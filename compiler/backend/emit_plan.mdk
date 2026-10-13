@@ -22,7 +22,8 @@ import support.ordmap.{
   omFromNames,
   omFromPairs,
 }
-import support.util.{lenKey, reverseL, filterList}
+import support.util.{lenKey, reverseL, filterList, listLen}
+import backend.wasm_reach.{wasmReachFilter}
 import backend.emit_support.{eagerReachMap, lazyGlobalNames}
 import backend.trmc_analysis.{
   SelfRef(..),
@@ -35,6 +36,17 @@ import backend.trmc_analysis.{
   bindName,
 }
 
+-- `wasmOnlyReach` is `Some` only on a plan from `buildEmitPlanReached`: the unit
+-- counts (top-level binds plus impl entries) before and after the dispatch-rooted
+-- reach filter, whose result the plan's other fields were computed over.  Reach is
+-- wasm-only because native whole mode emits every function but `@mdk_program_main`
+-- as `define internal`, so clang's GlobalDCE already drops the same functions: the
+-- compiler self-build shrinks 0.29% in `.ll` bytes, its CPU-s change (+3.7) sits
+-- inside the noise band, and the pass costs 0.155 s and 106 MB per emit.  The
+-- prelude-object halves must be identity: a reached prelude half links to a
+-- 5-symbol object, and a reached program half links only through `--gc-sections`.
+-- Only a small whole-mode build gains (hello saves about 0.09 CPU-s).
+--
 -- `target` is the backend the plan was built for; the emitter asserts it is its own.
 -- `lazyGlobals` are the value globals emitted as forced-on-first-use cells.
 -- `eagerReach` maps each binding to the value globals it eagerly reaches; the
@@ -44,11 +56,14 @@ import backend.trmc_analysis.{
 -- group's members are emitted as one destination-passing loop rooted at its root.
 public export data EmitPlan = EmitPlan {
   target : Backend,
+  wasmOnlyReach : Option ReachUnits,
   lazyGlobals : List String,
   eagerReach : OrdMap (List String),
   trmc : TrmcVerdicts,
   dispGroups : List DispGroup,
 }
+
+public export data ReachUnits = ReachUnits { total : Int, kept : Int }
 
 -- The self-recursive TRMC verdict.  `eligibleFns` holds every top-level function, and
 -- `eligibleImpls` every impl group (one `(method, key)` pair, its clauses in program
@@ -75,12 +90,32 @@ public export data TrmcVerdicts = TrmcVerdicts {
 
 export
 buildEmitPlan : Backend -> CProgram -> EmitPlan
-buildEmitPlan target (CProgram groups ctorArs _ impls _ _) =
+buildEmitPlan target prog = planOver target None prog
+
+-- The wasm modules entries' builder: reach first, then every plan field over the
+-- reached program, which is also the program the emitter must receive.
+export
+buildEmitPlanReached : CProgram -> (EmitPlan, CProgram)
+buildEmitPlanReached prog =
+  let reached = wasmReachFilter prog
+  let units = ReachUnits {
+    total = programUnitCount prog,
+    kept = programUnitCount reached,
+  }
+  (planOver WasmBackend (Some units) reached, reached)
+
+programUnitCount : CProgram -> Int
+programUnitCount (CProgram groups _ _ impls _ _) =
+  listLen groups + listLen impls
+
+planOver : Backend -> Option ReachUnits -> CProgram -> EmitPlan
+planOver target reach (CProgram groups ctorArs _ impls _ _) =
   -- first entry wins on a repeated constructor name, as in both emitters' tables
   let ctors = omFromPairs (reverseL ctorArs) omEmpty
   let fns = filterList isTopFn groups
   EmitPlan {
     target = target,
+    wasmOnlyReach = reach,
     lazyGlobals = lazyGlobalNames groups,
     eagerReach = eagerReachMap groups,
     trmc = TrmcVerdicts {

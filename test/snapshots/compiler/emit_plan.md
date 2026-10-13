@@ -1,5 +1,5 @@
 # META
-source_lines=222
+source_lines=257
 stages=DESUGAR,MARK
 # SOURCE
 -- The per-emission plan: facts about the lowered program that both backends read
@@ -26,7 +26,8 @@ import support.ordmap.{
   omFromNames,
   omFromPairs,
 }
-import support.util.{lenKey, reverseL, filterList}
+import support.util.{lenKey, reverseL, filterList, listLen}
+import backend.wasm_reach.{wasmReachFilter}
 import backend.emit_support.{eagerReachMap, lazyGlobalNames}
 import backend.trmc_analysis.{
   SelfRef(..),
@@ -39,6 +40,17 @@ import backend.trmc_analysis.{
   bindName,
 }
 
+-- `wasmOnlyReach` is `Some` only on a plan from `buildEmitPlanReached`: the unit
+-- counts (top-level binds plus impl entries) before and after the dispatch-rooted
+-- reach filter, whose result the plan's other fields were computed over.  Reach is
+-- wasm-only because native whole mode emits every function but `@mdk_program_main`
+-- as `define internal`, so clang's GlobalDCE already drops the same functions: the
+-- compiler self-build shrinks 0.29% in `.ll` bytes, its CPU-s change (+3.7) sits
+-- inside the noise band, and the pass costs 0.155 s and 106 MB per emit.  The
+-- prelude-object halves must be identity: a reached prelude half links to a
+-- 5-symbol object, and a reached program half links only through `--gc-sections`.
+-- Only a small whole-mode build gains (hello saves about 0.09 CPU-s).
+--
 -- `target` is the backend the plan was built for; the emitter asserts it is its own.
 -- `lazyGlobals` are the value globals emitted as forced-on-first-use cells.
 -- `eagerReach` maps each binding to the value globals it eagerly reaches; the
@@ -48,11 +60,14 @@ import backend.trmc_analysis.{
 -- group's members are emitted as one destination-passing loop rooted at its root.
 public export data EmitPlan = EmitPlan {
   target : Backend,
+  wasmOnlyReach : Option ReachUnits,
   lazyGlobals : List String,
   eagerReach : OrdMap (List String),
   trmc : TrmcVerdicts,
   dispGroups : List DispGroup,
 }
+
+public export data ReachUnits = ReachUnits { total : Int, kept : Int }
 
 -- The self-recursive TRMC verdict.  `eligibleFns` holds every top-level function, and
 -- `eligibleImpls` every impl group (one `(method, key)` pair, its clauses in program
@@ -79,12 +94,32 @@ public export data TrmcVerdicts = TrmcVerdicts {
 
 export
 buildEmitPlan : Backend -> CProgram -> EmitPlan
-buildEmitPlan target (CProgram groups ctorArs _ impls _ _) =
+buildEmitPlan target prog = planOver target None prog
+
+-- The wasm modules entries' builder: reach first, then every plan field over the
+-- reached program, which is also the program the emitter must receive.
+export
+buildEmitPlanReached : CProgram -> (EmitPlan, CProgram)
+buildEmitPlanReached prog =
+  let reached = wasmReachFilter prog
+  let units = ReachUnits {
+    total = programUnitCount prog,
+    kept = programUnitCount reached,
+  }
+  (planOver WasmBackend (Some units) reached, reached)
+
+programUnitCount : CProgram -> Int
+programUnitCount (CProgram groups _ _ impls _ _) =
+  listLen groups + listLen impls
+
+planOver : Backend -> Option ReachUnits -> CProgram -> EmitPlan
+planOver target reach (CProgram groups ctorArs _ impls _ _) =
   -- first entry wins on a repeated constructor name, as in both emitters' tables
   let ctors = omFromPairs (reverseL ctorArs) omEmpty
   let fns = filterList isTopFn groups
   EmitPlan {
     target = target,
+    wasmOnlyReach = reach,
     lazyGlobals = lazyGlobalNames groups,
     eagerReach = eagerReachMap groups,
     trmc = TrmcVerdicts {
@@ -229,13 +264,21 @@ canonFnIn fns name =
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" false) (mem "CImplEntry" true) (mem "CImplBody" true))))
 (DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "backendName" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
-(DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "reverseL" false) (mem "filterList" false))))
+(DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "reverseL" false) (mem "filterList" false) (mem "listLen" false))))
+(DUse false (UseGroup ("backend" "wasm_reach") ((mem "wasmReachFilter" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "lazyGlobalNames" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "DispGroup" false) (mem "trmcEligible" false) (mem "detectDispatchGroups" false) (mem "dictUniformClauses" false) (mem "methodSelf" false) (mem "clauseArityOf" false) (mem "bindName" false))))
-(DData Public "EmitPlan" () ((variant "EmitPlan" (ConNamed (field "target" (TyCon "Backend")) (field "lazyGlobals" (TyApp (TyCon "List") (TyCon "String"))) (field "eagerReach" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "trmc" (TyCon "TrmcVerdicts")) (field "dispGroups" (TyApp (TyCon "List") (TyCon "DispGroup")))))) ())
+(DData Public "EmitPlan" () ((variant "EmitPlan" (ConNamed (field "target" (TyCon "Backend")) (field "wasmOnlyReach" (TyApp (TyCon "Option") (TyCon "ReachUnits"))) (field "lazyGlobals" (TyApp (TyCon "List") (TyCon "String"))) (field "eagerReach" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "trmc" (TyCon "TrmcVerdicts")) (field "dispGroups" (TyApp (TyCon "List") (TyCon "DispGroup")))))) ())
+(DData Public "ReachUnits" () ((variant "ReachUnits" (ConNamed (field "total" (TyCon "Int")) (field "kept" (TyCon "Int"))))) ())
 (DData Public "TrmcVerdicts" () ((variant "TrmcVerdicts" (ConNamed (field "eligibleFns" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "eligibleImpls" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DTypeSig true "buildEmitPlan" (TyFun (TyCon "Backend") (TyFun (TyCon "CProgram") (TyCon "EmitPlan"))))
-(DFunDef false "buildEmitPlan" ((PVar "target") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") PWild (PVar "impls") PWild PWild)) (EBlock (DoLet false false (PVar "ctors") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorArs"))) (EVar "omEmpty"))) (DoLet false false (PVar "fns") (EApp (EApp (EVar "filterList") (EVar "isTopFn")) (EVar "groups"))) (DoExpr (ERecordCreate "EmitPlan" ((fa "target" (EVar "target")) (fa "lazyGlobals" (EApp (EVar "lazyGlobalNames") (EVar "groups"))) (fa "eagerReach" (EApp (EVar "eagerReachMap") (EVar "groups"))) (fa "trmc" (ERecordCreate "TrmcVerdicts" ((fa "eligibleFns" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "selfTrmcBind") (EVar "ctors")) (EVar "b")))) (EVar "fns")))) (EVar "omEmpty"))) (fa "eligibleImpls" (EApp (EApp (EVar "trmcImplKeys") (EVar "ctors")) (EVar "impls")))))) (fa "dispGroups" (EApp (EApp (EApp (EApp (EVar "planDispatchGroups") (EVar "ctors")) (EVar "fns")) (EVar "groups")) (EVar "impls"))))))))
+(DFunDef false "buildEmitPlan" ((PVar "target") (PVar "prog")) (EApp (EApp (EApp (EVar "planOver") (EVar "target")) (EVar "None")) (EVar "prog")))
+(DTypeSig true "buildEmitPlanReached" (TyFun (TyCon "CProgram") (TyTuple (TyCon "EmitPlan") (TyCon "CProgram"))))
+(DFunDef false "buildEmitPlanReached" ((PVar "prog")) (EBlock (DoLet false false (PVar "reached") (EApp (EVar "wasmReachFilter") (EVar "prog"))) (DoLet false false (PVar "units") (ERecordCreate "ReachUnits" ((fa "total" (EApp (EVar "programUnitCount") (EVar "prog"))) (fa "kept" (EApp (EVar "programUnitCount") (EVar "reached")))))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "planOver") (EVar "WasmBackend")) (EApp (EVar "Some") (EVar "units"))) (EVar "reached")) (EVar "reached")))))
+(DTypeSig false "programUnitCount" (TyFun (TyCon "CProgram") (TyCon "Int")))
+(DFunDef false "programUnitCount" ((PCon "CProgram" (PVar "groups") PWild PWild (PVar "impls") PWild PWild)) (EBinOp "+" (EApp (EVar "listLen") (EVar "groups")) (EApp (EVar "listLen") (EVar "impls"))))
+(DTypeSig false "planOver" (TyFun (TyCon "Backend") (TyFun (TyApp (TyCon "Option") (TyCon "ReachUnits")) (TyFun (TyCon "CProgram") (TyCon "EmitPlan")))))
+(DFunDef false "planOver" ((PVar "target") (PVar "reach") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") PWild (PVar "impls") PWild PWild)) (EBlock (DoLet false false (PVar "ctors") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorArs"))) (EVar "omEmpty"))) (DoLet false false (PVar "fns") (EApp (EApp (EVar "filterList") (EVar "isTopFn")) (EVar "groups"))) (DoExpr (ERecordCreate "EmitPlan" ((fa "target" (EVar "target")) (fa "wasmOnlyReach" (EVar "reach")) (fa "lazyGlobals" (EApp (EVar "lazyGlobalNames") (EVar "groups"))) (fa "eagerReach" (EApp (EVar "eagerReachMap") (EVar "groups"))) (fa "trmc" (ERecordCreate "TrmcVerdicts" ((fa "eligibleFns" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "selfTrmcBind") (EVar "ctors")) (EVar "b")))) (EVar "fns")))) (EVar "omEmpty"))) (fa "eligibleImpls" (EApp (EApp (EVar "trmcImplKeys") (EVar "ctors")) (EVar "impls")))))) (fa "dispGroups" (EApp (EApp (EApp (EApp (EVar "planDispatchGroups") (EVar "ctors")) (EVar "fns")) (EVar "groups")) (EVar "impls"))))))))
 (DTypeSig true "isTrmcFn" (TyFun (TyCon "TrmcVerdicts") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isTrmcFn" ((PVar "v") (PVar "name")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "v") "eligibleFns")))
 (DTypeSig true "isTrmcImpl" (TyFun (TyCon "TrmcVerdicts") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
@@ -280,13 +323,21 @@ canonFnIn fns name =
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" false) (mem "CImplEntry" true) (mem "CImplBody" true))))
 (DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "backendName" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
-(DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "reverseL" false) (mem "filterList" false))))
+(DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "reverseL" false) (mem "filterList" false) (mem "listLen" false))))
+(DUse false (UseGroup ("backend" "wasm_reach") ((mem "wasmReachFilter" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "lazyGlobalNames" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "DispGroup" false) (mem "trmcEligible" false) (mem "detectDispatchGroups" false) (mem "dictUniformClauses" false) (mem "methodSelf" false) (mem "clauseArityOf" false) (mem "bindName" false))))
-(DData Public "EmitPlan" () ((variant "EmitPlan" (ConNamed (field "target" (TyCon "Backend")) (field "lazyGlobals" (TyApp (TyCon "List") (TyCon "String"))) (field "eagerReach" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "trmc" (TyCon "TrmcVerdicts")) (field "dispGroups" (TyApp (TyCon "List") (TyCon "DispGroup")))))) ())
+(DData Public "EmitPlan" () ((variant "EmitPlan" (ConNamed (field "target" (TyCon "Backend")) (field "wasmOnlyReach" (TyApp (TyCon "Option") (TyCon "ReachUnits"))) (field "lazyGlobals" (TyApp (TyCon "List") (TyCon "String"))) (field "eagerReach" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "trmc" (TyCon "TrmcVerdicts")) (field "dispGroups" (TyApp (TyCon "List") (TyCon "DispGroup")))))) ())
+(DData Public "ReachUnits" () ((variant "ReachUnits" (ConNamed (field "total" (TyCon "Int")) (field "kept" (TyCon "Int"))))) ())
 (DData Public "TrmcVerdicts" () ((variant "TrmcVerdicts" (ConNamed (field "eligibleFns" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "eligibleImpls" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DTypeSig true "buildEmitPlan" (TyFun (TyCon "Backend") (TyFun (TyCon "CProgram") (TyCon "EmitPlan"))))
-(DFunDef false "buildEmitPlan" ((PVar "target") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") PWild (PVar "impls") PWild PWild)) (EBlock (DoLet false false (PVar "ctors") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorArs"))) (EVar "omEmpty"))) (DoLet false false (PVar "fns") (EApp (EApp (EVar "filterList") (EVar "isTopFn")) (EVar "groups"))) (DoExpr (ERecordCreate "EmitPlan" ((fa "target" (EVar "target")) (fa "lazyGlobals" (EApp (EVar "lazyGlobalNames") (EVar "groups"))) (fa "eagerReach" (EApp (EVar "eagerReachMap") (EVar "groups"))) (fa "trmc" (ERecordCreate "TrmcVerdicts" ((fa "eligibleFns" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "selfTrmcBind") (EVar "ctors")) (EVar "b")))) (EVar "fns")))) (EVar "omEmpty"))) (fa "eligibleImpls" (EApp (EApp (EVar "trmcImplKeys") (EVar "ctors")) (EVar "impls")))))) (fa "dispGroups" (EApp (EApp (EApp (EApp (EVar "planDispatchGroups") (EVar "ctors")) (EVar "fns")) (EVar "groups")) (EVar "impls"))))))))
+(DFunDef false "buildEmitPlan" ((PVar "target") (PVar "prog")) (EApp (EApp (EApp (EVar "planOver") (EVar "target")) (EVar "None")) (EVar "prog")))
+(DTypeSig true "buildEmitPlanReached" (TyFun (TyCon "CProgram") (TyTuple (TyCon "EmitPlan") (TyCon "CProgram"))))
+(DFunDef false "buildEmitPlanReached" ((PVar "prog")) (EBlock (DoLet false false (PVar "reached") (EApp (EVar "wasmReachFilter") (EVar "prog"))) (DoLet false false (PVar "units") (ERecordCreate "ReachUnits" ((fa "total" (EApp (EVar "programUnitCount") (EVar "prog"))) (fa "kept" (EApp (EVar "programUnitCount") (EVar "reached")))))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "planOver") (EVar "WasmBackend")) (EApp (EVar "Some") (EVar "units"))) (EVar "reached")) (EVar "reached")))))
+(DTypeSig false "programUnitCount" (TyFun (TyCon "CProgram") (TyCon "Int")))
+(DFunDef false "programUnitCount" ((PCon "CProgram" (PVar "groups") PWild PWild (PVar "impls") PWild PWild)) (EBinOp "+" (EApp (EVar "listLen") (EVar "groups")) (EApp (EVar "listLen") (EVar "impls"))))
+(DTypeSig false "planOver" (TyFun (TyCon "Backend") (TyFun (TyApp (TyCon "Option") (TyCon "ReachUnits")) (TyFun (TyCon "CProgram") (TyCon "EmitPlan")))))
+(DFunDef false "planOver" ((PVar "target") (PVar "reach") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") PWild (PVar "impls") PWild PWild)) (EBlock (DoLet false false (PVar "ctors") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ctorArs"))) (EVar "omEmpty"))) (DoLet false false (PVar "fns") (EApp (EApp (EVar "filterList") (EVar "isTopFn")) (EVar "groups"))) (DoExpr (ERecordCreate "EmitPlan" ((fa "target" (EVar "target")) (fa "wasmOnlyReach" (EVar "reach")) (fa "lazyGlobals" (EApp (EVar "lazyGlobalNames") (EVar "groups"))) (fa "eagerReach" (EApp (EVar "eagerReachMap") (EVar "groups"))) (fa "trmc" (ERecordCreate "TrmcVerdicts" ((fa "eligibleFns" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "selfTrmcBind") (EVar "ctors")) (EVar "b")))) (EVar "fns")))) (EVar "omEmpty"))) (fa "eligibleImpls" (EApp (EApp (EVar "trmcImplKeys") (EVar "ctors")) (EVar "impls")))))) (fa "dispGroups" (EApp (EApp (EApp (EApp (EVar "planDispatchGroups") (EVar "ctors")) (EVar "fns")) (EVar "groups")) (EVar "impls"))))))))
 (DTypeSig true "isTrmcFn" (TyFun (TyCon "TrmcVerdicts") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isTrmcFn" ((PVar "v") (PVar "name")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "v") "eligibleFns")))
 (DTypeSig true "isTrmcImpl" (TyFun (TyCon "TrmcVerdicts") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))

@@ -215,7 +215,7 @@ tested a constrained builder either.
 longer requires *set equality*: on the SHIPPING arm the census now accepts wasm's
 TMC set being a **subset** of llvm's, reporting it as `SUBSET` rather than `DIFF`.
 That sprint's S1 added `wasmReachFilter` (`compiler/backend/wasm_reach.mdk`), called
-from `compiler/entries/wasm_emit_modules_main.mdk` *after* TRMC marking: a
+from `compiler/backend/emit_plan.mdk`'s `buildEmitPlanReached` (used by `compiler/entries/wasm_emit_modules_main.mdk`) *after* TRMC marking: a
 dispatch-unreachable function is never emitted at all on the wasm side, so it carries
 no census marker — while LLVM's `dceFilter` (`compiler/ir/dce.mdk`, shared, and
 deliberately outside that sprint's scope) never removes an impl/method body and keeps

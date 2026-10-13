@@ -15,24 +15,37 @@
 
 import test_process.{medakaRoot}
 import test.{
-  Expectation, expectAll, expectEqual, expectFalse, expectTrue, labelFail
+  Expectation, expectAll, expectEqual, expectNotEqual, expectFalse, expectTrue,
+  labelFail
 }
 import string.{contains, lines, trimLeft, startsWith}
-import frontend.ast.{Addr(..), Lit(..), Pat(..), noDeclLoc, noBinderId}
+import frontend.ast.{
+  Addr(..), Lit(..), Pat(..), Route(..), noDeclLoc, noBinderId
+}
 import ir.core_ir.{
   CArm(..),
   CBind(..),
   CClause(..),
   CExpr(..),
   CGuard(..),
+  CImplBody(..),
+  CImplEntry(..),
   CProgram(..),
+  MethodEvidence(..),
+  noImplSym,
   CTree(..),
   mkApp,
   noDeclFacts,
   synthBind,
 }
 import support.ordmap.{omLookup}
-import backend.emit_plan.{EmitPlan(..), buildEmitPlan, isTrmcFn}
+import backend.emit_plan.{
+  EmitPlan(..),
+  ReachUnits(..),
+  buildEmitPlan,
+  buildEmitPlanReached,
+  isTrmcFn,
+}
 import backend.core_validate.{Backend(..)}
 import backend.trmc_analysis.{ctorTailIsCons, dispMembersOf, dispRootOf}
 
@@ -128,12 +141,107 @@ noRecompute file = match readFile "\{medakaRoot}/compiler/backend/\{file}"
     labelFail
       "\{file} calls detectDispatchGroups"
       (expectFalse (codeMentions "detectDispatchGroups" text)),
+    labelFail
+      "\{file} calls wasmReachFilter"
+      (expectFalse (codeMentions "wasmReachFilter" text)),
   ]
 
 test "neither emitter recomputes a plan analysis" = expectAll [
   noRecompute "llvm_emit.mdk",
   noRecompute "wasm_emit.mdk",
 ]
+
+-- Reach belongs to the plan builder: no entry calls the filter itself.
+noEntryReach : String -> <IO, FileRead> Expectation
+noEntryReach file = match readFile "\{medakaRoot}/compiler/entries/\{file}"
+  Err e => expectEqual "readable" "cannot read \{file}: \{e}"
+  Ok text =>
+    labelFail
+      "\{file} calls wasmReachFilter"
+      (expectFalse (codeMentions "wasmReachFilter" text))
+
+test "the wasm modules entries leave reach to the plan builder" = expectAll [
+  noEntryReach "wasm_emit_modules_main.mdk",
+  noEntryReach "playground_main.mdk",
+  noEntryReach "wasm_emit_gaps_main.mdk",
+]
+
+-- ── wasm-only reach ─────────────────────────────────────────────────────────
+
+-- main = m            (dispatch only: a CMethod, no static reference to the impl)
+-- impl m for Int = g  (the impl body reads the lazy global g)
+-- g = g               (a self-loop, so lazy)
+-- dead = 2            (named by nothing)
+-- impl k for Int = 3  (k is mentioned by nothing reachable)
+-- Units: 3 binds + 2 impls = 5; reach keeps main, g and the m impl = 3.
+methodRef : String -> CExpr
+methodRef name = CMethod name (MethodEvidence "" 0 RNone [] [])
+
+implOf : String -> CExpr -> CImplEntry
+implOf method body =
+  CImplEntry method 0 0 (CImplTagged "Int" "Int" "I" noImplSym [] [] body)
+
+reachProgram : CProgram
+reachProgram =
+  CProgram
+    [
+      val "main" (methodRef "m"),
+      val "g" (ref "g"),
+      val "dead" (CLit (LInt 2)),
+    ]
+    []
+    []
+    [implOf "m" (ref "g"), implOf "k" (CLit (LInt 3))]
+    []
+    noDeclFacts
+
+implMethods : CProgram -> List String
+implMethods (CProgram _ _ _ impls _ _) = map implName impls
+
+implName : CImplEntry -> String
+implName (CImplEntry m _ _ _) = m
+
+bindNames : CProgram -> List String
+bindNames (CProgram groups _ _ _ _ _) = map bindNm groups
+
+bindNm : CBind -> String
+bindNm (CBind n _ _ _) = n
+
+test "wasm reach keeps a dispatch-only impl and its lazy global, drops the rest" =
+  let (plan, reached) = buildEmitPlanReached reachProgram
+  expectAll [
+    labelFail
+      "the m impl survives, the k impl does not"
+      (expectEqual ["m"] (implMethods reached)),
+    labelFail
+      "main and g survive, dead does not"
+      (expectEqual ["main", "g"] (bindNames reached)),
+    labelFail
+      "the plan counts 5 total and 3 kept units"
+      (expectEqual "Some (5, 3)" (match plan.wasmOnlyReach
+        Some u => "Some (\{u.total}, \{u.kept})"
+        None => "None")),
+    labelFail "g is lazy" (expectEqual ["g"] plan.lazyGlobals),
+    labelFail
+      "dead has no eagerReach entry"
+      (expectEqual ["<no entry>"] (reachOf "dead" plan)),
+    labelFail
+      "g has an eagerReach entry"
+      (expectNotEqual (reachOf "g" plan) ["<no entry>"]),
+  ]
+
+test "an unreached plan reports no reach and keeps every unit" =
+  let plan = buildEmitPlan WasmBackend reachProgram
+  expectAll [
+    labelFail
+      "no wasmOnlyReach"
+      (expectTrue (match plan.wasmOnlyReach
+        Some _ => False
+        None => True)),
+    labelFail
+      "dead keeps its eagerReach entry"
+      (expectNotEqual (reachOf "dead" plan) ["<no entry>"]),
+  ]
 
 -- ── TRMC verdict and dispatch groups ────────────────────────────────────────
 

@@ -32,7 +32,7 @@ loader module graph
        -> core_ir_lower.lowerProgramEmit <EmitTarget>   (TargetNative | TargetWasm | TargetBothUnknown)
        -> CProgram
             -> llvm_emit.emitProgram -> LLVM text -> clang -> native binary
-            -> wasm_reach.wasmReachFilter (Wasm product paths only, post-lower)
+            -> emit_plan.buildEmitPlanReached -> wasm_reach (Wasm modules paths only, post-lower)
                -> wasm_emit.emitProgram -> WAT -> wasm-tools -> WasmGC module
 ```
 
