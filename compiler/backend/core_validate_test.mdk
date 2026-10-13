@@ -46,7 +46,6 @@ import frontend.ast.{BinderId(..)}
 import ir.core_ir_lower.{
   EmitTarget(..),
   ctorFieldTypeNames,
-  declSigTypeNames,
   declaredRecordFieldOrders,
   lowerProgramEmit,
 }
@@ -189,7 +188,6 @@ test "(e) record mode logs one event per refused extern, and no unbound-variable
   let input =
     makeWasmEmitInputFull
       []
-      (declSigTypeNames decls)
       (ctorFieldTypeNames decls)
       False
       False
@@ -387,7 +385,6 @@ ffiWallEvents checked =
   let input =
     makeWasmEmitInputFull
       []
-      (declSigTypeNames decls)
       (ctorFieldTypeNames decls)
       False
       False

@@ -89,8 +89,8 @@ for sym in WGapMode WasmEmit freshWasmEmit emitProgramRecord; do
     exit 1
   }
 done
-has_wasm_pin '| Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput WasmEmit' || {
-  echo "FAIL wasm typed index ratchet: Prog must retain its index fields plus one WasmEmit field"
+has_wasm_pin '| Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput WasmEmit FnCtx' || {
+  echo "FAIL wasm typed index ratchet: Prog must retain its index fields plus WasmEmit and the per-function FnCtx"
   exit 1
 }
 if grep -E '^(strSegsRef|strSegIdRef)[[:space:]]*:' "$WASM_SRC" >/dev/null; then
@@ -109,15 +109,11 @@ fi
 # (every run of spaces/newlines is one space), so `medaka fmt` re-wrapping a
 # long line does not read as the carrier having gone missing.
 for required in \
-  'trmcCtx : Ref WTrmcCtx' \
-  'trmcCtx = Ref WTrmcOff' \
-  'match (progEmit prog).trmcCtx.value' \
-  'let saved = (progEmit prog).trmcCtx.value' \
-  'let _ = setRef (progEmit prog).trmcCtx (WTrmcOn self arity pslots ctorSet isBuiltinList loopLbl exitLbl)' \
-  'let _ = setRef (progEmit prog).trmcCtx saved' \
-  'let savedTrmc = (progEmit prog).trmcCtx.value' \
-  'let _ = setRef (progEmit prog).trmcCtx WTrmcOff' \
-  'let _ = setRef (progEmit prog).trmcCtx savedTrmc'; do
+  'data FnCtx = FnCtx { trmc : WTrmcCtx, disp : WDispCtx }' \
+  'freshFnCtx = FnCtx { trmc = WTrmcOff, disp = WDispOff }' \
+  'progInFn prog = progWithFnCtx prog freshFnCtx' \
+  'progWithTrmc ctx prog =' \
+  'progWithDisp ctx prog ='; do
   has_wasm_pin "$required" || {
     echo "FAIL H2B6-WTRMC-CARRIER: missing $required"
     exit 1
@@ -141,28 +137,17 @@ done
   echo "FAIL H2B7-NAMED-WRAPPER-APPARATUS: lambda fixture must use Pair twice"
   exit 1
 }
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'match (progEmit prog).trmcCtx.value' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'match (progFnCtx prog).trmc' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B6-WTRMC-CARRIER: expected exactly two trmc readers"
   exit 1
 }
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let _ = setRef (progEmit prog).trmcCtx WTrmcOff' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let _ = setRef (progEmit prog).trmcCtx savedTrmc' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
-  echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: expected two independent-function clears/restores"
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'progInFn' | wc -l | tr -d '[:space:]')" -ge 4 ] || {
+  echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: independent functions must start from progInFn"
   exit 1
 }
 has_wasm_pin 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: strict, record, census freshness routes changed"
-  exit 1
-}
-# X-W.H: wDispCtx is now a WasmEmit field too (it was the last ambient neighbour of
-# trmcCtx).  Same assertion, re-anchored: the dispatch context is still its OWN carrier
-# with its OWN save/set/restore routes, not folded into trmcCtx.
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let _ = setRef (progEmit prog).wDispCtx WDispOff' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let _ = setRef (progEmit prog).wDispCtx savedDisp' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  has_wasm_pin 'wDispCtx : Ref WDispCtx' &&
-  has_wasm_pin 'wDispCtx = Ref WDispOff' || {
-  echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: nearest-miss wDispCtx carrier/clear routes changed"
   exit 1
 }
 if grep -E '^(lamIdRef|liftedFnsRef|liftedNamesRef|funcRefsRef|liftedNamesSetW|funcRefsSetW)[[:space:]]*[:=]' "$WASM_SRC" >/dev/null; then
@@ -187,7 +172,7 @@ for required in \
   'emitElemDeclare : WasmEmit -> String' \
   'let n = freshLamId (progEmit prog)' \
   'let gid = freshLamId (progEmit prog)' \
-  'addLifted (progEmit prog) (emitLamDefine prog lamName pats captured body)' \
+  'addLifted (progEmit prog) (emitLamDefine prog lamName pats captured (envMarksOf captured env) body)' \
   'addLifted (progEmit prog) def' \
   'let lifted = if progUseClos prog then flatMap (x => x) (reverseL (progEmit prog).liftedDefinitions.value) else []' \
   'let names = "$mdk_pap" :: reverseL !emit.functionReferences' \
@@ -792,7 +777,7 @@ for required in \
   'reverseL !emit.stringSegments' \
   'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' \
   'emitProgramRecord input cp =' \
-  'emitProgramGaps input (CProgram groups ctorArs ctorTypes impls mctx facts) =' \
+  'emitProgramGaps input cp0 =' \
   'let emit = freshWasmEmit WGapRecord' \
   'let dataSegs = emitDataSegs (progEmit prog)' \
   'emitRefExpr prog env d (CLit l) = emitLitRef (progEmit prog) l'; do
@@ -2113,7 +2098,7 @@ REEMIT_OUT="$($EMITBIN --reemit-input "$RUNTIME" "$INPUT_WORK/p.mdk" "$INPUT_WOR
   echo "FAIL wasm typed same-process input harness"
   exit 1
 }
-REEMIT_EXPECTED="$(printf 'P_EQ_PLAST\nP_EQ_METHOD\nP_NE_SIG\nP_NE_CTOR\nP_NE_MAIN\nP_EQ_RECORD')"
+REEMIT_EXPECTED="$(printf 'P_EQ_PLAST\nP_EQ_METHOD\nP_NE_CTOR\nP_NE_MAIN\nP_EQ_RECORD')"
 [ "$REEMIT_OUT" = "$REEMIT_EXPECTED" ] || {
   echo "FAIL wasm typed input isolation: an explicit field did not discriminate: $REEMIT_OUT"
   exit 1

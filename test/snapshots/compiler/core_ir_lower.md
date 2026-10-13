@@ -1,5 +1,5 @@
 # META
-source_lines=4101
+source_lines=4182
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -1139,6 +1139,12 @@ stampBinders lowering prog =
   let rows = Ref BM.Tip
   let stamped = mapProgramBinders (stampVisit lowering rows) prog
   withBinderRows (BM.values !rows) stamped
+
+-- [prog] with every binder stamped as an untyped lowering stamps it, for a driver
+-- that builds Core by hand.
+export
+stampUntypedBinders : CProgram -> CProgram
+stampUntypedBinders prog = stampBinders UntypedLowering prog
 
 -- Whether the program being lowered was elaborated, so that its source binders
 -- have rows in the typechecker's table.
@@ -3868,12 +3874,9 @@ fieldTyHeadName (Field _ ty) = tyHeadName ty
 -- (TyVar / TyFun / TyTuple / applied types) — the emitter treats "" as "unknown".
 tyHeadName : Ty -> String
 tyHeadName (TyCon { tyConName = n }) = n
--- G3: a type VARIABLE head (`a` in `Num a => a -> a`) yields its var name, so the
--- emitter's declSig table can recognise a polymorphic Num param (isTypeVarName) and
--- route its arithmetic through the runtime tag-dispatched @mdk_num_* helpers.
--- ADDITIVE for every other consumer: a var name (lowercase) is not a known scalar,
--- so `fieldNameToLTy` maps it to None exactly as the old "" did (ctor-field /
--- record-field LTy seeding is unchanged); only the new G3 check reads the name.
+-- A type VARIABLE head (`a` in `Num a => a -> a`) yields its var name.  A var name
+-- (lowercase) is not a known scalar, so `fieldNameToLTy` maps it to None exactly as
+-- "" would.
 tyHeadName (TyVar n) = n
 tyHeadName (TyApp a _) = tyHeadName a
 tyHeadName (TyConstrained _ t) = tyHeadName t
@@ -3882,25 +3885,104 @@ tyHeadName (TyNamed _ t _) = tyHeadName t
 tyHeadName (TyQual t _ _) = tyHeadName t
 tyHeadName _ = ""
 
--- ── function → DECLARED param/return type-head names (wasm backend, Gap E1) ───
--- Per top-level function name (from its `DTypeSig` annotation): the head
--- type-name of each declared PARAMETER (in order) plus the declared RETURN type
--- head, e.g. `double : Float -> Float` → ("double", (["Float"], "Float")).  The
--- wasm emitter seeds its Float registries from it; a literal-free annotated body
--- like `double x = x + x` has no Float anchor of its own (Gap E1).  A non-scalar
--- head (TyVar / applied / function / tuple) maps to "", which seeds nothing.
--- The LLVM emitter reads binder stamps instead (`DeclFacts.factBinders`).
+-- ── an untyped lowering's rows, from the signatures the source declares ──────
+-- An untyped lowering stamps every source binder `RTValue`, so a backend takes its
+-- generic path for all of them.  A top-level function whose `DTypeSig` names
+-- builtin scalar types has already said what its parameters hold and what it
+-- returns; this states that as the rows an elaboration would have published, so
+-- the generic path is left to the binders the source does not type.  A
+-- parameter or result whose declared head is not a builtin scalar keeps its
+-- `RTValue`, and a function whose clauses take a different number of parameters
+-- than its signature declares (an eta-reduced definition) is left alone.
 export
-declSigTypeNames : List Decl -> List (String, (List String, String))
-declSigTypeNames prog = flatMap declSigTypeEntries prog
+stampDeclaredSignatures : List Decl -> CProgram -> CProgram
+stampDeclaredSignatures decls (prog@(CProgram groups _ _ _ _ facts)) =
+  let sigs = declaredScalarSigs decls
+  let edits = BM.fromList (flatMap (bindSigEdits sigs) groups)
+  withBinderRows (map (applyRowEdit edits) facts.factBinders) prog
 
-declSigTypeEntries : Decl -> List (String, (List String, String))
-declSigTypeEntries (DTypeSig _ name ty _) =
-  [(name, (map tyHeadName (methodArgTys ty), tyHeadName (methodRetTy ty)))]
-declSigTypeEntries (DExtern _ name ty) =
-  [(name, (map tyHeadName (methodArgTys ty), tyHeadName (methodRetTy ty)))]
-declSigTypeEntries (DAttrib _ inner) = declSigTypeEntries inner
-declSigTypeEntries _ = []
+-- What a signature changes about one row: the type the binder holds and, for a
+-- function, the type it returns.
+data RowEdit = RowEdit (Option RuntimeType) (Option RuntimeType)
+
+declaredScalarSigs : List Decl ->
+  OrdMap (List (Option RuntimeType), Option RuntimeType)
+declaredScalarSigs decls =
+  omFromPairs (reverseL (flatMap declaredScalarSig decls)) omEmpty
+
+declaredScalarSig : Decl ->
+  List (String, (List (Option RuntimeType), Option RuntimeType))
+declaredScalarSig (DTypeSig _ name ty _) = [
+  (
+    name,
+    (
+      map (t => scalarHeadType (tyHeadName t)) (methodArgTys ty),
+      scalarHeadType (tyHeadName (methodRetTy ty)),
+    ),
+  ),
+]
+declaredScalarSig (DAttrib _ inner) = declaredScalarSig inner
+declaredScalarSig _ = []
+
+scalarHeadType : String -> Option RuntimeType
+scalarHeadType "Int" = Some RTInt
+scalarHeadType "Float" = Some RTFloat
+scalarHeadType "Bool" = Some RTBool
+scalarHeadType "Char" = Some RTChar
+scalarHeadType "String" = Some RTString
+scalarHeadType "Unit" = Some RTUnit
+scalarHeadType "U64" = Some RTU64
+scalarHeadType "I64" = Some RTI64
+scalarHeadType "U32" = Some RTU32
+scalarHeadType "I32" = Some RTI32
+scalarHeadType "U16" = Some RTU16
+scalarHeadType "U8" = Some RTU8
+scalarHeadType _ = None
+
+bindSigEdits : OrdMap (List (Option RuntimeType), Option RuntimeType) ->
+  CBind ->
+  List (Int, RowEdit)
+bindSigEdits sigs (CBind name clauses _ bid) = match omLookup name sigs
+  None => []
+  Some (ptys, ret) =>
+    if allList (clauseTakes (listLen ptys)) clauses then
+      (binderOrdinalOf bid, functionSigEdit ptys ret)
+        :: flatMap (clauseParamEdits ptys) clauses
+    else
+      []
+
+clauseTakes : Int -> CClause -> Bool
+clauseTakes n (CClause pats _) = listLen pats == n
+
+-- A value binding holds what its signature declares; a function returns it.
+functionSigEdit : List (Option RuntimeType) -> Option RuntimeType -> RowEdit
+functionSigEdit [] ret = RowEdit ret ret
+functionSigEdit _ ret = RowEdit None ret
+
+clauseParamEdits : List (Option RuntimeType) -> CClause -> List (Int, RowEdit)
+clauseParamEdits ptys (CClause pats _) = paramSigEdits ptys pats
+
+paramSigEdits : List (Option RuntimeType) -> List Pat -> List (Int, RowEdit)
+paramSigEdits ((Some t) :: tys) ((PVar _ _ bid) :: pats) =
+  (binderOrdinalOf bid, RowEdit (Some t) None) :: paramSigEdits tys pats
+paramSigEdits (_ :: tys) (_ :: pats) = paramSigEdits tys pats
+paramSigEdits _ _ = []
+
+binderOrdinalOf : BinderId -> Int
+binderOrdinalOf (BinderId _ n) = n
+
+applyRowEdit : BM.Map Int RowEdit -> BinderRow -> BinderRow
+applyRowEdit edits row = match BM.get (binderOrdinalOf row.brId) edits
+  Some (RowEdit ty ret) => BinderRow {
+    brId = row.brId,
+    brName = row.brName,
+    brType = optionOr row.brType ty,
+    brReturns = match ret
+      Some t => Some t
+      None => row.brReturns,
+    brSigned = row.brSigned,
+  }
+  None => row
 
 -- The declared arity of each `extern` in [decls]: the parameter count of its
 -- signature, which the LLVM emitter's first-class (eta-wrapped) form of an
@@ -3915,8 +3997,8 @@ externArityEntries (DAttrib _ inner) = externArityEntries inner
 externArityEntries _ = []
 
 -- ── user-declared FFI externs → the lowering's own table (#2074) ─────────────
--- A declared-signature table (`declSigTypeNames`, above) cannot answer "is this
--- name a USER extern?": built from `runtimeDecls ++ allDecls`, it holds ordinary
+-- A table of every declared signature could not answer "is this name a USER
+-- extern?": built from `runtimeDecls ++ allDecls`, it would hold ordinary
 -- annotated functions and the `stdlib/runtime.mdk` builtins in the same
 -- flat keyspace.  So the FFI lowering gets its OWN index, minted here from the
 -- same two decl lists the emit drivers already hold, and carried to the emitter
@@ -4012,8 +4094,7 @@ externDeclNamesOf ((DAttrib _ inner) :: rest) =
   externDeclNamesOf [inner] ++ externDeclNamesOf rest
 externDeclNamesOf (_ :: rest) = externDeclNamesOf rest
 
--- Same (param-head-names, return-head-name) shape as `declSigTypeEntries`, so
--- the emitter reads one row type for both tables.  `tyHeadName` collapses
+-- Rows are (param-head-names, return-head-name).  `tyHeadName` collapses
 -- `Array Int` to `Array`, which is unambiguous HERE and only here: slice 1's
 -- `ffiCrossableTy` guard rejects every non-crossable type — `Array` of anything
 -- but `Int` included — before a user extern's signature can reach the emitter,
@@ -4476,6 +4557,8 @@ nodeTag _ = "?"
 (DFunDef false "withDeclFacts" ((PVar "facts") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") PWild)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (EVar "facts")))
 (DTypeSig false "stampBinders" (TyFun (TyCon "Lowering") (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
 (DFunDef false "stampBinders" ((PVar "lowering") (PVar "prog")) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "Ref") (EVar "BM.Tip"))) (DoLet false false (PVar "stamped") (EApp (EApp (EVar "mapProgramBinders") (EApp (EApp (EVar "stampVisit") (EVar "lowering")) (EVar "rows"))) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "withBinderRows") (EApp (EVar "BM.values") (EUnOp "!" (EVar "rows")))) (EVar "stamped")))))
+(DTypeSig true "stampUntypedBinders" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
+(DFunDef false "stampUntypedBinders" ((PVar "prog")) (EApp (EApp (EVar "stampBinders") (EVar "UntypedLowering")) (EVar "prog")))
 (DData Private "Lowering" () ((variant "TypedLowering" (ConPos)) (variant "UntypedLowering" (ConPos))) ())
 (DTypeSig false "stampVisit" (TyFun (TyCon "Lowering") (TyFun (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "BinderRow"))) (TyFun (TyCon "BinderSite") (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyCon "BinderId")))))))
 (DFunDef false "stampVisit" ((PVar "lowering") (PVar "rows") (PVar "site") (PVar "x") (PAs "bid" (PCon "BinderId" PWild (PVar "n")))) (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 0))) (EBlock (DoExpr (EMatch (EApp (EVar "binderRowIfInstalled") (EVar "bid")) (arm (PCon "Some" (PVar "row")) () (EApp (EApp (EVar "setRef") (EVar "rows")) (EApp (EApp (EApp (EVar "BM.set") (EVar "n")) (EVar "row")) (EUnOp "!" (EVar "rows"))))) (arm (PCon "None") () (EMatch (EVar "lowering") (arm (PCon "TypedLowering") () (ELit LUnit)) (arm (PCon "UntypedLowering") () (EApp (EApp (EVar "setRef") (EVar "rows")) (EApp (EApp (EApp (EVar "BM.set") (EVar "n")) (EApp (EApp (EApp (EVar "untypedRow") (EVar "bid")) (EVar "x")) (EVar "site"))) (EUnOp "!" (EVar "rows"))))))))) (DoExpr (EVar "bid"))) (EBlock (DoLet false false (PVar "fresh") (EApp (EVar "freshBinderId") (ELit (LString "")))) (DoLet false false (PVar "ord") (EMatch (EVar "fresh") (arm (PCon "BinderId" PWild (PVar "k")) () (EVar "k")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "rows")) (EApp (EApp (EApp (EVar "BM.set") (EVar "ord")) (EApp (EApp (EApp (EVar "mintedRow") (EVar "fresh")) (EVar "x")) (EVar "site"))) (EUnOp "!" (EVar "rows"))))) (DoExpr (EVar "fresh")))))
@@ -5327,13 +5410,46 @@ nodeTag _ = "?"
 (DFunDef false "tyHeadName" ((PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EVar "tyHeadName") (EVar "t")))
 (DFunDef false "tyHeadName" ((PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EVar "tyHeadName") (EVar "t")))
 (DFunDef false "tyHeadName" (PWild) (ELit (LString "")))
-(DTypeSig true "declSigTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))))
-(DFunDef false "declSigTypeNames" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "declSigTypeEntries")) (EVar "prog")))
-(DTypeSig false "declSigTypeEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))))
-(DFunDef false "declSigTypeEntries" ((PCon "DTypeSig" PWild (PVar "name") (PVar "ty") PWild)) (EListLit (ETuple (EVar "name") (ETuple (EApp (EApp (EVar "map") (EVar "tyHeadName")) (EApp (EVar "methodArgTys") (EVar "ty"))) (EApp (EVar "tyHeadName") (EApp (EVar "methodRetTy") (EVar "ty")))))))
-(DFunDef false "declSigTypeEntries" ((PCon "DExtern" PWild (PVar "name") (PVar "ty"))) (EListLit (ETuple (EVar "name") (ETuple (EApp (EApp (EVar "map") (EVar "tyHeadName")) (EApp (EVar "methodArgTys") (EVar "ty"))) (EApp (EVar "tyHeadName") (EApp (EVar "methodRetTy") (EVar "ty")))))))
-(DFunDef false "declSigTypeEntries" ((PCon "DAttrib" PWild (PVar "inner"))) (EApp (EVar "declSigTypeEntries") (EVar "inner")))
-(DFunDef false "declSigTypeEntries" (PWild) (EListLit))
+(DTypeSig true "stampDeclaredSignatures" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
+(DFunDef false "stampDeclaredSignatures" ((PVar "decls") (PAs "prog" (PCon "CProgram" (PVar "groups") PWild PWild PWild PWild (PVar "facts")))) (EBlock (DoLet false false (PVar "sigs") (EApp (EVar "declaredScalarSigs") (EVar "decls"))) (DoLet false false (PVar "edits") (EApp (EVar "BM.fromList") (EApp (EApp (EVar "flatMap") (EApp (EVar "bindSigEdits") (EVar "sigs"))) (EVar "groups")))) (DoExpr (EApp (EApp (EVar "withBinderRows") (EApp (EApp (EVar "map") (EApp (EVar "applyRowEdit") (EVar "edits"))) (EFieldAccess (EVar "facts") "factBinders"))) (EVar "prog")))))
+(DData Private "RowEdit" () ((variant "RowEdit" (ConPos (TyApp (TyCon "Option") (TyCon "RuntimeType")) (TyApp (TyCon "Option") (TyCon "RuntimeType"))))) ())
+(DTypeSig false "declaredScalarSigs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "RuntimeType"))) (TyApp (TyCon "Option") (TyCon "RuntimeType"))))))
+(DFunDef false "declaredScalarSigs" ((PVar "decls")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "flatMap") (EVar "declaredScalarSig")) (EVar "decls")))) (EVar "omEmpty")))
+(DTypeSig false "declaredScalarSig" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "RuntimeType"))) (TyApp (TyCon "Option") (TyCon "RuntimeType")))))))
+(DFunDef false "declaredScalarSig" ((PCon "DTypeSig" PWild (PVar "name") (PVar "ty") PWild)) (EListLit (ETuple (EVar "name") (ETuple (EApp (EApp (EVar "map") (ELam ((PVar "t")) (EApp (EVar "scalarHeadType") (EApp (EVar "tyHeadName") (EVar "t"))))) (EApp (EVar "methodArgTys") (EVar "ty"))) (EApp (EVar "scalarHeadType") (EApp (EVar "tyHeadName") (EApp (EVar "methodRetTy") (EVar "ty"))))))))
+(DFunDef false "declaredScalarSig" ((PCon "DAttrib" PWild (PVar "inner"))) (EApp (EVar "declaredScalarSig") (EVar "inner")))
+(DFunDef false "declaredScalarSig" (PWild) (EListLit))
+(DTypeSig false "scalarHeadType" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RuntimeType"))))
+(DFunDef false "scalarHeadType" ((PLit (LString "Int"))) (EApp (EVar "Some") (EVar "RTInt")))
+(DFunDef false "scalarHeadType" ((PLit (LString "Float"))) (EApp (EVar "Some") (EVar "RTFloat")))
+(DFunDef false "scalarHeadType" ((PLit (LString "Bool"))) (EApp (EVar "Some") (EVar "RTBool")))
+(DFunDef false "scalarHeadType" ((PLit (LString "Char"))) (EApp (EVar "Some") (EVar "RTChar")))
+(DFunDef false "scalarHeadType" ((PLit (LString "String"))) (EApp (EVar "Some") (EVar "RTString")))
+(DFunDef false "scalarHeadType" ((PLit (LString "Unit"))) (EApp (EVar "Some") (EVar "RTUnit")))
+(DFunDef false "scalarHeadType" ((PLit (LString "U64"))) (EApp (EVar "Some") (EVar "RTU64")))
+(DFunDef false "scalarHeadType" ((PLit (LString "I64"))) (EApp (EVar "Some") (EVar "RTI64")))
+(DFunDef false "scalarHeadType" ((PLit (LString "U32"))) (EApp (EVar "Some") (EVar "RTU32")))
+(DFunDef false "scalarHeadType" ((PLit (LString "I32"))) (EApp (EVar "Some") (EVar "RTI32")))
+(DFunDef false "scalarHeadType" ((PLit (LString "U16"))) (EApp (EVar "Some") (EVar "RTU16")))
+(DFunDef false "scalarHeadType" ((PLit (LString "U8"))) (EApp (EVar "Some") (EVar "RTU8")))
+(DFunDef false "scalarHeadType" (PWild) (EVar "None"))
+(DTypeSig false "bindSigEdits" (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "RuntimeType"))) (TyApp (TyCon "Option") (TyCon "RuntimeType")))) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "RowEdit"))))))
+(DFunDef false "bindSigEdits" ((PVar "sigs") (PCon "CBind" (PVar "name") (PVar "clauses") PWild (PVar "bid"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "sigs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "ptys") (PVar "ret"))) () (EIf (EApp (EApp (EVar "allList") (EApp (EVar "clauseTakes") (EApp (EVar "listLen") (EVar "ptys")))) (EVar "clauses")) (EBinOp "::" (ETuple (EApp (EVar "binderOrdinalOf") (EVar "bid")) (EApp (EApp (EVar "functionSigEdit") (EVar "ptys")) (EVar "ret"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "clauseParamEdits") (EVar "ptys"))) (EVar "clauses"))) (EListLit)))))
+(DTypeSig false "clauseTakes" (TyFun (TyCon "Int") (TyFun (TyCon "CClause") (TyCon "Bool"))))
+(DFunDef false "clauseTakes" ((PVar "n") (PCon "CClause" (PVar "pats") PWild)) (EBinOp "==" (EApp (EVar "listLen") (EVar "pats")) (EVar "n")))
+(DTypeSig false "functionSigEdit" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "RuntimeType"))) (TyFun (TyApp (TyCon "Option") (TyCon "RuntimeType")) (TyCon "RowEdit"))))
+(DFunDef false "functionSigEdit" ((PList) (PVar "ret")) (EApp (EApp (EVar "RowEdit") (EVar "ret")) (EVar "ret")))
+(DFunDef false "functionSigEdit" (PWild (PVar "ret")) (EApp (EApp (EVar "RowEdit") (EVar "None")) (EVar "ret")))
+(DTypeSig false "clauseParamEdits" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "RuntimeType"))) (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "RowEdit"))))))
+(DFunDef false "clauseParamEdits" ((PVar "ptys") (PCon "CClause" (PVar "pats") PWild)) (EApp (EApp (EVar "paramSigEdits") (EVar "ptys")) (EVar "pats")))
+(DTypeSig false "paramSigEdits" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "RuntimeType"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "RowEdit"))))))
+(DFunDef false "paramSigEdits" ((PCons (PCon "Some" (PVar "t")) (PVar "tys")) (PCons (PCon "PVar" PWild PWild (PVar "bid")) (PVar "pats"))) (EBinOp "::" (ETuple (EApp (EVar "binderOrdinalOf") (EVar "bid")) (EApp (EApp (EVar "RowEdit") (EApp (EVar "Some") (EVar "t"))) (EVar "None"))) (EApp (EApp (EVar "paramSigEdits") (EVar "tys")) (EVar "pats"))))
+(DFunDef false "paramSigEdits" ((PCons PWild (PVar "tys")) (PCons PWild (PVar "pats"))) (EApp (EApp (EVar "paramSigEdits") (EVar "tys")) (EVar "pats")))
+(DFunDef false "paramSigEdits" (PWild PWild) (EListLit))
+(DTypeSig false "binderOrdinalOf" (TyFun (TyCon "BinderId") (TyCon "Int")))
+(DFunDef false "binderOrdinalOf" ((PCon "BinderId" PWild (PVar "n"))) (EVar "n"))
+(DTypeSig false "applyRowEdit" (TyFun (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "RowEdit")) (TyFun (TyCon "BinderRow") (TyCon "BinderRow"))))
+(DFunDef false "applyRowEdit" ((PVar "edits") (PVar "row")) (EMatch (EApp (EApp (EVar "BM.get") (EApp (EVar "binderOrdinalOf") (EFieldAccess (EVar "row") "brId"))) (EVar "edits")) (arm (PCon "Some" (PCon "RowEdit" (PVar "ty") (PVar "ret"))) () (ERecordCreate "BinderRow" ((fa "brId" (EFieldAccess (EVar "row") "brId")) (fa "brName" (EFieldAccess (EVar "row") "brName")) (fa "brType" (EApp (EApp (EVar "optionOr") (EFieldAccess (EVar "row") "brType")) (EVar "ty"))) (fa "brReturns" (EMatch (EVar "ret") (arm (PCon "Some" (PVar "t")) () (EApp (EVar "Some") (EVar "t"))) (arm (PCon "None") () (EFieldAccess (EVar "row") "brReturns")))) (fa "brSigned" (EFieldAccess (EVar "row") "brSigned"))))) (arm (PCon "None") () (EVar "row"))))
 (DTypeSig true "externArities" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "externArities" ((PVar "decls")) (EApp (EApp (EVar "flatMap") (EVar "externArityEntries")) (EVar "decls")))
 (DTypeSig false "externArityEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
@@ -5780,6 +5896,8 @@ nodeTag _ = "?"
 (DFunDef false "withDeclFacts" ((PVar "facts") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") PWild)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (EVar "facts")))
 (DTypeSig false "stampBinders" (TyFun (TyCon "Lowering") (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
 (DFunDef false "stampBinders" ((PVar "lowering") (PVar "prog")) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "Ref") (EVar "BM.Tip"))) (DoLet false false (PVar "stamped") (EApp (EApp (EVar "mapProgramBinders") (EApp (EApp (EVar "stampVisit") (EVar "lowering")) (EVar "rows"))) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "withBinderRows") (EApp (EVar "BM.values") (EUnOp "!" (EVar "rows")))) (EVar "stamped")))))
+(DTypeSig true "stampUntypedBinders" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
+(DFunDef false "stampUntypedBinders" ((PVar "prog")) (EApp (EApp (EVar "stampBinders") (EVar "UntypedLowering")) (EVar "prog")))
 (DData Private "Lowering" () ((variant "TypedLowering" (ConPos)) (variant "UntypedLowering" (ConPos))) ())
 (DTypeSig false "stampVisit" (TyFun (TyCon "Lowering") (TyFun (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "BinderRow"))) (TyFun (TyCon "BinderSite") (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyCon "BinderId")))))))
 (DFunDef false "stampVisit" ((PVar "lowering") (PVar "rows") (PVar "site") (PVar "x") (PAs "bid" (PCon "BinderId" PWild (PVar "n")))) (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 0))) (EBlock (DoExpr (EMatch (EApp (EVar "binderRowIfInstalled") (EVar "bid")) (arm (PCon "Some" (PVar "row")) () (EApp (EApp (EVar "setRef") (EVar "rows")) (EApp (EApp (EApp (EVar "BM.set") (EVar "n")) (EVar "row")) (EUnOp "!" (EVar "rows"))))) (arm (PCon "None") () (EMatch (EVar "lowering") (arm (PCon "TypedLowering") () (ELit LUnit)) (arm (PCon "UntypedLowering") () (EApp (EApp (EVar "setRef") (EVar "rows")) (EApp (EApp (EApp (EVar "BM.set") (EVar "n")) (EApp (EApp (EApp (EVar "untypedRow") (EVar "bid")) (EVar "x")) (EVar "site"))) (EUnOp "!" (EVar "rows"))))))))) (DoExpr (EVar "bid"))) (EBlock (DoLet false false (PVar "fresh") (EApp (EVar "freshBinderId") (ELit (LString "")))) (DoLet false false (PVar "ord") (EMatch (EVar "fresh") (arm (PCon "BinderId" PWild (PVar "k")) () (EVar "k")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "rows")) (EApp (EApp (EApp (EVar "BM.set") (EVar "ord")) (EApp (EApp (EApp (EVar "mintedRow") (EVar "fresh")) (EVar "x")) (EVar "site"))) (EUnOp "!" (EVar "rows"))))) (DoExpr (EVar "fresh")))))
@@ -6631,13 +6749,46 @@ nodeTag _ = "?"
 (DFunDef false "tyHeadName" ((PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EVar "tyHeadName") (EVar "t")))
 (DFunDef false "tyHeadName" ((PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EVar "tyHeadName") (EVar "t")))
 (DFunDef false "tyHeadName" (PWild) (ELit (LString "")))
-(DTypeSig true "declSigTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))))
-(DFunDef false "declSigTypeNames" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "declSigTypeEntries")) (EVar "prog")))
-(DTypeSig false "declSigTypeEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))))
-(DFunDef false "declSigTypeEntries" ((PCon "DTypeSig" PWild (PVar "name") (PVar "ty") PWild)) (EListLit (ETuple (EVar "name") (ETuple (EApp (EApp (EMethodRef "map") (EVar "tyHeadName")) (EApp (EVar "methodArgTys") (EVar "ty"))) (EApp (EVar "tyHeadName") (EApp (EVar "methodRetTy") (EVar "ty")))))))
-(DFunDef false "declSigTypeEntries" ((PCon "DExtern" PWild (PVar "name") (PVar "ty"))) (EListLit (ETuple (EVar "name") (ETuple (EApp (EApp (EMethodRef "map") (EVar "tyHeadName")) (EApp (EVar "methodArgTys") (EVar "ty"))) (EApp (EVar "tyHeadName") (EApp (EVar "methodRetTy") (EVar "ty")))))))
-(DFunDef false "declSigTypeEntries" ((PCon "DAttrib" PWild (PVar "inner"))) (EApp (EVar "declSigTypeEntries") (EVar "inner")))
-(DFunDef false "declSigTypeEntries" (PWild) (EListLit))
+(DTypeSig true "stampDeclaredSignatures" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
+(DFunDef false "stampDeclaredSignatures" ((PVar "decls") (PAs "prog" (PCon "CProgram" (PVar "groups") PWild PWild PWild PWild (PVar "facts")))) (EBlock (DoLet false false (PVar "sigs") (EApp (EVar "declaredScalarSigs") (EVar "decls"))) (DoLet false false (PVar "edits") (EApp (EVar "BM.fromList") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "bindSigEdits") (EVar "sigs"))) (EVar "groups")))) (DoExpr (EApp (EApp (EVar "withBinderRows") (EApp (EApp (EMethodRef "map") (EApp (EVar "applyRowEdit") (EVar "edits"))) (EFieldAccess (EVar "facts") "factBinders"))) (EVar "prog")))))
+(DData Private "RowEdit" () ((variant "RowEdit" (ConPos (TyApp (TyCon "Option") (TyCon "RuntimeType")) (TyApp (TyCon "Option") (TyCon "RuntimeType"))))) ())
+(DTypeSig false "declaredScalarSigs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "RuntimeType"))) (TyApp (TyCon "Option") (TyCon "RuntimeType"))))))
+(DFunDef false "declaredScalarSigs" ((PVar "decls")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EDictApp "flatMap") (EVar "declaredScalarSig")) (EVar "decls")))) (EVar "omEmpty")))
+(DTypeSig false "declaredScalarSig" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "RuntimeType"))) (TyApp (TyCon "Option") (TyCon "RuntimeType")))))))
+(DFunDef false "declaredScalarSig" ((PCon "DTypeSig" PWild (PVar "name") (PVar "ty") PWild)) (EListLit (ETuple (EVar "name") (ETuple (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (EApp (EVar "scalarHeadType") (EApp (EVar "tyHeadName") (EVar "t"))))) (EApp (EVar "methodArgTys") (EVar "ty"))) (EApp (EVar "scalarHeadType") (EApp (EVar "tyHeadName") (EApp (EVar "methodRetTy") (EVar "ty"))))))))
+(DFunDef false "declaredScalarSig" ((PCon "DAttrib" PWild (PVar "inner"))) (EApp (EVar "declaredScalarSig") (EVar "inner")))
+(DFunDef false "declaredScalarSig" (PWild) (EListLit))
+(DTypeSig false "scalarHeadType" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RuntimeType"))))
+(DFunDef false "scalarHeadType" ((PLit (LString "Int"))) (EApp (EVar "Some") (EVar "RTInt")))
+(DFunDef false "scalarHeadType" ((PLit (LString "Float"))) (EApp (EVar "Some") (EVar "RTFloat")))
+(DFunDef false "scalarHeadType" ((PLit (LString "Bool"))) (EApp (EVar "Some") (EVar "RTBool")))
+(DFunDef false "scalarHeadType" ((PLit (LString "Char"))) (EApp (EVar "Some") (EVar "RTChar")))
+(DFunDef false "scalarHeadType" ((PLit (LString "String"))) (EApp (EVar "Some") (EVar "RTString")))
+(DFunDef false "scalarHeadType" ((PLit (LString "Unit"))) (EApp (EVar "Some") (EVar "RTUnit")))
+(DFunDef false "scalarHeadType" ((PLit (LString "U64"))) (EApp (EVar "Some") (EVar "RTU64")))
+(DFunDef false "scalarHeadType" ((PLit (LString "I64"))) (EApp (EVar "Some") (EVar "RTI64")))
+(DFunDef false "scalarHeadType" ((PLit (LString "U32"))) (EApp (EVar "Some") (EVar "RTU32")))
+(DFunDef false "scalarHeadType" ((PLit (LString "I32"))) (EApp (EVar "Some") (EVar "RTI32")))
+(DFunDef false "scalarHeadType" ((PLit (LString "U16"))) (EApp (EVar "Some") (EVar "RTU16")))
+(DFunDef false "scalarHeadType" ((PLit (LString "U8"))) (EApp (EVar "Some") (EVar "RTU8")))
+(DFunDef false "scalarHeadType" (PWild) (EVar "None"))
+(DTypeSig false "bindSigEdits" (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "RuntimeType"))) (TyApp (TyCon "Option") (TyCon "RuntimeType")))) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "RowEdit"))))))
+(DFunDef false "bindSigEdits" ((PVar "sigs") (PCon "CBind" (PVar "name") (PVar "clauses") PWild (PVar "bid"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "sigs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "ptys") (PVar "ret"))) () (EIf (EApp (EApp (EVar "allList") (EApp (EVar "clauseTakes") (EApp (EVar "listLen") (EVar "ptys")))) (EVar "clauses")) (EBinOp "::" (ETuple (EApp (EVar "binderOrdinalOf") (EVar "bid")) (EApp (EApp (EVar "functionSigEdit") (EVar "ptys")) (EVar "ret"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "clauseParamEdits") (EVar "ptys"))) (EVar "clauses"))) (EListLit)))))
+(DTypeSig false "clauseTakes" (TyFun (TyCon "Int") (TyFun (TyCon "CClause") (TyCon "Bool"))))
+(DFunDef false "clauseTakes" ((PVar "n") (PCon "CClause" (PVar "pats") PWild)) (EBinOp "==" (EApp (EVar "listLen") (EVar "pats")) (EVar "n")))
+(DTypeSig false "functionSigEdit" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "RuntimeType"))) (TyFun (TyApp (TyCon "Option") (TyCon "RuntimeType")) (TyCon "RowEdit"))))
+(DFunDef false "functionSigEdit" ((PList) (PVar "ret")) (EApp (EApp (EVar "RowEdit") (EVar "ret")) (EVar "ret")))
+(DFunDef false "functionSigEdit" (PWild (PVar "ret")) (EApp (EApp (EVar "RowEdit") (EVar "None")) (EVar "ret")))
+(DTypeSig false "clauseParamEdits" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "RuntimeType"))) (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "RowEdit"))))))
+(DFunDef false "clauseParamEdits" ((PVar "ptys") (PCon "CClause" (PVar "pats") PWild)) (EApp (EApp (EVar "paramSigEdits") (EVar "ptys")) (EVar "pats")))
+(DTypeSig false "paramSigEdits" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "RuntimeType"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "RowEdit"))))))
+(DFunDef false "paramSigEdits" ((PCons (PCon "Some" (PVar "t")) (PVar "tys")) (PCons (PCon "PVar" PWild PWild (PVar "bid")) (PVar "pats"))) (EBinOp "::" (ETuple (EApp (EVar "binderOrdinalOf") (EVar "bid")) (EApp (EApp (EVar "RowEdit") (EApp (EVar "Some") (EVar "t"))) (EVar "None"))) (EApp (EApp (EVar "paramSigEdits") (EVar "tys")) (EVar "pats"))))
+(DFunDef false "paramSigEdits" ((PCons PWild (PVar "tys")) (PCons PWild (PVar "pats"))) (EApp (EApp (EVar "paramSigEdits") (EVar "tys")) (EVar "pats")))
+(DFunDef false "paramSigEdits" (PWild PWild) (EListLit))
+(DTypeSig false "binderOrdinalOf" (TyFun (TyCon "BinderId") (TyCon "Int")))
+(DFunDef false "binderOrdinalOf" ((PCon "BinderId" PWild (PVar "n"))) (EVar "n"))
+(DTypeSig false "applyRowEdit" (TyFun (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "RowEdit")) (TyFun (TyCon "BinderRow") (TyCon "BinderRow"))))
+(DFunDef false "applyRowEdit" ((PVar "edits") (PVar "row")) (EMatch (EApp (EApp (EVar "BM.get") (EApp (EVar "binderOrdinalOf") (EFieldAccess (EVar "row") "brId"))) (EVar "edits")) (arm (PCon "Some" (PCon "RowEdit" (PVar "ty") (PVar "ret"))) () (ERecordCreate "BinderRow" ((fa "brId" (EFieldAccess (EVar "row") "brId")) (fa "brName" (EFieldAccess (EVar "row") "brName")) (fa "brType" (EApp (EApp (EVar "optionOr") (EFieldAccess (EVar "row") "brType")) (EVar "ty"))) (fa "brReturns" (EMatch (EVar "ret") (arm (PCon "Some" (PVar "t")) () (EApp (EVar "Some") (EVar "t"))) (arm (PCon "None") () (EFieldAccess (EVar "row") "brReturns")))) (fa "brSigned" (EFieldAccess (EVar "row") "brSigned"))))) (arm (PCon "None") () (EVar "row"))))
 (DTypeSig true "externArities" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "externArities" ((PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EVar "externArityEntries")) (EVar "decls")))
 (DTypeSig false "externArityEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))

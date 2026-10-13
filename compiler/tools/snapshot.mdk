@@ -174,7 +174,6 @@ import ir.core_ir_lower.{
   selfFnParamTable,
   methodIfaceTable,
   ctorFieldTypeNames,
-  declSigTypeNames,
   externArities,
   ffiExternTypeNames,
 }
@@ -660,7 +659,6 @@ wasmOf runtimeDecls allDecls cp =
   let input =
     makeWasmEmitInputFull
       (methodIfaceTable allDecls)
-      (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
       (ctorFieldTypeNames allDecls)
       False
       (mainTypeIsUnit ())

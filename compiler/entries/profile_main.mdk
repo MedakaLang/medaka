@@ -56,7 +56,6 @@ import ir.core_ir_lower.{
   selfFnParamTable,
   methodIfaceTable,
   ctorFieldTypeNames,
-  declSigTypeNames,
   externArities,
   validateFfiExternTypeNames,
 }
@@ -493,7 +492,6 @@ wasmStage on True runtimeDecls live cprog declsOp =
   let input =
     makeWasmEmitInputFull
       (methodIfaceTable live)
-      (declSigTypeNames runtimeDecls ++ declSigTypeNames live)
       (ctorFieldTypeNames live)
       (mainTypeIsFloat ())
       (mainTypeIsUnit ())

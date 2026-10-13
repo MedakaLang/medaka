@@ -1,6 +1,6 @@
 -- W-SQLITE-4 (stage 1): type-erased Float arithmetic — a Float lowers to f64 ops
 -- even with NO co-located Float literal, via the float-return-fn + float-param
--- registries seeded from the installed declSigTypeNames table.  Before the fix each
+-- facts read from the binder and return stamps.  Before the fix each
 -- of these trapped at instantiate with `illegal cast` (an i31 unbox on a $float box).
 --
 --   * `f (x:Float) = x + x`   — Float FN PARAM arith (float-param registry)

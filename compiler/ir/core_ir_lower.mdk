@@ -1136,6 +1136,12 @@ stampBinders lowering prog =
   let stamped = mapProgramBinders (stampVisit lowering rows) prog
   withBinderRows (BM.values !rows) stamped
 
+-- [prog] with every binder stamped as an untyped lowering stamps it, for a driver
+-- that builds Core by hand.
+export
+stampUntypedBinders : CProgram -> CProgram
+stampUntypedBinders prog = stampBinders UntypedLowering prog
+
 -- Whether the program being lowered was elaborated, so that its source binders
 -- have rows in the typechecker's table.
 data Lowering = TypedLowering | UntypedLowering
@@ -3864,12 +3870,9 @@ fieldTyHeadName (Field _ ty) = tyHeadName ty
 -- (TyVar / TyFun / TyTuple / applied types) — the emitter treats "" as "unknown".
 tyHeadName : Ty -> String
 tyHeadName (TyCon { tyConName = n }) = n
--- G3: a type VARIABLE head (`a` in `Num a => a -> a`) yields its var name, so the
--- emitter's declSig table can recognise a polymorphic Num param (isTypeVarName) and
--- route its arithmetic through the runtime tag-dispatched @mdk_num_* helpers.
--- ADDITIVE for every other consumer: a var name (lowercase) is not a known scalar,
--- so `fieldNameToLTy` maps it to None exactly as the old "" did (ctor-field /
--- record-field LTy seeding is unchanged); only the new G3 check reads the name.
+-- A type VARIABLE head (`a` in `Num a => a -> a`) yields its var name.  A var name
+-- (lowercase) is not a known scalar, so `fieldNameToLTy` maps it to None exactly as
+-- "" would.
 tyHeadName (TyVar n) = n
 tyHeadName (TyApp a _) = tyHeadName a
 tyHeadName (TyConstrained _ t) = tyHeadName t
@@ -3878,25 +3881,104 @@ tyHeadName (TyNamed _ t _) = tyHeadName t
 tyHeadName (TyQual t _ _) = tyHeadName t
 tyHeadName _ = ""
 
--- ── function → DECLARED param/return type-head names (wasm backend, Gap E1) ───
--- Per top-level function name (from its `DTypeSig` annotation): the head
--- type-name of each declared PARAMETER (in order) plus the declared RETURN type
--- head, e.g. `double : Float -> Float` → ("double", (["Float"], "Float")).  The
--- wasm emitter seeds its Float registries from it; a literal-free annotated body
--- like `double x = x + x` has no Float anchor of its own (Gap E1).  A non-scalar
--- head (TyVar / applied / function / tuple) maps to "", which seeds nothing.
--- The LLVM emitter reads binder stamps instead (`DeclFacts.factBinders`).
+-- ── an untyped lowering's rows, from the signatures the source declares ──────
+-- An untyped lowering stamps every source binder `RTValue`, so a backend takes its
+-- generic path for all of them.  A top-level function whose `DTypeSig` names
+-- builtin scalar types has already said what its parameters hold and what it
+-- returns; this states that as the rows an elaboration would have published, so
+-- the generic path is left to the binders the source does not type.  A
+-- parameter or result whose declared head is not a builtin scalar keeps its
+-- `RTValue`, and a function whose clauses take a different number of parameters
+-- than its signature declares (an eta-reduced definition) is left alone.
 export
-declSigTypeNames : List Decl -> List (String, (List String, String))
-declSigTypeNames prog = flatMap declSigTypeEntries prog
+stampDeclaredSignatures : List Decl -> CProgram -> CProgram
+stampDeclaredSignatures decls (prog@(CProgram groups _ _ _ _ facts)) =
+  let sigs = declaredScalarSigs decls
+  let edits = BM.fromList (flatMap (bindSigEdits sigs) groups)
+  withBinderRows (map (applyRowEdit edits) facts.factBinders) prog
 
-declSigTypeEntries : Decl -> List (String, (List String, String))
-declSigTypeEntries (DTypeSig _ name ty _) =
-  [(name, (map tyHeadName (methodArgTys ty), tyHeadName (methodRetTy ty)))]
-declSigTypeEntries (DExtern _ name ty) =
-  [(name, (map tyHeadName (methodArgTys ty), tyHeadName (methodRetTy ty)))]
-declSigTypeEntries (DAttrib _ inner) = declSigTypeEntries inner
-declSigTypeEntries _ = []
+-- What a signature changes about one row: the type the binder holds and, for a
+-- function, the type it returns.
+data RowEdit = RowEdit (Option RuntimeType) (Option RuntimeType)
+
+declaredScalarSigs : List Decl ->
+  OrdMap (List (Option RuntimeType), Option RuntimeType)
+declaredScalarSigs decls =
+  omFromPairs (reverseL (flatMap declaredScalarSig decls)) omEmpty
+
+declaredScalarSig : Decl ->
+  List (String, (List (Option RuntimeType), Option RuntimeType))
+declaredScalarSig (DTypeSig _ name ty _) = [
+  (
+    name,
+    (
+      map (t => scalarHeadType (tyHeadName t)) (methodArgTys ty),
+      scalarHeadType (tyHeadName (methodRetTy ty)),
+    ),
+  ),
+]
+declaredScalarSig (DAttrib _ inner) = declaredScalarSig inner
+declaredScalarSig _ = []
+
+scalarHeadType : String -> Option RuntimeType
+scalarHeadType "Int" = Some RTInt
+scalarHeadType "Float" = Some RTFloat
+scalarHeadType "Bool" = Some RTBool
+scalarHeadType "Char" = Some RTChar
+scalarHeadType "String" = Some RTString
+scalarHeadType "Unit" = Some RTUnit
+scalarHeadType "U64" = Some RTU64
+scalarHeadType "I64" = Some RTI64
+scalarHeadType "U32" = Some RTU32
+scalarHeadType "I32" = Some RTI32
+scalarHeadType "U16" = Some RTU16
+scalarHeadType "U8" = Some RTU8
+scalarHeadType _ = None
+
+bindSigEdits : OrdMap (List (Option RuntimeType), Option RuntimeType) ->
+  CBind ->
+  List (Int, RowEdit)
+bindSigEdits sigs (CBind name clauses _ bid) = match omLookup name sigs
+  None => []
+  Some (ptys, ret) =>
+    if allList (clauseTakes (listLen ptys)) clauses then
+      (binderOrdinalOf bid, functionSigEdit ptys ret)
+        :: flatMap (clauseParamEdits ptys) clauses
+    else
+      []
+
+clauseTakes : Int -> CClause -> Bool
+clauseTakes n (CClause pats _) = listLen pats == n
+
+-- A value binding holds what its signature declares; a function returns it.
+functionSigEdit : List (Option RuntimeType) -> Option RuntimeType -> RowEdit
+functionSigEdit [] ret = RowEdit ret ret
+functionSigEdit _ ret = RowEdit None ret
+
+clauseParamEdits : List (Option RuntimeType) -> CClause -> List (Int, RowEdit)
+clauseParamEdits ptys (CClause pats _) = paramSigEdits ptys pats
+
+paramSigEdits : List (Option RuntimeType) -> List Pat -> List (Int, RowEdit)
+paramSigEdits ((Some t) :: tys) ((PVar _ _ bid) :: pats) =
+  (binderOrdinalOf bid, RowEdit (Some t) None) :: paramSigEdits tys pats
+paramSigEdits (_ :: tys) (_ :: pats) = paramSigEdits tys pats
+paramSigEdits _ _ = []
+
+binderOrdinalOf : BinderId -> Int
+binderOrdinalOf (BinderId _ n) = n
+
+applyRowEdit : BM.Map Int RowEdit -> BinderRow -> BinderRow
+applyRowEdit edits row = match BM.get (binderOrdinalOf row.brId) edits
+  Some (RowEdit ty ret) => BinderRow {
+    brId = row.brId,
+    brName = row.brName,
+    brType = optionOr row.brType ty,
+    brReturns = match ret
+      Some t => Some t
+      None => row.brReturns,
+    brSigned = row.brSigned,
+  }
+  None => row
 
 -- The declared arity of each `extern` in [decls]: the parameter count of its
 -- signature, which the LLVM emitter's first-class (eta-wrapped) form of an
@@ -3911,8 +3993,8 @@ externArityEntries (DAttrib _ inner) = externArityEntries inner
 externArityEntries _ = []
 
 -- ── user-declared FFI externs → the lowering's own table (#2074) ─────────────
--- A declared-signature table (`declSigTypeNames`, above) cannot answer "is this
--- name a USER extern?": built from `runtimeDecls ++ allDecls`, it holds ordinary
+-- A table of every declared signature could not answer "is this name a USER
+-- extern?": built from `runtimeDecls ++ allDecls`, it would hold ordinary
 -- annotated functions and the `stdlib/runtime.mdk` builtins in the same
 -- flat keyspace.  So the FFI lowering gets its OWN index, minted here from the
 -- same two decl lists the emit drivers already hold, and carried to the emitter
@@ -4008,8 +4090,7 @@ externDeclNamesOf ((DAttrib _ inner) :: rest) =
   externDeclNamesOf [inner] ++ externDeclNamesOf rest
 externDeclNamesOf (_ :: rest) = externDeclNamesOf rest
 
--- Same (param-head-names, return-head-name) shape as `declSigTypeEntries`, so
--- the emitter reads one row type for both tables.  `tyHeadName` collapses
+-- Rows are (param-head-names, return-head-name).  `tyHeadName` collapses
 -- `Array Int` to `Array`, which is unambiguous HERE and only here: slice 1's
 -- `ffiCrossableTy` guard rejects every non-crossable type — `Array` of anything
 -- but `Int` included — before a user extern's signature can reach the emitter,
