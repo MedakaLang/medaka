@@ -78,16 +78,22 @@ preflight:
 	sh test/preflight.sh $(BASE)
 
 ## Concurrency budget for `make test`: INLANG_JOBS steps run at once, each
-## handing MEDAKA_TEST_JOBS (INLANG_NESTED) to the suites it spawns, so
-## outer x nested stays near INLANG_CORES (4 vCPU CI: 2 x 2; 12 cores: 6 x 2).
-## Override any of the three on the command line.  GNU make 3.81 (macOS) has no
-## --output-sync, so it falls back to one step at a time with every core nested.
+## handing MEDAKA_TEST_JOBS (INLANG_NESTED) to the suites it spawns.  From 4 cores up
+## the outer count is one above cores/2 (4 vCPU CI: 3 x 2; 12 cores: 7 x 2), because
+## most steps are single-threaded for long stretches (a front-end pass, then clang)
+## and cores/2 x 2 leaves a 4-core runner about a third idle.  Below 4 cores it is
+## cores/2, floored at 1.  An INLANG_JOBS given on the command line or in the
+## environment is the outer count exactly, and the nested count divides the cores by it.
+## Override any of the three.  GNU make 3.81 (macOS) has no --output-sync, so it
+## falls back to one step at a time with every core nested.
 ## Steps share no scratch: each `medaka test --native` builds in its own mktemp
 ## directory, so the only ordering kept is a -O2 rerun after its base step.
 INLANG_CORES ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 INLANG_SERIAL := $(filter 3.%,$(MAKE_VERSION))
-INLANG_JOBS ?= $(if $(INLANG_SERIAL),1,$(shell j=$$(( $(INLANG_CORES) / 2 )); [ $$j -ge 1 ] || j=1; echo $$j))
-INLANG_NESTED ?= $(shell n=$$(( $(INLANG_CORES) / $(INLANG_JOBS) )); [ $$n -ge 1 ] || n=1; echo $$n)
+INLANG_JOBS_ORIGIN := $(origin INLANG_JOBS)
+INLANG_BASE_JOBS := $(if $(INLANG_SERIAL),1,$(shell j=$$(( $(INLANG_CORES) / 2 )); [ $$j -ge 1 ] || j=1; echo $$j))
+INLANG_JOBS ?= $(if $(INLANG_SERIAL),1,$(shell j=$(INLANG_BASE_JOBS); [ $(INLANG_CORES) -lt 4 ] || j=$$(( j + 1 )); echo $$j))
+INLANG_NESTED ?= $(shell n=$$(( $(INLANG_CORES) / $(if $(filter undefined,$(INLANG_JOBS_ORIGIN)),$(INLANG_BASE_JOBS),$(INLANG_JOBS)) )); [ $$n -ge 1 ] || n=1; echo $$n)
 INLANG_SYNC := $(if $(INLANG_SERIAL),,--output-sync=target)
 INLANG_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 ## The step list is READ from the `inlang-*` targets between the markers below,
@@ -108,8 +114,12 @@ INLANG_STEPS := $(shell awk '/^. inlang-steps: begin/{f=1;next} /^. inlang-steps
 ##    doctests, so listing such a module HERE is what puts both its types and
 ##    its doctests inside a required check (`inlang` runs `make test`).  Add a
 ##    step below (an `inlang-*` target) for every call-site-free compiler module.
+## GC_INITIAL_HEAP_SIZE (1 GiB): every step is front-end bound and allocation-heavy, so a
+## pre-sized heap skips most collections, cutting the suite's CPU-seconds.  Each process
+## peaks near 1.5 GB RSS, so 6 concurrent on a 16 GB runner is fine; 2 GiB buys little
+## more.  The byte count, not a `1G` suffix, because older libgc ignores the suffix.
 test: medaka
-	MEDAKA_TEST_JOBS=$(if $(MEDAKA_TEST_JOBS),$(MEDAKA_TEST_JOBS),$(INLANG_NESTED)) $(MAKE) -f $(INLANG_MAKEFILE) --no-print-directory -j$(INLANG_JOBS) $(INLANG_SYNC) inlang-steps
+	GC_INITIAL_HEAP_SIZE=$(if $(GC_INITIAL_HEAP_SIZE),$(GC_INITIAL_HEAP_SIZE),1073741824) MEDAKA_TEST_JOBS=$(if $(MEDAKA_TEST_JOBS),$(MEDAKA_TEST_JOBS),$(INLANG_NESTED)) $(MAKE) -f $(INLANG_MAKEFILE) --no-print-directory -j$(INLANG_JOBS) $(INLANG_SYNC) inlang-steps
 
 .PHONY: inlang-steps $(INLANG_STEPS)
 inlang-steps: $(INLANG_STEPS)
