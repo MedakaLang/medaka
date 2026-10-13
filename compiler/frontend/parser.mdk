@@ -87,7 +87,6 @@ import frontend.lexer.{
   offsetToLineCol,
   lineStartsOf,
   offsetToLineColFast,
-  offsetsToLines,
   describeToken,
 }
 import support.util.{reverseL, joinWith}
@@ -235,10 +234,15 @@ locLineStartsRef : Ref (Array Int)
 locLineStartsRef = Ref (arrayFromList [0])
 
 setLocState : String -> Array (Int, Int) -> Unit
-setLocState src offs =
+setLocState src offs = setLocStateWith src (lineStartsOf src) offs
+
+-- `setLocState` with the caller's already-computed `lineStartsOf src`, so a
+-- caller that needs the line starts too does not rescan the source.
+setLocStateWith : String -> Array Int -> Array (Int, Int) -> Unit
+setLocStateWith src lineStarts offs =
   guardOffsRef := arrayFromList []
   locSrcRef := src
-  locLineStartsRef := lineStartsOf src
+  locLineStartsRef := lineStarts
   locOffsRef := offs
 
 -- start char offset of token `i` (0 when out of range / unset).
@@ -264,9 +268,28 @@ locOfSpan : Int -> Int -> Loc
 locOfSpan startIdx endIdx =
   let lineStarts = !locLineStartsRef
   let lastIdx = if endIdx > startIdx then endIdx - 1 else startIdx
-  match offsetToLineColFast lineStarts (tokOffsetAt startIdx)
-    (sl, sc) => match offsetToLineColFast lineStarts (tokEndOffsetAt lastIdx)
-      (el, ec) => Loc "" sl sc el ec
+  let so = tokOffsetAt startIdx
+  let eo = tokEndOffsetAt lastIdx
+  let si = lineStartIdx lineStarts so 0 (arrayLength lineStarts - 1)
+  let ei = lineStartIdx lineStarts eo 0 (arrayLength lineStarts - 1)
+  Loc
+    ""
+    (si + 1)
+    (so - arrayGetUnsafe si lineStarts)
+    (ei + 1)
+    (eo - arrayGetUnsafe ei lineStarts)
+
+-- `offsetToLineColFast`'s search, returning the line index directly (no pair
+-- allocation).  Same rightmost-`lineStarts[i] <= off` contract.
+lineStartIdx : Array Int -> Int -> Int -> Int -> Int
+lineStartIdx arr off lo hi
+  | lo >= hi = lo
+  | otherwise =
+    let mid = (lo + hi + 1) / 2
+    if arrayGetUnsafe mid arr <= off then
+      lineStartIdx arr off mid hi
+    else
+      lineStartIdx arr off lo (mid - 1)
 
 -- Wrap an expr production in a transparent ELoc capturing its token span.
 located : Parser Expr -> Parser Expr
@@ -448,7 +471,7 @@ skipNlFor _ = deferPure ()
 parseExpr : Parser Expr
 parseExpr = defer
   e <- parseAssign
-  orElse (annotTail e) (deferPure e)
+  annotOpt e
 
 -- `:=` reference assignment (mutation). Looser than lambda so the RHS may be a
 -- full lambda (`r := x => x`), right-associative (`a := b := c` ⇒ `a := (b := c)`)
@@ -457,7 +480,7 @@ parseExpr = defer
 parseAssign : Parser Expr
 parseAssign = defer
   e <- parseLam
-  orElse (assignTail e) (deferPure e)
+  assignOpt e
 
 assignTail : Expr -> Parser Expr
 assignTail lhs = located (assignTailRaw lhs)
@@ -486,6 +509,24 @@ assignTailRaw lhs = defer
   rhs <- parseRhsExpr
   deferPure (EBinOp ":=" lhs rhs (Ref RNone))
 
+-- Each optional tail is taken only when its introducing token is next.  Any
+-- other next token makes the tail fail without consuming (at this same pos), so
+-- the result is `POk e pos` and the tail's chain need not be built.
+annotOpt : Expr -> Parser Expr
+annotOpt e = ParserE (toks pos => match peekTok toks pos
+  TColon => runP (orElse (annotTail e) (deferPure e)) toks pos
+  _ => POk e pos)
+
+assignOpt : Expr -> Parser Expr
+assignOpt e = ParserE (toks pos => match peekTok toks pos
+  TColonEq => runP (orElse (assignTail e) (deferPure e)) toks pos
+  _ => POk e pos)
+
+lamOpt : Expr -> Parser Expr
+lamOpt e = ParserE (toks pos => match peekTok toks pos
+  TFatArrow => runP (orElse (lamTail e) (deferPure e)) toks pos
+  _ => POk e pos)
+
 -- expression type annotation `e : ty` (loosest level)
 annotTail : Expr -> Parser Expr
 annotTail e = defer
@@ -496,7 +537,7 @@ annotTail e = defer
 parseLam : Parser Expr
 parseLam = defer
   e <- parsePipe
-  orElse (lamTail e) (deferPure e)
+  lamOpt e
 
 lamTail : Expr -> Parser Expr
 lamTail e = located (lamTailRaw e)
@@ -851,7 +892,7 @@ parseInfix = parseApp
 parseApp : Parser Expr
 parseApp = defer
   head <- parseAspat
-  args <- many (appArg (headIsNumeric head))
+  args <- many (appArg head)
   deferPure (applyAll head args)
 
 -- One application argument.  Normally an aspat, but a TIGHT negative literal
@@ -859,8 +900,31 @@ parseApp = defer
 -- negative-numeric argument when the application HEAD is non-numeric.  A numeric
 -- head (`5 -1`) never grabs, so the TMinusTight falls through to the
 -- binary-minus level (`binLevel`) and stays subtraction (Rule C, head-gated).
-appArg : Bool -> Parser Expr
-appArg headNum = orElse (negLitArg headNum) (orElse derefArg parseAspat)
+appArg : Expr -> Parser Expr
+appArg head = ParserE (toks pos => appArgR head toks pos)
+
+-- End-of-arguments fast path.  `many (appArg …)` ends every application with a
+-- failing attempt whose error it discards, so for a token that cannot start an
+-- argument the whole chain is a PErr at `pos`.  The one exception is the nesting
+-- cap: `parseAtomNestGo` returns PFatal before it looks at the token, so the
+-- chain runs whenever the depth counter is at the cap.
+appArgR : Expr -> Array Token -> Int -> PR Expr
+appArgR head toks pos =
+  if appArgStops (peekTok toks pos) && !nestDepthRef < maxNestDepth then
+    PErr (FailMsg "expected an application argument") pos
+  else
+    runP (orElse (negLitArg head) (orElse derefArg parseAspat)) toks pos
+
+-- Tokens that no argument alternative accepts without a fatal outcome.
+appArgStops : Token -> Bool
+appArgStops TEof = True
+appArgStops TNewline = True
+appArgStops TDedent = True
+appArgStops TRParen = True
+appArgStops TRBracket = True
+appArgStops TRBrace = True
+appArgStops TComma = True
+appArgStops _ = False
 
 -- #1739 half A: `!` (Ref-dereference) binds TIGHTER than application, so `f !r`
 -- is `f (!r)` — the OCaml-standard Ref ergonomics this bite exists to deliver.
@@ -889,12 +953,25 @@ derefArgFor TBang = defer
   deferPure (EUnOp "!" e (Ref RNone))
 derefArgFor _ = failP "not a tight deref argument"
 
-negLitArg : Bool -> Parser Expr
-negLitArg True = failP "numeric head: tight minus stays subtraction"
-negLitArg False = defer
+-- The numeric-head test (`headIsNumeric`) walks the head's ELoc chain, so it runs
+-- only once the next token is TMinusTight, the one token it can change the answer for.
+negLitArg : Expr -> Parser Expr
+negLitArg head = defer
   t <- peekP
+  negLitArgGate head t
+
+negLitArgGate : Expr -> Token -> Parser Expr
+negLitArgGate head TMinusTight =
+  if headIsNumeric head then
+    failP "numeric head: tight minus stays subtraction"
+  else
+    negLitArgTight
+negLitArgGate _ _ = failP "not a tight negative literal argument"
+
+negLitArgTight : Parser Expr
+negLitArgTight = defer
   t2 <- peek2P
-  negLitArgFor t t2
+  negLitArgFor TMinusTight t2
 
 negLitArgFor : Token -> Token -> Parser Expr
 negLitArgFor TMinusTight (TInt n lx) = defer
@@ -947,7 +1024,19 @@ parsePostfix = defer
   postfixTail e
 
 postfixTail : Expr -> Parser Expr
-postfixTail e = orElse (bracketIndexTail e) (orElse (dotTail e) (deferPure e))
+postfixTail e = ParserE (toks pos => postfixTailR e toks pos)
+
+-- Only `[`-tight and `.` can continue a postfix chain.  For any other next
+-- token both tails fail without consuming (at this same pos), so the chain
+-- would pick `deferPure e`: return that directly and skip building the chain.
+postfixTailR : Expr -> Array Token -> Int -> PR Expr
+postfixTailR e toks pos = match peekTok toks pos
+  TLBracketTight => runP (postfixChain e) toks pos
+  TDot => runP (postfixChain e) toks pos
+  _ => POk e pos
+
+postfixChain : Expr -> Parser Expr
+postfixChain e = orElse (bracketIndexTail e) (orElse (dotTail e) (deferPure e))
 
 -- bare `a[i]` postfix indexing (no dot) — fires only on the adjacency-lexed
 -- TLBracketTight token, so a spaced `a [i]` (application to a list literal)
@@ -1061,9 +1150,17 @@ parseAtomNestGo toks pos =
 parseAtomNestRun : Array Token -> Int -> Int -> PR Expr
 parseAtomNestRun toks pos d =
   nestDepthRef := d
-  let r = runP (located parseAtomRaw) toks pos
+  let r = atomRawLocated toks pos
   nestDepthRef := d - 1
   r
+
+-- `located parseAtomRaw`, run directly: the same ELoc (span from `pos` to the
+-- position after the atom) on success, the raw failure unchanged otherwise.
+atomRawLocated : Array Token -> Int -> PR Expr
+atomRawLocated toks pos = match runP parseAtomRaw toks pos
+  POk e q => POk (ELoc (locOfSpan pos q) e) q
+  PErr ef q => PErr ef q
+  PFatal m q => PFatal m q
 
 parseAtomRaw : Parser Expr
 parseAtomRaw = defer
@@ -5693,10 +5790,13 @@ parseWithPositionsOptPairs src tokList offPairList =
   -- expression `ELoc`s carry real spans for every caller (LSP included).
   let toks = arrayFromList tokList
   let offs = arrayFromList offPairList
-  let lines =
-    arrayFromList (offsetsToLines (stringToChars src) (map fst offPairList))
   let nameLineStarts = lineStartsOf src
-  let _ = setLocState src offs
+  let lines =
+    arrayFromList
+      (map
+        (off => fst (offsetToLineColFast nameLineStarts off))
+        (map fst offPairList))
+  let _ = setLocStateWith src nameLineStarts offs
   trailingCommaLocsRef := []
   unitStartsRef := []
   match runP programWithSpans toks 0
