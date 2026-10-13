@@ -726,12 +726,12 @@ has_wasm_pin 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) 
   exit 1
 }
 for required in \
-  'currentBinding : Ref String' \
-  'currentBinding = Ref "?"' \
-  'currentBindingOfW : WasmEmit -> String' \
-  'currentBindingOfW emit = !emit.currentBinding' \
-  'setCurrentBindingOfW : WasmEmit -> String -> Unit' \
-  'setCurrentBindingOfW emit name = setRef emit.currentBinding name'; do
+  'site : Int, binding : String, }' \
+  'freshFnCtx = FnCtx { trmc = WTrmcOff, disp = WDispOff, site = 0, binding = "?" }' \
+  'progBinding : Prog -> String' \
+  'progBinding prog = (progFnCtx prog).binding' \
+  'progForBinding : String -> Int -> Prog -> Prog' \
+  'progForBinding name site prog = progWithFnCtx prog { freshFnCtx | site = site, binding = name }'; do
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F -- "$required" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
     echo "FAIL H2B5-CARRIER: missing $required"
     exit 1
@@ -741,27 +741,30 @@ if grep -E '^curBindRef[[:space:]]*[:=]' "$WASM_SRC" >/dev/null; then
   echo "FAIL H2B5-AUTHORITY-SET: retired current-binding authority remains ambient"
   exit 1
 fi
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setCurrentBindingOfW (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
-  echo "FAIL H2B5-ROUTES: expected exactly two current-binding setter call sites"
+if grep -E 'currentBinding|CurrentBindingOfW' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B5-AUTHORITY-SET: retired WasmEmit current-binding cell remains"
+  exit 1
+fi
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'progForBinding ' | wc -l | tr -d '[:space:]')" -eq 4 ] || {
+  echo "FAIL H2B5-ROUTES: expected exactly two progForBinding call sites (plus signature and definition)"
   exit 1
 }
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'currentBindingOfW (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '++ currentBindingOfW emit ++' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'currentBindingOfW' | wc -l | tr -d '[:space:]')" -eq 5 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setCurrentBindingOfW' | wc -l | tr -d '[:space:]')" -eq 4 ] || {
-  echo "FAIL H2B5-ROUTES: expected exactly three current-binding getter call sites"
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'in \{progBinding prog}]' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'progBinding' | wc -l | tr -d '[:space:]')" -eq 4 ] || {
+  echo "FAIL H2B5-ROUTES: expected exactly two current-binding reader sites"
   exit 1
 }
-has_wasm_pin 'patName emit _ =' &&
-  has_wasm_pin 'currentBindingOfW emit ++ "]")' || {
-  echo "FAIL H2B5-PATNAME-STRUCTURAL: patName fallback is not routed through WasmEmit"
+has_wasm_pin 'patName emit binding _ =' &&
+  has_wasm_pin '++ binding ++ "]")' &&
+  has_wasm_pin 'map (patName emit name) pats' || {
+  echo "FAIL H2B5-PATNAME-STRUCTURAL: patName fallback is not routed through the explicit binding name"
   exit 1
 }
-if grep -E 'let (saved|old|prior|previous)[A-Za-z0-9_]*[[:space:]]*=[[:space:]]*currentBindingOfW|setCurrentBindingOfW.*(saved|old|prior|previous)' "$WASM_SRC" >/dev/null; then
+if grep -E 'let (saved|old|prior|previous)[A-Za-z0-9_]*[[:space:]]*=[[:space:]]*progBinding|setRef emit\.[a-zA-Z]*[bB]inding[A-Za-z]* ' "$WASM_SRC" >/dev/null; then
   echo "FAIL H2B5-NO-RESTORE: current-binding save/restore is forbidden"
   exit 1
 fi
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'emit.currentBinding' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progFnCtx prog).binding' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B5-NO-RESTORE: current-binding alias/reset/restore route added"
   exit 1
 }
@@ -1011,7 +1014,8 @@ run_trmc_state_check() {
   done
   [ "$(wc -l < "$INPUT_WORK/trmc-census.events")" -eq 1 ] &&
     grep -F $'val trmcIntentionalGap\tunbound variable '\''missingTrmcCensus' "$INPUT_WORK/trmc-census.events" >/dev/null &&
-    grep -F '[in pTrmc]' "$INPUT_WORK/trmc-census.events" >/dev/null || {
+    grep -F '[in ?]' "$INPUT_WORK/trmc-census.events" >/dev/null &&
+    ! grep -F '[in pTrmc]' "$INPUT_WORK/trmc-census.events" >/dev/null || {
       echo "FAIL H2B6-WTRMC-P-SHAPE: census gap attribution"
       exit 1
     }
