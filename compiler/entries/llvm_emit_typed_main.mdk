@@ -18,7 +18,7 @@
 -- `core_ir_lower` resolves the record by a bare-label first-match guess (the
 -- wrong-slot behaviour issue #38 closed).  Elaborate, mangle, then key every
 -- table off the mangled decls — the order `entry_support.emitModulesWith` runs.
-import frontend.ast.{Decl, Lit(..), noDeclLoc}
+import frontend.ast.{Decl, Lit(..), BinderId(..), noDeclLoc}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.typecheck.{
@@ -37,16 +37,13 @@ import ir.core_ir_lower.{
   selfFnParamTable,
   methodIfaceTable,
   ctorFieldTypeNames,
-  declSigTypeNames,
+  externArities,
   validateFfiExternTypeNames,
 }
 import ir.core_ir.{
-  CProgram(..),
-  CBind(..),
-  CClause(..),
-  CExpr(..),
-  noDeclFacts,
+  CProgram(..), CBind(..), CClause(..), CExpr(..), DeclFacts(..)
 }
+import types.runtime_types.{BinderRow(..), RuntimeType(..)}
 import backend.llvm_emit.{emitProgram, emitProgramRecord, makeEmitInput}
 import entries.entry_support.{driveRuntime, failWith}
 import support.util.{contains}
@@ -88,17 +85,31 @@ emitIsolation runtimePath pPath pPlusUPath =
 -- Record then strict-emit the same unsupported Core node in ONE process. The
 -- record marker reaches stdout before the strict panic; the shell control asserts
 -- both, so an ambient Record mode leak changes the second observation to exit 0.
+-- `main` is stamped, as every lowered binder is, so the emitter reaches the node.
 emitGapIsolation : <IO> Unit
 emitGapIsolation =
   let input = makeEmitInput [] [] [] [] [] False False 0 [] [] "" [] []
+  let mainId = BinderId "" 0
   let cp =
     CProgram
-      [CBind "main" [CClause [] (CMatch (CLit (LInt 0)) [])] noDeclLoc]
+      [CBind "main" [CClause [] (CMatch (CLit (LInt 0)) [])] noDeclLoc mainId]
       []
       []
       []
       []
-      noDeclFacts
+      DeclFacts {
+        factRequires = [],
+        factSupers = [],
+        factBinders = [
+          BinderRow {
+            brId = mainId,
+            brName = "main",
+            brType = RTValue,
+            brReturns = Some RTValue,
+            brSigned = False,
+          },
+        ],
+      }
   let (_, gaps) = emitProgramRecord input cp
   if contains "?\tunsupported Core IR node CMatch" gaps then
     let _ = putStr "LLVM_GAP_RECORD_OK\n"
@@ -125,7 +136,7 @@ runEmit runtimeDecls preludeDecls userDecls =
       (selfFnParamTable mangled)
       (methodIfaceTable mangled)
       (ctorFieldTypeNames mangled)
-      (declSigTypeNames runtimeDecls ++ declSigTypeNames mangled)
+      (externArities runtimeDecls)
       (mainTypeIsUnit ())
       (mainTypeIsFloat ())
       0

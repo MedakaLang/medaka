@@ -29,9 +29,13 @@ import ir.core_ir.{
   CTree(..),
   CTBranch(..),
   CHead(..),
+  programBinderIds,
 }
+import frontend.ast.{BinderId(..)}
+import types.runtime_types.{BinderRow(..), runtimeTypeName}
+import map as BM
 import ir.sexp.{boolStr, node, slist, litSexp, patSexp}
-import support.util.{escStr, joinNl}
+import support.util.{escStr, joinNl, reverseL}
 
 -- ── Addr and Route ─────────────────────────────────────────────────────────────
 
@@ -251,7 +255,7 @@ cstmtSexp m (CSAssign x e) = node "CSAssign" [escStr x, cexprSexp m e]
 
 export
 cbindSexp : SexpMode -> CBind -> String
-cbindSexp m (CBind name clauses _) =
+cbindSexp m (CBind name clauses _ _) =
   node "CBind" (escStr name :: map (cclauseSexp m) clauses)
 
 export
@@ -326,7 +330,7 @@ cprogramToSexp prog = cprogramToSexpWith defaultSexpMode prog
 -- would otherwise be reached by flipping an ambient flag first.
 export
 cprogramToSexpWith : SexpMode -> CProgram -> String
-cprogramToSexpWith m (CProgram binds ctorArities ctorToType impls mctx facts) =
+cprogramToSexpWith m (prog@(CProgram binds ctorArities ctorToType impls mctx facts)) =
   node
     "CProgram"
     ([
@@ -335,14 +339,17 @@ cprogramToSexpWith m (CProgram binds ctorArities ctorToType impls mctx facts) =
         slist (map ctorTypePairSexp ctorToType),
         slist (map (cimplEntrySexp m) impls),
       ]
-      ++ tablesSexp mctx facts)
+      ++ tablesSexp mctx facts (binderTypesSexp prog))
 
 -- The method-context table is written only when it has a row, so a program whose
 -- interfaces declare no method context keeps the four-element form.  The
 -- declaration facts are written only when they have a row, after the
--- method-context table, which is then written even when empty.
-tablesSexp : List (String, Int) -> DeclFacts -> List String
-tablesSexp rows facts = match (rows, facts.factRequires, facts.factSupers)
+-- method-context table, which is then written even when empty.  The binder-type
+-- section follows both, which are then both written.
+tablesSexp : List (String, Int) -> DeclFacts -> Option String -> List String
+tablesSexp rows facts (Some binders) =
+  [slist (map methodContextPairSexp rows), declFactsSexp facts, binders]
+tablesSexp rows facts None = match (rows, facts.factRequires, facts.factSupers)
   ([], [], []) => []
   (_, [], []) => [slist (map methodContextPairSexp rows)]
   _ => [slist (map methodContextPairSexp rows), declFactsSexp facts]
@@ -358,3 +365,78 @@ factPairSexp tag (key, n) = node tag [escStr key, intToString n]
 
 methodContextPairSexp : (String, Int) -> String
 methodContextPairSexp (key, n) = node "mc" [escStr key, intToString n]
+
+-- ── binder types ─────────────────────────────────────────────────────────────
+-- `(binder-types [(ids n…)] (b i "module" "name" RT [RT])…)`.  A binder's ordinal
+-- comes from a process-global counter, so it moves whenever any other program was
+-- processed first; the dump renumbers the ids a program holds by first occurrence
+-- in the binder walk (`core_ir.mapProgramBinders`), which is what makes it stable.
+-- `ids` lists the renumbered id of each binder occurrence in walk order, and is
+-- left out when that is 0, 1, 2…: every occurrence a distinct binder.  `-1` is a
+-- binder with no id.  A row is `i`, the id's module, the binder's name, its type
+-- and, for a function binder, the type its body returns; an id with no row has none.
+-- The section is absent for a program with no binder.
+binderTypesSexp : CProgram -> Option String
+binderTypesSexp (prog@(CProgram _ _ _ _ _ facts)) =
+  let ids = programBinderIds prog
+  match ids
+    [] => None
+    _ =>
+      let (occ, firsts) = denseIds ids BM.Tip 0 [] []
+      let byOrd = BM.fromList (map (r => (rowOrdinal r, r)) facts.factBinders)
+      let rows = flatMap (binderRowSexp byOrd) (reverseL firsts)
+      let idsPart =
+        if isIdentity occ 0 then [] else [node "ids" (map intToString occ)]
+      Some ("(" ++ joinNl ("binder-types" :: idsPart ++ rows) ++ ")")
+
+rowOrdinal : BinderRow -> Int
+rowOrdinal row = match row.brId
+  BinderId _ n => n
+
+-- Per-occurrence dense ids, and the distinct ids in order of first occurrence
+-- paired with their dense id (both accumulated in reverse).
+denseIds : List BinderId ->
+  BM.Map Int Int ->
+  Int ->
+  List Int ->
+  List (Int, BinderId) ->
+  (List Int, List (Int, BinderId))
+denseIds [] _ _ occ firsts = (reverseL occ, firsts)
+denseIds ((bid@(BinderId _ n)) :: rest) seen next occ firsts
+  | n < 0 = denseIds rest seen next (0 - 1 :: occ) firsts
+  | otherwise = match BM.get n seen
+    Some d => denseIds rest seen next (d :: occ) firsts
+    None =>
+      denseIds
+        rest
+        (BM.set n next seen)
+        (next + 1)
+        (next :: occ)
+        ((next, bid) :: firsts)
+
+isIdentity : List Int -> Int -> Bool
+isIdentity [] _ = True
+isIdentity (d :: rest) i = d == i && isIdentity rest (i + 1)
+
+binderRowSexp : BM.Map Int BinderRow -> (Int, BinderId) -> List String
+binderRowSexp byOrd (d, BinderId _ n) = match BM.get n byOrd
+  None => []
+  Some row => match row.brId
+    BinderId m _ =>
+      let ret = match row.brReturns
+        None => []
+        Some r => [runtimeTypeName r]
+      -- a signed function's row ends in `signed`; every other row omits it
+      let signed = if row.brSigned then ["signed"] else []
+      [
+        node
+          "b"
+          ([
+              intToString d,
+              escStr m,
+              escStr row.brName,
+              runtimeTypeName row.brType,
+            ]
+            ++ ret
+            ++ signed),
+      ]

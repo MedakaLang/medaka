@@ -71,20 +71,20 @@ patBindings : Pat -> List String
 -- raw AST without dragging the resolver in; importing resolve.mdk for a pattern
 -- walk would invert the pass order this file sits after.
 -- lint-disable-next-line rule-duplicate-body
-patBindings (PVar x _) = [x]
+patBindings (PVar x _ _) = [x]
 patBindings PWild = []
 patBindings (PLit _) = []
 patBindings (PCon _ ps) = flatMap patBindings ps
 patBindings (PCons a b) = patBindings a ++ patBindings b
 patBindings (PTuple ps) = flatMap patBindings ps
 patBindings (PList ps) = flatMap patBindings ps
-patBindings (PAs x _ p) = x :: patBindings p
+patBindings (PAs x _ _ p) = x :: patBindings p
 patBindings (PRng _ _ _) = []
 patBindings (PRec _ fields _) = flatMap recFieldBindings fields
 
 recFieldBindings : RecPatField -> List String
-recFieldBindings (RecPatField fname _ None) = [fname]
-recFieldBindings (RecPatField _ _ (Some p)) = patBindings p
+recFieldBindings (RecPatField fname _ _ None) = [fname]
+recFieldBindings (RecPatField _ _ _ (Some p)) = patBindings p
 
 startsWithAt : Array Char -> Bool
 -- Intentional cross-file duplicate of the same helper in resolve.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
@@ -95,7 +95,7 @@ isHint : String -> Bool
 isHint n = startsWithAt (stringToChars n)
 
 letBindName : LetBind -> String
-letBindName (LetBind n _ _) = n
+letBindName (LetBind n _ _ _) = n
 
 propParamName : PropParam -> String
 propParamName (PropParam x _ _) = x
@@ -185,9 +185,9 @@ annotateExpr fr (EDoOrigin l e) = EDoOrigin l (annotateExpr fr e)
 -- (eval's evalRecLet pushFrame [f]); any other let evaluates the RHS in the
 -- OUTER scope and pushes the pattern's bindings for the body only (evalLet).
 annotateLet : List (List String) -> Loc -> Bool -> Pat -> Expr -> Expr -> Expr
-annotateLet fr m True (PVar f fl) e1 e2 =
+annotateLet fr m True (PVar f fl bid) e1 e2 =
   let inner = [f] :: fr
-  ELet m True (PVar f fl) (annotateExpr inner e1) (annotateExpr inner e2)
+  ELet m True (PVar f fl bid) (annotateExpr inner e1) (annotateExpr inner e2)
 annotateLet fr m isRec pat e1 e2 =
   ELet
     m
@@ -206,8 +206,8 @@ annotateLetGroup fr binds body =
     (annotateExpr groupScope body)
 
 annotateLetBind : List (List String) -> LetBind -> LetBind
-annotateLetBind groupScope (LetBind name clauses site) =
-  LetBind name (map (annotateClause groupScope) clauses) site
+annotateLetBind groupScope (LetBind name clauses site bid) =
+  LetBind name (map (annotateClause groupScope) clauses) site bid
 
 annotateClause : List (List String) -> FunClause -> FunClause
 annotateClause groupScope (FunClause pats body) =
@@ -274,8 +274,8 @@ annotateSection fr (SecLeft e op) = SecLeft (annotateExpr fr e) op
 -- a top-level function's params become per-parameter frames (the only local
 -- scope; sibling top-level names resolve to AGlobal by-name)
 annotateDecl : Decl -> Decl
-annotateDecl (DFunDef p n pats body site) =
-  DFunDef p n pats (annotateExpr (paramFrames pats) body) site
+annotateDecl (DFunDef p n pats body site bid) =
+  DFunDef p n pats (annotateExpr (paramFrames pats) body) site bid
 annotateDecl (DProp p n params body) =
   DProp p n params (annotateExpr [map propParamName params] body)
 annotateDecl (DTest p n body) = DTest p n (annotateExpr [] body)

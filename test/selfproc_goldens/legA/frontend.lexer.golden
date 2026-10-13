@@ -39,6 +39,7 @@ concatAll : List String -> String
 consumeNl : Array Char -> Int -> Int -> Int -> (Int, Int)
 dedentGroupSegs : Int -> List String -> List String
 dedentRestSegs : Int -> Bool -> List String -> List String
+dedentTripleGo : List RawTok -> List RawTok
 dedentTripleGroup : String -> Int -> Int -> List String -> List RawTok -> List RawTok -> List RawTok
 dedentTripleInterp : List RawTok -> List RawTok
 describeToken : Token -> String
@@ -69,6 +70,7 @@ flushSepPairsGo : Token -> Int -> Int -> List RawTok -> List Int -> Int -> List 
 frameHasLive : List BracketFrame -> Bool
 handleNewline : Array Char -> Int -> Int -> Int -> Int -> List RawTok
 hasTripleInterpMark : String -> Bool
+hasTripleInterpOpen : List RawTok -> Bool
 identEnd : Array Char -> Int -> Int -> Int
 identToken : Array Char -> Int -> Int -> Token
 indentOf : String -> Int
@@ -168,7 +170,6 @@ skipLineComment : Array Char -> Int -> Int -> Int
 splitInterpGroup : List RawTok -> (List String, List RawTok, List RawTok)
 splitLines : Array Char -> Int -> Int -> String -> List String
 startsWithNl : String -> Bool
-stripComments : List RawTok -> List RawTok
 stripFirstAware : Int -> Bool -> List String -> List String
 stripIndent : String -> String
 stripIndentCs : String -> Array Char -> Int -> String

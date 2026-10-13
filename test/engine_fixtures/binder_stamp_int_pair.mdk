@@ -1,0 +1,11 @@
+-- An Int pair matched in a body: both binders are Ints, so the sum is an Int
+-- add, and its overflow traps like any Int add.
+-- Expected, derived from the source: `addPair (20, 22)` = `42`;
+-- `addPair (-5, 3)` = `-2`.
+addPair : (Int, Int) -> Int
+addPair p = match p
+  (a, b) => a + b
+
+main =
+  println (addPair (20, 22))
+  println (addPair (-5, 3))

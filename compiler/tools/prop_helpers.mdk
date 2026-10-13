@@ -6,6 +6,7 @@
 -- property runner then invokes the resulting bindings by their exact names.
 
 import frontend.ast.{
+  noBinderId,
   Decl(..),
   Expr(..),
   Pat(..),
@@ -92,14 +93,16 @@ helperDecls i (CustomPlan _ carrier _) =
       generator
       [PLit LUnit]
       (ELoc loc (EApp (EVar "$prop_core.arbitrary") (ELit LUnit)))
-      loc,
+      loc
+      noBinderId,
     DTypeSig False shrinker (TyFun carrier (TyApp listTy carrier)) loc,
     DFunDef
       False
       shrinker
-      [PVar "$prop_value" loc]
+      [PVar "$prop_value" loc noBinderId]
       (ELoc loc (EApp (EVar "$prop_core.shrink") (EVar "$prop_value")))
-      loc,
+      loc
+      noBinderId,
   ]
 
 prependDecls : List Decl -> List Decl -> List Decl

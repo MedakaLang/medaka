@@ -454,20 +454,20 @@ patBindings : Pat -> List String
 -- beyond the AST, deliberately: annotate runs after resolve and sharing this
 -- would make the post-resolve pass depend on the pass that precedes it.
 -- lint-disable-next-line rule-duplicate-body
-patBindings (PVar x _) = [x]
+patBindings (PVar x _ _) = [x]
 patBindings PWild = []
 patBindings (PLit _) = []
 patBindings (PCon _ ps) = flatMap patBindings ps
 patBindings (PCons a b) = patBindings a ++ patBindings b
 patBindings (PTuple ps) = flatMap patBindings ps
 patBindings (PList ps) = flatMap patBindings ps
-patBindings (PAs x _ p) = x :: patBindings p
+patBindings (PAs x _ _ p) = x :: patBindings p
 patBindings (PRng _ _ _) = []
 patBindings (PRec _ fields _) = flatMap recFieldBindings fields
 
 recFieldBindings : RecPatField -> List String
-recFieldBindings (RecPatField fname _ None) = [fname]
-recFieldBindings (RecPatField _ _ (Some p)) = patBindings p
+recFieldBindings (RecPatField fname _ _ None) = [fname]
+recFieldBindings (RecPatField _ _ _ (Some p)) = patBindings p
 
 patsBindings : List Pat -> List String
 patsBindings ps = flatMap patBindings ps
@@ -764,7 +764,7 @@ checkPat cur env (PCon c ps) =
 checkPat cur env (PCons a b) = checkPat cur env a ++ checkPat cur env b
 checkPat cur env (PTuple ps) = flatMap (checkPat cur env) ps
 checkPat cur env (PList ps) = flatMap (checkPat cur env) ps
-checkPat cur env (PAs _ _ p) = checkPat cur env p
+checkPat cur env (PAs _ _ _ p) = checkPat cur env p
 checkPat cur env (PRec name fields _) = checkRecPat cur env name fields
 checkPat _ _ _ = []
 
@@ -791,7 +791,7 @@ recPatHead cur env name =
     [UnknownType name cur (suggestType env name)]
 
 checkRecField : Option Loc -> Env -> String -> RecPatField -> List ResError
-checkRecField cur env owner (RecPatField fname _ popt) =
+checkRecField cur env owner (RecPatField fname _ _ popt) =
   fieldCheck cur env owner fname ++ recFieldSub cur env popt
 
 fieldCheck : Option Loc -> Env -> String -> String -> List ResError
@@ -1626,7 +1626,7 @@ checkLet : Option Loc ->
   Expr ->
   Expr ->
   List ResError
-checkLet cur env scope True (PVar f _) e1 e2 =
+checkLet cur env scope True (PVar f _ _) e1 e2 =
   checkExpr cur env (scopeAdd f scope) e1
     ++ checkExpr cur env (scopeAdd f scope) e2
 -- non-recursive (or rec with non-var pat): the bound names are NOT in scope on
@@ -1656,10 +1656,10 @@ checkLetGroup cur env scope binds body =
   flatMap (checkLetBind cur env scope2) binds ++ checkExpr cur env scope2 body
 
 letBindName : LetBind -> String
-letBindName (LetBind n _ _) = n
+letBindName (LetBind n _ _ _) = n
 
 checkLetBind : Option Loc -> Env -> Scope -> LetBind -> List ResError
-checkLetBind cur env scope (LetBind n clauses _) =
+checkLetBind cur env scope (LetBind n clauses _ _) =
   letBindDupErrors cur n clauses
     ++ flatMap (checkFunClause cur env scope) clauses
 
@@ -1836,7 +1836,7 @@ checkSection cur env scope (SecLeft e _) = checkExpr cur env scope e
 -- Decl-level entry: `cur` starts at `None` (no enclosing expr span yet); the body's `ELoc`
 -- wrappers re-set it as the expr walk descends.
 checkDecl : Env -> Decl -> List ResError
-checkDecl env (DFunDef _ _ pats body _) =
+checkDecl env (DFunDef _ _ pats body _ _) =
   flatMap (checkPat (firstExprLoc body) env) pats
     ++ patGroupDupErrors (firstExprLoc body) "parameter list" pats
     ++ checkExpr None env (mkScope (patsBindings pats)) body
@@ -2086,7 +2086,7 @@ interfaceList (_ :: rest) = interfaceList rest
 -- prelude value names (DFunDef/DTypeSig + DImpl & DInterface method names)
 preludeValueNames : List Decl -> List String
 preludeValueNames [] = []
-preludeValueNames ((DFunDef _ n _ _ _) :: rest) = n :: preludeValueNames rest
+preludeValueNames ((DFunDef _ n _ _ _ _) :: rest) = n :: preludeValueNames rest
 preludeValueNames ((DTypeSig _ n _ _) :: rest) = n :: preludeValueNames rest
 preludeValueNames ((DImpl { methods, ... }) :: rest) =
   map implMethodNm methods ++ preludeValueNames rest
@@ -2098,7 +2098,7 @@ preludeValueNames (_ :: rest) = preludeValueNames rest
 -- user value names (DFunDef/DTypeSig/DExtern + DInterface methods; NOT DImpl)
 userValueNames : List Decl -> List String
 userValueNames [] = []
-userValueNames ((DFunDef _ n _ _ _) :: rest) = n :: userValueNames rest
+userValueNames ((DFunDef _ n _ _ _ _) :: rest) = n :: userValueNames rest
 userValueNames ((DTypeSig _ n _ _) :: rest) = n :: userValueNames rest
 userValueNames ((DExtern _ n _) :: rest) = n :: userValueNames rest
 userValueNames ((DLetGroup _ bs) :: rest) =
@@ -2447,7 +2447,8 @@ dupValGo run sawNullary (d :: rest)
 -- None for any decl that is not a DFunDef (starts a fresh run).
 dupValClause : Decl -> Option (String, Bool, Option Loc)
 dupValClause (DAttrib _ d) = dupValClause d
-dupValClause (DFunDef _ n ps body _) = Some (n, isEmptyL ps, firstExprLoc body)
+dupValClause (DFunDef _ n ps body _ _) =
+  Some (n, isEmptyL ps, firstExprLoc body)
 dupValClause _ = None
 
 isEmptyL : List a -> Bool
@@ -2465,7 +2466,7 @@ isEmptyL _ = False
 -- defs" grouping of a mutually-recursive pair is accepted.
 declBindNames : Decl -> List String
 declBindNames (DAttrib _ d) = declBindNames d
-declBindNames (DFunDef _ n _ _ _) = [n]
+declBindNames (DFunDef _ n _ _ _ _) = [n]
 declBindNames (DLetGroup _ bs) = map letBindName bs
 declBindNames _ = []
 
@@ -2537,7 +2538,7 @@ newlyDuplicated loc closed (n :: ns)
 -- first ELoc).  DFunDef only; other decls have no body span → None.
 declLoc : Decl -> Option Loc
 declLoc (DAttrib _ d) = declLoc d
-declLoc (DFunDef _ _ _ body _) = firstExprLoc body
+declLoc (DFunDef _ _ _ body _ _) = firstExprLoc body
 declLoc _ = None
 
 -- First ELoc span in a pre-order traversal of an expr (None if the subtree has
@@ -2587,7 +2588,7 @@ firstLocList (e :: rest) = orElseLoc (firstExprLoc e) (firstLocList rest)
 -- group unlocated.
 firstBindLoc : List LetBind -> Option Loc
 firstBindLoc [] = None
-firstBindLoc ((LetBind _ clauses _) :: rest) =
+firstBindLoc ((LetBind _ clauses _ _) :: rest) =
   orElseLoc (firstClauseLoc clauses) (firstBindLoc rest)
 
 firstClauseLoc : List FunClause -> Option Loc
@@ -2618,7 +2619,7 @@ unionStr acc (x :: xs)
 
 externWithBodyErrors : List String -> List Decl -> List ResError
 externWithBodyErrors _ [] = []
-externWithBodyErrors externs ((DFunDef _ n _ _ _) :: rest) =
+externWithBodyErrors externs ((DFunDef _ n _ _ _ _) :: rest) =
   (if contains n externs then [ExternWithBody n None] else [])
     ++ externWithBodyErrors externs rest
 externWithBodyErrors externs (_ :: rest) = externWithBodyErrors externs rest
@@ -4529,7 +4530,7 @@ nsValues = ExpNs {
     d => match d
       DTypeSig True n _ _ => [n]
       DExtern True n _ => [n]
-      DFunDef True n _ _ _ => [n]
+      DFunDef True n _ _ _ _ => [n]
       _ => [],
   nsCarry = path src => carriedValuesFrom src (reexportBindings path src),
 }
@@ -5296,7 +5297,7 @@ insertParams (p :: rest) env =
 -- top-level value binder names, in decl order (DFunDef + DLetGroup members).
 topBinderNames : List Decl -> List String
 topBinderNames [] = []
-topBinderNames ((DFunDef _ n _ _ _) :: rest) = n :: topBinderNames rest
+topBinderNames ((DFunDef _ n _ _ _ _) :: rest) = n :: topBinderNames rest
 topBinderNames ((DLetGroup _ binds) :: rest) =
   map letBindName binds ++ topBinderNames rest
 topBinderNames ((DAttrib _ d) :: rest) = topBinderNames (d :: rest)
@@ -5366,9 +5367,9 @@ stampExpr env (ELoc l e) = ELoc l (stampExpr env e)
 stampExpr env (EDoOrigin l e) = EDoOrigin l (stampExpr env e)
 
 stampLet : OrdMap Int -> Loc -> Bool -> Pat -> Expr -> Expr -> Expr
-stampLet env m True (PVar f fl) e1 e2 =
+stampLet env m True (PVar f fl bid) e1 e2 =
   let inner = insertZero [f] env
-  ELet m True (PVar f fl) (stampExpr inner e1) (stampExpr inner e2)
+  ELet m True (PVar f fl bid) (stampExpr inner e1) (stampExpr inner e2)
 stampLet env m isRec pat e1 e2 =
   ELet
     m
@@ -5383,8 +5384,8 @@ stampLetGroup env binds body =
   ELetGroup (map (stampLetBind groupScope) binds) (stampExpr groupScope body)
 
 stampLetBind : OrdMap Int -> LetBind -> LetBind
-stampLetBind groupScope (LetBind name clauses site) =
-  LetBind name (map (stampClause groupScope) clauses) site
+stampLetBind groupScope (LetBind name clauses site bid) =
+  LetBind name (map (stampClause groupScope) clauses) site bid
 
 stampClause : OrdMap Int -> FunClause -> FunClause
 stampClause groupScope (FunClause pats body) =
@@ -5444,8 +5445,8 @@ stampSection env (SecLeft e op) = SecLeft (stampExpr env e) op
 -- Each top-level fn's params shadow-insert (id 0) over `top`; sibling top-level
 -- names resolve through `top` to their minted id.
 stampDecl : OrdMap Int -> Decl -> Decl
-stampDecl top (DFunDef p n pats body site) =
-  DFunDef p n pats (stampExpr (insertParams pats top) body) site
+stampDecl top (DFunDef p n pats body site bid) =
+  DFunDef p n pats (stampExpr (insertParams pats top) body) site bid
 stampDecl top (DProp p n params body) =
   DProp p n params (stampExpr (insertZero (map propParamName params) top) body)
 stampDecl top (DTest p n body) = DTest p n (stampExpr top body)
@@ -6212,8 +6213,8 @@ unqualConstraint ctx (c@(Constraint { constraintHead = n })) =
 -- `DEffect`, `DTypeAlias`, `DNewtype`.  Their `Ty` positions — constraints
 -- included — are rewritten by `stampTyHead`'s own walk, not here.
 unqualDecl : AliasCtx -> Decl -> Decl
-unqualDecl ctx (DFunDef p n pats body site) =
-  DFunDef p n (map (unqualPat ctx) pats) (unqualExpr ctx body) site
+unqualDecl ctx (DFunDef p n pats body site bid) =
+  DFunDef p n (map (unqualPat ctx) pats) (unqualExpr ctx body) site bid
 unqualDecl ctx (DProp p n params body) = DProp p n params (unqualExpr ctx body)
 unqualDecl ctx (DTest p n body) = DTest p n (unqualExpr ctx body)
 unqualDecl ctx (DLetGroup p binds) = DLetGroup p (map (unqualLetBind ctx) binds)
@@ -6243,22 +6244,22 @@ unqualImplMethod ctx (ImplMethod nm pats body) =
   ImplMethod nm (map (unqualPat ctx) pats) (unqualExpr ctx body)
 
 unqualPat : AliasCtx -> Pat -> Pat
-unqualPat _ (PVar x l) = PVar x l
+unqualPat _ (PVar x l bid) = PVar x l bid
 unqualPat _ PWild = PWild
 unqualPat _ (PLit l) = PLit l
 unqualPat ctx (PCon c ps) = PCon (unqualCtor ctx c) (map (unqualPat ctx) ps)
 unqualPat ctx (PCons a b) = PCons (unqualPat ctx a) (unqualPat ctx b)
 unqualPat ctx (PTuple ps) = PTuple (map (unqualPat ctx) ps)
 unqualPat ctx (PList ps) = PList (map (unqualPat ctx) ps)
-unqualPat ctx (PAs x l p) = PAs x l (unqualPat ctx p)
+unqualPat ctx (PAs x l bid p) = PAs x l bid (unqualPat ctx p)
 unqualPat _ (PRng a b incl) = PRng a b incl
 unqualPat ctx (PRec name fs rest) =
   PRec (unqualHead ctx name) (map (unqualRecPatField ctx) fs) rest
 
 unqualRecPatField : AliasCtx -> RecPatField -> RecPatField
-unqualRecPatField _ (RecPatField f l None) = RecPatField f l None
-unqualRecPatField ctx (RecPatField f l (Some p)) =
-  RecPatField f l (Some (unqualPat ctx p))
+unqualRecPatField _ (RecPatField f l bid None) = RecPatField f l bid None
+unqualRecPatField ctx (RecPatField f l bid (Some p)) =
+  RecPatField f l bid (Some (unqualPat ctx p))
 
 unqualExpr : AliasCtx -> Expr -> Expr
 unqualExpr _ (ELit l) = ELit l
@@ -6323,8 +6324,8 @@ unqualExpr ctx (ELoc l e) = ELoc l (unqualExpr ctx e)
 unqualExpr ctx (EDoOrigin l e) = EDoOrigin l (unqualExpr ctx e)
 
 unqualLetBind : AliasCtx -> LetBind -> LetBind
-unqualLetBind ctx (LetBind name clauses site) =
-  LetBind name (map (unqualClause ctx) clauses) site
+unqualLetBind ctx (LetBind name clauses site bid) =
+  LetBind name (map (unqualClause ctx) clauses) site bid
 
 unqualClause : AliasCtx -> FunClause -> FunClause
 unqualClause ctx (FunClause pats body) =

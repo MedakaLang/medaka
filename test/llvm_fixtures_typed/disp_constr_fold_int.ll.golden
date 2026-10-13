@@ -303,8 +303,18 @@ decend1:
 ; mdk-module program
 define i64 @mdk_lam.program.1(i64 %clos, i64 %arg0, i64 %arg1) {
 entry:
-  %t0 = call i64 @mdk_num_add(i64 %arg0, i64 %arg1)
-  ret i64 %t0
+  %t0 = sub i64 %arg1, 1
+  %t1 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %arg0, i64 %t0)
+  %t2 = extractvalue { i64, i1 } %t1, 0
+  %t3 = extractvalue { i64, i1 } %t1, 1
+  br i1 %t3, label %intovf4, label %intok4
+intovf4:
+  %t5 = ashr i64 %arg0, 1
+  %t6 = ashr i64 %arg1, 1
+  call void @mdk_int_overflow(i64 0, i64 %t5, i64 %t6)
+  unreachable
+intok4:
+  ret i64 %t2
 }
 
 ; mdk-module program

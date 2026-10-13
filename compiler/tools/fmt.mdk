@@ -54,7 +54,10 @@ import frontend.lexer.{
   tokenizeWithOffsetPairs,
 }
 import frontend.parser.{
-  parseWithPositions,
+  parseWithPositionsOptPairs,
+  parseResultPairs,
+  prescanErrorPairs,
+  ParseError(..),
   Positions,
   DeclPos,
   positionsDecls,
@@ -296,7 +299,7 @@ renderNamedFieldMulti st decl = declDoc st decl
 -- (header on line 0, field i on line i+1): a STANDALONE comment renders as its
 -- own line above the field it precedes; a TRAILING comment is appended to its
 -- field's line.  Returns (newDeclStr, consumedComments).
-spliceInterior : List String ->
+spliceInterior : Array String ->
   String ->
   Int ->
   List Comment ->
@@ -309,28 +312,29 @@ spliceInterior srcLines declStr startLine interior =
     (newLines, consumed) => (joinNl newLines, consumed)
 
 -- Fetch source line `n` (1-indexed) from the whole-file `srcLines`, or "".
-nthLine : List String -> Int -> String
-nthLine [] _ = ""
-nthLine (l :: ls) n
-  | n <= 1 = l
-  | otherwise = nthLine ls (n - 1)
+-- `n <= 1` reads the first line; O(1) because `srcLines` is an Array built
+-- once per `formatProgram` call.
+nthLine : Array String -> Int -> String
+nthLine srcLines n =
+  let i = if n <= 1 then 0 else n - 1
+  if i < arrayLength srcLines then arrayGetUnsafe i srcLines else ""
 
 -- A comment is STANDALONE iff nothing but whitespace precedes it on its own
 -- SOURCE line — its column equals that line's own leading-space count.
-isStandaloneSrc : List String -> Comment -> Bool
+isStandaloneSrc : Array String -> Comment -> Bool
 isStandaloneSrc srcLines c =
   commentCol c == leadingSpaceCount (nthLine srcLines (commentLine c))
 
 data CKind = CTrailing | CStandalone
 
-classifyKind : List String -> Comment -> CKind
+classifyKind : Array String -> Comment -> CKind
 classifyKind srcLines c =
   if isStandaloneSrc srcLines c then CStandalone else CTrailing
 
 -- Map each interior comment to its OUTPUT-line index and its kind, accounting
 -- for the source lines already eaten by earlier STANDALONE comments.
 classifyIdxs : Int ->
-  List String ->
+  Array String ->
   Int ->
   List Comment ->
   List (Comment, Int, CKind)
@@ -411,13 +415,9 @@ leadingSpaceCountGo src i n
   | charAt src i == ' ' = leadingSpaceCountGo src (i + 1) n
   | otherwise = i
 
+-- The leading run is spaces by definition, so it is a prefix slice of `s`.
 leadingSpaces : String -> String
-leadingSpaces s = spacesN (leadingSpaceCount s)
-
-spacesN : Int -> String
-spacesN n
-  | n <= 0 = ""
-  | otherwise = " " ++ spacesN (n - 1)
+leadingSpaces s = stringSlice 0 (leadingSpaceCount s) s
 
 -- Drop the consumed comments from the pending stream (order-preserving), by
 -- source line — interior comment lines are unique per output line.
@@ -435,16 +435,21 @@ anyLineEq l (c :: cs) = if commentLine c == l then True else anyLineEq l cs
 
 -- Extract source lines [startLine .. endLine] (1-based, inclusive) and rejoin
 -- them exactly.
-verbatimSpan : List String -> Int -> Int -> String
+verbatimSpan : Array String -> Int -> Int -> String
 verbatimSpan srcLines startLine endLine =
-  joinNl (spanLines srcLines 1 startLine endLine)
+  joinNl (spanLines srcLines startLine endLine)
 
-spanLines : List String -> Int -> Int -> Int -> List String
-spanLines [] _ _ _ = []
-spanLines (l :: ls) idx startLine endLine
-  | idx > endLine = []
-  | idx >= startLine = l :: spanLines ls (idx + 1) startLine endLine
-  | otherwise = spanLines ls (idx + 1) startLine endLine
+-- Source lines [startLine .. endLine] (1-based, inclusive, clamped to the
+-- file), built from the end so the result is a plain cons chain.
+spanLines : Array String -> Int -> Int -> List String
+spanLines srcLines startLine endLine =
+  spanGo srcLines (min (arrayLength srcLines) endLine) (max 1 startLine) []
+
+spanGo : Array String -> Int -> Int -> List String -> List String
+spanGo srcLines idx lo acc
+  | idx < lo = acc
+  | otherwise =
+    spanGo srcLines (idx - 1) lo (arrayGetUnsafe (idx - 1) srcLines :: acc)
 
 -- ── Main walk ─────────────────────────────────────
 
@@ -464,7 +469,7 @@ appendAfterComments (FmtState p c v cur s pl) after =
   FmtState p (c ++ after) v cur s pl
 
 -- The printer's view of a comment: line, column, lexeme, standalone flag.
-toPComment : List String -> Comment -> PComment
+toPComment : Array String -> Comment -> PComment
 toPComment srcLines c =
   PComment
     (commentLine c)
@@ -483,7 +488,7 @@ anyCommaWithin lo hi ((l, _) :: rest) =
 -- this decl's span before dispatching; the after-span remainder is
 -- re-appended on the way out.
 stepDecl : FmtState ->
-  List String ->
+  Array String ->
   List (Int, Int) ->
   Decl ->
   DeclPos ->
@@ -502,7 +507,7 @@ stepDecl st srcLines commas decl dp =
 
 -- The per-decl body, over a comment stream narrowed to [line, endLine].
 stepDeclSpan : FmtState ->
-  List String ->
+  Array String ->
   List (Int, Int) ->
   Decl ->
   Int ->
@@ -519,7 +524,7 @@ stepDeclSpan (FmtState pieces1 cs1 vlines1 cursor1 started1 placed1) srcLines co
 -- A non-data declaration: the printer places every interior comment; any it
 -- cannot place sends the declaration to the verbatim safety net.
 stepExprDecl : FmtState ->
-  List String ->
+  Array String ->
   List (Int, Int) ->
   Decl ->
   Int ->
@@ -555,7 +560,7 @@ stepExprDecl (FmtState pieces2 cs1 vlines1 _cursor1 _started1 placed1) srcLines 
 -- A `data` declaration: interior comments are placed per variant
 -- (`printDataDeclCommented`) or, for a single-variant record with field
 -- comments, per field (`printNamedFieldData` + a line-index splice).
-stepDataDecl : FmtState -> List String -> Decl -> Int -> Int -> FmtState
+stepDataDecl : FmtState -> Array String -> Decl -> Int -> Int -> FmtState
 stepDataDecl (FmtState pieces2 cs1 vlines1 cursor1 started1 placed1) srcLines decl line endLine =
   -- The variant's OWN source line (`| X {` of a two-line header, else the
   -- decl's start line).
@@ -603,7 +608,7 @@ isStrictInterior startLine endLine c =
   l > startLine && l < endLine && isSingleLine (commentText c)
 
 walkDecls : FmtState ->
-  List String ->
+  Array String ->
   List (Int, Int) ->
   List Decl ->
   List DeclPos ->
@@ -634,7 +639,8 @@ formatProgram decls declPositions variantLines commas arms comments src =
     setTrailingCommas commas
     setUnitStarts arms
     let st0 = FmtState [] comments variantLines 0 False 0
-    match drainAll (walkDecls st0 (splitNl src) commas decls declPositions)
+    match (drainAll
+      (walkDecls st0 (arrayFromList (splitNl src)) commas decls declPositions))
       FmtState finalPieces _ _ _ _ placed =>
         checkCommentCount (listLen comments) placed
         stringConcat (reverseL finalPieces)
@@ -656,20 +662,57 @@ drainAll (FmtState pieces (c :: rest) vlines cursor started placed) =
 -- Convenience: parse + collect comments + format, from source text.
 export
 formatSource : String -> String
-formatSource src = match parseWithPositions src
-  (decls, pos) =>
-    let commas = trailingCommaLocs ()
-    let arms = unitStarts ()
-    restoreTripleQuotedStrings
-      src
-      (formatProgram
-        decls
-        (positionsDecls pos)
-        (positionsVariantLines pos)
-        commas
-        arms
-        (collectComments src)
-        src)
+formatSource src = match tokenizeWithOffsetPairs src
+  (toks, pairs) => formatSourcePairs src toks pairs
+
+-- `formatSource` over an ALREADY-tokenized stream (`tokenizeWithOffsetPairs
+-- src`), so a caller that lexed the source for its own parse does not lex it
+-- again. Panics on a parse failure, as `parseWithPositions` does.
+export
+formatSourcePairs : String -> List Token -> List (Int, Int) -> String
+formatSourcePairs src toks pairs =
+  match parseWithPositionsOptPairs src toks pairs
+    Some parsed => formatParsed src parsed
+    None => panic "parse error"
+
+-- The formatter proper, over the result of a successful
+-- `parseWithPositionsOptPairs`.  Reads the side-channel refs that parse just
+-- filled, so it must run before any other parse.
+formatParsed : String -> (List Decl, Positions) -> String
+formatParsed src (decls, pos) =
+  let commas = trailingCommaLocs ()
+  let arms = unitStarts ()
+  restoreTripleQuotedStrings
+    src
+    (formatProgram
+      decls
+      (positionsDecls pos)
+      (positionsVariantLines pos)
+      commas
+      arms
+      (collectComments src)
+      src)
+
+-- `medaka fmt`'s parse check and formatter in one, over an ALREADY-tokenized
+-- stream.  Same verdict as `parseResultPairs` followed by `formatSourcePairs`,
+-- without running the grammar twice: the pre-scans run first (they are not
+-- redundant with the grammar; they reject some sources the grammar accepts,
+-- e.g. `record P : Int`), then the formatting parse, which the grammar accepts
+-- exactly when `parseResultWith` does.  Only when that parse fails does the
+-- full `parseResultPairs` run, to produce the diagnostic it always produced.
+export
+formatSourceChecked : String ->
+  List Token ->
+  List (Int, Int) ->
+  Result ParseError String
+formatSourceChecked src toks pairs = match prescanErrorPairs src toks pairs
+  Some e => Err e
+  None => match parseWithPositionsOptPairs src toks pairs
+    Some parsed => Ok (formatParsed src parsed)
+    None =>
+      map
+        (_ => formatSourcePairs src toks pairs)
+        (parseResultPairs src toks pairs)
 
 -- ── Triple-quoted string preservation ─────────────
 -- `formatProgram` re-renders every string literal in the canonical
@@ -713,21 +756,31 @@ tripleStringSubs ((True, raw) :: is) ((s, e) :: ss) =
 tripleStringSubs ((False, _) :: is) (_ :: ss) = tripleStringSubs is ss
 tripleStringSubs _ _ = []
 
--- Apply substitutions HIGHEST-OFFSET-FIRST so an earlier substitution's
--- offsets are never invalidated by a later one.
+-- Apply substitutions to `out` in one pass.  `subs` is in ASCENDING offset
+-- order and its spans never overlap (they are the formatted output's own
+-- token spans), so each chunk is the untouched text between two spans.
 applyTripleSubs : List (Int, Int, String) -> String -> String
-applyTripleSubs [] out = out
-applyTripleSubs ((s, e, raw) :: rest) out =
-  applyTripleSubs
-    rest
-    (stringSlice 0 s out ++ raw ++ stringSlice e (stringLength out) out)
+applyTripleSubs subs out = stringConcat (applyTripleGo subs out 0 [])
 
+-- Chunks are collected reversed and flipped once at the end.
+applyTripleGo : List (Int, Int, String) ->
+  String ->
+  Int ->
+  List String ->
+  List String
+applyTripleGo [] out cursor acc =
+  reverseL (stringSlice cursor (stringLength out) out :: acc)
+applyTripleGo ((s, e, raw) :: rest) out cursor acc =
+  applyTripleGo rest out e (raw :: stringSlice cursor s out :: acc)
+
+-- A source with no `"""` substring has no triple-quoted token, so there is
+-- nothing to restore and both tokenizations are skipped.
 restoreTripleQuotedStrings : String -> String -> String
-restoreTripleQuotedStrings src formatted = match tokenizeWithOffsetPairs src
-  (origToks, origSpans) => match tokenizeWithOffsetPairs formatted
-    (fmtToks, fmtSpans) =>
-      let origInfo = stringTokenInfo src origToks origSpans
-      let fmtStrSpans = stringTokenSpans fmtToks fmtSpans
-      applyTripleSubs
-        (reverseL (tripleStringSubs origInfo fmtStrSpans))
-        formatted
+restoreTripleQuotedStrings src formatted = match stringIndexOf "\"\"\"" src
+  None => formatted
+  Some _ => match tokenizeWithOffsetPairs src
+    (origToks, origSpans) => match tokenizeWithOffsetPairs formatted
+      (fmtToks, fmtSpans) =>
+        let origInfo = stringTokenInfo src origToks origSpans
+        let fmtStrSpans = stringTokenSpans fmtToks fmtSpans
+        applyTripleSubs (tripleStringSubs origInfo fmtStrSpans) formatted
