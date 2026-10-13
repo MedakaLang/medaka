@@ -33528,8 +33528,10 @@ resolveDictApps (app :: rest) =
 -- callback) so a nested element-position caller STRUCTURALLY cannot
 -- raise T-AMBIGUOUS-INSTANCE — the type forbids it, so a blanket RNone→RKey can never
 -- corrupt element-dict routing (the fear the three variants were "kept SEPARATE" for).
+-- CommitSuper (a dictionary's super segment, `superRouteAt`) commits the instance the
+-- checker's super judgment selects for the goal (`committedSuperRoute`).
 -- lint-disable-next-line rule-clone-type
-data Undetermined = KeepNone | CountImpls IfaceRef
+data Undetermined = KeepNone | CountImpls IfaceRef | CommitSuper
 
 -- #156 S3b: the SiteKind-parametrized entailment core.  ONE `assum → inst → fallback`
 -- ladder that both the genuine return-position method resolver (`resolveSite`, EKReturn)
@@ -33593,7 +33595,7 @@ data EntailKind =
 -- `activeDictPredOf`/`ifaceOfMethodName`): every one is a `perRun` registry lookup and
 -- none reaches a selector.
 --
--- ⚠️ `entailFallback` HAS ONE REACHING PATH, AND IT IS NOT A VIOLATION — but it is why
+-- `entailFallback` has two reaching paths, and neither is a violation, but they are why
 -- the rule above stops naming it.  `EKNestedTop`'s `CountImpls` policy goes
 -- `undeterminedRoute` → `routeUndeterminedTop`, which answers THIS goal by its
 -- CANDIDATES (`goalCandidates`: one, or a stable minimum → that instance; two or more
@@ -33602,7 +33604,9 @@ data EntailKind =
 -- FRESH sub-goal descending the ladder again, not this goal being answered on a later rung.  A refactor
 -- that let the fallback rung answer the ladder's own goal by selection IS the violation
 -- this property forbids; the `KeepNone` policy (every element-dict recursion) cannot
--- reach even this path.
+-- reach even this path.  The `CommitSuper` policy (a super segment) reaches
+-- `committedSuperRoute` the same way: it answers a goal over variables alone by the
+-- candidates the checker's super judgment counted (`stableGoalReach`).
 --
 -- WHY IT MATTERS.  DICT-SEMANTICS §3 pins the precedence: `assum` strictly precedes
 -- `inst`, which strictly precedes `fallback`.  Letting a later rung answer a goal an
@@ -33664,7 +33668,7 @@ entail name m encl useScope kind = match entailAssum m encl name useScope kind
   None => match headTyconMono m
     Some hk => entailInst name m encl useScope (headKeyTag hk) kind
     None =>
-      let result = (entailFallback useScope m kind, [])
+      let result = (entailFallback encl useScope m kind, [])
       let _ = noteNumericEntailment kind useScope None (fst result) (snd result)
       result
 
@@ -33911,13 +33915,7 @@ entailInst _ m encl useScope tag (EKNestedTop iface _ walk rest) =
   let goals = m :: rest
   let env = perRun.value.bodyImplEnvRef.value
   match ieSelectRowByIface env iface goals
-    Some (row@(ImplRow _ _ selectedIface _ _ _)) => (
-      RKey
-        (rowRouteKey row)
-        (argImplRequiresRoutesForRow encl useScope m goals walk row)
-        (superRoutesAt selectedIface encl useScope goals walk),
-      [],
-    )
+    Some row => (nestedRowRoute encl useScope m goals walk row, [])
     None => (RKey tag [] (superRoutesAt iface encl useScope goals walk), [])
 -- #609: select on the interface's FULL param vector (§5 — the dispatch type is the
 -- instantiated vector `T̄`), not on the discriminating ARGUMENT's mono alone.
@@ -33982,8 +33980,43 @@ superRouteAt : String ->
   (IfaceRef, Option (List Mono)) ->
   Route
 superRouteAt encl useScope walk (superIface, superArgs) = match superArgs
-  Some (g0 :: gs) => routeOfD superIface encl useScope KeepNone g0 gs walk
+  Some (g0 :: gs) => routeOfD superIface encl useScope CommitSuper g0 gs walk
   _ => RNone
+
+-- The dictionary of a goal's selected instance [row]: the row's word, its `requires`
+-- answered at [goals], and its own supers.  The word and the context are projections
+-- of one row, so the dictionary names the impl whose context it discharges (§6 C2).
+nestedRowRoute : String ->
+  ScopeId ->
+  Mono ->
+  List Mono ->
+  ReqWalk ->
+  ImplRow ->
+  Route
+nestedRowRoute encl useScope m goals walk (row@(ImplRow _ _ selectedIface _ _ _)) =
+  RKey
+    (rowRouteKey row)
+    (argImplRequiresRoutesForRow encl useScope m goals walk row)
+    (superRoutesAt selectedIface encl useScope goals walk)
+
+-- A super goal no dictionary in scope answers and no head constructor selects for: a
+-- goal over variables alone.  It is built from the instance the checker's super
+-- judgment selected for it (`superGoalEntered`, `residualSelectionStable`), never
+-- re-selected at the value: a variable a binder declared is rigid, so the instance is
+-- the min⊑ of those matching the goal (DICT-SEMANTICS §6.1.3); a variable the binder
+-- generalized reaches it here only when that selection is stable.
+committedSuperRoute : String ->
+  ScopeId ->
+  IfaceRef ->
+  ReqWalk ->
+  List Mono ->
+  Route
+committedSuperRoute _ _ _ _ [] = RNone
+committedSuperRoute encl useScope iface walk (goals@(m :: _)) =
+  match stableGoalReach [] iface goals
+    ReachOne row if rowHeadMatches goals row =>
+      nestedRowRoute encl useScope m goals walk row
+    _ => RNone
 
 -- The super segment of a method-call primary `RKey`.  A call whose selected instance
 -- supplies [name] only selects it, so the route carries none; a call whose instance
@@ -34003,14 +34036,14 @@ selectedCallSupers name (Some (ImplRow _ _ iface _ _ supplied)) encl useScope go
     superRoutesAt iface encl useScope goals (reqWalkStart ())
 selectedCallSupers _ None _ _ _ = []
 
-entailFallback : ScopeId -> Mono -> EntailKind -> Route
-entailFallback _ _ (EKReturn _ _) = RNone
-entailFallback _ _ (EKNumReturn _ _ _ _) = RNone
-entailFallback scope m (EKNestedTop _ policy _ rest) =
-  undeterminedRoute scope policy (m :: rest)
-entailFallback _ _ (EKArg _) = RNone
-entailFallback _ _ (EKOp _ _) = RNone
-entailFallback _ _ (EKPredicateOp _ _ _) = RNone
+entailFallback : String -> ScopeId -> Mono -> EntailKind -> Route
+entailFallback _ _ _ (EKReturn _ _) = RNone
+entailFallback _ _ _ (EKNumReturn _ _ _ _) = RNone
+entailFallback encl scope m (EKNestedTop iface policy walk rest) =
+  undeterminedRoute encl scope iface policy walk (m :: rest)
+entailFallback _ _ _ (EKArg _) = RNone
+entailFallback _ _ _ (EKOp _ _) = RNone
+entailFallback _ _ _ (EKPredicateOp _ _ _) = RNone
 
 -- ONE constrained-call-arg route resolver — collapses routeOfMono (encl="",
 -- KeepNone) / routeOfMonoEncl (KeepNone) / routeOfMonoTop (encl="", CountImpls).
@@ -34041,10 +34074,18 @@ routeOfD : IfaceRef ->
 routeOfD iface encl useScope policy m rest walk =
   fst (entail "" m encl useScope (EKNestedTop iface policy walk rest))
 
-undeterminedRoute : ScopeId -> Undetermined -> List Mono -> Route
-undeterminedRoute _ KeepNone _ = RNone
-undeterminedRoute scope (CountImpls iface) goal =
+undeterminedRoute : String ->
+  ScopeId ->
+  IfaceRef ->
+  Undetermined ->
+  ReqWalk ->
+  List Mono ->
+  Route
+undeterminedRoute _ _ _ KeepNone _ _ = RNone
+undeterminedRoute _ scope _ (CountImpls iface) _ goal =
   routeUndeterminedTop scope iface goal
+undeterminedRoute encl scope iface CommitSuper walk goal =
+  committedSuperRoute encl scope iface walk goal
 
 -- TOP-LEVEL constraint routes (a constrained-fn CALL site, e.g. `roundtrip 10`).
 -- Like routesOfMonos but passes the CountImpls policy to routeOf, so the UNDETERMINED
@@ -46515,27 +46556,32 @@ residualSelectionStable chosen context iface args
 -- become a type another instance head needs.
 goalSelectionStable : List Int -> IfaceRef -> List Mono -> Bool
 goalSelectionStable chosen iface args =
-  let goalIds = dedupI (flatMap monoUnboundIds args)
-  if not (anyIn goalIds chosen) then
+  if not (anyIn (flatMap monoUnboundIds args) chosen) then
     True
-  else
-    let declared = perRun.value.declaredSigVarIds.value
-    let rigidIds =
-      omFromNames
-        (map
-          intToString
-          (filterList
-            (i => not (containsI i chosen) && omHasKey (intToString i) declared)
-            goalIds))
-        omEmpty
-    let cands =
-      filterList
-        (c => rowCountsFor args (fst c))
-        (goalCandidates rigidIds args (goalRows iface args))
-    match goalReach args cands
-      ReachMany => False
-      ReachOne _ => True
-      ReachNone => True
+  else match stableGoalReach chosen iface args
+    ReachMany => False
+    ReachOne _ => True
+    ReachNone => True
+
+-- What the instance heads that unify with the goal decide (`goalReach`), with the
+-- goal's variables that some binder declared (`declaredSigVarIds`) and [chosen] does
+-- not name held rigid.
+stableGoalReach : List Int -> IfaceRef -> List Mono -> GoalReach
+stableGoalReach chosen iface args =
+  let declared = perRun.value.declaredSigVarIds.value
+  let rigidIds =
+    omFromNames
+      (map
+        intToString
+        (filterList
+          (i => not (containsI i chosen) && omHasKey (intToString i) declared)
+          (dedupI (flatMap monoUnboundIds args))))
+      omEmpty
+  goalReach
+    args
+    (filterList
+      (c => rowCountsFor args (fst c))
+      (goalCandidates rigidIds args (goalRows iface args)))
 
 -- ── #1564 / Stage A "Door 4": the un-plumbed case is a LOUD reject ────────────
 -- `residualPredsOf`'s `None` arm conflates TWO facts, and since the instance axis went
