@@ -2,28 +2,106 @@
 -- and neither recomputes.  Built once, right after lowering, from the program an
 -- emitter is about to receive.
 
-import ir.core_ir.{CProgram(..)}
+import frontend.ast.{Pat}
+import ir.core_ir.{
+  CProgram(..),
+  CBind(..),
+  CClause(..),
+  CExpr,
+  CImplEntry(..),
+  CImplBody(..),
+}
 import backend.core_validate.{Backend(..), backendName}
-import support.ordmap.{OrdMap}
+import support.ordmap.{
+  OrdMap,
+  omEmpty,
+  omInsert,
+  omLookup,
+  omHasKey,
+  omKeys,
+  omFromNames,
+  omFromPairs,
+}
+import support.util.{lenKey, reverseL, filterList}
 import backend.emit_support.{eagerReachMap, lazyGlobalNames}
+import backend.trmc_analysis.{
+  SelfRef(..),
+  DispGroup,
+  trmcEligible,
+  detectDispatchGroups,
+  dictUniformClauses,
+  methodSelf,
+  clauseArityOf,
+  bindName,
+}
 
 -- `target` is the backend the plan was built for; the emitter asserts it is its own.
 -- `lazyGlobals` are the value globals emitted as forced-on-first-use cells.
 -- `eagerReach` maps each binding to the value globals it eagerly reaches; the
 -- value-global init order is sorted by it.
+-- `trmc` says which functions are tail-recursive modulo constructor (TRMC-DESIGN.md).
+-- `dispGroups` are the dispatch-graph TMC groups (WASMGC-TRMC-DESIGN.md §11): a
+-- group's members are emitted as one destination-passing loop rooted at its root.
 public export data EmitPlan = EmitPlan {
   target : Backend,
   lazyGlobals : List String,
   eagerReach : OrdMap (List String),
+  trmc : TrmcVerdicts,
+  dispGroups : List DispGroup,
+}
+
+-- The self-recursive TRMC verdict.  `eligibleFns` holds every top-level function, and
+-- `eligibleImpls` every impl group (one `(method, key)` pair, its clauses in program
+-- order), whose clauses `trmcEligible` accepts with a uniform count of leading
+-- dictionary parameters.
+--
+-- The verdict is the same on both backends, and each realizes every eligible
+-- function as a destination-passing loop.  What differs is only the cell a
+-- constructor leaf links.  LLVM allocates every leaf through its constructor
+-- tag.  Wasm picks the struct per function: the built-in list cell when the
+-- leaves are `::` (`ctorTailIsCons`), the user constructor's struct otherwise.
+-- A dispatch-group member is emitted by its group, not by this verdict.
+--
+-- A constructor is a name in the program's constructor table.  Wasm's own table
+-- also answers for reserved and synthetic names the program may not declare
+-- (`Some`, `Ok`, `Err`, `Cons`, `Tup<n>`).  None of them can head a leaf whose
+-- last field is the self-call: `Some (f x)` returned by `f` would need
+-- `Option T = T`, and the list and tuple cells lower to `::` and tuple nodes, not
+-- applications.  So the one table gives both backends the verdict they computed.
+public export data TrmcVerdicts = TrmcVerdicts {
+  eligibleFns : OrdMap Unit,
+  eligibleImpls : OrdMap Unit,
 }
 
 export
 buildEmitPlan : Backend -> CProgram -> EmitPlan
-buildEmitPlan target (CProgram groups _ _ _ _ _) = EmitPlan {
-  target = target,
-  lazyGlobals = lazyGlobalNames groups,
-  eagerReach = eagerReachMap groups,
-}
+buildEmitPlan target (CProgram groups ctorArs _ impls _ _) =
+  -- first entry wins on a repeated constructor name, as in both emitters' tables
+  let ctors = omFromPairs (reverseL ctorArs) omEmpty
+  let fns = filterList isTopFn groups
+  EmitPlan {
+    target = target,
+    lazyGlobals = lazyGlobalNames groups,
+    eagerReach = eagerReachMap groups,
+    trmc = TrmcVerdicts {
+      eligibleFns =
+        omFromNames
+          (map bindName (filterList (b => selfTrmcBind ctors b) fns))
+          omEmpty,
+      eligibleImpls = trmcImplKeys ctors impls,
+    },
+    dispGroups = planDispatchGroups ctors fns groups impls,
+  }
+
+-- does the TRMC verdict hold for top-level function [name]?
+export
+isTrmcFn : TrmcVerdicts -> String -> Bool
+isTrmcFn v name = omHasKey name v.eligibleFns
+
+-- does the TRMC verdict hold for the impl group of [method] at instance [key]?
+export
+isTrmcImpl : TrmcVerdicts -> String -> String -> Bool
+isTrmcImpl v method key = omHasKey (implGroupKey method key) v.eligibleImpls
 
 -- The backend a plan was built for, asserted to be the calling emitter's own: a
 -- plan built for the other backend would pick the wrong dict-tag width.
@@ -35,3 +113,110 @@ planBackendFor expected plan =
   else
     panic
       "internal error: emit plan was built for the \{backendName plan.target} backend but the \{backendName expected} emitter received it"
+
+-- a function binding: it takes parameters, and it is not `main`
+isTopFn : CBind -> Bool
+isTopFn (CBind "main" _ _ _) = False
+isTopFn (CBind _ ((CClause (_ :: _) _) :: _) _ _) = True
+isTopFn _ = False
+
+isCtorIn : OrdMap Int -> String -> Bool
+isCtorIn ctors name = omHasKey name ctors
+
+ctorArityIn : OrdMap Int -> String -> Int
+ctorArityIn ctors name = match omLookup name ctors
+  Some n => n
+  None => 0
+
+clausePair : CClause -> (List Pat, CExpr)
+clausePair (CClause pats body) = (pats, body)
+
+-- the TRMC verdict on clauses that recurse through [self]
+clausesTrmc : OrdMap Int -> SelfRef -> List CClause -> Bool
+clausesTrmc ctors self clauses =
+  let arity = clauseArityOf clauses
+  arity > 0
+    && dictUniformClauses clauses
+    && trmcEligible
+      (isCtorIn ctors)
+      (ctorArityIn ctors)
+      self
+      arity
+      (map clausePair clauses)
+
+selfTrmcBind : OrdMap Int -> CBind -> Bool
+selfTrmcBind ctors (CBind name clauses _ _) =
+  clausesTrmc ctors (SelfByVar name) clauses
+
+implGroupKey : String -> String -> String
+implGroupKey method key = lenKey method ++ key
+
+-- the eligible impl groups, keyed by `implGroupKey`
+trmcImplKeys : OrdMap Int -> List CImplEntry -> OrdMap Unit
+trmcImplKeys ctors impls =
+  let grouped = groupImplClauses impls omEmpty
+  omFromNames
+    (filterList
+      (k => match omLookup k grouped
+        Some (method, key, revClauses) =>
+          let clauses = reverseL revClauses
+          clausesTrmc ctors (methodSelf method key (firstPats clauses)) clauses
+        None => False)
+      (omKeys grouped))
+    omEmpty
+
+-- each `(method, key)` group's clauses, newest first
+groupImplClauses : List CImplEntry ->
+  OrdMap (String, String, List CClause) ->
+  OrdMap (String, String, List CClause)
+groupImplClauses [] acc = acc
+groupImplClauses ((CImplEntry method _ _ body) :: rest) acc =
+  let (key, clause) = implKeyClause body
+  let k = implGroupKey method key
+  let prev = match omLookup k acc
+    Some (_, _, cs) => cs
+    None => []
+  groupImplClauses rest (omInsert k (method, key, clause :: prev) acc)
+
+implKeyClause : CImplBody -> (String, CClause)
+implKeyClause (CImplTagged _ key _ _ _ pats body) = (key, CClause pats body)
+implKeyClause (CImplDefault _ _ key _ _ pats body) = (key, CClause pats body)
+
+firstPats : List CClause -> List Pat
+firstPats ((CClause pats _) :: _) = pats
+firstPats [] = []
+
+-- The dispatch-graph TMC groups.  A name is a function when it names a function
+-- binding; a bare prelude reference resolves to its `core__` binding; an unknown
+-- name's arity is -1, so no call to it saturates.  The singleton check is the
+-- self-recursive TRMC verdict, so a function that verdict claims never joins a group.
+planDispatchGroups : OrdMap Int ->
+  List CBind ->
+  List CBind ->
+  List CImplEntry ->
+  List DispGroup
+planDispatchGroups ctors fns groups impls =
+  let arities =
+    omFromPairs (reverseL (map (b => (bindName b, bindArity b)) fns)) omEmpty
+  detectDispatchGroups
+    (n => canonFnIn arities n)
+    (n => omHasKey n arities)
+    (n => match omLookup n arities
+      Some a => a
+      None => 0 - 1)
+    (nm _ cs => clausesTrmc ctors (SelfByVar nm) cs)
+    fns
+    groups
+    impls
+
+bindArity : CBind -> Int
+bindArity (CBind _ clauses _ _) = clauseArityOf clauses
+
+canonFnIn : OrdMap Int -> String -> String
+canonFnIn fns name =
+  if omHasKey name fns then
+    name
+  else if omHasKey ("core__" ++ name) fns then
+    "core__" ++ name
+  else
+    name

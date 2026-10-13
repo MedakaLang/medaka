@@ -299,7 +299,6 @@ import backend.trmc_analysis.{
   SelfRef(..),
   methodSelf,
   freeGivens,
-  trmcEligible,
   isCtorTail,
   isSelfSatApp,
   consTailArgs,
@@ -311,10 +310,8 @@ import backend.trmc_analysis.{
   dispRootOf,
   dispMembersOf,
   dispGroupOf,
-  detectDispatchGroups,
   dispSpineParts,
   dispIsSatRootCall,
-  dictUniformClauses,
   dropFirstN,
   flattenApp,
   clauseArityOf,
@@ -324,7 +321,13 @@ import backend.trmc_analysis.{
 }
 import backend.private_mangle.{dictTag, hashName, injectiveIdent}
 import types.disposition.{ifaceSuperCount, installedDispositionsOpt}
-import backend.emit_plan.{EmitPlan(..), planBackendFor}
+import backend.emit_plan.{
+  EmitPlan(..),
+  TrmcVerdicts,
+  isTrmcFn,
+  isTrmcImpl,
+  planBackendFor,
+}
 import backend.emit_support.{
   bindEagerReach,
   bindNameMap,
@@ -651,6 +654,8 @@ data WasmFnImplIndex = WasmFnImplIndex {
   arities : ArityEnv,
   implBuckets : OrdMap (List CImplEntry),
   lazyGlobals : OrdMap Unit,
+  -- the plan's self-recursive TRMC verdict (`EmitPlan.trmc`)
+  trmc : TrmcVerdicts,
 }
 
 data WasmRecordValueIndex = WasmRecordValueIndex { fnValues : OrdMap Unit }
@@ -779,6 +784,9 @@ indexImplsByMethodW index = index.fnImpl.implBuckets
 
 indexLazyGlobalsW : WasmProgramIndex -> OrdMap Unit
 indexLazyGlobalsW index = index.fnImpl.lazyGlobals
+
+progTrmcW : Prog -> TrmcVerdicts
+progTrmcW prog = (progIndex prog).fnImpl.trmc
 
 indexFnsUsedAsValuesW : WasmProgramIndex -> OrdMap Unit
 indexFnsUsedAsValuesW index = index.recordValue.fnValues
@@ -922,8 +930,10 @@ makeWasmProgramIndex _ plan binderRows groups ctorArs ctorTypes impls fnNames va
     fnNames
     valNames
     plan.lazyGlobals
+    plan.trmc
 
 makeWasmProgramIndexGaps : WasmEmitInput ->
+  TrmcVerdicts ->
   List BinderRow ->
   List CBind ->
   List (String, Int) ->
@@ -932,7 +942,7 @@ makeWasmProgramIndexGaps : WasmEmitInput ->
   List String ->
   List String ->
   WasmProgramIndex
-makeWasmProgramIndexGaps _ binderRows groups ctorArs ctorTypes impls fnNames valNames =
+makeWasmProgramIndexGaps _ trmc binderRows groups ctorArs ctorTypes impls fnNames valNames =
   makeWasmProgramIndexWithLazy
     binderRows
     groups
@@ -942,6 +952,7 @@ makeWasmProgramIndexGaps _ binderRows groups ctorArs ctorTypes impls fnNames val
     fnNames
     valNames
     []
+    trmc
 
 makeWasmProgramIndexWithLazy : List BinderRow ->
   List CBind ->
@@ -951,8 +962,9 @@ makeWasmProgramIndexWithLazy : List BinderRow ->
   List String ->
   List String ->
   List String ->
+  TrmcVerdicts ->
   WasmProgramIndex
-makeWasmProgramIndexWithLazy binderRows groups ctorArs ctorTypes impls fnNames valNames lazyNames =
+makeWasmProgramIndexWithLazy binderRows groups ctorArs ctorTypes impls fnNames valNames lazyNames trmc =
   let fnIndex = omFromNames fnNames omEmpty
   let valIndex = omFromNames valNames omEmpty
   let ctorArIndex = omFromPairs (reverseL ctorArs) omEmpty
@@ -971,6 +983,7 @@ makeWasmProgramIndexWithLazy binderRows groups ctorArs ctorTypes impls fnNames v
         programArities (CProgram groups ctorArs ctorTypes impls [] noDeclFacts),
       implBuckets = groupImplsByMethodW impls,
       lazyGlobals = omFromNames lazyNames omEmpty,
+      trmc = trmc,
     },
     recordValue = WasmRecordValueIndex {
       fnValues = omFromNames usedFns omEmpty,
@@ -1679,8 +1692,8 @@ checkCalledNamesW defined (name :: rest) =
 -- calls the main-requiring emitRefMain.  Each binding is wrapped with setGapBindingOfW
 -- so a recorded gap is attributed to its source binding.
 export
-emitProgramGaps : WasmEmitInput -> CProgram -> List String
-emitProgramGaps input cp0 =
+emitProgramGaps : WasmEmitInput -> EmitPlan -> CProgram -> List String
+emitProgramGaps input plan cp0 =
   let (CProgram groups ctorArs ctorTypes impls mctx facts) = uniqueBinders cp0
   let emit = freshWasmEmit WGapRecord
   let _ =
@@ -1698,6 +1711,7 @@ emitProgramGaps input cp0 =
   let index =
     makeWasmProgramIndexGaps
       input
+      plan.trmc
       facts.factBinders
       groups
       ctorArs
@@ -3142,12 +3156,11 @@ emitRefProgram prog plan groups =
       else
         [])
   let valNames = progValNames prog
-  -- Stage-2/3 (b′) WASMGC-TRMC: detect dispatch-graph TMC groups (the lexer's `scan`
-  -- token spine, the offside-rule `layout` family, `intersperse`) BEFORE emitting fns,
-  -- so emitRefFnBind can route a group member to the dest-passing reset-wrapper +
-  -- inner-loop emit.  ALL binds are passed (not just fn binds): the external-entry
-  -- root-selection check must see references from value-bind bodies too.
-  let dispGroups = wDetectDispatchGroups prog groups
+  -- Stage-2/3 (b′) WASMGC-TRMC: the plan's dispatch-graph TMC groups (the lexer's
+  -- `scan` token spine, the offside-rule `layout` family, `intersperse`), installed
+  -- BEFORE emitting fns, so emitRefFnBind can route a group member to the
+  -- dest-passing reset-wrapper + inner-loop emit.
+  let dispGroups = plan.dispGroups
   let _ = setRef (progEmit prog).wDispGroups dispGroups
   -- W8: the SplitMix64 seed lives in a mutable i64 global (emitted before the value globals).
   let rngGlobal =
@@ -8572,10 +8585,11 @@ wTrmcStoreGo (p :: ps) (_ :: as_) base k =
     ++ wTrmcStoreGo ps as_ base (k + 1)
 
 -- ── the Stage-1 driver: decide eligibility + emit the destination-passing loop ──
--- Returns `Some fnDef` when `name`/`clauses` is a top-level self-recursive define
--- that is `trmcEligible` for the self-only cons/ctor-tail shape (a).  Dict-carrying
--- defines (every unannotated polymorphic builder — F2(b) shape (a)) are admitted
--- when the leading-dict count is uniform across clauses (`dictUniformClauses`); the
+-- Returns `Some fnDef` when the plan's verdict (`EmitPlan.trmc`) holds `name`: a
+-- top-level self-recursive define that is `trmcEligible` for the self-only
+-- cons/ctor-tail shape (a).  Dict-carrying defines (every unannotated polymorphic
+-- builder — F2(b) shape (a)) are admitted when the leading-dict count is uniform
+-- across clauses; the
 -- emit is arity-keyed and types every param `(ref eq)`, so the dict is just another
 -- loop slot.
 -- Otherwise `None` → the caller falls back to the ordinary (stack-growing)
@@ -8594,14 +8608,7 @@ wasmTrmcTry prog name arity clauses =
   -- ordinary emitClausesRef path emits.  All-PVar single/multi-clause stays the fast
   -- direct-body path.  (Mirrors llvm_emit's trmcTryFn forceSingle=False / emitClauseTree
   -- reuse.)
-  if arity > 0
-    && dictUniformClauses clauses
-    && trmcEligible
-      (c => isCtor prog c)
-      (c => ctorArity prog c)
-      self
-      arity
-      pairs then
+  if isTrmcFn (progTrmcW prog) name then
     Some
       (emitWasmTrmcFn
         prog
@@ -8647,14 +8654,7 @@ wTrmcImplTry prog method key fnName arity clauses =
   let self = methodSelf method key (match pairs
     (ps, _) :: _ => ps
     [] => [])
-  if arity > 0
-    && dictUniformClauses clauses
-    && trmcEligible
-      (c => isCtor prog c)
-      (c => ctorArity prog c)
-      self
-      arity
-      pairs then
+  if isTrmcImpl (progTrmcW prog) method key then
     Some
       (emitWasmTrmcCore
         prog
@@ -8921,39 +8921,10 @@ wDispGlobalLines grp =
   ]
 
 -- ── group detection (SHARED — backend/trmc_analysis.mdk) ─────────────────────
--- The Stage-3 dispatch-graph detection (candidate roots, tail-closure growth,
--- the v2–v7 soundness validations, the spine classifier) was lifted into the
--- shared `backend/trmc_analysis.mdk` (TMC-parity arc) so both backends detect
--- the SAME groups.  The program-coupled lookups are passed as hooks; these thin
--- wrappers close over `prog` so the emit-side call sites stay unchanged.
-wDetectDispatchGroups : Prog -> List CBind -> List DispGroup
-wDetectDispatchGroups prog allBinds =
-  detectDispatchGroups
-    (n => canonFn prog n)
-    (n => progFnMemberW prog n)
-    (n => fnParamCountW prog n)
-    (nm ar cs => wDispStage1Claims prog nm ar cs)
-    (userFnBinds allBinds)
-    allBinds
-    (progImpls prog)
-
--- would Stage-1 (wasmTrmcTry) already claim this fn as a self-TMC loop?  (The
--- shared dispValidate v5 keeps such singletons on Stage-1 — no group machinery.)
--- Since the uniform-ctor gate retired (P3), this predicate is semantically
--- IDENTICAL to the LLVM backend's gDispStage1Claims — v5 decides the same way
--- on both backends by construction.
-wDispStage1Claims : Prog -> String -> Int -> List CClause -> Bool
-wDispStage1Claims prog name arity clauses =
-  let self = SelfByVar name
-  let pairs = map clauseToPair clauses
-  arity > 0
-    && dictUniformClauses clauses
-    && trmcEligible
-      (c => isCtor prog c)
-      (c => ctorArity prog c)
-      self
-      arity
-      pairs
+-- The Stage-3 dispatch-graph groups are detected once, by the plan
+-- (`emit_plan.buildEmitPlan`), with the shared detection in
+-- `backend/trmc_analysis.mdk`; both backends route the SAME groups.  The spine
+-- classifier below closes the shared one over `prog`.
 
 -- shared spine classifier, closed over `prog` (detection, validation, and the
 -- leaf emit below all agree on what is — and is not — a spine cons).

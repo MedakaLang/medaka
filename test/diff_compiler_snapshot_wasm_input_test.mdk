@@ -93,7 +93,7 @@ apiCheck = match readFile wasmEmitPath
           ls
         && exportDeclPresent
           "emitProgramGaps"
-          "emitProgramGaps : WasmEmitInput -> CProgram -> List String"
+          "emitProgramGaps : WasmEmitInput -> EmitPlan -> CProgram -> List String"
           ls)
       "FAIL: WasmEmitInput API is incomplete"
 

@@ -292,7 +292,6 @@ import backend.trmc_analysis.{
   patVars,
   patVarsList,
   patVarNames,
-  trmcEligible,
   isCtorTail,
   isSelfSatApp,
   consTailArgs,
@@ -306,9 +305,7 @@ import backend.trmc_analysis.{
   dispRootOf,
   dispMembersOf,
   dispGroupOf,
-  detectDispatchGroups,
   dispSpineParts,
-  dictUniformPairs,
   dropFirstN,
   clauseArityOf,
   lastStmtExpr,
@@ -316,7 +313,13 @@ import backend.trmc_analysis.{
 import backend.private_mangle.{hashName, injectiveIdent}
 import types.disposition.{ifaceSuperCount, installedDispositionsOpt}
 import types.route_key.{numIntWord}
-import backend.emit_plan.{EmitPlan(..), planBackendFor}
+import backend.emit_plan.{
+  EmitPlan(..),
+  TrmcVerdicts,
+  isTrmcFn,
+  isTrmcImpl,
+  planBackendFor,
+}
 import backend.emit_support.{
   bindEagerReach,
   bindNameMap,
@@ -472,21 +475,16 @@ data GDispCtx =
   | GDispOff
   | GDispOn String (List String) (List String) String String
 
--- the detected (b′) groups (shared detection, backend/trmc_analysis.mdk), the fn
--- binds they were detected over, and the fn-arity table with wasm's `fnParamCountW`
--- contract (clause arity; -1 when not a top-level fn — an 0-when-unknown lookup
--- would let a 0-arg call "saturate").  Computed once per emitProgram; reset (to
--- empty) by emitProgramGaps so a prior program's groups can never leak into the
--- gap-census path.
+-- the plan's (b′) groups (`EmitPlan.dispGroups`), the fn binds they were detected
+-- over, and the fn-arity table with wasm's `fnParamCountW` contract (clause arity;
+-- -1 when not a top-level fn — an 0-when-unknown lookup would let a 0-arg call
+-- "saturate").  Installed once per emitProgram; left empty by emitProgramGaps so a
+-- prior program's groups can never leak into the gap-census path.
 
 -- #990: the (fn-name -> arity) table above indexed into an OrdMap, built once beside
--- `e.gDispArs` in emitProgram.  `detectDispatchGroups` (the TMC group detection run
--- inside emitProgram) calls `gDispIsFn`/`gDispFnArity` PER referenced fn name, and each
--- `lookupAssoc` scanned the WHOLE O(fns) list — O(refs·fns) = O(N²) `emit`-stage
--- OP-COUNT on dispatch-heavy code (the residual LLVM-side emit-op quadratic #986 isolated
--- from the method-arity lookups, ~3.77×/doubling; #990).  The map returns the SAME first-match value
--- (`omFromPairs (reverseL …)` makes the FIRST pair win on a duplicate name, matching
--- lookupAssoc), so the TMC grouping — and therefore the emitted IR — is byte-identical.
+-- `e.gDispArs` in emitProgram.  The group emit calls `gDispFnArity` per member and
+-- per tail call; the map answers in O(log fns) with the SAME first-match value
+-- (`omFromPairs (reverseL …)` makes the FIRST pair win on a duplicate name).
 -- RUN-EMIT-003: the second `lookupAssoc n !e.gDispArs` path is RETIRED.
 -- `installDispatchState` installs this map on BOTH arms, so `None` is now a
 -- broken-invariant panic, not a silent slow path that has to agree with the index.
@@ -924,6 +922,8 @@ data Emit = Emit {
   -- the gensym id every per-scope counter starts from (`EmitStateConfig.counter0`
   -- — 0 for the prelude half, `programHalfIdBase` for the program half).
   counter0 : Int,
+  -- the plan's self-recursive TRMC verdict (`EmitPlan.trmc`)
+  trmc : TrmcVerdicts,
   -- the scope every lifted name minted right now is attributed to, and the value
   -- the `; mdk-module` marker carries: a module id (`frontend_lexer`), an impl
   -- group's own key (`impl:List_eq`), or `program`.
@@ -8997,10 +8997,10 @@ emitGroup e (ImplGroup method tag key _ positions arity clauses fname) =
 -- call, NOT cons-tail-recursive, so `trmcEligible` rejects it (stays ordinary).
 
 -- Phase 2 B-dispatch: try to emit an impl group as a TRMC destination-passing loop.
--- Returns True (and emits the whole define) when the impl is F2(a)/F2(b)-shape-(a)
--- eligible: uniform leading-dict count (`dictUniformPairs` — dicts are admitted as
--- ordinary loop slots) and cons/ctor-tail self-recursive via its own `CMethod method
--- (RKey tag)` dispatch (`trmcEligible (SelfByMethod …)`).  Otherwise returns False so
+-- Returns True (and emits the whole define) when the plan's verdict
+-- (`EmitPlan.trmc`) holds the group: uniform leading-dict count (dicts are admitted
+-- as ordinary loop slots) and cons/ctor-tail self-recursive via its own `CMethod
+-- method (RKey tag)` dispatch (`trmcEligible (SelfByMethod …)`).  Otherwise returns False so
 -- emitGroup falls back to the ordinary `emitGroupBody`.  The loop body reuses
 -- emitTrmcLoopBody verbatim (the shared Axis-A machinery); the impl path supplies the
 -- `@mdk_impl_<tag>_<method>` define name, the receiver-typed `aK` scrutinee env
@@ -9019,9 +9019,7 @@ trmcImplTry : Emit ->
 -- [tag] is its head tag, which types the receiver slots.
 trmcImplTry e fname method tag key positions arity clauses =
   let self = methodSelf method key (firstClausePats clauses)
-  if arity > 0
-    && dictUniformPairs clauses
-    && trmcEligible (isCtor e) (ctorArity e) self arity clauses then
+  if isTrmcImpl e.trmc method key then
     let slotTys = patPosTys tag positions arity 0
     let (spats, sbody) = match clauses
       (ps, b) :: _ => (ps, b)
@@ -11564,9 +11562,9 @@ emitFnSingle e name pats body site =
   else
     emitMultiClauseFn e name [(pats, body)] site
 
--- TRMC branch point (TRMC-DESIGN.md §"Emitter touchpoints" #2): if `name`'s
--- clauses are TRMC-eligible AND its leading-dict count is uniform across clauses
--- (`dictUniformPairs` — a dict-carrying define, i.e. every unannotated
+-- TRMC branch point (TRMC-DESIGN.md §"Emitter touchpoints" #2): if the plan's
+-- verdict (`EmitPlan.trmc`) holds `name` — its clauses are TRMC-eligible AND its
+-- leading-dict count is uniform across clauses (a dict-carrying define, i.e. every unannotated
 -- polymorphic builder, is admitted; the dict is just another loop slot, and
 -- the signature is read off the LOWERED clauses so `ptys` is already
 -- dict-inclusive),
@@ -11578,9 +11576,7 @@ trmcTryFn : Emit -> String -> List (List Pat, CExpr) -> Bool -> Loc -> Bool
 trmcTryFn e name clauses forceSingle site =
   let arity = clauseArity clauses
   let single = forceSingle && allClausesPVar clauses
-  if arity > 0
-    && dictUniformPairs clauses
-    && trmcEligible (isCtor e) (ctorArity e) (SelfByVar name) arity clauses then
+  if isTrmcFn e.trmc name then
     let ptys = match sigLookup e name
       Some (FnSig ts _) => ts
       None => []
@@ -12329,21 +12325,11 @@ emitGDispEdge e env f args uslots =
   let _ = trmcStoreParamSlots e uslots argOps
   emit e ("  br label %" ++ gDispLabel f)
 
--- the clause-derived fn-arity table (name → first clause's param count) — the
--- detection's isFn/fa hooks read it.
+-- the clause-derived fn-arity table (name → first clause's param count)
 gDispFnArsOf : List CBind -> List (String, Int)
 gDispFnArsOf [] = []
 gDispFnArsOf ((CBind n cs _ _) :: rest) =
   (n, clauseArityOf cs) :: gDispFnArsOf rest
-
--- would the LLVM Stage-1 self-TMC (trmcTryFn's gate) already claim this fn?
--- (the shared dispValidate v5 keeps such singletons on Stage-1.)
-gDispStage1Claims : Emit -> String -> Int -> List CClause -> Bool
-gDispStage1Claims e name arity clauses =
-  let pairs = clausePairs clauses
-  arity > 0
-    && dictUniformPairs pairs
-    && trmcEligible (isCtor e) (ctorArity e) (SelfByVar name) arity pairs
 
 -- drop group members from the float worker-wrapper advertisement set.
 gDispDropMembers : Emit ->
@@ -12729,10 +12715,7 @@ rawWorkerOf e refine (CBind name [CClause pats body] _ bid) =
       && not (any (== RTFloat) paramStamps)
       && ret /= RTFloat
       && isNone (dispGroupOf !e.gDispGroups name)
-      && not
-        (trmcEligible (isCtor e) (ctorArity e) (SelfByVar name) arity [
-          (pats, body),
-        ]) then
+      && not (isTrmcFn e.trmc name) then
       Some (RawWorker arity ks rk)
     else
       None
@@ -14541,7 +14524,8 @@ programEmitConfig gapMode input plan groups = EmitStateConfig {
       initGlobalsReg (valBinds groups),
   gapMode = gapMode,
   lazyNames = plan.lazyGlobals,
-  runDispatchAnalysis = True,
+  trmc = plan.trmc,
+  dispGroups = Some plan.dispGroups,
 }
 
 -- The Strict-mode emission body, factored out of `emitProgramMode` so
@@ -14642,52 +14626,40 @@ data EmitStateConfig = EmitStateConfig {
   globalsReg0 : List (String, (Bool, LTy)),
   gapMode : GapMode,
   lazyNames : List String,
-  runDispatchAnalysis : Bool,
+  trmc : TrmcVerdicts,
+  dispGroups : Option (List DispGroup),
 }
 
--- Row #5/#6 (RUN-EMIT-002: one disposition, not two): when the caller wants the
--- dispatch-graph TMC groups computed (emitProgramMode), install them via the
--- full detection sequence; otherwise leave `gDispGroups` empty, matching
+-- Row #5/#6 (RUN-EMIT-002: one disposition, not two): when the caller routes the
+-- plan's dispatch-graph TMC groups (emitProgramMode), install them with their
+-- tables; otherwise (`None`) leave `gDispGroups` empty, matching
 -- emitProgramGaps' plain per-bind census. `gDispDropMembers` over an empty
 -- group list is identity, so routing floatFwSet through it unconditionally
 -- reproduces emitProgramGaps' bare `collectFloatFw` while keeping ONE call site
 -- for the whole disposition.
-installDispatchState : Emit ->
-  Bool ->
-  List CBind ->
-  List CBind ->
-  List CImplEntry ->
-  Unit
-installDispatchState e runAnalysis groupsAll fnBindsList implEntries =
+installDispatchState : Emit -> Option (List DispGroup) -> List CBind -> Unit
+installDispatchState e dispGroups fnBindsList =
   -- RUN-EMIT-003: `gDispArMap` is installed on BOTH arms, so no reader can ever
   -- observe it uninstalled.  The census arm leaves `gDispArs` empty and never
   -- reaches gDispIsFn/gDispFnArity (they run only under GDispOn, which needs the
-  -- groups this arm does not compute) — an EMPTY map answers exactly what the
+  -- groups this arm does not install) — an EMPTY map answers exactly what the
   -- retired `lookupAssoc n ![]` scan answered (False / -1), so this is inert.
-  -- `installDispatchGroupsFull` overwrites it with the real table on the other arm.
+  -- `installDispatchGroups` overwrites it with the real table on the other arm.
   e.gDispArMap := Some omEmpty
-  let _ =
-    if runAnalysis then
-      installDispatchGroupsFull e groupsAll fnBindsList implEntries
-    else
-      e.gDispGroups := []
+  let _ = match dispGroups
+    Some groups => installDispatchGroups e groups fnBindsList
+    None => e.gDispGroups := []
   e.floatFwSet := gDispDropMembers e (collectFloatFw e fnBindsList)
 
--- (b′) dispatch-graph TMC: run the SHARED detection (backend/trmc_analysis.mdk)
--- before any fn emit, so emitFn can route group members/roots. Hooks: the LLVM
--- canonFnName + a clause-derived fn-arity table with wasm's fnParamCountW contract
--- (-1 when unknown); v5's stage-1-claims hook is the LLVM Stage-1 gate (no
--- uniform-ctor condition — the backends' hooks unify when wasm's gate retires).
-installDispatchGroupsFull : Emit ->
-  List CBind ->
-  List CBind ->
-  List CImplEntry ->
-  Unit
-installDispatchGroupsFull e groupsAll fnBindsList implEntries =
+-- (b′) dispatch-graph TMC: install the plan's groups (detected once, by
+-- `emit_plan.buildEmitPlan`) before any fn emit, so emitFn can route group
+-- members/roots, beside the tables the group emit reads.
+installDispatchGroups : Emit -> List DispGroup -> List CBind -> Unit
+installDispatchGroups e groups fnBindsList =
   let gDispArs = gDispFnArsOf fnBindsList
   e.gDispArs := gDispArs
-  -- #990: index the fn-arity table so detectDispatchGroups' per-ref gDispIsFn/
-  -- gDispFnArity is O(log fns) not O(fns) — reverseL ⇒ first-pair-wins = lookupAssoc.
+  -- #990: index the fn-arity table so the group emit's gDispIsFn/gDispFnArity is
+  -- O(log fns) not O(fns) — reverseL ⇒ first-pair-wins = lookupAssoc.
   e.gDispArMap := Some (omFromPairs (reverseL gDispArs) omEmpty)
   e.gDispBinds := fnBindsList
   -- #1061: O(log P) member lookup for emitGDispMembers/gDispMembersEtaStable,
@@ -14695,16 +14667,7 @@ installDispatchGroupsFull e groupsAll fnBindsList implEntries =
   -- program's function binds. bindNameMap's leftmost-wins insert order
   -- matches dispFindBind's first-match semantics exactly (emit_support.mdk).
   e.gDispBindMap := bindNameMap fnBindsList
-  let dispGroups0 =
-    detectDispatchGroups
-      (n => canonFnName e n)
-      (n => gDispIsFn e n)
-      (n => gDispFnArity e n)
-      (nm ar cs => gDispStage1Claims e nm ar cs)
-      fnBindsList
-      groupsAll
-      implEntries
-  e.gDispGroups := dispGroups0
+  e.gDispGroups := groups
 
 -- ONE construction path (RUN-EMIT-002) for the per-emission derived state: the
 -- `Emit` record literal, the nine `install*` calls, and the post-install
@@ -14724,6 +14687,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
   let e = Emit {
     input = input,
     counter0 = cfg.counter0,
+    trmc = cfg.trmc,
     curModule = Ref scopeProgram,
     counters = Ref omEmpty,
     buf = Ref [],
@@ -14797,13 +14761,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
   -- group path emits no standalone defines, so a float-context caller would call
   -- a nonexistent symbol; v3/v4 make external float callers impossible anyway —
   -- belt and braces).
-  let _ =
-    installDispatchState
-      e
-      cfg.runDispatchAnalysis
-      groups
-      (fnBinds groups)
-      implEntries
+  let _ = installDispatchState e cfg.dispGroups (fnBinds groups)
   e.floatClosureFns := collectFloatClosureFns e (fnBinds groups)
   e.rawWorkers := collectRawWorkers e (fnBinds groups)
   e.constGlobals := collectConstGlobals (valBinds groups)
@@ -15203,23 +15161,26 @@ ctag _ = "?"
 -- bind, and impl group; returns the recorded gap events ("<binding>\t<reason>").
 -- The emitted LLVM text is discarded by the probe — only the gap log matters.
 export
-emitProgramGaps : EmitInput -> CProgram -> List String
-emitProgramGaps input (cp@(CProgram groups ctorArs ctorTypes implEntries _ facts)) =
+emitProgramGaps : EmitInput -> EmitPlan -> CProgram -> List String
+emitProgramGaps input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ facts)) =
   -- #561 PR-A: the gap census emits every value bind ORDINARILY (eager load), so
   -- install an EMPTY lazy set — this also RESETS any prior emitProgram's set so it
-  -- cannot leak into the census. Likewise `runDispatchAnalysis = False` resets the
-  -- (b′) groups (see installDispatchState) so a prior emitProgram's routing state
-  -- can never leak into this path.
+  -- cannot leak into the census. Likewise `dispGroups = None` resets the (b′)
+  -- groups (see installDispatchState) so a prior emitProgram's routing state can
+  -- never leak into this path.  The TRMC verdict is the plan's, as in emitProgram.
   let cfg = EmitStateConfig {
     counter0 = 0,
     globalsReg0 = initGlobalsRegReady (valBinds groups),
     gapMode = Record,
     lazyNames = [],
-    runDispatchAnalysis = False,
+    trmc = plan.trmc,
+    dispGroups = None,
   }
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries facts
   let _ =
-    noteUnprovidedExterns e (unprovidedExterns Record LlvmBackend input cp)
+    noteUnprovidedExterns
+      e
+      (unprovidedExterns Record (planBackendFor LlvmBackend plan) input cp)
   let _ = emitPreamble e
   let _ = emitFnsGaps e (fnBinds groups)
   let _ = emitImplsGaps e implEntries

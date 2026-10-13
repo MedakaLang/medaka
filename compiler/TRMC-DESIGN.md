@@ -588,8 +588,10 @@ path) + full `diff_compiler_*` + `selfcompile_fixpoint` C3a/C3b.
 > - **detection non-termination — SOLVED upstream.** The WASM Stage-3 detector
 >   (pass-0 precomputed head tables, worklist growth, hard 256-cap BFS) replaced
 >   the algorithm that hung; it was lifted into the shared
->   `backend/trmc_analysis.mdk` (`detectDispatchGroups`, hook-parameterized) and
->   now runs in BOTH emitters.  Measured on the compiler's own graphs: detection
+>   `backend/trmc_analysis.mdk` (`detectDispatchGroups`, hook-parameterized).  It
+>   runs once per emission, in the plan builder (`emit_plan.buildEmitPlan`, #1404),
+>   together with the Stage-1/impl `trmcEligible` verdict; both emitters read the
+>   groups and the verdict from the plan.  Measured on the compiler's own graphs: detection
 >   is ~0.6% of emit time (perf profile); whole-emit delta vs the pre-arc seed
 >   emitter ≈ +4–8% on `check_main`.
 >

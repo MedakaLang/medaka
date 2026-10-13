@@ -69,7 +69,7 @@ import backend.wasm_emit.{
   emitProgram as emitWithPlan,
   emitProgramUnchecked as emitUncheckedWithPlan,
   emitProgramRecord as emitRecordWithPlan,
-  emitProgramGaps,
+  emitProgramGaps as emitGapsWithPlan,
   makeWasmEmitInput,
   makeWasmEmitInputFull,
 }
@@ -88,6 +88,10 @@ emitProgramUnchecked input cp =
 emitProgramRecord : WasmEmitInput -> CProgram -> (String, List String)
 emitProgramRecord input cp =
   emitRecordWithPlan input (buildEmitPlan WasmBackend cp) cp
+
+emitProgramGaps : WasmEmitInput -> CProgram -> List String
+emitProgramGaps input cp =
+  emitGapsWithPlan input (buildEmitPlan WasmBackend cp) cp
 
 main = match args ()
   "--reemit-trmc-state" :: _ => reemitTrmcState ()
