@@ -177,9 +177,17 @@ hashInt	TOTAL	total over Int
 hashString	TOTAL	total over String (incl. "")
 # String ops with a total domain.
 stringLength	TOTAL	total: length of any String
+stringByteLength	TOTAL	total: UTF-8 byte count of any String
 stringConcat	TOTAL	total: concatenation of any list of Strings
 stringCompare	TOTAL	total three-way compare of any two Strings
 stringIndexOf	TOTAL	total: Option Int, None when the needle is absent
+stringStartsWith	TOTAL	total: whether the second String begins with the first
+stringEndsWith	TOTAL	total: whether the second String ends with the first
+stringCountOccurrences	TOTAL	total: non-overlapping occurrence count, 0 for an empty needle
+stringLastIndexOf	TOTAL	total: Option Int of the last (possibly overlapping) hit
+stringToInt	TOTAL	total: Option Int of a signed decimal String, None for anything else or outside the Int range
+stringReverse	TOTAL	total: any String with its codepoints in reverse order
+stringJoin	TOTAL	total: any separator and list of Strings joined with the separator between pieces
 stringToLower	TOTAL	total case map
 stringToUpper	TOTAL	total case map
 stringToChars	TOTAL	total: decompose any String to its Chars

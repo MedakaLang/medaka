@@ -3560,6 +3560,7 @@ externBindings _ = [
   ("charToUpper", prim1 pCharToUpper),
   ("charToLower", prim1 pCharToLower),
   ("stringLength", prim1 pStringLength),
+  ("stringByteLength", prim1 pStringByteLength),
   ("stringConcat", prim1 pStringConcat),
   ("stringToChars", prim1 pStringToChars),
   ("stringFromChars", prim1 pStringFromChars),
@@ -3592,6 +3593,13 @@ externBindings _ = [
   ("stringToLower", prim1 pStringToLower),
   ("stringCompare", prim2 pStringCompare),
   ("stringIndexOf", prim2 pStringIndexOf),
+  ("stringStartsWith", prim2 pStringStartsWith),
+  ("stringEndsWith", prim2 pStringEndsWith),
+  ("stringCountOccurrences", prim2 pStringCountOccurrences),
+  ("stringLastIndexOf", prim2 pStringLastIndexOf),
+  ("stringToInt", prim1 pStringToInt),
+  ("stringReverse", prim1 pStringReverse),
+  ("stringJoin", prim2 pStringJoin),
   ("stringSlice", prim3 pStringSlice),
   ("arrayLength", prim1 pArrayLength),
   ("arrayFromList", prim1 pArrayFromList),
@@ -3885,6 +3893,10 @@ pStringLength : Value e -> <e> Value e
 pStringLength (VString s) = VInt (stringLength s)
 pStringLength _ = panic "stringLength: not a String"
 
+pStringByteLength : Value e -> <e> Value e
+pStringByteLength (VString s) = VInt (arrayLength (stringToUtf8Bytes s))
+pStringByteLength _ = panic "stringByteLength: not a String"
+
 pStringConcat : Value e -> <e> Value e
 pStringConcat (VList vs) = VString (stringConcat (map unString vs))
 pStringConcat _ = panic "stringConcat: not a List"
@@ -4002,6 +4014,63 @@ pStringIndexOf : Value e -> Value e -> <e> Value e
 pStringIndexOf (VString needle) (VString hay) =
   optionToValue (mapOption VInt (stringIndexOf needle hay))
 pStringIndexOf _ _ = panic "stringIndexOf: not Strings"
+
+pStringStartsWith : Value e -> Value e -> <e> Value e
+pStringStartsWith (VString p) (VString s) =
+  VBool (stringSlice 0 (stringLength p) s == p)
+pStringStartsWith _ _ = panic "stringStartsWith: not Strings"
+
+pStringEndsWith : Value e -> Value e -> <e> Value e
+pStringEndsWith (VString p) (VString s) =
+  VBool (stringSlice (stringLength s - stringLength p) (stringLength s) s == p)
+pStringEndsWith _ _ = panic "stringEndsWith: not Strings"
+
+-- Host-level mirrors of the byte-level externs, in codepoint terms.
+pStringCountOccurrences : Value e -> Value e -> <e> Value e
+pStringCountOccurrences (VString n) (VString h) = VInt (evalCountOcc n h)
+pStringCountOccurrences _ _ = panic "stringCountOccurrences: not Strings"
+
+evalCountOcc : String -> String -> Int
+evalCountOcc n h = if n == "" then 0 else evalCountOccGo n h 0
+
+evalCountOccGo : String -> String -> Int -> Int
+evalCountOccGo n h acc = match stringIndexOf n h
+  None => acc
+  Some i =>
+    evalCountOccGo
+      n
+      (stringSlice (i + stringLength n) (stringLength h) h)
+      (acc + 1)
+
+pStringLastIndexOf : Value e -> Value e -> <e> Value e
+pStringLastIndexOf (VString n) (VString h) =
+  optionToValue (mapOption VInt (evalLastIndexOf n h))
+pStringLastIndexOf _ _ = panic "stringLastIndexOf: not Strings"
+
+pStringToInt : Value e -> <e> Value e
+pStringToInt (VString s) = optionToValue (mapOption VInt (stringToInt s))
+pStringToInt _ = panic "stringToInt: not a String"
+
+pStringReverse : Value e -> <e> Value e
+pStringReverse (VString s) = VString (stringReverse s)
+pStringReverse _ = panic "stringReverse: not a String"
+
+pStringJoin : Value e -> Value e -> <e> Value e
+pStringJoin (VString sep) (VList vs) =
+  VString (stringJoin sep (map unString vs))
+pStringJoin _ _ = panic "stringJoin: bad operands"
+
+evalLastIndexOf : String -> String -> Option Int
+-- Host-level lastIndexOf: the last hit, which no stdlib function returns.
+-- lint-disable-next-line rule-stdlib-reimpl
+evalLastIndexOf n h =
+  if n == "" then Some (stringLength h) else evalLastIndexOfGo n h 0 None
+
+evalLastIndexOfGo : String -> String -> Int -> Option Int -> Option Int
+evalLastIndexOfGo n h from acc =
+  match stringIndexOf n (stringSlice from (stringLength h) h)
+    None => acc
+    Some i => evalLastIndexOfGo n h (from + i + 1) (Some (from + i))
 
 pStringSlice : Value e -> Value e -> Value e -> <e> Value e
 pStringSlice (VInt lo) (VInt hi) (VString s) = VString (stringSlice lo hi s)

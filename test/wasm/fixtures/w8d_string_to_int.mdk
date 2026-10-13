@@ -1,0 +1,15 @@
+-- W8d: stringToInt on signs, junk, and both Int bounds (the bounds take the $boxint path).
+showOpt : Option Int -> String
+showOpt o = match o
+  None => "N"
+  Some i => intToString i
+
+main =
+  showOpt (stringToInt "-7") ++ " "
+    ++ showOpt (stringToInt "+7") ++ " "
+    ++ showOpt (stringToInt "") ++ " "
+    ++ showOpt (stringToInt "12x") ++ " "
+    ++ showOpt (stringToInt "4611686018427387903") ++ " "
+    ++ showOpt (stringToInt "4611686018427387904") ++ " "
+    ++ showOpt (stringToInt "-4611686018427387904") ++ " "
+    ++ showOpt (stringToInt "-4611686018427387905")

@@ -3,8 +3,13 @@
 -- Positions are codepoint indices, so the multibyte cases below are where a
 -- byte offset would show.
 
-import string.{countOccurrences, indexOf, lastIndexOf, replaceAll}
-import test.{expectEqual}
+import string.{
+  byteLength, center, countOccurrences, drop, endsWith, fromChars, indexOf,
+  join, lastIndexOf, lines, padLeft, padRight, replace, replaceAll, reverse,
+  splitAt, startsWith, stripPrefix, stripSuffix, take, toInt, trim, trimLeft,
+  trimRight, unlines, unwords, utf8ByteLength
+}
+import test.{expectEqual, expectFalse, expectTrue}
 
 -- # Fixed cases
 
@@ -93,6 +98,209 @@ test "stringSlice jumps far in both directions on a multibyte string" =
     ["語", "日", "語", "日本語"]
     [stringSlice 8 9 s, stringSlice 0 1 s, stringSlice 5 6 s, stringSlice 6 9 s]
 
+test "stringSlice of the whole cell and of its ends" =
+  let s = "aé日😀"
+  expectEqual
+    [s, "", "", s, "😀", "a"]
+    [
+      stringSlice 0 4 s,
+      stringSlice 4 4 s,
+      stringSlice 0 0 s,
+      stringSlice 0 99 s,
+      stringSlice 3 4 s,
+      stringSlice 0 1 s,
+    ]
+
+-- # take, drop, splitAt
+
+test "byteLength of the empty string is 0" = expectEqual 0 (byteLength "")
+
+test "byteLength counts UTF-8 bytes, not codepoints" =
+  expectEqual 6 (byteLength "héllo")
+
+test "byteLength of a four-byte codepoint is 4" = expectEqual 4 (byteLength "😀")
+
+test "byteLength of ASCII equals its codepoint count" =
+  expectEqual 5 (byteLength "hello")
+
+test "utf8ByteLength agrees with byteLength" =
+  expectEqual (byteLength "a→b日") (utf8ByteLength "a→b日")
+
+test "byteLength of a string that is a slice of a multibyte cell" =
+  expectEqual 3 (byteLength (stringSlice 1 2 "é日本"))
+
+test "take 0 is empty" = expectEqual "" (take 0 "héllo")
+
+test "take a negative count is empty" = expectEqual "" (take (0 - 2) "abc")
+
+test "take past the end is the whole string" = expectEqual "é日" (take 99 "é日")
+
+test "take counts codepoints across multibyte text" =
+  expectEqual "aé日" (take 3 "aé日😀")
+
+test "take of an empty string is empty" = expectEqual "" (take 3 "")
+
+test "drop 0 is the whole string" = expectEqual "héllo" (drop 0 "héllo")
+
+test "drop a negative count is the whole string" =
+  expectEqual "abc" (drop (0 - 2) "abc")
+
+test "drop past the end is empty" = expectEqual "" (drop 99 "abc")
+
+test "drop counts codepoints across multibyte text" =
+  expectEqual "日" (drop 1 "é日")
+
+test "drop of an empty string is empty" = expectEqual "" (drop 3 "")
+
+test "splitAt 0 gives an empty head" = expectEqual ("", "日本") (splitAt 0 "日本")
+
+test "splitAt a negative count gives an empty head" =
+  expectEqual ("", "ab") (splitAt (0 - 1) "ab")
+
+test "splitAt past the end gives an empty tail" =
+  expectEqual ("é日", "") (splitAt 9 "é日")
+
+test "splitAt splits between codepoints of multibyte text" =
+  expectEqual ("aé", "日") (splitAt 2 "aé日")
+
+test "splitAt of an empty string is two empty strings" =
+  expectEqual ("", "") (splitAt 0 "")
+
+test "splitAt pieces rejoin to the original" =
+  let s = "aé日😀z"
+  let (h, t) = splitAt 3 s
+  expectEqual s (h ++ t)
+
+-- # fromChars
+
+test "fromChars of no characters is empty" = expectEqual "" (fromChars [])
+
+test "fromChars encodes each codepoint once" =
+  expectEqual "aé日😀" (fromChars ['a', 'é', '日', '😀'])
+
+test "fromChars counts codepoints, not bytes" =
+  expectEqual 4 (stringLength (fromChars ['a', 'é', '日', '😀']))
+
+test "fromChars result slices by codepoint" =
+  expectEqual "é日" (stringSlice 1 3 (fromChars ['a', 'é', '日', '😀']))
+
+test "fromChars of only multibyte characters" =
+  expectEqual 2 (stringLength (fromChars ['😀', '😀']))
+
+test "padLeft fills on the left and leaves a long string alone" =
+  expectEqual ("...ab", "abc") (padLeft 5 '.' "ab", padLeft 2 '.' "abc")
+
+test "padLeft with a width at or below zero is unchanged" =
+  expectEqual ("ab", "ab") (padLeft 0 '.' "ab", padLeft (0 - 3) '.' "ab")
+
+test "padLeft of the empty string" = expectEqual "..." (padLeft 3 '.' "")
+
+test "padLeft counts codepoints for a multibyte pad character" =
+  expectEqual "日日ab" (padLeft 4 '日' "ab")
+
+test "padRight fills on the right and leaves a long string alone" =
+  expectEqual ("ab...", "abc") (padRight 5 '.' "ab", padRight 2 '.' "abc")
+
+test "padRight with a width at or below zero is unchanged" =
+  expectEqual "ab" (padRight (0 - 3) '.' "ab")
+
+test "padRight counts codepoints for a multibyte pad character" =
+  expectEqual "é→→→" (padRight 4 '→' "é")
+
+test "center puts the odd pad character on the right" =
+  expectEqual ".ab.." (center 5 '.' "ab")
+
+test "center splits an even pad evenly" =
+  expectEqual ("..ab..", ".ab.") (center 6 '.' "ab", center 4 '.' "ab")
+
+test "center of the empty string" = expectEqual "..." (center 3 '.' "")
+
+test "center with a width at or below the length is unchanged" =
+  expectEqual ("abc", "abc") (center 2 '.' "abc", center (0 - 1) '.' "abc")
+
+test "replace of an empty needle is unchanged" =
+  expectEqual "hi" (replace "" "x" "hi")
+
+test "replace of an absent needle is unchanged" =
+  expectEqual "hello" (replace "z" "y" "hello")
+
+test "replace touches only the first occurrence" =
+  expectEqual "ba" (replace "aa" "b" "aaa")
+
+test "replace counts codepoints around a multibyte hit" =
+  expectEqual "a-b日" (replace "日" "-" "a日b日")
+
+test "replace can delete the first occurrence" =
+  expectEqual "xy" (replace "ab" "" "xaby")
+
+test "lines of the empty string is one empty line" = expectEqual [""] (lines "")
+
+test "lines removes one trailing carriage return per line" =
+  expectEqual ["a", "b", ""] (lines "a\r\nb\r\n")
+
+test "lines keeps a second carriage return" =
+  expectEqual ["a\r", "b"] (lines "a\r\r\nb")
+
+test "lines of a lone carriage return is one empty line" =
+  expectEqual [""] (lines "\r")
+
+test "lines does not split on a bare carriage return" =
+  expectEqual ["a\rb"] (lines "a\rb")
+
+test "lines of multibyte text with carriage returns" =
+  expectEqual ["é", "日"] (lines "é\r\n日\r")
+
+test "unlines of no lines is empty" = expectEqual "" (unlines [])
+
+test "unlines ends every line, including empty ones" =
+  expectEqual "\n\n" (unlines ["", ""])
+
+test "unlines keeps a carriage return inside a line" =
+  expectEqual "a\r\n" (unlines ["a\r"])
+
+-- # Trimming
+
+test "trim removes both ends" = expectEqual "hi" (trim "  hi  ")
+
+test "trimLeft keeps the trailing whitespace" =
+  expectEqual "hi  " (trimLeft "  hi  ")
+
+test "trimRight keeps the leading whitespace" =
+  expectEqual "  hi" (trimRight "  hi  ")
+
+test "trim of the empty string is empty" =
+  expectEqual ("", "", "") (trim "", trimLeft "", trimRight "")
+
+test "trim of all-space is empty" =
+  expectEqual ("", "", "") (trim "   \t", trimLeft "   \t", trimRight "   \t")
+
+test "trim of no whitespace is the string" = expectEqual "hi" (trim "hi")
+
+test "trim with only leading space" =
+  expectEqual ("a", "a", " a") (trim " a", trimLeft " a", trimRight " a")
+
+test "trim with only trailing space" =
+  expectEqual
+    ("a", "a \t", "a")
+    (trim "a \t", trimLeft "a \t", trimRight "a \t")
+
+test "trim of a multibyte body keeps its codepoints" =
+  expectEqual "héllo→" (trim "  héllo→ ")
+
+test "trimRight of a multibyte tail with spaces" =
+  expectEqual "日本語" (trimRight "日本語 \n")
+
+test "trimLeft of a multibyte head with spaces" =
+  expectEqual "→ x" (trimLeft "\t→ x")
+
+test "trim treats tab, newline, carriage return and vertical tab as space" =
+  expectEqual "x" (trim "\r\n\t\u{0b}\u{0c} x \r\n")
+
+test "trim does not remove a non-breaking space" = expectEqual " x" (trim " x")
+
+test "trim of a single space character" =
+  expectEqual ("", "", "") (trim " ", trimLeft " ", trimRight " ")
+
 -- # Properties
 
 prop "countOccurrences agrees with replaceAll on the removed length" (s : String) =
@@ -105,3 +313,368 @@ prop "lastIndexOf hit is an occurrence and no later one exists" (s : String) =
     Some i =>
       stringSlice i (i + 2) s == "ab"
         && indexOf "ab" (stringSlice (i + 1) (stringLength s) s) == None
+
+-- # Native byte-level searches
+
+test "startsWith the empty prefix is True" = expectTrue (startsWith "" "")
+
+test "startsWith a prefix longer than the string is False" =
+  expectFalse (startsWith "hello!" "hello")
+
+test "startsWith compares whole codepoints of multibyte text" =
+  expectEqual (True, False) (startsWith "日" "日本", startsWith "日本" "日")
+
+test "endsWith the empty suffix is True" = expectTrue (endsWith "" "")
+
+test "endsWith a suffix longer than the string is False" =
+  expectFalse (endsWith "xhello" "hello")
+
+test "endsWith of a multibyte suffix" =
+  expectEqual (True, False) (endsWith "語" "日本語", endsWith "本" "日本語")
+
+test "stripPrefix and stripSuffix on multibyte text" =
+  expectEqual
+    (Some "本語", Some "日本")
+    (stripPrefix "日" "日本語", stripSuffix "語" "日本語")
+
+test "countOccurrences of an empty needle is 0" =
+  expectEqual 0 (countOccurrences "" "héllo")
+
+test "countOccurrences does not count overlapping matches in multibyte text" =
+  expectEqual 2 (countOccurrences "éé" "ééé é ééé")
+
+test "countOccurrences finds multibyte needles" =
+  expectEqual 3 (countOccurrences "日" "日a日日")
+
+test "lastIndexOf of a needle longer than the haystack is None" =
+  expectEqual None (lastIndexOf "hello!" "hello")
+
+test "lastIndexOf keeps the last overlapping match in a run" =
+  expectEqual (Some 3) (lastIndexOf "aa" "aaaaa")
+
+test "lastIndexOf returns the codepoint index past a multibyte prefix" =
+  expectEqual (Some 3) (lastIndexOf "日" "日本語日")
+
+-- Reference semantics for countOccurrences and lastIndexOf, compared
+-- codepoint by codepoint.  They are the definitions the native externs
+-- replaced, so the differential below pins the new behaviour to them.
+
+refStartsWith : String -> String -> Bool
+-- Oracle: the codepoint definition the native extern replaced, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refStartsWith p s = stringSlice 0 (stringLength p) s == p
+
+refEndsWith : String -> String -> Bool
+-- Oracle: the codepoint definition the native extern replaced, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refEndsWith p s =
+  stringSlice (stringLength s - stringLength p) (stringLength s) s == p
+
+refCountOccurrences : String -> String -> Int
+-- Oracle: the codepoint definition the native extern replaced, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refCountOccurrences needle hay
+  | needle == "" = 0
+  | otherwise = refCountGo needle hay 0 0
+
+refCountGo : String -> String -> Int -> Int -> Int
+refCountGo needle hay i acc
+  | i + stringLength needle > stringLength hay = acc
+  | stringSlice i (i + stringLength needle) hay == needle =
+    refCountGo needle hay (i + stringLength needle) (acc + 1)
+  | otherwise = refCountGo needle hay (i + 1) acc
+
+refLastIndexOf : String -> String -> Option Int
+-- Oracle: the codepoint definition the native extern replaced, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refLastIndexOf needle hay
+  | needle == "" = Some (stringLength hay)
+  | otherwise = refLastGo needle hay 0 None
+
+refLastGo : String -> String -> Int -> Option Int -> Option Int
+refLastGo needle hay i acc
+  | i + stringLength needle > stringLength hay = acc
+  | stringSlice i (i + stringLength needle) hay == needle =
+    refLastGo needle hay (i + 1) (Some i)
+  | otherwise = refLastGo needle hay (i + 1) acc
+
+edgePairs : List (String, String)
+edgePairs = [
+  ("", ""),
+  ("", "abc"),
+  ("a", ""),
+  ("aa", "aaaa"),
+  ("aa", "aaa"),
+  ("aa", "a"),
+  ("aba", "ababa"),
+  ("ab", "xabab"),
+  ("x", "xxxxx"),
+  ("ll", "lllll"),
+  ("z", "hello"),
+  ("é", "éaé"),
+  ("é", "ééé"),
+  ("éé", "ééé"),
+  ("日本", "日本語日本"),
+  ("日", "a日日b"),
+  ("😀", "a😀😀b"),
+  ("ééé", "éé"),
+  ("abc", "ab"),
+  ("é", ""),
+]
+
+refPairs : (String -> String -> a) -> List (String, String) -> List a
+refPairs _ [] = []
+refPairs f ((n, h) :: rest) = f n h :: refPairs f rest
+
+test "startsWith agrees with the codepoint reference on edge inputs" =
+  expectEqual (refPairs refStartsWith edgePairs) (refPairs startsWith edgePairs)
+
+test "endsWith agrees with the codepoint reference on edge inputs" =
+  expectEqual (refPairs refEndsWith edgePairs) (refPairs endsWith edgePairs)
+
+test "countOccurrences agrees with the codepoint reference on edge inputs" =
+  expectEqual
+    (refPairs refCountOccurrences edgePairs)
+    (refPairs countOccurrences edgePairs)
+
+test "lastIndexOf agrees with the codepoint reference on edge inputs" =
+  expectEqual
+    (refPairs refLastIndexOf edgePairs)
+    (refPairs lastIndexOf edgePairs)
+
+-- # Native toInt, reverse and join
+
+test "toInt reads a signed decimal" =
+  expectEqual (Some 42, Some (-7), Some 7) (toInt "42", toInt "-7", toInt "+7")
+
+test "toInt of an empty or sign-only string is None" =
+  expectEqual (None, None, None) (toInt "", toInt "-", toInt "+")
+
+test "toInt rejects trailing and leading junk" =
+  expectEqual
+    (None, None, None, None)
+    (toInt "12x", toInt "x12", toInt "--1", toInt " 1")
+
+test "toInt rejects a non-ASCII digit" =
+  expectEqual (None, None) (toInt "1é", toInt "٣")
+
+test "toInt accepts leading zeros and negative zero" =
+  expectEqual (Some 7, Some 0, Some 0) (toInt "007", toInt "-0", toInt "+0")
+
+test "toInt holds the Int bounds" =
+  expectEqual
+    (Some 4611686018427387903, Some -4611686018427387904)
+    (toInt "4611686018427387903", toInt "-4611686018427387904")
+
+test "toInt rejects one past either Int bound" =
+  expectEqual
+    (None, None)
+    (toInt "4611686018427387904", toInt "-4611686018427387905")
+
+test "toInt rejects a value far outside the Int range" =
+  expectEqual
+    (None, None, None)
+    (
+      toInt "99999999999999999999",
+      toInt "-99999999999999999999",
+      toInt "9223372036854775807",
+    )
+
+test "reverse keeps multibyte codepoints whole" =
+  expectEqual ("óH", "本日", "b😀a") (reverse "Hó", reverse "日本", reverse "a😀b")
+
+test "reverse of the empty string is empty" = expectEqual "" (reverse "")
+
+test "join puts the separator between each adjacent pair" =
+  expectEqual
+    ("a, b, c", "", "a-b")
+    (join ", " ["a", "b", "c"], join "" ["", ""], join "-" ["a", "b"])
+
+test "join of nothing and of one part" =
+  expectEqual ("", "x") (join ", " [], join ", " ["x"])
+
+test "unwords joins with single spaces" =
+  expectEqual "a b  c" (unwords ["a", "b", "", "c"])
+
+-- Reference definitions for toInt, reverse and join: the Medaka code the
+-- native externs replaced, kept so the differential below pins the new
+-- behaviour to it.  They walk Arrays of Char, one codepoint at a time.
+
+refIsDigit : Char -> Bool
+-- Oracle: the digit test the Medaka parser used, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refIsDigit c = c >= '0' && c <= '9'
+
+refToInt : String -> Option Int
+-- Oracle: the Medaka parser the native stringToInt replaced, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refToInt s =
+  let a = stringToChars s
+  refParseInt a (arrayLength a)
+
+refParseInt : Array Char -> Int -> Option Int
+refParseInt a n = if n == 0 then None else refParseSign a n (arrayGetUnsafe 0 a)
+
+refParseSign : Array Char -> Int -> Char -> Option Int
+refParseSign a n c
+  | c == '-' = refParseDigits a n 1 0 False True
+  | c == '+' = refParseDigits a n 1 0 False False
+  | otherwise = refParseDigits a n 0 0 False False
+
+refParseDigits : Array Char -> Int -> Int -> Int -> Bool -> Bool -> Option Int
+refParseDigits a n i acc seen negative
+  | i >= n = refFinishInt seen acc negative
+  | otherwise = refParseDigitStep a n i acc seen negative (arrayGetUnsafe i a)
+
+refParseDigitStep : Array Char ->
+  Int ->
+  Int ->
+  Int ->
+  Bool ->
+  Bool ->
+  Char ->
+  Option Int
+refParseDigitStep a n i acc seen negative c =
+  if refIsDigit c then
+    let d = charCode c - 48
+    let limit = if negative then intMinBound else 0 - intMaxBound
+    let multMin = limit / 10
+    if acc < multMin then
+      None
+    else
+      let acc2 = acc * 10
+      if acc2 < limit + d then
+        None
+      else
+        refParseDigits a n (i + 1) (acc2 - d) True negative
+  else
+    None
+
+refFinishInt : Bool -> Int -> Bool -> Option Int
+refFinishInt seen acc negative =
+  if not seen then None else if negative then Some acc else Some (0 - acc)
+
+refReverse : String -> String
+-- Oracle: the codepoint reversal the native stringReverse replaced.
+-- lint-disable-next-line rule-stdlib-reimpl
+refReverse s =
+  let a = stringToChars s
+  let n = arrayLength a
+  stringFromChars (arrayMakeWith n (i => arrayGetUnsafe (n - 1 - i) a))
+
+refIntersperse : a -> List a -> List a
+-- Oracle: the separator walk the Medaka join used, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refIntersperse _ [] = []
+refIntersperse _ (x :: []) = [x]
+refIntersperse sep (x :: xs) = x :: sep :: refIntersperse sep xs
+
+refJoin : String -> List String -> String
+-- Oracle: the intersperse-then-concat definition the native stringJoin replaced.
+-- lint-disable-next-line rule-stdlib-reimpl
+refJoin sep parts = stringConcat (refIntersperse sep parts)
+
+intTextEdges : List String
+intTextEdges = [
+  "",
+  "-",
+  "+",
+  "0",
+  "-0",
+  "+0",
+  "007",
+  "-7",
+  "+7",
+  "42",
+  "12x",
+  "x12",
+  "--1",
+  "+-1",
+  "-+1",
+  " 1",
+  "1 ",
+  "1é",
+  "é1",
+  "٣",
+  "1\n",
+  "00000000000000000000001",
+  "4611686018427387903",
+  "4611686018427387904",
+  "-4611686018427387904",
+  "-4611686018427387905",
+  "461168601842738790",
+  "-461168601842738790",
+  "4611686018427387900",
+  "9223372036854775807",
+  "-9223372036854775808",
+  "99999999999999999999",
+  "-99999999999999999999",
+  "1234567890",
+]
+
+reverseEdges : List String
+reverseEdges = [
+  "",
+  "a",
+  "ab",
+  "abc",
+  "héllo",
+  "日本語",
+  "a😀b",
+  "é",
+  "👍🏽x",
+  "ééé",
+  "a\nb",
+  "日a本",
+]
+
+joinEdges : List (String, List String)
+joinEdges = [
+  (", ", []),
+  (", ", ["a"]),
+  ("", ["a", "b"]),
+  (", ", ["a", "b", "c"]),
+  ("é", ["日", "本"]),
+  ("日本", ["", "x", ""]),
+  ("-", ["", ""]),
+  (" ", ["a😀", "b"]),
+  ("", []),
+  ("", [""]),
+]
+
+test "toInt agrees with the Medaka reference on edge inputs" =
+  expectEqual (refPairs2 refToInt intTextEdges) (refPairs2 toInt intTextEdges)
+
+test "reverse agrees with the codepoint reference on edge inputs" =
+  expectEqual
+    (refPairs2 refReverse reverseEdges)
+    (refPairs2 reverse reverseEdges)
+
+test "join agrees with the intersperse reference on edge inputs" =
+  expectEqual (refJoinPairs refJoin joinEdges) (refJoinPairs join joinEdges)
+
+refPairs2 : (String -> a) -> List String -> List a
+refPairs2 f xs = map f xs
+
+refJoinPairs : (String -> List String -> String) ->
+  List (String, List String) ->
+  List String
+refJoinPairs _ [] = []
+refJoinPairs f ((sep, parts) :: rest) = f sep parts :: refJoinPairs f rest
+
+prop "toInt reads back every decimal Int" (n : Int) =
+  toInt (intToString n) == Some n
+
+prop "reverse is an involution" (s : String) = reverse (reverse s) == s
+
+prop "join with the empty separator is concat" (s : String) =
+  join "" [s, s] == s ++ s
+
+test "join keeps an exact codepoint length on multibyte text" =
+  expectEqual 7 (stringLength (join "→" ["é", "日本", "", "x"]))
+
+test "join with an empty separator keeps an exact codepoint length" =
+  expectEqual 2 (stringLength (join "" ["é", "日"]))
+
+test "reverse keeps an exact codepoint length on multibyte text" =
+  expectEqual 4 (stringLength (reverse "é日→😀"))

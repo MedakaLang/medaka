@@ -107,6 +107,8 @@ evalArithI64 : String -> (Int, Int) -> (Int, Int) -> Value a
 evalArithU64 : String -> (Int, Int) -> (Int, Int) -> Value a
 evalBinop : EvalEnv (Value a) -> String -> Expr -> Expr -> <a> Value a
 evalBlock : EvalEnv (Value a) -> List DoStmt -> <a> Value a
+evalCountOcc : String -> String -> Int
+evalCountOccGo : String -> String -> Int -> Int
 evalDepthLimit : Int
 evalDepthRef : Ref Int
 evalField : Value a -> String -> Value a
@@ -115,6 +117,8 @@ evalFileTagName : String
 evalIf : EvalEnv (Value a) -> Value a -> Expr -> Expr -> <a> Value a
 evalIndex : Value a -> Value a -> Value a
 evalIndexInt : Value a -> Int -> Value a
+evalLastIndexOf : String -> String -> Option Int
+evalLastIndexOfGo : String -> String -> Int -> Option Int -> Option Int
 evalLet : Loc -> EvalEnv (Value a) -> Pat -> Expr -> Expr -> <a> Value a
 evalLetGroup : EvalEnv (Value a) -> List LetBind -> Expr -> <a> Value a
 evalMain : List Decl -> String
@@ -425,15 +429,23 @@ pSliceError : Value a -> Value a -> <a> Value a
 pSqrt : Value a -> <a> Value a
 pStashRunStdout : Value a -> <a> Value a
 pStatFile : Value a -> <FileRead | a> Value a
+pStringByteLength : Value a -> <a> Value a
 pStringCompare : Value a -> Value a -> <a> Value a
 pStringConcat : Value a -> <a> Value a
+pStringCountOccurrences : Value a -> Value a -> <a> Value a
+pStringEndsWith : Value a -> Value a -> <a> Value a
 pStringFromChars : Value a -> <a> Value a
 pStringFromUtf8Bytes : Value a -> <a> Value a
 pStringIndexOf : Value a -> Value a -> <a> Value a
+pStringJoin : Value a -> Value a -> <a> Value a
+pStringLastIndexOf : Value a -> Value a -> <a> Value a
 pStringLength : Value a -> <a> Value a
+pStringReverse : Value a -> <a> Value a
 pStringSlice : Value a -> Value a -> Value a -> <a> Value a
+pStringStartsWith : Value a -> Value a -> <a> Value a
 pStringToChars : Value a -> <a> Value a
 pStringToFloat : Value a -> <a> Value a
+pStringToInt : Value a -> <a> Value a
 pStringToLower : Value a -> <a> Value a
 pStringToUpper : Value a -> <a> Value a
 pStringToUtf8Bytes : Value a -> <a> Value a
