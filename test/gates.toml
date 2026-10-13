@@ -3305,7 +3305,7 @@ oracles = []
 sources = []
 corpus = ["sqlite"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
-link = "production"
+link = "differential"
 
 [[gate]]
 name = "wasm/diff_wasm_ffi_wall"

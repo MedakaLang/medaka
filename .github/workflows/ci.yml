@@ -1807,7 +1807,7 @@ jobs:
         if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.wasm_corpora == 'true')) }}
         run: |
           export MEDAKA_EMITTER="$PWD/medaka_emitter"
-          sh test/wasm/build_wasm_oracle.sh
+          WASM_EMITTER_OPT=-O0 WASM_ORACLE_JOBS=3 sh test/wasm/build_wasm_oracle.sh
 
       # The gates, each invoked by its LITERAL repo-relative path — that literal is
       # what makes diff_compiler_ci_shard_coverage.sh classify them "covered" (see the

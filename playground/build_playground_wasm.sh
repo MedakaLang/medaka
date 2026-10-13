@@ -40,10 +40,27 @@ command -v dune >/dev/null 2>&1 || export PATH="$HOME/.opam/5.4.1/bin:$PATH"
 mkdir -p "$DIST"
 
 # ── step 1: native compiler + the native modules-emitter binary ──────────────────
-echo "[1/2] building native compiler + wasm emitter binary ..."
-( cd "$ROOT" && make medaka )
-[ -x "$EMITTER" ] && export MEDAKA_EMITTER="$EMITTER"
-( cd "$ROOT" && bash test/wasm/build_wasm_oracle.sh )
+#
+# Skipped when `medaka` and the modules emitter (the only one this script runs) are
+# newer than every compiler/stdlib/runtime source. The other two emitters are not
+# checked here; build_wasm_oracle.sh is what refreshes them.
+native_fresh() {
+  [ -x "$MEDAKA" ] && [ -x "$EMITBIN" ] || return 1
+  # A failing find (missing dir, unsupported primary) must read as stale, not fresh.
+  newer=$(find "$ROOT/compiler" "$ROOT/stdlib" "$ROOT/runtime" -type f \
+            \( -name '*.mdk' -o -name '*.c' -o -name '*.h' \) \
+            \( -newer "$MEDAKA" -o -newer "$EMITBIN" \) -print) || return 1
+  [ -z "$newer" ]
+}
+if native_fresh; then
+  echo "[1/2] native compiler + wasm emitter binary are up to date; skipping rebuild"
+  [ -x "$EMITTER" ] && export MEDAKA_EMITTER="$EMITTER"
+else
+  echo "[1/2] building native compiler + wasm emitter binary ..."
+  ( cd "$ROOT" && make medaka )
+  [ -x "$EMITTER" ] && export MEDAKA_EMITTER="$EMITTER"
+  ( cd "$ROOT" && bash test/wasm/build_wasm_oracle.sh )
+fi
 [ -x "$MEDAKA" ]  || { echo "FAIL: missing $MEDAKA";  exit 1; }
 [ -x "$EMITBIN" ] || { echo "FAIL: missing $EMITBIN"; exit 1; }
 

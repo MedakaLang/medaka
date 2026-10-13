@@ -58,23 +58,47 @@ _ms() { # epoch ms; whole seconds where date has no %N (BSD/macOS)
   _n=$(date +%s%N 2>/dev/null)
   case "$_n" in ''|*[!0-9]*) echo $(( $(date +%s) * 1000 )) ;; *) echo $(( _n / 1000000 )) ;; esac
 }
+# WASM_EMITTER_OPT=-O0 builds the emitters unoptimised and without ThinLTO. The WAT is
+# identical, but the emitter itself runs slower, so this only pays for a job that builds
+# them once and runs them a bounded number of times (the `wasm` CI job); the engines
+# gates run the modules emitter per corpus row and keep the production link. Unset keeps
+# the production link. MEDAKA_RT_OBJ / MEDAKA_PRELUDE_OBJ are compiled for the detected
+# link mode, so the plain link compiles its own.
 _build_timed() { # <entry> <out>
   _t0=$(_ms)
-  "$MEDAKA" build --allow-internal "$1" -o "$2" || return 1
+  if [ -n "${WASM_EMITTER_OPT:-}" ]; then
+    env MEDAKA_NO_LTO=1 MEDAKA_RT_OBJ= MEDAKA_PRELUDE_OBJ= MEDAKA_CLANG_OPT="$WASM_EMITTER_OPT" \
+      "$MEDAKA" build --allow-internal "$1" -o "$2" || return 1
+  else
+    "$MEDAKA" build --allow-internal "$1" -o "$2" || return 1
+  fi
   sh "$ROOT/test/build_oracles.sh" --record-sample "$(basename "$2")" "$(( $(_ms) - _t0 ))" "${JOBS:-1}"
+}
+_build_one() { # <entry> <out>
+  _build_timed "$1" "$2" || { echo "build failed for $1"; return 1; }
+  echo "built $1 -> $2"
 }
 # --allow-internal: the emitter entries pull in the compiler graph, which uses the
 # internal-only array-kernel externs (arrayGetUnsafe, …) — the same flag the LLVM
 # entry oracles pass in test/build_oracles.sh.
-if [ "$MODE" = all ]; then
-  _build_timed "$ENTRY" "$OUT" || { echo "build failed for $ENTRY"; exit 1; }
-  echo "built $ENTRY -> $OUT"
-fi
-if [ "$MODE" = all ] || [ "$MODE" = typed ]; then
-  _build_timed "$ENTRY_TYPED" "$OUT_TYPED" || { echo "build failed for $ENTRY_TYPED"; exit 1; }
-  echo "built $ENTRY_TYPED -> $OUT_TYPED"
-fi
-if [ "$MODE" = all ] || [ "$MODE" = modules ]; then
-  _build_timed "$ENTRY_MODULES" "$OUT_MODULES" || { echo "build failed for $ENTRY_MODULES"; exit 1; }
-  echo "built $ENTRY_MODULES -> $OUT_MODULES"
-fi
+#
+# WASM_ORACLE_JOBS>1 builds every requested emitter at once (default 1: a box may be
+# shared, and each build is single-threaded work, so CI is what sets it).
+case "${WASM_ORACLE_JOBS:-1}" in
+  ''|*[!0-9]*) echo "WASM_ORACLE_JOBS must be a number" >&2; exit 2 ;;
+esac
+_rc=0
+_pids=""
+_run() { # <entry> <out>
+  if [ "${WASM_ORACLE_JOBS:-1}" -gt 1 ]; then
+    _build_one "$1" "$2" &
+    _pids="$_pids $!"
+  else
+    _build_one "$1" "$2" || exit 1
+  fi
+}
+if [ "$MODE" = all ]; then _run "$ENTRY" "$OUT"; fi
+if [ "$MODE" = all ] || [ "$MODE" = typed ]; then _run "$ENTRY_TYPED" "$OUT_TYPED"; fi
+if [ "$MODE" = all ] || [ "$MODE" = modules ]; then _run "$ENTRY_MODULES" "$OUT_MODULES"; fi
+for _pid in $_pids; do wait "$_pid" || _rc=1; done
+exit "$_rc"
