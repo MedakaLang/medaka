@@ -181,7 +181,14 @@ runCheckModulesFromDiags : List Decl ->
   List ModDiags ->
   String
 runCheckModulesFromDiags rtD coreD mods perMod =
-  let exWarns = entryExhaust rtD coreD mods
+  checkModulesReport (entryExhaust rtD coreD mods) perMod
+
+-- `runCheckModulesFromDiags` with the entry's guard-exhaustiveness lines already
+-- rendered, for a caller that renders them before the graph is typechecked so the
+-- desugared modules they read need not stay live through the typecheck.
+export
+checkModulesReport : String -> List ModDiags -> String
+checkModulesReport exWarns perMod =
   joinNonEmpty exWarns (entryReportFromDiags perMod)
 
 -- guard-exhaustiveness warnings on the ENTRY module (last) — the multi-module
@@ -192,6 +199,7 @@ runCheckModulesFromDiags rtD coreD mods perMod =
 -- imports bind, and runtime + core — the same scope `typecheckDiagsFold`
 -- (`driver/diagnostics.mdk`) gives every module.  `rtD`/`coreD`/`mods` are the
 -- DESUGARED decls, which still carry the DData the oracle reads.
+export
 entryExhaust : List Decl -> List Decl -> List (String, List Decl) -> String
 entryExhaust rtD coreD mods =
   entryExhaustGo (rtD ++ coreD) (importedCtorDecls coreD mods mods) mods

@@ -13,7 +13,7 @@
 MEDAKA_SCRATCH ?= /var/tmp/medaka-scratch
 export TMPDIR := $(shell mkdir -p $(MEDAKA_SCRATCH) 2>/dev/null && echo $(MEDAKA_SCRATCH) || echo /tmp)
 
-.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census dup-census dist o2-survivor-census alloc-census doc-census jev-census jev-eval bytes-census
+.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census dup-census dist o2-survivor-census alloc-census retain-census doc-census jev-census jev-eval bytes-census
 
 ## medaka  — build the native `medaka` CLI.
 ##           WARM (./medaka_emitter present): 2-stage rebuild from current source,
@@ -605,6 +605,15 @@ o2-survivor-census: medaka
 ##           a gate — see test/alloc_census.sh's header.
 alloc-census: medaka
 	sh test/alloc_census.sh
+
+## retain-census — report-only retention census of `medaka check` on the
+##           compiler (#4090): what the collector keeps re-marking, as live
+##           bytes by allocating function and module at several points of the
+##           run, plus "who holds it" with RETAIN_REF_SITES/RETAIN_REF_APP.
+##           ~6 min. Needs a built ./medaka, clang, python3, bdw-gc. Always
+##           exits 0: a census, not a gate — see test/retain_census.sh's header.
+retain-census: medaka
+	sh test/retain_census.sh
 
 ## dup-census — report what rule-duplicate-body's zero is hiding (#2861):
 ##           suppression directives per file, the findings they hide (derived

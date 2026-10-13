@@ -52977,8 +52977,10 @@ checkModuleFullDiags mid seedVars accData accAll prog =
 -- `test/run_check_agreement_fixtures/accept_own_module_impl_return_only_dispatch.mdk`
 -- for the entry module of a graph) does not depend on it: determination reads the
 -- whole-graph `IE` through `improvementPool`.
--- Cost: the accumulator grows on the RIGHT, so O(|prog|) per module; this is not the
--- perf-gated `checkModules` path, which is `cmCheckWorker`'s.
+-- Cost: `accAll ++ prog` copies the accumulator, so O(|accAll|) per module and
+-- quadratic over the graph; this is not the perf-gated `checkModules` path, which is
+-- `cmCheckWorker`'s.  Each copy is short-lived only while nothing holds it until graph
+-- end, which is why a module's stamping context keeps the interface decls alone.
 --
 -- #2246: the payload carries `schemes` a SECOND time.  `foldModules` hands the worker's
 -- FIRST component to the NEXT module (it is the fold's seed, never `collect`'s), so the
@@ -53356,10 +53358,10 @@ chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) 
     [] => (None, [])
   match key
     None =>
-      -- no key for this module: nothing after it can be resumed either
-      let (finalResults, _) =
-        chainGo baseSeed coreV depEnv2 accData2 accAll2 results2 [] rest
-      (finalResults, [])
+      -- No key for this module: nothing after it can be resumed either, so the rest
+      -- records no step and this is a tail call.  A frame waiting on the rest would
+      -- keep its own `accAll2`/`accData2` copies reachable from the stack.
+      chainGo baseSeed coreV depEnv2 accData2 accAll2 results2 [] rest
     Some k =>
       -- #2705: drain what is queued (this module's context, and the contexts of
       -- any un-keyed modules before it) BEFORE the snapshot, so a hit restores a
@@ -55423,11 +55425,16 @@ moduleStampOrder = [
 -- What is deliberately NOT captured is the tyvar substitution, which is not on
 -- `PerRun` at all: the drain therefore resolves every module's goals against the
 -- FINAL, whole-graph solution, which is the point of draining at quiescence.
+--
+-- `scSuperDecls` is the impl universe reduced to its interface declarations, the only
+-- decls `ifaceSupersOf` (super-expansion's reader of `superDeclsRef`) matches.  The
+-- whole universe is a fresh copy per module, so holding it here kept every module's
+-- copy live until the drain: quadratic in the graph, and re-marked by every collection.
 data StampCtx = StampCtx {
   scModule : String,
   scPerRun : PerRun,
   scToggles : Toggles,
-  scImplDecls : List Decl,
+  scSuperDecls : List Decl,
   scRpNames : List String,
   scGoals : List Obligation,
   scNumlits : List (Mono, Ref (Option Float), Int, Ref Route),
@@ -55442,11 +55449,16 @@ stampCtxOf mid implDecls goals numlits = StampCtx {
   scModule = mid,
   scPerRun = perRun.value,
   scToggles = toggles.value,
-  scImplDecls = implDecls,
+  scSuperDecls = filterList isInterfaceDecl implDecls,
   scRpNames = returnPosMethodNames implDecls,
   scGoals = goals,
   scNumlits = numlits,
 }
+
+isInterfaceDecl : Decl -> Bool
+isInterfaceDecl (DAttrib _ d) = isInterfaceDecl d
+isInterfaceDecl (DInterface {  }) = True
+isInterfaceDecl _ = False
 
 -- This module's windows, cut now — see `siteGoalsIn`.
 enqueueStampCtx : String -> List Decl -> Unit
@@ -55585,7 +55597,7 @@ runStampCtxs (ctx :: rest) =
   -- super-expansion reads — both are what `graphModuleWorker` set for this module
   -- (`elabModuleStamp` for the core pass, which is the only module still on it).
   driverState.value.currentModuleRef := ctx.scModule
-  driverState.value.superDeclsRef := ctx.scImplDecls
+  driverState.value.superDeclsRef := ctx.scSuperDecls
   let _ = runStampSteps ctx moduleStampOrder
   let _ = recordEvidence ctx.scGoals
   runStampCtxs rest

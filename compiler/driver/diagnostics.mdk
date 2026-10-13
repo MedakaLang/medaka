@@ -1402,10 +1402,6 @@ analyzeProjectFull : (List String -> <e> List (String, List String)) ->
 analyzeProjectFull exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let staleRef = newStale ()
   let wread = p => wrappedRead cacheRef staleRef read p
-  let runtimeP = preludeDesugared runtimeSrc
-  let coreP = preludeDesugared coreSrc
-  let preludeKey =
-    Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
   match loadProgramFilesLocatedCachedE parseCacheRef wread entry roots
     -- #100: a parse/lex error in a dependency is attributed to THAT module's file
     -- with its own located `P-*`/`L-*` diag — this is the LSP's most common input
@@ -1432,16 +1428,41 @@ analyzeProjectFull exportsFor allowInternal trustedMods cacheRef parseCacheRef r
       )
     Ok mods =>
       let (full, results) =
-        projectDiagsLoadedFull
+        analyzeLoadedFull
           exportsFor
           allowInternal
           trustedMods
-          runtimeP
-          coreP
-          preludeKey
-          (chainKeyOf entry roots)
+          entry
+          roots
+          runtimeSrc
+          coreSrc
           mods
       (full, appendStale staleRef results)
+
+-- `analyzeProjectFull` over a graph the caller has already loaded from disk with
+-- `entry` and `roots`, so it has no unsaved-buffer source and no stale parse errors
+-- to fold in.  Human `check` loads once and hands its graph here; loading it a
+-- second time costs a whole-graph parse and keeps two copies of every tree live.
+export
+analyzeLoadedFull : (List String -> <e> List (String, List String)) ->
+  Bool ->
+  List String ->
+  String ->
+  List String ->
+  String ->
+  String ->
+  List (String, String, List Decl) ->
+  <e> (List ModDiags, List (String, List Diag))
+analyzeLoadedFull exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc mods =
+  projectDiagsLoadedFull
+    exportsFor
+    allowInternal
+    trustedMods
+    (preludeDesugared runtimeSrc)
+    (preludeDesugared coreSrc)
+    (Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc))
+    (chainKeyOf entry roots)
+    mods
 
 -- `analyzeProject` minus the load: resolve, then typecheck, then bucket — over a
 -- graph the caller has already loaded.  `medaka test` loads once and calls this,
