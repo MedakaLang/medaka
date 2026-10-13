@@ -109,9 +109,9 @@ fi
 # (every run of spaces/newlines is one space), so `medaka fmt` re-wrapping a
 # long line does not read as the carrier having gone missing.
 for required in \
-  'data FnCtx = FnCtx { trmc : WTrmcCtx, disp : WDispCtx }' \
-  'freshFnCtx = FnCtx { trmc = WTrmcOff, disp = WDispOff }' \
-  'progInFn prog = progWithFnCtx prog freshFnCtx' \
+  'data FnCtx = FnCtx { trmc : WTrmcCtx, disp : WDispCtx, site : Int, binding : String, }' \
+  'freshFnCtx = FnCtx { trmc = WTrmcOff, disp = WDispOff, site = 0, binding = "?" }' \
+  'progInFn prog = progWithFnCtx prog { freshFnCtx | binding = (progFnCtx prog).binding }' \
   'progWithTrmc ctx prog =' \
   'progWithDisp ctx prog ='; do
   has_wasm_pin "$required" || {
