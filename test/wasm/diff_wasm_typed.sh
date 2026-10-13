@@ -780,7 +780,7 @@ for required in \
   'reverseL !emit.stringSegments' \
   'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' \
   'emitProgramRecord input plan cp =' \
-  'emitProgramGaps input cp0 =' \
+  'emitProgramGaps input plan cp0 =' \
   'let emit = freshWasmEmit WGapRecord' \
   'let dataSegs = emitDataSegs (progEmit prog)' \
   'emitRefExpr prog env d (CLit l) = emitLitRef (progEmit prog) l'; do

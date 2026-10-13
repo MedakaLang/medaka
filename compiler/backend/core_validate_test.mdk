@@ -199,7 +199,11 @@ test "(e) record mode logs one event per refused extern, and no unbound-variable
       "the refused externs"
       (expectEqual ["writeFile", "netSend"] (refused WasmBackend recordSrc)),
     labelFail "record emission" (expectEqual expected events),
-    labelFail "gap census" (expectEqual expected (emitProgramGaps input cp)),
+    labelFail
+      "gap census"
+      (expectEqual
+        expected
+        (emitProgramGaps input (buildEmitPlan WasmBackend cp) cp)),
   ]
 
 assertSnapshotSrc : String

@@ -7,24 +7,34 @@
 -- whose body names a lazy global is lazy (taint is downward-closed over reads); a
 -- self-loop or a mutual cycle has no static init order so its members are lazy;
 -- `main` is never lazy.
+--
+-- The TRMC programs are Core for small source functions, written next to each
+-- one.  A function is eligible when every tail leaf is a self-free base or a
+-- constructor whose last field is a saturated self-call (at least one such leaf),
+-- and no self-call sits anywhere else, a match guard included.
 
 import test_process.{medakaRoot}
 import test.{
   Expectation, expectAll, expectEqual, expectFalse, expectTrue, labelFail
 }
 import string.{contains, lines, trimLeft, startsWith}
-import frontend.ast.{Addr(..), Lit(..), noDeclLoc, noBinderId}
+import frontend.ast.{Addr(..), Lit(..), Pat(..), noDeclLoc, noBinderId}
 import ir.core_ir.{
+  CArm(..),
   CBind(..),
   CClause(..),
   CExpr(..),
+  CGuard(..),
   CProgram(..),
+  CTree(..),
+  mkApp,
   noDeclFacts,
   synthBind,
 }
 import support.ordmap.{omLookup}
-import backend.emit_plan.{EmitPlan(..), buildEmitPlan}
+import backend.emit_plan.{EmitPlan(..), buildEmitPlan, isTrmcFn}
 import backend.core_validate.{Backend(..)}
+import backend.trmc_analysis.{ctorTailIsCons, dispMembersOf, dispRootOf}
 
 val : String -> CExpr -> CBind
 val name rhs = synthBind name [CClause [] rhs]
@@ -95,7 +105,8 @@ isWasm : Backend -> Bool
 isWasm WasmBackend = True
 isWasm _ = False
 
--- The emitters read the classification from the plan; neither may recompute it.
+-- The emitters read the global classification, the TRMC verdict and the dispatch
+-- groups from the plan; neither may recompute them.
 -- Comment lines are skipped: they may name the analyses.
 codeMentions : String -> String -> Bool
 codeMentions word text =
@@ -111,9 +122,148 @@ noRecompute file = match readFile "\{medakaRoot}/compiler/backend/\{file}"
     labelFail
       "\{file} calls lazyGlobalNames"
       (expectFalse (codeMentions "lazyGlobalNames" text)),
+    labelFail
+      "\{file} calls trmcEligible"
+      (expectFalse (codeMentions "trmcEligible" text)),
+    labelFail
+      "\{file} calls detectDispatchGroups"
+      (expectFalse (codeMentions "detectDispatchGroups" text)),
   ]
 
-test "neither emitter recomputes the global classification" = expectAll [
+test "neither emitter recomputes a plan analysis" = expectAll [
   noRecompute "llvm_emit.mdk",
   noRecompute "wasm_emit.mdk",
 ]
+
+-- ── TRMC verdict and dispatch groups ────────────────────────────────────────
+
+fn : String -> List String -> CExpr -> CBind
+fn name params body =
+  synthBind name [CClause (map (p => PVar p noDeclLoc noBinderId) params) body]
+
+call : String -> List CExpr -> CExpr
+call f args = mkApp (ref f) args
+
+int : Int -> CExpr
+int n = CLit (LInt n)
+
+prim : String -> CExpr -> CExpr -> CExpr
+prim op l r = CBinPrim op l r "" noDeclLoc
+
+trmcPlan : List (String, Int) -> List CBind -> EmitPlan
+trmcPlan ctors binds =
+  buildEmitPlan LlvmBackend (CProgram binds ctors [] [] [] noDeclFacts)
+
+-- upto lo hi = if lo > hi then [] else lo :: upto (lo + 1) hi
+uptoLeaf : CExpr
+uptoLeaf =
+  prim "::" (ref "lo") (call "upto" [prim "+" (ref "lo") (int 1), ref "hi"])
+
+upto : CBind
+upto =
+  fn
+    "upto"
+    ["lo", "hi"]
+    (CIf (prim ">" (ref "lo") (ref "hi")) (CList []) uptoLeaf)
+
+-- data T = Leaf | Node Int T
+-- build n = if n == 0 then Leaf else Node n (build (n - 1))
+buildLeaf : CExpr
+buildLeaf = call "Node" [ref "n", call "build" [prim "-" (ref "n") (int 1)]]
+
+build : CBind
+build =
+  fn "build" ["n"] (CIf (prim "==" (ref "n") (int 0)) (ref "Leaf") buildLeaf)
+
+treeCtors : List (String, Int)
+treeCtors = [("Leaf", 0), ("Node", 2)]
+
+test "a cons-tail builder is TRMC-eligible" =
+  expectTrue (isTrmcFn (trmcPlan [] [upto]).trmc "upto")
+
+-- Both backends realize this verdict.  Which cell the loop links is per backend:
+-- wasm asks `ctorTailIsCons` of each leaf and builds the built-in list cell only
+-- for `::`, the user constructor's struct otherwise.
+test "a user constructor tail is eligible, and is not the built-in list cell" = expectAll
+  [
+    labelFail
+      "build is eligible"
+      (expectTrue (isTrmcFn (trmcPlan treeCtors [build]).trmc "build")),
+    labelFail
+      "the Node leaf is a user cell"
+      (expectFalse (ctorTailIsCons buildLeaf)),
+    labelFail
+      "the :: leaf is the list cell"
+      (expectTrue (ctorTailIsCons uptoLeaf)),
+    labelFail
+      "without the program's constructor table, Node is no constructor"
+      (expectFalse (isTrmcFn (trmcPlan [] [build]).trmc "build")),
+  ]
+
+-- keep xs = match xs
+--   y :: ys | keep ys == [] => [y]
+--   y :: ys => y :: keep ys
+--   [] => []
+consArm : CArm
+consArm =
+  CArm
+    (PCons (PVar "y" noDeclLoc noBinderId) (PVar "ys" noDeclLoc noBinderId))
+    []
+    (prim "::" (ref "y") (call "keep" [ref "ys"]))
+
+nilArm : CArm
+nilArm = CArm (PList []) [] (CList [])
+
+guardArm : CArm
+guardArm =
+  CArm
+    (PCons (PVar "y" noDeclLoc noBinderId) (PVar "ys" noDeclLoc noBinderId))
+    [CGBool (prim "==" (call "keep" [ref "ys"]) (CList []))]
+    (CList [ref "y"])
+
+keepWith : List CArm -> CBind
+keepWith arms = fn "keep" ["xs"] (CDecision (ref "xs") arms (CTLeaf 0))
+
+test "a self-call in a match guard disqualifies the function" = expectAll [
+  labelFail
+    "without the guard arm it is eligible"
+    (expectTrue
+      (isTrmcFn (trmcPlan [] [keepWith [consArm, nilArm]]).trmc "keep")),
+  labelFail
+    "with it, it is not"
+    (expectFalse
+      (isTrmcFn
+        (trmcPlan [] [keepWith [guardArm, consArm, nilArm]]).trmc
+        "keep")),
+]
+
+-- c0 k = if k <= 0 then [] else 0 :: c0 (k - 1)
+-- c1 k = if k <= 0 then c0 1 else 1 :: c1 (k - 1)
+-- main = c1 5
+-- c0 builds its own spine, so it stays a singleton.  c1 conses onto itself and
+-- tail-calls c0, and nothing outside reaches c0, so c1 roots the group {c1, c0}.
+consFamily : List CBind
+consFamily = [
+  fn
+    "c0"
+    ["k"]
+    (CIf
+      (prim "<=" (ref "k") (int 0))
+      (CList [])
+      (prim "::" (int 0) (call "c0" [prim "-" (ref "k") (int 1)]))),
+  fn
+    "c1"
+    ["k"]
+    (CIf
+      (prim "<=" (ref "k") (int 0))
+      (call "c0" [int 1])
+      (prim "::" (int 1) (call "c1" [prim "-" (ref "k") (int 1)]))),
+  val "main" (call "c1" [int 5]),
+]
+
+test "a mutually tail-calling cons family is one dispatch group" =
+  expectEqual
+    [("c1", ["c1", "c0"])]
+    (map
+      (g => (dispRootOf g, dispMembersOf g))
+      (trmcPlan [] consFamily).dispGroups)
