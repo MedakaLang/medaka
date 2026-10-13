@@ -29,6 +29,7 @@ import ir.core_ir_lower.{
   declaredRecordFieldOrders,
 }
 import backend.wasm_emit.{emitProgram, makeWasmEmitInputFull}
+import backend.emit_plan.{buildEmitPlan}
 
 main = match args ()
   [targetPath] => withTarget targetPath
@@ -53,8 +54,7 @@ withTarget targetPath = match readFile targetPath
         []
     -- No typechecker ran, so the lowering stamps every binder `RTValue`; the
     -- signatures the source declares restate what they type.
-    putStr
-      (emitProgram
-        input
-        (stampDeclaredSignatures decls (lowerProgramEmit TargetWasm annotated)))
+    let cp =
+      stampDeclaredSignatures decls (lowerProgramEmit TargetWasm annotated)
+    putStr (emitProgram input (buildEmitPlan TargetWasm cp) cp)
   Err msg => ePutStrLn msg

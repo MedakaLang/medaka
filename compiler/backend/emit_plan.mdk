@@ -1,0 +1,26 @@
+-- The per-emission plan: facts about the lowered program that both backends read
+-- and neither recomputes.  Built once, right after lowering, from the program an
+-- emitter is about to receive.
+
+import ir.core_ir.{CProgram(..)}
+import ir.core_ir_lower.{EmitTarget(..)}
+import support.ordmap.{OrdMap}
+import backend.emit_support.{eagerReachMap, lazyGlobalNames}
+
+-- `target` is the lowering's own discriminator, carried as-is.
+-- `lazyGlobals` are the value globals emitted as forced-on-first-use cells.
+-- `eagerReach` maps each binding to the value globals it eagerly reaches; the
+-- value-global init order is sorted by it.
+public export data EmitPlan = EmitPlan {
+  target : EmitTarget,
+  lazyGlobals : List String,
+  eagerReach : OrdMap (List String),
+}
+
+export
+buildEmitPlan : EmitTarget -> CProgram -> EmitPlan
+buildEmitPlan target (CProgram groups _ _ _ _ _) = EmitPlan {
+  target = target,
+  lazyGlobals = lazyGlobalNames groups,
+  eagerReach = eagerReachMap groups,
+}

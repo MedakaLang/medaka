@@ -211,6 +211,11 @@ inlang-backend-core-validate-test:
 inlang-backend-emit-binder-refusal-test:
 	./medaka test --native compiler/backend/emit_binder_refusal_test.mdk
 
+## The emission plan's lazy/eager global classification, and the structural check
+## that neither emitter recomputes it. Native: the check reads the emitter sources.
+inlang-backend-emit-plan-test:
+	./medaka test --native compiler/backend/emit_plan_test.mdk
+
 ## Coded-trap helpers of wasm_emit.mdk: one `$trapmsg_K` per distinct fixed text,
 ## graded against the spec's stderr lines.
 inlang-backend-wasm-emit-trapmsg-test:

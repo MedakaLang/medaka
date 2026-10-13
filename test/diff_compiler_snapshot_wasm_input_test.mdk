@@ -89,7 +89,7 @@ apiCheck = match readFile wasmEmitPath
       (exportDeclPresent "makeWasmEmitInput" "" ls
         && exportDeclPresent
           "emitProgram"
-          "emitProgram : WasmEmitInput -> CProgram -> String"
+          "emitProgram : WasmEmitInput -> EmitPlan -> CProgram -> String"
           ls
         && exportDeclPresent
           "emitProgramGaps"

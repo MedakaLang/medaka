@@ -1,0 +1,119 @@
+-- Sibling test for `compiler/backend/emit_plan.mdk` ([P-TEST-SIBLING]).
+--
+-- Run natively: the structural test reads the two emitter sources.
+--
+-- Each program is a list of value globals.  Verdicts follow from the eager-init
+-- rules, not from a captured run: a literal reads nothing so it is eager; a global
+-- whose body names a lazy global is lazy (taint is downward-closed over reads); a
+-- self-loop or a mutual cycle has no static init order so its members are lazy;
+-- `main` is never lazy.
+
+import test_process.{medakaRoot}
+import test.{
+  Expectation, expectAll, expectEqual, expectFalse, expectTrue, labelFail
+}
+import string.{contains, lines, trimLeft, startsWith}
+import frontend.ast.{Addr(..), Lit(..), noDeclLoc, noBinderId}
+import ir.core_ir.{
+  CBind(..),
+  CClause(..),
+  CExpr(..),
+  CProgram(..),
+  noDeclFacts,
+  synthBind,
+}
+import ir.core_ir_lower.{EmitTarget(..)}
+import support.ordmap.{omLookup}
+import backend.emit_plan.{EmitPlan(..), buildEmitPlan}
+
+val : String -> CExpr -> CBind
+val name rhs = synthBind name [CClause [] rhs]
+
+ref : String -> CExpr
+ref n = CVar n AGlobal
+
+program : List CBind -> CProgram
+program binds = CProgram binds [] [] [] [] noDeclFacts
+
+planOf : List CBind -> EmitPlan
+planOf binds = buildEmitPlan TargetNative (program binds)
+
+reachOf : String -> EmitPlan -> List String
+reachOf n plan = match omLookup n plan.eagerReach
+  Some rs => rs
+  None => ["<no entry>"]
+
+-- a = 1 (eager)  b = a (eager)  c = c (self loop)  d = c (reads a lazy one)
+-- x = y, y = x (a cycle)  main = 0 (never lazy)
+mixed : List CBind
+mixed = [
+  val "a" (CLit (LInt 1)),
+  val "b" (ref "a"),
+  val "c" (ref "c"),
+  val "d" (ref "c"),
+  val "x" (ref "y"),
+  val "y" (ref "x"),
+  val "main" (CLit (LInt 0)),
+]
+
+test "a pure literal global and a reader of it are eager" = expectAll [
+  labelFail
+    "no eager global is lazy"
+    (expectEqual
+      []
+      (planOf [
+        val "a" (CLit (LInt 1)),
+        val "b" (ref "a"),
+      ]).lazyGlobals),
+  labelFail "a reaches nothing" (expectEqual [] (reachOf "a" (planOf mixed))),
+  labelFail "b reaches a" (expectEqual ["a"] (reachOf "b" (planOf mixed))),
+]
+
+test "a self loop, a reader of it, and a mutual cycle are lazy; main is not" =
+  expectEqual ["c", "d", "x", "y"] (planOf mixed).lazyGlobals
+
+test "a cycle's members share one reach set" = expectAll [
+  labelFail
+    "x reaches y and x"
+    (expectTrue (hasAll ["x", "y"] (reachOf "x" (planOf mixed)))),
+  labelFail
+    "y reaches y and x"
+    (expectTrue (hasAll ["x", "y"] (reachOf "y" (planOf mixed)))),
+]
+
+test "the plan carries the target it was built with" = expectAll [
+  labelFail
+    "wasm"
+    (expectTrue (isWasm (buildEmitPlan TargetWasm (program mixed)).target)),
+  labelFail "native" (expectFalse (isWasm (planOf mixed).target)),
+]
+
+hasAll : List String -> List String -> Bool
+hasAll wanted have = all (w => any (== w) have) wanted
+
+isWasm : EmitTarget -> Bool
+isWasm TargetWasm = True
+isWasm _ = False
+
+-- The emitters read the classification from the plan; neither may recompute it.
+-- Comment lines are skipped: they may name the analyses.
+codeMentions : String -> String -> Bool
+codeMentions word text =
+  any (l => not (startsWith "--" (trimLeft l)) && contains word l) (lines text)
+
+noRecompute : String -> <IO, FileRead> Expectation
+noRecompute file = match readFile "\{medakaRoot}/compiler/backend/\{file}"
+  Err e => expectEqual "readable" "cannot read \{file}: \{e}"
+  Ok text => expectAll [
+    labelFail
+      "\{file} calls eagerReachMap"
+      (expectFalse (codeMentions "eagerReachMap" text)),
+    labelFail
+      "\{file} calls lazyGlobalNames"
+      (expectFalse (codeMentions "lazyGlobalNames" text)),
+  ]
+
+test "neither emitter recomputes the global classification" = expectAll [
+  noRecompute "llvm_emit.mdk",
+  noRecompute "wasm_emit.mdk",
+]

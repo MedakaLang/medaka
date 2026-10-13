@@ -314,11 +314,10 @@ import backend.trmc_analysis.{
 import backend.private_mangle.{hashName, injectiveIdent}
 import types.disposition.{ifaceSuperCount, installedDispositionsOpt}
 import types.route_key.{numIntWord}
+import backend.emit_plan.{EmitPlan(..)}
 import backend.emit_support.{
-  eagerReachMap,
   bindEagerReach,
   bindNameMap,
-  lazyGlobalNames,
   isDictParamName,
   ftPrefix,
   ftLabelOf,
@@ -13356,13 +13355,13 @@ valBinds (b :: rest) = if isFnBind b then valBinds rest else b :: valBinds rest
 -- sort by intra-value-global references.  A genuine VALUE cycle (mutual recursion
 -- through nullary globals — none arise in practice) keeps its members in source
 -- order, the pre-existing behaviour (still caught by the forward-ref gap).
--- `allBinds` is the WHOLE program (functions included) so the eager-reachability
--- closure can follow calls; `binds` is the nullary value bindings to be ordered.
-orderedValBinds : List CBind -> List CBind -> List CBind
+-- The plan's `eagerReach` was computed over the WHOLE program (functions included)
+-- so the closure follows calls; `binds` is the nullary value bindings to be ordered.
+orderedValBinds : EmitPlan -> List CBind -> List CBind
 -- Intentional cross-file duplicate of the same helper in wasm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
-orderedValBinds allBinds binds =
-  let rm = eagerReachMap allBinds
+orderedValBinds plan binds =
+  let rm = plan.eagerReach
   -- #623: ONE name→bind map replaces the `all : List CBind` + `names : List
   -- String` pair; `done`/`visiting` are sets, not lists; and `acc` is built by
   -- PREPEND + one final reverse instead of `acc ++ [b]` per binding.  Every one
@@ -14526,8 +14525,12 @@ tableStats e = [
 -- `emitProgramWithStats` always runs Strict. Extracted to ONE function so a
 -- future edit to one caller's config can't silently diverge from the
 -- other's with no gate to catch it.
-programEmitConfig : GapMode -> EmitInput -> List CBind -> EmitStateConfig
-programEmitConfig gapMode input groups = EmitStateConfig {
+programEmitConfig : GapMode ->
+  EmitInput ->
+  EmitPlan ->
+  List CBind ->
+  EmitStateConfig
+programEmitConfig gapMode input plan groups = EmitStateConfig {
   counter0 = if input.emitHalf == emitHalfProgram then programHalfIdBase else 0,
   globalsReg0 =
     if input.emitHalf == emitHalfPrelude then
@@ -14535,7 +14538,7 @@ programEmitConfig gapMode input groups = EmitStateConfig {
     else
       initGlobalsReg (valBinds groups),
   gapMode = gapMode,
-  lazyGlobalNames = lazyGlobalNames groups,
+  lazyNames = plan.lazyGlobals,
   runDispatchAnalysis = True,
 }
 
@@ -14548,8 +14551,13 @@ programEmitConfig gapMode input groups = EmitStateConfig {
 -- (`emitFfiDeclares` writes only `e.buf`, so `emitProgramWithStats`'s
 -- pre-emission `tableStats` snapshot is unaffected — none of the seven counted
 -- tables is touched by it.)
-runStrictEmission : Emit -> EmitInput -> List CBind -> List CImplEntry -> String
-runStrictEmission e input groups implEntries =
+runStrictEmission : Emit ->
+  EmitInput ->
+  EmitPlan ->
+  List CBind ->
+  List CImplEntry ->
+  String
+runStrictEmission e input plan groups implEntries =
   let _ = emitPreamble e
   -- #2074: the user-declared externs' `declare`s.  No user extern ⇒ no lines.
   let _ = emitFfiDeclares e
@@ -14558,7 +14566,10 @@ runStrictEmission e input groups implEntries =
   -- program half's `@mdk_program_main` is the one that defines and initialises
   -- every `@mdk_g_*` (the prelude's included).
   let _ =
-    if input.emitHalf == emitHalfPrelude then () else emitProgramMain e groups
+    if input.emitHalf == emitHalfPrelude then
+      ()
+    else
+      emitProgramMain e plan groups
   -- #561 PR-A: LAZY value globals' @mdk_force_<x> defines live with the init logic
   -- (@mdk_program_main), i.e. the program/whole half; the prelude half only declares
   -- them (emitGlobalDecls).  In whole mode with no lazy global this emits nothing.
@@ -14591,13 +14602,16 @@ runStrictEmission e input groups implEntries =
 -- (post-`buildEmitState`, matching what a caller reading the printed line
 -- expects: "the table the emitter built"), not two.
 export
-emitProgramWithStats : EmitInput -> CProgram -> (String, List (String, Int))
-emitProgramWithStats input (cp@(CProgram groups ctorArs ctorTypes implEntries _ facts)) =
+emitProgramWithStats : EmitInput ->
+  EmitPlan ->
+  CProgram ->
+  (String, List (String, Int))
+emitProgramWithStats input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ facts)) =
   let _ = unprovidedExterns Strict input cp
-  let cfg = programEmitConfig Strict input groups
+  let cfg = programEmitConfig Strict input plan groups
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries facts
   let stats = tableStats e
-  let text = runStrictEmission e input groups implEntries
+  let text = runStrictEmission e input plan groups implEntries
   (text, stats)
 
 -- ── program ─────────────────────────────────────────────────────────────────
@@ -14606,16 +14620,16 @@ emitProgramWithStats input (cp@(CProgram groups ctorArs ctorTypes implEntries _ 
 -- `@main` that computes the top-level nullary value bindings (in source order),
 -- then `main`'s body, then a type-directed print.
 export
-emitProgram : EmitInput -> CProgram -> String
-emitProgram input cp =
-  let (text, _) = emitProgramMode Strict input cp
+emitProgram : EmitInput -> EmitPlan -> CProgram -> String
+emitProgram input plan cp =
+  let (text, _) = emitProgramMode Strict input plan cp
   text
 
 -- Record-mode emission is self-contained: callers receive both the rendered LLVM and
 -- the gap events, so no state can leak across emissions in one process.
 export
-emitProgramRecord : EmitInput -> CProgram -> (String, List String)
-emitProgramRecord input cp = emitProgramMode Record input cp
+emitProgramRecord : EmitInput -> EmitPlan -> CProgram -> (String, List String)
+emitProgramRecord input plan cp = emitProgramMode Record input plan cp
 
 -- Per-emission derived-state config (RUN-EMIT-002): the fields the six-row
 -- divergence census found differing between emitProgramMode and
@@ -14625,7 +14639,7 @@ data EmitStateConfig = EmitStateConfig {
   counter0 : Int,
   globalsReg0 : List (String, (Bool, LTy)),
   gapMode : GapMode,
-  lazyGlobalNames : List String,
+  lazyNames : List String,
   runDispatchAnalysis : Bool,
 }
 
@@ -14766,7 +14780,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
   -- #561 PR-A: classify LAZY value globals (dispatch-reaching / cyclic) once per
   -- program.  Reads of these lower to `call @mdk_force_<x>()`; every other global
   -- stays on the byte-identical eager prologue.
-  let _ = installLazyGlobalMap e cfg.lazyGlobalNames
+  let _ = installLazyGlobalMap e cfg.lazyNames
   let _ = installCtorMap e ctorArs
   -- #990: index the ctor→type table so cellTag's per-ctor ctorTypeId/ctorOrdinal/
   -- ctorHasSiblings lookups are O(log types) not O(types) — reverseL ⇒ first-wins.
@@ -14793,8 +14807,12 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
   e.constGlobals := collectConstGlobals (valBinds groups)
   e
 
-emitProgramMode : GapMode -> EmitInput -> CProgram -> (String, List String)
-emitProgramMode gapMode input (cp@(CProgram groups ctorArs ctorTypes implEntries _ facts)) =
+emitProgramMode : GapMode ->
+  EmitInput ->
+  EmitPlan ->
+  CProgram ->
+  (String, List String)
+emitProgramMode gapMode input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ facts)) =
   -- Each half's run checks the whole program it received, so a refused extern
   -- is refused by the half that reaches it, before that half emits anything.
   let found = unprovidedExterns gapMode input cp
@@ -14805,10 +14823,10 @@ emitProgramMode gapMode input (cp@(CProgram groups ctorArs ctorTypes implEntries
   -- the globals initialised as it computes them — so they start READY, exactly as
   -- the non-emitting gaps driver does (initGlobalsRegReady).  Without this every
   -- prelude body that loads a global would hit the forward-dependency gap.
-  let cfg = programEmitConfig gapMode input groups
+  let cfg = programEmitConfig gapMode input plan groups
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries facts
   let _ = noteUnprovidedExterns e found
-  let text = runStrictEmission e input groups implEntries
+  let text = runStrictEmission e input plan groups implEntries
   (text, reverseL !e.gapLog)
 
 -- Every free reference to a runtime extern llvm does not lower
@@ -14874,8 +14892,8 @@ noteUnprovidedExterns e (f :: rest) =
 
 -- `@mdk_program_main`: the init prologue (every top-level value binding's rhs, in
 -- source order) followed by `main`'s own body and the type-directed print.
-emitProgramMain : Emit -> List CBind -> Unit
-emitProgramMain e groups =
+emitProgramMain : Emit -> EmitPlan -> List CBind -> Unit
+emitProgramMain e plan groups =
   -- `@mdk_program_main` itself is a whole-program entity; the per-bind
   -- initializers inside its prologue re-scope themselves (emitTopGlobals).
   let _ = setScope e scopeProgram
@@ -14900,7 +14918,7 @@ emitProgramMain e groups =
   -- taint is downward-closed over reads), so this prologue never calls a force fn.
   -- LAZY globals are initialised on first use by their @mdk_force_<x> defines below.
   let _ =
-    emitTopGlobals e (orderedValBinds groups (safeValBinds e (valBinds groups)))
+    emitTopGlobals e (orderedValBinds plan (safeValBinds e (valBinds groups)))
   let (mv, mty) = emitExpr e omEmpty mainRhs
   -- A Unit-returning `main` produces output ONLY through explicit print calls (or
   -- a panic); never auto-print its `()` result.  Detected by `main`'s own stamp
@@ -15180,7 +15198,7 @@ emitProgramGaps input (cp@(CProgram groups ctorArs ctorTypes implEntries _ facts
     counter0 = 0,
     globalsReg0 = initGlobalsRegReady (valBinds groups),
     gapMode = Record,
-    lazyGlobalNames = [],
+    lazyNames = [],
     runDispatchAnalysis = False,
   }
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries facts

@@ -182,7 +182,7 @@ scattered places, moved rather than reinvented:
 | Field | Today |
 |---|---|
 | reachability roots and edges | `ir/dce.mdk` (pre-lower) and `backend/wasm_reach.mdk` (post-lower, Wasm only) |
-| lazy/eager global classification | `emit_support.eagerReachMap` / `lazyGlobalNames`, computed per backend |
+| lazy/eager global classification | `emit_support.eagerReachMap` / `lazyGlobalNames`, computed once by `backend/emit_plan.mdk`'s `buildEmitPlan` and read by both backends |
 | TRMC eligibility and groups | `backend/trmc_analysis.mdk`, computed per backend |
 | linkage map and injectivity | `private_mangle` and the three X-L.H guards, run inside lowering |
 | reachable extern requirements | per-backend extern ladders |

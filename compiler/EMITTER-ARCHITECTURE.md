@@ -215,7 +215,7 @@ Core. That distinction is not represented in their types.
 | Record field slot | `Emit.recByName`/`recByLabel`/`recFields` | record-name and label indexes built into `WasmEmitInput` | record-name strings on some nodes; ordinals nowhere |
 | Dispatch arm/default | one `icmp` per arm keyed on the canonical row key (`implEntryKey`), dispatch/default chain synthesis | `findByKeyW`, dispatch chains, incomplete default synthesis | `Route` plus incomplete `CImplEntry` set |
 | Closure captures/layout | LLVM free-variable and allocation paths | Wasm closure-use scan and lifted functions | none |
-| Global forcing | native realization of shared classification | Wasm realization of shared classification | `emit_support.eagerReachMap` / `lazyGlobalNames` |
+| Global forcing | native realization of shared classification | Wasm realization of shared classification | `emit_plan.EmitPlan` (built from `emit_support.eagerReachMap` / `lazyGlobalNames`) |
 | Tail/TRMC realization | `musttail`, destination cells, dispatch-group inlining | `return_call`, typed destination structs | `trmc_analysis` eligibility/groups |
 | Link symbols/tags | LLVM sanitization and tagged-word spaces | WAT identifiers and i32 tag spaces | `private_mangle`, dense logical ctor ordinals |
 | Extern capability/runtime group | LLVM extern predicate ladders and C declarations | Wasm extern ladders and host/runtime inclusion flags | `stdlib/runtime.mdk` plus capability ledgers |
