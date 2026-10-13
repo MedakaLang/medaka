@@ -114,16 +114,20 @@ write_source_manifest() {
 # `bytes as B` and calls `B.length`, since an imported `length` was shadowed by
 # Foldable's and every compile of the carrier warned. Outside the signing
 # closure, like the move above.
+# Re-blessed 2026-10-13 for `@noinline`: field.mdk, scalar.mdk, hmac_sha256.mdk
+# and secp256k1.mdk gained one `@noinline` line above each helper this gate and
+# constant_time_public_key.sh require as a linked symbol or disassemble, so LLVM
+# keeps those helpers as symbols however it inlines. No definition changed.
 expected_internal_source_manifest() {
   cat <<'EOF'
-3731538746 28626  pds/lib/field.mdk
-155881618 41112  pds/lib/scalar.mdk
+2571003349 28636  pds/lib/field.mdk
+1716947667 41162  pds/lib/scalar.mdk
 2724272250 11762  stdlib/crypto/sha256.mdk
 2268744627 7364  stdlib/crypto/hmac.mdk
 3074298774 10394  stdlib/u32.mdk
 2001432321 10382  stdlib/u64.mdk
-2873386462 1355  pds/lib/hmac_sha256.mdk
-2537316894 24171  pds/lib/secp256k1.mdk
+2849009910 1365  pds/lib/hmac_sha256.mdk
+2286411630 24231  pds/lib/secp256k1.mdk
 3551598025 4736  pds/test/constant_time_signing_main.mdk
 EOF
 }
@@ -139,16 +143,17 @@ EOF
 # sign.mdk re-pinned 2026-09-30 again for a header-comment rewrite only: the
 # module doc now states which property the types enforce and which the
 # lib_boundary import scan does. No definition changed.
+# The four pds/lib rows re-pinned 2026-10-13 for `@noinline` (see above).
 expected_public_source_manifest() {
   cat <<'EOF'
-3731538746 28626  pds/lib/field.mdk
-155881618 41112  pds/lib/scalar.mdk
+2571003349 28636  pds/lib/field.mdk
+1716947667 41162  pds/lib/scalar.mdk
 2724272250 11762  stdlib/crypto/sha256.mdk
 2268744627 7364  stdlib/crypto/hmac.mdk
 3074298774 10394  stdlib/u32.mdk
 2001432321 10382  stdlib/u64.mdk
-2873386462 1355  pds/lib/hmac_sha256.mdk
-2537316894 24171  pds/lib/secp256k1.mdk
+2849009910 1365  pds/lib/hmac_sha256.mdk
+2286411630 24231  pds/lib/secp256k1.mdk
 2451873097 6303  pds/lib/sign.mdk
 1008417625 3197  pds/test/constant_time_signing_public_main.mdk
 EOF
