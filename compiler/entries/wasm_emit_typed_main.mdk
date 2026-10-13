@@ -26,6 +26,7 @@
 -- dispatch nodes the emitter can lower.
 
 import frontend.ast.{
+  noBinderId,
   Decl,
   Lit(..),
   Loc(..),
@@ -58,8 +59,8 @@ import ir.core_ir_lower.{
   markTailSites,
   stampCallModes,
   stampImplSymbols,
+  stampUntypedBinders,
   EmitTarget(..),
-  declSigTypeNames,
   ctorFieldTypeNames,
   declaredRecordFieldOrders,
   methodIfaceTable,
@@ -126,26 +127,26 @@ typedInput runtimeDecls preludeDecls userDecls =
   let mangled = typedElaborated runtimeDecls preludeDecls userDecls
   makeWasmEmitInputFull
     (methodIfaceTable mangled)
-    (declSigTypeNames runtimeDecls ++ declSigTypeNames mangled)
     (ctorFieldTypeNames mangled)
     False
     False
     (declaredRecordFieldOrders mangled)
     []
 
--- A hand-built program, its applications stamped and tail-flagged as a
--- lowering's are.
+-- A hand-built program, its applications stamped and tail-flagged and its
+-- binders stamped as a lowering's are.
 cprogram : List CBind ->
   List (String, Int) ->
   List (String, String) ->
   List CImplEntry ->
   CProgram
 cprogram groups ctorArs ctorTypes impls =
-  markTailSites
-    (stampCallModes
-      (stampImplSymbols
-        []
-        (CProgram groups ctorArs ctorTypes impls [] noDeclFacts)))
+  stampUntypedBinders
+    (markTailSites
+      (stampCallModes
+        (stampImplSymbols
+          []
+          (CProgram groups ctorArs ctorTypes impls [] noDeclFacts))))
 
 typedProgram : List Decl -> List Decl -> List Decl -> CProgram
 typedProgram runtimeDecls preludeDecls userDecls =
@@ -177,11 +178,10 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
         let pMangled = typedElaborated runtimeDecls [] pDecls
         let uMangled = typedElaborated runtimeDecls [] uDecls
         let pMethods = methodIfaceTable pMangled
-        let pSigs = declSigTypeNames runtimeDecls ++ declSigTypeNames pMangled
         let pCtors = ctorFieldTypeNames pMangled
         let pRecords = declaredRecordFieldOrders pMangled
         let pInput =
-          makeWasmEmitInputFull pMethods pSigs pCtors False False pRecords []
+          makeWasmEmitInputFull pMethods pCtors False False pRecords []
         let p1 = emitProgram pInput pProgram
         -- these four deliberately pair P's REAL program with a MISMATCHED
         -- (U-derived or dummy) table -- never a real compile combination, so
@@ -190,18 +190,6 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
           emitProgramUnchecked
             (makeWasmEmitInputFull
               (methodIfaceTable uMangled)
-              pSigs
-              pCtors
-              False
-              False
-              pRecords
-              [])
-            pProgram
-        let sigWat =
-          emitProgramUnchecked
-            (makeWasmEmitInputFull
-              pMethods
-              (declSigTypeNames runtimeDecls ++ declSigTypeNames uMangled)
               pCtors
               False
               False
@@ -212,7 +200,6 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
           emitProgramUnchecked
             (makeWasmEmitInputFull
               pMethods
-              pSigs
               (ctorFieldTypeNames uMangled)
               False
               False
@@ -223,7 +210,6 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
           emitProgramUnchecked
             (makeWasmEmitInputFull
               pMethods
-              pSigs
               pCtors
               False
               False
@@ -243,7 +229,6 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
           emitProgramUnchecked
             (makeWasmEmitInputFull
               []
-              (declSigTypeNames runtimeDecls ++ declSigTypeNames mainMangled)
               (ctorFieldTypeNames mainMangled)
               True
               False
@@ -254,7 +239,6 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
         let _ = putStrLn (if p1 == pLast then "P_EQ_PLAST" else "P_NE_PLAST")
         let _ =
           putStrLn (if p1 /= methodWat then "P_NE_METHOD" else "P_EQ_METHOD")
-        let _ = putStrLn (if p1 /= sigWat then "P_NE_SIG" else "P_EQ_SIG")
         let _ = putStrLn (if p1 /= ctorWat then "P_NE_CTOR" else "P_EQ_CTOR")
         let _ =
           putStrLn (if mainBase /= mainWat then "P_NE_MAIN" else "P_EQ_MAIN")
@@ -297,7 +281,6 @@ reemitStateFallbackInput runtimeDecls decls =
   let mangled = typedElaborated runtimeDecls [] decls
   makeWasmEmitInput
     (methodIfaceTable mangled)
-    (declSigTypeNames runtimeDecls ++ declSigTypeNames mangled)
     (ctorFieldTypeNames mangled)
     False
     []
@@ -326,7 +309,7 @@ reemitTrmcState _ =
     (emitProgram trmcStateInput (trmcStateProgram "pTrmc" 17))
 
 trmcStateInput : WasmEmitInput
-trmcStateInput = makeWasmEmitInput [] [] [] False []
+trmcStateInput = makeWasmEmitInput [] [] False []
 
 trmcStateLoc : Loc
 trmcStateLoc = Loc "<trmc-state>" 1 1 1 1
@@ -343,13 +326,13 @@ trmcStateProgram name marker =
       (CBinPrim "::" (CLit (LInt marker)) recursive "" noDeclLoc)
   cprogram
     [
-      synthBind name [CClause [PVar "n" trmcStateLoc] body],
+      synthBind name [CClause [PVar "n" trmcStateLoc noBinderId] body],
       synthBind "main" [
         CClause
           []
           (CLet
             False
-            (PCons (PVar "head" trmcStateLoc) PWild)
+            (PCons (PVar "head" trmcStateLoc noBinderId) PWild)
             (mkApp (CVar name AGlobal) [CLit (LInt 2000000)])
             (CVar "head" (ALocal 0 0))),
       ],
@@ -364,7 +347,7 @@ trmcStateCensusProgram =
     [
       synthBind "pTrmc" [
         CClause
-          [PVar "n" trmcStateLoc]
+          [PVar "n" trmcStateLoc noBinderId]
           (CIf
             (CBinPrim
               "=="
@@ -425,16 +408,16 @@ reemitLambdaState _ =
     (emitProgram lambdaStateInput (lambdaStateProgram 17))
 
 lambdaStateInput : WasmEmitInput
-lambdaStateInput = makeWasmEmitInput [] [] [("Pair", ["Int", "Int"])] False []
+lambdaStateInput = makeWasmEmitInput [] [("Pair", ["Int", "Int"])] False []
 
 lambdaStateLoc : Loc
 lambdaStateLoc = Loc "<lambda-state>" 1 1 1 1
 
 lambdaStateProgram : Int -> CProgram
 lambdaStateProgram result =
-  let arg = PVar "arg" lambdaStateLoc
-  let local = PVar "local" lambdaStateLoc
-  let nestedName = PVar "nested" lambdaStateLoc
+  let arg = PVar "arg" lambdaStateLoc noBinderId
+  let local = PVar "local" lambdaStateLoc noBinderId
+  let nestedName = PVar "nested" lambdaStateLoc noBinderId
   let identity = CLam [arg] (CVar "arg" (ALocal 0 0))
   let nested =
     CLam [arg] (mkApp (CVar "local" (ALocal 0 0)) [CVar "arg" (ALocal 0 0)])
@@ -472,7 +455,9 @@ lambdaStateCensusProgram =
   cprogram
     [
       synthBind "lambdaCensus" [
-        CClause [] (CLam [PVar "x" lambdaStateLoc] (CVar "x" (ALocal 0 0))),
+        CClause
+          []
+          (CLam [PVar "x" lambdaStateLoc noBinderId] (CVar "x" (ALocal 0 0))),
       ],
       synthBind "lambdaIntentionalGap" [
         CClause [] (CVar "missingLambdaCensus" AGlobal),
@@ -533,7 +518,6 @@ featureStateInput : WasmEmitInput
 featureStateInput =
   makeWasmEmitInput
     []
-    []
     [("FeatureRecord", ["Int", "Int"]), ("FeatureVariant", ["Int", "Int"])]
     False
     [
@@ -545,7 +529,7 @@ featureStateLoc : Loc
 featureStateLoc = Loc "<feature-state>" 1 1 1 1
 
 featureStateArg : Pat
-featureStateArg = PVar "x" featureStateLoc
+featureStateArg = PVar "x" featureStateLoc noBinderId
 
 featureStateRecord : CExpr
 featureStateRecord = CRecord "FeatureRecord" [
@@ -626,7 +610,7 @@ featureStateProgram =
 -- string-bearing feature route, so it proves the hash-string runtime conjunction
 -- is not widened by base hash use.
 featureHashIntOnlyInput : WasmEmitInput
-featureHashIntOnlyInput = makeWasmEmitInput [] [] [] False []
+featureHashIntOnlyInput = makeWasmEmitInput [] [] False []
 
 featureHashIntOnlyProgram : CProgram
 featureHashIntOnlyProgram =
@@ -647,7 +631,7 @@ featureHashIntOnlyProgram =
 -- record U is the nearest miss: Float + hashInt retain shared prerequisites but
 -- deliberately omit hashFloat. Census repeats P and adds exactly one attributed gap.
 featureHashFloatInput : WasmEmitInput
-featureHashFloatInput = makeWasmEmitInput [] [] [] False []
+featureHashFloatInput = makeWasmEmitInput [] [] False []
 
 featureHashFloatProgram : CProgram
 featureHashFloatProgram =
@@ -721,7 +705,7 @@ reemitCharFromCodeState _ =
     (emitProgram charFromCodeStateInput charFromCodeStateProgram)
 
 charFromCodeStateInput : WasmEmitInput
-charFromCodeStateInput = makeWasmEmitInput [] [] [] False []
+charFromCodeStateInput = makeWasmEmitInput [] [] False []
 
 charFromCodeStateProgram : CProgram
 charFromCodeStateProgram =
@@ -870,13 +854,13 @@ reemitLeafRuntimeRow name p u gapBind gapMissing =
   printCapture ("LEAF_" ++ name ++ "_P2") (emitProgram leafRuntimeInput p)
 
 leafRuntimeInput : WasmEmitInput
-leafRuntimeInput = makeWasmEmitInput [] [] [] False []
+leafRuntimeInput = makeWasmEmitInput [] [] False []
 
 leafRuntimeLoc : Loc
 leafRuntimeLoc = Loc "<leaf-runtime-state>" 1 1 1 1
 
 leafRuntimeArg : Pat
-leafRuntimeArg = PVar "x" leafRuntimeLoc
+leafRuntimeArg = PVar "x" leafRuntimeLoc noBinderId
 
 leafRuntimeProgram : List CBind -> CProgram
 leafRuntimeProgram groups =
@@ -1165,7 +1149,7 @@ featureStateCensusProgram =
     []
 
 trapStateInput : WasmEmitInput
-trapStateInput = makeWasmEmitInput [] [] [] False []
+trapStateInput = makeWasmEmitInput [] [] False []
 
 trapStateProgram : CProgram
 trapStateProgram =
@@ -1173,7 +1157,7 @@ trapStateProgram =
     [
       synthBind "trapRoute" [
         CClause
-          [PVar "n" lambdaStateLoc]
+          [PVar "n" lambdaStateLoc noBinderId]
           (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int" noDeclLoc),
       ],
       synthBind "main" [CClause [] (CLit (LInt 17))],
@@ -1184,13 +1168,14 @@ trapStateProgram =
 
 trapStateControlProgram : CProgram
 trapStateControlProgram =
-  CProgram
-    [synthBind "main" [CClause [] (CLit (LInt 29))]]
-    []
-    []
-    []
-    []
-    noDeclFacts
+  stampUntypedBinders
+    (CProgram
+      [synthBind "main" [CClause [] (CLit (LInt 29))]]
+      []
+      []
+      []
+      []
+      noDeclFacts)
 
 trapStateCensusProgram : CProgram
 trapStateCensusProgram =
@@ -1198,7 +1183,7 @@ trapStateCensusProgram =
     [
       synthBind "trapCensusRoute" [
         CClause
-          [PVar "n" lambdaStateLoc]
+          [PVar "n" lambdaStateLoc noBinderId]
           (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int" noDeclLoc),
       ],
       synthBind "trapIntentionalGap" [
@@ -1234,7 +1219,7 @@ reemitRefTrapState _ =
   printCapture "REF_TRAP_P2" (emitProgram refTrapStateInput refTrapStateProgram)
 
 refTrapStateInput : WasmEmitInput
-refTrapStateInput = makeWasmEmitInput [] [] [] False []
+refTrapStateInput = makeWasmEmitInput [] [] False []
 
 refTrapCtorArities : List (String, Int)
 refTrapCtorArities = [("TrapToken", 0)]
@@ -1248,7 +1233,7 @@ refTrapStateProgram =
     [
       synthBind "refTrapRoute" [
         CClause
-          [PVar "n" lambdaStateLoc]
+          [PVar "n" lambdaStateLoc noBinderId]
           (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int" noDeclLoc),
       ],
       synthBind "main" [CClause [] (CLit (LInt 17))],
@@ -1280,7 +1265,7 @@ refTrapStateAbortProgram =
     []
 
 implSelfInput : WasmEmitInput
-implSelfInput = makeWasmEmitInput [("walk", ("Loop", "Loop", 2))] [] [] False []
+implSelfInput = makeWasmEmitInput [("walk", ("Loop", "Loop", 2))] [] False []
 
 implSelfLoc : Loc
 implSelfLoc = Loc "<impl-self-state>" 1 1 1 1
@@ -1316,7 +1301,7 @@ implSelfProgram tag base depth =
           tag
           noImplSym
           [0]
-          [PVar "self" implSelfLoc, PVar "n" implSelfLoc]
+          [PVar "self" implSelfLoc noBinderId, PVar "n" implSelfLoc noBinderId]
           body),
     ]
 
@@ -1418,7 +1403,6 @@ defaultStateInputP =
   makeWasmEmitInput
     [("synthDefault", ("DefaultFace", "DefaultFace", 1))]
     []
-    []
     False
     []
 
@@ -1429,7 +1413,6 @@ defaultStateInputU : WasmEmitInput
 defaultStateInputU =
   makeWasmEmitInput
     [("synthDefault", ("DefaultFace", "DefaultFace", 1))]
-    []
     []
     False
     []
@@ -1446,10 +1429,10 @@ defaultStateProgram tag bodyConstant =
   cprogram
     [
       synthBind "defaultRequestOne" [
-        CClause [PVar "one" defaultStateLoc] (defaultStateCall tag),
+        CClause [PVar "one" defaultStateLoc noBinderId] (defaultStateCall tag),
       ],
       synthBind "defaultRequestTwo" [
-        CClause [PVar "two" defaultStateLoc] (defaultStateCall tag),
+        CClause [PVar "two" defaultStateLoc noBinderId] (defaultStateCall tag),
       ],
       synthBind "main" [CClause [] (CLit (LInt 0))],
     ]
@@ -1467,8 +1450,8 @@ defaultStateProgram tag bodyConstant =
           noImplSym
           []
           [
-            PVar "$dict_synthDefault_0" defaultStateLoc,
-            PVar "value" defaultStateLoc,
+            PVar "$dict_synthDefault_0" defaultStateLoc noBinderId,
+            PVar "value" defaultStateLoc noBinderId,
           ]
           (CLit (LInt bodyConstant))),
     ]
@@ -1484,10 +1467,14 @@ defaultStateCensusProgramU =
   cprogram
     [
       synthBind "defaultRequestOne" [
-        CClause [PVar "one" defaultStateLoc] (defaultStateCall "UDefault"),
+        CClause
+          [PVar "one" defaultStateLoc noBinderId]
+          (defaultStateCall "UDefault"),
       ],
       synthBind "defaultRequestTwo" [
-        CClause [PVar "two" defaultStateLoc] (defaultStateCall "UDefault"),
+        CClause
+          [PVar "two" defaultStateLoc noBinderId]
+          (defaultStateCall "UDefault"),
       ],
       synthBind "defaultCensusGap" [
         CClause [] (CVar "missingDefaultCensus" AGlobal),
@@ -1508,8 +1495,8 @@ defaultStateCensusProgramU =
           noImplSym
           []
           [
-            PVar "$dict_synthDefault_0" defaultStateLoc,
-            PVar "value" defaultStateLoc,
+            PVar "$dict_synthDefault_0" defaultStateLoc noBinderId,
+            PVar "value" defaultStateLoc noBinderId,
           ]
           (CLit (LInt 29))),
     ]
@@ -1521,7 +1508,7 @@ bindingLoc : Loc
 bindingLoc = Loc "<current-binding>" 1 1 1 1
 
 bindingInput : WasmEmitInput
-bindingInput = makeWasmEmitInput [] [] [] False []
+bindingInput = makeWasmEmitInput [] [] False []
 
 bindingMain : CBind
 bindingMain = synthBind "main" [CClause [] (CLit (LInt 0))]
@@ -1548,7 +1535,9 @@ bindingProgram groups = cprogram groups bindingRefCtorArs bindingRefCtorTypes []
 
 bindingSensitiveProgram : String -> CProgram
 bindingSensitiveProgram name = bindingProgram [
-  synthBind name [CClause [PVar "x" bindingLoc] bindingSensitiveExpr],
+  synthBind name [
+    CClause [PVar "x" bindingLoc noBinderId] bindingSensitiveExpr,
+  ],
   bindingMain,
 ]
 
@@ -1558,7 +1547,9 @@ bindingNoWriterProgram =
 
 bindingWriterProgram : CProgram
 bindingWriterProgram = bindingProgram [
-  synthBind "U" [CClause [PVar "x" bindingLoc] (CVar "x" (ALocal 0 0))],
+  synthBind "U" [
+    CClause [PVar "x" bindingLoc noBinderId] (CVar "x" (ALocal 0 0)),
+  ],
   bindingMain,
 ]
 
@@ -1583,13 +1574,17 @@ captureCurrentBinding "top" =
   putStr (emitProgram bindingInput program)
 captureCurrentBinding "lifted" =
   -- emitLetGroupRef calls emitLgLifted before it emits this group's use-site
-  -- body, so the sensitive local member is reached while currentBinding is lg:P.
+  -- body, so the sensitive local member is reached while the FnCtx binding is lg:P.
   let program = bindingProgram [
     synthBind "outer" [
       CClause
-        [PVar "x" bindingLoc]
+        [PVar "x" bindingLoc noBinderId]
         (CLetGroup
-          [synthBind "P" [CClause [PVar "y" bindingLoc] bindingSensitiveExpr]]
+          [
+            synthBind "P" [
+              CClause [PVar "y" bindingLoc noBinderId] bindingSensitiveExpr,
+            ],
+          ]
           (mkApp (CVar "P" (ALocal 0 0)) [CLit (LInt 0)])),
     ],
     bindingMain,
@@ -1606,16 +1601,16 @@ captureCurrentBinding "no-writer" =
   putStr (emitProgram bindingInput bindingNoWriterProgram)
 captureCurrentBinding "post-lift" =
   -- The local member L emits successfully before the enclosing body reaches the
-  -- unsupported argument; the final strict call observes whichever binding the
-  -- existing backend leaves current, without choosing a verdict here.
+  -- unsupported argument; the final strict call observes the binding of the FnCtx of the body
+  -- being emitted (P), not the lifted member's.
   let program = bindingProgram [
     synthBind "P" [
       CClause
-        [PVar "x" bindingLoc]
+        [PVar "x" bindingLoc noBinderId]
         (CLetGroup
           [
             synthBind "L" [
-              CClause [PVar "y" bindingLoc] (CVar "y" (ALocal 0 0)),
+              CClause [PVar "y" bindingLoc noBinderId] (CVar "y" (ALocal 0 0)),
             ],
           ]
           (mkApp (CVar "L" (ALocal 0 0)) [bindingSensitiveExpr])),
@@ -1661,7 +1656,7 @@ printEventLines (event :: rest) =
   printEventLines rest
 
 gapStateInput : WasmEmitInput
-gapStateInput = makeWasmEmitInput [] [] [] False []
+gapStateInput = makeWasmEmitInput [] [] False []
 
 gapStateProgram : CProgram
 gapStateProgram =

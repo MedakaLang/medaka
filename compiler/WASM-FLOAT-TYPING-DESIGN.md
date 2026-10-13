@@ -1,5 +1,7 @@
 # WASM-FLOAT-TYPING-DESIGN — the principled fix for W-SQLITE-4
 
+> **Superseded by binder stamps** (sprint binders-say-what-they-hold): the LLVM and Wasm emitters now read binder and return types from typechecker stamps, so the signature/body-use recovery described here no longer exists.
+
 **Status:** IMPLEMENTED — stage 1 `b5eb9606`, stage 2 `2d321af6`, 2026-06-30.
 X-W.H1 later moved these declaration-derived facts into explicit immutable
 `WasmEmitInput`; the original design below predates both changes.

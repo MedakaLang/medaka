@@ -394,15 +394,25 @@ conyes8:
   %t18 = inttoptr i64 %arg0 to ptr
   %t19 = getelementptr i8, ptr %t18, i64 16
   %t20 = load i64, ptr %t19
-  %t21 = call i64 @mdk_num_add(i64 %t17, i64 %t20)
-  store i64 %t21, ptr %t0
+  %t21 = sub i64 %t20, 1
+  %t22 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t17, i64 %t21)
+  %t23 = extractvalue { i64, i1 } %t22, 0
+  %t24 = extractvalue { i64, i1 } %t22, 1
+  br i1 %t24, label %intovf25, label %intok25
+intovf25:
+  %t26 = ashr i64 %t17, 1
+  %t27 = ashr i64 %t20, 1
+  call void @mdk_int_overflow(i64 0, i64 %t26, i64 %t27)
+  unreachable
+intok25:
+  store i64 %t23, ptr %t0
   br label %decend1
 connext8:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t22 = load i64, ptr %t0
-  ret i64 %t22
+  %t28 = load i64, ptr %t0
+  ret i64 %t28
 }
 
 ; mdk-module program

@@ -1,3 +1,4 @@
+addCellHead	Decl	1/14
 aliasDictNamesOfDecl	Decl	2/14
 allEVars	Expr	37/42
 appArgExpr	Expr	2/42
@@ -90,6 +91,7 @@ prePassDeclScoped	Decl	5/14
 prependLocalDicts	Expr	2/42
 recordDeclKinds	Decl	1/14
 recordNegatedLitRange	Expr	3/42
+recordTopDeclBinderTypes	Decl	3/14
 reexportedCtorIdentsOf	Decl	2/14
 reexportedIfaceMethodsOf	Decl	2/14
 reexportedMethodIdentsOf	Decl	2/14

@@ -1,5 +1,5 @@
 # META
-source_lines=2583
+source_lines=2612
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -798,18 +798,18 @@ effAtomBare l = EffAtomTy {
 -- The names a pattern binds, in source order.
 export
 patBoundNames : Pat -> List String
-patBoundNames (PVar x _) = [x]
+patBoundNames (PVar x _ _) = [x]
 patBoundNames (PCon _ args) = flatMap patBoundNames args
 patBoundNames (PCons h t) = patBoundNames h ++ patBoundNames t
 patBoundNames (PTuple ps) = flatMap patBoundNames ps
 patBoundNames (PList ps) = flatMap patBoundNames ps
-patBoundNames (PAs x _ p) = x :: patBoundNames p
+patBoundNames (PAs x _ _ p) = x :: patBoundNames p
 patBoundNames (PRec _ fields _) = flatMap recPatFieldNames fields
 patBoundNames _ = []
 
 recPatFieldNames : RecPatField -> List String
-recPatFieldNames (RecPatField label _ None) = [label]
-recPatFieldNames (RecPatField _ _ (Some p)) = patBoundNames p
+recPatFieldNames (RecPatField label _ _ None) = [label]
+recPatFieldNames (RecPatField _ _ _ (Some p)) = patBoundNames p
 
 -- An effect declaration as the parser produces it: the resolver stamps its
 -- declaring origin, so before resolve it carries none.
@@ -1305,6 +1305,33 @@ intMinLiteralHelp =
 -- there to turn into a panic.
 public export data EvId = EvId String Int
 
+-- ── binder identity ───────────────────────────────────────────────────────────
+-- The key under which the typechecker publishes what a source binder holds at run
+-- time (`compiler/types/runtime_types.mdk`).  A binder's `Loc` cannot be that key:
+-- its file field is always empty, lambda, do-bind and guard parameters carry the
+-- zero span, and desugar mints many binders at one site, so two binders of
+-- different types share a `Loc` routinely.
+--
+-- Same shape and same discipline as `EvId`: the `String` is the module the binder
+-- was minted for (`""` where the minting call had none to give, which includes the
+-- whole prelude), the `Int` an ordinal from one process-global monotone counter,
+-- and uniqueness rests on the ordinal alone.  The module half is a tripwire the
+-- table compares on every hit.
+--
+-- Every binder node carries one: `PVar`, `PAs`, a record-pattern field (whose id
+-- names a binder only when the field is a pun), a `LetBind`, and each `DFunDef`
+-- clause.  The parser and every synthesizing pass build them with `noBinderId`;
+-- `stampBinderIds` (`compiler/frontend/desugar.mdk`) mints the real ones as the
+-- last step of desugar, and every later pass that rebuilds a binder carries its id
+-- across unchanged.
+public export data BinderId = BinderId String Int
+
+-- The id of a binder no minting pass has visited.  Its ordinal is negative, so no
+-- table row can ever answer it.
+export
+noBinderId : BinderId
+noBinderId = BinderId "" (0 - 1)
+
 -- The evidence shapes.  `EvOne` and `EvMany` are one per destination arm a goal
 -- can have: a single site route, or a dictionary application's slot-ordered route
 -- list.  `EvMethod` is published PER METHOD OCCURRENCE, not per goal: an
@@ -1354,21 +1381,23 @@ export type EvTable = List EvEntry
 public export data Addr = ALocal Int Int | AGlobal
 
 public export data Pat =
-  | PVar String Loc
+  | PVar String Loc BinderId
   | PWild
   | PLit Lit
   | PCon String (List Pat)
   | PCons Pat Pat
   | PTuple (List Pat)
   | PList (List Pat)
-  | PAs String Loc Pat
+  | PAs String Loc BinderId Pat
   | PRng Lit Lit Bool
   | PRec String (List RecPatField) Bool
 
 -- one field of a record pattern: `field` (pun, None) or `field = pat`
 -- The Loc is the field-name token (#913 Inc 2b: a punned field `{x}` binds
 -- `x`, and rename must land on the field token, not the enclosing match Loc).
-public export data RecPatField = RecPatField String Loc (Option Pat)
+-- The `BinderId` names the binder a pun introduces; a field with a subpattern
+-- binds nothing itself and keeps `noBinderId`.
+public export data RecPatField = RecPatField String Loc BinderId (Option Pat)
 
 public export data Guard = GBool Expr | GBind Pat Expr
 
@@ -1413,7 +1442,7 @@ public export data FunClause = FunClause (List Pat) Expr
 -- The Loc is the first clause's name token, where a call whose clauses and
 -- guards all fall through is reported.  Like `DFunDef`'s site it is never
 -- rendered, and a synthesized binding carries `noDeclLoc`.
-public export data LetBind = LetBind String (List FunClause) Loc
+public export data LetBind = LetBind String (List FunClause) Loc BinderId
 
 public export data Expr =
   | ELit Lit
@@ -1761,12 +1790,12 @@ public export data Decl =
   -- dump renders it.
   | DTypeSig Bool String Ty Loc
   | DExtern Bool String Ty
-  -- pub? name params body site.  One clause; a multi-clause function is a run
-  -- of same-named DFunDefs.  The site is the clause's name token, so a call
+  -- pub? name params body site id.  One clause; a multi-clause function is a run
+  -- of same-named DFunDefs, each with its own `BinderId`.  The site is the clause's name token, so a call
   -- whose clauses and guards all fall through is reported at the function's
   -- first clause.  No printer or dump renders it, it takes no part in clause
   -- grouping, and a synthesized clause carries `noDeclLoc`.
-  | DFunDef Bool String (List Pat) Expr Loc
+  | DFunDef Bool String (List Pat) Expr Loc BinderId
   -- ── the four TYPE-DECLARATION forms carry module identity (#1110) ────────
   -- `DData`/`DNewtype`/`DTypeAlias`/`DInterface` each gained a `…Origin` field,
   -- stamped by resolve (`stampGraphTyOrigins`, `frontend/resolve.mdk`) with the
@@ -2216,9 +2245,9 @@ mapTyInDecl f (DTypeSig pub n t site) =
 mapTyInDecl f (DExtern pub n t) =
   let (t2, c) = mapTyFull f t
   (DExtern pub n t2, c)
-mapTyInDecl f (DFunDef pub n ps e site) =
+mapTyInDecl f (DFunDef pub n ps e site bid) =
   let (e2, c) = mapTyInExpr f e
-  (DFunDef pub n ps e2 site, c)
+  (DFunDef pub n ps e2 site bid, c)
 -- ⚠️ Record UPDATE, not re-construction: rebuilding from the projected fields
 -- would DROP an already-acquired `dataOrigin`, which is exactly the identity-
 -- destroying shape #1219 found in `substTyVars`.  Every rebuild arm below follows
@@ -2344,10 +2373,10 @@ mapImplMethodsB f ((ImplMethod n ps e) :: rest) =
 
 mapLetBindsB : (Ty -> (Ty, Bool)) -> List LetBind -> (List LetBind, Bool)
 mapLetBindsB _ [] = ([], False)
-mapLetBindsB f ((LetBind n clauses site) :: rest) =
+mapLetBindsB f ((LetBind n clauses site bid) :: rest) =
   let (cs2, c1) = mapFunClausesB f clauses
   let (rest2, c2) = mapLetBindsB f rest
-  (LetBind n cs2 site :: rest2, c1 || c2)
+  (LetBind n cs2 site bid :: rest2, c1 || c2)
 
 mapFunClausesB : (Ty -> (Ty, Bool)) -> List FunClause -> (List FunClause, Bool)
 mapFunClausesB _ [] = ([], False)
@@ -2653,17 +2682,17 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig true "effAtomBare" (TyFun (TyCon "String") (TyCon "EffAtomTy")))
 (DFunDef false "effAtomBare" ((PVar "l")) (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "l")) (fa "eatOrigin" (EVar "OriginUnresolved")) (fa "eatParam" (EVar "EPTop")) (fa "eatLoc" (EVar "None")) (fa "eatPattern" (EVar "False")))))
 (DTypeSig true "patBoundNames" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patBoundNames" ((PCon "PVar" (PVar "x") PWild)) (EListLit (EVar "x")))
+(DFunDef false "patBoundNames" ((PCon "PVar" (PVar "x") PWild PWild)) (EListLit (EVar "x")))
 (DFunDef false "patBoundNames" ((PCon "PCon" PWild (PVar "args"))) (EApp (EApp (EVar "flatMap") (EVar "patBoundNames")) (EVar "args")))
 (DFunDef false "patBoundNames" ((PCon "PCons" (PVar "h") (PVar "t"))) (EBinOp "++" (EApp (EVar "patBoundNames") (EVar "h")) (EApp (EVar "patBoundNames") (EVar "t"))))
 (DFunDef false "patBoundNames" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBoundNames")) (EVar "ps")))
 (DFunDef false "patBoundNames" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBoundNames")) (EVar "ps")))
-(DFunDef false "patBoundNames" ((PCon "PAs" (PVar "x") PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBoundNames") (EVar "p"))))
+(DFunDef false "patBoundNames" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBoundNames") (EVar "p"))))
 (DFunDef false "patBoundNames" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recPatFieldNames")) (EVar "fields")))
 (DFunDef false "patBoundNames" (PWild) (EListLit))
 (DTypeSig false "recPatFieldNames" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "recPatFieldNames" ((PCon "RecPatField" (PVar "label") PWild (PCon "None"))) (EListLit (EVar "label")))
-(DFunDef false "recPatFieldNames" ((PCon "RecPatField" PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBoundNames") (EVar "p")))
+(DFunDef false "recPatFieldNames" ((PCon "RecPatField" (PVar "label") PWild PWild (PCon "None"))) (EListLit (EVar "label")))
+(DFunDef false "recPatFieldNames" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBoundNames") (EVar "p")))
 (DTypeSig true "effectDeclUnstamped" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Decl")))))))
 (DFunDef false "effectDeclUnstamped" ((PVar "pub") (PVar "name") (PVar "dom") (PVar "axes") (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "name")) (EVar "dom")) (EVar "axes")) (EVar "OriginUnresolved")) (EVar "loc")))
 (DTypeSig true "effAtomWith" (TyFun (TyCon "String") (TyFun (TyCon "EffParamTy") (TyCon "EffAtomTy"))))
@@ -2786,12 +2815,15 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig true "intMinLiteralHelp" (TyCon "String"))
 (DFunDef false "intMinLiteralHelp" () (ELit (LString "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the negative -4611686018427387904, so write it with its `-`")))
 (DData Public "EvId" () ((variant "EvId" (ConPos (TyCon "String") (TyCon "Int")))) ())
+(DData Public "BinderId" () ((variant "BinderId" (ConPos (TyCon "String") (TyCon "Int")))) ())
+(DTypeSig true "noBinderId" (TyCon "BinderId"))
+(DFunDef false "noBinderId" () (EApp (EApp (EVar "BinderId") (ELit (LString ""))) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))))
 (DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route")))) (variant "EvMethod" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "EvEntry" () ((variant "EvEntry" (ConPos (TyCon "EvId") (TyCon "EvVal")))) ())
 (DTypeAlias true "EvTable" () (TyApp (TyCon "List") (TyCon "EvEntry")))
 (DData Public "Addr" () ((variant "ALocal" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "AGlobal" (ConPos))) ())
-(DData Public "Pat" () ((variant "PVar" (ConPos (TyCon "String") (TyCon "Loc"))) (variant "PWild" (ConPos)) (variant "PLit" (ConPos (TyCon "Lit"))) (variant "PCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PCons" (ConPos (TyCon "Pat") (TyCon "Pat"))) (variant "PTuple" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PList" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PAs" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "Pat"))) (variant "PRng" (ConPos (TyCon "Lit") (TyCon "Lit") (TyCon "Bool"))) (variant "PRec" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "RecPatField")) (TyCon "Bool")))) ())
-(DData Public "RecPatField" () ((variant "RecPatField" (ConPos (TyCon "String") (TyCon "Loc") (TyApp (TyCon "Option") (TyCon "Pat"))))) ())
+(DData Public "Pat" () ((variant "PVar" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "BinderId"))) (variant "PWild" (ConPos)) (variant "PLit" (ConPos (TyCon "Lit"))) (variant "PCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PCons" (ConPos (TyCon "Pat") (TyCon "Pat"))) (variant "PTuple" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PList" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PAs" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "BinderId") (TyCon "Pat"))) (variant "PRng" (ConPos (TyCon "Lit") (TyCon "Lit") (TyCon "Bool"))) (variant "PRec" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "RecPatField")) (TyCon "Bool")))) ())
+(DData Public "RecPatField" () ((variant "RecPatField" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "BinderId") (TyApp (TyCon "Option") (TyCon "Pat"))))) ())
 (DData Public "Guard" () ((variant "GBool" (ConPos (TyCon "Expr"))) (variant "GBind" (ConPos (TyCon "Pat") (TyCon "Expr")))) ())
 (DData Public "Arm" () ((variant "Arm" (ConPos (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Guard")) (TyCon "Expr")))) ())
 (DData Public "DoStmt" () ((variant "DoExpr" (ConPos (TyCon "Expr"))) (variant "DoBind" (ConPos (TyCon "Pat") (TyCon "Expr"))) (variant "DoLet" (ConPos (TyCon "Bool") (TyCon "Bool") (TyCon "Pat") (TyCon "Expr") (TyCon "Loc"))) (variant "DoAssign" (ConPos (TyCon "String") (TyCon "Expr"))) (variant "DoFieldAssign" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Expr")))) ())
@@ -2800,7 +2832,7 @@ mapKvsB f ((k, v) :: rest) =
 (DData Public "FieldAssign" () ((variant "FieldAssign" (ConPos (TyCon "String") (TyCon "Expr")))) ())
 (DData Public "Section" () ((variant "SecBare" (ConPos (TyCon "String"))) (variant "SecRight" (ConPos (TyCon "String") (TyCon "Expr"))) (variant "SecLeft" (ConPos (TyCon "Expr") (TyCon "String")))) ())
 (DData Public "FunClause" () ((variant "FunClause" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) ())
-(DData Public "LetBind" () ((variant "LetBind" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "FunClause")) (TyCon "Loc")))) ())
+(DData Public "LetBind" () ((variant "LetBind" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "FunClause")) (TyCon "Loc") (TyCon "BinderId")))) ())
 (DData Public "Expr" () ((variant "ELit" (ConPos (TyCon "Lit"))) (variant "EVar" (ConPos (TyCon "String"))) (variant "EApp" (ConPos (TyCon "Expr") (TyCon "Expr"))) (variant "ELam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "ELet" (ConPos (TyCon "Loc") (TyCon "Bool") (TyCon "Pat") (TyCon "Expr") (TyCon "Expr"))) (variant "EMatch" (ConPos (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Arm")))) (variant "EIf" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Expr"))) (variant "EBinOp" (ConPos (TyCon "String") (TyCon "Expr") (TyCon "Expr") (TyApp (TyCon "Ref") (TyCon "Route")))) (variant "EUnOp" (ConPos (TyCon "String") (TyCon "Expr") (TyApp (TyCon "Ref") (TyCon "Route")))) (variant "EInfix" (ConPos (TyCon "String") (TyCon "Expr") (TyCon "Expr"))) (variant "EFieldAccess" (ConPos (TyCon "Expr") (TyCon "String") (TyApp (TyCon "Ref") (TyCon "String")))) (variant "ETuple" (ConPos (TyApp (TyCon "List") (TyCon "Expr")))) (variant "EListLit" (ConPos (TyApp (TyCon "List") (TyCon "Expr")))) (variant "EArrayLit" (ConPos (TyApp (TyCon "List") (TyCon "Expr")))) (variant "ERangeList" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Bool"))) (variant "ERangeArray" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Bool"))) (variant "ESlice" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Expr") (TyCon "Bool") (TyApp (TyCon "Ref") (TyCon "String")))) (variant "ELetGroup" (ConPos (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "Expr"))) (variant "ESection" (ConPos (TyCon "Section"))) (variant "EIndex" (ConPos (TyCon "Expr") (TyCon "Expr") (TyApp (TyCon "Ref") (TyCon "String")))) (variant "EAnnot" (ConPos (TyCon "Expr") (TyCon "Ty"))) (variant "EHeadAnnot" (ConPos (TyCon "Expr") (TyCon "Ty"))) (variant "EBlock" (ConPos (TyApp (TyCon "List") (TyCon "DoStmt")))) (variant "EDo" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "DoStmt")))) (variant "EStringInterp" (ConPos (TyApp (TyCon "List") (TyCon "InterpPart")))) (variant "EGuards" (ConPos (TyApp (TyCon "List") (TyCon "GuardArm")))) (variant "ERecordCreate" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "FieldAssign")))) (variant "ERecordUpdate" (ConPos (TyCon "Expr") (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyApp (TyCon "Ref") (TyCon "String")))) (variant "EVariantUpdate" (ConPos (TyCon "String") (TyCon "Expr") (TyApp (TyCon "List") (TyCon "FieldAssign")))) (variant "EMapLit" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "Expr") (TyCon "Expr"))))) (variant "ESetLit" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Expr")))) (variant "EAsPat" (ConPos (TyCon "String") (TyCon "Expr"))) (variant "EMethodRef" (ConPos (TyCon "String"))) (variant "EDictApp" (ConPos (TyCon "String"))) (variant "EVarAt" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "EVarId" (ConPos (TyCon "String") (TyCon "Int"))) (variant "EMethodAt" (ConPos (TyCon "String") (TyCon "String") (TyCon "EvId"))) (variant "EDictAt" (ConPos (TyCon "String") (TyCon "EvId"))) (variant "ELoc" (ConPos (TyCon "Loc") (TyCon "Expr"))) (variant "EDoOrigin" (ConPos (TyCon "Loc") (TyCon "Expr"))) (variant "ENumLit" (ConPos (TyCon "Int") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "String"))) (variant "EWideLit" (ConPos (TyCon "Int") (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "String")))) ())
 (DData Public "UseMember" () ((variant "UseMember" (ConPos (TyCon "String") (TyCon "Bool") (TyCon "Loc") (TyApp (TyCon "Option") (TyCon "String"))))) ())
 (DData Public "UsePath" () ((variant "UseName" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "UseGroup" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "UseMember")))) (variant "UseWild" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "UseAlias" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) ())
@@ -2830,7 +2862,7 @@ mapKvsB f ((k, v) :: rest) =
 (DData Public "DeriveRef" () ((variant "DeriveRef" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "deriveRefName" (TyFun (TyCon "DeriveRef") (TyCon "String")))
 (DFunDef false "deriveRefName" ((PCon "DeriveRef" (PVar "n") PWild)) (EVar "n"))
-(DData Public "Decl" () ((variant "DTypeSig" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty") (TyCon "Loc"))) (variant "DExtern" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DFunDef" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))) (variant "DData" (ConNamed (field "dataVis" (TyCon "DataVis")) (field "dataName" (TyCon "String")) (field "dataParams" (TyApp (TyCon "List") (TyCon "String"))) (field "dataParamKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "dataCtors" (TyApp (TyCon "List") (TyCon "Variant"))) (field "dataCtorBinders" (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))))) (field "dataDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "dataOrigin" (TyCon "TyConOrigin")) (field "dataExtern" (TyCon "Bool")) (field "dataNameLoc" (TyApp (TyCon "Option") (TyCon "Loc"))))) (variant "DUse" (ConPos (TyCon "Bool") (TyCon "UsePath") (TyCon "Loc"))) (variant "DEffect" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "TyConOrigin") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DProp" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "PropParam")) (TyCon "Expr"))) (variant "DTest" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DInterface" (ConNamed (field "pub" (TyCon "Bool")) (field "def" (TyCon "Bool")) (field "name" (TyCon "String")) (field "typarams" (TyApp (TyCon "List") (TyCon "String"))) (field "typaramKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "supers" (TyApp (TyCon "List") (TyCon "Super"))) (field "methods" (TyApp (TyCon "List") (TyCon "IfaceMethod"))) (field "ifaceOrigin" (TyCon "TyConOrigin")) (field "ifaceNameLoc" (TyApp (TyCon "Option") (TyCon "Loc"))))) (variant "DImpl" (ConNamed (field "pub" (TyCon "Bool")) (field "iface" (TyCon "String")) (field "tys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "reqs" (TyApp (TyCon "List") (TyCon "Require"))) (field "methods" (TyApp (TyCon "List") (TyCon "ImplMethod"))) (field "implOrigin" (TyCon "TyConOrigin")) (field "implIfaceLoc" (TyApp (TyCon "Option") (TyCon "Loc"))))) (variant "DTypeAlias" (ConNamed (field "tyAliasPub" (TyCon "Bool")) (field "tyAliasName" (TyCon "String")) (field "tyAliasParams" (TyApp (TyCon "List") (TyCon "String"))) (field "tyAliasParamKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "tyAliasRhs" (TyCon "Ty")) (field "tyAliasOrigin" (TyCon "TyConOrigin")) (field "tyAliasNameLoc" (TyApp (TyCon "Option") (TyCon "Loc"))))) (variant "DNewtype" (ConNamed (field "newtypePub" (TyCon "Bool")) (field "newtypeName" (TyCon "String")) (field "newtypeParams" (TyApp (TyCon "List") (TyCon "String"))) (field "newtypeParamKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "newtypeCtor" (TyCon "String")) (field "newtypeCtorBinders" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (field "newtypeFieldTy" (TyCon "Ty")) (field "newtypeDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "newtypeOrigin" (TyCon "TyConOrigin")) (field "newtypeNameLoc" (TyApp (TyCon "Option") (TyCon "Loc"))))) (variant "DLetGroup" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LetBind")))) (variant "DAttrib" (ConPos (TyApp (TyCon "List") (TyCon "Attr")) (TyCon "Decl")))) ())
+(DData Public "Decl" () ((variant "DTypeSig" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty") (TyCon "Loc"))) (variant "DExtern" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DFunDef" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc") (TyCon "BinderId"))) (variant "DData" (ConNamed (field "dataVis" (TyCon "DataVis")) (field "dataName" (TyCon "String")) (field "dataParams" (TyApp (TyCon "List") (TyCon "String"))) (field "dataParamKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "dataCtors" (TyApp (TyCon "List") (TyCon "Variant"))) (field "dataCtorBinders" (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))))) (field "dataDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "dataOrigin" (TyCon "TyConOrigin")) (field "dataExtern" (TyCon "Bool")) (field "dataNameLoc" (TyApp (TyCon "Option") (TyCon "Loc"))))) (variant "DUse" (ConPos (TyCon "Bool") (TyCon "UsePath") (TyCon "Loc"))) (variant "DEffect" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "TyConOrigin") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DProp" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "PropParam")) (TyCon "Expr"))) (variant "DTest" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DInterface" (ConNamed (field "pub" (TyCon "Bool")) (field "def" (TyCon "Bool")) (field "name" (TyCon "String")) (field "typarams" (TyApp (TyCon "List") (TyCon "String"))) (field "typaramKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "supers" (TyApp (TyCon "List") (TyCon "Super"))) (field "methods" (TyApp (TyCon "List") (TyCon "IfaceMethod"))) (field "ifaceOrigin" (TyCon "TyConOrigin")) (field "ifaceNameLoc" (TyApp (TyCon "Option") (TyCon "Loc"))))) (variant "DImpl" (ConNamed (field "pub" (TyCon "Bool")) (field "iface" (TyCon "String")) (field "tys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "reqs" (TyApp (TyCon "List") (TyCon "Require"))) (field "methods" (TyApp (TyCon "List") (TyCon "ImplMethod"))) (field "implOrigin" (TyCon "TyConOrigin")) (field "implIfaceLoc" (TyApp (TyCon "Option") (TyCon "Loc"))))) (variant "DTypeAlias" (ConNamed (field "tyAliasPub" (TyCon "Bool")) (field "tyAliasName" (TyCon "String")) (field "tyAliasParams" (TyApp (TyCon "List") (TyCon "String"))) (field "tyAliasParamKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "tyAliasRhs" (TyCon "Ty")) (field "tyAliasOrigin" (TyCon "TyConOrigin")) (field "tyAliasNameLoc" (TyApp (TyCon "Option") (TyCon "Loc"))))) (variant "DNewtype" (ConNamed (field "newtypePub" (TyCon "Bool")) (field "newtypeName" (TyCon "String")) (field "newtypeParams" (TyApp (TyCon "List") (TyCon "String"))) (field "newtypeParamKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "newtypeCtor" (TyCon "String")) (field "newtypeCtorBinders" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (field "newtypeFieldTy" (TyCon "Ty")) (field "newtypeDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "newtypeOrigin" (TyCon "TyConOrigin")) (field "newtypeNameLoc" (TyApp (TyCon "Option") (TyCon "Loc"))))) (variant "DLetGroup" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LetBind")))) (variant "DAttrib" (ConPos (TyApp (TyCon "List") (TyCon "Attr")) (TyCon "Decl")))) ())
 (DTypeSig true "dDataUnresolved" (TyFun (TyCon "DataVis") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Decl")))))))))
 (DFunDef false "dDataUnresolved" ((PVar "vis") (PVar "n") (PVar "params") (PVar "kinds") (PVar "variants") (PVar "binders") (PVar "derives")) (ERecordCreate "DData" ((fa "dataVis" (EVar "vis")) (fa "dataName" (EVar "n")) (fa "dataParams" (EVar "params")) (fa "dataParamKinds" (EVar "kinds")) (fa "dataCtors" (EVar "variants")) (fa "dataCtorBinders" (EVar "binders")) (fa "dataDerives" (EVar "derives")) (fa "dataOrigin" (EVar "OriginUnresolved")) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig true "externDataUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyCon "Decl"))))))
@@ -2880,7 +2912,7 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig true "mapTyInDecl" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "t") (PVar "site"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "pub")) (EVar "n")) (EVar "t2")) (EVar "site")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DExtern" (PVar "pub") (PVar "n") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DExtern") (EVar "pub")) (EVar "n")) (EVar "t2")) (EVar "c")))))
-(DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e") (PVar "site"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EVar "e2")) (EVar "site")) (EVar "c")))))
+(DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e") (PVar "site") (PVar "bid"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EVar "e2")) (EVar "site")) (EVar "bid")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DData" ((rf "dataCtors" None)) false))) (EBlock (DoLet false false (PTuple (PVar "vs2") (PVar "c")) (EApp (EApp (EVar "mapVariantsB") (EVar "f")) (EVar "dataCtors"))) (DoExpr (ETuple (EVariantUpdate "DData" (EVar "d") ((fa "dataCtors" (EVar "vs2")))) (EVar "c")))))
 (DFunDef false "mapTyInDecl" (PWild (PCon "DUse" (PVar "pub") (PVar "path") (PVar "loc"))) (ETuple (EApp (EApp (EApp (EVar "DUse") (EVar "pub")) (EVar "path")) (EVar "loc")) (EVar "False")))
 (DFunDef false "mapTyInDecl" (PWild (PCon "DEffect" (PVar "pub") (PVar "n") (PVar "dom") (PVar "axes") (PVar "o") (PVar "l"))) (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "n")) (EVar "dom")) (EVar "axes")) (EVar "o")) (EVar "l")) (EVar "False")))
@@ -2918,7 +2950,7 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "mapImplMethodsB" ((PVar "f") (PCons (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapImplMethodsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps")) (EVar "e2")) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapLetBindsB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyTuple (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "Bool")))))
 (DFunDef false "mapLetBindsB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
-(DFunDef false "mapLetBindsB" ((PVar "f") (PCons (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "cs2") (PVar "c1")) (EApp (EApp (EVar "mapFunClausesB") (EVar "f")) (EVar "clauses"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapLetBindsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "cs2")) (EVar "site")) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
+(DFunDef false "mapLetBindsB" ((PVar "f") (PCons (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "cs2") (PVar "c1")) (EApp (EApp (EVar "mapFunClausesB") (EVar "f")) (EVar "clauses"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapLetBindsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "cs2")) (EVar "site")) (EVar "bid")) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapFunClausesB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyTuple (TyApp (TyCon "List") (TyCon "FunClause")) (TyCon "Bool")))))
 (DFunDef false "mapFunClausesB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
 (DFunDef false "mapFunClausesB" ((PVar "f") (PCons (PCon "FunClause" (PVar "ps") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapFunClausesB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "FunClause") (EVar "ps")) (EVar "e2")) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
@@ -3067,17 +3099,17 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig true "effAtomBare" (TyFun (TyCon "String") (TyCon "EffAtomTy")))
 (DFunDef false "effAtomBare" ((PVar "l")) (ERecordCreate "EffAtomTy" ((fa "eatLabel" (EVar "l")) (fa "eatOrigin" (EVar "OriginUnresolved")) (fa "eatParam" (EVar "EPTop")) (fa "eatLoc" (EVar "None")) (fa "eatPattern" (EVar "False")))))
 (DTypeSig true "patBoundNames" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patBoundNames" ((PCon "PVar" (PVar "x") PWild)) (EListLit (EVar "x")))
+(DFunDef false "patBoundNames" ((PCon "PVar" (PVar "x") PWild PWild)) (EListLit (EVar "x")))
 (DFunDef false "patBoundNames" ((PCon "PCon" PWild (PVar "args"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBoundNames")) (EVar "args")))
 (DFunDef false "patBoundNames" ((PCon "PCons" (PVar "h") (PVar "t"))) (EBinOp "++" (EApp (EVar "patBoundNames") (EVar "h")) (EApp (EVar "patBoundNames") (EVar "t"))))
 (DFunDef false "patBoundNames" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBoundNames")) (EVar "ps")))
 (DFunDef false "patBoundNames" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBoundNames")) (EVar "ps")))
-(DFunDef false "patBoundNames" ((PCon "PAs" (PVar "x") PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBoundNames") (EVar "p"))))
+(DFunDef false "patBoundNames" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBoundNames") (EVar "p"))))
 (DFunDef false "patBoundNames" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recPatFieldNames")) (EVar "fields")))
 (DFunDef false "patBoundNames" (PWild) (EListLit))
 (DTypeSig false "recPatFieldNames" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "recPatFieldNames" ((PCon "RecPatField" (PVar "label") PWild (PCon "None"))) (EListLit (EVar "label")))
-(DFunDef false "recPatFieldNames" ((PCon "RecPatField" PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBoundNames") (EVar "p")))
+(DFunDef false "recPatFieldNames" ((PCon "RecPatField" (PVar "label") PWild PWild (PCon "None"))) (EListLit (EVar "label")))
+(DFunDef false "recPatFieldNames" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBoundNames") (EVar "p")))
 (DTypeSig true "effectDeclUnstamped" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Decl")))))))
 (DFunDef false "effectDeclUnstamped" ((PVar "pub") (PVar "name") (PVar "dom") (PVar "axes") (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "name")) (EVar "dom")) (EVar "axes")) (EVar "OriginUnresolved")) (EVar "loc")))
 (DTypeSig true "effAtomWith" (TyFun (TyCon "String") (TyFun (TyCon "EffParamTy") (TyCon "EffAtomTy"))))
@@ -3200,12 +3232,15 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig true "intMinLiteralHelp" (TyCon "String"))
 (DFunDef false "intMinLiteralHelp" () (ELit (LString "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the negative -4611686018427387904, so write it with its `-`")))
 (DData Public "EvId" () ((variant "EvId" (ConPos (TyCon "String") (TyCon "Int")))) ())
+(DData Public "BinderId" () ((variant "BinderId" (ConPos (TyCon "String") (TyCon "Int")))) ())
+(DTypeSig true "noBinderId" (TyCon "BinderId"))
+(DFunDef false "noBinderId" () (EApp (EApp (EVar "BinderId") (ELit (LString ""))) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))))
 (DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route")))) (variant "EvMethod" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "EvEntry" () ((variant "EvEntry" (ConPos (TyCon "EvId") (TyCon "EvVal")))) ())
 (DTypeAlias true "EvTable" () (TyApp (TyCon "List") (TyCon "EvEntry")))
 (DData Public "Addr" () ((variant "ALocal" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "AGlobal" (ConPos))) ())
-(DData Public "Pat" () ((variant "PVar" (ConPos (TyCon "String") (TyCon "Loc"))) (variant "PWild" (ConPos)) (variant "PLit" (ConPos (TyCon "Lit"))) (variant "PCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PCons" (ConPos (TyCon "Pat") (TyCon "Pat"))) (variant "PTuple" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PList" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PAs" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "Pat"))) (variant "PRng" (ConPos (TyCon "Lit") (TyCon "Lit") (TyCon "Bool"))) (variant "PRec" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "RecPatField")) (TyCon "Bool")))) ())
-(DData Public "RecPatField" () ((variant "RecPatField" (ConPos (TyCon "String") (TyCon "Loc") (TyApp (TyCon "Option") (TyCon "Pat"))))) ())
+(DData Public "Pat" () ((variant "PVar" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "BinderId"))) (variant "PWild" (ConPos)) (variant "PLit" (ConPos (TyCon "Lit"))) (variant "PCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PCons" (ConPos (TyCon "Pat") (TyCon "Pat"))) (variant "PTuple" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PList" (ConPos (TyApp (TyCon "List") (TyCon "Pat")))) (variant "PAs" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "BinderId") (TyCon "Pat"))) (variant "PRng" (ConPos (TyCon "Lit") (TyCon "Lit") (TyCon "Bool"))) (variant "PRec" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "RecPatField")) (TyCon "Bool")))) ())
+(DData Public "RecPatField" () ((variant "RecPatField" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "BinderId") (TyApp (TyCon "Option") (TyCon "Pat"))))) ())
 (DData Public "Guard" () ((variant "GBool" (ConPos (TyCon "Expr"))) (variant "GBind" (ConPos (TyCon "Pat") (TyCon "Expr")))) ())
 (DData Public "Arm" () ((variant "Arm" (ConPos (TyCon "Pat") (TyApp (TyCon "List") (TyCon "Guard")) (TyCon "Expr")))) ())
 (DData Public "DoStmt" () ((variant "DoExpr" (ConPos (TyCon "Expr"))) (variant "DoBind" (ConPos (TyCon "Pat") (TyCon "Expr"))) (variant "DoLet" (ConPos (TyCon "Bool") (TyCon "Bool") (TyCon "Pat") (TyCon "Expr") (TyCon "Loc"))) (variant "DoAssign" (ConPos (TyCon "String") (TyCon "Expr"))) (variant "DoFieldAssign" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Expr")))) ())
@@ -3214,7 +3249,7 @@ mapKvsB f ((k, v) :: rest) =
 (DData Public "FieldAssign" () ((variant "FieldAssign" (ConPos (TyCon "String") (TyCon "Expr")))) ())
 (DData Public "Section" () ((variant "SecBare" (ConPos (TyCon "String"))) (variant "SecRight" (ConPos (TyCon "String") (TyCon "Expr"))) (variant "SecLeft" (ConPos (TyCon "Expr") (TyCon "String")))) ())
 (DData Public "FunClause" () ((variant "FunClause" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) ())
-(DData Public "LetBind" () ((variant "LetBind" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "FunClause")) (TyCon "Loc")))) ())
+(DData Public "LetBind" () ((variant "LetBind" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "FunClause")) (TyCon "Loc") (TyCon "BinderId")))) ())
 (DData Public "Expr" () ((variant "ELit" (ConPos (TyCon "Lit"))) (variant "EVar" (ConPos (TyCon "String"))) (variant "EApp" (ConPos (TyCon "Expr") (TyCon "Expr"))) (variant "ELam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "ELet" (ConPos (TyCon "Loc") (TyCon "Bool") (TyCon "Pat") (TyCon "Expr") (TyCon "Expr"))) (variant "EMatch" (ConPos (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Arm")))) (variant "EIf" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Expr"))) (variant "EBinOp" (ConPos (TyCon "String") (TyCon "Expr") (TyCon "Expr") (TyApp (TyCon "Ref") (TyCon "Route")))) (variant "EUnOp" (ConPos (TyCon "String") (TyCon "Expr") (TyApp (TyCon "Ref") (TyCon "Route")))) (variant "EInfix" (ConPos (TyCon "String") (TyCon "Expr") (TyCon "Expr"))) (variant "EFieldAccess" (ConPos (TyCon "Expr") (TyCon "String") (TyApp (TyCon "Ref") (TyCon "String")))) (variant "ETuple" (ConPos (TyApp (TyCon "List") (TyCon "Expr")))) (variant "EListLit" (ConPos (TyApp (TyCon "List") (TyCon "Expr")))) (variant "EArrayLit" (ConPos (TyApp (TyCon "List") (TyCon "Expr")))) (variant "ERangeList" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Bool"))) (variant "ERangeArray" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Bool"))) (variant "ESlice" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Expr") (TyCon "Bool") (TyApp (TyCon "Ref") (TyCon "String")))) (variant "ELetGroup" (ConPos (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "Expr"))) (variant "ESection" (ConPos (TyCon "Section"))) (variant "EIndex" (ConPos (TyCon "Expr") (TyCon "Expr") (TyApp (TyCon "Ref") (TyCon "String")))) (variant "EAnnot" (ConPos (TyCon "Expr") (TyCon "Ty"))) (variant "EHeadAnnot" (ConPos (TyCon "Expr") (TyCon "Ty"))) (variant "EBlock" (ConPos (TyApp (TyCon "List") (TyCon "DoStmt")))) (variant "EDo" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "DoStmt")))) (variant "EStringInterp" (ConPos (TyApp (TyCon "List") (TyCon "InterpPart")))) (variant "EGuards" (ConPos (TyApp (TyCon "List") (TyCon "GuardArm")))) (variant "ERecordCreate" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "FieldAssign")))) (variant "ERecordUpdate" (ConPos (TyCon "Expr") (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyApp (TyCon "Ref") (TyCon "String")))) (variant "EVariantUpdate" (ConPos (TyCon "String") (TyCon "Expr") (TyApp (TyCon "List") (TyCon "FieldAssign")))) (variant "EMapLit" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "Expr") (TyCon "Expr"))))) (variant "ESetLit" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Expr")))) (variant "EAsPat" (ConPos (TyCon "String") (TyCon "Expr"))) (variant "EMethodRef" (ConPos (TyCon "String"))) (variant "EDictApp" (ConPos (TyCon "String"))) (variant "EVarAt" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "EVarId" (ConPos (TyCon "String") (TyCon "Int"))) (variant "EMethodAt" (ConPos (TyCon "String") (TyCon "String") (TyCon "EvId"))) (variant "EDictAt" (ConPos (TyCon "String") (TyCon "EvId"))) (variant "ELoc" (ConPos (TyCon "Loc") (TyCon "Expr"))) (variant "EDoOrigin" (ConPos (TyCon "Loc") (TyCon "Expr"))) (variant "ENumLit" (ConPos (TyCon "Int") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "String"))) (variant "EWideLit" (ConPos (TyCon "Int") (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "String")))) ())
 (DData Public "UseMember" () ((variant "UseMember" (ConPos (TyCon "String") (TyCon "Bool") (TyCon "Loc") (TyApp (TyCon "Option") (TyCon "String"))))) ())
 (DData Public "UsePath" () ((variant "UseName" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "UseGroup" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "UseMember")))) (variant "UseWild" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "UseAlias" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) ())
@@ -3244,7 +3279,7 @@ mapKvsB f ((k, v) :: rest) =
 (DData Public "DeriveRef" () ((variant "DeriveRef" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "deriveRefName" (TyFun (TyCon "DeriveRef") (TyCon "String")))
 (DFunDef false "deriveRefName" ((PCon "DeriveRef" (PVar "n") PWild)) (EVar "n"))
-(DData Public "Decl" () ((variant "DTypeSig" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty") (TyCon "Loc"))) (variant "DExtern" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DFunDef" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))) (variant "DData" (ConNamed (field "dataVis" (TyCon "DataVis")) (field "dataName" (TyCon "String")) (field "dataParams" (TyApp (TyCon "List") (TyCon "String"))) (field "dataParamKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "dataCtors" (TyApp (TyCon "List") (TyCon "Variant"))) (field "dataCtorBinders" (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))))) (field "dataDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "dataOrigin" (TyCon "TyConOrigin")) (field "dataExtern" (TyCon "Bool")) (field "dataNameLoc" (TyApp (TyCon "Option") (TyCon "Loc"))))) (variant "DUse" (ConPos (TyCon "Bool") (TyCon "UsePath") (TyCon "Loc"))) (variant "DEffect" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "TyConOrigin") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DProp" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "PropParam")) (TyCon "Expr"))) (variant "DTest" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DInterface" (ConNamed (field "pub" (TyCon "Bool")) (field "def" (TyCon "Bool")) (field "name" (TyCon "String")) (field "typarams" (TyApp (TyCon "List") (TyCon "String"))) (field "typaramKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "supers" (TyApp (TyCon "List") (TyCon "Super"))) (field "methods" (TyApp (TyCon "List") (TyCon "IfaceMethod"))) (field "ifaceOrigin" (TyCon "TyConOrigin")) (field "ifaceNameLoc" (TyApp (TyCon "Option") (TyCon "Loc"))))) (variant "DImpl" (ConNamed (field "pub" (TyCon "Bool")) (field "iface" (TyCon "String")) (field "tys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "reqs" (TyApp (TyCon "List") (TyCon "Require"))) (field "methods" (TyApp (TyCon "List") (TyCon "ImplMethod"))) (field "implOrigin" (TyCon "TyConOrigin")) (field "implIfaceLoc" (TyApp (TyCon "Option") (TyCon "Loc"))))) (variant "DTypeAlias" (ConNamed (field "tyAliasPub" (TyCon "Bool")) (field "tyAliasName" (TyCon "String")) (field "tyAliasParams" (TyApp (TyCon "List") (TyCon "String"))) (field "tyAliasParamKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "tyAliasRhs" (TyCon "Ty")) (field "tyAliasOrigin" (TyCon "TyConOrigin")) (field "tyAliasNameLoc" (TyApp (TyCon "Option") (TyCon "Loc"))))) (variant "DNewtype" (ConNamed (field "newtypePub" (TyCon "Bool")) (field "newtypeName" (TyCon "String")) (field "newtypeParams" (TyApp (TyCon "List") (TyCon "String"))) (field "newtypeParamKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "newtypeCtor" (TyCon "String")) (field "newtypeCtorBinders" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (field "newtypeFieldTy" (TyCon "Ty")) (field "newtypeDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "newtypeOrigin" (TyCon "TyConOrigin")) (field "newtypeNameLoc" (TyApp (TyCon "Option") (TyCon "Loc"))))) (variant "DLetGroup" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LetBind")))) (variant "DAttrib" (ConPos (TyApp (TyCon "List") (TyCon "Attr")) (TyCon "Decl")))) ())
+(DData Public "Decl" () ((variant "DTypeSig" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty") (TyCon "Loc"))) (variant "DExtern" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DFunDef" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc") (TyCon "BinderId"))) (variant "DData" (ConNamed (field "dataVis" (TyCon "DataVis")) (field "dataName" (TyCon "String")) (field "dataParams" (TyApp (TyCon "List") (TyCon "String"))) (field "dataParamKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "dataCtors" (TyApp (TyCon "List") (TyCon "Variant"))) (field "dataCtorBinders" (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn"))))) (field "dataDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "dataOrigin" (TyCon "TyConOrigin")) (field "dataExtern" (TyCon "Bool")) (field "dataNameLoc" (TyApp (TyCon "Option") (TyCon "Loc"))))) (variant "DUse" (ConPos (TyCon "Bool") (TyCon "UsePath") (TyCon "Loc"))) (variant "DEffect" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "TyConOrigin") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DProp" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "PropParam")) (TyCon "Expr"))) (variant "DTest" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DInterface" (ConNamed (field "pub" (TyCon "Bool")) (field "def" (TyCon "Bool")) (field "name" (TyCon "String")) (field "typarams" (TyApp (TyCon "List") (TyCon "String"))) (field "typaramKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "supers" (TyApp (TyCon "List") (TyCon "Super"))) (field "methods" (TyApp (TyCon "List") (TyCon "IfaceMethod"))) (field "ifaceOrigin" (TyCon "TyConOrigin")) (field "ifaceNameLoc" (TyApp (TyCon "Option") (TyCon "Loc"))))) (variant "DImpl" (ConNamed (field "pub" (TyCon "Bool")) (field "iface" (TyCon "String")) (field "tys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "reqs" (TyApp (TyCon "List") (TyCon "Require"))) (field "methods" (TyApp (TyCon "List") (TyCon "ImplMethod"))) (field "implOrigin" (TyCon "TyConOrigin")) (field "implIfaceLoc" (TyApp (TyCon "Option") (TyCon "Loc"))))) (variant "DTypeAlias" (ConNamed (field "tyAliasPub" (TyCon "Bool")) (field "tyAliasName" (TyCon "String")) (field "tyAliasParams" (TyApp (TyCon "List") (TyCon "String"))) (field "tyAliasParamKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "tyAliasRhs" (TyCon "Ty")) (field "tyAliasOrigin" (TyCon "TyConOrigin")) (field "tyAliasNameLoc" (TyApp (TyCon "Option") (TyCon "Loc"))))) (variant "DNewtype" (ConNamed (field "newtypePub" (TyCon "Bool")) (field "newtypeName" (TyCon "String")) (field "newtypeParams" (TyApp (TyCon "List") (TyCon "String"))) (field "newtypeParamKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "newtypeCtor" (TyCon "String")) (field "newtypeCtorBinders" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (field "newtypeFieldTy" (TyCon "Ty")) (field "newtypeDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "newtypeOrigin" (TyCon "TyConOrigin")) (field "newtypeNameLoc" (TyApp (TyCon "Option") (TyCon "Loc"))))) (variant "DLetGroup" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LetBind")))) (variant "DAttrib" (ConPos (TyApp (TyCon "List") (TyCon "Attr")) (TyCon "Decl")))) ())
 (DTypeSig true "dDataUnresolved" (TyFun (TyCon "DataVis") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "KindAnn")))) (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Decl")))))))))
 (DFunDef false "dDataUnresolved" ((PVar "vis") (PVar "n") (PVar "params") (PVar "kinds") (PVar "variants") (PVar "binders") (PVar "derives")) (ERecordCreate "DData" ((fa "dataVis" (EVar "vis")) (fa "dataName" (EVar "n")) (fa "dataParams" (EVar "params")) (fa "dataParamKinds" (EVar "kinds")) (fa "dataCtors" (EVar "variants")) (fa "dataCtorBinders" (EVar "binders")) (fa "dataDerives" (EVar "derives")) (fa "dataOrigin" (EVar "OriginUnresolved")) (fa "dataExtern" (EVar "False")) (fa "dataNameLoc" (EVar "None")))))
 (DTypeSig true "externDataUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyCon "Decl"))))))
@@ -3294,7 +3329,7 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig true "mapTyInDecl" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "t") (PVar "site"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "pub")) (EVar "n")) (EVar "t2")) (EVar "site")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DExtern" (PVar "pub") (PVar "n") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DExtern") (EVar "pub")) (EVar "n")) (EVar "t2")) (EVar "c")))))
-(DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e") (PVar "site"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EVar "e2")) (EVar "site")) (EVar "c")))))
+(DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e") (PVar "site") (PVar "bid"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EVar "e2")) (EVar "site")) (EVar "bid")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PAs "d" (PRec "DData" ((rf "dataCtors" None)) false))) (EBlock (DoLet false false (PTuple (PVar "vs2") (PVar "c")) (EApp (EApp (EVar "mapVariantsB") (EVar "f")) (EVar "dataCtors"))) (DoExpr (ETuple (EVariantUpdate "DData" (EVar "d") ((fa "dataCtors" (EVar "vs2")))) (EVar "c")))))
 (DFunDef false "mapTyInDecl" (PWild (PCon "DUse" (PVar "pub") (PVar "path") (PVar "loc"))) (ETuple (EApp (EApp (EApp (EVar "DUse") (EVar "pub")) (EVar "path")) (EVar "loc")) (EVar "False")))
 (DFunDef false "mapTyInDecl" (PWild (PCon "DEffect" (PVar "pub") (PVar "n") (PVar "dom") (PVar "axes") (PVar "o") (PVar "l"))) (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "n")) (EVar "dom")) (EVar "axes")) (EVar "o")) (EVar "l")) (EVar "False")))
@@ -3332,7 +3367,7 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "mapImplMethodsB" ((PVar "f") (PCons (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapImplMethodsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps")) (EVar "e2")) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapLetBindsB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyTuple (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "Bool")))))
 (DFunDef false "mapLetBindsB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
-(DFunDef false "mapLetBindsB" ((PVar "f") (PCons (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "cs2") (PVar "c1")) (EApp (EApp (EVar "mapFunClausesB") (EVar "f")) (EVar "clauses"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapLetBindsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "cs2")) (EVar "site")) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
+(DFunDef false "mapLetBindsB" ((PVar "f") (PCons (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "cs2") (PVar "c1")) (EApp (EApp (EVar "mapFunClausesB") (EVar "f")) (EVar "clauses"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapLetBindsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "cs2")) (EVar "site")) (EVar "bid")) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapFunClausesB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyTuple (TyApp (TyCon "List") (TyCon "FunClause")) (TyCon "Bool")))))
 (DFunDef false "mapFunClausesB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
 (DFunDef false "mapFunClausesB" ((PVar "f") (PCons (PCon "FunClause" (PVar "ps") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapFunClausesB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "FunClause") (EVar "ps")) (EVar "e2")) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))

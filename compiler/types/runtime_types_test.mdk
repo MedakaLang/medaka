@@ -1,0 +1,255 @@
+-- Sibling test module for `compiler/types/runtime_types.mdk` ([P-TEST-SIBLING]).
+--
+-- Each case elaborates a small program against the real prelude
+-- (`stdlib/runtime.mdk` + `stdlib/core.mdk`), exactly as a build does, and reads
+-- back the table the elaboration installed.  The expected types are derived from
+-- the language rules, not captured: a parameter takes its declared type, a
+-- polymorphic binder is `RTValue`, an ambiguous `Num` binder defaults to `Int`.
+--
+-- The program under test is desugared with module id `main` (a helper module with
+-- `helper`), so its rows are told apart from the prelude's by the id's module half.
+-- Rows are compared by type after sorting, never by ordinal order: mint order is a
+-- traversal detail no reader may depend on.
+
+import test.{Expectation, expectAll, expectEqual, expectNotEqual, fail}
+import test_process.{underRoot}
+import frontend.parser.{parse, parseLocated}
+import frontend.desugar.{desugar, desugarIn}
+import frontend.ast.{BinderId(..)}
+import types.typecheck.{elaborateModules}
+import types.runtime_types.{
+  BinderRow(..),
+  RuntimeType(..),
+  binderOrdinal,
+  binderRow,
+  installedBinderRows,
+}
+import list.{sortOn}
+import support.util.{joinNl, listLen}
+
+-- Elaborate [modules] (module id, source lines) and return the installed rows.
+rowsOf : List (String, List String) ->
+  <IO, FileRead> Result String (List BinderRow)
+rowsOf modules = do
+  rsrc <- readFile (underRoot "stdlib/runtime.mdk")
+  csrc <- readFile (underRoot "stdlib/core.mdk")
+  let _ =
+    elaborateModules
+      (desugar (parse rsrc))
+      (desugar (parse csrc))
+      (map
+        (m => (fst m, desugarIn (fst m) (parseLocated (joinNl (snd m)))))
+        modules)
+  Ok (installedBinderRows ())
+
+withRows : List (String, List String) ->
+  (List BinderRow -> Expectation) ->
+  <IO, FileRead> Expectation
+withRows modules check = match rowsOf modules
+  Ok rows => check rows
+  Err e => fail e
+
+withMain : List String ->
+  (List BinderRow -> Expectation) ->
+  <IO, FileRead> Expectation
+withMain src check = withRows [("main", src)] check
+
+rowModule : BinderRow -> String
+rowModule row = match row.brId
+  BinderId m _ => m
+
+-- The rows module [m] published for binders spelled [name].
+named : String -> String -> List BinderRow -> List BinderRow
+named m name rows = filter (r => r.brName == name && rowModule r == m) rows
+
+-- The types of [name]'s rows in module `main`, sorted.
+typesOf : String -> List BinderRow -> List RuntimeType
+typesOf name rows = sortOn debug (map (r => r.brType) (named "main" name rows))
+
+returnsOf : String -> List BinderRow -> List (Option RuntimeType)
+returnsOf name rows = map (r => r.brReturns) (named "main" name rows)
+
+-- The one type of [name]'s single row in `main`; `RTValue` when there is not
+-- exactly one, which the case's expected value then contradicts.
+oneTypeOf : List BinderRow -> String -> RuntimeType
+oneTypeOf rows name = match typesOf name rows
+  [t] => t
+  _ => RTValue
+
+test "a parameter takes its declared Int, Float, U64 or U32 type" =
+  withMain
+    [
+      "f : Int -> Int",
+      "f n = n + 1",
+      "g : Float -> Float",
+      "g x = x * 2.0",
+      "h : U64 -> U64",
+      "h w = w",
+      "k : U32 -> U32",
+      "k v = v",
+      "main = println (f 1)",
+    ]
+    (rows => expectAll [
+      expectEqual [RTInt] (typesOf "n" rows),
+      expectEqual [RTFloat] (typesOf "x" rows),
+      expectEqual [RTU64] (typesOf "w" rows),
+      expectEqual [RTU32] (typesOf "v" rows),
+    ])
+
+test "a binder typed at a type variable, Num-constrained or not, is RTValue" =
+  withMain
+    [
+      "ident : a -> a",
+      "ident v = v",
+      "pairUp x = (x, x)",
+      "inc k = k + 1",
+      "main = println (ident 1)",
+    ]
+    (rows => expectAll [
+      expectEqual [RTValue] (typesOf "v" rows),
+      expectEqual [RTValue] (typesOf "x" rows),
+      expectEqual [RTValue] (typesOf "k" rows),
+      expectEqual [Some RTValue] (returnsOf "ident" rows),
+      expectEqual [Some RTCon] (returnsOf "pairUp" rows),
+    ])
+
+test "a binder fixed only by Num defaulting is RTInt" =
+  withMain
+    ["d0 u =", "  let d = 7", "  d * 2", "main = println (d0 ())"]
+    (rows => expectEqual [RTInt] (typesOf "d" rows))
+
+test "a shadowing pair of different types is two keys" =
+  withMain
+    [
+      "s : Int -> Float",
+      "s n =",
+      "  let v = n + 1",
+      "  let v = intToFloat v * 0.5",
+      "  v",
+      "main = println (s 3)",
+    ]
+    (rows =>
+      let ords = map (r => binderOrdinal r.brId) (named "main" "v" rows)
+      expectAll [
+        expectEqual [RTFloat, RTInt] (typesOf "v" rows),
+        expectEqual 2 (listLen ords),
+        match ords
+          [a, b] => expectNotEqual a b
+          _ => fail "expected two rows for v",
+      ])
+
+test "a where-function publishes its return type, its parameter its own" =
+  withMain
+    [
+      "gd : Int -> Float",
+      "gd n = go n",
+      "  where",
+      "    go m = intToFloat m * 1.5",
+      "main = println (gd 2)",
+    ]
+    (rows => expectAll [
+      expectEqual [RTValue] (typesOf "go" rows),
+      expectEqual [Some RTFloat] (returnsOf "go" rows),
+      expectEqual [RTInt] (typesOf "m" rows),
+    ])
+
+test "every clause of a top-level function records the one return type" =
+  withMain
+    [
+      "fact : Int -> Int",
+      "fact 0 = 1",
+      "fact n = n * fact (n - 1)",
+      "answer = 42",
+      "main = println (fact 3)",
+    ]
+    (rows => expectAll [
+      expectEqual [Some RTInt, Some RTInt] (returnsOf "fact" rows),
+      expectEqual [RTInt] (typesOf "answer" rows),
+      expectEqual [Some RTInt] (returnsOf "answer" rows),
+    ])
+
+test "the same line and column in two modules is two rows" =
+  withRows
+    [
+      ("helper", ["fa k = k * 2.0"]),
+      ("main", ["fb k = k + (1 : Int)", "main = println (fb 1)"]),
+    ]
+    (rows => expectAll [
+      expectEqual [RTFloat] (map (r => r.brType) (named "helper" "k" rows)),
+      expectEqual [RTInt] (map (r => r.brType) (named "main" "k" rows)),
+    ])
+
+test "the two section binders of one function are typed apart" =
+  withMain
+    [
+      "sec : List Int -> List Float -> (List Int, List Float)",
+      "sec xs ys = (map (+ 1) xs, map (+ 1.5) ys)",
+      "main = println (sec [1] [2.0])",
+    ]
+    (rows => expectEqual [RTFloat, RTInt] (typesOf "_s" rows))
+
+test "two lambdas binding the same name are typed apart" =
+  withMain
+    [
+      "lams : Unit -> (List Int, List Float)",
+      "lams u = (map (x => x + 1) [1], map (x => x * 2.5) [1.0])",
+      "main = println (lams ())",
+    ]
+    (rows => expectEqual [RTFloat, RTInt] (typesOf "x" rows))
+
+test "a record pun binds the field's type" =
+  withMain
+    [
+      "data Pt = { px : Float, py : Int }",
+      "recordy p = match p",
+      "  Pt { px, py } => px + intToFloat py",
+      "main = println (recordy (Pt { px = 1.5, py = 2 }))",
+    ]
+    (rows => expectAll [
+      expectEqual [RTFloat] (typesOf "px" rows),
+      expectEqual [RTInt] (typesOf "py" rows),
+    ])
+
+test "a derived Eq binds each constructor's field at its own type" =
+  withMain
+    [
+      "data Shape = Circle Float | Square Int deriving (Eq)",
+      "main = println (Circle 1.0 == Square 2)",
+    ]
+    (rows => expectEqual [RTFloat, RTInt] (typesOf "__a0" rows))
+
+test "constructor cells, the other scalars and opaque values" =
+  withMain
+    [
+      "data Box = Box Int",
+      "cells : List Int -> Option Int -> Box -> (Int, Bool) -> Int",
+      "cells xs o b t = 0",
+      "scalars : Bool -> Char -> String -> Unit -> Int",
+      "scalars bb c s u = 0",
+      "opaque : (Int -> Int) -> Ref Int -> Int",
+      "opaque fn r = 0",
+      "main = println 1",
+    ]
+    (rows => expectAll [
+      expectEqual
+        [RTCon, RTCon, RTCon, RTCon]
+        (map (oneTypeOf rows) ["xs", "o", "b", "t"]),
+      expectEqual
+        [RTBool, RTChar, RTString, RTUnit]
+        (map (oneTypeOf rows) ["bb", "c", "s", "u"]),
+      expectEqual [RTValue, RTValue] (map (oneTypeOf rows) ["fn", "r"]),
+    ])
+
+test "a lookup answers by id, and an unminted id has no row" =
+  withMain
+    ["f : Int -> Int", "f n = n + 1", "main = println (f 1)"]
+    (rows => expectAll [
+      expectEqual
+        [Some RTInt]
+        (map
+          (r => map (found => found.brType) (binderRow r.brId))
+          (named "main" "n" rows)),
+      expectEqual
+        None
+        (map (found => found.brType) (binderRow (BinderId "main" (0 - 1)))),
+    ])

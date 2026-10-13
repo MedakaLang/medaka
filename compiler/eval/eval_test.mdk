@@ -2,6 +2,7 @@
 
 import test.{expectAll, expectEqual}
 import frontend.ast.{
+  noBinderId,
   Lit(..),
   Pat(..),
   Expr(..),
@@ -31,13 +32,13 @@ boxTy =
 
 methodWithDicts : String -> Int -> ImplMethod
 methodWithDicts name count =
-  ImplMethod name (dictPats count ++ [PVar "n" testLoc]) (ELit LUnit)
+  ImplMethod name (dictPats count ++ [PVar "n" testLoc noBinderId]) (ELit LUnit)
 
 dictPats : Int -> List Pat
 dictPats count
   | count <= 0 = []
   | otherwise =
-    PVar ("$dict_fromInt_" ++ intToString (count - 1)) testLoc
+    PVar ("$dict_fromInt_" ++ intToString (count - 1)) testLoc noBinderId
       :: dictPats (count - 1)
 
 implDecl : String -> TyConOrigin -> Int -> Decl
@@ -98,7 +99,13 @@ runtimeAliasModules = [
     "root",
     [
       DUse False (UseAlias ["runtime"] "R") testLoc,
-      DFunDef False "main" [] (EApp (EVar "R.Ref") (ELit LUnit)) testLoc,
+      DFunDef
+        False
+        "main"
+        []
+        (EApp (EVar "R.Ref") (ELit LUnit))
+        testLoc
+        noBinderId,
     ],
   ),
 ]

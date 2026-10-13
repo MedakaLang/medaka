@@ -145,7 +145,6 @@ import ir.core_ir_lower.{
   validateFfiExternTypeNames,
   EmitTarget(..),
   methodIfaceTable,
-  declSigTypeNames,
   declaredRecordFieldOrders,
   ctorFieldTypeNames,
 }
@@ -439,7 +438,7 @@ guardedEmit emit rsrc csrc tsrc entry paths mods warnTriples =
 findMainFunDef : List Decl -> Option (List Pat, Expr)
 findMainFunDef [] = None
 findMainFunDef ((DAttrib _ d) :: rest) = findMainFunDef (d :: rest)
-findMainFunDef ((DFunDef _ "main" ps body _) :: _) = Some (ps, body)
+findMainFunDef ((DFunDef _ "main" ps body _ _) :: _) = Some (ps, body)
 findMainFunDef (_ :: rest) = findMainFunDef rest
 
 -- Best-effort location: the first ELoc span walking the outermost EApp spine.
@@ -651,7 +650,6 @@ runEmit paths warnTriples runtimeDecls coreDecls modules =
           (runtimeExternNames runtimeDecls)
           (makeWasmEmitInputFull
             (methodIfaceTable allDecls)
-            (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
             (ctorFieldTypeNames allDecls)
             (mainTypeIsFloat ())
             (mainTypeIsUnit ())

@@ -1326,7 +1326,7 @@ pubFnNames decls =
 -- names whose DFunDef / DLetGroup binder is itself `pub = True`.
 pubDefNames : List Decl -> List String
 pubDefNames [] = []
-pubDefNames ((DFunDef True n _ _ _) :: rest) = n :: pubDefNames rest
+pubDefNames ((DFunDef True n _ _ _ _) :: rest) = n :: pubDefNames rest
 pubDefNames ((DLetGroup True binds) :: rest) =
   map letBindName binds ++ pubDefNames rest
 pubDefNames ((DAttrib _ d) :: rest) = pubDefNames [d] ++ pubDefNames rest
@@ -1339,13 +1339,13 @@ unitDefNames : (String, List Decl) -> List String
 unitDefNames (_, decls) = flatMap declDefNames decls
 
 declDefNames : Decl -> List String
-declDefNames (DFunDef _ n _ _ _) = [n]
+declDefNames (DFunDef _ n _ _ _ _) = [n]
 declDefNames (DLetGroup _ binds) = map letBindName binds
 declDefNames (DAttrib _ d) = declDefNames d
 declDefNames _ = []
 
 letBindName : LetBind -> String
-letBindName (LetBind n _ _) = n
+letBindName (LetBind n _ _ _) = n
 
 -- names exported via a `pub` DTypeSig/DExtern in this unit (so their DFunDef
 -- clauses, which parse private, still count as exported function symbols).
@@ -1529,13 +1529,14 @@ posMod n m = (n % m + m) % m
 
 -- ── decl rewrite (rename both the DEFINITION name and all references) ─────────
 renameDecl : OrdMap String -> Decl -> Decl
-renameDecl rm (DFunDef pub n ps e site) =
+renameDecl rm (DFunDef pub n ps e site bid) =
   DFunDef
     pub
     (renameDefName rm n)
     (renamePatsPM rm ps)
     (renameScoped rm (boundOfListPM (patVarsListPM ps)) e)
     site
+    bid
 -- a top-level signature (`f : …` / `export f : …`) shares the function's name; it
 -- MUST be renamed in lockstep with its DFunDef so the typechecker keys f's scheme
 -- under the SAME mangled name the call sites + def now use (else dictPass /
@@ -1598,8 +1599,12 @@ renameVariant rm (Variant n payload) = Variant (renameDefName rm n) payload
 -- top-level LetBind in a DLetGroup: rename the binder name (if in map) AND its
 -- clause bodies.  The group's own names are in scope across all clauses.
 renameLetBindDef : OrdMap String -> LetBind -> LetBind
-renameLetBindDef rm (LetBind n clauses site) =
-  LetBind (renameDefName rm n) (map (renameFunClause rm omEmpty) clauses) site
+renameLetBindDef rm (LetBind n clauses site bid) =
+  LetBind
+    (renameDefName rm n)
+    (map (renameFunClause rm omEmpty) clauses)
+    site
+    bid
 
 renameDefName : OrdMap String -> String -> String
 renameDefName rm n = match omLookup n rm
@@ -1819,8 +1824,8 @@ renameInterp rm bound (InterpExpr e) = InterpExpr (renameScoped rm bound e)
 -- the binder would point every use at the module-level definition (#3519:
 -- `where result = 5` bound as the prelude's `core__result`).
 renameLetBind : OrdMap String -> OrdMap Unit -> LetBind -> LetBind
-renameLetBind rm bound (LetBind n clauses site) =
-  LetBind n (map (renameFunClause rm bound) clauses) site
+renameLetBind rm bound (LetBind n clauses site bid) =
+  LetBind n (map (renameFunClause rm bound) clauses) site bid
 
 renameFunClause : OrdMap String -> OrdMap Unit -> FunClause -> FunClause
 renameFunClause rm bound (FunClause ps body) =
@@ -1874,12 +1879,12 @@ letBindNamesPM binds = map letBindName binds
 
 -- ── pattern variables (local copy; covers PRec field/pun binders) ─────────────
 patVarsPM : Pat -> List String
-patVarsPM (PVar x _) = [x]
+patVarsPM (PVar x _ _) = [x]
 patVarsPM (PCon _ args) = patVarsListPM args
 patVarsPM (PCons h t) = patVarsPM h ++ patVarsPM t
 patVarsPM (PTuple ps) = patVarsListPM ps
 patVarsPM (PList ps) = patVarsListPM ps
-patVarsPM (PAs x _ p) = x :: patVarsPM p
+patVarsPM (PAs x _ _ p) = x :: patVarsPM p
 patVarsPM (PRec _ fields _) = flatMap recPatFieldVarsPM fields
 patVarsPM _ = []
 
@@ -1896,7 +1901,7 @@ renamePat rm (PCon n args) = PCon (renameDefName rm n) (map (renamePat rm) args)
 renamePat rm (PCons h t) = PCons (renamePat rm h) (renamePat rm t)
 renamePat rm (PTuple ps) = PTuple (map (renamePat rm) ps)
 renamePat rm (PList ps) = PList (map (renamePat rm) ps)
-renamePat rm (PAs x l p) = PAs x l (renamePat rm p)
+renamePat rm (PAs x l bid p) = PAs x l bid (renamePat rm p)
 renamePat rm (PRec n fields open) =
   PRec (renameDefName rm n) (map (renameRecPatField rm) fields) open
 -- ── LEAVES, AS AN EXPLICIT LIST ───────────────────────────────────────────────
@@ -1909,19 +1914,20 @@ renamePat rm (PRec n fields open) =
 --   * `PVar` / `PAs`' binder are lowercase VALUE binders, never in the ctor/fn map.
 --   * `PWild` binds nothing.
 --   * `PLit` / `PRng` carry `Lit`s, which name nothing renameable.
-renamePat _ (p@(PVar _ _)) = p
+renamePat _ (p@(PVar _ _ _)) = p
 renamePat _ (p@PWild) = p
 renamePat _ (p@(PLit _)) = p
 renamePat _ (p@(PRng _ _ _)) = p
 
 renameRecPatField : OrdMap String -> RecPatField -> RecPatField
-renameRecPatField _ (RecPatField label l None) = RecPatField label l None
-renameRecPatField rm (RecPatField label l (Some p)) =
-  RecPatField label l (Some (renamePat rm p))
+renameRecPatField _ (RecPatField label l bid None) =
+  RecPatField label l bid None
+renameRecPatField rm (RecPatField label l bid (Some p)) =
+  RecPatField label l bid (Some (renamePat rm p))
 
 renamePatsPM : OrdMap String -> List Pat -> List Pat
 renamePatsPM rm ps = map (renamePat rm) ps
 
 recPatFieldVarsPM : RecPatField -> List String
-recPatFieldVarsPM (RecPatField label _ None) = [label]
-recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
+recPatFieldVarsPM (RecPatField label _ _ None) = [label]
+recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p

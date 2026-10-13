@@ -7,7 +7,8 @@ import types.effect_domain.{Param(..)}
 import types.effect_authority.{Authority(..), authIsTop}
 import types.repr.{Mono(..), ppAuthority}
 import frontend.ast.{
-  Expr(..), Lit(..), Pat(..), DoStmt(..), Loc(..), TyConOrigin(..), Route(..)
+  noBinderId, Expr(..), Lit(..), Pat(..), DoStmt(..), Loc(..), TyConOrigin(..),
+  Route(..)
 }
 import support.util.{listLen}
 
@@ -62,7 +63,12 @@ test "a block is abstracted as its last expression in the scope its lets build" 
     "\"cfg/app\""
     (alphaPrefix
       (EBlock [
-        DoLet False False (PVar "p" at) (ELit (LString "cfg/app")) at,
+        DoLet
+          False
+          False
+          (PVar "p" at noBinderId)
+          (ELit (LString "cfg/app"))
+          at,
         DoExpr (EVar "p"),
       ]))
 
@@ -71,8 +77,18 @@ test "a patterned let in a block hides the names it binds" =
     "top"
     (alphaPrefix
       (EBlock [
-        DoLet False False (PVar "p" at) (ELit (LString "cfg/app")) at,
-        DoLet False False (PTuple [PVar "p" at, PWild]) (EVar "pair") at,
+        DoLet
+          False
+          False
+          (PVar "p" at noBinderId)
+          (ELit (LString "cfg/app"))
+          at,
+        DoLet
+          False
+          False
+          (PTuple [PVar "p" at noBinderId, PWild])
+          (EVar "pair")
+          at,
         DoExpr (EVar "p"),
       ]))
 
@@ -113,7 +129,7 @@ test "an interpolated part is top unless display is the prelude method" =
       (alphaPrefixWith
         True
         qualifiedNames
-        (ELet at False (PVar "display" at) (EVar "f") dirPath)),
+        (ELet at False (PVar "display" at noBinderId) (EVar "f") dirPath)),
   ]
 
 test "an interpolated part keeps a qualifier only on a String operand" = expectAll

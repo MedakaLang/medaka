@@ -139,7 +139,7 @@ shape _ = "?"
 
 bodyShape : String -> String
 bodyShape src = match parseResult "x = \{src}\n"
-  Ok [DFunDef _ _ _ e _] => shape e
+  Ok [DFunDef _ _ _ e _ _] => shape e
   Ok _ => "not one definition"
   Err e => "error: \{parseErrorMessage e}"
 

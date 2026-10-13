@@ -619,15 +619,15 @@ fieldAssignSpan : FieldAssign -> (Int, Int, Int, Int)
 fieldAssignSpan (FieldAssign _ v) = exprSpan v
 
 letBindSpan : LetBind -> (Int, Int, Int, Int)
-letBindSpan (LetBind _ clauses _) = spansOf clauseSpan clauses
+letBindSpan (LetBind _ clauses _ _) = spansOf clauseSpan clauses
 
 clauseSpan : FunClause -> (Int, Int, Int, Int)
 clauseSpan (FunClause pats body) =
   mergeSpan (spansOf patSpan pats) (exprSpan body)
 
 patSpan : Pat -> (Int, Int, Int, Int)
-patSpan (PVar _ l) = locSpan l
-patSpan (PAs _ l p) = mergeSpan (locSpan l) (patSpan p)
+patSpan (PVar _ l _) = locSpan l
+patSpan (PAs _ l _ p) = mergeSpan (locSpan l) (patSpan p)
 patSpan (PCon _ ps) = spansOf patSpan ps
 patSpan (PCons a b) = mergeSpan (patSpan a) (patSpan b)
 patSpan (PTuple ps) = spansOf patSpan ps
@@ -636,7 +636,7 @@ patSpan (PRec _ fs _) = spansOf recPatFieldSpan fs
 patSpan _ = noSpan
 
 recPatFieldSpan : RecPatField -> (Int, Int, Int, Int)
-recPatFieldSpan (RecPatField _ l q) = match q
+recPatFieldSpan (RecPatField _ l _ q) = match q
   Some p => mergeSpan (locSpan l) (patSpan p)
   None => locSpan l
 
@@ -1091,7 +1091,7 @@ printTypeAppLhs t = printTypeAtom t
 -- ── Patterns ──────────────────────────────────────
 
 printPat : Pat -> Doc
-printPat (PVar x _) = text x
+printPat (PVar x _ _) = text x
 printPat PWild = text "_"
 printPat (PLit l) = printLit l
 printPat (PCon c []) = text c
@@ -1108,7 +1108,7 @@ printPat (PTuple ps) =
   Cat (text "(") (Cat (sepBy (text ", ") (map printPatArm ps)) (text ")"))
 printPat (PList ps) =
   Cat (text "[") (Cat (sepBy (text ", ") (map printPatArm ps)) (text "]"))
-printPat (PAs x _ inner) = Cat (text x) (Cat (text "@") (printPatAtom inner))
+printPat (PAs x _ _ inner) = Cat (text x) (Cat (text "@") (printPatAtom inner))
 printPat (PRec name fields rest) =
   let fieldDocs = map recPatFieldDoc fields
   let all = if rest then fieldDocs ++ [text "..."] else fieldDocs
@@ -1117,15 +1117,15 @@ printPat (PRng lo hi incl) =
   Cat (printLit lo) (Cat (text (if incl then "..=" else "..")) (printLit hi))
 
 recPatFieldDoc : RecPatField -> Doc
-recPatFieldDoc (RecPatField k _ None) = text k
-recPatFieldDoc (RecPatField k _ (Some q)) =
+recPatFieldDoc (RecPatField k _ _ None) = text k
+recPatFieldDoc (RecPatField k _ _ (Some q)) =
   Cat (text k) (Cat (text " = ") (printPat q))
 
 -- PCon with args already self-parenthesizes in printPat, so it is atom-safe.
 -- A PRec with fields is NOT self-delimiting, so in atom position it must be
 -- parenthesized.
 printPatAtom : Pat -> Doc
-printPatAtom (PVar x l) = printPat (PVar x l)
+printPatAtom (PVar x l bid) = printPat (PVar x l bid)
 printPatAtom PWild = printPat PWild
 printPatAtom (PLit l) = printPat (PLit l)
 printPatAtom (PCon c ps) = printPat (PCon c ps)
@@ -1598,7 +1598,7 @@ printLetBinderPat pat =
     printPat pat
 
 letBinderNeedsParens : Pat -> Bool
-letBinderNeedsParens (PAs _ _ _) = True
+letBinderNeedsParens (PAs _ _ _ _) = True
 letBinderNeedsParens (PCons _ _) = True
 letBinderNeedsParens _ = False
 
@@ -1608,7 +1608,7 @@ letBinderNeedsParens _ = False
 -- always printing the plain `let pat = rhs` form drops the recursion the
 -- source asked for (#2932).
 printDoLetRec : Bool -> Pat -> Expr -> Doc
-printDoLetRec isMut (PVar f _) rhs = match unwrapLams [] rhs
+printDoLetRec isMut (PVar f _ _) rhs = match unwrapLams [] rhs
   ([], body) =>
     Cat
       (text "let rec ")
@@ -1637,7 +1637,7 @@ printDoLetRec isMut pat rhs =
 -- `let [f args] = rhs in body`: one line when it fits, else the body drops one
 -- step below the line-final `in`.
 printELet : Bool -> Pat -> Expr -> Expr -> Doc
-printELet True (PVar f _) rhs e2 = match unwrapLams [] rhs
+printELet True (PVar f _ _) rhs e2 = match unwrapLams [] rhs
   (args, body) =>
     let headD =
       Cat
@@ -1668,7 +1668,7 @@ unwrapLams acc body = (acc, body)
 -- nested `let rec … in` forms.
 letRecInDoc : List LetBind -> Expr -> Doc
 letRecInDoc [] body = printExprBody body
-letRecInDoc ((LetBind name clauses _) :: rest) body =
+letRecInDoc ((LetBind name clauses _ _) :: rest) body =
   let inner = letRecInDoc rest body
   match clauses
     [FunClause pats rhs] =>
@@ -2123,7 +2123,7 @@ letGroupClauses bindings =
 
 clausePieces : List LetBind -> List Piece
 clausePieces [] = []
-clausePieces ((LetBind name clauses _) :: rest) =
+clausePieces ((LetBind name clauses _ _) :: rest) =
   map (c => clausePiece name c) clauses ++ clausePieces rest
 
 clausePiece : String -> FunClause -> Piece
@@ -2410,7 +2410,7 @@ printDecl (DExtern pub n t) =
   Cat
     (valueExportPrefix pub)
     (Cat (text "extern ") (Cat (text n) (Cat (text " : ") (sigTypeDoc t))))
-printDecl (DFunDef pub n pats body _) =
+printDecl (DFunDef pub n pats body _ _) =
   Cat
     (if pub then text "export " else Nil)
     (Cat (defHeader n pats) (printDefRhs body))
@@ -2518,7 +2518,7 @@ letGroupDecl bindings =
 
 letGroupDeclGo : Bool -> List LetBind -> List Doc
 letGroupDeclGo _ [] = []
-letGroupDeclGo first ((LetBind name clauses _) :: rest) =
+letGroupDeclGo first ((LetBind name clauses _ _) :: rest) =
   let r = letGroupBindClauses first name clauses
   match r
     (docs, nextFirst) => docs ++ letGroupDeclGo nextFirst rest

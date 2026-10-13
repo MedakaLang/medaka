@@ -553,6 +553,8 @@ emitter graph still DCEs + reproduces byte-for-byte); `bootstrap_eval` 20/0.
 | E2 | ADT with two Float fields, extracting both: `Rect Float Float; Rect w h => w * h` | `12.` | `12.` | **CLOSED 2026-06-10 (Fix B):** field vars now typed from ctor's DECLARED field types — see Gap E note below |
 | E3 | lambda Float param `(y => y + 1.0) 3.0` | `4.` | `4.` | **CLOSED 2026-06-10 (Fix A)** — lambda params typed via `paramUseTy` |
 
+*Superseded by binder stamps (sprint binders-say-what-they-hold): the static `LTy` recovery described here was deleted; the emitter reads typechecker stamps.*
+
 **Fix target:** `compiler/backend/llvm_emit.mdk` — all three closed. Gap E is the LLVM emitter's static `LTy` recovery guessing too weakly; each fix sources a stronger, DECLARED type into inference rather than relying on body-use.
 
 ---

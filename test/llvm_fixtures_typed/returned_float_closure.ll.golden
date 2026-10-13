@@ -304,52 +304,9 @@ entry:
 }
 
 ; mdk-module program
-define double @mdk___user____mkAdd__fw(double %arg0) {
-entry:
-  %t0 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t0
-  %t1 = getelementptr i8, ptr %t0, i64 8
-  store double %arg0, ptr %t1
-  %t2 = ptrtoint ptr %t0 to i64
-  %t3 = call ptr @mdk_alloc(i64 24)
-  store i64 1, ptr %t3
-  %t4 = getelementptr i8, ptr %t3, i64 8
-  store i64 ptrtoint (ptr @mdk_lam.program.1 to i64), ptr %t4
-  %t5 = getelementptr i8, ptr %t3, i64 16
-  store i64 %t2, ptr %t5
-  %t6 = ptrtoint ptr %t3 to i64
-  %t7 = inttoptr i64 %t6 to ptr
-  %t8 = getelementptr i8, ptr %t7, i64 8
-  %t9 = load double, ptr %t8
-  ret double %t9
-}
-
-; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
 define i64 @mdk_lam.program.0(i64 %clos, i64 %arg0) {
-entry:
-  %t0 = inttoptr i64 %clos to ptr
-  %t1 = getelementptr i8, ptr %t0, i64 16
-  %t2 = load i64, ptr %t1
-  %t3 = inttoptr i64 %arg0 to ptr
-  %t4 = getelementptr i8, ptr %t3, i64 8
-  %t5 = load double, ptr %t4
-  %t6 = inttoptr i64 %t2 to ptr
-  %t7 = getelementptr i8, ptr %t6, i64 8
-  %t8 = load double, ptr %t7
-  %t9 = call double @llvm.arithmetic.fence.f64(double %t5)
-  %t10 = fadd double %t9, %t8
-  %t11 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t11
-  %t12 = getelementptr i8, ptr %t11, i64 8
-  store double %t10, ptr %t12
-  %t13 = ptrtoint ptr %t11 to i64
-  ret i64 %t13
-}
-
-; mdk-module program
-define i64 @mdk_lam.program.1(i64 %clos, i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %clos to ptr
   %t1 = getelementptr i8, ptr %t0, i64 16

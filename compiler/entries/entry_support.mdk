@@ -12,7 +12,7 @@
 import frontend.ast.{Decl(..), Expr(..), DoStmt(..), LetBind(..), Loc(..)}
 import types.typecheck.{TcDiag}
 import frontend.parser.{parse}
-import frontend.desugar.{desugar, mapProg}
+import frontend.desugar.{desugar, desugarIn, mapProg}
 export import support.util.{rootsOrDefault}
 import support.util.{splitLast, startsWith}
 import types.typecheck.{
@@ -194,7 +194,7 @@ driveModulesLocated runEmit = match args ()
 -- be a module cycle.
 export
 desugarPair : (String, List Decl) -> (String, List Decl)
-desugarPair (mid, p) = (mid, desugar p)
+desugarPair (mid, p) = (mid, desugarIn mid p)
 
 -- The loader is the LOCATED one (`parseLocatedResult`, real spans + each
 -- module's path), not `loadProgram`: this driver renders the build's type
@@ -644,16 +644,16 @@ stampModuleFile paths (mid, decls) = match omLookup mid paths
 
 -- A function's first-clause site, which a call no clause accepts reports.
 stampDeclFile : String -> Decl -> Decl
-stampDeclFile path (DFunDef pub n ps e site) =
-  DFunDef pub n ps e (withSiteFile path site)
+stampDeclFile path (DFunDef pub n ps e site bid) =
+  DFunDef pub n ps e (withSiteFile path site) bid
 stampDeclFile path (DLetGroup r binds) =
   DLetGroup r (map (stampBindFile path) binds)
 stampDeclFile path (DAttrib attrs d) = DAttrib attrs (stampDeclFile path d)
 stampDeclFile _ d = d
 
 stampBindFile : String -> LetBind -> LetBind
-stampBindFile path (LetBind n clauses site) =
-  LetBind n clauses (withSiteFile path site)
+stampBindFile path (LetBind n clauses site bid) =
+  LetBind n clauses (withSiteFile path site) bid
 
 stampSiteFile : String -> Expr -> Expr
 stampSiteFile path (ELoc l e) = ELoc (withSiteFile path l) e

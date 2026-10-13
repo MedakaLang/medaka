@@ -12,6 +12,7 @@
 -- against dev/eval_probe.exe (Eval.eval_program ~prelude:false → Eval.pp_value).
 
 import frontend.ast.{
+  noBinderId,
   Loc(..),
   Lit(..),
   Ty(..),
@@ -475,7 +476,7 @@ implMethodReqCountEntry key (ImplMethod mname pats _) =
 -- from a bare method-name signature is ambiguous when unrelated interfaces reuse a
 -- method name, the same collision that makes the canonical alias live.
 leadingImplDictPats : List Pat -> Int
-leadingImplDictPats ((PVar x _) :: rest) =
+leadingImplDictPats ((PVar x _ _) :: rest) =
   if startsWith "$dict" x then 1 + leadingImplDictPats rest else 0
 leadingImplDictPats _ = 0
 
@@ -1007,7 +1008,7 @@ ordGt _ = False
 -- ── pattern matching ──────────────────────────────────────────────────────
 export
 matchPat : Pat -> Value e -> Option (List (String, Value e))
-matchPat (PVar x _) v = Some [(x, v)]
+matchPat (PVar x _ _) v = Some [(x, v)]
 matchPat PWild _ = Some []
 matchPat (PLit (LInt n)) (VInt m) = if n == m then Some [] else None
 matchPat (PLit (LFloat f)) (VFloat g) = if f == g then Some [] else None
@@ -1028,7 +1029,7 @@ matchPat (PTuple pats) (VTuple vals)
 matchPat (PList pats) (VList vals)
   | listLen pats == listLen vals = matchPats pats vals
   | otherwise = None
-matchPat (PAs x _ p) v = matchAs x p v
+matchPat (PAs x _ _ p) v = matchAs x p v
 -- #1462: the constructor is part of the pattern's identity, exactly as in the
 -- `VCon` arm below — a record pattern selects an arm by CONSTRUCTOR first and
 -- by label set second.  Binding the ctor to `_` here made an arm naming only
@@ -1063,7 +1064,7 @@ matchRecFields : List RecPatField ->
   List (String, Value e) ->
   Option (List (String, Value e))
 matchRecFields [] _ = Some []
-matchRecFields ((RecPatField fname _ mp) :: rest) recFields =
+matchRecFields ((RecPatField fname _ _ mp) :: rest) recFields =
   match lookupAssoc fname recFields
     None => None
     Some v => matchRecField fname mp v rest recFields
@@ -1651,7 +1652,7 @@ eval env (EDictAt name ev) =
   applyDicts env (lookupEnv env name) (evDictRoutes ev)
 eval env (app@(EApp _ _)) = evalApp env app
 eval env (ELam pats body) = VClosure env pats body noTrapLoc
-eval env (ELet _ True (PVar f _) e1 e2) = evalRecLet env f e1 e2
+eval env (ELet _ True (PVar f _ _) e1 e2) = evalRecLet env f e1 e2
 eval env (ELet site _ pat e1 e2) = evalLet site env pat e1 e2
 eval env (ELetGroup binds body) = evalLetGroup env binds body
 eval env (EMatch scrut arms) = evalMatch noTrapLoc env (eval env scrut) arms
@@ -2052,7 +2053,8 @@ evalBlock env [DoLet _ _ pat e site] = blockLetLast site env pat e
 evalBlock env ((DoExpr e) :: rest) =
   let _ = eval env e
   evalBlock env rest
-evalBlock env ((DoLet _ True (PVar f _) e _) :: rest) = blockRecLet env f e rest
+evalBlock env ((DoLet _ True (PVar f _ _) e _) :: rest) =
+  blockRecLet env f e rest
 evalBlock env ((DoLet _ _ pat e site) :: rest) = blockLet site env pat e rest
 evalBlock env [DoAssign _ e] =
   let _ = eval env e
@@ -2107,14 +2109,14 @@ evalLetGroup env binds body =
   eval env2 body
 
 letBindCell : LetBind -> (String, Ref (Value e))
-letBindCell (LetBind name _ _) = (name, Ref VUnit)
+letBindCell (LetBind name _ _ _) = (name, Ref VUnit)
 
 installGroup : EvalEnv (Value e) ->
   List (String, Ref (Value e)) ->
   List LetBind ->
   <e> Unit
 installGroup _ _ [] = ()
-installGroup env cells ((LetBind name clauses site) :: rest) =
+installGroup env cells ((LetBind name clauses site _) :: rest) =
   findCell cells name := groupValue env (map (funClauseToClause site) clauses)
   installGroup env cells rest
 
@@ -2439,7 +2441,7 @@ funDefs : List Decl -> List (String, (List Pat, Expr, Loc))
 -- path ([T-PRELUDE-DICT]) and the typed pipeline differences against it — and
 -- this copy also keeps each clause's site.
 funDefs [] = []
-funDefs ((DFunDef _ n pats body site) :: rest) =
+funDefs ((DFunDef _ n pats body site _) :: rest) =
   (n, (pats, body, site)) :: funDefs rest
 -- Top-level `let rec … with …` (DLetGroup): each binding behaves exactly like a
 -- multi-clause DFunDef — flatten to (name, (pats, body, site)) entries so
@@ -2451,7 +2453,7 @@ funDefs (_ :: rest) = funDefs rest
 
 letGroupDefs : List LetBind -> List (String, (List Pat, Expr, Loc))
 letGroupDefs [] = []
-letGroupDefs ((LetBind n clauses site) :: rest) =
+letGroupDefs ((LetBind n clauses site _) :: rest) =
   map (clauseDef n site) clauses ++ letGroupDefs rest
 
 clauseDef : String -> Loc -> FunClause -> (String, (List Pat, Expr, Loc))
@@ -2642,7 +2644,7 @@ implMethodValue env positions [] body
   | otherwise =
     VClosure
       env
-      [PVar "$eta" (Loc "" 0 0 0 0)]
+      [PVar "$eta" (Loc "" 0 0 0 0) noBinderId]
       (EApp body (EVar "$eta"))
       noTrapLoc
 implMethodValue env _ pats body = VClosure env pats body noTrapLoc
@@ -2775,7 +2777,7 @@ sharedDefaultValue : EvalEnv (Value e) ->
   Value e
 sharedDefaultValue env positions pats body mname =
   let nMethod = leadingImplDictPats pats
-  let receiver = PVar (defaultReceiverDict mname) (Loc "" 0 0 0 0)
+  let receiver = PVar (defaultReceiverDict mname) (Loc "" 0 0 0 0) noBinderId
   implMethodValue
     env
     positions
@@ -4340,7 +4342,7 @@ dropShadowed names (d :: rest)
   | otherwise = d :: dropShadowed names rest
 
 shadowedFun : List String -> Decl -> Bool
-shadowedFun names (DFunDef _ n _ _ _) = contains n names
+shadowedFun names (DFunDef _ n _ _ _ _) = contains n names
 shadowedFun _ _ = False
 
 runMainForEffect : List (String, Value e) -> <e> Value e

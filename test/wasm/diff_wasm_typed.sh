@@ -89,8 +89,8 @@ for sym in WGapMode WasmEmit freshWasmEmit emitProgramRecord; do
     exit 1
   }
 done
-has_wasm_pin '| Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput WasmEmit' || {
-  echo "FAIL wasm typed index ratchet: Prog must retain its index fields plus one WasmEmit field"
+has_wasm_pin '| Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput WasmEmit FnCtx' || {
+  echo "FAIL wasm typed index ratchet: Prog must retain its index fields plus WasmEmit and the per-function FnCtx"
   exit 1
 }
 if grep -E '^(strSegsRef|strSegIdRef)[[:space:]]*:' "$WASM_SRC" >/dev/null; then
@@ -109,15 +109,11 @@ fi
 # (every run of spaces/newlines is one space), so `medaka fmt` re-wrapping a
 # long line does not read as the carrier having gone missing.
 for required in \
-  'trmcCtx : Ref WTrmcCtx' \
-  'trmcCtx = Ref WTrmcOff' \
-  'match (progEmit prog).trmcCtx.value' \
-  'let saved = (progEmit prog).trmcCtx.value' \
-  'let _ = setRef (progEmit prog).trmcCtx (WTrmcOn self arity pslots ctorSet isBuiltinList loopLbl exitLbl)' \
-  'let _ = setRef (progEmit prog).trmcCtx saved' \
-  'let savedTrmc = (progEmit prog).trmcCtx.value' \
-  'let _ = setRef (progEmit prog).trmcCtx WTrmcOff' \
-  'let _ = setRef (progEmit prog).trmcCtx savedTrmc'; do
+  'data FnCtx = FnCtx { trmc : WTrmcCtx, disp : WDispCtx, site : Int, binding : String, }' \
+  'freshFnCtx = FnCtx { trmc = WTrmcOff, disp = WDispOff, site = 0, binding = "?" }' \
+  'progInFn prog = progWithFnCtx prog { freshFnCtx | binding = (progFnCtx prog).binding }' \
+  'progWithTrmc ctx prog =' \
+  'progWithDisp ctx prog ='; do
   has_wasm_pin "$required" || {
     echo "FAIL H2B6-WTRMC-CARRIER: missing $required"
     exit 1
@@ -141,28 +137,17 @@ done
   echo "FAIL H2B7-NAMED-WRAPPER-APPARATUS: lambda fixture must use Pair twice"
   exit 1
 }
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'match (progEmit prog).trmcCtx.value' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'match (progFnCtx prog).trmc' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B6-WTRMC-CARRIER: expected exactly two trmc readers"
   exit 1
 }
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let _ = setRef (progEmit prog).trmcCtx WTrmcOff' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let _ = setRef (progEmit prog).trmcCtx savedTrmc' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
-  echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: expected two independent-function clears/restores"
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'progInFn' | wc -l | tr -d '[:space:]')" -ge 4 ] || {
+  echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: independent functions must start from progInFn"
   exit 1
 }
 has_wasm_pin 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: strict, record, census freshness routes changed"
-  exit 1
-}
-# X-W.H: wDispCtx is now a WasmEmit field too (it was the last ambient neighbour of
-# trmcCtx).  Same assertion, re-anchored: the dispatch context is still its OWN carrier
-# with its OWN save/set/restore routes, not folded into trmcCtx.
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let _ = setRef (progEmit prog).wDispCtx WDispOff' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let _ = setRef (progEmit prog).wDispCtx savedDisp' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  has_wasm_pin 'wDispCtx : Ref WDispCtx' &&
-  has_wasm_pin 'wDispCtx = Ref WDispOff' || {
-  echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: nearest-miss wDispCtx carrier/clear routes changed"
   exit 1
 }
 if grep -E '^(lamIdRef|liftedFnsRef|liftedNamesRef|funcRefsRef|liftedNamesSetW|funcRefsSetW)[[:space:]]*[:=]' "$WASM_SRC" >/dev/null; then
@@ -187,7 +172,7 @@ for required in \
   'emitElemDeclare : WasmEmit -> String' \
   'let n = freshLamId (progEmit prog)' \
   'let gid = freshLamId (progEmit prog)' \
-  'addLifted (progEmit prog) (emitLamDefine prog lamName pats captured body)' \
+  'addLifted (progEmit prog) (emitLamDefine prog lamName pats captured (envMarksOf captured env) body)' \
   'addLifted (progEmit prog) def' \
   'let lifted = if progUseClos prog then flatMap (x => x) (reverseL (progEmit prog).liftedDefinitions.value) else []' \
   'let names = "$mdk_pap" :: reverseL !emit.functionReferences' \
@@ -741,12 +726,12 @@ has_wasm_pin 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) 
   exit 1
 }
 for required in \
-  'currentBinding : Ref String' \
-  'currentBinding = Ref "?"' \
-  'currentBindingOfW : WasmEmit -> String' \
-  'currentBindingOfW emit = !emit.currentBinding' \
-  'setCurrentBindingOfW : WasmEmit -> String -> Unit' \
-  'setCurrentBindingOfW emit name = setRef emit.currentBinding name'; do
+  'site : Int, binding : String, }' \
+  'freshFnCtx = FnCtx { trmc = WTrmcOff, disp = WDispOff, site = 0, binding = "?" }' \
+  'progBinding : Prog -> String' \
+  'progBinding prog = (progFnCtx prog).binding' \
+  'progForBinding : String -> Int -> Prog -> Prog' \
+  'progForBinding name site prog = progWithFnCtx prog { freshFnCtx | site = site, binding = name }'; do
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F -- "$required" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
     echo "FAIL H2B5-CARRIER: missing $required"
     exit 1
@@ -756,27 +741,30 @@ if grep -E '^curBindRef[[:space:]]*[:=]' "$WASM_SRC" >/dev/null; then
   echo "FAIL H2B5-AUTHORITY-SET: retired current-binding authority remains ambient"
   exit 1
 fi
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setCurrentBindingOfW (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
-  echo "FAIL H2B5-ROUTES: expected exactly two current-binding setter call sites"
+if grep -E 'currentBinding|CurrentBindingOfW' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B5-AUTHORITY-SET: retired WasmEmit current-binding cell remains"
+  exit 1
+fi
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'progForBinding ' | wc -l | tr -d '[:space:]')" -eq 4 ] || {
+  echo "FAIL H2B5-ROUTES: expected exactly two progForBinding call sites (plus signature and definition)"
   exit 1
 }
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'currentBindingOfW (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '++ currentBindingOfW emit ++' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'currentBindingOfW' | wc -l | tr -d '[:space:]')" -eq 5 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setCurrentBindingOfW' | wc -l | tr -d '[:space:]')" -eq 4 ] || {
-  echo "FAIL H2B5-ROUTES: expected exactly three current-binding getter call sites"
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'in \{progBinding prog}]' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'progBinding' | wc -l | tr -d '[:space:]')" -eq 4 ] || {
+  echo "FAIL H2B5-ROUTES: expected exactly two current-binding reader sites"
   exit 1
 }
-has_wasm_pin 'patName emit _ =' &&
-  has_wasm_pin 'currentBindingOfW emit ++ "]")' || {
-  echo "FAIL H2B5-PATNAME-STRUCTURAL: patName fallback is not routed through WasmEmit"
+has_wasm_pin 'patName emit binding _ =' &&
+  has_wasm_pin '++ binding ++ "]")' &&
+  has_wasm_pin 'map (patName emit name) pats' || {
+  echo "FAIL H2B5-PATNAME-STRUCTURAL: patName fallback is not routed through the explicit binding name"
   exit 1
 }
-if grep -E 'let (saved|old|prior|previous)[A-Za-z0-9_]*[[:space:]]*=[[:space:]]*currentBindingOfW|setCurrentBindingOfW.*(saved|old|prior|previous)' "$WASM_SRC" >/dev/null; then
+if grep -E 'let (saved|old|prior|previous)[A-Za-z0-9_]*[[:space:]]*=[[:space:]]*progBinding|setRef emit\.[a-zA-Z]*[bB]inding[A-Za-z]* ' "$WASM_SRC" >/dev/null; then
   echo "FAIL H2B5-NO-RESTORE: current-binding save/restore is forbidden"
   exit 1
 fi
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'emit.currentBinding' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progFnCtx prog).binding' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B5-NO-RESTORE: current-binding alias/reset/restore route added"
   exit 1
 }
@@ -792,7 +780,7 @@ for required in \
   'reverseL !emit.stringSegments' \
   'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' \
   'emitProgramRecord input cp =' \
-  'emitProgramGaps input (CProgram groups ctorArs ctorTypes impls mctx facts) =' \
+  'emitProgramGaps input cp0 =' \
   'let emit = freshWasmEmit WGapRecord' \
   'let dataSegs = emitDataSegs (progEmit prog)' \
   'emitRefExpr prog env d (CLit l) = emitLitRef (progEmit prog) l'; do
@@ -1026,7 +1014,8 @@ run_trmc_state_check() {
   done
   [ "$(wc -l < "$INPUT_WORK/trmc-census.events")" -eq 1 ] &&
     grep -F $'val trmcIntentionalGap\tunbound variable '\''missingTrmcCensus' "$INPUT_WORK/trmc-census.events" >/dev/null &&
-    grep -F '[in pTrmc]' "$INPUT_WORK/trmc-census.events" >/dev/null || {
+    grep -F '[in ?]' "$INPUT_WORK/trmc-census.events" >/dev/null &&
+    ! grep -F '[in pTrmc]' "$INPUT_WORK/trmc-census.events" >/dev/null || {
       echo "FAIL H2B6-WTRMC-P-SHAPE: census gap attribution"
       exit 1
     }
@@ -1106,11 +1095,11 @@ for required in \
   'synthBind "defaultRequestOne"' \
   'synthBind "defaultRequestTwo"' \
   'defaultStateCensusProgramU : CProgram' \
-  'synthBind "defaultRequestOne" [CClause [PVar "one" defaultStateLoc] (defaultStateCall "UDefault")]' \
-  'synthBind "defaultRequestTwo" [CClause [PVar "two" defaultStateLoc] (defaultStateCall "UDefault")]' \
+  'synthBind "defaultRequestOne" [CClause [PVar "one" defaultStateLoc noBinderId] (defaultStateCall "UDefault")]' \
+  'synthBind "defaultRequestTwo" [CClause [PVar "two" defaultStateLoc noBinderId] (defaultStateCall "UDefault")]' \
   'synthBind "defaultCensusGap" [CClause [] (CVar "missingDefaultCensus" AGlobal)]' \
   'synthBind "main" [CClause [] (CLit (LInt 0))]' \
-  'CImplEntry "synthDefault" 0 1 (CImplDefault "DefaultFace" "UDefault" "DefaultFace|UDefault|" noImplSym [] [PVar "$dict_synthDefault_0" defaultStateLoc, PVar "value" defaultStateLoc] (CLit (LInt 29)))'; do
+  'CImplEntry "synthDefault" 0 1 (CImplDefault "DefaultFace" "UDefault" "DefaultFace|UDefault|" noImplSym [] [PVar "$dict_synthDefault_0" defaultStateLoc noBinderId, PVar "value" defaultStateLoc noBinderId] (CLit (LInt 29)))'; do
   has_typed_pin "$required" || {
     echo "FAIL H2B4-DEFAULT-DEFS: default-state harness is missing $required"
     exit 1
@@ -2015,7 +2004,7 @@ cbind_exact_events() {
 cbind_abort_row top H2B5-TOP-EXACT CBIND_TOP_STRICT '' P 'fn P'
 cbind_abort_row lifted H2B5-LIFT-EXACT CBIND_LIFT_STRICT '' 'lg:P' 'fn outer'
 cbind_abort_row no-writer H2B5-NOWRITER-EXACT CBIND_NOWRITER_STRICT $'CBIND_NOWRITER_SETUP_WAT_BEGIN\nCBIND_NOWRITER_SETUP_WAT_END\nCBIND_NOWRITER_SETUP_OK' '?' 'val P'
-cbind_abort_row post-lift H2B5-POSTLIFT-EXACT CBIND_POSTLIFT_STRICT '' 'lg:L' 'fn P'
+cbind_abort_row post-lift H2B5-POSTLIFT-EXACT CBIND_POSTLIFT_STRICT '' P 'fn P'
 
 "$EMITBIN" --capture-current-binding malformed >"$INPUT_WORK/cbind-malformed.out" 2>"$INPUT_WORK/cbind-malformed.err"
 CBIND_MALFORMED_STATUS=$?
@@ -2113,7 +2102,7 @@ REEMIT_OUT="$($EMITBIN --reemit-input "$RUNTIME" "$INPUT_WORK/p.mdk" "$INPUT_WOR
   echo "FAIL wasm typed same-process input harness"
   exit 1
 }
-REEMIT_EXPECTED="$(printf 'P_EQ_PLAST\nP_EQ_METHOD\nP_NE_SIG\nP_NE_CTOR\nP_NE_MAIN\nP_EQ_RECORD')"
+REEMIT_EXPECTED="$(printf 'P_EQ_PLAST\nP_EQ_METHOD\nP_NE_CTOR\nP_NE_MAIN\nP_EQ_RECORD')"
 [ "$REEMIT_OUT" = "$REEMIT_EXPECTED" ] || {
   echo "FAIL wasm typed input isolation: an explicit field did not discriminate: $REEMIT_OUT"
   exit 1

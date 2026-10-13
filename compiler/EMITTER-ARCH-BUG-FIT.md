@@ -76,7 +76,7 @@ ones, mapped to the target document's R4 fact ledger:
 | F2 call mode | #2078; #2396 (garbage pointer through a constrained generic wrapper); #2425's Wasm realization (invalid module for a point-free partial application of an interface method) |
 | F3 identity on dispatch nodes | emitted-symbol half of #1397; #1619; #2055; #1852; #1973; the symbol-keying half of #1265; #2575/#2576 (where-bound local shadowing a prelude or top-level name, native only: `CVar` local-versus-global identity, same family) |
 | F4 tail sites | #1349, #2577 |
-| F5 runtime types | #2545 (`paramUseTy` ignores shadowed binders, native segfault) |
+| F5 runtime types (landed 2026-10-12, sprint binders-say-what-they-hold) | #2545 (`paramUseTy` ignores shadowed binders, native segfault): `paramUseTy` is deleted and facts are keyed by `BinderId`; #4035 (wasm shadowed binders) |
 | F6 evidence and dispositions (#3966; unblocked 2026-10-10) | none open: #1068, #1020, #1046 and the route half of #1265 closed 2026-09-27 (M-EVIDENCE, PR #3480) |
 | F7 capability manifest | #2426 (`sleepMs` has no WasmGC host import, bare trap) |
 | R5 plan record | #2312 (needs-repro; the two topo-sort dedups), #1030/#1061-class reach and index duplication |

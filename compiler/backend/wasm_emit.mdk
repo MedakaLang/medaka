@@ -127,9 +127,9 @@
 --     rendering the LLVM oracle bakes into its const — shortest-round-trip since #57,
 --     NOT `%.12g`, see wasm_preamble.mdk's W8b Float section — so the parsed double is
 --     byte-identical across clang and wasm-tools).  pi/e likewise.
---   * Float ARITHMETIC / COMPARISON — recovered STRUCTURALLY (Core IR is type-erased)
---     via `cexprIsFloat`: a Float lit / pi/e / Float-returning extern / Float binop /
---     a Float-impl param (the impl tag drives `floatLocals`).  Unbox→f64 op→rebox
+--   * Float ARITHMETIC / COMPARISON — read off the binder stamps (Core carries each
+--     binder's runtime type) via `cexprIsFloat`: a Float lit / pi/e / Float-returning
+--     extern or function / Float binop / a variable stamped Float.  Unbox→f64 op→rebox
 --     (arith) or →i31 Bool (compare).  Unary `-` → f64.neg.
 --   * Float EXTERNS — intToFloat/floatToInt/hashFloat/randomFloat are pure WAT (the
 --     boxed-Float conversions; hashFloat = reinterpret+mix64; randomFloat = SplitMix64
@@ -186,6 +186,8 @@
 -- on the stack is always `(ref eq)`; in scalar-mode it is i32.
 
 import frontend.ast.{
+  noBinderId,
+  BinderId(..),
   Lit(..),
   Pat(..),
   Addr(..),
@@ -198,6 +200,8 @@ import frontend.ast.{
 }
 import ir.core_ir.{
   CProgram(..),
+  DeclFacts(..),
+  litRuntimeType,
   noDeclFacts,
   CBind(..),
   CClause(..),
@@ -221,6 +225,7 @@ import ir.core_ir.{
   siteSentinelName,
 }
 import list.{replicate, take, drop}
+import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import backend.extern_catalog.{
   WasmFamily(..),
   WasmUse(..),
@@ -243,6 +248,8 @@ import backend.core_validate.{
   validateDispatchEvidence,
   validateTails,
   validateRecords,
+  validateBinderStamps,
+  renderBinderRefusal,
   unrefusedExternMessage,
   withheldExternNote,
   checkedTarget,
@@ -409,13 +416,11 @@ data WasmEmit = WasmEmit {
   gapMode : WGapMode,
   gapLog : Ref (List String),
   curGapBind : Ref String,
-  currentBinding : Ref String,
   stringSegments : Ref (List (Int, List Int)),
   nextStringSegmentId : Ref Int,
   -- the segment of each distinct literal payload, keyed by `strSegKey` (an OrdMap,
   -- so a lookup is O(log n)).  `freshStrSeg` consults it before allocating.
   strSegIds : Ref (OrdMap Int),
-  trmcCtx : Ref WTrmcCtx,
   nextLambdaId : Ref Int,
   liftedDefinitions : Ref (List (List String)),
   liftedDefinitionNames : Ref (OrdMap Unit),
@@ -444,8 +449,6 @@ data WasmEmit = WasmEmit {
   -- See `trapMsgCall`.
   trapMsgIds : Ref (OrdMap Int),
   trapMsgFns : Ref (List String),
-  -- the first-clause site of the function whose clauses are being emitted
-  clauseSite : Ref Int,
   -- the checked `Int` operators and `Int` shifts this emission called, by helper
   -- name (`add`, `left`, ...), for `intRuntimeLines` (wasm_preamble.mdk).
   intRtUsed : Ref (List String),
@@ -490,16 +493,7 @@ data WasmEmit = WasmEmit {
   useStrReverse : Ref Bool,
   useStrJoin : Ref Bool,
   tupleArities : Ref (List Int),
-  floatGlobals : Ref (List String),
   wDispGroups : Ref (List DispGroup),
-  -- FUNCTION-lifetime dynamic contexts, seeded and restored around each body
-  -- (emitRefFnBind, emitImplGroup, emitLamDefine, seedArmNumEnv/…).  They live
-  -- here for the same reason trmcCtx does: a fresh WasmEmit bounds
-  -- them to ONE emission, while the existing save/restore discipline keeps
-  -- their narrower per-body scope.
-  floatLocals : Ref (List String),
-  numPolyLocals : Ref (List String),
-  wDispCtx : Ref WDispCtx,
   -- the W7 scratch locals (`__rli2`, ...) the function being emitted references;
   -- see w7ScopeOpen.
   w7Used : Ref (OrdMap Unit),
@@ -510,11 +504,9 @@ freshWasmEmit mode = WasmEmit {
   gapMode = mode,
   gapLog = Ref [],
   curGapBind = Ref "?",
-  currentBinding = Ref "?",
   stringSegments = Ref [],
   nextStringSegmentId = Ref 0,
   strSegIds = Ref omEmpty,
-  trmcCtx = Ref WTrmcOff,
   nextLambdaId = Ref 0,
   liftedDefinitions = Ref [],
   liftedDefinitionNames = Ref omEmpty,
@@ -531,7 +523,6 @@ freshWasmEmit mode = WasmEmit {
   siteNonexhUsed = Ref False,
   trapMsgIds = Ref omEmpty,
   trapMsgFns = Ref [],
-  clauseSite = Ref 0,
   intRtUsed = Ref [],
   useEPut = Ref False,
   useDivGuard = Ref False,
@@ -569,11 +560,7 @@ freshWasmEmit mode = WasmEmit {
   useStrReverse = Ref False,
   useStrJoin = Ref False,
   tupleArities = Ref [],
-  floatGlobals = Ref [],
   wDispGroups = Ref [],
-  floatLocals = Ref [],
-  numPolyLocals = Ref [],
-  wDispCtx = Ref WDispOff,
   w7Used = Ref omEmpty,
 }
 
@@ -581,7 +568,7 @@ freshWasmEmit mode = WasmEmit {
 -- table is required; indexes preserve lookupAssoc's first-match result.  The
 -- last field is the `stdlib/runtime.mdk` extern names (`withRuntimeExternsW`).
 data WasmEmitInputData =
-  | WasmEmitInputData (List (String, (List String, String))) (OrdMap (List String, String)) (List (String, List String)) (OrdMap (List Int)) Bool (OrdMap (List String, String)) Bool (List String)
+  | WasmEmitInputData (List (String, List String)) (OrdMap (List Int)) Bool (OrdMap (List String, String)) Bool (List String)
 
 export type WasmEmitInput = WasmEmitInputData
 
@@ -590,15 +577,13 @@ export type WasmEmitInput = WasmEmitInputData
 -- `makeWasmEmitInputFull` instead.
 export
 makeWasmEmitInput : List (String, (String, String, Int)) ->
-  List (String, (List String, String)) ->
   List (String, List String) ->
   Bool ->
   List (String, List String) ->
   WasmEmitInput
-makeWasmEmitInput methodIfaces declSigTypes ctorFieldTypes mainIsFloat recordFieldOrders =
+makeWasmEmitInput methodIfaces ctorFieldTypes mainIsFloat recordFieldOrders =
   makeWasmEmitInputFull
     methodIfaces
-    declSigTypes
     ctorFieldTypes
     mainIsFloat
     False
@@ -618,17 +603,14 @@ makeWasmEmitInput methodIfaces declSigTypes ctorFieldTypes mainIsFloat recordFie
 -- the 5-argument `makeWasmEmitInput` above.
 export
 makeWasmEmitInputFull : List (String, (String, String, Int)) ->
-  List (String, (List String, String)) ->
   List (String, List String) ->
   Bool ->
   Bool ->
   List (String, List String) ->
   List (String, (List String, String)) ->
   WasmEmitInput
-makeWasmEmitInputFull _ declSigTypes ctorFieldTypes mainIsFloat mainIsUnit recordFieldOrders ffiExternTypes =
+makeWasmEmitInputFull _ ctorFieldTypes mainIsFloat mainIsUnit recordFieldOrders ffiExternTypes =
   WasmEmitInputData
-    declSigTypes
-    (omFromPairs (reverseL declSigTypes) omEmpty)
     ctorFieldTypes
     (omFromPairs (reverseL (map ctorToFloatIdxs ctorFieldTypes)) omEmpty)
     mainIsFloat
@@ -641,19 +623,19 @@ makeWasmEmitInputFull _ declSigTypes ctorFieldTypes mainIsFloat mainIsUnit recor
 -- has no catalog row; an input built without them checks none.
 export
 withRuntimeExternsW : List String -> WasmEmitInput -> WasmEmitInput
-withRuntimeExternsW names (WasmEmitInputData c d e f g l m _) =
-  WasmEmitInputData c d e f g l m names
+withRuntimeExternsW names (WasmEmitInputData c d e f g _) =
+  WasmEmitInputData c d e f g names
 
 inputRuntimeExternsW : WasmEmitInput -> List String
-inputRuntimeExternsW (WasmEmitInputData _ _ _ _ _ _ _ names) = names
+inputRuntimeExternsW (WasmEmitInputData _ _ _ _ _ names) = names
 
 inputMainIsFloat : WasmEmitInput -> Bool
-inputMainIsFloat (WasmEmitInputData _ _ _ _ isFloat _ _ _) = isFloat
+inputMainIsFloat (WasmEmitInputData _ _ isFloat _ _ _) = isFloat
 
 -- The typechecker's verdict that `main` is Unit; False when the entry has no
 -- typechecked program to ask, leaving the structural `mainBodyIsUnit` guess.
 inputMainIsUnit : WasmEmitInput -> Bool
-inputMainIsUnit (WasmEmitInputData _ _ _ _ _ _ isUnit _) = isUnit
+inputMainIsUnit (WasmEmitInputData _ _ _ _ isUnit _) = isUnit
 
 -- ── program info threaded through the ref-mode emitter ───────────────────────
 -- WasmProgramIndex owns the declaration-derived function, value, constructor,
@@ -679,33 +661,108 @@ data WasmCtorIndex = WasmCtorIndex {
   typeCtors : OrdMap (List String),
 }
 
+-- The program's binder table (`DeclFacts.factBinders`): every row by the
+-- ordinal of its id (printed, so an env entry can name a row without parsing),
+-- and the row of each top-level binding by its name.
+data WasmStamps = WasmStamps {
+  rows : OrdMap BinderRow,
+  tops : OrdMap BinderRow,
+}
+
 data WasmProgramIndex = WasmProgramIndex {
   fnImpl : WasmFnImplIndex,
   recordValue : WasmRecordValueIndex,
   ctor : WasmCtorIndex,
+  stamps : WasmStamps,
 }
 
+makeWasmStamps : List CBind -> List BinderRow -> WasmStamps
+makeWasmStamps groups binderRows =
+  let rows =
+    omFromPairs
+      (reverseL (map (r => (intToString (binderOrdinal r.brId), r)) binderRows))
+      omEmpty
+  WasmStamps {
+    rows = rows,
+    tops = omFromPairs (reverseL (flatMap (topRow rows) groups)) omEmpty,
+  }
+
+topRow : OrdMap BinderRow -> CBind -> List (String, BinderRow)
+topRow rows (CBind name _ _ bid) =
+  match omLookup (intToString (binderOrdinal bid)) rows
+    Some row => [(name, row)]
+    None => []
+
 data Prog =
-  | Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput WasmEmit
+  | Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput WasmEmit FnCtx
+
+-- What is true of the ONE function whose body is being emitted: the TMC loop
+-- or dispatch-group context its tail leaves redirect to, its first-clause site
+-- (packed by `sitePackedW`, 0 for none), and the binding name its gap messages
+-- cite.  It is a value of the `Prog` the body is emitted with, never a cell: a
+-- function that needs a different context emits its body with a derived `Prog`
+-- (`progInFn`, `progForBinding`, `progWithTrmc`, `progWithDisp`), so there is no
+-- state to restore, and a lifted lambda or let-group member starts without its
+-- encloser's TMC loop, dispatch group or clause site however it was reached.  A
+-- lifted lambda keeps citing its encloser's binding name.
+data FnCtx = FnCtx {
+  trmc : WTrmcCtx,
+  disp : WDispCtx,
+  site : Int,
+  binding : String,
+}
+
+freshFnCtx : FnCtx
+freshFnCtx = FnCtx { trmc = WTrmcOff, disp = WDispOff, site = 0, binding = "?" }
 
 progValNames : Prog -> List String
-progValNames (Prog _ _ vals _ _ _ _) = vals
+progValNames (Prog _ _ vals _ _ _ _ _) = vals
 
 progUseClos : Prog -> Bool
-progUseClos (Prog _ _ _ uc _ _ _) = uc
+progUseClos (Prog _ _ _ uc _ _ _ _) = uc
 
 -- W5: the lowered typeclass impl entries (CProgram's 4th field).
 progImpls : Prog -> List CImplEntry
-progImpls (Prog _ _ _ _ impls _ _) = impls
+progImpls (Prog _ _ _ _ impls _ _ _) = impls
 
 progInput : Prog -> WasmEmitInput
-progInput (Prog _ _ _ _ _ input _) = input
+progInput (Prog _ _ _ _ _ input _ _) = input
 
 progIndex : Prog -> WasmProgramIndex
-progIndex (Prog index _ _ _ _ _ _) = index
+progIndex (Prog index _ _ _ _ _ _ _) = index
 
 progEmit : Prog -> WasmEmit
-progEmit (Prog _ _ _ _ _ _ emit) = emit
+progEmit (Prog _ _ _ _ _ _ emit _) = emit
+
+progFnCtx : Prog -> FnCtx
+progFnCtx (Prog _ _ _ _ _ _ _ fn) = fn
+
+-- [prog] for emitting the body of another function: no TMC loop, no dispatch
+-- group, no clause site; the binding name is inherited.
+progInFn : Prog -> Prog
+progInFn prog =
+  progWithFnCtx prog { freshFnCtx | binding = (progFnCtx prog).binding }
+
+-- [progInFn prog] for the binding [name] whose first clause is at [site].
+progForBinding : String -> Int -> Prog -> Prog
+progForBinding name site prog =
+  progWithFnCtx prog { freshFnCtx | site = site, binding = name }
+
+-- The binding name the body being emitted with [prog] cites in a gap message.
+progBinding : Prog -> String
+progBinding prog = (progFnCtx prog).binding
+
+-- [prog] with [ctx] as the Stage-1 TMC loop context of the body about to be emitted.
+progWithTrmc : WTrmcCtx -> Prog -> Prog
+progWithTrmc ctx prog = progWithFnCtx prog { progFnCtx prog | trmc = ctx }
+
+-- [prog] with [ctx] as the dispatch-group context of the body about to be emitted.
+progWithDisp : WDispCtx -> Prog -> Prog
+progWithDisp ctx prog = progWithFnCtx prog { progFnCtx prog | disp = ctx }
+
+progWithFnCtx : Prog -> FnCtx -> Prog
+progWithFnCtx (Prog index types vals uc impls input emit _) fn =
+  Prog index types vals uc impls input emit fn
 
 indexFnNamesW : WasmProgramIndex -> OrdMap Unit
 indexFnNamesW index = index.fnImpl.fnNames
@@ -775,11 +832,6 @@ narrowByIfaceW "" entries = entries
 narrowByIfaceW iface entries =
   filterList (ent => implEntryIfaceWordW ent == iface) entries
 
--- Declared parameter/return type heads drive Unit-main and Float recovery.
-declRetLookupW : Prog -> String -> Option (List String, String)
-declRetLookupW prog name = match progInput prog
-  WasmEmitInputData _ declIndex _ _ _ _ _ _ => omLookup name declIndex
-
 -- #2076: the wasm peer of `llvm_emit.mdk`'s `ffiSigOf`/`isFfiExtern` — is `name`
 -- a USER-declared FFI extern?  Built from `makeWasmEmitInputFull`'s
 -- `ffiExternTypes` (empty for every other caller of `makeWasmEmitInput`, so this
@@ -790,7 +842,7 @@ declRetLookupW prog name = match progInput prog
 -- a generic unbound-variable panic.
 ffiSigOfW : Prog -> String -> Option (List String, String)
 ffiSigOfW prog name = match progInput prog
-  WasmEmitInputData _ _ _ _ _ ffiIndex _ _ => omLookup name ffiIndex
+  WasmEmitInputData _ _ _ ffiIndex _ _ => omLookup name ffiIndex
 
 isFfiExternW : Prog -> String -> Bool
 isFfiExternW prog name = match ffiSigOfW prog name
@@ -808,26 +860,6 @@ ffiWallW prog name =
     Some t =>
       gapLP prog "\{wall}; \{withheldExternNote WasmBackend name ["FFI"] t}"
     None => gapLP prog "\{wall}. Build for a native target instead."
-
-declRetTypeOf : Prog -> String -> String
-declRetTypeOf prog name = match declRetLookupW prog name
-  Some (_, ret) => ret
-  None => ""
-
-declParamTypesOf : Prog -> String -> List String
-declParamTypesOf prog name = match declRetLookupW prog name
-  Some (ps, _) => ps
-  None => []
-
--- W-SQLITE-4 (float-return registry): does this fn's DECLARED signature return a
--- Float?  Consulted by `cexprIsFloat`'s CApp arm so Float arithmetic at a call to a
--- user fn returning Float (`acc + cellNumF c`, `cellNumF : Cell -> Float`) is
--- recognized even with no co-located Float literal — the analog of the native
--- emitter's `declRetLTy`.  Additive: an unknown/Int-returning fn stays the Int path.
-fnReturnsFloat : Prog -> String -> Bool
-fnReturnsFloat prog name = match declRetLookupW prog name
-  Some (_, ret) => ret == "Float"
-  None => False
 
 progFnMemberW : Prog -> String -> Bool
 progFnMemberW prog n = omHasKey n (indexFnNamesW (progIndex prog))
@@ -870,6 +902,7 @@ groupImplsByMethodW entries =
   omMapValues reverseL (foldImplsByMethodW entries omEmpty)
 
 makeWasmProgramIndex : WasmEmitInput ->
+  List BinderRow ->
   List CBind ->
   List (String, Int) ->
   List (String, String) ->
@@ -877,8 +910,9 @@ makeWasmProgramIndex : WasmEmitInput ->
   List String ->
   List String ->
   WasmProgramIndex
-makeWasmProgramIndex _ groups ctorArs ctorTypes impls fnNames valNames =
+makeWasmProgramIndex _ binderRows groups ctorArs ctorTypes impls fnNames valNames =
   makeWasmProgramIndexWithLazy
+    binderRows
     groups
     ctorArs
     ctorTypes
@@ -888,6 +922,7 @@ makeWasmProgramIndex _ groups ctorArs ctorTypes impls fnNames valNames =
     (lazyGlobalNames groups)
 
 makeWasmProgramIndexGaps : WasmEmitInput ->
+  List BinderRow ->
   List CBind ->
   List (String, Int) ->
   List (String, String) ->
@@ -895,8 +930,9 @@ makeWasmProgramIndexGaps : WasmEmitInput ->
   List String ->
   List String ->
   WasmProgramIndex
-makeWasmProgramIndexGaps _ groups ctorArs ctorTypes impls fnNames valNames =
+makeWasmProgramIndexGaps _ binderRows groups ctorArs ctorTypes impls fnNames valNames =
   makeWasmProgramIndexWithLazy
+    binderRows
     groups
     ctorArs
     ctorTypes
@@ -905,7 +941,8 @@ makeWasmProgramIndexGaps _ groups ctorArs ctorTypes impls fnNames valNames =
     valNames
     []
 
-makeWasmProgramIndexWithLazy : List CBind ->
+makeWasmProgramIndexWithLazy : List BinderRow ->
+  List CBind ->
   List (String, Int) ->
   List (String, String) ->
   List CImplEntry ->
@@ -913,7 +950,7 @@ makeWasmProgramIndexWithLazy : List CBind ->
   List String ->
   List String ->
   WasmProgramIndex
-makeWasmProgramIndexWithLazy groups ctorArs ctorTypes impls fnNames valNames lazyNames =
+makeWasmProgramIndexWithLazy binderRows groups ctorArs ctorTypes impls fnNames valNames lazyNames =
   let fnIndex = omFromNames fnNames omEmpty
   let valIndex = omFromNames valNames omEmpty
   let ctorArIndex = omFromPairs (reverseL ctorArs) omEmpty
@@ -942,6 +979,7 @@ makeWasmProgramIndexWithLazy groups ctorArs ctorTypes impls fnNames valNames laz
       ordinals = ctorOrds,
       typeCtors = typeCtors,
     },
+    stamps = makeWasmStamps groups binderRows,
   }
 
 foldImplsByMethodW : List CImplEntry ->
@@ -1029,12 +1067,6 @@ gapEventsOfW emit = reverseL !emit.gapLog
 
 setGapBindingOfW : WasmEmit -> String -> Unit
 setGapBindingOfW emit name = setRef emit.curGapBind name
-
-currentBindingOfW : WasmEmit -> String
-currentBindingOfW emit = !emit.currentBinding
-
-setCurrentBindingOfW : WasmEmit -> String -> Unit
-setCurrentBindingOfW emit name = setRef emit.currentBinding name
 
 noteGapW : WasmEmit -> String -> Unit
 noteGapW emit reason = noteGapAtW emit !emit.curGapBind reason
@@ -1173,7 +1205,7 @@ isLazyGlobalW prog x = omHasKey x (indexLazyGlobalsW (progIndex prog))
 
 -- A0/A1 (poly-`Num`-on-Float): the program routes an arithmetic binop through the
 -- runtime value-tag-dispatched $mdk_value_add/sub/mul/div/mod helpers (a polymorphic
--- `Num a` operand — see numPolyLocals).  Gates valueArithRuntimeLines.
+-- `Num a` operand — see isPolyNumOperand).  Gates valueArithRuntimeLines.
 -- A1 (poly-`Num`-on-Float): the pattern-var names bound at the CURRENT function's
 -- POLYMORPHIC `Num`/`Ord` param positions — a param whose declared type head is a type
 -- VARIABLE (lowercase-initial) used arithmetically, OR (no declared sig) any param used
@@ -1194,7 +1226,7 @@ isLazyGlobalW prog x = omHasKey x (indexLazyGlobalsW (progIndex prog))
 -- runtime-dispatched path.  Seeding these names (in emitRefProgram, before any body
 -- emission) lets `cexprIsFloat` recognize the operand as Float so the comparison
 -- lowers to inline `f64.le`/`f64.ge` (IEEE-correct, NaN → False), mirroring native's
--- `staticIsFloat`-reads-the-global fcmp path.
+-- fcmp on a global whose stamp is Float.
 -- (#305: the poly path is IEEE-correct at NaN too now — ordering there calls the
 -- per-op $mdk_value_lt/le/gt/ge rather than comparing a 3-way against 0 — so this
 -- seeding is a code-quality win (inline f64, no call), no longer a correctness fix.)
@@ -1211,7 +1243,7 @@ floatFieldIndices (_ :: rest) i = floatFieldIndices rest (i + 1)
 -- true iff the ctor's field at the given 0-based index has declared type Float.
 isFloatCtorField : Prog -> String -> Int -> Bool
 isFloatCtorField prog ctor idx = match progInput prog
-  WasmEmitInputData _ _ _ ctorFloatIndex _ _ _ _ =>
+  WasmEmitInputData _ ctorFloatIndex _ _ _ _ =>
     match omLookup ctor ctorFloatIndex
       Some idxs => containsInt idx idxs
       None => False
@@ -1356,8 +1388,8 @@ emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp
 -- The X-W.H1/H2 same-process input/state-isolation harnesses (`reemitInput` and
 -- peers, compiler/entries/wasm_emit_typed_main.mdk) deliberately re-emit ONE
 -- lowered `CProgram` under MISMATCHED `WasmEmitInput` fields (P's real program
--- with U's sig/ctor/method/mainIsFloat table) specifically to prove each field
--- independently influences the physical plan (`P_NE_SIG` etc). Such a
+-- with U's ctor/method/mainIsFloat table) specifically to prove each field
+-- independently influences the physical plan (`P_NE_CTOR` etc). Such a
 -- combination never occurs in a real compile (there sigs/ctors/methods/
 -- mainIsFloat are always derived from the SAME decls as the program), can
 -- legitimately desync a gating decision that reads the mismatched table (e.g.
@@ -1402,6 +1434,9 @@ refuseUnprovidedExternsW emit input cp =
   let _ = match validateRecords cp
     [] => ()
     bad => panic ("internal error: " ++ renderRecordRefusal bad)
+  let _ = match validateBinderStamps cp
+    [] => ()
+    bad => panic ("internal error: " ++ renderBinderRefusal bad)
   let badCalls =
     validateCalls cp
       ++ validateImplSymbols cp
@@ -1423,7 +1458,10 @@ refuseUnprovidedExternsW emit input cp =
           findings
 
 emitProgramCore : WasmEmit -> WasmEmitInput -> CProgram -> String
-emitProgramCore emit input (cp@(CProgram groups ctorArs ctorTypes impls _ _)) =
+emitProgramCore emit input cp = emitUniqueProgram emit input (uniqueBinders cp)
+
+emitUniqueProgram : WasmEmit -> WasmEmitInput -> CProgram -> String
+emitUniqueProgram emit input (cp@(CProgram groups ctorArs ctorTypes impls _ facts)) =
   let _ = refuseUnprovidedExternsW emit input cp
   let _ = setRef emit.useStr (programUsesStr groups)
   -- W7: scan the program for collection usage (gates type-section decls + forces
@@ -1439,7 +1477,15 @@ emitProgramCore emit input (cp@(CProgram groups ctorArs ctorTypes impls _ _)) =
   let fnNames = collectFnNames groups
   let valNames = collectValNames groups
   let index =
-    makeWasmProgramIndex input groups ctorArs ctorTypes impls fnNames valNames
+    makeWasmProgramIndex
+      input
+      facts.factBinders
+      groups
+      ctorArs
+      ctorTypes
+      impls
+      fnNames
+      valNames
   let useClos = programUsesClosures index groups ctorArs
   -- closures force the uniform (ref eq) rep (a closure captures heterogeneous
   -- values); so does ANY dispatch — an impl method / method occurrence threads
@@ -1465,7 +1511,7 @@ emitProgramCore emit input (cp@(CProgram groups ctorArs ctorTypes impls _ _)) =
       || !emit.useIO
       || !emit.useClock
   let typeNames = distinctTypeNames ctorTypes
-  let prog = Prog index typeNames valNames useClos impls input emit
+  let prog = Prog index typeNames valNames useClos impls input emit freshFnCtx
   if useRef then
     emitRefProgram prog groups
   else
@@ -1619,7 +1665,8 @@ checkCalledNamesW defined (name :: rest) =
 -- so a recorded gap is attributed to its source binding.
 export
 emitProgramGaps : WasmEmitInput -> CProgram -> List String
-emitProgramGaps input (CProgram groups ctorArs ctorTypes impls mctx facts) =
+emitProgramGaps input cp0 =
+  let (CProgram groups ctorArs ctorTypes impls mctx facts) = uniqueBinders cp0
   let emit = freshWasmEmit WGapRecord
   let _ =
     refuseUnprovidedExternsW
@@ -1635,6 +1682,7 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls mctx facts) =
   let index =
     makeWasmProgramIndexGaps
       input
+      facts.factBinders
       groups
       ctorArs
       ctorTypes
@@ -1644,7 +1692,7 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls mctx facts) =
   let useClos = programUsesClosures index groups ctorArs
   -- force the ref path: the census measures the full (ref eq) emitter surface.
   let typeNames = distinctTypeNames ctorTypes
-  let prog = Prog index typeNames valNames useClos impls input emit
+  let prog = Prog index typeNames valNames useClos impls input emit freshFnCtx
   let _ = emitFnsGapsW prog (userFnBinds groups)
   let _ = emitImplsGapsW prog (implGroups prog impls)
   let _ = emitValsGapsW prog (filterList isValBind groups)
@@ -1652,9 +1700,9 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls mctx facts) =
 
 emitFnsGapsW : Prog -> List CBind -> Unit
 emitFnsGapsW _ [] = ()
-emitFnsGapsW prog ((CBind name cs site) :: rest) =
+emitFnsGapsW prog ((CBind name cs site bid) :: rest) =
   let _ = setGapBindingOfW (progEmit prog) ("fn " ++ name)
-  let _ = emitRefFnBind prog (CBind name cs site)
+  let _ = emitRefFnBind prog (CBind name cs site bid)
   emitFnsGapsW prog rest
 
 emitImplsGapsW : Prog -> List ImplG -> Unit
@@ -1992,7 +2040,7 @@ programUsesStr : List CBind -> Bool
 programUsesStr groups = anyBind bindUsesStr groups
 
 bindUsesStr : CBind -> Bool
-bindUsesStr (CBind _ clauses _) =
+bindUsesStr (CBind _ clauses _ _) =
   anyList (c => exprUsesStr (clauseBodyOf c)) clauses
 
 exprUsesStr : CExpr -> Bool
@@ -2054,7 +2102,7 @@ forEachU _ [] = ()
 forEachU f (x :: xs) = let _ = f x in forEachU f xs
 
 scanBindW7 : WasmEmit -> CBind -> Unit
-scanBindW7 emit (CBind _ clauses _) =
+scanBindW7 emit (CBind _ clauses _ _) =
   forEachU (clause => scanClauseW7 emit clause) clauses
 
 -- W9: scan BOTH a clause's param patterns (a list/tuple clause head forces the
@@ -2226,7 +2274,7 @@ scanPatW7 emit (PTuple ps) =
   let _ = noteTupleArity emit (listLen ps) in
     forEachU (p => scanPatW7 emit p) ps
 scanPatW7 emit (PCon _ args) = forEachU (p => scanPatW7 emit p) args
-scanPatW7 emit (PAs _ _ p) = scanPatW7 emit p
+scanPatW7 emit (PAs _ _ _ p) = scanPatW7 emit p
 scanPatW7 _ _ = ()
 
 -- a decision tree's match heads (the lowered shape of list/tuple patterns).
@@ -2253,7 +2301,7 @@ cFieldExpr : CField -> CExpr
 cFieldExpr (CField _ _ e) = e
 
 bindUsesClosures : OrdMap Unit -> List (String, Int) -> CBind -> Bool
-bindUsesClosures fnNames ctorArs (CBind _ clauses _) =
+bindUsesClosures fnNames ctorArs (CBind _ clauses _ _) =
   multiOrPatternClauses clauses
     || anyList (clauseUsesClosures fnNames ctorArs) clauses
 
@@ -2266,7 +2314,7 @@ multiOrPatternClauses [CClause pats _] =
 multiOrPatternClauses _ = True
 
 isPlainParam : Pat -> Bool
-isPlainParam (PVar _ _) = True
+isPlainParam (PVar _ _ _) = True
 isPlainParam PWild = True
 isPlainParam _ = False
 
@@ -2296,7 +2344,7 @@ scanImplEntryValueUses fnNames ctorArs (CImplEntry _ _ _ body) = match body
   CImplDefault _ _ _ _ _ _ b => scanExprValueUses fnNames ctorArs b
 
 scanBindValueUses : OrdMap Unit -> List (String, Int) -> CBind -> List String
-scanBindValueUses fnNames ctorArs (CBind _ clauses _) =
+scanBindValueUses fnNames ctorArs (CBind _ clauses _ _) =
   flatMap (c => scanExprValueUses fnNames ctorArs (clauseBodyOf c)) clauses
 
 scanExprValueUses : OrdMap Unit -> List (String, Int) -> CExpr -> List String
@@ -2502,7 +2550,7 @@ programUsesAdt groups ctorArs =
 
 anyBindHasDecision : List CBind -> Bool
 anyBindHasDecision [] = False
-anyBindHasDecision ((CBind _ clauses _) :: rest) =
+anyBindHasDecision ((CBind _ clauses _ _) :: rest) =
   if anyClauseHasDecision clauses then True else anyBindHasDecision rest
 
 anyClauseHasDecision : List CClause -> Bool
@@ -2616,7 +2664,7 @@ emitScalarValInit : WasmEmit ->
   List String ->
   CBind ->
   List String
-emitScalarValInit emit fnNames valNames (CBind name [CClause [] body] _) =
+emitScalarValInit emit fnNames valNames (CBind name [CClause [] body] _ _) =
   let (instrs, _) = emitScalarExpr emit fnNames valNames omEmpty body
   indent instrs ++ ["    global.set $" ++ gname name]
 emitScalarValInit emit _ _ _ =
@@ -2660,8 +2708,8 @@ emitScalarFnBind : WasmEmit ->
   List String ->
   CBind ->
   List String
-emitScalarFnBind emit fnNames valNames (CBind name [CClause pats body] _) =
-  let params = map (patName emit) pats
+emitScalarFnBind emit fnNames valNames (CBind name [CClause pats body] _ _) =
+  let params = map (patName emit name) pats
   let localsInBody = collectExprLocals body
   let extraLocals = filterList (notIn params) (dedupKeep localsInBody)
   let env = omFromNames params omEmpty
@@ -2672,7 +2720,7 @@ emitScalarFnBind emit fnNames valNames (CBind name [CClause pats body] _) =
   -- B5: scalar divisor-guard scratch for a concrete-Int `/`/`%` in this fn body.
   let dv = if !emit.useDivGuard then ["(local $__sdivr i64)"] else []
   [sig] ++ map ("  " ++ _) (dv ++ localDecls) ++ indent instrs ++ ["  )"]
-emitScalarFnBind emit _ _ (CBind name _ _) =
+emitScalarFnBind emit _ _ (CBind name _ _ _) =
   gapL
     emit
     ("scalar-mode top-level function '"
@@ -2700,7 +2748,7 @@ emitScalarTail emit fnNames valNames env (CIf c t f) =
     ++ ["else"]
     ++ indent fi
     ++ ["end", "unreachable"]
-emitScalarTail emit fnNames valNames env (CLet False (PVar x _) e1 e2) =
+emitScalarTail emit fnNames valNames env (CLet False (PVar x _ _) e1 e2) =
   let (i1, _) = emitScalarExpr emit fnNames valNames env e1
   i1
     ++ ["local.set $" ++ gname x]
@@ -2978,7 +3026,7 @@ emitLetI32 : WasmEmit ->
   CExpr ->
   CExpr ->
   (List String, WTy)
-emitLetI32 emit fnNames valNames env False (PVar x _) e1 e2 =
+emitLetI32 emit fnNames valNames env False (PVar x _ _) e1 e2 =
   let (i1, _) = emitScalarExpr emit fnNames valNames env e1
   let (i2, ty2) = emitScalarExpr emit fnNames valNames (omInsert x () env) e2
   (i1 ++ ["local.set $" ++ gname x] ++ i2, ty2)
@@ -3001,7 +3049,7 @@ emitBlockI32 emit fnNames valNames env ((CSExpr ex) :: rest) =
   let (i1, _) = emitScalarExpr emit fnNames valNames env ex
   let (i2, ty) = emitBlockI32 emit fnNames valNames env rest
   (i1 ++ ["drop"] ++ i2, ty)
-emitBlockI32 emit fnNames valNames env ((CSLet _ (PVar x _) ex) :: rest) =
+emitBlockI32 emit fnNames valNames env ((CSLet _ (PVar x _ _) ex) :: rest) =
   let (i1, _) = emitScalarExpr emit fnNames valNames env ex
   let (i2, ty) = emitBlockI32 emit fnNames valNames (omInsert x () env) rest
   (i1 ++ ["local.set $" ++ gname x] ++ i2, ty)
@@ -3076,15 +3124,6 @@ emitRefProgram prog groups =
       else
         [])
   let valNames = progValNames prog
-  -- #288: record the top-level nullary bindings whose RHS is statically Float, BEFORE
-  -- any fn / init body emission, so `cexprIsFloat` recognizes a `global.get` of one as
-  -- Float and a `<=`/`>=` over it lowers to inline `f64.le`/`f64.ge` (IEEE NaN → False)
-  -- rather than the poly runtime-dispatched path (which since #305 is IEEE-correct at
-  -- NaN as well, via $mdk_value_lt/le/gt/ge — this is now a code-quality win).
-  let _ =
-    setRef
-      (progEmit prog).floatGlobals
-      (floatValGlobalNames prog (filterList isValBind groups))
   -- Stage-2/3 (b′) WASMGC-TRMC: detect dispatch-graph TMC groups (the lexer's `scan`
   -- token spine, the offside-rule `layout` family, `intersperse`) BEFORE emitting fns,
   -- so emitRefFnBind can route a group member to the dest-passing reset-wrapper +
@@ -3466,7 +3505,7 @@ tupleTypeDecl n =
 -- with their ctor list.  Reserved types are handled separately so they are never
 -- double-declared.
 userTypesWithCtors : Prog -> List String
-userTypesWithCtors (Prog _ typeNames _ _ _ _ _) =
+userTypesWithCtors (Prog _ typeNames _ _ _ _ _ _) =
   filterList (t => not (isReservedType t)) typeNames
 
 -- per-type: a root struct (just the i32 tag) + one struct per PAYLOAD ctor (tag +
@@ -3689,7 +3728,7 @@ emitRefInit prog groups =
     ++ ["  )", "  (start $__init)"]
 
 bindBodies : CBind -> List CExpr
-bindBodies (CBind _ clauses _) = flatMap clauseBody clauses
+bindBodies (CBind _ clauses _ _) = flatMap clauseBody clauses
 
 clauseBody : CClause -> List CExpr
 clauseBody (CClause _ body) = [body]
@@ -3699,7 +3738,7 @@ foldMaxDepth [] = 0
 foldMaxDepth (e :: rest) = maxI (maxRefDepth e) (foldMaxDepth rest)
 
 emitRefValInit : Prog -> CBind -> List String
-emitRefValInit prog (CBind name [CClause [] body] _) =
+emitRefValInit prog (CBind name [CClause [] body] _ _) =
   let instrs = emitRefExpr prog [] 0 body
   indent instrs ++ ["    global.set $" ++ gname name]
 emitRefValInit prog _ = gapLP prog "value binding must be a nullary clause"
@@ -3726,7 +3765,7 @@ emitRefForceFns prog groups =
       (filterList isValBind groups))
 
 emitRefForceFn : Prog -> CBind -> List String
-emitRefForceFn prog (CBind name [CClause [] body] _) =
+emitRefForceFn prog (CBind name [CClause [] body] _ _) =
   let g = gname name
   let w7Outer = w7ScopeOpen (progEmit prog)
   let instrs = emitRefExpr prog [] 0 body
@@ -3789,23 +3828,20 @@ emitRefMain : Prog -> List CBind -> List String
 emitRefMain prog groups = match findMain (progEmit prog) groups
   Some body =>
     let instrs = emitRefExpr prog [] 0 body
-    -- C4: if the typecheck Float hint is set, override the structural refMainKind
-    -- (which defaults to WInt on type-erased polymorphic-HOF returns) so bare Float
-    -- value mains (e.g. `main = fold (acc x => acc + x) 0.0 [1.0, 2.0, 3.0]`)
-    -- auto-print via the Float formatter instead of reinterpreting bits as an Int.
-    -- A main DECLARED `Unit` (`main : <IO> Unit`) is Unit whatever its body's
-    -- shape: the structural walk below reads a match's first arm and an if's
-    -- then-branch, and a driver whose first arm is `panic …` was printed as an
-    -- Int (#2424's second face, the pds engine drivers).
+    -- A main stamped `Unit` is Unit whatever its body's shape, and one stamped
+    -- with a printable scalar prints as that scalar: the structural read below is
+    -- only for a main with no stamp of its own (an untyped lowering stamps every
+    -- binder `RTValue`).  The typechecker's Float hint overrides a body whose
+    -- result is a polymorphic return (`main = fold (acc x => acc + x) 0.0 [..]`).
     let k =
       if inputMainIsUnit (progInput prog)
-        || mainBodyIsUnit prog (cafBodies groups) body
-        || declRetTypeOf prog "main" == "Unit" then
+        || mainStamp prog == RTUnit
+        || mainBodyIsUnit prog (cafBodies groups) body then
         WUnit
       else if inputMainIsFloat (progInput prog) then
         WFloat
       else
-        refMainKind prog body
+        stampPrintKind (mainPrintStamp prog body)
     -- a Unit main (a `putStrLn …` etc.) has already produced its IO effect; drop its
     -- i31-0 result and auto-print NOTHING (the "Unit main no auto-print" contract).
     match k
@@ -3813,30 +3849,27 @@ emitRefMain prog groups = match findMain (progEmit prog) groups
       _ => indent instrs ++ refPrintFor prog k
   None => gapLP prog "no `main` binding"
 
--- W9b: a value main whose head function DECLARES a Unit return (`println : … -> <IO>
--- Unit`, `print`, any user/prelude Unit-returning wrapper) is a Unit main and must
--- NOT auto-print its result — the structural `refMainKind` can't see through the
--- wrapper, so it would route the Unit result to the Int printer (a trailing `0`).
--- Reads the installed declared-return-type table; empty ⇒ "" ⇒ False (unchanged).
+-- W9b: a value main whose head function returns Unit (`println`, `print`, any
+-- user/prelude Unit-returning wrapper: the head's return stamp) is a Unit main and
+-- must NOT auto-print its result, or the Unit result would go to the Int printer
+-- (a trailing `0`).
 -- `cafs` maps each top-level nullary value binding still in scope to its body: a
 -- reference to an unannotated CAF (`go = println "x"; main = go`) is Unit iff that
 -- body is.  Following a CAF removes it from the map, so a cyclic chain ends False.
 mainBodyIsUnit : Prog -> OrdMap CExpr -> CExpr -> Bool
 mainBodyIsUnit prog _ (CApp f _ _) = match appHead f
-  CVar fn _ => declRetTypeOf prog fn == "Unit"
+  CVar fn _ => isUnitExtern fn || returnStamp prog [] fn == RTUnit
   -- `println`/`print` are `Display a =>` constrained → the dict-pass rewrites the
-  -- head to a CDict (or CMethod) carrying the routes; recover the bare name.
-  CDict fn _ => declRetTypeOf prog fn == "Unit"
-  CMethod fn _ => declRetTypeOf prog fn == "Unit"
+  -- head to a CDict carrying the routes; recover the bare name.
+  CDict fn _ => returnStamp prog [] fn == RTUnit
   _ => False
 mainBodyIsUnit prog cafs (CVar fn _) =
-  if declRetTypeOf prog fn == "Unit" then
+  if returnStamp prog [] fn == RTUnit then
     True
   else match omLookup fn cafs
     Some body => mainBodyIsUnit prog (omDelete fn cafs) body
     None => False
-mainBodyIsUnit prog _ (CDict fn _) = declRetTypeOf prog fn == "Unit"
-mainBodyIsUnit prog _ (CMethod fn _) = declRetTypeOf prog fn == "Unit"
+mainBodyIsUnit prog _ (CDict fn _) = returnStamp prog [] fn == RTUnit
 mainBodyIsUnit prog cafs (CLet _ pat _ b) =
   mainBodyIsUnit prog (shadowCafs (patVars pat) cafs) b
 -- the native branch-(2) equivalent: an UNANNOTATED `main = match … { … }` whose
@@ -3878,7 +3911,7 @@ cafBodies groups = omFromPairs (cafBodyRows groups) omEmpty
 
 cafBodyRows : List CBind -> List (String, CExpr)
 cafBodyRows [] = []
-cafBodyRows ((CBind name [CClause [] body] _) :: rest) =
+cafBodyRows ((CBind name [CClause [] body] _ _) :: rest) =
   if name == "main" then cafBodyRows rest else (name, body) :: cafBodyRows rest
 cafBodyRows (_ :: rest) = cafBodyRows rest
 
@@ -3887,177 +3920,34 @@ shadowCafs : List String -> OrdMap CExpr -> OrdMap CExpr
 shadowCafs [] cafs = cafs
 shadowCafs (x :: xs) cafs = shadowCafs xs (omDelete x cafs)
 
--- the printable static kind of a ref-mode main body: an Int (decimal) or a Bool
--- (true/false).  Determined structurally — arithmetic/Int-lit → Int; a comparison
--- / Bool-lit / `!` → Bool.  A match's kind is its first arm's body kind.
-isWBool : WTy -> Bool
-isWBool WBool = True
-isWBool _ = False
+-- The stamp of `main` itself: the type of the value it holds.
+mainStamp : Prog -> RuntimeType
+mainStamp prog = varStamp prog [] "main"
 
--- a CIf main's kind: WBool if either branch is conclusively Bool, else the then kind.
-ifKind : Prog -> CExpr -> CExpr -> WTy
-ifKind prog t f =
-  if isWBool (refMainKind prog t) then
-    WBool
-  else if isWBool (refMainKind prog f) then
-    WBool
-  else if divergesW t then
-    -- a `panic`/`exit` branch has no value to print; the other branch decides
-    refMainKind prog f
-  else
-    refMainKind prog t
+-- What `main`'s result prints as: its own stamp where that is a printable
+-- scalar, else the stamp the body states for itself.
+mainPrintStamp : Prog -> CExpr -> RuntimeType
+mainPrintStamp prog body =
+  let own = mainStamp prog
+  if isPrintableScalarStamp own then own else cexprStamp prog [] body
 
--- A body whose head is `panic` or `exit` never yields a value, so it must not
--- decide main's auto-print kind: skipped by `ifKind` and `refMainKindArms`.
-divergesW : CExpr -> Bool
-divergesW (CApp f _ _) = match appHead f
-  CVar fn _ => fn == "panic" || fn == "exit"
-  _ => False
-divergesW _ = False
+isPrintableScalarStamp : RuntimeType -> Bool
+isPrintableScalarStamp RTInt = True
+isPrintableScalarStamp RTFloat = True
+isPrintableScalarStamp RTBool = True
+isPrintableScalarStamp RTChar = True
+isPrintableScalarStamp RTString = True
+isPrintableScalarStamp _ = False
 
-refMainKind : Prog -> CExpr -> WTy
-refMainKind prog (CLit (LInt _)) = WInt
-refMainKind prog (CLit (LBool _)) = WBool
-refMainKind prog (CLit (LString _)) = WStr
-refMainKind prog (CLit (LChar _)) = WChar
--- W8b: a Float literal main auto-prints via floatToString (shortest-round-trip since #57).
-refMainKind prog (CLit (LFloat _)) = WFloat
--- `main = ()` is a Unit main: nothing to auto-print (the same contract as a
--- `putStrLn …` main).  Without this arm the literal fell to the `other => WInt`
--- default and the i31 0 was printed as a trailing `0`.
-refMainKind _ (CLit LUnit) = WUnit
--- the Bool constructors as values (a dispatched main `… else False`); also lets a
--- CIf whose arms are dispatch calls recover Bool-ness from a literal-Bool branch.
-refMainKind prog (CVar "True" _) = WBool
-refMainKind prog (CVar "False" _) = WBool
--- W8b: pi/e are Float values.
-refMainKind prog (CVar "pi" _) = WFloat
-refMainKind prog (CVar "e" _) = WFloat
--- W8b: a Float arith binop (recovered structurally) auto-prints as a Float; otherwise
--- the op's kind (arith→Int, compare→Bool, ++→Str).
-refMainKind prog (CBinPrim op l r _ _) =
-  if isArithOp op && (cexprIsFloat prog [] l || cexprIsFloat prog [] r) then
-    WFloat
-  else
-    binOpTy op
-refMainKind prog (CUnOp "-" x) = if cexprIsFloat prog [] x then WFloat else WInt
-refMainKind prog (CUnOp _ _) = WInt
--- a CIf main: prefer whichever branch is conclusively Bool (a comparison / Bool
--- ctor / `!`), else fall back to the then branch.  A W5 dispatch fixture often has
--- `if <Bool-cond> then <method-call : Bool> else False` — the else pins it Bool.
-refMainKind prog (CIf _ t f) = ifKind prog t f
-refMainKind prog (CLet _ _ _ b) = refMainKind prog b
-refMainKind prog (CBlock stmts) = refMainKindBlock prog stmts
-refMainKind prog (CDecision _ arms _) = refMainKindArms prog arms
-refMainKind prog (CMatch _ arms) = refMainKindArms prog arms
--- a String-returning extern applied to its args (intToString/charToStr/stringConcat).
-refMainKind prog (CApp f _ _) = match appHead f
-  CVar fn _ =>
-    if isStrReturningExtern fn then
-      WStr
-    else if contains
-      fn
-      [
-        "randomBool",
-        "charIsAlpha",
-        "charIsSpace",
-        "charIsUpper",
-        "charIsLower",
-        "charIsPunct",
-      ] then
-      WBool
-    else if contains fn ["randomChar", "charToUpper", "charToLower"] then
-      WChar
-    else if contains fn ["intToFloat", "randomFloat"] then
-      -- W8b: a Float-returning extern main (intToFloat/randomFloat) auto-prints as Float.
-      WFloat
-    else if fnReturnsFloat prog fn then
-      -- W-SQLITE-4: a call to a user fn whose declared sig returns Float (`main = f 2.5`).
-      WFloat
-    else if isUnitExtern fn || declRetTypeOf prog fn == "Unit" then
-      -- a call whose head DECLARES a Unit return (`println`, `print`, a user
-      -- wrapper) is Unit wherever it sits in main's body — under an else-less
-      -- `if`, a `match` arm, a block tail — not only as main's top-level head
-      -- (which `mainBodyIsUnit` already covers).  #2424: `main = if True then
-      -- println "b"` printed `b` then a spurious `0`.
-      WUnit
-    else if methodReturnsBoolW prog fn then
-      -- composite-autoprint parity: a bare `main = myeq a b` calls a dispatched
-      -- interface method whose Bool result is type-erased at this CApp (→ WInt →
-      -- prints the raw i31 "1").  Native's `println`/`display` wrap renders the Bool
-      -- ctor as `True`/`False`, so recover Bool-ness structurally from the method's
-      -- lowered impl bodies (all conclusively Bool ⇒ WBool → $mdk_print_bool).
-      WBool
-    else
-      refMainKind prog (appHead f)
-  -- a resolved dispatch head (`main = myeq a b` lowers to CApp (CMethod/CDict …) …):
-  -- same composite-autoprint Bool recovery as the CVar method case above.
-  CMethod fn _ =>
-    if declRetTypeOf prog fn == "Unit" then
-      WUnit
-    else if methodReturnsBoolW prog fn then
-      WBool
-    else
-      WInt
-  CDict fn _ =>
-    if declRetTypeOf prog fn == "Unit" then
-      WUnit
-    else if methodReturnsBoolW prog fn then
-      WBool
-    else
-      WInt
-  h => refMainKind prog h
--- W-SQLITE-4: a nullary Float-typed binding used as a value main (`main = h`, `h : Float`).
-refMainKind prog (CVar x _) = if fnReturnsFloat prog x then WFloat else WInt
-refMainKind prog other = WInt
-
--- True iff EVERY lowered impl clause of dispatched method `fn` conclusively renders
--- Bool (its body's structural refMainKind is WBool).  Used to recover Bool-ness for a
--- type-erased `main = <method> a b` value-main so its auto-print matches native's
--- `println`/`display` (`True`/`False`).  Conservative: no impls (not a method) or any
--- non-Bool clause ⇒ False, so the caller keeps the existing WInt fallback.
-methodReturnsBoolW : Prog -> String -> Bool
-methodReturnsBoolW prog fn = match implBodiesForW fn (methodEntriesW prog fn)
-  [] => False
-  bodies => allWBoolW prog bodies
-
-implBodiesForW : String -> List CImplEntry -> List CExpr
-implBodiesForW _ [] = []
-implBodiesForW fn ((CImplEntry name _ _ body) :: rest) =
-  if name == fn then
-    implBodyExprW body :: implBodiesForW fn rest
-  else
-    implBodiesForW fn rest
-
-implBodyExprW : CImplBody -> CExpr
-implBodyExprW (CImplTagged _ _ _ _ _ _ e) = e
-implBodyExprW (CImplDefault _ _ _ _ _ _ e) = e
-
-allWBoolW : Prog -> List CExpr -> Bool
-allWBoolW _ [] = True
-allWBoolW prog (e :: rest) = isWBool (refMainKind prog e) && allWBoolW prog rest
-
--- the String-RESULT externs (drive value-main String auto-print).  `stringLength`
--- returns Int, so it is NOT here.
-isStrReturningExtern : String -> Bool
-isStrReturningExtern name = contains
-  name
-  [
-    "intToString",
-    "charToStr",
-    "stringConcat",
-    "stringSlice",
-    "stringToUpper",
-    "stringToLower",
-    "stringReverse",
-    "stringJoin",
-    -- W8b: floatToString returns a String.
-    "floatToString",
-    -- W11b: stringFromChars : Array Char -> String.
-    "stringFromChars",
-    -- W11b: stringFromUtf8Bytes : Array Int -> String.
-    "stringFromUtf8Bytes",
-  ]
+-- the auto-print kind of a main whose result has stamp [t]; a stamp that names no
+-- printable scalar prints as an Int
+stampPrintKind : RuntimeType -> WTy
+stampPrintKind RTFloat = WFloat
+stampPrintKind RTBool = WBool
+stampPrintKind RTString = WStr
+stampPrintKind RTChar = WChar
+stampPrintKind RTUnit = WUnit
+stampPrintKind _ = WInt
 
 -- the Unit-RESULT IO externs: a `main = putStrLn …` produces Unit and must NOT be
 -- auto-printed (the "Unit main no auto-print" contract — the native oracle prints
@@ -4067,16 +3957,6 @@ isUnitExtern : String -> Bool
 -- lint-disable-next-line rule-duplicate-body
 isUnitExtern name =
   contains name ["putStr", "putStrLn", "ePutStr", "ePutStrLn", "flushStdout"]
-
-refMainKindBlock : Prog -> List CStmt -> WTy
-refMainKindBlock _ [] = WInt
-refMainKindBlock prog [CSExpr e] = refMainKind prog e
-refMainKindBlock prog (_ :: rest) = refMainKindBlock prog rest
-
-refMainKindArms : Prog -> List CArm -> WTy
-refMainKindArms _ [] = WInt
-refMainKindArms prog ((CArm _ _ body) :: rest) =
-  if divergesW body then refMainKindArms prog rest else refMainKind prog body
 
 appHead : CExpr -> CExpr
 appHead (CApp f _ _) = appHead f
@@ -4124,19 +4004,8 @@ refPrintFor prog WRef =
 -- applied), also emit a closure wrapper `$name__clos` (a $clos with arity = param
 -- count, code = a thunk that unpacks the args array + calls $name).
 emitRefFnBind : Prog -> CBind -> List String
-emitRefFnBind prog (CBind name clauses bindLoc) =
-  let _ = setCurrentBindingOfW (progEmit prog) name
-  let _ =
-    setRef (progEmit prog).clauseSite (sitePackedW (progEmit prog) bindLoc)
-  -- W-SQLITE-4: seed (and reset) floatLocals with this fn's declared Float
-  -- params before emitting its body, so type-erased Float arith on a param lowers
-  -- to f64 ops (mirrors emitImplGroup's `impl … Float` seeding, generalized).
-  let _ = setRef (progEmit prog).floatLocals (floatParamNames prog name clauses)
-  -- A1 (poly-`Num`-on-Float): seed the polymorphic-`Num`/`Ord` param names so this fn's
-  -- bare-CVar arithmetic on a type-var param routes to the runtime value-dispatch helper
-  -- (mirrors floatLocals, and native's LTNum seed).  [] resets for monomorphic fns.
-  let _ =
-    setRef (progEmit prog).numPolyLocals (numPolyParamNames prog name clauses)
+emitRefFnBind outer (CBind name clauses bindLoc _) =
+  let prog = progForBinding name (sitePackedW (progEmit outer) bindLoc) outer
   let arity = clauseArityOf clauses
   let params = clauseParamNames clauses arity
   -- Stage-2/3 (b′): a member of a detected dispatch-TMC group emits via the dest-passing
@@ -4232,7 +4101,7 @@ headParamNames [] _ _ = []
 headParamNames (p :: ps) inner i =
   let name = "__wparg" ++ intToString i
   let chosen = match p
-    PVar x _ => if startsWith "__" x || contains x inner then name else x
+    PVar x _ _ => if startsWith "__" x || contains x inner then name else x
     _ => name
   chosen :: headParamNames ps inner (i + 1)
 
@@ -4266,7 +4135,7 @@ emitClausesRefEnv : Prog ->
 emitClausesRefEnv prog baseEnv name params arity (clauses@[CClause pats body]) =
   if allPlainParams pats && not (exprHasFallthrough body) then
     let aliases = bindParamAliases prog pats params
-    let env = map (patName (progEmit prog)) pats ++ baseEnv
+    let env = paramEnv pats ++ baseEnv
     aliases ++ emitRefTail prog env arity body
   else
     emitClauseChainRefEnv prog baseEnv name params arity clauses
@@ -4306,7 +4175,7 @@ bindParamAliases prog pats params =
   flatMap (aliasOne prog) (zipPats pats params)
 
 aliasOne : Prog -> (Pat, String) -> List String
-aliasOne _ (PVar x _, a) =
+aliasOne _ (PVar x _ _, a) =
   if x == a then [] else ["local.get $" ++ gname a, "local.set $" ++ gname x]
 aliasOne _ (PWild, _) = []
 aliasOne prog _ = gapLP prog "ref-mode: non-plain param in fast-path alias"
@@ -4339,7 +4208,7 @@ emitClauseChainRefEnv prog baseEnv name params arity clauses =
     arity
     clauses
     0
-    (progEmit prog).clauseSite.value
+    (progFnCtx prog).site
 
 emitClauseChainGo : Prog ->
   List String ->
@@ -4409,8 +4278,8 @@ patTestBind : Prog ->
   List String ->
   (List String, List String, List String)
 patTestBind prog PWild occ clLabel env = ([], [], env)
-patTestBind prog (PVar x _) occ clLabel env =
-  ([], occ ++ ["local.set $" ++ gname x], x :: env)
+patTestBind prog (PVar x _ bid) occ clLabel env =
+  ([], occ ++ ["local.set $" ++ gname x], envBind x bid env)
 -- #759: unbox the scrutinee through the $mdk_unbox_int seam (i31 OR $boxint) and
 -- compare at full i64 width.  An `i31.get_s` + `i32.const n` path truncates to
 -- 31 bits — for |n| >= 2^30 the `i32.const` overflows (wasm-tools REJECTS the module)
@@ -4493,9 +4362,9 @@ patTestBind prog (PCon c args) occ clLabel env =
       ]
   let (ft, fb, env2) = patTestBindCon prog c args occ clLabel env 0
   (ctest ++ ft, fb, env2)
-patTestBind prog (PAs x _ p) occ clLabel env =
+patTestBind prog (PAs x _ bid p) occ clLabel env =
   let setX = occ ++ ["local.set $" ++ gname x]
-  let (t, b, env2) = patTestBind prog p occ clLabel (x :: env)
+  let (t, b, env2) = patTestBind prog p occ clLabel (envBind x bid env)
   (t, setX ++ b, env2)
 -- W9: a refutable cons-cell clause head `(h :: t)` — the focus must be a Cons
 -- (ordinal 0; Nil is ordinal 1), else fall to the next clause.  Then test+bind
@@ -5303,7 +5172,7 @@ emitMethodValueRef prog env d name iface siteArity route implRoutes methRoutes =
       CallValueW
   else
     let names = etaValNames arity
-    let ps = map (n => PVar n (Loc "" 0 0 0 0)) names
+    let ps = map (n => PVar n (Loc "" 0 0 0 0) noBinderId) names
     let body = stampedAppW prog node (map (n => CVar n AGlobal) names)
     emitClosure prog env d ps body
 
@@ -5337,7 +5206,7 @@ emitDictValueRef prog env d name routes =
       emitDictRef prog env d name routes [] CallExact CallValueW
     else
       let names = etaValNames valArity
-      let ps = map (n => PVar n (Loc "" 0 0 0 0)) names
+      let ps = map (n => PVar n (Loc "" 0 0 0 0) noBinderId) names
       let body =
         stampedAppW prog (CDict name routes) (map (n => CVar n AGlobal) names)
       emitClosure prog env d ps body
@@ -5478,7 +5347,7 @@ gatherImplGroup prog entries (m, key) =
 -- count of leading `$dict_…` param patterns the dict-pass prepends ahead of the
 -- source value params (mirror of llvm_emit's leadingDictPats; uses wIsDictParamName).
 wLeadingDictPats : List Pat -> Int
-wLeadingDictPats ((PVar x _) :: rest) =
+wLeadingDictPats ((PVar x _ _) :: rest) =
   if wIsDictParamName x then 1 + wLeadingDictPats rest else 0
 wLeadingDictPats _ = 0
 
@@ -5492,6 +5361,10 @@ implClauseFor m tag ent =
   else
     []
 
+implBodyExprW : CImplBody -> CExpr
+implBodyExprW (CImplTagged _ _ _ _ _ _ e) = e
+implBodyExprW (CImplDefault _ _ _ _ _ _ e) = e
+
 implEntryBodyW : CImplEntry -> CImplBody
 implEntryBodyW (CImplEntry _ _ _ body) = body
 
@@ -5500,9 +5373,9 @@ implGroupArity ((CClause pats _) :: _) = listLen pats
 implGroupArity [] = 0
 
 emitImplGroup : Prog -> ImplG -> List String
-emitImplGroup prog (ImplG method headTag key arity clauses fnName) =
+emitImplGroup outer (ImplG method headTag key arity clauses fnName) =
   -- an impl method has no first-clause site of its own
-  let _ = setRef (progEmit prog).clauseSite 0
+  let prog = progInFn outer
   let params = synthParams arity
   -- Phase 2 B-dispatch (TRMC-DESIGN §"Phase 2"): a DISPATCHED self-recursive cons/ctor-tail
   -- impl (the `List map`: self-call is a `CMethod method (RKey tag)`) is emitted as a
@@ -5512,17 +5385,8 @@ emitImplGroup prog (ImplG method headTag key arity clauses fnName) =
   match wTrmcImplTry prog method key fnName arity clauses
     Some tmcDef => tmcDef
     None =>
-      -- W8b: an `impl … Float` method's params are Float — record their (pattern-var) names
-      -- so the body's bare-CVar arithmetic lowers to f64.  `signum`/`abs`/`negate`/`add`/…
-      -- all take Float args.  Reset for every other impl (Int/String/etc. stay i31).
-      let _ = setRef
-        (progEmit prog).floatLocals
-        (if headTag == "Float" then flatMap clausePatVars clauses else [])
-      -- A1: impl-method params are concrete-typed (the impl tag), never poly-`Num`; reset.
-      let _ = setRef (progEmit prog).numPolyLocals []
       let w7Outer = w7ScopeOpen (progEmit prog)
       let bodyLines = emitClausesImpl prog fnName params arity clauses
-      let _ = setRef (progEmit prog).floatLocals []
       let allLocals = clauseLocals clauses
       let extraLocals = filterList (notIn params) (dedupKeep allLocals)
       let scratch = scratchLocals (clausesMaxDepth clauses)
@@ -5537,144 +5401,6 @@ emitImplGroup prog (ImplG method headTag key arity clauses fnName) =
         ++ map ("  " ++ _) (localDecls ++ w7Decls)
         ++ indent bodyLines
         ++ ["  )"]
-
-clausePatVars : CClause -> List String
-clausePatVars (CClause pats _) = flatMap patVars pats
-
--- W-SQLITE-4 (float-param registry): the pattern-var names bound at a fn's
--- Float-typed parameter positions (from the installed `declSigTypeNames` table),
--- unioned across clauses.  `emitRefFnBind` seeds `floatLocals` with these before
--- emitting the body, so `f (x : Float) = x + x` sees `x` as Float without a
--- co-located literal — generalizing the `impl … Float` seeding at emitImplGroup to
--- any sig'd top-level fn.  Empty (no sig / no Float param) resets floatLocals,
--- preserving the reset-before-body discipline.
-floatParamNames : Prog -> String -> List CClause -> List String
-floatParamNames prog name clauses = match declParamTypesOf prog name
-  [] => []
-  ptys => dedupKeep (flatMap (floatClausePatVars ptys) clauses)
-
-floatClausePatVars : List String -> CClause -> List String
-floatClausePatVars ptys (CClause pats _) = floatPatsAt ptys pats
-
--- P1: a `$dict_*` param (prepended to a `=>`-constrained fn by elaborateModules) is
--- NOT a source param, so it must advance the PATTERN cursor without consuming a
--- DECLARED type head — otherwise every declared type lines up one slot left of the
--- param it describes.  Peer of llvm_emit's inferParamTysSeedD, whose own comment
--- names this as the G3 root cause ("x's LTNum seed was read at the dict's index →
--- missed").  wasm never got the same guard; see numPolyPatsAt for what it cost.
-floatPatsAt : List String -> List Pat -> List String
-floatPatsAt tys ((PVar x _) :: ps)
-  | isDictParamName x = floatPatsAt tys ps
-floatPatsAt (ty :: tys) ((PVar x _) :: ps) =
-  (if ty == "Float" then [x] else []) ++ floatPatsAt tys ps
-floatPatsAt (_ :: tys) (_ :: ps) = floatPatsAt tys ps
-floatPatsAt _ _ = []
-
--- A1 (poly-`Num`-on-Float): the pattern-var names bound at this fn's POLYMORPHIC
--- `Num`/`Ord` param positions — the wasm peer of native's `isNumPolyParam`.  Two cases,
--- matching native's `isNumPolyParam` (dsig Some → type-var head; dsig None → True):
---   • declared sig present (declParamTypesOf non-empty): a param whose declared type
---     head is a type VARIABLE (lowercase-initial, `Num a => a -> a`) and used arithmetically.
---   • no declared sig: any param USED arithmetically (`sq x = x*x`) — the operand's type
---     is only known at runtime, so it must dispatch (native seeds LTNum identically).
--- A param declared with a concrete scalar (`: Int`/`: Float`) stays on the static fast
--- path.  Unioned across clauses.  `paramUsedInArith` keeps `id x = x` off the list.
-numPolyParamNames : Prog -> String -> List CClause -> List String
-numPolyParamNames prog name clauses = match declParamTypesOf prog name
-  [] => dedupKeep (flatMap noSigNumPolyPatVars clauses)
-  ptys => dedupKeep (flatMap (numPolyClausePatVars ptys) clauses)
-
--- declared-sig case: collect PVar params whose declared type head is a type var and
--- which are used arithmetically in the clause body.
-numPolyClausePatVars : List String -> CClause -> List String
-numPolyClausePatVars ptys (CClause pats body) = numPolyPatsAt ptys pats body
-
--- P1: skip a `$dict_*` param WITHOUT consuming a declared type head (see floatPatsAt).
--- This was the whole bug behind wasm/polynum_sq_sig_float: `sq : Num a => a -> a`
--- lowers to params [$dict_…__sq_0, x], so the declared head `a` lined up with the DICT
--- slot; `x` fell off the end of `ptys` and was never seeded into numPolyLocals.  Its
--- `x * x` then took the inline i31 int path and trapped `illegal cast` on the boxed
--- $float at runtime — i.e. the explicit `Num a =>` signature, the one thing that should
--- have GUARANTEED runtime dispatch, was precisely what disabled it.
-numPolyPatsAt : List String -> List Pat -> CExpr -> List String
-numPolyPatsAt tys ((PVar x _) :: ps) body
-  | isDictParamName x = numPolyPatsAt tys ps body
-numPolyPatsAt (ty :: tys) ((PVar x _) :: ps) body =
-  (if isTypeVarName ty && paramUsedInNumBinop x body then [x] else [])
-    ++ numPolyPatsAt tys ps body
-numPolyPatsAt (_ :: tys) (_ :: ps) body = numPolyPatsAt tys ps body
-numPolyPatsAt _ _ _ = []
-
--- no-declared-sig case: every PVar param used in an arithmetic OR comparison binop is
--- poly-`Num`/`Ord` (its type is resolved only at runtime, so the op must dispatch).
-noSigNumPolyPatVars : CClause -> List String
-noSigNumPolyPatVars (CClause pats body) =
-  flatMap
-    (p => match p
-      PVar x _ => if paramUsedInNumBinop x body then [x] else []
-      _ => [])
-    pats
-
--- A1 (design row 6): a lambda's PVar params used in a num/cmp binop — the lambda has no
--- declared sig, so like the no-sig fn case its arith-used params are polymorphic `Num`.
-lamPolyParamNames : List Pat -> CExpr -> List String
-lamPolyParamNames pats body =
-  flatMap
-    (p => match p
-      PVar x _ => if paramUsedInNumBinop x body then [x] else []
-      _ => [])
-    pats
-
--- a type-variable head name is lowercase-initial (`a`, `elem`); a concrete type
--- (`Int`, `Float`, a user type) is uppercase-initial (peer of native's isTypeVarName).
-isTypeVarName : String -> Bool
-isTypeVarName n =
-  if stringLength n == 0 then
-    False
-  else
-    let f = stringSlice 0 1 n in "a" <= f && f <= "z"
-
-isVarNamed : String -> CExpr -> Bool
-isVarNamed p (CVar x _) = p == x
-isVarNamed _ _ = False
-
--- True when param `p` appears as a direct operand of an arithmetic OR comparison binop
--- anywhere in `body` (peer of native's paramUsedInArith, extended to `Ord` compares so
--- the poly-`Ord`-on-Float sibling `myMax a b = if a > b …` is seeded).  Structural walk.
-paramUsedInNumBinop : String -> CExpr -> Bool
-paramUsedInNumBinop p (CBinPrim op l r _ _) =
-  if (isArithOp op || isCmpOp op) && (isVarNamed p l || isVarNamed p r) then
-    True
-  else
-    paramUsedInNumBinop p l || paramUsedInNumBinop p r
-paramUsedInNumBinop p (CUnOp _ x) = paramUsedInNumBinop p x
-paramUsedInNumBinop p (CIf c t f) =
-  paramUsedInNumBinop p c || paramUsedInNumBinop p t || paramUsedInNumBinop p f
-paramUsedInNumBinop p (CLet _ _ e1 e2) =
-  paramUsedInNumBinop p e1 || paramUsedInNumBinop p e2
-paramUsedInNumBinop p (CLetGroup _ b) = paramUsedInNumBinop p b
-paramUsedInNumBinop p (CBlock stmts) = anyNumStmt p stmts
-paramUsedInNumBinop p (CApp f args _) =
-  paramUsedInNumBinop p f || anyList (paramUsedInNumBinop p) args
--- match bodies: a param used arithmetically inside an arm (`sumOne acc xs = match xs {…
--- y::rest => acc + y}`) must be seeded, so walk the scrutinee + every arm body.
-paramUsedInNumBinop p (CMatch scrut arms) =
-  paramUsedInNumBinop p scrut || anyNumArm p arms
-paramUsedInNumBinop p (CDecision scrut arms _) =
-  paramUsedInNumBinop p scrut || anyNumArm p arms
-paramUsedInNumBinop _ _ = False
-
-anyNumArm : String -> List CArm -> Bool
-anyNumArm _ [] = False
-anyNumArm p ((CArm _ _ body) :: rest) =
-  paramUsedInNumBinop p body || anyNumArm p rest
-
-anyNumStmt : String -> List CStmt -> Bool
-anyNumStmt _ [] = False
-anyNumStmt p ((CSExpr e) :: rest) = paramUsedInNumBinop p e || anyNumStmt p rest
-anyNumStmt p ((CSLet _ _ e) :: rest) =
-  paramUsedInNumBinop p e || anyNumStmt p rest
-anyNumStmt p (_ :: rest) = anyNumStmt p rest
 
 -- impl bodies use the SAME clause emission as top-level fns; the synthetic fn
 -- "name" (used only for the internal clause-block labels) is the impl symbol.
@@ -5833,7 +5559,7 @@ emitRefExpr prog env d (CVariantUpdate con base fields) =
 emitRefExpr prog env d other =
   gapLP
     prog
-    "ref-mode: unsupported Core IR node \{ctag other} [in \{currentBindingOfW (progEmit prog)}]"
+    "ref-mode: unsupported Core IR node \{ctag other} [in \{progBinding prog}]"
 
 -- a scalar literal → an i31 immediate.  Int: ref.i31 of the value.  Bool: 1/0.
 -- Unit: i31 0 (a placeholder immediate; Unit is never inspected in this slice).
@@ -6076,7 +5802,7 @@ emitVarRefPlain prog env d x =
   else
     gapUnboundLP
       prog
-      "unbound variable '\{x}' (not a local, global value, constructor, or known function) [in \{currentBindingOfW (progEmit prog)}]"
+      "unbound variable '\{x}' (not a local, global value, constructor, or known function) [in \{progBinding prog}]"
 
 -- W9: lift `$mdk_ext_<name>` (a $codety) that unpacks its $args into synthetic CVar
 -- locals and emits the extern call, then build the closure struct at the use site.
@@ -6248,7 +5974,7 @@ emitBinRef prog env d op l r tag site =
     let _ = setRef (progEmit prog).useStrSearch True
     let _ = setRef (progEmit prog).useStrLeaf True
     emitValueCmpRef prog env d op l r
-  else if isCmpOp op && isPolyNumBinop (progEmit prog) l r then
+  else if isCmpOp op && isPolyNumBinop prog env l r then
     -- S2/#2359 correction of #371: this branch only ever calls into the num-only
     -- cmp sextet (emitValueCmpNumRef below) — never $mdk_value_div/$mdk_value_mod
     -- — so it demands ONLY useValueCmpNum, not the arith family, and never needs
@@ -6258,7 +5984,7 @@ emitBinRef prog env d op l r tag site =
     emitValueCmpNumRef prog env d op l r
   else if isArithOp op
     && (op == "/" || op == "%")
-    && isPolyNumBinop (progEmit prog) l r then
+    && isPolyNumBinop prog env l r then
     -- A1 (poly-`Num`-on-Float): arithmetic whose operand is a polymorphic `Num` param
     -- routes through the runtime value-tag-dispatched $mdk_value_add/… helper (A0) instead
     -- of the trapping inline int primitive.  The static Int/Float fast paths are unchanged.
@@ -6272,7 +5998,7 @@ emitBinRef prog env d op l r tag site =
     emitRefExpr prog env d l
       ++ emitRefExpr prog env d r
       ++ ["call $mdk_value_" ++ valueArithName op]
-  else if isArithOp op && isPolyNumBinop (progEmit prog) l r then
+  else if isArithOp op && isPolyNumBinop prog env l r then
     let _ = setValueArithFlag (progEmit prog) op
     emitRefExpr prog env d l
       ++ emitRefExpr prog env d r
@@ -6420,16 +6146,6 @@ wasmU64Op ">" = "i64.gt_u"
 wasmU64Op "<=" = "i64.le_u"
 wasmU64Op ">=" = "i64.ge_u"
 wasmU64Op op = panic ("wasm: not a U64 op '" ++ op ++ "'")
-
--- A1: a binop with a POLYMORPHIC `Num`/`Ord` operand — a bare CVar bound to a param
--- seeded into numPolyLocals.  Only such operands route to the runtime value-dispatch
--- helpers; literals / computed sub-expressions / concrete-scalar params stay on the fast path.
-isPolyNumBinop : WasmEmit -> CExpr -> CExpr -> Bool
-isPolyNumBinop emit l r = isPolyNumOperand emit l || isPolyNumOperand emit r
-
-isPolyNumOperand : WasmEmit -> CExpr -> Bool
-isPolyNumOperand emit (CVar x _) = contains x !emit.numPolyLocals
-isPolyNumOperand _ _ = False
 
 -- A0: arithmetic op → the $mdk_value_<name> helper suffix.
 valueArithName : String -> String
@@ -6767,109 +6483,256 @@ wasmFloatCmp "<=" = "f64.le"
 wasmFloatCmp ">=" = "f64.ge"
 wasmFloatCmp op = panic ("wasm W8b: not a Float compare op '" ++ op ++ "'")
 
--- W8b: STRUCTURAL Float detection (Core IR is type-erased).  An expression is Float if
--- it is a Float literal, the pi/e constants (NOT shadowed by a local of that name —
--- `env` carries the bound locals; `Err e => 0 - e`'s `e` is the LOCAL, not Euler's),
--- a Float-returning extern application (intToFloat / randomFloat), a Float arith binop,
--- a unary `-` on a Float, or a let/block/if whose result is Float.  Conservative:
--- anything else → not Float (Int path).  Sufficient for the W8b fixtures.
+-- ── what a name holds, read from the binder stamps ───────────────────────────
+-- Every static numeric fact this emitter acts on is a binder's published
+-- runtime type (`DeclFacts.factBinders`), found through the binder's `BinderId`
+-- ordinal.  A reference is a name, and the names in `env` are unique only among
+-- NESTED binders (`uniqueBinders`): two sibling arms may bind `x` at different
+-- types.  So `env` carries, beside each stamped binder's name, an entry naming
+-- the binder (`envBind`), scoped exactly as the name is, and a reference
+-- resolves through the nearest entry.  A fact is never stored under a name.
+
+-- the env entry that says the local `x` is the binder with ordinal [bid]'s
+envMark : String -> BinderId -> String
+envMark x bid = "\{x}@\{intToString (binderOrdinal bid)}"
+
+-- [env] extended with the stamped binder [x]
+envBind : String -> BinderId -> List String -> List String
+envBind x bid env = x :: envMark x bid :: env
+
+-- the env entries of a function's plain parameters, in order
+paramEnv : List Pat -> List String
+paramEnv pats = flatMap paramEntries pats
+
+paramEntries : Pat -> List String
+paramEntries (PVar x _ bid) = [x, envMark x bid]
+paramEntries _ = ["_"]
+
+-- every variable a pattern binds, with its id
+patBinders : Pat -> List (String, BinderId)
+patBinders (PVar x _ bid) = [(x, bid)]
+patBinders (PAs x _ bid p) = (x, bid) :: patBinders p
+patBinders (PCon _ args) = flatMap patBinders args
+patBinders (PTuple ps) = flatMap patBinders ps
+patBinders (PCons h t) = patBinders h ++ patBinders t
+patBinders (PList ps) = flatMap patBinders ps
+patBinders _ = []
+
+-- [env] extended with every variable [pat] binds
+envBindPat : Pat -> List String -> List String
+envBindPat pat env =
+  fold (acc b => envBind (fst b) (snd b) acc) env (patBinders pat)
+
+-- the entries of [env] that name the binders behind [names], for a lifted body
+-- that captures them
+envMarksOf : List String -> List String -> List String
+envMarksOf names env = flatMap (x => envMarkOf x env) names
+
+-- [names] as env entries, each followed by its entry in [marks] when it has one
+envWithMarks : List String -> List String -> List String
+envWithMarks names marks =
+  flatMap (x => x :: filterList (startsWith "\{x}@") marks) names
+
+envMarkOf : String -> List String -> List String
+envMarkOf x env = match envLookup x env
+  LocalBinder ord => ["\{x}@\{ord}"]
+  _ => []
+
+-- what a name denotes inside `env`
+data EnvRef = NotLocal | LocalUnstamped | LocalBinder String
+
+envLookup : String -> List String -> EnvRef
+envLookup _ [] = NotLocal
+envLookup x (e :: rest) =
+  if e == x then match rest
+    m :: _ =>
+      if startsWith "\{x}@" m then
+        LocalBinder (stringSlice (stringLength x + 1) (stringLength m) m)
+      else
+        LocalUnstamped
+    [] => LocalUnstamped
+  else
+    envLookup x rest
+
+stampRowOf : Prog -> String -> Option BinderRow
+stampRowOf prog ord = omLookup ord (progIndex prog).stamps.rows
+
+-- the stamp row of the binder a reference to [x] reaches: its local binder when
+-- [x] is bound in [env], else the top-level binding of that name
+varRow : Prog -> List String -> String -> Option BinderRow
+varRow prog env x = match envLookup x env
+  LocalBinder ord => stampRowOf prog ord
+  LocalUnstamped => None
+  NotLocal => omLookup x (progIndex prog).stamps.tops
+
+-- what a reference to [x] holds; RTValue where no row states it
+varStamp : Prog -> List String -> String -> RuntimeType
+varStamp prog env x = match varRow prog env x
+  Some row => row.brType
+  None => RTValue
+
+-- what a call to [fn] returns once saturated: its return stamp, or for a runtime
+-- extern (a name no binder in the program has) the result type its declaration in
+-- `stdlib/runtime.mdk` gives
+returnStamp : Prog -> List String -> String -> RuntimeType
+returnStamp prog env fn = match varRow prog env fn
+  Some row => optionOr RTValue row.brReturns
+  None =>
+    if contains fn env || progFnMemberW prog fn || progValMemberW prog fn then
+      RTValue
+    else
+      externResultStamp fn
+
+-- The result type of the runtime extern [fn], for the externs whose result
+-- decides how a value is printed or computed on.  RTValue where it is none of
+-- them.
+externResultStamp : String -> RuntimeType
+externResultStamp fn =
+  if contains fn [
+    "intToString",
+    "charToStr",
+    "stringConcat",
+    "stringSlice",
+    "stringToUpper",
+    "stringToLower",
+    "floatToString",
+    "stringFromChars",
+    "stringFromUtf8Bytes",
+  ] then
+    RTString
+  else if contains fn [
+    "randomBool",
+    "charIsAlpha",
+    "charIsSpace",
+    "charIsUpper",
+    "charIsLower",
+    "charIsPunct",
+  ] then
+    RTBool
+  else if contains fn ["randomChar", "charToUpper", "charToLower"] then
+    RTChar
+  else if contains fn ["intToFloat", "randomFloat"] then
+    RTFloat
+  else if isUnitExtern fn then
+    RTUnit
+  else
+    RTValue
+
+-- The static type of [e], read off stamped Core without emitting it: a literal
+-- states its own type, a variable its binder's stamp, an operator node its
+-- stamped scalar tag (or its operands'), and a saturated call its callee's
+-- return stamp.  RTValue where nothing states it.
+cexprStamp : Prog -> List String -> CExpr -> RuntimeType
+cexprStamp _ _ (CLit l) = litRuntimeType l
+cexprStamp prog env (CVar "pi" _) =
+  if contains "pi" env then varStamp prog env "pi" else RTFloat
+cexprStamp prog env (CVar "e" _) =
+  if contains "e" env then varStamp prog env "e" else RTFloat
+cexprStamp _ _ (CVar "True" _) = RTBool
+cexprStamp _ _ (CVar "False" _) = RTBool
+cexprStamp prog env (CVar x _) = varStamp prog env x
+cexprStamp prog env (CBinPrim op l r tag _) =
+  if isCmpOp op then
+    RTBool
+  else if op == "::" then
+    RTCon
+  else if isArithOp op then
+    arithStamp prog env tag l r
+  else
+    appendStamp (cexprStamp prog env l) (cexprStamp prog env r)
+cexprStamp prog env (CUnOp "-" x) = cexprStamp prog env x
+cexprStamp prog env (CIf _ t f) =
+  stampOrElse (cexprStamp prog env t) (cexprStamp prog env f)
+cexprStamp prog env (CLet _ pat _ b) = cexprStamp prog (envBindPat pat env) b
+cexprStamp prog env (CLetGroup binds b) =
+  cexprStamp prog (envBindGroups binds env) b
+cexprStamp prog env (CBlock stmts) = blockStamp prog env stmts
+cexprStamp prog env (CDecision _ arms _) = armsStamp prog env arms
+cexprStamp prog env (CMatch _ arms) = armsStamp prog env arms
+cexprStamp prog env (app@(CApp _ _ (CallSite mode _))) = match mode
+  CallPartial _ => RTValue
+  CallOver _ => RTValue
+  _ => match appHead app
+    CVar fn _ => returnStamp prog env fn
+    CDict fn _ => returnStamp prog env fn
+    _ => RTValue
+cexprStamp prog _ (CFieldAccess _ _ recName ord) =
+  if ord >= 0 && isFloatCtorField prog recName ord then RTFloat else RTValue
+cexprStamp _ _ _ = RTValue
+
+-- `++` appends two Strings or two Lists.  Where neither operand states which,
+-- the result prints as a String: a List-valued `main` has no print.
+appendStamp : RuntimeType -> RuntimeType -> RuntimeType
+appendStamp RTValue RTValue = RTString
+appendStamp a RTValue = a
+appendStamp _ b = b
+
+-- the arithmetic result of two operands: the typechecker's scalar tag where it
+-- states one, else a Float operand makes a Float result
+arithStamp : Prog -> List String -> String -> CExpr -> CExpr -> RuntimeType
+arithStamp prog env tag l r =
+  if tag == "Float" then
+    RTFloat
+  else if tag == "U64" then
+    RTU64
+  else if tag == "I64" then
+    RTI64
+  else if isTaggedFixedHead tag then
+    RTInt
+  else
+    stampOrElse (cexprStamp prog env l) (cexprStamp prog env r)
+
+-- [a] where it states a type, else [b]
+stampOrElse : RuntimeType -> RuntimeType -> RuntimeType
+stampOrElse RTValue b = b
+stampOrElse a _ = a
+
+envBindGroup : CBind -> List String -> List String
+envBindGroup (CBind name _ _ bid) env = envBind name bid env
+
+envBindGroups : List CBind -> List String -> List String
+envBindGroups binds env = fold (acc g => envBindGroup g acc) env binds
+
+-- the env entry naming a let-group member's binder
+groupBindMark : CBind -> String
+groupBindMark (CBind name _ _ bid) = envMark name bid
+
+blockStamp : Prog -> List String -> List CStmt -> RuntimeType
+blockStamp _ _ [] = RTValue
+blockStamp prog env [CSExpr e] = cexprStamp prog env e
+blockStamp prog env ((CSLet _ pat _) :: rest) =
+  blockStamp prog (envBindPat pat env) rest
+blockStamp prog env (_ :: rest) = blockStamp prog env rest
+
+armsStamp : Prog -> List String -> List CArm -> RuntimeType
+armsStamp _ _ [] = RTValue
+armsStamp prog env ((CArm pat _ body) :: rest) =
+  stampOrElse
+    (cexprStamp prog (envBindPat pat env) body)
+    (armsStamp prog env rest)
+
+-- is [e] statically a Float?
 cexprIsFloat : Prog -> List String -> CExpr -> Bool
-cexprIsFloat prog env (CLit (LFloat _)) = True
-cexprIsFloat prog env (CVar "pi" _) = not (contains "pi" env)
-cexprIsFloat prog env (CVar "e" _) = not (contains "e" env)
--- W8b: a name known to be Float in the current body (an `impl Num Float` param).
--- #288: also a top-level nullary binding whose RHS is statically Float, unless a
--- local of the same name shadows it (mirrors the pi/e `not (contains x env)` guard).
-cexprIsFloat prog env (CVar x _) =
-  contains x (progEmit prog).floatLocals.value
-    || not (contains x env) && contains x (progEmit prog).floatGlobals.value
--- C3: also True when the binop itself carries an "Float" scalar-tag (e.g. a nested
--- Float binop whose operands are type-lost but the typecheck stamped the node).
-cexprIsFloat prog env (CBinPrim op l r tag _) =
-  isArithOp op
-    && not (isTaggedFixedHead tag)
-    && tag /= "U64"
-    && tag /= "I64"
-    && (tag == "Float" || cexprIsFloat prog env l || cexprIsFloat prog env r)
-cexprIsFloat prog env (CUnOp "-" x) = cexprIsFloat prog env x
-cexprIsFloat prog env (CLet _ (PVar x _) _ b) = cexprIsFloat prog (x :: env) b
-cexprIsFloat prog env (CLet _ _ _ b) = cexprIsFloat prog env b
-cexprIsFloat prog env (CBlock stmts) = cexprIsFloatBlock prog env stmts
-cexprIsFloat prog env (CIf _ t f) =
-  cexprIsFloat prog env t || cexprIsFloat prog env f
--- W-SQLITE-4: a call to a Float-returning extern OR a user fn whose declared
--- signature returns Float (`cellNumF : Cell -> Float`) — additive over the two
--- externs, so a co-located literal is no longer required to detect Float arith.
-cexprIsFloat prog env (app@(CApp _ _ _)) = match appHead app
-  CVar fn _ =>
-    not (contains fn env)
-      && (contains fn ["intToFloat", "randomFloat"] || fnReturnsFloat prog fn)
-  _ => False
--- W-SQLITE-4 stage 2: a record field access whose field is declared Float.
--- Look up the record ctor that owns `label` (by the stamped record name when
--- available, else by label) and check if that field's 0-based index is in
--- WasmEmitInput's constructor-Float index.
-cexprIsFloat prog env (CFieldAccess _ _ recName ord) =
-  ord >= 0 && isFloatCtorField prog recName ord
-cexprIsFloat prog env _ = False
+cexprIsFloat prog env e = cexprStamp prog env e == RTFloat
+
+-- A binop operand whose type is known only at run time: a variable stamped
+-- `RTValue` (a `Num a` parameter, or any binder the typechecker left generic).
+-- It routes to the runtime value-dispatch helpers, never the inline Int path
+-- (which would trap `illegal cast` on a boxed $float).
+isPolyNumBinop : Prog -> List String -> CExpr -> CExpr -> Bool
+isPolyNumBinop prog env l r =
+  isPolyNumOperand prog env l || isPolyNumOperand prog env r
+
+isPolyNumOperand : Prog -> List String -> CExpr -> Bool
+isPolyNumOperand prog env (CVar x _) = match varRow prog env x
+  Some row => row.brType == RTValue
+  None => False
+isPolyNumOperand _ _ _ = False
 
 isArithOp : String -> Bool
 -- Intentional cross-file duplicate of the same helper in typecheck.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
 isArithOp op = contains op ["+", "-", "*", "/", "%"]
-
--- W-SQLITE-4 stage 2: collect the PVar names that bind Float ctor-payload fields in
--- a PCon pattern.  For `PCon c [PVar x, …]`, for each field index i where ctor c is
--- declared Float (via WasmEmitInput), collect x if the i-th sub-pattern is a
--- PVar.  Used by emitLeafRef/emitGuardArmRef to seed floatLocals for the arm body.
-ctorPatFloatBinders : Prog -> Pat -> List String
-ctorPatFloatBinders prog (PCon c args) = match progInput prog
-  WasmEmitInputData _ _ _ ctorFloatIndex _ _ _ _ =>
-    match omLookup c ctorFloatIndex
-      Some floatIdxs => ctorPatFloatBindersGo c floatIdxs args 0
-      None => []
-ctorPatFloatBinders _ _ = []
-
-ctorPatFloatBindersGo : String -> List Int -> List Pat -> Int -> List String
-ctorPatFloatBindersGo _ _ [] _ = []
-ctorPatFloatBindersGo c floatIdxs ((PVar x _) :: rest) i =
-  (if containsInt i floatIdxs then [x] else [])
-    ++ ctorPatFloatBindersGo c floatIdxs rest (i + 1)
-ctorPatFloatBindersGo c floatIdxs (_ :: rest) i =
-  ctorPatFloatBindersGo c floatIdxs rest (i + 1)
-
--- P1: the match-arm pattern binders whose numeric type is only known at RUNTIME — every
--- PVar the arm binds that is used as a direct operand of an arith/compare binop and is
--- NOT one of the declared-Float ctor fields (those already take the static Float fast
--- path via floatLocals, which emitBinRef consults first).
---
--- A match binder carries NO static type: a tuple field has no declared type at all, and
--- a ctor field is only known when it is declared Float.  Ref-mode's fallback for an
--- unknown operand is the inline i31 int primitive — which is not merely a wrong guess but
--- a TRAP: $mdk_unbox_int ref.casts a boxed $float and the module dies `illegal cast` at
--- instantiate (test/llvm_fixtures_typed/float_typelost_tuple: `addPair p = match p (a,b)
--- => a + b` at Float).  So an unknown operand must DISPATCH, never guess.
---
--- This is exactly what the native backend already does — llvm_emit's binOperandTy falls
--- back to LTNum (the runtime tag-dispatched @mdk_num_* helpers) for any arith operand
--- whose type it cannot pin concretely, and a match binder is never in its LTy env, so it
--- is always LTNum there.  Seeding these into numPolyLocals routes them to $mdk_value_*
--- — the WasmGC peers of those very helpers — so BOTH backends now runtime-dispatch the
--- SAME nodes.  On an Int instantiation $mdk_value_* is byte-identical to the inline int
--- path, so only correctness changes, never a value.
-armNumPolyBinders : Prog -> Pat -> CExpr -> List String
-armNumPolyBinders prog pat body =
-  let floatBinders = ctorPatFloatBinders prog pat
-  filterList
-    (x => notIn floatBinders x && paramUsedInNumBinop x body)
-    (patVars pat)
-
-cexprIsFloatBlock : Prog -> List String -> List CStmt -> Bool
-cexprIsFloatBlock _ _ [] = False
-cexprIsFloatBlock prog env [CSExpr e] = cexprIsFloat prog env e
-cexprIsFloatBlock prog env ((CSLet _ (PVar x _) _) :: rest) =
-  cexprIsFloatBlock prog (x :: env) rest
-cexprIsFloatBlock prog env (_ :: rest) = cexprIsFloatBlock prog env rest
 
 emitUnRef : Prog -> List String -> Int -> String -> CExpr -> List String
 emitUnRef prog env d "-" x =
@@ -6936,9 +6799,9 @@ emitLetWith : Prog ->
   CExpr ->
   CExpr ->
   List String
-emitLetWith prog env d body False (PVar x _) e1 e2 =
+emitLetWith prog env d body False (PVar x _ bid) e1 e2 =
   let i1 = emitRefExpr prog env d e1
-  let i2 = body (x :: env) e2
+  let i2 = body (envBind x bid env) e2
   i1 ++ ["local.set $" ++ gname x] ++ i2
 emitLetWith prog env d body False PWild e1 e2 =
   let i1 = emitRefExpr prog env d e1
@@ -6956,8 +6819,9 @@ emitLetWith prog env d body False pat e1 e2 =
 -- the self-call resolves), rebuild `go`'s closure into local `$go`, then emit `e2`
 -- with `go` bound.  `collectExprLocals` already declares `$go` (its CLet clause
 -- wildcards the rec flag), so no locals change is needed.
-emitLetWith prog env _ body True (PVar x _) (CLam pats lamBody) e2 =
-  emitSelfRecLocalBind prog env x pats lamBody ++ body (x :: env) e2
+emitLetWith prog env _ body True (PVar x _ bid) (CLam pats lamBody) e2 =
+  emitSelfRecLocalBind prog env x bid pats lamBody
+    ++ body (envBind x bid env) e2
 -- a recursive NON-function `let` (`let x = … x … in e2`) is a value knot that no
 -- backend ties: the native emitter's rec clause likewise matches only `(PVar f)
 -- (CLam …)` and has no `True`/non-CLam clause at all.  We keep a named gap here
@@ -6970,13 +6834,13 @@ emitBlockRef prog env d [CSExpr ex] = emitRefExpr prog env d ex
 emitBlockRef prog env d ((CSExpr ex) :: rest) =
   emitRefExpr prog env d ex ++ ["drop"] ++ emitBlockRef prog env d rest
 -- #314: a recursive block-statement function-`let` (see emitSelfRecLocalBind).
-emitBlockRef prog env d ((CSLet _ (PVar x _) (CLam pats body)) :: rest) =
-  emitSelfRecLocalBind prog env x pats body
-    ++ emitBlockRef prog (x :: env) d rest
-emitBlockRef prog env d ((CSLet _ (PVar x _) ex) :: rest) =
+emitBlockRef prog env d ((CSLet _ (PVar x _ bid) (CLam pats body)) :: rest) =
+  emitSelfRecLocalBind prog env x bid pats body
+    ++ emitBlockRef prog (envBind x bid env) d rest
+emitBlockRef prog env d ((CSLet _ (PVar x _ bid) ex) :: rest) =
   emitRefExpr prog env d ex
     ++ ["local.set $" ++ gname x]
-    ++ emitBlockRef prog (x :: env) d rest
+    ++ emitBlockRef prog (envBind x bid env) d rest
 emitBlockRef prog env d ((CSLet _ PWild ex) :: rest) =
   emitRefExpr prog env d ex ++ ["drop"] ++ emitBlockRef prog env d rest
 emitBlockRef prog env d ((CSLet _ pat ex) :: rest) =
@@ -8280,7 +8144,7 @@ emitArgsArray prog env d args =
 -- destination cell instead of issuing the stack-growing recursive call.  The
 -- destination-passing context (the self-ref, arity, the param locals, the loop/exit
 -- labels, the uniform cell struct name + recursive-field index) is carried in a
--- per-emission `WasmEmit.trmcCtx` field so tail descent (emitRefTail / emitDecisionTail) can
+-- `FnCtx` of the `Prog` the body is emitted with, so tail descent (emitRefTail / emitDecisionTail) can
 -- redirect its cons/ctor/base leaves without threading a new argument through every arm.
 -- The ENGINE never sees a recursive `call`/`return_call` to the self fn inside the loop
 -- (the decisive "TMC fired" property): a cons/ctor leaf builds a cell, struct.sets it
@@ -8324,7 +8188,7 @@ wTrmcDctorL = "$__tmc_dctor"
 -- `arity` = the enclosing fn's param count (unused today; kept for symmetry with
 -- the LLVM self-call walk).
 emitRefTail : Prog -> List String -> Int -> CExpr -> List String
-emitRefTail prog env arity e = match (progEmit prog).trmcCtx.value
+emitRefTail prog env arity e = match (progFnCtx prog).trmc
   WTrmcOn self sarity pslots ctorSet _ loopLbl exitLbl =>
     -- TMC active: descend the structural tail wrappers (if/let/block/decision) with the
     -- context STILL LIVE so their inner leaves re-enter here; redirect every LEAF
@@ -8333,7 +8197,7 @@ emitRefTail prog env arity e = match (progEmit prog).trmcCtx.value
       emitRefTailWrap prog env arity e
     else
       emitWasmTrmcLeaf prog env self sarity pslots ctorSet loopLbl exitLbl e
-  WTrmcOff => match (progEmit prog).wDispCtx.value
+  WTrmcOff => match (progFnCtx prog).disp
     WDispOn root loopLbl rootArity members =>
       -- Stage-2/3 (b′) active: descend the structural tail wrappers with the dispatch
       -- context LIVE; redirect SPINE cons leaves + base leaves to the dest globals.
@@ -8454,7 +8318,7 @@ emitRefTailWrap prog env arity other =
 -- takes as a base leaf: computed as a value and stored into the destination.
 isWTrmcWrapper : CExpr -> Bool
 isWTrmcWrapper (CIf _ _ _) = True
-isWTrmcWrapper (CLet False (PVar _ _) _ _) = True
+isWTrmcWrapper (CLet False (PVar _ _ _) _ _) = True
 isWTrmcWrapper (CLet False PWild _ _) = True
 isWTrmcWrapper (CBlock _) = True
 isWTrmcWrapper (CDecision _ _ _) = True
@@ -8652,7 +8516,7 @@ emitWasmTrmcBase prog env exitLbl e =
   -- else store it into the current dest's recursive slot (the parent ctor's type
   -- is static for a singleton leaf-ctor set; a mixed set dispatches on
   -- $__tmc_dctor — wTrmcLinkParent).  Fetch the set from the ctx.
-  match (progEmit prog).trmcCtx.value
+  match (progFnCtx prog).trmc
     WTrmcOn _ _ _ ctorSet isBuiltinList _ _ =>
       let storeBranch = wTrmcLinkParent isBuiltinList ctorSet valInstrs
       let seedBranch = valInstrs ++ ["local.set " ++ wTrmcHeadL]
@@ -8897,11 +8761,10 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
   let exitLbl = "$tmcexit"
   let isBuiltinList = wTrmcBuildsBuiltinList prog self arity clauses
   let w7Outer = w7ScopeOpen (progEmit prog)
-  let saved = (progEmit prog).trmcCtx.value
-  let _ =
-    setRef
-      (progEmit prog).trmcCtx
+  let tprog =
+    progWithTrmc
       (WTrmcOn self arity pslots ctorSet isBuiltinList loopLbl exitLbl)
+      prog
   -- Single all-PVar clause (no fallthrough): the fast path — alias params to the
   -- synthetic positions and TMC-emit the body directly.  Otherwise (multi-clause OR
   -- a clause carries a list/ctor pattern, e.g. `stripComments`/the `map` impl): route
@@ -8911,28 +8774,27 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
     [CClause ps b] =>
       if allPlainParams ps && not (exprHasFallthrough b) then
         bindParamAliases prog ps params
-          ++ emitRefTail prog (map (patName (progEmit prog)) ps) arity b
+          ++ emitRefTail tprog (paramEnv ps) arity b
       else
         emitClauseChainGo
-          prog
+          tprog
           []
           lblRoot
           params
           arity
           clauses
           0
-          (progEmit prog).clauseSite.value
+          (progFnCtx prog).site
     _ =>
       emitClauseChainGo
-        prog
+        tprog
         []
         lblRoot
         params
         arity
         clauses
         0
-        (progEmit prog).clauseSite.value
-  let _ = setRef (progEmit prog).trmcCtx saved
+        (progFnCtx prog).site
   let loopShell =
     ["i32.const 1", "local.set " ++ wTrmcFirstL]
       ++ ["block " ++ exitLbl, "loop " ++ loopLbl]
@@ -9008,8 +8870,8 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
 -- from zeroed ones, and restores them before returning, so the outer spine resumes
 -- linking where it left off.
 
--- (`WDispCtx` and the per-emission `WasmEmit.wDispCtx` / `WasmEmit.wDispGroups`
--- cells that carry this context live with the rest of the emission state, above.)
+-- (`WDispCtx` rides in the `FnCtx` of the `Prog` a body is emitted with, and
+-- `WasmEmit.wDispGroups` carries the detected groups; both live above.)
 
 -- PER-GROUP dest globals (Stage-3): each group root gets its own head/dest/first
 -- triple, so one group's spine build cannot clobber another's — a member's helper
@@ -9189,13 +9051,9 @@ emitWDispMemberFn prog grp emitName origName arity clauses =
   -- cons leaves targeting a non-root member return_call that member directly.
   let rootArity = fnParamCountW prog root
   let w7Outer = w7ScopeOpen (progEmit prog)
-  let saved = (progEmit prog).wDispCtx.value
-  let _ =
-    setRef
-      (progEmit prog).wDispCtx
-      (WDispOn root loopName rootArity (dispMembersOf grp))
-  let bodyLines = emitClausesRef prog origName params arity clauses
-  let _ = setRef (progEmit prog).wDispCtx saved
+  let dprog =
+    progWithDisp (WDispOn root loopName rootArity (dispMembersOf grp)) prog
+  let bodyLines = emitClausesRef dprog origName params arity clauses
   let allLocals = clauseLocals clauses
   let extraLocals = filterList (notIn params) (dedupKeep allLocals)
   let scratch = scratchLocals (clausesMaxDepth clauses)
@@ -9385,13 +9243,13 @@ emitBlockTail prog env arity [CSExpr ex] = emitRefTail prog env arity ex
 emitBlockTail prog env arity ((CSExpr ex) :: rest) =
   emitRefExpr prog env 0 ex ++ ["drop"] ++ emitBlockTail prog env arity rest
 -- #314: a recursive block-statement function-`let` (see emitSelfRecLocalBind).
-emitBlockTail prog env arity ((CSLet _ (PVar x _) (CLam pats body)) :: rest) =
-  emitSelfRecLocalBind prog env x pats body
-    ++ emitBlockTail prog (x :: env) arity rest
-emitBlockTail prog env arity ((CSLet _ (PVar x _) ex) :: rest) =
+emitBlockTail prog env arity ((CSLet _ (PVar x _ bid) (CLam pats body)) :: rest) =
+  emitSelfRecLocalBind prog env x bid pats body
+    ++ emitBlockTail prog (envBind x bid env) arity rest
+emitBlockTail prog env arity ((CSLet _ (PVar x _ bid) ex) :: rest) =
   emitRefExpr prog env 0 ex
     ++ ["local.set $" ++ gname x]
-    ++ emitBlockTail prog (x :: env) arity rest
+    ++ emitBlockTail prog (envBind x bid env) arity rest
 emitBlockTail prog env arity ((CSLet _ PWild ex) :: rest) =
   emitRefExpr prog env 0 ex ++ ["drop"] ++ emitBlockTail prog env arity rest
 emitBlockTail prog env arity ((CSLet _ pat ex) :: rest) =
@@ -9451,8 +9309,7 @@ emitTreeTail prog env arity d root occs arms (CTDrop sub) =
 emitTreeTail prog env arity d root occs arms (CTSwitch branches dft) =
   emitSwitchTail prog env arity d root occs arms branches dft
 
--- W-SQLITE-4 stage 2: same ctor-payload Float binder seeding as emitLeafRef,
--- but for arm bodies in TAIL POSITION (emitRefTail path).
+-- Like emitLeafRef, for an arm body in TAIL POSITION (emitRefTail path).
 emitLeafTail : Prog ->
   List String ->
   Int ->
@@ -9463,14 +9320,11 @@ emitLeafTail : Prog ->
 emitLeafTail prog env arity root arms i = match nthArm arms i
   Some (CArm pat _ body) =>
     let (binds, env2) = bindPatRef prog env pat root
-    let savedNum = seedArmNumEnv prog pat body
     let bodyCode = emitRefTail prog env2 arity body
-    let _ = restoreArmNumEnv (progEmit prog) savedNum
     binds ++ bodyCode
   None => gapLP prog "ref-mode: tail decision arm index out of range"
 
--- W-SQLITE-4 stage 2: same ctor-payload Float binder seeding as emitGuardArmRef,
--- for guarded arms in tail position.
+-- Like emitGuardArmRef, for guarded arms in tail position.
 -- G6 (#379): same `patTestBind` re-match as emitGuardArmRef — see its note.  A `PRng`
 -- arm reaches THIS site too (`f n = match n` is a tail match), so the range test has to
 -- exist on both engines or the two disagree.
@@ -9486,7 +9340,6 @@ emitGuardArmTail : Prog ->
   List String
 emitGuardArmTail prog env arity d root occs arms i fail = match nthArm arms i
   Some (CArm pat guards body) =>
-    let savedNum = seedArmNumEnv prog pat body
     let gLabel = "$gt" ++ intToString d
     let (tests, binds, env2) = patTestBind prog pat root gLabel env
     -- #379: guards now thread the env (a CGBind binds names the body can see), so the
@@ -9496,7 +9349,6 @@ emitGuardArmTail prog env arity d root occs arms i fail = match nthArm arms i
       ["block " ++ gLabel]
         ++ indent (tests ++ binds ++ gcode ++ emitRefTail prog env3 arity body)
         ++ ["end"]
-    let _ = restoreArmNumEnv (progEmit prog) savedNum
     armCode ++ emitTreeTail prog env arity d root occs arms fail
   None => gapLP prog "ref-mode: tail guarded arm index out of range"
 
@@ -9772,7 +9624,9 @@ emitClosure prog env d pats body =
     filterList (c => contains c env) (dedupKeep (freeVarsExpr boundVars body))
   let _ = noteFuncRef (progEmit prog) lamName
   let _ =
-    addLifted (progEmit prog) (emitLamDefine prog lamName pats captured body)
+    addLifted
+      (progEmit prog)
+      (emitLamDefine prog lamName pats captured (envMarksOf captured env) body)
   -- build the closure struct at the use site: ref.func, arity, env array of captures.
   -- S-4: with NO captures every operand is constant, so hoist the struct to a module
   -- global (wConstClos) instead of rebuilding it on each evaluation of the `CLam`.
@@ -9794,9 +9648,10 @@ emitLamDefine : Prog ->
   String ->
   List Pat ->
   List String ->
+  List String ->
   CExpr ->
   List String
-emitLamDefine prog lamName pats captured body =
+emitLamDefine prog lamName pats captured capMarks body =
   let arity = listLen pats
   -- each param i: load $args[i] into a synthetic local `$__lp<i>`, then bind its
   -- (possibly-destructuring) pattern against that local via bindPatRef (the same
@@ -9806,7 +9661,10 @@ emitLamDefine prog lamName pats captured body =
   let capPrologue = flatMap capLoadAt (zipIdx captured 0)
   let argLoads = flatMap argLoadAt (zipIdx synthPs 0)
   let (paramBinds, bodyEnv0) =
-    bindParamPats prog (captured ++ synthPs) (zipPatsP pats synthPs)
+    bindParamPats
+      prog
+      (envWithMarks (captured ++ synthPs) capMarks)
+      (zipPatsP pats synthPs)
   let bodyEnv = bodyEnv0
   let patBoundVars = flatMap patVars pats
   let bodyLocals =
@@ -9822,28 +9680,13 @@ emitLamDefine prog lamName pats captured body =
   let setup =
     ["local.get $self", "ref.cast (ref $clos)", "local.set $__self_clos"]
   -- A lifted lambda is an INDEPENDENT function: it must NOT inherit the enclosing
-  -- fn's TMC loop context nor a dispatch-group context (wDispCtx).
+  -- fn's TMC loop context nor a dispatch-group context, so its body is emitted
+  -- with `progInFn`.
   -- emitLamDefine can run while one of those is LIVE (a cons-tail clause body whose
   -- lead-field / recomputed-arg builds a closure is emitted under a live trmc context),
   -- and without clearing it the lambda body's tail leaves would emit `$__tmc_*` /
   -- `$tmcloop` references that this lambda never declares as locals → invalid wasm.
-  let savedTrmc = (progEmit prog).trmcCtx.value
-  let savedDisp = (progEmit prog).wDispCtx.value
-  let _ = setRef (progEmit prog).trmcCtx WTrmcOff
-  let _ = setRef (progEmit prog).wDispCtx WDispOff
-  -- A1 (poly-`Num`-on-Float, design row 6): a lambda's own params carry no declared
-  -- sig, so its arith-used params are polymorphic `Num` (the arith-section accumulator
-  -- `a x => a + x` in `fold`).  Seed them (unioned with the enclosing poly set, whose
-  -- captured vars may also be poly) so the lambda body routes to the value helpers.
-  let savedNumPoly = (progEmit prog).numPolyLocals.value
-  let _ =
-    setRef
-      (progEmit prog).numPolyLocals
-      (dedupKeep (lamPolyParamNames pats body ++ savedNumPoly))
-  let bodyLines = emitRefTail prog bodyEnv arity body
-  let _ = setRef (progEmit prog).numPolyLocals savedNumPoly
-  let _ = setRef (progEmit prog).trmcCtx savedTrmc
-  let _ = setRef (progEmit prog).wDispCtx savedDisp
+  let bodyLines = emitRefTail (progInFn prog) bodyEnv arity body
   let w7Decls =
     w7LocalDecls (w7ScopeClose (progEmit prog) w7Outer) (maxRefDepth body)
   [
@@ -9936,17 +9779,19 @@ argLoadAt (p, i) = [
 emitSelfRecLocalBind : Prog ->
   List String ->
   String ->
+  BinderId ->
   List Pat ->
   CExpr ->
   List String
-emitSelfRecLocalBind prog env x pats body =
+emitSelfRecLocalBind prog env x bid pats body =
   let gid = freshLamId (progEmit prog)
-  let bind = CBind x [CClause pats body] noDeclLoc
+  let bind = CBind x [CClause pats body] noDeclLoc bid
   let groupCaps =
     filterList
       (c => contains c env)
       (dedupKeep (filterList (notIn [x]) (freeVarsClauses [] bind)))
-  let _ = emitLgLifted prog gid [x] groupCaps [bind] bind
+  let marks = envMark x bid :: envMarksOf groupCaps env
+  let _ = emitLgLifted prog gid [x] groupCaps marks [bind] bind
   -- one-member group: `useSiteRebuilds`'s later-sibling guard is vacuous here, so a
   -- capture-free `go` reaches the hoisted-global branch.  Self-reference is not a
   -- forward reference — the knot is tied inside the lifted prologue, not here.
@@ -9984,13 +9829,16 @@ emitLetGroupWith prog env d emitBody binds body =
     -- the group's value bindings are shared by every member, so they ride along as caps.
     let groupCaps = freeCaps ++ valNames
     -- emit each lifted top-level fn (drained into the module like other lifted lams).
+    let marks = map groupBindMark binds ++ envMarksOf freeCaps env
     let _ =
-      forEachU (b => emitLgLifted prog gid names groupCaps fnBinds b) fnBinds
+      forEachU
+        (b => emitLgLifted prog gid names groupCaps marks fnBinds b)
+        fnBinds
     -- at the use site: compute the value bindings into their locals (each visible to the
     -- next), rebuild every FUNCTION member's closure, then emit the body with all bound.
     let valInit = emitLgValBinds prog env d valBinds
     let rebuilds = useSiteRebuilds prog gid groupCaps fnBinds
-    valInit ++ rebuilds ++ emitBody (names ++ valNames ++ env) body
+    valInit ++ rebuilds ++ emitBody (envBindGroups binds env) body
 
 -- S-4: the USE-SITE closure rebuilds for a let-group.  A member whose group capture
 -- set is EMPTY and which does not FORWARD-reference a later sibling builds a `$clos`
@@ -10036,7 +9884,7 @@ liftedMemberRebuilds prog gid groupCaps binds =
 -- the hoisted-global form of rebuildLgClosure: same lifted code function, same arity,
 -- an empty env — read from one module global and stored into the member's local.
 constLgClosure : Prog -> Int -> CBind -> List String
-constLgClosure prog gid (CBind name clauses _) =
+constLgClosure prog gid (CBind name clauses _ _) =
   wConstClos
       (progEmit prog)
       "$mdk_lg\{intToString gid}_\{gname name}"
@@ -10045,17 +9893,17 @@ constLgClosure prog gid (CBind name clauses _) =
 
 -- P1: a CLetGroup member that is a nullary VALUE binding, not a local function.
 isLgValBind : CBind -> Bool
-isLgValBind (CBind _ [CClause [] _] _) = True
+isLgValBind (CBind _ [CClause [] _] _ _) = True
 isLgValBind _ = False
 
 -- P1: evaluate each value binding's rhs into its local, threading the bound names
 -- through the env so a later value binding can reference an earlier one.
 emitLgValBinds : Prog -> List String -> Int -> List CBind -> List String
 emitLgValBinds _ _ _ [] = []
-emitLgValBinds prog env d ((CBind name [CClause [] rhs] _) :: rest) =
+emitLgValBinds prog env d ((CBind name [CClause [] rhs] _ bid) :: rest) =
   emitRefExpr prog env d rhs
     ++ ["local.set $" ++ gname name]
-    ++ emitLgValBinds prog (name :: env) d rest
+    ++ emitLgValBinds prog (envBind name bid env) d rest
 emitLgValBinds prog env d (_ :: rest) = emitLgValBinds prog env d rest
 
 -- P1: does any name in `xs` occur in `ys`?
@@ -10064,7 +9912,7 @@ anyOfList xs ys = anyList (x => contains x ys) xs
 
 -- params of a CLetGroup binding (the first clause's pattern arity → synthetic names).
 lgBindParams : CBind -> List String
-lgBindParams (CBind _ clauses _) = synthParams (clauseArityOf clauses)
+lgBindParams (CBind _ clauses _ _) = synthParams (clauseArityOf clauses)
 
 -- the lifted member function `$mdk_lg<gid>_<name>`: $env = groupCaps; prologue loads
 -- caps, rebuilds every member closure into its local, loads own params, emits clauses.
@@ -10072,14 +9920,13 @@ emitLgLifted : Prog ->
   Int ->
   List String ->
   List String ->
+  List String ->
   List CBind ->
   CBind ->
   Unit
-emitLgLifted prog gid names groupCaps binds (CBind name clauses bindLoc) =
-  let _ = setCurrentBindingOfW (progEmit prog) ("lg:" ++ name)
-  let savedSite = (progEmit prog).clauseSite.value
-  let _ =
-    setRef (progEmit prog).clauseSite (sitePackedW (progEmit prog) bindLoc)
+emitLgLifted prog gid names groupCaps marks binds (CBind name clauses bindLoc _) =
+  let memberProg =
+    progForBinding ("lg:" ++ name) (sitePackedW (progEmit prog) bindLoc) prog
   let lamName = "$mdk_lg\{intToString gid}_\{gname name}"
   let _ = noteFuncRef (progEmit prog) lamName
   let arity = clauseArityOf clauses
@@ -10093,15 +9940,14 @@ emitLgLifted prog gid names groupCaps binds (CBind name clauses bindLoc) =
   -- a lifted letgroup member is an independent function: clear any live TMC /
   -- dispatch-group context so its body doesn't leak `$__tmc_*`/`$tmcloop` references
   -- (see emitLamDefine — same hazard when lifted under a live trmc context).
-  let savedTrmc = (progEmit prog).trmcCtx.value
-  let savedDisp = (progEmit prog).wDispCtx.value
-  let _ = setRef (progEmit prog).trmcCtx WTrmcOff
-  let _ = setRef (progEmit prog).wDispCtx WDispOff
   let bodyLines =
-    emitClausesRefEnv prog (names ++ groupCaps) name params arity clauses
-  let _ = setRef (progEmit prog).trmcCtx savedTrmc
-  let _ = setRef (progEmit prog).wDispCtx savedDisp
-  let _ = setRef (progEmit prog).clauseSite savedSite
+    emitClausesRefEnv
+      memberProg
+      (envWithMarks (names ++ groupCaps) marks)
+      name
+      params
+      arity
+      clauses
   let memberLocals = names
   let bodyLocals =
     filterList
@@ -10135,7 +9981,7 @@ emitLgLifted prog gid names groupCaps binds (CBind name clauses bindLoc) =
 -- bind it to its local `$<name>`.  Used BOTH at the use site and inside each lifted
 -- member's prologue; groupCaps must be bound as locals in either context.
 rebuildLgClosure : Prog -> Int -> List String -> CBind -> List String
-rebuildLgClosure prog gid groupCaps (CBind name clauses _) =
+rebuildLgClosure prog gid groupCaps (CBind name clauses _ _) =
   let lamName = "$mdk_lg\{intToString gid}_\{gname name}"
   let arity = clauseArityOf clauses
   let capInstrs = flatMap (c => ["local.get $" ++ gname c]) groupCaps
@@ -10217,7 +10063,7 @@ freeVarsExpr bound _ = []
 
 -- free vars of a CLetGroup binding's clauses (each clause's params are locally bound).
 freeVarsClauses : List String -> CBind -> List String
-freeVarsClauses bound (CBind _ clauses _) =
+freeVarsClauses bound (CBind _ clauses _ _) =
   flatMap (freeVarsClause bound) clauses
 
 freeVarsClause : List String -> CClause -> List String
@@ -10225,7 +10071,7 @@ freeVarsClause bound (CClause pats body) =
   freeVarsExpr (flatMap patVars pats ++ bound) body
 
 lgBindName : CBind -> String
-lgBindName (CBind n _ _) = n
+lgBindName (CBind n _ _ _) = n
 
 freeVarsStmts : List String -> List CStmt -> List String
 freeVarsStmts _ [] = []
@@ -10758,38 +10604,8 @@ emitTreeRef prog env d decLabel root occs arms (CTDrop sub) =
 emitTreeRef prog env d decLabel root occs arms (CTSwitch branches dft) =
   emitSwitchRef prog env d decLabel root occs arms branches dft
 
--- The numeric typing environment an arm's PATTERN BINDERS contribute to its body, saved
--- so it can be restored after (arms nest).  Two disjoint seeds, both scoped to the body:
---   * floatLocals  — binders at declared-Float ctor fields (W-SQLITE-4 stage 2): a
---     STATIC Float, so cexprIsFloat sees them and emitBinRef takes the f64 fast path.
---   * numPolyLocals — P1: every OTHER binder used in a num binop, whose type is known
---     only at runtime → routed to the shape-dispatching $mdk_value_* helpers.  Without
---     this the unknown operand fell to the inline i31 int path and TRAPPED `illegal cast`
---     on a boxed $float (see armNumPolyBinders).
--- emitBinRef consults floatLocals first, so a declared-Float binder keeps its static
--- path and only genuinely type-lost operands pay for dispatch.
-seedArmNumEnv : Prog -> Pat -> CExpr -> (List String, List String)
-seedArmNumEnv prog pat body =
-  let savedFloat = (progEmit prog).floatLocals.value
-  let savedNumPoly = (progEmit prog).numPolyLocals.value
-  let _ =
-    setRef
-      (progEmit prog).floatLocals
-      (ctorPatFloatBinders prog pat ++ savedFloat)
-  let _ =
-    setRef
-      (progEmit prog).numPolyLocals
-      (armNumPolyBinders prog pat body ++ savedNumPoly)
-  (savedFloat, savedNumPoly)
-
-restoreArmNumEnv : WasmEmit -> (List String, List String) -> Unit
-restoreArmNumEnv emit (savedFloat, savedNumPoly) =
-  let _ = setRef emit.floatLocals savedFloat
-  setRef emit.numPolyLocals savedNumPoly
-
 -- a leaf: re-match arm i's pattern against `root` to bind its PVars (loading struct
 -- fields), then emit the body, then `br decLabel` with the value.
--- Pattern binders seed the arm body's numeric typing env — see seedArmNumEnv.
 emitLeafRef : Prog ->
   List String ->
   Int ->
@@ -10801,9 +10617,7 @@ emitLeafRef : Prog ->
 emitLeafRef prog env d decLabel root arms i = match nthArm arms i
   Some (CArm pat _ body) =>
     let (binds, env2) = bindPatRef prog env pat root
-    let savedNum = seedArmNumEnv prog pat body
     let bodyCode = emitRefExpr prog env2 d body
-    let _ = restoreArmNumEnv (progEmit prog) savedNum
     binds ++ bodyCode ++ ["br " ++ decLabel]
   None => gapLP prog "ref-mode: decision arm index out of range"
 
@@ -10817,7 +10631,6 @@ emitLeafRef prog env d decLabel root arms i = match nthArm arms i
 -- An irrefutable pattern emits NO test, so the plain-`if`-guard case is unchanged.
 -- Mirrors llvm_emit's emitGuardedArm/`emitRefutArm`.  `root` is the scrutinee
 -- `local.get` (occ0), which satisfies patTestBind's re-runnable-read contract.
--- W-SQLITE-4 stage 2: same ctor-payload Float binder seeding as emitLeafRef.
 emitGuardArmRef : Prog ->
   List String ->
   Int ->
@@ -10830,7 +10643,6 @@ emitGuardArmRef : Prog ->
   List String
 emitGuardArmRef prog env d decLabel root occs arms i fail = match nthArm arms i
   Some (CArm pat guards body) =>
-    let savedNum = seedArmNumEnv prog pat body
     let gLabel = "$g" ++ intToString d
     let (tests, binds, env2) = patTestBind prog pat root gLabel env
     -- #379: guards now thread the env (a CGBind binds names the body can see), so the
@@ -10845,7 +10657,6 @@ emitGuardArmRef prog env d decLabel root occs arms i fail = match nthArm arms i
             ++ emitRefExpr prog env3 d body
             ++ ["br " ++ decLabel])
         ++ ["end"]
-    let _ = restoreArmNumEnv (progEmit prog) savedNum
     armCode ++ emitTreeRef prog env d decLabel root occs arms fail
   None => gapLP prog "ref-mode: guarded arm index out of range"
 
@@ -11252,7 +11063,8 @@ bindPatRef : Prog ->
   (List String, List String)
 bindPatRef prog env PWild v = ([], env)
 bindPatRef prog env (PLit _) v = ([], env)
-bindPatRef prog env (PVar x _) v = (v ++ ["local.set $" ++ gname x], x :: env)
+bindPatRef prog env (PVar x _ bid) v =
+  (v ++ ["local.set $" ++ gname x], envBind x bid env)
 bindPatRef prog env (PCon c args) v = bindConFields prog env c args v
 -- W7: a cons cell — field 1 = head, field 2 = tail (struct $C_Cons).
 bindPatRef prog env (PCons h t) v =
@@ -11266,9 +11078,9 @@ bindPatRef prog env (PList ps) v = bindListPat prog env ps v
 -- W7: a tuple pattern — field i+1 of the $C_Tup<n> struct.
 bindPatRef prog env (PTuple ps) v =
   bindTupleFields prog env (tupleCtorName (listLen ps)) ps v 0
-bindPatRef prog env (PAs x _ p) v =
+bindPatRef prog env (PAs x _ bid p) v =
   let setX = v ++ ["local.set $" ++ gname x]
-  let (inner, env2) = bindPatRef prog (x :: env) p v
+  let (inner, env2) = bindPatRef prog (envBind x bid env) p v
   (setX ++ inner, env2)
 bindPatRef prog env other v =
   gapL2P
@@ -11345,23 +11157,12 @@ bindConFieldsGo prog env c (p :: rest) v i =
 
 -- top-level binding classification (W2 + W3, identical).
 isValBind : CBind -> Bool
-isValBind (CBind name [CClause [] _] _) = name /= "main"
+isValBind (CBind name [CClause [] _] _ _) = name /= "main"
 isValBind _ = False
 
 isFnBind : CBind -> Bool
-isFnBind (CBind "main" _ _) = False
+isFnBind (CBind "main" _ _ _) = False
 isFnBind b = not (isValBind b)
-
--- #288: names of nullary value bindings whose RHS is statically Float (structural
--- `cexprIsFloat`, e.g. `nan = 0.0 / 0.0`).  Seeds floatGlobals so a `global.get`
--- of such a name reads as Float at a comparison site.
-floatValGlobalNames : Prog -> List CBind -> List String
-floatValGlobalNames prog binds = flatMap (floatValGlobalName prog) binds
-
-floatValGlobalName : Prog -> CBind -> List String
-floatValGlobalName prog (CBind name [CClause [] body] _) =
-  if cexprIsFloat prog [] body then [name] else []
-floatValGlobalName _ _ = []
 
 userFnBinds : List CBind -> List CBind
 userFnBinds groups = filterList isFnBind groups
@@ -11373,28 +11174,28 @@ collectValNames : List CBind -> List String
 collectValNames groups = map bindName (filterList isValBind groups)
 
 bindName : CBind -> String
-bindName (CBind n _ _) = n
+bindName (CBind n _ _ _) = n
 
 findMain : WasmEmit -> List CBind -> Option CExpr
 findMain _ [] = None
-findMain _ ((CBind "main" [CClause [] body] _) :: _) = Some body
-findMain emit ((CBind "main" _ _) :: _) =
+findMain _ ((CBind "main" [CClause [] body] _ _) :: _) = Some body
+findMain emit ((CBind "main" _ _ _) :: _) =
   gapOptE emit "`main` must be a nullary value (main = ...)"
 findMain emit (_ :: rest) = findMain emit rest
 
 -- the let-bound locals inside a binding's (single, nullary) clause body.
 collectBindLocals : CBind -> List String
-collectBindLocals (CBind _ [CClause _ body] _) = collectExprLocals body
+collectBindLocals (CBind _ [CClause _ body] _ _) = collectExprLocals body
 collectBindLocals _ = []
 
-patName : WasmEmit -> Pat -> String
-patName _ (PVar x _) = x
-patName _ PWild = "_"
-patName emit _ =
+patName : WasmEmit -> String -> Pat -> String
+patName _ _ (PVar x _ _) = x
+patName _ _ PWild = "_"
+patName emit binding _ =
   gapS
     emit
     ("only PVar/PWild parameters (pattern params are inner-match material) [in "
-      ++ currentBindingOfW emit
+      ++ binding
       ++ "]")
 
 -- ── local collection ─────────────────────────────────────────────────────────
@@ -11402,7 +11203,7 @@ patName emit _ =
 -- every `let`-bound / block-let-bound PVar AND (W3) every PATTERN-bound var in a
 -- CDecision arm (the leaf re-match binds them into locals).
 collectExprLocals : CExpr -> List String
-collectExprLocals (CLet _ (PVar x _) e1 e2) =
+collectExprLocals (CLet _ (PVar x _ _) e1 e2) =
   x :: collectExprLocals e1 ++ collectExprLocals e2
 collectExprLocals (CLet _ pat e1 e2) =
   patVars pat ++ (collectExprLocals e1 ++ collectExprLocals e2)
@@ -11456,12 +11257,12 @@ collectFieldLocals (CField _ _ value) = collectExprLocals value
 -- P1: the inline-emitted locals of a group's nullary VALUE member (none for a function
 -- member — that one is lifted).
 collectLgValLocals : CBind -> List String
-collectLgValLocals (CBind _ [CClause [] rhs] _) = collectExprLocals rhs
+collectLgValLocals (CBind _ [CClause [] rhs] _ _) = collectExprLocals rhs
 collectLgValLocals _ = []
 
 collectStmtLocals : CStmt -> List String
 collectStmtLocals (CSExpr ex) = collectExprLocals ex
-collectStmtLocals (CSLet _ (PVar x _) ex) = x :: collectExprLocals ex
+collectStmtLocals (CSLet _ (PVar x _ _) ex) = x :: collectExprLocals ex
 collectStmtLocals (CSLet _ pat ex) = patVars pat ++ collectExprLocals ex
 collectStmtLocals (CSAssign _ ex) = collectExprLocals ex
 
@@ -11572,15 +11373,188 @@ collectGuardLocals (CGBind p e) =
 
 -- the variables a pattern binds (for local declaration).
 patVars : Pat -> List String
-patVars (PVar x _) = [x]
+patVars (PVar x _ _) = [x]
 patVars PWild = []
 patVars (PLit _) = []
 patVars (PCon _ args) = flatMap patVars args
 patVars (PTuple ps) = flatMap patVars ps
 patVars (PCons h t) = patVars h ++ patVars t
 patVars (PList ps) = flatMap patVars ps
-patVars (PAs x _ p) = x :: patVars p
+patVars (PAs x _ _ p) = x :: patVars p
 patVars _ = []
+
+-- ── distinct locals for shadowing binders ────────────────────────────────────
+-- Every wasm local is named after its source binder, and a function declares one
+-- local per distinct name, so a binder that shadows an enclosing one of the same
+-- name would write the outer binder's slot.  `uniqueBinders` runs once per program,
+-- before emission, and renames only a binder that has an in-scope binder of the
+-- same name: the n-th nested one becomes `x$<n-1>` (`$` cannot occur in a source
+-- name), and its references follow.  An unshadowed binder keeps its name, so
+-- the emitted text of a program without shadowing is unchanged.  Dictionary
+-- parameters (`$`-prefixed) are never renamed: routes name them.  The scope maps a
+-- name to how many binders of it are in scope.
+uniqueBinders : CProgram -> CProgram
+uniqueBinders (CProgram groups ctorArs ctorTypes impls mctx facts) =
+  CProgram
+    (map (ubBind omEmpty) groups)
+    ctorArs
+    ctorTypes
+    (map ubImpl impls)
+    mctx
+    facts
+
+ubImpl : CImplEntry -> CImplEntry
+ubImpl (CImplEntry m a b (CImplTagged t k i sym pos pats body)) =
+  CImplEntry
+    m
+    a
+    b
+    (CImplTagged
+      t
+      k
+      i
+      sym
+      pos
+      (map (ubPat omEmpty) pats)
+      (ubExpr (ubExtend omEmpty pats) body))
+ubImpl (CImplEntry m a b (CImplDefault t k i sym pos pats body)) =
+  CImplEntry
+    m
+    a
+    b
+    (CImplDefault
+      t
+      k
+      i
+      sym
+      pos
+      (map (ubPat omEmpty) pats)
+      (ubExpr (ubExtend omEmpty pats) body))
+
+ubShadowable : String -> Bool
+ubShadowable x = not (startsWith "$" x)
+
+-- the name a binder introduced now gets
+ubNew : OrdMap Int -> String -> String
+ubNew sc x = match omLookup x sc
+  Some n => if ubShadowable x then "\{x}$\{intToString n}" else x
+  None => x
+
+-- the name a reference resolves to
+ubRef : OrdMap Int -> String -> String
+ubRef sc x = match omLookup x sc
+  Some n => if n > 1 then "\{x}$\{intToString (n - 1)}" else x
+  None => x
+
+ubBump : OrdMap Int -> String -> OrdMap Int
+ubBump sc x =
+  if ubShadowable x then
+    omInsert
+      x
+      (match omLookup x sc
+        Some n => n + 1
+        None => 1)
+      sc
+  else
+    sc
+
+ubBumpAll : OrdMap Int -> List String -> OrdMap Int
+ubBumpAll sc [] = sc
+ubBumpAll sc (x :: xs) = ubBumpAll (ubBump sc x) xs
+
+ubExtend : OrdMap Int -> List Pat -> OrdMap Int
+ubExtend sc pats = ubBumpAll sc (flatMap patVars pats)
+
+ubPat : OrdMap Int -> Pat -> Pat
+ubPat sc (PVar x l bid) = PVar (ubNew sc x) l bid
+ubPat sc (PCon c ps) = PCon c (map (ubPat sc) ps)
+ubPat sc (PCons h t) = PCons (ubPat sc h) (ubPat sc t)
+ubPat sc (PTuple ps) = PTuple (map (ubPat sc) ps)
+ubPat sc (PList ps) = PList (map (ubPat sc) ps)
+ubPat sc (PAs x l bid p) = PAs (ubNew sc x) l bid (ubPat sc p)
+ubPat _ p = p
+
+ubBind : OrdMap Int -> CBind -> CBind
+ubBind sc (CBind n clauses loc bid) =
+  CBind n (map (ubClause sc) clauses) loc bid
+
+ubClause : OrdMap Int -> CClause -> CClause
+ubClause sc (CClause pats body) =
+  CClause (map (ubPat sc) pats) (ubExpr (ubExtend sc pats) body)
+
+ubExprs : OrdMap Int -> List CExpr -> List CExpr
+ubExprs sc es = map (ubExpr sc) es
+
+ubField : OrdMap Int -> CField -> CField
+ubField sc (CField l o e) = CField l o (ubExpr sc e)
+
+ubExpr : OrdMap Int -> CExpr -> CExpr
+ubExpr sc (CVar x a) = CVar (ubRef sc x) a
+ubExpr sc (CApp f args cs) = CApp (ubExpr sc f) (ubExprs sc args) cs
+ubExpr sc (CLam pats b) =
+  CLam (map (ubPat sc) pats) (ubExpr (ubExtend sc pats) b)
+ubExpr sc (CLet r pat e1 e2) =
+  let sc2 = ubExtend sc [pat]
+  CLet r (ubPat sc pat) (ubExpr (if r then sc2 else sc) e1) (ubExpr sc2 e2)
+ubExpr sc (CLetGroup binds body) =
+  let sc2 = ubBumpAll sc (map lgBindName binds)
+  CLetGroup (map (b => ubBind sc2 (ubRenameBind sc b)) binds) (ubExpr sc2 body)
+ubExpr sc (CMatch scrut arms) = CMatch (ubExpr sc scrut) (map (ubArm sc) arms)
+ubExpr sc (CDecision scrut arms tree) =
+  CDecision (ubExpr sc scrut) (map (ubArm sc) arms) tree
+ubExpr sc (CIf c t f) = CIf (ubExpr sc c) (ubExpr sc t) (ubExpr sc f)
+ubExpr sc (CBinPrim op l r tag loc) =
+  CBinPrim op (ubExpr sc l) (ubExpr sc r) tag loc
+ubExpr sc (CUnOp op x) = CUnOp op (ubExpr sc x)
+ubExpr sc (CTuple es) = CTuple (ubExprs sc es)
+ubExpr sc (CList es) = CList (ubExprs sc es)
+ubExpr sc (CArray es) = CArray (ubExprs sc es)
+ubExpr sc (CRecord n fs) = CRecord n (map (ubField sc) fs)
+ubExpr sc (CFieldAccess e l r o) = CFieldAccess (ubExpr sc e) l r o
+ubExpr sc (CRecordUpdate n e fs) =
+  CRecordUpdate n (ubExpr sc e) (map (ubField sc) fs)
+ubExpr sc (CVariantUpdate n e fs) =
+  CVariantUpdate n (ubExpr sc e) (map (ubField sc) fs)
+ubExpr sc (CRangeList lo hi i) = CRangeList (ubExpr sc lo) (ubExpr sc hi) i
+ubExpr sc (CRangeArray lo hi i) = CRangeArray (ubExpr sc lo) (ubExpr sc hi) i
+ubExpr sc (CIndex b i) = CIndex (ubExpr sc b) (ubExpr sc i)
+ubExpr sc (CSlice b lo hi i) =
+  CSlice (ubExpr sc b) (ubExpr sc lo) (ubExpr sc hi) i
+ubExpr sc (CStringIndex b i) = CStringIndex (ubExpr sc b) (ubExpr sc i)
+ubExpr sc (CStringSlice b lo hi i) =
+  CStringSlice (ubExpr sc b) (ubExpr sc lo) (ubExpr sc hi) i
+ubExpr sc (CListIndex b i) = CListIndex (ubExpr sc b) (ubExpr sc i)
+ubExpr sc (CListSlice b lo hi i) =
+  CListSlice (ubExpr sc b) (ubExpr sc lo) (ubExpr sc hi) i
+ubExpr sc (CBlock stmts) = CBlock (ubStmts sc stmts)
+ubExpr _ e = e
+
+-- a let-group member's own name, as bound in the enclosing scope
+ubRenameBind : OrdMap Int -> CBind -> CBind
+ubRenameBind sc (CBind n clauses loc bid) = CBind (ubNew sc n) clauses loc bid
+
+ubStmts : OrdMap Int -> List CStmt -> List CStmt
+ubStmts _ [] = []
+ubStmts sc ((CSExpr e) :: rest) = CSExpr (ubExpr sc e) :: ubStmts sc rest
+ubStmts sc ((CSLet r pat e) :: rest) =
+  let sc2 = ubExtend sc [pat]
+  CSLet r (ubPat sc pat) (ubExpr (if r then sc2 else sc) e) :: ubStmts sc2 rest
+ubStmts sc ((CSAssign n e) :: rest) =
+  CSAssign (ubRef sc n) (ubExpr sc e) :: ubStmts sc rest
+
+ubArm : OrdMap Int -> CArm -> CArm
+ubArm sc (CArm pat guards body) =
+  let (guards2, sc2) = ubGuards (ubExtend sc [pat]) guards
+  CArm (ubPat sc pat) guards2 (ubExpr sc2 body)
+
+ubGuards : OrdMap Int -> List CGuard -> (List CGuard, OrdMap Int)
+ubGuards sc [] = ([], sc)
+ubGuards sc ((CGBool g) :: rest) =
+  let (rest2, sc2) = ubGuards sc rest
+  (CGBool (ubExpr sc g) :: rest2, sc2)
+ubGuards sc ((CGBind p e) :: rest) =
+  let (rest2, sc2) = ubGuards (ubExtend sc [p]) rest
+  (CGBind (ubPat sc p) (ubExpr sc e) :: rest2, sc2)
 
 -- ── operator tables (both modes) ─────────────────────────────────────────────
 
@@ -12114,7 +12088,7 @@ treeSwitchNesting (CTSwitch branches dft) =
 -- P1: scratch depth of a group's nullary VALUE member's inline-emitted rhs (a function
 -- member contributes nothing here — it is lifted).
 maxIndexAtLgVal : CBind -> Int -> Int
-maxIndexAtLgVal (CBind _ [CClause [] rhs] _) d = maxIndexAt rhs d
+maxIndexAtLgVal (CBind _ [CClause [] rhs] _ _) d = maxIndexAt rhs d
 maxIndexAtLgVal _ d = d - 1
 
 maxIndexAtStmt : CStmt -> Int -> Int
@@ -12128,7 +12102,7 @@ maxIndexAtStmt (CSAssign _ e) d = maxIndexAt e d
 -- whatever the RHS itself uses, so the stash never collides with the RHS's own
 -- scratch and is live only while the sub-patterns extract their fields.
 letStashIndex : Pat -> CExpr -> Int -> Int
-letStashIndex (PVar _ _) _ d = d - 1
+letStashIndex (PVar _ _ _) _ d = d - 1
 letStashIndex PWild _ d = d - 1
 letStashIndex _ e d = maxIndexAt e d + 1
 
@@ -12304,7 +12278,7 @@ ctag _ = "?"
 
 -- a readable tag for an unsupported pattern.
 ptag : Pat -> String
-ptag (PVar _ _) = "PVar"
+ptag (PVar _ _ _) = "PVar"
 ptag PWild = "PWild"
 ptag (PLit (LInt _)) = "PLit-LInt"
 ptag (PLit (LFloat _)) = "PLit-LFloat"
@@ -12316,7 +12290,7 @@ ptag (PCon _ _) = "PCon"
 ptag (PTuple _) = "PTuple (W7)"
 ptag (PCons _ _) = "PCons (list — W7)"
 ptag (PList _) = "PList (list — W7)"
-ptag (PAs _ _ _) = "PAs"
+ptag (PAs _ _ _ _) = "PAs"
 -- #380 (first half): without this arm a range-shaped residual gap fell to `_ = "?"` and
 -- named no construct — which is why the #379 ledger rows read `… literal): ?`.
 ptag (PRng _ _ _) = "PRng"

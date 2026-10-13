@@ -259,8 +259,20 @@ mw_done4:
 ; mdk-module program
 define i64 @mdk_lam.program.0(i64 %clos, i64 %arg0) {
 entry:
-  %t0 = call i64 @mdk_num_mul(i64 %arg0, i64 %arg0)
-  ret i64 %t0
+  %t0 = sub i64 %arg0, 1
+  %t1 = ashr i64 %arg0, 1
+  %t2 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %t1, i64 %t0)
+  %t3 = extractvalue { i64, i1 } %t2, 0
+  %t4 = extractvalue { i64, i1 } %t2, 1
+  br i1 %t4, label %intovf5, label %intok5
+intovf5:
+  %t6 = ashr i64 %arg0, 1
+  %t7 = ashr i64 %arg0, 1
+  call void @mdk_int_overflow(i64 2, i64 %t6, i64 %t7)
+  unreachable
+intok5:
+  %t8 = or i64 %t3, 1
+  ret i64 %t8
 }
 
 ; mdk-module program

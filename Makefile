@@ -169,6 +169,12 @@ inlang-support-util-test:
 inlang-ir-dce-test:
 	./medaka test compiler/ir/dce_test.mdk
 
+## The Core s-expression printer and parser round-trip a call's mode and tail
+## flag, record ordinals, float literals and the binder-type section; no entry
+## imports this sibling.
+inlang-ir-core-ir-sexp-test:
+	./medaka test compiler/ir/core_ir_sexp_test.mdk
+
 inlang-eval-eval-test:
 	./medaka test compiler/eval/eval_test.mdk
 
@@ -194,6 +200,11 @@ inlang-backend-extern-catalog-test:
 ## run only from here.
 inlang-backend-core-validate-test:
 	./medaka test compiler/backend/core_validate_test.mdk
+
+## Each emitter refuses an unstamped binder. Native-only: the refusal is a panic,
+## graded in a child `medaka test` run, and no entry imports the file.
+inlang-backend-emit-binder-refusal-test:
+	./medaka test --native compiler/backend/emit_binder_refusal_test.mdk
 
 ## Coded-trap helpers of wasm_emit.mdk: one `$trapmsg_K` per distinct fixed text,
 ## graded against the spec's stderr lines.

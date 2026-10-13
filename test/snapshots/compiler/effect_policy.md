@@ -225,7 +225,7 @@ collectEVars (EDo _ stmts) = concatMapCP collectStmt stmts
 collectEVars _ = []
 
 collectBind : LetBind -> List String
-collectBind (LetBind _ clauses _) = concatMapCP collectClause clauses
+collectBind (LetBind _ clauses _ _) = concatMapCP collectClause clauses
 
 collectClause : FunClause -> List String
 collectClause (FunClause _ body) = collectEVars body
@@ -254,14 +254,14 @@ concatMapCP f (x :: xs) = f x ++ concatMapCP f xs
 
 -- A top-level name (DFunDef or DExtern), peeling DAttrib.
 topName : Decl -> Option String
-topName (DFunDef _ n _ _ _) = Some n
+topName (DFunDef _ n _ _ _ _) = Some n
 topName (DExtern _ n _) = Some n
 topName (DAttrib _ d) = topName d
 topName _ = None
 
 -- (name, body-EVars) for each top-level DFunDef (externs have no body).
 fnBody : Decl -> Option (String, List String)
-fnBody (DFunDef _ n _ body _) = Some (n, collectEVars body)
+fnBody (DFunDef _ n _ body _ _) = Some (n, collectEVars body)
 fnBody (DAttrib _ d) = fnBody d
 fnBody _ = None
 
@@ -422,7 +422,7 @@ firstWithEffect effTable label (c :: rest) =
 (DFunDef false "collectEVars" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EVar "concatMapCP") (EVar "collectStmt")) (EVar "stmts")))
 (DFunDef false "collectEVars" (PWild) (EListLit))
 (DTypeSig false "collectBind" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "collectBind" ((PCon "LetBind" PWild (PVar "clauses") PWild)) (EApp (EApp (EVar "concatMapCP") (EVar "collectClause")) (EVar "clauses")))
+(DFunDef false "collectBind" ((PCon "LetBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "concatMapCP") (EVar "collectClause")) (EVar "clauses")))
 (DTypeSig false "collectClause" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectClause" ((PCon "FunClause" PWild (PVar "body"))) (EApp (EVar "collectEVars") (EVar "body")))
 (DTypeSig false "collectArm" (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyCon "String"))))
@@ -442,12 +442,12 @@ firstWithEffect effTable label (c :: rest) =
 (DFunDef false "concatMapCP" (PWild (PList)) (EListLit))
 (DFunDef false "concatMapCP" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "concatMapCP") (EVar "f")) (EVar "xs"))))
 (DTypeSig false "topName" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "topName" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "topName" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "topName" ((PCon "DExtern" PWild (PVar "n") PWild)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "topName" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topName") (EVar "d")))
 (DFunDef false "topName" (PWild) (EVar "None"))
 (DTypeSig false "fnBody" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "fnBody" ((PCon "DFunDef" PWild (PVar "n") PWild (PVar "body") PWild)) (EApp (EVar "Some") (ETuple (EVar "n") (EApp (EVar "collectEVars") (EVar "body")))))
+(DFunDef false "fnBody" ((PCon "DFunDef" PWild (PVar "n") PWild (PVar "body") PWild PWild)) (EApp (EVar "Some") (ETuple (EVar "n") (EApp (EVar "collectEVars") (EVar "body")))))
 (DFunDef false "fnBody" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "fnBody") (EVar "d")))
 (DFunDef false "fnBody" (PWild) (EVar "None"))
 (DTypeSig true "buildCallGraph" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CallGraph")))
@@ -551,7 +551,7 @@ firstWithEffect effTable label (c :: rest) =
 (DFunDef false "collectEVars" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EVar "concatMapCP") (EVar "collectStmt")) (EVar "stmts")))
 (DFunDef false "collectEVars" (PWild) (EListLit))
 (DTypeSig false "collectBind" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "collectBind" ((PCon "LetBind" PWild (PVar "clauses") PWild)) (EApp (EApp (EVar "concatMapCP") (EVar "collectClause")) (EVar "clauses")))
+(DFunDef false "collectBind" ((PCon "LetBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "concatMapCP") (EVar "collectClause")) (EVar "clauses")))
 (DTypeSig false "collectClause" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectClause" ((PCon "FunClause" PWild (PVar "body"))) (EApp (EVar "collectEVars") (EVar "body")))
 (DTypeSig false "collectArm" (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyCon "String"))))
@@ -571,12 +571,12 @@ firstWithEffect effTable label (c :: rest) =
 (DFunDef false "concatMapCP" (PWild (PList)) (EListLit))
 (DFunDef false "concatMapCP" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "concatMapCP") (EVar "f")) (EVar "xs"))))
 (DTypeSig false "topName" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "topName" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "topName" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "topName" ((PCon "DExtern" PWild (PVar "n") PWild)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "topName" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topName") (EVar "d")))
 (DFunDef false "topName" (PWild) (EVar "None"))
 (DTypeSig false "fnBody" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "fnBody" ((PCon "DFunDef" PWild (PVar "n") PWild (PVar "body") PWild)) (EApp (EVar "Some") (ETuple (EVar "n") (EApp (EVar "collectEVars") (EVar "body")))))
+(DFunDef false "fnBody" ((PCon "DFunDef" PWild (PVar "n") PWild (PVar "body") PWild PWild)) (EApp (EVar "Some") (ETuple (EVar "n") (EApp (EVar "collectEVars") (EVar "body")))))
 (DFunDef false "fnBody" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "fnBody") (EVar "d")))
 (DFunDef false "fnBody" (PWild) (EVar "None"))
 (DTypeSig true "buildCallGraph" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CallGraph")))

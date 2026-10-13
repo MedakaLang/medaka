@@ -71,21 +71,21 @@ litSexp (LI64 hi lo) = node "LI64" [intToString hi, intToString lo]
 
 export
 patSexp : Pat -> String
-patSexp (PVar x _) = node "PVar" [escStr x]
+patSexp (PVar x _ _) = node "PVar" [escStr x]
 patSexp PWild = "PWild"
 patSexp (PLit l) = node "PLit" [litSexp l]
 patSexp (PCon c ps) = node "PCon" (escStr c :: map patSexp ps)
 patSexp (PCons a b) = node "PCons" [patSexp a, patSexp b]
 patSexp (PTuple ps) = node "PTuple" (map patSexp ps)
 patSexp (PList ps) = node "PList" (map patSexp ps)
-patSexp (PAs x _ q) = node "PAs" [escStr x, patSexp q]
+patSexp (PAs x _ _ q) = node "PAs" [escStr x, patSexp q]
 patSexp (PRng lo hi incl) = node "PRng" [litSexp lo, litSexp hi, boolStr incl]
 patSexp (PRec name fields rest) =
   node "PRec" [escStr name, slist (map recPatFieldSexp fields), boolStr rest]
 
 recPatFieldSexp : RecPatField -> String
-recPatFieldSexp (RecPatField f _ (Some p)) = node "rf" [escStr f, patSexp p]
-recPatFieldSexp (RecPatField f _ None) = node "rf" [escStr f, "None"]
+recPatFieldSexp (RecPatField f _ _ (Some p)) = node "rf" [escStr f, patSexp p]
+recPatFieldSexp (RecPatField f _ _ None) = node "rf" [escStr f, "None"]
 
 tySexp : Ty -> String
 tySexp (TyCon { tyConName = c }) = node "TyCon" [escStr c]
@@ -246,7 +246,7 @@ kvSexp : (Expr, Expr) -> String
 kvSexp (k, v) = node "kv" [exprSexp k, exprSexp v]
 
 letBindSexp : LetBind -> String
-letBindSexp (LetBind name clauses _) =
+letBindSexp (LetBind name clauses _ _) =
   node "lgb" (escStr name :: map funClauseSexp clauses)
 
 funClauseSexp : FunClause -> String
@@ -280,7 +280,7 @@ variantSexp (Variant n pl) = node "variant" [escStr n, payloadSexp pl]
 declSexp : Decl -> String
 declSexp (DTypeSig p n t _) = node "DTypeSig" [boolStr p, escStr n, tySexp t]
 declSexp (DExtern p n t) = node "DExtern" [boolStr p, escStr n, tySexp t]
-declSexp (DFunDef p n ps b _) =
+declSexp (DFunDef p n ps b _ _) =
   node "DFunDef" [boolStr p, escStr n, slist (map patSexp ps), exprSexp b]
 declSexp (DData { dataVis = vis, dataName = n, dataParams = ps, dataExtern = True }) =
   node "DExternData" [visSexp vis, escStr n, slist (map escStr ps)]

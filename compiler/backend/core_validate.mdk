@@ -46,6 +46,16 @@
 -- default sexp printer drops an `RKey`'s prerequisite and super routes, so a
 -- program parsed back from a dump would be refused.
 --
+-- The binder-stamp check: every binder pattern in the program (a `PVar`, a `PAs`,
+-- a record-pattern pun) has a row in the program's binder table
+-- (`DeclFacts.factBinders`), so it says what it holds at run time.  A `let` of a
+-- literal, a tuple, a list or a constructor is held to what its own right-hand
+-- side is: a binder stamped as another scalar than the literal's, or as a scalar
+-- where a cell is bound, is refused.  `RTValue` is the answer "no static fact" and
+-- contradicts nothing; an integer literal may be stamped as any numeric type,
+-- because it is written the same at each.  Every named function (a `CBind`) has
+-- a row too, and the row gives the type its body returns.
+--
 -- The extern check: a runtime extern whose catalog row gives the backend no
 -- lowering (`NotProvided`) is refused wherever the program references it
 -- freely.  A reference is free when no local binder in scope and no top-level
@@ -70,8 +80,19 @@ import ir.core_ir.{
   DeclFacts(..),
   CallMode(..),
   CallSite(..),
+  noDeclFacts,
   givenNames,
+  mapProgramBinders,
+  BinderSite(..),
+  litRuntimeType,
 }
+import types.runtime_types.{
+  BinderRow(..),
+  RuntimeType(..),
+  binderOrdinal,
+  runtimeTypeName,
+}
+import map as BM
 import ir.core_ir_lower.{
   ArityEnv,
   CallScope,
@@ -88,7 +109,9 @@ import ir.core_ir_lower.{
   leadingDictParams,
 }
 import ir.core_ir_sexp.{callModeSexp}
-import frontend.ast.{Pat(..), Route(..), Decl(..), Ty(..)}
+import frontend.ast.{
+  Pat(..), Route(..), Decl(..), Ty(..), Lit(..), BinderId(..)
+}
 import types.target_profile.{TargetProfile, withheldLabels, profileName}
 import backend.extern_catalog.{
   Disposition(..),
@@ -240,7 +263,7 @@ declaredMethodContext table iface method =
 
 -- How many of [pats], from the front, are `$dict_<method>_0`, `$dict_<method>_1`, ….
 leadingMethodDicts : String -> Int -> List Pat -> Int
-leadingMethodDicts method k ((PVar x _) :: rest) =
+leadingMethodDicts method k ((PVar x _ _) :: rest) =
   if x == "$dict_\{method}_\{intToString k}" then
     leadingMethodDicts method (k + 1) rest
   else
@@ -400,7 +423,7 @@ programNames : List CBind -> List (String, Int) -> OrdMap Unit -> OrdMap Unit
 programNames [] [] acc = acc
 programNames [] ((ctor, _) :: rest) acc =
   programNames [] rest (omInsert ctor () acc)
-programNames ((CBind name _ _) :: rest) ctors acc =
+programNames ((CBind name _ _ _) :: rest) ctors acc =
   programNames rest ctors (omInsert name () acc)
 
 -- A reference is the program's own when a top-level binding has its name, or
@@ -449,7 +472,7 @@ walkProgram backend (prog@(CProgram groups ctors _ impls mctx facts)) =
 
 walkBinds : Ctx -> List CBind -> Walk -> Walk
 walkBinds _ [] w = w
-walkBinds ctx ((CBind name clauses _) :: rest) w =
+walkBinds ctx ((CBind name clauses _ _) :: rest) w =
   walkBinds ctx rest (walkClauses (inBinding ctx name) omEmpty clauses w)
 
 walkImpls : Ctx -> List CImplEntry -> Walk -> Walk
@@ -550,7 +573,7 @@ validateDispatchEvidence prog = match walkProgram LlvmBackend prog
 -- The leading `$dict` parameters of each top-level binding's first clause.
 dictParamCounts : List CBind -> OrdMap Int -> OrdMap Int
 dictParamCounts [] acc = acc
-dictParamCounts ((CBind name ((CClause pats _) :: _) _) :: rest) acc =
+dictParamCounts ((CBind name ((CClause pats _) :: _) _ _) :: rest) acc =
   dictParamCounts rest (omInsert name (leadingDictParams pats) acc)
 dictParamCounts (_ :: rest) acc = dictParamCounts rest acc
 
@@ -821,7 +844,7 @@ walkFields ctx scope ((CField _ _ e) :: rest) w =
 
 walkLocalBinds : Ctx -> CallScope -> List CBind -> Walk -> Walk
 walkLocalBinds _ _ [] w = w
-walkLocalBinds ctx scope ((CBind _ clauses _) :: rest) w =
+walkLocalBinds ctx scope ((CBind _ clauses _ _) :: rest) w =
   walkLocalBinds ctx scope rest (walkClauses ctx scope clauses w)
 
 -- An arm's pattern scopes over its guards and body; a `Pat <- e` guard's
@@ -871,7 +894,7 @@ renderTailRefusal bad = joinWith "\n" bad
 
 tailBinds : List CBind -> List String -> List String
 tailBinds [] acc = acc
-tailBinds ((CBind name clauses _) :: rest) acc =
+tailBinds ((CBind name clauses _ _) :: rest) acc =
   tailBinds rest (tailClauses name clauses acc)
 
 tailClauses : String -> List CClause -> List String -> List String
@@ -964,7 +987,7 @@ tailFields b ((CField _ _ e) :: rest) acc =
 
 tailLocalBinds : String -> List CBind -> List String -> List String
 tailLocalBinds _ [] acc = acc
-tailLocalBinds b ((CBind _ clauses _) :: rest) acc =
+tailLocalBinds b ((CBind _ clauses _ _) :: rest) acc =
   tailLocalBinds b rest (tailClauses b clauses acc)
 
 tailArms : String -> Bool -> List CArm -> List String -> List String
@@ -987,3 +1010,140 @@ tailStmt : String -> CStmt -> List String -> List String
 tailStmt b (CSExpr e) acc = tailE b False e acc
 tailStmt b (CSLet _ _ e) acc = tailE b False e acc
 tailStmt b (CSAssign _ e) acc = tailE b False e acc
+
+-- ── binder stamps ─────────────────────────────────────────────────────────────
+-- One line per binder with no row, per binder stamped against the literal,
+-- tuple, list or constructor it is bound to, and per function whose row gives no
+-- return type: a binding's patterns first, then its functions, in program order.
+export
+validateBinderStamps : CProgram -> List String
+validateBinderStamps (CProgram groups ctorArs ctorTypes impls _ facts) =
+  let rows =
+    BM.fromList (map (r => (binderOrdinal r.brId, r)) facts.factBinders)
+  let ctors = omFromPairs ctorTypes omEmpty
+  let arities = omFromPairs ctorArs omEmpty
+  flatMap (bindStampFaults rows ctors arities) groups
+    ++ flatMap (entryStampFaults rows ctors arities) impls
+
+bindStampFaults : BM.Map Int BinderRow ->
+  OrdMap String ->
+  OrdMap Int ->
+  CBind ->
+  List String
+bindStampFaults rows ctors arities (b@(CBind name _ _ _)) =
+  stampFaultsIn rows ctors arities name (CProgram [b] [] [] [] [] noDeclFacts)
+
+entryStampFaults : BM.Map Int BinderRow ->
+  OrdMap String ->
+  OrdMap Int ->
+  CImplEntry ->
+  List String
+entryStampFaults rows ctors arities (e@(CImplEntry method _ _ body)) =
+  stampFaultsIn
+    rows
+    ctors
+    arities
+    "impl \{method}@\{implBodyTag body}"
+    (CProgram [] [] [] [e] [] noDeclFacts)
+
+stampFaultsIn : BM.Map Int BinderRow ->
+  OrdMap String ->
+  OrdMap Int ->
+  String ->
+  CProgram ->
+  List String
+stampFaultsIn rows ctors arities where_ prog =
+  let found = Ref []
+  let _ =
+    mapProgramBinders
+      (site x bid =>
+        let _ = match site
+          PatternBinder rhs => match stampFault rows ctors arities rhs x bid
+            Some msg => found := "binder: \{msg} [in \{where_}]" :: !found
+            None => ()
+          FunctionBinder _ => match returnFault rows x bid
+            Some msg => found := "function: \{msg} [in \{where_}]" :: !found
+            None => ()
+        bid)
+      prog
+  reverseL !found
+
+-- A named function's row must say what its body returns.
+returnFault : BM.Map Int BinderRow -> String -> BinderId -> Option String
+returnFault rows x (BinderId _ n) =
+  if n < 0 then
+    Some "\{x} has no id, so no return type"
+  else match BM.get n rows
+    None => Some "\{x} has no stamped type"
+    Some row => match row.brReturns
+      None => Some "\{x} has no return type"
+      Some _ => None
+
+stampFault : BM.Map Int BinderRow ->
+  OrdMap String ->
+  OrdMap Int ->
+  Option CExpr ->
+  String ->
+  BinderId ->
+  Option String
+stampFault rows ctors arities rhs x (BinderId _ n) =
+  if n < 0 then
+    Some "\{x} has no id, so no stamped type"
+  else match BM.get n rows
+    None => Some "\{x} has no stamped type"
+    Some row => match rhs
+      None => None
+      Some e => match boundShape ctors arities e
+        None => None
+        Some shape =>
+          if stampAllows shape row.brType then
+            None
+          else
+            Some
+              "\{x} is stamped \{runtimeTypeName row.brType} but is bound to \{shapeName shape}"
+
+-- What a `let` right-hand side is, where that fixes what its binder holds.
+data BoundShape = BoundLit RuntimeType | BoundInt | BoundCell
+
+boundShape : OrdMap String -> OrdMap Int -> CExpr -> Option BoundShape
+boundShape _ _ (CLit (LInt _)) = Some BoundInt
+boundShape _ _ (CLit l) = Some (BoundLit (litRuntimeType l))
+boundShape _ _ (CTuple _) = Some BoundCell
+boundShape _ _ (CList _) = Some BoundCell
+boundShape ctors arities (CVar c _) = ctorShape ctors arities c 0
+boundShape ctors arities (CApp (CVar c _) args _) =
+  ctorShape ctors arities c (listLen args)
+boundShape _ _ _ = None
+
+-- A constructor of a type other than `Bool` and `Unit`, applied to all its fields.
+ctorShape : OrdMap String -> OrdMap Int -> String -> Int -> Option BoundShape
+ctorShape ctors arities c n = match (omLookup c arities, omLookup c ctors)
+  (Some k, Some ty) =>
+    if k == n && ty /= "Bool" && ty /= "Unit" then Some BoundCell else None
+  _ => None
+
+stampAllows : BoundShape -> RuntimeType -> Bool
+stampAllows _ RTValue = True
+stampAllows (BoundLit t) stamped = t == stamped
+stampAllows BoundInt stamped = isNumericRuntimeType stamped
+stampAllows BoundCell stamped = stamped == RTCon
+
+isNumericRuntimeType : RuntimeType -> Bool
+isNumericRuntimeType RTInt = True
+isNumericRuntimeType RTFloat = True
+isNumericRuntimeType RTU64 = True
+isNumericRuntimeType RTI64 = True
+isNumericRuntimeType RTU32 = True
+isNumericRuntimeType RTI32 = True
+isNumericRuntimeType RTU16 = True
+isNumericRuntimeType RTU8 = True
+isNumericRuntimeType _ = False
+
+shapeName : BoundShape -> String
+shapeName (BoundLit t) = "a \{runtimeTypeName t} literal"
+shapeName BoundInt = "an integer literal"
+shapeName BoundCell = "a constructor cell"
+
+export
+renderBinderRefusal : List String -> String
+renderBinderRefusal bad = joinWith "\n" bad

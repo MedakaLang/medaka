@@ -1,0 +1,484 @@
+-- Sibling test module for `compiler/ir/core_ir_sexp.mdk` and
+-- `compiler/ir/core_ir_sexp_parse.mdk` ([P-TEST-SIBLING]).
+--
+-- The printer and the parser are two halves of one format, and the gate that
+-- round-trips a dump (`core_ir_roundtrip_main`) compares evaluator output, which
+-- ignores a call's mode, its tail flag, a record's field ordinals and a binder's
+-- stamp.  Each case here builds the node, prints it, parses it back and reads
+-- that field off the result, so a printer or parser that drops one goes red.
+
+import test.{
+  Expectation,
+  expectAll,
+  expectEach,
+  expectEqual,
+  expectNotEqual,
+  expectTextContainsAll,
+  expectTrue,
+  fail,
+  labelFail,
+}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.typecheck.{elaborateOne, grantWholeDomain}
+import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
+import frontend.ast.{
+  BinderId(..), Decl, Lit(..), Pat(..), Addr(..), noDeclLoc, noBinderId
+}
+import ir.core_ir.{
+  CBind(..),
+  CClause(..),
+  CExpr(..),
+  CField(..),
+  CProgram(..),
+  CallMode(..),
+  CallSite(..),
+  DeclFacts(..),
+  noDeclFacts,
+  programBinderIds,
+}
+import ir.core_ir_lower.{EmitTarget(..), lowerProgramEmit}
+import ir.core_ir_sexp.{cprogramToSexp}
+import ir.core_ir_sexp_parse.{parseCProgram}
+import ir.dce.{dceFilter}
+import backend.core_validate.{validateBinderStamps}
+import backend.private_mangle.{mangleUnitsEv}
+import driver.loader.{
+  dropPathTriple,
+  loadErrorMessage,
+  loadProgramFilesLocatedE,
+  stdlibOwnership,
+}
+import types.typecheck.{elaborateModules, setStdlibOwnership}
+import frontend.desugar.{desugarIn}
+import test_process.{underRoot}
+import support.util.{listLen}
+import list.{sortOn}
+import map as BM
+import string as S
+
+-- A one-binding program whose body is [body].
+programOf : CExpr -> CProgram
+programOf body =
+  CProgram
+    [CBind "main" [CClause [] body] noDeclLoc noBinderId]
+    []
+    []
+    []
+    []
+    noDeclFacts
+
+-- The body of the only binding of a parsed program.
+bodyOf : CProgram -> Option CExpr
+bodyOf (CProgram [CBind _ [CClause _ body] _ _] _ _ _ _ _) = Some body
+bodyOf _ = None
+
+roundTrip : CExpr -> Option CExpr
+roundTrip body = bodyOf (parseCProgram (cprogramToSexp (programOf body)))
+
+callOf : CallMode -> Bool -> CExpr
+callOf mode tailPos =
+  CApp (CVar "f" AGlobal) [CLit (LInt 1)] (CallSite mode tailPos)
+
+-- The mode and tail flag of a parsed application.
+siteOf : Option CExpr -> Option (CallMode, Bool)
+siteOf (Some (CApp _ _ (CallSite mode tailPos))) = Some (mode, tailPos)
+siteOf _ = None
+
+modeName : Option (CallMode, Bool) -> String
+modeName None = "none"
+modeName (Some (CallExact, t)) = "exact \{debug t}"
+modeName (Some (CallPartial n, t)) = "partial \{intToString n} \{debug t}"
+modeName (Some (CallOver n, t)) = "over \{intToString n} \{debug t}"
+modeName (Some (CallDynamic, t)) = "dynamic \{debug t}"
+
+test "a call's mode and tail flag survive the round trip" = expectAll [
+  labelFail
+    "exact, tail"
+    (expectEqual
+      "exact True"
+      (modeName (siteOf (roundTrip (callOf CallExact True))))),
+  labelFail
+    "partial 2, not tail"
+    (expectEqual
+      "partial 2 False"
+      (modeName (siteOf (roundTrip (callOf (CallPartial 2) False))))),
+  labelFail
+    "over 3, not tail"
+    (expectEqual
+      "over 3 False"
+      (modeName (siteOf (roundTrip (callOf (CallOver 3) False))))),
+  labelFail
+    "dynamic, tail"
+    (expectEqual
+      "dynamic True"
+      (modeName (siteOf (roundTrip (callOf CallDynamic True))))),
+]
+
+-- The declared field ordinal of a parsed field access, record literal and update.
+accessOrdinal : Option CExpr -> Int
+accessOrdinal (Some (CFieldAccess _ _ _ o)) = o
+accessOrdinal _ = 0 - 9
+
+recordOrdinals : Option CExpr -> List Int
+recordOrdinals (Some (CRecord _ fields)) =
+  map
+    (f => match f
+      CField _ o _ => o)
+    fields
+recordOrdinals (Some (CRecordUpdate _ _ fields)) =
+  map
+    (f => match f
+      CField _ o _ => o)
+    fields
+recordOrdinals _ = []
+
+test "a record's field ordinals survive the round trip" = expectAll [
+  labelFail
+    "field access"
+    (expectEqual
+      3
+      (accessOrdinal (roundTrip (CFieldAccess (CVar "r" AGlobal) "d" "R" 3)))),
+  labelFail
+    "record literal"
+    (expectEqual
+      [0, 1, 2]
+      (recordOrdinals
+        (roundTrip
+          (CRecord "R" [
+            CField "a" 0 (CLit (LInt 1)),
+            CField "b" 1 (CLit (LInt 2)),
+            CField "c" 2 (CLit (LInt 3)),
+          ])))),
+  labelFail
+    "record update"
+    (expectEqual
+      [1, 3]
+      (recordOrdinals
+        (roundTrip
+          (CRecordUpdate "R" (CVar "r" AGlobal) [
+            CField "b" 1 (CLit (LInt 2)),
+            CField "d" 3 (CLit (LInt 4)),
+          ])))),
+  labelFail
+    "a Ref read stays unstamped"
+    (expectEqual
+      (0 - 1)
+      (accessOrdinal
+        (roundTrip (CFieldAccess (CVar "r" AGlobal) "value" "" (0 - 1))))),
+]
+
+floatOf : Option CExpr -> Option Float
+floatOf (Some (CLit (LFloat x))) = Some x
+floatOf _ = None
+
+test "a float literal survives the round trip" = expectAll [
+  labelFail
+    "zero"
+    (expectEqual (Some 0.0) (floatOf (roundTrip (CLit (LFloat 0.0))))),
+  labelFail
+    "fraction"
+    (expectEqual (Some 2.5) (floatOf (roundTrip (CLit (LFloat 2.5))))),
+  labelFail
+    "negative"
+    (expectEqual
+      (Some (0.0 - 1.25))
+      (floatOf (roundTrip (CLit (LFloat (0.0 - 1.25)))))),
+]
+
+-- ── binder stamps ────────────────────────────────────────────────────────────
+
+prelude : String
+prelude =
+  "interface Num a where\n  fromInt : Int -> a\n  add : a -> a -> a\nimpl Num Int where\n  fromInt n = n\n  add a b = a"
+
+-- A shadowing pair of different scalar types, a Float, a pair and a lambda.
+src : String
+src =
+  "f x = x\nmain =\n  let v = 1.5\n  let w = \"s\"\n  let t = (1, 2)\n  let g = k => k\n  let v = 2\n  f (g v)"
+
+typed : CProgram
+typed =
+  lowerProgramEmit
+    TargetNative
+    (elaborateOne [] (desugar (parse prelude)) (
+      "sexp",
+      grantWholeDomain (desugar (parse src)),
+    ))
+
+-- The table's rows as "name type [return]" text, sorted: the original holds them
+-- in ordinal order and a parsed program in the dump's walk order.
+rowsOf : CProgram -> List String
+rowsOf (CProgram _ _ _ _ _ facts) =
+  sortOn
+    (r => r)
+    (map
+      (r => "\{r.brName} \{debug r.brType} \{debug r.brReturns}")
+      facts.factBinders)
+
+test "the dump lists each binder's type and parses back to the same table" =
+  let text = cprogramToSexp typed
+  let back = parseCProgram text
+  expectAll [
+    labelFail
+      "the section is present"
+      (expectTextContainsAll ["(binder-types"] text),
+    labelFail
+      "the Float binder is typed"
+      (expectTextContainsAll ["RTFloat"] text),
+    labelFail
+      "the String binder is typed"
+      (expectTextContainsAll ["RTString"] text),
+    labelFail
+      "the dump is a fixpoint of parse then print"
+      (expectEqual text (cprogramToSexp back)),
+    labelFail
+      "the rows are the same"
+      (expectEqual (rowsOf typed) (rowsOf back)),
+    labelFail
+      "every binder of the parsed program has a row"
+      (expectEqual [] (validateBinderStamps back)),
+    labelFail
+      "as many binder occurrences"
+      (expectEqual
+        (listLen (programBinderIds typed))
+        (listLen (programBinderIds back))),
+  ]
+
+-- A clone of one source binder, as an interface default body is lowered once per
+-- instance, repeats its id: the dump keeps the two occurrences one binder.
+test "two occurrences of one binder id stay one binder" =
+  let shared = BinderId "m" 700
+  let prog =
+    CProgram
+      [
+        CBind
+          "main"
+          [
+            CClause
+              [PVar "a" noDeclLoc shared, PVar "b" noDeclLoc shared]
+              (CLit (LInt 0)),
+          ]
+          noDeclLoc
+          noBinderId,
+      ]
+      []
+      []
+      []
+      []
+      DeclFacts {
+        factRequires = [],
+        factSupers = [],
+        factBinders = [
+          BinderRow {
+            brId = shared,
+            brName = "a",
+            brType = RTFloat,
+            brReturns = None,
+            brSigned = False,
+          },
+        ],
+      }
+  let back = parseCProgram (cprogramToSexp prog)
+  expectAll
+    [
+      labelFail "one row" (expectEqual ["a RTFloat None"] (rowsOf back)),
+      labelFail
+        "both occurrences name it"
+        (expectTrue
+          (match programBinderIds back
+            -- the two patterns, then the function `main`
+            [x, y, _] => binderOrdinal x == binderOrdinal y
+            _ => False)),
+      labelFail
+        "re-printed"
+        (expectEqual (cprogramToSexp prog) (cprogramToSexp back)),
+    ]
+
+-- A function returning Float, one returning Int and a where-function returning
+-- Float: each row names the type its function's body returns.
+fnSrc : String
+fnSrc =
+  "half x = 0.5\nnext x = x + (1 : Int)\nouter x = inner x\n  where\n    inner y = 2.5\nmain = next 1"
+
+test "a function's return type survives the round trip" =
+  let typed =
+    lowerProgramEmit
+      TargetNative
+      (elaborateOne [] (desugar (parse prelude)) (
+        "sexp",
+        grantWholeDomain (desugar (parse fnSrc)),
+      ))
+  let text = cprogramToSexp typed
+  let back = parseCProgram text
+  expectAll [
+    labelFail
+      "each function's row gives its return type"
+      (expectTextContainsAll
+        [
+          "\"half\" RTValue RTFloat)",
+          "\"next\" RTValue RTInt)",
+          "\"inner\" RTValue RTFloat)",
+        ]
+        text),
+    labelFail
+      "the dump is a fixpoint of parse then print"
+      (expectEqual text (cprogramToSexp back)),
+    labelFail
+      "the rows are the same"
+      (expectEqual (rowsOf typed) (rowsOf back)),
+    labelFail
+      "every function of the parsed program has a return type"
+      (expectEqual [] (validateBinderStamps back)),
+  ]
+
+-- ── Int literals at the ends of the range ───────────────────────────────────
+
+intOf : Option CExpr -> Option Int
+intOf (Some (CLit (LInt n))) = Some n
+intOf _ = None
+
+test "an Int literal survives the round trip, the greatest and least included" =
+  let greatest = 4611686018427387903
+  let least = 0 - greatest - 1
+  expectEach
+    (map
+      (n => (
+        intToString n,
+        expectEqual (Some n) (intOf (roundTrip (CLit (LInt n)))),
+      ))
+      [greatest, least, 0, 0 - 1])
+
+-- ── the engine fixtures, lowered as a build lowers them ─────────────────────
+
+-- [entry] loaded with its imports from [roots], elaborated against the real
+-- prelude ([runtimeDecls], [coreDecls]) and lowered as a native build does.
+loweredEntry : List Decl ->
+  List Decl ->
+  String ->
+  List String ->
+  <IO> Result String CProgram
+loweredEntry runtimeDecls coreDecls entry roots =
+  match loadProgramFilesLocatedE (_ => None) entry roots
+    Err e => Err (loadErrorMessage e)
+    Ok mods =>
+      let pairs = map dropPathTriple mods
+      let (flatStdlib, ownedStdlib) =
+        stdlibOwnership entry roots (underRoot "stdlib") pairs
+      let _ = setStdlibOwnership flatStdlib ownedStdlib
+      let (coreE, modulesE, _, _, _, _) =
+        elaborateModules
+          runtimeDecls
+          coreDecls
+          (map (p => (fst p, desugarIn (fst p) (snd p))) pairs)
+      let (coreD, modules2) = mangleUnitsEv coreE modulesE
+      Ok
+        (lowerProgramEmit
+          TargetNative
+          (dceFilter (coreD ++ flatMap snd modules2)))
+
+-- Each binder occurrence's row, in the binder walk's order, as text: what an
+-- emitter reads when it looks a binder up.  `-` is an occurrence with no row.
+stampsInWalkOrder : CProgram -> List String
+stampsInWalkOrder (prog@(CProgram _ _ _ _ _ facts)) =
+  let byOrd =
+    BM.fromList (map (r => (binderOrdinal r.brId, r)) facts.factBinders)
+  map
+    (bid => match BM.get (binderOrdinal bid) byOrd
+      Some r =>
+        "\{r.brName} \{debug r.brType} \{debug r.brReturns} \{debug r.brSigned}"
+      None => "-")
+    (programBinderIds prog)
+
+-- The fixtures left out, each for a reason outside the dump format.
+corpusExclusions : List String
+corpusExclusions = [
+  -- The typechecker's table of grant-taking bindings is keyed by bare name and
+  -- outlives an elaboration, so this fixture's plain `sub` meets the
+  -- grant-taking `sub` of `named_authority` and `residual_delayed_join` and
+  -- panics the grant pass.  Built alone, it lowers.
+  "string_ranges_infix.mdk",
+]
+
+-- The printed forms of the fields a dump must carry through a round trip.  The
+-- corpus must exercise every one, or a fixpoint over it proves nothing of it.
+roundTripFields : List String
+roundTripFields = [
+  "CallExact true)",
+  "CallExact false)",
+  "(CallPartial ",
+  "(CallOver ",
+  "CallDynamic",
+  "(CFieldAccess ",
+  "(CRecord ",
+  "(CRecordUpdate ",
+  "(LFloat ",
+  "(binder-types",
+  "(LInt 4611686018427387903)",
+  "(LInt -4611686018427387904)",
+]
+
+-- The verdict on one fixture, and the fields its dump carries.
+roundTripFixture : List Decl ->
+  List Decl ->
+  String ->
+  <IO> ((String, Expectation), List String)
+roundTripFixture runtimeDecls coreDecls name =
+  let dir = underRoot "test/engine_fixtures"
+  let roots = [dir, underRoot "stdlib"]
+  match loweredEntry runtimeDecls coreDecls "\{dir}/\{name}" roots
+    Err e => ((name, fail e), [])
+    Ok prog =>
+      let text = cprogramToSexp prog
+      let back = parseCProgram text
+      (
+        (
+          name,
+          expectAll [
+            labelFail
+              "the dump is a fixpoint of parse then print"
+              (expectEqual text (cprogramToSexp back)),
+            labelFail
+              "every binder keeps its row"
+              (expectEqual (stampsInWalkOrder prog) (stampsInWalkOrder back)),
+            labelFail
+              "the lowered program's binders validate clean"
+              (expectEqual [] (validateBinderStamps prog)),
+            labelFail
+              "the parsed program's binders validate clean"
+              (expectEqual [] (validateBinderStamps back)),
+          ],
+        ),
+        filter (f => S.contains f text) roundTripFields,
+      )
+
+-- Every engine fixture's verdict, and the check that together they carry every
+-- field a dump must round-trip.
+corpusRoundTrip : <IO, FileRead> Result String Expectation
+corpusRoundTrip = do
+  entries <- listDir (underRoot "test/engine_fixtures")
+  rsrc <- readFile (underRoot "stdlib/runtime.mdk")
+  csrc <- readFile (underRoot "stdlib/core.mdk")
+  let runtimeDecls = desugar (parse rsrc)
+  let coreDecls = desugar (parse csrc)
+  let names =
+    sortOn
+      (n => n)
+      (filter
+        (n => S.endsWith ".mdk" n && not (elem n corpusExclusions))
+        entries)
+  let results = map (roundTripFixture runtimeDecls coreDecls) names
+  let seen = flatMap snd results
+  Ok
+    (expectAll [
+      labelFail "the corpus is not empty" (expectNotEqual [] names),
+      labelFail
+        "the corpus carries every field"
+        (expectEqual [] (filter (f => not (elem f seen)) roundTripFields)),
+      expectEach (map fst results),
+    ])
+
+test "every engine fixture's lowered program round-trips through its dump" =
+  match corpusRoundTrip
+    Ok verdict => verdict
+    Err e => fail e

@@ -174,7 +174,7 @@ import ir.core_ir_lower.{
   selfFnParamTable,
   methodIfaceTable,
   ctorFieldTypeNames,
-  declSigTypeNames,
+  externArities,
   ffiExternTypeNames,
 }
 import ir.core_ir_sexp.{cprogramToSexp}
@@ -642,7 +642,7 @@ llvmOf runtimeDecls allDecls cp =
       (selfFnParamTable allDecls)
       (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)
-      (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
+      (externArities runtimeDecls)
       (mainTypeIsUnit ())
       (mainTypeIsFloat ())
       0
@@ -659,7 +659,6 @@ wasmOf runtimeDecls allDecls cp =
   let input =
     makeWasmEmitInputFull
       (methodIfaceTable allDecls)
-      (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
       (ctorFieldTypeNames allDecls)
       False
       (mainTypeIsUnit ())
