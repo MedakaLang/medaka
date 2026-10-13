@@ -217,7 +217,7 @@ entry:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk___user____myClamp(i64 %arg0, i64 %arg1, i64 %arg2, i64 %arg3) {
+define internal i64 @mdk___user____myClamp(i64 %arg0, i64 %arg1, i64 %arg2, i64 %arg3) {
 entry:
   %t0 = call ptr @mdk_alloc(i64 40)
   store i64 1, ptr %t0
@@ -239,7 +239,7 @@ entry:
 }
 
 ; mdk-module impl:Int_lt
-define i64 @mdk_impl_Int_lt(i64 %arg0, i64 %arg1) {
+define internal i64 @mdk_impl_Int_lt(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = icmp slt i64 %arg0, %arg1
   %t1 = zext i1 %t0 to i64
@@ -253,7 +253,7 @@ entry:
 ; mdk-module program
 @mdk_dc.program.0 = internal constant [1 x i64] [i64 -54051695436414980]
 ; mdk-module program
-define i64 @mdk_lam.program.1(i64 %clos, i64 %arg0) {
+define internal i64 @mdk_lam.program.1(i64 %clos, i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %clos to ptr
   %t1 = getelementptr i8, ptr %t0, i64 16

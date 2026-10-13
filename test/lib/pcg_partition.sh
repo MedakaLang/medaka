@@ -46,10 +46,11 @@
 #
 # Two things a text split has to do that llvm-split did in the IR:
 #   * local-linkage globals (`private` string constants, `internal` closure records)
-#     are referenced across partition boundaries, so their definitions are promoted
-#     from private/internal to `hidden` — external linkage, still not exported from
-#     the binary, and exactly what llvm-split emitted for the same globals. lld's
-#     LTO re-internalizes what stays partition-local.
+#     and `internal` functions are referenced across partition boundaries, so their
+#     definitions are promoted from private/internal to `hidden` — external
+#     linkage, still not exported from the binary, and exactly what llvm-split
+#     emitted for the same symbols. lld's LTO re-internalizes what stays
+#     partition-local.
 #   * a partition needs a declaration for every symbol it references but does not
 #     define. They are derived from the definition text and appended (top-level IR
 #     is order-insensitive), and ONLY for symbols the partition actually mentions —
@@ -159,8 +160,8 @@ pcg_partition() {
     sz[cur]++
     if ($0 ~ /^define /) {
       ind = 1
-      nm = $3; sub(/\(.*/, "", nm)
-      d = $0; sub(/^define /, "declare ", d); sub(/[ \t]*\{[ \t]*$/, "", d)
+      d = $0; sub(/^define (internal )?/, "declare ", d); sub(/[ \t]*\{[ \t]*$/, "", d)
+      nm = d; sub(/^[^@]*/, "", nm); sub(/\(.*/, "", nm)
       owner[nm] = cur; decl[nm] = d
       next
     }
@@ -198,7 +199,7 @@ pcg_partition() {
       tp = part[cur]; next
     }
     l = $0
-    if (l ~ /^define /) ind = 1
+    if (l ~ /^define /) { ind = 1; sub(/^define internal /, "define hidden ", l) }
     else if (l ~ /^@/) { sub(/ = private /, " = hidden ", l); sub(/ = internal /, " = hidden ", l) }
     emit(l)
   }

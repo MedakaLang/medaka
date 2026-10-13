@@ -240,19 +240,19 @@ entry:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk___user____identity(i64 %arg0) {
+define internal i64 @mdk___user____identity(i64 %arg0) {
 entry:
   ret i64 %arg0
 }
 
 ; mdk-module program
-define i64 @mdk___user____fid(i64 %arg0) {
+define internal i64 @mdk___user____fid(i64 %arg0) {
 entry:
   ret i64 %arg0
 }
 
 ; mdk-module program
-define double @mdk___user____fid__fw(double %arg0) {
+define internal double @mdk___user____fid__fw(double %arg0) {
 entry:
   ret double %arg0
 }

@@ -289,7 +289,7 @@ entry:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk___user____addP(i64 %arg0) {
+define internal i64 @mdk___user____addP(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t2 = and i64 %arg0, 1
@@ -336,7 +336,7 @@ decend1:
 }
 
 ; mdk-module program
-define double @mdk___user____addP__fw(i64 %arg0) {
+define internal double @mdk___user____addP__fw(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t2 = and i64 %arg0, 1

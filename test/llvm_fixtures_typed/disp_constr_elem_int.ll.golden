@@ -250,7 +250,7 @@ end15:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk___user____elem(i64 %arg0, i64 %arg1, i64 %arg2) {
+define internal i64 @mdk___user____elem(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = alloca i64
   %t2 = icmp eq i64 %arg2, 562949953421315
@@ -300,7 +300,7 @@ decend1:
 }
 
 ; mdk-module impl:Int_eq
-define i64 @mdk_impl_Int_eq(i64 %arg0, i64 %arg1) {
+define internal i64 @mdk_impl_Int_eq(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = icmp eq i64 %arg0, %arg1
   %t1 = zext i1 %t0 to i64

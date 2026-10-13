@@ -235,7 +235,7 @@ decend2:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_force_$memo_Int_zero() {
+define internal i64 @mdk_force_$memo_Int_zero() {
 entry:
   %t0 = load i8, ptr @mdk_gs_$memo_Int_zero
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
@@ -253,7 +253,7 @@ lz_unforced:
   ret i64 %t2
 }
 ; mdk-module $memo_zZ_5f
-define i64 @mdk_force_$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero() {
+define internal i64 @mdk_force_$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero() {
 entry:
   %t0 = load i8, ptr @mdk_gs_$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
@@ -271,20 +271,20 @@ lz_unforced:
   ret i64 %t2
 }
 ; mdk-module program
-define i64 @mdk___user____firstZero(i64 %arg0, i64 %arg1) {
+define internal i64 @mdk___user____firstZero(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_disp_zero_0_0(i64 %arg0)
   ret i64 %t0
 }
 
 ; mdk-module impl:Int_zero
-define i64 @mdk_impl_Int_zero() {
+define internal i64 @mdk_impl_Int_zero() {
 entry:
   ret i64 1
 }
 
 ; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_Flag_zero
-define i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Flag_zero() {
+define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Flag_zero() {
 entry:
   ret i64 3
 }
@@ -308,7 +308,7 @@ entry:
 ; mdk-module $memo_zZ_5f
 @.gname.$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero = private unnamed_addr constant [42 x i8] c"\24\6D\65\6D\6F\5F\7A\5A\5F\35\66\5F\5F\35\66\5F\75\73\65\72\5F\35\66\5F\5F\35\66\5F\5F\32\65\5F\46\6C\61\67\5F\7A\65\72\6F\00"
 ; mdk-module program
-define i64 @mdk_disp_zero_0_0(i64 %dict) {
+define internal i64 @mdk_disp_zero_0_0(i64 %dict) {
 entry:
   %t0 = inttoptr i64 %dict to ptr
   %t1 = load i64, ptr %t0

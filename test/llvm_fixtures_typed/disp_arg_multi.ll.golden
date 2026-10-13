@@ -229,7 +229,7 @@ intok6:
   ret i32 0
 }
 ; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_Animal_code
-define i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Animal_code(i64 %arg0) {
+define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Animal_code(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg0, 1
@@ -254,7 +254,7 @@ decend1:
 }
 
 ; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_Color_code
-define i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Color_code(i64 %arg0) {
+define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Color_code(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg0, 8589934593
