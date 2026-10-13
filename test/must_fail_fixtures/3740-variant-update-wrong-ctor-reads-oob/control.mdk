@@ -7,8 +7,17 @@ tag t = match t
   A { x, y } => "A \{x} \{y}"
   B { x } => "B \{x}"
 
+ctorAndX : T -> String
+ctorAndX t = match t
+  A { x, y = _ } => "A \{x}"
+  B { x } => "B \{x}"
+
 mkB : T
 mkB = A { x = 1, y = 2 }
 
 main : <IO> Unit
-main = println (tag (A { mkB | x = 5 }))
+main =
+  let v = A { mkB | x = 5 }
+  println (ctorAndX v)
+  println (tag v)
+  println "done"
