@@ -24,6 +24,9 @@
 # when the toolchain (wasm-tools / Node>=22 / clang) is unavailable, mirroring the
 # other native diff scripts.
 set -u
+# ThinLTO is the only link flag dropped (-13% CPU): the oracle below stays -O2 for
+# the deep TCO fixtures.
+export MEDAKA_NO_LTO="${MEDAKA_NO_LTO:-1}"
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 MEDAKA="$ROOT/medaka"

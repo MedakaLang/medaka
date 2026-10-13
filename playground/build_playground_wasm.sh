@@ -40,10 +40,24 @@ command -v dune >/dev/null 2>&1 || export PATH="$HOME/.opam/5.4.1/bin:$PATH"
 mkdir -p "$DIST"
 
 # ── step 1: native compiler + the native modules-emitter binary ──────────────────
-echo "[1/2] building native compiler + wasm emitter binary ..."
-( cd "$ROOT" && make medaka )
-[ -x "$EMITTER" ] && export MEDAKA_EMITTER="$EMITTER"
-( cd "$ROOT" && bash test/wasm/build_wasm_oracle.sh )
+#
+# Skipped when both binaries are already newer than every compiler/stdlib/runtime
+# source: rebuilding the three emitter oracles from unchanged inputs costs ~165s.
+native_fresh() {
+  [ -x "$MEDAKA" ] && [ -x "$EMITBIN" ] || return 1
+  [ -z "$(find "$ROOT/compiler" "$ROOT/stdlib" "$ROOT/runtime" -type f \
+            \( -name '*.mdk' -o -name '*.c' -o -name '*.h' \) \
+            \( -newer "$MEDAKA" -o -newer "$EMITBIN" \) -print -quit)" ]
+}
+if native_fresh; then
+  echo "[1/2] native compiler + wasm emitter binary are up to date; skipping rebuild"
+  [ -x "$EMITTER" ] && export MEDAKA_EMITTER="$EMITTER"
+else
+  echo "[1/2] building native compiler + wasm emitter binary ..."
+  ( cd "$ROOT" && make medaka )
+  [ -x "$EMITTER" ] && export MEDAKA_EMITTER="$EMITTER"
+  ( cd "$ROOT" && bash test/wasm/build_wasm_oracle.sh )
+fi
 [ -x "$MEDAKA" ]  || { echo "FAIL: missing $MEDAKA";  exit 1; }
 [ -x "$EMITBIN" ] || { echo "FAIL: missing $EMITBIN"; exit 1; }
 
