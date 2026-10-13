@@ -992,12 +992,13 @@ also expose ramp-up/ramp-down hints for applications that know they are growing
 and then dropping mature graphs. Those hints do not establish automatic phase
 detection.
 
-Our proposed supplementary pressure budget counts all requested mutator bytes,
+The historical supplementary pressure budget counted all requested mutator bytes,
 including dead nursery objects, at existing collection boundaries. This is a
 Medaka-specific anti-starvation hypothesis: after a mature graph loses its roots,
 continued young allocation should eventually prompt mature reclamation even if
-nothing new survives. It is not a reproduction of OCaml's debt rule. The first
-experiment keeps the existing mature-size threshold and stop-the-world tracing;
+nothing new survives. It was rejected in the allocation-pressure screen above,
+and is not installed. It is not a reproduction of OCaml's debt rule. That
+experiment kept the existing mature-size threshold and stop-the-world tracing;
 concurrent or incremental slices need additional barrier contracts.
 
 Caching object bytes and mature size class in the interned descriptor was tested
@@ -1012,13 +1013,14 @@ safepoint, and retain barriers on direct-old objects. Boehm must receive the sam
 initialization affordances in comparisons. These changes belong in the planned
 native physical contracts, after the F5 carrier consumer is available.
 
-Intrusive promotion work is a separate higher-risk experiment: cycles, aliases,
+Intrusive promotion work is now a tested scratch experiment: cycles, aliases,
 one-word objects, atomic payloads, complete field restoration, and draining before
 mutator resumption need independent checks. Measure threshold-major work and
 bounded heap-headroom policies before adding incremental collection. Always
 charge the final drain; a larger nursery cannot avoid eventual copying of a fully
 retained tree. Incremental major GC would require an additional major-marking
-barrier contract. Intrusive promotion and incremental collection remain proposals.
+barrier contract. Intrusive correctness checks establish no timing result;
+incremental collection remains a proposal.
 
 ### Packed gzip inflater output (2026-10-12)
 
@@ -1061,3 +1063,71 @@ matrix was rerun with an exact warning allowlist and all stderr retained.
 Independent source and artifact reviews check the growth order, reconstruction
 patch, identities, sample order, and timing summaries. The
 [experiment README](../../test/gc_prototype/README.md) links the evidence.
+
+### Retained-tree direct-old birth diagnostic (2026-10-13)
+
+This diagnostic sends only retained-tree nodes directly to the mature allocator.
+Both custom arms compile the same validated source; `TREE_DIRECT_OLD` is the
+only candidate define. Generic allocation, zeroing, root registration/reloads,
+store barriers and final collection remain present. The new birth call is
+checked and out of line. Placement and allocation order also change, so this
+does not isolate physical copying cost or establish a production policy.
+
+Each fresh process constructs 5,000,000 nodes. Six balanced cyclic rounds compare
+four capacities: 262144, 262136, 16777216 and 16777208 bytes. The two Boehm
+allocators each use default and requested 128 MiB initial heaps, static libgc
+8.2.8 and divisor 1. Boehm ignores the nursery-capacity labels. All 144 timed
+rows pass allocation/checksum/storage contracts; compiler, static archive,
+transitive headers, sources and four binaries retain their before/after hashes.
+The existing elapsed interval includes construction, checksum traversal and
+final GC, excluding heap/layout setup. It supplies no separate phase timings.
+
+| Capacity | Custom nursery (ms) | Direct old (ms) | Historical Boehm default / 128 MiB (ms) | Caller Boehm default / 128 MiB (ms) | Paired direct/nursery median (range) |
+|---|---:|---:|---:|---:|---:|
+| 256 KiB | 301.7 | 248.3 | 379.5 / 344.4 | 254.8 / 248.0 | 0.824 (0.801–0.883) |
+| 256 KiB − 8 B | 289.7 | 243.7 | 342.6 / 337.9 | 247.7 / 241.4 | 0.842 (0.718–0.976) |
+| 16 MiB | 312.2 | 209.4 | 331.9 / 329.7 | 258.9 / 277.9 | 0.675 (0.615–0.696) |
+| 16 MiB − 8 B | 324.2 | 210.5 | 334.5 / 318.1 | 252.3 / 251.9 | 0.664 (0.555–0.692) |
+
+Times are six-process medians; ratios are medians of the six within-round ratios.
+Direct-old/fastest-observed-Boehm paired medians are 1.001, 1.008, 0.817 and
+0.825 respectively; their ranges are 0.899–1.083, 0.961–1.046, 0.763–0.833 and
+0.733–0.904. This is a tree-only diagnostic with no selection or held-out claim.
+A negative checked-birth result could not rule out specialized old allocation
+or chunk retention; a positive result still includes the placement/order effects.
+
+| Capacity | Median RSS nursery → direct old (MiB) | Historical Boehm default / 128 MiB RSS (MiB) | Caller Boehm default / 128 MiB RSS (MiB) | Minor / major counts nursery → direct old |
+|---|---:|---:|---:|---:|
+| 256 KiB | 155.0 → 154.8 | 167.3 / 167.4 | 167.3 / 167.4 | 618 / 8 → 8 / 8 |
+| 256 KiB − 8 B | 155.0 → 154.8 | 167.4 / 167.4 | 167.4 / 167.4 | 617 / 7 → 8 / 8 |
+| 16 MiB | 170.8 → 154.8 | 167.4 / 167.4 | 167.4 / 167.4 | 11 / 2 → 2 / 2 |
+| 16 MiB − 8 B | 170.8 → 154.8 | 167.4 / 167.4 | 167.4 / 167.4 | 11 / 2 → 2 / 2 |
+
+The mature limit is still initially `4*N`, then `2*live + 4*N`; changing nursery
+capacity therefore changes major pacing even with no nursery births. Each major
+includes a minor prepass, so the two collection counts are not disjoint. The
+candidate avoids all 5,000,000 promotions: logical copied bytes change from
+160,000,000 to zero, including 120,000,000 payload bytes. Both arms end with
+160,000,000 logical mature bytes, 9,766 pools reserving 160,474,912 bytes, a
+512-byte work queue and the same descriptor/layout/root storage. Exact accounted
+bytes still include the identical reserved nursery. Direct-old peak accounting
+is 736 bytes higher, reflecting the same pool reservation coexisting with
+768 active root bytes during construction instead of 32 during the final minor.
+The approximately 16 MiB RSS difference at the large capacities is consistent
+with leaving that nursery reservation untouched; it is not a reduction in
+reported reserved bytes. RSS is process high-water, and Boehm heap-minus-free
+is not exact live-object accounting.
+
+The accepted correctness run covers 159 checks, including ASan/UBSan,
+pre-dereference barrier/root-reload negative controls, invalid prepared layouts,
+all six non-tree counter controls, and equal same-heap postdrop schedules.
+Independent source, packet and 144-row artifact reviews passed. The
+[raw rows](../../test/gc_prototype/results/2026-10-13-direct-old-results.jsonl),
+[measurement audit](../../test/gc_prototype/results/2026-10-13-direct-old-audit.json),
+[independent audit](../../test/gc_prototype/results/2026-10-13-direct-old-independent-audit.json)
+and [reproduction bundle](../../test/gc_prototype/results/2026-10-13-direct-old-reproduction.tar.gz)
+preserve the evidence; the
+[export manifest](../../test/gc_prototype/results/2026-10-13-direct-old-export.json)
+records every archived file hash. The frozen protocol's historical `SOURCE ONLY`
+label remains unchanged and is annotated externally in the
+[reproduction notes](../../test/gc_prototype/results/2026-10-13-direct-old-README.md).

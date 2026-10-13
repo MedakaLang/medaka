@@ -255,6 +255,33 @@ step toward R5a; root liveness, relocation reloads, managed/static ownership, an
 complete helper contracts remain required before moving execution. See the
 [evidence and limits](../docs/design/GC-FEASIBILITY.md#compiler-produced-native-inventory-2026-10-12).
 
+The opt-in [ByteBlock experiment](../test/gc_prototype/native_byteblock/run.py)
+executes restricted, compiler-produced kernels against the original [C runtime
+helper bodies](../runtime/medaka_rt.c), with versioned atomic-layout receipts
+and Word-slot roots/reloads inside the copy helper. It checks forced relocation,
+extent/layout rejection, omitted roots/reloads before stale access, and
+O0/O2/sanitizer/Boehm controls while preserving default runtime preprocessing
+and default/kernel LLVM equality. Its [checked-Core
+validator](backend/native_byteblock_kernel.mdk) consumes F5 facts within a
+trusted catalog and closed execution path; copy kernels cannot reuse the source
+after copying. This establishes one foreign-helper seam, not caller root liveness,
+complete helper coverage, or moving execution of PDS varint or gzip.
+
+The next bounded native-lowering diagnostic should exercise the real [recursive
+varint digit computation](../pds/lib/multiformats.mdk) through rooted immutable
+construction. Physical operand handles must protect earlier arguments and
+conditional join results, reload after allocating calls, and initialize fields
+under scoped constructor-layout authority derived from the actual native store
+ABI. Direct-old initialization needs its barrier; retain the generic zeroed
+allocator. Root frames must balance on every return and branch path, with a
+collection-free return handoff to the caller. Use ordinary recursion bounded by
+the supported varint integer domain, with TRMC explicitly disabled for this
+experimental target. Require a trusted import/direct-call closure and reject
+unsupported retained code rather than silently prune it. Builder/Ref mutation,
+callbacks, static ownership, TRMC interior pointers, and full application
+support remain separate obligations; neither this diagnostic nor its timings
+imply an application speedup or additional F5 scope.
+
 ### R6. The Core validator
 
 `coreValidate : EmitTarget -> CProgram -> Plan -> List CoreDefect`, run by every

@@ -1,0 +1,2367 @@
+{
+  "status": "independent read-only audit passed",
+  "raw_sha256": "36d2eceacd51c74e6aec591886731aa267213231faa13251a83d66dd8cecf5a0",
+  "audit_sha256": "2abe268acb6c9345748a22c0d046a8d8b81b18084a836bfe2e77d1f13dc19351",
+  "protocol_sha256": "2459f1466224ddba0389bb1b0cff97ee39d0151301f6d04bf203b62460d2f1c0",
+  "runner_sha256": "1bab46286d2b72e2d7120e10220ba6dc63626def63709e823af9aa69a5537b05",
+  "rows": 144,
+  "unique_balanced": true,
+  "pinned_input_count": 124,
+  "binary_count": 4,
+  "source_drift": false,
+  "summary_exact_match": true,
+  "concrete_results": [
+    {
+      "capacity": 262144,
+      "baseline_ms": 301.7279885,
+      "direct_old_ms": 248.30087949999998,
+      "fastest_boehm_ms": 248.0473705,
+      "fastest_boehm_arm": "boehm-caller-fixed128",
+      "paired_time_ratio_median": 0.8239781320106845,
+      "paired_time_ratio_range": [
+        0.8009614845584894,
+        0.8830100486607175
+      ],
+      "direct_fastest_boehm_ratio_of_medians": 1.0010220184938425,
+      "baseline_rss_mib": 154.98828125,
+      "direct_rss_mib": 154.76953125,
+      "fastest_boehm_rss_mib": 167.416015625,
+      "deterministic": {
+        "minor_count": [
+          618,
+          8
+        ],
+        "major_count": [
+          8,
+          8
+        ],
+        "work_queue_bytes": [
+          512,
+          512
+        ],
+        "remembered_queue_bytes": [
+          0,
+          0
+        ],
+        "accounted_bytes": [
+          160738944,
+          160738944
+        ],
+        "peak_accounted_bytes": [
+          160738976,
+          160739712
+        ]
+      }
+    },
+    {
+      "capacity": 262136,
+      "baseline_ms": 289.67597950000004,
+      "direct_old_ms": 243.65074,
+      "fastest_boehm_ms": 241.404743,
+      "fastest_boehm_arm": "boehm-caller-fixed128",
+      "paired_time_ratio_median": 0.8415925733228601,
+      "paired_time_ratio_range": [
+        0.7178346368241804,
+        0.9763867216340728
+      ],
+      "direct_fastest_boehm_ratio_of_medians": 1.0093038644232437,
+      "baseline_rss_mib": 155.03125,
+      "direct_rss_mib": 154.76171875,
+      "fastest_boehm_rss_mib": 167.4296875,
+      "deterministic": {
+        "minor_count": [
+          617,
+          8
+        ],
+        "major_count": [
+          7,
+          8
+        ],
+        "work_queue_bytes": [
+          512,
+          512
+        ],
+        "remembered_queue_bytes": [
+          0,
+          0
+        ],
+        "accounted_bytes": [
+          160738936,
+          160738936
+        ],
+        "peak_accounted_bytes": [
+          160738968,
+          160739704
+        ]
+      }
+    },
+    {
+      "capacity": 16777216,
+      "baseline_ms": 312.2485955,
+      "direct_old_ms": 209.362783,
+      "fastest_boehm_ms": 258.8995435,
+      "fastest_boehm_arm": "boehm-caller-default",
+      "paired_time_ratio_median": 0.6754189898427364,
+      "paired_time_ratio_range": [
+        0.6153620498262422,
+        0.6955506599330212
+      ],
+      "direct_fastest_boehm_ratio_of_medians": 0.80866416436922,
+      "baseline_rss_mib": 170.771484375,
+      "direct_rss_mib": 154.759765625,
+      "fastest_boehm_rss_mib": 167.404296875,
+      "deterministic": {
+        "minor_count": [
+          11,
+          2
+        ],
+        "major_count": [
+          2,
+          2
+        ],
+        "work_queue_bytes": [
+          512,
+          512
+        ],
+        "remembered_queue_bytes": [
+          0,
+          0
+        ],
+        "accounted_bytes": [
+          177254016,
+          177254016
+        ],
+        "peak_accounted_bytes": [
+          177254048,
+          177254784
+        ]
+      }
+    },
+    {
+      "capacity": 16777208,
+      "baseline_ms": 324.2344675,
+      "direct_old_ms": 210.5176205,
+      "fastest_boehm_ms": 251.900858,
+      "fastest_boehm_arm": "boehm-caller-fixed128",
+      "paired_time_ratio_median": 0.663689546702896,
+      "paired_time_ratio_range": [
+        0.554721290329629,
+        0.6915446592827639
+      ],
+      "direct_fastest_boehm_ratio_of_medians": 0.8357161709230859,
+      "baseline_rss_mib": 170.759765625,
+      "direct_rss_mib": 154.751953125,
+      "fastest_boehm_rss_mib": 167.396484375,
+      "deterministic": {
+        "minor_count": [
+          11,
+          2
+        ],
+        "major_count": [
+          2,
+          2
+        ],
+        "work_queue_bytes": [
+          512,
+          512
+        ],
+        "remembered_queue_bytes": [
+          0,
+          0
+        ],
+        "accounted_bytes": [
+          177254008,
+          177254008
+        ],
+        "peak_accounted_bytes": [
+          177254040,
+          177254776
+        ]
+      }
+    }
+  ],
+  "summary": [
+    {
+      "capacity": 262144,
+      "arms": {
+        "custom-baseline": {
+          "seconds": [
+            0.293629563,
+            0.302608347,
+            0.30084763,
+            0.297396149,
+            0.304553201,
+            0.311737916
+          ],
+          "seconds_median": 0.3017279885,
+          "seconds_range": [
+            0.293629563,
+            0.311737916
+          ],
+          "rss_bytes": [
+            162418688,
+            162631680,
+            162525184,
+            162549760,
+            162508800,
+            162451456
+          ],
+          "rss_median_bytes": 162516992.0,
+          "rss_range_bytes": [
+            162418688,
+            162631680
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": 618,
+              "major_count": 8,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            },
+            {
+              "minor_count": 618,
+              "major_count": 8,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            },
+            {
+              "minor_count": 618,
+              "major_count": 8,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            },
+            {
+              "minor_count": 618,
+              "major_count": 8,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            },
+            {
+              "minor_count": 618,
+              "major_count": 8,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            },
+            {
+              "minor_count": 618,
+              "major_count": 8,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            }
+          ]
+        },
+        "custom-direct-old": {
+          "seconds": [
+            0.243567911,
+            0.251328029,
+            0.246228385,
+            0.262603788,
+            0.243935384,
+            0.250373374
+          ],
+          "seconds_median": 0.2483008795,
+          "seconds_range": [
+            0.243567911,
+            0.262603788
+          ],
+          "rss_bytes": [
+            162279424,
+            162295808,
+            162369536,
+            162320384,
+            162271232,
+            162267136
+          ],
+          "rss_median_bytes": 162287616.0,
+          "rss_range_bytes": [
+            162267136,
+            162369536
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": 8,
+              "major_count": 8,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            },
+            {
+              "minor_count": 8,
+              "major_count": 8,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            },
+            {
+              "minor_count": 8,
+              "major_count": 8,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            },
+            {
+              "minor_count": 8,
+              "major_count": 8,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            },
+            {
+              "minor_count": 8,
+              "major_count": 8,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            },
+            {
+              "minor_count": 8,
+              "major_count": 8,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            }
+          ]
+        },
+        "boehm-historical-default": {
+          "seconds": [
+            0.382776346,
+            0.376274918,
+            0.386129724,
+            0.330448054,
+            0.345631851,
+            0.384407787
+          ],
+          "seconds_median": 0.379525632,
+          "seconds_range": [
+            0.330448054,
+            0.386129724
+          ],
+          "rss_bytes": [
+            175443968,
+            175427584,
+            175464448,
+            175583232,
+            175448064,
+            175513600
+          ],
+          "rss_median_bytes": 175456256.0,
+          "rss_range_bytes": [
+            175427584,
+            175583232
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            }
+          ]
+        },
+        "boehm-historical-fixed128": {
+          "seconds": [
+            0.338291514,
+            0.348839235,
+            0.341729283,
+            0.373932471,
+            0.326303387,
+            0.34708127
+          ],
+          "seconds_median": 0.34440527649999997,
+          "seconds_range": [
+            0.326303387,
+            0.373932471
+          ],
+          "rss_bytes": [
+            177139712,
+            175464448,
+            175562752,
+            175472640,
+            175468544,
+            175640576
+          ],
+          "rss_median_bytes": 175517696.0,
+          "rss_range_bytes": [
+            175464448,
+            177139712
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            }
+          ]
+        },
+        "boehm-caller-default": {
+          "seconds": [
+            0.252787683,
+            0.25674047,
+            0.252146259,
+            0.249565758,
+            0.270679306,
+            0.257455638
+          ],
+          "seconds_median": 0.2547640765,
+          "seconds_range": [
+            0.249565758,
+            0.270679306
+          ],
+          "rss_bytes": [
+            175570944,
+            175386624,
+            175407104,
+            175419392,
+            175620096,
+            175357952
+          ],
+          "rss_median_bytes": 175413248.0,
+          "rss_range_bytes": [
+            175357952,
+            175620096
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            }
+          ]
+        },
+        "boehm-caller-fixed128": {
+          "seconds": [
+            0.239347395,
+            0.260728563,
+            0.247319019,
+            0.242561072,
+            0.271472048,
+            0.248775722
+          ],
+          "seconds_median": 0.2480473705,
+          "seconds_range": [
+            0.239347395,
+            0.271472048
+          ],
+          "rss_bytes": [
+            175460352,
+            175575040,
+            175616000,
+            175456256,
+            175542272,
+            175554560
+          ],
+          "rss_median_bytes": 175548416.0,
+          "rss_range_bytes": [
+            175456256,
+            175616000
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            }
+          ]
+        }
+      },
+      "paired_direct_old": {
+        "custom-baseline": {
+          "direct_old_time_ratios": [
+            0.8295074532396454,
+            0.8305389837776022,
+            0.8184488107817237,
+            0.8830100486607175,
+            0.8009614845584894,
+            0.8031534219918246
+          ],
+          "median_ratio": 0.8239781320106845,
+          "paired_range": [
+            0.8009614845584894,
+            0.8830100486607175
+          ],
+          "direct_old_rss_ratios": [
+            0.9991425617229466,
+            0.9979347689207908,
+            0.99904231457446,
+            0.9985888874889757,
+            0.9985381222432262,
+            0.9988653841305061
+          ],
+          "rss_median_ratio": 0.9987271358097409,
+          "rss_paired_range": [
+            0.9979347689207908,
+            0.9991425617229466
+          ]
+        },
+        "boehm-historical-default": {
+          "direct_old_time_ratios": [
+            0.6363191287687354,
+            0.6679372367838773,
+            0.6376830627004514,
+            0.7946900725280107,
+            0.7057665064554483,
+            0.6513223261005375
+          ],
+          "median_ratio": 0.6596297814422074,
+          "paired_range": [
+            0.6363191287687354,
+            0.7946900725280107
+          ],
+          "direct_old_rss_ratios": [
+            0.9249643966100903,
+            0.9251441780102267,
+            0.9253699985993744,
+            0.924464039937481,
+            0.9248961105663726,
+            0.9245274212368728
+          ],
+          "rss_median_ratio": 0.9249302535882314,
+          "rss_paired_range": [
+            0.924464039937481,
+            0.9253699985993744
+          ]
+        },
+        "boehm-historical-fixed128": {
+          "direct_old_time_ratios": [
+            0.7199941497793527,
+            0.7204694993669505,
+            0.7205363931308163,
+            0.7022759678979578,
+            0.7475723321253788,
+            0.721368151038516
+          ],
+          "median_ratio": 0.7205029462488834,
+          "paired_range": [
+            0.7022759678979578,
+            0.7475723321253788
+          ],
+          "direct_old_rss_ratios": [
+            0.9161097879621708,
+            0.9249498109155423,
+            0.9248518501236527,
+            0.925046685340803,
+            0.9247881603212026,
+            0.923859051794501
+          ],
+          "rss_median_ratio": 0.9248200052224276,
+          "rss_paired_range": [
+            0.9161097879621708,
+            0.925046685340803
+          ]
+        },
+        "boehm-caller-default": {
+          "direct_old_time_ratios": [
+            0.9635276058920956,
+            0.9789186293847636,
+            0.9765299948392254,
+            1.0522428641833148,
+            0.9011970202110685,
+            0.9724913229517235
+          ],
+          "median_ratio": 0.9745106588954744,
+          "paired_range": [
+            0.9011970202110685,
+            1.0522428641833148
+          ],
+          "direct_old_rss_ratios": [
+            0.9242954460619635,
+            0.925360237277844,
+            0.9256725200821969,
+            0.9253274803278305,
+            0.9239901110178188,
+            0.9253480332617023
+          ],
+          "rss_median_ratio": 0.9253377567947665,
+          "rss_paired_range": [
+            0.9239901110178188,
+            0.9256725200821969
+          ]
+        },
+        "boehm-caller-fixed128": {
+          "direct_old_time_ratios": [
+            1.0176334319410496,
+            0.9639451317038862,
+            0.9955901733541972,
+            1.0826295655553502,
+            0.8985653801086733,
+            1.0064220575350193
+          ],
+          "median_ratio": 1.0010061154446084,
+          "paired_range": [
+            0.8985653801086733,
+            1.0826295655553502
+          ],
+          "direct_old_rss_ratios": [
+            0.9248780260055559,
+            0.9243671993467865,
+            0.9245714285714286,
+            0.9251330656457185,
+            0.92439974799916,
+            0.9243117125524964
+          ],
+          "rss_median_ratio": 0.9244855882852943,
+          "rss_paired_range": [
+            0.9243117125524964,
+            0.9251330656457185
+          ]
+        }
+      },
+      "fastest_observed_boehm_median_arm": "boehm-caller-fixed128"
+    },
+    {
+      "capacity": 262136,
+      "arms": {
+        "custom-baseline": {
+          "seconds": [
+            0.296422806,
+            0.282929153,
+            0.268351514,
+            0.278586726,
+            0.336130349,
+            0.31767565
+          ],
+          "seconds_median": 0.2896759795,
+          "seconds_range": [
+            0.268351514,
+            0.336130349
+          ],
+          "rss_bytes": [
+            162574336,
+            162549760,
+            162631680,
+            162623488,
+            162426880,
+            162549760
+          ],
+          "rss_median_bytes": 162562048.0,
+          "rss_range_bytes": [
+            162426880,
+            162631680
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": 617,
+              "major_count": 7,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            },
+            {
+              "minor_count": 617,
+              "major_count": 7,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            },
+            {
+              "minor_count": 617,
+              "major_count": 7,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            },
+            {
+              "minor_count": 617,
+              "major_count": 7,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            },
+            {
+              "minor_count": 617,
+              "major_count": 7,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            },
+            {
+              "minor_count": 617,
+              "major_count": 7,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            }
+          ]
+        },
+        "custom-direct-old": {
+          "seconds": [
+            0.243386036,
+            0.243915444,
+            0.262014855,
+            0.242242455,
+            0.241286007,
+            0.249082302
+          ],
+          "seconds_median": 0.24365074,
+          "seconds_range": [
+            0.241286007,
+            0.262014855
+          ],
+          "rss_bytes": [
+            162324480,
+            162287616,
+            162250752,
+            162271232,
+            162263040,
+            162295808
+          ],
+          "rss_median_bytes": 162279424.0,
+          "rss_range_bytes": [
+            162250752,
+            162324480
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": 8,
+              "major_count": 8,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            },
+            {
+              "minor_count": 8,
+              "major_count": 8,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            },
+            {
+              "minor_count": 8,
+              "major_count": 8,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            },
+            {
+              "minor_count": 8,
+              "major_count": 8,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            },
+            {
+              "minor_count": 8,
+              "major_count": 8,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            },
+            {
+              "minor_count": 8,
+              "major_count": 8,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            }
+          ]
+        },
+        "boehm-historical-default": {
+          "seconds": [
+            0.343653867,
+            0.328967758,
+            0.326762585,
+            0.341524994,
+            0.363315452,
+            0.352992462
+          ],
+          "seconds_median": 0.3425894305,
+          "seconds_range": [
+            0.326762585,
+            0.363315452
+          ],
+          "rss_bytes": [
+            175423488,
+            175513600,
+            175550464,
+            175583232,
+            175529984,
+            175394816
+          ],
+          "rss_median_bytes": 175521792.0,
+          "rss_range_bytes": [
+            175394816,
+            175583232
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            }
+          ]
+        },
+        "boehm-historical-fixed128": {
+          "seconds": [
+            0.315924872,
+            0.329571943,
+            0.329079865,
+            0.369796466,
+            0.346309473,
+            0.348172227
+          ],
+          "seconds_median": 0.337940708,
+          "seconds_range": [
+            0.315924872,
+            0.369796466
+          ],
+          "rss_bytes": [
+            175390720,
+            175529984,
+            175525888,
+            175566848,
+            175624192,
+            175419392
+          ],
+          "rss_median_bytes": 175527936.0,
+          "rss_range_bytes": [
+            175390720,
+            175624192
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            }
+          ]
+        },
+        "boehm-caller-default": {
+          "seconds": [
+            0.248171908,
+            0.242020008,
+            0.246638256,
+            0.267819012,
+            0.247210329,
+            0.277107539
+          ],
+          "seconds_median": 0.2476911185,
+          "seconds_range": [
+            0.242020008,
+            0.277107539
+          ],
+          "rss_bytes": [
+            175554560,
+            175525888,
+            175505408,
+            175517696,
+            175546368,
+            175456256
+          ],
+          "rss_median_bytes": 175521792.0,
+          "rss_range_bytes": [
+            175456256,
+            175554560
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            }
+          ]
+        },
+        "boehm-caller-fixed128": {
+          "seconds": [
+            0.253357043,
+            0.233162794,
+            0.264513858,
+            0.237492068,
+            0.242236375,
+            0.240573111
+          ],
+          "seconds_median": 0.241404743,
+          "seconds_range": [
+            0.233162794,
+            0.264513858
+          ],
+          "rss_bytes": [
+            175583232,
+            175583232,
+            175538176,
+            175542272,
+            175624192,
+            175472640
+          ],
+          "rss_median_bytes": 175562752.0,
+          "rss_range_bytes": [
+            175472640,
+            175624192
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            }
+          ]
+        }
+      },
+      "paired_direct_old": {
+        "custom-baseline": {
+          "direct_old_time_ratios": [
+            0.821077295921691,
+            0.8621078507240292,
+            0.9763867216340728,
+            0.8695405501840027,
+            0.7178346368241804,
+            0.7840774135505822
+          ],
+          "median_ratio": 0.8415925733228601,
+          "paired_range": [
+            0.7178346368241804,
+            0.9763867216340728
+          ],
+          "direct_old_rss_ratios": [
+            0.9984631276611826,
+            0.9983872999874008,
+            0.9976577257272384,
+            0.9978339168324811,
+            0.9989912999621737,
+            0.9984376968627945
+          ],
+          "rss_median_ratio": 0.9984124984250977,
+          "rss_paired_range": [
+            0.9976577257272384,
+            0.9989912999621737
+          ]
+        },
+        "boehm-historical-default": {
+          "direct_old_time_ratios": [
+            0.7082301681185506,
+            0.7414569910526004,
+            0.8018508453163327,
+            0.7092964182879101,
+            0.6641226121040401,
+            0.705630654515223
+          ],
+          "median_ratio": 0.7087632932032304,
+          "paired_range": [
+            0.6641226121040401,
+            0.8018508453163327
+          ],
+          "direct_old_rss_ratios": [
+            0.9253292238722332,
+            0.9246441073512252,
+            0.9242399496021839,
+            0.9241841043226725,
+            0.9244177906379801,
+            0.9253170173512996
+          ],
+          "rss_median_ratio": 0.9245309489946026,
+          "rss_paired_range": [
+            0.9241841043226725,
+            0.9253292238722332
+          ]
+        },
+        "boehm-historical-fixed128": {
+          "direct_old_time_ratios": [
+            0.7703921329752094,
+            0.7400977212432189,
+            0.7962044563255183,
+            0.6550696863609291,
+            0.6967352204079038,
+            0.7153996863741806
+          ],
+          "median_ratio": 0.7277487038086998,
+          "paired_range": [
+            0.6550696863609291,
+            0.7962044563255183
+          ],
+          "direct_old_rss_ratios": [
+            0.9255021018215787,
+            0.9245578009053997,
+            0.9243693557043847,
+            0.9242703497188718,
+            0.9239219161788371,
+            0.9251873817918603
+          ],
+          "rss_median_ratio": 0.9244635783048922,
+          "rss_paired_range": [
+            0.9239219161788371,
+            0.9255021018215787
+          ]
+        },
+        "boehm-caller-default": {
+          "direct_old_time_ratios": [
+            0.9807154966145484,
+            1.0078317326557562,
+            1.06234474428006,
+            0.9045005923627258,
+            0.9760352974571705,
+            0.8988651225400258
+          ],
+          "median_ratio": 0.9783753970358595,
+          "paired_range": [
+            0.8988651225400258,
+            1.06234474428006
+          ],
+          "direct_old_rss_ratios": [
+            0.9246383574428372,
+            0.9245793760063473,
+            0.924477221807319,
+            0.9245291825161607,
+            0.9243315133697326,
+            0.9249929965449621
+          ],
+          "rss_median_ratio": 0.924554279261254,
+          "rss_paired_range": [
+            0.9243315133697326,
+            0.9249929965449621
+          ]
+        },
+        "boehm-caller-fixed128": {
+          "direct_old_time_ratios": [
+            0.9606444451595529,
+            1.0461164914673309,
+            0.990552468521328,
+            1.020002297508311,
+            0.9960766916199105,
+            1.0353704990746035
+          ],
+          "median_ratio": 1.0080394945641107,
+          "paired_range": [
+            0.9606444451595529,
+            1.0461164914673309
+          ],
+          "direct_old_rss_ratios": [
+            0.9244873679053818,
+            0.9242774161942753,
+            0.92430464812395,
+            0.92439974799916,
+            0.9239219161788371,
+            0.9249066293183941
+          ],
+          "rss_median_ratio": 0.924352198061555,
+          "rss_paired_range": [
+            0.9239219161788371,
+            0.9249066293183941
+          ]
+        }
+      },
+      "fastest_observed_boehm_median_arm": "boehm-caller-fixed128"
+    },
+    {
+      "capacity": 16777216,
+      "arms": {
+        "custom-baseline": {
+          "seconds": [
+            0.297432154,
+            0.308641749,
+            0.303301061,
+            0.348107086,
+            0.315855442,
+            0.317740482
+          ],
+          "seconds_median": 0.3122485955,
+          "seconds_range": [
+            0.297432154,
+            0.348107086
+          ],
+          "rss_bytes": [
+            179118080,
+            179027968,
+            179060736,
+            179134464,
+            178982912,
+            179073024
+          ],
+          "rss_median_bytes": 179066880.0,
+          "rss_range_bytes": [
+            178982912,
+            179134464
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": 11,
+              "major_count": 2,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            },
+            {
+              "minor_count": 11,
+              "major_count": 2,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            },
+            {
+              "minor_count": 11,
+              "major_count": 2,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            },
+            {
+              "minor_count": 11,
+              "major_count": 2,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            },
+            {
+              "minor_count": 11,
+              "major_count": 2,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            },
+            {
+              "minor_count": 11,
+              "major_count": 2,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            }
+          ]
+        },
+        "custom-direct-old": {
+          "seconds": [
+            0.206879131,
+            0.207449935,
+            0.21066094,
+            0.21421189,
+            0.208064626,
+            0.215650369
+          ],
+          "seconds_median": 0.209362783,
+          "seconds_range": [
+            0.206879131,
+            0.215650369
+          ],
+          "rss_bytes": [
+            162287616,
+            162267136,
+            162320384,
+            162295808,
+            162213888,
+            162263040
+          ],
+          "rss_median_bytes": 162277376.0,
+          "rss_range_bytes": [
+            162213888,
+            162320384
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": 2,
+              "major_count": 2,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            },
+            {
+              "minor_count": 2,
+              "major_count": 2,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            },
+            {
+              "minor_count": 2,
+              "major_count": 2,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            },
+            {
+              "minor_count": 2,
+              "major_count": 2,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            },
+            {
+              "minor_count": 2,
+              "major_count": 2,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            },
+            {
+              "minor_count": 2,
+              "major_count": 2,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            }
+          ]
+        },
+        "boehm-historical-default": {
+          "seconds": [
+            0.329844631,
+            0.32794686,
+            0.325294968,
+            0.333940911,
+            0.338828613,
+            0.340905163
+          ],
+          "seconds_median": 0.33189277100000003,
+          "seconds_range": [
+            0.325294968,
+            0.340905163
+          ],
+          "rss_bytes": [
+            175423488,
+            175484928,
+            175566848,
+            175480832,
+            175611904,
+            175591424
+          ],
+          "rss_median_bytes": 175525888.0,
+          "rss_range_bytes": [
+            175423488,
+            175611904
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            }
+          ]
+        },
+        "boehm-historical-fixed128": {
+          "seconds": [
+            0.339381589,
+            0.320644289,
+            0.331054774,
+            0.328397773,
+            0.327388926,
+            0.332442925
+          ],
+          "seconds_median": 0.3297262735,
+          "seconds_range": [
+            0.320644289,
+            0.339381589
+          ],
+          "rss_bytes": [
+            175591424,
+            175616000,
+            175501312,
+            175513600,
+            175583232,
+            175554560
+          ],
+          "rss_median_bytes": 175568896.0,
+          "rss_range_bytes": [
+            175501312,
+            175616000
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            }
+          ]
+        },
+        "boehm-caller-default": {
+          "seconds": [
+            0.250188204,
+            0.25624869,
+            0.252856879,
+            0.264663481,
+            0.272597951,
+            0.261550397
+          ],
+          "seconds_median": 0.2588995435,
+          "seconds_range": [
+            0.250188204,
+            0.272597951
+          ],
+          "rss_bytes": [
+            175558656,
+            175394816,
+            175333376,
+            175591424,
+            175554560,
+            175517696
+          ],
+          "rss_median_bytes": 175536128.0,
+          "rss_range_bytes": [
+            175333376,
+            175591424
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            }
+          ]
+        },
+        "boehm-caller-fixed128": {
+          "seconds": [
+            0.240875646,
+            0.239082139,
+            0.280183434,
+            0.30431643,
+            0.275520146,
+            0.289730288
+          ],
+          "seconds_median": 0.27785179000000004,
+          "seconds_range": [
+            0.239082139,
+            0.30431643
+          ],
+          "rss_bytes": [
+            175616000,
+            175489024,
+            175554560,
+            175558656,
+            175419392,
+            175587328
+          ],
+          "rss_median_bytes": 175556608.0,
+          "rss_range_bytes": [
+            175419392,
+            175616000
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            }
+          ]
+        }
+      },
+      "paired_direct_old": {
+        "custom-baseline": {
+          "direct_old_time_ratios": [
+            0.6955506599330212,
+            0.672138282238674,
+            0.6945605112802424,
+            0.6153620498262422,
+            0.6587337064149745,
+            0.6786996974467988
+          ],
+          "median_ratio": 0.6754189898427364,
+          "paired_range": [
+            0.6153620498262422,
+            0.6955506599330212
+          ],
+          "direct_old_rss_ratios": [
+            0.9060370455065173,
+            0.9063786949757482,
+            0.9065102022142922,
+            0.9059999085379796,
+            0.9063093576218046,
+            0.9061277705345502
+          ],
+          "rss_median_ratio": 0.9062185640781775,
+          "rss_paired_range": [
+            0.9059999085379796,
+            0.9065102022142922
+          ]
+        },
+        "boehm-historical-default": {
+          "direct_old_time_ratios": [
+            0.6272017536644396,
+            0.6325717983700164,
+            0.6475997501443059,
+            0.6414664479369525,
+            0.6140704120522431,
+            0.6325817042553855
+          ],
+          "median_ratio": 0.632576751312701,
+          "paired_range": [
+            0.6140704120522431,
+            0.6475997501443059
+          ],
+          "direct_old_rss_ratios": [
+            0.925119080975063,
+            0.9246784772308195,
+            0.9245503114574342,
+            0.9248634517529527,
+            0.9237066753743528,
+            0.9240943339009541
+          ],
+          "rss_median_ratio": 0.9246143943441268,
+          "rss_paired_range": [
+            0.9237066753743528,
+            0.925119080975063
+          ]
+        },
+        "boehm-historical-fixed128": {
+          "direct_old_time_ratios": [
+            0.6095767646370469,
+            0.6469784185053736,
+            0.6363325846495722,
+            0.6522939788632488,
+            0.6355273788338216,
+            0.6486838876177016
+          ],
+          "median_ratio": 0.641655501577473,
+          "paired_range": [
+            0.6095767646370469,
+            0.6522939788632488
+          ],
+          "direct_old_rss_ratios": [
+            0.924234295178334,
+            0.9239883381924199,
+            0.924895558615539,
+            0.9246907817969662,
+            0.9238575127720624,
+            0.9242883807746151
+          ],
+          "rss_median_ratio": 0.9242613379764746,
+          "rss_paired_range": [
+            0.9238575127720624,
+            0.924895558615539
+          ]
+        },
+        "boehm-caller-default": {
+          "direct_old_time_ratios": [
+            0.8268940249477148,
+            0.8095648606047509,
+            0.8331232309483659,
+            0.8093745657339102,
+            0.7632655536724853,
+            0.8245079016263165
+          ],
+          "median_ratio": 0.8170363811155337,
+          "paired_range": [
+            0.7632655536724853,
+            0.8331232309483659
+          ],
+          "direct_old_rss_ratios": [
+            0.9244068033876951,
+            0.9251535461572593,
+            0.9257814325094613,
+            0.9242809489374606,
+            0.9240083994400373,
+            0.9244825091596462
+          ],
+          "rss_median_ratio": 0.9244446562736707,
+          "rss_paired_range": [
+            0.9240083994400373,
+            0.9257814325094613
+          ]
+        },
+        "boehm-caller-fixed128": {
+          "direct_old_time_ratios": [
+            0.858862796781041,
+            0.8676931529377023,
+            0.7518679352041919,
+            0.7039116816663497,
+            0.7551702807242269,
+            0.7443142050788975
+          ],
+          "median_ratio": 0.7535191079642094,
+          "paired_range": [
+            0.7039116816663497,
+            0.8676931529377023
+          ],
+          "direct_old_rss_ratios": [
+            0.9241049562682215,
+            0.9246568947810662,
+            0.9246150256649557,
+            0.9244534658547398,
+            0.9247203866719593,
+            0.9241158906410376
+          ],
+          "rss_median_ratio": 0.9245342457598478,
+          "rss_paired_range": [
+            0.9241049562682215,
+            0.9247203866719593
+          ]
+        }
+      },
+      "fastest_observed_boehm_median_arm": "boehm-caller-default"
+    },
+    {
+      "capacity": 16777208,
+      "arms": {
+        "custom-baseline": {
+          "seconds": [
+            0.303673014,
+            0.331231941,
+            0.363386835,
+            0.327068183,
+            0.317947857,
+            0.321400752
+          ],
+          "seconds_median": 0.3242344675,
+          "seconds_range": [
+            0.303673014,
+            0.363386835
+          ],
+          "rss_bytes": [
+            178991104,
+            179068928,
+            179126272,
+            179126272,
+            179040256,
+            179027968
+          ],
+          "rss_median_bytes": 179054592.0,
+          "rss_range_bytes": [
+            178991104,
+            179126272
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": 11,
+              "major_count": 2,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            },
+            {
+              "minor_count": 11,
+              "major_count": 2,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            },
+            {
+              "minor_count": 11,
+              "major_count": 2,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            },
+            {
+              "minor_count": 11,
+              "major_count": 2,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            },
+            {
+              "minor_count": 11,
+              "major_count": 2,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            },
+            {
+              "minor_count": 11,
+              "major_count": 2,
+              "copied_bytes": 160000000,
+              "promoted_count": 5000000
+            }
+          ]
+        },
+        "custom-direct-old": {
+          "seconds": [
+            0.210003451,
+            0.20646308,
+            0.201578414,
+            0.218917325,
+            0.21103179,
+            0.213297056
+          ],
+          "seconds_median": 0.2105176205,
+          "seconds_range": [
+            0.201578414,
+            0.218917325
+          ],
+          "rss_bytes": [
+            162250752,
+            162263040,
+            162267136,
+            162271232,
+            162369536,
+            162295808
+          ],
+          "rss_median_bytes": 162269184.0,
+          "rss_range_bytes": [
+            162250752,
+            162369536
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": 2,
+              "major_count": 2,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            },
+            {
+              "minor_count": 2,
+              "major_count": 2,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            },
+            {
+              "minor_count": 2,
+              "major_count": 2,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            },
+            {
+              "minor_count": 2,
+              "major_count": 2,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            },
+            {
+              "minor_count": 2,
+              "major_count": 2,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            },
+            {
+              "minor_count": 2,
+              "major_count": 2,
+              "copied_bytes": 0,
+              "promoted_count": 0
+            }
+          ]
+        },
+        "boehm-historical-default": {
+          "seconds": [
+            0.33485967,
+            0.326246188,
+            0.331317846,
+            0.360006583,
+            0.334092489,
+            0.337165048
+          ],
+          "seconds_median": 0.3344760795,
+          "seconds_range": [
+            0.326246188,
+            0.360006583
+          ],
+          "rss_bytes": [
+            175624192,
+            175558656,
+            175550464,
+            175603712,
+            175583232,
+            175480832
+          ],
+          "rss_median_bytes": 175570944.0,
+          "rss_range_bytes": [
+            175480832,
+            175624192
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            }
+          ]
+        },
+        "boehm-historical-fixed128": {
+          "seconds": [
+            0.317546019,
+            0.31718912,
+            0.318674085,
+            0.338978998,
+            0.32612005,
+            0.317143888
+          ],
+          "seconds_median": 0.318110052,
+          "seconds_range": [
+            0.317143888,
+            0.338978998
+          ],
+          "rss_bytes": [
+            175349760,
+            175542272,
+            175443968,
+            175620096,
+            175435776,
+            177078272
+          ],
+          "rss_median_bytes": 175493120.0,
+          "rss_range_bytes": [
+            175349760,
+            177078272
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            }
+          ]
+        },
+        "boehm-caller-default": {
+          "seconds": [
+            0.256039742,
+            0.241162446,
+            0.237302562,
+            0.248521524,
+            0.258419005,
+            0.267079501
+          ],
+          "seconds_median": 0.25228063300000003,
+          "seconds_range": [
+            0.237302562,
+            0.267079501
+          ],
+          "rss_bytes": [
+            175620096,
+            175591424,
+            175575040,
+            175558656,
+            175505408,
+            177577984
+          ],
+          "rss_median_bytes": 175583232.0,
+          "rss_range_bytes": [
+            175505408,
+            177577984
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            }
+          ]
+        },
+        "boehm-caller-fixed128": {
+          "seconds": [
+            0.239304968,
+            0.258153521,
+            0.253036863,
+            0.242184323,
+            0.287767086,
+            0.250764853
+          ],
+          "seconds_median": 0.251900858,
+          "seconds_range": [
+            0.239304968,
+            0.287767086
+          ],
+          "rss_bytes": [
+            175538176,
+            175525888,
+            175550464,
+            175443968,
+            175423488,
+            175529984
+          ],
+          "rss_median_bytes": 175527936.0,
+          "rss_range_bytes": [
+            175423488,
+            175550464
+          ],
+          "collection_schedules": [
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            },
+            {
+              "minor_count": null,
+              "major_count": null,
+              "copied_bytes": null,
+              "promoted_count": null
+            }
+          ]
+        }
+      },
+      "paired_direct_old": {
+        "custom-baseline": {
+          "direct_old_time_ratios": [
+            0.6915446592827639,
+            0.6233187517383778,
+            0.554721290329629,
+            0.6693323789309094,
+            0.6637308142007701,
+            0.6636482792050219
+          ],
+          "median_ratio": 0.663689546702896,
+          "paired_range": [
+            0.554721290329629,
+            0.6915446592827639
+          ],
+          "direct_old_rss_ratios": [
+            0.906473832353143,
+            0.9061484971865136,
+            0.9058812768681972,
+            0.9059041434190067,
+            0.9068884262542609,
+            0.9065388487233459
+          ],
+          "rss_median_ratio": 0.9063111647698283,
+          "rss_paired_range": [
+            0.9058812768681972,
+            0.9068884262542609
+          ]
+        },
+        "boehm-historical-default": {
+          "direct_old_time_ratios": [
+            0.6271386787187601,
+            0.6328444211584168,
+            0.6084139940955671,
+            0.6080925609074209,
+            0.6316567924997559,
+            0.6326191201171006
+          ],
+          "median_ratio": 0.6293977356092579,
+          "paired_range": [
+            0.6080925609074209,
+            0.6328444211584168
+          ],
+          "direct_old_rss_ratios": [
+            0.92385194859715,
+            0.9242668159865612,
+            0.9243332788912481,
+            0.9240763202089942,
+            0.9247439755522896,
+            0.9248634517529527
+          ],
+          "rss_median_ratio": 0.9243000474389047,
+          "rss_paired_range": [
+            0.92385194859715,
+            0.9248634517529527
+          ]
+        },
+        "boehm-historical-fixed128": {
+          "direct_old_time_ratios": [
+            0.6613323374713761,
+            0.6509147602540718,
+            0.6325535193738769,
+            0.6458138300355706,
+            0.6470984841318405,
+            0.6725560985744112
+          ],
+          "median_ratio": 0.6490066221929561,
+          "paired_range": [
+            0.6325535193738769,
+            0.6725560985744112
+          ],
+          "direct_old_rss_ratios": [
+            0.9252978276103714,
+            0.9243530811769373,
+            0.9248943571545304,
+            0.9239901110178188,
+            0.9255212346197847,
+            0.9165201702442635
+          ],
+          "rss_median_ratio": 0.9246237191657338,
+          "rss_paired_range": [
+            0.9165201702442635,
+            0.9255212346197847
+          ]
+        },
+        "boehm-caller-default": {
+          "direct_old_time_ratios": [
+            0.8201986510359786,
+            0.8561162130525082,
+            0.8494573859678768,
+            0.8808787322582168,
+            0.8166264319452821,
+            0.7986275816802578
+          ],
+          "median_ratio": 0.8348280185019277,
+          "paired_range": [
+            0.7986275816802578,
+            0.8808787322582168
+          ],
+          "direct_old_rss_ratios": [
+            0.9238734956619088,
+            0.9240943339009541,
+            0.9242038959524087,
+            0.9243134784536059,
+            0.9251540328603436,
+            0.9139410435023296
+          ],
+          "rss_median_ratio": 0.9241491149266814,
+          "rss_paired_range": [
+            0.9139410435023296,
+            0.9251540328603436
+          ]
+        },
+        "boehm-caller-fixed128": {
+          "direct_old_time_ratios": [
+            0.877555751370778,
+            0.7997685997085432,
+            0.7966365517264574,
+            0.9039285544506528,
+            0.7333423461778391,
+            0.8505859311950706
+          ],
+          "median_ratio": 0.8251772654518069,
+          "paired_range": [
+            0.7333423461778391,
+            0.9039285544506528
+          ],
+          "direct_old_rss_ratios": [
+            0.92430464812395,
+            0.9244393624717056,
+            0.9243332788912481,
+            0.924917703639717,
+            0.9255860651909965,
+            0.9246044709945396
+          ],
+          "rss_median_ratio": 0.9245219167331226,
+          "rss_paired_range": [
+            0.92430464812395,
+            0.9255860651909965
+          ]
+        }
+      },
+      "fastest_observed_boehm_median_arm": "boehm-caller-fixed128"
+    }
+  ],
+  "limits": [
+    "Placement/allocation order, direct checked call and full zeroing change alongside removal of nursery promotion. This does not isolate copying cost.",
+    "Boehm capacity labels are paired controls, not Boehm nursery configurations. Fixed128 initial heap is not a memory cap.",
+    "RSS is process high-water, not exact live heap. Combined elapsed includes construction, checksum traversal and final collection; no phase attribution is available.",
+    "Frozen protocol status remains SOURCE ONLY although audit records completed execution; preserve original protocol and annotate this historical label when exporting."
+  ]
+}
