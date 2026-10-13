@@ -41,7 +41,7 @@ import ir.core_ir.{
   CallSite(..),
 }
 import frontend.ast.{Lit(..), Pat(..), Route(..), noDeclLoc, noBinderId}
-import types.runtime_types.{BinderRow(..), RuntimeType(..)}
+import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import frontend.ast.{BinderId(..)}
 import ir.core_ir_lower.{
   EmitTarget(..),
@@ -1585,7 +1585,7 @@ functionReturnsIn : String ->
   (List (String, Option RuntimeType), List String, List Int)
 functionReturnsIn top (CProgram groups _ _ _ _ facts) =
   let rows =
-    BM.fromList (map (r => (binderOrdinalOf r.brId, r)) facts.factBinders)
+    BM.fromList (map (r => (binderOrdinal r.brId, r)) facts.factBinders)
   let found = Ref []
   let _ =
     mapProgramBinders
@@ -1608,16 +1608,13 @@ functionReturnsIn top (CProgram groups _ _ _ _ facts) =
   let inner = take (listLen fns - 1) fns
   (
     map
-      (p => match BM.get (binderOrdinalOf (snd p)) rows
+      (p => match BM.get (binderOrdinal (snd p)) rows
         Some r => (r.brName, r.brReturns)
         None => (fst p, None))
       fns,
     map fst inner,
-    map (p => binderOrdinalOf (snd p)) inner,
+    map (p => binderOrdinal (snd p)) inner,
   )
-
-binderOrdinalOf : BinderId -> Int
-binderOrdinalOf (BinderId _ n) = n
 
 test "(ae) two functions of one name each return what their own body returns" =
   match loweredSource sameNameSrc

@@ -86,7 +86,12 @@ import ir.core_ir.{
   BinderSite(..),
   litRuntimeType,
 }
-import types.runtime_types.{BinderRow(..), RuntimeType(..), runtimeTypeName}
+import types.runtime_types.{
+  BinderRow(..),
+  RuntimeType(..),
+  binderOrdinal,
+  runtimeTypeName,
+}
 import map as BM
 import ir.core_ir_lower.{
   ArityEnv,
@@ -1013,15 +1018,12 @@ tailStmt b (CSAssign _ e) acc = tailE b False e acc
 export
 validateBinderStamps : CProgram -> List String
 validateBinderStamps (CProgram groups ctorArs ctorTypes impls _ facts) =
-  let rows = BM.fromList (map (r => (rowOrdinal r, r)) facts.factBinders)
+  let rows =
+    BM.fromList (map (r => (binderOrdinal r.brId, r)) facts.factBinders)
   let ctors = omFromPairs ctorTypes omEmpty
   let arities = omFromPairs ctorArs omEmpty
   flatMap (bindStampFaults rows ctors arities) groups
     ++ flatMap (entryStampFaults rows ctors arities) impls
-
-rowOrdinal : BinderRow -> Int
-rowOrdinal row = match row.brId
-  BinderId _ n => n
 
 bindStampFaults : BM.Map Int BinderRow ->
   OrdMap String ->

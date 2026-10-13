@@ -1,5 +1,5 @@
 # META
-source_lines=442
+source_lines=439
 stages=DESUGAR,MARK
 # SOURCE
 -- Structural S-expression dump of the Core IR (STAGE2-DESIGN §2.1).  Mirrors
@@ -36,7 +36,7 @@ import ir.core_ir.{
   programBinderIds,
 }
 import frontend.ast.{BinderId(..)}
-import types.runtime_types.{BinderRow(..), runtimeTypeName}
+import types.runtime_types.{BinderRow(..), binderOrdinal, runtimeTypeName}
 import map as BM
 import ir.sexp.{boolStr, node, slist, litSexp, patSexp}
 import support.util.{escStr, joinNl, reverseL}
@@ -387,15 +387,12 @@ binderTypesSexp (prog@(CProgram _ _ _ _ _ facts)) =
     [] => None
     _ =>
       let (occ, firsts) = denseIds ids BM.Tip 0 [] []
-      let byOrd = BM.fromList (map (r => (rowOrdinal r, r)) facts.factBinders)
+      let byOrd =
+        BM.fromList (map (r => (binderOrdinal r.brId, r)) facts.factBinders)
       let rows = flatMap (binderRowSexp byOrd) (reverseL firsts)
       let idsPart =
         if isIdentity occ 0 then [] else [node "ids" (map intToString occ)]
       Some ("(" ++ joinNl ("binder-types" :: idsPart ++ rows) ++ ")")
-
-rowOrdinal : BinderRow -> Int
-rowOrdinal row = match row.brId
-  BinderId _ n => n
 
 -- Per-occurrence dense ids, and the distinct ids in order of first occurrence
 -- paired with their dense id (both accumulated in reverse).
@@ -448,7 +445,7 @@ binderRowSexp byOrd (d, BinderId _ n) = match BM.get n byOrd
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "programBinderIds" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true))))
-(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "runtimeTypeName" false))))
+(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "binderOrdinal" false) (mem "runtimeTypeName" false))))
 (DUse false (UseAlias ("map") "BM"))
 (DUse false (UseGroup ("ir" "sexp") ((mem "boolStr" false) (mem "node" false) (mem "slist" false) (mem "litSexp" false) (mem "patSexp" false))))
 (DUse false (UseGroup ("support" "util") ((mem "escStr" false) (mem "joinNl" false) (mem "reverseL" false))))
@@ -561,9 +558,7 @@ binderRowSexp byOrd (d, BinderId _ n) = match BM.get n byOrd
 (DTypeSig false "methodContextPairSexp" (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "String")))
 (DFunDef false "methodContextPairSexp" ((PTuple (PVar "key") (PVar "n"))) (EApp (EApp (EVar "node") (ELit (LString "mc"))) (EListLit (EApp (EVar "escStr") (EVar "key")) (EApp (EVar "intToString") (EVar "n")))))
 (DTypeSig false "binderTypesSexp" (TyFun (TyCon "CProgram") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "binderTypesSexp" ((PAs "prog" (PCon "CProgram" PWild PWild PWild PWild PWild (PVar "facts")))) (EBlock (DoLet false false (PVar "ids") (EApp (EVar "programBinderIds") (EVar "prog"))) (DoExpr (EMatch (EVar "ids") (arm (PList) () (EVar "None")) (arm PWild () (EBlock (DoLet false false (PTuple (PVar "occ") (PVar "firsts")) (EApp (EApp (EApp (EApp (EApp (EVar "denseIds") (EVar "ids")) (EVar "BM.Tip")) (ELit (LInt 0))) (EListLit)) (EListLit))) (DoLet false false (PVar "byOrd") (EApp (EVar "BM.fromList") (EApp (EApp (EVar "map") (ELam ((PVar "r")) (ETuple (EApp (EVar "rowOrdinal") (EVar "r")) (EVar "r")))) (EFieldAccess (EVar "facts") "factBinders")))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "flatMap") (EApp (EVar "binderRowSexp") (EVar "byOrd"))) (EApp (EVar "reverseL") (EVar "firsts")))) (DoLet false false (PVar "idsPart") (EIf (EApp (EApp (EVar "isIdentity") (EVar "occ")) (ELit (LInt 0))) (EListLit) (EListLit (EApp (EApp (EVar "node") (ELit (LString "ids"))) (EApp (EApp (EVar "map") (EVar "intToString")) (EVar "occ")))))) (DoExpr (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "joinNl") (EBinOp "::" (ELit (LString "binder-types")) (EBinOp "++" (EVar "idsPart") (EVar "rows"))))) (ELit (LString ")")))))))))))
-(DTypeSig false "rowOrdinal" (TyFun (TyCon "BinderRow") (TyCon "Int")))
-(DFunDef false "rowOrdinal" ((PVar "row")) (EMatch (EFieldAccess (EVar "row") "brId") (arm (PCon "BinderId" PWild (PVar "n")) () (EVar "n"))))
+(DFunDef false "binderTypesSexp" ((PAs "prog" (PCon "CProgram" PWild PWild PWild PWild PWild (PVar "facts")))) (EBlock (DoLet false false (PVar "ids") (EApp (EVar "programBinderIds") (EVar "prog"))) (DoExpr (EMatch (EVar "ids") (arm (PList) () (EVar "None")) (arm PWild () (EBlock (DoLet false false (PTuple (PVar "occ") (PVar "firsts")) (EApp (EApp (EApp (EApp (EApp (EVar "denseIds") (EVar "ids")) (EVar "BM.Tip")) (ELit (LInt 0))) (EListLit)) (EListLit))) (DoLet false false (PVar "byOrd") (EApp (EVar "BM.fromList") (EApp (EApp (EVar "map") (ELam ((PVar "r")) (ETuple (EApp (EVar "binderOrdinal") (EFieldAccess (EVar "r") "brId")) (EVar "r")))) (EFieldAccess (EVar "facts") "factBinders")))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "flatMap") (EApp (EVar "binderRowSexp") (EVar "byOrd"))) (EApp (EVar "reverseL") (EVar "firsts")))) (DoLet false false (PVar "idsPart") (EIf (EApp (EApp (EVar "isIdentity") (EVar "occ")) (ELit (LInt 0))) (EListLit) (EListLit (EApp (EApp (EVar "node") (ELit (LString "ids"))) (EApp (EApp (EVar "map") (EVar "intToString")) (EVar "occ")))))) (DoExpr (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "joinNl") (EBinOp "::" (ELit (LString "binder-types")) (EBinOp "++" (EVar "idsPart") (EVar "rows"))))) (ELit (LString ")")))))))))))
 (DTypeSig false "denseIds" (TyFun (TyApp (TyCon "List") (TyCon "BinderId")) (TyFun (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "BinderId"))) (TyTuple (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "BinderId"))))))))))
 (DFunDef false "denseIds" ((PList) PWild PWild (PVar "occ") (PVar "firsts")) (ETuple (EApp (EVar "reverseL") (EVar "occ")) (EVar "firsts")))
 (DFunDef false "denseIds" ((PCons (PAs "bid" (PCon "BinderId" PWild (PVar "n"))) (PVar "rest")) (PVar "seen") (PVar "next") (PVar "occ") (PVar "firsts")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EVar "denseIds") (EVar "rest")) (EVar "seen")) (EVar "next")) (EBinOp "::" (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (EVar "occ"))) (EVar "firsts")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "BM.get") (EVar "n")) (EVar "seen")) (arm (PCon "Some" (PVar "d")) () (EApp (EApp (EApp (EApp (EApp (EVar "denseIds") (EVar "rest")) (EVar "seen")) (EVar "next")) (EBinOp "::" (EVar "d") (EVar "occ"))) (EVar "firsts"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "denseIds") (EVar "rest")) (EApp (EApp (EApp (EVar "BM.set") (EVar "n")) (EVar "next")) (EVar "seen"))) (EBinOp "+" (EVar "next") (ELit (LInt 1)))) (EBinOp "::" (EVar "next") (EVar "occ"))) (EBinOp "::" (ETuple (EVar "next") (EVar "bid")) (EVar "firsts"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -576,7 +571,7 @@ binderRowSexp byOrd (d, BinderId _ n) = match BM.get n byOrd
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "programBinderIds" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "BinderId" true))))
-(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "runtimeTypeName" false))))
+(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "binderOrdinal" false) (mem "runtimeTypeName" false))))
 (DUse false (UseAlias ("map") "BM"))
 (DUse false (UseGroup ("ir" "sexp") ((mem "boolStr" false) (mem "node" false) (mem "slist" false) (mem "litSexp" false) (mem "patSexp" false))))
 (DUse false (UseGroup ("support" "util") ((mem "escStr" false) (mem "joinNl" false) (mem "reverseL" false))))
@@ -689,9 +684,7 @@ binderRowSexp byOrd (d, BinderId _ n) = match BM.get n byOrd
 (DTypeSig false "methodContextPairSexp" (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "String")))
 (DFunDef false "methodContextPairSexp" ((PTuple (PVar "key") (PVar "n"))) (EApp (EApp (EVar "node") (ELit (LString "mc"))) (EListLit (EApp (EVar "escStr") (EVar "key")) (EApp (EVar "intToString") (EVar "n")))))
 (DTypeSig false "binderTypesSexp" (TyFun (TyCon "CProgram") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "binderTypesSexp" ((PAs "prog" (PCon "CProgram" PWild PWild PWild PWild PWild (PVar "facts")))) (EBlock (DoLet false false (PVar "ids") (EApp (EVar "programBinderIds") (EVar "prog"))) (DoExpr (EMatch (EVar "ids") (arm (PList) () (EVar "None")) (arm PWild () (EBlock (DoLet false false (PTuple (PVar "occ") (PVar "firsts")) (EApp (EApp (EApp (EApp (EApp (EVar "denseIds") (EVar "ids")) (EVar "BM.Tip")) (ELit (LInt 0))) (EListLit)) (EListLit))) (DoLet false false (PVar "byOrd") (EApp (EVar "BM.fromList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "r")) (ETuple (EApp (EVar "rowOrdinal") (EVar "r")) (EVar "r")))) (EFieldAccess (EVar "facts") "factBinders")))) (DoLet false false (PVar "rows") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "binderRowSexp") (EVar "byOrd"))) (EApp (EVar "reverseL") (EVar "firsts")))) (DoLet false false (PVar "idsPart") (EIf (EApp (EApp (EVar "isIdentity") (EVar "occ")) (ELit (LInt 0))) (EListLit) (EListLit (EApp (EApp (EVar "node") (ELit (LString "ids"))) (EApp (EApp (EMethodRef "map") (EVar "intToString")) (EVar "occ")))))) (DoExpr (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "joinNl") (EBinOp "::" (ELit (LString "binder-types")) (EBinOp "++" (EVar "idsPart") (EVar "rows"))))) (ELit (LString ")")))))))))))
-(DTypeSig false "rowOrdinal" (TyFun (TyCon "BinderRow") (TyCon "Int")))
-(DFunDef false "rowOrdinal" ((PVar "row")) (EMatch (EFieldAccess (EVar "row") "brId") (arm (PCon "BinderId" PWild (PVar "n")) () (EVar "n"))))
+(DFunDef false "binderTypesSexp" ((PAs "prog" (PCon "CProgram" PWild PWild PWild PWild PWild (PVar "facts")))) (EBlock (DoLet false false (PVar "ids") (EApp (EVar "programBinderIds") (EVar "prog"))) (DoExpr (EMatch (EVar "ids") (arm (PList) () (EVar "None")) (arm PWild () (EBlock (DoLet false false (PTuple (PVar "occ") (PVar "firsts")) (EApp (EApp (EApp (EApp (EApp (EVar "denseIds") (EVar "ids")) (EVar "BM.Tip")) (ELit (LInt 0))) (EListLit)) (EListLit))) (DoLet false false (PVar "byOrd") (EApp (EVar "BM.fromList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "r")) (ETuple (EApp (EVar "binderOrdinal") (EFieldAccess (EVar "r") "brId")) (EVar "r")))) (EFieldAccess (EVar "facts") "factBinders")))) (DoLet false false (PVar "rows") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "binderRowSexp") (EVar "byOrd"))) (EApp (EVar "reverseL") (EVar "firsts")))) (DoLet false false (PVar "idsPart") (EIf (EApp (EApp (EVar "isIdentity") (EVar "occ")) (ELit (LInt 0))) (EListLit) (EListLit (EApp (EApp (EVar "node") (ELit (LString "ids"))) (EApp (EApp (EMethodRef "map") (EVar "intToString")) (EVar "occ")))))) (DoExpr (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "joinNl") (EBinOp "::" (ELit (LString "binder-types")) (EBinOp "++" (EVar "idsPart") (EVar "rows"))))) (ELit (LString ")")))))))))))
 (DTypeSig false "denseIds" (TyFun (TyApp (TyCon "List") (TyCon "BinderId")) (TyFun (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "BinderId"))) (TyTuple (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "BinderId"))))))))))
 (DFunDef false "denseIds" ((PList) PWild PWild (PVar "occ") (PVar "firsts")) (ETuple (EApp (EVar "reverseL") (EVar "occ")) (EVar "firsts")))
 (DFunDef false "denseIds" ((PCons (PAs "bid" (PCon "BinderId" PWild (PVar "n"))) (PVar "rest")) (PVar "seen") (PVar "next") (PVar "occ") (PVar "firsts")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EVar "denseIds") (EVar "rest")) (EVar "seen")) (EVar "next")) (EBinOp "::" (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (EVar "occ"))) (EVar "firsts")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "BM.get") (EVar "n")) (EVar "seen")) (arm (PCon "Some" (PVar "d")) () (EApp (EApp (EApp (EApp (EApp (EVar "denseIds") (EVar "rest")) (EVar "seen")) (EVar "next")) (EBinOp "::" (EVar "d") (EVar "occ"))) (EVar "firsts"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "denseIds") (EVar "rest")) (EApp (EApp (EApp (EVar "BM.set") (EVar "n")) (EVar "next")) (EVar "seen"))) (EBinOp "+" (EVar "next") (ELit (LInt 1)))) (EBinOp "::" (EVar "next") (EVar "occ"))) (EBinOp "::" (ETuple (EVar "next") (EVar "bid")) (EVar "firsts"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
