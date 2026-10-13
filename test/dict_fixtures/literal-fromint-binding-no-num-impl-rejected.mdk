@@ -1,0 +1,9 @@
+data Nat = Zero deriving (Debug)
+
+fromInt : Int -> Int
+fromInt n = n
+
+probe : Nat
+probe = 1
+
+main = println (debug probe)

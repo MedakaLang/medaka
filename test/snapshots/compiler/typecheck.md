@@ -1,5 +1,5 @@
 # META
-source_lines=56025
+source_lines=56024
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -20525,6 +20525,7 @@ data BuiltinClasses = BuiltinClasses {
   bcEqPresent : Bool,
   bcOrdPresent : Bool,
   bcSemigroupPresent : Bool,  -- adding a member means adding a constructor AND two fields here
+  bcPreludeSeeded : Bool,
 }
 
 emptyBuiltinClasses : BuiltinClasses
@@ -20537,6 +20538,7 @@ emptyBuiltinClasses = BuiltinClasses {
   bcEqPresent = False,
   bcOrdPresent = False,
   bcSemigroupPresent = False,
+  bcPreludeSeeded = False,
 }
 
 builtinClassOrigin : BuiltinClass -> TyConOrigin
@@ -20663,6 +20665,8 @@ builtinClassSet _ _ _ acc = acc
 -- `DImpl.implOrigin`, so this side must read the origin of the interface declaration
 -- that lives in the SAME universe:
 --   * With a real prelude, the prelude pass installs all four identities from `core`.
+--   * Once a non-empty prelude has been seeded, a later module contributes nothing: a
+--     program interface spelled `Eq` is not the prelude's, whatever the prelude lacks.
 --   * In a prelude-free graph, builtin declarations can be split across modules.
 --     Each module contributes only identities not already present, so Eq→Num and
 --     Num→Eq module orders retain both identities without allowing a later duplicate
@@ -20680,7 +20684,11 @@ seedBuiltinClasses : String -> List Decl -> Unit
 -- 634-diagnostic signature.
 seedBuiltinClasses mid prog =
   if isPreludeMid mid then
-    crossRun.value.builtinClassesRef := builtinClassesOf prog
+    let seeded = builtinClassesOf prog
+    crossRun.value.builtinClassesRef :=
+      BuiltinClasses { seeded | bcPreludeSeeded = isNonEmptyL prog }
+  else if crossRun.value.builtinClassesRef.value.bcPreludeSeeded then
+    ()
   else
     crossRun.value.builtinClassesRef :=
       builtinClassesGo prog crossRun.value.builtinClassesRef.value
@@ -20752,7 +20760,7 @@ inferNumLitVar env n fref dref
     None => inferNumLitBare n fref
     Some anchor =>
       -- records the Num impl obligation + a pendingSite on [dref].
-      let fromIntTy = inferNumLitMethod env anchor dref
+      let fromIntTy = inferNumLitMethod anchor dref
       let a = freshVar ()
       let _ = unify fromIntTy (TFun (tconBuiltin "Int") (openRow ()) a)
       let _ = pushNumlit (a, fref, n, dref)
@@ -20775,19 +20783,16 @@ inferNumLitVar env n fref dref
 --   • `argDispatchOf` — `fromInt` is return-position (no dispatch argument), so this answered
 --     `None` and fell to `recordSite` on every path already.
 --
--- KEPT, in substance: the obligation-recording guard.  ⚠️ Its `lookupLocalFlag env name`
--- half is a term-scope read that survives here — a residual, reported with #259 rather
--- than changed under this fix, because its effect is to SUPPRESS a `Num` obligation (a
--- missed reject), never to re-type the literal, and touching it would move behaviour on
--- programs that have no shadow at all.
+-- KEPT, in substance: the obligation.  A literal ALWAYS records the prelude `Num`
+-- obligation (DICT §8 I7); no binding spelled `fromInt`, local or standalone, suppresses
+-- it.  Only a mono-scheme anchor (nothing to instantiate) skips it.
 --
--- #2157 REPLACED the callee, not the guard: `recordMethodObligationGuarded` →
--- `recordNumLitObligationGuarded`, which applies the SAME two suppressions (term-scope
--- local, mono scheme) and the SAME two standalone-shadow suppressions, then records the
--- obligation against the PRELUDE `Num`'s identity-selected row instead of re-deriving the
--- interface from the spelling `"fromInt"` in the bare-name method table.
-inferNumLitMethod : TcEnv -> MethodSchemeRow -> Ref Route -> Mono
-inferNumLitMethod env anchor tagRef =
+-- #2157 REPLACED the callee: `recordMethodObligationGuarded` →
+-- `recordNumLitObligationGuarded`, which records the obligation against the PRELUDE
+-- `Num`'s identity-selected row instead of re-deriving the interface from the spelling
+-- `"fromInt"` in the bare-name method table.
+inferNumLitMethod : MethodSchemeRow -> Ref Route -> Mono
+inferNumLitMethod anchor tagRef =
   let inst = instantiateTracked anchor.msrScheme
   let occurrence = fst inst
   let predicate = ClassPredicate {
@@ -20800,8 +20805,7 @@ inferNumLitMethod env anchor tagRef =
   let _ =
     noteNumericPredicateTrace NPTProduced predicate scope origin None None []
   let _ = recordMethodDictsFromSlots anchor.msrMethodSlots (Ref []) (snd inst)
-  let _ =
-    recordNumLitObligationGuarded env anchor predicate occurrence origin scope
+  let _ = recordNumLitObligationGuarded anchor predicate occurrence origin scope
   recordNumLitSite predicate tagRef occurrence origin scope
 
 -- no-prelude fallback: a fresh var, no route (dref untouched ⇒ stays RNone ⇒ Int).
@@ -21838,17 +21842,16 @@ recordInstantiatedMethodLevelSlots (slot :: rest) loc scope =
   recordInstantiatedMethodLevelSlots rest loc scope
 
 -- A numeric literal's checking obligation and method-level slots come from its
--- identity-selected method row.  The local/standalone suppression policy remains the
--- same as ordinary method occurrences, but no bare-name table reconstructs the class.
-recordNumLitObligationGuarded : TcEnv ->
-  MethodSchemeRow ->
+-- identity-selected method row; no bare-name table reconstructs the class and no
+-- binding's spelling suppresses it.
+recordNumLitObligationGuarded : MethodSchemeRow ->
   ClassPredicate ->
   Mono ->
   Option Loc ->
   ScopeId ->
   Mono
-recordNumLitObligationGuarded env anchor predicate occurrence origin scope =
-  if lookupLocalFlag env "fromInt" || isMonoScheme anchor.msrScheme then
+recordNumLitObligationGuarded anchor predicate occurrence origin scope =
+  if isMonoScheme anchor.msrScheme then
     occurrence
   else
     recordNumLitImplObligation anchor predicate occurrence origin scope
@@ -21859,14 +21862,10 @@ recordNumLitImplObligation : MethodSchemeRow ->
   Option Loc ->
   ScopeId ->
   Mono
-recordNumLitImplObligation anchor predicate occurrence origin scope
-  | omHasKey "fromInt" perRun.value.definerShadowNamesRef.value
-    || omHasKey "fromInt" driverState.value.standaloneValuesRef.value =
-    occurrence
-  | otherwise =
-    let _ = pushNumLitObl predicate occurrence origin scope
-    let _ = recordMethodLevelObls anchor.msrTyparams anchor.msrType occurrence
-    occurrence
+recordNumLitImplObligation anchor predicate occurrence origin scope =
+  let _ = pushNumLitObl predicate occurrence origin scope
+  let _ = recordMethodLevelObls anchor.msrTyparams anchor.msrType occurrence
+  occurrence
 
 -- #818 (#838 I3): record one PMethodLevel obligation per method-level `=>` constraint
 -- slot of a method occurrence.  [mty] is the method's DECLARED type (with its `=>`);
@@ -59607,9 +59606,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "builtinClassName" ((PCon "BEq")) (ELit (LString "Eq")))
 (DFunDef false "builtinClassName" ((PCon "BOrd")) (ELit (LString "Ord")))
 (DFunDef false "builtinClassName" ((PCon "BSemigroup")) (ELit (LString "Semigroup")))
-(DData Private "BuiltinClasses" () ((variant "BuiltinClasses" (ConNamed (field "bcNum" (TyCon "TyConOrigin")) (field "bcEq" (TyCon "TyConOrigin")) (field "bcOrd" (TyCon "TyConOrigin")) (field "bcSemigroup" (TyCon "TyConOrigin")) (field "bcNumPresent" (TyCon "Bool")) (field "bcEqPresent" (TyCon "Bool")) (field "bcOrdPresent" (TyCon "Bool")) (field "bcSemigroupPresent" (TyCon "Bool"))))) ())
+(DData Private "BuiltinClasses" () ((variant "BuiltinClasses" (ConNamed (field "bcNum" (TyCon "TyConOrigin")) (field "bcEq" (TyCon "TyConOrigin")) (field "bcOrd" (TyCon "TyConOrigin")) (field "bcSemigroup" (TyCon "TyConOrigin")) (field "bcNumPresent" (TyCon "Bool")) (field "bcEqPresent" (TyCon "Bool")) (field "bcOrdPresent" (TyCon "Bool")) (field "bcSemigroupPresent" (TyCon "Bool")) (field "bcPreludeSeeded" (TyCon "Bool"))))) ())
 (DTypeSig false "emptyBuiltinClasses" (TyCon "BuiltinClasses"))
-(DFunDef false "emptyBuiltinClasses" () (ERecordCreate "BuiltinClasses" ((fa "bcNum" (EVar "OriginUnresolved")) (fa "bcEq" (EVar "OriginUnresolved")) (fa "bcOrd" (EVar "OriginUnresolved")) (fa "bcSemigroup" (EVar "OriginUnresolved")) (fa "bcNumPresent" (EVar "False")) (fa "bcEqPresent" (EVar "False")) (fa "bcOrdPresent" (EVar "False")) (fa "bcSemigroupPresent" (EVar "False")))))
+(DFunDef false "emptyBuiltinClasses" () (ERecordCreate "BuiltinClasses" ((fa "bcNum" (EVar "OriginUnresolved")) (fa "bcEq" (EVar "OriginUnresolved")) (fa "bcOrd" (EVar "OriginUnresolved")) (fa "bcSemigroup" (EVar "OriginUnresolved")) (fa "bcNumPresent" (EVar "False")) (fa "bcEqPresent" (EVar "False")) (fa "bcOrdPresent" (EVar "False")) (fa "bcSemigroupPresent" (EVar "False")) (fa "bcPreludeSeeded" (EVar "False")))))
 (DTypeSig false "builtinClassOrigin" (TyFun (TyCon "BuiltinClass") (TyCon "TyConOrigin")))
 (DFunDef false "builtinClassOrigin" ((PCon "BNum")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcNum"))
 (DFunDef false "builtinClassOrigin" ((PCon "BEq")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcEq"))
@@ -59646,7 +59645,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "builtinClassSet" ((PLit (LString "Semigroup")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcSemigroup" (EVar "o")) (fa "bcSemigroupPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcSemigroupPresent") (EVar "p"))))))
 (DFunDef false "builtinClassSet" (PWild PWild PWild (PVar "acc")) (EVar "acc"))
 (DTypeSig false "seedBuiltinClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
-(DFunDef false "seedBuiltinClasses" ((PVar "mid") (PVar "prog")) (EIf (EApp (EVar "isPreludeMid") (EVar "mid")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EVar "builtinClassesOf") (EVar "prog"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EApp (EVar "builtinClassesGo") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value")))))
+(DFunDef false "seedBuiltinClasses" ((PVar "mid") (PVar "prog")) (EIf (EApp (EVar "isPreludeMid") (EVar "mid")) (EBlock (DoLet false false (PVar "seeded") (EApp (EVar "builtinClassesOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EVariantUpdate "BuiltinClasses" (EVar "seeded") ((fa "bcPreludeSeeded" (EApp (EVar "isNonEmptyL") (EVar "prog")))))))) (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcPreludeSeeded") (ELit LUnit) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EApp (EVar "builtinClassesGo") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value"))))))
 (DTypeSig false "numArithOp" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "numArithOp" ((PVar "lt") (PVar "rt")) (EBlock (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EVar "lt"))) (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "lt")) (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "recordIfaceObligation") (EVar "BNum")) (EVar "lt"))) (DoExpr (EVar "lt"))))
 (DTypeSig false "inferNumLit" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono"))))))
@@ -59654,9 +59653,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "inferWideLit" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyCon "String") (TyCon "Mono")))))))
 (DFunDef false "inferWideLit" ((PVar "env") (PVar "hi") (PVar "lo") (PVar "dref") (PVar "lx")) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EApp (EApp (EVar "inferNumLitVar") (EVar "env")) (EVar "lo")) (EApp (EVar "Ref") (EVar "None"))) (EVar "dref"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "wideLitRanges")) (EBinOp "::" (ETuple (EVar "a") (EVar "lx") (EVar "hi") (EVar "lo") (EVar "False") (EUnOp "!" (EVar "currentLoc"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "wideLitRanges") "value")))) (DoExpr (EVar "a"))))
 (DTypeSig false "inferNumLitVar" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono"))))))
-(DFunDef false "inferNumLitVar" ((PVar "env") (PVar "n") (PVar "fref") (PVar "dref")) (EIf (EApp (EVar "builtinClassPresent") (EVar "BNum")) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numLitFromIntAnchorRef") "value") (arm (PCon "None") () (EApp (EApp (EVar "inferNumLitBare") (EVar "n")) (EVar "fref"))) (arm (PCon "Some" (PVar "anchor")) () (EBlock (DoLet false false (PVar "fromIntTy") (EApp (EApp (EApp (EVar "inferNumLitMethod") (EVar "env")) (EVar "anchor")) (EVar "dref"))) (DoLet false false (PVar "a") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "fromIntTy")) (EApp (EApp (EApp (EVar "TFun") (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (EApp (EVar "openRow") (ELit LUnit))) (EVar "a")))) (DoLet false false PWild (EApp (EVar "pushNumlit") (ETuple (EVar "a") (EVar "fref") (EVar "n") (EVar "dref")))) (DoLet false false PWild (EApp (EVar "recordNumlitLoc") (EVar "a"))) (DoExpr (EVar "a"))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "inferNumLitBare") (EVar "n")) (EVar "fref")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "inferNumLitMethod" (TyFun (TyCon "TcEnv") (TyFun (TyCon "MethodSchemeRow") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono")))))
-(DFunDef false "inferNumLitMethod" ((PVar "env") (PVar "anchor") (PVar "tagRef")) (EBlock (DoLet false false (PVar "inst") (EApp (EVar "instantiateTracked") (EFieldAccess (EVar "anchor") "msrScheme"))) (DoLet false false (PVar "occurrence") (EApp (EVar "fst") (EVar "inst"))) (DoLet false false (PVar "predicate") (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EFieldAccess (EVar "anchor") "msrIface")) (fa "predicateArguments" (EApp (EApp (EApp (EVar "dispatchMonosOf") (EFieldAccess (EVar "anchor") "msrTyparams")) (EFieldAccess (EVar "anchor") "msrType")) (EVar "occurrence")))))) (DoLet false false (PVar "origin") (EFieldAccess (EVar "currentLoc") "value")) (DoLet false false (PVar "scope") (EApp (EVar "captureScope") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteNumericPredicateTrace") (EVar "NPTProduced")) (EVar "predicate")) (EVar "scope")) (EVar "origin")) (EVar "None")) (EVar "None")) (EListLit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordMethodDictsFromSlots") (EFieldAccess (EVar "anchor") "msrMethodSlots")) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "snd") (EVar "inst")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recordNumLitObligationGuarded") (EVar "env")) (EVar "anchor")) (EVar "predicate")) (EVar "occurrence")) (EVar "origin")) (EVar "scope"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "recordNumLitSite") (EVar "predicate")) (EVar "tagRef")) (EVar "occurrence")) (EVar "origin")) (EVar "scope")))))
+(DFunDef false "inferNumLitVar" ((PVar "env") (PVar "n") (PVar "fref") (PVar "dref")) (EIf (EApp (EVar "builtinClassPresent") (EVar "BNum")) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numLitFromIntAnchorRef") "value") (arm (PCon "None") () (EApp (EApp (EVar "inferNumLitBare") (EVar "n")) (EVar "fref"))) (arm (PCon "Some" (PVar "anchor")) () (EBlock (DoLet false false (PVar "fromIntTy") (EApp (EApp (EVar "inferNumLitMethod") (EVar "anchor")) (EVar "dref"))) (DoLet false false (PVar "a") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "fromIntTy")) (EApp (EApp (EApp (EVar "TFun") (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (EApp (EVar "openRow") (ELit LUnit))) (EVar "a")))) (DoLet false false PWild (EApp (EVar "pushNumlit") (ETuple (EVar "a") (EVar "fref") (EVar "n") (EVar "dref")))) (DoLet false false PWild (EApp (EVar "recordNumlitLoc") (EVar "a"))) (DoExpr (EVar "a"))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "inferNumLitBare") (EVar "n")) (EVar "fref")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "inferNumLitMethod" (TyFun (TyCon "MethodSchemeRow") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono"))))
+(DFunDef false "inferNumLitMethod" ((PVar "anchor") (PVar "tagRef")) (EBlock (DoLet false false (PVar "inst") (EApp (EVar "instantiateTracked") (EFieldAccess (EVar "anchor") "msrScheme"))) (DoLet false false (PVar "occurrence") (EApp (EVar "fst") (EVar "inst"))) (DoLet false false (PVar "predicate") (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EFieldAccess (EVar "anchor") "msrIface")) (fa "predicateArguments" (EApp (EApp (EApp (EVar "dispatchMonosOf") (EFieldAccess (EVar "anchor") "msrTyparams")) (EFieldAccess (EVar "anchor") "msrType")) (EVar "occurrence")))))) (DoLet false false (PVar "origin") (EFieldAccess (EVar "currentLoc") "value")) (DoLet false false (PVar "scope") (EApp (EVar "captureScope") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteNumericPredicateTrace") (EVar "NPTProduced")) (EVar "predicate")) (EVar "scope")) (EVar "origin")) (EVar "None")) (EVar "None")) (EListLit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordMethodDictsFromSlots") (EFieldAccess (EVar "anchor") "msrMethodSlots")) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "snd") (EVar "inst")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "recordNumLitObligationGuarded") (EVar "anchor")) (EVar "predicate")) (EVar "occurrence")) (EVar "origin")) (EVar "scope"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "recordNumLitSite") (EVar "predicate")) (EVar "tagRef")) (EVar "occurrence")) (EVar "origin")) (EVar "scope")))))
 (DTypeSig false "inferNumLitBare" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Mono"))))
 (DFunDef false "inferNumLitBare" ((PVar "n") (PVar "fref")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false (PVar "predicate") (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EApp (EVar "builtinIfaceRef") (EVar "BNum"))) (fa "predicateArguments" (EListLit (EVar "a")))))) (DoLet false false (PVar "origin") (EFieldAccess (EVar "currentLoc") "value")) (DoLet false false (PVar "scope") (EApp (EVar "captureScope") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteNumericPredicateTrace") (EVar "NPTProduced")) (EVar "predicate")) (EVar "scope")) (EVar "origin")) (EVar "None")) (EVar "None")) (EListLit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "pushNumLitObl") (EVar "predicate")) (EVar "a")) (EVar "origin")) (EVar "scope"))) (DoLet false false PWild (EApp (EVar "pushNumlit") (ETuple (EVar "a") (EVar "fref") (EVar "n") (EApp (EVar "Ref") (EVar "RNone"))))) (DoLet false false PWild (EApp (EVar "recordNumlitLoc") (EVar "a"))) (DoExpr (EVar "a"))))
 (DTypeSig false "recordNumlitRange" (TyFun (TyCon "Mono") (TyFun (TyCon "Int") (TyCon "Unit"))))
@@ -59813,10 +59812,10 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "recordInstantiatedMethodLevelSlots" (TyFun (TyApp (TyCon "List") (TyCon "PredicateSlot")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit")))))
 (DFunDef false "recordInstantiatedMethodLevelSlots" ((PList) PWild PWild) (ELit LUnit))
 (DFunDef false "recordInstantiatedMethodLevelSlots" ((PCons (PVar "slot") (PVar "rest")) (PVar "loc") (PVar "scope")) (EBlock (DoLet false false PWild (EMatch (EFieldAccess (EVar "slot") "psArgs") (arm (PCon "PSArgsUnknown") () (ELit LUnit)) (arm (PCon "PSArgsKnown" (PVar "args")) () (EApp (EApp (EApp (EApp (EApp (EVar "recordOblAt") (ERecordCreate "Predicate" ((fa "iface" (EFieldAccess (EVar "slot") "psIface")) (fa "args" (EVar "args"))))) (ELit (LInt 0))) (EVar "PMethodLevel")) (EVar "loc")) (EVar "scope"))))) (DoExpr (EApp (EApp (EApp (EVar "recordInstantiatedMethodLevelSlots") (EVar "rest")) (EVar "loc")) (EVar "scope")))))
-(DTypeSig false "recordNumLitObligationGuarded" (TyFun (TyCon "TcEnv") (TyFun (TyCon "MethodSchemeRow") (TyFun (TyCon "ClassPredicate") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Mono"))))))))
-(DFunDef false "recordNumLitObligationGuarded" ((PVar "env") (PVar "anchor") (PVar "predicate") (PVar "occurrence") (PVar "origin") (PVar "scope")) (EIf (EBinOp "||" (EApp (EApp (EVar "lookupLocalFlag") (EVar "env")) (ELit (LString "fromInt"))) (EApp (EVar "isMonoScheme") (EFieldAccess (EVar "anchor") "msrScheme"))) (EVar "occurrence") (EApp (EApp (EApp (EApp (EApp (EVar "recordNumLitImplObligation") (EVar "anchor")) (EVar "predicate")) (EVar "occurrence")) (EVar "origin")) (EVar "scope"))))
+(DTypeSig false "recordNumLitObligationGuarded" (TyFun (TyCon "MethodSchemeRow") (TyFun (TyCon "ClassPredicate") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Mono")))))))
+(DFunDef false "recordNumLitObligationGuarded" ((PVar "anchor") (PVar "predicate") (PVar "occurrence") (PVar "origin") (PVar "scope")) (EIf (EApp (EVar "isMonoScheme") (EFieldAccess (EVar "anchor") "msrScheme")) (EVar "occurrence") (EApp (EApp (EApp (EApp (EApp (EVar "recordNumLitImplObligation") (EVar "anchor")) (EVar "predicate")) (EVar "occurrence")) (EVar "origin")) (EVar "scope"))))
 (DTypeSig false "recordNumLitImplObligation" (TyFun (TyCon "MethodSchemeRow") (TyFun (TyCon "ClassPredicate") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Mono")))))))
-(DFunDef false "recordNumLitImplObligation" ((PVar "anchor") (PVar "predicate") (PVar "occurrence") (PVar "origin") (PVar "scope")) (EIf (EBinOp "||" (EApp (EApp (EVar "omHasKey") (ELit (LString "fromInt"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef") "value")) (EApp (EApp (EVar "omHasKey") (ELit (LString "fromInt"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef") "value"))) (EVar "occurrence") (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "pushNumLitObl") (EVar "predicate")) (EVar "occurrence")) (EVar "origin")) (EVar "scope"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordMethodLevelObls") (EFieldAccess (EVar "anchor") "msrTyparams")) (EFieldAccess (EVar "anchor") "msrType")) (EVar "occurrence"))) (DoExpr (EVar "occurrence"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "recordNumLitImplObligation" ((PVar "anchor") (PVar "predicate") (PVar "occurrence") (PVar "origin") (PVar "scope")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "pushNumLitObl") (EVar "predicate")) (EVar "occurrence")) (EVar "origin")) (EVar "scope"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordMethodLevelObls") (EFieldAccess (EVar "anchor") "msrTyparams")) (EFieldAccess (EVar "anchor") "msrType")) (EVar "occurrence"))) (DoExpr (EVar "occurrence"))))
 (DTypeSig false "recordMethodLevelObls" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "Mono") (TyCon "Unit")))))
 (DFunDef false "recordMethodLevelObls" ((PVar "typarams") (PVar "mty") (PVar "occMono")) (EBlock (DoLet false false (PVar "slots") (EApp (EApp (EVar "methodLevelConstraintSlots") (EVar "typarams")) (EVar "mty"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "slots")) (ELit LUnit) (EMatch (EApp (EApp (EVar "matchTyMono") (EApp (EVar "stripLeadingMethodConstraints") (EVar "mty"))) (EVar "occMono")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "subst")) () (EApp (EApp (EVar "recordMethodLevelSlotObls") (EVar "slots")) (EVar "subst"))))))))
 (DTypeSig false "recordMethodLevelSlotObls" (TyFun (TyApp (TyCon "List") (TyCon "Constraint")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyCon "Unit"))))
@@ -68943,9 +68942,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "builtinClassName" ((PCon "BEq")) (ELit (LString "Eq")))
 (DFunDef false "builtinClassName" ((PCon "BOrd")) (ELit (LString "Ord")))
 (DFunDef false "builtinClassName" ((PCon "BSemigroup")) (ELit (LString "Semigroup")))
-(DData Private "BuiltinClasses" () ((variant "BuiltinClasses" (ConNamed (field "bcNum" (TyCon "TyConOrigin")) (field "bcEq" (TyCon "TyConOrigin")) (field "bcOrd" (TyCon "TyConOrigin")) (field "bcSemigroup" (TyCon "TyConOrigin")) (field "bcNumPresent" (TyCon "Bool")) (field "bcEqPresent" (TyCon "Bool")) (field "bcOrdPresent" (TyCon "Bool")) (field "bcSemigroupPresent" (TyCon "Bool"))))) ())
+(DData Private "BuiltinClasses" () ((variant "BuiltinClasses" (ConNamed (field "bcNum" (TyCon "TyConOrigin")) (field "bcEq" (TyCon "TyConOrigin")) (field "bcOrd" (TyCon "TyConOrigin")) (field "bcSemigroup" (TyCon "TyConOrigin")) (field "bcNumPresent" (TyCon "Bool")) (field "bcEqPresent" (TyCon "Bool")) (field "bcOrdPresent" (TyCon "Bool")) (field "bcSemigroupPresent" (TyCon "Bool")) (field "bcPreludeSeeded" (TyCon "Bool"))))) ())
 (DTypeSig false "emptyBuiltinClasses" (TyCon "BuiltinClasses"))
-(DFunDef false "emptyBuiltinClasses" () (ERecordCreate "BuiltinClasses" ((fa "bcNum" (EVar "OriginUnresolved")) (fa "bcEq" (EVar "OriginUnresolved")) (fa "bcOrd" (EVar "OriginUnresolved")) (fa "bcSemigroup" (EVar "OriginUnresolved")) (fa "bcNumPresent" (EVar "False")) (fa "bcEqPresent" (EVar "False")) (fa "bcOrdPresent" (EVar "False")) (fa "bcSemigroupPresent" (EVar "False")))))
+(DFunDef false "emptyBuiltinClasses" () (ERecordCreate "BuiltinClasses" ((fa "bcNum" (EVar "OriginUnresolved")) (fa "bcEq" (EVar "OriginUnresolved")) (fa "bcOrd" (EVar "OriginUnresolved")) (fa "bcSemigroup" (EVar "OriginUnresolved")) (fa "bcNumPresent" (EVar "False")) (fa "bcEqPresent" (EVar "False")) (fa "bcOrdPresent" (EVar "False")) (fa "bcSemigroupPresent" (EVar "False")) (fa "bcPreludeSeeded" (EVar "False")))))
 (DTypeSig false "builtinClassOrigin" (TyFun (TyCon "BuiltinClass") (TyCon "TyConOrigin")))
 (DFunDef false "builtinClassOrigin" ((PCon "BNum")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcNum"))
 (DFunDef false "builtinClassOrigin" ((PCon "BEq")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcEq"))
@@ -68982,7 +68981,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "builtinClassSet" ((PLit (LString "Semigroup")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcSemigroup" (EVar "o")) (fa "bcSemigroupPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcSemigroupPresent") (EVar "p"))))))
 (DFunDef false "builtinClassSet" (PWild PWild PWild (PVar "acc")) (EVar "acc"))
 (DTypeSig false "seedBuiltinClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
-(DFunDef false "seedBuiltinClasses" ((PVar "mid") (PVar "prog")) (EIf (EApp (EVar "isPreludeMid") (EVar "mid")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EVar "builtinClassesOf") (EVar "prog"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EApp (EVar "builtinClassesGo") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value")))))
+(DFunDef false "seedBuiltinClasses" ((PVar "mid") (PVar "prog")) (EIf (EApp (EVar "isPreludeMid") (EVar "mid")) (EBlock (DoLet false false (PVar "seeded") (EApp (EVar "builtinClassesOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EVariantUpdate "BuiltinClasses" (EVar "seeded") ((fa "bcPreludeSeeded" (EApp (EVar "isNonEmptyL") (EVar "prog")))))))) (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcPreludeSeeded") (ELit LUnit) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EApp (EVar "builtinClassesGo") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value"))))))
 (DTypeSig false "numArithOp" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "numArithOp" ((PVar "lt") (PVar "rt")) (EBlock (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EMethodRef "lt"))) (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EMethodRef "lt")) (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "recordIfaceObligation") (EVar "BNum")) (EMethodRef "lt"))) (DoExpr (EMethodRef "lt"))))
 (DTypeSig false "inferNumLit" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono"))))))
@@ -68990,9 +68989,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "inferWideLit" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyCon "String") (TyCon "Mono")))))))
 (DFunDef false "inferWideLit" ((PVar "env") (PVar "hi") (PVar "lo") (PVar "dref") (PVar "lx")) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EApp (EApp (EVar "inferNumLitVar") (EVar "env")) (EVar "lo")) (EApp (EVar "Ref") (EVar "None"))) (EVar "dref"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "wideLitRanges")) (EBinOp "::" (ETuple (EVar "a") (EVar "lx") (EVar "hi") (EVar "lo") (EVar "False") (EUnOp "!" (EVar "currentLoc"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "wideLitRanges") "value")))) (DoExpr (EVar "a"))))
 (DTypeSig false "inferNumLitVar" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono"))))))
-(DFunDef false "inferNumLitVar" ((PVar "env") (PVar "n") (PVar "fref") (PVar "dref")) (EIf (EApp (EVar "builtinClassPresent") (EVar "BNum")) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numLitFromIntAnchorRef") "value") (arm (PCon "None") () (EApp (EApp (EVar "inferNumLitBare") (EVar "n")) (EVar "fref"))) (arm (PCon "Some" (PVar "anchor")) () (EBlock (DoLet false false (PVar "fromIntTy") (EApp (EApp (EApp (EVar "inferNumLitMethod") (EVar "env")) (EVar "anchor")) (EVar "dref"))) (DoLet false false (PVar "a") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "fromIntTy")) (EApp (EApp (EApp (EVar "TFun") (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (EApp (EVar "openRow") (ELit LUnit))) (EVar "a")))) (DoLet false false PWild (EApp (EVar "pushNumlit") (ETuple (EVar "a") (EVar "fref") (EVar "n") (EVar "dref")))) (DoLet false false PWild (EApp (EVar "recordNumlitLoc") (EVar "a"))) (DoExpr (EVar "a"))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "inferNumLitBare") (EVar "n")) (EVar "fref")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "inferNumLitMethod" (TyFun (TyCon "TcEnv") (TyFun (TyCon "MethodSchemeRow") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono")))))
-(DFunDef false "inferNumLitMethod" ((PVar "env") (PVar "anchor") (PVar "tagRef")) (EBlock (DoLet false false (PVar "inst") (EApp (EVar "instantiateTracked") (EFieldAccess (EVar "anchor") "msrScheme"))) (DoLet false false (PVar "occurrence") (EApp (EVar "fst") (EVar "inst"))) (DoLet false false (PVar "predicate") (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EFieldAccess (EVar "anchor") "msrIface")) (fa "predicateArguments" (EApp (EApp (EApp (EVar "dispatchMonosOf") (EFieldAccess (EVar "anchor") "msrTyparams")) (EFieldAccess (EVar "anchor") "msrType")) (EVar "occurrence")))))) (DoLet false false (PVar "origin") (EFieldAccess (EVar "currentLoc") "value")) (DoLet false false (PVar "scope") (EApp (EVar "captureScope") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteNumericPredicateTrace") (EVar "NPTProduced")) (EVar "predicate")) (EVar "scope")) (EVar "origin")) (EVar "None")) (EVar "None")) (EListLit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordMethodDictsFromSlots") (EFieldAccess (EVar "anchor") "msrMethodSlots")) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "snd") (EVar "inst")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "recordNumLitObligationGuarded") (EVar "env")) (EVar "anchor")) (EVar "predicate")) (EVar "occurrence")) (EVar "origin")) (EVar "scope"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "recordNumLitSite") (EVar "predicate")) (EVar "tagRef")) (EVar "occurrence")) (EVar "origin")) (EVar "scope")))))
+(DFunDef false "inferNumLitVar" ((PVar "env") (PVar "n") (PVar "fref") (PVar "dref")) (EIf (EApp (EVar "builtinClassPresent") (EVar "BNum")) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numLitFromIntAnchorRef") "value") (arm (PCon "None") () (EApp (EApp (EVar "inferNumLitBare") (EVar "n")) (EVar "fref"))) (arm (PCon "Some" (PVar "anchor")) () (EBlock (DoLet false false (PVar "fromIntTy") (EApp (EApp (EVar "inferNumLitMethod") (EVar "anchor")) (EVar "dref"))) (DoLet false false (PVar "a") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "fromIntTy")) (EApp (EApp (EApp (EVar "TFun") (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (EApp (EVar "openRow") (ELit LUnit))) (EVar "a")))) (DoLet false false PWild (EApp (EVar "pushNumlit") (ETuple (EVar "a") (EVar "fref") (EVar "n") (EVar "dref")))) (DoLet false false PWild (EApp (EVar "recordNumlitLoc") (EVar "a"))) (DoExpr (EVar "a"))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "inferNumLitBare") (EVar "n")) (EVar "fref")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "inferNumLitMethod" (TyFun (TyCon "MethodSchemeRow") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono"))))
+(DFunDef false "inferNumLitMethod" ((PVar "anchor") (PVar "tagRef")) (EBlock (DoLet false false (PVar "inst") (EApp (EVar "instantiateTracked") (EFieldAccess (EVar "anchor") "msrScheme"))) (DoLet false false (PVar "occurrence") (EApp (EVar "fst") (EVar "inst"))) (DoLet false false (PVar "predicate") (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EFieldAccess (EVar "anchor") "msrIface")) (fa "predicateArguments" (EApp (EApp (EApp (EVar "dispatchMonosOf") (EFieldAccess (EVar "anchor") "msrTyparams")) (EFieldAccess (EVar "anchor") "msrType")) (EVar "occurrence")))))) (DoLet false false (PVar "origin") (EFieldAccess (EVar "currentLoc") "value")) (DoLet false false (PVar "scope") (EApp (EVar "captureScope") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteNumericPredicateTrace") (EVar "NPTProduced")) (EVar "predicate")) (EVar "scope")) (EVar "origin")) (EVar "None")) (EVar "None")) (EListLit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordMethodDictsFromSlots") (EFieldAccess (EVar "anchor") "msrMethodSlots")) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "snd") (EVar "inst")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "recordNumLitObligationGuarded") (EVar "anchor")) (EVar "predicate")) (EVar "occurrence")) (EVar "origin")) (EVar "scope"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "recordNumLitSite") (EVar "predicate")) (EVar "tagRef")) (EVar "occurrence")) (EVar "origin")) (EVar "scope")))))
 (DTypeSig false "inferNumLitBare" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Mono"))))
 (DFunDef false "inferNumLitBare" ((PVar "n") (PVar "fref")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false (PVar "predicate") (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EApp (EVar "builtinIfaceRef") (EVar "BNum"))) (fa "predicateArguments" (EListLit (EVar "a")))))) (DoLet false false (PVar "origin") (EFieldAccess (EVar "currentLoc") "value")) (DoLet false false (PVar "scope") (EApp (EVar "captureScope") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteNumericPredicateTrace") (EVar "NPTProduced")) (EVar "predicate")) (EVar "scope")) (EVar "origin")) (EVar "None")) (EVar "None")) (EListLit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "pushNumLitObl") (EVar "predicate")) (EVar "a")) (EVar "origin")) (EVar "scope"))) (DoLet false false PWild (EApp (EVar "pushNumlit") (ETuple (EVar "a") (EVar "fref") (EVar "n") (EApp (EVar "Ref") (EVar "RNone"))))) (DoLet false false PWild (EApp (EVar "recordNumlitLoc") (EVar "a"))) (DoExpr (EVar "a"))))
 (DTypeSig false "recordNumlitRange" (TyFun (TyCon "Mono") (TyFun (TyCon "Int") (TyCon "Unit"))))
@@ -69149,10 +69148,10 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "recordInstantiatedMethodLevelSlots" (TyFun (TyApp (TyCon "List") (TyCon "PredicateSlot")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit")))))
 (DFunDef false "recordInstantiatedMethodLevelSlots" ((PList) PWild PWild) (ELit LUnit))
 (DFunDef false "recordInstantiatedMethodLevelSlots" ((PCons (PVar "slot") (PVar "rest")) (PVar "loc") (PVar "scope")) (EBlock (DoLet false false PWild (EMatch (EFieldAccess (EVar "slot") "psArgs") (arm (PCon "PSArgsUnknown") () (ELit LUnit)) (arm (PCon "PSArgsKnown" (PVar "args")) () (EApp (EApp (EApp (EApp (EApp (EVar "recordOblAt") (ERecordCreate "Predicate" ((fa "iface" (EFieldAccess (EVar "slot") "psIface")) (fa "args" (EVar "args"))))) (ELit (LInt 0))) (EVar "PMethodLevel")) (EVar "loc")) (EVar "scope"))))) (DoExpr (EApp (EApp (EApp (EVar "recordInstantiatedMethodLevelSlots") (EVar "rest")) (EVar "loc")) (EVar "scope")))))
-(DTypeSig false "recordNumLitObligationGuarded" (TyFun (TyCon "TcEnv") (TyFun (TyCon "MethodSchemeRow") (TyFun (TyCon "ClassPredicate") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Mono"))))))))
-(DFunDef false "recordNumLitObligationGuarded" ((PVar "env") (PVar "anchor") (PVar "predicate") (PVar "occurrence") (PVar "origin") (PVar "scope")) (EIf (EBinOp "||" (EApp (EApp (EVar "lookupLocalFlag") (EVar "env")) (ELit (LString "fromInt"))) (EApp (EVar "isMonoScheme") (EFieldAccess (EVar "anchor") "msrScheme"))) (EVar "occurrence") (EApp (EApp (EApp (EApp (EApp (EVar "recordNumLitImplObligation") (EVar "anchor")) (EVar "predicate")) (EVar "occurrence")) (EVar "origin")) (EVar "scope"))))
+(DTypeSig false "recordNumLitObligationGuarded" (TyFun (TyCon "MethodSchemeRow") (TyFun (TyCon "ClassPredicate") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Mono")))))))
+(DFunDef false "recordNumLitObligationGuarded" ((PVar "anchor") (PVar "predicate") (PVar "occurrence") (PVar "origin") (PVar "scope")) (EIf (EApp (EVar "isMonoScheme") (EFieldAccess (EVar "anchor") "msrScheme")) (EVar "occurrence") (EApp (EApp (EApp (EApp (EApp (EVar "recordNumLitImplObligation") (EVar "anchor")) (EVar "predicate")) (EVar "occurrence")) (EVar "origin")) (EVar "scope"))))
 (DTypeSig false "recordNumLitImplObligation" (TyFun (TyCon "MethodSchemeRow") (TyFun (TyCon "ClassPredicate") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Mono")))))))
-(DFunDef false "recordNumLitImplObligation" ((PVar "anchor") (PVar "predicate") (PVar "occurrence") (PVar "origin") (PVar "scope")) (EIf (EBinOp "||" (EApp (EApp (EVar "omHasKey") (ELit (LString "fromInt"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef") "value")) (EApp (EApp (EVar "omHasKey") (ELit (LString "fromInt"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef") "value"))) (EVar "occurrence") (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "pushNumLitObl") (EVar "predicate")) (EVar "occurrence")) (EVar "origin")) (EVar "scope"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordMethodLevelObls") (EFieldAccess (EVar "anchor") "msrTyparams")) (EFieldAccess (EVar "anchor") "msrType")) (EVar "occurrence"))) (DoExpr (EVar "occurrence"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "recordNumLitImplObligation" ((PVar "anchor") (PVar "predicate") (PVar "occurrence") (PVar "origin") (PVar "scope")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "pushNumLitObl") (EVar "predicate")) (EVar "occurrence")) (EVar "origin")) (EVar "scope"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordMethodLevelObls") (EFieldAccess (EVar "anchor") "msrTyparams")) (EFieldAccess (EVar "anchor") "msrType")) (EVar "occurrence"))) (DoExpr (EVar "occurrence"))))
 (DTypeSig false "recordMethodLevelObls" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "Mono") (TyCon "Unit")))))
 (DFunDef false "recordMethodLevelObls" ((PVar "typarams") (PVar "mty") (PVar "occMono")) (EBlock (DoLet false false (PVar "slots") (EApp (EApp (EVar "methodLevelConstraintSlots") (EVar "typarams")) (EVar "mty"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "slots")) (ELit LUnit) (EMatch (EApp (EApp (EVar "matchTyMono") (EApp (EVar "stripLeadingMethodConstraints") (EVar "mty"))) (EVar "occMono")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "subst")) () (EApp (EApp (EVar "recordMethodLevelSlotObls") (EVar "slots")) (EVar "subst"))))))))
 (DTypeSig false "recordMethodLevelSlotObls" (TyFun (TyApp (TyCon "List") (TyCon "Constraint")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyCon "Unit"))))
