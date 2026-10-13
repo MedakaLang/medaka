@@ -192,8 +192,11 @@ The two emit-input records converge into this one over time; the four facts
 `WasmEmitInput` lacks relative to `EmitInput` (`returnsSelf`, `selfFnParams`,
 `methodConstraintIfaces`, `mainIsUnit`) are the first to move. This unit has no
 upstream dependency and is landable now. `wasmReachFilter`'s post-lower pruning
-becomes the shared reachability pass once F3 gives it identity-keyed dispatch
-edges; until then it stays a Wasm-only field, named as such.
+is landed as the plan's wasm-only field `wasmOnlyReach` (`buildEmitPlanReached`,
+used by the two wasm modules entries). Native does not share it: whole mode emits
+`define internal`, so clang's GlobalDCE already drops the same functions (compiler
+self-build -0.29% `.ll`, +3.7 CPU-s inside the noise band, 0.155 s / 106 MB for the
+pass), and the prelude-object halves must be identity.
 
 ### R6. The Core validator
 

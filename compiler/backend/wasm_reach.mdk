@@ -2,8 +2,8 @@
 --
 -- WHY: `ir/dce.mdk` runs at the elaborated-AST level and, by design, retains EVERY
 -- impl-method and interface-default body WHOLE (it can only drop plain top-level
--- `DFunDef`s — see that file's SOUNDNESS block; it is SHARED with the LLVM path and
--- is not touched here).  Because every impl body is a DCE ROOT, the whole real
+-- `DFunDef`s — see that file's SOUNDNESS block; it is shared with the LLVM path).
+-- Because every impl body is a DCE ROOT, the whole real
 -- `core.mdk` prelude survives into the lowered `CProgram`: on the 43-fixture wasm
 -- modules corpus that is 14,868 emitted wasm functions of which a whole-program
 -- optimizer (`wasm-opt --remove-unused-module-elements`) can prove ~89.8% dead.
@@ -64,13 +64,12 @@
 -- keeps ALL of its impls at ALL types, even the ones a whole-program optimizer can
 -- prove unreachable from the concrete dict witnesses in play.
 --
--- SCOPE: called from the two entries that run the REAL multi-module front end —
--- `compiler/entries/wasm_emit_modules_main.mdk` (the native modules emitter) and
--- `compiler/entries/playground_main.mdk` (the in-browser combined diagnostics+emit
--- compiler), which run the identical `lowerProgramEmit` → `emitProgram` shape and
--- so must prune identically.  The prelude-free W1–W4 (`wasm_emit_main`) and typed
--- W5 (`wasm_emit_typed_main`) entries build their own minimal impl sets and are
--- left byte-identical, as is the LLVM path.
+-- SCOPE: called only by `backend.emit_plan.buildEmitPlanReached`, the builder the
+-- two entries that run the REAL multi-module front end use
+-- (`compiler/entries/wasm_emit_modules_main.mdk` and
+-- `compiler/entries/playground_main.mdk`).  The prelude-free and typed probes and
+-- the gap census build their plans unreached, and the LLVM path never reaches:
+-- see `EmitPlan.wasmOnlyReach` for why.
 
 import frontend.ast.{Route(..)}
 import ir.core_ir.{
@@ -144,13 +143,10 @@ definedKeys groups impls =
 -- mirrors dce.canonRef / wasm_emit.canonFn: a post-mangle-synthesized bare prelude
 -- reference (`not`) resolves to its `core__`-mangled definition.
 --
--- This is deliberately NOT consolidated with `dce.canonRef` (which
--- `rule-duplicate-body` will pair it with the moment the two bodies converge):
--- `canonRef` is module-private in `compiler/ir/dce.mdk`, and that file is a hard
--- no-touch here — it is SHARED with the LLVM emit path, where the identical
--- reachability question has a different (and deliberately more conservative)
--- answer.  Exporting it to share would widen this wasm-only change into the LLVM
--- path's blast radius for one three-line lookup.
+-- Not shared with `dce.canonRef`, which is module-private in `compiler/ir/dce.mdk`
+-- and serves the LLVM path, whose reachability answer is deliberately more
+-- conservative; exporting it would put this wasm-only pass's lookup in that
+-- path's blast radius.
 canonKey : HashMap String Unit -> String -> String
 canonKey defined n =
   let mangled = "core__" ++ n

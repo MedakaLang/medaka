@@ -8,7 +8,7 @@
 --     -> types.typecheck.elaborateModules  (REAL core.mdk prelude + dict-passing)
 --     -> ir.core_ir_lower.lowerProgramEmit
 --     -> ir.dce.dceFilter  (prunes the real prelude to reached decls)
---     -> backend.wasm_reach.wasmReachFilter  (#2359: drops the impl bodies —
+--     -> backend.emit_plan.buildEmitPlanReached  (#2359, via backend.wasm_reach: drops the impl bodies —
 --        and the plain bindings only they reached — that no dispatchable method
 --        name in this program can reach; see that module's header for the exact
 --        notion of reachable)
@@ -41,7 +41,6 @@ import types.typecheck.{
 import driver.diagnostics.{emitDiagExitCode, renderTcDiags}
 import driver.loader.{modIdToPath}
 import backend.wasm_file_grants.{prepareWasmFileGrants}
-import ir.core_ir.{CProgram(..)}
 import ir.core_ir_lower.{
   declaredRecordFieldOrders,
   lowerProgramEmit,
@@ -55,16 +54,13 @@ import backend.wasm_emit.{
   makeWasmEmitInputFull,
   withRuntimeExternsW,
 }
-import backend.emit_plan.{buildEmitPlan}
-import backend.core_validate.{Backend(..)}
-import backend.wasm_reach.{wasmReachFilter}
+import backend.emit_plan.{buildEmitPlanReached}
 import entries.entry_support.{
   driveEmitLocated,
   runtimeExternNames,
   stampSiteFiles,
 }
 import support.timer.{statsEnabled, emitStats}
-import support.util.{listLen}
 
 main : <IO> Unit
 -- WasmGC has no clock host-imports yet (`sleepMs`/`monotonicSec` are WASM-GAP
@@ -108,33 +104,18 @@ emitTail mods runtimeDecls coreD modules1 =
         (validateFfiExternTypeNames
           (checkedFfiExternTypeNamesModules modules2)))
   let lowered = lowerProgramEmit allDecls
-  let filtered = wasmReachFilter lowered
-  -- MEDAKA_STATS reporting hook (S5, #2359 closure): the S5 gate's "emitted-vs-
-  -- reachable" ratio must be derived from THIS filter's own notion of reachable,
-  -- never a freshly re-derived one (the contract's named S1∧S5 shared-decision
-  -- risk) — so report the unit count `wasmReachFilter` itself operates over
-  -- (top-level binds + impl entries) before and after the filter runs. Same
-  -- gating convention as `llvm_emit.mdk`'s `emitProgramWithStats`/support.timer's
-  -- `statsEnabled`: OFF by default, so ordinary emission (every gate that diffs
-  -- this entry's stdout) stays byte-identical; the whole stats block — including
-  -- both `programUnitCount` walks, not just the print — is skipped when
-  -- MEDAKA_STATS is unset.
-  let statsOn = statsEnabled ()
+  let (plan, reached) = buildEmitPlanReached lowered
+  -- MEDAKA_STATS reporting hook: the counts come from the plan, so the ratio is the
+  -- reach filter's own notion of reachable.  Off by default, so ordinary emission
+  -- stays byte-identical.
   let _ =
-    if statsOn then
-      emitStats True [
-        ("wasm-reach-total-units", programUnitCount lowered),
-        ("wasm-reach-kept-units", programUnitCount filtered),
+    if statsEnabled () then match plan.wasmOnlyReach
+      Some units => emitStats True [
+        ("wasm-reach-total-units", units.total),
+        ("wasm-reach-kept-units", units.kept),
       ]
-  putStr (emitProgram input (buildEmitPlan WasmBackend filtered) filtered)
-
--- The unit count `backend.wasm_reach.wasmReachFilter` filters over: every
--- top-level bind group plus every impl entry. Matches that filter's own
--- `filterList` granularity exactly, so "kept / total" over this count IS the
--- notion of reachable S1 computes — not a re-derived one.
-programUnitCount : CProgram -> Int
-programUnitCount (CProgram groups _ _ impls _ _) =
-  listLen groups + listLen impls
+      None => ()
+  putStr (emitProgram input plan reached)
 
 refuseNarrowFileGrants : List (String, String, List Decl) ->
   List Decl ->
