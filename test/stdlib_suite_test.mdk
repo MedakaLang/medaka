@@ -182,7 +182,7 @@ suites = [
   -- importing `bytes` does not import `test` with it.
   ("bytes_test", (5, EvalAndNative)),
   ("core", (138, Eval)),
-  ("core_test", (29, EvalAndNative)),
+  ("core_test", (44, EvalAndNative)),
   ("crypto/hmac", (12, EvalAndNative)),
   ("fs", (8, NativeCapability)),
   -- `readFile` of a file that is not UTF-8. Writes a scratch file, so it is

@@ -1,5 +1,5 @@
 # META
-source_lines=127
+source_lines=200
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the list and array rendering and string indexing in
@@ -9,7 +9,7 @@ stages=DESUGAR,MARK
 -- last. `debug` quotes strings and `display` does not. Indexing a string
 -- counts codepoints, not bytes.
 
-import test.{expectEqual}
+import test.{expectEqual, expectTrue, expectFalse}
 
 -- # Debug and Display of lists
 
@@ -129,8 +129,81 @@ test "list compare decides on the first differing element" =
 
 prop "list compare is Eq exactly when the lists are equal" (xs : List Int) (ys : List Int) =
   compare xs ys == Eq == eq xs ys
+
+test "foldMap over a String monoid concatenates in element order" =
+  expectEqual "123" (foldMap (x => display x) [1, 2, 3])
+
+test "foldMap over a list of lists keeps the element order" =
+  expectEqual [1, 2, 3, 4] (foldMap (x => [x, x + 1]) [1, 3])
+
+-- # Filtering lists
+
+test "filter keeps the elements that satisfy the predicate" =
+  expectEqual [2, 4] (filter (x => x % 2 == 0) [1, 2, 3, 4])
+
+test "filter keeps the order of the surviving elements" =
+  expectEqual [5, 3, 9] (filter (x => x > 2) [5, 1, 3, 0, 9])
+
+test "filter of an empty list is empty" =
+  expectEqual ([] : List Int) (filter (x => x > 0) ([] : List Int))
+
+test "filter drops every element when none satisfies the predicate" =
+  expectEqual ([] : List Int) (filter (x => x > 10) [1, 2])
+
+-- # Exclusive or
+
+test "xor of True and True is False" = expectFalse (xor True True)
+
+test "xor of True and False is True" = expectTrue (xor True False)
+
+test "xor of False and True is True" = expectTrue (xor False True)
+
+test "xor of False and False is False" = expectFalse (xor False False)
+
+-- # Tuple ordering
+
+test "pair compare decides on the first field" =
+  expectEqual [Lt, Gt] [compare (1, 9) (2, 0), compare (3, 0) (2, 9)]
+
+test "pair compare falls through to the second field on a tie" =
+  expectEqual
+    [Lt, Gt, Eq]
+    [compare (1, 2) (1, 3), compare (1, 3) (1, 2), compare (1, 2) (1, 2)]
+
+test "triple compare decides on each field in turn" =
+  expectEqual
+    [Lt, Lt, Gt, Eq]
+    [
+      compare (1, 9, 9) (2, 0, 0),
+      compare (1, 1, 9) (1, 2, 0),
+      compare (1, 2, 9) (1, 2, 0),
+      compare (1, 2, 3) (1, 2, 3),
+    ]
+
+test "quadruple compare decides on each field in turn" =
+  expectEqual
+    [Lt, Lt, Lt, Gt, Eq]
+    [
+      compare (1, 9, 9, 9) (2, 0, 0, 0),
+      compare (1, 1, 9, 9) (1, 2, 0, 0),
+      compare (1, 1, 1, 9) (1, 1, 2, 0),
+      compare (1, 1, 1, 9) (1, 1, 1, 0),
+      compare (1, 1, 2, 3) (1, 1, 2, 3),
+    ]
+
+test "quintuple compare decides on each field in turn" =
+  expectEqual
+    [Lt, Lt, Lt, Lt, Gt, Eq]
+    [
+      compare (1, 9, 9, 9, 9) (2, 0, 0, 0, 0),
+      compare (1, 1, 9, 9, 9) (1, 2, 0, 0, 0),
+      compare (1, 1, 1, 9, 9) (1, 1, 2, 0, 0),
+      compare (1, 1, 1, 1, 9) (1, 1, 1, 2, 0),
+      compare (1, 1, 1, 1, 9) (1, 1, 1, 1, 0),
+      compare (1, 1, 1, 2, 3) (1, 1, 1, 2, 3),
+    ]
 # DESUGAR
-(DUse false (UseGroup ("test") ((mem "expectEqual" false))))
+(DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectTrue" false) (mem "expectFalse" false))))
 (DTest false "debug of an empty list" (EApp (EApp (EVar "expectEqual") (ELit (LString "[]"))) (EApp (EVar "debug") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DTest false "debug of a one-element list has no separator" (EApp (EApp (EVar "expectEqual") (ELit (LString "[1]"))) (EApp (EVar "debug") (EListLit (ELit (LInt 1))))))
 (DTest false "debug of a list separates elements with a comma and a space" (EApp (EApp (EVar "expectEqual") (ELit (LString "[1, 2, 3]"))) (EApp (EVar "debug") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3))))))
@@ -168,8 +241,23 @@ prop "list compare is Eq exactly when the lists are equal" (xs : List Int) (ys :
 (DTest false "foldMap applies the function in element order" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))) (EApp (EApp (EVar "foldMap") (ELam ((PVar "x")) (EListLit (EVar "x")))) (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3))))))
 (DTest false "list compare decides on the first differing element" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "Lt") (EVar "Gt") (EVar "Eq"))) (ETuple (EApp (EApp (EVar "compare") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 9)))) (EListLit (ELit (LInt 1)) (ELit (LInt 3)))) (EApp (EApp (EVar "compare") (EListLit (ELit (LInt 2)))) (EListLit (ELit (LInt 1)) (ELit (LInt 9)))) (EApp (EApp (EVar "compare") (EListLit (ELit (LInt 4)) (ELit (LInt 4)))) (EListLit (ELit (LInt 4)) (ELit (LInt 4)))))))
 (DProp false "list compare is Eq exactly when the lists are equal" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EBinOp "==" (EBinOp "==" (EApp (EApp (EVar "compare") (EVar "xs")) (EVar "ys")) (EVar "Eq")) (EApp (EApp (EVar "eq") (EVar "xs")) (EVar "ys"))))
+(DTest false "foldMap over a String monoid concatenates in element order" (EApp (EApp (EVar "expectEqual") (ELit (LString "123"))) (EApp (EApp (EVar "foldMap") (ELam ((PVar "x")) (EApp (EVar "display") (EVar "x")))) (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3))))))
+(DTest false "foldMap over a list of lists keeps the element order" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)))) (EApp (EApp (EVar "foldMap") (ELam ((PVar "x")) (EListLit (EVar "x") (EBinOp "+" (EVar "x") (ELit (LInt 1)))))) (EListLit (ELit (LInt 1)) (ELit (LInt 3))))))
+(DTest false "filter keeps the elements that satisfy the predicate" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 2)) (ELit (LInt 4)))) (EApp (EApp (EVar "filter") (ELam ((PVar "x")) (EBinOp "==" (EBinOp "%" (EVar "x") (ELit (LInt 2))) (ELit (LInt 0))))) (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4))))))
+(DTest false "filter keeps the order of the surviving elements" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 5)) (ELit (LInt 3)) (ELit (LInt 9)))) (EApp (EApp (EVar "filter") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 2))))) (EListLit (ELit (LInt 5)) (ELit (LInt 1)) (ELit (LInt 3)) (ELit (LInt 0)) (ELit (LInt 9))))))
+(DTest false "filter of an empty list is empty" (EApp (EApp (EVar "expectEqual") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EVar "filter") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 0))))) (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int"))))))
+(DTest false "filter drops every element when none satisfies the predicate" (EApp (EApp (EVar "expectEqual") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EVar "filter") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 10))))) (EListLit (ELit (LInt 1)) (ELit (LInt 2))))))
+(DTest false "xor of True and True is False" (EApp (EVar "expectFalse") (EApp (EApp (EVar "xor") (EVar "True")) (EVar "True"))))
+(DTest false "xor of True and False is True" (EApp (EVar "expectTrue") (EApp (EApp (EVar "xor") (EVar "True")) (EVar "False"))))
+(DTest false "xor of False and True is True" (EApp (EVar "expectTrue") (EApp (EApp (EVar "xor") (EVar "False")) (EVar "True"))))
+(DTest false "xor of False and False is False" (EApp (EVar "expectFalse") (EApp (EApp (EVar "xor") (EVar "False")) (EVar "False"))))
+(DTest false "pair compare decides on the first field" (EApp (EApp (EVar "expectEqual") (EListLit (EVar "Lt") (EVar "Gt"))) (EListLit (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 9)))) (ETuple (ELit (LInt 2)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 3)) (ELit (LInt 0)))) (ETuple (ELit (LInt 2)) (ELit (LInt 9)))))))
+(DTest false "pair compare falls through to the second field on a tie" (EApp (EApp (EVar "expectEqual") (EListLit (EVar "Lt") (EVar "Gt") (EVar "Eq"))) (EListLit (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 2)))) (ETuple (ELit (LInt 1)) (ELit (LInt 3)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 3)))) (ETuple (ELit (LInt 1)) (ELit (LInt 2)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 2)))) (ETuple (ELit (LInt 1)) (ELit (LInt 2)))))))
+(DTest false "triple compare decides on each field in turn" (EApp (EApp (EVar "expectEqual") (EListLit (EVar "Lt") (EVar "Lt") (EVar "Gt") (EVar "Eq"))) (EListLit (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))) (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))))))
+(DTest false "quadruple compare decides on each field in turn" (EApp (EApp (EVar "expectEqual") (EListLit (EVar "Lt") (EVar "Lt") (EVar "Lt") (EVar "Gt") (EVar "Eq"))) (EListLit (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))))))
+(DTest false "quintuple compare decides on each field in turn" (EApp (EApp (EVar "expectEqual") (EListLit (EVar "Lt") (EVar "Lt") (EVar "Lt") (EVar "Lt") (EVar "Gt") (EVar "Eq"))) (EListLit (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))))))
 # MARK
-(DUse false (UseGroup ("test") ((mem "expectEqual" false))))
+(DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectTrue" false) (mem "expectFalse" false))))
 (DTest false "debug of an empty list" (EApp (EApp (EVar "expectEqual") (ELit (LString "[]"))) (EApp (EMethodRef "debug") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DTest false "debug of a one-element list has no separator" (EApp (EApp (EVar "expectEqual") (ELit (LString "[1]"))) (EApp (EMethodRef "debug") (EListLit (ELit (LInt 1))))))
 (DTest false "debug of a list separates elements with a comma and a space" (EApp (EApp (EVar "expectEqual") (ELit (LString "[1, 2, 3]"))) (EApp (EMethodRef "debug") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3))))))
@@ -207,3 +295,18 @@ prop "list compare is Eq exactly when the lists are equal" (xs : List Int) (ys :
 (DTest false "foldMap applies the function in element order" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))) (EApp (EApp (EMethodRef "foldMap") (ELam ((PVar "x")) (EListLit (EVar "x")))) (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3))))))
 (DTest false "list compare decides on the first differing element" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "Lt") (EVar "Gt") (EVar "Eq"))) (ETuple (EApp (EApp (EMethodRef "compare") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 9)))) (EListLit (ELit (LInt 1)) (ELit (LInt 3)))) (EApp (EApp (EMethodRef "compare") (EListLit (ELit (LInt 2)))) (EListLit (ELit (LInt 1)) (ELit (LInt 9)))) (EApp (EApp (EMethodRef "compare") (EListLit (ELit (LInt 4)) (ELit (LInt 4)))) (EListLit (ELit (LInt 4)) (ELit (LInt 4)))))))
 (DProp false "list compare is Eq exactly when the lists are equal" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EBinOp "==" (EBinOp "==" (EApp (EApp (EMethodRef "compare") (EVar "xs")) (EVar "ys")) (EVar "Eq")) (EApp (EApp (EMethodRef "eq") (EVar "xs")) (EVar "ys"))))
+(DTest false "foldMap over a String monoid concatenates in element order" (EApp (EApp (EVar "expectEqual") (ELit (LString "123"))) (EApp (EApp (EMethodRef "foldMap") (ELam ((PVar "x")) (EApp (EMethodRef "display") (EVar "x")))) (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3))))))
+(DTest false "foldMap over a list of lists keeps the element order" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4)))) (EApp (EApp (EMethodRef "foldMap") (ELam ((PVar "x")) (EListLit (EVar "x") (EBinOp "+" (EVar "x") (ELit (LInt 1)))))) (EListLit (ELit (LInt 1)) (ELit (LInt 3))))))
+(DTest false "filter keeps the elements that satisfy the predicate" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 2)) (ELit (LInt 4)))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "x")) (EBinOp "==" (EBinOp "%" (EVar "x") (ELit (LInt 2))) (ELit (LInt 0))))) (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 4))))))
+(DTest false "filter keeps the order of the surviving elements" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 5)) (ELit (LInt 3)) (ELit (LInt 9)))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 2))))) (EListLit (ELit (LInt 5)) (ELit (LInt 1)) (ELit (LInt 3)) (ELit (LInt 0)) (ELit (LInt 9))))))
+(DTest false "filter of an empty list is empty" (EApp (EApp (EVar "expectEqual") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 0))))) (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int"))))))
+(DTest false "filter drops every element when none satisfies the predicate" (EApp (EApp (EVar "expectEqual") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 10))))) (EListLit (ELit (LInt 1)) (ELit (LInt 2))))))
+(DTest false "xor of True and True is False" (EApp (EVar "expectFalse") (EApp (EApp (EVar "xor") (EVar "True")) (EVar "True"))))
+(DTest false "xor of True and False is True" (EApp (EVar "expectTrue") (EApp (EApp (EVar "xor") (EVar "True")) (EVar "False"))))
+(DTest false "xor of False and True is True" (EApp (EVar "expectTrue") (EApp (EApp (EVar "xor") (EVar "False")) (EVar "True"))))
+(DTest false "xor of False and False is False" (EApp (EVar "expectFalse") (EApp (EApp (EVar "xor") (EVar "False")) (EVar "False"))))
+(DTest false "pair compare decides on the first field" (EApp (EApp (EVar "expectEqual") (EListLit (EVar "Lt") (EVar "Gt"))) (EListLit (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 9)))) (ETuple (ELit (LInt 2)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 3)) (ELit (LInt 0)))) (ETuple (ELit (LInt 2)) (ELit (LInt 9)))))))
+(DTest false "pair compare falls through to the second field on a tie" (EApp (EApp (EVar "expectEqual") (EListLit (EVar "Lt") (EVar "Gt") (EVar "Eq"))) (EListLit (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 2)))) (ETuple (ELit (LInt 1)) (ELit (LInt 3)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 3)))) (ETuple (ELit (LInt 1)) (ELit (LInt 2)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 2)))) (ETuple (ELit (LInt 1)) (ELit (LInt 2)))))))
+(DTest false "triple compare decides on each field in turn" (EApp (EApp (EVar "expectEqual") (EListLit (EVar "Lt") (EVar "Lt") (EVar "Gt") (EVar "Eq"))) (EListLit (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))) (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))))))
+(DTest false "quadruple compare decides on each field in turn" (EApp (EApp (EVar "expectEqual") (EListLit (EVar "Lt") (EVar "Lt") (EVar "Lt") (EVar "Gt") (EVar "Eq"))) (EListLit (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))))))
+(DTest false "quintuple compare decides on each field in turn" (EApp (EApp (EVar "expectEqual") (EListLit (EVar "Lt") (EVar "Lt") (EVar "Lt") (EVar "Lt") (EVar "Gt") (EVar "Eq"))) (EListLit (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))))))

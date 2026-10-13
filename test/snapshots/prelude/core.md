@@ -1,5 +1,5 @@
 # META
-source_lines=2377
+source_lines=2392
 stages=TYPES
 diagnostics=TYPES
 # SOURCE
@@ -273,34 +273,39 @@ export impl Ord String where
 export impl Ord Char where
   compare a b = if a < b then Lt else if a > b then Gt else Eq
 
--- Lexicographic chaining: take the first non-`Eq` result, else the second.
--- Private helper backing the tuple `Ord` impls below.
-thenCmp : Ordering -> Ordering -> Ordering
-thenCmp Eq o = o
-thenCmp o _ = o
-
 -- Lexicographic ordering for tuples (arities 2–5): compare field by field,
 -- left to right, stopping at the first that differs.
 export impl Ord (a, b) requires Ord a, Ord b where
-  compare (a1, b1) (a2, b2) = thenCmp (compare a1 a2) (compare b1 b2)
+  compare (a1, b1) (a2, b2) = match compare a1 a2
+    Eq => compare b1 b2
+    o => o
 
 export impl Ord (a, b, c) requires Ord a, Ord b, Ord c where
-  compare (a1, b1, c1) (a2, b2, c2) =
-    thenCmp (compare a1 a2) (thenCmp (compare b1 b2) (compare c1 c2))
+  compare (a1, b1, c1) (a2, b2, c2) = match compare a1 a2
+    Eq => match compare b1 b2
+      Eq => compare c1 c2
+      o => o
+    o => o
 
 export impl Ord (a, b, c, d) requires Ord a, Ord b, Ord c, Ord d where
-  compare (a1, b1, c1, d1) (a2, b2, c2, d2) =
-    thenCmp
-      (compare a1 a2)
-      (thenCmp (compare b1 b2) (thenCmp (compare c1 c2) (compare d1 d2)))
+  compare (a1, b1, c1, d1) (a2, b2, c2, d2) = match compare a1 a2
+    Eq => match compare b1 b2
+      Eq => match compare c1 c2
+        Eq => compare d1 d2
+        o => o
+      o => o
+    o => o
 
 export impl Ord (a, b, c, d, e) requires Ord a, Ord b, Ord c, Ord d, Ord e where
-  compare (a1, b1, c1, d1, e1) (a2, b2, c2, d2, e2) =
-    thenCmp
-      (compare a1 a2)
-      (thenCmp
-        (compare b1 b2)
-        (thenCmp (compare c1 c2) (thenCmp (compare d1 d2) (compare e1 e2))))
+  compare (a1, b1, c1, d1, e1) (a2, b2, c2, d2, e2) = match compare a1 a2
+    Eq => match compare b1 b2
+      Eq => match compare c1 c2
+        Eq => match compare d1 d2
+          Eq => compare e1 e2
+          o => o
+        o => o
+      o => o
+    o => o
 
 {- | Lists compare lexicographically: element by element, with a proper
    prefix sorting before any list that extends it (`[1] < [1, 2]`,
@@ -1554,6 +1559,14 @@ sliceListGo (x :: xs) i lo hi
   | i >= lo = x :: sliceListGo xs (i + 1) lo hi
   | otherwise = sliceListGo xs (i + 1) lo hi
 
+listRevMap : (a -> <e> b) -> List a -> List b -> <e> List b
+listRevMap _ [] acc = acc
+listRevMap f (x :: xs) acc = listRevMap f xs (f x :: acc)
+
+listFoldMapGo : Monoid m => m -> List m -> m
+listFoldMapGo acc [] = acc
+listFoldMapGo acc (y :: ys) = listFoldMapGo (append y acc) ys
+
 -- `length` goes through the strict left fold; `1 + length xs` would
 -- accumulate stack frames proportional to list length.
 export impl Foldable List where
@@ -1565,8 +1578,7 @@ export impl Foldable List where
   isEmpty [] = True
   isEmpty _ = False
   length = fold (acc _ => acc + 1) 0
-  foldMap f xs =
-    fold (acc y => append y acc) empty (fold (acc x => f x :: acc) [] xs)
+  foldMap f xs = listFoldMapGo empty (listRevMap f xs [])
 
 -- `Option` and `Result e` each fold as a 0-or-1-element container.
 export impl Foldable Option where
@@ -1768,6 +1780,8 @@ export impl Filterable List where
   filterMap f (x :: xs) = match f x
     Some y => y :: filterMap f xs
     None => filterMap f xs
+  filter _ [] = []
+  filter p (x :: xs) = if p x then x :: filter p xs else filter p xs
 
 -- # Booleans
 
@@ -1803,7 +1817,8 @@ or _ _ = True
 -- | Exclusive or.
 export
 xor : Bool -> Bool -> Bool
-xor a b = a /= b
+xor True b = not b
+xor False b = b
 
 -- # Options
 
@@ -2443,7 +2458,6 @@ floatSignBit : Float -> Bool
 compareBySign : Float -> Float -> Ordering
 otherwise : Bool
 compareNaN : Float -> Float -> Ordering
-thenCmp : Ordering -> Ordering -> Ordering
 debugListItems : Debug a => List a -> List String
 debugArrayItems : Debug a => Array a -> Int -> Int -> List String -> List String
 eqGo : Eq a => Array a -> Array a -> Int -> Int -> Bool
@@ -2491,6 +2505,8 @@ stringIndexAt : Int -> String -> Int -> Char
 sliceLastIndex : Int -> Int
 sliceInclusiveEnd : Int -> Int
 sliceListGo : List a -> Int -> Int -> Int -> List a
+listRevMap : (a -> <b> c) -> List a -> List c -> <b> List c
+listFoldMapGo : Monoid a => a -> List a -> a
 any : Foldable c => (a -> <b> Bool) -> c a -> <b> Bool
 all : Foldable c => (a -> <b> Bool) -> c a -> <b> Bool
 find : Foldable c => (a -> <b> Bool) -> c a -> <b> Option a
