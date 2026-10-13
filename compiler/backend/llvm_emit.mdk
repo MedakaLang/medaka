@@ -11713,7 +11713,9 @@ emitTrmcHeader : Emit -> String -> Int -> String -> Unit
 emitTrmcHeader e defineName arity attrs =
   let _ = beginDefine e
   let _ =
-    emit e "\{defineHead e} i64 @\{defineName}(\{implParamDecls arity 0})\{attrs} {"
+    emit
+      e
+      "\{defineHead e} i64 @\{defineName}(\{implParamDecls arity 0})\{attrs} {"
   emit e "entry:"
 
 -- the REUSABLE TRMC loop body (assumes `define`+`entry:` already emitted; does NOT
@@ -12681,7 +12683,9 @@ emitFloatWorkerFn e name pats ptys body =
   -- wrapper: original i64 ABI; unbox float params, call worker, box the result
   let _ = beginDefine e
   let _ =
-    emit e "\{defineHead e} i64 @mdk_\{name}(\{paramDecls pats 0})\{fnAttrs e name} {"
+    emit
+      e
+      "\{defineHead e} i64 @mdk_\{name}(\{paramDecls pats 0})\{fnAttrs e name} {"
   let _ = emit e "entry:"
   let callArgs = wrapperCallArgs e fp 0 pats
   let r = freshReg e
@@ -12862,7 +12866,9 @@ emitRawWorkerFn e name pats body (RawWorker arity ks rk) =
   let wenv = paramEnvRaw pats ptys ks 0
   let _ = beginDefine e
   let _ =
-    emit e "\{defineHead e} \{rty} @\{worker}(\{rawParamDecls ks 0})\{fnAttrs e name} {"
+    emit
+      e
+      "\{defineHead e} \{rty} @\{worker}(\{rawParamDecls ks 0})\{fnAttrs e name} {"
   let _ = emit e "entry:"
   let _ =
     emitFnBodyRaw e wenv (RawTail name worker (RawWorker arity ks rk)) body
@@ -12870,7 +12876,9 @@ emitRawWorkerFn e name pats body (RawWorker arity ks rk) =
   let _ = emit e ""
   let _ = beginDefine e
   let _ =
-    emit e "\{defineHead e} i64 @mdk_\{name}(\{paramDecls pats 0})\{fnAttrs e name} {"
+    emit
+      e
+      "\{defineHead e} i64 @mdk_\{name}(\{paramDecls pats 0})\{fnAttrs e name} {"
   let _ = emit e "entry:"
   let ops = rawWrapperArgs e ks 0
   let r = freshReg e
@@ -13023,7 +13031,9 @@ emitFnClauseW e name pats ptys body =
   let env = paramEnv pats ptys 0
   let _ = beginDefine e
   let _ =
-    emit e "\{defineHead e} i64 @mdk_\{name}(\{paramDecls pats 0})\{fnAttrs e name} {"
+    emit
+      e
+      "\{defineHead e} i64 @mdk_\{name}(\{paramDecls pats 0})\{fnAttrs e name} {"
   let _ = emit e "entry:"
   let _ =
     emitFnBody e env (TailDefine ("mdk_" ++ name) (listLen pats) False) body
