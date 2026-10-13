@@ -52,6 +52,7 @@ import backend.extern_catalog.{
   wasmUses,
 }
 import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInputFull}
+import backend.emit_plan.{buildEmitPlan}
 import eval.eval.{externBindings, ioExternBindings}
 import set as S
 
@@ -292,7 +293,8 @@ emitWat src =
       False
       (declaredRecordFieldOrders decls)
       []
-  emitProgramRecord input (lowerProgramEmit TargetWasm (annotateProgram decls))
+  let cp = lowerProgramEmit TargetWasm (annotateProgram decls)
+  emitProgramRecord input (buildEmitPlan TargetWasm cp) cp
 
 -- A program whose one source of `use` is the call to extern `name` emits `marker`,
 -- a definition the demand's runtime group, type or host import block carries.

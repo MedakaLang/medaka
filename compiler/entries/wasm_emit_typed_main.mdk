@@ -67,14 +67,27 @@ import ir.core_ir_lower.{
 }
 import backend.wasm_emit.{
   WasmEmitInput,
-  emitProgram,
-  emitProgramUnchecked,
-  emitProgramRecord,
+  emitProgram as emitWithPlan,
+  emitProgramUnchecked as emitUncheckedWithPlan,
+  emitProgramRecord as emitRecordWithPlan,
   emitProgramGaps,
   makeWasmEmitInput,
   makeWasmEmitInputFull,
 }
 import entries.entry_support.{driveRuntime}
+import backend.emit_plan.{buildEmitPlan}
+
+-- Every emission here builds its own plan from the program it emits.
+emitProgram : WasmEmitInput -> CProgram -> String
+emitProgram input cp = emitWithPlan input (buildEmitPlan TargetWasm cp) cp
+
+emitProgramUnchecked : WasmEmitInput -> CProgram -> String
+emitProgramUnchecked input cp =
+  emitUncheckedWithPlan input (buildEmitPlan TargetWasm cp) cp
+
+emitProgramRecord : WasmEmitInput -> CProgram -> (String, List String)
+emitProgramRecord input cp =
+  emitRecordWithPlan input (buildEmitPlan TargetWasm cp) cp
 
 main = match args ()
   "--reemit-trmc-state" :: _ => reemitTrmcState ()

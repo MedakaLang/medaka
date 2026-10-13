@@ -156,6 +156,7 @@ import backend.wasm_emit.{
   withRuntimeExternsW,
 }
 import backend.wasm_file_grants.{prepareWasmFileGrants}
+import backend.emit_plan.{buildEmitPlan}
 import backend.wasm_reach.{wasmReachFilter}
 
 -- ARG CONTRACT (Stage 3): the FIRST arg is a MODE, dispatched below.
@@ -663,7 +664,7 @@ runEmit paths warnTriples runtimeDecls coreDecls modules =
       let lowered = lowerProgramEmit TargetWasm allDecls
       let filtered = wasmReachFilter lowered
       let _ = emitWatMarker warnTriples
-      putStr (emitProgram input filtered)
+      putStr (emitProgram input (buildEmitPlan TargetWasm filtered) filtered)
 
 wasmGrantDiagTriple : List (String, String) ->
   (String, TcDiag) ->

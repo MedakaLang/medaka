@@ -24,6 +24,7 @@ import ir.core_ir_lower.{
   lowerProgramEmit,
 }
 import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInputFull}
+import backend.emit_plan.{buildEmitPlan}
 
 -- the emitted WAT of `src`, as the modules entry would print it for that program
 watOf : String -> String
@@ -38,7 +39,7 @@ watOf src =
       (declaredRecordFieldOrders decls)
       []
   let cp = lowerProgramEmit TargetWasm (annotateProgram decls)
-  let (text, _) = emitProgramRecord input cp
+  let (text, _) = emitProgramRecord input (buildEmitPlan TargetWasm cp) cp
   text
 
 -- the (segment id, escaped payload) of one `(data $strseg_N "…")` line

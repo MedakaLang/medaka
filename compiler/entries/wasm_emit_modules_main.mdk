@@ -56,6 +56,7 @@ import backend.wasm_emit.{
   makeWasmEmitInputFull,
   withRuntimeExternsW,
 }
+import backend.emit_plan.{buildEmitPlan}
 import backend.wasm_reach.{wasmReachFilter}
 import entries.entry_support.{
   driveEmitLocated,
@@ -125,7 +126,7 @@ emitTail mods runtimeDecls coreD modules1 =
         ("wasm-reach-total-units", programUnitCount lowered),
         ("wasm-reach-kept-units", programUnitCount filtered),
       ]
-  putStr (emitProgram input filtered)
+  putStr (emitProgram input (buildEmitPlan TargetWasm filtered) filtered)
 
 -- The unit count `backend.wasm_reach.wasmReachFilter` filters over: every
 -- top-level bind group plus every impl entry. Matches that filter's own

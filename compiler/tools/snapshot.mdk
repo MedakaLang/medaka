@@ -192,6 +192,7 @@ import types.typecheck.{
 }
 import backend.private_mangle.{mangleUnitsEv}
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp, noMainMsg}
+import backend.emit_plan.{buildEmitPlan}
 import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
 -- A member alias gives the Wasm emitter a distinct local name, so BOTH backends are driven from ONE process
 -- over ONE lowered CProgram.  (This is what retired `tools/snap_wasm.mdk`, a re-export
@@ -651,7 +652,8 @@ llvmOf runtimeDecls allDecls cp =
       ""
       (declaredRecordFieldOrders allDecls)
       (ffiExternTypeNames runtimeDecls allDecls)
-  let (text, gaps) = emitProgramRecord input cp
+  let (text, gaps) =
+    emitProgramRecord input (buildEmitPlan TargetBothUnknown cp) cp
   withGaps ";" text gaps
 
 wasmOf : List Decl -> List Decl -> CProgram -> String
@@ -664,7 +666,7 @@ wasmOf runtimeDecls allDecls cp =
       (mainTypeIsUnit ())
       (declaredRecordFieldOrders allDecls)
       []
-  let (text, gaps) = wasmRecord input cp
+  let (text, gaps) = wasmRecord input (buildEmitPlan TargetBothUnknown cp) cp
   withGaps ";;" text gaps
 
 withGaps : String -> String -> List String -> String

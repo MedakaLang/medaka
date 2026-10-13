@@ -75,6 +75,7 @@ import backend.wasm_emit.{
   makeWasmEmitInputFull,
 }
 import backend.llvm_emit.{emitProgramRecord as llvmRecord, makeEmitInput}
+import backend.emit_plan.{buildEmitPlan}
 import types.target_profile.{lookupProfile}
 import test_process.{underRoot}
 
@@ -194,7 +195,7 @@ test "(e) record mode logs one event per refused extern, and no unbound-variable
       (declaredRecordFieldOrders decls)
       []
   let cp = lowerProgramEmit TargetWasm (annotateProgram decls)
-  let (_, events) = wasmRecord input cp
+  let (_, events) = wasmRecord input (buildEmitPlan TargetWasm cp) cp
   let expected = map ("main\t" ++ _) (refusalLines WasmBackend recordSrc)
   expectAll [
     labelFail
@@ -246,8 +247,8 @@ llvmRecordEvents =
       ""
       (declaredRecordFieldOrders decls)
       []
-  let (_, events) =
-    llvmRecord input (lowerProgramEmit TargetNative (annotateProgram decls))
+  let cp = lowerProgramEmit TargetNative (annotateProgram decls)
+  let (_, events) = llvmRecord input (buildEmitPlan TargetNative cp) cp
   expectEqual
     (map ("main\t" ++ _) (refusalLines LlvmBackend assertSnapshotSrc))
     events
@@ -392,7 +393,7 @@ ffiWallEvents checked =
       ffiTypes
   let cp = lowerProgramEmit TargetWasm (annotateProgram decls)
   checkedTarget := checked
-  let (_, events) = wasmRecord input cp
+  let (_, events) = wasmRecord input (buildEmitPlan TargetWasm cp) cp
   checkedTarget := None
   events
 
