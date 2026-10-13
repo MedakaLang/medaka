@@ -3,8 +3,9 @@
    Reads a corpus directory `pds/test/synth_repo_main.mdk` built, back through
    the same seam a real `pdsd` serves it through — `persistLoad` /
    `repoFromBlocks` / `blobFileRead` for the state, `lib.server_core`'s
-   `handleBytes` for every request — and reports microseconds per request for
-   one page of `listRecords`, one `describeRepo`, and one `listBlobs`.
+   `handleBytes` for every request — and reports microseconds and bytes
+   allocated per request for one page of `listRecords`, one `describeRepo`,
+   and one `listBlobs`.
 
    Every request is answered against the SAME loaded store, so each repetition
    measures one request against a repository of the corpus's size rather than
@@ -178,10 +179,12 @@ measure : String -> Server e -> Store -> Bytes -> Int -> <Clock, IO | e> Unit
 measure label server store request reps =
   let (_, first) = handleBytes server benchContext store request
   let start = monotonicSec ()
+  let a0 = allocBytes ()
   let checksum = repeatRequest server store request reps 0
+  let a1 = allocBytes ()
   let elapsed = monotonicSec () - start
   println
-    "\{label} us=\{intToString (micros elapsed reps)} reps=\{intToString reps} bytes=\{intToString (checksum / reps)} status=\{firstLineText first}"
+    "\{label} us=\{intToString (micros elapsed reps)} reps=\{intToString reps} allocBytes=\{intToString (floatToInt (a1 - a0) / reps)} bytes=\{intToString (checksum / reps)} status=\{firstLineText first}"
 
 run : String ->
   String ->
