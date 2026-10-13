@@ -827,6 +827,30 @@ and safe failures for omitted barriers and stale pre-allocation inputs. The
 [audit](../../test/gc_prototype/results/2026-10-12-whole-init-audit.json) preserve
 the uninstalled helper, independent fixture, measured sources, and uncertainty.
 
+### Root-pair registration screen (2026-10-12)
+
+A scratch tree constructor batches each pair of adjacent root pushes and pops,
+retaining the same two root records, relocation semantics, and peak accounting.
+Assembly confirms four root calls become two per node. Five selftests, 105 smoke
+runs, and seven graded fixture cases pass; invalid LIFO operations and an omitted
+relocation mutant fail their intended checks.
+
+The balanced screen contains 288 samples across four workloads, two capacities,
+and six arms, including both Boehm adapters with default and 128 MiB initial heaps.
+All 48 paired custom counter groups match exactly. Tree medians change from
+285.928 to 269.367 ms at 262,136 bytes, but from 298.883 to 299.928 ms at 262,144
+bytes. The candidate remains 13.5% and 14.4% behind the strongest Boehm medians.
+Its tree RSS remains about 155 MiB versus roughly 167–168 MiB for those Boehm
+arms, with no meaningful change from the existing custom collector.
+It fails the predeclared requirement to improve both tree alignments and is not
+installed. Per-round variation remains visible in the audit.
+
+The [raw samples](../../test/gc_prototype/results/2026-10-12-root-pair-results.jsonl)
+and [audit](../../test/gc_prototype/results/2026-10-12-root-pair-audit.json) preserve
+the candidate, controls, and frozen provenance. A summary-key error occurred
+after all measurements and final input checks completed; a separate corrected
+offline reducer processed the unchanged rows. No timing rerun was performed.
+
 ### PDS varint integration workload (2026-10-12)
 
 `pds/test/gc_varint_main.mdk` calls the real `uvarintEncode` implementation.
