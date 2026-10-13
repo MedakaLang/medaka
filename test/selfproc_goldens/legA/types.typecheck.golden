@@ -2076,7 +2076,6 @@ methodReturnArgs : MethodReturnRequest -> Option (List Mono)
 methodReturnChainStats : List ChainStep -> (Int, Int, Int)
 methodReturnEvidenceRoute : String -> ScopeId -> PrerequisiteEvidence -> Route
 methodReturnEvidenceRoutes : String -> ScopeId -> List PrerequisiteEvidence -> List Route
-methodReturnFallbackTag : MethodReturnRequest -> Option String
 methodReturnInstanceMatches : RequestInstanceId -> ImplRow -> Bool
 methodReturnInstantiation : MethodReturnRequest -> Option Instantiation
 methodReturnMemoArguments : List Mono -> List String
