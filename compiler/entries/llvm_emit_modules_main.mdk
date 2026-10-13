@@ -48,6 +48,7 @@ import ir.core_ir_lower.{
   ctorFieldTypeNames,
   externArities,
   validateFfiExternTypeNames,
+  noInlineFnNames,
 }
 import backend.llvm_emit.{
   emitProgram,
@@ -55,6 +56,7 @@ import backend.llvm_emit.{
   makeEmitInput,
   preludeImplSymbols,
   withRuntimeExterns,
+  withNoInlineFns,
 }
 import ir.dce.{dceFilter}
 import entries.entry_support.{
@@ -149,7 +151,7 @@ emitTail mods runtimeDecls coreD modules1 =
     preludeReturnPosDictNames coreD allDecls
       ++ preludeArgPosDictNames coreD allDecls
       ++ constrainedSigNames allDecls
-  let input =
+  let base =
     withRuntimeExterns
       (runtimeExternNames runtimeDecls)
       (makeEmitInput
@@ -167,6 +169,7 @@ emitTail mods runtimeDecls coreD modules1 =
         (declaredRecordFieldOrders allDecls)
         (validateFfiExternTypeNames
           (checkedFfiExternTypeNamesModules modules2)))
+  let input = withNoInlineFns (noInlineFnNames allDecls) base
   let statsOn = statsEnabled ()
   if statsOn then
     let (text, stats) =

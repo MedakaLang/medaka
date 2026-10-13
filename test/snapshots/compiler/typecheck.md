@@ -1,5 +1,5 @@
 # META
-source_lines=55976
+source_lines=55979
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -27660,6 +27660,7 @@ constrainedSigName : Decl -> List String
 constrainedSigName (DTypeSig _ n ty _)
   | isConstrainedTy ty = [n]
   | otherwise = []
+constrainedSigName (DAttrib _ d) = constrainedSigName d
 constrainedSigName _ = []
 
 isConstrainedTy : Ty -> Bool
@@ -43761,6 +43762,7 @@ constraintSlotId typarams tvs c = match constraintSlotDispatchVar typarams c
 sigsOf : List Decl -> List (String, Ty)
 sigsOf [] = []
 sigsOf ((DTypeSig _ n ty _) :: rest) = (n, ty) :: sigsOf rest
+sigsOf ((DAttrib _ d) :: rest) = sigsOf (d :: rest)
 sigsOf (_ :: rest) = sigsOf rest
 
 -- every variable reference in an expr, bound ones included (an over-approximation
@@ -54828,6 +54830,7 @@ constrainedSigPredicateSlots : Decl -> List (String, List PredicateSlot)
 constrainedSigPredicateSlots (DTypeSig _ n ty _)
   | isConstrainedTy ty = [(n, map sigPredicateSlot (sigConstraints ty))]
   | otherwise = []
+constrainedSigPredicateSlots (DAttrib _ d) = constrainedSigPredicateSlots d
 constrainedSigPredicateSlots _ = []
 
 sigPredicateSlot : (IfaceRef, List String) -> PredicateSlot
@@ -60895,6 +60898,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "constrainedSigNames" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "constrainedSigName")) (EVar "prog")))
 (DTypeSig false "constrainedSigName" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "constrainedSigName" ((PCon "DTypeSig" PWild (PVar "n") (PVar "ty") PWild)) (EIf (EApp (EVar "isConstrainedTy") (EVar "ty")) (EListLit (EVar "n")) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "constrainedSigName" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "constrainedSigName") (EVar "d")))
 (DFunDef false "constrainedSigName" (PWild) (EListLit))
 (DTypeSig false "isConstrainedTy" (TyFun (TyCon "Ty") (TyCon "Bool")))
 (DFunDef false "isConstrainedTy" ((PCon "TyConstrained" PWild PWild)) (EVar "True"))
@@ -63516,6 +63520,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "sigsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))))
 (DFunDef false "sigsOf" ((PList)) (EListLit))
 (DFunDef false "sigsOf" ((PCons (PCon "DTypeSig" PWild (PVar "n") (PVar "ty") PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EVar "ty")) (EApp (EVar "sigsOf") (EVar "rest"))))
+(DFunDef false "sigsOf" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "sigsOf") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "sigsOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "sigsOf") (EVar "rest")))
 (DTypeSig false "allEVars" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "allEVars" ((PCon "EVar" (PVar "x"))) (EListLit (EVar "x")))
@@ -65146,6 +65151,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "moduleDictNames" ((PVar "bodyVars") (PVar "rpNames") (PVar "modules")) (EBlock (DoLet false false (PVar "rpSet") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EApp (EVar "anyMember") (EApp (EVar "snd") (EVar "p"))) (EVar "rpNames")))) (EVar "bodyVars")))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "rpSet") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "rpSet"))))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "bodyVars")))) (EApp (EVar "constrainedSigNames") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules")))))))
 (DTypeSig false "constrainedSigPredicateSlots" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "PredicateSlot"))))))
 (DFunDef false "constrainedSigPredicateSlots" ((PCon "DTypeSig" PWild (PVar "n") (PVar "ty") PWild)) (EIf (EApp (EVar "isConstrainedTy") (EVar "ty")) (EListLit (ETuple (EVar "n") (EApp (EApp (EVar "map") (EVar "sigPredicateSlot")) (EApp (EVar "sigConstraints") (EVar "ty"))))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "constrainedSigPredicateSlots" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "constrainedSigPredicateSlots") (EVar "d")))
 (DFunDef false "constrainedSigPredicateSlots" (PWild) (EListLit))
 (DTypeSig false "sigPredicateSlot" (TyFun (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "PredicateSlot")))
 (DFunDef false "sigPredicateSlot" ((PTuple (PVar "iface") PWild)) (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "iface")) (fa "psArgs" (EVar "PSArgsUnknown")) (fa "psBoundIds" (EListLit)))))
@@ -70220,6 +70226,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "constrainedSigNames" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "constrainedSigName")) (EVar "prog")))
 (DTypeSig false "constrainedSigName" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "constrainedSigName" ((PCon "DTypeSig" PWild (PVar "n") (PVar "ty") PWild)) (EIf (EApp (EVar "isConstrainedTy") (EVar "ty")) (EListLit (EVar "n")) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "constrainedSigName" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "constrainedSigName") (EVar "d")))
 (DFunDef false "constrainedSigName" (PWild) (EListLit))
 (DTypeSig false "isConstrainedTy" (TyFun (TyCon "Ty") (TyCon "Bool")))
 (DFunDef false "isConstrainedTy" ((PCon "TyConstrained" PWild PWild)) (EVar "True"))
@@ -72841,6 +72848,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "sigsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))))
 (DFunDef false "sigsOf" ((PList)) (EListLit))
 (DFunDef false "sigsOf" ((PCons (PCon "DTypeSig" PWild (PVar "n") (PVar "ty") PWild) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EVar "ty")) (EApp (EVar "sigsOf") (EVar "rest"))))
+(DFunDef false "sigsOf" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "sigsOf") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "sigsOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "sigsOf") (EVar "rest")))
 (DTypeSig false "allEVars" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "allEVars" ((PCon "EVar" (PVar "x"))) (EListLit (EVar "x")))
@@ -74471,6 +74479,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "moduleDictNames" ((PVar "bodyVars") (PVar "rpNames") (PVar "modules")) (EBlock (DoLet false false (PVar "rpSet") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EApp (EVar "anyMember") (EApp (EVar "snd") (EVar "p"))) (EVar "rpNames")))) (EVar "bodyVars")))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "rpSet") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "rpSet"))))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "bodyVars")))) (EApp (EVar "constrainedSigNames") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules")))))))
 (DTypeSig false "constrainedSigPredicateSlots" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "PredicateSlot"))))))
 (DFunDef false "constrainedSigPredicateSlots" ((PCon "DTypeSig" PWild (PVar "n") (PVar "ty") PWild)) (EIf (EApp (EVar "isConstrainedTy") (EVar "ty")) (EListLit (ETuple (EVar "n") (EApp (EApp (EMethodRef "map") (EVar "sigPredicateSlot")) (EApp (EVar "sigConstraints") (EVar "ty"))))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "constrainedSigPredicateSlots" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "constrainedSigPredicateSlots") (EVar "d")))
 (DFunDef false "constrainedSigPredicateSlots" (PWild) (EListLit))
 (DTypeSig false "sigPredicateSlot" (TyFun (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "PredicateSlot")))
 (DFunDef false "sigPredicateSlot" ((PTuple (PVar "iface") PWild)) (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "iface")) (fa "psArgs" (EVar "PSArgsUnknown")) (fa "psBoundIds" (EListLit)))))

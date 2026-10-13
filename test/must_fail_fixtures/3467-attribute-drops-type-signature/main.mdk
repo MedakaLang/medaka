@@ -1,5 +1,0 @@
-@inline
-f : Int -> Int
-f x = x ++ "!"
-
-main = println (f "a")

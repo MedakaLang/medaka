@@ -60,7 +60,11 @@ source_closure_ok() {
   # secret condition bits combine through bitAnd/bitOr/bitXor instead of
   # `+ - *`, and the RFC 6979 byte blend runs on U64, so no Int overflow
   # check in it tests a secret operand.
-  [ "$(cksum "$tree/pds/lib/secp256k1.mdk" | awk '{print $1 " " $2}')" = '2537316894 24171' ] || return 1
+  # Re-pinned 2026-10-13 for `@noinline`: secp256k1.mdk, scalar.mdk and
+  # field.mdk gained one `@noinline` line above each helper the linked-symbol
+  # and disassembly checks below read, so LLVM keeps those helpers as symbols.
+  # No definition changed.
+  [ "$(cksum "$tree/pds/lib/secp256k1.mdk" | awk '{print $1 " " $2}')" = '2286411630 24231' ] || return 1
   # Re-audited when both modules' limb arithmetic moved to U64 expressions
   # over Int storage (#3427): every limb step widens through U64.truncate and
   # narrows through U64.toIntTruncating, the secret byte scan's validity and
@@ -72,8 +76,8 @@ source_closure_ok() {
   # for the field, three folds and the carry-aware subtract-and-select for the
   # scalar). The secret-ingress lines pinned below are unchanged, and
   # constant_time_reductions.sh pins each helper's source and IR shape.
-  [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '155881618 41112' ] || return 1
-  [ "$(cksum "$tree/pds/lib/field.mdk" | awk '{print $1 " " $2}')" = '3731538746 28626' ] || return 1
+  [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '1716947667 41162' ] || return 1
+  [ "$(cksum "$tree/pds/lib/field.mdk" | awk '{print $1 " " $2}')" = '2571003349 28636' ] || return 1
 
   tr -s '[:space:]' ' ' < "$tree/pds/lib/secp256k1.mdk" | grep -F -q 'if i >= 256 then r0' || return 1
   grep -F -q 'let added = pointAddComplete r0 r1' "$tree/pds/lib/secp256k1.mdk" || return 1

@@ -247,6 +247,42 @@ numericNestedBodySource = joinNl [
   "value = 1",
 ]
 
+-- An attribute above a signature leaves the signature binding the definition:
+-- each attributed program reports exactly what the bare one does.
+attributedSigErrors : String -> String -> List String
+attributedSigErrors attrs sigAndDef =
+  let (errors, _) = checkOneDiags [] (desugar (parse numericPreludeSource)) (
+    "attributed_sig",
+    desugar (parseLocated (attrs ++ sigAndDef)),
+  )
+  map tcMsg errors
+
+attributeSpellings : List String
+attributeSpellings = [
+  "@inline\n",
+  "@must_use\n",
+  "@deprecated \"old\"\n",
+  "@noinline\n",
+  "@must_use\n@noinline\n",
+]
+
+attributedSigCases : List String
+attributedSigCases = [
+  "f : Int -> Int\nf x = \"s\"\n",
+  "g : Num a => a -> a\ng x = \"s\"\n",
+]
+
+test "an attribute above a signature keeps the signature binding the definition" =
+  expectAll
+    (flatMap
+      (src =>
+        let bare = attributedSigErrors "" src
+        expectFalse (isEmptyL bare)
+          :: map
+            (attrs => expectEqual bare (attributedSigErrors attrs src))
+            attributeSpellings)
+      attributedSigCases)
+
 test "a nested numeric literal may use the declared impl prerequisite" =
   let (errors, _) = numericCheckObserved numericNestedBodySource
   expectEqual [] errors

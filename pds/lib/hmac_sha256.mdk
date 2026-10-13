@@ -24,6 +24,7 @@ keyBytes = 32
 --   state keys are SHA-256 digests and therefore 32 bytes. The length is
 --   public, and key and message go to the schedule as they are: `Bytes`
 --   carries the byte domain, so nothing scans a secret byte.
+@noinline
 export
 hmacSha256FixedKey : B.Bytes -> B.Bytes -> B.Bytes
 hmacSha256FixedKey key message =

@@ -1,5 +1,5 @@
 # META
-source_lines=4179
+source_lines=4204
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -31,6 +31,7 @@ import frontend.ast.{
   FunClause(..),
   Addr(..),
   Decl(..),
+  Attr(..),
   Variant(..),
   ConPayload(..),
   Field(..),
@@ -1934,6 +1935,30 @@ topFunNames ((DFunDef _ n _ _ _ _) :: rest) acc =
   topFunNames rest (omInsert n () acc)
 topFunNames ((DAttrib _ d) :: rest) acc = topFunNames (d :: rest) acc
 topFunNames (_ :: rest) acc = topFunNames rest acc
+
+-- The top-level functions a `@noinline` attribute marks, by bind name.  The
+-- attribute wraps the signature above a definition, or a definition written
+-- without one; stacked attributes nest, so the walk looks through each layer.
+export
+noInlineFnNames : List Decl -> List String
+noInlineFnNames [] = []
+noInlineFnNames ((DAttrib attrs d) :: rest) =
+  if hasNoInline attrs then
+    attribTargetName d ++ noInlineFnNames rest
+  else
+    noInlineFnNames (d :: rest)
+noInlineFnNames (_ :: rest) = noInlineFnNames rest
+
+hasNoInline : List Attr -> Bool
+hasNoInline [] = False
+hasNoInline (AttrNoInline :: _) = True
+hasNoInline (_ :: rest) = hasNoInline rest
+
+attribTargetName : Decl -> List String
+attribTargetName (DAttrib _ d) = attribTargetName d
+attribTargetName (DTypeSig _ n _ _) = [n]
+attribTargetName (DFunDef _ n _ _ _ _) = [n]
+attribTargetName _ = []
 
 indexTwinOf : OrdMap String -> Expr -> Option String
 indexTwinOf twins (ELoc _ h) = indexTwinOf twins h
@@ -4182,7 +4207,7 @@ nodeTag (EMethodRef _) = "EMethodRef"
 nodeTag (EDictApp _) = "EDictApp"
 nodeTag _ = "?"
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "numIntWord" false) (mem "numFloatWord" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "DeclFacts" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "obviousRuntimeType" false) (mem "withBinderRows" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "freshBinderId" false))))
@@ -4835,6 +4860,19 @@ nodeTag _ = "?"
 (DFunDef false "topFunNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "topFunNames") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "acc"))))
 (DFunDef false "topFunNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "topFunNames") (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "acc")))
 (DFunDef false "topFunNames" ((PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "topFunNames") (EVar "rest")) (EVar "acc")))
+(DTypeSig true "noInlineFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "noInlineFnNames" ((PList)) (EListLit))
+(DFunDef false "noInlineFnNames" ((PCons (PCon "DAttrib" (PVar "attrs") (PVar "d")) (PVar "rest"))) (EIf (EApp (EVar "hasNoInline") (EVar "attrs")) (EBinOp "++" (EApp (EVar "attribTargetName") (EVar "d")) (EApp (EVar "noInlineFnNames") (EVar "rest"))) (EApp (EVar "noInlineFnNames") (EBinOp "::" (EVar "d") (EVar "rest")))))
+(DFunDef false "noInlineFnNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "noInlineFnNames") (EVar "rest")))
+(DTypeSig false "hasNoInline" (TyFun (TyApp (TyCon "List") (TyCon "Attr")) (TyCon "Bool")))
+(DFunDef false "hasNoInline" ((PList)) (EVar "False"))
+(DFunDef false "hasNoInline" ((PCons (PCon "AttrNoInline") PWild)) (EVar "True"))
+(DFunDef false "hasNoInline" ((PCons PWild (PVar "rest"))) (EApp (EVar "hasNoInline") (EVar "rest")))
+(DTypeSig false "attribTargetName" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "attribTargetName" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "attribTargetName") (EVar "d")))
+(DFunDef false "attribTargetName" ((PCon "DTypeSig" PWild (PVar "n") PWild PWild)) (EListLit (EVar "n")))
+(DFunDef false "attribTargetName" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild)) (EListLit (EVar "n")))
+(DFunDef false "attribTargetName" (PWild) (EListLit))
 (DTypeSig false "indexTwinOf" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "indexTwinOf" ((PVar "twins") (PCon "ELoc" PWild (PVar "h"))) (EApp (EApp (EVar "indexTwinOf") (EVar "twins")) (EVar "h")))
 (DFunDef false "indexTwinOf" ((PVar "twins") (PCon "EMethodAt" (PLit (LString "index")) PWild (PVar "ev"))) (EMatch (EApp (EVar "evMethodRoutes") (EVar "ev")) (arm (PTuple PWild PWild (PCon "RKey" (PVar "key") PWild PWild) PWild PWild) () (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "twins"))) (arm PWild () (EVar "None"))))
@@ -5519,7 +5557,7 @@ nodeTag _ = "?"
 (DFunDef false "nodeTag" ((PCon "EDictApp" PWild)) (ELit (LString "EDictApp")))
 (DFunDef false "nodeTag" (PWild) (ELit (LString "?")))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "numIntWord" false) (mem "numFloatWord" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "DeclFacts" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "obviousRuntimeType" false) (mem "withBinderRows" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "freshBinderId" false))))
@@ -6172,6 +6210,19 @@ nodeTag _ = "?"
 (DFunDef false "topFunNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "topFunNames") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "acc"))))
 (DFunDef false "topFunNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "topFunNames") (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "acc")))
 (DFunDef false "topFunNames" ((PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "topFunNames") (EVar "rest")) (EVar "acc")))
+(DTypeSig true "noInlineFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "noInlineFnNames" ((PList)) (EListLit))
+(DFunDef false "noInlineFnNames" ((PCons (PCon "DAttrib" (PVar "attrs") (PVar "d")) (PVar "rest"))) (EIf (EApp (EVar "hasNoInline") (EVar "attrs")) (EBinOp "++" (EApp (EVar "attribTargetName") (EVar "d")) (EApp (EVar "noInlineFnNames") (EVar "rest"))) (EApp (EVar "noInlineFnNames") (EBinOp "::" (EVar "d") (EVar "rest")))))
+(DFunDef false "noInlineFnNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "noInlineFnNames") (EVar "rest")))
+(DTypeSig false "hasNoInline" (TyFun (TyApp (TyCon "List") (TyCon "Attr")) (TyCon "Bool")))
+(DFunDef false "hasNoInline" ((PList)) (EVar "False"))
+(DFunDef false "hasNoInline" ((PCons (PCon "AttrNoInline") PWild)) (EVar "True"))
+(DFunDef false "hasNoInline" ((PCons PWild (PVar "rest"))) (EApp (EVar "hasNoInline") (EVar "rest")))
+(DTypeSig false "attribTargetName" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "attribTargetName" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "attribTargetName") (EVar "d")))
+(DFunDef false "attribTargetName" ((PCon "DTypeSig" PWild (PVar "n") PWild PWild)) (EListLit (EVar "n")))
+(DFunDef false "attribTargetName" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild)) (EListLit (EVar "n")))
+(DFunDef false "attribTargetName" (PWild) (EListLit))
 (DTypeSig false "indexTwinOf" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "indexTwinOf" ((PVar "twins") (PCon "ELoc" PWild (PVar "h"))) (EApp (EApp (EVar "indexTwinOf") (EVar "twins")) (EVar "h")))
 (DFunDef false "indexTwinOf" ((PVar "twins") (PCon "EMethodAt" (PLit (LString "index")) PWild (PVar "ev"))) (EMatch (EApp (EVar "evMethodRoutes") (EVar "ev")) (arm (PTuple PWild PWild (PCon "RKey" (PVar "key") PWild PWild) PWild PWild) () (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "twins"))) (arm PWild () (EVar "None"))))

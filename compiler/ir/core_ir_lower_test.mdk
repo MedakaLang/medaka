@@ -1,0 +1,56 @@
+-- `noInlineFnNames` is the whole route from a `@noinline` attribute to the LLVM
+-- emitter's `noinline` function attribute: the build driver hands its result to
+-- `withNoInlineFns`.  A name it misses is a helper LLVM may inline away, which is
+-- invisible until a check that disassembles that helper finds no symbol.
+
+import test.{expectEqual}
+import frontend.desugar.{desugar}
+import frontend.parser.{parse}
+import ir.core_ir_lower.{noInlineFnNames}
+import support.util.{joinNl}
+
+marked : String -> List String
+marked source = noInlineFnNames (desugar (parse source))
+
+test "@noinline above a signature marks the function" =
+  expectEqual
+    ["f"]
+    (marked (joinNl ["@noinline", "f : Int -> Int", "f x = x + 1"]))
+
+test "@noinline on a definition without a signature marks the function" =
+  expectEqual ["g"] (marked (joinNl ["@noinline", "g x = x + 1"]))
+
+test "@noinline is found under and over another attribute" =
+  expectEqual
+    ["h", "k"]
+    (marked
+      (joinNl [
+        "@must_use",
+        "@noinline",
+        "h : Int -> Int",
+        "h x = x",
+        "@noinline",
+        "@deprecated \"old\"",
+        "k : Int -> Int",
+        "k x = x",
+      ]))
+
+test "@noinline above an exported signature marks the function" =
+  expectEqual
+    ["e"]
+    (marked (joinNl ["@noinline", "export", "e : Int -> Int", "e x = x"]))
+
+test "other attributes and unattributed functions mark nothing" =
+  expectEqual
+    []
+    (marked
+      (joinNl [
+        "@inline",
+        "a : Int -> Int",
+        "a x = x",
+        "@must_use",
+        "b : Int -> Int",
+        "b x = x",
+        "c : Int -> Int",
+        "c x = x",
+      ]))

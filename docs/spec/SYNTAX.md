@@ -1229,6 +1229,11 @@ baz : Int -> Int
 baz x = x
 ```
 
+`@noinline` keeps a top-level function a separate symbol in a native binary:
+LLVM never inlines it, so a check that reads its machine code (the PDS
+constant-time gates disassemble their crypto helpers) has a definition to
+read. Other engines ignore it.
+
 ## Refs
 
 Mutable state lives in a `Ref` cell, not in the binding. Mutation is untracked

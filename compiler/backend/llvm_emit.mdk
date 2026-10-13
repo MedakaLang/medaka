@@ -815,6 +815,8 @@ data EmitInputData = EmitInputData {
   sharedMethodNames : OrdMap Unit,
   -- the `stdlib/runtime.mdk` extern names (`withRuntimeExterns`)
   runtimeExterns : List String,
+  -- the top-level functions `@noinline` marks (`withNoInlineFns`)
+  noInlineFns : OrdMap Unit,
 }
 
 -- The constructor is intentionally private: callers supply raw declaration facts
@@ -855,6 +857,7 @@ makeEmitInput returnsSelf selfFnParams methodIfaces ctorFieldTypes externArities
   recordFieldOrders = recordFieldOrders,
   sharedMethodNames = sharedMethodNamesOf methodIfaces omEmpty omEmpty,
   runtimeExterns = [],
+  noInlineFns = omEmpty,
 }
 
 -- The input with the extern names the entry declared from `stdlib/runtime.mdk`.
@@ -863,6 +866,22 @@ makeEmitInput returnsSelf selfFnParams methodIfaces ctorFieldTypes externArities
 export
 withRuntimeExterns : List String -> EmitInput -> EmitInput
 withRuntimeExterns names input = { input | runtimeExterns = names }
+
+-- The input with the top-level functions a `@noinline` attribute marks, by bind
+-- name (`ir.core_ir_lower.noInlineFnNames`).
+export
+withNoInlineFns : List String -> EmitInput -> EmitInput
+withNoInlineFns names input =
+  { input | noInlineFns = omFromPairs (map (n => (n, ())) names) omEmpty }
+
+-- The function attributes after the parameter list of each define emitted for
+-- top-level function [name], its float and raw workers included: ` noinline`
+-- when `@noinline` marks it, so LLVM keeps it a symbol of its own however small
+-- or singly called it is.
+fnAttrs : Emit -> String -> String
+fnAttrs e name = match omLookup name e.input.noInlineFns
+  Some _ => " noinline"
+  None => ""
 
 -- The methods declared by more than one interface word, from `methodIfaceTable` rows
 -- (one per declared interface method).  [firstWord] remembers each method's first
@@ -7975,9 +7994,10 @@ emitDeclaresFor e (l :: rest) =
   emitDeclaresFor e rest
 
 -- `define i64 @f(i64 %a, i64 %b) {`  →  `declare i64 @f(i64 %a, i64 %b)`.
--- Every define the emitter writes has exactly this shape (verified: all 281 define
--- lines of the reference module end in `) {`); a line that does not is not a define
--- header and yields None.
+-- Every define the emitter writes has this shape, with the function attributes
+-- (`fnAttrs`) between `)` and ` {` when it has any; they carry over to the
+-- declare.  A line that does not end in ` {` is not a define header and yields
+-- None.
 declareOfDefine : String -> Option String
 declareOfDefine l =
   let n = stringLength l
@@ -8993,7 +9013,7 @@ trmcImplTry e fname method tag key positions arity clauses =
       [] => ([], CLit LUnit)
     let single = listLen clauses == 1 && allClausesPVar clauses
     let _ = tmcMarker e fname "trmc"
-    let _ = emitTrmcHeader e fname arity
+    let _ = emitTrmcHeader e fname arity ""
     let _ =
       emitTrmcLoopBody e self arity slotTys clauses single spats sbody noDeclLoc
     let _ = emit e "}"
@@ -11586,7 +11606,10 @@ emitMultiClauseFn e name clauses site =
     None => []
   let env = implParamEnvTyped arity ptys 0
   let _ = beginDefine e
-  let _ = emit e "define i64 @mdk_\{name}(\{implParamDecls arity 0}) {"
+  let _ =
+    emit
+      e
+      "define i64 @mdk_\{name}(\{implParamDecls arity 0})\{fnAttrs e name} {"
   let _ = emit e "entry:"
   let _ =
     emitTailClauseTree
@@ -11650,7 +11673,7 @@ emitTrmcFn : Emit ->
   Unit
 emitTrmcFn e name arity ptys clauses single singlePats singleBody site =
   let _ = tmcMarker e name "trmc"
-  let _ = emitTrmcHeader e ("mdk_" ++ name) arity
+  let _ = emitTrmcHeader e ("mdk_" ++ name) arity (fnAttrs e name)
   let _ =
     emitTrmcLoopBody
       e
@@ -11668,11 +11691,13 @@ emitTrmcFn e name arity ptys clauses single singlePats singleBody site =
 -- emit the `define` header + entry label for a TRMC define.  `defineName` is the
 -- bare symbol (`mdk_<name>` for a top-level fn, `mdk_impl_<tag>_<method>` for a
 -- dispatched impl method).  The caller emits the closing `}` (the impl path's
--- emitGroup already brackets the define).
-emitTrmcHeader : Emit -> String -> Int -> Unit
-emitTrmcHeader e defineName arity =
+-- emitGroup already brackets the define).  [attrs] is the define's function
+-- attributes (`fnAttrs`), empty for an impl method.
+emitTrmcHeader : Emit -> String -> Int -> String -> Unit
+emitTrmcHeader e defineName arity attrs =
   let _ = beginDefine e
-  let _ = emit e "define i64 @\{defineName}(\{implParamDecls arity 0}) {"
+  let _ =
+    emit e "define i64 @\{defineName}(\{implParamDecls arity 0})\{attrs} {"
   emit e "entry:"
 
 -- the REUSABLE TRMC loop body (assumes `define`+`entry:` already emitted; does NOT
@@ -12057,7 +12082,7 @@ emitGDispGroup e grp =
   let rootArity = gDispFnArity e root
   let u = gDispMaxArity e members 0
   let _ = tmcGroupMarkers e root members
-  let _ = emitTrmcHeader e ("mdk_" ++ root) rootArity
+  let _ = emitTrmcHeader e ("mdk_" ++ root) rootArity (fnAttrs e root)
   let uslots = gDispEmitSlots e u rootArity 0
   let hole = freshReg e
   let _ = emit e ("  " ++ hole ++ " = alloca i64")
@@ -12622,7 +12647,10 @@ emitFloatFwOnly e name pats ptys body =
   let worker = name ++ "__fw"
   let wenv = paramEnvD pats ptys fp 0
   let _ = beginDefine e
-  let _ = emit e "define double @mdk_\{worker}(\{paramDeclsD pats fp 0}) {"
+  let _ =
+    emit
+      e
+      "define double @mdk_\{worker}(\{paramDeclsD pats fp 0})\{fnAttrs e name} {"
   let _ = emit e "entry:"
   let _ = emitFnBodyD e wenv name worker fp arity body
   let _ = emit e "}"
@@ -12636,7 +12664,8 @@ emitFloatWorkerFn e name pats ptys body =
   let _ = emitFloatFwOnly e name pats ptys body
   -- wrapper: original i64 ABI; unbox float params, call worker, box the result
   let _ = beginDefine e
-  let _ = emit e "define i64 @mdk_\{name}(\{paramDecls pats 0}) {"
+  let _ =
+    emit e "define i64 @mdk_\{name}(\{paramDecls pats 0})\{fnAttrs e name} {"
   let _ = emit e "entry:"
   let callArgs = wrapperCallArgs e fp 0 pats
   let r = freshReg e
@@ -12816,14 +12845,16 @@ emitRawWorkerFn e name pats body (RawWorker arity ks rk) =
   let rty = rawKindTy rk
   let wenv = paramEnvRaw pats ptys ks 0
   let _ = beginDefine e
-  let _ = emit e "define \{rty} @\{worker}(\{rawParamDecls ks 0}) {"
+  let _ =
+    emit e "define \{rty} @\{worker}(\{rawParamDecls ks 0})\{fnAttrs e name} {"
   let _ = emit e "entry:"
   let _ =
     emitFnBodyRaw e wenv (RawTail name worker (RawWorker arity ks rk)) body
   let _ = emit e "}"
   let _ = emit e ""
   let _ = beginDefine e
-  let _ = emit e "define i64 @mdk_\{name}(\{paramDecls pats 0}) {"
+  let _ =
+    emit e "define i64 @mdk_\{name}(\{paramDecls pats 0})\{fnAttrs e name} {"
   let _ = emit e "entry:"
   let ops = rawWrapperArgs e ks 0
   let r = freshReg e
@@ -12975,7 +13006,8 @@ emitFnClauseW : Emit -> String -> List Pat -> List LTy -> CExpr -> Unit
 emitFnClauseW e name pats ptys body =
   let env = paramEnv pats ptys 0
   let _ = beginDefine e
-  let _ = emit e "define i64 @mdk_\{name}(\{paramDecls pats 0}) {"
+  let _ =
+    emit e "define i64 @mdk_\{name}(\{paramDecls pats 0})\{fnAttrs e name} {"
   let _ = emit e "entry:"
   let _ =
     emitFnBody e env (TailDefine ("mdk_" ++ name) (listLen pats) False) body
