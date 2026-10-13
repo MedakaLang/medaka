@@ -1,5 +1,5 @@
 # META
-source_lines=813
+source_lines=814
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `String` and `Char`.
@@ -19,13 +19,14 @@ stages=DESUGAR,MARK
 -- externs (`stringSlice`/`stringConcat`/`stringCompare`/`stringLength`), over
 -- a `List Char` of cons cells.  Three tiers, fastest first:
 --   1. operate on the String directly (no char materialization): `take`/`drop`/
---      `sliceClamped`, `startsWith`/`endsWith` (slice + `==`), `concat`/`join`/
---      `repeat`, `trim*` (probe the ends one character at a time, then one
---      slice), and substring search via the host `stringIndexOf` (`indexOf`,
---      and `contains`/`replace*` derived from it);
+--      `sliceClamped`, `concat`/`join`/`repeat`, `trim*` (probe the ends one
+--      character at a time, then one slice), and the host byte-level externs
+--      (`stringStartsWith`/`stringEndsWith`, `stringIndexOf`/`stringLastIndexOf`/
+--      `stringCountOccurrences`, `stringReverse`, `stringToInt`,
+--      `stringByteLength`, `stringJoin`), with `contains`/`replace*` derived
+--      from them;
 --   2. decode once to `Array Char`, scan by index, rebuild via `stringFromChars`
---      or carve out `stringSlice`s: `words`, `split`/`lines`,
---      `reverse`, `capitalize`, `toInt`;
+--      or carve out `stringSlice`s: `words`, `split`/`lines`, `capitalize`;
 --   3. `List Char` is avoided internally.
 --
 -- The collection functions (`split`/`words`/`lines`/`concat`/`join`/`unlines`/

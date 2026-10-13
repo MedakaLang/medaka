@@ -669,3 +669,12 @@ prop "reverse is an involution" (s : String) = reverse (reverse s) == s
 
 prop "join with the empty separator is concat" (s : String) =
   join "" [s, s] == s ++ s
+
+test "join keeps an exact codepoint length on multibyte text" =
+  expectEqual 7 (stringLength (join "→" ["é", "日本", "", "x"]))
+
+test "join with an empty separator keeps an exact codepoint length" =
+  expectEqual 2 (stringLength (join "" ["é", "日"]))
+
+test "reverse keeps an exact codepoint length on multibyte text" =
+  expectEqual 4 (stringLength (reverse "é日→😀"))

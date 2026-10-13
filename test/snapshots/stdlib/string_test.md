@@ -1,5 +1,5 @@
 # META
-source_lines=671
+source_lines=680
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -673,6 +673,15 @@ prop "reverse is an involution" (s : String) = reverse (reverse s) == s
 
 prop "join with the empty separator is concat" (s : String) =
   join "" [s, s] == s ++ s
+
+test "join keeps an exact codepoint length on multibyte text" =
+  expectEqual 7 (stringLength (join "→" ["é", "日本", "", "x"]))
+
+test "join with an empty separator keeps an exact codepoint length" =
+  expectEqual 2 (stringLength (join "" ["é", "日"]))
+
+test "reverse keeps an exact codepoint length on multibyte text" =
+  expectEqual 4 (stringLength (reverse "é日→😀"))
 # DESUGAR
 (DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
@@ -850,6 +859,9 @@ prop "join with the empty separator is concat" (s : String) =
 (DProp false "toInt reads back every decimal Int" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "toInt") (EApp (EVar "intToString") (EVar "n"))) (EApp (EVar "Some") (EVar "n"))))
 (DProp false "reverse is an involution" ((pp "s" (TyCon "String"))) (EBinOp "==" (EApp (EVar "reverse") (EApp (EVar "reverse") (EVar "s"))) (EVar "s")))
 (DProp false "join with the empty separator is concat" ((pp "s" (TyCon "String"))) (EBinOp "==" (EApp (EApp (EVar "join") (ELit (LString ""))) (EListLit (EVar "s") (EVar "s"))) (EBinOp "++" (EVar "s") (EVar "s"))))
+(DTest false "join keeps an exact codepoint length on multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LInt 7))) (EApp (EVar "stringLength") (EApp (EApp (EVar "join") (ELit (LString "→"))) (EListLit (ELit (LString "é")) (ELit (LString "日本")) (ELit (LString "")) (ELit (LString "x")))))))
+(DTest false "join with an empty separator keeps an exact codepoint length" (EApp (EApp (EVar "expectEqual") (ELit (LInt 2))) (EApp (EVar "stringLength") (EApp (EApp (EVar "join") (ELit (LString ""))) (EListLit (ELit (LString "é")) (ELit (LString "日")))))))
+(DTest false "reverse keeps an exact codepoint length on multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LInt 4))) (EApp (EVar "stringLength") (EApp (EVar "reverse") (ELit (LString "é日→😀"))))))
 # MARK
 (DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
@@ -1027,3 +1039,6 @@ prop "join with the empty separator is concat" (s : String) =
 (DProp false "toInt reads back every decimal Int" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "toInt") (EApp (EVar "intToString") (EVar "n"))) (EApp (EVar "Some") (EVar "n"))))
 (DProp false "reverse is an involution" ((pp "s" (TyCon "String"))) (EBinOp "==" (EApp (EVar "reverse") (EApp (EVar "reverse") (EVar "s"))) (EVar "s")))
 (DProp false "join with the empty separator is concat" ((pp "s" (TyCon "String"))) (EBinOp "==" (EApp (EApp (EVar "join") (ELit (LString ""))) (EListLit (EVar "s") (EVar "s"))) (EBinOp "++" (EVar "s") (EVar "s"))))
+(DTest false "join keeps an exact codepoint length on multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LInt 7))) (EApp (EVar "stringLength") (EApp (EApp (EVar "join") (ELit (LString "→"))) (EListLit (ELit (LString "é")) (ELit (LString "日本")) (ELit (LString "")) (ELit (LString "x")))))))
+(DTest false "join with an empty separator keeps an exact codepoint length" (EApp (EApp (EVar "expectEqual") (ELit (LInt 2))) (EApp (EVar "stringLength") (EApp (EApp (EVar "join") (ELit (LString ""))) (EListLit (ELit (LString "é")) (ELit (LString "日")))))))
+(DTest false "reverse keeps an exact codepoint length on multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LInt 4))) (EApp (EVar "stringLength") (EApp (EVar "reverse") (ELit (LString "é日→😀"))))))
