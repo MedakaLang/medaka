@@ -1,5 +1,5 @@
 # META
-source_lines=6749
+source_lines=6750
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -3220,7 +3220,7 @@ letRecDeclClause = defer
   body <- parseBody
   deferPure (name, pats, body, locOfSpan s (s + 1))
 
--- declaration attribute `@deprecated "msg"` / `@inline` / `@must_use` wrapping
+-- declaration attribute `@deprecated "msg"` / `@inline` / `@must_use` / `@noinline` wrapping
 -- the following decl.
 parseAttrib : Parser Decl
 parseAttrib = defer
@@ -3241,6 +3241,7 @@ attrArg name _ = deferPure (mkAttr name None)
 mkAttr : String -> Option String -> Attr
 mkAttr "deprecated" (Some msg) = AttrDeprecated msg
 mkAttr "must_use" _ = AttrMustUse
+mkAttr "noinline" _ = AttrNoInline
 mkAttr _ _ = AttrInline
 
 externName : Parser String
@@ -7782,6 +7783,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "mkAttr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Attr"))))
 (DFunDef false "mkAttr" ((PLit (LString "deprecated")) (PCon "Some" (PVar "msg"))) (EApp (EVar "AttrDeprecated") (EVar "msg")))
 (DFunDef false "mkAttr" ((PLit (LString "must_use")) PWild) (EVar "AttrMustUse"))
+(DFunDef false "mkAttr" ((PLit (LString "noinline")) PWild) (EVar "AttrNoInline"))
 (DFunDef false "mkAttr" (PWild PWild) (EVar "AttrInline"))
 (DTypeSig false "externName" (TyApp (TyCon "Parser") (TyCon "String")))
 (DFunDef false "externName" () (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "externNameFor") (EVar "t")))))
@@ -9786,6 +9788,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "mkAttr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Attr"))))
 (DFunDef false "mkAttr" ((PLit (LString "deprecated")) (PCon "Some" (PVar "msg"))) (EApp (EVar "AttrDeprecated") (EVar "msg")))
 (DFunDef false "mkAttr" ((PLit (LString "must_use")) PWild) (EVar "AttrMustUse"))
+(DFunDef false "mkAttr" ((PLit (LString "noinline")) PWild) (EVar "AttrNoInline"))
 (DFunDef false "mkAttr" (PWild PWild) (EVar "AttrInline"))
 (DTypeSig false "externName" (TyApp (TyCon "Parser") (TyCon "String")))
 (DFunDef false "externName" () (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "externNameFor") (EVar "t")))))
