@@ -11,11 +11,14 @@ aliasNameFor : Token -> ParserE <> String
 allChainLines : Array Token -> Array Int -> List (Decl, Int, Int) -> List (List Int)
 allNames : List EffParamTy -> List String -> Option (List String)
 allVariantLines : Array Token -> Array Int -> List (Decl, Int, Int) -> List Int
+annotOpt : Expr -> ParserE <> Expr
 annotTail : Expr -> ParserE <> Expr
 anyField : List KvItem -> Bool
 anyKV : List KvItem -> Bool
 apPR : ParserE a (b -> c) -> ParserE a b -> Array Token -> Int -> <a> PR c
-appArg : Bool -> ParserE <> Expr
+appArg : Expr -> ParserE <> Expr
+appArgR : Expr -> Array Token -> Int -> PR Expr
+appArgStops : Token -> Bool
 appToParams : Expr -> List Pat
 appToPat : Expr -> Pat
 appToPatCtor : String -> List Expr -> Pat
@@ -31,9 +34,11 @@ arrayFor : Token -> ParserE <> Expr
 arrayRangeAfter : Expr -> Bool -> ParserE <> Expr
 arrayRest : Expr -> Token -> ParserE <> Expr
 assignFromLhs : Int -> Expr -> Expr -> ParserE <> DoStmt
+assignOpt : Expr -> ParserE <> Expr
 assignTail : Expr -> ParserE <> Expr
 assignTailRaw : Expr -> ParserE <> Expr
 atLetSite : Loc -> Expr -> Expr
+atomRawLocated : Array Token -> Int -> PR Expr
 attrArg : String -> Token -> ParserE <> Attr
 authJoinTail : ParserE <> (List EffParamTy)
 authJoinTailFor : Token -> ParserE <> (List EffParamTy)
@@ -335,6 +340,7 @@ kvElems : List KvItem -> List Expr
 kvKVorElemFor : Expr -> Token -> ParserE <> KvItem
 kvPairs : List KvItem -> List (Expr, Expr)
 kvToField : KvItem -> FieldAssign
+lamOpt : Expr -> ParserE <> Expr
 lamTail : Expr -> ParserE <> Expr
 lamTailRaw : Expr -> ParserE <> Expr
 lastContentIdx : Array Token -> Int -> Int -> Int
@@ -370,6 +376,7 @@ lineHasFatArrow : Array Token -> Int -> Bool
 lineIndentCol : Array Token -> Int -> Int
 lineIndentGo : Array Token -> Int -> Int -> Int -> Int
 lineIsRecordBody : Array Token -> Int -> Int -> Bool -> Bool
+lineStartIdx : Array Int -> Int -> Int -> Int -> Int
 lineTrailingColonNoEq : Array Token -> Int -> Int -> Bool -> Bool -> Bool
 listAfterComma : Expr -> Token -> ParserE <> Expr
 listFor : Token -> ParserE <> Expr
@@ -414,8 +421,10 @@ namedImplRemovedMsg : String
 namesOrAuthJoin : String -> List EffParamTy -> Option Loc -> Ty
 negIntPat : ParserE <> Pat
 negIntRng : Lit -> ParserE <> Pat
-negLitArg : Bool -> ParserE <> Expr
+negLitArg : Expr -> ParserE <> Expr
 negLitArgFor : Token -> Token -> ParserE <> Expr
+negLitArgGate : Expr -> Token -> ParserE <> Expr
+negLitArgTight : ParserE <> Expr
 negUnary : ParserE <> Expr
 negUnaryFor : Token -> ParserE <> Expr
 nestDepthRef : Ref Int
@@ -580,7 +589,9 @@ positionsChainLines : Positions -> List (List Int)
 positionsDecls : Positions -> List DeclPos
 positionsLastContentLine : Positions -> Int
 positionsVariantLines : Positions -> List Int
+postfixChain : Expr -> ParserE <> Expr
 postfixTail : Expr -> ParserE <> Expr
+postfixTailR : Expr -> Array Token -> Int -> PR Expr
 prescanError : String -> Array Token -> Array Int -> Option ParseError
 prescanErrorPairs : String -> List Token -> List (Int, Int) -> Option ParseError
 primeGuardPos : String -> Array Int -> Unit
@@ -626,6 +637,7 @@ semicolonMsg : String
 sepBy1 : ParserE <> a -> ParserE <> b -> ParserE <> (List a)
 sepThen : ParserE <> a -> ParserE <> b -> ParserE <> b
 setLocState : String -> Array (Int, Int) -> Unit
+setLocStateWith : String -> Array Int -> Array (Int, Int) -> Unit
 skipLeadingModifiers : Array Token -> Int -> Int
 skipNewlineToks : Array Token -> Int -> Int -> Int
 skipNewlines : ParserE <> Unit
