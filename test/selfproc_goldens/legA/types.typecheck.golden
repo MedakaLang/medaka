@@ -1679,7 +1679,7 @@ inferMethodBody : TcEnv -> IfaceRef -> MethodBodyKind -> (List String, Ty, List 
 inferMethodCandidateAt : TcEnv -> String -> Ref String -> Ref (Option Int) -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Mono
 inferNumLit : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
 inferNumLitBare : Int -> Ref (Option Float) -> Mono
-inferNumLitMethod : TcEnv -> MethodSchemeRow -> Ref Route -> Mono
+inferNumLitMethod : MethodSchemeRow -> Ref Route -> Mono
 inferNumLitVar : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
 inferOneIfaceDefaults : TcEnv -> Decl -> Unit
 inferOneImpl : TcEnv -> List String -> ClassEnv -> Int -> Decl -> Unit
@@ -2624,7 +2624,7 @@ recordMethodObligationOwned : TcEnv -> String -> Scheme -> Mono -> MethodInstant
 recordModuleStart : String -> Unit
 recordNegatedLitRange : Mono -> Expr -> Unit
 recordNumLitImplObligation : MethodSchemeRow -> ClassPredicate -> Mono -> Option Loc -> ScopeId -> Mono
-recordNumLitObligationGuarded : TcEnv -> MethodSchemeRow -> ClassPredicate -> Mono -> Option Loc -> ScopeId -> Mono
+recordNumLitObligationGuarded : MethodSchemeRow -> ClassPredicate -> Mono -> Option Loc -> ScopeId -> Mono
 recordNumLitSite : ClassPredicate -> Ref Route -> Mono -> Option Loc -> ScopeId -> Mono
 recordNumlitLoc : Mono -> Unit
 recordNumlitRange : Mono -> Int -> Unit

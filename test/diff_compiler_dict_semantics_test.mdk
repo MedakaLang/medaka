@@ -836,6 +836,28 @@ table = [
     codes = [],
   },
   Row {
+    entry = "literal-fromint-binding-no-num-impl-rejected.mdk",
+    label =
+      "§8 I7 (#3956): a literal at `Nat`, which has no prelude `Num` impl, is rejected although a standalone `fromInt` is bound; it was accepted at exit 0 and the built binary panicked",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-TYPE-MISMATCH"],
+  },
+  Row {
+    entry = "literal-fromint-binding-beside-num-impl-accepted.mdk",
+    label =
+      "§8 I7 ACCEPT control for the row above: with a real `impl Num Money` the literal `4` dispatches through the prelude `Num`, not the standalone `fromInt` (which would give 104), on every engine",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [],
+  },
+  Row {
     entry = "s4-gen-sig-superclass-redundant-dropped.mdk",
     label =
       "§4 `gen-sig` + §3 `super` + §6 C2 diamond: `B a` inferred by the body is entailed by the declared `C a` via requires-closure, so it is DROPPED from the scheme (not merged); `super` is projection, and both diamond arms agree",
@@ -5436,7 +5458,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 481
+tableRows = 483
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

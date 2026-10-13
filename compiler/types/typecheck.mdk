@@ -20521,6 +20521,7 @@ data BuiltinClasses = BuiltinClasses {
   bcEqPresent : Bool,
   bcOrdPresent : Bool,
   bcSemigroupPresent : Bool,  -- adding a member means adding a constructor AND two fields here
+  bcPreludeSeeded : Bool,
 }
 
 emptyBuiltinClasses : BuiltinClasses
@@ -20533,6 +20534,7 @@ emptyBuiltinClasses = BuiltinClasses {
   bcEqPresent = False,
   bcOrdPresent = False,
   bcSemigroupPresent = False,
+  bcPreludeSeeded = False,
 }
 
 builtinClassOrigin : BuiltinClass -> TyConOrigin
@@ -20659,6 +20661,8 @@ builtinClassSet _ _ _ acc = acc
 -- `DImpl.implOrigin`, so this side must read the origin of the interface declaration
 -- that lives in the SAME universe:
 --   * With a real prelude, the prelude pass installs all four identities from `core`.
+--   * Once a non-empty prelude has been seeded, a later module contributes nothing: a
+--     program interface spelled `Eq` is not the prelude's, whatever the prelude lacks.
 --   * In a prelude-free graph, builtin declarations can be split across modules.
 --     Each module contributes only identities not already present, so Eq→Num and
 --     Num→Eq module orders retain both identities without allowing a later duplicate
@@ -20676,7 +20680,11 @@ seedBuiltinClasses : String -> List Decl -> Unit
 -- 634-diagnostic signature.
 seedBuiltinClasses mid prog =
   if isPreludeMid mid then
-    crossRun.value.builtinClassesRef := builtinClassesOf prog
+    let seeded = builtinClassesOf prog
+    crossRun.value.builtinClassesRef :=
+      BuiltinClasses { seeded | bcPreludeSeeded = isNonEmptyL prog }
+  else if crossRun.value.builtinClassesRef.value.bcPreludeSeeded then
+    ()
   else
     crossRun.value.builtinClassesRef :=
       builtinClassesGo prog crossRun.value.builtinClassesRef.value
@@ -20748,7 +20756,7 @@ inferNumLitVar env n fref dref
     None => inferNumLitBare n fref
     Some anchor =>
       -- records the Num impl obligation + a pendingSite on [dref].
-      let fromIntTy = inferNumLitMethod env anchor dref
+      let fromIntTy = inferNumLitMethod anchor dref
       let a = freshVar ()
       let _ = unify fromIntTy (TFun (tconBuiltin "Int") (openRow ()) a)
       let _ = pushNumlit (a, fref, n, dref)
@@ -20771,19 +20779,16 @@ inferNumLitVar env n fref dref
 --   • `argDispatchOf` — `fromInt` is return-position (no dispatch argument), so this answered
 --     `None` and fell to `recordSite` on every path already.
 --
--- KEPT, in substance: the obligation-recording guard.  ⚠️ Its `lookupLocalFlag env name`
--- half is a term-scope read that survives here — a residual, reported with #259 rather
--- than changed under this fix, because its effect is to SUPPRESS a `Num` obligation (a
--- missed reject), never to re-type the literal, and touching it would move behaviour on
--- programs that have no shadow at all.
+-- KEPT, in substance: the obligation.  A literal ALWAYS records the prelude `Num`
+-- obligation (DICT §8 I7); no binding spelled `fromInt`, local or standalone, suppresses
+-- it.  Only a mono-scheme anchor (nothing to instantiate) skips it.
 --
--- #2157 REPLACED the callee, not the guard: `recordMethodObligationGuarded` →
--- `recordNumLitObligationGuarded`, which applies the SAME two suppressions (term-scope
--- local, mono scheme) and the SAME two standalone-shadow suppressions, then records the
--- obligation against the PRELUDE `Num`'s identity-selected row instead of re-deriving the
--- interface from the spelling `"fromInt"` in the bare-name method table.
-inferNumLitMethod : TcEnv -> MethodSchemeRow -> Ref Route -> Mono
-inferNumLitMethod env anchor tagRef =
+-- #2157 REPLACED the callee: `recordMethodObligationGuarded` →
+-- `recordNumLitObligationGuarded`, which records the obligation against the PRELUDE
+-- `Num`'s identity-selected row instead of re-deriving the interface from the spelling
+-- `"fromInt"` in the bare-name method table.
+inferNumLitMethod : MethodSchemeRow -> Ref Route -> Mono
+inferNumLitMethod anchor tagRef =
   let inst = instantiateTracked anchor.msrScheme
   let occurrence = fst inst
   let predicate = ClassPredicate {
@@ -20796,8 +20801,7 @@ inferNumLitMethod env anchor tagRef =
   let _ =
     noteNumericPredicateTrace NPTProduced predicate scope origin None None []
   let _ = recordMethodDictsFromSlots anchor.msrMethodSlots (Ref []) (snd inst)
-  let _ =
-    recordNumLitObligationGuarded env anchor predicate occurrence origin scope
+  let _ = recordNumLitObligationGuarded anchor predicate occurrence origin scope
   recordNumLitSite predicate tagRef occurrence origin scope
 
 -- no-prelude fallback: a fresh var, no route (dref untouched ⇒ stays RNone ⇒ Int).
@@ -21834,17 +21838,16 @@ recordInstantiatedMethodLevelSlots (slot :: rest) loc scope =
   recordInstantiatedMethodLevelSlots rest loc scope
 
 -- A numeric literal's checking obligation and method-level slots come from its
--- identity-selected method row.  The local/standalone suppression policy remains the
--- same as ordinary method occurrences, but no bare-name table reconstructs the class.
-recordNumLitObligationGuarded : TcEnv ->
-  MethodSchemeRow ->
+-- identity-selected method row; no bare-name table reconstructs the class and no
+-- binding's spelling suppresses it.
+recordNumLitObligationGuarded : MethodSchemeRow ->
   ClassPredicate ->
   Mono ->
   Option Loc ->
   ScopeId ->
   Mono
-recordNumLitObligationGuarded env anchor predicate occurrence origin scope =
-  if lookupLocalFlag env "fromInt" || isMonoScheme anchor.msrScheme then
+recordNumLitObligationGuarded anchor predicate occurrence origin scope =
+  if isMonoScheme anchor.msrScheme then
     occurrence
   else
     recordNumLitImplObligation anchor predicate occurrence origin scope
@@ -21855,14 +21858,10 @@ recordNumLitImplObligation : MethodSchemeRow ->
   Option Loc ->
   ScopeId ->
   Mono
-recordNumLitImplObligation anchor predicate occurrence origin scope
-  | omHasKey "fromInt" perRun.value.definerShadowNamesRef.value
-    || omHasKey "fromInt" driverState.value.standaloneValuesRef.value =
-    occurrence
-  | otherwise =
-    let _ = pushNumLitObl predicate occurrence origin scope
-    let _ = recordMethodLevelObls anchor.msrTyparams anchor.msrType occurrence
-    occurrence
+recordNumLitImplObligation anchor predicate occurrence origin scope =
+  let _ = pushNumLitObl predicate occurrence origin scope
+  let _ = recordMethodLevelObls anchor.msrTyparams anchor.msrType occurrence
+  occurrence
 
 -- #818 (#838 I3): record one PMethodLevel obligation per method-level `=>` constraint
 -- slot of a method occurrence.  [mty] is the method's DECLARED type (with its `=>`);
