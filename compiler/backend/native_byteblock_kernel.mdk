@@ -1,0 +1,131 @@
+import frontend.ast.{Addr(..), Pat(..), Lit(..), BinderId(..)}
+import ir.core_ir.{
+  CProgram(..), CBind(..), CClause(..), CExpr(..), CStmt(..), CallSite(..),
+  CallMode(..)
+}
+import types.runtime_types.{RuntimeType(..), BinderRow}
+import backend.core_validate.{validateBinderStamps, validateCalls}
+import support.util.{anyList, joinNl}
+
+sameBinder : BinderId -> BinderId -> Bool
+sameBinder (BinderId a n) (BinderId b k) = a == b && n == k
+
+integerLiteral : CExpr -> Option Int
+integerLiteral (CLit (LInt n)) = Some n
+integerLiteral _ = None
+
+-- Catalog externs use CallDynamic; their known family still emits a direct C call.
+arguments : String -> CExpr -> Option (List CExpr)
+arguments name (CApp (CVar actual AGlobal) args (CallSite CallDynamic _)) =
+  if actual == name then Some args else None
+arguments _ _ = None
+
+sourceVar : String -> CExpr -> Bool
+sourceVar name (CVar actual (ALocal 0 0)) = actual == name
+sourceVar _ _ = False
+
+makeSize : CExpr -> Option Int
+makeSize ex = match arguments "byteBlockMake" ex
+  Some [n] => match integerLiteral n
+    Some count if count >= 0 && count <= 4096 => Some count
+    _ => None
+  _ => None
+
+leafStatement : String -> Int -> CExpr -> Bool
+leafStatement name capacity ex = match arguments "byteBlockSetUnsafe" ex
+  Some [i, value, bb] => match (integerLiteral i, integerLiteral value)
+    (Some index, Some byte) =>
+      sourceVar name bb
+        && index >= 0
+        && index < capacity
+        && byte >= 0
+        && byte <= 255
+    _ => False
+  _ => match arguments "byteBlockBlit" ex
+    Some [src, so, dst, do_, n] => match (
+      integerLiteral so,
+      integerLiteral do_,
+      integerLiteral n,
+    )
+      (Some start, Some dest, Some count) =>
+        sourceVar name src
+          && sourceVar name dst
+          && start >= 0
+          && start <= capacity
+          && dest >= 0
+          && dest <= capacity
+          && count >= 0
+          && count <= capacity
+          && start + count <= capacity
+          && dest + count <= capacity
+      _ => False
+    _ => False
+
+copySize : String -> Int -> CExpr -> Option Int
+copySize name capacity ex = match arguments "byteBlockCopyUnsafe" ex
+  Some [n, bb] => match integerLiteral n
+    Some count if sourceVar name bb && count >= 0 && count <= capacity =>
+      Some count
+    _ => None
+  _ => None
+
+terminal : String -> Int -> CExpr -> Bool
+terminal name capacity ex = match arguments "byteBlockGetUnsafe" ex
+  Some [i, copy] => match (integerLiteral i, copySize name capacity copy)
+    (Some index, Some count) => index >= 0 && index < count
+    _ => False
+  _ => match arguments "byteBlockLength" ex
+    Some [copy] => match copySize name capacity copy
+      Some _ => True
+      None => False
+    _ => False
+
+finish : String -> Int -> List CStmt -> Bool
+finish name capacity [CSExpr result] = terminal name capacity result
+finish name capacity ((CSExpr ex) :: rest) =
+  leafStatement name capacity ex && finish name capacity rest
+finish _ _ _ = False
+
+bodyAccepted : CExpr -> Bool
+bodyAccepted (CBlock ((CSLet False (PVar name _ _) allocation) :: rest)) =
+  name /= "byteBlockMake"
+    && name /= "byteBlockCopyUnsafe"
+    && name /= "byteBlockGetUnsafe"
+    && name /= "byteBlockLength"
+    && name /= "byteBlockSetUnsafe"
+    && name /= "byteBlockBlit"
+    && (match makeSize allocation
+      Some count => finish name count rest
+      None => False)
+bodyAccepted _ = False
+
+sourceFact : CExpr -> List BinderRow -> Bool
+sourceFact (CBlock ((CSLet False (PVar name _ bid) _) :: _)) rows =
+  anyList
+    (row =>
+      sameBinder row.brId bid && row.brName == name && row.brType == RTValue)
+    rows
+sourceFact _ _ = False
+
+export
+validateByteBlockKernel : CProgram -> Result String String
+validateByteBlockKernel (cp@(CProgram groups ctors ctorTypes impls contexts facts)) =
+  let faults = validateBinderStamps cp ++ validateCalls cp
+  if faults /= [] then
+    Err (joinNl faults)
+  else match (groups, ctors, ctorTypes, impls, contexts)
+    ([CBind "main" [CClause [] body] _ bid], [], [], [], []) =>
+      if anyList
+          (row =>
+            sameBinder row.brId bid
+              && row.brType == RTInt
+              && row.brReturns == Some RTInt)
+          facts.factBinders
+        && sourceFact body facts.factBinders
+        && bodyAccepted body then
+        Ok
+          "(byteblock-kernel v1 runtime-layout=mdk_gc_byteblock_atomic_v1 output=tagged-int source-consumed-by-copy no-escape no-later-argument-allocation)\n"
+      else
+        Err "byteblock kernel: unsupported producer/use or main return contract"
+    _ =>
+      Err "byteblock kernel: extra definitions or unsupported module structure"

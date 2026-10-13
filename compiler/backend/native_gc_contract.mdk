@@ -277,6 +277,16 @@ renderContract binders events =
               node "native-contract" [
                 "v1", "boehm", "incomplete", "moving-safe=false"
               ],
+              node "foreign-layout-obligation" [
+                "mdk_gc_byteblock_atomic_v1", "runtime-owned-extent",
+                "atomic-mask-zero", "experimental-only"
+              ],
+              node "foreign-root-obligation" [
+                "mdk_byteblock_copy", "source-argument=1",
+                "Word-slot-before-allocation",
+                "reload-before-source-derivation",
+                "caller-reuse-needs-caller-roots"
+              ],
             ]
             ++ map binderText binders
             ++ map eventText events

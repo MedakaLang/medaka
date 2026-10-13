@@ -206,6 +206,9 @@ inlang-backend-core-validate-test:
 inlang-backend-native-gc-contract-test:
 	./medaka test compiler/backend/native_gc_contract_test.mdk
 
+inlang-backend-native-byteblock-kernel-test:
+	./medaka test compiler/backend/native_byteblock_kernel_test.mdk
+
 ## Coded-trap helpers of wasm_emit.mdk: one `$trapmsg_K` per distinct fixed text,
 ## graded against the spec's stderr lines.
 inlang-backend-wasm-emit-trapmsg-test:
