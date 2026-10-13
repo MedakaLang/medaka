@@ -230,7 +230,7 @@ end3:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_force___user____cell() {
+define internal i64 @mdk_force___user____cell() {
 entry:
   %t0 = load i8, ptr @mdk_gs___user____cell
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
@@ -248,7 +248,7 @@ lz_unforced:
   ret i64 %t2
 }
 ; mdk-module impl:Int_mkB
-define i64 @mdk_impl_Int_mkB(i64 %arg0) {
+define internal i64 @mdk_impl_Int_mkB(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t2 = load i64, ptr @mdk_g___user____flag

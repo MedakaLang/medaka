@@ -271,7 +271,7 @@ end27:
   ret i32 0
 }
 ; mdk-module impl:Int_eq
-define i64 @mdk_impl_Int_eq(i64 %arg0, i64 %arg1) {
+define internal i64 @mdk_impl_Int_eq(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = icmp eq i64 %arg0, %arg1
   %t1 = zext i1 %t0 to i64
@@ -281,7 +281,7 @@ entry:
 }
 
 ; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_MyList_eq
-define i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_eq(i64 %arg0, i64 %arg1, i64 %arg2) {
+define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_eq(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg1, 562949953421315
@@ -382,7 +382,7 @@ decend1:
 ; mdk-module program
 @mdk_dc.program.0 = internal constant [1 x i64] [i64 4190803891842103885]
 ; mdk-module program
-define i64 @mdk_disp_eq_0_2(i64 %dict, i64 %arg0, i64 %arg1) {
+define internal i64 @mdk_disp_eq_0_2(i64 %dict, i64 %arg0, i64 %arg1) {
 entry:
   %t0 = inttoptr i64 %dict to ptr
   %t1 = load i64, ptr %t0

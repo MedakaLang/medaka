@@ -238,7 +238,7 @@ entry:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk___user____debugListItems(i64 %arg0, i64 %arg1) {
+define internal i64 @mdk___user____debugListItems(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg1, 562949953421315
@@ -302,13 +302,13 @@ decend1:
 }
 
 ; mdk-module impl:Int_debug
-define i64 @mdk_impl_Int_debug(i64 %arg0) {
+define internal i64 @mdk_impl_Int_debug(i64 %arg0) {
 entry:
   ret i64 3
 }
 
 ; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_MyList_debug
-define i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_debug(i64 %arg0, i64 %arg1) {
+define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_debug(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk___user____debugListItems(i64 %arg0, i64 %arg1)
   ret i64 %t0
@@ -319,7 +319,7 @@ entry:
 ; mdk-module program
 @mdk_dc.program.0 = internal constant [1 x i64] [i64 -3522593011855770626]
 ; mdk-module program
-define i64 @mdk_disp_debug_0_1(i64 %dict, i64 %arg0) {
+define internal i64 @mdk_disp_debug_0_1(i64 %dict, i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %dict to ptr
   %t1 = load i64, ptr %t0

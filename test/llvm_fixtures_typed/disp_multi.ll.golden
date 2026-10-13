@@ -235,7 +235,7 @@ decend2:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_force_$memo_Int_zero() {
+define internal i64 @mdk_force_$memo_Int_zero() {
 entry:
   %t0 = load i8, ptr @mdk_gs_$memo_Int_zero
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
@@ -253,7 +253,7 @@ lz_unforced:
   ret i64 %t2
 }
 ; mdk-module $memo_zZ_5f
-define i64 @mdk_force_$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero() {
+define internal i64 @mdk_force_$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero() {
 entry:
   %t0 = load i8, ptr @mdk_gs_$memo_zZ_5f__5f_user_5f__5f__2e_Flag_zero
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
@@ -271,7 +271,7 @@ lz_unforced:
   ret i64 %t2
 }
 ; mdk-module program
-define i64 @mdk_force___user____intZero() {
+define internal i64 @mdk_force___user____intZero() {
 entry:
   %t0 = load i8, ptr @mdk_gs___user____intZero
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
@@ -289,7 +289,7 @@ lz_unforced:
   ret i64 %t2
 }
 ; mdk-module program
-define i64 @mdk_force___user____flagZero() {
+define internal i64 @mdk_force___user____flagZero() {
 entry:
   %t0 = load i8, ptr @mdk_gs___user____flagZero
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
@@ -307,13 +307,13 @@ lz_unforced:
   ret i64 %t2
 }
 ; mdk-module impl:Int_zero
-define i64 @mdk_impl_Int_zero() {
+define internal i64 @mdk_impl_Int_zero() {
 entry:
   ret i64 1
 }
 
 ; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_Flag_zero
-define i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Flag_zero() {
+define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Flag_zero() {
 entry:
   ret i64 1
 }

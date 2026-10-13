@@ -368,7 +368,7 @@ intok101:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk___user____bit(i64 %arg0) {
+define internal i64 @mdk___user____bit(i64 %arg0) {
 entry:
   %t0 = ashr i64 %arg0, 1
   %t1 = icmp ne i64 %t0, 0
@@ -380,7 +380,7 @@ else2:
 }
 
 ; mdk-module impl:Float_ordered
-define i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_Float_7c_(i64 %arg0, i64 %arg1, i64 %arg2) {
+define internal i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_Float_7c_(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = call i64 @mdk_impl_Float_keyOf(i64 %arg1)
   %t1 = call i64 @mdk_impl_Float_keyOf(i64 %arg2)
@@ -398,7 +398,7 @@ entry:
 }
 
 ; mdk-module impl:String_ordered
-define i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_String_7c_(i64 %arg0, i64 %arg1, i64 %arg2) {
+define internal i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_String_7c_(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = call i64 @mdk_impl_String_keyOf(i64 %arg1)
   %t1 = call i64 @mdk_impl_String_keyOf(i64 %arg2)
@@ -411,7 +411,7 @@ entry:
 }
 
 ; mdk-module impl:Int_ordered
-define i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_Int_7c_(i64 %arg0, i64 %arg1, i64 %arg2) {
+define internal i64 @mdk_default_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_ordered_zZ_5f__5f_user_5f__5f__3a__3a_Keyed_7c_Int_7c_(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = call i64 @mdk_impl_Int_keyOf(i64 %arg1)
   %t1 = call i64 @mdk_impl_Int_keyOf(i64 %arg2)
@@ -420,19 +420,19 @@ entry:
 }
 
 ; mdk-module impl:Float_keyOf
-define i64 @mdk_impl_Float_keyOf(i64 %arg0) {
+define internal i64 @mdk_impl_Float_keyOf(i64 %arg0) {
 entry:
   ret i64 %arg0
 }
 
 ; mdk-module impl:String_keyOf
-define i64 @mdk_impl_String_keyOf(i64 %arg0) {
+define internal i64 @mdk_impl_String_keyOf(i64 %arg0) {
 entry:
   ret i64 %arg0
 }
 
 ; mdk-module impl:Int_keyOf
-define i64 @mdk_impl_Int_keyOf(i64 %arg0) {
+define internal i64 @mdk_impl_Int_keyOf(i64 %arg0) {
 entry:
   ret i64 %arg0
 }

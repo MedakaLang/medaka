@@ -229,7 +229,7 @@ end3:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk___user____neq(i64 %arg0, i64 %arg1, i64 %arg2) {
+define internal i64 @mdk___user____neq(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = call i64 @mdk_impl_Int_eq(i64 %arg1, i64 %arg2)
   %t1 = ashr i64 %t0, 1
@@ -242,7 +242,7 @@ else3:
 }
 
 ; mdk-module program
-define i64 @mdk___user____allNe(i64 %arg0, i64 %arg1, i64 %arg2, i64 %arg3) {
+define internal i64 @mdk___user____allNe(i64 %arg0, i64 %arg1, i64 %arg2, i64 %arg3) {
 entry:
   %t0 = call i64 @mdk___user____neq(i64 %arg0, i64 %arg1, i64 %arg2)
   %t1 = ashr i64 %t0, 1
@@ -256,7 +256,7 @@ else3:
 }
 
 ; mdk-module impl:Int_eq
-define i64 @mdk_impl_Int_eq(i64 %arg0, i64 %arg1) {
+define internal i64 @mdk_impl_Int_eq(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = icmp eq i64 %arg0, %arg1
   %t1 = zext i1 %t0 to i64

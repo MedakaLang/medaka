@@ -7852,8 +7852,7 @@ siteImpls e name iface siteArity =
 -- null-dict property WS-1b exists for is preserved exactly: that body still makes
 -- a direct call and still never loads `%dict` (see emitDispatcherDefine).
 --
--- Mode 0 (every ordinary `medaka build`) is unchanged, so the default path's IR
--- stays byte-for-byte what it was.
+-- Mode 0 (every ordinary `medaka build`) keeps the direct call at the site.
 soleImplDirectSite : Emit -> String -> String -> Int -> Option CImplEntry
 soleImplDirectSite e name iface siteArity =
   if e.input.emitHalf == emitHalfWhole then
@@ -7878,9 +7877,9 @@ soleImplDirectSite e name iface siteArity =
 --
 -- THREE MODES, selected by MEDAKA_EMIT_HALF (read by the emit driver):
 --
---   0 WHOLE   (unset — every ordinary `medaka build`).  Untouched.  Every branch
---             this section adds is keyed on `emitHalfRef.value /= 0`, so the
---             default path's IR is byte-for-byte what it was.
+--   0 WHOLE   (unset — every ordinary `medaka build`).  One module holds all the
+--             Medaka code in the link, so its functions are `internal`
+--             (defineHead).
 --
 --   1 PRELUDE (`medaka build --emit-prelude-obj <path>`).  Emit core.mdk ALONE, as
 --             a library: no `@mdk_program_main`, `@mdk_g_*` globals declared
@@ -7923,8 +7922,8 @@ defineHead e =
   if e.input.emitHalf == emitHalfWhole then "define internal" else "define"
 
 -- The gensym-id base for the PROGRAM half.  `freshId` names every LIFTED define —
--- `@mdk_lam_<scope>_N`, `@mdk_eta_*_<scope>_N`, `@mdk_pap_*` — and
--- those have external linkage, so if the two halves drew from the same range they
+-- `@mdk_lam_<scope>_N`, `@mdk_eta_*_<scope>_N`, `@mdk_pap_*` — and in the two
+-- halves those have external linkage, so if the halves drew from the same range they
 -- would collide on a symbol name (loudly, at link).  The halves are emitted by two
 -- INDEPENDENT emitter runs, so give them disjoint ranges: the prelude half counts
 -- up from 0, the program half from this base.  #2726 made the counter PER SCOPE,
@@ -8008,10 +8007,11 @@ emitDeclaresFor e (l :: rest) =
   emitDeclaresFor e rest
 
 -- `define i64 @f(i64 %a, i64 %b) {`  →  `declare i64 @f(i64 %a, i64 %b)`.
--- Every define the emitter writes has this shape, with the function attributes
--- (`fnAttrs`) between `)` and ` {` when it has any; they carry over to the
--- declare.  A line that does not end in ` {` is not a define header and yields
--- None.
+-- Only the program half calls this, and its defines carry no linkage keyword
+-- (defineHead), so the `define ` prefix is the whole head.  The function
+-- attributes (`fnAttrs`), when a define has any, sit between `)` and ` {` and
+-- carry over to the declare.  A line that does not end in ` {` is not a define
+-- header and yields None.
 declareOfDefine : String -> Option String
 declareOfDefine l =
   let n = stringLength l

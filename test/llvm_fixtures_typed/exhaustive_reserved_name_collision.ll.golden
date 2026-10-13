@@ -361,7 +361,7 @@ intok94:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk___user____partial(i64 %arg0) {
+define internal i64 @mdk___user____partial(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = and i64 %arg0, 1
@@ -430,7 +430,7 @@ decend1:
 }
 
 ; mdk-module program
-define i64 @mdk___user____full(i64 %arg0) {
+define internal i64 @mdk___user____full(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = and i64 %arg0, 1
@@ -522,7 +522,7 @@ decend1:
 }
 
 ; mdk-module program
-define i64 @mdk___user____plain(i64 %arg0) {
+define internal i64 @mdk___user____plain(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = and i64 %arg0, 1
