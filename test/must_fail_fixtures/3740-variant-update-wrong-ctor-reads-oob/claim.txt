@@ -12,10 +12,11 @@ why-verb: `build-run`, because the S0 half is the native binary. `run` already f
 why-verb: so it cannot pin this. A runtime tag check makes the binary exit nonzero, and a
 why-verb: check-time reject makes `build` fail (reported here as a build-run MALFORMED row):
 why-verb: either way this row stops reproducing, so read a MALFORMED here as a drain.
-why-stdout: `A 5` is the wrong answer: a B value relabelled A, read only in bounds. The
-why-stdout: middle line prints `y`, the word after mkB's static two-word B cell, and is not
-why-stdout: pinned: that word is whatever data the link placed next (under ThinLTO, the start
-why-stdout: of the C runtime's stack-overflow message; without LTO, 0), so it moves with
+why-stdout: `A 5` is the wrong answer: a B value relabelled A. It does not depend on `y`.
+why-stdout: The middle line prints `y`, the word after mkB's static two-word B cell, and is not
+why-stdout: pinned: that word is whatever data the link placed next, and it varies by link mode
+why-stdout: (under ThinLTO, the start of the C runtime's stack-overflow message), so it moves with
 why-stdout: unrelated runtime or toolchain changes. `done` proves the binary ran past that read.
-why-control: control.mdk builds `mkB` with constructor A, so the update is well-formed; it
-why-control: must print `A 5`, `A 5 2` and `done` at exit 0. A red control means variant update broke.
+why-control: control.mdk builds `mkB` with constructor A, so the update is well-formed. The
+why-control: runner grades its exit 0; it prints `A 5`, `A 5 2` and `done`. A red control means
+why-control: variant update broke.
