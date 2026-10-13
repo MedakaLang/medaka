@@ -4,6 +4,9 @@ This is an on-demand C/LLVM test and synthetic benchmark, not a Medaka compiler
 backend, runtime option, or CI gate. Production keeps Boehm. The design decision
 and compiler profiling evidence live in [GC feasibility](../../docs/design/GC-FEASIBILITY.md).
 
+For continuation, read the [handoff](HANDOFF.md): validated commits, rejected
+experiments, CI status, the unexecuted next candidate, and cleanup before merge.
+
 The separate LLVM whole-module probe now supports a compiler-produced inventory
 through `MEDAKA_NATIVE_GC_CONTRACT=/absolute/path/report.sexpr`. It observes
 ordinary Boehm emission and always reports incomplete coverage and

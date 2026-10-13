@@ -1131,3 +1131,49 @@ preserve the evidence; the
 records every archived file hash. The frozen protocol's historical `SOURCE ONLY`
 label remains unchanged and is annotated externally in the
 [reproduction notes](../../test/gc_prototype/results/2026-10-13-direct-old-README.md).
+
+### Intrusive minor work queue screen (2026-10-13)
+
+This isolated candidate copies each promoted payload completely, then borrows
+nursery field zero as a pending-work link. It removes each entry before scanning
+its children. Forwarding stays in the header; atomic objects still enter the
+queue. Allocation, zeroing, scanning, major pacing and workload phases remain
+unchanged. The mature marking queue remains an array.
+
+The frozen screen runs all seven existing profiles at 5,000,000 inputs and both
+256 KiB capacities, plus tree at both 16 MiB capacities: 576 fresh-process rows,
+six balanced rounds and six arms. Boehm retains historical/caller allocators,
+default/128 MiB initial heaps, static libgc 8.2.8 and divisor 1. Advancement
+requires both small-tree cells to have median paired ratio below .95 and at
+least five of six ratios below .95. Other cells reject repeatable slowdowns
+above 1.05. All six arms remain visible in the evidence.
+
+| Tree capacity | Baseline / intrusive median (ms) | Fastest observed Boehm median (ms) | Paired intrusive/baseline median | Samples below .95 |
+|---|---:|---:|---:|---:|
+| 256 KiB | 293.7 / 306.6 | 241.7, caller 128 MiB | 1.053 | 0/6 |
+| 256 KiB − 8 B | 282.8 / 278.3 | 244.7, caller default | 0.984 | 1/6 |
+| 16 MiB | 299.7 / 303.3 | 249.4, caller 128 MiB | 1.019 | 2/6 |
+| 16 MiB − 8 B | 303.1 / 296.5 | 239.2, caller 128 MiB | 0.962 | 2/6 |
+
+Both primary cells fail the gain rule. No secondary cell meets the repeatable
+slowdown rule, and no qualifying RSS cell exceeds the 10% growth threshold.
+Ten of sixteen cells are RSS-inconclusive because baseline median RSS is below
+twice the independently recorded launcher floor; total RSS is never adjusted
+by subtracting that floor. Every cell ends with the same 512-byte major queue.
+Current and peak accounted storage are exactly 8 bytes higher, the static head:
+32 untimed ledgers verify 134,704 component sums, including transient allocation
+overlap. Removing minor queue traffic provides no final reserved-storage saving
+in this matrix.
+
+The unchanged full correctness runner and 18 independent positives plus five
+named safe mutants pass with address/UB checks active; LSan is disabled under
+ptrace. Independent source, reducer and raw-artifact audits pass. The screen
+does not advance, and no collector installation or held-out confirmation follows.
+[Raw rows](../../test/gc_prototype/results/2026-10-13-intrusive-screen-results.jsonl),
+[measurement audit](../../test/gc_prototype/results/2026-10-13-intrusive-screen-audit.json),
+[independent audit](../../test/gc_prototype/results/2026-10-13-intrusive-screen-independent-audit.json)
+and the [reconstruction bundle](../../test/gc_prototype/results/2026-10-13-intrusive-screen-reproduction.tar.gz)
+retain the exact evidence. The [export manifest](../../test/gc_prototype/results/2026-10-13-intrusive-screen-export.json)
+hashes every member and annotates the frozen protocol's historical source-only
+label externally. The bundle preserves sources and receipts, not a full host
+replay environment.

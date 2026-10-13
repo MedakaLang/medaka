@@ -1,0 +1,135 @@
+{
+  "status": "UNBUILT / UNEXECUTED source-only handoff; independent source review PASS only",
+  "collector_execution_performed": false,
+  "verification_execute_performed": false,
+  "source_plan_generation_performed": true,
+  "baseline_commit": "85c364304684c44c544957c8ba2b180d15d736c5",
+  "variant": "V: original vector queue plus traced copy/scan fusion",
+  "candidate_gc_sha256": "02246c8148d2086ae70aef645305298605b3249c40f2ee666a4b9fb1a217de11",
+  "planned_builds": 9,
+  "planned_positive_runs": 22,
+  "planned_negative_controls": 7,
+  "no_performance_claim": true,
+  "no_host_binaries": true,
+  "review_receipt": "review/source-review-receipt.md",
+  "external_requirements": [
+    "Python 3.10+",
+    "64-bit C11 Clang with ASan/UBSan runtime; no Boehm needed"
+  ],
+  "durable_files": {
+    "2026-10-13-copy-scan-source-README.md": {
+      "sha256": "79b360371f15d47214bbebe8836aa9d386d70109ecf6478ebe1ffe0f1d192043",
+      "bytes": 4505
+    },
+    "2026-10-13-copy-scan-source-reproduction.tar.gz": {
+      "sha256": "0e76460f8d7a06c32bb83ebb0c304c81bbe8c51efc3d44d34ecd3490264ee067",
+      "bytes": 42656,
+      "format": "deterministic gzip/tar, exact source bytes"
+    }
+  },
+  "members": {
+    "LICENSE": {
+      "sha256": "5a7936358100f33efae1c91e02b9688fbfa75d7b1ab8974cd6fc98d6957e7272",
+      "bytes": 11346,
+      "original_path": "/root/.codex/worktrees/f396/medaka/LICENSE",
+      "archive_mode": "0o644"
+    },
+    "README.md": {
+      "sha256": "79b360371f15d47214bbebe8836aa9d386d70109ecf6478ebe1ffe0f1d192043",
+      "bytes": 4505,
+      "original_path": "/root/.codex/worktrees/f396/medaka/test/gc_prototype/results/2026-10-13-copy-scan-source-README.md",
+      "archive_mode": "0o644"
+    },
+    "helpers/export-source.py": {
+      "sha256": "3298be03c55f2590760cc36f07a0cb0efafb987c6902742957e43cbef550b78b",
+      "bytes": 9530,
+      "original_path": "/tmp/medaka-copy-scan-source-export.py",
+      "archive_mode": "0o644"
+    },
+    "helpers/prepare-source.py": {
+      "sha256": "312d2eb962bb30b7a1a6a178cf88a297866c9005e15d45e957ef0929391bd6f2",
+      "bytes": 5887,
+      "original_path": "/tmp/medaka-copy-scan-fusion-v-85-prepare.py",
+      "archive_mode": "0o644"
+    },
+    "plan/accepted-plan.md": {
+      "sha256": "eee274c7ffb83c08b0ed98d89504b8187020316ea105b701cbe04de4678891da",
+      "bytes": 10519,
+      "original_path": "/tmp/medaka-copy-scan-fusion-plan.md",
+      "archive_mode": "0o644"
+    },
+    "review/source-review-receipt.md": {
+      "sha256": "5ade15309e84238cdeae93772e72ede6714043c52f00ee8f936a7a9d1429cd2c",
+      "bytes": 3140,
+      "original_path": "/tmp/medaka-copy-scan-source-review-receipt.md",
+      "archive_mode": "0o644"
+    },
+    "sources/baseline/gc.c": {
+      "sha256": "8b3d4bf65beccb9a019d2330f8266fc5261120140d94b611981add3b720876b4",
+      "bytes": 22397,
+      "original_path": "/tmp/medaka-copy-scan-fusion-v-85/baseline/gc.c",
+      "archive_mode": "0o644"
+    },
+    "sources/baseline/gc.h": {
+      "sha256": "c70257e8bb754ac649db073f7aad9960a6a734273b77bc213de14fc45d94cff0",
+      "bytes": 5077,
+      "original_path": "/tmp/medaka-copy-scan-fusion-v-85/baseline/gc.h",
+      "archive_mode": "0o644"
+    },
+    "sources/baseline/workload.c": {
+      "sha256": "b2c38813145487d506191d7c172048f11c367a2af8968026b603bceb4774c112",
+      "bytes": 10967,
+      "original_path": "/tmp/medaka-copy-scan-fusion-v-85/baseline/workload.c",
+      "archive_mode": "0o644"
+    },
+    "sources/candidate/gc.c": {
+      "sha256": "02246c8148d2086ae70aef645305298605b3249c40f2ee666a4b9fb1a217de11",
+      "bytes": 23466,
+      "original_path": "/tmp/medaka-copy-scan-fusion-v-85/candidate/gc.c",
+      "archive_mode": "0o644"
+    },
+    "sources/candidate/gc.h": {
+      "sha256": "c70257e8bb754ac649db073f7aad9960a6a734273b77bc213de14fc45d94cff0",
+      "bytes": 5077,
+      "original_path": "/tmp/medaka-copy-scan-fusion-v-85/candidate/gc.h",
+      "archive_mode": "0o644"
+    },
+    "sources/candidate/workload.c": {
+      "sha256": "b2c38813145487d506191d7c172048f11c367a2af8968026b603bceb4774c112",
+      "bytes": 10967,
+      "original_path": "/tmp/medaka-copy-scan-fusion-v-85/candidate/workload.c",
+      "archive_mode": "0o644"
+    },
+    "sources/copy-scan-fusion-v.patch": {
+      "sha256": "e97c051161239574fb9e20f7cd33b566b83656c22406b39267dbbef9490831ee",
+      "bytes": 3024,
+      "original_path": "/tmp/medaka-copy-scan-fusion-v-85/copy-scan-fusion-v.patch",
+      "archive_mode": "0o644"
+    },
+    "sources/manifest.json": {
+      "sha256": "026be9dfb958a619b1919bbd2ed67860d0054e575c269e1a250596f27f42b1d7",
+      "bytes": 2693,
+      "original_path": "/tmp/medaka-copy-scan-fusion-v-85/manifest.json",
+      "archive_mode": "0o644"
+    },
+    "verification/fixture.c": {
+      "sha256": "509c3a253b2d75dde0789f87b4ba2e107d983b5b3d843e143093f1f62f33293a",
+      "bytes": 13671,
+      "original_path": "/tmp/medaka-copy-scan-fusion-85/verification/fixture.c",
+      "archive_mode": "0o644"
+    },
+    "verification/plan.json": {
+      "sha256": "dbffb5d69954165f4a11d66c03ca38fc952aaef97c06c31fcececabaa2dc5867",
+      "bytes": 5079,
+      "original_path": "/tmp/medaka-copy-scan-fusion-85/verification/plan.json",
+      "archive_mode": "0o644"
+    },
+    "verification/run.py": {
+      "sha256": "3c345ad5290bd7773a5adc4409e690a66d78da59c53b5535d98ce24448ffd4c8",
+      "bytes": 20289,
+      "original_path": "/tmp/medaka-copy-scan-fusion-85/verification/run.py",
+      "archive_mode": "0o644"
+    }
+  },
+  "packaging_validation": "two independently produced archive byte strings equal; every archived member verified against frozen input bytes; no collector/verifier execution"
+}
