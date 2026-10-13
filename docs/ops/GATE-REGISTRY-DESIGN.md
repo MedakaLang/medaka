@@ -153,6 +153,10 @@ corpus      = ["test/parse_error_fixtures"]      # fixture DIRECTORIES read (lit
                                #   project dir here binds that project to this gate for
                                #   queue scoping (#2179).
 toolchain   = []               # e.g. ["clang"] ["wasm-tools","node>=24"] ["sqlite3"] ["valgrind"]
+link        = "production"     # production|differential (#4089): the link the gate's
+                               #   `medaka build`s take. `differential` = -O1, no ThinLTO
+                               #   (run_gates.sh exports MEDAKA_NO_LTO/MEDAKA_CLANG_OPT);
+                               #   for gates that only compare outputs. Checked by `gate verify`.
 shares_baseline_with = "<entry name>"  # OPTIONAL (the one non-required field, #3335): declares a deliberate
                                #   baselineKey collision during a native migration: exactly one row of the
                                #   colliding group stays unhatched (the anchor), the rest name a member. Stale ones are a `gate verify` violation.

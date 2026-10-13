@@ -35,3 +35,14 @@ _native_rows() {
     END               { if (k == "native" && n != "" && r != "") print n, r }
   ' "$ROOT/test/gates.toml" 2>/dev/null
 }
+
+# `_link_rows()`: one line per gate, "<repo-relative run path> <link>", where
+# link is the registry's `link` field (`production` | `differential`, #4089).
+# Same line-scan as `_native_rows`, so run_gates.sh needs no built binary.
+_link_rows() {
+  awk -F'"' '
+    /^\[\[/ { r="" }
+    /^run = "/  { r = $2 }
+    /^link = "/ { if (r != "") print r, $2 }
+  ' "$ROOT/test/gates.toml" 2>/dev/null
+}

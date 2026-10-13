@@ -353,7 +353,7 @@ shareLine shares = "shares_baseline_with = \"\{shares}\"\n"
 
 gateToml : String -> String -> String -> String
 gateToml name run shares =
-  "[[gate]]\nname = \"\{name}\"\narea = \"a\"\nshard = \"s\"\nproject = \"p\"\ntiers = [\"pr\"]\ncost = \"cheap\"\nkind = \"shell\"\nmigration = \"none\"\nrun = \"\{run}\"\noracles = []\nsources = []\ncorpus = []\ntoolchain = []\n\{shareLine shares}\n"
+  "[[gate]]\nname = \"\{name}\"\narea = \"a\"\nshard = \"s\"\nproject = \"p\"\ntiers = [\"pr\"]\ncost = \"cheap\"\nkind = \"shell\"\nmigration = \"none\"\nrun = \"\{run}\"\noracles = []\nsources = []\ncorpus = []\ntoolchain = []\nlink = \"production\"\n\{shareLine shares}\n"
 
 regOf : List (String, String, String) -> Result String (List Gate)
 regOf rows = parseRegistry (joinNl (map ((n, r, h) => gateToml n r h) rows))
@@ -549,7 +549,7 @@ test "the gate reader still reads a baseline carrying oracles[]" =
 -- (name, row, toolchain); the run path, hence the baseline key, is the name.
 packGate : (String, String, String) -> String
 packGate (name, row, tc) =
-  "[[gate]]\nname = \"\{name}\"\narea = \"a\"\nshard = \"\{row}\"\nproject = \"p\"\ntiers = [\"merge\"]\ncost = \"cheap\"\nkind = \"exec\"\nmigration = \"none\"\nrun = \"test/\{name}.sh\"\noracles = []\nsources = []\ncorpus = []\ntoolchain = [\{tc}]\n"
+  "[[gate]]\nname = \"\{name}\"\narea = \"a\"\nshard = \"\{row}\"\nproject = \"p\"\ntiers = [\"merge\"]\ncost = \"cheap\"\nkind = \"exec\"\nmigration = \"none\"\nrun = \"test/\{name}.sh\"\noracles = []\nsources = []\ncorpus = []\ntoolchain = [\{tc}]\nlink = \"production\"\n"
 
 packRow : (String, Bool) -> String
 packRow (name, wasm) =
