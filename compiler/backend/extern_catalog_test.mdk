@@ -34,7 +34,6 @@ import types.typecheck.{grantWholeDomain}
 import ir.core_ir_lower.{
   EmitTarget(..),
   ctorFieldTypeNames,
-  declSigTypeNames,
   declaredRecordFieldOrders,
   lowerProgramEmit,
 }
@@ -288,7 +287,6 @@ emitWat src =
   let input =
     makeWasmEmitInputFull
       []
-      (declSigTypeNames decls)
       (ctorFieldTypeNames decls)
       False
       False

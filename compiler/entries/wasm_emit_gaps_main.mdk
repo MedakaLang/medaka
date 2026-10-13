@@ -41,7 +41,6 @@ import ir.core_ir_lower.{
   lowerProgramEmit,
   EmitTarget(..),
   methodIfaceTable,
-  declSigTypeNames,
   declaredRecordFieldOrders,
 }
 import backend.private_mangle.{mangleUnitsEv}
@@ -71,7 +70,6 @@ runEmit runtimeDecls coreDecls modules =
   let input =
     makeWasmEmitInputFull
       (methodIfaceTable allDecls)
-      (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
       []
       False
       False

@@ -47,7 +47,6 @@ import ir.core_ir_lower.{
   lowerProgramEmit,
   EmitTarget(..),
   methodIfaceTable,
-  declSigTypeNames,
   ctorFieldTypeNames,
   validateFfiExternTypeNames,
 }
@@ -101,7 +100,6 @@ emitTail mods runtimeDecls coreD modules1 =
       (runtimeExternNames runtimeDecls)
       (makeWasmEmitInputFull
         (methodIfaceTable allDecls)
-        (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
         (ctorFieldTypeNames allDecls)
         (mainTypeIsFloat ())
         (mainTypeIsUnit ())

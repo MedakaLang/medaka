@@ -1,9 +1,9 @@
 -- C4 (SHARED-FLOAT-RESIDUAL-DESIGN §6): bare Float value main via a polymorphic HOF
 -- whose return type is structurally opaque.  `myId`'s declared return type is `a`, not
--- `Float`, so `fnReturnsFloat "myId"` = False and the structural `refMainKind` defaults
--- to WInt, printing garbage.  The typecheck hint (`mainTypeIsFloat` in
--- `WasmEmitInput`) overrides refMainKind to WFloat so the auto-print uses the
--- Float formatter.  Expected output: 6.0
+-- `Float`, so a structural guess at `main`'s result defaults to Int, printing garbage.
+-- `main`'s own stamp (and the typecheck hint `mainTypeIsFloat` in `WasmEmitInput`)
+-- select the Float formatter,
+-- so the auto-print renders it as a Float.  Expected output: 6.0
 myId : a -> a
 myId x = x
 

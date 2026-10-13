@@ -10683,7 +10683,7 @@ mainTypeIsUnit _ = match driverState.value.mainSchemeRef.value
 
 -- Stage 4 query: did the last-elaborated `main` infer to a bare Float return type?
 -- Used by the LLVM/WasmGC emitters to render a bare Float value main correctly
--- even when the structural `mainKind`/`refMainKind` can't see through a polymorphic
+-- even when a structural guess at `main`'s result can't see through a polymorphic
 -- HOF's return type (e.g. `main = fold (acc x => acc + x) 0.0 [1.0, 2.0, 3.0]`).
 export
 mainTypeIsFloat : Unit -> Bool

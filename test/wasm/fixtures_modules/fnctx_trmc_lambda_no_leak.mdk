@@ -1,0 +1,11 @@
+-- A lifted lambda inside a cons-tail (TMC) clause starts from a fresh per-function
+-- context. If the enclosing function's TMC context leaked into the lambda body, its
+-- tail leaves would reference `$__tmc_first`, a local the lambda never declares, and
+-- wasm-tools validation would fail. Expected output: 16.
+mapAdd : Int -> List Int -> List (Int -> Int)
+mapAdd _ [] = []
+mapAdd k (x :: xs) = (y => y + x + k) :: mapAdd k xs
+
+main = match mapAdd 1 [10, 20, 30]
+  [] => 0
+  f :: _ => f 5

@@ -23,8 +23,8 @@ import types.annotate.{annotateProgram}
 import types.typecheck.{grantWholeDomain}
 import ir.core_ir_lower.{
   lowerProgramEmit,
+  stampDeclaredSignatures,
   EmitTarget(..),
-  declSigTypeNames,
   ctorFieldTypeNames,
   declaredRecordFieldOrders,
 }
@@ -46,11 +46,15 @@ withTarget targetPath = match readFile targetPath
     let input =
       makeWasmEmitInputFull
         []
-        (declSigTypeNames decls)
         (ctorFieldTypeNames decls)
         False
         False
         (declaredRecordFieldOrders decls)
         []
-    putStr (emitProgram input (lowerProgramEmit TargetWasm annotated))
+    -- No typechecker ran, so the lowering stamps every binder `RTValue`; the
+    -- signatures the source declares restate what they type.
+    putStr
+      (emitProgram
+        input
+        (stampDeclaredSignatures decls (lowerProgramEmit TargetWasm annotated)))
   Err msg => ePutStrLn msg

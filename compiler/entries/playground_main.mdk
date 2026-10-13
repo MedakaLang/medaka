@@ -145,7 +145,6 @@ import ir.core_ir_lower.{
   validateFfiExternTypeNames,
   EmitTarget(..),
   methodIfaceTable,
-  declSigTypeNames,
   declaredRecordFieldOrders,
   ctorFieldTypeNames,
 }
@@ -651,7 +650,6 @@ runEmit paths warnTriples runtimeDecls coreDecls modules =
           (runtimeExternNames runtimeDecls)
           (makeWasmEmitInputFull
             (methodIfaceTable allDecls)
-            (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
             (ctorFieldTypeNames allDecls)
             (mainTypeIsFloat ())
             (mainTypeIsUnit ())
