@@ -224,6 +224,24 @@ import ir.core_ir_lower.{
   programArities,
 }
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
+import backend.native_gc_contract.{
+  NativeLog,
+  NativeEvent(..),
+  StorageKind(..),
+  LayoutKind(..),
+  CallEffect(..),
+  newLog,
+  enterScope,
+  restoreScope,
+  currentScope,
+  recordEvent,
+  logEvents,
+  taggedSlots,
+  constructorSlots,
+  closureSlots,
+  runtimeCall,
+  renderContract,
+}
 import map as BM
 import support.util.{
   reverseL,
@@ -915,6 +933,7 @@ data Emit = Emit {
   -- what every binder of the program holds (`DeclFacts.factBinders`), keyed by
   -- the ordinal of the row's id
   binderRows : BM.Map Int BinderRow,
+  nativeContract : Ref (Option NativeLog),
   -- each top-level value binding's stamped type, by name
   globalTys : OrdMap LTy,
   lams : Ref (List String),
@@ -1129,7 +1148,7 @@ freshReg e = "%t" ++ intToString (freshLocal e)
 --
 -- Tail contexts contain labels and slots belonging to their own define.
 data DefScope =
-  | DefScope Int (List (String, LTy)) (List (String, (String, Int))) TrmcCtx GDispCtx (Option TailDefine)
+  | DefScope Int (List (String, LTy)) (List (String, (String, Int))) TrmcCtx GDispCtx (Option TailDefine) String
 
 -- Start a fresh `define` scope, returning the enclosing one (for `endDefine`).
 --
@@ -1141,15 +1160,20 @@ data DefScope =
 -- the head of the spliced lifted define rather than in the enclosing one.
 beginDefine : Emit -> DefScope
 beginDefine e =
-  let saved =
-    DefScope
-      !e.defineCounter
-      !e.closureRetTy
-      !e.directFn
-      !e.trmcCtx
-      !e.gDispCtx
-      !e.selfTailCtx
+  let saved = DefScope
+    !e.defineCounter
+    !e.closureRetTy
+    !e.directFn
+    !e.trmcCtx
+    !e.gDispCtx
+    !e.selfTailCtx
+    (match !e.nativeContract
+      Some log => currentScope log
+      None => "module")
   let _ = markScope e
+  let _ = match !e.nativeContract
+    Some log => enterScope log (scopeWord e)
+    None => ()
   e.defineCounter := 0
   e.closureRetTy := []
   e.directFn := []
@@ -1161,7 +1185,10 @@ beginDefine e =
 -- restore the enclosing `define` scope (only needed where a define NESTS inside
 -- another's emission, i.e. at each bufRef save/restore swap).
 endDefine : Emit -> DefScope -> Unit
-endDefine e (DefScope n rt df trmc gd st) =
+endDefine e (DefScope n rt df trmc gd st nativeSaved) =
+  let _ = match !e.nativeContract
+    Some log => restoreScope log nativeSaved
+    None => ()
   e.defineCounter := n
   e.closureRetTy := rt
   e.directFn := df
@@ -1171,6 +1198,21 @@ endDefine e (DefScope n rt df trmc gd st) =
 
 emit : Emit -> String -> Unit
 emit e line = let buf = e.buf in buf := line :: !buf
+
+nativeOn : Emit -> Bool
+nativeOn e = match !e.nativeContract
+  Some _ => True
+  None => False
+
+nativeScope : Emit -> String
+nativeScope e = match !e.nativeContract
+  Some log => currentScope log
+  None => panic "native contract: recording is disabled"
+
+nativeRecord : Emit -> NativeEvent -> Unit
+nativeRecord e event = match !e.nativeContract
+  Some log => recordEvent log event
+  None => panic "native contract: recording is disabled"
 
 -- the main output buffer ref (needed for the save/restore swap that
 -- redirects emission of a lifted lambda's `define` into the side buffer).
@@ -1774,6 +1816,19 @@ boxFloat e d =
   let _ = emit e "  store double \{d}, ptr \{dp}"
   let w = freshReg e
   let _ = emit e "  \{w} = ptrtoint ptr \{p} to i64"
+  let _ =
+    if nativeOn e then
+      nativeRecord
+        e
+        (Allocation
+          (nativeScope e)
+          AtomicBox
+          p
+          w
+          "16"
+          [RawScalar, RawScalar]
+          [d]
+          "complete-no-safepoint")
   w
 
 -- The header of a boxed `U64` cell, `{ i64 header, i64 payload }` in Float's cell
@@ -1815,6 +1870,19 @@ boxCell64 e tag x =
   let _ = emit e "  store i64 \{x}, ptr \{xp}"
   let w = freshReg e
   let _ = emit e "  \{w} = ptrtoint ptr \{p} to i64"
+  let _ =
+    if nativeOn e then
+      nativeRecord
+        e
+        (Allocation
+          (nativeScope e)
+          AtomicBox
+          p
+          w
+          "16"
+          [RawScalar, RawScalar]
+          [x]
+          "complete-no-safepoint")
   w
 
 -- unbox a U64 or I64 cell word -> its raw 64-bit payload.
@@ -2526,30 +2594,79 @@ emitByteBlockExtern e env "byteBlockMake" args = match emitArgs e env args
   [n] =>
     let r = freshReg e
     let _ = emit e "  \{r} = call i64 @mdk_byteblock_make(i64 \{n})"
+    let _ =
+      if nativeOn e then
+        let _ =
+          nativeRecord
+            e
+            (runtimeCall (nativeScope e) "mdk_byteblock_make" r [n])
+        nativeRecord
+          e
+          (Allocation
+            (nativeScope e)
+            AtomicByteBlock
+            ""
+            r
+            ("16 + round8(untag(" ++ n ++ "))")
+            [RawScalar, RawScalar, PackedBytes]
+            [n]
+            "runtime-complete-zeroed")
     (r, LTCon)
   _ => panic "llvm: byteBlockMake takes one argument"
 emitByteBlockExtern e env "byteBlockLength" args = match emitArgs e env args
   [bb] =>
     let r = freshReg e
     let _ = emit e "  \{r} = call i64 @mdk_byteblock_length(i64 \{bb})"
+    let _ =
+      if nativeOn e then
+        nativeRecord
+          e
+          (runtimeCall (nativeScope e) "mdk_byteblock_length" r [bb])
     (r, LTInt)
   _ => panic "llvm: byteBlockLength takes one argument"
 emitByteBlockExtern e env "byteBlockGetUnsafe" args = match emitArgs e env args
   [i, bb] =>
     let r = freshReg e
     let _ = emit e "  \{r} = call i64 @mdk_byteblock_get(i64 \{i}, i64 \{bb})"
+    let _ =
+      if nativeOn e then
+        nativeRecord
+          e
+          (runtimeCall (nativeScope e) "mdk_byteblock_get" r [i, bb])
     (r, LTInt)
   _ => panic "llvm: byteBlockGetUnsafe takes two arguments"
 emitByteBlockExtern e env "byteBlockSetUnsafe" args = match emitArgs e env args
   [i, v, bb] =>
     let _ =
       emit e "  call void @mdk_byteblock_set(i64 \{i}, i64 \{v}, i64 \{bb})"
+    let _ =
+      if nativeOn e then
+        nativeRecord
+          e
+          (runtimeCall (nativeScope e) "mdk_byteblock_set" "" [i, v, bb])
     ("1", LTUnit)
   _ => panic "llvm: byteBlockSetUnsafe takes three arguments"
 emitByteBlockExtern e env "byteBlockCopyUnsafe" args = match emitArgs e env args
   [n, bb] =>
     let r = freshReg e
     let _ = emit e "  \{r} = call i64 @mdk_byteblock_copy(i64 \{n}, i64 \{bb})"
+    let _ =
+      if nativeOn e then
+        let _ =
+          nativeRecord
+            e
+            (runtimeCall (nativeScope e) "mdk_byteblock_copy" r [n, bb])
+        nativeRecord
+          e
+          (Allocation
+            (nativeScope e)
+            AtomicByteBlock
+            ""
+            r
+            ("16 + round8(untag(" ++ n ++ "))")
+            [RawScalar, RawScalar, PackedBytes]
+            [n, bb]
+            "runtime-complete-zeroed; source-live-across-allocation")
     (r, LTCon)
   _ => panic "llvm: byteBlockCopyUnsafe takes two arguments"
 emitByteBlockExtern e env "byteBlockBlit" args = match emitArgs e env args
@@ -2558,6 +2675,13 @@ emitByteBlockExtern e env "byteBlockBlit" args = match emitArgs e env args
       emit
         e
         "  call void @mdk_byteblock_blit(i64 \{src}, i64 \{so}, i64 \{dst}, i64 \{dof}, i64 \{len})"
+    let _ =
+      if nativeOn e then
+        nativeRecord
+          e
+          (runtimeCall (nativeScope e) "mdk_byteblock_blit" "" [
+            src, so, dst, dof, len
+          ])
     ("1", LTUnit)
   _ => panic "llvm: byteBlockBlit takes five arguments"
 emitByteBlockExtern e env "byteBlockFromIntArray" args =
@@ -2565,24 +2689,44 @@ emitByteBlockExtern e env "byteBlockFromIntArray" args =
     [a] =>
       let r = freshReg e
       let _ = emit e "  \{r} = call i64 @mdk_byteblock_from_int_array(i64 \{a})"
+      let _ =
+        if nativeOn e then
+          nativeRecord
+            e
+            (runtimeCall (nativeScope e) "mdk_byteblock_from_int_array" r [a])
       (r, LTCon)
     _ => panic "llvm: byteBlockFromIntArray takes one argument"
 emitByteBlockExtern e env "byteBlockToIntArray" args = match emitArgs e env args
   [bb] =>
     let r = freshReg e
     let _ = emit e "  \{r} = call i64 @mdk_byteblock_to_int_array(i64 \{bb})"
+    let _ =
+      if nativeOn e then
+        nativeRecord
+          e
+          (runtimeCall (nativeScope e) "mdk_byteblock_to_int_array" r [bb])
     (r, LTCon)
   _ => panic "llvm: byteBlockToIntArray takes one argument"
 emitByteBlockExtern e env "byteBlockFromString" args = match emitArgs e env args
   [s] =>
     let r = freshReg e
     let _ = emit e "  \{r} = call i64 @mdk_byteblock_from_string(i64 \{s})"
+    let _ =
+      if nativeOn e then
+        nativeRecord
+          e
+          (runtimeCall (nativeScope e) "mdk_byteblock_from_string" r [s])
     (r, LTCon)
   _ => panic "llvm: byteBlockFromString takes one argument"
 emitByteBlockExtern e env "byteBlockToString" args = match emitArgs e env args
   [bb] =>
     let r = freshReg e
     let _ = emit e "  \{r} = call i64 @mdk_byteblock_to_string(i64 \{bb})"
+    let _ =
+      if nativeOn e then
+        nativeRecord
+          e
+          (runtimeCall (nativeScope e) "mdk_byteblock_to_string" r [bb])
     (r, LTStr)
   _ => panic "llvm: byteBlockToString takes one argument"
 emitByteBlockExtern e _ name _ =
@@ -3268,6 +3412,9 @@ emitBitBin e env sym args = match emitArgs e env args
     let y = untagInt e b
     let r = freshReg e
     let _ = emit e "  \{r} = call i64 @\{sym}(i64 \{x}, i64 \{y})"
+    let _ =
+      if nativeOn e then
+        nativeRecord e (runtimeCall (nativeScope e) sym r [x, y])
     (tagInt e r, LTInt)
   _ => panic ("llvm: " ++ sym ++ " takes two arguments")
 
@@ -3292,6 +3439,9 @@ emitBitExtern e env "bitNot" args = match emitArgs e env args
     let x = untagInt e a
     let r = freshReg e
     let _ = emit e "  \{r} = call i64 @mdk_bit_not(i64 \{x})"
+    let _ =
+      if nativeOn e then
+        nativeRecord e (runtimeCall (nativeScope e) "mdk_bit_not" r [x])
     (tagInt e r, LTInt)
   _ => panic "llvm: bitNot takes one argument"
 emitBitExtern e _ name _ = gapE e ("unsupported bit extern " ++ name)
@@ -4605,9 +4755,18 @@ emitExternApplied : Emit ->
   List CExpr ->
   (String, LTy)
 emitExternApplied e env fname args = match llvmFamily fname
-  Some f => match externEmitter f
-    Some fn => fn e env fname args
-    None => panic (notAnExternFamily fname)
+  Some f =>
+    let _ =
+      if nativeOn e then match f
+        LlvmByteBlock => ()
+        LlvmBit => ()
+        _ =>
+          nativeRecord
+            e
+            (Uncovered (nativeScope e) ("extern lowering: " ++ fname))
+    match externEmitter f
+      Some fn => fn e env fname args
+      None => panic (notAnExternFamily fname)
   None => panic (notAnExternFamily fname)
 
 notAnExternFamily : String -> String
@@ -6691,6 +6850,19 @@ emitClosureAllocPatch e lamName callArity nCap =
   let _ = storeFields e p fields 0
   let w = freshReg e
   let _ = emit e "  \{w} = ptrtoint ptr \{p} to i64"
+  let _ =
+    if nativeOn e then
+      nativeRecord
+        e
+        (Allocation
+          (nativeScope e)
+          ClosureCell
+          p
+          w
+          (intToString (8 * (nFields + 1)))
+          (closureSlots nCap)
+          fields
+          "deferred-backpatch")
   (p, w)
 
 zeroWords : Int -> List String
@@ -6971,6 +7143,11 @@ emitKnownFnApp e env fname args mode = match u32Inline e env fname args
     (tagW32 e k (emitU32Inlined e env pats body args), LTInt)
   None => match rawWorkerCall e fname (lengthS args)
     Some (sym, w) =>
+      let _ =
+        if nativeOn e then
+          nativeRecord
+            e
+            (Uncovered (nativeScope e) ("raw worker call: " ++ sym))
       let res = emitRawWorkerCallW e env sym w args (fnRetTy e fname)
       let _ = recordFloatClosureResult e fname CallExact res
       res
@@ -7020,6 +7197,18 @@ emitIndirect e env hd args mode =
     Some lam =>
       let r = freshReg e
       let _ = emit e "  \{r} = call i64 @\{lam}(\{argDecls (cw :: argOps)})"
+      let _ =
+        if nativeOn e then
+          nativeRecord
+            e
+            (Call
+              (nativeScope e)
+              lam
+              r
+              (cw :: argOps)
+              (taggedSlots (lengthS argOps + 1))
+              TaggedWord
+              MayCollectAndReenter)
       (r, indirectRetTy e cw hd)
     None => emitIndirectMode e cw argOps hd mode
 
@@ -7064,6 +7253,20 @@ emitIndirectCallWords e cw argOps =
   let _ = emit e "  \{fp} = inttoptr i64 \{cp} to ptr"
   let r = freshReg e
   let _ = emit e "  \{r} = call i64 \{fp}(\{argDecls (cw :: argOps)})"
+  let _ =
+    if nativeOn e then nativeRecord e (Operand (nativeScope e) cp CodeAddress)
+  let _ =
+    if nativeOn e then
+      nativeRecord
+        e
+        (Call
+          (nativeScope e)
+          fp
+          r
+          (cw :: argOps)
+          (taggedSlots (lengthS argOps + 1))
+          TaggedWord
+          MayCollectAndReenter)
   r
 
 -- the static result type of an indirect call: container when the head is a
@@ -7090,6 +7293,8 @@ emitArgs : Emit -> OrdMap (String, LTy) -> List CExpr -> List String
 emitArgs _ _ [] = []
 emitArgs e env (a :: rest) =
   let (v, _) = emitExpr e env a
+  let _ =
+    if nativeOn e then nativeRecord e (Operand (nativeScope e) v TaggedWord)
   v :: emitArgs e env rest
 
 -- render an operand list as a comma-separated i64 argument list.
@@ -7511,6 +7716,18 @@ emitImplCall : Emit -> String -> List String -> LTy -> (String, LTy)
 emitImplCall e fname argOps resTy =
   let r = freshReg e
   let _ = emit e "  \{r} = call i64 @\{fname}(\{argDecls argOps})"
+  let _ =
+    if nativeOn e then
+      nativeRecord
+        e
+        (Call
+          (nativeScope e)
+          fname
+          r
+          argOps
+          (taggedSlots (lengthS argOps))
+          TaggedWord
+          MayCollectAndReenter)
   (r, resTy)
 
 -- A direct call of define `sym` (already `mdk_`-prefixed) in [mode]: exact ⇒ the
@@ -7593,6 +7810,18 @@ emitApplyRuntime e cw argOps =
     emit
       e
       "  \{r} = call i64 @__mdk_apply(i64 \{cw}, i64 \{intToString n}, ptr \{arr})"
+  let _ =
+    if nativeOn e then
+      nativeRecord
+        e
+        (Call
+          (nativeScope e)
+          "__mdk_apply"
+          r
+          [cw, intToString n, arr]
+          [TaggedWord, RawScalar, StackAddress]
+          TaggedWord
+          MayCollectAndReenter)
   r
 
 -- store each arg word into the argv alloca at index `i` (getelementptr i64 stride).
@@ -9367,6 +9596,19 @@ emitClosureCell e hdr fields =
   let _ = storeFields e p fields 0
   let w = freshReg e
   let _ = emit e "  \{w} = ptrtoint ptr \{p} to i64"
+  let _ =
+    if nativeOn e then
+      nativeRecord
+        e
+        (Allocation
+          (nativeScope e)
+          ClosureCell
+          p
+          w
+          (intToString (8 * (n + 1)))
+          (closureSlots (n - 1))
+          fields
+          "complete-no-safepoint")
   (w, LTClosure)
 
 -- ── capture-free closure hoisting (S-1, EMITTER-GAPS #10 allocation half) ───
@@ -9970,6 +10212,8 @@ capWords : Emit -> OrdMap (String, LTy) -> List String -> List String
 capWords _ _ [] = []
 capWords e env (c :: rest) =
   let (op, _) = lookupVarG e env c
+  let _ =
+    if nativeOn e then nativeRecord e (Operand (nativeScope e) op TaggedWord)
   op :: capWords e env rest
 
 -- keep only the names present as keys in the emit env (the capturable locals);
@@ -10207,6 +10451,19 @@ emitCtorAlloc e name fields =
   let _ = storeFields e p fields 0
   let w = freshReg e
   let _ = emit e "  \{w} = ptrtoint ptr \{p} to i64"
+  let _ =
+    if nativeOn e then
+      nativeRecord
+        e
+        (Allocation
+          (nativeScope e)
+          ConstructorCell
+          p
+          w
+          (intToString (8 * (arity + 1)))
+          (constructorSlots arity)
+          fields
+          ("complete-no-safepoint: " ++ name))
   (w, LTCon)
 
 -- store each field at offset 8*(i+1) (field 0 follows the one-word header).
@@ -11915,6 +12172,28 @@ emitTrmcCtor e env ctor leadFields args selfIdx destSlot loopL pslots =
       e
       "  \{newdest} = getelementptr i8, ptr \{cell}, i64 \{intToString (8 * (selfIdx + 1))}"
   let _ = emit e "  store ptr \{newdest}, ptr \{destSlot}"
+  let _ =
+    if nativeOn e then
+      nativeRecord
+        e
+        (Allocation
+          (nativeScope e)
+          ConstructorCell
+          cell
+          cellw
+          (intToString (8 * (arity + 1)))
+          (constructorSlots arity)
+          leadVals
+          "deferred-backpatch")
+  let _ =
+    if nativeOn e then
+      nativeRecord
+        e
+        (Derived
+          (nativeScope e)
+          newdest
+          cellw
+          (intToString (8 * (selfIdx + 1))))
   let argOps = emitArgs e env args
   -- dict-carrying self-call: skip the loop-invariant leading dict slots (see
   -- emitTrmcTailCall); non-dict is |argOps| == |pslots| ⇒ drop 0.
@@ -13768,6 +14047,8 @@ emitSetRef e env [r, x] =
   let fp = freshReg e
   let _ = emit e "  \{fp} = getelementptr i8, ptr \{p}, i64 8"
   let _ = emit e "  store i64 \{xw}, ptr \{fp}"
+  let _ =
+    if nativeOn e then nativeRecord e (Store (nativeScope e) rw 8 xw TaggedWord)
   ("1", LTInt)
 emitSetRef e env _ = gapE e "setRef expects exactly 2 arguments"
 
@@ -13849,6 +14130,19 @@ emitArrayAlloc e n fields =
   let _ = storeFields e p fields 0
   let w = freshReg e
   let _ = emit e "  \{w} = ptrtoint ptr \{p} to i64"
+  let _ =
+    if nativeOn e then
+      nativeRecord
+        e
+        (Allocation
+          (nativeScope e)
+          WordArray
+          p
+          w
+          (intToString (8 * (n + 1)))
+          (constructorSlots n)
+          fields
+          "complete-no-safepoint")
   (w, LTCon)
 
 -- allocate an array cell with a DYNAMIC element count (for ranges and slices);
@@ -13862,6 +14156,19 @@ emitArrayDynAlloc e len_raw =
   let p = freshReg e
   let _ = emit e "  \{p} = call ptr @mdk_alloc(i64 \{bytes})"
   let _ = emit e "  store i64 \{len_raw}, ptr \{p}"
+  let _ =
+    if nativeOn e then
+      nativeRecord
+        e
+        (Allocation
+          (nativeScope e)
+          DynamicWordArray
+          p
+          ""
+          bytes
+          [RawScalar, TaggedWord]
+          [len_raw]
+          "repeated-tagged-elements; initialization-loop-not-proven")
   p
 
 -- CArray [e0, e1, …]: allocate a static-size array cell, emit each element,
@@ -14486,6 +14793,31 @@ emitProgramWithStats input (cp@(CProgram groups ctorArs ctorTypes implEntries _ 
   let text = runStrictEmission e input groups implEntries
   (text, stats)
 
+export
+emitProgramWithNativeContract : EmitInput -> CProgram -> (String, String)
+emitProgramWithNativeContract input (cp@(CProgram groups ctorArs ctorTypes implEntries _ facts)) =
+  let _ =
+    if input.emitHalf == emitHalfWhole then
+      ()
+    else
+      panic "native contract reporting requires whole-module emission"
+  let _ = unprovidedExterns Strict input cp
+  let e =
+    buildEmitState
+      (programEmitConfig Strict input groups)
+      input
+      groups
+      ctorArs
+      ctorTypes
+      implEntries
+      facts
+  let log = newLog ()
+  e.nativeContract := Some log
+  let text = runStrictEmission e input groups implEntries
+  match renderContract facts.factBinders (logEvents log)
+    Ok report => (text, report)
+    Err message => panic ("native contract: " ++ message)
+
 -- ── program ─────────────────────────────────────────────────────────────────
 -- Emit a whole CProgram as a textual LLVM module: the runtime declares, then one
 -- LLVM function per top-level `name p… = …` binding, then a single
@@ -14599,6 +14931,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
     buf = Ref [],
     fnNames = Ref (collectFns groups),
     binderRows = rows,
+    nativeContract = Ref None,
     globalTys = globalStampTys rows (filter (b => not (isFnBind b)) groups),
     lams = Ref [],
     implEntries = Ref implEntries,

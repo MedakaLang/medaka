@@ -1,0 +1,284 @@
+-- Native producer observations under Boehm; this report is not a root map.
+
+import frontend.ast.{BinderId(..)}
+import types.runtime_types.{BinderRow(..), runtimeTypeName}
+import support.util.{joinNl, joinWith, reverseL, escStr, listLen}
+
+public export data StorageKind =
+  | TaggedWord
+  | RawScalar
+  | CodeAddress
+  | PackedBytes
+  | StackAddress
+  | NoValue
+  | UnknownStorage
+  deriving (Eq, Debug)
+
+public export data LayoutKind =
+  | ConstructorCell
+  | ClosureCell
+  | WordArray
+  | DynamicWordArray
+  | AtomicBox
+  | AtomicByteBlock
+  deriving (Eq, Debug)
+
+public export data CallEffect =
+  | NoManagedCollection
+  | MayCollect
+  | MayCollectAndReenter
+  | UnknownEffect
+  deriving (Eq, Debug)
+
+public export data NativeEvent =
+  | Allocation String LayoutKind String String String (List StorageKind) (List String) String
+  | Call String String String (List String) (List StorageKind) StorageKind CallEffect
+  | Operand String String StorageKind
+  | Store String String Int String StorageKind
+  | Derived String String String String
+  | Uncovered String String
+  deriving (Debug)
+
+public export data NativeLog = NativeLog {
+  events : Ref (List NativeEvent),
+  scope : Ref String,
+  nextScope : Ref Int,
+}
+
+export
+newLog : Unit -> NativeLog
+newLog _ =
+  NativeLog { events = Ref [], scope = Ref "module", nextScope = Ref 0 }
+
+export
+enterScope : NativeLog -> String -> Unit
+enterScope log module_ =
+  let n = !log.nextScope
+  log.nextScope := n + 1
+  log.scope := "\{module_}/define\{n}"
+
+export
+restoreScope : NativeLog -> String -> Unit
+restoreScope log saved = log.scope := saved
+
+export
+currentScope : NativeLog -> String
+currentScope log = !log.scope
+
+export
+recordEvent : NativeLog -> NativeEvent -> Unit
+recordEvent log event = log.events := event :: !log.events
+
+export
+logEvents : NativeLog -> List NativeEvent
+logEvents log = reverseL !log.events
+
+export
+taggedSlots : Int -> List StorageKind
+taggedSlots n = if n <= 0 then [] else TaggedWord :: taggedSlots (n - 1)
+
+export
+constructorSlots : Int -> List StorageKind
+constructorSlots n = RawScalar :: taggedSlots n
+
+export
+closureSlots : Int -> List StorageKind
+closureSlots n = RawScalar :: CodeAddress :: taggedSlots n
+
+-- These are C ABI contracts, not classifications inferred from LLVM i64.
+export
+helperContract : String -> (List StorageKind, StorageKind, CallEffect)
+helperContract "mdk_byteblock_make" = ([TaggedWord], TaggedWord, MayCollect)
+helperContract "mdk_byteblock_copy" =
+  ([TaggedWord, TaggedWord], TaggedWord, MayCollect)
+helperContract "mdk_byteblock_length" =
+  ([TaggedWord], TaggedWord, NoManagedCollection)
+helperContract "mdk_byteblock_get" =
+  ([TaggedWord, TaggedWord], TaggedWord, NoManagedCollection)
+helperContract "mdk_byteblock_set" =
+  ([TaggedWord, TaggedWord, TaggedWord], NoValue, NoManagedCollection)
+helperContract "mdk_byteblock_blit" = (
+  [TaggedWord, TaggedWord, TaggedWord, TaggedWord, TaggedWord],
+  NoValue,
+  NoManagedCollection,
+)
+helperContract "mdk_bit_and" =
+  ([RawScalar, RawScalar], RawScalar, NoManagedCollection)
+helperContract "mdk_bit_or" =
+  ([RawScalar, RawScalar], RawScalar, NoManagedCollection)
+helperContract "mdk_bit_xor" =
+  ([RawScalar, RawScalar], RawScalar, NoManagedCollection)
+helperContract "mdk_shift_left" =
+  ([RawScalar, RawScalar], RawScalar, MayCollectAndReenter)
+helperContract "mdk_shift_right" =
+  ([RawScalar, RawScalar], RawScalar, MayCollectAndReenter)
+helperContract "mdk_bit_not" = ([RawScalar], RawScalar, NoManagedCollection)
+helperContract _ = ([], UnknownStorage, UnknownEffect)
+
+export
+runtimeCall : String -> String -> String -> List String -> NativeEvent
+runtimeCall scope name result args =
+  let (kinds, output, callEffect) = helperContract name
+  Call scope name result args kinds output callEffect
+
+allTagged : List StorageKind -> Bool
+allTagged [] = True
+allTagged (TaggedWord :: rest) = allTagged rest
+allTagged _ = False
+
+validSlots : LayoutKind -> List StorageKind -> Bool
+validSlots ConstructorCell (RawScalar :: fields) = allTagged fields
+validSlots ClosureCell (RawScalar :: CodeAddress :: captures) =
+  allTagged captures
+validSlots WordArray (RawScalar :: fields) = allTagged fields
+validSlots DynamicWordArray [RawScalar, TaggedWord] = True
+validSlots AtomicBox [RawScalar, RawScalar] = True
+validSlots AtomicByteBlock [RawScalar, RawScalar, PackedBytes] = True
+validSlots _ _ = False
+
+export
+validateEvent : NativeEvent -> List String
+validateEvent (Allocation _ layout _ _ extent slots _ _) =
+  if extent == "" then
+    ["allocation has no extent"]
+  else if validSlots layout slots then
+    []
+  else
+    ["allocation storage disagrees with its native layout"]
+validateEvent (Call _ name _ args kinds output callEffect) =
+  let (expected, expectedOutput, expectedEffect) = helperContract name
+  if expectedEffect == UnknownEffect then
+    if callEffect == UnknownEffect || callEffect == MayCollectAndReenter then
+      []
+    else
+      ["unclassified call was declared collection-free"]
+  else if kinds == expected
+    && output == expectedOutput
+    && callEffect == expectedEffect
+    && listLen args == listLen kinds then
+    []
+  else
+    ["runtime call disagrees with its native ABI contract"]
+validateEvent (Store _ _ _ _ TaggedWord) = []
+validateEvent (Store _ _ _ _ _) =
+  ["Ref mutation must store a tagged value word"]
+validateEvent _ = []
+
+storageName : StorageKind -> String
+storageName TaggedWord = "tagged-value-word"
+storageName RawScalar = "raw-scalar"
+storageName CodeAddress = "code-address"
+storageName PackedBytes = "packed-raw-bytes"
+storageName StackAddress = "stack-address"
+storageName NoValue = "void"
+storageName UnknownStorage = "unknown"
+
+layoutName : LayoutKind -> String
+layoutName ConstructorCell = "constructor"
+layoutName ClosureCell = "closure"
+layoutName WordArray = "word-array"
+layoutName DynamicWordArray = "word-array-repeated-tagged-elements"
+layoutName AtomicBox = "atomic-box"
+layoutName AtomicByteBlock = "atomic-byte-block"
+
+callEffectName : CallEffect -> String
+callEffectName NoManagedCollection = "no-managed-collection-no-callback"
+callEffectName MayCollect = "may-collect-no-callback"
+callEffectName MayCollectAndReenter = "may-collect-and-reenter"
+callEffectName UnknownEffect = "unknown-may-collect-and-reenter"
+
+node : String -> List String -> String
+node tag fields = "(" ++ joinWith " " (tag :: fields) ++ ")"
+
+strings : List String -> String
+strings xs = node "operands" (map escStr xs)
+
+slotsText : List StorageKind -> String
+slotsText xs = node "storage" (map storageName xs)
+
+eventText : NativeEvent -> String
+eventText (Allocation scope kind pointer word extent slots inputs init) = node
+  "allocation"
+  [
+    escStr scope,
+    layoutName kind,
+    escStr pointer,
+    escStr word,
+    escStr extent,
+    slotsText slots,
+    strings inputs,
+    escStr init,
+  ]
+eventText (Call scope name result args kinds output callEffect) = node "call" [
+  escStr scope,
+  escStr name,
+  escStr result,
+  strings args,
+  slotsText kinds,
+  storageName output,
+  callEffectName callEffect,
+]
+eventText (Operand scope word kind) =
+  node "operand" [escStr scope, escStr word, storageName kind]
+eventText (Store scope owner offset word kind) = node "store" [
+  escStr scope,
+  escStr owner,
+  intToString offset,
+  escStr word,
+  storageName kind,
+]
+eventText (Derived scope address base offset) =
+  node "derived" [escStr scope, escStr address, escStr base, escStr offset]
+eventText (Uncovered scope producer) =
+  node "uncovered" [escStr scope, escStr producer]
+
+binderText : BinderRow -> String
+binderText row = match row.brId
+  BinderId module_ ordinal => node "semantic-binder" [
+    escStr module_,
+    intToString ordinal,
+    escStr row.brName,
+    runtimeTypeName row.brType,
+    match row.brReturns
+      Some t => runtimeTypeName t
+      None => "no-return-fact",
+  ]
+
+eventGaps : NativeEvent -> List String
+eventGaps (Call scope name _ _ _ _ UnknownEffect) =
+  ["unknown call contract: \{scope}: \{name}"]
+eventGaps (Derived scope _ _ _) =
+  ["heap-derived address requires relocation proof: \{scope}"]
+eventGaps (Uncovered scope producer) =
+  ["uncovered producer: \{scope}: \{producer}"]
+eventGaps (Allocation scope _ _ _ _ _ _ "deferred-backpatch") =
+  ["deferred initialization requires publication proof: \{scope}"]
+eventGaps _ = []
+
+export
+renderContract : List BinderRow -> List NativeEvent -> Result String String
+renderContract binders events =
+  let faults = flatMap validateEvent events
+  if listLen faults > 0 then
+    Err (joinNl faults)
+  else
+    let gaps =
+      [
+          "partial producer inventory: runtime families outside ByteBlock/bit and unhooked call paths are not covered",
+          "root liveness, temporary roots and reloads are not produced",
+          "C helper roots, uintptr_t root-slot ABI and allocating callback reentry are not established",
+          "static/global ownership and barriers are not established",
+          "tagged value words identify storage, not scalar types or membership in the managed heap",
+        ]
+        ++ flatMap eventGaps events
+    Ok
+      (joinNl
+          ([
+              node "native-contract" [
+                "v1", "boehm", "incomplete", "moving-safe=false"
+              ],
+            ]
+            ++ map binderText binders
+            ++ map eventText events
+            ++ map (gap => node "gap" [escStr gap]) gaps)
+        ++ "\n")

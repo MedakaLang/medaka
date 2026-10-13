@@ -201,6 +201,10 @@ inlang-backend-extern-catalog-test:
 inlang-backend-core-validate-test:
 	./medaka test compiler/backend/core_validate_test.mdk
 
+## No entry imports the native contract reporter's sibling test.
+inlang-backend-native-gc-contract-test:
+	./medaka test compiler/backend/native_gc_contract_test.mdk
+
 ## Coded-trap helpers of wasm_emit.mdk: one `$trapmsg_K` per distinct fixed text,
 ## graded against the spec's stderr lines.
 inlang-backend-wasm-emit-trapmsg-test:

@@ -50,14 +50,17 @@ import ir.core_ir_lower.{
   validateFfiExternTypeNames,
 }
 import backend.llvm_emit.{
+  EmitInput,
   emitProgram,
   emitProgramWithStats,
+  emitProgramWithNativeContract,
   makeEmitInput,
   preludeImplSymbols,
   withRuntimeExterns,
 }
 import ir.dce.{dceFilter}
 import entries.entry_support.{
+  failWith,
   driveEmitLocated,
   runtimeExternNames,
   stampSiteFiles,
@@ -65,6 +68,26 @@ import entries.entry_support.{
 import support.timer.{statsEnabled, emitStats}
 import support.util.{endsWith, filterList}
 import driver.main_autoprint.{autoPrintPinName}
+
+-- Report output is separate from the LLVM stream consumed by clang.
+emitNativeReport : EmitInput -> CProgram -> Bool -> <IO> Bool
+emitNativeReport input cp statsOn = match getEnv "MEDAKA_NATIVE_GC_CONTRACT"
+  Some path if path /= "" =>
+    if statsOn then
+      let _ =
+        failWith
+          "native contract reporting cannot be combined with MEDAKA_STATS"
+      False
+    else
+      let (text, report) = emitProgramWithNativeContract input cp
+      match writeFile path report
+        Err message =>
+          let _ = failWith ("native contract report: " ++ message)
+          False
+        Ok _ =>
+          let _ = putStr text
+          True
+  _ => False
 
 -- The entry-module path is argv[2] (`<runtime> <core> <entry> [root ...]`); hand it
 -- to the emitter so a main-less program's diagnostic names the file (issue #397).
@@ -168,18 +191,16 @@ emitTail mods runtimeDecls coreD modules1 =
         (validateFfiExternTypeNames
           (checkedFfiExternTypeNamesModules modules2)))
   let statsOn = statsEnabled ()
-  if statsOn then
-    let (text, stats) =
-      emitProgramWithStats
-        input
-        (lowerProgramEmitPinned TargetNative preludeImpls allDecls)
+  let cp = lowerProgramEmitPinned TargetNative preludeImpls allDecls
+  let reported = emitNativeReport input cp statsOn
+  if reported then
+    ()
+  else if statsOn then
+    let (text, stats) = emitProgramWithStats input cp
     let _ = emitStats statsOn stats
     putStr text
   else
-    putStr
-      (emitProgram
-        input
-        (lowerProgramEmitPinned TargetNative preludeImpls allDecls))
+    putStr (emitProgram input cp)
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
 -- across units, AFTER elaborateModules and over its output (#2809) — same
 -- flat-emit @mdk_<name> collision risk the bootstrap driver fixes.  The gate
