@@ -1705,3 +1705,81 @@ The allocation pin (`test/diff_compiler_closure_alloc.sh`, `getsome`/`tupleloop`
 allocates 320 MB / 480 MB / 192 MB on the base emitter and 32 / 80 / 32 bytes with the attributes.
 The comment at the top of `compiler/frontend/parser.mdk` that called direct-style parsing
 "perf-neutral" did not hold on this head and was replaced.
+
+## Box-throughput census: CPU-seconds per agent workload, Boehm knob sweep (#503, #4093)
+
+Measured 2026-10-12 at `d7e849f51` on the dedicated 12-core Debian box with no other
+session active (load ~1.5). The question was throughput, not latency: how many
+CPU-seconds each thing an agent does costs, since a saturated shared box gains
+nothing from a job that finishes sooner by using more cores. CPU below is user+sys
+from bash `time`; attribution is `perf record -e cpu-clock` following the workload's
+process tree (no `-a`), read with `perf report --sort comm` / `--sort sym`. Repeated
+`check` baselines differed by ~7% (22.3 vs 20.8 s), so ratios under that are not
+established. Scripts: this session's `measure_{check,build,knobs,gates,gates_m1,gates_lto}.sh`;
+the plan that consumes these numbers is EPIC #4093.
+
+### Whole-compiler `check` (`check compiler/driver/medaka_cli.mdk`)
+
+| Configuration | CPU-s | wall |
+|---|---:|---:|
+| `GC_MARKERS=1` | 23.0 | 23.0 s |
+| default (12 marker threads) | 25.3 | 13.9 s |
+
+Symbol shares at one marker: `GC_mark_from` 20.8%, `GC_header_cache_miss` 16.0%,
+`GC_push_contents_hdr` 12.4%, `GC_reclaim_generic` 5.9%, `mdk_alloc` 4.1%; the largest
+mutator symbol (`List.andThen`'s lambda) is 2.5%. **The collector is about 55% of
+`check` CPU.** The 5.3-percentage-point figure recorded earlier in this file was an
+instruction count; marking is memory-latency bound and `Ir` does not see it.
+
+`GC_PRINT_STATS` series (heap minus freed): ~100 MB live at collection 11, 211 MB at
+31, 690–820 MB at the 51st and last, i.e. roughly 4 KB retained per line of the
+206k-line closure, re-marked ~10 GB cumulatively. Marking cost tracks the retained
+set, not the allocation volume (#4090).
+
+### Boehm knob sweep on the same workload (#503 items 1, 2, 4)
+
+| Knob | CPU-s | collections | verdict |
+|---|---:|---:|---|
+| base (runtime's 128 MiB pre-expanded heap) | 22.3 / 20.8 | 52 | |
+| `GC_INITIAL_HEAP_SIZE=1G` | 20.8 | 21 | same CPU with 40% of the collections; not a lever (agrees with the #2685 emitB sweep) |
+| `GC_ENABLE_INCREMENTAL=1` | 26.9 | 133 | worse; pause-oriented |
+| `GC_ENABLE_INCREMENTAL=1` + default markers | **378** | 132 | marker threads spin through every increment; never combine |
+
+The free-space divisor is pinned to 1 by the runtime and was not swept. Item 3 (the
+atomic census) is #4091. Verdict against `RUNTIME-DESIGN.md` §9: the trigger has not
+fired (allocation reduction is still open in #4028/#4029/#4040; the typed/atomic rung
+is unclimbed), and the collector's share is now quantified.
+
+### Forced two-stage `make medaka`
+
+67 s wall, 127 CPU-s: clang plus its ThinLTO worker threads 60.0%, `medaka_emitter`
+plus its marker threads 37.2% (about half of that in Boehm symbols), `awk` 2.7%.
+Stage A link 25 s (64 partitions), stage B link 10 s (109 partitions, cache-served).
+
+### Two representative gates under `run_gates.sh` (JOBS=7)
+
+| Gate | CPU-s / wall | `GC_MARKERS=1` | + `MEDAKA_NO_LTO=1` | + `MEDAKA_CLANG_OPT=-O1` |
+|---|---|---|---|---|
+| `diff_compiler_engines_part1` | 340 / 56.2 s | 307 / 56.4 s | 264 / 52.2 s | 251 / 49.6 s |
+| `diff_compiler_dict_semantics` | 504 / 67.9 s | 461 / 61.6 s | | |
+
+All runs PASS with unchanged verdicts. Engines gate by command: clang + `llvm-worker-*`
++ lld 37.4%, `medaka_emitter` 25.2%, `eval_autoprint_main` 23.5%, `GC-marker-*` threads
+10.5%, `medaka` 2.4%. Dict gate: clang + LTO 46.7%, `medaka` 32.9%, emitter 13.0%,
+markers 5.2%; 16.5% of its CPU is the kernel (page clearing and faults for each
+spawned process's fresh heap, spinlocks, page-cache lookups) and ~3% is the dynamic
+loader relocating `libLLVM.so` per clang spawn. Every CLI `medaka build` in a shell gate
+is `BuildNormal` (`-O2` + ThinLTO, `build_cmd.mdk` `detectLto`); only `medaka test`
+probes take the `-O0` no-LTO `BuildProbe` link.
+
+CI ledger (`test/gate_cost_baseline.json`, generated 2026-10-12): 6,457 s over 165
+gates; the top 20 gates are 67%; rows declaring `clang` in `toolchain` are ~46% of the
+seconds; `pds/test/inlang_test_oracle` alone is 537 s, mostly the eval engine.
+
+**Decisions:** harness-spawned medaka processes should run with `GC_MARKERS=1` (#4088,
+−9–10% gate CPU at unchanged wall) and differential fixtures should link without ThinLTO
+at `-O1` through a registry-declared link profile (#4089, a further −18% on the engines
+gate). On the compiler side the lever is what `check` retains (#4090), then typed and
+atomic allocation inside the existing `mdk_alloc` seam (#4091). The wall-time gate
+speedups in #4002 and #4016 came from fan-out and moved no CPU. A custom collector is
+not the first lever; #4061's prototype and the reasoning are summarised in #4093.
