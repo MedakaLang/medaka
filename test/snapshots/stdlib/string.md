@@ -1,5 +1,5 @@
 # META
-source_lines=885
+source_lines=814
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `String` and `Char`.
@@ -19,12 +19,14 @@ stages=DESUGAR,MARK
 -- externs (`stringSlice`/`stringConcat`/`stringCompare`/`stringLength`), over
 -- a `List Char` of cons cells.  Three tiers, fastest first:
 --   1. operate on the String directly (no char materialization): `take`/`drop`/
---      `sliceClamped`, `startsWith`/`endsWith` (slice + `==`), `concat`/`join`/
---      `repeat`, and substring search via the host `stringIndexOf` (`indexOf`,
---      and `contains`/`replace*` derived from it);
+--      `sliceClamped`, `concat`/`join`/`repeat`, `trim*` (probe the ends one
+--      character at a time, then one slice), and the host byte-level externs
+--      (`stringStartsWith`/`stringEndsWith`, `stringIndexOf`/`stringLastIndexOf`/
+--      `stringCountOccurrences`, `stringReverse`, `stringToInt`,
+--      `stringByteLength`, `stringJoin`), with `contains`/`replace*` derived
+--      from them;
 --   2. decode once to `Array Char`, scan by index, rebuild via `stringFromChars`
---      or carve out `stringSlice`s: `trim*`, `words`, `split`/`lines`,
---      `reverse`, `capitalize`, `toInt`;
+--      or carve out `stringSlice`s: `words`, `split`/`lines`, `capitalize`;
 --   3. `List Char` is avoided internally.
 --
 -- The collection functions (`split`/`words`/`lines`/`concat`/`join`/`unlines`/
@@ -200,7 +202,7 @@ byteLength s = utf8ByteLength s
    6 -}
 export
 utf8ByteLength : String -> Int
-utf8ByteLength s = arrayLength (toUtf8 s)
+utf8ByteLength s = stringByteLength s
 
 {- | The integer written in decimal in `s`, with an optional leading `-` or
    `+`.
@@ -214,9 +216,7 @@ utf8ByteLength s = arrayLength (toUtf8 s)
    None -}
 export
 toInt : String -> Option Int
-toInt s =
-  let a = toChars s
-  parseInt a (arrayLength a)
+toInt s = stringToInt s
 
 -- > toInt "-7"
 -- Some (-7)
@@ -230,55 +230,6 @@ toInt s =
 -- None
 -- > toInt "99999999999999999999"
 -- None
-
-parseInt : Array Char -> Int -> Option Int
-parseInt a n = if n == 0 then None else parseSign a n (arrayGetUnsafe 0 a)
-
-parseSign : Array Char -> Int -> Char -> Option Int
-parseSign a n c
-  | c == '-' = parseDigits a n 1 0 False True
-  | c == '+' = parseDigits a n 1 0 False False
-  | otherwise = parseDigits a n 0 0 False False
-
-{- Accumulates a NON-POSITIVE running magnitude (`acc <= 0`) regardless of
-   the parsed sign, and detects overflow before every multiply/add rather
-   than after (the overflowing operation would itself stop the program).
-   Negative accumulation — not positive-then-negate — is deliberate:
-   `intMinBound`'s magnitude (2^62) is one larger than `intMaxBound`'s
-   (2^62 - 1), so only the negative side can hold it without overflowing;
-   `finishInt` negates back to positive only when the source had no `-`. -}
-parseDigits : Array Char -> Int -> Int -> Int -> Bool -> Bool -> Option Int
-parseDigits a n i acc seen negative
-  | i >= n = finishInt seen acc negative
-  | otherwise = parseDigitStep a n i acc seen negative (arrayGetUnsafe i a)
-
-parseDigitStep : Array Char ->
-  Int ->
-  Int ->
-  Int ->
-  Bool ->
-  Bool ->
-  Char ->
-  Option Int
-parseDigitStep a n i acc seen negative c =
-  if isDigit c then
-    let d = charCode c - 48
-    let limit = if negative then intMinBound else 0 - intMaxBound
-    let multMin = limit / 10
-    if acc < multMin then
-      None
-    else
-      let acc2 = acc * 10
-      if acc2 < limit + d then
-        None
-      else
-        parseDigits a n (i + 1) (acc2 - d) True negative
-  else
-    None
-
-finishInt : Bool -> Int -> Bool -> Option Int
-finishInt seen acc negative =
-  if not seen then None else if negative then Some acc else Some (0 - acc)
 
 {- | The floating-point number written in `s`, or `None` when `s` is not
    one.
@@ -301,7 +252,7 @@ toFloat s = stringToFloat s
    False -}
 export
 startsWith : String -> String -> Bool
-startsWith prefix s = stringSlice 0 (stringLength prefix) s == prefix
+startsWith prefix s = stringStartsWith prefix s
 
 {- | Whether `s` ends with `suffix`.
 
@@ -309,9 +260,7 @@ startsWith prefix s = stringSlice 0 (stringLength prefix) s == prefix
    True -}
 export
 endsWith : String -> String -> Bool
-endsWith suffix s =
-  stringSlice (stringLength s - stringLength suffix) (stringLength s) s
-    == suffix
+endsWith suffix s = stringEndsWith suffix s
 
 {- | `s` without its leading `prefix`, or `None` when `s` does not begin
    with it.
@@ -388,27 +337,7 @@ indexOf needle haystack = stringIndexOf needle haystack
    None -}
 export
 lastIndexOf : String -> String -> Option Int
-lastIndexOf needle haystack
-  | needle == "" = Some (stringLength haystack)
-  | otherwise = match indexOf needle haystack
-    None => None
-    Some _ =>
-      let a = toChars haystack
-      let nA = toChars needle
-      lastIndexOfGo a (arrayLength a) nA (arrayLength nA) 0 None
-
--- Walks forward from each hit, advancing one codepoint so overlapping
--- matches still count, and keeps the latest.
-lastIndexOfGo : Array Char ->
-  Int ->
-  Array Char ->
-  Int ->
-  Int ->
-  Option Int ->
-  Option Int
-lastIndexOfGo a n nA nl from acc = match sepFrom a n nA nl from
-  None => acc
-  Some i => lastIndexOfGo a n nA nl (i + 1) (Some i)
+lastIndexOf needle haystack = stringLastIndexOf needle haystack
 
 {- | The number of non-overlapping occurrences of `needle` in `haystack`.
 
@@ -420,20 +349,7 @@ lastIndexOfGo a n nA nl from acc = match sepFrom a n nA nl from
    2 -}
 export
 countOccurrences : String -> String -> Int
-countOccurrences needle haystack
-  | needle == "" = 0
-  | otherwise = match indexOf needle haystack
-    None => 0
-    Some _ =>
-      let a = toChars haystack
-      let nA = toChars needle
-      countGo a (arrayLength a) nA (arrayLength nA) 0 0
-
--- Non-overlapping: each hit resumes just past its own end.
-countGo : Array Char -> Int -> Array Char -> Int -> Int -> Int -> Int
-countGo a n nA nl from acc = match sepFrom a n nA nl from
-  None => acc
-  Some i => countGo a n nA nl (i + nl) (acc + 1)
+countOccurrences needle haystack = stringCountOccurrences needle haystack
 
 -- # Building
 
@@ -459,12 +375,7 @@ concat parts = stringConcat parts
    "a, b, c" -}
 export
 join : String -> List String -> String
-join sep parts = stringConcat (intersperse sep parts)
-
-intersperse : a -> List a -> List a
-intersperse _ [] = []
-intersperse _ (x :: []) = [x]
-intersperse sep (x :: xs) = x :: sep :: intersperse sep xs
+join sep parts = stringJoin sep parts
 
 {- | `s` repeated `n` times.
 
@@ -496,12 +407,6 @@ repeatDbl k s =
     let h = repeatDbl (k / 2) s
     if isEven k then h ++ h else h ++ h ++ s
 
--- A list of `n` copies of `x` (empty when `n <= 0`).  Used by the padding
--- helpers below, whose `n` is a display width (small in practice) rather
--- than a caller-controlled repeat count.
-replic : Int -> a -> List a
-replic n x = if n <= 0 then [] else x :: replic (n - 1) x
-
 -- # Transformation
 
 {- | The string with its characters in reverse order.
@@ -510,12 +415,7 @@ replic n x = if n <= 0 then [] else x :: replic (n - 1) x
    "cba" -}
 export
 reverse : String -> String
-reverse s =
-  let a = toChars s
-  stringFromChars (reverseArr a (arrayLength a))
-
-reverseArr : Array Char -> Int -> Array Char
-reverseArr a n = arrayMakeWith n (i => arrayGetUnsafe (n - 1 - i) a)
+reverse s = stringReverse s
 
 {- | The string without its leading whitespace.
 
@@ -524,8 +424,8 @@ reverseArr a n = arrayMakeWith n (i => arrayGetUnsafe (n - 1 - i) a)
 export
 trimLeft : String -> String
 trimLeft s =
-  let a = toChars s
-  stringSlice (firstNonSpace a 0 (arrayLength a)) (stringLength s) s
+  let n = stringLength s
+  stringSlice (firstNonSpaceStr s 0 n) n s
 
 {- | The string without its trailing whitespace.
 
@@ -533,9 +433,7 @@ trimLeft s =
    "  hi" -}
 export
 trimRight : String -> String
-trimRight s =
-  let a = toChars s
-  stringSlice 0 (lastNonSpace a (arrayLength a - 1) + 1) s
+trimRight s = stringSlice 0 (lastNonSpaceStr s (stringLength s - 1) 0 + 1) s
 
 {- | The string without leading or trailing whitespace.
 
@@ -544,20 +442,35 @@ trimRight s =
 export
 trim : String -> String
 trim s =
-  let a = toChars s
-  let n = arrayLength a
-  stringSlice (firstNonSpace a 0 n) (lastNonSpace a (n - 1) + 1) s
+  let n = stringLength s
+  let lo = firstNonSpaceStr s 0 n
+  stringSlice lo (lastNonSpaceStr s (n - 1) lo + 1) s
+
+-- Only the characters at the ends are inspected, so trimming costs the
+-- length of the surrounding whitespace, not of the string.
+charAtStr : String -> Int -> Char
+charAtStr s i = arrayGetUnsafe 0 (toChars (stringSlice i (i + 1) s))
+
+-- The first index in [i, n) holding a non-space, or n.
+firstNonSpaceStr : String -> Int -> Int -> Int
+firstNonSpaceStr s i n
+  | i >= n = n
+  | isSpace (charAtStr s i) = firstNonSpaceStr s (i + 1) n
+  | otherwise = i
+
+-- The last index in [lo, i] holding a non-space, or lo - 1 when there is none.
+-- Callers pass lo = 0 for a whole string, or a lo that is already a non-space
+-- index (or the string length), so the scan never passes a non-space at lo.
+lastNonSpaceStr : String -> Int -> Int -> Int
+lastNonSpaceStr s i lo
+  | i < lo = lo - 1
+  | isSpace (charAtStr s i) = lastNonSpaceStr s (i - 1) lo
+  | otherwise = i
 
 firstNonSpace : Array Char -> Int -> Int -> Int
 firstNonSpace a i n
   | i >= n = n
   | isSpace (arrayGetUnsafe i a) = firstNonSpace a (i + 1) n
-  | otherwise = i
-
-lastNonSpace : Array Char -> Int -> Int
-lastNonSpace a i
-  | i < 0 = -1
-  | isSpace (arrayGetUnsafe i a) = lastNonSpace a (i - 1)
   | otherwise = i
 
 firstSpace : Array Char -> Int -> Int -> Int
@@ -615,8 +528,11 @@ replaceFirst old new s = match indexOf old s
   Some i => spliceAt i (stringLength old) new s
 
 spliceAt : Int -> Int -> String -> String -> String
-spliceAt i oldLen new s =
-  stringSlice 0 i s ++ new ++ stringSlice (i + oldLen) (stringLength s) s
+spliceAt i oldLen new s = stringConcat [
+  stringSlice 0 i s,
+  new,
+  stringSlice (i + oldLen) (stringLength s) s,
+]
 
 {- | The string with every non-overlapping occurrence of `old` replaced by
    `new`.
@@ -768,7 +684,30 @@ subChars a lo hi =
    ["a", "b", "c"] -}
 export
 lines : String -> List String
-lines s = map stripCR (split nl s)
+lines s =
+  let a = toChars s
+  linesFrom a (arrayLength a) 0
+
+-- Each line is cut once: the `\r` before the `\n` is left out of the slice,
+-- so no line is copied a second time to strip it.
+linesFrom : Array Char -> Int -> Int -> List String
+linesFrom a n start = match newlineFrom a n start
+  None => [lineSlice a start n]
+  Some i => lineSlice a start i :: linesFrom a n (i + 1)
+
+newlineFrom : Array Char -> Int -> Int -> Option Int
+newlineFrom a n i
+  | i >= n = None
+  | arrayGetUnsafe i a == '\n' = Some i
+  | otherwise = newlineFrom a n (i + 1)
+
+-- The characters `[start, hi)`, minus one trailing `\r` when present.
+lineSlice : Array Char -> Int -> Int -> String
+lineSlice a start hi =
+  if hi > start && arrayGetUnsafe (hi - 1) a == '\r' then
+    subChars a start (hi - 1)
+  else
+    subChars a start hi
 
 {- | The line without one trailing `\r`.
 
@@ -813,10 +752,12 @@ wordsEmit a n start e =
    "a\nb\n" -}
 export
 unlines : List String -> String
-unlines parts = stringConcat (map addNL parts)
+unlines parts = stringConcat (withNewlines parts)
 
-addNL : String -> String
-addNL p = p ++ nl
+-- Interleaves the separator between the pieces, so one concat joins them.
+withNewlines : List String -> List String
+withNewlines [] = []
+withNewlines (p :: ps) = p :: nl :: withNewlines ps
 
 -- A single newline.
 nl : String
@@ -844,7 +785,7 @@ padLeft n c s =
   if stringLength s >= n then
     s
   else
-    stringConcat (replic (n - stringLength s) (charToStr c)) ++ s
+    repeat (n - stringLength s) (charToStr c) ++ s
 
 {- | The string padded on the right with `c` to length `n`.
 
@@ -858,7 +799,7 @@ padRight n c s =
   if stringLength s >= n then
     s
   else
-    s ++ stringConcat (replic (n - stringLength s) (charToStr c))
+    s ++ repeat (n - stringLength s) (charToStr c)
 
 {- | The string centered in a field of width `n`, padded with `c`.
 
@@ -873,20 +814,8 @@ center n c s =
   if stringLength s >= n then
     s
   else
-    centerPad
-      (half (n - stringLength s))
-      (n - stringLength s - half (n - stringLength s))
-      c
-      s
-
-centerPad : Int -> Int -> Char -> String -> String
-centerPad l r c s =
-  stringConcat (replic l (charToStr c))
-    ++ s
-    ++ stringConcat (replic r (charToStr c))
-
-half : Int -> Int
-half k = if k <= 1 then 0 else 1 + half (k - 2)
+    let k = n - stringLength s
+    repeat (k / 2) (charToStr c) ++ s ++ repeat (k - k / 2) (charToStr c)
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Option" false))))
 (DTypeSig true "isDigit" (TyFun (TyCon "Char") (TyCon "Bool")))
@@ -924,25 +853,15 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DTypeSig true "byteLength" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "byteLength" ((PVar "s")) (EApp (EVar "utf8ByteLength") (EVar "s")))
 (DTypeSig true "utf8ByteLength" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "utf8ByteLength" ((PVar "s")) (EApp (EVar "arrayLength") (EApp (EVar "toUtf8") (EVar "s"))))
+(DFunDef false "utf8ByteLength" ((PVar "s")) (EApp (EVar "stringByteLength") (EVar "s")))
 (DTypeSig true "toInt" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "toInt" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "s"))) (DoExpr (EApp (EApp (EVar "parseInt") (EVar "a")) (EApp (EVar "arrayLength") (EVar "a"))))))
-(DTypeSig false "parseInt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "parseInt" ((PVar "a") (PVar "n")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EVar "None") (EApp (EApp (EApp (EVar "parseSign") (EVar "a")) (EVar "n")) (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "a")))))
-(DTypeSig false "parseSign" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "parseSign" ((PVar "a") (PVar "n") (PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "-"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "a")) (EVar "n")) (ELit (LInt 1))) (ELit (LInt 0))) (EVar "False")) (EVar "True")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "+"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "a")) (EVar "n")) (ELit (LInt 1))) (ELit (LInt 0))) (EVar "False")) (EVar "False")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "a")) (EVar "n")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "False")) (EVar "False")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "parseDigits" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "Int")))))))))
-(DFunDef false "parseDigits" ((PVar "a") (PVar "n") (PVar "i") (PVar "acc") (PVar "seen") (PVar "negative")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EApp (EApp (EVar "finishInt") (EVar "seen")) (EVar "acc")) (EVar "negative")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseDigitStep") (EVar "a")) (EVar "n")) (EVar "i")) (EVar "acc")) (EVar "seen")) (EVar "negative")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "parseDigitStep" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Char") (TyApp (TyCon "Option") (TyCon "Int"))))))))))
-(DFunDef false "parseDigitStep" ((PVar "a") (PVar "n") (PVar "i") (PVar "acc") (PVar "seen") (PVar "negative") (PVar "c")) (EIf (EApp (EVar "isDigit") (EVar "c")) (EBlock (DoLet false false (PVar "d") (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 48)))) (DoLet false false (PVar "limit") (EIf (EVar "negative") (EVar "intMinBound") (EBinOp "-" (ELit (LInt 0)) (EVar "intMaxBound")))) (DoLet false false (PVar "multMin") (EBinOp "/" (EVar "limit") (ELit (LInt 10)))) (DoExpr (EIf (EBinOp "<" (EVar "acc") (EVar "multMin")) (EVar "None") (EBlock (DoLet false false (PVar "acc2") (EBinOp "*" (EVar "acc") (ELit (LInt 10)))) (DoExpr (EIf (EBinOp "<" (EVar "acc2") (EBinOp "+" (EVar "limit") (EVar "d"))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "a")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "acc2") (EVar "d"))) (EVar "True")) (EVar "negative")))))))) (EVar "None")))
-(DTypeSig false "finishInt" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "finishInt" ((PVar "seen") (PVar "acc") (PVar "negative")) (EIf (EApp (EVar "not") (EVar "seen")) (EVar "None") (EIf (EVar "negative") (EApp (EVar "Some") (EVar "acc")) (EApp (EVar "Some") (EBinOp "-" (ELit (LInt 0)) (EVar "acc"))))))
+(DFunDef false "toInt" ((PVar "s")) (EApp (EVar "stringToInt") (EVar "s")))
 (DTypeSig true "toFloat" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Float"))))
 (DFunDef false "toFloat" ((PVar "s")) (EApp (EVar "stringToFloat") (EVar "s")))
 (DTypeSig true "startsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "startsWith" ((PVar "prefix") (PVar "s")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "prefix"))) (EVar "s")) (EVar "prefix")))
+(DFunDef false "startsWith" ((PVar "prefix") (PVar "s")) (EApp (EApp (EVar "stringStartsWith") (EVar "prefix")) (EVar "s")))
 (DTypeSig true "endsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "endsWith" ((PVar "suffix") (PVar "s")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EVar "suffix")))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (EVar "suffix")))
+(DFunDef false "endsWith" ((PVar "suffix") (PVar "s")) (EApp (EApp (EVar "stringEndsWith") (EVar "suffix")) (EVar "s")))
 (DTypeSig true "stripPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "stripPrefix" ((PVar "prefix") (PVar "s")) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "s")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "prefix"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (EVar "None")))
 (DTypeSig true "stripSuffix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -952,43 +871,35 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DTypeSig true "indexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "indexOf" ((PVar "needle") (PVar "haystack")) (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack")))
 (DTypeSig true "lastIndexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EIf (EBinOp "==" (EVar "needle") (ELit (LString ""))) (EApp (EVar "Some") (EApp (EVar "stringLength") (EVar "haystack"))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "indexOf") (EVar "needle")) (EVar "haystack")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "haystack"))) (DoLet false false (PVar "nA") (EApp (EVar "toChars") (EVar "needle"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "a")) (EApp (EVar "arrayLength") (EVar "a"))) (EVar "nA")) (EApp (EVar "arrayLength") (EVar "nA"))) (ELit (LInt 0))) (EVar "None")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "lastIndexOfGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Int")))))))))
-(DFunDef false "lastIndexOfGo" ((PVar "a") (PVar "n") (PVar "nA") (PVar "nl") (PVar "from") (PVar "acc")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "sepFrom") (EVar "a")) (EVar "n")) (EVar "nA")) (EVar "nl")) (EVar "from")) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "a")) (EVar "n")) (EVar "nA")) (EVar "nl")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "Some") (EVar "i"))))))
+(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EApp (EApp (EVar "stringLastIndexOf") (EVar "needle")) (EVar "haystack")))
 (DTypeSig true "countOccurrences" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "countOccurrences" ((PVar "needle") (PVar "haystack")) (EIf (EBinOp "==" (EVar "needle") (ELit (LString ""))) (ELit (LInt 0)) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "indexOf") (EVar "needle")) (EVar "haystack")) (arm (PCon "None") () (ELit (LInt 0))) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "haystack"))) (DoLet false false (PVar "nA") (EApp (EVar "toChars") (EVar "needle"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "countGo") (EVar "a")) (EApp (EVar "arrayLength") (EVar "a"))) (EVar "nA")) (EApp (EVar "arrayLength") (EVar "nA"))) (ELit (LInt 0))) (ELit (LInt 0))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "countGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))))
-(DFunDef false "countGo" ((PVar "a") (PVar "n") (PVar "nA") (PVar "nl") (PVar "from") (PVar "acc")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "sepFrom") (EVar "a")) (EVar "n")) (EVar "nA")) (EVar "nl")) (EVar "from")) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "countGo") (EVar "a")) (EVar "n")) (EVar "nA")) (EVar "nl")) (EBinOp "+" (EVar "i") (EVar "nl"))) (EBinOp "+" (EVar "acc") (ELit (LInt 1)))))))
+(DFunDef false "countOccurrences" ((PVar "needle") (PVar "haystack")) (EApp (EApp (EVar "stringCountOccurrences") (EVar "needle")) (EVar "haystack")))
 (DTypeSig true "prepend" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "prepend" ((PVar "pre") (PVar "s")) (EBinOp "++" (EVar "pre") (EVar "s")))
 (DTypeSig true "concat" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "concat" ((PVar "parts")) (EApp (EVar "stringConcat") (EVar "parts")))
 (DTypeSig true "join" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "join" ((PVar "sep") (PVar "parts")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "intersperse") (EVar "sep")) (EVar "parts"))))
-(DTypeSig false "intersperse" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "intersperse" (PWild (PList)) (EListLit))
-(DFunDef false "intersperse" (PWild (PCons (PVar "x") (PList))) (EListLit (EVar "x")))
-(DFunDef false "intersperse" ((PVar "sep") (PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "sep") (EApp (EApp (EVar "intersperse") (EVar "sep")) (EVar "xs")))))
+(DFunDef false "join" ((PVar "sep") (PVar "parts")) (EApp (EApp (EVar "stringJoin") (EVar "sep")) (EVar "parts")))
 (DTypeSig true "repeat" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "repeat" ((PVar "n") (PVar "s")) (EApp (EApp (EVar "repeatDbl") (EVar "n")) (EVar "s")))
 (DTypeSig false "repeatDbl" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "repeatDbl" ((PVar "k") (PVar "s")) (EIf (EBinOp "<=" (EVar "k") (ELit (LInt 0))) (ELit (LString "")) (EBlock (DoLet false false (PVar "h") (EApp (EApp (EVar "repeatDbl") (EBinOp "/" (EVar "k") (ELit (LInt 2)))) (EVar "s"))) (DoExpr (EIf (EApp (EVar "isEven") (EVar "k")) (EBinOp "++" (EVar "h") (EVar "h")) (EBinOp "++" (EBinOp "++" (EVar "h") (EVar "h")) (EVar "s")))))))
-(DTypeSig false "replic" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "replic" ((PVar "n") (PVar "x")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EListLit) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "replic") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "x")))))
 (DTypeSig true "reverse" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "reverse" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "s"))) (DoExpr (EApp (EVar "stringFromChars") (EApp (EApp (EVar "reverseArr") (EVar "a")) (EApp (EVar "arrayLength") (EVar "a")))))))
-(DTypeSig false "reverseArr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "Array") (TyCon "Char")))))
-(DFunDef false "reverseArr" ((PVar "a") (PVar "n")) (EApp (EApp (EVar "arrayMakeWith") (EVar "n")) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EBinOp "-" (EVar "n") (ELit (LInt 1))) (EVar "i"))) (EVar "a")))))
+(DFunDef false "reverse" ((PVar "s")) (EApp (EVar "stringReverse") (EVar "s")))
 (DTypeSig true "trimLeft" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "trimLeft" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "stringSlice") (EApp (EApp (EApp (EVar "firstNonSpace") (EVar "a")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "a")))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))
+(DFunDef false "trimLeft" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "stringSlice") (EApp (EApp (EApp (EVar "firstNonSpaceStr") (EVar "s")) (ELit (LInt 0))) (EVar "n"))) (EVar "n")) (EVar "s")))))
 (DTypeSig true "trimRight" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "trimRight" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "+" (EApp (EApp (EVar "lastNonSpace") (EVar "a")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "a")) (ELit (LInt 1)))) (ELit (LInt 1)))) (EVar "s")))))
+(DFunDef false "trimRight" ((PVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "+" (EApp (EApp (EApp (EVar "lastNonSpaceStr") (EVar "s")) (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 1)))) (ELit (LInt 0))) (ELit (LInt 1)))) (EVar "s")))
 (DTypeSig true "trim" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "trim" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "a"))) (DoExpr (EApp (EApp (EApp (EVar "stringSlice") (EApp (EApp (EApp (EVar "firstNonSpace") (EVar "a")) (ELit (LInt 0))) (EVar "n"))) (EBinOp "+" (EApp (EApp (EVar "lastNonSpace") (EVar "a")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (ELit (LInt 1)))) (EVar "s")))))
+(DFunDef false "trim" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoLet false false (PVar "lo") (EApp (EApp (EApp (EVar "firstNonSpaceStr") (EVar "s")) (ELit (LInt 0))) (EVar "n"))) (DoExpr (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EBinOp "+" (EApp (EApp (EApp (EVar "lastNonSpaceStr") (EVar "s")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "lo")) (ELit (LInt 1)))) (EVar "s")))))
+(DTypeSig false "charAtStr" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Char"))))
+(DFunDef false "charAtStr" ((PVar "s") (PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "toChars") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s")))))
+(DTypeSig false "firstNonSpaceStr" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "firstNonSpaceStr" ((PVar "s") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EApp (EVar "isSpace") (EApp (EApp (EVar "charAtStr") (EVar "s")) (EVar "i"))) (EApp (EApp (EApp (EVar "firstNonSpaceStr") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "lastNonSpaceStr" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "lastNonSpaceStr" ((PVar "s") (PVar "i") (PVar "lo")) (EIf (EBinOp "<" (EVar "i") (EVar "lo")) (EBinOp "-" (EVar "lo") (ELit (LInt 1))) (EIf (EApp (EVar "isSpace") (EApp (EApp (EVar "charAtStr") (EVar "s")) (EVar "i"))) (EApp (EApp (EApp (EVar "lastNonSpaceStr") (EVar "s")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "lo")) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "firstNonSpace" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "firstNonSpace" ((PVar "a") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EApp (EVar "isSpace") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EApp (EApp (EVar "firstNonSpace") (EVar "a")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "lastNonSpace" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "lastNonSpace" ((PVar "a") (PVar "i")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1))) (EIf (EApp (EVar "isSpace") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EApp (EVar "lastNonSpace") (EVar "a")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "firstSpace" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "firstSpace" ((PVar "a") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EApp (EVar "isSpace") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EVar "i") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "firstSpace") (EVar "a")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "toUpper" (TyFun (TyCon "String") (TyCon "String")))
@@ -1002,7 +913,7 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DTypeSig false "replaceFirst" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "replaceFirst" ((PVar "old") (PVar "new") (PVar "s")) (EMatch (EApp (EApp (EVar "indexOf") (EVar "old")) (EVar "s")) (arm (PCon "None") () (EVar "s")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EVar "spliceAt") (EVar "i")) (EApp (EVar "stringLength") (EVar "old"))) (EVar "new")) (EVar "s")))))
 (DTypeSig false "spliceAt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "spliceAt" ((PVar "i") (PVar "oldLen") (PVar "new") (PVar "s")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s")) (EVar "new")) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (EVar "oldLen"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))))
+(DFunDef false "spliceAt" ((PVar "i") (PVar "oldLen") (PVar "new") (PVar "s")) (EApp (EVar "stringConcat") (EListLit (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s")) (EVar "new") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (EVar "oldLen"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))
 (DTypeSig true "replaceAll" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "replaceAll" ((PVar "old") (PVar "new") (PVar "s")) (EIf (EBinOp "==" (EVar "old") (ELit (LString ""))) (EVar "s") (EApp (EApp (EApp (EVar "replaceAllGo") (EVar "old")) (EVar "new")) (EVar "s"))))
 (DTypeSig false "replaceAllGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
@@ -1033,7 +944,13 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DTypeSig false "subChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "subChars" ((PVar "a") (PVar "lo") (PVar "hi")) (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "i"))) (EVar "a"))))))
 (DTypeSig true "lines" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "lines" ((PVar "s")) (EApp (EApp (EVar "map") (EVar "stripCR")) (EApp (EApp (EVar "split") (EVar "nl")) (EVar "s"))))
+(DFunDef false "lines" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "linesFrom") (EVar "a")) (EApp (EVar "arrayLength") (EVar "a"))) (ELit (LInt 0))))))
+(DTypeSig false "linesFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "linesFrom" ((PVar "a") (PVar "n") (PVar "start")) (EMatch (EApp (EApp (EApp (EVar "newlineFrom") (EVar "a")) (EVar "n")) (EVar "start")) (arm (PCon "None") () (EListLit (EApp (EApp (EApp (EVar "lineSlice") (EVar "a")) (EVar "start")) (EVar "n")))) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (EApp (EApp (EApp (EVar "lineSlice") (EVar "a")) (EVar "start")) (EVar "i")) (EApp (EApp (EApp (EVar "linesFrom") (EVar "a")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))
+(DTypeSig false "newlineFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DFunDef false "newlineFrom" ((PVar "a") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a")) (ELit (LChar "\n"))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "newlineFrom") (EVar "a")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "lineSlice" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "lineSlice" ((PVar "a") (PVar "start") (PVar "hi")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "hi") (EVar "start")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EVar "a")) (ELit (LChar "\r")))) (EApp (EApp (EApp (EVar "subChars") (EVar "a")) (EVar "start")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "subChars") (EVar "a")) (EVar "start")) (EVar "hi"))))
 (DTypeSig true "stripCR" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripCR" ((PVar "line")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "\r"))) (EVar "line")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "line")) (ELit (LInt 1)))) (EVar "line")) (EVar "line")))
 (DTypeSig true "words" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
@@ -1043,23 +960,20 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DTypeSig false "wordsEmit" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "wordsEmit" ((PVar "a") (PVar "n") (PVar "start") (PVar "e")) (EBinOp "::" (EApp (EApp (EApp (EVar "subChars") (EVar "a")) (EVar "start")) (EVar "e")) (EApp (EApp (EApp (EVar "wordsFrom") (EVar "a")) (EVar "n")) (EApp (EApp (EApp (EVar "firstNonSpace") (EVar "a")) (EVar "e")) (EVar "n")))))
 (DTypeSig true "unlines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "unlines" ((PVar "parts")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "map") (EVar "addNL")) (EVar "parts"))))
-(DTypeSig false "addNL" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "addNL" ((PVar "p")) (EBinOp "++" (EVar "p") (EVar "nl")))
+(DFunDef false "unlines" ((PVar "parts")) (EApp (EVar "stringConcat") (EApp (EVar "withNewlines") (EVar "parts"))))
+(DTypeSig false "withNewlines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "withNewlines" ((PList)) (EListLit))
+(DFunDef false "withNewlines" ((PCons (PVar "p") (PVar "ps"))) (EBinOp "::" (EVar "p") (EBinOp "::" (EVar "nl") (EApp (EVar "withNewlines") (EVar "ps")))))
 (DTypeSig false "nl" (TyCon "String"))
 (DFunDef false "nl" () (ELit (LString "\n")))
 (DTypeSig true "unwords" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "unwords" ((PVar "parts")) (EApp (EApp (EVar "join") (ELit (LString " "))) (EVar "parts")))
 (DTypeSig true "padLeft" (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "String") (TyCon "String")))))
-(DFunDef false "padLeft" ((PVar "n") (PVar "c") (PVar "s")) (EIf (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (EVar "n")) (EVar "s") (EBinOp "++" (EApp (EVar "stringConcat") (EApp (EApp (EVar "replic") (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s")))) (EApp (EVar "charToStr") (EVar "c")))) (EVar "s"))))
+(DFunDef false "padLeft" ((PVar "n") (PVar "c") (PVar "s")) (EIf (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (EVar "n")) (EVar "s") (EBinOp "++" (EApp (EApp (EVar "repeat") (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s")))) (EApp (EVar "charToStr") (EVar "c"))) (EVar "s"))))
 (DTypeSig true "padRight" (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "String") (TyCon "String")))))
-(DFunDef false "padRight" ((PVar "n") (PVar "c") (PVar "s")) (EIf (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (EVar "n")) (EVar "s") (EBinOp "++" (EVar "s") (EApp (EVar "stringConcat") (EApp (EApp (EVar "replic") (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s")))) (EApp (EVar "charToStr") (EVar "c")))))))
+(DFunDef false "padRight" ((PVar "n") (PVar "c") (PVar "s")) (EIf (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (EVar "n")) (EVar "s") (EBinOp "++" (EVar "s") (EApp (EApp (EVar "repeat") (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s")))) (EApp (EVar "charToStr") (EVar "c"))))))
 (DTypeSig true "center" (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "String") (TyCon "String")))))
-(DFunDef false "center" ((PVar "n") (PVar "c") (PVar "s")) (EIf (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (EVar "n")) (EVar "s") (EApp (EApp (EApp (EApp (EVar "centerPad") (EApp (EVar "half") (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s"))))) (EBinOp "-" (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s"))) (EApp (EVar "half") (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s")))))) (EVar "c")) (EVar "s"))))
-(DTypeSig false "centerPad" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "centerPad" ((PVar "l") (PVar "r") (PVar "c") (PVar "s")) (EBinOp "++" (EBinOp "++" (EApp (EVar "stringConcat") (EApp (EApp (EVar "replic") (EVar "l")) (EApp (EVar "charToStr") (EVar "c")))) (EVar "s")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "replic") (EVar "r")) (EApp (EVar "charToStr") (EVar "c"))))))
-(DTypeSig false "half" (TyFun (TyCon "Int") (TyCon "Int")))
-(DFunDef false "half" ((PVar "k")) (EIf (EBinOp "<=" (EVar "k") (ELit (LInt 1))) (ELit (LInt 0)) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "half") (EBinOp "-" (EVar "k") (ELit (LInt 2)))))))
+(DFunDef false "center" ((PVar "n") (PVar "c") (PVar "s")) (EIf (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (EVar "n")) (EVar "s") (EBlock (DoLet false false (PVar "k") (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s")))) (DoExpr (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "repeat") (EBinOp "/" (EVar "k") (ELit (LInt 2)))) (EApp (EVar "charToStr") (EVar "c"))) (EVar "s")) (EApp (EApp (EVar "repeat") (EBinOp "-" (EVar "k") (EBinOp "/" (EVar "k") (ELit (LInt 2))))) (EApp (EVar "charToStr") (EVar "c"))))))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Option" false))))
 (DTypeSig true "isDigit" (TyFun (TyCon "Char") (TyCon "Bool")))
@@ -1097,25 +1011,15 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DTypeSig true "byteLength" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "byteLength" ((PVar "s")) (EApp (EVar "utf8ByteLength") (EVar "s")))
 (DTypeSig true "utf8ByteLength" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "utf8ByteLength" ((PVar "s")) (EApp (EVar "arrayLength") (EApp (EVar "toUtf8") (EVar "s"))))
+(DFunDef false "utf8ByteLength" ((PVar "s")) (EApp (EVar "stringByteLength") (EVar "s")))
 (DTypeSig true "toInt" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "toInt" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "s"))) (DoExpr (EApp (EApp (EVar "parseInt") (EVar "a")) (EApp (EVar "arrayLength") (EVar "a"))))))
-(DTypeSig false "parseInt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "parseInt" ((PVar "a") (PVar "n")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EVar "None") (EApp (EApp (EApp (EVar "parseSign") (EVar "a")) (EVar "n")) (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "a")))))
-(DTypeSig false "parseSign" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "parseSign" ((PVar "a") (PVar "n") (PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "-"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "a")) (EVar "n")) (ELit (LInt 1))) (ELit (LInt 0))) (EVar "False")) (EVar "True")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "+"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "a")) (EVar "n")) (ELit (LInt 1))) (ELit (LInt 0))) (EVar "False")) (EVar "False")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "a")) (EVar "n")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "False")) (EVar "False")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "parseDigits" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "Int")))))))))
-(DFunDef false "parseDigits" ((PVar "a") (PVar "n") (PVar "i") (PVar "acc") (PVar "seen") (PVar "negative")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EApp (EApp (EVar "finishInt") (EVar "seen")) (EVar "acc")) (EVar "negative")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseDigitStep") (EVar "a")) (EVar "n")) (EVar "i")) (EVar "acc")) (EVar "seen")) (EVar "negative")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "parseDigitStep" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Char") (TyApp (TyCon "Option") (TyCon "Int"))))))))))
-(DFunDef false "parseDigitStep" ((PVar "a") (PVar "n") (PVar "i") (PVar "acc") (PVar "seen") (PVar "negative") (PVar "c")) (EIf (EApp (EVar "isDigit") (EVar "c")) (EBlock (DoLet false false (PVar "d") (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 48)))) (DoLet false false (PVar "limit") (EIf (EVar "negative") (EVar "intMinBound") (EBinOp "-" (ELit (LInt 0)) (EVar "intMaxBound")))) (DoLet false false (PVar "multMin") (EBinOp "/" (EVar "limit") (ELit (LInt 10)))) (DoExpr (EIf (EBinOp "<" (EVar "acc") (EVar "multMin")) (EVar "None") (EBlock (DoLet false false (PVar "acc2") (EBinOp "*" (EVar "acc") (ELit (LInt 10)))) (DoExpr (EIf (EBinOp "<" (EVar "acc2") (EBinOp "+" (EVar "limit") (EVar "d"))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "a")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "acc2") (EVar "d"))) (EVar "True")) (EVar "negative")))))))) (EVar "None")))
-(DTypeSig false "finishInt" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "finishInt" ((PVar "seen") (PVar "acc") (PVar "negative")) (EIf (EApp (EVar "not") (EVar "seen")) (EVar "None") (EIf (EVar "negative") (EApp (EVar "Some") (EVar "acc")) (EApp (EVar "Some") (EBinOp "-" (ELit (LInt 0)) (EVar "acc"))))))
+(DFunDef false "toInt" ((PVar "s")) (EApp (EVar "stringToInt") (EVar "s")))
 (DTypeSig true "toFloat" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Float"))))
 (DFunDef false "toFloat" ((PVar "s")) (EApp (EVar "stringToFloat") (EVar "s")))
 (DTypeSig true "startsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "startsWith" ((PVar "prefix") (PVar "s")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "prefix"))) (EVar "s")) (EVar "prefix")))
+(DFunDef false "startsWith" ((PVar "prefix") (PVar "s")) (EApp (EApp (EVar "stringStartsWith") (EVar "prefix")) (EVar "s")))
 (DTypeSig true "endsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "endsWith" ((PVar "suffix") (PVar "s")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EVar "suffix")))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (EVar "suffix")))
+(DFunDef false "endsWith" ((PVar "suffix") (PVar "s")) (EApp (EApp (EVar "stringEndsWith") (EVar "suffix")) (EVar "s")))
 (DTypeSig true "stripPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "stripPrefix" ((PVar "prefix") (PVar "s")) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "s")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "prefix"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (EVar "None")))
 (DTypeSig true "stripSuffix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -1125,43 +1029,35 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DTypeSig true "indexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "indexOf" ((PVar "needle") (PVar "haystack")) (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack")))
 (DTypeSig true "lastIndexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EIf (EBinOp "==" (EVar "needle") (ELit (LString ""))) (EApp (EVar "Some") (EApp (EVar "stringLength") (EVar "haystack"))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "indexOf") (EVar "needle")) (EVar "haystack")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "haystack"))) (DoLet false false (PVar "nA") (EApp (EVar "toChars") (EVar "needle"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "a")) (EApp (EVar "arrayLength") (EVar "a"))) (EVar "nA")) (EApp (EVar "arrayLength") (EVar "nA"))) (ELit (LInt 0))) (EVar "None")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "lastIndexOfGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Int")))))))))
-(DFunDef false "lastIndexOfGo" ((PVar "a") (PVar "n") (PVar "nA") (PVar "nl") (PVar "from") (PVar "acc")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "sepFrom") (EVar "a")) (EVar "n")) (EVar "nA")) (EVar "nl")) (EVar "from")) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "a")) (EVar "n")) (EVar "nA")) (EVar "nl")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "Some") (EVar "i"))))))
+(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EApp (EApp (EVar "stringLastIndexOf") (EVar "needle")) (EVar "haystack")))
 (DTypeSig true "countOccurrences" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "countOccurrences" ((PVar "needle") (PVar "haystack")) (EIf (EBinOp "==" (EVar "needle") (ELit (LString ""))) (ELit (LInt 0)) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "indexOf") (EVar "needle")) (EVar "haystack")) (arm (PCon "None") () (ELit (LInt 0))) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "haystack"))) (DoLet false false (PVar "nA") (EApp (EVar "toChars") (EVar "needle"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "countGo") (EVar "a")) (EApp (EVar "arrayLength") (EVar "a"))) (EVar "nA")) (EApp (EVar "arrayLength") (EVar "nA"))) (ELit (LInt 0))) (ELit (LInt 0))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "countGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))))
-(DFunDef false "countGo" ((PVar "a") (PVar "n") (PVar "nA") (PVar "nl") (PVar "from") (PVar "acc")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "sepFrom") (EVar "a")) (EVar "n")) (EVar "nA")) (EVar "nl")) (EVar "from")) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "countGo") (EVar "a")) (EVar "n")) (EVar "nA")) (EVar "nl")) (EBinOp "+" (EVar "i") (EVar "nl"))) (EBinOp "+" (EVar "acc") (ELit (LInt 1)))))))
+(DFunDef false "countOccurrences" ((PVar "needle") (PVar "haystack")) (EApp (EApp (EVar "stringCountOccurrences") (EVar "needle")) (EVar "haystack")))
 (DTypeSig true "prepend" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "prepend" ((PVar "pre") (PVar "s")) (EBinOp "++" (EVar "pre") (EVar "s")))
 (DTypeSig true "concat" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "concat" ((PVar "parts")) (EApp (EVar "stringConcat") (EVar "parts")))
 (DTypeSig true "join" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "join" ((PVar "sep") (PVar "parts")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "intersperse") (EVar "sep")) (EVar "parts"))))
-(DTypeSig false "intersperse" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "intersperse" (PWild (PList)) (EListLit))
-(DFunDef false "intersperse" (PWild (PCons (PVar "x") (PList))) (EListLit (EVar "x")))
-(DFunDef false "intersperse" ((PVar "sep") (PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "sep") (EApp (EApp (EVar "intersperse") (EVar "sep")) (EVar "xs")))))
+(DFunDef false "join" ((PVar "sep") (PVar "parts")) (EApp (EApp (EVar "stringJoin") (EVar "sep")) (EVar "parts")))
 (DTypeSig true "repeat" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "repeat" ((PVar "n") (PVar "s")) (EApp (EApp (EVar "repeatDbl") (EVar "n")) (EVar "s")))
 (DTypeSig false "repeatDbl" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "repeatDbl" ((PVar "k") (PVar "s")) (EIf (EBinOp "<=" (EVar "k") (ELit (LInt 0))) (ELit (LString "")) (EBlock (DoLet false false (PVar "h") (EApp (EApp (EVar "repeatDbl") (EBinOp "/" (EVar "k") (ELit (LInt 2)))) (EVar "s"))) (DoExpr (EIf (EApp (EVar "isEven") (EVar "k")) (EBinOp "++" (EVar "h") (EVar "h")) (EBinOp "++" (EBinOp "++" (EVar "h") (EVar "h")) (EVar "s")))))))
-(DTypeSig false "replic" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "replic" ((PVar "n") (PVar "x")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EListLit) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "replic") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "x")))))
 (DTypeSig true "reverse" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "reverse" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "s"))) (DoExpr (EApp (EVar "stringFromChars") (EApp (EApp (EVar "reverseArr") (EVar "a")) (EApp (EVar "arrayLength") (EVar "a")))))))
-(DTypeSig false "reverseArr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "Array") (TyCon "Char")))))
-(DFunDef false "reverseArr" ((PVar "a") (PVar "n")) (EApp (EApp (EVar "arrayMakeWith") (EVar "n")) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EBinOp "-" (EVar "n") (ELit (LInt 1))) (EVar "i"))) (EVar "a")))))
+(DFunDef false "reverse" ((PVar "s")) (EApp (EVar "stringReverse") (EVar "s")))
 (DTypeSig true "trimLeft" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "trimLeft" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "stringSlice") (EApp (EApp (EApp (EVar "firstNonSpace") (EVar "a")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "a")))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))
+(DFunDef false "trimLeft" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "stringSlice") (EApp (EApp (EApp (EVar "firstNonSpaceStr") (EVar "s")) (ELit (LInt 0))) (EVar "n"))) (EVar "n")) (EVar "s")))))
 (DTypeSig true "trimRight" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "trimRight" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "+" (EApp (EApp (EVar "lastNonSpace") (EVar "a")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "a")) (ELit (LInt 1)))) (ELit (LInt 1)))) (EVar "s")))))
+(DFunDef false "trimRight" ((PVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "+" (EApp (EApp (EApp (EVar "lastNonSpaceStr") (EVar "s")) (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 1)))) (ELit (LInt 0))) (ELit (LInt 1)))) (EVar "s")))
 (DTypeSig true "trim" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "trim" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "a"))) (DoExpr (EApp (EApp (EApp (EVar "stringSlice") (EApp (EApp (EApp (EVar "firstNonSpace") (EVar "a")) (ELit (LInt 0))) (EVar "n"))) (EBinOp "+" (EApp (EApp (EVar "lastNonSpace") (EVar "a")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (ELit (LInt 1)))) (EVar "s")))))
+(DFunDef false "trim" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoLet false false (PVar "lo") (EApp (EApp (EApp (EVar "firstNonSpaceStr") (EVar "s")) (ELit (LInt 0))) (EVar "n"))) (DoExpr (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EBinOp "+" (EApp (EApp (EApp (EVar "lastNonSpaceStr") (EVar "s")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "lo")) (ELit (LInt 1)))) (EVar "s")))))
+(DTypeSig false "charAtStr" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Char"))))
+(DFunDef false "charAtStr" ((PVar "s") (PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "toChars") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s")))))
+(DTypeSig false "firstNonSpaceStr" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "firstNonSpaceStr" ((PVar "s") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EApp (EVar "isSpace") (EApp (EApp (EVar "charAtStr") (EVar "s")) (EVar "i"))) (EApp (EApp (EApp (EVar "firstNonSpaceStr") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "lastNonSpaceStr" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "lastNonSpaceStr" ((PVar "s") (PVar "i") (PVar "lo")) (EIf (EBinOp "<" (EVar "i") (EVar "lo")) (EBinOp "-" (EVar "lo") (ELit (LInt 1))) (EIf (EApp (EVar "isSpace") (EApp (EApp (EVar "charAtStr") (EVar "s")) (EVar "i"))) (EApp (EApp (EApp (EVar "lastNonSpaceStr") (EVar "s")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "lo")) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "firstNonSpace" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "firstNonSpace" ((PVar "a") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EApp (EVar "isSpace") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EApp (EApp (EVar "firstNonSpace") (EVar "a")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "lastNonSpace" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "lastNonSpace" ((PVar "a") (PVar "i")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1))) (EIf (EApp (EVar "isSpace") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EApp (EVar "lastNonSpace") (EVar "a")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "firstSpace" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "firstSpace" ((PVar "a") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EApp (EVar "isSpace") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EVar "i") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "firstSpace") (EVar "a")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "toUpper" (TyFun (TyCon "String") (TyCon "String")))
@@ -1175,7 +1071,7 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DTypeSig false "replaceFirst" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "replaceFirst" ((PVar "old") (PVar "new") (PVar "s")) (EMatch (EApp (EApp (EVar "indexOf") (EVar "old")) (EVar "s")) (arm (PCon "None") () (EVar "s")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EVar "spliceAt") (EVar "i")) (EApp (EVar "stringLength") (EVar "old"))) (EVar "new")) (EVar "s")))))
 (DTypeSig false "spliceAt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "spliceAt" ((PVar "i") (PVar "oldLen") (PVar "new") (PVar "s")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s")) (EVar "new")) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (EVar "oldLen"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))))
+(DFunDef false "spliceAt" ((PVar "i") (PVar "oldLen") (PVar "new") (PVar "s")) (EApp (EVar "stringConcat") (EListLit (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s")) (EVar "new") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (EVar "oldLen"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))
 (DTypeSig true "replaceAll" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "replaceAll" ((PVar "old") (PVar "new") (PVar "s")) (EIf (EBinOp "==" (EVar "old") (ELit (LString ""))) (EVar "s") (EApp (EApp (EApp (EVar "replaceAllGo") (EVar "old")) (EVar "new")) (EVar "s"))))
 (DTypeSig false "replaceAllGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
@@ -1206,7 +1102,13 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DTypeSig false "subChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "subChars" ((PVar "a") (PVar "lo") (PVar "hi")) (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "i"))) (EVar "a"))))))
 (DTypeSig true "lines" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "lines" ((PVar "s")) (EApp (EApp (EMethodRef "map") (EVar "stripCR")) (EApp (EApp (EVar "split") (EVar "nl")) (EVar "s"))))
+(DFunDef false "lines" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "linesFrom") (EVar "a")) (EApp (EVar "arrayLength") (EVar "a"))) (ELit (LInt 0))))))
+(DTypeSig false "linesFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "linesFrom" ((PVar "a") (PVar "n") (PVar "start")) (EMatch (EApp (EApp (EApp (EVar "newlineFrom") (EVar "a")) (EVar "n")) (EVar "start")) (arm (PCon "None") () (EListLit (EApp (EApp (EApp (EVar "lineSlice") (EVar "a")) (EVar "start")) (EVar "n")))) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (EApp (EApp (EApp (EVar "lineSlice") (EVar "a")) (EVar "start")) (EVar "i")) (EApp (EApp (EApp (EVar "linesFrom") (EVar "a")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))
+(DTypeSig false "newlineFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DFunDef false "newlineFrom" ((PVar "a") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a")) (ELit (LChar "\n"))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "newlineFrom") (EVar "a")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "lineSlice" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "lineSlice" ((PVar "a") (PVar "start") (PVar "hi")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "hi") (EVar "start")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EVar "a")) (ELit (LChar "\r")))) (EApp (EApp (EApp (EVar "subChars") (EVar "a")) (EVar "start")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "subChars") (EVar "a")) (EVar "start")) (EVar "hi"))))
 (DTypeSig true "stripCR" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripCR" ((PVar "line")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "\r"))) (EVar "line")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "line")) (ELit (LInt 1)))) (EVar "line")) (EVar "line")))
 (DTypeSig true "words" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
@@ -1216,20 +1118,17 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DTypeSig false "wordsEmit" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "wordsEmit" ((PVar "a") (PVar "n") (PVar "start") (PVar "e")) (EBinOp "::" (EApp (EApp (EApp (EVar "subChars") (EVar "a")) (EVar "start")) (EVar "e")) (EApp (EApp (EApp (EVar "wordsFrom") (EVar "a")) (EVar "n")) (EApp (EApp (EApp (EVar "firstNonSpace") (EVar "a")) (EVar "e")) (EVar "n")))))
 (DTypeSig true "unlines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
-(DFunDef false "unlines" ((PVar "parts")) (EApp (EVar "stringConcat") (EApp (EApp (EMethodRef "map") (EVar "addNL")) (EVar "parts"))))
-(DTypeSig false "addNL" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "addNL" ((PVar "p")) (EBinOp "++" (EVar "p") (EVar "nl")))
+(DFunDef false "unlines" ((PVar "parts")) (EApp (EVar "stringConcat") (EApp (EVar "withNewlines") (EVar "parts"))))
+(DTypeSig false "withNewlines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "withNewlines" ((PList)) (EListLit))
+(DFunDef false "withNewlines" ((PCons (PVar "p") (PVar "ps"))) (EBinOp "::" (EVar "p") (EBinOp "::" (EVar "nl") (EApp (EVar "withNewlines") (EVar "ps")))))
 (DTypeSig false "nl" (TyCon "String"))
 (DFunDef false "nl" () (ELit (LString "\n")))
 (DTypeSig true "unwords" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "unwords" ((PVar "parts")) (EApp (EApp (EVar "join") (ELit (LString " "))) (EVar "parts")))
 (DTypeSig true "padLeft" (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "String") (TyCon "String")))))
-(DFunDef false "padLeft" ((PVar "n") (PVar "c") (PVar "s")) (EIf (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (EVar "n")) (EVar "s") (EBinOp "++" (EApp (EVar "stringConcat") (EApp (EApp (EVar "replic") (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s")))) (EApp (EVar "charToStr") (EVar "c")))) (EVar "s"))))
+(DFunDef false "padLeft" ((PVar "n") (PVar "c") (PVar "s")) (EIf (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (EVar "n")) (EVar "s") (EBinOp "++" (EApp (EApp (EVar "repeat") (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s")))) (EApp (EVar "charToStr") (EVar "c"))) (EVar "s"))))
 (DTypeSig true "padRight" (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "String") (TyCon "String")))))
-(DFunDef false "padRight" ((PVar "n") (PVar "c") (PVar "s")) (EIf (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (EVar "n")) (EVar "s") (EBinOp "++" (EVar "s") (EApp (EVar "stringConcat") (EApp (EApp (EVar "replic") (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s")))) (EApp (EVar "charToStr") (EVar "c")))))))
+(DFunDef false "padRight" ((PVar "n") (PVar "c") (PVar "s")) (EIf (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (EVar "n")) (EVar "s") (EBinOp "++" (EVar "s") (EApp (EApp (EVar "repeat") (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s")))) (EApp (EVar "charToStr") (EVar "c"))))))
 (DTypeSig true "center" (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "String") (TyCon "String")))))
-(DFunDef false "center" ((PVar "n") (PVar "c") (PVar "s")) (EIf (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (EVar "n")) (EVar "s") (EApp (EApp (EApp (EApp (EVar "centerPad") (EApp (EVar "half") (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s"))))) (EBinOp "-" (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s"))) (EApp (EVar "half") (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s")))))) (EVar "c")) (EVar "s"))))
-(DTypeSig false "centerPad" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "centerPad" ((PVar "l") (PVar "r") (PVar "c") (PVar "s")) (EBinOp "++" (EBinOp "++" (EApp (EVar "stringConcat") (EApp (EApp (EVar "replic") (EVar "l")) (EApp (EVar "charToStr") (EVar "c")))) (EVar "s")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "replic") (EVar "r")) (EApp (EVar "charToStr") (EVar "c"))))))
-(DTypeSig false "half" (TyFun (TyCon "Int") (TyCon "Int")))
-(DFunDef false "half" ((PVar "k")) (EIf (EBinOp "<=" (EVar "k") (ELit (LInt 1))) (ELit (LInt 0)) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "half") (EBinOp "-" (EVar "k") (ELit (LInt 2)))))))
+(DFunDef false "center" ((PVar "n") (PVar "c") (PVar "s")) (EIf (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (EVar "n")) (EVar "s") (EBlock (DoLet false false (PVar "k") (EBinOp "-" (EVar "n") (EApp (EVar "stringLength") (EVar "s")))) (DoExpr (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "repeat") (EBinOp "/" (EVar "k") (ELit (LInt 2)))) (EApp (EVar "charToStr") (EVar "c"))) (EVar "s")) (EApp (EApp (EVar "repeat") (EBinOp "-" (EVar "k") (EBinOp "/" (EVar "k") (ELit (LInt 2))))) (EApp (EVar "charToStr") (EVar "c"))))))))

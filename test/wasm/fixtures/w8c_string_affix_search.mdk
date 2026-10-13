@@ -1,0 +1,11 @@
+-- W8c: stringStartsWith / stringEndsWith on multibyte, empty and too-long operands.
+bit : Bool -> Int
+bit b = if b then 1 else 0
+
+main =
+  bit (stringStartsWith "" "x")
+    + 2 * bit (stringStartsWith "日" "日本")
+    + 4 * bit (stringStartsWith "日本" "日")
+    + 8 * bit (stringEndsWith "語" "日本語")
+    + 16 * bit (stringEndsWith "本" "日本語")
+    + 32 * bit (stringEndsWith "xhello" "hello")

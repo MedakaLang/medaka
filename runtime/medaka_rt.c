@@ -1744,14 +1744,30 @@ long long mdk_string_to_chars(long long s) {
   }
   return (long long)arr;
 }
+/* Byte width mdk_utf8_encode writes for a codepoint, from the same thresholds. */
+static int mdk_utf8_width(long long cp) {
+  return cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+}
+/* One pass sizes the cell, a second writes it, and the codepoint count is n.
+ * Each encoded char has exactly one non-continuation lead byte, so the count
+ * is n for every codepoint >= 0. A negative value is encoded as one raw byte
+ * that may be a continuation byte, so that case recounts the bytes. */
 long long mdk_string_from_chars(long long arr) {
   const long long *a = (const long long *)arr;
-  long long n = a[0], total = 0; char tmp[4];
-  for (long long i = 0; i < n; i++) total += mdk_utf8_encode(a[i+1] >> 1, tmp);
-  char *buf = (char *)mdk_alloc(total + 1);
-  long long off = 0;
-  for (long long i = 0; i < n; i++) off += mdk_utf8_encode(a[i+1] >> 1, buf + off);
-  return mdk_str_lit(buf, total);
+  long long n = a[0], total = 0, neg = 0;
+  for (long long i = 0; i < n; i++) {
+    long long cp = a[i+1] >> 1;
+    total += mdk_utf8_width(cp);
+    neg |= (cp < 0);
+  }
+  char *cell = (char *)mdk_alloc_atomic(24 + total + 1);
+  char *dst = cell + 24;
+  for (long long i = 0; i < n; i++) dst += mdk_utf8_encode(a[i+1] >> 1, dst);
+  ((long long *)cell)[0] = MDK_STR_TAG;
+  ((long long *)cell)[1] = total;
+  ((long long *)cell)[2] = neg ? mdk_utf8_cp_count(cell + 24, total) : n;
+  cell[24 + total] = '\0';
+  return (long long)cell;
 }
 /* stringToUtf8Bytes : String -> Array Int.  Expose the String cell's raw UTF-8
  * backing as an Array of tagged Int bytes 0..255 (O(n) copy, NO codepoint
@@ -1785,14 +1801,18 @@ long long mdk_string_slice(long long lo_t, long long hi_t, long long s) {
   if (lo < 0) lo = 0; else if (lo > cp_count) lo = cp_count;
   if (hi < lo) hi = lo; else if (hi > cp_count) hi = cp_count;
   /* A cell whose codepoint count equals its byte length is all ASCII, so a
-   * codepoint index is its byte offset. */
+   * codepoint index is its byte offset.  An offset at either end of the cell
+   * is known without a walk. */
   long long blo, bhi;
   if (cp_count == byte_len) { blo = lo; bhi = hi; }
   else {
-    blo = mdk_utf8_cursor_offset(cell, bytes, byte_len, lo);
-    bhi = mdk_utf8_cursor_offset(cell, bytes, byte_len, hi);
+    blo = lo == 0 ? 0 : mdk_utf8_cursor_offset(cell, bytes, byte_len, lo);
+    bhi = hi == cp_count ? byte_len
+                         : mdk_utf8_cursor_offset(cell, bytes, byte_len, hi);
   }
-  return mdk_str_lit(bytes + blo, bhi - blo);
+  /* The bytes [blo, bhi) are whole codepoints lo..hi-1 of a well-formed cell,
+   * so the result's codepoint count is hi - lo without a rescan. */
+  return mdk_str_cell(bytes + blo, bhi - blo, hi - lo);
 }
 
 /* ── native extern catalog slice 14: ASCII char classification + case mapping ── */
@@ -2113,6 +2133,155 @@ long long mdk_string_index_of(long long needle, long long hay) {
       return mdk_some((cp << 1) | 1);
     }
   return mdk_none();
+}
+
+/* Byte-level searches over String cells.  UTF-8 is self-synchronizing, so a byte
+ * match is a codepoint match; every operand is well-formed (see mdk_utf8_cp_count).
+ * Results are raw 0/1 or counts; the emitter tags them. */
+long long mdk_string_starts_with(long long prefix, long long s) {
+  const char *pc = (const char *)prefix, *sc = (const char *)s;
+  long long pl = ((const long long *)pc)[1], sl = ((const long long *)sc)[1];
+  if (pl > sl) return 0;
+  return memcmp(sc + 24, pc + 24, (size_t)pl) == 0;
+}
+
+long long mdk_string_ends_with(long long suffix, long long s) {
+  const char *xc = (const char *)suffix, *sc = (const char *)s;
+  long long xl = ((const long long *)xc)[1], sl = ((const long long *)sc)[1];
+  if (xl > sl) return 0;
+  return memcmp(sc + 24 + (sl - xl), xc + 24, (size_t)xl) == 0;
+}
+
+/* Non-overlapping occurrences; 0 for an empty needle. */
+long long mdk_string_count_occurrences(long long needle, long long hay) {
+  const char *nc = (const char *)needle, *hc = (const char *)hay;
+  long long nl = ((const long long *)nc)[1], hl = ((const long long *)hc)[1];
+  const char *nb = nc + 24, *hb = hc + 24;
+  if (nl == 0) return 0;
+  long long count = 0;
+  long long b = 0;
+  while (b + nl <= hl) {
+    const char *p = memchr(hb + b, nb[0], (size_t)(hl - nl + 1 - b));
+    if (p == NULL) break;
+    b = p - hb;
+    if (memcmp(hb + b, nb, (size_t)nl) == 0) { count++; b += nl; }
+    else b++;
+  }
+  return count;
+}
+
+/* Overlapping occurrences are allowed; the last one wins.  An empty needle is
+ * found at the end of the haystack, i.e. at its codepoint count. */
+long long mdk_string_last_index_of(long long needle, long long hay) {
+  const char *nc = (const char *)needle, *hc = (const char *)hay;
+  long long nl = ((const long long *)nc)[1], hl = ((const long long *)hc)[1];
+  const char *nb = nc + 24, *hb = hc + 24;
+  if (nl == 0) return mdk_some((((const long long *)hc)[2] << 1) | 1);
+  long long last = -1;
+  long long b = 0;
+  while (b + nl <= hl) {
+    const char *p = memchr(hb + b, nb[0], (size_t)(hl - nl + 1 - b));
+    if (p == NULL) break;
+    b = p - hb;
+    if (memcmp(hb + b, nb, (size_t)nl) == 0) last = b;
+    b++;
+  }
+  if (last < 0) return mdk_none();
+  return mdk_some((mdk_utf8_cp_count(hb, last) << 1) | 1);
+}
+
+/* A String cell of `byte_len` bytes with its codepoint count set; the caller
+ * fills the bytes at cell + 24 with well-formed UTF-8. */
+static char *mdk_str_cell_new(long long byte_len, long long cp_count) {
+  char *cell = (char *)mdk_alloc_atomic(24 + byte_len + 1);
+  ((long long *)cell)[0] = MDK_STR_TAG;
+  ((long long *)cell)[1] = byte_len;
+  ((long long *)cell)[2] = cp_count;
+  cell[24 + byte_len] = '\0';
+  return cell;
+}
+
+/* stringToInt : String -> Option Int.  A byte-level parser: the running magnitude
+ * stays non-positive, and each digit is
+ * checked against the limit before the multiply and before the add, so no step
+ * leaves the i64 range.  Non-ASCII bytes are never digits or signs, so a byte
+ * scan decides exactly what the codepoint scan decides. */
+long long mdk_string_to_int(long long s) {
+  const char *c = (const char *)s;
+  long long n = ((const long long *)c)[1];
+  const unsigned char *b = (const unsigned char *)c + 24;
+  const long long min_bound = -(1LL << 62);
+  const long long max_bound = (1LL << 62) - 1;
+  if (n == 0) return mdk_none();
+  long long i = 0;
+  int negative = 0;
+  if (b[0] == '-') { negative = 1; i = 1; }
+  else if (b[0] == '+') i = 1;
+  long long acc = 0;
+  int seen = 0;
+  for (; i < n; i++) {
+    if (b[i] < '0' || b[i] > '9') return mdk_none();
+    long long d = b[i] - '0';
+    long long limit = negative ? min_bound : 0 - max_bound;
+    if (acc < limit / 10) return mdk_none();
+    long long acc2 = acc * 10;
+    if (acc2 < limit + d) return mdk_none();
+    acc = acc2 - d;
+    seen = 1;
+  }
+  if (!seen) return mdk_none();
+  long long v = negative ? acc : 0 - acc;
+  return mdk_some(v * 2 + 1);
+}
+
+/* stringReverse : String -> String.  Walks the UTF-8 bytes from the end, each
+ * codepoint's lead byte found by skipping continuation bytes, and copies each
+ * sequence whole.  The codepoint count is unchanged. */
+long long mdk_string_reverse(long long s) {
+  const char *c = (const char *)s;
+  long long n = ((const long long *)c)[1];
+  long long cp = ((const long long *)c)[2];
+  const char *b = c + 24;
+  char *out = mdk_str_cell_new(n, cp);
+  char *o = out + 24;
+  long long end = n;
+  while (end > 0) {
+    long long start = end - 1;
+    while (start > 0 && (((unsigned char)b[start]) & 0xC0) == 0x80) start--;
+    memcpy(o, b + start, (size_t)(end - start));
+    o += end - start;
+    end = start;
+  }
+  return (long long)out;
+}
+
+/* stringJoin : String -> List String -> String, the same bytes as
+ * stringConcat (intersperse sep parts).  Pass one sums byte and codepoint
+ * counts (both are additive over the pieces); pass two blits. */
+long long mdk_string_join(long long sep, long long list) {
+  const char *sc = (const char *)sep;
+  long long sl = ((const long long *)sc)[1];
+  long long scp = ((const long long *)sc)[2];
+  long long total = 0, cp = 0, parts = 0;
+  for (long long w = list; (w & 1) == 0; w = ((const long long *)w)[2]) {
+    const long long *piece = (const long long *)((const long long *)w)[1];
+    total += piece[1];
+    cp += piece[2];
+    parts++;
+  }
+  if (parts > 1) { total += (parts - 1) * sl; cp += (parts - 1) * scp; }
+  char *out = mdk_str_cell_new(total, cp);
+  char *o = out + 24;
+  int first = 1;
+  for (long long w = list; (w & 1) == 0; w = ((const long long *)w)[2]) {
+    if (!first) { memcpy(o, sc + 24, (size_t)sl); o += sl; }
+    first = 0;
+    const char *p = (const char *)((const long long *)w)[1];
+    long long bl = ((const long long *)p)[1];
+    memcpy(o, p + 24, (size_t)bl);
+    o += bl;
+  }
+  return (long long)out;
 }
 
 long long mdk_string_compare(long long a, long long b) {

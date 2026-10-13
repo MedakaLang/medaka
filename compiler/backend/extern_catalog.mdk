@@ -124,6 +124,9 @@ public export data WasmUse =
   | UseArgs
   | UseFileBytes
   | UseClock
+  | UseStrToInt
+  | UseStrReverse
+  | UseStrJoin
   deriving (Eq, Debug)
 
 -- One extern: its name, then the llvm, wasm and eval dispositions.  The
@@ -341,6 +344,13 @@ wasmUseRows = [
   ("stringSlice", [UseStrLeaf]),
   ("stringConcat", [UseStrLeaf]),
   ("stringIndexOf", [UseStr, UseStrLeaf, UseStrSearch]),
+  ("stringStartsWith", [UseStr, UseStrLeaf]),
+  ("stringEndsWith", [UseStr, UseStrLeaf]),
+  ("stringCountOccurrences", [UseStr, UseStrLeaf, UseStrSearch]),
+  ("stringLastIndexOf", [UseStr, UseStrLeaf, UseStrSearch]),
+  ("stringToInt", [UseStr, UseStrToInt]),
+  ("stringReverse", [UseStr, UseStrReverse]),
+  ("stringJoin", [UseStr, UseList, UseStrJoin]),
   ("stringCompare", [UseStr, UseStrLeaf, UseStrSearch]),
   ("stringToFloat", [UseStr, UseFloat, UseFloatStr, UseIO]),
   ("charIsAlpha", [UseCharClass]),
@@ -1218,6 +1228,7 @@ catalogRows = [
     (Inline WasmStr)
     Interpreted,
   ExternRow "stringLength" (Inline LlvmStr) (Inline WasmStr) Interpreted,
+  ExternRow "stringByteLength" (Inline LlvmStr) (Inline WasmStr) Interpreted,
   ExternRow
     "stringSlice"
     (CSymbol LlvmStrChar "mdk_string_slice")
@@ -1231,6 +1242,41 @@ catalogRows = [
   ExternRow
     "stringIndexOf"
     (CSymbol LlvmAdt "mdk_string_index_of")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringStartsWith"
+    (CSymbol LlvmStr "mdk_string_starts_with")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringEndsWith"
+    (CSymbol LlvmStr "mdk_string_ends_with")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringCountOccurrences"
+    (CSymbol LlvmStr "mdk_string_count_occurrences")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringLastIndexOf"
+    (CSymbol LlvmAdt "mdk_string_last_index_of")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringToInt"
+    (CSymbol LlvmAdt "mdk_string_to_int")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringReverse"
+    (CSymbol LlvmStr "mdk_string_reverse")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringJoin"
+    (CSymbol LlvmStr "mdk_string_join")
     (Inline WasmStr)
     Interpreted,
   ExternRow

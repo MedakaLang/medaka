@@ -2164,6 +2164,19 @@ emitStrExtern e env "stringConcat" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_string_concat(i64 \{a})"
     (r, LTStr)
   _ => panic "llvm: stringConcat takes one argument"
+emitStrExtern e env "stringReverse" args = match emitArgs e env args
+  [a] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_string_reverse(i64 \{a})"
+    (r, LTStr)
+  _ => panic "llvm: stringReverse takes one argument"
+emitStrExtern e env "stringJoin" args = match emitArgs e env args
+  [sep, parts] =>
+    let r = freshReg e
+    let _ =
+      emit e "  \{r} = call i64 @mdk_string_join(i64 \{sep}, i64 \{parts})"
+    (r, LTStr)
+  _ => panic "llvm: stringJoin takes two arguments"
 emitStrExtern e env "stringLength" args = match emitArgs e env args
   [a] =>
     let p = freshReg e
@@ -2174,6 +2187,39 @@ emitStrExtern e env "stringLength" args = match emitArgs e env args
     let _ = emit e "  \{n} = load i64, ptr \{cpp}"
     (tagInt e n, LTInt)
   _ => panic "llvm: stringLength takes one argument"
+-- INTRINSIC: load byte_len@8, tag it
+emitStrExtern e env "stringByteLength" args = match emitArgs e env args
+  [a] =>
+    let p = freshReg e
+    let _ = emit e "  \{p} = inttoptr i64 \{a} to ptr"
+    let bp = freshReg e
+    let _ = emit e "  \{bp} = getelementptr i8, ptr \{p}, i64 8"
+    let n = freshReg e
+    let _ = emit e "  \{n} = load i64, ptr \{bp}"
+    (tagInt e n, LTInt)
+  _ => panic "llvm: stringByteLength takes one argument"
+emitStrExtern e env "stringStartsWith" args = match emitArgs e env args
+  [p, s] =>
+    let r = freshReg e
+    let _ =
+      emit e "  \{r} = call i64 @mdk_string_starts_with(i64 \{p}, i64 \{s})"
+    (tagInt e r, LTBool)
+  _ => panic "llvm: stringStartsWith takes two arguments"
+emitStrExtern e env "stringEndsWith" args = match emitArgs e env args
+  [p, s] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_string_ends_with(i64 \{p}, i64 \{s})"
+    (tagInt e r, LTBool)
+  _ => panic "llvm: stringEndsWith takes two arguments"
+emitStrExtern e env "stringCountOccurrences" args = match emitArgs e env args
+  [n, h] =>
+    let r = freshReg e
+    let _ =
+      emit
+        e
+        "  \{r} = call i64 @mdk_string_count_occurrences(i64 \{n}, i64 \{h})"
+    (tagInt e r, LTInt)
+  _ => panic "llvm: stringCountOccurrences takes two arguments"
 -- INTRINSIC: load cp_count@16, tag it
 
 emitStrExtern e _ name _ = gapE e ("unsupported string extern " ++ name)
@@ -2744,6 +2790,19 @@ emitAdtExtern e env "stringIndexOf" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_string_index_of(i64 \{n}, i64 \{h})"
     (r, LTCon)
   _ => panic "llvm: stringIndexOf takes two arguments"
+emitAdtExtern e env "stringLastIndexOf" args = match emitArgs e env args
+  [n, h] =>
+    let r = freshReg e
+    let _ =
+      emit e "  \{r} = call i64 @mdk_string_last_index_of(i64 \{n}, i64 \{h})"
+    (r, LTCon)
+  _ => panic "llvm: stringLastIndexOf takes two arguments"
+emitAdtExtern e env "stringToInt" args = match emitArgs e env args
+  [s] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_string_to_int(i64 \{s})"
+    (r, LTCon)
+  _ => panic "llvm: stringToInt takes one argument"
 emitAdtExtern e env "stringCompare" args = match emitArgs e env args
   [a, b] =>
     let r = freshReg e
