@@ -58,7 +58,7 @@ regions of the language untested.
 | Dimension | `sqlite/` | This project |
 |-----------|-----------|--------------|
 | Bit granularity | Byte-aligned, big-endian | **LSB-first bit stream**; Huffman codes packed MSB-of-code-first inside it. Two opposite bit orders in one format |
-| Data mutation | Immutable; `Array Int` read-only | **In-place `Array Int` / `Vector Int`** — a 32 KB sliding window with *overlapping* back-references (the `distance < length` case is the whole trick) |
+| Data mutation | Immutable; `Array Int` read-only | **Packed byte-builder output and mutable numeric tables** — back-references reach up to 32 KB behind the output position and may overlap (`distance < length`) |
 | Hot loops | Allocation-heavy, not perf-sensitive | Genuinely hot inner loops. Gives `test/diff_compiler_perf_scaling.sh` and the emitter a real **non-compiler** workload, which the tree currently has none of |
 | Numeric surface | Varints, big-endian ints | 32-bit masked arithmetic (CRC-32, Adler-32) on a 63-bit `Int`; `shiftRight` is **logical**, which is what CRC needs |
 | Testing style | Fixed corpus + golden diffs | **Round-trip properties** (`inflate (deflate x) == x`) over generated inputs — an unbounded oracle, not a fixed corpus |
@@ -83,7 +83,7 @@ Nothing needs to be added to the runtime. Verified against the current tree:
 | Binary file read | `readFileBytes : String -> <FileRead "_"> Result String (Array Int)` | The byte-clean read; `readFile` UTF-8-decodes and would corrupt any byte ≥ 0x80 |
 | Binary file write | `writeFileBytes : String -> Array Int -> <FileWrite "_"> Result String Unit` | The byte-clean counterpart. The SQLite project's write path already leans on it |
 | Growable output | `stdlib/vector.mdk` — `push`, `set`, `get`, `toArray`, amortized O(1) | The natural output accumulator |
-| Fixed buffers | `stdlib/array.mdk` — `make`, `set`, `blit`, `fill`, `copy` | The window and the Huffman decode tables. `blit` handles non-overlapping copies; overlapping LZ77 copies must be byte-at-a-time by definition |
+| Fixed buffers | `stdlib/array.mdk` — `make`, `set`, `blit`, `fill`, `copy` | Huffman decode tables. Packed output uses `stdlib/bytebuilder.mdk`; overlapping LZ77 copies must read newly appended bytes |
 | Byte-level framing | `stdlib/byteparser.mdk` (`leUint`, `takeSlice`, `runByteParser`) and `stdlib/bytebuilder.mdk` (`emitU8`, `emitU32LE`, `buildArray`) | Used for the **container** layers only — gzip/zlib headers and trailers are byte-aligned. The DEFLATE payload needs its own bit reader (below) |
 
 ### The one new abstraction: `BitReader` / `BitWriter`
@@ -324,12 +324,14 @@ cell and passes every test but one.
 
 ### 4. The sliding window and the overlap case
 
-Output is a `Vector Int` that *is* the window — no separate 32 KB ring buffer.
+Output is a packed `bytebuilder.Builder` that *is* the window — no separate
+32 KB ring buffer. The exported `copyBack` still operates on `Vector Int` for
+existing callers; the inflater uses the private packed helper.
 A back-reference `(length, distance)` copies from `outLen - distance` forward:
 
 ```
-copyBack : Int -> Int -> Vector Int -> Result String Unit
--- for i in 0..length-1:  push (get (outLen - distance + i)) out
+copyBackPacked : Int -> Int -> Builder -> Result String Unit
+-- Repeatedly read the current output at currentLength - distance, then emitU8.
 ```
 
 Read-then-push, one byte at a time, **in that order**. When
@@ -340,6 +342,11 @@ here would be wrong; so would any implementation that snapshots the source
 slice first. This is the single most-often-broken line in any inflate.
 
 A `distance > outLen` reference is a malformed stream (`Err`), not a wrap-around.
+The builder's backing capacity can exceed its initialized length; validate against
+the latter. An append at full capacity replaces the backing block, so subsequent
+reads must refresh the borrowed backing view. Stored blocks append into this same
+buffer. `buildBytes` copies only the initialized prefix at finalization. The CLI's
+file-writing boundary still converts the packed result to an integer array.
 
 ### 5. Canonical Huffman decoding
 
