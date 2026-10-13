@@ -144,6 +144,56 @@ and descriptors. Unsupported mutation, callbacks, FFI, or interior-pointer
 forms must be rejected by that experimental path until their contracts exist.
 Compiling the compiler itself belongs after this boundary is proven.
 
+### Confirmation target
+
+The active goal is to outperform the strongest matched Boehm baseline, first on
+the standalone lifetime workloads and then on real generated PDS/gzip programs.
+A retained-tree loss must remain visible rather than disappearing in an aggregate
+average. Any faster-but-larger result must identify its memory tradeoff.
+The retain/drop/churn case below is an additional required check; it is not part
+of the fifteen-point confirmation driver.
+
+After a candidate wins the development matrix, freeze it for a separate serial
+confirmation batch: list/tree at 500,000, two million, and eight million objects;
+the other five lifetime workloads at two million; and tree/mixed at approximately
+64 KiB and 1 MiB nurseries as well as the usual approximately 256 KiB. Five cyclic
+rounds compare custom GC with both Boehm allocation adapters under default and
+128 MiB initial-heap policies: 375 fresh processes across fifteen points. Choose
+the fastest Boehm median independently at each point and retain every arm's
+results. These are proposed confirmation runs, not completed measurements.
+
+A useful practical margin is at least 5% per point, with retained-case uncertainty
+supporting a ratio below one and no more than 10% additional RSS against the
+fastest comparator where RSS exceeds the launcher floor. These are experimental
+acceptance targets, not claimed results or substitutes for application evidence.
+Report workload time and process wall time separately, since the former excludes
+heap initialization and descriptor preparation. A Boehm initial heap is not a
+memory cap or the same control as a custom nursery. Atomic-allocation comparisons
+must label zeroing differences and include a comparator with the same contract.
+
+Nursery selection is a separate experiment on unchanged commit `85c364304`.
+Training compares 256 KiB, 1 MiB, 4 MiB, and 16 MiB, each aligned and minus eight
+bytes, across tree, transition, ephemeral, and mutation workloads. Both Boehm
+adapters run under both initial-heap policies. Twelve cyclic rounds balance the
+eight custom settings and four Boehm arms: 576 processes. Choose one nursery
+family across workloads, using its worse alignment and worst custom/Boehm ratio;
+prefer the smaller family for scores within 3%. Reject repeatable regressions
+over 5% against the existing setting and memory growth over the stated 10% limit
+where RSS is above the launcher floor. Preserve every configuration's results.
+The unchanged collector couples nursery size to the major threshold, so this
+does not isolate minor-collection policy alone.
+
+A selected default needs held-out counts and lifetime windows before a general
+claim. Forced smaller nurseries remain visible as sensitivity results; selecting
+a different nursery for each workload cannot establish a useful global default.
+Neither this protocol nor the confirmation driver is evidence of a win.
+
+Real-application confirmation must use the improved packed gzip implementation
+in both arms. PDS needs exact content oracles beyond the existing CAR-size and
+MST-entry-count checks, plus forced-relocation and omitted-root/reload/barrier
+controls. Compiler-produced physical contracts precede moving execution; a
+handwritten fixture contract alone cannot establish application rooting costs.
+
 ## First prototype results (2026-10-12)
 
 The tested collector implements evacuation, forwarding, explicit roots, a
@@ -613,6 +663,170 @@ The [raw samples](../../test/gc_prototype/results/2026-10-12-mark-inline-results
 and [correctness record](../../test/gc_prototype/results/2026-10-12-mark-inline-correctness.json)
 retain phase boundaries, provenance, and the corrected fastest-Boehm reduction.
 
+### Rejected descriptor cache (2026-10-12)
+
+Caching object bytes and mature size class in each descriptor removes the class
+selection chain from promotion, but does not improve the measured workload.
+Eight cyclic rounds compare commit `85c364304`, the cache, and both Boehm adapters
+across seven profiles and two nursery capacities at five million allocations:
+448 samples. Tree medians regress from 286.65 to 292.13 ms at 262,136 bytes and
+from 301.25 to 305.03 ms at 262,144 bytes. Most other profile medians also regress
+slightly. The cache is excluded from the collector.
+
+All 112 paired custom rows retain identical deterministic counters except the
+four descriptor/current/peak accounting fields, each correctly increasing by
+256 bytes. Assembly confirms the intended class-selection work disappears;
+removing instructions is insufficient evidence of an improvement. The
+[samples](../../test/gc_prototype/results/2026-10-12-descriptor-cache-results.jsonl)
+and [audit](../../test/gc_prototype/results/2026-10-12-descriptor-cache-audit.json)
+preserve the rejected patch and reconstruction evidence.
+
+Separate baseline event instrumentation finds six construction-time major
+collections with the 262,136-byte nursery and seven with 262,144 bytes, plus the
+final collection in both cases. The extra collection traces a large retained
+graph; this makes collection policy a candidate for investigation. Diagnostic
+durations and sampled profiles are not uninstrumented benchmark results. Any
+policy change must also measure a retain-then-drop workload, since postponing
+collection can retain dead memory longer.
+
+### Rejected promotion inlining (2026-10-12)
+
+The uncached baseline next competes against full promotion inlining and a split
+with inline null/mature/forwarded checks plus an out-of-line evacuation helper.
+Assembly confirms the intended changes. Across 560 samples (seven profiles, two
+capacities, five arms, eight cyclic rounds), full inlining improves tree medians
+by only 0.7–0.8%, while the split regresses them by about 1%. Other results are
+mixed, including a size-profile gain at one capacity and loss at the other.
+Neither variant is selected. All deterministic custom counters match exactly;
+both variants pass 89 sanitizer cases and fourteen phase smoke comparisons.
+
+The [raw samples](../../test/gc_prototype/results/2026-10-12-promote-inline-results.jsonl)
+and [audit](../../test/gc_prototype/results/2026-10-12-promote-inline-audit.json)
+retain both patches, assembly findings, correctness records, complete timing
+ranges, and the independently selected fastest Boehm arm for each point.
+
+### Rejected larger major-collection threshold (2026-10-12)
+
+A candidate raises the post-collection threshold from `2*live + 4*nursery` to
+`4*live + 4*nursery` when at most one eighth of the pre-sweep population is
+reclaimed. It recomputes this choice after each major and returns to factor two
+after substantial reclamation. Four reset checks (including sanitizers), three
+deliberately broken policies, and 120 compiled arithmetic boundary cases pass.
+
+The lifetime-transition workload retains one million list nodes, drops them,
+then creates eight million more in windows of 65,536 nodes, keeping a separate
+15,625-node anchor. Exact contents and final custom liveness are checked. Three
+cyclic rounds across four arms and two nursery capacities give 24 samples;
+three rounds do not fully balance four execution positions.
+
+| Median, 262,136 / 262,144-byte nursery | Existing custom | Larger threshold | Fastest Boehm |
+|---|---:|---:|---:|
+| Whole workload, ms | 201.04 / 174.34 | 219.44 / 206.28 | 91.59 / 92.26 |
+| Process peak RSS, decimal MB | 42.35 / 34.23 | 113.33 / 91.32 | 38.95 / 38.92 |
+
+The larger threshold performs fewer collections but takes 9–18% longer than the
+existing collector and uses 2.4–2.9 times the fastest Boehm arm's peak RSS. It is
+rejected without widening the timing matrix. This workload also exposes a
+remaining deficit in the existing collector: almost every temporary node is
+promoted, and thousands of empty mature pools are released and allocated again.
+Those counters motivate profiling; they do not identify the dominant CPU cost.
+Whole-workload time includes validation omitted from individual phase timers,
+so summing phase medians is not an equivalent metric. RSS snapshots are
+cumulative process high-water marks, not independent phase peaks.
+
+The [samples](../../test/gc_prototype/results/2026-10-12-headroom-rejected-results.jsonl)
+and [audit](../../test/gc_prototype/results/2026-10-12-headroom-rejected-audit.json)
+retain the policy, transition fixture, controls, and reconstruction inputs.
+
+### Why the transition favors caller-inline Boehm (2026-10-12)
+
+Fifty DWARF profiles per arm compare the existing custom collector and both
+Boehm adapters on the offset transition case. All 150 recordings have zero lost
+samples. Only the main workload thread appears in the samples; there is no
+sampled parallel-marking contribution explaining the advantage.
+
+About 54% of custom workload samples include minor collection and 45% include
+promotion. These are overlapping call-stack groups, not additive costs. During
+churn, 98.565% of allocated payload is promoted before its temporary root is
+dropped. Each 65,536-node window occupies 2 MiB, versus a roughly 256 KiB nursery.
+The nonmoving Boehm collector avoids those evacuation copies, and assembly
+confirms its caller-inline path pops a TLS size-class free list directly, calling
+refill only on a miss. Caller-inline Boehm takes 91.59 ms versus custom's
+201.04 ms in the ordinary offset measurements; historical out-of-line Boehm takes
+220.29 ms. The advantage belongs to the stronger caller-inline comparator.
+
+Pool creation and free-list initialization appear in the custom profile, but
+their inlined attribution overlaps `new_old`; event counts alone do not justify
+making pool caching the first fix. The next configuration control changes nursery
+size while retaining the same collector source. Since nursery size also sets the
+major threshold's `4*nursery` reserve, that control measures a coupled policy
+change. Copy volume, delayed reclamation, and memory must accompany its timing.
+
+The [profile audit](../../test/gc_prototype/results/2026-10-12-transition-profile.json)
+preserves commands, reductions, source attribution, and the distinction between
+instrumented profiles and ordinary timings.
+
+### Nursery and major-reserve sweep (2026-10-12)
+
+The frozen sweep completed 576 fresh-process measurements: four workloads,
+eight custom settings, four Boehm arms, and twelve position-balanced rounds.
+All 384 custom rows pass conservation checks. Changing nursery capacity also
+changes the major threshold's `4*nursery` reserve, so these measure coupled
+policies. The table uses each family's worse alignment and the fastest Boehm
+median for each workload; ratios below one favor custom GC.
+
+| Nursery family | Retained tree | Lifetime transition | Ephemeral | Mutation | Memory eligible |
+|---|---:|---:|---:|---:|---|
+| 256 KiB | 1.161 | 1.870 | 0.684 | 0.704 | Yes |
+| 1 MiB | 1.159 | 1.499 | 0.694 | 0.709 | No |
+| 4 MiB | 1.152 | 1.029 | 0.706 | 0.740 | No |
+| 16 MiB | 1.283 | 0.837 | 0.828 | 0.893 | No |
+
+At 16 MiB, churn promotion falls to about 6.59% and transition time falls to
+about 93 ms versus Boehm's 111.63 ms. However, custom peak RSS is about 49.5 MiB
+versus 37.14 MiB, exceeding the predeclared 10% memory allowance. Final collection
+also grows from roughly 0.4 ms to 12 ms. Retained trees remain slower, and
+short-lived workloads lose some of their advantage. No new global default
+qualifies for held-out confirmation; that batch was not run.
+
+The prepared sweep protocol and reducer omitted the separately stated 5%
+repeatable-regression gate against the existing setting. That criterion was not
+evaluated as a repeatability gate; all alternative families already failed the
+memory criterion. Short-lived RSS remains indeterminate at the launcher floor:
+"memory eligible" means no observed above-floor rejection, not a demonstrated
+memory margin on every workload.
+
+The [samples](../../test/gc_prototype/results/2026-10-12-nursery-sweep-results.jsonl)
+and [audit](../../test/gc_prototype/results/2026-10-12-nursery-sweep-audit.json)
+preserve all alignments, ranges, phase counters, frozen selection rules, source
+inputs, and the limitations of reused historical build provenance. These results
+motivate separating major collection pressure from survivor volume: a larger
+nursery can reduce promotion while delaying reclamation of dead mature objects.
+
+### Whole-payload initialization candidate (2026-10-12)
+
+A scratch helper initializes a complete payload after zeroed allocation and root
+reloads, validating the trusted prepared layout once and remembering an old
+target once when needed. It preserves zeroed allocation, ordinary mutation, and
+the collection schedule. Both prepared Boehm and custom arms receive the same
+helper; historical Boehm remains a fifth comparator.
+
+Seven profiles, two capacities, and ten position-balanced rounds produce 700
+samples. Custom tree medians improve 3.7% and 5.3%, mainly in construction, but
+remain 2.2% and 12.7% behind the fastest Boehm median. The aligned list median
+regresses 4.3%, and unchanged profiles also show substantial timing variation.
+Exploratory paired bootstrap intervals include parity for the offset tree gain;
+the aligned result favors the candidate. This is a promising constructor API,
+not a selected collector change or a general performance win.
+
+All deterministic custom counters match. Five selftests, 105 smoke runs, and
+22 independent graded cases pass, including ASan/UBSan, direct-old slot 63,
+overlapping initialization, preserved zeroing, remembered-entry deduplication,
+and safe failures for omitted barriers and stale pre-allocation inputs. The
+[samples](../../test/gc_prototype/results/2026-10-12-whole-init-results.jsonl) and
+[audit](../../test/gc_prototype/results/2026-10-12-whole-init-audit.json) preserve
+the uninstalled helper, independent fixture, measured sources, and uncertainty.
+
 ### PDS varint integration workload (2026-10-12)
 
 `pds/test/gc_varint_main.mdk` calls the real `uvarintEncode` implementation.
@@ -670,12 +884,28 @@ The useful lessons cross the compiler/runtime boundary:
   includes pacing and prefetch mechanisms. These address different throughput and
   latency costs; they are hypotheses for measurement, not features to copy wholesale.
 
-The next runtime-only candidate is caching object bytes and mature size class in
-the interned descriptor. This removes repeated promotion work without changing
-roots or collection semantics, but must charge increased descriptor storage and
-show a repeatable construction-time benefit across both nursery capacities and
-mixed sizes. The phase measurements make it a stronger immediate candidate than
-another final-marking optimization.
+The pinned runtime also clarifies what allocation pressure means. Its
+[major pacing](https://github.com/ocaml/ocaml/blob/907eec0b75c5bcf0fe6da5f4b9f11c5c22995a16/runtime/major_gc.c)
+charges promotions and direct major allocations, together with work already
+performed; it does not charge every nursery allocation that dies young. Nursery
+size is explicitly configured, rather than automatically inferred from survival.
+[GC controls](https://github.com/ocaml/ocaml/blob/907eec0b75c5bcf0fe6da5f4b9f11c5c22995a16/runtime/gc_ctrl.c)
+also expose ramp-up/ramp-down hints for applications that know they are growing
+and then dropping mature graphs. Those hints do not establish automatic phase
+detection.
+
+Our proposed supplementary pressure budget counts all requested mutator bytes,
+including dead nursery objects, at existing collection boundaries. This is a
+Medaka-specific anti-starvation hypothesis: after a mature graph loses its roots,
+continued young allocation should eventually prompt mature reclamation even if
+nothing new survives. It is not a reproduction of OCaml's debt rule. The first
+experiment keeps the existing mature-size threshold and stop-the-world tracing;
+concurrent or incremental slices need additional barrier contracts.
+
+Caching object bytes and mature size class in the interned descriptor was tested
+and rejected above: removing that repeated work did not improve measured
+performance. Whole-payload initialization showed a narrower tree improvement,
+but has not earned installation across the workload set.
 
 Compiler integration should then test explicit allocation/initialization windows
 and compact live-root frames. Keep the generic zeroed allocation API, reload
@@ -690,7 +920,7 @@ mutator resumption need independent checks. Measure threshold-major work and
 bounded heap-headroom policies before adding incremental collection. Always
 charge the final drain; a larger nursery cannot avoid eventual copying of a fully
 retained tree. Incremental major GC would require an additional major-marking
-barrier contract. None of these proposed experiments has been implemented here.
+barrier contract. Intrusive promotion and incremental collection remain proposals.
 
 ### Packed gzip inflater output (2026-10-12)
 

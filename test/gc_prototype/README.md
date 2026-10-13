@@ -31,6 +31,30 @@ reports a dynamic-link fallback explicitly. Provenance includes the platform,
 compiler version, Git base, source hashes, link flags, and static archive hash.
 Output consists of JSON lines, including correctness and LLVM fixture statuses.
 
+For a separate confirmation batch after selecting a development candidate, use
+`confirm.py` with an empty scratch directory:
+
+```console
+python3 /absolute/path/to/medaka/test/gc_prototype/confirm.py --prepare --scratch /tmp/medaka-gc-confirm
+python3 /absolute/path/to/medaka/test/gc_prototype/confirm.py --measure --resume --scratch /tmp/medaka-gc-confirm
+```
+
+Preparation runs correctness checks and freezes sources, compiler, static Boehm
+archive, allocation-header dependencies, adapters, and binaries. Measurement runs
+375 serial fresh processes: fifteen workload/size/nursery points, five arms, and
+five cyclic rounds. Custom GC is compared with both Boehm adapters under default
+and 128 MiB initial-heap policies; each point reports its fastest Boehm median.
+Raw rows preserve workload time, process wall time, RSS, and collector counters.
+Source or binary drift and partial timing batches are rejected. `--resume` reuses
+preparation only; interrupted measurements require a new scratch directory.
+The [confirmation target](../../docs/design/GC-FEASIBILITY.md#confirmation-target)
+defines the intended margin and memory comparison. Adding the driver is not
+evidence that the collector meets those targets.
+The [driver validation](results/2026-10-12-confirmation-driver-validation.json)
+records a real preparation run, 35 cohort correctness checks, and rejection of
+changed plan, source, binary, and header manifests; no confirmation timing batch
+is claimed by that record.
+
 For a separate profile of real compiler `check`, use a new empty output directory:
 
 ```console
