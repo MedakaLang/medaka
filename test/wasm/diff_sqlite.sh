@@ -24,7 +24,7 @@ EMITTER="$ROOT/medaka_emitter"
 WASM_EMITTER="$ROOT/test/bin/wasm_emit_modules_main"
 RUNJS="$ROOT/test/wasm/run.js"
 CC="${CC:-clang}"
-# Output-only comparison: ThinLTO and -O2 buy nothing here (-25% CPU without them).
+# Output-only comparison: ThinLTO and -O2 buy nothing here.
 export MEDAKA_NO_LTO="${MEDAKA_NO_LTO:-1}" MEDAKA_CLANG_OPT="${MEDAKA_CLANG_OPT:--O1}"
 
 # ── Per-probe worker (parallel fan-out target) ─────────────────────────────────

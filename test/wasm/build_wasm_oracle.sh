@@ -58,13 +58,12 @@ _ms() { # epoch ms; whole seconds where date has no %N (BSD/macOS)
   _n=$(date +%s%N 2>/dev/null)
   case "$_n" in ''|*[!0-9]*) echo $(( $(date +%s) * 1000 )) ;; *) echo $(( _n / 1000000 )) ;; esac
 }
-# WASM_EMITTER_OPT=-O0 builds the emitters unoptimised and without ThinLTO. They emit
-# the same WAT, and the link is ~4x cheaper than the production -O2 + ThinLTO one, but
-# the emitter then runs ~1.4x slower: that pays for a job that builds the emitters once
-# and runs them a few hundred times (the `wasm` CI job), not for the engines gates,
-# which run the modules emitter on every corpus row. Unset keeps the production link.
-# MEDAKA_RT_OBJ / MEDAKA_PRELUDE_OBJ are compiled for the detected link mode, so the
-# plain link compiles its own.
+# WASM_EMITTER_OPT=-O0 builds the emitters unoptimised and without ThinLTO. The WAT is
+# identical, but the emitter itself runs slower, so this only pays for a job that builds
+# them once and runs them a bounded number of times (the `wasm` CI job); the engines
+# gates run the modules emitter per corpus row and keep the production link. Unset keeps
+# the production link. MEDAKA_RT_OBJ / MEDAKA_PRELUDE_OBJ are compiled for the detected
+# link mode, so the plain link compiles its own.
 _build_timed() { # <entry> <out>
   _t0=$(_ms)
   if [ -n "${WASM_EMITTER_OPT:-}" ]; then
@@ -85,23 +84,21 @@ _build_one() { # <entry> <out>
 #
 # WASM_ORACLE_JOBS>1 builds every requested emitter at once (default 1: a box may be
 # shared, and each build is single-threaded work, so CI is what sets it).
-_pairs=""
-if [ "$MODE" = all ]; then _pairs="$ENTRY|$OUT"; fi
-if [ "$MODE" = all ] || [ "$MODE" = typed ]; then _pairs="$_pairs $ENTRY_TYPED|$OUT_TYPED"; fi
-if [ "$MODE" = all ] || [ "$MODE" = modules ]; then _pairs="$_pairs $ENTRY_MODULES|$OUT_MODULES"; fi
-
-_jobs="${WASM_ORACLE_JOBS:-1}"
+case "${WASM_ORACLE_JOBS:-1}" in
+  ''|*[!0-9]*) echo "WASM_ORACLE_JOBS must be a number" >&2; exit 2 ;;
+esac
 _rc=0
-if [ "$_jobs" -le 1 ]; then
-  for _p in $_pairs; do
-    _build_one "${_p%%|*}" "${_p##*|}" || exit 1
-  done
-else
-  _pids=""
-  for _p in $_pairs; do
-    _build_one "${_p%%|*}" "${_p##*|}" &
+_pids=""
+_run() { # <entry> <out>
+  if [ "${WASM_ORACLE_JOBS:-1}" -gt 1 ]; then
+    _build_one "$1" "$2" &
     _pids="$_pids $!"
-  done
-  for _pid in $_pids; do wait "$_pid" || _rc=1; done
-  exit "$_rc"
-fi
+  else
+    _build_one "$1" "$2" || exit 1
+  fi
+}
+if [ "$MODE" = all ]; then _run "$ENTRY" "$OUT"; fi
+if [ "$MODE" = all ] || [ "$MODE" = typed ]; then _run "$ENTRY_TYPED" "$OUT_TYPED"; fi
+if [ "$MODE" = all ] || [ "$MODE" = modules ]; then _run "$ENTRY_MODULES" "$OUT_MODULES"; fi
+for _pid in $_pids; do wait "$_pid" || _rc=1; done
+exit "$_rc"
