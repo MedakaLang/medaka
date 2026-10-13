@@ -22,9 +22,9 @@ import ir.core_ir.{
   noDeclFacts,
   synthBind,
 }
-import ir.core_ir_lower.{EmitTarget(..)}
 import support.ordmap.{omLookup}
 import backend.emit_plan.{EmitPlan(..), buildEmitPlan}
+import backend.core_validate.{Backend(..)}
 
 val : String -> CExpr -> CBind
 val name rhs = synthBind name [CClause [] rhs]
@@ -36,7 +36,7 @@ program : List CBind -> CProgram
 program binds = CProgram binds [] [] [] [] noDeclFacts
 
 planOf : List CBind -> EmitPlan
-planOf binds = buildEmitPlan TargetNative (program binds)
+planOf binds = buildEmitPlan LlvmBackend (program binds)
 
 reachOf : String -> EmitPlan -> List String
 reachOf n plan = match omLookup n plan.eagerReach
@@ -84,15 +84,15 @@ test "a cycle's members share one reach set" = expectAll [
 test "the plan carries the target it was built with" = expectAll [
   labelFail
     "wasm"
-    (expectTrue (isWasm (buildEmitPlan TargetWasm (program mixed)).target)),
+    (expectTrue (isWasm (buildEmitPlan WasmBackend (program mixed)).target)),
   labelFail "native" (expectFalse (isWasm (planOf mixed).target)),
 ]
 
 hasAll : List String -> List String -> Bool
 hasAll wanted have = all (w => any (== w) have) wanted
 
-isWasm : EmitTarget -> Bool
-isWasm TargetWasm = True
+isWasm : Backend -> Bool
+isWasm WasmBackend = True
 isWasm _ = False
 
 -- The emitters read the classification from the plan; neither may recompute it.

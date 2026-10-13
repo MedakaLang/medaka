@@ -23,11 +23,11 @@ import types.annotate.{annotateProgram}
 import types.typecheck.{grantWholeDomain}
 import ir.core_ir_lower.{
   lowerProgramEmit,
-  EmitTarget(..),
   declaredRecordFieldOrders,
 }
 import backend.llvm_emit.{emitProgram, makeEmitInput}
 import backend.emit_plan.{buildEmitPlan}
+import backend.core_validate.{Backend(..)}
 
 export
 oracleMain : Unit -> <IO> Unit
@@ -49,7 +49,7 @@ withTarget targetPath = match readFile targetPath
 -- sites, which misses a record that is only ever projected).
 emitTarget : List Decl -> <IO> Unit
 emitTarget decls =
-  let cp = lowerProgramEmit TargetNative decls
+  let cp = lowerProgramEmit decls
   putStr
     (emitProgram
       (makeEmitInput
@@ -70,7 +70,7 @@ emitTarget decls =
         -- catalog to subtract the builtin-name exemption against.  An empty FFI
         -- index keeps its behaviour exactly what it was.
         [])
-      (buildEmitPlan TargetNative cp)
+      (buildEmitPlan LlvmBackend cp)
       cp)
 
 main = oracleMain ()

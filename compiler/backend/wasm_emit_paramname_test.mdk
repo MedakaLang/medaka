@@ -18,13 +18,13 @@ import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
 import types.typecheck.{grantWholeDomain}
 import ir.core_ir_lower.{
-  EmitTarget(..),
   ctorFieldTypeNames,
   declaredRecordFieldOrders,
   lowerProgramEmit,
 }
 import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInputFull}
 import backend.emit_plan.{buildEmitPlan}
+import backend.core_validate.{Backend(..)}
 
 -- the emitted WAT of `src`, as the modules entry would print it for that program
 watOf : String -> String
@@ -38,8 +38,8 @@ watOf src =
       False
       (declaredRecordFieldOrders decls)
       []
-  let cp = lowerProgramEmit TargetWasm (annotateProgram decls)
-  let (text, _) = emitProgramRecord input (buildEmitPlan TargetWasm cp) cp
+  let cp = lowerProgramEmit (annotateProgram decls)
+  let (text, _) = emitProgramRecord input (buildEmitPlan WasmBackend cp) cp
   text
 
 -- the lines of the top-level `(func $<name> ` definition, from its header through `  )`

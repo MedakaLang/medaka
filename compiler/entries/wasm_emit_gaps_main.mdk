@@ -39,7 +39,6 @@ import types.typecheck.{
 }
 import ir.core_ir_lower.{
   lowerProgramEmit,
-  EmitTarget(..),
   methodIfaceTable,
   declaredRecordFieldOrders,
 }
@@ -75,7 +74,7 @@ runEmit runtimeDecls coreDecls modules =
       False
       (declaredRecordFieldOrders allDecls)
       []
-  let gaps = emitProgramGaps input (lowerProgramEmit TargetWasm allDecls)
+  let gaps = emitProgramGaps input (lowerProgramEmit allDecls)
   printGaps gaps
 
 printGaps : List String -> <IO> Unit

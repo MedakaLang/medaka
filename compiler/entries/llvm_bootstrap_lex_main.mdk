@@ -35,7 +35,6 @@ import types.typecheck.{
 import ir.core_ir_lower.{
   declaredRecordFieldOrders,
   lowerProgramEmit,
-  EmitTarget(..),
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
@@ -45,6 +44,7 @@ import ir.core_ir_lower.{
 }
 import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
 import backend.emit_plan.{buildEmitPlan}
+import backend.core_validate.{Backend(..)}
 import backend.private_mangle.{mangleUnitsEv}
 import entries.entry_support.{driveModules}
 
@@ -78,8 +78,8 @@ runEmit runtimeDecls coreDecls modules =
       ""
       (declaredRecordFieldOrders allDecls)
       (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
-  let cp = lowerProgramEmit TargetNative allDecls
-  let (text, _) = emitProgramRecord input (buildEmitPlan TargetNative cp) cp
+  let cp = lowerProgramEmit allDecls
+  let (text, _) = emitProgramRecord input (buildEmitPlan LlvmBackend cp) cp
   putStr text
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
 -- across units, on the trees `elaborateModules` has already produced (#2809 put the

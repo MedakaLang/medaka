@@ -186,7 +186,7 @@ scattered places, moved rather than reinvented:
 | TRMC eligibility and groups | `backend/trmc_analysis.mdk`, computed per backend |
 | linkage map and injectivity | `private_mangle` and the three X-L.H guards, run inside lowering |
 | reachable extern requirements | per-backend extern ladders |
-| target | the `EmitTarget` parameter of `lowerProgramEmit`, which moves here so lowering itself is target-neutral again (L4) |
+| target | `core_validate.Backend`, chosen by each emit entry; lowering is target-neutral (L4) |
 
 The two emit-input records converge into this one over time; the four facts
 `WasmEmitInput` lacks relative to `EmitInput` (`returnsSelf`, `selfFnParams`,
@@ -197,7 +197,7 @@ edges; until then it stays a Wasm-only field, named as such.
 
 ### R6. The Core validator
 
-`coreValidate : EmitTarget -> CProgram -> Plan -> List CoreDefect`, run by every
+`coreValidate : Backend -> CProgram -> Plan -> List CoreDefect`, run by every
 build entry between lowering and emission. It rejects, before any text is
 produced: a record operation without an ordinal once F1 has landed, an
 application without a call mode once F2 has landed, a dispatch node without

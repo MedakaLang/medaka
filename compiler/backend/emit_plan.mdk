@@ -3,24 +3,35 @@
 -- emitter is about to receive.
 
 import ir.core_ir.{CProgram(..)}
-import ir.core_ir_lower.{EmitTarget(..)}
+import backend.core_validate.{Backend(..), backendName}
 import support.ordmap.{OrdMap}
 import backend.emit_support.{eagerReachMap, lazyGlobalNames}
 
--- `target` is the lowering's own discriminator, carried as-is.
+-- `target` is the backend the plan was built for; the emitter asserts it is its own.
 -- `lazyGlobals` are the value globals emitted as forced-on-first-use cells.
 -- `eagerReach` maps each binding to the value globals it eagerly reaches; the
 -- value-global init order is sorted by it.
 public export data EmitPlan = EmitPlan {
-  target : EmitTarget,
+  target : Backend,
   lazyGlobals : List String,
   eagerReach : OrdMap (List String),
 }
 
 export
-buildEmitPlan : EmitTarget -> CProgram -> EmitPlan
+buildEmitPlan : Backend -> CProgram -> EmitPlan
 buildEmitPlan target (CProgram groups _ _ _ _ _) = EmitPlan {
   target = target,
   lazyGlobals = lazyGlobalNames groups,
   eagerReach = eagerReachMap groups,
 }
+
+-- The backend a plan was built for, asserted to be the calling emitter's own: a
+-- plan built for the other backend would pick the wrong dict-tag width.
+export
+planBackendFor : Backend -> EmitPlan -> Backend
+planBackendFor expected plan =
+  if backendName plan.target == backendName expected then
+    plan.target
+  else
+    panic
+      "internal error: emit plan was built for the \{backendName plan.target} backend but the \{backendName expected} emitter received it"
