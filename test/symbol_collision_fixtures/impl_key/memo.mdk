@@ -5,7 +5,7 @@
 -- `core_ir_lower.memoBindName` mints its per-instance CAF (`$memo_<selector>_
 -- <method>`, which flows into `@mdk_g_<name>` / `@mdk_force_<name>`) from the SAME
 -- canonical key the impl symbol is minted from.  That domain has NO guard --
--- `implSymbolCollisionGuard`'s SCOPE is `mdk_impl_*` only -- so `injectiveIdent`
+-- `validateImplSymbolInjectivity`'s SCOPE is `mdk_impl_*` only -- so `injectiveIdent`
 -- is the only thing keeping the two CAFs apart.  With a lossy encoder here and an
 -- injective one at the impl symbol, this program reaches clang as a raw
 -- `invalid redefinition of function 'mdk_force_$memo_main__Sz__Q_A_B_C___banner'`

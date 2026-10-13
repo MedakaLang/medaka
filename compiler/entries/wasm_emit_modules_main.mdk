@@ -45,7 +45,6 @@ import ir.core_ir.{CProgram(..)}
 import ir.core_ir_lower.{
   declaredRecordFieldOrders,
   lowerProgramEmit,
-  EmitTarget(..),
   methodIfaceTable,
   ctorFieldTypeNames,
   validateFfiExternTypeNames,
@@ -57,6 +56,7 @@ import backend.wasm_emit.{
   withRuntimeExternsW,
 }
 import backend.emit_plan.{buildEmitPlan}
+import backend.core_validate.{Backend(..)}
 import backend.wasm_reach.{wasmReachFilter}
 import entries.entry_support.{
   driveEmitLocated,
@@ -107,7 +107,7 @@ emitTail mods runtimeDecls coreD modules1 =
         (declaredRecordFieldOrders allDecls)
         (validateFfiExternTypeNames
           (checkedFfiExternTypeNamesModules modules2)))
-  let lowered = lowerProgramEmit TargetWasm allDecls
+  let lowered = lowerProgramEmit allDecls
   let filtered = wasmReachFilter lowered
   -- MEDAKA_STATS reporting hook (S5, #2359 closure): the S5 gate's "emitted-vs-
   -- reachable" ratio must be derived from THIS filter's own notion of reachable,
@@ -126,7 +126,7 @@ emitTail mods runtimeDecls coreD modules1 =
         ("wasm-reach-total-units", programUnitCount lowered),
         ("wasm-reach-kept-units", programUnitCount filtered),
       ]
-  putStr (emitProgram input (buildEmitPlan TargetWasm filtered) filtered)
+  putStr (emitProgram input (buildEmitPlan WasmBackend filtered) filtered)
 
 -- The unit count `backend.wasm_reach.wasmReachFilter` filters over: every
 -- top-level bind group plus every impl entry. Matches that filter's own

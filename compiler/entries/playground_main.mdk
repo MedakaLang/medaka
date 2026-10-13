@@ -143,7 +143,6 @@ import types.typecheck.{
 import ir.core_ir_lower.{
   lowerProgramEmit,
   validateFfiExternTypeNames,
-  EmitTarget(..),
   methodIfaceTable,
   declaredRecordFieldOrders,
   ctorFieldTypeNames,
@@ -157,6 +156,7 @@ import backend.wasm_emit.{
 }
 import backend.wasm_file_grants.{prepareWasmFileGrants}
 import backend.emit_plan.{buildEmitPlan}
+import backend.core_validate.{Backend(..)}
 import backend.wasm_reach.{wasmReachFilter}
 
 -- ARG CONTRACT (Stage 3): the FIRST arg is a MODE, dispatched below.
@@ -661,10 +661,10 @@ runEmit paths warnTriples runtimeDecls coreDecls modules =
       -- program, then drop the impl bodies (and the plain bindings only they
       -- reached) that no dispatchable method name in this program can reach.  Without
       -- this the in-browser compiler emitted ~84k lines of WAT for a one-line program.
-      let lowered = lowerProgramEmit TargetWasm allDecls
+      let lowered = lowerProgramEmit allDecls
       let filtered = wasmReachFilter lowered
       let _ = emitWatMarker warnTriples
-      putStr (emitProgram input (buildEmitPlan TargetWasm filtered) filtered)
+      putStr (emitProgram input (buildEmitPlan WasmBackend filtered) filtered)
 
 wasmGrantDiagTriple : List (String, String) ->
   (String, TcDiag) ->

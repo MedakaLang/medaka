@@ -244,6 +244,8 @@ import backend.core_validate.{
   renderTailRefusal,
   validateCalls,
   validateImplSymbols,
+  validateImplSymbolInjectivity,
+  validateDictTags,
   validateMethodContexts,
   validateDispatchEvidence,
   validateTails,
@@ -322,7 +324,7 @@ import backend.trmc_analysis.{
 }
 import backend.private_mangle.{dictTag, hashName, injectiveIdent}
 import types.disposition.{ifaceSuperCount, installedDispositionsOpt}
-import backend.emit_plan.{EmitPlan(..)}
+import backend.emit_plan.{EmitPlan(..), planBackendFor}
 import backend.emit_support.{
   bindEagerReach,
   bindNameMap,
@@ -1433,8 +1435,14 @@ emitProgramWith emit input plan cp =
 -- any text is emitted: one panic naming each in strict mode, one gap event per
 -- extern in record mode.  The emitter's own fallthrough for such a name then
 -- records nothing (`unprovidedExternW`).
-refuseUnprovidedExternsW : WasmEmit -> WasmEmitInput -> CProgram -> Unit
-refuseUnprovidedExternsW emit input cp =
+refuseUnprovidedExternsW : Backend ->
+  WasmEmit ->
+  WasmEmitInput ->
+  CProgram ->
+  Unit
+refuseUnprovidedExternsW target emit input cp =
+  let _ = validateImplSymbolInjectivity cp
+  let _ = validateDictTags target cp
   let _ = match validateRecords cp
     [] => ()
     bad => panic ("internal error: " ++ renderRecordRefusal bad)
@@ -1467,7 +1475,8 @@ emitProgramCore emit input plan cp =
 
 emitUniqueProgram : WasmEmit -> WasmEmitInput -> EmitPlan -> CProgram -> String
 emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _ facts)) =
-  let _ = refuseUnprovidedExternsW emit input cp
+  let _ =
+    refuseUnprovidedExternsW (planBackendFor WasmBackend plan) emit input cp
   let _ = setRef emit.useStr (programUsesStr groups)
   -- W7: scan the program for collection usage (gates type-section decls + forces
   -- ref-mode — every collection is a boxed (ref eq) value).  The scan only ever
@@ -1676,6 +1685,7 @@ emitProgramGaps input cp0 =
   let emit = freshWasmEmit WGapRecord
   let _ =
     refuseUnprovidedExternsW
+      WasmBackend
       emit
       input
       (CProgram groups ctorArs ctorTypes impls mctx facts)
@@ -5506,7 +5516,7 @@ findByKeyArityW prog method tag siteArity (entry :: rest) =
 
 -- `dictTag` (the i31-safe 30-bit mask of `hashName`) and its `posMod` helper moved
 -- to `backend.private_mangle`, beside `hashName`, in #377/#348: the emit-time
--- collision guard (`core_ir_lower.dictWitnessTagGuard`) has to check THIS tag space
+-- collision guard (`core_validate.validateDictTags`) has to check THIS tag space
 -- with the SAME expression this emitter mints, and a second copy of the mask is a
 -- copy that can drift.  Imported at the top of this file; the emitted `i32.const`s
 -- are unchanged.

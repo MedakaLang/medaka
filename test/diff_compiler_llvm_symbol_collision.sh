@@ -64,7 +64,7 @@
 # cover (this is an LLVM gate; `test/wasm/` owns that backend).
 #
 # Section 5 covers a DIFFERENT space from 1–4: the DICT-WITNESS TAG domain
-# (`core_ir_lower.dictWitnessTagGuard`, #348/#377), a djb2 hash rather than an
+# (`core_validate.validateDictTags`, #348/#377), a djb2 hash rather than an
 # emitted-symbol identifier. FR-1 scoped that guard's population by method name
 # (the same grouping key the emitted dispatcher itself uses) so it only fires when
 # two impls a real dispatch chain could actually compare collide; see the
@@ -282,7 +282,7 @@ fi
 #
 # memo.mdk is the second symbol family. It was never reachable while the pin
 # existed: the `mdk_impl_*` collision of the same program masked it (S-2's guard
-# fired first). It has NO guard of its own — `implSymbolCollisionGuard`'s SCOPE is
+# fired first). It has NO guard of its own — `validateImplSymbolInjectivity`'s SCOPE is
 # `mdk_impl_*` — so the encoder is the only thing keeping its two CAFs apart, and
 # its two effect lines double as the memo-SHARING assertion.
 
@@ -410,7 +410,7 @@ else
 fi
 
 # ── 5. the DICT-WITNESS TAG domain (FR-1, #348/#377) — scope-narrowing coverage ──
-# `core_ir_lower.dictWitnessTagGuard` checks a SEPARATE space from sections 1-4's
+# `core_validate.validateDictTags` checks a SEPARATE space from sections 1-4's
 # emitted-symbol domain: the dict-witness/route-word tag a shared dispatcher
 # compares at runtime (`private_mangle.hashName`, a non-injective djb2 hash — see
 # its own comment for the constructible-collision mechanism). FR-1 fixed the guard

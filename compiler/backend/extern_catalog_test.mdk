@@ -32,7 +32,6 @@ import frontend.ast.{Decl(..)}
 import types.annotate.{annotateProgram}
 import types.typecheck.{grantWholeDomain}
 import ir.core_ir_lower.{
-  EmitTarget(..),
   ctorFieldTypeNames,
   declaredRecordFieldOrders,
   lowerProgramEmit,
@@ -53,6 +52,7 @@ import backend.extern_catalog.{
 }
 import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInputFull}
 import backend.emit_plan.{buildEmitPlan}
+import backend.core_validate.{Backend(..)}
 import eval.eval.{externBindings, ioExternBindings}
 import set as S
 
@@ -293,8 +293,8 @@ emitWat src =
       False
       (declaredRecordFieldOrders decls)
       []
-  let cp = lowerProgramEmit TargetWasm (annotateProgram decls)
-  emitProgramRecord input (buildEmitPlan TargetWasm cp) cp
+  let cp = lowerProgramEmit (annotateProgram decls)
+  emitProgramRecord input (buildEmitPlan WasmBackend cp) cp
 
 -- A program whose one source of `use` is the call to extern `name` emits `marker`,
 -- a definition the demand's runtime group, type or host import block carries.
