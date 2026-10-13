@@ -1,0 +1,418 @@
+{
+  "status": "correctness PASS; no Variant V timings, installation or production integration",
+  "baseline_commit": "85c364304684c44c544957c8ba2b180d15d736c5",
+  "workspace_execution_head": "c3f19e532414eec4d6512b36351b6e12ed0963cd",
+  "candidate_gc_sha256": "02246c8148d2086ae70aef645305298605b3249c40f2ee666a4b9fb1a217de11",
+  "historical_source_archive": {
+    "path": "test/gc_prototype/results/2026-10-13-copy-scan-source-reproduction.tar.gz",
+    "sha256": "0e76460f8d7a06c32bb83ebb0c304c81bbe8c51efc3d44d34ecd3490264ee067",
+    "bytes": 42656,
+    "status": "original source-only evidence unchanged; all 17 decoded members retained under independent/restore"
+  },
+  "archive": {
+    "filename": "2026-10-13-copy-scan-correctness-reproduction.tar.gz",
+    "sha256": "5422f623bd429371092171b6d6af4e7335a22e0dc873fa85a9c02d857f2e3f8f",
+    "bytes": 187427,
+    "member_count": 61,
+    "decoded_member_bytes": 1283247,
+    "determinism": "sorted USTAR members, zero uid/gid/mtime, mode0644; gzip mtime0/no filename; every decoded member byte-verified"
+  },
+  "full_suite": {
+    "actual_exit": 0,
+    "positive_fixture_processes": 203,
+    "expected_negative_processes": 10,
+    "successful_builds": 24,
+    "default_sanitizer_link_failures_preserved": 5,
+    "execution_sha256": "6ee1c4eb24db4a252fcc975f81f6045fbc10537ec7720b81e1c29d4afb31152e",
+    "postrun_audit_sha256": "4a09deaf43fdbdf1d9f17037f67834bb363cec0539cc956dadf473c9dc8ec939"
+  },
+  "targeted_verifier": {
+    "actual_exit": 0,
+    "positive_fixture_processes": 22,
+    "expected_named_negative_processes": 7,
+    "positive_cases": 11,
+    "paired_stages": 12,
+    "raw_stats_snapshots": 24,
+    "exact_fields_per_snapshot": 46,
+    "numeric_fields_per_snapshot": 45,
+    "successful_builds": 9,
+    "default_sanitizer_link_failures_preserved": 9
+  },
+  "timing_plan": {
+    "status": "proposed only; unimplemented and unexecuted",
+    "sha256": "034474f797161138c57abe825ebb6157bd41be90e8ee2bb394d19efa116acc9c"
+  },
+  "omissions": [
+    "Rebuildable binaries omitted; all 24 full-suite and nine targeted build hashes preserved in execution records.",
+    "Compiler, Boehm and sanitizer libraries are external toolchain dependencies, recorded by hashes; no full host replay claim."
+  ],
+  "members": [
+    {
+      "path": "README.md",
+      "bytes": 4079,
+      "sha256": "f09f1c166f1acaf5a9de7240dab7625f21a2f7ed05340607e6d0a18a1f0ebc8d",
+      "origin_path": "/tmp/medaka-copy-scan-correctness-export-c3f19e532/2026-10-13-copy-scan-correctness-README.md"
+    },
+    {
+      "path": "audit/full-suite-independent-audit.json",
+      "bytes": 1328,
+      "sha256": "caf6c14f9c119c9143937157695ba9e5babb5ac77b01706e1252c9f92256cea7",
+      "origin_path": "/tmp/pool-review-copy-scan-full-audit.json"
+    },
+    {
+      "path": "audit/full-suite-independent-audit.py",
+      "bytes": 7090,
+      "sha256": "7ccf2e9d6c8de16454fb0b6d4b1940ef7f52a1643f4abc385b1d8671efcc25eb",
+      "origin_path": "/tmp/pool-review-copy-scan-full-audit.py"
+    },
+    {
+      "path": "audit/verifier-independent-audit.json",
+      "bytes": 2408,
+      "sha256": "f9f1269d6ddc07853251a3c041424695a5d8729e66c9ea447934bb6dac79c5e7",
+      "origin_path": "/tmp/pool-review-copy-scan-verifier-audit.json"
+    },
+    {
+      "path": "audit/verifier-independent-audit.py",
+      "bytes": 9549,
+      "sha256": "c5af59f584bf059aa691db7bb585b35d74682c278ce30da20e8cf819fe6082b9",
+      "origin_path": "/tmp/pool-review-copy-scan-verifier-audit.py"
+    },
+    {
+      "path": "full-suite/child-commands.jsonl",
+      "bytes": 5792,
+      "sha256": "edc3d7ca11424997d96595600aea76ce36a4fa7b9dc313631346309b04bf4c70",
+      "origin_path": "/tmp/medaka-copy-scan-full-correctness-c3f19e532/child-commands.jsonl"
+    },
+    {
+      "path": "full-suite/execution.json",
+      "bytes": 271430,
+      "sha256": "6ee1c4eb24db4a252fcc975f81f6045fbc10537ec7720b81e1c29d4afb31152e",
+      "origin_path": "/tmp/medaka-copy-scan-full-correctness-c3f19e532/execution.json"
+    },
+    {
+      "path": "full-suite/inputs/adversarial.c",
+      "bytes": 3113,
+      "sha256": "cc7cf0e4f235996212ba0c15e1992c37289ab6d898b28f7e1b9a5b2d00c1fe6f",
+      "origin_path": "/tmp/medaka-copy-scan-full-correctness-c3f19e532/inputs/adversarial.c"
+    },
+    {
+      "path": "full-suite/inputs/gc.c",
+      "bytes": 23466,
+      "sha256": "02246c8148d2086ae70aef645305298605b3249c40f2ee666a4b9fb1a217de11",
+      "origin_path": "/tmp/medaka-copy-scan-full-correctness-c3f19e532/inputs/gc.c"
+    },
+    {
+      "path": "full-suite/inputs/gc.h",
+      "bytes": 5077,
+      "sha256": "c70257e8bb754ac649db073f7aad9960a6a734273b77bc213de14fc45d94cff0",
+      "origin_path": "/tmp/medaka-copy-scan-full-correctness-c3f19e532/inputs/gc.h"
+    },
+    {
+      "path": "full-suite/inputs/llvm_contract/contract.ll",
+      "bytes": 3926,
+      "sha256": "4ca2df22bbb5c5514650ad30319406b43a2feef7540cab19ca5ea30921fcf803",
+      "origin_path": "/tmp/medaka-copy-scan-full-correctness-c3f19e532/inputs/llvm_contract/contract.ll"
+    },
+    {
+      "path": "full-suite/inputs/llvm_contract/driver.c",
+      "bytes": 1313,
+      "sha256": "f7c5d448147ecc52c8d0dadd8f025dbfdca1e9fd17ccae420492ec51065de85c",
+      "origin_path": "/tmp/medaka-copy-scan-full-correctness-c3f19e532/inputs/llvm_contract/driver.c"
+    },
+    {
+      "path": "full-suite/inputs/llvm_contract/validate_llvm.py",
+      "bytes": 4215,
+      "sha256": "4e3b2ae070705ab5980d326b64731c5b58389d9c18314638ecab062fc8272e15",
+      "origin_path": "/tmp/medaka-copy-scan-full-correctness-c3f19e532/inputs/llvm_contract/validate_llvm.py"
+    },
+    {
+      "path": "full-suite/inputs/pool_review.c",
+      "bytes": 8791,
+      "sha256": "f48319266694e39c7d5067551c098718d9fe91102c950361f8441c435501ca22",
+      "origin_path": "/tmp/medaka-copy-scan-full-correctness-c3f19e532/inputs/pool_review.c"
+    },
+    {
+      "path": "full-suite/inputs/prepared_api.c",
+      "bytes": 11851,
+      "sha256": "11d67906c1ab2c41ad2ea5e8a671159f25a81104a929e3c74945959dcc5c9c47",
+      "origin_path": "/tmp/medaka-copy-scan-full-correctness-c3f19e532/inputs/prepared_api.c"
+    },
+    {
+      "path": "full-suite/inputs/run.py",
+      "bytes": 16426,
+      "sha256": "151505c92ac42732de5ca975f61ba65b4592eb55e37fad1a676040488bb59695",
+      "origin_path": "/tmp/medaka-copy-scan-full-correctness-c3f19e532/inputs/run.py"
+    },
+    {
+      "path": "full-suite/inputs/workload.c",
+      "bytes": 10967,
+      "sha256": "b2c38813145487d506191d7c172048f11c367a2af8968026b603bceb4774c112",
+      "origin_path": "/tmp/medaka-copy-scan-full-correctness-c3f19e532/inputs/workload.c"
+    },
+    {
+      "path": "full-suite/observer/sitecustomize.py",
+      "bytes": 1125,
+      "sha256": "b6cc4f85d4546ffd970c29451a00a06d03a57e39847f8589304dda1bc656afcf",
+      "origin_path": "/tmp/medaka-copy-scan-full-correctness-c3f19e532/observer/sitecustomize.py"
+    },
+    {
+      "path": "full-suite/pinned_repo/runtime/medaka_rt.c",
+      "bytes": 186639,
+      "sha256": "5ca4ce0a019cabf73ae24ce576223ff13c7536a9ae98f472c5c8371ce45b7667",
+      "origin_path": "/tmp/medaka-copy-scan-full-correctness-c3f19e532/pinned_repo/runtime/medaka_rt.c"
+    },
+    {
+      "path": "full-suite/postrun-audit.json",
+      "bytes": 21281,
+      "sha256": "4a09deaf43fdbdf1d9f17037f67834bb363cec0539cc956dadf473c9dc8ec939",
+      "origin_path": "/tmp/medaka-copy-scan-full-correctness-c3f19e532/postrun-audit.json"
+    },
+    {
+      "path": "full-suite/preparation.json",
+      "bytes": 12155,
+      "sha256": "7ee080a0897327d0b5772bd1231f3153a2cd9969d44c5f80952fa261a3890f4f",
+      "origin_path": "/tmp/medaka-copy-scan-full-correctness-c3f19e532/preparation.json"
+    },
+    {
+      "path": "full-suite/run_review.py",
+      "bytes": 8357,
+      "sha256": "65ad8bd542b995bae643e0db4b36d3a65094b02f0a84fe9b70bc83e9f78f1d0c",
+      "origin_path": "/tmp/medaka-copy-scan-full-correctness-c3f19e532/run_review.py"
+    },
+    {
+      "path": "full-suite/stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "origin_path": "/tmp/medaka-copy-scan-full-correctness-c3f19e532/stderr.log"
+    },
+    {
+      "path": "full-suite/stdout.log",
+      "bytes": 9478,
+      "sha256": "68406bab52dc77f3b706998db173e8511d861f9a716f294f9ae96c16019280b9",
+      "origin_path": "/tmp/medaka-copy-scan-full-correctness-c3f19e532/stdout.log"
+    },
+    {
+      "path": "helpers/export.py",
+      "bytes": 6614,
+      "sha256": "c6375a3437951406af35f13dc4cd6964cb487f3415b08beee1ee7cff017dd5e9",
+      "origin_path": "/tmp/medaka-copy-scan-correctness-export-c3f19e532/export.py"
+    },
+    {
+      "path": "independent/archive-audit.json",
+      "bytes": 3006,
+      "sha256": "c5f86c68ca25161365a9637cb5f5fc3ac73121276b2e6606070f7e26107885c7",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/archive-audit.json"
+    },
+    {
+      "path": "independent/execution-status.json",
+      "bytes": 431,
+      "sha256": "675e4f9af2f0f59907ee92ab167bbd95542fc3e84aeed34143be97acd05c5002",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/execution-status.json"
+    },
+    {
+      "path": "independent/execution/attempts.jsonl",
+      "bytes": 72612,
+      "sha256": "44dbd6fb497ba85837d9492debeacdc8df7ba2f079f9642916e09e33697d7f0c",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/execution/attempts.jsonl"
+    },
+    {
+      "path": "independent/execution/builds/baseline/gc.c",
+      "bytes": 22397,
+      "sha256": "8b3d4bf65beccb9a019d2330f8266fc5261120140d94b611981add3b720876b4",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/execution/builds/baseline/gc.c"
+    },
+    {
+      "path": "independent/execution/builds/candidate/gc.c",
+      "bytes": 23466,
+      "sha256": "02246c8148d2086ae70aef645305298605b3249c40f2ee666a4b9fb1a217de11",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/execution/builds/candidate/gc.c"
+    },
+    {
+      "path": "independent/execution/builds/mutant-incomplete-completion/gc.c",
+      "bytes": 23545,
+      "sha256": "9d2cc70736cd38a87b1ceb20bf3995b3e2a43c15f891e9b48d419cb84d1b512d",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/execution/builds/mutant-incomplete-completion/gc.c"
+    },
+    {
+      "path": "independent/execution/builds/mutant-lost-saved-field0/gc.c",
+      "bytes": 23485,
+      "sha256": "4564ad04e4ef54e5ac263befc2132cbd5b8270a7bf09547772b29caa317f9797",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/execution/builds/mutant-lost-saved-field0/gc.c"
+    },
+    {
+      "path": "independent/execution/builds/mutant-missing-raw-tail/gc.c",
+      "bytes": 23482,
+      "sha256": "4cbfc10771dfcc6abfb27c7c084b0e0662055188b9be11acd4440afa25e3f507",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/execution/builds/mutant-missing-raw-tail/gc.c"
+    },
+    {
+      "path": "independent/execution/builds/mutant-nursery-zeroing/gc.c",
+      "bytes": 23466,
+      "sha256": "02246c8148d2086ae70aef645305298605b3249c40f2ee666a4b9fb1a217de11",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/execution/builds/mutant-nursery-zeroing/gc.c"
+    },
+    {
+      "path": "independent/execution/builds/mutant-root-slot/gc.c",
+      "bytes": 23466,
+      "sha256": "02246c8148d2086ae70aef645305298605b3249c40f2ee666a4b9fb1a217de11",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/execution/builds/mutant-root-slot/gc.c"
+    },
+    {
+      "path": "independent/execution/builds/mutant-stale-fused-edge/gc.c",
+      "bytes": 23479,
+      "sha256": "489c485e14a12972be4bfaf294c017412a1437a573d18a2c5234634eae99afc8",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/execution/builds/mutant-stale-fused-edge/gc.c"
+    },
+    {
+      "path": "independent/execution/builds/mutant-write-barrier/gc.c",
+      "bytes": 23466,
+      "sha256": "02246c8148d2086ae70aef645305298605b3249c40f2ee666a4b9fb1a217de11",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/execution/builds/mutant-write-barrier/gc.c"
+    },
+    {
+      "path": "independent/execution/last-stdout.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/execution/last-stdout.txt"
+    },
+    {
+      "path": "independent/execution/verification.json",
+      "bytes": 115608,
+      "sha256": "0eda9ccc36583cd5fc03ee401df173295622399fdfd61d841746773e92068939",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/execution/verification.json"
+    },
+    {
+      "path": "independent/postrun-audit.json",
+      "bytes": 60351,
+      "sha256": "1604a5882a4afe1745823f676b40bea8a7b344c8d71fe4f9c2298b6efc7900a9",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/postrun-audit.json"
+    },
+    {
+      "path": "independent/relocated-plan.json",
+      "bytes": 5309,
+      "sha256": "617b0f024f385fce6585b8765a7aa8c9666a31aedac92e15775871912618f5da",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/relocated-plan.json"
+    },
+    {
+      "path": "independent/restore/LICENSE",
+      "bytes": 11346,
+      "sha256": "5a7936358100f33efae1c91e02b9688fbfa75d7b1ab8974cd6fc98d6957e7272",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/restore/LICENSE"
+    },
+    {
+      "path": "independent/restore/README.md",
+      "bytes": 4505,
+      "sha256": "79b360371f15d47214bbebe8836aa9d386d70109ecf6478ebe1ffe0f1d192043",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/restore/README.md"
+    },
+    {
+      "path": "independent/restore/helpers/export-source.py",
+      "bytes": 9530,
+      "sha256": "3298be03c55f2590760cc36f07a0cb0efafb987c6902742957e43cbef550b78b",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/restore/helpers/export-source.py"
+    },
+    {
+      "path": "independent/restore/helpers/prepare-source.py",
+      "bytes": 5887,
+      "sha256": "312d2eb962bb30b7a1a6a178cf88a297866c9005e15d45e957ef0929391bd6f2",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/restore/helpers/prepare-source.py"
+    },
+    {
+      "path": "independent/restore/plan/accepted-plan.md",
+      "bytes": 10519,
+      "sha256": "eee274c7ffb83c08b0ed98d89504b8187020316ea105b701cbe04de4678891da",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/restore/plan/accepted-plan.md"
+    },
+    {
+      "path": "independent/restore/review/source-review-receipt.md",
+      "bytes": 3140,
+      "sha256": "5ade15309e84238cdeae93772e72ede6714043c52f00ee8f936a7a9d1429cd2c",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/restore/review/source-review-receipt.md"
+    },
+    {
+      "path": "independent/restore/sources/baseline/gc.c",
+      "bytes": 22397,
+      "sha256": "8b3d4bf65beccb9a019d2330f8266fc5261120140d94b611981add3b720876b4",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/restore/sources/baseline/gc.c"
+    },
+    {
+      "path": "independent/restore/sources/baseline/gc.h",
+      "bytes": 5077,
+      "sha256": "c70257e8bb754ac649db073f7aad9960a6a734273b77bc213de14fc45d94cff0",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/restore/sources/baseline/gc.h"
+    },
+    {
+      "path": "independent/restore/sources/baseline/workload.c",
+      "bytes": 10967,
+      "sha256": "b2c38813145487d506191d7c172048f11c367a2af8968026b603bceb4774c112",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/restore/sources/baseline/workload.c"
+    },
+    {
+      "path": "independent/restore/sources/candidate/gc.c",
+      "bytes": 23466,
+      "sha256": "02246c8148d2086ae70aef645305298605b3249c40f2ee666a4b9fb1a217de11",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/restore/sources/candidate/gc.c"
+    },
+    {
+      "path": "independent/restore/sources/candidate/gc.h",
+      "bytes": 5077,
+      "sha256": "c70257e8bb754ac649db073f7aad9960a6a734273b77bc213de14fc45d94cff0",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/restore/sources/candidate/gc.h"
+    },
+    {
+      "path": "independent/restore/sources/candidate/workload.c",
+      "bytes": 10967,
+      "sha256": "b2c38813145487d506191d7c172048f11c367a2af8968026b603bceb4774c112",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/restore/sources/candidate/workload.c"
+    },
+    {
+      "path": "independent/restore/sources/copy-scan-fusion-v.patch",
+      "bytes": 3024,
+      "sha256": "e97c051161239574fb9e20f7cd33b566b83656c22406b39267dbbef9490831ee",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/restore/sources/copy-scan-fusion-v.patch"
+    },
+    {
+      "path": "independent/restore/sources/manifest.json",
+      "bytes": 2693,
+      "sha256": "026be9dfb958a619b1919bbd2ed67860d0054e575c269e1a250596f27f42b1d7",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/restore/sources/manifest.json"
+    },
+    {
+      "path": "independent/restore/verification/fixture.c",
+      "bytes": 13671,
+      "sha256": "509c3a253b2d75dde0789f87b4ba2e107d983b5b3d843e143093f1f62f33293a",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/restore/verification/fixture.c"
+    },
+    {
+      "path": "independent/restore/verification/plan.json",
+      "bytes": 5079,
+      "sha256": "dbffb5d69954165f4a11d66c03ca38fc952aaef97c06c31fcececabaa2dc5867",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/restore/verification/plan.json"
+    },
+    {
+      "path": "independent/restore/verification/run.py",
+      "bytes": 20289,
+      "sha256": "3c345ad5290bd7773a5adc4409e690a66d78da59c53b5535d98ce24448ffd4c8",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/restore/verification/run.py"
+    },
+    {
+      "path": "independent/toolchain.json",
+      "bytes": 824,
+      "sha256": "4322d67a82c71b95d7953981f9818c920d725bd5a11c3befc6d973848a48e482",
+      "origin_path": "/tmp/medaka-copy-scan-resume-c3f19e532/toolchain.json"
+    },
+    {
+      "path": "planning/UNIMPLEMENTED-UNEXECUTED-timing-plan.md",
+      "bytes": 8980,
+      "sha256": "034474f797161138c57abe825ebb6157bd41be90e8ee2bb394d19efa116acc9c",
+      "origin_path": "/tmp/medaka-copy-scan-timing-plan-c3f19e532/PLAN.md"
+    },
+    {
+      "path": "replay.py",
+      "bytes": 1770,
+      "sha256": "b8d486dcb158925dfd0f04c44cb3d69dce8d29c8f31a8b568bc019600c9186c8",
+      "origin_path": "/tmp/medaka-copy-scan-correctness-export-c3f19e532/replay.py"
+    }
+  ],
+  "readme_sha256": "f09f1c166f1acaf5a9de7240dab7625f21a2f7ed05340607e6d0a18a1f0ebc8d"
+}

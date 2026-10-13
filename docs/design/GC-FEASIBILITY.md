@@ -1177,3 +1177,33 @@ retain the exact evidence. The [export manifest](../../test/gc_prototype/results
 hashes every member and annotates the frozen protocol's historical source-only
 label externally. The bundle preserves sources and receipts, not a full host
 replay environment.
+
+### Copy/scan fusion correctness (2026-10-13)
+
+Variant V retains the baseline85 vector queue and completes traced promotion
+payloads while resolving pointers from the nursery source. It saves field zero
+before forwarding, queues source headers, and uses the destination descriptor
+while draining. Atomic objects still receive complete copies; direct-old
+zeroing, remembered-owner scanning and major marking are unchanged. Forwarded
+destinations may be privately incomplete only during the uninterrupted minor
+drain. No mutator or major marker may observe them before completion.
+
+After restoring the previously archived source bundle, the independent verifier
+passed 22 positive runs and seven named negative controls under ASan/UBSan.
+Eleven cases produce 12 paired stages: all 46 snapshot fields (45 numeric and
+the stage name) match baseline exactly. An independent raw-evidence audit
+verified diagnostics, identities, accounting and sanitizer instrumentation.
+The unchanged full collector correctness suite also passed on the isolated
+candidate, including ten backends, prepared allocation, pooled storage,
+adversarial graphs and LLVM contracts. Missing bundled Clang sanitizer libraries
+required the recorded system ASan/UBSan fallback; LSan was disabled. Host library
+hashes are receipts, not a hermetic execution environment.
+
+The candidate SHA256 remains
+`02246c8148d2086ae70aef645305298605b3249c40f2ee666a4b9fb1a217de11`.
+It is not installed or timed. These results establish correctness within the
+tested contracts, not a speedup or full application support. The
+[execution bundle](../../test/gc_prototype/results/2026-10-13-copy-scan-correctness-README.md)
+preserves original link failures, successful commands, fixtures, source/binary
+identities and independent audit. Its next-screen proposal still needs a
+reviewed, frozen implementation and fresh paired baseline/Boehm measurements.

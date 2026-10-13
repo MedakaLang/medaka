@@ -139,11 +139,12 @@ with a concrete new hypothesis; do not rerun the same variant under a new name.
 | Packed gzip inflater output | Implemented and measured under Boehm: large seed workload 1.935→1.649 s and 1,286.8→348.0 decimal MB RSS; small inputs mixed. Preserve overlapping backreferences and public arbitrary-Int copyBack behavior. | [Packed gzip](../../docs/design/GC-FEASIBILITY.md#packed-gzip-inflater-output-2026-10-12) |
 | Compiler-produced native inventory | Implemented, incomplete, and output-neutral. It observes physical contracts; it does not create a valid root map. Report-disabled compiler overhead has not been separately benchmarked. | [Native inventory](../../docs/design/GC-FEASIBILITY.md#compiler-produced-native-inventory-2026-10-12) |
 | Real ByteBlock helper relocation seam | Implemented for closed kernels, 86 combined runtime checks. Establishes helper rooting/extent/relocation behavior while leaving caller roots and full applications unsupported. | [Combined evidence](results/2026-10-12-combined-cad-byteblock-validation.json) |
+| Copy/scan fusion on the original vector queue | Independent sanitizer/mutation checks and the unchanged full collector correctness suite passed after resumption. Not installed or timed; performance remains unknown. | [Executed correctness evidence](results/2026-10-13-copy-scan-correctness-README.md) |
 
 The proposed 375-process confirmation batch has never run. Its preparation and
 drift-rejection checks passed, but a preparation result is not timing evidence.
-The copy/scan-fusion source below is a new prepared candidate, not a tried or
-validated runtime optimization.
+The copy/scan-fusion candidate below has now passed correctness execution, but
+has not received a performance screen.
 
 ## Lessons that should survive the session
 
@@ -204,7 +205,7 @@ validated runtime optimization.
   documented per run. A named, pre-dereference mutant failure is evidence;
   arbitrary sanitizer crashes, timeouts or wrong exits are not.
 
-## Prepared next experiment: source only
+## Next experiment: copy/scan correctness passed, timing pending
 
 The next idea, taken from pinned OCaml minor promotion, fuses copying traced
 fields with resolving their pointers. Current promotion copies the payload and
@@ -213,16 +214,35 @@ vector queue, independently of the rejected intrusive-list change.
 
 Candidate C SHA256:
 `02246c8148d2086ae70aef645305298605b3249c40f2ee666a4b9fb1a217de11`.
-Header/workload are exact baseline85. Independent source review passed.
-**No candidate, verifier, or mutant native binary has been built or run. No
-timing or runtime-correctness claim is available.**
+Header/workload are exact baseline85. Independent source review passed. After
+the initial handoff, the goal resumed from `c3f19e532`: the durable archive and
+all 17 member hashes/sizes were checked before fresh extraction, then the
+unchanged prepared verifier executed successfully. All 22 positive runs and
+seven exact named negative controls passed. Across 11 cases and 12 paired
+stages, all 46 snapshot fields (45 numeric plus the stage name) matched baseline
+exactly. An independent audit checked raw commands, diagnostics, hashes and
+accounting identities.
+
+The unchanged complete collector correctness suite also exited zero against
+the isolated candidate: 203 positive runs and ten intended negative controls
+covered all ten backends, prepared allocation, pooled heap, adversarial graphs
+and LLVM contracts. Its command counts and provenance received a separate
+independent audit. Neither run
+installed the candidate in the repository. ASan/UBSan remained active with
+LSan disabled; missing bundled Clang sanitizer libraries required the recorded
+system-runtime fallback. Runtime-library hashes are post-run receipts, not a
+hermetic before/after host-library freeze. See the
+[executed evidence and reproduction notes](results/2026-10-13-copy-scan-correctness-README.md).
+**No timing or performance claim is available.**
 
 The [source-only bundle notes](results/2026-10-13-copy-scan-source-README.md)
 provide the exact baseline, candidate, patch, packet, prepared verification
-files, review receipts, member hashes, and restoration/next commands. The first
-resumed step is independent correctness, followed by the unchanged complete
-collector suite and exact counter/storage checks. Only after these pass should
-a separate timing packet be reviewed and run.
+files, review receipts, member hashes, and restoration commands. Its original
+UNBUILT/UNEXECUTED labels describe the archived handoff date and are preserved
+as historical provenance; the executed evidence above supersedes that status.
+The next step is to implement and review a separate frozen timing packet with
+fresh paired baseline runs and matched Boehm cohorts. The proposed timing plan
+in the new evidence bundle is not an implemented or executed performance runner.
 
 Critical invariant: a forwarded mature object may be privately incomplete
 during the uninterrupted minor drain. Save field0 before forwarding; queue
