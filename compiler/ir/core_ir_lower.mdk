@@ -103,7 +103,6 @@ import types.disposition.{
 import eval.eval.{
   buildCtorToType,
   installDispatchTables,
-  lookupPositions,
   tyvarsInArgs,
   headTyconHead,
   exprStartLoc,
@@ -3275,9 +3274,51 @@ lowerImplsRaw : List ((String, String, String), List Int) ->
   List Decl ->
   List CImplEntry
 lowerImplsRaw disp reqCounts arities dispositions prog =
-  flatMap (lowerDeclImpl disp reqCounts arities dispositions) prog
+  flatMap
+    (lowerDeclImpl (positionsIndex disp) reqCounts arities dispositions)
+    prog
 
-lowerDeclImpl : List ((String, String, String), List Int) ->
+-- `disp` re-keyed once per program: `lookupPositions` scans it per impl method and per
+-- interface default, and an interface's own rows grow with its method count.  Keys are
+-- `<iface>#<method>` (`#` occurs in neither); the first row for a key wins, as in the scan.
+data PositionsIndex = PositionsIndex {
+  -- tier 1, rows that carry an interface identity
+  pxIdentity : OrdMap (List Int),
+  -- tier 2, the bare interface spelling
+  pxSpelling : OrdMap (List Int),
+}
+
+positionsIndex : List ((String, String, String), List Int) -> PositionsIndex
+positionsIndex rows = positionsIndexGo rows (PositionsIndex omEmpty omEmpty)
+
+positionsIndexGo : List ((String, String, String), List Int) ->
+  PositionsIndex ->
+  PositionsIndex
+positionsIndexGo [] acc = acc
+positionsIndexGo (((ident, iface, m), p) :: rest) acc =
+  positionsIndexGo
+    rest
+    (PositionsIndex
+      (if ident == "" then
+        acc.pxIdentity
+      else
+        insertFirst "\{ident}#\{m}" p acc.pxIdentity)
+      (insertFirst "\{iface}#\{m}" p acc.pxSpelling))
+
+insertFirst : String -> List Int -> OrdMap (List Int) -> OrdMap (List Int)
+insertFirst k p m = match omLookup k m
+  Some _ => m
+  None => omInsert k p m
+
+-- `lookupPositions` over the index: the identity tier answers only a query that carries
+-- an identity, then the spelling tier, then the `[0]` miss default.
+positionsOf : PositionsIndex -> String -> String -> String -> List Int
+positionsOf ix ident iface m =
+  match if ident == "" then None else omLookup "\{ident}#\{m}" ix.pxIdentity
+    Some p => p
+    None => optionOr [0] (omLookup "\{iface}#\{m}" ix.pxSpelling)
+
+lowerDeclImpl : PositionsIndex ->
   OrdMap Int ->
   OrdMap Int ->
   Option DispositionTable ->
@@ -3308,7 +3349,7 @@ lowerDeclImpl disp reqCounts arities (Some dt) (DInterface { name = ifaceName, i
   flatMap (lowerInheritedDefault disp reqCounts arities dt o ifaceName) methods
 lowerDeclImpl _ _ _ _ _ = []
 
-lowerImplMethod : List ((String, String, String), List Int) ->
+lowerImplMethod : PositionsIndex ->
   OrdMap Int ->
   TyConOrigin ->
   String ->
@@ -3320,10 +3361,9 @@ lowerImplMethod disp arities o ifaceName typeArgs (ImplMethod mname pats body) =
   let key = implRouteKeyWord o ifaceName typeArgs None
   -- #1113 Phase 4: identity-keyed admissibility lookup — the LOCKSTEP peer of
   -- `eval.implMethodEntry`'s identical line.  `o` is already bound for `key`, so
-  -- both consumers pay nothing.  These are the ONLY two `lookupPositions` call
+  -- both consumers pay nothing.  These are the ONLY two `positionsOf` call
   -- sites, and `CImplTagged`'s `positions` is where the answer is FROZEN.
-  let positions =
-    lookupPositions (ifaceIdentity o ifaceName) ifaceName mname disp
+  let positions = positionsOf disp (ifaceIdentity o ifaceName) ifaceName mname
   CImplEntry
     mname
     (tyvarsInArgs typeArgs)
@@ -3337,7 +3377,7 @@ lowerImplMethod disp arities o ifaceName typeArgs (ImplMethod mname pats body) =
       pats
       (lower body))
 
-lowerInheritedDefault : List ((String, String, String), List Int) ->
+lowerInheritedDefault : PositionsIndex ->
   OrdMap Int ->
   OrdMap Int ->
   DispositionTable ->
@@ -3348,8 +3388,7 @@ lowerInheritedDefault : List ((String, String, String), List Int) ->
 lowerInheritedDefault _ _ _ _ _ _ (IfaceMethod _ _ None _) = []
 lowerInheritedDefault disp reqCounts arities dt o ifaceName (IfaceMethod mname _ (Some (MethodDefault pats body)) _) =
   let ifaceWord = ifaceWordOf o ifaceName
-  let positions =
-    lookupPositions (ifaceIdentity o ifaceName) ifaceName mname disp
+  let positions = positionsOf disp (ifaceIdentity o ifaceName) ifaceName mname
   let nMethodDicts = leadingDictParams pats
   let receiver = "$dict_\{mname}_\{intToString nMethodDicts}"
   let params =
