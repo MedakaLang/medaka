@@ -104,7 +104,10 @@ import types.typecheck.{
   walkGoalSameProbe,
 }
 import types.target_profile.{selectProfile, selectedProfile}
-import support.util.{contains, isEmptyL, joinNl, joinWith, listLen, lookupAssoc}
+import support.util.{
+  contains, isEmptyL, joinNl, joinWith, listLen, lookupAssoc, splitNl,
+  startsWith
+}
 import list.{last}
 
 data NumericTraceView = NumericTraceView {
@@ -5021,3 +5024,292 @@ test "a literal applied as a function is rejected at its use" = expectEach [
       (arrowNumOutcome ["f x = 1 x", "main : String", "main = f 2"]),
   ),
 ]
+
+-- The line `check` prints for [name]'s scheme in [source], checked over the
+-- alias-head prelude; the whole report when no such line exists.
+superGoalScheme : String -> List String -> String
+superGoalScheme name source =
+  let report = checkModulesEntryReport [] (desugar
+    (parseLocated aliasHeadPrelude)) [
+    ("super_goal", desugar (parseLocated (joinNl source))),
+  ]
+  match filter (startsWith "\{name} : ") (splitNl report)
+    line :: _ => line
+    [] => report
+
+-- #4044: `D b`, the super goal of `C (Box Bool) b`, has arguments that are all
+-- variables.  The matched `impl C (Box a) b` has no context to answer it, so it is a
+-- selection: `impl D a` answers it at the binder and `impl D Int` at a use, so the
+-- goal is kept as written.
+blanketSuperProgram : List String -> List String
+blanketSuperProgram extra =
+  [
+      "interface D a where",
+      "  d : a -> String",
+      "interface C a b requires D b where",
+      "  c : a -> b -> String",
+      "data Box a = Box a",
+      "impl D a where",
+      "  d _ = \"BLANKET\"",
+      "impl D Int where",
+      "  d _ = \"INT\"",
+      "impl C (Box a) b where",
+      "  c _ _ = \"c\"",
+      "useC : C a b => a -> b -> String",
+      "useC x y = d y ++ c x y",
+      "g y = useC (Box True) y",
+    ]
+    ++ extra
+
+test "an all-variable super goal is a selection at a generalizing binder" = expectEach
+  [
+    (
+      "scheme",
+      expectEqual
+        "g : C (Box Bool) a => a -> String"
+        (superGoalScheme "g" (blanketSuperProgram [])),
+    ),
+    (
+      "satisfied use",
+      expectEqual
+        ([], "INTc")
+        (aliasHeadOutcome
+          (aliasHeadModule (blanketSuperProgram ["main = g (1 : Int)"]))),
+    ),
+    (
+      "unsatisfied use",
+      expectEqual
+        (["T-NO-IMPL"], "")
+        (aliasHeadOutcome
+          (aliasHeadModule
+            (blanketSuperProgram [
+              "interface Show2 a where",
+              "  show2 : a -> String",
+              "impl D (List a) requires Show2 a where",
+              "  d _ = \"LIST\"",
+              "main = g [True]",
+            ]))),
+    ),
+  ]
+
+-- #4043: the super goal `Sup2 (a -> <b> c)` of `Conv (Box Int) (a -> <b> c)` has an
+-- arrow argument; `impl Sup2 (Int -> b)` can match it at a use, so the goal is kept.
+arrowSuperProgram : List String -> List String
+arrowSuperProgram extra =
+  [
+      "interface Sup2 a where",
+      "  sup2 : a -> String",
+      "interface Conv a b requires Sup2 b where",
+      "  conv : a -> b -> String",
+      "data Box a = Box a",
+      "impl Sup2 (a -> b) where",
+      "  sup2 _ = \"GENFN\"",
+      "impl Sup2 (Int -> b) where",
+      "  sup2 _ = \"INTFN\"",
+      "impl Conv (Box a) (b -> c) where",
+      "  conv _ _ = \"conv\"",
+      "useC : Conv a b => a -> b -> String",
+      "useC x y = sup2 y ++ conv x y",
+      "inc : Int -> Int",
+      "inc x = x",
+      "g f = useC (Box (1 : Int)) (y => f y)",
+    ]
+    ++ extra
+
+test "an arrow super goal is a selection at a generalizing binder" = expectEach
+  [
+    (
+      "scheme",
+      expectEqual
+        "g : Conv (Box Int) (a -> <b> c) => (a -> <b> c) -> String"
+        (superGoalScheme "g" (arrowSuperProgram [])),
+    ),
+    (
+      "uses",
+      expectEqual
+        ([], "INTFNconvINTFNconv")
+        (aliasHeadOutcome
+          (aliasHeadModule
+            (arrowSuperProgram [
+              "main = g inc ++ useC (Box (1 : Int)) (y => inc y)",
+            ]))),
+    ),
+  ]
+
+-- The super-goal judgment matrix.  `Sub (Wrap Bool) s` has the super goal `Sup s`,
+-- where `s` is a constructed type, an arrow or a variable over `g`'s quantified
+-- variable.  Every judgment must treat the three shapes alike.
+superShapes : List String
+superShapes = ["constructed", "arrow", "variable"]
+
+superShapeType : String -> String -> String
+superShapeType "constructed" v = "(Box \{v})"
+superShapeType "arrow" v = "(Int -> \{v})"
+superShapeType _ v = v
+
+superShapeValue : String -> String -> String
+superShapeValue "constructed" v = "(Box \{v})"
+superShapeValue "arrow" v = "(konst \{v})"
+superShapeValue _ v = v
+
+-- `sup`'s body, which reaches the shape's one `b` value.
+superShapeSup : String -> String
+superShapeSup "constructed" = "  sup (Box v) = show2 [v]"
+superShapeSup "arrow" = "  sup f = show2 [f 1]"
+superShapeSup _ = "  sup v = show2 [v]"
+
+superShapeProgram : String -> List String -> List String
+superShapeProgram shape extra =
+  [
+      "interface Show2 a where",
+      "  show2 : a -> String",
+      "impl Show2 Bool where",
+      "  show2 _ = \"b\"",
+      "data Box a = Box a",
+      "data Wrap a = Wrap a",
+      "konst : b -> Int -> b",
+      "konst y _ = y",
+      "interface Sup a where",
+      "  sup : a -> String",
+      "interface Sub a b requires Sup b where",
+      "  sub : a -> b -> String",
+      "useSub : Sub a b => a -> b -> String",
+      "useSub x y = sup y ++ sub x y",
+      "g y = useSub (Wrap True) \{superShapeValue shape "y"}",
+    ]
+    ++ extra
+
+-- A blanket `Sup`, the `Sub` impl, and a more specific `Sup` at the shape over
+-- `Two c`, which a use at `Two Bool` selects; its `requires Show4 c` is owed there.
+superShapeOverlap : String -> List String -> List String
+superShapeOverlap shape extra =
+  superShapeProgram
+    shape
+    ([
+        "data Two a = Two a",
+        "interface Show4 a where",
+        "  show4 : a -> String",
+        "impl Sup a where",
+        "  sup _ = \"GEN\"",
+        "impl Sup \{superShapeType shape "(Two c)"} requires Show4 c where",
+        "  sup _ = \"SPEC\"",
+        "impl Sub (Wrap a) b where",
+        "  sub _ _ = \"sub\"",
+      ]
+      ++ extra)
+
+-- The `Sup` instance at the shape requires `Show2 (List b)`, which `impl Show2 (List
+-- Bool)` can answer at a use, so the carried goal stays in `g`'s scheme beside what
+-- the `Sub` impl's own context leaves.  For the variable shape that instance is the
+-- blanket one, and the `Sub` impl's `requires Show2 b` entails its context.
+superShapeCarry : String -> List String
+superShapeCarry shape =
+  superShapeProgram
+    shape
+    ([
+        "impl Show2 (List a) requires Show2 a where",
+        "  show2 _ = \"L\"",
+        "impl Show2 (List Bool) where",
+        "  show2 _ = \"LB\"",
+        "impl Sup \{superShapeType shape "b"} requires Show2 (List b) where",
+        superShapeSup shape,
+      ]
+      ++ (if shape == "variable" then
+        ["impl Sub (Wrap a) b requires Show2 b where", "  sub _ _ = \"sub\""]
+      else
+        [
+          "impl Sup a where",
+          "  sup _ = \"GEN\"",
+          "impl Sub (Wrap a) b where",
+          "  sub _ _ = \"sub\"",
+        ]))
+
+superShapeVerdicts : (Eq a, Debug a) =>
+  (String -> a) ->
+  (String -> a) ->
+  Expectation
+superShapeVerdicts expected observe =
+  expectEach (map (s => (s, expectEqual (expected s) (observe s))) superShapes)
+
+superShapeRun : List String -> (List String, String)
+superShapeRun program = aliasHeadOutcome (aliasHeadModule program)
+
+test "super-goal judgment matrix: stability test" = expectEach [
+  (
+    "unsatisfied requires",
+    superShapeVerdicts
+      (_ => (["T-NO-IMPL"], ""))
+      (s => superShapeRun (superShapeOverlap s ["main = g (Two True)"])),
+  ),
+  (
+    "satisfied requires",
+    superShapeVerdicts
+      (_ => ([], "SPECsub"))
+      (s =>
+        superShapeRun
+          (superShapeOverlap s [
+            "impl Show4 Bool where",
+            "  show4 _ = \"4\"",
+            "main = g (Two True)",
+          ])),
+  ),
+]
+
+test "super-goal judgment matrix: generalized scheme" =
+  superShapeVerdicts
+    (s => "g : Sub (Wrap Bool) \{superShapeType s "a"} => a -> String")
+    (s => superGoalScheme "g" (superShapeOverlap s []))
+
+test "super-goal judgment matrix: carry" =
+  superShapeVerdicts
+    (s =>
+      if s == "variable" then
+        "g : (Show2 (List a), Show2 a) => a -> String"
+      else
+        "g : Show2 (List a) => a -> String")
+    (s => superGoalScheme "g" (superShapeCarry s))
+
+-- A stable super selection is reduced: with only the blanket `Sup`, `g` keeps no
+-- goal, and its use builds the blanket super.
+test "super-goal judgment matrix: residual" =
+  superShapeVerdicts
+    (_ => ("g : a -> String", ([], "GENsub")))
+    (s =>
+      let program = superShapeProgram s [
+        "impl Sup a where",
+        "  sup _ = \"GEN\"",
+        "impl Sub (Wrap a) b where",
+        "  sub _ _ = \"sub\"",
+      ]
+      (
+        superGoalScheme "g" program,
+        superShapeRun (program ++ ["main = g True"]),
+      ))
+
+-- The #4023 controls: a goal whose super selection is stable reduces at the
+-- binder, and each use builds the super its own instantiation selects.
+test "a stable super selection builds each use's super" =
+  expectEqual
+    ([], "supsub suptbsub")
+    (aliasHeadOutcome
+      (aliasHeadModule [
+        "interface Show2 t where",
+        "  show2 : t -> String",
+        "impl Show2 Bool where",
+        "  show2 _ = \"b\"",
+        "interface Sup a where",
+        "  sup : a -> String",
+        "interface Sub a requires Sup a where",
+        "  sub : a -> String",
+        "data Box a = Box a",
+        "data Two a = Two a",
+        "impl Sup (Box a) where",
+        "  sup _ = \"sup\"",
+        "impl Sup (Box (Two a)) requires Show2 a where",
+        "  sup (Box (Two x)) = \"supt\" ++ show2 x",
+        "impl Sub (Box a) where",
+        "  sub _ = \"sub\"",
+        "useSup : Sub a => a -> String",
+        "useSup x = sup x ++ sub x",
+        "main = useSup (Box True) ++ \" \" ++ useSup (Box (Two True))",
+      ]))

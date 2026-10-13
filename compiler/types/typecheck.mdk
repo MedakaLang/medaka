@@ -39092,8 +39092,9 @@ data SuperGoalEntry = SuperGoalEntry {
 -- specific super instance adds a goal.  A super goal is entered beside the goal, on the
 -- walk that reached it, as the route walk enters it (`superRoutesAt`), a cycle or
 -- spent fuel reported at [loc].  A super goal [answered] gives, itself or through its
--- supers, is not entered: the construction's ladder tries `assum` before `inst`.  A
--- super goal with no constructed argument is answered by a given, and one no instance
+-- supers, is not entered: the construction's ladder tries `assum` before `inst`.  Any
+-- other super goal is a selection, whatever its arguments are (constructed, arrows or
+-- variables alone), and is entered when an instance matches it.  One no instance
 -- matches is the impl declaration's error (`checkImplSuperContexts`): the
 -- declaration's existence match (`superHeadCovers`) holds the head variables rigid and
 -- binds a repeated impl variable consistently, as `implMatchesU` does here.
@@ -39117,7 +39118,7 @@ superGoalEntered : ImplUniverse ->
   List Mono ->
   List SuperGoalEntry
 superGoalEntered univ walk loc answered sup supArgs
-  | not (anyConcreteHead supArgs && implMatchesU univ sup supArgs) = []
+  | not (implMatchesU univ sup supArgs) = []
   | goalAnsweredBy answered sup supArgs = []
   | otherwise = match reqWalkReported loc (reqWalkEnter walk sup supArgs)
     Some next =>
@@ -46347,12 +46348,12 @@ residualPredsOf chosen walk iface args
 -- Whether every use of the binder builds the dictionary the goal's reduction builds
 -- now (DICT-SEMANTICS §6.1.3): the goal mentions no variable the uses choose, or the
 -- goal is stable (`goalSelectionStable`) and so is each of its super goals
--- (`superGoalClosure`) that is tested.  [context] is the matched instance's context
+-- (`superGoalClosure`) that selects.  [context] is the matched instance's context
 -- at the goal; a super goal it answers (`goalAnsweredBy`) is built from that context,
--- not selected, and the context's goals are reduced under this same test.  Not
--- tested, and so able to differ between uses (#4044): a super goal none of whose
--- arguments `anyConcreteHead` counts as constructed (an all-variable super goal), which a
--- blanket instance can answer.
+-- not selected, and the context's goals are reduced under this same test.  Every
+-- other super goal is a selection and is tested, whatever its arguments are
+-- (constructed, arrows or variables alone): a super goal over variables alone that a
+-- blanket instance answers now is unstable when a more specific instance unifies.
 residualSelectionStable : List Int ->
   List (IfaceRef, List Mono) ->
   IfaceRef ->
@@ -46364,8 +46365,7 @@ residualSelectionStable chosen context iface args
     goalSelectionStable chosen iface args
       && allList
         (sg =>
-          not (anyConcreteHead (snd sg))
-            || goalAnsweredBy context (fst sg) (snd sg)
+          goalAnsweredBy context (fst sg) (snd sg)
             || goalSelectionStable chosen (fst sg) (snd sg))
         (superGoalClosure iface args)
 
@@ -47749,7 +47749,10 @@ requiresUnroutedMsg iface args =
 -- arrow)?  The per-argument twin of `allConcreteHeads`: `False` means the whole vector is
 -- head-free, hence terminal for
 -- §3 reduction (nothing to match an impl head against).  See `residualPredsOf` for why
--- the vector test must be ANY and not ALL — issue 1560.
+-- the vector test must be ANY and not ALL — issue 1560.  It asks whether a goal posed
+-- at a binder, an impl body or a super instance's context is the binder's own
+-- predicate; whether a super goal is a selection is decided by what answers it
+-- (`goalAnsweredBy`), not by this.
 anyConcreteHead : List Mono -> Bool
 anyConcreteHead args = anyListM (m => isSome (headTyconMono m)) args
 
