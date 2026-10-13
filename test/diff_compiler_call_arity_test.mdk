@@ -257,11 +257,11 @@ dictPrefix = "mdk_dict_call_arity_conformance__"
 adderCall : String
 adderCall = "call i64 @\{dictPrefix}adder3("
 
--- The body lines of the first `define i64 @sym(` header, up to its closing "}".
+-- The body lines of the first `define internal i64 @sym(` header, up to its closing "}".
 bodyLines : String -> List String -> Option String
 bodyLines sym [] = None
 bodyLines sym (l :: r) =
-  if S.startsWith "define i64 @\{sym}(" l && S.endsWith ") {" l then
+  if S.startsWith "define internal i64 @\{sym}(" l && S.endsWith ") {" l then
     Some (S.join "\n" (untilClose r))
   else
     bodyLines sym r
@@ -282,7 +282,7 @@ shapeRow name ir ok msg = match bodyOf name ir
 
 -- adder3's define: the dictionary and `a`; `b => c => …` is its returned lambda.
 adderDefine : String
-adderDefine = "define i64 @\{dictPrefix}adder3(i64 %arg0, i64 %arg1) {"
+adderDefine = "define internal i64 @\{dictPrefix}adder3(i64 %arg0, i64 %arg1) {"
 
 defineOk : String -> Expectation
 defineOk ir =
