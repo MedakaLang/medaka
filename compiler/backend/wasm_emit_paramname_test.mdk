@@ -11,7 +11,7 @@
 -- `watOf` is kept local so each sibling test file reads alone.
 
 import test.{expectAll, expectFalse, expectTrue, labelFail}
-import string.{contains, lines, startsWith}
+import string.{contains, endsWith, lines, startsWith}
 import list.{reverse}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
@@ -128,15 +128,28 @@ test "TRMC loop: the loop writes the source-named params directly" =
       (expectFalse (blockHas "__wparg" blk)),
   ]
 
--- a body binder that rebinds a param name keeps that param positional, so its wasm
--- local is never the binder's local
+-- Alpha-renaming gives the inner binder its own local. The outer param remains
+-- readable after the inner scope ends: (7) + (3) must be 10.
 shadowSrc : String
-shadowSrc = "shadowL xs = let xs = [] in xs\nmain = shadowL []"
+shadowSrc =
+  "shadowL x = (let x = 7 in x) + x\nmain = if shadowL 3 == 10 then \"ok\" else \"bad\""
 
-test "shadowed param: the header keeps the positional name, not the source name" =
+test "shadowed param: distinct inner local preserves the outer parameter" =
   let blk = funcBlock "shadowL" (watOf shadowSrc)
-  labelFail
-    "header is positional"
-    (expectTrue
-      (blockHas "(param $u____wparg0 (ref eq))" blk
-        && not (blockHas "(param $xs (ref eq))" blk)))
+  expectAll [
+    labelFail
+      "outer param retains its source name without a positional copy"
+      (expectTrue
+        (blockHas "(param $x (ref eq))" blk && not (blockHas "__wparg" blk))),
+    labelFail
+      "inner binder has its own declared, written and read local"
+      (expectTrue
+        (blockHas "(local $x$1 (ref eq))" blk
+          && anyLine (endsWith "local.set $x$1") blk
+          && anyLine (endsWith "local.get $x$1") blk)),
+    labelFail
+      "outer parameter is read after the inner scope and is never overwritten"
+      (expectTrue
+        (anyLine (endsWith "local.get $x") blk
+          && not (anyLine (endsWith "local.set $x") blk))),
+  ]

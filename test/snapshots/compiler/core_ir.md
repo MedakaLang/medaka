@@ -1,5 +1,5 @@
 # META
-source_lines=677
+source_lines=687
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR — STAGE2-DESIGN §2.1.  A serializable, backend-neutral intermediate
@@ -469,6 +469,16 @@ export
 obviousRuntimeType : CExpr -> Option RuntimeType
 obviousRuntimeType (CLit (LInt _)) = None
 obviousRuntimeType (CLit l) = Some (litRuntimeType l)
+obviousRuntimeType (CBinPrim op _ _ _ _) =
+  if op == "=="
+    || op == "/="
+    || op == "<"
+    || op == ">"
+    || op == "<="
+    || op == ">=" then
+    Some RTBool
+  else
+    None
 obviousRuntimeType (CTuple _) = Some RTCon
 obviousRuntimeType (CList _) = Some RTCon
 obviousRuntimeType _ = None
@@ -744,6 +754,7 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DTypeSig true "obviousRuntimeType" (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "RuntimeType"))))
 (DFunDef false "obviousRuntimeType" ((PCon "CLit" (PCon "LInt" PWild))) (EVar "None"))
 (DFunDef false "obviousRuntimeType" ((PCon "CLit" (PVar "l"))) (EApp (EVar "Some") (EApp (EVar "litRuntimeType") (EVar "l"))))
+(DFunDef false "obviousRuntimeType" ((PCon "CBinPrim" (PVar "op") PWild PWild PWild PWild)) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "=="))) (EBinOp "==" (EVar "op") (ELit (LString "/=")))) (EBinOp "==" (EVar "op") (ELit (LString "<")))) (EBinOp "==" (EVar "op") (ELit (LString ">")))) (EBinOp "==" (EVar "op") (ELit (LString "<=")))) (EBinOp "==" (EVar "op") (ELit (LString ">=")))) (EApp (EVar "Some") (EVar "RTBool")) (EVar "None")))
 (DFunDef false "obviousRuntimeType" ((PCon "CTuple" PWild)) (EApp (EVar "Some") (EVar "RTCon")))
 (DFunDef false "obviousRuntimeType" ((PCon "CList" PWild)) (EApp (EVar "Some") (EVar "RTCon")))
 (DFunDef false "obviousRuntimeType" (PWild) (EVar "None"))
@@ -893,6 +904,7 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DTypeSig true "obviousRuntimeType" (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "RuntimeType"))))
 (DFunDef false "obviousRuntimeType" ((PCon "CLit" (PCon "LInt" PWild))) (EVar "None"))
 (DFunDef false "obviousRuntimeType" ((PCon "CLit" (PVar "l"))) (EApp (EVar "Some") (EApp (EVar "litRuntimeType") (EVar "l"))))
+(DFunDef false "obviousRuntimeType" ((PCon "CBinPrim" (PVar "op") PWild PWild PWild PWild)) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "=="))) (EBinOp "==" (EVar "op") (ELit (LString "/=")))) (EBinOp "==" (EVar "op") (ELit (LString "<")))) (EBinOp "==" (EVar "op") (ELit (LString ">")))) (EBinOp "==" (EVar "op") (ELit (LString "<=")))) (EBinOp "==" (EVar "op") (ELit (LString ">=")))) (EApp (EVar "Some") (EVar "RTBool")) (EVar "None")))
 (DFunDef false "obviousRuntimeType" ((PCon "CTuple" PWild)) (EApp (EVar "Some") (EVar "RTCon")))
 (DFunDef false "obviousRuntimeType" ((PCon "CList" PWild)) (EApp (EVar "Some") (EVar "RTCon")))
 (DFunDef false "obviousRuntimeType" (PWild) (EVar "None"))

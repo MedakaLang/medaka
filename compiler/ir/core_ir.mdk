@@ -465,6 +465,16 @@ export
 obviousRuntimeType : CExpr -> Option RuntimeType
 obviousRuntimeType (CLit (LInt _)) = None
 obviousRuntimeType (CLit l) = Some (litRuntimeType l)
+obviousRuntimeType (CBinPrim op _ _ _ _) =
+  if op == "=="
+    || op == "/="
+    || op == "<"
+    || op == ">"
+    || op == "<="
+    || op == ">=" then
+    Some RTBool
+  else
+    None
 obviousRuntimeType (CTuple _) = Some RTCon
 obviousRuntimeType (CList _) = Some RTCon
 obviousRuntimeType _ = None

@@ -1122,8 +1122,9 @@ withDeclFacts facts (CProgram groups ctorArs ctorTypes impls mctx _) =
 -- carries a source id is stamped from the typechecker's published table.  In a
 -- typed lowering a row the table lacks stays absent, which
 -- `core_validate.validateBinderStamps` refuses; an untyped lowering has no table
--- to read, so its source binders are stamped `RTValue`, the answer "no static
--- fact", and a backend takes its generic path for them.  A binder with no id is
+-- to read, so its source binders hold `RTValue`, the answer "no static fact".
+-- A single-clause function can still state a Bool result in its body; that
+-- intrinsic fact is published as its return stamp.  A binder with no id is
 -- synthesized, by the typechecker or by an earlier lowering pass: it gets a fresh
 -- id and a row of the type its right-hand side states, else `RTValue`.  A
 -- synthesized function returns what its one clause's body states, else
@@ -1185,14 +1186,17 @@ mintedRow bid x (FunctionBinder clauses) =
     brSigned = False,
   }
 
--- A source binder of an untyped lowering: nothing is known of what it holds, nor
--- of what a function returns.
+-- Untyped source bindings have no value-type fact.  Only an intrinsic Bool
+-- result in one clause supplies a return fact; names and calls supply none.
 untypedRow : BinderId -> String -> BinderSite -> BinderRow
 untypedRow bid x site = BinderRow {
   brId = bid,
   brName = x,
   brType = RTValue,
   brReturns = match site
+    FunctionBinder [CClause _ body] => Some (match obviousRuntimeType body
+      Some RTBool => RTBool
+      _ => RTValue)
     FunctionBinder _ => Some RTValue
     PatternBinder _ => None,
   brSigned = False,

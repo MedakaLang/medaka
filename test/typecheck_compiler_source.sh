@@ -575,6 +575,8 @@ stampTy names (ty@(TyCon { tyConName, tyConOrigin = OriginUnresolved })) =' || e
 # `sameIfaceOrUnresolved`'s two arms are the same elimination on the tyvar-keyed
 # rung (#3527): with an unresolved side the interfaces can only be compared by
 # spelling; with both resolved the comparison is `sameIfaceDecl`.
+# Runtime-type materialization's `cellHeadKey` clause observes an existing
+# unresolved origin to render a declaration lookup key; it mints no identity.
 tc_originun_allowed="(OriginUnresolved, _) => a.irName == b.irName
 (OriginUnresolved, _) => givenAnswerResidual g
 (_, OriginUnresolved) => a.irName == b.irName
@@ -586,6 +588,7 @@ bcNum = OriginUnresolved,
 bcOrd = OriginUnresolved,
 bcSemigroup = OriginUnresolved,
 ceSuperOrigin (Super { superOrigin = OriginUnresolved, ... }) = \"<unresolved>\"
+cellHeadKey n OriginUnresolved = \"unresolved|\{n}\"
 ifaceRefBare n = IfaceRef { irName = n, irOrigin = OriginUnresolved }
 ifaceRefNone = IfaceRef { irName = \"\", irOrigin = OriginUnresolved }
 implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None

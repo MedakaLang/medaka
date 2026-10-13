@@ -1,0 +1,158 @@
+import test.{expectAll, expectEach, expectEqual, expectTextContainsAll}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import frontend.ast.{Decl(..), Expr(..), Lit(..), Addr(..), noDeclLoc}
+import types.annotate.{annotateProgram}
+import types.typecheck.{elaborateOne, grantWholeDomain}
+import types.runtime_types.{BinderRow(..), RuntimeType(..), restoreBinderTable}
+import types.disposition.{installedDispositionsOpt, restoreDispositions}
+import types.route_key.{withEvidencePreserved}
+import ir.core_ir.{CExpr(..), CProgram(..), DeclFacts(..), obviousRuntimeType}
+import ir.core_ir_lower.{EmitTarget(..), lowerProgramEmit}
+import backend.core_validate.{validateBinderStamps}
+import support.util.{joinNl}
+
+-- Lowering tests must not consume tables left by another helper elaboration.
+preserveTables : (Unit -> CProgram) -> CProgram
+preserveTables action =
+  let before = installedDispositionsOpt ()
+  let result = withEvidencePreserved action
+  let _ = restoreDispositions before
+  result
+
+untypedDecls : List Decl -> CProgram
+untypedDecls decls = preserveTables (_ =>
+  let _ = restoreBinderTable None
+  let _ = restoreDispositions None
+  lowerProgramEmit TargetNative (annotateProgram (grantWholeDomain decls)))
+
+untyped : String -> CProgram
+untyped src = untypedDecls (desugar (parse src))
+
+rowsOf : CProgram -> List BinderRow
+rowsOf (CProgram _ _ _ _ _ facts) = facts.factBinders
+
+factOf : String -> CProgram -> List (RuntimeType, Option RuntimeType, Bool)
+factOf name prog =
+  map
+    (r => (r.brType, r.brReturns, r.brSigned))
+    (filter (r => r.brName == name) (rowsOf prog))
+
+test "only the six primitive comparisons state an intrinsic Bool result" = expectAll
+  [
+    expectEach
+      (map
+        (op => (
+          op,
+          expectEqual
+            (Some RTBool)
+            (obviousRuntimeType
+              (CBinPrim op (CVar "x" AGlobal) (CLit (LInt 0)) "" noDeclLoc)),
+        ))
+        ["==", "/=", "<", ">", "<=", ">="]),
+    expectEach
+      (map
+        (op => (
+          op,
+          expectEqual
+            None
+            (obviousRuntimeType
+              (CBinPrim op (CVar "x" AGlobal) (CLit (LInt 0)) "" noDeclLoc)),
+        ))
+        ["+", "-", "*", "/", "%", "::", "++", "&&", "||", "unknown"]),
+    expectEqual None (obviousRuntimeType (CLit (LInt 1))),
+  ]
+
+test "untyped comparison function returns Bool without typing its parameters" =
+  expectEach
+    (map
+      (op =>
+        let prog = untyped "f n = n \{op} 0\nmain = f 5"
+        (
+          op,
+          expectAll [
+            expectEqual [(RTValue, Some RTBool, False)] (factOf "f" prog),
+            expectEqual [(RTValue, None, False)] (factOf "n" prog),
+            expectEqual [(RTValue, Some RTValue, False)] (factOf "main" prog),
+            expectEqual [] (validateBinderStamps prog),
+          ],
+        ))
+      ["==", "/=", "<", ">", "<=", ">="])
+
+test "untyped unknown numeric wrapped and multiple-clause returns stay generic" =
+  expectEach
+    (map
+      (src =>
+        let prog = untyped src
+        (
+          src,
+          expectAll [
+            expectEqual [(RTValue, Some RTValue, False)] (factOf "f" prog),
+            expectEqual [] (validateBinderStamps prog),
+          ],
+        ))
+      [
+        "f n = n\nmain = f 5",
+        "f n = 1\nmain = f 5",
+        "f n = n + 1\nmain = f 5",
+        "f n = True\nmain = f 5",
+        "f n = if n > 0 then n > 1 else n < 0\nmain = f 5",
+        "g n = n > 0\nf n = g n\nmain = f 5",
+        "f 0 = 0 < 1\nf n = n\nmain = f 5",
+        "f 0 = 0 < 1\nf n = n > 0\nmain = f 5",
+      ])
+
+-- Preserve a parsed source binder id while supplying an explicit Core-producing
+-- Bool literal.  Source True is a constructor name, not an ELit LBool node.
+boolBody : String -> Bool -> Decl -> Decl
+boolBody name value (d@(DFunDef pub n ps _ site bid)) =
+  if n == name then DFunDef pub n ps (ELit (LBool value)) site bid else d
+boolBody _ _ d = d
+
+test "explicit Bool literals supply only a return fact even for nullary bindings" =
+  expectEach
+    (map
+      (value =>
+        let f =
+          untypedDecls
+            (map (boolBody "f" value) (desugar (parse "f n = 0\nmain = 0")))
+        let main =
+          untypedDecls
+            (map (boolBody "main" value) (desugar (parse "main = 0")))
+        (
+          debug value,
+          expectAll [
+            expectEqual [(RTValue, Some RTBool, False)] (factOf "f" f),
+            expectEqual [(RTValue, None, False)] (factOf "n" f),
+            expectEqual [(RTValue, Some RTBool, False)] (factOf "main" main),
+            expectEqual [] (validateBinderStamps f),
+            expectEqual [] (validateBinderStamps main),
+          ],
+        ))
+      [False, True])
+
+prelude : String
+prelude =
+  "interface Num a where\n  fromInt : Int -> a\n  add : a -> a -> a\nimpl Num Int where\n  fromInt n = n\n  add a b = a"
+
+typed : Bool -> CProgram
+typed missingRows = preserveTables (_ =>
+  let decls = elaborateOne [] (desugar (parse prelude)) (
+    "lower-test",
+    grantWholeDomain (desugar (parse "f : U64 -> U64\nf arg = arg\nmain = 0")),
+  )
+  let _ = if missingRows then restoreBinderTable None
+  lowerProgramEmit TargetNative decls)
+
+test "typed published rows take precedence over the untyped fallback" =
+  let prog = typed False
+  expectAll [
+    expectEqual [(RTValue, Some RTU64, True)] (factOf "f" prog),
+    expectEqual [(RTU64, None, False)] (factOf "arg" prog),
+    expectEqual [] (validateBinderStamps prog),
+  ]
+
+test "a missing typed source row is refused rather than guessed" =
+  expectTextContainsAll
+    ["f has no stamped type", "arg has no stamped type"]
+    (joinNl (validateBinderStamps (typed True)))

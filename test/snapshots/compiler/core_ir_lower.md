@@ -1,5 +1,5 @@
 # META
-source_lines=4101
+source_lines=4105
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -1126,8 +1126,9 @@ withDeclFacts facts (CProgram groups ctorArs ctorTypes impls mctx _) =
 -- carries a source id is stamped from the typechecker's published table.  In a
 -- typed lowering a row the table lacks stays absent, which
 -- `core_validate.validateBinderStamps` refuses; an untyped lowering has no table
--- to read, so its source binders are stamped `RTValue`, the answer "no static
--- fact", and a backend takes its generic path for them.  A binder with no id is
+-- to read, so its source binders hold `RTValue`, the answer "no static fact".
+-- A single-clause function can still state a Bool result in its body; that
+-- intrinsic fact is published as its return stamp.  A binder with no id is
 -- synthesized, by the typechecker or by an earlier lowering pass: it gets a fresh
 -- id and a row of the type its right-hand side states, else `RTValue`.  A
 -- synthesized function returns what its one clause's body states, else
@@ -1189,14 +1190,17 @@ mintedRow bid x (FunctionBinder clauses) =
     brSigned = False,
   }
 
--- A source binder of an untyped lowering: nothing is known of what it holds, nor
--- of what a function returns.
+-- Untyped source bindings have no value-type fact.  Only an intrinsic Bool
+-- result in one clause supplies a return fact; names and calls supply none.
 untypedRow : BinderId -> String -> BinderSite -> BinderRow
 untypedRow bid x site = BinderRow {
   brId = bid,
   brName = x,
   brType = RTValue,
   brReturns = match site
+    FunctionBinder [CClause _ body] => Some (match obviousRuntimeType body
+      Some RTBool => RTBool
+      _ => RTValue)
     FunctionBinder _ => Some RTValue
     PatternBinder _ => None,
   brSigned = False,
@@ -4483,7 +4487,7 @@ nodeTag _ = "?"
 (DFunDef false "mintedRow" ((PVar "bid") (PVar "x") (PCon "PatternBinder" (PVar "hint"))) (ERecordCreate "BinderRow" ((fa "brId" (EVar "bid")) (fa "brName" (EVar "x")) (fa "brType" (EMatch (EVar "hint") (arm (PCon "Some" (PVar "rhs")) () (EApp (EApp (EVar "optionOr") (EVar "RTValue")) (EApp (EVar "obviousRuntimeType") (EVar "rhs")))) (arm (PCon "None") () (EVar "RTValue")))) (fa "brReturns" (EVar "None")) (fa "brSigned" (EVar "False")))))
 (DFunDef false "mintedRow" ((PVar "bid") (PVar "x") (PCon "FunctionBinder" (PVar "clauses"))) (EBlock (DoLet false false (PVar "ret") (EMatch (EVar "clauses") (arm (PList (PCon "CClause" PWild (PVar "body"))) () (EApp (EApp (EVar "optionOr") (EVar "RTValue")) (EApp (EVar "obviousRuntimeType") (EVar "body")))) (arm PWild () (EVar "RTValue")))) (DoLet false false (PVar "self") (EIf (EApp (EApp (EVar "allList") (EVar "clauseHasParams")) (EVar "clauses")) (EVar "RTValue") (EVar "ret"))) (DoExpr (ERecordCreate "BinderRow" ((fa "brId" (EVar "bid")) (fa "brName" (EVar "x")) (fa "brType" (EVar "self")) (fa "brReturns" (EApp (EVar "Some") (EVar "ret"))) (fa "brSigned" (EVar "False")))))))
 (DTypeSig false "untypedRow" (TyFun (TyCon "BinderId") (TyFun (TyCon "String") (TyFun (TyCon "BinderSite") (TyCon "BinderRow")))))
-(DFunDef false "untypedRow" ((PVar "bid") (PVar "x") (PVar "site")) (ERecordCreate "BinderRow" ((fa "brId" (EVar "bid")) (fa "brName" (EVar "x")) (fa "brType" (EVar "RTValue")) (fa "brReturns" (EMatch (EVar "site") (arm (PCon "FunctionBinder" PWild) () (EApp (EVar "Some") (EVar "RTValue"))) (arm (PCon "PatternBinder" PWild) () (EVar "None")))) (fa "brSigned" (EVar "False")))))
+(DFunDef false "untypedRow" ((PVar "bid") (PVar "x") (PVar "site")) (ERecordCreate "BinderRow" ((fa "brId" (EVar "bid")) (fa "brName" (EVar "x")) (fa "brType" (EVar "RTValue")) (fa "brReturns" (EMatch (EVar "site") (arm (PCon "FunctionBinder" (PList (PCon "CClause" PWild (PVar "body")))) () (EApp (EVar "Some") (EMatch (EApp (EVar "obviousRuntimeType") (EVar "body")) (arm (PCon "Some" (PCon "RTBool")) () (EVar "RTBool")) (arm PWild () (EVar "RTValue"))))) (arm (PCon "FunctionBinder" PWild) () (EApp (EVar "Some") (EVar "RTValue"))) (arm (PCon "PatternBinder" PWild) () (EVar "None")))) (fa "brSigned" (EVar "False")))))
 (DTypeSig false "cprogramCtorTypes" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "cprogramCtorTypes" ((PCon "CProgram" PWild PWild (PVar "ctorTypes") PWild PWild PWild)) (EVar "ctorTypes"))
 (DTypeSig false "finishLowering" (TyFun (TyCon "Lowering") (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
@@ -5787,7 +5791,7 @@ nodeTag _ = "?"
 (DFunDef false "mintedRow" ((PVar "bid") (PVar "x") (PCon "PatternBinder" (PVar "hint"))) (ERecordCreate "BinderRow" ((fa "brId" (EVar "bid")) (fa "brName" (EVar "x")) (fa "brType" (EMatch (EVar "hint") (arm (PCon "Some" (PVar "rhs")) () (EApp (EApp (EVar "optionOr") (EVar "RTValue")) (EApp (EVar "obviousRuntimeType") (EVar "rhs")))) (arm (PCon "None") () (EVar "RTValue")))) (fa "brReturns" (EVar "None")) (fa "brSigned" (EVar "False")))))
 (DFunDef false "mintedRow" ((PVar "bid") (PVar "x") (PCon "FunctionBinder" (PVar "clauses"))) (EBlock (DoLet false false (PVar "ret") (EMatch (EVar "clauses") (arm (PList (PCon "CClause" PWild (PVar "body"))) () (EApp (EApp (EVar "optionOr") (EVar "RTValue")) (EApp (EVar "obviousRuntimeType") (EVar "body")))) (arm PWild () (EVar "RTValue")))) (DoLet false false (PVar "self") (EIf (EApp (EApp (EVar "allList") (EVar "clauseHasParams")) (EVar "clauses")) (EVar "RTValue") (EVar "ret"))) (DoExpr (ERecordCreate "BinderRow" ((fa "brId" (EVar "bid")) (fa "brName" (EVar "x")) (fa "brType" (EVar "self")) (fa "brReturns" (EApp (EVar "Some") (EVar "ret"))) (fa "brSigned" (EVar "False")))))))
 (DTypeSig false "untypedRow" (TyFun (TyCon "BinderId") (TyFun (TyCon "String") (TyFun (TyCon "BinderSite") (TyCon "BinderRow")))))
-(DFunDef false "untypedRow" ((PVar "bid") (PVar "x") (PVar "site")) (ERecordCreate "BinderRow" ((fa "brId" (EVar "bid")) (fa "brName" (EVar "x")) (fa "brType" (EVar "RTValue")) (fa "brReturns" (EMatch (EVar "site") (arm (PCon "FunctionBinder" PWild) () (EApp (EVar "Some") (EVar "RTValue"))) (arm (PCon "PatternBinder" PWild) () (EVar "None")))) (fa "brSigned" (EVar "False")))))
+(DFunDef false "untypedRow" ((PVar "bid") (PVar "x") (PVar "site")) (ERecordCreate "BinderRow" ((fa "brId" (EVar "bid")) (fa "brName" (EVar "x")) (fa "brType" (EVar "RTValue")) (fa "brReturns" (EMatch (EVar "site") (arm (PCon "FunctionBinder" (PList (PCon "CClause" PWild (PVar "body")))) () (EApp (EVar "Some") (EMatch (EApp (EVar "obviousRuntimeType") (EVar "body")) (arm (PCon "Some" (PCon "RTBool")) () (EVar "RTBool")) (arm PWild () (EVar "RTValue"))))) (arm (PCon "FunctionBinder" PWild) () (EApp (EVar "Some") (EVar "RTValue"))) (arm (PCon "PatternBinder" PWild) () (EVar "None")))) (fa "brSigned" (EVar "False")))))
 (DTypeSig false "cprogramCtorTypes" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "cprogramCtorTypes" ((PCon "CProgram" PWild PWild (PVar "ctorTypes") PWild PWild PWild)) (EVar "ctorTypes"))
 (DTypeSig false "finishLowering" (TyFun (TyCon "Lowering") (TyFun (TyCon "CProgram") (TyCon "CProgram"))))

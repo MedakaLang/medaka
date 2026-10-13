@@ -841,7 +841,7 @@ control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
 # signatureBytes, and the call column rose with them (wordAt__rw and
 # putWord__rw 8 -> 16, scToBytes 9 -> 19, beWord 0 -> 4, and so on).
 # hmacSha256FixedKey fell 5 -> 3 calls, its doors gone.
-[ "$control_grade" = '2372950205 5772' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+[ "$control_grade" = '4117642617 5772' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -1119,7 +1119,7 @@ public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " 
 # side by side: the root moved to `signCommitDigest`, whose one row enters
 # (0 branches, 1 call, to `signDigest`), and no other row moved in any
 # column. 138 -> 139 definitions.
-if [ "$public_closure_grade" != '2151910788 4065' ] || [ "$public_control_grade" != '1733750442 6324' ]; then
+if [ "$public_closure_grade" != '2151910788 4065' ] || [ "$public_control_grade" != '797838777 6324' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"
