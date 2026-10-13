@@ -83,6 +83,7 @@ import types.typecheck.{
   checkModulesEntryReport,
   checkOneDiags,
   checkOneSchemeFullK,
+  constrainedSigNames,
   elaborateModules,
   elaborateOne,
   finishAssumptionTrace,
@@ -282,6 +283,24 @@ test "an attribute above a signature keeps the signature binding the definition"
             (attrs => expectEqual bare (attributedSigErrors attrs src))
             attributeSpellings)
       attributedSigCases)
+
+test "an attributed constrained signature is still a constrained signature" =
+  expectEqual
+    ["g", "h"]
+    (constrainedSigNames
+      (desugar
+        (parse
+          (joinNl [
+            "@noinline",
+            "g : Num a => a -> a",
+            "g x = x",
+            "@must_use",
+            "@noinline",
+            "h : Num a => a -> a",
+            "h x = x",
+            "k : Int -> Int",
+            "k x = x",
+          ]))))
 
 test "a nested numeric literal may use the declared impl prerequisite" =
   let (errors, _) = numericCheckObserved numericNestedBodySource

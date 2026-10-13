@@ -729,7 +729,6 @@ scIsHigh s = scHighBit s == 1
 --   exactly when `s > floor(n/2)`: the threshold `floor(n/2) + 1` is
 --   subtracted with a fixed borrow chain over all eight limbs, and the result
 --   is `1 - borrow`.
-@noinline
 export
 scHighBit : Sc -> Int
 scHighBit s =
@@ -789,7 +788,6 @@ scNegate a = scNegateCt a
 --   with a fixed borrow chain, then `subNSelect`. `a` is canonical, so
 --   `0 < n - a <= n` and the chain never borrows out; the subtract-and-select
 --   maps the `a = 0` case (`n - 0 = n`) to canonical zero.
-@noinline
 export
 scNegateCt : Sc -> Sc
 scNegateCt x =

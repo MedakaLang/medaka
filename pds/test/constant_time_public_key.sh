@@ -76,7 +76,7 @@ source_closure_ok() {
   # for the field, three folds and the carry-aware subtract-and-select for the
   # scalar). The secret-ingress lines pinned below are unchanged, and
   # constant_time_reductions.sh pins each helper's source and IR shape.
-  [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '1716947667 41162' ] || return 1
+  [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '3298764120 41142' ] || return 1
   [ "$(cksum "$tree/pds/lib/field.mdk" | awk '{print $1 " " $2}')" = '2571003349 28636' ] || return 1
 
   tr -s '[:space:]' ' ' < "$tree/pds/lib/secp256k1.mdk" | grep -F -q 'if i >= 256 then r0' || return 1
@@ -305,17 +305,13 @@ pass 'emitted LLVM retains every named secret-path helper, including public wrap
 # operations it reaches still survive. It is in the emitted-symbol list above,
 # where its definition always exists.
 #
-# pointAddComplete left this list 2026-09-27, when the ladder began reading
-# its scalar bytes through the `Bytes` index. Measured on the linked probe:
-# -O2 now inlines the complete addition into scalarLadder, its only caller in
-# this program, where the base build kept it as a call. What is lost is only
-# the claim that it is a distinct function in this binary: it is in the
-# emitted-symbol list above, the emitted ladder below still calls it once per
-# round, the linked ladder check below accepts it only inlined whole, and the
-# signing gate still requires it as a linked symbol of both of its carriers.
+# Every symbol in this list carries `@noinline` in its source, so it survives
+# however the link inlines. pointAddComplete is back in it for that reason: from
+# 2026-09-27 until it was marked, -O2 inlined the complete addition into
+# scalarLadder, its only caller here.
 for symbol in \
   mdk_lib_scalar__scSecretCandidate mdk_lib_field__feMul \
-  mdk_lib_secp256k1__scalarLadder \
+  mdk_lib_secp256k1__scalarLadder mdk_lib_secp256k1__pointAddComplete \
   mdk_lib_secp256k1__pointDoubleComplete mdk_lib_secp256k1__pointCompressed
 do require_native_symbol "$symbol"; done
 pass 'linked native code retains ingress and complete-ladder helper topology'
@@ -354,9 +350,9 @@ pass 'emitted secret ingress bits and reduction are straight-line over literal l
 # (Since the 8 x 32 scalar the split is the reverse: secretAffine links and its
 # caller inlines; see the list above.)  scalarLadder and both complete point
 # operations stay linked, so the ladder topology the list exists to prove is
-# unaffected.  Nothing emitter-side
-# steers that decision: the emitted IR carries no inline attributes at all.  Pin
-# the shape here instead, where the definition always exists.
+# unaffected.  secretAffine carries no `@noinline`, so
+# nothing emitter-side steers that decision for it.  Pin the shape here
+# instead, where the definition always exists.
 #
 # BRANCH COUNT IS THE PROPERTY; the comparison count is only its witness.  The one
 # surviving branch must be a comparison against a compile-time constructor tag,
@@ -402,7 +398,8 @@ ladder_symbol=$(nm "$BIN" | awk '$3 ~ /mdk_lib_secp256k1__scalarLadder$/ { print
 [ -n "$ladder_symbol" ] || fail 'linked scalar ladder symbol exists'
 disassemble "$ladder_symbol" "$WORK/scalar-ladder.asm"
 # The complete addition is either a call (one per round, beside the two
-# doublings and two selections) or inlined whole, which the linked ladder
+# doublings and two selections; the shape `@noinline` guarantees) or inlined
+# whole, the shape before it was marked, which the linked ladder
 # shows as the addition's own doubling candidate beside the ladder's two
 # (three doubling calls) and its five arithmetic selections beside the
 # ladder's two (seven). An inlined addition that dropped a candidate or a
