@@ -1,0 +1,15 @@
+-- §5 + §3 Determination (#4072): `k : a -> String` never mentions `K`'s `b`, so
+-- the occurrence poses `K (Box Int) ?b`.  `impl K (Box Int) Bool` is the one
+-- instance that unifies with it, so `?b` is determined to `Bool` and the route
+-- names that impl.  Hand-derived: ACCEPT on all three verbs, prints `main`.
+interface K a b where
+  k : a -> String
+  mk : b -> a
+
+data Box a = Box a
+
+impl K (Box Int) Bool where
+  k _ = "main"
+  mk _ = Box 2
+
+main = println (k (Box (2 : Int)))

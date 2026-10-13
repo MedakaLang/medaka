@@ -858,6 +858,39 @@ table = [
     codes = [],
   },
   Row {
+    entry = "method-omitted-param-determined-accepted.mdk",
+    label =
+      "§5 + §3 Determination (#4072): a method whose type omits `b` poses `K (Box Int) ?b`, and the one unifying instance determines `?b`; the route was a bare head tag and the built binary panicked",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "main\n",
+    codes = [],
+  },
+  Row {
+    entry = "method-omitted-param-determined-via-sibling-accepted.mdk",
+    label =
+      "§5 + §3 Determination (#4072): `k (mk True)`, the receiver fixed by a sibling method's goal, still poses its own `?b` and the one unifying instance determines it",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "main\n",
+    codes = [],
+  },
+  Row {
+    entry = "method-omitted-param-ambiguous-rejected.mdk",
+    label =
+      "§5 + §3 (#4072): two instances differing only at the omitted `b` leave `?b` undetermined, so the boundary rejects; `check` accepted it and `run` failed at dispatch",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
     entry = "s4-gen-sig-superclass-redundant-dropped.mdk",
     label =
       "§4 `gen-sig` + §3 `super` + §6 C2 diamond: `B a` inferred by the body is entailed by the declared `C a` via requires-closure, so it is DROPPED from the scheme (not merged); `super` is projection, and both diamond arms agree",
@@ -5458,7 +5491,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 483
+tableRows = 486
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

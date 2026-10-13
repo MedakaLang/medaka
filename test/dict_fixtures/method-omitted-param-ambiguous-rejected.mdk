@@ -1,0 +1,20 @@
+-- §5 + §3 (#4072): `k : a -> String` never mentions `K`'s `b`, so the
+-- occurrence poses `K (Box Int) ?b`.  Two instances unify with it and differ
+-- only at `b`, so nothing determines `?b` and `main`'s boundary rejects the goal.
+-- Hand-derived: REJECT on all three verbs, T-AMBIGUOUS-INSTANCE at the `k`
+-- occurrence.
+interface K a b where
+  k : a -> String
+  mk : b -> a
+
+data Box a = Box a
+
+impl K (Box Int) Bool where
+  k _ = "main"
+  mk _ = Box 2
+
+impl K (Box Int) Int where
+  k _ = "other"
+  mk _ = Box 3
+
+main = println (k (Box (2 : Int)))
