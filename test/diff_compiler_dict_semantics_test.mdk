@@ -891,6 +891,39 @@ table = [
     codes = [Present "T-AMBIGUOUS-INSTANCE"],
   },
   Row {
+    entry = "method-omitted-param-return-determined-accepted.mdk",
+    label =
+      "§5 + §3 Determination (exact-return twin of #4072): a return-dispatched method whose type omits `b` poses `K (Box Int) ?b`, and the one unifying instance determines `?b`; the route was a bare head tag and the built binary panicked",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [],
+  },
+  Row {
+    entry = "method-omitted-param-return-ambiguous-rejected.mdk",
+    label =
+      "§5 + §3 (exact-return twin of #4072): two instances differing only at the omitted `b`, and no given, leave `?b` undetermined, so the occurrence is rejected",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "method-omitted-param-return-given-accepted.mdk",
+    label =
+      "§5 given precedence (exact-return twin of #4072): a given `K x y` answers the return-dispatched occurrence's `K x ?b` before any fresh `?b` is posed",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [],
+  },
+  Row {
     entry = "s4-gen-sig-superclass-redundant-dropped.mdk",
     label =
       "§4 `gen-sig` + §3 `super` + §6 C2 diamond: `B a` inferred by the body is entailed by the declared `C a` via requires-closure, so it is DROPPED from the scheme (not merged); `super` is projection, and both diamond arms agree",
@@ -5491,7 +5524,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 486
+tableRows = 489
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

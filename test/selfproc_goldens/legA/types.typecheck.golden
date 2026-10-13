@@ -1172,6 +1172,7 @@ fileGoal : Int -> UObligation -> Map Int (List Int) -> Map Int (List Int)
 fileGrantExterns : Map String (Int, Int)
 fileValueKey : String -> Expr -> Option String
 fileValueShape : Expr -> String
+fillOmittedTemplateArgs : List String -> List (Option Mono) -> List (String, Mono) -> List (Option Mono)
 filterNonSelf : String -> List String -> List String
 finalizeNumBoundary : NumBoundary -> List Mono
 findIfaceDecl : List Decl -> String -> Option (List String, List (Option KindAnn), List IfaceMethod)
@@ -2094,7 +2095,7 @@ methodReturnMemoView : List EvEntry -> Obligation -> MethodReturnRequest -> Meth
 methodReturnOrigin : Option Loc -> GoalOrigin
 methodReturnOwnershipProbe : Unit -> (List String, List String, Bool, Bool)
 methodReturnPredicate : MethodReturnRequest -> Option ClassPredicate
-methodReturnPredicateFromTemplate : MethodPredicateTemplate -> ScopeId -> Option ClassPredicate
+methodReturnPredicateFromTemplate : MethodPredicateTemplate -> List String -> List (String, Mono) -> ScopeId -> Option ClassPredicate
 methodReturnPrerequisites : List Mono -> ImplRow -> List PrerequisiteEvidence
 methodReturnPrerequisitesMatch : List PrerequisiteEvidence -> List PrerequisiteEvidence -> Bool
 methodReturnProbeCodes : MethodSchemeRow -> List Decl -> List String
