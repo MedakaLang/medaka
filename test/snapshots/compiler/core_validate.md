@@ -1,5 +1,5 @@
 # META
-source_lines=1147
+source_lines=1149
 stages=DESUGAR,MARK
 # SOURCE
 -- Checks a lowered program must pass before an emitter writes any of it.  Each
@@ -90,7 +90,12 @@ import ir.core_ir.{
   BinderSite(..),
   litRuntimeType,
 }
-import types.runtime_types.{BinderRow(..), RuntimeType(..), runtimeTypeName}
+import types.runtime_types.{
+  BinderRow(..),
+  RuntimeType(..),
+  binderOrdinal,
+  runtimeTypeName,
+}
 import map as BM
 import ir.core_ir_lower.{
   ArityEnv,
@@ -1017,15 +1022,12 @@ tailStmt b (CSAssign _ e) acc = tailE b False e acc
 export
 validateBinderStamps : CProgram -> List String
 validateBinderStamps (CProgram groups ctorArs ctorTypes impls _ facts) =
-  let rows = BM.fromList (map (r => (rowOrdinal r, r)) facts.factBinders)
+  let rows =
+    BM.fromList (map (r => (binderOrdinal r.brId, r)) facts.factBinders)
   let ctors = omFromPairs ctorTypes omEmpty
   let arities = omFromPairs ctorArs omEmpty
   flatMap (bindStampFaults rows ctors arities) groups
     ++ flatMap (entryStampFaults rows ctors arities) impls
-
-rowOrdinal : BinderRow -> Int
-rowOrdinal row = match row.brId
-  BinderId _ n => n
 
 bindStampFaults : BM.Map Int BinderRow ->
   OrdMap String ->
@@ -1151,7 +1153,7 @@ renderBinderRefusal : List String -> String
 renderBinderRefusal bad = joinWith "\n" bad
 # DESUGAR
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "MethodEvidence" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "CallMode" true) (mem "CallSite" true) (mem "noDeclFacts" false) (mem "givenNames" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "litRuntimeType" false))))
-(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "runtimeTypeName" false))))
+(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false) (mem "runtimeTypeName" false))))
 (DUse false (UseAlias ("map") "BM"))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "CallScope" false) (mem "bindGroupScope" false) (mem "bindLetScope" false) (mem "bindPatScope" false) (mem "bindPatsScope" false) (mem "callModeFor" false) (mem "definedArityOf" false) (mem "entryArityRow" false) (mem "programArities" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false) (mem "leadingDictParams" false))))
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "callModeSexp" false))))
@@ -1481,9 +1483,7 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DFunDef false "tailStmt" ((PVar "b") (PCon "CSLet" PWild PWild (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "e")) (EVar "acc")))
 (DFunDef false "tailStmt" ((PVar "b") (PCon "CSAssign" PWild (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "e")) (EVar "acc")))
 (DTypeSig true "validateBinderStamps" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "validateBinderStamps" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") PWild (PVar "facts"))) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "BM.fromList") (EApp (EApp (EVar "map") (ELam ((PVar "r")) (ETuple (EApp (EVar "rowOrdinal") (EVar "r")) (EVar "r")))) (EFieldAccess (EVar "facts") "factBinders")))) (DoLet false false (PVar "ctors") (EApp (EApp (EVar "omFromPairs") (EVar "ctorTypes")) (EVar "omEmpty"))) (DoLet false false (PVar "arities") (EApp (EApp (EVar "omFromPairs") (EVar "ctorArs")) (EVar "omEmpty"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "bindStampFaults") (EVar "rows")) (EVar "ctors")) (EVar "arities"))) (EVar "groups")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "entryStampFaults") (EVar "rows")) (EVar "ctors")) (EVar "arities"))) (EVar "impls"))))))
-(DTypeSig false "rowOrdinal" (TyFun (TyCon "BinderRow") (TyCon "Int")))
-(DFunDef false "rowOrdinal" ((PVar "row")) (EMatch (EFieldAccess (EVar "row") "brId") (arm (PCon "BinderId" PWild (PVar "n")) () (EVar "n"))))
+(DFunDef false "validateBinderStamps" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") PWild (PVar "facts"))) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "BM.fromList") (EApp (EApp (EVar "map") (ELam ((PVar "r")) (ETuple (EApp (EVar "binderOrdinal") (EFieldAccess (EVar "r") "brId")) (EVar "r")))) (EFieldAccess (EVar "facts") "factBinders")))) (DoLet false false (PVar "ctors") (EApp (EApp (EVar "omFromPairs") (EVar "ctorTypes")) (EVar "omEmpty"))) (DoLet false false (PVar "arities") (EApp (EApp (EVar "omFromPairs") (EVar "ctorArs")) (EVar "omEmpty"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "bindStampFaults") (EVar "rows")) (EVar "ctors")) (EVar "arities"))) (EVar "groups")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "entryStampFaults") (EVar "rows")) (EVar "ctors")) (EVar "arities"))) (EVar "impls"))))))
 (DTypeSig false "bindStampFaults" (TyFun (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "BinderRow")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "bindStampFaults" ((PVar "rows") (PVar "ctors") (PVar "arities") (PAs "b" (PCon "CBind" (PVar "name") PWild PWild PWild))) (EApp (EApp (EApp (EApp (EApp (EVar "stampFaultsIn") (EVar "rows")) (EVar "ctors")) (EVar "arities")) (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EListLit (EVar "b"))) (EListLit)) (EListLit)) (EListLit)) (EListLit)) (EVar "noDeclFacts"))))
 (DTypeSig false "entryStampFaults" (TyFun (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "BinderRow")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "String")))))))
@@ -1528,7 +1528,7 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DFunDef false "renderBinderRefusal" ((PVar "bad")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EVar "bad")))
 # MARK
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "MethodEvidence" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "CallMode" true) (mem "CallSite" true) (mem "noDeclFacts" false) (mem "givenNames" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "litRuntimeType" false))))
-(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "runtimeTypeName" false))))
+(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false) (mem "runtimeTypeName" false))))
 (DUse false (UseAlias ("map") "BM"))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "CallScope" false) (mem "bindGroupScope" false) (mem "bindLetScope" false) (mem "bindPatScope" false) (mem "bindPatsScope" false) (mem "callModeFor" false) (mem "definedArityOf" false) (mem "entryArityRow" false) (mem "programArities" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false) (mem "leadingDictParams" false))))
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "callModeSexp" false))))
@@ -1858,9 +1858,7 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DFunDef false "tailStmt" ((PVar "b") (PCon "CSLet" PWild PWild (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "e")) (EVar "acc")))
 (DFunDef false "tailStmt" ((PVar "b") (PCon "CSAssign" PWild (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "e")) (EVar "acc")))
 (DTypeSig true "validateBinderStamps" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "validateBinderStamps" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") PWild (PVar "facts"))) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "BM.fromList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "r")) (ETuple (EApp (EVar "rowOrdinal") (EVar "r")) (EVar "r")))) (EFieldAccess (EVar "facts") "factBinders")))) (DoLet false false (PVar "ctors") (EApp (EApp (EVar "omFromPairs") (EVar "ctorTypes")) (EVar "omEmpty"))) (DoLet false false (PVar "arities") (EApp (EApp (EVar "omFromPairs") (EVar "ctorArs")) (EVar "omEmpty"))) (DoExpr (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "bindStampFaults") (EVar "rows")) (EVar "ctors")) (EVar "arities"))) (EVar "groups")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "entryStampFaults") (EVar "rows")) (EVar "ctors")) (EVar "arities"))) (EVar "impls"))))))
-(DTypeSig false "rowOrdinal" (TyFun (TyCon "BinderRow") (TyCon "Int")))
-(DFunDef false "rowOrdinal" ((PVar "row")) (EMatch (EFieldAccess (EVar "row") "brId") (arm (PCon "BinderId" PWild (PVar "n")) () (EVar "n"))))
+(DFunDef false "validateBinderStamps" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") PWild (PVar "facts"))) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "BM.fromList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "r")) (ETuple (EApp (EVar "binderOrdinal") (EFieldAccess (EVar "r") "brId")) (EVar "r")))) (EFieldAccess (EVar "facts") "factBinders")))) (DoLet false false (PVar "ctors") (EApp (EApp (EVar "omFromPairs") (EVar "ctorTypes")) (EVar "omEmpty"))) (DoLet false false (PVar "arities") (EApp (EApp (EVar "omFromPairs") (EVar "ctorArs")) (EVar "omEmpty"))) (DoExpr (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "bindStampFaults") (EVar "rows")) (EVar "ctors")) (EVar "arities"))) (EVar "groups")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "entryStampFaults") (EVar "rows")) (EVar "ctors")) (EVar "arities"))) (EVar "impls"))))))
 (DTypeSig false "bindStampFaults" (TyFun (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "BinderRow")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "bindStampFaults" ((PVar "rows") (PVar "ctors") (PVar "arities") (PAs "b" (PCon "CBind" (PVar "name") PWild PWild PWild))) (EApp (EApp (EApp (EApp (EApp (EVar "stampFaultsIn") (EVar "rows")) (EVar "ctors")) (EVar "arities")) (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EListLit (EVar "b"))) (EListLit)) (EListLit)) (EListLit)) (EListLit)) (EVar "noDeclFacts"))))
 (DTypeSig false "entryStampFaults" (TyFun (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "BinderRow")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "String")))))))

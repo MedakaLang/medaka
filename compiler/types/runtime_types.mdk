@@ -85,6 +85,8 @@ export
 addBinderRow : BinderRow -> BinderTypeTable -> BinderTypeTable
 addBinderRow row table = set (binderOrdinal row.brId) row table
 
+-- The ordinal of [bid], which no other binder in the process shares.
+export
 binderOrdinal : BinderId -> Int
 binderOrdinal (BinderId _ i) = i
 
@@ -205,6 +207,8 @@ restoreBinderTable : Option BinderTypeTable -> Unit
 restoreBinderTable table = binderTypesRef := table
 
 -- The spelling a row's type has in a Core dump (`core_ir_sexp`), and its inverse.
+-- Both are explicit tables, not derived `Debug`, so that Core dumps and the
+-- goldens that pin them do not depend on how `Debug` spells a constructor.
 export
 runtimeTypeName : RuntimeType -> String
 runtimeTypeName RTInt = "RTInt"

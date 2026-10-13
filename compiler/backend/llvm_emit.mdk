@@ -223,7 +223,7 @@ import ir.core_ir_lower.{
   ifaceWordOfKey,
   programArities,
 }
-import types.runtime_types.{BinderRow(..), RuntimeType(..)}
+import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import map as BM
 import support.util.{
   reverseL,
@@ -13387,9 +13387,6 @@ emitGlobalDecls e (b :: rest) =
 -- other binder in the process shares.
 binderRowsOf : List BinderRow -> BM.Map Int BinderRow
 binderRowsOf rows = BM.fromList (map (r => (binderOrdinal r.brId, r)) rows)
-
-binderOrdinal : BinderId -> Int
-binderOrdinal (BinderId _ n) = n
 
 stampRow : Emit -> BinderId -> BinderRow
 stampRow e (BinderId m n) = match BM.get n e.binderRows

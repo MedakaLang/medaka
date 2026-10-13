@@ -1,5 +1,5 @@
 # META
-source_lines=248
+source_lines=252
 stages=DESUGAR,MARK
 # SOURCE
 -- What each source binder holds at run time, as the typechecker decided it.
@@ -89,6 +89,8 @@ export
 addBinderRow : BinderRow -> BinderTypeTable -> BinderTypeTable
 addBinderRow row table = set (binderOrdinal row.brId) row table
 
+-- The ordinal of [bid], which no other binder in the process shares.
+export
 binderOrdinal : BinderId -> Int
 binderOrdinal (BinderId _ i) = i
 
@@ -209,6 +211,8 @@ restoreBinderTable : Option BinderTypeTable -> Unit
 restoreBinderTable table = binderTypesRef := table
 
 -- The spelling a row's type has in a Core dump (`core_ir_sexp`), and its inverse.
+-- Both are explicit tables, not derived `Debug`, so that Core dumps and the
+-- goldens that pin them do not depend on how `Debug` spells a constructor.
 export
 runtimeTypeName : RuntimeType -> String
 runtimeTypeName RTInt = "RTInt"
@@ -263,7 +267,7 @@ installedBinderRows _ = match !binderTypesRef
 (DFunDef false "emptyBinderTypes" () (EVar "Tip"))
 (DTypeSig true "addBinderRow" (TyFun (TyCon "BinderRow") (TyFun (TyCon "BinderTypeTable") (TyCon "BinderTypeTable"))))
 (DFunDef false "addBinderRow" ((PVar "row") (PVar "table")) (EApp (EApp (EApp (EVar "set") (EApp (EVar "binderOrdinal") (EFieldAccess (EVar "row") "brId"))) (EVar "row")) (EVar "table")))
-(DTypeSig false "binderOrdinal" (TyFun (TyCon "BinderId") (TyCon "Int")))
+(DTypeSig true "binderOrdinal" (TyFun (TyCon "BinderId") (TyCon "Int")))
 (DFunDef false "binderOrdinal" ((PCon "BinderId" PWild (PVar "i"))) (EVar "i"))
 (DTypeSig true "runtimeTypeOf" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))) (TyFun (TyCon "Mono") (TyCon "RuntimeType"))))
 (DFunDef false "runtimeTypeOf" ((PVar "isCell") (PCon "TVar" (PVar "cell"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Link" (PVar "t")) () (EApp (EApp (EVar "runtimeTypeOf") (EVar "isCell")) (EVar "t"))) (arm (PCon "Unbound" PWild PWild) () (EVar "RTValue"))))
@@ -359,7 +363,7 @@ installedBinderRows _ = match !binderTypesRef
 (DFunDef false "emptyBinderTypes" () (EVar "Tip"))
 (DTypeSig true "addBinderRow" (TyFun (TyCon "BinderRow") (TyFun (TyCon "BinderTypeTable") (TyCon "BinderTypeTable"))))
 (DFunDef false "addBinderRow" ((PVar "row") (PVar "table")) (EApp (EApp (EApp (EVar "set") (EApp (EVar "binderOrdinal") (EFieldAccess (EVar "row") "brId"))) (EVar "row")) (EVar "table")))
-(DTypeSig false "binderOrdinal" (TyFun (TyCon "BinderId") (TyCon "Int")))
+(DTypeSig true "binderOrdinal" (TyFun (TyCon "BinderId") (TyCon "Int")))
 (DFunDef false "binderOrdinal" ((PCon "BinderId" PWild (PVar "i"))) (EVar "i"))
 (DTypeSig true "runtimeTypeOf" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))) (TyFun (TyCon "Mono") (TyCon "RuntimeType"))))
 (DFunDef false "runtimeTypeOf" ((PVar "isCell") (PCon "TVar" (PVar "cell"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Link" (PVar "t")) () (EApp (EApp (EVar "runtimeTypeOf") (EVar "isCell")) (EVar "t"))) (arm (PCon "Unbound" PWild PWild) () (EVar "RTValue"))))

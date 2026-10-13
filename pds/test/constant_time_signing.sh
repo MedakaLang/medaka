@@ -841,7 +841,14 @@ control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
 # signatureBytes, and the call column rose with them (wordAt__rw and
 # putWord__rw 8 -> 16, scToBytes 9 -> 19, beWord 0 -> 4, and so on).
 # hmacSha256FixedKey fell 5 -> 3 calls, its doors gone.
-[ "$control_grade" = '2372950205 5772' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+# Re-derived 2026-10-12 for the emitters reading binder stamps (#4047), row
+# by row against the grade above. Two rows moved and no branch column did:
+# `mdk_bytes__concatLength` and `mdk_bytes__concatFill` each went from 3
+# calls and 0 traps to 2 calls and 1 trap. The `acc + length b` and
+# `off + n` sums, whose operands now have Int stamps, are inline
+# overflow-checked adds instead of a generic numeric call; the trap tests the
+# public running length.
+[ "$control_grade" = '4117642617 5772' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -1119,7 +1126,11 @@ public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " 
 # side by side: the root moved to `signCommitDigest`, whose one row enters
 # (0 branches, 1 call, to `signDigest`), and no other row moved in any
 # column. 138 -> 139 definitions.
-if [ "$public_closure_grade" != '2151910788 4065' ] || [ "$public_control_grade" != '1733750442 6324' ]; then
+# Re-derived 2026-10-12 for the emitters reading binder stamps (#4047): the
+# same two row changes as the internal grade above (concatLength and
+# concatFill, 3 calls and 0 traps to 2 calls and 1 trap) and no others. The
+# closure is unchanged.
+if [ "$public_closure_grade" != '2151910788 4065' ] || [ "$public_control_grade" != '797838777 6324' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"

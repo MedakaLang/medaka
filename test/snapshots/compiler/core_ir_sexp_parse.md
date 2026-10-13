@@ -1,5 +1,5 @@
 # META
-source_lines=583
+source_lines=585
 stages=DESUGAR,MARK
 # SOURCE
 -- Round-trip deserializer for the Core IR S-expression format produced by
@@ -202,19 +202,21 @@ parseIntStr s =
   if n == 0 then
     panic "core_ir_sexp_parse: empty int"
   else if arrayGetUnsafe 0 cs == '-' then
-    0 - parseDigits cs 1 n 0
+    negDigits cs 1 n 0
   else
-    parseDigits cs 0 n 0
+    0 - negDigits cs 0 n 0
 
-parseDigits : Array Char -> Int -> Int -> Int -> Int
-parseDigits cs i n acc
+-- The digits of [cs] from [i], negated.  It accumulates downward because the
+-- least Int has no positive counterpart.
+negDigits : Array Char -> Int -> Int -> Int -> Int
+negDigits cs i n acc
   | i >= n = acc
   | otherwise =
-    parseDigits
+    negDigits
       cs
       (i + 1)
       n
-      (acc * 10 + charCode (arrayGetUnsafe i cs) - charCode '0')
+      (acc * 10 - (charCode (arrayGetUnsafe i cs) - charCode '0'))
 
 toInt : SExp -> Int
 toInt (SAtom s) = parseIntStr s
@@ -647,9 +649,9 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "toBool" ((PCon "SAtom" (PLit (LString "false")))) (EVar "False"))
 (DFunDef false "toBool" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: expected bool: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "parseIntStr" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "parseIntStr" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: empty int"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")) (ELit (LChar "-"))) (EBinOp "-" (ELit (LInt 0)) (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "cs")) (ELit (LInt 1))) (EVar "n")) (ELit (LInt 0)))) (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "cs")) (ELit (LInt 0))) (EVar "n")) (ELit (LInt 0))))))))
-(DTypeSig false "parseDigits" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "parseDigits" ((PVar "cs") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "-" (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")))) (EApp (EVar "charCode") (ELit (LChar "0"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "parseIntStr" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: empty int"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")) (ELit (LChar "-"))) (EApp (EApp (EApp (EApp (EVar "negDigits") (EVar "cs")) (ELit (LInt 1))) (EVar "n")) (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EApp (EApp (EApp (EApp (EVar "negDigits") (EVar "cs")) (ELit (LInt 0))) (EVar "n")) (ELit (LInt 0)))))))))
+(DTypeSig false "negDigits" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "negDigits" ((PVar "cs") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "negDigits") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "-" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EBinOp "-" (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EVar "charCode") (ELit (LChar "0")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "toInt" (TyFun (TyCon "SExp") (TyCon "Int")))
 (DFunDef false "toInt" ((PCon "SAtom" (PVar "s"))) (EApp (EVar "parseIntStr") (EVar "s")))
 (DFunDef false "toInt" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: expected int atom: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
@@ -883,9 +885,9 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "toBool" ((PCon "SAtom" (PLit (LString "false")))) (EVar "False"))
 (DFunDef false "toBool" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: expected bool: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "parseIntStr" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "parseIntStr" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: empty int"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")) (ELit (LChar "-"))) (EBinOp "-" (ELit (LInt 0)) (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "cs")) (ELit (LInt 1))) (EVar "n")) (ELit (LInt 0)))) (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "cs")) (ELit (LInt 0))) (EVar "n")) (ELit (LInt 0))))))))
-(DTypeSig false "parseDigits" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "parseDigits" ((PVar "cs") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "-" (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")))) (EApp (EVar "charCode") (ELit (LChar "0"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "parseIntStr" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: empty int"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")) (ELit (LChar "-"))) (EApp (EApp (EApp (EApp (EVar "negDigits") (EVar "cs")) (ELit (LInt 1))) (EVar "n")) (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EApp (EApp (EApp (EApp (EVar "negDigits") (EVar "cs")) (ELit (LInt 0))) (EVar "n")) (ELit (LInt 0)))))))))
+(DTypeSig false "negDigits" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "negDigits" ((PVar "cs") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "negDigits") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "-" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EBinOp "-" (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EVar "charCode") (ELit (LChar "0")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "toInt" (TyFun (TyCon "SExp") (TyCon "Int")))
 (DFunDef false "toInt" ((PCon "SAtom" (PVar "s"))) (EApp (EVar "parseIntStr") (EVar "s")))
 (DFunDef false "toInt" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: expected int atom: ")) (EApp (EVar "sexprToStr") (EVar "other")))))

@@ -198,19 +198,21 @@ parseIntStr s =
   if n == 0 then
     panic "core_ir_sexp_parse: empty int"
   else if arrayGetUnsafe 0 cs == '-' then
-    0 - parseDigits cs 1 n 0
+    negDigits cs 1 n 0
   else
-    parseDigits cs 0 n 0
+    0 - negDigits cs 0 n 0
 
-parseDigits : Array Char -> Int -> Int -> Int -> Int
-parseDigits cs i n acc
+-- The digits of [cs] from [i], negated.  It accumulates downward because the
+-- least Int has no positive counterpart.
+negDigits : Array Char -> Int -> Int -> Int -> Int
+negDigits cs i n acc
   | i >= n = acc
   | otherwise =
-    parseDigits
+    negDigits
       cs
       (i + 1)
       n
-      (acc * 10 + charCode (arrayGetUnsafe i cs) - charCode '0')
+      (acc * 10 - (charCode (arrayGetUnsafe i cs) - charCode '0'))
 
 toInt : SExp -> Int
 toInt (SAtom s) = parseIntStr s

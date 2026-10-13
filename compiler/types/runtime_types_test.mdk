@@ -20,6 +20,7 @@ import types.typecheck.{elaborateModules}
 import types.runtime_types.{
   BinderRow(..),
   RuntimeType(..),
+  binderOrdinal,
   binderRow,
   installedBinderRows,
 }
@@ -56,10 +57,6 @@ withMain src check = withRows [("main", src)] check
 rowModule : BinderRow -> String
 rowModule row = match row.brId
   BinderId m _ => m
-
-rowOrdinal : BinderRow -> Int
-rowOrdinal row = match row.brId
-  BinderId _ i => i
 
 -- The rows module [m] published for binders spelled [name].
 named : String -> String -> List BinderRow -> List BinderRow
@@ -132,7 +129,7 @@ test "a shadowing pair of different types is two keys" =
       "main = println (s 3)",
     ]
     (rows =>
-      let ords = map rowOrdinal (named "main" "v" rows)
+      let ords = map (r => binderOrdinal r.brId) (named "main" "v" rows)
       expectAll [
         expectEqual [RTFloat, RTInt] (typesOf "v" rows),
         expectEqual 2 (listLen ords),

@@ -225,7 +225,7 @@ import ir.core_ir.{
   siteSentinelName,
 }
 import list.{replicate, take, drop}
-import types.runtime_types.{BinderRow(..), RuntimeType(..)}
+import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import backend.extern_catalog.{
   WasmFamily(..),
   WasmUse(..),
@@ -413,7 +413,6 @@ data WasmEmit = WasmEmit {
   gapMode : WGapMode,
   gapLog : Ref (List String),
   curGapBind : Ref String,
-  currentBinding : Ref String,
   stringSegments : Ref (List (Int, List Int)),
   nextStringSegmentId : Ref Int,
   -- the segment of each distinct literal payload, keyed by `strSegKey` (an OrdMap,
@@ -447,8 +446,6 @@ data WasmEmit = WasmEmit {
   -- See `trapMsgCall`.
   trapMsgIds : Ref (OrdMap Int),
   trapMsgFns : Ref (List String),
-  -- the first-clause site of the function whose clauses are being emitted
-  clauseSite : Ref Int,
   -- the checked `Int` operators and `Int` shifts this emission called, by helper
   -- name (`add`, `left`, ...), for `intRuntimeLines` (wasm_preamble.mdk).
   intRtUsed : Ref (List String),
@@ -501,7 +498,6 @@ freshWasmEmit mode = WasmEmit {
   gapMode = mode,
   gapLog = Ref [],
   curGapBind = Ref "?",
-  currentBinding = Ref "?",
   stringSegments = Ref [],
   nextStringSegmentId = Ref 0,
   strSegIds = Ref omEmpty,
@@ -521,7 +517,6 @@ freshWasmEmit mode = WasmEmit {
   siteNonexhUsed = Ref False,
   trapMsgIds = Ref omEmpty,
   trapMsgFns = Ref [],
-  clauseSite = Ref 0,
   intRtUsed = Ref [],
   useEPut = Ref False,
   useDivGuard = Ref False,
@@ -676,7 +671,7 @@ makeWasmStamps : List CBind -> List BinderRow -> WasmStamps
 makeWasmStamps groups binderRows =
   let rows =
     omFromPairs
-      (reverseL (map (r => (intToString (stampOrdinal r.brId), r)) binderRows))
+      (reverseL (map (r => (intToString (binderOrdinal r.brId), r)) binderRows))
       omEmpty
   WasmStamps {
     rows = rows,
@@ -685,7 +680,7 @@ makeWasmStamps groups binderRows =
 
 topRow : OrdMap BinderRow -> CBind -> List (String, BinderRow)
 topRow rows (CBind name _ _ bid) =
-  match omLookup (intToString (stampOrdinal bid)) rows
+  match omLookup (intToString (binderOrdinal bid)) rows
     Some row => [(name, row)]
     None => []
 
@@ -693,16 +688,23 @@ data Prog =
   | Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput WasmEmit FnCtx
 
 -- What is true of the ONE function whose body is being emitted: the TMC loop
--- or dispatch-group context its tail leaves redirect to.  It is a value of the
--- `Prog` the body is emitted with, never a cell: a function that needs a
--- different context emits its body with a derived `Prog` (`progInFn`,
--- `progWithTrmc`, `progWithDisp`), so there is no state to restore, and a
--- lifted lambda or let-group member starts from `freshFnCtx` however it was
--- reached.
-data FnCtx = FnCtx { trmc : WTrmcCtx, disp : WDispCtx }
+-- or dispatch-group context its tail leaves redirect to, its first-clause site
+-- (packed by `sitePackedW`, 0 for none), and the binding name its gap messages
+-- cite.  It is a value of the `Prog` the body is emitted with, never a cell: a
+-- function that needs a different context emits its body with a derived `Prog`
+-- (`progInFn`, `progForBinding`, `progWithTrmc`, `progWithDisp`), so there is no
+-- state to restore, and a lifted lambda or let-group member starts without its
+-- encloser's TMC loop, dispatch group or clause site however it was reached.  A
+-- lifted lambda keeps citing its encloser's binding name.
+data FnCtx = FnCtx {
+  trmc : WTrmcCtx,
+  disp : WDispCtx,
+  site : Int,
+  binding : String,
+}
 
 freshFnCtx : FnCtx
-freshFnCtx = FnCtx { trmc = WTrmcOff, disp = WDispOff }
+freshFnCtx = FnCtx { trmc = WTrmcOff, disp = WDispOff, site = 0, binding = "?" }
 
 progValNames : Prog -> List String
 progValNames (Prog _ _ vals _ _ _ _ _) = vals
@@ -726,19 +728,28 @@ progEmit (Prog _ _ _ _ _ _ emit _) = emit
 progFnCtx : Prog -> FnCtx
 progFnCtx (Prog _ _ _ _ _ _ _ fn) = fn
 
--- [prog] for emitting the body of another function: no TMC loop, no dispatch group.
+-- [prog] for emitting the body of another function: no TMC loop, no dispatch
+-- group, no clause site; the binding name is inherited.
 progInFn : Prog -> Prog
-progInFn prog = progWithFnCtx prog freshFnCtx
+progInFn prog =
+  progWithFnCtx prog { freshFnCtx | binding = (progFnCtx prog).binding }
+
+-- [progInFn prog] for the binding [name] whose first clause is at [site].
+progForBinding : String -> Int -> Prog -> Prog
+progForBinding name site prog =
+  progWithFnCtx prog { freshFnCtx | site = site, binding = name }
+
+-- The binding name the body being emitted with [prog] cites in a gap message.
+progBinding : Prog -> String
+progBinding prog = (progFnCtx prog).binding
 
 -- [prog] with [ctx] as the Stage-1 TMC loop context of the body about to be emitted.
 progWithTrmc : WTrmcCtx -> Prog -> Prog
-progWithTrmc ctx prog =
-  progWithFnCtx prog FnCtx { trmc = ctx, disp = (progFnCtx prog).disp }
+progWithTrmc ctx prog = progWithFnCtx prog { progFnCtx prog | trmc = ctx }
 
 -- [prog] with [ctx] as the dispatch-group context of the body about to be emitted.
 progWithDisp : WDispCtx -> Prog -> Prog
-progWithDisp ctx prog =
-  progWithFnCtx prog FnCtx { trmc = (progFnCtx prog).trmc, disp = ctx }
+progWithDisp ctx prog = progWithFnCtx prog { progFnCtx prog | disp = ctx }
 
 progWithFnCtx : Prog -> FnCtx -> Prog
 progWithFnCtx (Prog index types vals uc impls input emit _) fn =
@@ -1047,12 +1058,6 @@ gapEventsOfW emit = reverseL !emit.gapLog
 
 setGapBindingOfW : WasmEmit -> String -> Unit
 setGapBindingOfW emit name = setRef emit.curGapBind name
-
-currentBindingOfW : WasmEmit -> String
-currentBindingOfW emit = !emit.currentBinding
-
-setCurrentBindingOfW : WasmEmit -> String -> Unit
-setCurrentBindingOfW emit name = setRef emit.currentBinding name
 
 noteGapW : WasmEmit -> String -> Unit
 noteGapW emit reason = noteGapAtW emit !emit.curGapBind reason
@@ -2684,7 +2689,7 @@ emitScalarFnBind : WasmEmit ->
   CBind ->
   List String
 emitScalarFnBind emit fnNames valNames (CBind name [CClause pats body] _ _) =
-  let params = map (patName emit) pats
+  let params = map (patName emit name) pats
   let localsInBody = collectExprLocals body
   let extraLocals = filterList (notIn params) (dedupKeep localsInBody)
   let env = omFromNames params omEmpty
@@ -3969,10 +3974,7 @@ refPrintFor prog WRef =
 -- count, code = a thunk that unpacks the args array + calls $name).
 emitRefFnBind : Prog -> CBind -> List String
 emitRefFnBind outer (CBind name clauses bindLoc _) =
-  let prog = progInFn outer
-  let _ = setCurrentBindingOfW (progEmit prog) name
-  let _ =
-    setRef (progEmit prog).clauseSite (sitePackedW (progEmit prog) bindLoc)
+  let prog = progForBinding name (sitePackedW (progEmit outer) bindLoc) outer
   let arity = clauseArityOf clauses
   let params = clauseParamNames clauses arity
   -- Stage-2/3 (b′): a member of a detected dispatch-TMC group emits via the dest-passing
@@ -4175,7 +4177,7 @@ emitClauseChainRefEnv prog baseEnv name params arity clauses =
     arity
     clauses
     0
-    (progEmit prog).clauseSite.value
+    (progFnCtx prog).site
 
 emitClauseChainGo : Prog ->
   List String ->
@@ -5341,9 +5343,8 @@ implGroupArity [] = 0
 
 emitImplGroup : Prog -> ImplG -> List String
 emitImplGroup outer (ImplG method headTag key arity clauses fnName) =
-  let prog = progInFn outer
   -- an impl method has no first-clause site of its own
-  let _ = setRef (progEmit prog).clauseSite 0
+  let prog = progInFn outer
   let params = synthParams arity
   -- Phase 2 B-dispatch (TRMC-DESIGN §"Phase 2"): a DISPATCHED self-recursive cons/ctor-tail
   -- impl (the `List map`: self-call is a `CMethod method (RKey tag)`) is emitted as a
@@ -5527,7 +5528,7 @@ emitRefExpr prog env d (CVariantUpdate con base fields) =
 emitRefExpr prog env d other =
   gapLP
     prog
-    "ref-mode: unsupported Core IR node \{ctag other} [in \{currentBindingOfW (progEmit prog)}]"
+    "ref-mode: unsupported Core IR node \{ctag other} [in \{progBinding prog}]"
 
 -- a scalar literal → an i31 immediate.  Int: ref.i31 of the value.  Bool: 1/0.
 -- Unit: i31 0 (a placeholder immediate; Unit is never inspected in this slice).
@@ -5770,7 +5771,7 @@ emitVarRefPlain prog env d x =
   else
     gapUnboundLP
       prog
-      "unbound variable '\{x}' (not a local, global value, constructor, or known function) [in \{currentBindingOfW (progEmit prog)}]"
+      "unbound variable '\{x}' (not a local, global value, constructor, or known function) [in \{progBinding prog}]"
 
 -- W9: lift `$mdk_ext_<name>` (a $codety) that unpacks its $args into synthetic CVar
 -- locals and emits the extern call, then build the closure struct at the use site.
@@ -6460,12 +6461,9 @@ wasmFloatCmp op = panic ("wasm W8b: not a Float compare op '" ++ op ++ "'")
 -- the binder (`envBind`), scoped exactly as the name is, and a reference
 -- resolves through the nearest entry.  A fact is never stored under a name.
 
-stampOrdinal : BinderId -> Int
-stampOrdinal (BinderId _ n) = n
-
 -- the env entry that says the local `x` is the binder with ordinal [bid]'s
 envMark : String -> BinderId -> String
-envMark x bid = "\{x}@\{intToString (stampOrdinal bid)}"
+envMark x bid = "\{x}@\{intToString (binderOrdinal bid)}"
 
 -- [env] extended with the stamped binder [x]
 envBind : String -> BinderId -> List String -> List String
@@ -8704,7 +8702,7 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
           arity
           clauses
           0
-          (progEmit prog).clauseSite.value
+          (progFnCtx prog).site
     _ =>
       emitClauseChainGo
         tprog
@@ -8714,7 +8712,7 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
         arity
         clauses
         0
-        (progEmit prog).clauseSite.value
+        (progFnCtx prog).site
   let loopShell =
     ["i32.const 1", "local.set " ++ wTrmcFirstL]
       ++ ["block " ++ exitLbl, "loop " ++ loopLbl]
@@ -9845,10 +9843,8 @@ emitLgLifted : Prog ->
   CBind ->
   Unit
 emitLgLifted prog gid names groupCaps marks binds (CBind name clauses bindLoc _) =
-  let _ = setCurrentBindingOfW (progEmit prog) ("lg:" ++ name)
-  let savedSite = (progEmit prog).clauseSite.value
-  let _ =
-    setRef (progEmit prog).clauseSite (sitePackedW (progEmit prog) bindLoc)
+  let memberProg =
+    progForBinding ("lg:" ++ name) (sitePackedW (progEmit prog) bindLoc) prog
   let lamName = "$mdk_lg\{intToString gid}_\{gname name}"
   let _ = noteFuncRef (progEmit prog) lamName
   let arity = clauseArityOf clauses
@@ -9864,13 +9860,12 @@ emitLgLifted prog gid names groupCaps marks binds (CBind name clauses bindLoc _)
   -- (see emitLamDefine — same hazard when lifted under a live trmc context).
   let bodyLines =
     emitClausesRefEnv
-      (progInFn prog)
+      memberProg
       (envWithMarks (names ++ groupCaps) marks)
       name
       params
       arity
       clauses
-  let _ = setRef (progEmit prog).clauseSite savedSite
   let memberLocals = names
   let bodyLocals =
     filterList
@@ -11111,14 +11106,14 @@ collectBindLocals : CBind -> List String
 collectBindLocals (CBind _ [CClause _ body] _ _) = collectExprLocals body
 collectBindLocals _ = []
 
-patName : WasmEmit -> Pat -> String
-patName _ (PVar x _ _) = x
-patName _ PWild = "_"
-patName emit _ =
+patName : WasmEmit -> String -> Pat -> String
+patName _ _ (PVar x _ _) = x
+patName _ _ PWild = "_"
+patName emit binding _ =
   gapS
     emit
     ("only PVar/PWild parameters (pattern params are inner-match material) [in "
-      ++ currentBindingOfW emit
+      ++ binding
       ++ "]")
 
 -- ── local collection ─────────────────────────────────────────────────────────

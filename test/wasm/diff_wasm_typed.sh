@@ -2000,7 +2000,7 @@ cbind_exact_events() {
 cbind_abort_row top H2B5-TOP-EXACT CBIND_TOP_STRICT '' P 'fn P'
 cbind_abort_row lifted H2B5-LIFT-EXACT CBIND_LIFT_STRICT '' 'lg:P' 'fn outer'
 cbind_abort_row no-writer H2B5-NOWRITER-EXACT CBIND_NOWRITER_STRICT $'CBIND_NOWRITER_SETUP_WAT_BEGIN\nCBIND_NOWRITER_SETUP_WAT_END\nCBIND_NOWRITER_SETUP_OK' '?' 'val P'
-cbind_abort_row post-lift H2B5-POSTLIFT-EXACT CBIND_POSTLIFT_STRICT '' 'lg:L' 'fn P'
+cbind_abort_row post-lift H2B5-POSTLIFT-EXACT CBIND_POSTLIFT_STRICT '' P 'fn P'
 
 "$EMITBIN" --capture-current-binding malformed >"$INPUT_WORK/cbind-malformed.out" 2>"$INPUT_WORK/cbind-malformed.err"
 CBIND_MALFORMED_STATUS=$?

@@ -85,6 +85,7 @@ import frontend.desugar.{mapProg, freshBinderId}
 import types.runtime_types.{
   BinderRow(..),
   RuntimeType(..),
+  binderOrdinal,
   binderRowIfInstalled,
 }
 import map as BM
@@ -1162,8 +1163,7 @@ stampVisit lowering rows site x (bid@(BinderId _ n)) =
     bid
   else
     let fresh = freshBinderId ""
-    let ord = match fresh
-      BinderId _ k => k
+    let ord = binderOrdinal fresh
     rows := BM.set ord (mintedRow fresh x site) !rows
     fresh
 
@@ -3942,7 +3942,7 @@ bindSigEdits sigs (CBind name clauses _ bid) = match omLookup name sigs
   None => []
   Some (ptys, ret) =>
     if allList (clauseTakes (listLen ptys)) clauses then
-      (binderOrdinalOf bid, functionSigEdit ptys ret)
+      (binderOrdinal bid, functionSigEdit ptys ret)
         :: flatMap (clauseParamEdits ptys) clauses
     else
       []
@@ -3960,15 +3960,12 @@ clauseParamEdits ptys (CClause pats _) = paramSigEdits ptys pats
 
 paramSigEdits : List (Option RuntimeType) -> List Pat -> List (Int, RowEdit)
 paramSigEdits ((Some t) :: tys) ((PVar _ _ bid) :: pats) =
-  (binderOrdinalOf bid, RowEdit (Some t) None) :: paramSigEdits tys pats
+  (binderOrdinal bid, RowEdit (Some t) None) :: paramSigEdits tys pats
 paramSigEdits (_ :: tys) (_ :: pats) = paramSigEdits tys pats
 paramSigEdits _ _ = []
 
-binderOrdinalOf : BinderId -> Int
-binderOrdinalOf (BinderId _ n) = n
-
 applyRowEdit : BM.Map Int RowEdit -> BinderRow -> BinderRow
-applyRowEdit edits row = match BM.get (binderOrdinalOf row.brId) edits
+applyRowEdit edits row = match BM.get (binderOrdinal row.brId) edits
   Some (RowEdit ty ret) => BinderRow {
     brId = row.brId,
     brName = row.brName,

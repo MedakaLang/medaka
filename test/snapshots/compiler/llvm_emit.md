@@ -1,5 +1,5 @@
 # META
-source_lines=15106
+source_lines=15103
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -227,7 +227,7 @@ import ir.core_ir_lower.{
   ifaceWordOfKey,
   programArities,
 }
-import types.runtime_types.{BinderRow(..), RuntimeType(..)}
+import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import map as BM
 import support.util.{
   reverseL,
@@ -13392,9 +13392,6 @@ emitGlobalDecls e (b :: rest) =
 binderRowsOf : List BinderRow -> BM.Map Int BinderRow
 binderRowsOf rows = BM.fromList (map (r => (binderOrdinal r.brId, r)) rows)
 
-binderOrdinal : BinderId -> Int
-binderOrdinal (BinderId _ n) = n
-
 stampRow : Emit -> BinderId -> BinderRow
 stampRow e (BinderId m n) = match BM.get n e.binderRows
   Some row => row
@@ -15112,7 +15109,7 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "BinderId" true) (mem "RecPatField" true) (mem "noDeclLoc" false) (mem "ifaceIdMatches" false) (mem "isFixedWidthHead" false) (mem "fixedWidthMask" false) (mem "isU64Head" false) (mem "isFixedIntHead" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "givenNames" false) (mem "isGivenRooted" false) (mem "receiverEvidence" false) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CProgram" true) (mem "DeclFacts" false) (mem "noDeclFacts" false) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "FailSite" true) (mem "CallMode" true) (mem "CallSite" true) (mem "siteSentinelName" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "compileTree" false) (mem "canonPat" false) (mem "definedArityOf" false) (mem "ifaceWordOfKey" false) (mem "programArities" false))))
-(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true))))
+(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false))))
 (DUse false (UseAlias ("map") "BM"))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "isNonEmptyL" false) (mem "u64HalvesHex" false))))
 (DUse false (UseGroup ("backend" "llvm_preamble") ((mem "preambleLines" false))))
@@ -17504,8 +17501,6 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DFunDef false "emitGlobalDecls" ((PVar "e") (PCons (PVar "b") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setScopeOfBind") (EVar "e")) (EApp (EVar "bindName") (EVar "b")))) (DoLet false false (PVar "line") (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "e") "input") "emitHalf") (EVar "emitHalfPrelude")) (EBinOp "++" (EBinOp "++" (ELit (LString "@mdk_g_")) (EApp (EVar "bindName") (EVar "b"))) (ELit (LString " = external global i64"))) (EBinOp "++" (EBinOp "++" (ELit (LString "@mdk_g_")) (EApp (EVar "bindName") (EVar "b"))) (ELit (LString " = global i64 0"))))) (DoLet false false PWild (EApp (EApp (EVar "emitGlobal") (EVar "e")) (EVar "line"))) (DoLet false false PWild (EIf (EApp (EApp (EVar "isLazyGlobal") (EVar "e")) (EApp (EVar "bindName") (EVar "b"))) (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "e") "input") "emitHalf") (EVar "emitHalfPrelude")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "emitGlobal") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "@mdk_gs_")) (EApp (EVar "display") (EApp (EVar "bindName") (EVar "b")))) (ELit (LString " = external global i8"))))) (DoExpr (EApp (EApp (EVar "emitGlobal") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "declare i64 @mdk_force_")) (EApp (EVar "display") (EApp (EVar "bindName") (EVar "b")))) (ELit (LString "()")))))) (EApp (EApp (EVar "emitGlobal") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "@mdk_gs_")) (EApp (EVar "display") (EApp (EVar "bindName") (EVar "b")))) (ELit (LString " = global i8 0"))))) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "emitGlobalDecls") (EVar "e")) (EVar "rest")))))
 (DTypeSig false "binderRowsOf" (TyFun (TyApp (TyCon "List") (TyCon "BinderRow")) (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "BinderRow"))))
 (DFunDef false "binderRowsOf" ((PVar "rows")) (EApp (EVar "BM.fromList") (EApp (EApp (EVar "map") (ELam ((PVar "r")) (ETuple (EApp (EVar "binderOrdinal") (EFieldAccess (EVar "r") "brId")) (EVar "r")))) (EVar "rows"))))
-(DTypeSig false "binderOrdinal" (TyFun (TyCon "BinderId") (TyCon "Int")))
-(DFunDef false "binderOrdinal" ((PCon "BinderId" PWild (PVar "n"))) (EVar "n"))
 (DTypeSig false "stampRow" (TyFun (TyCon "Emit") (TyFun (TyCon "BinderId") (TyCon "BinderRow"))))
 (DFunDef false "stampRow" ((PVar "e") (PCon "BinderId" (PVar "m") (PVar "n"))) (EMatch (EApp (EApp (EVar "BM.get") (EVar "n")) (EFieldAccess (EVar "e") "binderRows")) (arm (PCon "Some" (PVar "row")) () (EVar "row")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "llvm: binder ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " has no stamped type (internal error)")))))))
 (DTypeSig false "binderStamp" (TyFun (TyCon "Emit") (TyFun (TyCon "BinderId") (TyCon "RuntimeType"))))
@@ -17864,7 +17859,7 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "BinderId" true) (mem "RecPatField" true) (mem "noDeclLoc" false) (mem "ifaceIdMatches" false) (mem "isFixedWidthHead" false) (mem "fixedWidthMask" false) (mem "isU64Head" false) (mem "isFixedIntHead" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "givenNames" false) (mem "isGivenRooted" false) (mem "receiverEvidence" false) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CProgram" true) (mem "DeclFacts" false) (mem "noDeclFacts" false) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "FailSite" true) (mem "CallMode" true) (mem "CallSite" true) (mem "siteSentinelName" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "compileTree" false) (mem "canonPat" false) (mem "definedArityOf" false) (mem "ifaceWordOfKey" false) (mem "programArities" false))))
-(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true))))
+(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false))))
 (DUse false (UseAlias ("map") "BM"))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "isNonEmptyL" false) (mem "u64HalvesHex" false))))
 (DUse false (UseGroup ("backend" "llvm_preamble") ((mem "preambleLines" false))))
@@ -20256,8 +20251,6 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DFunDef false "emitGlobalDecls" ((PVar "e") (PCons (PVar "b") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setScopeOfBind") (EVar "e")) (EApp (EVar "bindName") (EVar "b")))) (DoLet false false (PVar "line") (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "e") "input") "emitHalf") (EVar "emitHalfPrelude")) (EBinOp "++" (EBinOp "++" (ELit (LString "@mdk_g_")) (EApp (EVar "bindName") (EVar "b"))) (ELit (LString " = external global i64"))) (EBinOp "++" (EBinOp "++" (ELit (LString "@mdk_g_")) (EApp (EVar "bindName") (EVar "b"))) (ELit (LString " = global i64 0"))))) (DoLet false false PWild (EApp (EApp (EVar "emitGlobal") (EVar "e")) (EVar "line"))) (DoLet false false PWild (EIf (EApp (EApp (EVar "isLazyGlobal") (EVar "e")) (EApp (EVar "bindName") (EVar "b"))) (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "e") "input") "emitHalf") (EVar "emitHalfPrelude")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "emitGlobal") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "@mdk_gs_")) (EApp (EMethodRef "display") (EApp (EVar "bindName") (EVar "b")))) (ELit (LString " = external global i8"))))) (DoExpr (EApp (EApp (EVar "emitGlobal") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "declare i64 @mdk_force_")) (EApp (EMethodRef "display") (EApp (EVar "bindName") (EVar "b")))) (ELit (LString "()")))))) (EApp (EApp (EVar "emitGlobal") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "@mdk_gs_")) (EApp (EMethodRef "display") (EApp (EVar "bindName") (EVar "b")))) (ELit (LString " = global i8 0"))))) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "emitGlobalDecls") (EVar "e")) (EVar "rest")))))
 (DTypeSig false "binderRowsOf" (TyFun (TyApp (TyCon "List") (TyCon "BinderRow")) (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "BinderRow"))))
 (DFunDef false "binderRowsOf" ((PVar "rows")) (EApp (EVar "BM.fromList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "r")) (ETuple (EApp (EVar "binderOrdinal") (EFieldAccess (EVar "r") "brId")) (EVar "r")))) (EVar "rows"))))
-(DTypeSig false "binderOrdinal" (TyFun (TyCon "BinderId") (TyCon "Int")))
-(DFunDef false "binderOrdinal" ((PCon "BinderId" PWild (PVar "n"))) (EVar "n"))
 (DTypeSig false "stampRow" (TyFun (TyCon "Emit") (TyFun (TyCon "BinderId") (TyCon "BinderRow"))))
 (DFunDef false "stampRow" ((PVar "e") (PCon "BinderId" (PVar "m") (PVar "n"))) (EMatch (EApp (EApp (EVar "BM.get") (EVar "n")) (EFieldAccess (EVar "e") "binderRows")) (arm (PCon "Some" (PVar "row")) () (EVar "row")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "llvm: binder ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " has no stamped type (internal error)")))))))
 (DTypeSig false "binderStamp" (TyFun (TyCon "Emit") (TyFun (TyCon "BinderId") (TyCon "RuntimeType"))))

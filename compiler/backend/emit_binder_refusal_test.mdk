@@ -1,0 +1,122 @@
+-- Each emitter refuses a program with a binder its binder table has no row for,
+-- before it emits anything: `llvm_emit.refuseUnstampedBinders` and the binder
+-- check in `wasm_emit.refuseUnprovidedExternsW`.  The refusal is a panic, which
+-- no test observes in its own process, so each case runs this file's probe test
+-- in a child `medaka test` with `MEDAKA_BINDER_REFUSAL_PROBE` naming the backend,
+-- and grades the child's exit and output.  In an ordinary run the probe passes
+-- without emitting.
+
+import test.{
+  Expectation, expectAll, expectEqual, expectNotEqual, labelFail, pass
+}
+import test_process.{expectSpawnFails, medakaBin, underRoot}
+import frontend.ast.{BinderId(..), Lit(..), Pat(..), Addr(..), noDeclLoc}
+import ir.core_ir.{
+  CBind(..),
+  CClause(..),
+  CExpr(..),
+  CProgram(..),
+  CallMode(..),
+  CallSite(..),
+  DeclFacts(..),
+}
+import types.runtime_types.{BinderRow(..), RuntimeType(..)}
+import backend.core_validate.{validateBinderStamps}
+import backend.llvm_emit.{emitProgram as llvmEmit, makeEmitInput}
+import backend.wasm_emit.{emitProgram as wasmEmit, makeWasmEmitInputFull}
+
+probeVar : String
+probeVar = "MEDAKA_BINDER_REFUSAL_PROBE"
+
+row : String -> Int -> RuntimeType -> Option RuntimeType -> BinderRow
+row name n ty ret = BinderRow {
+  brId = BinderId "m" n,
+  brName = name,
+  brType = ty,
+  brReturns = ret,
+  brSigned = False,
+}
+
+-- `f x = x` and `main = f 1`, with a row for `f` and `main` and, when
+-- [paramRow], for `x`.
+program : Bool -> CProgram
+program paramRow =
+  CProgram
+    [
+      CBind
+        "f"
+        [CClause [PVar "x" noDeclLoc (BinderId "m" 3)] (CVar "x" (ALocal 0 0))]
+        noDeclLoc
+        (BinderId "m" 1),
+      CBind
+        "main"
+        [
+          CClause
+            []
+            (CApp (CVar "f" AGlobal) [CLit (LInt 1)] (CallSite CallExact False)),
+        ]
+        noDeclLoc
+        (BinderId "m" 2),
+    ]
+    []
+    []
+    []
+    []
+    DeclFacts {
+      factRequires = [],
+      factSupers = [],
+      factBinders =
+        [row "f" 1 RTValue (Some RTInt), row "main" 2 RTInt (Some RTInt)]
+          ++ (if paramRow then [row "x" 3 RTInt None] else []),
+    }
+
+llvmText : CProgram -> String
+llvmText cp =
+  llvmEmit (makeEmitInput [] [] [] [] [] False False 0 [] [] "" [] []) cp
+
+wasmText : CProgram -> String
+wasmText cp = wasmEmit (makeWasmEmitInputFull [] [] False False [] []) cp
+
+-- What the refusal says about `x`.
+refusal : String
+refusal = "internal error: binder: x has no stamped type [in f]"
+
+test "the hand-built program lacks exactly the row for x" = expectAll [
+  labelFail
+    "without it"
+    (expectEqual
+      ["binder: x has no stamped type [in f]"]
+      (validateBinderStamps (program False))),
+  labelFail "with it" (expectEqual [] (validateBinderStamps (program True))),
+]
+
+test "both emitters emit the program once x has its row" = expectAll [
+  labelFail "llvm" (expectNotEqual "" (llvmText (program True))),
+  labelFail "wasm" (expectNotEqual "" (wasmText (program True))),
+]
+
+-- The probe: under `MEDAKA_BINDER_REFUSAL_PROBE`, the backend it names emits the
+-- program without `x`'s row.  Passing means the emitter did not refuse.
+test "probe: emit with an unstamped binder" = match getEnv probeVar
+  Some "llvm" => expectNotEqual "" (llvmText (program False))
+  Some "wasm" => expectNotEqual "" (wasmText (program False))
+  _ => pass
+
+-- [backend]'s probe run, which must fail with the refusal.
+refusedBy : String -> <Exec "env", IO> Expectation
+refusedBy backend =
+  expectSpawnFails
+    "env"
+    [
+      "\{probeVar}=\{backend}",
+      medakaBin,
+      "test",
+      "--filter",
+      "probe:",
+      underRoot "compiler/backend/emit_binder_refusal_test.mdk",
+    ]
+    refusal
+
+test "the llvm emitter refuses a binder with no stamped type" = refusedBy "llvm"
+
+test "the wasm emitter refuses a binder with no stamped type" = refusedBy "wasm"
