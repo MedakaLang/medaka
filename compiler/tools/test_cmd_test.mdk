@@ -5,7 +5,7 @@
 import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import tools.doctest.{Engine(..)}
-import tools.test_cmd.{treesUnread, childJobsPrefix}
+import tools.test_cmd.{treesUnread, childJobsPrefix, childGcMarkersPrefix}
 import io.{runVerb}
 import string.{contains, indexOf, toInt, trim}
 import test.{
@@ -123,6 +123,13 @@ test "children split the budget with the outer fan-out" = expectAll [
   expectEqual ["MEDAKA_TEST_JOBS=1"] (childJobsPrefix 1 1),
   expectEqual ["MEDAKA_TEST_JOBS=1"] (childJobsPrefix 0 1),
 ]
+
+test "GC_MARKERS: caller env beats the concurrent-children default" = expectAll
+  [
+    expectEqual ["GC_MARKERS=1"] (childGcMarkersPrefix "" 4),
+    expectEqual [] (childGcMarkersPrefix "4" 4),
+    expectEqual [] (childGcMarkersPrefix "" 1),
+  ]
 
 dirWithKnobProbe : String -> <FileWrite> Result String Unit
 dirWithKnobProbe dir = dirWithKnobProbeFor dir knobProbeSource
