@@ -392,6 +392,19 @@ is3 src len pos a b c =
     && at src (pos + 1) == b
     && at src (pos + 2) == c
 
+-- Constructor matches, not derived `==` on Token (layout pass hot path).
+isCommaTok : Token -> Bool
+isCommaTok TComma = True
+isCommaTok _ = False
+
+isThenTok : Token -> Bool
+isThenTok TThen = True
+isThenTok _ = False
+
+isElseTok : Token -> Bool
+isElseTok TElse = True
+isElseTok _ = False
+
 substr : Array Char -> Int -> Int -> String
 substr src start endp
   | endp <= start = ""
@@ -1816,35 +1829,85 @@ emit src len pos depth id tok length ddelta =
   RTok tok pos (pos + length) :: scan src len (pos + length) (depth + ddelta) id
 
 scanOp : Array Char -> Int -> Int -> Int -> Int -> Char -> List RawTok
-scanOp src len pos depth id c
+scanOp src len pos depth id '.' = scanDotOp src len pos depth id
+scanOp src len pos depth id '|' = scanBarOp src len pos depth id
+scanOp src len pos depth id '=' = scanEqOp src len pos depth id
+scanOp src len pos depth id '<' = scanLtOp src len pos depth id
+scanOp src len pos depth id '>' = scanGtOp src len pos depth id
+scanOp src len pos depth id ':' = scanColonOp src len pos depth id
+scanOp src len pos depth id '[' =
+  scanTwoOp src len pos depth id '[' '|' TLArray 1
+scanOp src len pos depth id '-' =
+  scanTwoOp src len pos depth id '-' '>' TArrow 0
+scanOp src len pos depth id '+' =
+  scanTwoOp src len pos depth id '+' '+' TPlusPlus 0
+-- #1739 half B: `/=` is the canonical not-equals; `!=` is only a sentinel,
+-- caught by the `firstBangEqIdx` pre-scan below and reported as a located
+-- "did you mean `/=`?" hint.  Keeping it a DISTINCT token (rather than
+-- letting `!` `=` split) is what lets the hint point at the operator itself.
+scanOp src len pos depth id '!' =
+  scanTwoOp src len pos depth id '!' '=' TBangEq 0
+scanOp src len pos depth id '/' = scanTwoOp src len pos depth id '/' '=' TNeq 0
+scanOp src len pos depth id '&' = scanTwoOp src len pos depth id '&' '&' TAnd 0
+scanOp src len pos depth id c = singleOp src len pos depth id c
+
+-- Two-char operator with first char `c` (already matched by the caller).
+scanTwoOp : Array Char ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Char ->
+  Char ->
+  Token ->
+  Int ->
+  List RawTok
+scanTwoOp src len pos depth id c b tok ddelta =
+  if is2 src len pos c b then
+    emit src len pos depth id tok 2 ddelta
+  else
+    singleOp src len pos depth id c
+
+scanDotOp : Array Char -> Int -> Int -> Int -> Int -> List RawTok
+scanDotOp src len pos depth id
   | is3 src len pos '.' '.' '.' = emit src len pos depth id TEllipsis 3 0
   | is3 src len pos '.' '.' '=' = emit src len pos depth id TDotDotEq 3 0
-  | is2 src len pos '[' '|' = emit src len pos depth id TLArray 2 1
-  | is2 src len pos '|' ']' = emit src len pos depth id TRArray 2 (0 - 1)
-  | is2 src len pos '=' '>' = emit src len pos depth id TFatArrow 2 0
-  | is2 src len pos '-' '>' = emit src len pos depth id TArrow 2 0
-  | is2 src len pos '<' '-' = emit src len pos depth id TLArrow 2 0
-  | is2 src len pos ':' ':' = emit src len pos depth id TCons 2 0
-  | is2 src len pos ':' '=' = emit src len pos depth id TColonEq 2 0
-  | is2 src len pos '+' '+' = emit src len pos depth id TPlusPlus 2 0
-  | is2 src len pos '=' '=' = emit src len pos depth id TEqEq 2 0
-  -- #1739 half B: `/=` is the canonical not-equals; `!=` is only a sentinel,
-  -- caught by the `firstBangEqIdx` pre-scan below and reported as a located
-  -- "did you mean `/=`?" hint.  Keeping it a DISTINCT token (rather than
-  -- letting `!` `=` split) is what lets the hint point at the operator itself.
-  | is2 src len pos '!' '=' = emit src len pos depth id TBangEq 2 0
-  | is2 src len pos '/' '=' = emit src len pos depth id TNeq 2 0
-  | is2 src len pos '<' '=' = emit src len pos depth id TLeq 2 0
-  | is2 src len pos '>' '=' = emit src len pos depth id TGeq 2 0
-  | is2 src len pos '&' '&' = emit src len pos depth id TAnd 2 0
-  | is2 src len pos '|' '|' = emit src len pos depth id TOr 2 0
-  | is2 src len pos '|' '>' = emit src len pos depth id TPipeRight 2 0
-  | is2 src len pos '>' '>' = emit src len pos depth id TRCompose 2 0
-  | is2 src len pos '<' '<' = emit src len pos depth id TLCompose 2 0
   | is2 src len pos '.' '{' = emit src len pos depth id TDotLBrace 2 1
   | is2 src len pos '.' '*' = emit src len pos depth id TDotStar 2 0
   | is2 src len pos '.' '.' = emit src len pos depth id TDotDot 2 0
-  | otherwise = singleOp src len pos depth id c
+  | otherwise = singleOp src len pos depth id '.'
+
+scanBarOp : Array Char -> Int -> Int -> Int -> Int -> List RawTok
+scanBarOp src len pos depth id
+  | is2 src len pos '|' ']' = emit src len pos depth id TRArray 2 (0 - 1)
+  | is2 src len pos '|' '|' = emit src len pos depth id TOr 2 0
+  | is2 src len pos '|' '>' = emit src len pos depth id TPipeRight 2 0
+  | otherwise = singleOp src len pos depth id '|'
+
+scanEqOp : Array Char -> Int -> Int -> Int -> Int -> List RawTok
+scanEqOp src len pos depth id
+  | is2 src len pos '=' '>' = emit src len pos depth id TFatArrow 2 0
+  | is2 src len pos '=' '=' = emit src len pos depth id TEqEq 2 0
+  | otherwise = singleOp src len pos depth id '='
+
+scanLtOp : Array Char -> Int -> Int -> Int -> Int -> List RawTok
+scanLtOp src len pos depth id
+  | is2 src len pos '<' '-' = emit src len pos depth id TLArrow 2 0
+  | is2 src len pos '<' '=' = emit src len pos depth id TLeq 2 0
+  | is2 src len pos '<' '<' = emit src len pos depth id TLCompose 2 0
+  | otherwise = singleOp src len pos depth id '<'
+
+scanGtOp : Array Char -> Int -> Int -> Int -> Int -> List RawTok
+scanGtOp src len pos depth id
+  | is2 src len pos '>' '=' = emit src len pos depth id TGeq 2 0
+  | is2 src len pos '>' '>' = emit src len pos depth id TRCompose 2 0
+  | otherwise = singleOp src len pos depth id '>'
+
+scanColonOp : Array Char -> Int -> Int -> Int -> Int -> List RawTok
+scanColonOp src len pos depth id
+  | is2 src len pos ':' ':' = emit src len pos depth id TCons 2 0
+  | is2 src len pos ':' '=' = emit src len pos depth id TColonEq 2 0
+  | otherwise = singleOp src len pos depth id ':'
 
 singleOp : Array Char -> Int -> Int -> Int -> Int -> Char -> List RawTok
 singleOp src len pos depth id '+' = emit src len pos depth id TPlus 1 0
@@ -2085,7 +2148,8 @@ layout ((RTok t off _) :: rest) stack frames prev opener
         (Some t)
         False
   | bracketCloser t = flushClose t off rest stack frames opener
-  | t == TComma && frameHasLive frames = flushSep t off rest stack frames opener
+  | isCommaTok t && frameHasLive frames =
+    flushSep t off rest stack frames opener
   | otherwise =
     (t, off) :: layout rest stack frames (Some t) (opener || isOpener t)
 layout ((RComment _ _) :: rest) stack frames prev opener =
@@ -2397,8 +2461,8 @@ resolveCont : Int ->
   List (Token, Int)
 resolveCont col off stack ((RTok t toff tend) :: more) frames prev opener
   | canStartAtom t = layout (RTok t toff tend :: more) stack frames prev opener
-  | t == TThen = layout (RTok t toff tend :: more) stack frames prev opener
-  | t == TElse = layout (RTok t toff tend :: more) stack frames prev opener
+  | isThenTok t = layout (RTok t toff tend :: more) stack frames prev opener
+  | isElseTok t = layout (RTok t toff tend :: more) stack frames prev opener
   | otherwise =
     (TIndent, toff)
       :: layout
@@ -2482,7 +2546,7 @@ layoutPairs ((RTok t s e) :: rest) stack frames prev opener
         (Some t)
         False
   | bracketCloser t = flushClosePairs t s e rest stack frames opener
-  | t == TComma && frameHasLive frames =
+  | isCommaTok t && frameHasLive frames =
     flushSepPairs t s e rest stack frames opener
   | otherwise =
     (t, s, e) :: layoutPairs rest stack frames (Some t) (opener || isOpener t)
@@ -2639,8 +2703,10 @@ resolveContPairs : Int ->
 resolveContPairs col off stack ((RTok t toff tend) :: more) frames prev opener
   | canStartAtom t =
     layoutPairs (RTok t toff tend :: more) stack frames prev opener
-  | t == TThen = layoutPairs (RTok t toff tend :: more) stack frames prev opener
-  | t == TElse = layoutPairs (RTok t toff tend :: more) stack frames prev opener
+  | isThenTok t =
+    layoutPairs (RTok t toff tend :: more) stack frames prev opener
+  | isElseTok t =
+    layoutPairs (RTok t toff tend :: more) stack frames prev opener
   | otherwise =
     (TIndent, toff, toff)
       :: layoutPairs
@@ -2735,7 +2801,8 @@ layoutToks ((RTok t _ _) :: rest) stack frames prev opener
         t
         False
   | bracketCloser t = flushCloseToks t rest stack frames opener
-  | t == TComma && frameHasLive frames = flushSepToks t rest stack frames opener
+  | isCommaTok t && frameHasLive frames =
+    flushSepToks t rest stack frames opener
   | otherwise = t :: layoutToks rest stack frames t (opener || isOpener t)
 layoutToks ((RComment _ _) :: rest) stack frames prev opener =
   layoutToks rest stack frames prev opener
@@ -2872,8 +2939,8 @@ resolveContToks : Int ->
 resolveContToks col stack ((RTok t toff tend) :: more) frames prev opener
   | canStartAtom t =
     layoutToks (RTok t toff tend :: more) stack frames prev opener
-  | t == TThen = layoutToks (RTok t toff tend :: more) stack frames prev opener
-  | t == TElse = layoutToks (RTok t toff tend :: more) stack frames prev opener
+  | isThenTok t = layoutToks (RTok t toff tend :: more) stack frames prev opener
+  | isElseTok t = layoutToks (RTok t toff tend :: more) stack frames prev opener
   | otherwise =
     TIndent
       :: layoutToks

@@ -1616,6 +1616,54 @@ IDENT "c"
 NEWLINE
 DEDENT
 NEWLINE
+IDENT "isCommaTok"
+COLON
+UPPER "Token"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isCommaTok"
+UPPER "TComma"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isCommaTok"
+UNDERSCORE
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "isThenTok"
+COLON
+UPPER "Token"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isThenTok"
+UPPER "TThen"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isThenTok"
+UNDERSCORE
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "isElseTok"
+COLON
+UPPER "Token"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "isElseTok"
+UPPER "TElse"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isElseTok"
+UNDERSCORE
+EQUAL
+UPPER "False"
+NEWLINE
 IDENT "substr"
 COLON
 UPPER "Array"
@@ -10092,7 +10140,335 @@ IDENT "len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
+CHAR "."
+EQUAL
+IDENT "scanDotOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+IDENT "scanOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "|"
+EQUAL
+IDENT "scanBarOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+IDENT "scanOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "="
+EQUAL
+IDENT "scanEqOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+IDENT "scanOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "<"
+EQUAL
+IDENT "scanLtOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+IDENT "scanOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR ">"
+EQUAL
+IDENT "scanGtOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+IDENT "scanOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR ":"
+EQUAL
+IDENT "scanColonOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+NEWLINE
+IDENT "scanOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "["
+EQUAL
+INDENT
+IDENT "scanTwoOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "["
+CHAR "|"
+UPPER "TLArray"
+INT 1
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "-"
+EQUAL
+INDENT
+IDENT "scanTwoOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "-"
+CHAR ">"
+UPPER "TArrow"
+INT 0
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "+"
+EQUAL
+INDENT
+IDENT "scanTwoOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "+"
+CHAR "+"
+UPPER "TPlusPlus"
+INT 0
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "!"
+EQUAL
+INDENT
+IDENT "scanTwoOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "!"
+CHAR "="
+UPPER "TBangEq"
+INT 0
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "/"
+EQUAL
+IDENT "scanTwoOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "/"
+CHAR "="
+UPPER "TNeq"
+INT 0
+NEWLINE
+IDENT "scanOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "&"
+EQUAL
+IDENT "scanTwoOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "&"
+CHAR "&"
+UPPER "TAnd"
+INT 0
+NEWLINE
+IDENT "scanOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
 IDENT "c"
+EQUAL
+IDENT "singleOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+IDENT "c"
+NEWLINE
+IDENT "scanTwoOp"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Char"
+ARROW
+NEWLINE
+UPPER "Token"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanTwoOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+IDENT "c"
+IDENT "b"
+IDENT "tok"
+IDENT "ddelta"
+EQUAL
+INDENT
+IF
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "c"
+IDENT "b"
+THEN
+INDENT
+IDENT "emit"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+IDENT "tok"
+INT 2
+IDENT "ddelta"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+IDENT "singleOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+IDENT "c"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanDotOp"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+IDENT "scanDotOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
 INDENT
 PIPE
 IDENT "is3"
@@ -10130,334 +10506,6 @@ IDENT "depth"
 IDENT "id"
 UPPER "TDotDotEq"
 INT 3
-INT 0
-NEWLINE
-PIPE
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-CHAR "["
-CHAR "|"
-EQUAL
-IDENT "emit"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-UPPER "TLArray"
-INT 2
-INT 1
-NEWLINE
-PIPE
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-CHAR "|"
-CHAR "]"
-EQUAL
-IDENT "emit"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-UPPER "TRArray"
-INT 2
-LPAREN
-INT 0
-MINUS
-INT 1
-RPAREN
-NEWLINE
-PIPE
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-CHAR "="
-CHAR ">"
-EQUAL
-IDENT "emit"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-UPPER "TFatArrow"
-INT 2
-INT 0
-NEWLINE
-PIPE
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-CHAR "-"
-CHAR ">"
-EQUAL
-IDENT "emit"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-UPPER "TArrow"
-INT 2
-INT 0
-NEWLINE
-PIPE
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-CHAR "<"
-CHAR "-"
-EQUAL
-IDENT "emit"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-UPPER "TLArrow"
-INT 2
-INT 0
-NEWLINE
-PIPE
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-CHAR ":"
-CHAR ":"
-EQUAL
-IDENT "emit"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-UPPER "TCons"
-INT 2
-INT 0
-NEWLINE
-PIPE
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-CHAR ":"
-CHAR "="
-EQUAL
-IDENT "emit"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-UPPER "TColonEq"
-INT 2
-INT 0
-NEWLINE
-PIPE
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-CHAR "+"
-CHAR "+"
-EQUAL
-IDENT "emit"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-UPPER "TPlusPlus"
-INT 2
-INT 0
-NEWLINE
-PIPE
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-CHAR "="
-CHAR "="
-EQUAL
-IDENT "emit"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-UPPER "TEqEq"
-INT 2
-INT 0
-NEWLINE
-PIPE
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-CHAR "!"
-CHAR "="
-EQUAL
-IDENT "emit"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-UPPER "TBangEq"
-INT 2
-INT 0
-NEWLINE
-PIPE
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-CHAR "/"
-CHAR "="
-EQUAL
-IDENT "emit"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-UPPER "TNeq"
-INT 2
-INT 0
-NEWLINE
-PIPE
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-CHAR "<"
-CHAR "="
-EQUAL
-IDENT "emit"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-UPPER "TLeq"
-INT 2
-INT 0
-NEWLINE
-PIPE
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-CHAR ">"
-CHAR "="
-EQUAL
-IDENT "emit"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-UPPER "TGeq"
-INT 2
-INT 0
-NEWLINE
-PIPE
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-CHAR "&"
-CHAR "&"
-EQUAL
-IDENT "emit"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-UPPER "TAnd"
-INT 2
-INT 0
-NEWLINE
-PIPE
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-CHAR "|"
-CHAR "|"
-EQUAL
-IDENT "emit"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-UPPER "TOr"
-INT 2
-INT 0
-NEWLINE
-PIPE
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-CHAR "|"
-CHAR ">"
-EQUAL
-IDENT "emit"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-UPPER "TPipeRight"
-INT 2
-INT 0
-NEWLINE
-PIPE
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-CHAR ">"
-CHAR ">"
-EQUAL
-IDENT "emit"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-UPPER "TRCompose"
-INT 2
-INT 0
-NEWLINE
-PIPE
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-CHAR "<"
-CHAR "<"
-EQUAL
-IDENT "emit"
-IDENT "src"
-IDENT "len"
-IDENT "pos"
-IDENT "depth"
-IDENT "id"
-UPPER "TLCompose"
-INT 2
 INT 0
 NEWLINE
 PIPE
@@ -10523,7 +10571,407 @@ IDENT "len"
 IDENT "pos"
 IDENT "depth"
 IDENT "id"
-IDENT "c"
+CHAR "."
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanBarOp"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+IDENT "scanBarOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+INDENT
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "|"
+CHAR "]"
+EQUAL
+IDENT "emit"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TRArray"
+INT 2
+LPAREN
+INT 0
+MINUS
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "|"
+CHAR "|"
+EQUAL
+IDENT "emit"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TOr"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "|"
+CHAR ">"
+EQUAL
+IDENT "emit"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TPipeRight"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "singleOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "|"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanEqOp"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+IDENT "scanEqOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+INDENT
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "="
+CHAR ">"
+EQUAL
+IDENT "emit"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TFatArrow"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "="
+CHAR "="
+EQUAL
+IDENT "emit"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TEqEq"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "singleOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "="
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanLtOp"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+IDENT "scanLtOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+INDENT
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "<"
+CHAR "-"
+EQUAL
+IDENT "emit"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TLArrow"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "<"
+CHAR "="
+EQUAL
+IDENT "emit"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TLeq"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR "<"
+CHAR "<"
+EQUAL
+IDENT "emit"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TLCompose"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "singleOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR "<"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanGtOp"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+IDENT "scanGtOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+INDENT
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR ">"
+CHAR "="
+EQUAL
+IDENT "emit"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TGeq"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR ">"
+CHAR ">"
+EQUAL
+IDENT "emit"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TRCompose"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "singleOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR ">"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "scanColonOp"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+IDENT "scanColonOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+INDENT
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR ":"
+CHAR ":"
+EQUAL
+IDENT "emit"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TCons"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+CHAR ":"
+CHAR "="
+EQUAL
+IDENT "emit"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+UPPER "TColonEq"
+INT 2
+INT 0
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "singleOp"
+IDENT "src"
+IDENT "len"
+IDENT "pos"
+IDENT "depth"
+IDENT "id"
+CHAR ":"
 NEWLINE
 DEDENT
 NEWLINE
@@ -12371,13 +12819,13 @@ IDENT "frames"
 IDENT "opener"
 NEWLINE
 PIPE
+IDENT "isCommaTok"
 IDENT "t"
-EQ_EQ
-UPPER "TComma"
 AND
 IDENT "frameHasLive"
 IDENT "frames"
 EQUAL
+INDENT
 IDENT "flushSep"
 IDENT "t"
 IDENT "off"
@@ -12385,6 +12833,8 @@ IDENT "rest"
 IDENT "stack"
 IDENT "frames"
 IDENT "opener"
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "otherwise"
@@ -14100,9 +14550,8 @@ IDENT "prev"
 IDENT "opener"
 NEWLINE
 PIPE
+IDENT "isThenTok"
 IDENT "t"
-EQ_EQ
-UPPER "TThen"
 EQUAL
 IDENT "layout"
 LPAREN
@@ -14119,9 +14568,8 @@ IDENT "prev"
 IDENT "opener"
 NEWLINE
 PIPE
+IDENT "isElseTok"
 IDENT "t"
-EQ_EQ
-UPPER "TElse"
 EQUAL
 IDENT "layout"
 LPAREN
@@ -14636,9 +15084,8 @@ IDENT "frames"
 IDENT "opener"
 NEWLINE
 PIPE
+IDENT "isCommaTok"
 IDENT "t"
-EQ_EQ
-UPPER "TComma"
 AND
 IDENT "frameHasLive"
 IDENT "frames"
@@ -15825,10 +16272,10 @@ NEWLINE
 DEDENT
 NEWLINE
 PIPE
+IDENT "isThenTok"
 IDENT "t"
-EQ_EQ
-UPPER "TThen"
 EQUAL
+INDENT
 IDENT "layoutPairs"
 LPAREN
 UPPER "RTok"
@@ -15843,11 +16290,13 @@ IDENT "frames"
 IDENT "prev"
 IDENT "opener"
 NEWLINE
+DEDENT
+NEWLINE
 PIPE
+IDENT "isElseTok"
 IDENT "t"
-EQ_EQ
-UPPER "TElse"
 EQUAL
+INDENT
 IDENT "layoutPairs"
 LPAREN
 UPPER "RTok"
@@ -15861,6 +16310,8 @@ IDENT "stack"
 IDENT "frames"
 IDENT "prev"
 IDENT "opener"
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "otherwise"
@@ -16519,19 +16970,21 @@ IDENT "frames"
 IDENT "opener"
 NEWLINE
 PIPE
+IDENT "isCommaTok"
 IDENT "t"
-EQ_EQ
-UPPER "TComma"
 AND
 IDENT "frameHasLive"
 IDENT "frames"
 EQUAL
+INDENT
 IDENT "flushSepToks"
 IDENT "t"
 IDENT "rest"
 IDENT "stack"
 IDENT "frames"
 IDENT "opener"
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "otherwise"
@@ -17490,9 +17943,8 @@ NEWLINE
 DEDENT
 NEWLINE
 PIPE
+IDENT "isThenTok"
 IDENT "t"
-EQ_EQ
-UPPER "TThen"
 EQUAL
 IDENT "layoutToks"
 LPAREN
@@ -17509,9 +17961,8 @@ IDENT "prev"
 IDENT "opener"
 NEWLINE
 PIPE
+IDENT "isElseTok"
 IDENT "t"
-EQ_EQ
-UPPER "TElse"
 EQUAL
 IDENT "layoutToks"
 LPAREN
