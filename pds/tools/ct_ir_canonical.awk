@@ -20,6 +20,12 @@
 # forwarder) exits 1, and the build wrapper fails the gate.
 # The List and String twins are left alone: no audited helper reads one, and a
 # helper that began to would move its pinned shape.
+#
+# First, every `define internal` becomes `define`. A whole-program build gives
+# each function internal linkage; the gates audit control shape and call
+# graphs, which linkage does not change, so their patterns name a define the
+# same way whatever its linkage. The linked-symbol and disassembly checks read
+# the binary, not this text.
 
 function bad(msg) {
   print "ct_ir_canonical: " msg > "/dev/stderr"
@@ -27,7 +33,7 @@ function bad(msg) {
   exit 1
 }
 
-{ lines[++n] = $0 }
+{ line = $0; sub(/^define internal /, "define ", line); lines[++n] = line }
 
 END {
   if (failed) exit 1
