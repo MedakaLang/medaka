@@ -1,5 +1,5 @@
 # META
-source_lines=2679
+source_lines=2680
 stages=DESUGAR,MARK
 # SOURCE
 -- Pretty printer for Medaka, producing parseable source from the AST
@@ -2513,6 +2513,7 @@ attrDoc (AttrDeprecated msg) =
   Cat (text ("@deprecated " ++ escStringLit msg)) Hardline
 attrDoc AttrInline = Cat (text "@inline") Hardline
 attrDoc AttrMustUse = Cat (text "@must_use") Hardline
+attrDoc AttrNoInline = Cat (text "@noinline") Hardline
 
 -- `let rec` for the first clause, `with` for the rest (across all bindings).
 letGroupDecl : List LetBind -> Doc
@@ -3562,6 +3563,7 @@ effAxesDoc axes =
 (DFunDef false "attrDoc" ((PCon "AttrDeprecated" (PVar "msg"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EBinOp "++" (ELit (LString "@deprecated ")) (EApp (EVar "escStringLit") (EVar "msg"))))) (EVar "Hardline")))
 (DFunDef false "attrDoc" ((PCon "AttrInline")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "@inline")))) (EVar "Hardline")))
 (DFunDef false "attrDoc" ((PCon "AttrMustUse")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "@must_use")))) (EVar "Hardline")))
+(DFunDef false "attrDoc" ((PCon "AttrNoInline")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "@noinline")))) (EVar "Hardline")))
 (DTypeSig false "letGroupDecl" (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "Doc")))
 (DFunDef false "letGroupDecl" ((PVar "bindings")) (EBlock (DoLet false false (PVar "docs") (EApp (EApp (EVar "letGroupDeclGo") (EVar "True")) (EVar "bindings"))) (DoExpr (EApp (EVar "concatD") (EVar "docs")))))
 (DTypeSig false "letGroupDeclGo" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "List") (TyCon "Doc")))))
@@ -4515,6 +4517,7 @@ effAxesDoc axes =
 (DFunDef false "attrDoc" ((PCon "AttrDeprecated" (PVar "msg"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EBinOp "++" (ELit (LString "@deprecated ")) (EApp (EVar "escStringLit") (EVar "msg"))))) (EVar "Hardline")))
 (DFunDef false "attrDoc" ((PCon "AttrInline")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "@inline")))) (EVar "Hardline")))
 (DFunDef false "attrDoc" ((PCon "AttrMustUse")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "@must_use")))) (EVar "Hardline")))
+(DFunDef false "attrDoc" ((PCon "AttrNoInline")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "@noinline")))) (EVar "Hardline")))
 (DTypeSig false "letGroupDecl" (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "Doc")))
 (DFunDef false "letGroupDecl" ((PVar "bindings")) (EBlock (DoLet false false (PVar "docs") (EApp (EApp (EVar "letGroupDeclGo") (EVar "True")) (EVar "bindings"))) (DoExpr (EApp (EVar "concatD") (EVar "docs")))))
 (DTypeSig false "letGroupDeclGo" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "List") (TyCon "Doc")))))

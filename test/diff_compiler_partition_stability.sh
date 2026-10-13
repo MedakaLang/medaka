@@ -34,7 +34,7 @@
 #      construction (see the pcg_partition header comment on @mdk_program_main
 #      in test/lib/pcg_partition.sh).
 #
-#   2. Four invariants pcg_partition's contract states but nothing had run:
+#   2. Five invariants pcg_partition's contract states but nothing had run:
 #        - a fully-marked fixture partitions cleanly, every entity landing in
 #          exactly the partition its marker names (no leak into a neighbor);
 #        - no symbol is DEFINED in two partition files (a decl-only mention in
@@ -42,7 +42,9 @@
 #        - marker-less input degrades to one partition, byte-identical to the
 #          input, printing "1 nomark";
 #        - a corrupt top-level marker (`; mdk-module` with no scope name)
-#          exits nonzero.
+#          exits nonzero;
+#        - an `internal` define is promoted to `hidden`, and a partition that
+#          calls it gets a plain `declare`.
 #
 # Usage: sh test/diff_compiler_partition_stability.sh
 # Exit:  0 if every case and every invariant holds, else 1.
@@ -270,6 +272,27 @@ elif ! grep -q 'corrupt' "$WORK/inv4.err"; then
   fail=$((fail + 1))
 else
   printf 'ok   %-16s corrupt top-level marker exits nonzero ("%s")\n' inv4_corrupt_marker "$(cat "$WORK/inv4.err")"
+fi
+
+# ---- invariant 5: an `internal` function called from another partition is
+# promoted to `define hidden`, and the caller's partition declares it without
+# the `internal` keyword (a `declare internal` is not valid IR). -------------
+
+printf '; mdk-module a\ndefine internal i64 @callee(i64 %%x) {\n  ret i64 %%x\n}\n; mdk-module program\ndefine i32 @mdk_program_main() {\n  %%r = call i64 @callee(i64 1)\n  ret i32 0\n}\n' > "$WORK/inv5.ll"
+inv5_out="$WORK/inv5.out"; mkdir -p "$inv5_out"
+inv5_info="$(pcg_partition "$WORK/inv5.ll" "$inv5_out" "" 2>"$WORK/inv5.err")"
+inv5_rc=$?
+if [ "$inv5_rc" -ne 0 ]; then
+  printf 'FAIL %-16s internal-define fixture failed to partition: %s\n' inv5_internal_promote "$(cat "$WORK/inv5.err")"
+  fail=$((fail + 1))
+elif ! grep -qx 'define hidden i64 @callee(i64 %x) {' "$inv5_out/p0"; then
+  printf 'FAIL %-16s p0 does not define @callee as hidden:\n%s\n' inv5_internal_promote "$(cat "$inv5_out/p0")"
+  fail=$((fail + 1))
+elif ! grep -qx 'declare i64 @callee(i64 %x)' "$inv5_out/p1"; then
+  printf 'FAIL %-16s p1 lacks a plain declare of @callee:\n%s\n' inv5_internal_promote "$(cat "$inv5_out/p1")"
+  fail=$((fail + 1))
+else
+  printf 'ok   %-16s internal define promoted to hidden, declared plainly across partitions (%s)\n' inv5_internal_promote "$inv5_info"
 fi
 
 echo

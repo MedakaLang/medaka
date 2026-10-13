@@ -261,7 +261,7 @@ entry:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk___user____mag2(i64 %arg0) {
+define internal i64 @mdk___user____mag2(i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %arg0 to ptr
   %t1 = getelementptr i8, ptr %t0, i64 8
@@ -302,7 +302,7 @@ entry:
 }
 
 ; mdk-module program
-define double @mdk___user____mag2__fw(i64 %arg0) {
+define internal double @mdk___user____mag2__fw(i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %arg0 to ptr
   %t1 = getelementptr i8, ptr %t0, i64 8
@@ -338,7 +338,7 @@ entry:
 }
 
 ; mdk-module program
-define i64 @mdk___user____addF(i64 %arg0) {
+define internal i64 @mdk___user____addF(i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %arg0 to ptr
   %t1 = getelementptr i8, ptr %t0, i64 8
@@ -363,7 +363,7 @@ entry:
 }
 
 ; mdk-module program
-define double @mdk___user____addF__fw(i64 %arg0) {
+define internal double @mdk___user____addF__fw(i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %arg0 to ptr
   %t1 = getelementptr i8, ptr %t0, i64 8

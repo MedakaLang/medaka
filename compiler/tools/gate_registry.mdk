@@ -152,8 +152,18 @@ public export data Gate = Gate {
   sources : List String,
   corpus : List String,
   toolchain : List String,
+  link : String,
   sharesBaselineWith : String,
 }
+
+-- ── `link` (#4089) ───────────────────────────────────────────────────────────
+--
+-- Which link the `medaka build`s a gate runs take.  `production` is the shipped
+-- link (-O2 + ThinLTO); `differential` is plain -O1 with no LTO, for a gate that
+-- compares outputs and observes neither speed, code size nor stack depth at -O2.
+-- `test/run_gates.sh` exports MEDAKA_NO_LTO=1 and MEDAKA_CLANG_OPT=-O1 for a
+-- `differential` row (`_link_rows`, test/gate_native_rows.sh).  `gate verify`
+-- checks the value against these two.
 
 -- ── Registry reading ────────────────────────────────────────────────────────
 
@@ -194,6 +204,7 @@ readGateEntry i e = do
   sources <- reqArr i "sources" e
   corpus <- reqArr i "corpus" e
   toolchain <- reqArr i "toolchain" e
+  link <- reqStr i "link" e
   let sharesBaselineWith = match getString "shares_baseline_with" e
     Some v => v
     None => ""
@@ -211,6 +222,7 @@ readGateEntry i e = do
     sources = sources,
     corpus = corpus,
     toolchain = toolchain,
+    link = link,
     sharesBaselineWith = sharesBaselineWith,
   }
 
@@ -581,6 +593,7 @@ gateFields g = [
   ("sources", jArray (map JString g.sources)),
   ("corpus", jArray (map JString g.corpus)),
   ("toolchain", jArray (map JString g.toolchain)),
+  ("link", JString g.link),
 ]
 
 {- | The `--json` rendering: a JSON array of entry objects, in registry order,

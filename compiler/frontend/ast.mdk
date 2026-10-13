@@ -1767,8 +1767,13 @@ public export data Field = Field String Ty
 public export data ConPayload = ConPos (List Ty) | ConNamed (List Field) Bool
 public export data Variant = Variant String ConPayload
 
--- declaration attributes: `@deprecated "msg"`, `@inline`, `@must_use`
-public export data Attr = AttrDeprecated String | AttrInline | AttrMustUse
+-- declaration attributes: `@deprecated "msg"`, `@inline`, `@must_use`,
+-- `@noinline` (the native backend keeps the function a separate symbol)
+public export data Attr =
+  | AttrDeprecated String
+  | AttrInline
+  | AttrMustUse
+  | AttrNoInline
 
 -- One name inside a `deriving (…)` clause, carrying the span of the NAME itself
 -- so desugar can point a "cannot derive" diagnostic at the offending name rather

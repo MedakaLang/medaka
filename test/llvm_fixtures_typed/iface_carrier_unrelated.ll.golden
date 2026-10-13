@@ -234,14 +234,14 @@ intok9:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk___user____sidesOf(i64 %arg0, i64 %arg1) {
+define internal i64 @mdk___user____sidesOf(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_disp_sides_0_1(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-define i64 @mdk___user____unbox(i64 %arg0) {
+define internal i64 @mdk___user____unbox(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t2 = and i64 %arg0, 1
@@ -269,7 +269,7 @@ decend1:
 }
 
 ; mdk-module program
-define i64 @mdk___user____blend(i64 %arg0) {
+define internal i64 @mdk___user____blend(i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %arg0 to ptr
   %t1 = getelementptr i8, ptr %t0, i64 8
@@ -305,7 +305,7 @@ intok19:
 }
 
 ; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_Tri_sides
-define i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Tri_sides(i64 %arg0) {
+define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Tri_sides(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t2 = icmp eq i64 %arg0, 1
@@ -322,7 +322,7 @@ decend1:
 }
 
 ; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_Tri_tag
-define i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Tri_tag(i64 %arg0) {
+define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Tri_tag(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t2 = icmp eq i64 %arg0, 1
@@ -339,7 +339,7 @@ decend1:
 }
 
 ; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_Wrap_sides
-define i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Wrap_sides(i64 %arg0, i64 %arg1) {
+define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Wrap_sides(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = alloca i64
   %t2 = and i64 %arg1, 1
@@ -371,7 +371,7 @@ decend1:
 ; mdk-module program
 @mdk_dc.program.0 = internal constant [3 x i64] [i64 8589934592, i64 11, i64 15]
 ; mdk-module program
-define i64 @mdk_disp_sides_0_1(i64 %dict, i64 %arg0) {
+define internal i64 @mdk_disp_sides_0_1(i64 %dict, i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %dict to ptr
   %t1 = load i64, ptr %t0

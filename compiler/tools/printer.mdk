@@ -2509,6 +2509,7 @@ attrDoc (AttrDeprecated msg) =
   Cat (text ("@deprecated " ++ escStringLit msg)) Hardline
 attrDoc AttrInline = Cat (text "@inline") Hardline
 attrDoc AttrMustUse = Cat (text "@must_use") Hardline
+attrDoc AttrNoInline = Cat (text "@noinline") Hardline
 
 -- `let rec` for the first clause, `with` for the rest (across all bindings).
 letGroupDecl : List LetBind -> Doc

@@ -242,13 +242,13 @@ entry:
   ret i32 0
 }
 ; mdk-module impl:String_display
-define i64 @mdk_impl_String_display(i64 %arg0) {
+define internal i64 @mdk_impl_String_display(i64 %arg0) {
 entry:
   ret i64 %arg0
 }
 
 ; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_Box_display
-define i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Box_display(i64 %arg0) {
+define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Box_display(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t2 = and i64 %arg0, 1

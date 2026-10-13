@@ -246,6 +246,7 @@ processTail tail st =
 -- `sha256FoldKeyBlock` and resumes from there for every message under that
 -- key; not part of the digest API — reach for `sha256` to hash an ordinary
 -- message.
+@noinline
 export
 sha256AssumeByteDomainFrom : (U32, U32, U32, U32, U32, U32, U32, U32) ->
   Int ->

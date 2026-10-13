@@ -493,6 +493,7 @@ feSub a b = feAdd a (feNegate b)
 --   (`R << 12`). The steps' bounds are
 --   `docs/design/ATPROTO-PDS-CONSTANT-TIME.md` §3.1's table; the result
 --   limbs meet `canonicalizeLimbs`'s precondition, which reduces them.
+@noinline
 export
 feMul : Fe -> Fe -> Fe
 feMul a b =

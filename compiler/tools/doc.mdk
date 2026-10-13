@@ -510,6 +510,7 @@ clauseHeadsGo [] acc =
 clauseHeadsGo ((DFunDef _ name pats _ _ _) :: rest) acc =
   let names = map headArgName pats
   clauseHeadsGo rest (mergeHead name names acc)
+clauseHeadsGo ((DAttrib _ d) :: rest) acc = clauseHeadsGo (d :: rest) acc
 clauseHeadsGo (_ :: rest) acc = clauseHeadsGo rest acc
 
 -- Merge one clause's argument names into the accumulator, position by
@@ -899,6 +900,18 @@ extractFold : Bool ->
   List String ->
   (List DocEntry, List String)
 extractFold _ _ [] _ _ _ revEntries seen = (revEntries, seen)
+-- An attribute documents nothing itself: the declaration under it is the
+-- entry, at the attribute's line, which is where its doc comment sits above.
+extractFold bare heads ((DAttrib _ decl, dp) :: rest) schemes origins tbl revEntries seen =
+  extractFold
+    bare
+    heads
+    ((decl, dp) :: rest)
+    schemes
+    origins
+    tbl
+    revEntries
+    seen
 extractFold bare heads ((decl, dp) :: rest) schemes origins tbl revEntries seen =
   let line = declPosLine dp
   match multiEntriesFor bare decl line schemes origins tbl

@@ -28,6 +28,28 @@ gate state, and the numbers (min-of-N, single-threaded, quiet machine).
 
 ---
 
+## 2026-10-12 — per-gate link profile (#4089)
+
+`test/gates.toml` gained a required `link = "production" | "differential"` field;
+`test/run_gates.sh` exports `MEDAKA_NO_LTO=1 MEDAKA_CLANG_OPT=-O1` for the 29
+`differential` rows (pure output-comparison gates). Everything that grades
+speed, emitted size, stack depth, link behaviour or builds the compiler stays
+`production`. Sentinel for deep TCO at `-O1` without LTO:
+`test/engine_fixtures/default_deep_recursion.mdk` (10M-deep tail calls, passes).
+
+`diff_compiler_engines_part1`, `GC_MARKERS=1 JOBS=7`, 12-core box, four runs per arm
+(user+sys CPU-s; wall s):
+
+| arm | CPU-s | wall |
+|---|---|---|
+| production (`-O2` + ThinLTO) | 331, 356, 355, 358 (mean 350) | 62.6–71.0 |
+| differential (`-O1`, no LTO) | 296, 295, 287, 276 (mean 289) | 56.3–61.6 |
+
+−17.6% CPU on the means; stdout byte-identical between arms. Part of the drop
+is fewer ThinLTO worker threads oversubscribing the 7 jobs, not only optimiser work.
+
+---
+
 ## TL;DR (overnight session 2026-06-10 → 11)
 
 **Emitter self-compile: 12.04 s → 2.12 s = 5.68×; ~59× faster than the OCaml

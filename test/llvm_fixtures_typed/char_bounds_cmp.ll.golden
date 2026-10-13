@@ -279,7 +279,7 @@ intok46:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk___user____bit(i64 %arg0, i64 %arg1) {
+define internal i64 @mdk___user____bit(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = ashr i64 %arg1, 1
   %t1 = icmp ne i64 %t0, 0
@@ -291,7 +291,7 @@ else2:
 }
 
 ; mdk-module program
-define i64 @mdk___user____unwrap(i64 %arg0) {
+define internal i64 @mdk___user____unwrap(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg0, 562958543355907

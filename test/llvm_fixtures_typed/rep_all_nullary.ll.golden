@@ -342,7 +342,7 @@ intok83:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk___user____shade(i64 %arg0) {
+define internal i64 @mdk___user____shade(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg0, 1
@@ -375,7 +375,7 @@ decend1:
 }
 
 ; mdk-module program
-define i64 @mdk___user____rank(i64 %arg0) {
+define internal i64 @mdk___user____rank(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg0, 562975723225089

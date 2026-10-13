@@ -815,6 +815,8 @@ data EmitInputData = EmitInputData {
   sharedMethodNames : OrdMap Unit,
   -- the `stdlib/runtime.mdk` extern names (`withRuntimeExterns`)
   runtimeExterns : List String,
+  -- the top-level functions `@noinline` marks (`withNoInlineFns`)
+  noInlineFns : OrdMap Unit,
 }
 
 -- The constructor is intentionally private: callers supply raw declaration facts
@@ -855,6 +857,7 @@ makeEmitInput returnsSelf selfFnParams methodIfaces ctorFieldTypes externArities
   recordFieldOrders = recordFieldOrders,
   sharedMethodNames = sharedMethodNamesOf methodIfaces omEmpty omEmpty,
   runtimeExterns = [],
+  noInlineFns = omEmpty,
 }
 
 -- The input with the extern names the entry declared from `stdlib/runtime.mdk`.
@@ -863,6 +866,22 @@ makeEmitInput returnsSelf selfFnParams methodIfaces ctorFieldTypes externArities
 export
 withRuntimeExterns : List String -> EmitInput -> EmitInput
 withRuntimeExterns names input = { input | runtimeExterns = names }
+
+-- The input with the top-level functions a `@noinline` attribute marks, by bind
+-- name (`ir.core_ir_lower.noInlineFnNames`).
+export
+withNoInlineFns : List String -> EmitInput -> EmitInput
+withNoInlineFns names input =
+  { input | noInlineFns = omFromPairs (map (n => (n, ())) names) omEmpty }
+
+-- The function attributes after the parameter list of each define emitted for
+-- top-level function [name], its float and raw workers included: ` noinline`
+-- when `@noinline` marks it, so LLVM keeps it a symbol of its own however small
+-- or singly called it is.
+fnAttrs : Emit -> String -> String
+fnAttrs e name = match omLookup name e.input.noInlineFns
+  Some _ => " noinline"
+  None => ""
 
 -- The methods declared by more than one interface word, from `methodIfaceTable` rows
 -- (one per declared interface method).  [firstWord] remembers each method's first
@@ -6629,7 +6648,9 @@ emitGroupBindDefine e env lamName name arity clauses captured site =
   bufRef e := []
   let scope = beginDefine e
   let _ =
-    emit e "define i64 @\{lamName}(i64 %clos, \{implParamDecls arity 0}) {"
+    emit
+      e
+      "\{defineHead e} i64 @\{lamName}(i64 %clos, \{implParamDecls arity 0}) {"
   let _ = emit e "entry:"
   let cenv = loadCaptures e env captured 0
   let _ =
@@ -7448,7 +7469,7 @@ emitMethodValDefine e env lamName name iface siteArity route implRoutes methRout
   let saved = (bufRef e).value
   bufRef e := []
   let scope = beginDefine e
-  let _ = emit e "define i64 @\{lamName}(\{etaParamDecls arity}) {"
+  let _ = emit e "\{defineHead e} i64 @\{lamName}(\{etaParamDecls arity}) {"
   let _ = emit e "entry:"
   let cenv = loadCaptures e env capNames 0
   let synArgs = etaArgOps arity 0
@@ -7526,7 +7547,7 @@ emitDictValDefine e lamName name nDicts valArity =
   let saved = (bufRef e).value
   bufRef e := []
   let scope = beginDefine e
-  let _ = emit e "define i64 @\{lamName}(\{etaParamDecls valArity}) {"
+  let _ = emit e "\{defineHead e} i64 @\{lamName}(\{etaParamDecls valArity}) {"
   let _ = emit e "entry:"
   let dictOps = loadPapCaptures e nDicts 0
   let synArgs = dictOps ++ etaArgOps valArity 0
@@ -7695,7 +7716,7 @@ emitPapDefine e papName fname supplied remaining =
   let saved = (bufRef e).value
   bufRef e := []
   let scope = beginDefine e
-  let _ = emit e "define i64 @\{papName}(\{etaParamDecls remaining}) {"
+  let _ = emit e "\{defineHead e} i64 @\{papName}(\{etaParamDecls remaining}) {"
   let _ = emit e "entry:"
   let capOps = loadPapCaptures e supplied 0
   let allArgs = capOps ++ argNames remaining 0
@@ -7739,7 +7760,7 @@ emitPapDefineIndirect e papName supplied remaining =
   let saved = (bufRef e).value
   bufRef e := []
   let scope = beginDefine e
-  let _ = emit e "define i64 @\{papName}(\{etaParamDecls remaining}) {"
+  let _ = emit e "\{defineHead e} i64 @\{papName}(\{etaParamDecls remaining}) {"
   let _ = emit e "entry:"
   let innerCw = loadField e "%clos" 1
   let capOps = loadPapCaptures e (supplied + 1) 1
@@ -7831,8 +7852,7 @@ siteImpls e name iface siteArity =
 -- null-dict property WS-1b exists for is preserved exactly: that body still makes
 -- a direct call and still never loads `%dict` (see emitDispatcherDefine).
 --
--- Mode 0 (every ordinary `medaka build`) is unchanged, so the default path's IR
--- stays byte-for-byte what it was.
+-- Mode 0 (every ordinary `medaka build`) keeps the direct call at the site.
 soleImplDirectSite : Emit -> String -> String -> Int -> Option CImplEntry
 soleImplDirectSite e name iface siteArity =
   if e.input.emitHalf == emitHalfWhole then
@@ -7857,9 +7877,9 @@ soleImplDirectSite e name iface siteArity =
 --
 -- THREE MODES, selected by MEDAKA_EMIT_HALF (read by the emit driver):
 --
---   0 WHOLE   (unset — every ordinary `medaka build`).  Untouched.  Every branch
---             this section adds is keyed on `emitHalfRef.value /= 0`, so the
---             default path's IR is byte-for-byte what it was.
+--   0 WHOLE   (unset — every ordinary `medaka build`).  One module holds all the
+--             Medaka code in the link, so its functions are `internal`
+--             (defineHead).
 --
 --   1 PRELUDE (`medaka build --emit-prelude-obj <path>`).  Emit core.mdk ALONE, as
 --             a library: no `@mdk_program_main`, `@mdk_g_*` globals declared
@@ -7889,9 +7909,21 @@ emitHalfPrelude = 1
 emitHalfProgram : Int
 emitHalfProgram = 2
 
+-- The head of every function `define` except `@mdk_program_main`, the one symbol
+-- the C runtime calls.  A whole-mode module is the only Medaka code in its link,
+-- so its functions are `internal`, and clang drops the ones nothing reaches before
+-- optimising them.  On a small program that is most of the prelude's impls, and
+-- most of its compile time.  The two halves of a prelude-object build call each
+-- other's symbols, so their defines keep external linkage.  A text partitioner
+-- that splits a whole-mode module (`test/lib/pcg_partition.sh`) must promote
+-- these to `hidden`, as it does `internal` globals.
+defineHead : Emit -> String
+defineHead e =
+  if e.input.emitHalf == emitHalfWhole then "define internal" else "define"
+
 -- The gensym-id base for the PROGRAM half.  `freshId` names every LIFTED define —
--- `@mdk_lam_<scope>_N`, `@mdk_eta_*_<scope>_N`, `@mdk_pap_*` — and
--- those have external linkage, so if the two halves drew from the same range they
+-- `@mdk_lam_<scope>_N`, `@mdk_eta_*_<scope>_N`, `@mdk_pap_*` — and in the two
+-- halves those have external linkage, so if the halves drew from the same range they
 -- would collide on a symbol name (loudly, at link).  The halves are emitted by two
 -- INDEPENDENT emitter runs, so give them disjoint ranges: the prelude half counts
 -- up from 0, the program half from this base.  #2726 made the counter PER SCOPE,
@@ -7975,8 +8007,10 @@ emitDeclaresFor e (l :: rest) =
   emitDeclaresFor e rest
 
 -- `define i64 @f(i64 %a, i64 %b) {`  →  `declare i64 @f(i64 %a, i64 %b)`.
--- Every define the emitter writes has exactly this shape (verified: all 281 define
--- lines of the reference module end in `) {`); a line that does not is not a define
+-- Only the program half calls this, and its defines carry no linkage keyword
+-- (defineHead), so the `define ` prefix is the whole head.  The function
+-- attributes (`fnAttrs`), when a define has any, sit between `)` and ` {` and
+-- carry over to the declare.  A line that does not end in ` {` is not a define
 -- header and yields None.
 declareOfDefine : String -> Option String
 declareOfDefine l =
@@ -8105,7 +8139,7 @@ emitDispatcherDefine e fname name iface nmw nargs siteArity =
   let saved = (bufRef e).value
   bufRef e := []
   let scope = beginDefine e
-  let _ = emit e "define i64 @\{fname}(\{dispParamDecls nmw nargs}) {"
+  let _ = emit e "\{defineHead e} i64 @\{fname}(\{dispParamDecls nmw nargs}) {"
   let _ = emit e "entry:"
   let (r, _) = emitDispatcherBody e name iface nmw nargs siteArity
   let _ = emit e ("  ret i64 " ++ r)
@@ -8941,7 +8975,7 @@ emitGroup e (ImplGroup method tag key _ positions arity clauses fname) =
     ()
   else
     let _ = beginDefine e
-    let _ = emit e "define i64 @\{fname}(\{implParamDecls arity 0}) {"
+    let _ = emit e "\{defineHead e} i64 @\{fname}(\{implParamDecls arity 0}) {"
     let _ = emit e "entry:"
     let _ = emitGroupBody e fname tag positions arity clauses
     let _ = clearCurImplSelfFns e
@@ -8993,7 +9027,7 @@ trmcImplTry e fname method tag key positions arity clauses =
       [] => ([], CLit LUnit)
     let single = listLen clauses == 1 && allClausesPVar clauses
     let _ = tmcMarker e fname "trmc"
-    let _ = emitTrmcHeader e fname arity
+    let _ = emitTrmcHeader e fname arity ""
     let _ =
       emitTrmcLoopBody e self arity slotTys clauses single spats sbody noDeclLoc
     let _ = emit e "}"
@@ -9600,7 +9634,7 @@ emitRecLamDefine e env lamName f pats captured body =
   let saved = (bufRef e).value
   bufRef e := []
   let scope = beginDefine e
-  let _ = emit e "define i64 @\{lamName}(\{closureParamDecls pats}) {"
+  let _ = emit e "\{defineHead e} i64 @\{lamName}(\{closureParamDecls pats}) {"
   let _ = emit e "entry:"
   let cenv = loadCaptures e env captured 0
   let penv = paramEnv pats (map (patLTy e) pats) 0
@@ -9641,7 +9675,9 @@ emitPatLamDefine e env lamName extra pats captured body =
   let scope = beginDefine e
   let arity = listLen pats
   let _ =
-    emit e "define i64 @\{lamName}(i64 %clos, \{implParamDecls arity 0}) {"
+    emit
+      e
+      "\{defineHead e} i64 @\{lamName}(i64 %clos, \{implParamDecls arity 0}) {"
   let _ = emit e "entry:"
   let cenv = loadCaptures e env captured 0
   let _ =
@@ -9731,7 +9767,7 @@ emitCtorPapDefine e lamName name arity supplied =
   bufRef e := []
   let scope = beginDefine e
   let remaining = arity - supplied
-  let _ = emit e "define i64 @\{lamName}(\{etaParamDecls remaining}) {"
+  let _ = emit e "\{defineHead e} i64 @\{lamName}(\{etaParamDecls remaining}) {"
   let _ = emit e "entry:"
   let suppliedOps = loadPapCaptures e supplied 0
   let (w, _) = emitCtorAlloc e name (suppliedOps ++ etaArgOps remaining 0)
@@ -9766,7 +9802,7 @@ emitCtorEtaDefine e lamName name arity =
   let saved = (bufRef e).value
   bufRef e := []
   let scope = beginDefine e
-  let _ = emit e "define i64 @\{lamName}(\{etaParamDecls arity}) {"
+  let _ = emit e "\{defineHead e} i64 @\{lamName}(\{etaParamDecls arity}) {"
   let _ = emit e "entry:"
   let (w, _) = emitCtorAlloc e name (argNames arity 0)
   let _ = emit e ("  ret i64 " ++ w)
@@ -9795,7 +9831,7 @@ emitLamDefine e env lamName pats captured body =
   let saved = (bufRef e).value
   bufRef e := []
   let scope = beginDefine e
-  let _ = emit e "define i64 @\{lamName}(\{closureParamDecls pats}) {"
+  let _ = emit e "\{defineHead e} i64 @\{lamName}(\{closureParamDecls pats}) {"
   let _ = emit e "entry:"
   let cenv = loadCaptures e env captured 0
   let penv = paramEnv pats (map (patLTy e) pats) 0
@@ -9819,7 +9855,7 @@ emitEtaDefine e lamName fname arity =
   let saved = (bufRef e).value
   bufRef e := []
   let scope = beginDefine e
-  let _ = emit e "define i64 @\{lamName}(\{etaParamDecls arity}) {"
+  let _ = emit e "\{defineHead e} i64 @\{lamName}(\{etaParamDecls arity}) {"
   let _ = emit e "entry:"
   let r = freshReg e
   let _ =
@@ -9871,7 +9907,7 @@ emitMethodEtaDefine e lamName name arity =
   let saved = (bufRef e).value
   bufRef e := []
   let scope = beginDefine e
-  let _ = emit e "define i64 @\{lamName}(\{etaParamDecls arity}) {"
+  let _ = emit e "\{defineHead e} i64 @\{lamName}(\{etaParamDecls arity}) {"
   let _ = emit e "entry:"
   let synArgs = etaArgOps arity 0
   let (r, _) = emitMethodArgDispatch e name "" arity synArgs
@@ -9903,7 +9939,7 @@ emitExternEtaDefine e lamName name arity =
   let saved = (bufRef e).value
   bufRef e := []
   let scope = beginDefine e
-  let _ = emit e "define i64 @\{lamName}(\{etaParamDecls arity}) {"
+  let _ = emit e "\{defineHead e} i64 @\{lamName}(\{etaParamDecls arity}) {"
   let _ = emit e "entry:"
   let argEnv = etaArgEnv arity 0
   let synArgs = etaArgVars arity 0
@@ -9934,7 +9970,7 @@ emitFfiEtaDefine e lamName name arity =
   let saved = (bufRef e).value
   bufRef e := []
   let scope = beginDefine e
-  let _ = emit e "define i64 @\{lamName}(\{etaParamDecls arity}) {"
+  let _ = emit e "\{defineHead e} i64 @\{lamName}(\{etaParamDecls arity}) {"
   let _ = emit e "entry:"
   let argEnv = etaArgEnv arity 0
   let synArgs = etaArgVars arity 0
@@ -11586,7 +11622,10 @@ emitMultiClauseFn e name clauses site =
     None => []
   let env = implParamEnvTyped arity ptys 0
   let _ = beginDefine e
-  let _ = emit e "define i64 @mdk_\{name}(\{implParamDecls arity 0}) {"
+  let _ =
+    emit
+      e
+      "\{defineHead e} i64 @mdk_\{name}(\{implParamDecls arity 0})\{fnAttrs e name} {"
   let _ = emit e "entry:"
   let _ =
     emitTailClauseTree
@@ -11650,7 +11689,7 @@ emitTrmcFn : Emit ->
   Unit
 emitTrmcFn e name arity ptys clauses single singlePats singleBody site =
   let _ = tmcMarker e name "trmc"
-  let _ = emitTrmcHeader e ("mdk_" ++ name) arity
+  let _ = emitTrmcHeader e ("mdk_" ++ name) arity (fnAttrs e name)
   let _ =
     emitTrmcLoopBody
       e
@@ -11668,11 +11707,15 @@ emitTrmcFn e name arity ptys clauses single singlePats singleBody site =
 -- emit the `define` header + entry label for a TRMC define.  `defineName` is the
 -- bare symbol (`mdk_<name>` for a top-level fn, `mdk_impl_<tag>_<method>` for a
 -- dispatched impl method).  The caller emits the closing `}` (the impl path's
--- emitGroup already brackets the define).
-emitTrmcHeader : Emit -> String -> Int -> Unit
-emitTrmcHeader e defineName arity =
+-- emitGroup already brackets the define).  [attrs] is the define's function
+-- attributes (`fnAttrs`), empty for an impl method.
+emitTrmcHeader : Emit -> String -> Int -> String -> Unit
+emitTrmcHeader e defineName arity attrs =
   let _ = beginDefine e
-  let _ = emit e "define i64 @\{defineName}(\{implParamDecls arity 0}) {"
+  let _ =
+    emit
+      e
+      "\{defineHead e} i64 @\{defineName}(\{implParamDecls arity 0})\{attrs} {"
   emit e "entry:"
 
 -- the REUSABLE TRMC loop body (assumes `define`+`entry:` already emitted; does NOT
@@ -12057,7 +12100,7 @@ emitGDispGroup e grp =
   let rootArity = gDispFnArity e root
   let u = gDispMaxArity e members 0
   let _ = tmcGroupMarkers e root members
-  let _ = emitTrmcHeader e ("mdk_" ++ root) rootArity
+  let _ = emitTrmcHeader e ("mdk_" ++ root) rootArity (fnAttrs e root)
   let uslots = gDispEmitSlots e u rootArity 0
   let hole = freshReg e
   let _ = emit e ("  " ++ hole ++ " = alloca i64")
@@ -12622,7 +12665,10 @@ emitFloatFwOnly e name pats ptys body =
   let worker = name ++ "__fw"
   let wenv = paramEnvD pats ptys fp 0
   let _ = beginDefine e
-  let _ = emit e "define double @mdk_\{worker}(\{paramDeclsD pats fp 0}) {"
+  let _ =
+    emit
+      e
+      "\{defineHead e} double @mdk_\{worker}(\{paramDeclsD pats fp 0})\{fnAttrs e name} {"
   let _ = emit e "entry:"
   let _ = emitFnBodyD e wenv name worker fp arity body
   let _ = emit e "}"
@@ -12636,7 +12682,10 @@ emitFloatWorkerFn e name pats ptys body =
   let _ = emitFloatFwOnly e name pats ptys body
   -- wrapper: original i64 ABI; unbox float params, call worker, box the result
   let _ = beginDefine e
-  let _ = emit e "define i64 @mdk_\{name}(\{paramDecls pats 0}) {"
+  let _ =
+    emit
+      e
+      "\{defineHead e} i64 @mdk_\{name}(\{paramDecls pats 0})\{fnAttrs e name} {"
   let _ = emit e "entry:"
   let callArgs = wrapperCallArgs e fp 0 pats
   let r = freshReg e
@@ -12816,14 +12865,20 @@ emitRawWorkerFn e name pats body (RawWorker arity ks rk) =
   let rty = rawKindTy rk
   let wenv = paramEnvRaw pats ptys ks 0
   let _ = beginDefine e
-  let _ = emit e "define \{rty} @\{worker}(\{rawParamDecls ks 0}) {"
+  let _ =
+    emit
+      e
+      "\{defineHead e} \{rty} @\{worker}(\{rawParamDecls ks 0})\{fnAttrs e name} {"
   let _ = emit e "entry:"
   let _ =
     emitFnBodyRaw e wenv (RawTail name worker (RawWorker arity ks rk)) body
   let _ = emit e "}"
   let _ = emit e ""
   let _ = beginDefine e
-  let _ = emit e "define i64 @mdk_\{name}(\{paramDecls pats 0}) {"
+  let _ =
+    emit
+      e
+      "\{defineHead e} i64 @mdk_\{name}(\{paramDecls pats 0})\{fnAttrs e name} {"
   let _ = emit e "entry:"
   let ops = rawWrapperArgs e ks 0
   let r = freshReg e
@@ -12975,7 +13030,10 @@ emitFnClauseW : Emit -> String -> List Pat -> List LTy -> CExpr -> Unit
 emitFnClauseW e name pats ptys body =
   let env = paramEnv pats ptys 0
   let _ = beginDefine e
-  let _ = emit e "define i64 @mdk_\{name}(\{paramDecls pats 0}) {"
+  let _ =
+    emit
+      e
+      "\{defineHead e} i64 @mdk_\{name}(\{paramDecls pats 0})\{fnAttrs e name} {"
   let _ = emit e "entry:"
   let _ =
     emitFnBody e env (TailDefine ("mdk_" ++ name) (listLen pats) False) body
@@ -14966,7 +15024,7 @@ emitForceFn e name body =
       e
       "@\{gnid} = private unnamed_addr constant [\{intToString (nlen + 1)} x i8] c\"\{escBytes nbytes}\\00\""
   let _ = beginDefine e
-  let _ = emit e "define i64 @mdk_force_\{name}() {"
+  let _ = emit e "\{defineHead e} i64 @mdk_force_\{name}() {"
   let _ = emit e "entry:"
   let s = freshReg e
   let _ = emit e "  \{s} = load i8, ptr @mdk_gs_\{name}"

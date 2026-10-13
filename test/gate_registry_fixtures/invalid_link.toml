@@ -1,0 +1,43 @@
+# test/gate_registry_fixtures/invalid_link.toml — SYNTHETIC, hand-written.
+#
+# Control: valid_cost.toml with the first entry's `link` set to a value outside
+# production/differential (#4089). Run like invalid_cost.toml, against a throwaway root.
+
+[[gate]]
+name = "tidy"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "native-wrap"
+run = "test/tidy.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+link = "warp"
+
+[[gate]]
+name = "anchored"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "shell:instrumentation"
+run = "test/anchored.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+link = "production"
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = []

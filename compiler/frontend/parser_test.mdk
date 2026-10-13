@@ -221,6 +221,18 @@ test "every level is left-associative except cons" =
 test "a tight minus is subtraction only after a numeric head" =
   expectEqual ["(5 - 1)", "(f -1)"] (map bodyShape ["5 -1", "f -1"])
 
+-- The head test looks through parentheses (`(5) -1` is subtraction), and a
+-- second tight negative literal is still an argument of a non-numeric head.
+test "the numeric-head test sees through parens and keeps applying" =
+  expectEqual ["(5 - 1)", "((f -1) -2)"] (map bodyShape ["(5) -1", "f -1 -2"])
+
+-- A token that cannot start an argument ends the application and is left for
+-- the leftover-token diagnostic.
+test "an application stops at a token that cannot start an argument" =
+  expectEqual
+    ["unexpected `)`", "unexpected `,`", "unexpected `]`"]
+    [parseMsg "x = f a )\n", parseMsg "x = f a , b\n", parseMsg "x = f a ]\n"]
+
 -- An operator whose right operand does not parse is not consumed, so the
 -- leftover-token diagnostic names that operator, at every level.
 test "an operator with no right operand is left for the diagnostic" =

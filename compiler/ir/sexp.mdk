@@ -349,6 +349,7 @@ attrSexp : Attr -> String
 attrSexp (AttrDeprecated s) = node "AttrDeprecated" [escStr s]
 attrSexp AttrInline = "AttrInline"
 attrSexp AttrMustUse = "AttrMustUse"
+attrSexp AttrNoInline = "AttrNoInline"
 
 propParamSexp : PropParam -> String
 propParamSexp (PropParam n _ t) = node "pp" [escStr n, tySexp t]

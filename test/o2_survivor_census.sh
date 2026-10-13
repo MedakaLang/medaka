@@ -105,8 +105,13 @@ for f in "$CORPUS"/*.mdk; do
     continue
   fi
 
+  # A whole-mode build emits every function `internal`, and -O2 deletes an
+  # internal probe once it is inlined into main, which would read as
+  # ELIMINATED for every probe. Give the probe alone external linkage so its
+  # optimized body survives to be measured.
+  sed "s/^define internal \\(.*@$sym(\\)/define \\1/" "$ir" > "$WORK/$base.ext.ll"
   opt="$WORK/$base.opt.ll"
-  if ! clang -O2 -S -emit-llvm "$ir" -o "$opt" >"$WORK/$base.clang.log" 2>&1; then
+  if ! clang -O2 -S -emit-llvm "$WORK/$base.ext.ll" -o "$opt" >"$WORK/$base.clang.log" 2>&1; then
     echo "  BUILD_FAILED — clang -O2 failed:"
     sed 's/^/    /' "$WORK/$base.clang.log"
     n_build_failed=$((n_build_failed + 1))

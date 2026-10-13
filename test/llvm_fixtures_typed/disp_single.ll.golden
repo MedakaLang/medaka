@@ -217,7 +217,7 @@ entry:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_force_$memo_Int_def() {
+define internal i64 @mdk_force_$memo_Int_def() {
 entry:
   %t0 = load i8, ptr @mdk_gs_$memo_Int_def
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
@@ -235,7 +235,7 @@ lz_unforced:
   ret i64 %t2
 }
 ; mdk-module program
-define i64 @mdk_force___user____base() {
+define internal i64 @mdk_force___user____base() {
 entry:
   %t0 = load i8, ptr @mdk_gs___user____base
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
@@ -253,7 +253,7 @@ lz_unforced:
   ret i64 %t2
 }
 ; mdk-module impl:Int_def
-define i64 @mdk_impl_Int_def() {
+define internal i64 @mdk_impl_Int_def() {
 entry:
   ret i64 15
 }

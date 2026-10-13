@@ -1,5 +1,5 @@
 # META
-source_lines=405
+source_lines=406
 stages=DESUGAR,MARK
 # SOURCE
 -- Structural S-expression dump of the AST. Tags are the
@@ -353,6 +353,7 @@ attrSexp : Attr -> String
 attrSexp (AttrDeprecated s) = node "AttrDeprecated" [escStr s]
 attrSexp AttrInline = "AttrInline"
 attrSexp AttrMustUse = "AttrMustUse"
+attrSexp AttrNoInline = "AttrNoInline"
 
 propParamSexp : PropParam -> String
 propParamSexp (PropParam n _ t) = node "pp" [escStr n, tySexp t]
@@ -578,6 +579,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "attrSexp" ((PCon "AttrDeprecated" (PVar "s"))) (EApp (EApp (EVar "node") (ELit (LString "AttrDeprecated"))) (EListLit (EApp (EVar "escStr") (EVar "s")))))
 (DFunDef false "attrSexp" ((PCon "AttrInline")) (ELit (LString "AttrInline")))
 (DFunDef false "attrSexp" ((PCon "AttrMustUse")) (ELit (LString "AttrMustUse")))
+(DFunDef false "attrSexp" ((PCon "AttrNoInline")) (ELit (LString "AttrNoInline")))
 (DTypeSig false "propParamSexp" (TyFun (TyCon "PropParam") (TyCon "String")))
 (DFunDef false "propParamSexp" ((PCon "PropParam" (PVar "n") PWild (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "pp"))) (EListLit (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "tySexp") (EVar "t")))))
 (DTypeSig false "methodDefaultSexp" (TyFun (TyApp (TyCon "Option") (TyCon "MethodDefault")) (TyCon "String")))
@@ -776,6 +778,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "attrSexp" ((PCon "AttrDeprecated" (PVar "s"))) (EApp (EApp (EVar "node") (ELit (LString "AttrDeprecated"))) (EListLit (EApp (EVar "escStr") (EVar "s")))))
 (DFunDef false "attrSexp" ((PCon "AttrInline")) (ELit (LString "AttrInline")))
 (DFunDef false "attrSexp" ((PCon "AttrMustUse")) (ELit (LString "AttrMustUse")))
+(DFunDef false "attrSexp" ((PCon "AttrNoInline")) (ELit (LString "AttrNoInline")))
 (DTypeSig false "propParamSexp" (TyFun (TyCon "PropParam") (TyCon "String")))
 (DFunDef false "propParamSexp" ((PCon "PropParam" (PVar "n") PWild (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "pp"))) (EListLit (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "tySexp") (EVar "t")))))
 (DTypeSig false "methodDefaultSexp" (TyFun (TyApp (TyCon "Option") (TyCon "MethodDefault")) (TyCon "String")))

@@ -252,7 +252,7 @@ decend5:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk___user____when(i64 %arg0, i64 %arg1, i64 %arg2) {
+define internal i64 @mdk___user____when(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = ashr i64 %arg1, 1
   %t1 = icmp ne i64 %t0, 0
@@ -265,7 +265,7 @@ else2:
 }
 
 ; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_Option_pure
-define i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Option_pure(i64 %arg0) {
+define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Option_pure(i64 %arg0) {
 entry:
   %t0 = call ptr @mdk_alloc(i64 16)
   store i64 281479271677952, ptr %t0
@@ -276,7 +276,7 @@ entry:
 }
 
 ; mdk-module impl:zZ_5f__5f_user_5f__5f__2e_Option_andThen
-define i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Option_andThen(i64 %arg0, i64 %arg1) {
+define internal i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Option_andThen(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg0, 562958543355907
