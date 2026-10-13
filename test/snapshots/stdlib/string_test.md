@@ -1,5 +1,5 @@
 # META
-source_lines=443
+source_lines=671
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -9,9 +9,9 @@ stages=DESUGAR,MARK
 
 import string.{
   byteLength, center, countOccurrences, drop, endsWith, fromChars, indexOf,
-  lastIndexOf, lines, padLeft, padRight, replace, replaceAll, splitAt,
-  startsWith, stripPrefix, stripSuffix, take, trim, trimLeft, trimRight,
-  unlines, utf8ByteLength
+  join, lastIndexOf, lines, padLeft, padRight, replace, replaceAll, reverse,
+  splitAt, startsWith, stripPrefix, stripSuffix, take, toInt, trim, trimLeft,
+  trimRight, unlines, unwords, utf8ByteLength
 }
 import test.{expectEqual, expectFalse, expectTrue}
 
@@ -445,8 +445,236 @@ test "lastIndexOf agrees with the codepoint reference on edge inputs" =
   expectEqual
     (refPairs refLastIndexOf edgePairs)
     (refPairs lastIndexOf edgePairs)
+
+-- # Native toInt, reverse and join
+
+test "toInt reads a signed decimal" =
+  expectEqual (Some 42, Some (-7), Some 7) (toInt "42", toInt "-7", toInt "+7")
+
+test "toInt of an empty or sign-only string is None" =
+  expectEqual (None, None, None) (toInt "", toInt "-", toInt "+")
+
+test "toInt rejects trailing and leading junk" =
+  expectEqual
+    (None, None, None, None)
+    (toInt "12x", toInt "x12", toInt "--1", toInt " 1")
+
+test "toInt rejects a non-ASCII digit" =
+  expectEqual (None, None) (toInt "1é", toInt "٣")
+
+test "toInt accepts leading zeros and negative zero" =
+  expectEqual (Some 7, Some 0, Some 0) (toInt "007", toInt "-0", toInt "+0")
+
+test "toInt holds the Int bounds" =
+  expectEqual
+    (Some 4611686018427387903, Some -4611686018427387904)
+    (toInt "4611686018427387903", toInt "-4611686018427387904")
+
+test "toInt rejects one past either Int bound" =
+  expectEqual
+    (None, None)
+    (toInt "4611686018427387904", toInt "-4611686018427387905")
+
+test "toInt rejects a value far outside the Int range" =
+  expectEqual
+    (None, None, None)
+    (
+      toInt "99999999999999999999",
+      toInt "-99999999999999999999",
+      toInt "9223372036854775807",
+    )
+
+test "reverse keeps multibyte codepoints whole" =
+  expectEqual ("óH", "本日", "b😀a") (reverse "Hó", reverse "日本", reverse "a😀b")
+
+test "reverse of the empty string is empty" = expectEqual "" (reverse "")
+
+test "join puts the separator between each adjacent pair" =
+  expectEqual
+    ("a, b, c", "", "a-b")
+    (join ", " ["a", "b", "c"], join "" ["", ""], join "-" ["a", "b"])
+
+test "join of nothing and of one part" =
+  expectEqual ("", "x") (join ", " [], join ", " ["x"])
+
+test "unwords joins with single spaces" =
+  expectEqual "a b  c" (unwords ["a", "b", "", "c"])
+
+-- Reference definitions for toInt, reverse and join: the Medaka code the
+-- native externs replaced, kept so the differential below pins the new
+-- behaviour to it.  They walk Arrays of Char, one codepoint at a time.
+
+refIsDigit : Char -> Bool
+-- Oracle: the digit test the Medaka parser used, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refIsDigit c = c >= '0' && c <= '9'
+
+refToInt : String -> Option Int
+-- Oracle: the Medaka parser the native stringToInt replaced, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refToInt s =
+  let a = stringToChars s
+  refParseInt a (arrayLength a)
+
+refParseInt : Array Char -> Int -> Option Int
+refParseInt a n = if n == 0 then None else refParseSign a n (arrayGetUnsafe 0 a)
+
+refParseSign : Array Char -> Int -> Char -> Option Int
+refParseSign a n c
+  | c == '-' = refParseDigits a n 1 0 False True
+  | c == '+' = refParseDigits a n 1 0 False False
+  | otherwise = refParseDigits a n 0 0 False False
+
+refParseDigits : Array Char -> Int -> Int -> Int -> Bool -> Bool -> Option Int
+refParseDigits a n i acc seen negative
+  | i >= n = refFinishInt seen acc negative
+  | otherwise = refParseDigitStep a n i acc seen negative (arrayGetUnsafe i a)
+
+refParseDigitStep : Array Char ->
+  Int ->
+  Int ->
+  Int ->
+  Bool ->
+  Bool ->
+  Char ->
+  Option Int
+refParseDigitStep a n i acc seen negative c =
+  if refIsDigit c then
+    let d = charCode c - 48
+    let limit = if negative then intMinBound else 0 - intMaxBound
+    let multMin = limit / 10
+    if acc < multMin then
+      None
+    else
+      let acc2 = acc * 10
+      if acc2 < limit + d then
+        None
+      else
+        refParseDigits a n (i + 1) (acc2 - d) True negative
+  else
+    None
+
+refFinishInt : Bool -> Int -> Bool -> Option Int
+refFinishInt seen acc negative =
+  if not seen then None else if negative then Some acc else Some (0 - acc)
+
+refReverse : String -> String
+-- Oracle: the codepoint reversal the native stringReverse replaced.
+-- lint-disable-next-line rule-stdlib-reimpl
+refReverse s =
+  let a = stringToChars s
+  let n = arrayLength a
+  stringFromChars (arrayMakeWith n (i => arrayGetUnsafe (n - 1 - i) a))
+
+refIntersperse : a -> List a -> List a
+-- Oracle: the separator walk the Medaka join used, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refIntersperse _ [] = []
+refIntersperse _ (x :: []) = [x]
+refIntersperse sep (x :: xs) = x :: sep :: refIntersperse sep xs
+
+refJoin : String -> List String -> String
+-- Oracle: the intersperse-then-concat definition the native stringJoin replaced.
+-- lint-disable-next-line rule-stdlib-reimpl
+refJoin sep parts = stringConcat (refIntersperse sep parts)
+
+intTextEdges : List String
+intTextEdges = [
+  "",
+  "-",
+  "+",
+  "0",
+  "-0",
+  "+0",
+  "007",
+  "-7",
+  "+7",
+  "42",
+  "12x",
+  "x12",
+  "--1",
+  "+-1",
+  "-+1",
+  " 1",
+  "1 ",
+  "1é",
+  "é1",
+  "٣",
+  "1\n",
+  "00000000000000000000001",
+  "4611686018427387903",
+  "4611686018427387904",
+  "-4611686018427387904",
+  "-4611686018427387905",
+  "461168601842738790",
+  "-461168601842738790",
+  "4611686018427387900",
+  "9223372036854775807",
+  "-9223372036854775808",
+  "99999999999999999999",
+  "-99999999999999999999",
+  "1234567890",
+]
+
+reverseEdges : List String
+reverseEdges = [
+  "",
+  "a",
+  "ab",
+  "abc",
+  "héllo",
+  "日本語",
+  "a😀b",
+  "é",
+  "👍🏽x",
+  "ééé",
+  "a\nb",
+  "日a本",
+]
+
+joinEdges : List (String, List String)
+joinEdges = [
+  (", ", []),
+  (", ", ["a"]),
+  ("", ["a", "b"]),
+  (", ", ["a", "b", "c"]),
+  ("é", ["日", "本"]),
+  ("日本", ["", "x", ""]),
+  ("-", ["", ""]),
+  (" ", ["a😀", "b"]),
+  ("", []),
+  ("", [""]),
+]
+
+test "toInt agrees with the Medaka reference on edge inputs" =
+  expectEqual (refPairs2 refToInt intTextEdges) (refPairs2 toInt intTextEdges)
+
+test "reverse agrees with the codepoint reference on edge inputs" =
+  expectEqual
+    (refPairs2 refReverse reverseEdges)
+    (refPairs2 reverse reverseEdges)
+
+test "join agrees with the intersperse reference on edge inputs" =
+  expectEqual (refJoinPairs refJoin joinEdges) (refJoinPairs join joinEdges)
+
+refPairs2 : (String -> a) -> List String -> List a
+refPairs2 f xs = map f xs
+
+refJoinPairs : (String -> List String -> String) ->
+  List (String, List String) ->
+  List String
+refJoinPairs _ [] = []
+refJoinPairs f ((sep, parts) :: rest) = f sep parts :: refJoinPairs f rest
+
+prop "toInt reads back every decimal Int" (n : Int) =
+  toInt (intToString n) == Some n
+
+prop "reverse is an involution" (s : String) = reverse (reverse s) == s
+
+prop "join with the empty separator is concat" (s : String) =
+  join "" [s, s] == s ++ s
 # DESUGAR
-(DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "utf8ByteLength" false))))
+(DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -570,8 +798,60 @@ test "lastIndexOf agrees with the codepoint reference on edge inputs" =
 (DTest false "endsWith agrees with the codepoint reference on edge inputs" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "refPairs") (EVar "refEndsWith")) (EVar "edgePairs"))) (EApp (EApp (EVar "refPairs") (EVar "endsWith")) (EVar "edgePairs"))))
 (DTest false "countOccurrences agrees with the codepoint reference on edge inputs" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "refPairs") (EVar "refCountOccurrences")) (EVar "edgePairs"))) (EApp (EApp (EVar "refPairs") (EVar "countOccurrences")) (EVar "edgePairs"))))
 (DTest false "lastIndexOf agrees with the codepoint reference on edge inputs" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "refPairs") (EVar "refLastIndexOf")) (EVar "edgePairs"))) (EApp (EApp (EVar "refPairs") (EVar "lastIndexOf")) (EVar "edgePairs"))))
+(DTest false "toInt reads a signed decimal" (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 42))) (EApp (EVar "Some") (EUnOp "-" (ELit (LInt 7)))) (EApp (EVar "Some") (ELit (LInt 7))))) (ETuple (EApp (EVar "toInt") (ELit (LString "42"))) (EApp (EVar "toInt") (ELit (LString "-7"))) (EApp (EVar "toInt") (ELit (LString "+7"))))))
+(DTest false "toInt of an empty or sign-only string is None" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "None") (EVar "None") (EVar "None"))) (ETuple (EApp (EVar "toInt") (ELit (LString ""))) (EApp (EVar "toInt") (ELit (LString "-"))) (EApp (EVar "toInt") (ELit (LString "+"))))))
+(DTest false "toInt rejects trailing and leading junk" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "None") (EVar "None") (EVar "None") (EVar "None"))) (ETuple (EApp (EVar "toInt") (ELit (LString "12x"))) (EApp (EVar "toInt") (ELit (LString "x12"))) (EApp (EVar "toInt") (ELit (LString "--1"))) (EApp (EVar "toInt") (ELit (LString " 1"))))))
+(DTest false "toInt rejects a non-ASCII digit" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "None") (EVar "None"))) (ETuple (EApp (EVar "toInt") (ELit (LString "1é"))) (EApp (EVar "toInt") (ELit (LString "٣"))))))
+(DTest false "toInt accepts leading zeros and negative zero" (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 7))) (EApp (EVar "Some") (ELit (LInt 0))) (EApp (EVar "Some") (ELit (LInt 0))))) (ETuple (EApp (EVar "toInt") (ELit (LString "007"))) (EApp (EVar "toInt") (ELit (LString "-0"))) (EApp (EVar "toInt") (ELit (LString "+0"))))))
+(DTest false "toInt holds the Int bounds" (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 4611686018427387903))) (EApp (EVar "Some") (ELit (LInt -4611686018427387904))))) (ETuple (EApp (EVar "toInt") (ELit (LString "4611686018427387903"))) (EApp (EVar "toInt") (ELit (LString "-4611686018427387904"))))))
+(DTest false "toInt rejects one past either Int bound" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "None") (EVar "None"))) (ETuple (EApp (EVar "toInt") (ELit (LString "4611686018427387904"))) (EApp (EVar "toInt") (ELit (LString "-4611686018427387905"))))))
+(DTest false "toInt rejects a value far outside the Int range" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "None") (EVar "None") (EVar "None"))) (ETuple (EApp (EVar "toInt") (ELit (LString "99999999999999999999"))) (EApp (EVar "toInt") (ELit (LString "-99999999999999999999"))) (EApp (EVar "toInt") (ELit (LString "9223372036854775807"))))))
+(DTest false "reverse keeps multibyte codepoints whole" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "óH")) (ELit (LString "本日")) (ELit (LString "b😀a")))) (ETuple (EApp (EVar "reverse") (ELit (LString "Hó"))) (EApp (EVar "reverse") (ELit (LString "日本"))) (EApp (EVar "reverse") (ELit (LString "a😀b"))))))
+(DTest false "reverse of the empty string is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EVar "reverse") (ELit (LString "")))))
+(DTest false "join puts the separator between each adjacent pair" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "a, b, c")) (ELit (LString "")) (ELit (LString "a-b")))) (ETuple (EApp (EApp (EVar "join") (ELit (LString ", "))) (EListLit (ELit (LString "a")) (ELit (LString "b")) (ELit (LString "c")))) (EApp (EApp (EVar "join") (ELit (LString ""))) (EListLit (ELit (LString "")) (ELit (LString "")))) (EApp (EApp (EVar "join") (ELit (LString "-"))) (EListLit (ELit (LString "a")) (ELit (LString "b")))))))
+(DTest false "join of nothing and of one part" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LString "x")))) (ETuple (EApp (EApp (EVar "join") (ELit (LString ", "))) (EListLit)) (EApp (EApp (EVar "join") (ELit (LString ", "))) (EListLit (ELit (LString "x")))))))
+(DTest false "unwords joins with single spaces" (EApp (EApp (EVar "expectEqual") (ELit (LString "a b  c"))) (EApp (EVar "unwords") (EListLit (ELit (LString "a")) (ELit (LString "b")) (ELit (LString "")) (ELit (LString "c"))))))
+(DTypeSig false "refIsDigit" (TyFun (TyCon "Char") (TyCon "Bool")))
+(DFunDef false "refIsDigit" ((PVar "c")) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9")))))
+(DTypeSig false "refToInt" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
+(DFunDef false "refToInt" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EVar "refParseInt") (EVar "a")) (EApp (EVar "arrayLength") (EVar "a"))))))
+(DTypeSig false "refParseInt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "refParseInt" ((PVar "a") (PVar "n")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EVar "None") (EApp (EApp (EApp (EVar "refParseSign") (EVar "a")) (EVar "n")) (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "a")))))
+(DTypeSig false "refParseSign" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DFunDef false "refParseSign" ((PVar "a") (PVar "n") (PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "-"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "refParseDigits") (EVar "a")) (EVar "n")) (ELit (LInt 1))) (ELit (LInt 0))) (EVar "False")) (EVar "True")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "+"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "refParseDigits") (EVar "a")) (EVar "n")) (ELit (LInt 1))) (ELit (LInt 0))) (EVar "False")) (EVar "False")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "refParseDigits") (EVar "a")) (EVar "n")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "False")) (EVar "False")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "refParseDigits" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "Int")))))))))
+(DFunDef false "refParseDigits" ((PVar "a") (PVar "n") (PVar "i") (PVar "acc") (PVar "seen") (PVar "negative")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EApp (EApp (EVar "refFinishInt") (EVar "seen")) (EVar "acc")) (EVar "negative")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "refParseDigitStep") (EVar "a")) (EVar "n")) (EVar "i")) (EVar "acc")) (EVar "seen")) (EVar "negative")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "refParseDigitStep" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Char") (TyApp (TyCon "Option") (TyCon "Int"))))))))))
+(DFunDef false "refParseDigitStep" ((PVar "a") (PVar "n") (PVar "i") (PVar "acc") (PVar "seen") (PVar "negative") (PVar "c")) (EIf (EApp (EVar "refIsDigit") (EVar "c")) (EBlock (DoLet false false (PVar "d") (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 48)))) (DoLet false false (PVar "limit") (EIf (EVar "negative") (EVar "intMinBound") (EBinOp "-" (ELit (LInt 0)) (EVar "intMaxBound")))) (DoLet false false (PVar "multMin") (EBinOp "/" (EVar "limit") (ELit (LInt 10)))) (DoExpr (EIf (EBinOp "<" (EVar "acc") (EVar "multMin")) (EVar "None") (EBlock (DoLet false false (PVar "acc2") (EBinOp "*" (EVar "acc") (ELit (LInt 10)))) (DoExpr (EIf (EBinOp "<" (EVar "acc2") (EBinOp "+" (EVar "limit") (EVar "d"))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "refParseDigits") (EVar "a")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "acc2") (EVar "d"))) (EVar "True")) (EVar "negative")))))))) (EVar "None")))
+(DTypeSig false "refFinishInt" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DFunDef false "refFinishInt" ((PVar "seen") (PVar "acc") (PVar "negative")) (EIf (EApp (EVar "not") (EVar "seen")) (EVar "None") (EIf (EVar "negative") (EApp (EVar "Some") (EVar "acc")) (EApp (EVar "Some") (EBinOp "-" (ELit (LInt 0)) (EVar "acc"))))))
+(DTypeSig false "refReverse" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "refReverse" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "a"))) (DoExpr (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EVar "n")) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EBinOp "-" (EVar "n") (ELit (LInt 1))) (EVar "i"))) (EVar "a"))))))))
+(DTypeSig false "refIntersperse" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "refIntersperse" (PWild (PList)) (EListLit))
+(DFunDef false "refIntersperse" (PWild (PCons (PVar "x") (PList))) (EListLit (EVar "x")))
+(DFunDef false "refIntersperse" ((PVar "sep") (PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "sep") (EApp (EApp (EVar "refIntersperse") (EVar "sep")) (EVar "xs")))))
+(DTypeSig false "refJoin" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "refJoin" ((PVar "sep") (PVar "parts")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "refIntersperse") (EVar "sep")) (EVar "parts"))))
+(DTypeSig false "intTextEdges" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "intTextEdges" () (EListLit (ELit (LString "")) (ELit (LString "-")) (ELit (LString "+")) (ELit (LString "0")) (ELit (LString "-0")) (ELit (LString "+0")) (ELit (LString "007")) (ELit (LString "-7")) (ELit (LString "+7")) (ELit (LString "42")) (ELit (LString "12x")) (ELit (LString "x12")) (ELit (LString "--1")) (ELit (LString "+-1")) (ELit (LString "-+1")) (ELit (LString " 1")) (ELit (LString "1 ")) (ELit (LString "1é")) (ELit (LString "é1")) (ELit (LString "٣")) (ELit (LString "1\n")) (ELit (LString "00000000000000000000001")) (ELit (LString "4611686018427387903")) (ELit (LString "4611686018427387904")) (ELit (LString "-4611686018427387904")) (ELit (LString "-4611686018427387905")) (ELit (LString "461168601842738790")) (ELit (LString "-461168601842738790")) (ELit (LString "4611686018427387900")) (ELit (LString "9223372036854775807")) (ELit (LString "-9223372036854775808")) (ELit (LString "99999999999999999999")) (ELit (LString "-99999999999999999999")) (ELit (LString "1234567890"))))
+(DTypeSig false "reverseEdges" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "reverseEdges" () (EListLit (ELit (LString "")) (ELit (LString "a")) (ELit (LString "ab")) (ELit (LString "abc")) (ELit (LString "héllo")) (ELit (LString "日本語")) (ELit (LString "a😀b")) (ELit (LString "é")) (ELit (LString "👍🏽x")) (ELit (LString "ééé")) (ELit (LString "a\nb")) (ELit (LString "日a本"))))
+(DTypeSig false "joinEdges" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "joinEdges" () (EListLit (ETuple (ELit (LString ", ")) (EListLit)) (ETuple (ELit (LString ", ")) (EListLit (ELit (LString "a")))) (ETuple (ELit (LString "")) (EListLit (ELit (LString "a")) (ELit (LString "b")))) (ETuple (ELit (LString ", ")) (EListLit (ELit (LString "a")) (ELit (LString "b")) (ELit (LString "c")))) (ETuple (ELit (LString "é")) (EListLit (ELit (LString "日")) (ELit (LString "本")))) (ETuple (ELit (LString "日本")) (EListLit (ELit (LString "")) (ELit (LString "x")) (ELit (LString "")))) (ETuple (ELit (LString "-")) (EListLit (ELit (LString "")) (ELit (LString "")))) (ETuple (ELit (LString " ")) (EListLit (ELit (LString "a😀")) (ELit (LString "b")))) (ETuple (ELit (LString "")) (EListLit)) (ETuple (ELit (LString "")) (EListLit (ELit (LString ""))))))
+(DTest false "toInt agrees with the Medaka reference on edge inputs" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "refPairs2") (EVar "refToInt")) (EVar "intTextEdges"))) (EApp (EApp (EVar "refPairs2") (EVar "toInt")) (EVar "intTextEdges"))))
+(DTest false "reverse agrees with the codepoint reference on edge inputs" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "refPairs2") (EVar "refReverse")) (EVar "reverseEdges"))) (EApp (EApp (EVar "refPairs2") (EVar "reverse")) (EVar "reverseEdges"))))
+(DTest false "join agrees with the intersperse reference on edge inputs" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "refJoinPairs") (EVar "refJoin")) (EVar "joinEdges"))) (EApp (EApp (EVar "refJoinPairs") (EVar "join")) (EVar "joinEdges"))))
+(DTypeSig false "refPairs2" (TyFun (TyFun (TyCon "String") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "refPairs2" ((PVar "f") (PVar "xs")) (EApp (EApp (EVar "map") (EVar "f")) (EVar "xs")))
+(DTypeSig false "refJoinPairs" (TyFun (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "refJoinPairs" (PWild (PList)) (EListLit))
+(DFunDef false "refJoinPairs" ((PVar "f") (PCons (PTuple (PVar "sep") (PVar "parts")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "f") (EVar "sep")) (EVar "parts")) (EApp (EApp (EVar "refJoinPairs") (EVar "f")) (EVar "rest"))))
+(DProp false "toInt reads back every decimal Int" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "toInt") (EApp (EVar "intToString") (EVar "n"))) (EApp (EVar "Some") (EVar "n"))))
+(DProp false "reverse is an involution" ((pp "s" (TyCon "String"))) (EBinOp "==" (EApp (EVar "reverse") (EApp (EVar "reverse") (EVar "s"))) (EVar "s")))
+(DProp false "join with the empty separator is concat" ((pp "s" (TyCon "String"))) (EBinOp "==" (EApp (EApp (EVar "join") (ELit (LString ""))) (EListLit (EVar "s") (EVar "s"))) (EBinOp "++" (EVar "s") (EVar "s"))))
 # MARK
-(DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "utf8ByteLength" false))))
+(DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -695,3 +975,55 @@ test "lastIndexOf agrees with the codepoint reference on edge inputs" =
 (DTest false "endsWith agrees with the codepoint reference on edge inputs" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "refPairs") (EVar "refEndsWith")) (EVar "edgePairs"))) (EApp (EApp (EVar "refPairs") (EVar "endsWith")) (EVar "edgePairs"))))
 (DTest false "countOccurrences agrees with the codepoint reference on edge inputs" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "refPairs") (EVar "refCountOccurrences")) (EVar "edgePairs"))) (EApp (EApp (EVar "refPairs") (EVar "countOccurrences")) (EVar "edgePairs"))))
 (DTest false "lastIndexOf agrees with the codepoint reference on edge inputs" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "refPairs") (EVar "refLastIndexOf")) (EVar "edgePairs"))) (EApp (EApp (EVar "refPairs") (EVar "lastIndexOf")) (EVar "edgePairs"))))
+(DTest false "toInt reads a signed decimal" (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 42))) (EApp (EVar "Some") (EUnOp "-" (ELit (LInt 7)))) (EApp (EVar "Some") (ELit (LInt 7))))) (ETuple (EApp (EVar "toInt") (ELit (LString "42"))) (EApp (EVar "toInt") (ELit (LString "-7"))) (EApp (EVar "toInt") (ELit (LString "+7"))))))
+(DTest false "toInt of an empty or sign-only string is None" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "None") (EVar "None") (EVar "None"))) (ETuple (EApp (EVar "toInt") (ELit (LString ""))) (EApp (EVar "toInt") (ELit (LString "-"))) (EApp (EVar "toInt") (ELit (LString "+"))))))
+(DTest false "toInt rejects trailing and leading junk" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "None") (EVar "None") (EVar "None") (EVar "None"))) (ETuple (EApp (EVar "toInt") (ELit (LString "12x"))) (EApp (EVar "toInt") (ELit (LString "x12"))) (EApp (EVar "toInt") (ELit (LString "--1"))) (EApp (EVar "toInt") (ELit (LString " 1"))))))
+(DTest false "toInt rejects a non-ASCII digit" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "None") (EVar "None"))) (ETuple (EApp (EVar "toInt") (ELit (LString "1é"))) (EApp (EVar "toInt") (ELit (LString "٣"))))))
+(DTest false "toInt accepts leading zeros and negative zero" (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 7))) (EApp (EVar "Some") (ELit (LInt 0))) (EApp (EVar "Some") (ELit (LInt 0))))) (ETuple (EApp (EVar "toInt") (ELit (LString "007"))) (EApp (EVar "toInt") (ELit (LString "-0"))) (EApp (EVar "toInt") (ELit (LString "+0"))))))
+(DTest false "toInt holds the Int bounds" (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 4611686018427387903))) (EApp (EVar "Some") (ELit (LInt -4611686018427387904))))) (ETuple (EApp (EVar "toInt") (ELit (LString "4611686018427387903"))) (EApp (EVar "toInt") (ELit (LString "-4611686018427387904"))))))
+(DTest false "toInt rejects one past either Int bound" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "None") (EVar "None"))) (ETuple (EApp (EVar "toInt") (ELit (LString "4611686018427387904"))) (EApp (EVar "toInt") (ELit (LString "-4611686018427387905"))))))
+(DTest false "toInt rejects a value far outside the Int range" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "None") (EVar "None") (EVar "None"))) (ETuple (EApp (EVar "toInt") (ELit (LString "99999999999999999999"))) (EApp (EVar "toInt") (ELit (LString "-99999999999999999999"))) (EApp (EVar "toInt") (ELit (LString "9223372036854775807"))))))
+(DTest false "reverse keeps multibyte codepoints whole" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "óH")) (ELit (LString "本日")) (ELit (LString "b😀a")))) (ETuple (EApp (EVar "reverse") (ELit (LString "Hó"))) (EApp (EVar "reverse") (ELit (LString "日本"))) (EApp (EVar "reverse") (ELit (LString "a😀b"))))))
+(DTest false "reverse of the empty string is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EVar "reverse") (ELit (LString "")))))
+(DTest false "join puts the separator between each adjacent pair" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "a, b, c")) (ELit (LString "")) (ELit (LString "a-b")))) (ETuple (EApp (EApp (EVar "join") (ELit (LString ", "))) (EListLit (ELit (LString "a")) (ELit (LString "b")) (ELit (LString "c")))) (EApp (EApp (EVar "join") (ELit (LString ""))) (EListLit (ELit (LString "")) (ELit (LString "")))) (EApp (EApp (EVar "join") (ELit (LString "-"))) (EListLit (ELit (LString "a")) (ELit (LString "b")))))))
+(DTest false "join of nothing and of one part" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LString "x")))) (ETuple (EApp (EApp (EVar "join") (ELit (LString ", "))) (EListLit)) (EApp (EApp (EVar "join") (ELit (LString ", "))) (EListLit (ELit (LString "x")))))))
+(DTest false "unwords joins with single spaces" (EApp (EApp (EVar "expectEqual") (ELit (LString "a b  c"))) (EApp (EVar "unwords") (EListLit (ELit (LString "a")) (ELit (LString "b")) (ELit (LString "")) (ELit (LString "c"))))))
+(DTypeSig false "refIsDigit" (TyFun (TyCon "Char") (TyCon "Bool")))
+(DFunDef false "refIsDigit" ((PVar "c")) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9")))))
+(DTypeSig false "refToInt" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
+(DFunDef false "refToInt" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EVar "refParseInt") (EVar "a")) (EApp (EVar "arrayLength") (EVar "a"))))))
+(DTypeSig false "refParseInt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "refParseInt" ((PVar "a") (PVar "n")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EVar "None") (EApp (EApp (EApp (EVar "refParseSign") (EVar "a")) (EVar "n")) (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "a")))))
+(DTypeSig false "refParseSign" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DFunDef false "refParseSign" ((PVar "a") (PVar "n") (PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "-"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "refParseDigits") (EVar "a")) (EVar "n")) (ELit (LInt 1))) (ELit (LInt 0))) (EVar "False")) (EVar "True")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "+"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "refParseDigits") (EVar "a")) (EVar "n")) (ELit (LInt 1))) (ELit (LInt 0))) (EVar "False")) (EVar "False")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "refParseDigits") (EVar "a")) (EVar "n")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "False")) (EVar "False")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "refParseDigits" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "Int")))))))))
+(DFunDef false "refParseDigits" ((PVar "a") (PVar "n") (PVar "i") (PVar "acc") (PVar "seen") (PVar "negative")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EApp (EApp (EVar "refFinishInt") (EVar "seen")) (EVar "acc")) (EVar "negative")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "refParseDigitStep") (EVar "a")) (EVar "n")) (EVar "i")) (EVar "acc")) (EVar "seen")) (EVar "negative")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "refParseDigitStep" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Char") (TyApp (TyCon "Option") (TyCon "Int"))))))))))
+(DFunDef false "refParseDigitStep" ((PVar "a") (PVar "n") (PVar "i") (PVar "acc") (PVar "seen") (PVar "negative") (PVar "c")) (EIf (EApp (EVar "refIsDigit") (EVar "c")) (EBlock (DoLet false false (PVar "d") (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 48)))) (DoLet false false (PVar "limit") (EIf (EVar "negative") (EVar "intMinBound") (EBinOp "-" (ELit (LInt 0)) (EVar "intMaxBound")))) (DoLet false false (PVar "multMin") (EBinOp "/" (EVar "limit") (ELit (LInt 10)))) (DoExpr (EIf (EBinOp "<" (EVar "acc") (EVar "multMin")) (EVar "None") (EBlock (DoLet false false (PVar "acc2") (EBinOp "*" (EVar "acc") (ELit (LInt 10)))) (DoExpr (EIf (EBinOp "<" (EVar "acc2") (EBinOp "+" (EVar "limit") (EVar "d"))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "refParseDigits") (EVar "a")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "acc2") (EVar "d"))) (EVar "True")) (EVar "negative")))))))) (EVar "None")))
+(DTypeSig false "refFinishInt" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DFunDef false "refFinishInt" ((PVar "seen") (PVar "acc") (PVar "negative")) (EIf (EApp (EVar "not") (EVar "seen")) (EVar "None") (EIf (EVar "negative") (EApp (EVar "Some") (EVar "acc")) (EApp (EVar "Some") (EBinOp "-" (ELit (LInt 0)) (EVar "acc"))))))
+(DTypeSig false "refReverse" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "refReverse" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "a"))) (DoExpr (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EVar "n")) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EBinOp "-" (EVar "n") (ELit (LInt 1))) (EVar "i"))) (EVar "a"))))))))
+(DTypeSig false "refIntersperse" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "refIntersperse" (PWild (PList)) (EListLit))
+(DFunDef false "refIntersperse" (PWild (PCons (PVar "x") (PList))) (EListLit (EVar "x")))
+(DFunDef false "refIntersperse" ((PVar "sep") (PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "sep") (EApp (EApp (EVar "refIntersperse") (EVar "sep")) (EVar "xs")))))
+(DTypeSig false "refJoin" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "refJoin" ((PVar "sep") (PVar "parts")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "refIntersperse") (EVar "sep")) (EVar "parts"))))
+(DTypeSig false "intTextEdges" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "intTextEdges" () (EListLit (ELit (LString "")) (ELit (LString "-")) (ELit (LString "+")) (ELit (LString "0")) (ELit (LString "-0")) (ELit (LString "+0")) (ELit (LString "007")) (ELit (LString "-7")) (ELit (LString "+7")) (ELit (LString "42")) (ELit (LString "12x")) (ELit (LString "x12")) (ELit (LString "--1")) (ELit (LString "+-1")) (ELit (LString "-+1")) (ELit (LString " 1")) (ELit (LString "1 ")) (ELit (LString "1é")) (ELit (LString "é1")) (ELit (LString "٣")) (ELit (LString "1\n")) (ELit (LString "00000000000000000000001")) (ELit (LString "4611686018427387903")) (ELit (LString "4611686018427387904")) (ELit (LString "-4611686018427387904")) (ELit (LString "-4611686018427387905")) (ELit (LString "461168601842738790")) (ELit (LString "-461168601842738790")) (ELit (LString "4611686018427387900")) (ELit (LString "9223372036854775807")) (ELit (LString "-9223372036854775808")) (ELit (LString "99999999999999999999")) (ELit (LString "-99999999999999999999")) (ELit (LString "1234567890"))))
+(DTypeSig false "reverseEdges" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "reverseEdges" () (EListLit (ELit (LString "")) (ELit (LString "a")) (ELit (LString "ab")) (ELit (LString "abc")) (ELit (LString "héllo")) (ELit (LString "日本語")) (ELit (LString "a😀b")) (ELit (LString "é")) (ELit (LString "👍🏽x")) (ELit (LString "ééé")) (ELit (LString "a\nb")) (ELit (LString "日a本"))))
+(DTypeSig false "joinEdges" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "joinEdges" () (EListLit (ETuple (ELit (LString ", ")) (EListLit)) (ETuple (ELit (LString ", ")) (EListLit (ELit (LString "a")))) (ETuple (ELit (LString "")) (EListLit (ELit (LString "a")) (ELit (LString "b")))) (ETuple (ELit (LString ", ")) (EListLit (ELit (LString "a")) (ELit (LString "b")) (ELit (LString "c")))) (ETuple (ELit (LString "é")) (EListLit (ELit (LString "日")) (ELit (LString "本")))) (ETuple (ELit (LString "日本")) (EListLit (ELit (LString "")) (ELit (LString "x")) (ELit (LString "")))) (ETuple (ELit (LString "-")) (EListLit (ELit (LString "")) (ELit (LString "")))) (ETuple (ELit (LString " ")) (EListLit (ELit (LString "a😀")) (ELit (LString "b")))) (ETuple (ELit (LString "")) (EListLit)) (ETuple (ELit (LString "")) (EListLit (ELit (LString ""))))))
+(DTest false "toInt agrees with the Medaka reference on edge inputs" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "refPairs2") (EVar "refToInt")) (EVar "intTextEdges"))) (EApp (EApp (EVar "refPairs2") (EVar "toInt")) (EVar "intTextEdges"))))
+(DTest false "reverse agrees with the codepoint reference on edge inputs" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "refPairs2") (EVar "refReverse")) (EVar "reverseEdges"))) (EApp (EApp (EVar "refPairs2") (EVar "reverse")) (EVar "reverseEdges"))))
+(DTest false "join agrees with the intersperse reference on edge inputs" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "refJoinPairs") (EVar "refJoin")) (EVar "joinEdges"))) (EApp (EApp (EVar "refJoinPairs") (EVar "join")) (EVar "joinEdges"))))
+(DTypeSig false "refPairs2" (TyFun (TyFun (TyCon "String") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "refPairs2" ((PVar "f") (PVar "xs")) (EApp (EApp (EMethodRef "map") (EVar "f")) (EVar "xs")))
+(DTypeSig false "refJoinPairs" (TyFun (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "refJoinPairs" (PWild (PList)) (EListLit))
+(DFunDef false "refJoinPairs" ((PVar "f") (PCons (PTuple (PVar "sep") (PVar "parts")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "f") (EVar "sep")) (EVar "parts")) (EApp (EApp (EVar "refJoinPairs") (EVar "f")) (EVar "rest"))))
+(DProp false "toInt reads back every decimal Int" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "toInt") (EApp (EVar "intToString") (EVar "n"))) (EApp (EVar "Some") (EVar "n"))))
+(DProp false "reverse is an involution" ((pp "s" (TyCon "String"))) (EBinOp "==" (EApp (EVar "reverse") (EApp (EVar "reverse") (EVar "s"))) (EVar "s")))
+(DProp false "join with the empty separator is concat" ((pp "s" (TyCon "String"))) (EBinOp "==" (EApp (EApp (EVar "join") (ELit (LString ""))) (EListLit (EVar "s") (EVar "s"))) (EBinOp "++" (EVar "s") (EVar "s"))))

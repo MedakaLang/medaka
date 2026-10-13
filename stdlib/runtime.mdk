@@ -974,6 +974,20 @@ extern stringCountOccurrences : String -> String -> Int
 export
 extern stringLastIndexOf : String -> String -> Option Int
 
+-- | The integer written in decimal in the string, with an optional leading
+-- `-` or `+`, or `None` for an empty or non-numeric string or a value outside
+-- the `Int` range.
+export
+extern stringToInt : String -> Option Int
+
+-- | The strings joined with the first between each adjacent pair.
+export
+extern stringJoin : String -> List String -> String
+
+-- | The string with its codepoints in reverse order.
+export
+extern stringReverse : String -> String
+
 -- | The ordering of two strings, by codepoint.
 extern stringCompare : String -> String -> Ordering
 

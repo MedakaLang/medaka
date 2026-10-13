@@ -2219,6 +2219,19 @@ emitStrExtern e env "stringConcat" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_string_concat(i64 \{a})"
     (r, LTStr)
   _ => panic "llvm: stringConcat takes one argument"
+emitStrExtern e env "stringReverse" args = match emitArgs e env args
+  [a] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_string_reverse(i64 \{a})"
+    (r, LTStr)
+  _ => panic "llvm: stringReverse takes one argument"
+emitStrExtern e env "stringJoin" args = match emitArgs e env args
+  [sep, parts] =>
+    let r = freshReg e
+    let _ =
+      emit e "  \{r} = call i64 @mdk_string_join(i64 \{sep}, i64 \{parts})"
+    (r, LTStr)
+  _ => panic "llvm: stringJoin takes two arguments"
 emitStrExtern e env "stringLength" args = match emitArgs e env args
   [a] =>
     let p = freshReg e
@@ -2839,6 +2852,12 @@ emitAdtExtern e env "stringLastIndexOf" args = match emitArgs e env args
       emit e "  \{r} = call i64 @mdk_string_last_index_of(i64 \{n}, i64 \{h})"
     (r, LTCon)
   _ => panic "llvm: stringLastIndexOf takes two arguments"
+emitAdtExtern e env "stringToInt" args = match emitArgs e env args
+  [s] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_string_to_int(i64 \{s})"
+    (r, LTCon)
+  _ => panic "llvm: stringToInt takes one argument"
 emitAdtExtern e env "stringCompare" args = match emitArgs e env args
   [a, b] =>
     let r = freshReg e

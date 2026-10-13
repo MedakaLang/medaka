@@ -2190,6 +2190,100 @@ long long mdk_string_last_index_of(long long needle, long long hay) {
   return mdk_some((mdk_utf8_cp_count(hb, last) << 1) | 1);
 }
 
+/* A String cell of `byte_len` bytes with its codepoint count set; the caller
+ * fills the bytes at cell + 24 with well-formed UTF-8. */
+static char *mdk_str_cell_new(long long byte_len, long long cp_count) {
+  char *cell = (char *)mdk_alloc_atomic(24 + byte_len + 1);
+  ((long long *)cell)[0] = MDK_STR_TAG;
+  ((long long *)cell)[1] = byte_len;
+  ((long long *)cell)[2] = cp_count;
+  cell[24 + byte_len] = '\0';
+  return cell;
+}
+
+/* stringToInt : String -> Option Int.  A byte-level parser: the running magnitude
+ * stays non-positive, and each digit is
+ * checked against the limit before the multiply and before the add, so no step
+ * leaves the i64 range.  Non-ASCII bytes are never digits or signs, so a byte
+ * scan decides exactly what the codepoint scan decides. */
+long long mdk_string_to_int(long long s) {
+  const char *c = (const char *)s;
+  long long n = ((const long long *)c)[1];
+  const unsigned char *b = (const unsigned char *)c + 24;
+  const long long min_bound = -(1LL << 62);
+  const long long max_bound = (1LL << 62) - 1;
+  if (n == 0) return mdk_none();
+  long long i = 0;
+  int negative = 0;
+  if (b[0] == '-') { negative = 1; i = 1; }
+  else if (b[0] == '+') i = 1;
+  long long acc = 0;
+  int seen = 0;
+  for (; i < n; i++) {
+    if (b[i] < '0' || b[i] > '9') return mdk_none();
+    long long d = b[i] - '0';
+    long long limit = negative ? min_bound : 0 - max_bound;
+    if (acc < limit / 10) return mdk_none();
+    long long acc2 = acc * 10;
+    if (acc2 < limit + d) return mdk_none();
+    acc = acc2 - d;
+    seen = 1;
+  }
+  if (!seen) return mdk_none();
+  long long v = negative ? acc : 0 - acc;
+  return mdk_some(v * 2 + 1);
+}
+
+/* stringReverse : String -> String.  Walks the UTF-8 bytes from the end, each
+ * codepoint's lead byte found by skipping continuation bytes, and copies each
+ * sequence whole.  The codepoint count is unchanged. */
+long long mdk_string_reverse(long long s) {
+  const char *c = (const char *)s;
+  long long n = ((const long long *)c)[1];
+  long long cp = ((const long long *)c)[2];
+  const char *b = c + 24;
+  char *out = mdk_str_cell_new(n, cp);
+  char *o = out + 24;
+  long long end = n;
+  while (end > 0) {
+    long long start = end - 1;
+    while (start > 0 && (((unsigned char)b[start]) & 0xC0) == 0x80) start--;
+    memcpy(o, b + start, (size_t)(end - start));
+    o += end - start;
+    end = start;
+  }
+  return (long long)out;
+}
+
+/* stringJoin : String -> List String -> String, the same bytes as
+ * stringConcat (intersperse sep parts).  Pass one sums byte and codepoint
+ * counts (both are additive over the pieces); pass two blits. */
+long long mdk_string_join(long long sep, long long list) {
+  const char *sc = (const char *)sep;
+  long long sl = ((const long long *)sc)[1];
+  long long scp = ((const long long *)sc)[2];
+  long long total = 0, cp = 0, parts = 0;
+  for (long long w = list; (w & 1) == 0; w = ((const long long *)w)[2]) {
+    const long long *piece = (const long long *)((const long long *)w)[1];
+    total += piece[1];
+    cp += piece[2];
+    parts++;
+  }
+  if (parts > 1) { total += (parts - 1) * sl; cp += (parts - 1) * scp; }
+  char *out = mdk_str_cell_new(total, cp);
+  char *o = out + 24;
+  int first = 1;
+  for (long long w = list; (w & 1) == 0; w = ((const long long *)w)[2]) {
+    if (!first) { memcpy(o, sc + 24, (size_t)sl); o += sl; }
+    first = 0;
+    const char *p = (const char *)((const long long *)w)[1];
+    long long bl = ((const long long *)p)[1];
+    memcpy(o, p + 24, (size_t)bl);
+    o += bl;
+  }
+  return (long long)out;
+}
+
 long long mdk_string_compare(long long a, long long b) {
   const char *ac = (const char *)a, *bc = (const char *)b;
   long long al = ((const long long *)ac)[1], bl = ((const long long *)bc)[1];

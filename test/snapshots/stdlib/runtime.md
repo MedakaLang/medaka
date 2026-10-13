@@ -1,5 +1,5 @@
 # META
-source_lines=1017
+source_lines=1031
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -978,6 +978,20 @@ extern stringCountOccurrences : String -> String -> Int
 export
 extern stringLastIndexOf : String -> String -> Option Int
 
+-- | The integer written in decimal in the string, with an optional leading
+-- `-` or `+`, or `None` for an empty or non-numeric string or a value outside
+-- the `Int` range.
+export
+extern stringToInt : String -> Option Int
+
+-- | The strings joined with the first between each adjacent pair.
+export
+extern stringJoin : String -> List String -> String
+
+-- | The string with its codepoints in reverse order.
+export
+extern stringReverse : String -> String
+
 -- | The ordering of two strings, by codepoint.
 extern stringCompare : String -> String -> Ordering
 
@@ -1215,6 +1229,9 @@ extern stringToLower : String -> String
 (DExtern true "stringEndsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DExtern true "stringCountOccurrences" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int"))))
 (DExtern true "stringLastIndexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DExtern true "stringToInt" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
+(DExtern true "stringJoin" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DExtern true "stringReverse" (TyFun (TyCon "String") (TyCon "String")))
 (DExtern false "stringCompare" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Ordering"))))
 (DExtern false "stringToFloat" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Float"))))
 (DExtern false "charIsAlpha" (TyFun (TyCon "Char") (TyCon "Bool")))
@@ -1422,6 +1439,9 @@ extern stringToLower : String -> String
 (DExtern true "stringEndsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DExtern true "stringCountOccurrences" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int"))))
 (DExtern true "stringLastIndexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DExtern true "stringToInt" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
+(DExtern true "stringJoin" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DExtern true "stringReverse" (TyFun (TyCon "String") (TyCon "String")))
 (DExtern false "stringCompare" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Ordering"))))
 (DExtern false "stringToFloat" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Float"))))
 (DExtern false "charIsAlpha" (TyFun (TyCon "Char") (TyCon "Bool")))

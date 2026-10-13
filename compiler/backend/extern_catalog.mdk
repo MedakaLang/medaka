@@ -124,6 +124,9 @@ public export data WasmUse =
   | UseArgs
   | UseFileBytes
   | UseClock
+  | UseStrToInt
+  | UseStrReverse
+  | UseStrJoin
   deriving (Eq, Debug)
 
 -- One extern: its name, then the llvm, wasm and eval dispositions.  The
@@ -345,6 +348,9 @@ wasmUseRows = [
   ("stringEndsWith", [UseStr, UseStrLeaf]),
   ("stringCountOccurrences", [UseStr, UseStrLeaf, UseStrSearch]),
   ("stringLastIndexOf", [UseStr, UseStrLeaf, UseStrSearch]),
+  ("stringToInt", [UseStr, UseStrToInt]),
+  ("stringReverse", [UseStr, UseStrReverse]),
+  ("stringJoin", [UseStr, UseList, UseStrJoin]),
   ("stringCompare", [UseStr, UseStrLeaf, UseStrSearch]),
   ("stringToFloat", [UseStr, UseFloat, UseFloatStr, UseIO]),
   ("charIsAlpha", [UseCharClass]),
@@ -1256,6 +1262,21 @@ catalogRows = [
   ExternRow
     "stringLastIndexOf"
     (CSymbol LlvmAdt "mdk_string_last_index_of")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringToInt"
+    (CSymbol LlvmAdt "mdk_string_to_int")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringReverse"
+    (CSymbol LlvmStr "mdk_string_reverse")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringJoin"
+    (CSymbol LlvmStr "mdk_string_join")
     (Inline WasmStr)
     Interpreted,
   ExternRow

@@ -1,0 +1,8 @@
+-- W8d: stringReverse keeps multibyte sequences whole; stringJoin with an empty
+-- piece, a multibyte separator, and an empty list.
+main =
+  stringReverse "héllo日" ++ "|"
+    ++ stringJoin ", " ["a", "日", ""] ++ "|"
+    ++ stringJoin "é" ["日", "本"] ++ "|"
+    ++ stringJoin ", " [] ++ "|"
+    ++ stringReverse ""

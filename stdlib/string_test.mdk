@@ -5,9 +5,9 @@
 
 import string.{
   byteLength, center, countOccurrences, drop, endsWith, fromChars, indexOf,
-  lastIndexOf, lines, padLeft, padRight, replace, replaceAll, splitAt,
-  startsWith, stripPrefix, stripSuffix, take, trim, trimLeft, trimRight,
-  unlines, utf8ByteLength
+  join, lastIndexOf, lines, padLeft, padRight, replace, replaceAll, reverse,
+  splitAt, startsWith, stripPrefix, stripSuffix, take, toInt, trim, trimLeft,
+  trimRight, unlines, unwords, utf8ByteLength
 }
 import test.{expectEqual, expectFalse, expectTrue}
 
@@ -441,3 +441,231 @@ test "lastIndexOf agrees with the codepoint reference on edge inputs" =
   expectEqual
     (refPairs refLastIndexOf edgePairs)
     (refPairs lastIndexOf edgePairs)
+
+-- # Native toInt, reverse and join
+
+test "toInt reads a signed decimal" =
+  expectEqual (Some 42, Some (-7), Some 7) (toInt "42", toInt "-7", toInt "+7")
+
+test "toInt of an empty or sign-only string is None" =
+  expectEqual (None, None, None) (toInt "", toInt "-", toInt "+")
+
+test "toInt rejects trailing and leading junk" =
+  expectEqual
+    (None, None, None, None)
+    (toInt "12x", toInt "x12", toInt "--1", toInt " 1")
+
+test "toInt rejects a non-ASCII digit" =
+  expectEqual (None, None) (toInt "1é", toInt "٣")
+
+test "toInt accepts leading zeros and negative zero" =
+  expectEqual (Some 7, Some 0, Some 0) (toInt "007", toInt "-0", toInt "+0")
+
+test "toInt holds the Int bounds" =
+  expectEqual
+    (Some 4611686018427387903, Some -4611686018427387904)
+    (toInt "4611686018427387903", toInt "-4611686018427387904")
+
+test "toInt rejects one past either Int bound" =
+  expectEqual
+    (None, None)
+    (toInt "4611686018427387904", toInt "-4611686018427387905")
+
+test "toInt rejects a value far outside the Int range" =
+  expectEqual
+    (None, None, None)
+    (
+      toInt "99999999999999999999",
+      toInt "-99999999999999999999",
+      toInt "9223372036854775807",
+    )
+
+test "reverse keeps multibyte codepoints whole" =
+  expectEqual ("óH", "本日", "b😀a") (reverse "Hó", reverse "日本", reverse "a😀b")
+
+test "reverse of the empty string is empty" = expectEqual "" (reverse "")
+
+test "join puts the separator between each adjacent pair" =
+  expectEqual
+    ("a, b, c", "", "a-b")
+    (join ", " ["a", "b", "c"], join "" ["", ""], join "-" ["a", "b"])
+
+test "join of nothing and of one part" =
+  expectEqual ("", "x") (join ", " [], join ", " ["x"])
+
+test "unwords joins with single spaces" =
+  expectEqual "a b  c" (unwords ["a", "b", "", "c"])
+
+-- Reference definitions for toInt, reverse and join: the Medaka code the
+-- native externs replaced, kept so the differential below pins the new
+-- behaviour to it.  They walk Arrays of Char, one codepoint at a time.
+
+refIsDigit : Char -> Bool
+-- Oracle: the digit test the Medaka parser used, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refIsDigit c = c >= '0' && c <= '9'
+
+refToInt : String -> Option Int
+-- Oracle: the Medaka parser the native stringToInt replaced, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refToInt s =
+  let a = stringToChars s
+  refParseInt a (arrayLength a)
+
+refParseInt : Array Char -> Int -> Option Int
+refParseInt a n = if n == 0 then None else refParseSign a n (arrayGetUnsafe 0 a)
+
+refParseSign : Array Char -> Int -> Char -> Option Int
+refParseSign a n c
+  | c == '-' = refParseDigits a n 1 0 False True
+  | c == '+' = refParseDigits a n 1 0 False False
+  | otherwise = refParseDigits a n 0 0 False False
+
+refParseDigits : Array Char -> Int -> Int -> Int -> Bool -> Bool -> Option Int
+refParseDigits a n i acc seen negative
+  | i >= n = refFinishInt seen acc negative
+  | otherwise = refParseDigitStep a n i acc seen negative (arrayGetUnsafe i a)
+
+refParseDigitStep : Array Char ->
+  Int ->
+  Int ->
+  Int ->
+  Bool ->
+  Bool ->
+  Char ->
+  Option Int
+refParseDigitStep a n i acc seen negative c =
+  if refIsDigit c then
+    let d = charCode c - 48
+    let limit = if negative then intMinBound else 0 - intMaxBound
+    let multMin = limit / 10
+    if acc < multMin then
+      None
+    else
+      let acc2 = acc * 10
+      if acc2 < limit + d then
+        None
+      else
+        refParseDigits a n (i + 1) (acc2 - d) True negative
+  else
+    None
+
+refFinishInt : Bool -> Int -> Bool -> Option Int
+refFinishInt seen acc negative =
+  if not seen then None else if negative then Some acc else Some (0 - acc)
+
+refReverse : String -> String
+-- Oracle: the codepoint reversal the native stringReverse replaced.
+-- lint-disable-next-line rule-stdlib-reimpl
+refReverse s =
+  let a = stringToChars s
+  let n = arrayLength a
+  stringFromChars (arrayMakeWith n (i => arrayGetUnsafe (n - 1 - i) a))
+
+refIntersperse : a -> List a -> List a
+-- Oracle: the separator walk the Medaka join used, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refIntersperse _ [] = []
+refIntersperse _ (x :: []) = [x]
+refIntersperse sep (x :: xs) = x :: sep :: refIntersperse sep xs
+
+refJoin : String -> List String -> String
+-- Oracle: the intersperse-then-concat definition the native stringJoin replaced.
+-- lint-disable-next-line rule-stdlib-reimpl
+refJoin sep parts = stringConcat (refIntersperse sep parts)
+
+intTextEdges : List String
+intTextEdges = [
+  "",
+  "-",
+  "+",
+  "0",
+  "-0",
+  "+0",
+  "007",
+  "-7",
+  "+7",
+  "42",
+  "12x",
+  "x12",
+  "--1",
+  "+-1",
+  "-+1",
+  " 1",
+  "1 ",
+  "1é",
+  "é1",
+  "٣",
+  "1\n",
+  "00000000000000000000001",
+  "4611686018427387903",
+  "4611686018427387904",
+  "-4611686018427387904",
+  "-4611686018427387905",
+  "461168601842738790",
+  "-461168601842738790",
+  "4611686018427387900",
+  "9223372036854775807",
+  "-9223372036854775808",
+  "99999999999999999999",
+  "-99999999999999999999",
+  "1234567890",
+]
+
+reverseEdges : List String
+reverseEdges = [
+  "",
+  "a",
+  "ab",
+  "abc",
+  "héllo",
+  "日本語",
+  "a😀b",
+  "é",
+  "👍🏽x",
+  "ééé",
+  "a\nb",
+  "日a本",
+]
+
+joinEdges : List (String, List String)
+joinEdges = [
+  (", ", []),
+  (", ", ["a"]),
+  ("", ["a", "b"]),
+  (", ", ["a", "b", "c"]),
+  ("é", ["日", "本"]),
+  ("日本", ["", "x", ""]),
+  ("-", ["", ""]),
+  (" ", ["a😀", "b"]),
+  ("", []),
+  ("", [""]),
+]
+
+test "toInt agrees with the Medaka reference on edge inputs" =
+  expectEqual (refPairs2 refToInt intTextEdges) (refPairs2 toInt intTextEdges)
+
+test "reverse agrees with the codepoint reference on edge inputs" =
+  expectEqual
+    (refPairs2 refReverse reverseEdges)
+    (refPairs2 reverse reverseEdges)
+
+test "join agrees with the intersperse reference on edge inputs" =
+  expectEqual (refJoinPairs refJoin joinEdges) (refJoinPairs join joinEdges)
+
+refPairs2 : (String -> a) -> List String -> List a
+refPairs2 f xs = map f xs
+
+refJoinPairs : (String -> List String -> String) ->
+  List (String, List String) ->
+  List String
+refJoinPairs _ [] = []
+refJoinPairs f ((sep, parts) :: rest) = f sep parts :: refJoinPairs f rest
+
+prop "toInt reads back every decimal Int" (n : Int) =
+  toInt (intToString n) == Some n
+
+prop "reverse is an involution" (s : String) = reverse (reverse s) == s
+
+prop "join with the empty separator is concat" (s : String) =
+  join "" [s, s] == s ++ s

@@ -3597,6 +3597,9 @@ externBindings _ = [
   ("stringEndsWith", prim2 pStringEndsWith),
   ("stringCountOccurrences", prim2 pStringCountOccurrences),
   ("stringLastIndexOf", prim2 pStringLastIndexOf),
+  ("stringToInt", prim1 pStringToInt),
+  ("stringReverse", prim1 pStringReverse),
+  ("stringJoin", prim2 pStringJoin),
   ("stringSlice", prim3 pStringSlice),
   ("arrayLength", prim1 pArrayLength),
   ("arrayFromList", prim1 pArrayFromList),
@@ -4043,6 +4046,19 @@ pStringLastIndexOf : Value e -> Value e -> <e> Value e
 pStringLastIndexOf (VString n) (VString h) =
   optionToValue (mapOption VInt (evalLastIndexOf n h))
 pStringLastIndexOf _ _ = panic "stringLastIndexOf: not Strings"
+
+pStringToInt : Value e -> <e> Value e
+pStringToInt (VString s) = optionToValue (mapOption VInt (stringToInt s))
+pStringToInt _ = panic "stringToInt: not a String"
+
+pStringReverse : Value e -> <e> Value e
+pStringReverse (VString s) = VString (stringReverse s)
+pStringReverse _ = panic "stringReverse: not a String"
+
+pStringJoin : Value e -> Value e -> <e> Value e
+pStringJoin (VString sep) (VList vs) =
+  VString (stringJoin sep (map unString vs))
+pStringJoin _ _ = panic "stringJoin: bad operands"
 
 evalLastIndexOf : String -> String -> Option Int
 -- Host-level lastIndexOf: the last hit, which no stdlib function returns.

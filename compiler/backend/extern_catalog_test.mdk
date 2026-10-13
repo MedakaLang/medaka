@@ -418,4 +418,19 @@ test "(d) wasm: a program reaching an extern gets each runtime group it demands"
       "main = match readFileBytes \"x\"\n  Ok _ => 0\n  Err _ => 1"
       "(func $mdk_read_file_bytes_io",
     demandRow UseClock "sleepMs" "main = sleepMs 0" "(func $mdk_sleep_ms",
+    demandRow
+      UseStrToInt
+      "stringToInt"
+      "main = match stringToInt \"7\"\n  Some i => i\n  None => 0"
+      "(func $mdk_str_to_int",
+    demandRow
+      UseStrReverse
+      "stringReverse"
+      "main = stringLength (stringReverse \"ab\")"
+      "(func $mdk_str_reverse",
+    demandRow
+      UseStrJoin
+      "stringJoin"
+      "main = stringLength (stringJoin \",\" [\"a\", \"b\"])"
+      "(func $mdk_str_join",
   ]

@@ -123,12 +123,18 @@ FIXDIR_MODULES="$ROOT/test/wasm/fixtures_modules"
 #    (F1-floor ratio 4218).  The plain corpus gains the two new fixtures
 #    `w8c_string_affix_search` and `w8c_string_count_last_index`, measured 463399 B /
 #    3507 funcs.
+#    W8d (stringToInt, stringReverse, stringJoin) adds three runtime blocks, each
+#    behind its own use flag, so only a program that demands one pays for it.  No
+#    modules program does, so the modules figures stand unchanged.  The plain corpus
+#    gains the two fixtures `w8d_string_to_int` and `w8d_string_reverse_join`, which
+#    carry all three blocks: 31 + 32 = 63 funcs, and 474514 B against 463399 B
+#    before them (+11115 B for the two fixtures together).
 MODULES_BYTES_CEIL=2880000
 MODULES_FUNCS_CEIL=6403
 MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/awk float compare)
 
 PLAIN_BYTES_CEIL=495000
-PLAIN_FUNCS_CEIL=3510
+PLAIN_FUNCS_CEIL=3570
 
 TYPED_BYTES_CEIL=23500
 TYPED_FUNCS_CEIL=145
@@ -141,7 +147,7 @@ TYPED_FUNCS_CEIL=145
 # when they're actually fixtures dropping out). A gap appearing at all here is
 # itself the regression signal this gate exists to catch.
 MODULES_OK_EXACT=60
-PLAIN_OK_EXACT=170
+PLAIN_OK_EXACT=172
 TYPED_OK_EXACT=9
 
 # ── F1's wasm-opt-derived function-count floor (F2/S2-4) ───────────────────

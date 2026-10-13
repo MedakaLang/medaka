@@ -437,12 +437,15 @@ pStringEndsWith : Value a -> Value a -> <a> Value a
 pStringFromChars : Value a -> <a> Value a
 pStringFromUtf8Bytes : Value a -> <a> Value a
 pStringIndexOf : Value a -> Value a -> <a> Value a
+pStringJoin : Value a -> Value a -> <a> Value a
 pStringLastIndexOf : Value a -> Value a -> <a> Value a
 pStringLength : Value a -> <a> Value a
+pStringReverse : Value a -> <a> Value a
 pStringSlice : Value a -> Value a -> Value a -> <a> Value a
 pStringStartsWith : Value a -> Value a -> <a> Value a
 pStringToChars : Value a -> <a> Value a
 pStringToFloat : Value a -> <a> Value a
+pStringToInt : Value a -> <a> Value a
 pStringToLower : Value a -> <a> Value a
 pStringToUpper : Value a -> <a> Value a
 pStringToUtf8Bytes : Value a -> <a> Value a

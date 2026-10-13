@@ -1304,6 +1304,32 @@ stringLastIndexOf : String -> String -> Option Int
 The position of the last occurrence of the first string in the second,
 or `None`.  Occurrences may overlap; an empty needle is at the end.
 
+### `stringToInt`
+
+```
+stringToInt : String -> Option Int
+```
+
+The integer written in decimal in the string, with an optional leading
+`-` or `+`, or `None` for an empty or non-numeric string or a value outside
+the `Int` range.
+
+### `stringJoin`
+
+```
+stringJoin : String -> List String -> String
+```
+
+The strings joined with the first between each adjacent pair.
+
+### `stringReverse`
+
+```
+stringReverse : String -> String
+```
+
+The string with its codepoints in reverse order.
+
 ### `stringCompare`
 
 ```
