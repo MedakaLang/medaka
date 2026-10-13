@@ -803,6 +803,55 @@ inputs, and the limitations of reused historical build provenance. These results
 motivate separating major collection pressure from survivor volume: a larger
 nursery can reduce promotion while delaying reclamation of dead mature objects.
 
+### Allocation-pressure screen (2026-10-12)
+
+A scratch candidate supplements the mature-size trigger with mutator allocation
+debt, charged at existing slow paths. Its budget is twice post-collection live
+bytes plus four nursery capacities. This tests eventual mature reclamation when
+continued young allocation produces few survivors; it does not implement OCaml's
+major-allocation debt rule or incremental collection.
+
+All 576 measurements completed: four workloads, four nursery capacities
+(256 KiB and 16 MiB, each also tested eight bytes smaller), and six
+position-balanced rounds across two custom and four Boehm arms. Independent
+recomputation confirmed provenance, accounting, reductions, and three rejection
+cells under the frozen rules. The candidate is not selected or installed.
+
+At 16 MiB, transition medians improve from 82.07–82.72 ms to 70.08–70.47 ms, with five of six
+paired samples improving more than 5% at both capacities. Three pressure-triggered
+majors reduce post-churn pool reservation from 33.75 MB to 3.68–4.73 MB. Final
+collection falls from 10.99–11.83 ms to 1.06–1.44 ms, and peak RSS falls from
+49.55–49.61 MiB to 36.38–37.42 MiB. Candidate time is 0.748–0.766 of the fastest
+Boehm median, with RSS ratios 0.979–1.007.
+
+Keeping the mature graph live at those capacities exposes the cost: an extra
+major scan raises churn time by 15.5–19.3%. Whole-run candidate/baseline ratios are 1.034 and 1.087; only
+three of six paired ratios exceed 1.05 at either capacity. This does not meet the
+frozen repeatable-regression rejection, but it is inconclusive, not proof of no
+regression. At 256 KiB, stable-graph churn slows about 60–61%; whole-run medians
+rise 4.69–5.95%, again without meeting the frozen five-of-six repeatability rule.
+
+Both small-nursery transition points fail the qualifying-benefit requirement:
+median ratios are 0.977 and 0.970, without a qualifying reservation or final-pause
+reduction. The aligned 16 MiB retained tree rejects on a repeatable regression:
+454.07 ms becomes 492.60 ms, a ratio of 1.0849 with five of six paired ratios
+above 1.05. Both custom arms have the same 11 minor and two major collections,
+five million promotions, and 160 MB copied; this result does not establish extra
+collection work as the cause. No memory rejection occurs. No held-out
+confirmation batch was run.
+
+Whole elapsed includes exact-content validation. The frozen packet incorrectly
+said transition validation was contained in the named phase timers: several
+checks occur between timers. Zero validation/cleanup fields mean unreported
+time, not absent work. The audit preserves that packet with an explicit erratum
+and the elapsed-minus-phase residuals. The decision metric remains whole elapsed;
+phase timings do not partition it.
+
+The [raw samples](../../test/gc_prototype/results/2026-10-12-allocation-pressure-screen-results.jsonl)
+and [audit](../../test/gc_prototype/results/2026-10-12-allocation-pressure-screen-audit.json)
+preserve the frozen criteria, source reconstruction, phase ranges, correctness
+checks, and independent audit.
+
 ### Whole-payload initialization candidate (2026-10-12)
 
 A scratch helper initializes a complete payload after zeroed allocation and root
