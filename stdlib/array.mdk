@@ -73,19 +73,10 @@ make n x = arrayMake n x
    [0, 2, 4] -}
 export
 makeWith : Int -> (Int -> <e> a) -> <e> Array a
-makeWith n f =
-  if n <= 0 then
-    [||]
-  else
-    arrayFromList (revList (makeWithRevBuild f 0 n []) [])
+makeWith n f = if n <= 0 then [||] else arrayMakeWith n f
 
 -- > length (makeWith 0 (i => i))
 -- 0
-
-makeWithRevBuild : (Int -> <e> a) -> Int -> Int -> List a -> <e> List a
-makeWithRevBuild f i n acc
-  | i >= n = acc
-  | otherwise = makeWithRevBuild f (i + 1) n (f i :: acc)
 
 {- | An array holding the elements of a list, in order.
 
@@ -178,7 +169,13 @@ sliceClamped lo hi arr =
   let n = arrayLength arr
   let lo' = if lo < 0 then 0 else min lo n
   let hi' = if hi < lo' then lo' else min hi n
-  arrayMakeWith (hi' - lo') (i => arrayGetUnsafe (lo' + i) arr)
+  let m = hi' - lo'
+  if m <= 0 then
+    [||]
+  else
+    let out = arrayMake m (arrayGetUnsafe lo' arr)
+    let _ = arrayBlit arr lo' out 0 m
+    out
 
 {- | A new array of the first `n` elements, or of the whole array when it
    is shorter.
@@ -287,44 +284,76 @@ unzip arr =
     arrayMakeWith n (i => snd (arrayGetUnsafe i arr)),
   )
 
--- Only `filterMap` is defined; `filter` comes from the interface default.
--- `filterMap` filters via a list intermediate (tail-recursive, builds
--- reversed then `arrayFromList` after a final reverse): one O(N) traversal +
--- one O(M) list build + one O(M) array copy, no mutation so the signature
--- stays pure.
 {- | `filter` and `filterMap` return a new array of the elements that
    survive.
 
    > toList (filter isEven (fromList [1, 2, 3, 4]))
    [2, 4] -}
 export impl Filterable Array where
-  filterMap f arr =
+  filter p arr =
     let n = arrayLength arr
-    arrayFromList (revList (filterMapGo f arr 0 n []) [])
+    if n == 0 then
+      [||]
+    else
+      let buf = arrayMake n (arrayGetUnsafe 0 arr)
+      filterFinish buf (filterGo p arr buf 0 0 n) n
+
+  filterMap f arr = filterMapFrom f arr 0 (arrayLength arr)
+
+-- Survivors are written into a scratch buffer of the input's length, and the
+-- exact-size result is copied out once at the end.
+filterGo : (a -> <e> Bool) -> Array a -> Array a -> Int -> Int -> Int -> <e> Int
+filterGo p arr buf i k n =
+  if i >= n then
+    k
+  else
+    let x = arrayGetUnsafe i arr
+    if p x then
+      let _ = arraySetUnsafe k x buf
+      filterGo p arr buf (i + 1) (k + 1) n
+    else
+      filterGo p arr buf (i + 1) k n
+
+-- The buffer's first `k` elements are the result. `buf` is non-empty.
+filterFinish : Array a -> Int -> Int -> Array a
+filterFinish buf k n =
+  if k <= 0 then
+    [||]
+  else if k == n then
+    buf
+  else
+    let out = arrayMake k (arrayGetUnsafe 0 buf)
+    let _ = arrayBlit buf 0 out 0 k
+    out
+
+-- The buffer is created from the first survivor, which supplies the element
+-- type's seed value; every slot is then overwritten or discarded by the
+-- final copy.
+filterMapFrom : (a -> <e> Option b) -> Array a -> Int -> Int -> <e> Array b
+filterMapFrom f arr i n =
+  if i >= n then
+    [||]
+  else match f (arrayGetUnsafe i arr)
+    None => filterMapFrom f arr (i + 1) n
+    Some y =>
+      let buf = arrayMake n y
+      filterFinish buf (filterMapGo f arr buf (i + 1) n 1) n
 
 filterMapGo : (a -> <e> Option b) ->
   Array a ->
+  Array b ->
   Int ->
   Int ->
-  List b ->
-  <e> List b
-filterMapGo f arr i n acc =
-  if i >= n then acc else filterMapStep f arr i n acc (f (arrayGetUnsafe i arr))
-
-filterMapStep : (a -> <e> Option b) ->
-  Array a ->
   Int ->
-  Int ->
-  List b ->
-  Option b ->
-  <e> List b
-filterMapStep f arr i n acc (Some y) = filterMapGo f arr (i + 1) n (y :: acc)
-filterMapStep f arr i n acc None = filterMapGo f arr (i + 1) n acc
-
--- Local tail-recursive list reverse (avoids depending on stdlib/list.mdk).
-revList : List a -> List a -> List a
-revList [] acc = acc
-revList (x :: xs) acc = revList xs (x :: acc)
+  <e> Int
+filterMapGo f arr buf i n k =
+  if i >= n then
+    k
+  else match f (arrayGetUnsafe i arr)
+    Some y =>
+      let _ = arraySetUnsafe k y buf
+      filterMapGo f arr buf (i + 1) n (k + 1)
+    None => filterMapGo f arr buf (i + 1) n k
 
 -- # Mutation
 
@@ -429,7 +458,9 @@ sortBy cmp arr =
   if n <= 1 then
     arrayCopy arr
   else
-    mergePasses cmp (arrayCopy arr) (arrayCopy arr) n 1
+    let src = arrayCopy arr
+    let _ = sortRuns cmp src n 8 0
+    mergePasses cmp src (arrayMake n (arrayGetUnsafe 0 arr)) n 8
 
 -- > toList (sortBy compare (fromList [3, 1, 4, 1, 5]))
 -- [1, 1, 3, 4, 5]
@@ -454,14 +485,55 @@ sort arr = sortBy compare arr
 export
 sortOn : Ord b => (a -> <e> b) -> Array a -> <e> Array a
 sortOn key arr =
-  let decorated = arrayMakeWith (arrayLength arr) (i => (
-    key (arrayGetUnsafe i arr),
-    arrayGetUnsafe i arr,
-  ))
-  let sorted = sortBy ((k1, _) (k2, _) => compare k1 k2) decorated
-  arrayMakeWith (arrayLength sorted) (i => snd (arrayGetUnsafe i sorted))
+  let n = arrayLength arr
+  let keys = arrayMakeWith n (i => key (arrayGetUnsafe i arr))
+  let order =
+    sortBy
+      (i j => compare (arrayGetUnsafe i keys) (arrayGetUnsafe j keys))
+      (arrayMakeWith n (i => i))
+  arrayMakeWith n (i => arrayGetUnsafe (arrayGetUnsafe i order) arr)
 
 -- ── Merge helpers ─────────────────────────────────────────────────────
+
+-- Insertion-sorts each run of `w` elements, from index `lo` on, in place.
+-- Stable: an element moves left only past strictly greater elements.
+sortRuns : (a -> a -> <e> Ordering) -> Array a -> Int -> Int -> Int -> <e> Unit
+sortRuns cmp a n w lo =
+  if lo >= n then
+    ()
+  else
+    let hi = min (lo + w) n
+    let _ = insertionRun cmp a lo hi (lo + 1)
+    sortRuns cmp a n w hi
+
+insertionRun : (a -> a -> <e> Ordering) ->
+  Array a ->
+  Int ->
+  Int ->
+  Int ->
+  <e> Unit
+insertionRun cmp a lo hi i =
+  if i >= hi then
+    ()
+  else
+    let x = arrayGetUnsafe i a
+    let _ = insertionShift cmp a lo i x
+    insertionRun cmp a lo hi (i + 1)
+
+insertionShift : (a -> a -> <e> Ordering) ->
+  Array a ->
+  Int ->
+  Int ->
+  a ->
+  <e> Unit
+insertionShift cmp a lo j x =
+  if j <= lo then
+    arraySetUnsafe j x a
+  else if isNotGt cmp (arrayGetUnsafe (j - 1) a) x then
+    arraySetUnsafe j x a
+  else
+    let _ = arraySetUnsafe j (arrayGetUnsafe (j - 1) a) a
+    insertionShift cmp a lo (j - 1) x
 
 -- Bottom-up merge sort over two equal-length buffers, `src` and `dst`. Each
 -- pass merges adjacent runs of `width` from `src` into `dst`, then the roles
@@ -493,8 +565,30 @@ mergeRuns cmp src dst n width lo =
   else
     let mid = min (lo + width) n
     let hi = min (lo + width + width) n
-    let _ = mergeRun cmp src dst lo mid mid hi lo
+    let _ = mergePair cmp src dst lo mid hi
     mergeRuns cmp src dst n width hi
+
+-- Merges the adjacent runs `src[lo, mid)` and `src[mid, hi)` into `dst`. When
+-- the left run's last element is not greater than the right run's first, the
+-- runs are already in order and the merge is a plain copy.
+mergePair : (a -> a -> <e> Ordering) ->
+  Array a ->
+  Array a ->
+  Int ->
+  Int ->
+  Int ->
+  <e> Unit
+mergePair cmp src dst lo mid hi =
+  if mid >= hi
+    || isNotGt cmp (arrayGetUnsafe (mid - 1) src) (arrayGetUnsafe mid src) then
+    arrayBlit src lo dst lo (hi - lo)
+  else
+    mergeRun cmp src dst lo mid mid hi lo
+
+isNotGt : (a -> a -> <e> Ordering) -> a -> a -> <e> Bool
+isNotGt cmp x y = match cmp x y
+  Gt => False
+  _ => True
 
 -- Merges `src[i, iEnd)` and `src[j, jEnd)` into `dst` from index `k` on.
 mergeRun : (a -> a -> <e> Ordering) ->
@@ -746,3 +840,50 @@ prop "mapWithIndex agrees with zipWith over range" (xs : List Int) =
   eq
     (mapWithIndex (i x => i * 10 + x) arr)
     (zipWith (i x => i * 10 + x) (range 0 (length arr)) arr)
+
+-- Pairs of (key, original index) must come out ordered by key, and by index
+-- within each key: that is what stability means for a sort by key alone.
+isStableKeyedArr : Array (Int, Int) -> Int -> Bool
+isStableKeyedArr arr i
+  | i >= arrayLength arr - 1 = True
+  | otherwise =
+    let a = arrayGetUnsafe i arr
+    let b = arrayGetUnsafe (i + 1) arr
+    if fst a < fst b || fst a == fst b && snd a < snd b then
+      isStableKeyedArr arr (i + 1)
+    else
+      False
+
+prop "sortBy is stable on keys with many duplicates" (xs : List Int) =
+  let tagged = zip (map (x => x % 3) (fromList xs)) (range 0 (length xs))
+  isStableKeyedArr (sortBy ((k1, _) (k2, _) => compare k1 k2) tagged) 0
+
+prop "sort of already-sorted, reversed, and duplicate-heavy input" (xs : List Int) =
+  let arr = fromList xs
+  let sorted = sort arr
+  let dups = map (x => x % 4) arr
+  eq (sort sorted) sorted
+    && eq (sort (reverse arr)) sorted
+    && isSortedArr (sort dups)
+    && length (sort dups) == length arr
+
+prop "sortOn agrees with sortBy on the same key" (xs : List Int) =
+  let arr = fromList xs
+  eq (sortOn (x => x % 5) arr) (sortBy (a b => compare (a % 5) (b % 5)) arr)
+
+prop "filter agrees with List filter" (xs : List Int) =
+  let arr = fromList xs
+  eq (toList (filter (x => x % 3 == 0) arr)) (filter (x => x % 3 == 0) xs)
+
+prop "filterMap agrees with List filterMap" (xs : List Int) =
+  let arr = fromList xs
+  let f = x => if x % 3 == 0 then Some (x * 2) else None
+  eq (toList (filterMap f arr)) (filterMap f xs)
+
+prop "take, drop and sliceClamped agree with an index filter" (xs : List Int) (lo : Int) (hi : Int) =
+  let arr = fromList xs
+  let pairs = toList (zip (range 0 (length arr)) arr)
+  let inRange = p => fst p >= lo && fst p < hi
+  eq (toList (sliceClamped lo hi arr)) (map snd (filter inRange pairs))
+    && eq (toList (take lo arr)) (map snd (filter (p => fst p < lo) pairs))
+    && eq (toList (drop lo arr)) (map snd (filter (p => fst p >= lo) pairs))

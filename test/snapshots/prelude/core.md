@@ -1,5 +1,5 @@
 # META
-source_lines=2334
+source_lines=2377
 stages=TYPES
 diagnostics=TYPES
 # SOURCE
@@ -442,21 +442,21 @@ eqGo a b i n =
 -- does: `deriving (Ord)` over a field of array type must build without an
 -- `import array`.
 --
--- The body delegates to `Ord (List a)` rather than walking the arrays
--- directly on purpose.  A hand-written walk needs an `Ord a`-constrained
--- top-level helper, and calling one of those from an `impl Ord …` body in
--- this module panics at run time with `unbound identifier: $dict_max_0` (the
--- same shape compiles and runs correctly in any other module, and `Eq`- and
--- `Hashable`-constrained helpers are fine from here).  Delegation sidesteps it
--- and makes the "agrees with `Ord (List a)`" law true by construction.
+-- Lexicographic over the elements, then by length; agrees with `Ord (List a)`
+-- on the same elements (see the props below).
 export impl Ord (Array a) requires Ord a where
   compare a b =
-    compare (arrItems a 0 (arrayLength a)) (arrItems b 0 (arrayLength b))
-
--- Unconstrained array-to-list walk, for `Ord (Array a)` above.
-arrItems : Array a -> Int -> Int -> List a
-arrItems arr i n =
-  if i >= n then [] else arrayGetUnsafe i arr :: arrItems arr (i + 1) n
+    let la = arrayLength a
+    let lb = arrayLength b
+    let go i =
+      if i >= la then
+        compare la lb
+      else if i >= lb then
+        Gt
+      else match compare (arrayGetUnsafe i a) (arrayGetUnsafe i b)
+        Eq => go (i + 1)
+        r => r
+    go 0
 
 -- Tail-recursive walks backing the `Foldable (Array a)` impl below.
 arrToListGo : Array a -> Int -> List a -> List a
@@ -488,11 +488,18 @@ export impl Foldable Array where
   length arr = arrayLength arr
 
 export impl Semigroup (Array a) where
-  append a b = arrayMakeWith (arrayLength a + arrayLength b) (i =>
-    if i < arrayLength a then
-      arrayGetUnsafe i a
+  append a b =
+    let la = arrayLength a
+    let lb = arrayLength b
+    if la == 0 then
+      arrayCopy b
+    else if lb == 0 then
+      arrayCopy a
     else
-      arrayGetUnsafe (i - arrayLength a) b)
+      let out = arrayMake (la + lb) (arrayGetUnsafe 0 a)
+      let _ = arrayBlit a 0 out 0 la
+      let _ = arrayBlit b 0 out la lb
+      out
 
 {- | The empty array.
 
@@ -1485,8 +1492,12 @@ export impl Slice (Array a) where
     -- same reason.
     if lo < 0 || hi > arrayLength arr || hi < lo then
       sliceError lo (sliceLastIndex hi)
+    else if hi == lo then
+      [||]
     else
-      arrayMakeWith (hi - lo) (i => arrayGetUnsafe (lo + i) arr)
+      let out = arrayMake (hi - lo) (arrayGetUnsafe lo arr)
+      let _ = arrayBlit arr lo out 0 (hi - lo)
+      out
 
 {- | The substring over codepoint positions `[lo, hi)`.
 
@@ -2337,6 +2348,38 @@ prop "Array Mappable and Semigroup agree with List" (xs : List Int) (ys : List I
   eq
     (toList (append (map (x => x + 1) (arrayFromList xs)) (arrayFromList ys)))
     (map (x => x + 1) xs ++ ys)
+
+-- LAW: `append` agrees with list append and always returns a fresh array:
+-- writing into the result leaves both inputs unchanged. The left input is
+-- nonempty here; the empty-left case is the next prop.
+prop "Array append agrees with List append and does not alias its inputs" (xs : List Int) (ys : List Int) =
+  let a = arrayFromList (0 :: xs)
+  let b = arrayFromList ys
+  let r = append a b
+  let snapshot = toList r
+  let _ = arraySetUnsafe 0 0 r
+  eq snapshot ((0 :: xs) ++ ys) && eq (toList a) (0 :: xs) && eq (toList b) ys
+
+-- LAW: appending to an empty left array returns a fresh copy of the right one.
+prop "Array append with an empty left side copies the right input" (ys : List Int) =
+  let b = arrayFromList (1 :: ys)
+  let r = append (arrayFromList ([] : List Int)) b
+  let _ = arraySetUnsafe 0 0 r
+  eq (toList b) (1 :: ys) && eq (toList r) (0 :: ys)
+
+-- LAW: `slice` on arrays agrees with `slice` on lists over every in-range
+-- window, including empty windows.
+prop "Array slice agrees with List slice" (xs : List Int) (lo : Int) (hi : Int) =
+  let n = length xs
+  let l = if lo < 0 then 0 else if lo > n then n else lo
+  let h = if hi < l then l else if hi > n then n else hi
+  eq (toList (slice (arrayFromList xs) l h)) (slice xs l h)
+
+-- LAW: `Ord (Array a)` on equal prefixes orders by length.
+prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int) =
+  eq
+    (compare (arrayFromList xs) (arrayFromList (xs ++ ys)))
+    (compare (length xs) (length (xs ++ ys)))
 # TYPES
 eq : a -> a -> Bool
 append : a -> a -> a
@@ -2404,7 +2447,6 @@ thenCmp : Ordering -> Ordering -> Ordering
 debugListItems : Debug a => List a -> List String
 debugArrayItems : Debug a => Array a -> Int -> Int -> List String -> List String
 eqGo : Eq a => Array a -> Array a -> Int -> Int -> Bool
-arrItems : Array a -> Int -> Int -> List a
 arrToListGo : Array a -> Int -> List a -> List a
 arrFoldGo : (a -> b -> <c> a) -> Array b -> Int -> Int -> a -> <c> a
 arrFoldRightGo : (a -> b -> <c> b) -> Array a -> Int -> b -> <c> b
