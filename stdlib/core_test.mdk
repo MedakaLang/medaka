@@ -198,3 +198,17 @@ test "quintuple compare decides on each field in turn" =
       compare (1, 1, 1, 1, 9) (1, 1, 1, 1, 0),
       compare (1, 1, 1, 2, 3) (1, 1, 1, 2, 3),
     ]
+
+test "tuple compare returns Gt from an earlier field" =
+  expectEqual
+    [Gt, Gt, Gt, Gt, Gt, Gt, Gt, Gt]
+    [
+      compare (2, 0, 0) (1, 9, 9),
+      compare (1, 2, 0) (1, 1, 9),
+      compare (2, 0, 0, 0) (1, 9, 9, 9),
+      compare (1, 1, 2, 0) (1, 1, 1, 9),
+      compare (2, 0, 0, 0, 0) (1, 9, 9, 9, 9),
+      compare (1, 2, 0, 0, 0) (1, 1, 9, 9, 9),
+      compare (1, 1, 2, 0, 0) (1, 1, 1, 9, 9),
+      compare (1, 1, 1, 2, 0) (1, 1, 1, 1, 9),
+    ]
