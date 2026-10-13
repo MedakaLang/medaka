@@ -1,0 +1,120 @@
+--- a/test/gc_prototype/gc.c
++++ b/test/gc_prototype/gc.c
+@@ -33,0 +34,2 @@
++size_t nursery_header_size(void) { return 0; }
++size_t old_header_size(void) { return 0; }
+@@ -51,0 +54,5 @@
++typedef struct YoungHeader {
++  size_t words;
++  uint64_t mask;
++  Header *forward;
++} YoungHeader;
+@@ -58,0 +66 @@
++static size_t young_bytes(size_t words) { return sizeof(YoungHeader) + words * sizeof(Word); }
+@@ -59,0 +68 @@
++static YoungHeader *young_header(Word word) { return (YoungHeader *)word - 1; }
+@@ -60,0 +70,2 @@
++size_t nursery_header_size(void) { return sizeof(YoungHeader); }
++size_t old_header_size(void) { return sizeof(Header); }
+@@ -72 +83 @@
+-  assert(bytes >= object_bytes(3));
++  assert(bytes >= young_bytes(3));
+@@ -92 +103 @@
+-  Header *from = header(word);
++  YoungHeader *from = young_header(word);
+@@ -154 +165 @@
+-  size_t bytes = object_bytes(words);
++  size_t bytes = young_bytes(words);
+@@ -156,2 +167,6 @@
+-  Header *h;
+-  if (bytes > nursery_capacity) h = new_old(words, mask);
++  Word result;
++  if (bytes > nursery_capacity) {
++    result = payload(new_old(words, mask));
++    stats.direct_old_allocations++; stats.direct_old_payload_bytes += words * sizeof(Word);
++    stats.allocation_header_bytes += sizeof(Header);
++  }
+@@ -163 +178 @@
+-    h = (Header *)(nursery + used); used += bytes;
++    YoungHeader *h = (YoungHeader *)(nursery + used); used += bytes;
+@@ -164,0 +180,3 @@
++    result = (Word)(h + 1);
++    stats.nursery_allocations++; stats.nursery_payload_bytes += words * sizeof(Word);
++    stats.allocation_header_bytes += sizeof(YoungHeader);
+@@ -167 +185 @@
+-  stats.allocation_header_bytes += sizeof(Header); return payload(h);
++  return result;
+@@ -170,2 +188,7 @@
+-  Header *h = header(object); assert(index < h->words);
+-  assert(!pointer(value) || (index < 64 && ((h->mask >> index) & 1)));
++  int young = is_young(object);
++  size_t words;
++  uint64_t mask;
++  if (young) { YoungHeader *h = young_header(object); words = h->words; mask = h->mask; }
++  else { Header *h = header(object); words = h->words; mask = h->mask; }
++  assert(index < words);
++  assert(!pointer(value) || (index < 64 && ((mask >> index) & 1)));
+@@ -174,2 +197,5 @@
+-  if (!is_young(object) && is_young(value) && !(h->flags & REMEMBERED)) {
+-    h->flags |= REMEMBERED; h->next_remembered = remembered; remembered = h;
++  if (!young && is_young(value)) {
++    Header *h = header(object);
++    if (!(h->flags & REMEMBERED)) {
++      h->flags |= REMEMBERED; h->next_remembered = remembered; remembered = h;
++    }
+@@ -185 +211 @@
+-         ",\"allocation_header_bytes\":%" PRIu64 ",\"header_bytes_per_object\":%zu,"
++         ",\"allocation_header_bytes\":%" PRIu64 ",\"nursery_header_bytes\":%zu,\"old_header_bytes\":%zu,"
+@@ -191,2 +217,4 @@
+-         "\"old_total_allocated_bytes\":%" PRIu64 ",\"peak_root_bytes\":%zu,\"exact_live_bytes\":%zu",
+-         stats.allocations, stats.payload_bytes, stats.allocation_header_bytes, sizeof(Header),
++         "\"old_total_allocated_bytes\":%" PRIu64 ",\"peak_root_bytes\":%zu,\"exact_live_bytes\":%zu,"
++         "\"nursery_allocations\":%" PRIu64 ",\"nursery_payload_bytes\":%" PRIu64
++         ",\"direct_old_allocations\":%" PRIu64 ",\"direct_old_payload_bytes\":%" PRIu64,
++         stats.allocations, stats.payload_bytes, stats.allocation_header_bytes, sizeof(YoungHeader), sizeof(Header),
+@@ -195,3 +223,4 @@
+-         stats.peak_accounted_bytes, used, stats.old_total_allocated_bytes, stats.peak_root_bytes, stats.old_live_bytes);
+-}
+-#endif
++         stats.peak_accounted_bytes, used, stats.old_total_allocated_bytes, stats.peak_root_bytes, stats.old_live_bytes,
++         stats.nursery_allocations, stats.nursery_payload_bytes, stats.direct_old_allocations, stats.direct_old_payload_bytes);
++}
++#endif
+--- a/test/gc_prototype/gc.h
++++ b/test/gc_prototype/gc.h
+@@ -11,0 +12 @@
++  uint64_t nursery_allocations, nursery_payload_bytes, direct_old_allocations, direct_old_payload_bytes;
+@@ -29,0 +31,2 @@
++size_t nursery_header_size(void);
++size_t old_header_size(void);
+--- a/test/gc_prototype/workload.c
++++ b/test/gc_prototype/workload.c
+@@ -93 +93 @@
+-    assert(stats.old_live_bytes == stats.allocation_header_bytes / stats.allocations + 24);
++    assert(stats.old_live_bytes == old_header_size() + 3 * sizeof(Word));
+--- a/test/gc_prototype/run.py
++++ b/test/gc_prototype/run.py
+@@ -76 +76 @@
+-def build(directory, name, defines=(), sanitize=False, boehm=False):
++def build(directory, name, defines=(), sanitize=False, boehm=False, workload="workload.c"):
+@@ -82 +82 @@
+-    command += [str(HERE / "gc.c"), str(HERE / "workload.c")]
++    command += [str(HERE / "gc.c"), str(HERE / workload)]
+@@ -103,0 +104,6 @@
++            if name == "custom":
++                assert row["nursery_allocations"] + row["direct_old_allocations"] == row["allocations"]
++                assert row["nursery_payload_bytes"] + row["direct_old_payload_bytes"] == row["payload_bytes"]
++                assert row["allocation_header_bytes"] == (
++                    row["nursery_allocations"] * row["nursery_header_bytes"]
++                    + row["direct_old_allocations"] * row["old_header_bytes"])
+@@ -109,0 +116,7 @@
++    adversarial = build(directory, "custom_adversarial_sanitized", sanitize=True, workload="adversarial.c")
++    capacities = (48, 49, 55, 56, 63, 64, 79, 80, 81, 95, 96, 97, 239, 240, 241,
++                  319, 320, 321, 535, 536, 537, 567, 568, 569, 1024, 262144)
++    for capacity in capacities:
++        result = run([str(adversarial), str(capacity)], env=sanitizer_env)
++        assert result.stdout == "review graph passed\n" and not result.stderr
++    print(json.dumps({"adversarial_graph": "ASan+UBSan passed", "nursery_capacities": capacities}))
+@@ -138 +151 @@
+-        sources = ("gc.h", "gc.c", "workload.c", "run.py", "llvm_contract/contract.ll",
++        sources = ("gc.h", "gc.c", "workload.c", "run.py", "adversarial.c", "llvm_contract/contract.ll",

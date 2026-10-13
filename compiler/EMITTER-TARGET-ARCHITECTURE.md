@@ -192,6 +192,96 @@ upstream dependency and is landable now. `wasmReachFilter`'s post-lower pruning
 becomes the shared reachability pass once F3 gives it identity-keyed dispatch
 edges; until then it stays a Wasm-only field, named as such.
 
+### R5a. Experimental native moving-GC contract
+
+The [GC feasibility experiment](../docs/design/GC-FEASIBILITY.md) adds requirements
+for an opt-in native moving collector. These are integration requirements under
+investigation, not additions to the active F5 sprint's acceptance criteria or a
+change to the default collector. The revised Core-plus-Plan model still applies.
+
+- **One native layout contract.** The native emitter and C runtime must agree
+  on allocation extent, traced value slots, raw payload slots, and initialization
+  rules. Closure code addresses, array lengths, numeric payloads, and string
+  bytes cannot be traced merely because their bits resemble pointers. Native
+  descriptors are physical; Wasm keeps its own representation.
+- **Semantic types precede physical classification.** Consume F5's validated
+  binder, parameter, and return facts. Native lowering separately distinguishes
+  tagged values, raw scalars, code addresses, and heap-derived addresses. A
+  semantic Float or fixed-width type may have boxed or unboxed storage, so a
+  runtime-type stamp alone is not a root map. No GC-specific scalar-inference
+  table, source-name lookup, or default-to-Int rule becomes a second authority.
+- **Calls have collection contracts.** Allocation, runtime helpers, indirect
+  calls, and callbacks need an authoritative native contract for collection and
+  re-entry into allocating Medaka code. These are execution properties, not new
+  source effect rows: a pure call can allocate. An unknown call cannot be treated
+  as collection-free.
+- **Roots cover expression evaluation.** Earlier arguments, constructor
+  operands, projections, conditional results, and other live temporaries need
+  protection alongside lexical binders. References surviving a safepoint must
+  be available at their relocated addresses afterward. Root liveness and slot
+  placement are native decisions. TRMC interior destinations require a rooted
+  base plus offset or a stable-address contract; array builders must reload their
+  bases after allocating callbacks.
+- **Initialization windows are explicit.** An optimized constructor may omit
+  redundant zeroing only when every traced field receives a valid value before
+  another safepoint or publication. Register input roots before allocation and
+  reload them after a collecting slow path. Young initialization and direct-old
+  initialization have different barrier obligations; a fresh old object can
+  already contain young children. Preserve the generic zeroed allocator for
+  callers without this proof. Compact root frames or later stack maps must use
+  the same physical liveness facts, including intermediate operands.
+
+F5 does not provide complete field/capture layouts or object scan maps. Reuse
+Core's existing ordinals and call/tail facts. Additional semantic field or capture
+facts needed by both backends must be published and validated through Core;
+concrete scan descriptors, root frames, barriers, and relocation belong to native
+lowering and the runtime. Shared global and TRMC decisions remain owned by R5
+and the Targets arc.
+
+The experimental path must reject missing contracts and unsupported forms before
+execution. Its tests must include hand-derived answers, omitted-root/reload
+mutations, malformed layouts, and unrelated-code controls. This amendment does
+not require a new IR, a V/ANF/AP revival, or additional unboxing. Collector-side
+experiments can proceed alongside F5; compiler changes consume its settled
+carrier and follow the existing serialized landing lane.
+
+The GC experiment now includes an opt-in producer inventory in
+`compiler/backend/native_gc_contract.mdk`, consuming the F5 carrier after the
+LLVM consumer sprint. It records physical layouts and call observations during
+ordinary Boehm emission, with explicit incomplete coverage and
+`moving-safe=false`. Default/report LLVM equality and unrelated-program
+isolation are tested, including a real PDS varint program. This is an observation
+step toward R5a; root liveness, relocation reloads, managed/static ownership, and
+complete helper contracts remain required before moving execution. See the
+[evidence and limits](../docs/design/GC-FEASIBILITY.md#compiler-produced-native-inventory-2026-10-12).
+
+The opt-in [ByteBlock experiment](../test/gc_prototype/native_byteblock/run.py)
+executes restricted, compiler-produced kernels against the original [C runtime
+helper bodies](../runtime/medaka_rt.c), with versioned atomic-layout receipts
+and Word-slot roots/reloads inside the copy helper. It checks forced relocation,
+extent/layout rejection, omitted roots/reloads before stale access, and
+O0/O2/sanitizer/Boehm controls while preserving default runtime preprocessing
+and default/kernel LLVM equality. Its [checked-Core
+validator](backend/native_byteblock_kernel.mdk) consumes F5 facts within a
+trusted catalog and closed execution path; copy kernels cannot reuse the source
+after copying. This establishes one foreign-helper seam, not caller root liveness,
+complete helper coverage, or moving execution of PDS varint or gzip.
+
+The next bounded native-lowering diagnostic should exercise the real [recursive
+varint digit computation](../pds/lib/multiformats.mdk) through rooted immutable
+construction. Physical operand handles must protect earlier arguments and
+conditional join results, reload after allocating calls, and initialize fields
+under scoped constructor-layout authority derived from the actual native store
+ABI. Direct-old initialization needs its barrier; retain the generic zeroed
+allocator. Root frames must balance on every return and branch path, with a
+collection-free return handoff to the caller. Use ordinary recursion bounded by
+the supported varint integer domain, with TRMC explicitly disabled for this
+experimental target. Require a trusted import/direct-call closure and reject
+unsupported retained code rather than silently prune it. Builder/Ref mutation,
+callbacks, static ownership, TRMC interior pointers, and full application
+support remain separate obligations; neither this diagnostic nor its timings
+imply an application speedup or additional F5 scope.
+
 ### R6. The Core validator
 
 `coreValidate : EmitTarget -> CProgram -> Plan -> List CoreDefect`, run by every

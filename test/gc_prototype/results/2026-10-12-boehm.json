@@ -1,0 +1,549 @@
+{
+  "source_revision": "6aae2ea97e49656995a23eadaed333f676ee61ca",
+  "date": "2026-10-12",
+  "platform": "Linux-6.12.95+deb13-amd64-x86_64-with-glibc2.41",
+  "binary_sha256": "d0bfe52b0903e5b76840445601afa6432248db398afe9764e53fb997b5521e44",
+  "libgc_pkg_config_version": "8.2.8",
+  "common_environment": {
+    "MEDAKA_STRICT": "1",
+    "MEDAKA_ROOT": "/root/.codex/worktrees/f396/medaka",
+    "GC_FREE_SPACE_DIVISOR": "1"
+  },
+  "method": "Sequential Python subprocess timings with GNU time -v per-child RSS; separate GC_PRINT_STATS=1 runs. Same binary throughout. Final profile_boehm.py is a reusable equivalent with wait4 RSS and stricter provenance, not the historical driver.",
+  "limitations": [
+    "Shared machine; minimum of three is descriptive, not a significance test.",
+    "GC allocated-at-boundaries excludes allocation after final collection.",
+    "Reported full collection duration excludes lazy sweeping during later allocation.",
+    "CPU samples include parallel marker threads and are not wall-time fractions.",
+    "Compiler check stderr contains the identical 15-further-diagnostics note; these are successful checks, not a claim of no diagnostics."
+  ],
+  "cases": [
+    {
+      "case": "compiler_2gib",
+      "heap_initial_bytes": 2147483648,
+      "timings": [
+        {
+          "elapsed_seconds": 15.518373164348304,
+          "peak_rss_bytes": 2422079488,
+          "returncode": 0,
+          "stdout_sha256": "78b01731129ea94c49c6391b915c416dd506128694f250c7feac722d73038ea5",
+          "stderr_sha256": "4e5b00ea12530de5f2ce7289c854f623a4fca554ea7660abba400b935563c4d8"
+        },
+        {
+          "elapsed_seconds": 16.044727601110935,
+          "peak_rss_bytes": 2421862400,
+          "returncode": 0,
+          "stdout_sha256": "78b01731129ea94c49c6391b915c416dd506128694f250c7feac722d73038ea5",
+          "stderr_sha256": "4e5b00ea12530de5f2ce7289c854f623a4fca554ea7660abba400b935563c4d8"
+        },
+        {
+          "elapsed_seconds": 15.65831627510488,
+          "peak_rss_bytes": 2422046720,
+          "returncode": 0,
+          "stdout_sha256": "78b01731129ea94c49c6391b915c416dd506128694f250c7feac722d73038ea5",
+          "stderr_sha256": "4e5b00ea12530de5f2ce7289c854f623a4fca554ea7660abba400b935563c4d8"
+        }
+      ],
+      "gc_stats": {
+        "collections_logged": 12,
+        "collection_durations_logged": 12,
+        "allocated_bytes_at_collection_boundaries": 13122998576,
+        "reported_freed_bytes": 10969375408,
+        "max_logged_heap_bytes": 2229682176,
+        "full_collection_wall_seconds": 4.751383097,
+        "limitations": "Not nursery survival or exact live bytes; omits final allocation tail and lazy sweep outside collection.",
+        "elapsed_seconds": 16.12205825559795,
+        "full_collection_wall_fraction": 0.29471318250262557,
+        "stdout_sha256": "78b01731129ea94c49c6391b915c416dd506128694f250c7feac722d73038ea5",
+        "stderr_sha256": "c4988e7213041488b84cc79fc5c91087d759f24c7482425f66eb38f13a265618",
+        "collection_boundary_rows": [
+          {
+            "cycle": 1,
+            "allocated_since_previous_bytes": 0
+          },
+          {
+            "cycle": 2,
+            "allocated_since_previous_bytes": 2143099776
+          },
+          {
+            "cycle": 3,
+            "allocated_since_previous_bytes": 2065691056
+          },
+          {
+            "cycle": 4,
+            "allocated_since_previous_bytes": 376659920
+          },
+          {
+            "cycle": 5,
+            "allocated_since_previous_bytes": 2071445264
+          },
+          {
+            "cycle": 6,
+            "allocated_since_previous_bytes": 1266610800
+          },
+          {
+            "cycle": 7,
+            "allocated_since_previous_bytes": 672193280
+          },
+          {
+            "cycle": 8,
+            "allocated_since_previous_bytes": 869218048
+          },
+          {
+            "cycle": 9,
+            "allocated_since_previous_bytes": 815391136
+          },
+          {
+            "cycle": 10,
+            "allocated_since_previous_bytes": 1059345888
+          },
+          {
+            "cycle": 11,
+            "allocated_since_previous_bytes": 917008192
+          },
+          {
+            "cycle": 12,
+            "allocated_since_previous_bytes": 866335216
+          }
+        ],
+        "collection_wall_seconds_rows": [
+          0.000368137,
+          0.377586681,
+          0.741304848,
+          0.42840342,
+          0.62620628,
+          0.710652647,
+          0.179476422,
+          0.173643905,
+          0.940650581,
+          0.20617455099999998,
+          0.17368383799999998,
+          0.19323178700000002
+        ]
+      }
+    },
+    {
+      "case": "compiler_128mib",
+      "heap_initial_bytes": 134217728,
+      "timings": [
+        {
+          "elapsed_seconds": 14.77107041142881,
+          "peak_rss_bytes": 1603801088,
+          "returncode": 0,
+          "stdout_sha256": "78b01731129ea94c49c6391b915c416dd506128694f250c7feac722d73038ea5",
+          "stderr_sha256": "4e5b00ea12530de5f2ce7289c854f623a4fca554ea7660abba400b935563c4d8"
+        },
+        {
+          "elapsed_seconds": 15.250585099682212,
+          "peak_rss_bytes": 1612423168,
+          "returncode": 0,
+          "stdout_sha256": "78b01731129ea94c49c6391b915c416dd506128694f250c7feac722d73038ea5",
+          "stderr_sha256": "4e5b00ea12530de5f2ce7289c854f623a4fca554ea7660abba400b935563c4d8"
+        },
+        {
+          "elapsed_seconds": 15.774410976096988,
+          "peak_rss_bytes": 1612939264,
+          "returncode": 0,
+          "stdout_sha256": "78b01731129ea94c49c6391b915c416dd506128694f250c7feac722d73038ea5",
+          "stderr_sha256": "4e5b00ea12530de5f2ce7289c854f623a4fca554ea7660abba400b935563c4d8"
+        }
+      ],
+      "gc_stats": {
+        "collections_logged": 53,
+        "collection_durations_logged": 53,
+        "allocated_bytes_at_collection_boundaries": 13665167888,
+        "reported_freed_bytes": 12196233152,
+        "max_logged_heap_bytes": 1480204288,
+        "full_collection_wall_seconds": 3.1647814210000003,
+        "limitations": "Not nursery survival or exact live bytes; omits final allocation tail and lazy sweep outside collection.",
+        "elapsed_seconds": 14.751440384425223,
+        "full_collection_wall_fraction": 0.21454050170866168,
+        "stdout_sha256": "78b01731129ea94c49c6391b915c416dd506128694f250c7feac722d73038ea5",
+        "stderr_sha256": "9cd7e5e4f34fc7eb34726203e503fc461e255a1fdc18c2f03afa2ebf05f9df06",
+        "collection_boundary_rows": [
+          {
+            "cycle": 1,
+            "allocated_since_previous_bytes": 0
+          },
+          {
+            "cycle": 2,
+            "allocated_since_previous_bytes": 133889824
+          },
+          {
+            "cycle": 3,
+            "allocated_since_previous_bytes": 126692352
+          },
+          {
+            "cycle": 4,
+            "allocated_since_previous_bytes": 121021152
+          },
+          {
+            "cycle": 5,
+            "allocated_since_previous_bytes": 104202176
+          },
+          {
+            "cycle": 6,
+            "allocated_since_previous_bytes": 123845088
+          },
+          {
+            "cycle": 7,
+            "allocated_since_previous_bytes": 99688832
+          },
+          {
+            "cycle": 8,
+            "allocated_since_previous_bytes": 156305104
+          },
+          {
+            "cycle": 9,
+            "allocated_since_previous_bytes": 135662016
+          },
+          {
+            "cycle": 10,
+            "allocated_since_previous_bytes": 129666096
+          },
+          {
+            "cycle": 11,
+            "allocated_since_previous_bytes": 121716416
+          },
+          {
+            "cycle": 12,
+            "allocated_since_previous_bytes": 97833536
+          },
+          {
+            "cycle": 13,
+            "allocated_since_previous_bytes": 104299360
+          },
+          {
+            "cycle": 14,
+            "allocated_since_previous_bytes": 77395584
+          },
+          {
+            "cycle": 15,
+            "allocated_since_previous_bytes": 81273392
+          },
+          {
+            "cycle": 16,
+            "allocated_since_previous_bytes": 87233376
+          },
+          {
+            "cycle": 17,
+            "allocated_since_previous_bytes": 92200832
+          },
+          {
+            "cycle": 18,
+            "allocated_since_previous_bytes": 97913968
+          },
+          {
+            "cycle": 19,
+            "allocated_since_previous_bytes": 118288736
+          },
+          {
+            "cycle": 20,
+            "allocated_since_previous_bytes": 121571136
+          },
+          {
+            "cycle": 21,
+            "allocated_since_previous_bytes": 122445664
+          },
+          {
+            "cycle": 22,
+            "allocated_since_previous_bytes": 119304128
+          },
+          {
+            "cycle": 23,
+            "allocated_since_previous_bytes": 131363840
+          },
+          {
+            "cycle": 24,
+            "allocated_since_previous_bytes": 140507952
+          },
+          {
+            "cycle": 25,
+            "allocated_since_previous_bytes": 141255344
+          },
+          {
+            "cycle": 26,
+            "allocated_since_previous_bytes": 148212032
+          },
+          {
+            "cycle": 27,
+            "allocated_since_previous_bytes": 155018352
+          },
+          {
+            "cycle": 28,
+            "allocated_since_previous_bytes": 165351280
+          },
+          {
+            "cycle": 29,
+            "allocated_since_previous_bytes": 170399712
+          },
+          {
+            "cycle": 30,
+            "allocated_since_previous_bytes": 189643312
+          },
+          {
+            "cycle": 31,
+            "allocated_since_previous_bytes": 214250496
+          },
+          {
+            "cycle": 32,
+            "allocated_since_previous_bytes": 214527648
+          },
+          {
+            "cycle": 33,
+            "allocated_since_previous_bytes": 240046864
+          },
+          {
+            "cycle": 34,
+            "allocated_since_previous_bytes": 228975072
+          },
+          {
+            "cycle": 35,
+            "allocated_since_previous_bytes": 338205920
+          },
+          {
+            "cycle": 36,
+            "allocated_since_previous_bytes": 280558544
+          },
+          {
+            "cycle": 37,
+            "allocated_since_previous_bytes": 299378192
+          },
+          {
+            "cycle": 38,
+            "allocated_since_previous_bytes": 295874672
+          },
+          {
+            "cycle": 39,
+            "allocated_since_previous_bytes": 307852944
+          },
+          {
+            "cycle": 40,
+            "allocated_since_previous_bytes": 324894080
+          },
+          {
+            "cycle": 41,
+            "allocated_since_previous_bytes": 339723312
+          },
+          {
+            "cycle": 42,
+            "allocated_since_previous_bytes": 350949328
+          },
+          {
+            "cycle": 43,
+            "allocated_since_previous_bytes": 371752160
+          },
+          {
+            "cycle": 44,
+            "allocated_since_previous_bytes": 408164992
+          },
+          {
+            "cycle": 45,
+            "allocated_since_previous_bytes": 425979408
+          },
+          {
+            "cycle": 46,
+            "allocated_since_previous_bytes": 506983184
+          },
+          {
+            "cycle": 47,
+            "allocated_since_previous_bytes": 536956368
+          },
+          {
+            "cycle": 48,
+            "allocated_since_previous_bytes": 579435216
+          },
+          {
+            "cycle": 49,
+            "allocated_since_previous_bytes": 631032480
+          },
+          {
+            "cycle": 50,
+            "allocated_since_previous_bytes": 673161392
+          },
+          {
+            "cycle": 51,
+            "allocated_since_previous_bytes": 733321584
+          },
+          {
+            "cycle": 52,
+            "allocated_since_previous_bytes": 800425392
+          },
+          {
+            "cycle": 53,
+            "allocated_since_previous_bytes": 948518048
+          }
+        ],
+        "collection_wall_seconds_rows": [
+          0.000130075,
+          0.017119904000000002,
+          0.024699476,
+          0.026475585,
+          0.007032246,
+          0.008078945,
+          0.08827924899999999,
+          0.011263127,
+          0.01290677,
+          0.014432017,
+          0.017059258,
+          0.019380733,
+          0.017739093,
+          0.03971717,
+          0.019792584999999998,
+          0.020313842000000002,
+          0.019910199,
+          0.020013011,
+          0.101391121,
+          0.026219224,
+          0.027811577,
+          0.025515612,
+          0.028333492000000002,
+          0.029080151000000002,
+          0.027878101,
+          0.026510449,
+          0.027165606,
+          0.041380872,
+          0.041652258000000005,
+          0.036128892999999995,
+          0.039107274,
+          0.036844062,
+          0.039096707,
+          0.039363536,
+          0.053477334,
+          0.048167964,
+          0.050441673,
+          0.055278813,
+          0.063141278,
+          0.060679896,
+          0.067740485,
+          0.066428322,
+          0.077008961,
+          0.071920979,
+          0.095238581,
+          0.10323707,
+          0.5506688550000001,
+          0.117993703,
+          0.136869396,
+          0.132234642,
+          0.13980942600000001,
+          0.15727456,
+          0.139347263
+        ]
+      }
+    },
+    {
+      "case": "lexer_2gib",
+      "heap_initial_bytes": 2147483648,
+      "timings": [
+        {
+          "elapsed_seconds": 0.9260507524013519,
+          "peak_rss_bytes": 923426816,
+          "returncode": 0,
+          "stdout_sha256": "2af608d7dcdcd17a902ac0899a915edd6457d6538c025a9d0ba65969ed77a24b",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "elapsed_seconds": 0.7852277280762792,
+          "peak_rss_bytes": 922181632,
+          "returncode": 0,
+          "stdout_sha256": "2af608d7dcdcd17a902ac0899a915edd6457d6538c025a9d0ba65969ed77a24b",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "elapsed_seconds": 0.8343145353719592,
+          "peak_rss_bytes": 921255936,
+          "returncode": 0,
+          "stdout_sha256": "2af608d7dcdcd17a902ac0899a915edd6457d6538c025a9d0ba65969ed77a24b",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "gc_stats": {
+        "collections_logged": 1,
+        "collection_durations_logged": 1,
+        "allocated_bytes_at_collection_boundaries": 0,
+        "reported_freed_bytes": 0,
+        "max_logged_heap_bytes": 2147483648,
+        "full_collection_wall_seconds": 0.000525072,
+        "limitations": "Not nursery survival or exact live bytes; omits final allocation tail and lazy sweep outside collection.",
+        "elapsed_seconds": 0.7960828095674515,
+        "full_collection_wall_fraction": 0.0006595695745337044,
+        "stdout_sha256": "2af608d7dcdcd17a902ac0899a915edd6457d6538c025a9d0ba65969ed77a24b",
+        "stderr_sha256": "fc18dce71ee4bed88efb8457e0a016047cf2838f9aabb0a6d35e2b50be1bbe40",
+        "collection_boundary_rows": [
+          {
+            "cycle": 1,
+            "allocated_since_previous_bytes": 0
+          }
+        ],
+        "collection_wall_seconds_rows": [
+          0.000525072
+        ]
+      }
+    },
+    {
+      "case": "gc_stress_check_2gib",
+      "heap_initial_bytes": 2147483648,
+      "timings": [
+        {
+          "elapsed_seconds": 0.17417329642921686,
+          "peak_rss_bytes": 174563328,
+          "returncode": 0,
+          "stdout_sha256": "ce3e8c728c651fa31b814c3739053818e84c9285e3f9d289940403e677d53f5a",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "elapsed_seconds": 0.2638085847720504,
+          "peak_rss_bytes": 174313472,
+          "returncode": 0,
+          "stdout_sha256": "ce3e8c728c651fa31b814c3739053818e84c9285e3f9d289940403e677d53f5a",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "elapsed_seconds": 0.173772931098938,
+          "peak_rss_bytes": 174305280,
+          "returncode": 0,
+          "stdout_sha256": "ce3e8c728c651fa31b814c3739053818e84c9285e3f9d289940403e677d53f5a",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "gc_stats": {
+        "collections_logged": 1,
+        "collection_durations_logged": 1,
+        "allocated_bytes_at_collection_boundaries": 0,
+        "reported_freed_bytes": 0,
+        "max_logged_heap_bytes": 2147483648,
+        "full_collection_wall_seconds": 0.000417163,
+        "limitations": "Not nursery survival or exact live bytes; omits final allocation tail and lazy sweep outside collection.",
+        "elapsed_seconds": 0.16774077992886305,
+        "full_collection_wall_fraction": 0.0024869504015476384,
+        "stdout_sha256": "ce3e8c728c651fa31b814c3739053818e84c9285e3f9d289940403e677d53f5a",
+        "stderr_sha256": "ffd239492f12f2b624d27bb1cc2c14d5d2fce8c45fcf1ad5068c5c330e9dda5f",
+        "collection_boundary_rows": [
+          {
+            "cycle": 1,
+            "allocated_since_previous_bytes": 0
+          }
+        ],
+        "collection_wall_seconds_rows": [
+          0.000417163
+        ]
+      }
+    }
+  ],
+  "perf": {
+    "workload": "check compiler/driver/medaka_cli.mdk",
+    "initial_heap_bytes": 2147483648,
+    "frequency_hz": 99,
+    "call_graph": "dwarf,16384",
+    "event": "cycles:P",
+    "samples": 2129,
+    "lost_samples": 0,
+    "top_flat_cpu_cycle_percent": {
+      "GC_mark_from": 19.88,
+      "GC_header_cache_miss": 9.58,
+      "GC_push_contents_hdr.isra.0": 8.62,
+      "mdk_alloc": 4.8,
+      "GC_reclaim_generic": 3.89
+    }
+  }
+}

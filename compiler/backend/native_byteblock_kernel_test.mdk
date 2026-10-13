@@ -1,0 +1,106 @@
+import backend.native_byteblock_kernel.{validateByteBlockKernel}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.annotate.{annotateProgram}
+import types.typecheck.{elaborateOne, grantWholeDomain}
+import ir.core_ir_lower.{lowerProgramEmit, EmitTarget(..)}
+import ir.core_ir.{
+  CProgram(..), CBind(..), CClause(..), CExpr(..), CStmt(..), noDeclFacts
+}
+import frontend.ast.{Addr(..)}
+import test.{expectOkThen, expectTextContainsAll, expectErr}
+
+runtime : String
+runtime =
+  "extern byteBlockMake : Int -> ByteBlock\nextern byteBlockSetUnsafe : Int -> Int -> ByteBlock -> Unit\nextern byteBlockCopyUnsafe : Int -> ByteBlock -> ByteBlock\nextern byteBlockGetUnsafe : Int -> ByteBlock -> Int\nextern byteBlockLength : ByteBlock -> Int\nextern byteBlockBlit : ByteBlock -> Int -> ByteBlock -> Int -> Int -> Unit"
+
+program : String -> CProgram
+program body =
+  let source =
+    desugar
+      (parse ("main : Int\nmain =\n  let source = byteBlockMake 1\n" ++ body))
+  let prepared = elaborateOne (desugar (parse runtime)) [] (
+    "kernel",
+    grantWholeDomain source,
+  )
+  lowerProgramEmit TargetNative (annotateProgram prepared)
+
+valid : String
+valid =
+  "  byteBlockSetUnsafe 0 77 source\n  byteBlockGetUnsafe 0 (byteBlockCopyUnsafe 1 source)"
+
+test "checked producer kernel closes the copy lifetime" =
+  expectOkThen
+    (text =>
+      expectTextContainsAll
+        ["source-consumed-by-copy", "no-escape", "mdk_gc_byteblock_atomic_v1"]
+        text)
+    (validateByteBlockKernel (program valid))
+
+test "source reused after copy needs caller roots" =
+  expectErr
+    (validateByteBlockKernel
+      (program
+        "  let copy = byteBlockCopyUnsafe 1 source\n  byteBlockGetUnsafe 0 source"))
+
+test "later argument allocation cannot leave earlier source unrooted" =
+  expectErr
+    (validateByteBlockKernel
+      (program
+        "  byteBlockBlit source 0 (byteBlockMake 1) 0 1\n  byteBlockGetUnsafe 0 (byteBlockCopyUnsafe 1 source)"))
+
+test "source aliases are outside the closed physical-use grammar" =
+  expectErr
+    (validateByteBlockKernel
+      (program
+        "  let alias = source\n  byteBlockGetUnsafe 0 (byteBlockCopyUnsafe 1 alias)"))
+
+test "uncopied source result does not prove the helper seam" =
+  expectErr (validateByteBlockKernel (program "  byteBlockGetUnsafe 0 source"))
+
+test "unsafe get bounds need a literal proof" =
+  expectErr
+    (validateByteBlockKernel
+      (program "  byteBlockGetUnsafe 1 (byteBlockCopyUnsafe 1 source)"))
+
+test "oversized copy is rejected before unsafe runtime memory access" =
+  expectErr
+    (validateByteBlockKernel
+      (program "  byteBlockLength (byteBlockCopyUnsafe 2 source)"))
+
+test "missing F5 carrier fails closed" =
+  let (CProgram groups ctors types impls contexts _) = program valid
+  expectErr
+    (validateByteBlockKernel
+      (CProgram groups ctors types impls contexts noDeclFacts))
+
+replaceSource : String -> Addr -> CExpr -> CExpr
+replaceSource name address (CBlock [binding, fill, CSExpr (CApp get [index, CApp copy [count, _] copySite] getSite)]) = CBlock
+  [
+    binding,
+    fill,
+    CSExpr
+      (CApp get [index, CApp copy [count, CVar name address] copySite] getSite),
+  ]
+replaceSource _ _ body = body
+
+inconsistentSource : String -> Addr -> CProgram
+inconsistentSource name address =
+  let (CProgram [CBind fn [CClause pats body] loc bid] ctors types impls contexts facts) =
+    program valid
+  CProgram
+    [CBind fn [CClause pats (replaceSource name address body)] loc bid]
+    ctors
+    types
+    impls
+    contexts
+    facts
+
+test "global address cannot impersonate the local source" =
+  expectErr (validateByteBlockKernel (inconsistentSource "source" AGlobal))
+
+test "wrong lexical slot cannot impersonate the local source" =
+  expectErr (validateByteBlockKernel (inconsistentSource "source" (ALocal 0 1)))
+
+test "right lexical slot cannot repair a wrong emitted lookup name" =
+  expectErr (validateByteBlockKernel (inconsistentSource "other" (ALocal 0 0)))

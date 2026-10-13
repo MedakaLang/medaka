@@ -259,15 +259,25 @@ conyes20:
   %t31 = getelementptr i8, ptr %t30, i64 16
   %t32 = load i64, ptr %t31
   %t33 = call i64 @mdk___user____sumList(i64 %t32)
-  %t34 = call i64 @mdk_num_add(i64 %t29, i64 %t33)
-  store i64 %t34, ptr %t0
+  %t34 = sub i64 %t33, 1
+  %t35 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t29, i64 %t34)
+  %t36 = extractvalue { i64, i1 } %t35, 0
+  %t37 = extractvalue { i64, i1 } %t35, 1
+  br i1 %t37, label %intovf38, label %intok38
+intovf38:
+  %t39 = ashr i64 %t29, 1
+  %t40 = ashr i64 %t33, 1
+  call void @mdk_int_overflow(i64 0, i64 %t39, i64 %t40)
+  unreachable
+intok38:
+  store i64 %t36, ptr %t0
   br label %decend1
 connext20:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t35 = load i64, ptr %t0
-  ret i64 %t35
+  %t41 = load i64, ptr %t0
+  ret i64 %t41
 }
 
 ; tmc: impl_List_fmap trmc

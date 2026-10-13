@@ -1,0 +1,5 @@
+main : Int
+main =
+  let source = byteBlockMake 1
+  byteBlockSetUnsafe 0 77 source
+  byteBlockGetUnsafe 0 (byteBlockCopyUnsafe 1 source)

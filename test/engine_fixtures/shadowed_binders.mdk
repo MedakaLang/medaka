@@ -1,0 +1,36 @@
+-- A binder that shadows an enclosing binder of the same name owns its own slot on
+-- every engine: the outer binder is unchanged after the inner scope ends (#4035).
+-- Expected, derived from the scoping rules by hand:
+--   14 19 105 16 12 9.5
+inArm : Option Int -> Int
+inArm o =
+  let x = 10
+  let r = match o
+    Some x => x + 1
+    None => 0
+  r + x
+
+inLambda : Int -> Int
+inLambda x = (y => let x = y + 1 in x * 2) 5 + x
+
+inWhere : Int -> Int
+inWhere x = a + x
+  where
+    a = let x = 100 in x
+
+paramByLet : Int -> Int
+paramByLet x = let x = x + 1 in x * x
+
+paramByLetTail : Int -> Int
+paramByLetTail x = (let x = 5 in x) + x
+
+floatByInt : Float -> Int -> Float
+floatByInt x n = (let x = n * 2 in intToFloat (x + 1)) + x
+
+main =
+  let _ = println (debug (inArm (Some 3)))
+  let _ = println (debug (inLambda 7))
+  let _ = println (debug (inWhere 5))
+  let _ = println (debug (paramByLet 3))
+  let _ = println (debug (paramByLetTail 7))
+  println (debug (floatByInt 2.5 3))

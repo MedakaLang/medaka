@@ -1,0 +1,60 @@
+{
+  "head": "e2ef41974f99360c226a72f08861e070a635d110",
+  "file": "/root/.codex/worktrees/f396/medaka/test/diff_compiler_cli_reject_floor_test.mdk",
+  "file_sha256": "0c7f50cdc26ab663df10a914e14ee7db5a1cb1a4078a894d5a51ccf7f1488643",
+  "binary_before": "6897d4056f6ddad269781ea39e38945d6bbe737c021aa587b9c073f13bf4f66f",
+  "binary_after": "6897d4056f6ddad269781ea39e38945d6bbe737c021aa587b9c073f13bf4f66f",
+  "env": {
+    "MEDAKA_STRICT": "1",
+    "JOBS": "1",
+    "MEDAKA_TEST_JOBS": "1"
+  },
+  "commands": [
+    {
+      "name": "fmt",
+      "argv": [
+        "./medaka",
+        "fmt",
+        "--write",
+        "/root/.codex/worktrees/f396/medaka/test/diff_compiler_cli_reject_floor_test.mdk"
+      ],
+      "exit": 0,
+      "duration_seconds": 0.04400467872619629,
+      "stdout": "already formatted\n",
+      "stderr": "",
+      "stdout_sha256": "891183b5dfd7d0b7a695e29fb9400ac5aa924b5aa13748486a0335a95c4d74ae",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "lint",
+      "argv": [
+        "./medaka",
+        "lint",
+        "--only=rule-match-on-param,rule-hand-rolled-derivable,rule-bind-then-destructure,rule-lambda-section,rule-if-max-min,rule-andthen-pure-map,rule-destructure-in-param,rule-missing-signature,rule-not-eq,rule-bool-simplify,rule-rem-parity,rule-double-reverse,rule-when-unless,rule-complement-predicate,rule-match-to-map,rule-bind-chain-to-do,rule-dead-code,rule-concat-to-interp,rule-prefer-assign-op,rule-promissory-reader,rule-self-shadow-extern,rule-directive-reason,rule-regex-literal,rule-test-bool-literal-equal,rule-test-equal-in-true,rule-test-prelude-shadow",
+        "--deny=rule-match-on-param,rule-hand-rolled-derivable,rule-bind-then-destructure,rule-lambda-section,rule-if-max-min,rule-andthen-pure-map,rule-destructure-in-param,rule-missing-signature,rule-not-eq,rule-bool-simplify,rule-rem-parity,rule-double-reverse,rule-when-unless,rule-complement-predicate,rule-match-to-map,rule-bind-chain-to-do,rule-dead-code,rule-concat-to-interp,rule-prefer-assign-op,rule-promissory-reader,rule-self-shadow-extern,rule-directive-reason,rule-regex-literal,rule-test-bool-literal-equal,rule-test-equal-in-true,rule-test-prelude-shadow",
+        "/root/.codex/worktrees/f396/medaka/test/diff_compiler_cli_reject_floor_test.mdk"
+      ],
+      "exit": 0,
+      "duration_seconds": 0.04920458793640137,
+      "stdout": "",
+      "stderr": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "native",
+      "argv": [
+        "./medaka",
+        "test",
+        "--native",
+        "/root/.codex/worktrees/f396/medaka/test/diff_compiler_cli_reject_floor_test.mdk"
+      ],
+      "exit": 0,
+      "duration_seconds": 66.8377046585083,
+      "stdout": "running doctests in /root/.codex/worktrees/f396/medaka/test/diff_compiler_cli_reject_floor_test.mdk\n  (no doctests found)\n  running /root/.codex/worktrees/f396/medaka/test/diff_compiler_cli_reject_floor_test.mdk:392: cli reject floor D: every requireArgs spec resolves to a verb [native]\n  ok   /root/.codex/worktrees/f396/medaka/test/diff_compiler_cli_reject_floor_test.mdk:392: cli reject floor D: every requireArgs spec resolves to a verb [native]\n  running /root/.codex/worktrees/f396/medaka/test/diff_compiler_cli_reject_floor_test.mdk:397: cli reject floor R: every non-exempt verb rejects an unknown flag with rc 1 [native]\n  ok   /root/.codex/worktrees/f396/medaka/test/diff_compiler_cli_reject_floor_test.mdk:397: cli reject floor R: every non-exempt verb rejects an unknown flag with rc 1 [native]\n  running /root/.codex/worktrees/f396/medaka/test/diff_compiler_cli_reject_floor_test.mdk:403: cli reject floor R': declared exemptions are still necessary [native]\n  ok   /root/.codex/worktrees/f396/medaka/test/diff_compiler_cli_reject_floor_test.mdk:403: cli reject floor R': declared exemptions are still necessary [native]\n  running /root/.codex/worktrees/f396/medaka/test/diff_compiler_cli_reject_floor_test.mdk:409: cli reject floor K: every requireArgs verb prints a (known: \u2026) roster [native]\n  ok   /root/.codex/worktrees/f396/medaka/test/diff_compiler_cli_reject_floor_test.mdk:409: cli reject floor K: every requireArgs verb prints a (known: \u2026) roster [native]\n  running /root/.codex/worktrees/f396/medaka/test/diff_compiler_cli_reject_floor_test.mdk:415: cli reject floor S: every covered verb appears in the usage block [native]\n  ok   /root/.codex/worktrees/f396/medaka/test/diff_compiler_cli_reject_floor_test.mdk:415: cli reject floor S: every covered verb appears in the usage block [native]\n  running /root/.codex/worktrees/f396/medaka/test/diff_compiler_cli_reject_floor_test.mdk:594: cli reject floor U: every flag-literal argv arm is routed or exempt [native]\n  ok   /root/.codex/worktrees/f396/medaka/test/diff_compiler_cli_reject_floor_test.mdk:594: cli reject floor U: every flag-literal argv arm is routed or exempt [native]\n  running /root/.codex/worktrees/f396/medaka/test/diff_compiler_cli_reject_floor_test.mdk:601: cli reject floor U': declared U exemptions are still necessary [native]\n  ok   /root/.codex/worktrees/f396/medaka/test/diff_compiler_cli_reject_floor_test.mdk:601: cli reject floor U': declared U exemptions are still necessary [native]\n\n/root/.codex/worktrees/f396/medaka/test/diff_compiler_cli_reject_floor_test.mdk: 7/7 passed\n",
+      "stderr": "",
+      "stdout_sha256": "c693c6bfbd6bb65649d553a224e9f1fd32e68b6123723b35f2eb8436d28a079e",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

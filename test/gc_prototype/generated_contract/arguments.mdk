@@ -1,0 +1,9 @@
+data Box = Box { number : Int }
+
+make : Int -> Box
+make n = Box { number = n }
+
+first : Box -> Box -> Int
+first a b = a.number
+
+main = first (make 21) (make 43)

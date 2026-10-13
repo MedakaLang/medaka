@@ -70,6 +70,9 @@
 #include <mach-o/dyld.h>
 #endif
 #include <pthread.h>
+#ifdef MEDAKA_TEST_BYTEBLOCK_GC
+#include "mdk_gc_byteblock_bridge.h"
+#endif
 /* GC_THREADS MUST be defined before <gc.h> so Boehm exposes GC_pthread_create /
  * GC_pthread_join.  The compiler runs its whole pipeline on a large-stack worker
  * thread (see `int main` at the bottom of this file); a thread created with raw
@@ -1486,8 +1489,14 @@ noreturn static void mdk_byteblock_append_unsupported(void) {
 /* Fresh zeroed cell of `n` bytes.  mdk_alloc_atomic leaves the block
    uninitialised, so the whole cell is memset before the header is stamped. */
 static long long *mdk_byteblock_alloc(long long n) {
+#ifdef MEDAKA_TEST_BYTEBLOCK_GC
+  size_t bytes = mdk_gc_byteblock_extent_v1(n);
+  long long *cell = (long long *)mdk_gc_byteblock_atomic_v1(bytes);
+  mdk_gc_byteblock_check_allocation_v1((Word)cell, bytes);
+#else
   long long bytes = 16 + ((n + 7) / 8) * 8;
   long long *cell = (long long *)mdk_alloc_atomic(bytes);
+#endif
   memset(cell, 0, (size_t)bytes);
   cell[0] = MDK_BYTEBLOCK_TAG;
   cell[1] = n;
@@ -1520,9 +1529,26 @@ void mdk_byteblock_set(long long i_tagged, long long v_tagged, long long bb) {
 }
 long long mdk_byteblock_copy(long long n_tagged, long long bb) {
   long long n = n_tagged >> 1;
+#ifdef MEDAKA_TEST_BYTEBLOCK_GC
+  Word source = (Word)bb;
+  Root source_root = {0};
+  mdk_gc_byteblock_begin_copy_v1(&source_root, &source);
+#ifndef MDK_BB_MUTATE_ROOT
+  mdk_gc_byteblock_push_source_v1(&source_root, &source);
+#endif
+#endif
   long long *cell = mdk_byteblock_alloc(n);
+#ifdef MEDAKA_TEST_BYTEBLOCK_GC
+#ifndef MDK_BB_MUTATE_RELOAD
+  bb = (long long)source;
+#endif
+  mdk_gc_byteblock_check_source_v1((Word)bb);
+#endif
   if (n > 0) memcpy((unsigned char *)cell + 16, mdk_byteblock_bytes(bb),
                     (size_t)n);
+#ifdef MEDAKA_TEST_BYTEBLOCK_GC
+  mdk_gc_byteblock_end_copy_v1(&source_root);
+#endif
   return (long long)cell;
 }
 /* byteBlockBlit src srcOff dst dstOff len.  memmove, not memcpy: src and dst
@@ -4225,6 +4251,10 @@ int main(int argc, char **argv) {
     fprintf(stderr, "medaka: GC_pthread_create failed\n");
     return 1;
   }
+#ifdef MEDAKA_TEST_BYTEBLOCK_GC
+  mdk_gc_byteblock_join_v1(GC_pthread_join(tid, NULL));
+#else
   GC_pthread_join(tid, NULL);
+#endif
   return a.ret;
 }

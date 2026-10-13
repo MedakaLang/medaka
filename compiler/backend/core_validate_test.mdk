@@ -7,14 +7,19 @@
 
 import test.{
   Expectation,
+  fail,
   expectAll,
   expectEach,
   expectEqual,
+  expectNotEqual,
   expectTextContainsAll,
   labelFail,
 }
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
+import list.{take}
+import support.util.{listLen, joinNl, reverseL}
+import map as BM
 import types.annotate.{annotateProgram}
 import types.typecheck.{elaborateOne, grantWholeDomain}
 import ir.core_ir.{
@@ -29,11 +34,15 @@ import ir.core_ir.{
   DeclFacts(..),
   noDeclFacts,
   noImplSym,
+  BinderSite(..),
+  mapProgramBinders,
   CStmt(..),
   CallMode(..),
   CallSite(..),
 }
-import frontend.ast.{Lit(..), Pat(..), Route(..), noDeclLoc}
+import frontend.ast.{Lit(..), Pat(..), Route(..), noDeclLoc, noBinderId}
+import types.runtime_types.{BinderRow(..), RuntimeType(..)}
+import frontend.ast.{BinderId(..)}
 import ir.core_ir_lower.{
   EmitTarget(..),
   ctorFieldTypeNames,
@@ -59,6 +68,7 @@ import backend.core_validate.{
   validateMethodContexts,
   validateRecords,
   validateTails,
+  validateBinderStamps,
 }
 import backend.wasm_emit.{
   emitProgramGaps,
@@ -424,7 +434,13 @@ recordFindings target src = validateRecords (lowered target src)
 
 unstamped : CExpr -> CProgram
 unstamped body =
-  CProgram [CBind "main" [CClause [] body] noDeclLoc] [] [] [] [] noDeclFacts
+  CProgram
+    [CBind "main" [CClause [] body] noDeclLoc noBinderId]
+    []
+    []
+    []
+    []
+    noDeclFacts
 
 zero : CExpr
 zero = CLit (LInt 0)
@@ -531,8 +547,8 @@ restamp name mode (CProgram groups ctors ctorTypes impls mctx facts) =
   CProgram (map (restampBind name mode) groups) ctors ctorTypes impls mctx facts
 
 restampBind : String -> CallMode -> CBind -> CBind
-restampBind name mode (CBind n clauses site) =
-  CBind n (map (restampClause name mode) clauses) site
+restampBind name mode (CBind n clauses site bid) =
+  CBind n (map (restampClause name mode) clauses) site bid
 
 restampClause : String -> CallMode -> CClause -> CClause
 restampClause name mode (CClause pats body) =
@@ -643,8 +659,8 @@ reflag name flag (CProgram groups ctors ctorTypes impls mctx facts) =
   CProgram (map (reflagBind name flag) groups) ctors ctorTypes impls mctx facts
 
 reflagBind : String -> Bool -> CBind -> CBind
-reflagBind name flag (CBind n clauses site) =
-  CBind n (map (reflagClause name flag) clauses) site
+reflagBind name flag (CBind n clauses site bid) =
+  CBind n (map (reflagClause name flag) clauses) site bid
 
 reflagClause : String -> Bool -> CClause -> CClause
 reflagClause name flag (CClause pats body) =
@@ -780,9 +796,16 @@ widenEntries m ((ent@(CImplEntry n s d body)) :: rest) =
 
 widenBody : CImplBody -> CImplBody
 widenBody (CImplTagged tag key iface sym pos pats body) =
-  CImplTagged tag key iface sym pos (pats ++ [PVar "w" noDeclLoc]) body
+  CImplTagged
+    tag
+    key
+    iface
+    sym
+    pos
+    (pats ++ [PVar "w" noDeclLoc noBinderId])
+    body
 widenBody (CImplDefault w tag key sym pos pats body) =
-  CImplDefault w tag key sym pos (pats ++ [PVar "w" noDeclLoc]) body
+  CImplDefault w tag key sym pos (pats ++ [PVar "w" noDeclLoc noBinderId]) body
 
 test "(q) the impl entries of one method and route word take one arity" = expectEach
   [
@@ -866,8 +889,8 @@ dropMethodRoutes name (CProgram groups ctors ctorTypes impls mctx facts) =
   CProgram (map (dropRoutesBind name) groups) ctors ctorTypes impls mctx facts
 
 dropRoutesBind : String -> CBind -> CBind
-dropRoutesBind name (CBind n clauses site) =
-  CBind n (map (dropRoutesClause name) clauses) site
+dropRoutesBind name (CBind n clauses site bid) =
+  CBind n (map (dropRoutesClause name) clauses) site bid
 
 dropRoutesClause : String -> CClause -> CClause
 dropRoutesClause name (CClause pats body) =
@@ -935,8 +958,8 @@ addMethodRoute name (CProgram groups ctors ctorTypes impls mctx facts) =
   CProgram (map (addRouteBind name) groups) ctors ctorTypes impls mctx facts
 
 addRouteBind : String -> CBind -> CBind
-addRouteBind name (CBind n clauses site) =
-  CBind n (map (addRouteClause name) clauses) site
+addRouteBind name (CBind n clauses site bid) =
+  CBind n (map (addRouteClause name) clauses) site bid
 
 addRouteClause : String -> CClause -> CClause
 addRouteClause name (CClause pats body) = CClause pats (addRouteExpr name body)
@@ -962,9 +985,23 @@ addEntryDictOne m (ent@(CImplEntry n s d body)) =
 
 addFirstPat : String -> CImplBody -> CImplBody
 addFirstPat m (CImplTagged tag key iface sym pos pats body) =
-  CImplTagged tag key iface sym pos (PVar "$dict_\{m}_0" noDeclLoc :: pats) body
+  CImplTagged
+    tag
+    key
+    iface
+    sym
+    pos
+    (PVar "$dict_\{m}_0" noDeclLoc noBinderId :: pats)
+    body
 addFirstPat m (CImplDefault w tag key sym pos pats body) =
-  CImplDefault w tag key sym pos (PVar "$dict_\{m}_0" noDeclLoc :: pats) body
+  CImplDefault
+    w
+    tag
+    key
+    sym
+    pos
+    (PVar "$dict_\{m}_0" noDeclLoc noBinderId :: pats)
+    body
 
 test "(x) a method with no declared context takes no context dictionary" = expectEach
   [
@@ -1003,9 +1040,14 @@ evidenceProg body =
     [
       CBind
         "g"
-        [CClause [PVar "$dict_g_0" noDeclLoc] (CLit (LInt 1))]
-        noDeclLoc,
-      CBind "main" [CClause [PVar "$dict_m_0" noDeclLoc] body] noDeclLoc,
+        [CClause [PVar "$dict_g_0" noDeclLoc noBinderId] (CLit (LInt 1))]
+        noDeclLoc
+        noBinderId,
+      CBind
+        "main"
+        [CClause [PVar "$dict_m_0" noDeclLoc noBinderId] body]
+        noDeclLoc
+        noBinderId,
     ]
     []
     []
@@ -1014,6 +1056,7 @@ evidenceProg body =
     DeclFacts {
       factRequires = [("K", 0), ("S", 0)],
       factSupers = [("K", 0), ("S", 1)],
+      factBinders = [],
     }
 
 evidenceOf : Route -> CExpr
@@ -1094,8 +1137,8 @@ dropBuiltPrereqs name (CProgram groups ctors ctorTypes impls mctx facts) =
   CProgram (map (dropPrereqsBind name) groups) ctors ctorTypes impls mctx facts
 
 dropPrereqsBind : String -> CBind -> CBind
-dropPrereqsBind name (CBind n clauses site) =
-  CBind n (map (dropPrereqsClause name) clauses) site
+dropPrereqsBind name (CBind n clauses site bid) =
+  CBind n (map (dropPrereqsClause name) clauses) site bid
 
 dropPrereqsClause : String -> CClause -> CClause
 dropPrereqsClause name (CClause pats body) =
@@ -1217,3 +1260,395 @@ test "(s) `.value` is the Ref read, never a record field" = expectEach [
       (validateRecords (unstamped (CFieldAccess zero "value" "Entry" 1))),
   ),
 ]
+
+-- ── binder stamps ───────────────────────────────────────────────────────────
+
+-- Parameters, a `let` of a string, of a pair and of an Int, and a lambda.
+stampSrc : String
+stampSrc =
+  "f x = x\nmain =\n  let s = \"a\"\n  let t = (1, 2)\n  let n = 5\n  let h = k => k + n\n  f (h n)"
+
+-- The programs of `test/engine_fixtures` that bind a parameter, a `let`, a match
+-- arm or a record pun, or define a where/let-group function, and need no import.
+stampCorpus : List String
+stampCorpus = [
+  "adt_deriving_ord",
+  "adt_nested",
+  "arrays_ranges",
+  "box_do",
+  "call_mode_arity",
+  "dispatch_basic",
+  "guards_where",
+  "hof_compose",
+  "letgroup_toplevel",
+  "letrec_mutual",
+  "local_two_num_dicts",
+  "numlit_local_concrete_capture",
+  "numlit_recursive_nonlead",
+  "record_field_emit_interleave_2049",
+  "shadowed_binders",
+  "where_dict_forward",
+  "where_generalize_num",
+  "where_value_shadows_prelude",
+]
+
+-- [path] elaborated against the real prelude and lowered as a native build does.
+loweredFixture : String -> <IO, FileRead> Result String CProgram
+loweredFixture name = do
+  src <- readFile (underRoot "test/engine_fixtures/\{name}.mdk")
+  loweredSource src
+
+-- [src] elaborated against the real prelude and lowered as a native build does.
+loweredSource : String -> <IO, FileRead> Result String CProgram
+loweredSource src = do
+  rsrc <- readFile (underRoot "stdlib/runtime.mdk")
+  csrc <- readFile (underRoot "stdlib/core.mdk")
+  Ok
+    (lowerProgramEmit
+      TargetNative
+      (elaborateOne (desugar (parse rsrc)) (desugar (parse csrc)) (
+        "main",
+        grantWholeDomain (desugar (parse src)),
+      )))
+
+stampFixture : String -> <IO, FileRead> Expectation
+stampFixture name = match loweredFixture name
+  Ok prog => labelFail name (expectEqual [] (validateBinderStamps prog))
+  Err e => fail e
+
+test "(aa) lowering stamps every binder and every function's return, so a lowered program's binders validate clean" =
+  expectAll
+    (labelFail
+        "a typed program with parameters, lets and a lambda"
+        (expectEqual
+          []
+          (validateBinderStamps (typedLowered i2078Prelude stampSrc)))
+      :: map stampFixture stampCorpus)
+
+-- [prog] with its binder table emptied, and with the row named [name] retyped.
+dropBinderTable : CProgram -> CProgram
+dropBinderTable (CProgram groups ctors ctorTypes impls mctx facts) = CProgram
+  groups
+  ctors
+  ctorTypes
+  impls
+  mctx
+  DeclFacts {
+    factRequires = facts.factRequires,
+    factSupers = facts.factSupers,
+    factBinders = [],
+  }
+
+restampBinder : String -> RuntimeType -> CProgram -> CProgram
+restampBinder name ty (CProgram groups ctors ctorTypes impls mctx facts) = CProgram
+  groups
+  ctors
+  ctorTypes
+  impls
+  mctx
+  DeclFacts {
+    factRequires = facts.factRequires,
+    factSupers = facts.factSupers,
+    factBinders =
+      map
+        (row =>
+          if row.brName == name then
+            BinderRow {
+              brId = row.brId,
+              brName = row.brName,
+              brType = ty,
+              brReturns = row.brReturns,
+              brSigned = row.brSigned,
+            }
+          else
+            row)
+        facts.factBinders,
+  }
+
+test "(ab) a binder with no stamped type is refused, naming it and its binding" = expectEach
+  [
+    (
+      "a parameter",
+      expectEqual
+        ["binder: x has no stamped type [in f]"]
+        (take
+          1
+          (validateBinderStamps
+            (dropBinderTable (typedLowered i2078Prelude stampSrc)))),
+    ),
+    (
+      "a hand-built binder with no id",
+      expectEqual
+        [
+          "binder: x has no id, so no stamped type [in main]",
+          "function: main has no id, so no return type [in main]",
+        ]
+        (validateBinderStamps
+          (CProgram
+            [
+              CBind
+                "main"
+                [CClause [PVar "x" noDeclLoc noBinderId] (CLit (LInt 0))]
+                noDeclLoc
+                noBinderId,
+            ]
+            []
+            []
+            []
+            []
+            noDeclFacts)),
+    ),
+  ]
+
+-- Exactly one fault, whose text holds [needles]; lowering renames a local, so the
+-- binder's own spelling is not asserted.
+oneFault : List String -> CProgram -> Expectation
+oneFault needles prog = match validateBinderStamps prog
+  [fault] => expectTextContainsAll needles fault
+  faults => expectEqual 1 (listLen faults)
+
+-- `main = { let n = 5 }` with the binder `n` stamped [ty]; the typed lowering wraps
+-- an integer literal in `fromInt`, so the bare literal is built by hand.
+intLetProg : RuntimeType -> CProgram
+intLetProg ty =
+  let bid = BinderId "" 7001
+  let mainId = BinderId "" 7002
+  CProgram
+    [
+      CBind
+        "main"
+        [
+          CClause
+            []
+            (CBlock [
+              CSLet False (PVar "n" noDeclLoc bid) (CLit (LInt 5)),
+              CSExpr (CLit LUnit),
+            ]),
+        ]
+        noDeclLoc
+        mainId,
+    ]
+    []
+    []
+    []
+    []
+    DeclFacts {
+      factRequires = [],
+      factSupers = [],
+      factBinders = [
+        BinderRow {
+          brId = bid,
+          brName = "n",
+          brType = ty,
+          brReturns = None,
+          brSigned = False,
+        },
+        BinderRow {
+          brId = mainId,
+          brName = "main",
+          brType = RTUnit,
+          brReturns = Some RTUnit,
+          brSigned = False,
+        },
+      ],
+    }
+
+test "(ac) a binder stamped against its own literal or constructor is refused" = expectEach
+  [
+    (
+      "a string bound to an Int",
+      oneFault
+        ["is stamped RTInt but is bound to a RTString literal [in main]"]
+        (restampBinder "s" RTInt (typedLowered i2078Prelude stampSrc)),
+    ),
+    (
+      "a pair bound to a Float",
+      oneFault
+        ["is stamped RTFloat but is bound to a constructor cell [in main]"]
+        (restampBinder "t" RTFloat (typedLowered i2078Prelude stampSrc)),
+    ),
+    (
+      "a user constructor bound to an Int",
+      oneFault
+        ["is stamped RTInt but is bound to a constructor cell [in main]"]
+        (restampBinder
+          "b"
+          RTInt
+          (typedLowered
+            i2078Prelude
+            "data Box = Box Int\nmain =\n  let b = Box 1\n  b")),
+    ),
+    (
+      "an integer literal bound to a String",
+      oneFault
+        ["is stamped RTString but is bound to an integer literal [in main]"]
+        (intLetProg RTString),
+    ),
+    (
+      "an integer literal stamped Float is a Num-defaulted binder, not a fault",
+      expectEqual [] (validateBinderStamps (intLetProg RTFloat)),
+    ),
+    (
+      "a stamp of no static fact contradicts nothing",
+      expectEqual
+        []
+        (validateBinderStamps
+          (restampBinder "s" RTValue (typedLowered i2078Prelude stampSrc))),
+    ),
+  ]
+
+-- [prog] with the rows named [name] dropped, or with their return type dropped.
+dropRowsNamed : String -> CProgram -> CProgram
+dropRowsNamed name prog =
+  editRows (rows => filter (r => r.brName /= name) rows) prog
+
+dropReturnsNamed : String -> CProgram -> CProgram
+dropReturnsNamed name prog =
+  editRows
+    (rows =>
+      map
+        (r =>
+          if r.brName == name then
+            BinderRow {
+              brId = r.brId,
+              brName = r.brName,
+              brType = r.brType,
+              brReturns = None,
+              brSigned = r.brSigned,
+            }
+          else
+            r)
+        rows)
+    prog
+
+editRows : (List BinderRow -> List BinderRow) -> CProgram -> CProgram
+editRows edit (CProgram groups ctors ctorTypes impls mctx facts) = CProgram
+  groups
+  ctors
+  ctorTypes
+  impls
+  mctx
+  DeclFacts {
+    factRequires = facts.factRequires,
+    factSupers = facts.factSupers,
+    factBinders = edit facts.factBinders,
+  }
+
+test "(ad) a function whose row is missing or gives no return type is refused" = expectEach
+  [
+    (
+      "no row",
+      expectEqual
+        ["function: f has no stamped type [in f]"]
+        (validateBinderStamps
+          (dropRowsNamed "f" (typedLowered i2078Prelude stampSrc))),
+    ),
+    (
+      "a row with no return type",
+      expectEqual
+        ["function: f has no return type [in f]"]
+        (validateBinderStamps
+          (dropReturnsNamed "f" (typedLowered i2078Prelude stampSrc))),
+    ),
+  ]
+
+-- Two where-functions named `go` and two named `r` in one module.  The second
+-- `go` is unannotated, so it generalizes to `Num a => a -> a` and returns a type
+-- variable; the third pins its literal to Int.  Neither `r` takes a parameter or
+-- is a literal, so lowering keeps both under the one Core name `r`.
+sameNameSrc : String
+sameNameSrc = joinNl [
+  "f1 : Int -> Float",
+  "f1 n = go n",
+  "  where",
+  "    go m = intToFloat m * 1.5",
+  "f2 : Int -> Int",
+  "f2 n = go n",
+  "  where",
+  "    go m = m + 1",
+  "f3 : Int -> Int",
+  "f3 n = go n",
+  "  where",
+  "    go m = m + (1 : Int)",
+  "g1 : Int -> Float",
+  "g1 n = r",
+  "  where",
+  "    r = intToFloat n * 1.5",
+  "g2 : Int -> Int",
+  "g2 n = r",
+  "  where",
+  "    r = n + 1",
+  "main = println (f1 2, f2 2, f3 2, g1 2, g2 2)",
+]
+
+-- The functions of the top-level binding [top], inner first, as
+-- (row name, return type); the Core names of the inner ones; their ids.
+functionReturnsIn : String ->
+  CProgram ->
+  (List (String, Option RuntimeType), List String, List Int)
+functionReturnsIn top (CProgram groups _ _ _ _ facts) =
+  let rows =
+    BM.fromList (map (r => (binderOrdinalOf r.brId, r)) facts.factBinders)
+  let found = Ref []
+  let _ =
+    mapProgramBinders
+      (site x bid =>
+        let _ = match site
+          FunctionBinder _ => found := (x, bid) :: !found
+          PatternBinder _ => ()
+        bid)
+      (CProgram
+        (filter
+          (b => match b
+            CBind n _ _ _ => n == top)
+          groups)
+        []
+        []
+        []
+        []
+        noDeclFacts)
+  let fns = reverseL !found
+  let inner = take (listLen fns - 1) fns
+  (
+    map
+      (p => match BM.get (binderOrdinalOf (snd p)) rows
+        Some r => (r.brName, r.brReturns)
+        None => (fst p, None))
+      fns,
+    map fst inner,
+    map (p => binderOrdinalOf (snd p)) inner,
+  )
+
+binderOrdinalOf : BinderId -> Int
+binderOrdinalOf (BinderId _ n) = n
+
+test "(ae) two functions of one name each return what their own body returns" =
+  match loweredSource sameNameSrc
+    Ok prog =>
+      let (f1, _, _) = functionReturnsIn "f1" prog
+      let (f2, _, _) = functionReturnsIn "f2" prog
+      let (f3, _, _) = functionReturnsIn "f3" prog
+      let (g1, g1Core, g1Ids) = functionReturnsIn "g1" prog
+      let (g2, g2Core, g2Ids) = functionReturnsIn "g2" prog
+      expectEach [
+        (
+          "the Float go",
+          expectEqual [("go", Some RTFloat), ("f1", Some RTFloat)] f1,
+        ),
+        (
+          "the generalized go returns its type variable",
+          expectEqual [("go", Some RTValue), ("f2", Some RTInt)] f2,
+        ),
+        ("the Int go", expectEqual [("go", Some RTInt), ("f3", Some RTInt)] f3),
+        (
+          "the Float r",
+          expectEqual [("r", Some RTFloat), ("g1", Some RTFloat)] g1,
+        ),
+        ("the Int r", expectEqual [("r", Some RTInt), ("g2", Some RTInt)] g2),
+        (
+          "both r keep one Core name",
+          expectEqual (["r"], ["r"]) (g1Core, g2Core),
+        ),
+        ("the two r are two binders", expectNotEqual g1Ids g2Ids),
+      ]
+    Err e => fail e

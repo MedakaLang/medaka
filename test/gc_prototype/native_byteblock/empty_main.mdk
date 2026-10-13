@@ -1,0 +1,4 @@
+main : Int
+main =
+  let source = byteBlockMake 0
+  byteBlockLength (byteBlockCopyUnsafe 0 source)

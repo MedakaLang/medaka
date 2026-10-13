@@ -1,0 +1,199 @@
+import backend.native_gc_contract.{
+  StorageKind(..),
+  LayoutKind(..),
+  CallEffect(..),
+  NativeEvent(..),
+  constructorSlots,
+  closureSlots,
+  runtimeCall,
+  validateEvent,
+  renderContract,
+  newLog,
+  enterScope,
+  restoreScope,
+  currentScope,
+  recordEvent,
+  logEvents,
+}
+import test.{
+  expectEqual, expectNotEqual, expectTextContainsAll, expectOkThen, expectAll
+}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.typecheck.{elaborateOne, grantWholeDomain}
+import ir.core_ir.{CProgram}
+import ir.core_ir_lower.{
+  EmitTarget(..), lowerProgramEmit, ctorFieldTypeNames,
+  declaredRecordFieldOrders
+}
+import backend.llvm_emit.{
+  EmitInput, makeEmitInput, emitProgram, emitProgramWithNativeContract
+}
+
+test "native layout excludes headers and closure code addresses" =
+  expectEqual [RawScalar, CodeAddress, TaggedWord, TaggedWord] (closureSlots 2)
+
+test "constructor storage comes from the word-store ABI" =
+  expectEqual [RawScalar, TaggedWord, TaggedWord] (constructorSlots 2)
+
+test "code address cannot be traced as a closure capture" =
+  expectNotEqual
+    []
+    (validateEvent
+      (Allocation
+        "scope"
+        ClosureCell
+        "%p"
+        "%w"
+        "24"
+        [RawScalar, TaggedWord, TaggedWord]
+        ["%child"]
+        "complete"))
+
+test "raw numeric payload cannot be traced in an atomic box" =
+  expectNotEqual
+    []
+    (validateEvent
+      (Allocation
+        "scope"
+        AtomicBox
+        "%p"
+        "%w"
+        "16"
+        [RawScalar, TaggedWord]
+        []
+        "complete"))
+
+test "allocation without an extent is refused" =
+  expectNotEqual
+    []
+    (validateEvent
+      (Allocation
+        "scope"
+        ConstructorCell
+        "%p"
+        "%w"
+        ""
+        (constructorSlots 1)
+        ["%child"]
+        "complete"))
+
+test "ByteBlock copy may collect and keeps a source value operand" =
+  expectEqual
+    []
+    (validateEvent
+      (runtimeCall "scope" "mdk_byteblock_copy" "%result" ["%n", "%source"]))
+
+test "ByteBlock copy cannot be marked as a leaf" =
+  expectNotEqual
+    []
+    (validateEvent
+      (Call
+        "scope"
+        "mdk_byteblock_copy"
+        "%result"
+        ["%n", "%source"]
+        [TaggedWord, TaggedWord]
+        TaggedWord
+        NoManagedCollection))
+
+test "unknown callback cannot be marked as a leaf" =
+  expectNotEqual
+    []
+    (validateEvent
+      (Call
+        "scope"
+        "%callback"
+        "%result"
+        ["%closure", "%arg"]
+        [TaggedWord, TaggedWord]
+        TaggedWord
+        NoManagedCollection))
+
+test "report states unresolved runtime and root obligations" =
+  expectOkThen
+    (text =>
+      expectTextContainsAll
+        [
+          "incomplete", "moving-safe=false", "unknown call contract",
+          "root liveness"
+        ]
+        text)
+    (renderContract [] [runtimeCall "scope" "foreign_helper" "%result" []])
+
+test "nested emission restores its enclosing observation scope" =
+  let log = newLog ()
+  let _ = enterScope log "module"
+  let outer = currentScope log
+  let _ = enterScope log "module"
+  let _ =
+    recordEvent log (Operand (currentScope log) "%same-register" RawScalar)
+  let _ = restoreScope log outer
+  let restored = currentScope log
+  expectEqual outer restored
+
+test "new logs do not retain observations from another program" =
+  let first = newLog ()
+  let _ = recordEvent first (Operand "scope" "%value" TaggedWord)
+  expectEqual 0 (length (logEvents (newLog ())))
+
+-- Reuse one validated Core value: reparsing would mint different BinderIds.
+emitterFixture : String
+emitterFixture =
+  "data Box = Box Int\nmake : Int -> Box\nmake x = Box x\ntake : Box -> Int\ntake (Box 0) = 0\ntake (Box x) = x\napply : (Int -> Int) -> Int -> Int\napply f x = f x\nsaved = make 7\nmain =\n  let b = make 9\n  apply (z => take b) (take saved)"
+
+emitterProgram : String -> (EmitInput, CProgram)
+emitterProgram source =
+  let decls = grantWholeDomain (desugar (parse source))
+  let prelude =
+    desugar
+      (parse
+        "interface Num a where\n  fromInt : Int -> a\n  add : a -> a -> a\nimpl Num Int where\n  fromInt n = n\n  add a b = a")
+  let cp =
+    lowerProgramEmit
+      TargetNative
+      (elaborateOne [] prelude ("native-contract-test", decls))
+  let input =
+    makeEmitInput
+      []
+      []
+      []
+      (ctorFieldTypeNames decls)
+      []
+      False
+      False
+      0
+      []
+      []
+      "native-contract-test"
+      (declaredRecordFieldOrders decls)
+      []
+  (input, cp)
+
+test "actual emitter keeps default IR identical while reporting nested and top-level definitions" =
+  let (input, cp) = emitterProgram emitterFixture
+  let plain = emitProgram input cp
+  let (observed, report) = emitProgramWithNativeContract input cp
+  expectAll [
+    expectEqual plain observed,
+    expectTextContainsAll
+      [
+        "allocation", "constructor", "closure", "semantic-binder", "incomplete",
+        "moving-safe=false"
+      ]
+      report,
+  ]
+
+test "actual emitter reports are isolated across P then P plus U then P" =
+  let (input, cp) = emitterProgram emitterFixture
+  let (inputU, cpU) =
+    emitterProgram
+      (emitterFixture ++ "\nunrelated : Int -> Box\nunrelated x = Box x")
+  let (firstIR, firstReport) = emitProgramWithNativeContract input cp
+  let (_, extraReport) = emitProgramWithNativeContract inputU cpU
+  let (lastIR, lastReport) = emitProgramWithNativeContract input cp
+  expectAll [
+    expectEqual firstIR lastIR,
+    expectEqual firstReport lastReport,
+    expectNotEqual firstReport extraReport,
+  ]

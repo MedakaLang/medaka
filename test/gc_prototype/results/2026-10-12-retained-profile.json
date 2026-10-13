@@ -1,0 +1,2427 @@
+{
+  "task": "retained graph CPU-sample profile at frozen source; no source edits",
+  "git_head": "c324af5a926c7e65a4aede0844de459616c6e8f2",
+  "sampling": {
+    "command_template": "perf record --call-graph dwarf,16384 -F199 --inherit -o <data> -- python3 <driver.py> <binary> <profile> 5000000 262136 30 <rows.jsonl>",
+    "event": "cycles:P",
+    "frequency_hz": 199,
+    "call_graph": "DWARF, 16384-byte user stack",
+    "source": "perf 6.12.95",
+    "lost_samples": "recorded per profile; zero is no loss reported"
+  },
+  "filtering": "For each capture, retain samples whose TGID is one of the benchmark executable TGIDs and whose comm is either that executable (15-character kernel-truncated name) or a GC-marker/marker comm. This keeps the benchmark process\u2019s libc and kernel callchain frames, plus any marker-thread samples in its TGID, while excluding Python pre-exec samples even when they share the child TGID and excluding the Python/perf launcher TGID. All retained TIDs equaled TGID in these captures; no secondary-thread or marker-comm samples were observed (this does not establish that the program cannot create threads).",
+  "cpu_interpretation": "CPU sample shares, not wall-clock shares. Profiles ran sequentially with no other benchmark jobs. Sample-level elapsed_seconds are captured under perf and are provenance only, not timing claims.",
+  "build": {
+    "commands": {
+      "custom_AS": [
+        "clang",
+        "-std=c11",
+        "-O2",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-DUSE_PREPARED",
+        "-DINLINE_ALLOC",
+        "-DINLINE_STORE",
+        "-I",
+        "/tmp/medaka-retained-profile-c324af5a",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/workload.c",
+        "-o",
+        "/tmp/medaka-retained-profile-c324af5a/custom_AS"
+      ],
+      "boehm_caller_inline": [
+        "clang",
+        "-std=c11",
+        "-O2",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-DUSE_BOEHM",
+        "-DUSE_CALLER_INLINE",
+        "-DUSE_PREPARED",
+        "-DINLINE_ALLOC",
+        "-DINLINE_STORE",
+        "-I",
+        "/tmp/medaka-retained-profile-c324af5a",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/workload.c",
+        "-DGC_THREADS",
+        "-pthread",
+        "/tmp/medaka-retained-profile-c324af5a/boehm_adapter.c",
+        "/usr/lib/x86_64-linux-gnu/libgc.a",
+        "-lpthread",
+        "-ldl",
+        "-o",
+        "/tmp/medaka-retained-profile-c324af5a/boehm_caller_inline"
+      ]
+    },
+    "binary_sha256": {
+      "custom_AS": "0e74a001bd4dacfbe0e2c95ae564c6b269f32301146b5ecbae38728638f08d17",
+      "boehm_caller_inline": "948e4ff37e361d5c9556a1d35ca677c164b3081896742fa720c321b6f0e93ae1"
+    },
+    "translation_units": "separate C translation units; no LTO",
+    "libgc_version": "8.2.8",
+    "libgc_archive_sha256": "337a7cf7e9ff4a161025fc07b67ea0b613338dfc14ea510033d9c4e102a37045",
+    "clang_version": "Debian clang version 19.1.7 (3+b1)"
+  },
+  "source_sha256": {
+    "gc.h": "c70257e8bb754ac649db073f7aad9960a6a734273b77bc213de14fc45d94cff0",
+    "gc.c": "6e809f44d36f45d0fa8f355cd0d8a825ae87eac2892996eed11d55225d514231",
+    "workload.c": "b2c38813145487d506191d7c172048f11c367a2af8968026b603bceb4774c112",
+    "run.py": "151505c92ac42732de5ca975f61ba65b4592eb55e37fad1a676040488bb59695",
+    "runtime_inline_allocator_region": "9af68bcadb9080fa4630d2428a3f46eed98e771a83aeb8ceb18646d03d4481e4",
+    "caller_header": "5ea44cdef51ef719e43e57e07f73d811873cb4d8b0043117c5706bda071c3e4c"
+  },
+  "profiles": [
+    {
+      "backend": "custom_AS",
+      "profile": "list",
+      "perf_data_sha256": "5049713d6da7580d863f75f3e8863fb8c4b500ae094e689e2f3ba7c8c090bc9a",
+      "runner_jsonl_sha256": "46c993e4e8a17972e0b7b3fb9b53d120ed1cbd2d6393e27a59c0f8f4423a6443",
+      "sample_count_total": 1115,
+      "sample_count_retained_benchmark_tgids": 913,
+      "sample_count_discarded_other_processes_or_launcher_comm": 202,
+      "discarded_comm_counts": {
+        "perf-exec": 6,
+        "python3": 196
+      },
+      "discarded_launcher_comm_samples": 202,
+      "lost_samples": 0,
+      "benchmark_tgids": [
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37
+      ],
+      "retained_comm_counts": {
+        "custom_AS": 913
+      },
+      "retained_samples_by_thread": {
+        "custom_AS:8": 36,
+        "custom_AS:9": 33,
+        "custom_AS:10": 36,
+        "custom_AS:11": 29,
+        "custom_AS:12": 31,
+        "custom_AS:13": 35,
+        "custom_AS:14": 29,
+        "custom_AS:15": 31,
+        "custom_AS:16": 31,
+        "custom_AS:17": 31,
+        "custom_AS:18": 31,
+        "custom_AS:19": 31,
+        "custom_AS:20": 33,
+        "custom_AS:21": 28,
+        "custom_AS:22": 34,
+        "custom_AS:23": 29,
+        "custom_AS:24": 31,
+        "custom_AS:25": 29,
+        "custom_AS:26": 32,
+        "custom_AS:27": 29,
+        "custom_AS:28": 29,
+        "custom_AS:29": 28,
+        "custom_AS:30": 27,
+        "custom_AS:31": 28,
+        "custom_AS:32": 29,
+        "custom_AS:33": 28,
+        "custom_AS:34": 28,
+        "custom_AS:35": 29,
+        "custom_AS:36": 28,
+        "custom_AS:37": 30
+      },
+      "marker_comm_counts": {},
+      "flat_top_symbols": [
+        {
+          "symbol": "new_old",
+          "samples": 160,
+          "percent": 17.524644030668128
+        },
+        {
+          "symbol": "major_collect",
+          "samples": 118,
+          "percent": 12.924424972617743
+        },
+        {
+          "symbol": "queue_push",
+          "samples": 113,
+          "percent": 12.376779846659364
+        },
+        {
+          "symbol": "main",
+          "samples": 71,
+          "percent": 7.776560788608982
+        },
+        {
+          "symbol": "mark",
+          "samples": 49,
+          "percent": 5.3669222343921135
+        },
+        {
+          "symbol": "load",
+          "samples": 42,
+          "percent": 4.600219058050383
+        },
+        {
+          "symbol": "descriptor",
+          "samples": 42,
+          "percent": 4.600219058050383
+        },
+        {
+          "symbol": "clear_page_erms",
+          "samples": 40,
+          "percent": 4.381161007667032
+        },
+        {
+          "symbol": "scan_promote",
+          "samples": 26,
+          "percent": 2.8477546549835706
+        },
+        {
+          "symbol": "promote",
+          "samples": 20,
+          "percent": 2.190580503833516
+        },
+        {
+          "symbol": "__memset_avx512_unaligned_erms",
+          "samples": 20,
+          "percent": 2.190580503833516
+        },
+        {
+          "symbol": "pointer",
+          "samples": 15,
+          "percent": 1.642935377875137
+        },
+        {
+          "symbol": "__memcpy_avx512_unaligned_erms",
+          "samples": 10,
+          "percent": 1.095290251916758
+        },
+        {
+          "symbol": "folio_add_lru",
+          "samples": 10,
+          "percent": 1.095290251916758
+        },
+        {
+          "symbol": "__mod_memcg_lruvec_state",
+          "samples": 10,
+          "percent": 1.095290251916758
+        },
+        {
+          "symbol": "__list_del_entry_valid_or_report",
+          "samples": 8,
+          "percent": 0.8762322015334063
+        },
+        {
+          "symbol": "do_anonymous_page",
+          "samples": 8,
+          "percent": 0.8762322015334063
+        },
+        {
+          "symbol": "asm_exc_page_fault",
+          "samples": 8,
+          "percent": 0.8762322015334063
+        },
+        {
+          "symbol": "sum_list",
+          "samples": 8,
+          "percent": 0.8762322015334063
+        },
+        {
+          "symbol": "mas_walk",
+          "samples": 8,
+          "percent": 0.8762322015334063
+        },
+        {
+          "symbol": "__folio_batch_add_and_move",
+          "samples": 8,
+          "percent": 0.8762322015334063
+        },
+        {
+          "symbol": "__handle_mm_fault",
+          "samples": 7,
+          "percent": 0.7667031763417306
+        },
+        {
+          "symbol": "minor_collect",
+          "samples": 7,
+          "percent": 0.7667031763417306
+        },
+        {
+          "symbol": "folio_add_new_anon_rmap",
+          "samples": 6,
+          "percent": 0.6571741511500547
+        },
+        {
+          "symbol": "asm_sysvec_apic_timer_interrupt",
+          "samples": 5,
+          "percent": 0.547645125958379
+        }
+      ],
+      "inclusive_top_symbols": [
+        {
+          "symbol": "main",
+          "samples": 867,
+          "percent": 94.96166484118291
+        },
+        {
+          "symbol": "__libc_start_call_main",
+          "samples": 867,
+          "percent": 94.96166484118291
+        },
+        {
+          "symbol": "_start",
+          "samples": 787,
+          "percent": 86.19934282584884
+        },
+        {
+          "symbol": "__libc_start_main_impl",
+          "samples": 768,
+          "percent": 84.118291347207
+        },
+        {
+          "symbol": "allocate_prepared_slow",
+          "samples": 551,
+          "percent": 60.35049288061336
+        },
+        {
+          "symbol": "minor_collect",
+          "samples": 448,
+          "percent": 49.06900328587076
+        },
+        {
+          "symbol": "scan_promote",
+          "samples": 437,
+          "percent": 47.86418400876232
+        },
+        {
+          "symbol": "promote",
+          "samples": 391,
+          "percent": 42.82584884994524
+        },
+        {
+          "symbol": "new_old",
+          "samples": 329,
+          "percent": 36.03504928806134
+        },
+        {
+          "symbol": "major_collect",
+          "samples": 288,
+          "percent": 31.54435925520263
+        },
+        {
+          "symbol": "asm_exc_page_fault",
+          "samples": 159,
+          "percent": 17.41511500547645
+        },
+        {
+          "symbol": "exc_page_fault",
+          "samples": 150,
+          "percent": 16.42935377875137
+        },
+        {
+          "symbol": "do_user_addr_fault",
+          "samples": 149,
+          "percent": 16.319824753559693
+        },
+        {
+          "symbol": "handle_mm_fault",
+          "samples": 136,
+          "percent": 14.895947426067908
+        },
+        {
+          "symbol": "__handle_mm_fault",
+          "samples": 131,
+          "percent": 14.348302300109529
+        },
+        {
+          "symbol": "do_anonymous_page",
+          "samples": 117,
+          "percent": 12.814895947426068
+        },
+        {
+          "symbol": "__memset_avx512_unaligned_erms",
+          "samples": 117,
+          "percent": 12.814895947426068
+        },
+        {
+          "symbol": "queue_push",
+          "samples": 113,
+          "percent": 12.376779846659364
+        },
+        {
+          "symbol": "mark",
+          "samples": 60,
+          "percent": 6.571741511500548
+        },
+        {
+          "symbol": "workload",
+          "samples": 59,
+          "percent": 6.4622124863088715
+        },
+        {
+          "symbol": "_int_malloc",
+          "samples": 57,
+          "percent": 6.24315443592552
+        },
+        {
+          "symbol": "__alloc_pages_noprof",
+          "samples": 55,
+          "percent": 6.024096385542169
+        },
+        {
+          "symbol": "alloc_pages_mpol_noprof",
+          "samples": 55,
+          "percent": 6.024096385542169
+        },
+        {
+          "symbol": "vma_alloc_folio_noprof",
+          "samples": 55,
+          "percent": 6.024096385542169
+        },
+        {
+          "symbol": "folio_alloc_mpol_noprof",
+          "samples": 54,
+          "percent": 5.9145673603504925
+        }
+      ],
+      "selected_symbols": {
+        "GC_allocobj": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_collect_or_expand": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_generic_malloc_inner": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_generic_malloc_many": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_malloc": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_malloc_atomic": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_mark_from": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_mark_some": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_push_contents_hdr": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_stopped_mark": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_try_to_collect_inner": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "__memcpy_avx512_unaligned_erms": {
+          "flat_samples": 10,
+          "flat_percent": 1.095290251916758,
+          "inclusive_samples": 10,
+          "inclusive_percent": 1.095290251916758
+        },
+        "__memmove_avx512_unaligned_erms": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "__memset_avx512_unaligned_erms": {
+          "flat_samples": 20,
+          "flat_percent": 2.190580503833516,
+          "inclusive_samples": 117,
+          "inclusive_percent": 12.814895947426068
+        },
+        "allocate_prepared": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "allocate_prepared_slow": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 551,
+          "inclusive_percent": 60.35049288061336
+        },
+        "bzero": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "clear_page_erms": {
+          "flat_samples": 40,
+          "flat_percent": 4.381161007667032,
+          "inclusive_samples": 40,
+          "inclusive_percent": 4.381161007667032
+        },
+        "major_collect": {
+          "flat_samples": 118,
+          "flat_percent": 12.924424972617743,
+          "inclusive_samples": 288,
+          "inclusive_percent": 31.54435925520263
+        },
+        "memcpy": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "memset": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "minor_collect": {
+          "flat_samples": 7,
+          "flat_percent": 0.7667031763417306,
+          "inclusive_samples": 448,
+          "inclusive_percent": 49.06900328587076
+        },
+        "new_old": {
+          "flat_samples": 160,
+          "flat_percent": 17.524644030668128,
+          "inclusive_samples": 329,
+          "inclusive_percent": 36.03504928806134
+        },
+        "promote": {
+          "flat_samples": 20,
+          "flat_percent": 2.190580503833516,
+          "inclusive_samples": 391,
+          "inclusive_percent": 42.82584884994524
+        },
+        "prototype_caller_alloc": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "prototype_caller_refill": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "root_pop": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "root_push": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "scan_promote": {
+          "flat_samples": 26,
+          "flat_percent": 2.8477546549835706,
+          "inclusive_samples": 437,
+          "inclusive_percent": 47.86418400876232
+        }
+      },
+      "flat_dso_samples": {
+        "/tmp/medaka-retained-profile-c324af5a/custom_AS": {
+          "samples": 539,
+          "percent": 59.036144578313255
+        },
+        "[kernel.kallsyms]": {
+          "samples": 182,
+          "percent": 19.934282584884993
+        },
+        "inlined": {
+          "samples": 161,
+          "percent": 17.634173055859804
+        },
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": {
+          "samples": 26,
+          "percent": 2.8477546549835706
+        },
+        "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2": {
+          "samples": 4,
+          "percent": 0.43811610076670315
+        },
+        "[unknown]": {
+          "samples": 1,
+          "percent": 0.10952902519167579
+        }
+      },
+      "sample_metrics": {
+        "elapsed_seconds": {
+          "min": 0.180676722,
+          "median": 0.1922967645,
+          "max": 0.233681054
+        },
+        "process_peak_rss_bytes": {
+          "min": 162476032,
+          "median": 162537472.0,
+          "max": 162639872
+        },
+        "copied_payload_bytes": {
+          "min": 120000000,
+          "median": 120000000.0,
+          "max": 120000000
+        },
+        "nursery_payload_bytes": {
+          "min": 120000000,
+          "median": 120000000.0,
+          "max": 120000000
+        },
+        "exact_live_payload_bytes": {
+          "min": 120000000,
+          "median": 120000000.0,
+          "max": 120000000
+        },
+        "payload_bytes": {
+          "min": 120000000,
+          "median": 120000000.0,
+          "max": 120000000
+        },
+        "allocations": {
+          "min": 5000000,
+          "median": 5000000.0,
+          "max": 5000000
+        },
+        "checksum": {
+          "min": 12499997500000,
+          "median": 12499997500000.0,
+          "max": 12499997500000
+        },
+        "nursery_capacity_bytes": {
+          "min": 262136,
+          "median": 262136.0,
+          "max": 262136
+        },
+        "copied_bytes": {
+          "min": 160000000,
+          "median": 160000000.0,
+          "max": 160000000
+        },
+        "copied_payload_over_nursery_payload_fraction": {
+          "median": 1.0
+        },
+        "final_live_payload_over_total_payload_fraction": {
+          "median": 1.0
+        }
+      },
+      "identity": {
+        "repeats": 30,
+        "allocations": 5000000,
+        "payload_bytes": 120000000,
+        "checksum": 12499997500000,
+        "nursery_capacity_bytes": 262136,
+        "profile": "list",
+        "count": 5000000
+      }
+    },
+    {
+      "backend": "custom_AS",
+      "profile": "tree",
+      "perf_data_sha256": "22bcf496f891c970d2e11a466f53a2188cf60fe0d5f7e6e5db4f05ecad0e36fa",
+      "runner_jsonl_sha256": "bfc92623a0c7e6cb4efcd1c6ceccc9bb17213944c65a02008014e0e021ac0dcd",
+      "sample_count_total": 2114,
+      "sample_count_retained_benchmark_tgids": 1915,
+      "sample_count_discarded_other_processes_or_launcher_comm": 199,
+      "discarded_comm_counts": {
+        "perf-exec": 5,
+        "python3": 194
+      },
+      "discarded_launcher_comm_samples": 199,
+      "lost_samples": 0,
+      "benchmark_tgids": [
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        65,
+        66,
+        67,
+        68,
+        69
+      ],
+      "retained_comm_counts": {
+        "custom_AS": 1915
+      },
+      "retained_samples_by_thread": {
+        "custom_AS:40": 60,
+        "custom_AS:41": 61,
+        "custom_AS:42": 64,
+        "custom_AS:43": 76,
+        "custom_AS:44": 59,
+        "custom_AS:45": 60,
+        "custom_AS:46": 57,
+        "custom_AS:47": 60,
+        "custom_AS:48": 60,
+        "custom_AS:49": 60,
+        "custom_AS:50": 64,
+        "custom_AS:51": 62,
+        "custom_AS:52": 71,
+        "custom_AS:53": 76,
+        "custom_AS:54": 67,
+        "custom_AS:55": 61,
+        "custom_AS:56": 69,
+        "custom_AS:57": 64,
+        "custom_AS:58": 64,
+        "custom_AS:59": 68,
+        "custom_AS:60": 60,
+        "custom_AS:61": 63,
+        "custom_AS:62": 60,
+        "custom_AS:63": 60,
+        "custom_AS:64": 60,
+        "custom_AS:65": 77,
+        "custom_AS:66": 73,
+        "custom_AS:67": 56,
+        "custom_AS:68": 63,
+        "custom_AS:69": 60
+      },
+      "marker_comm_counts": {},
+      "flat_top_symbols": [
+        {
+          "symbol": "load",
+          "samples": 414,
+          "percent": 21.618798955613578
+        },
+        {
+          "symbol": "major_collect",
+          "samples": 190,
+          "percent": 9.921671018276763
+        },
+        {
+          "symbol": "tree",
+          "samples": 179,
+          "percent": 9.347258485639687
+        },
+        {
+          "symbol": "new_old",
+          "samples": 174,
+          "percent": 9.086161879895561
+        },
+        {
+          "symbol": "queue_push",
+          "samples": 139,
+          "percent": 7.258485639686684
+        },
+        {
+          "symbol": "promote",
+          "samples": 96,
+          "percent": 5.013054830287206
+        },
+        {
+          "symbol": "mark",
+          "samples": 95,
+          "percent": 4.960835509138382
+        },
+        {
+          "symbol": "descriptor",
+          "samples": 91,
+          "percent": 4.751958224543081
+        },
+        {
+          "symbol": "scan_promote",
+          "samples": 50,
+          "percent": 2.6109660574412534
+        },
+        {
+          "symbol": "sum_tree",
+          "samples": 48,
+          "percent": 2.506527415143603
+        },
+        {
+          "symbol": "root_push",
+          "samples": 45,
+          "percent": 2.349869451697128
+        },
+        {
+          "symbol": "clear_page_erms",
+          "samples": 41,
+          "percent": 2.1409921671018277
+        },
+        {
+          "symbol": "root_pop",
+          "samples": 26,
+          "percent": 1.3577023498694516
+        },
+        {
+          "symbol": "is_young",
+          "samples": 23,
+          "percent": 1.2010443864229765
+        },
+        {
+          "symbol": "__memset_avx512_unaligned_erms",
+          "samples": 22,
+          "percent": 1.1488250652741514
+        },
+        {
+          "symbol": "accounted_bytes",
+          "samples": 21,
+          "percent": 1.0966057441253263
+        },
+        {
+          "symbol": "__memcpy_avx512_unaligned_erms",
+          "samples": 14,
+          "percent": 0.7310704960835509
+        },
+        {
+          "symbol": "pointer",
+          "samples": 13,
+          "percent": 0.6788511749347258
+        },
+        {
+          "symbol": "__mod_memcg_lruvec_state",
+          "samples": 12,
+          "percent": 0.6266318537859008
+        },
+        {
+          "symbol": "prepared_young",
+          "samples": 12,
+          "percent": 0.6266318537859008
+        },
+        {
+          "symbol": "__handle_mm_fault",
+          "samples": 12,
+          "percent": 0.6266318537859008
+        },
+        {
+          "symbol": "do_anonymous_page",
+          "samples": 11,
+          "percent": 0.5744125326370757
+        },
+        {
+          "symbol": "asm_exc_page_fault",
+          "samples": 10,
+          "percent": 0.5221932114882507
+        },
+        {
+          "symbol": "asm_sysvec_apic_timer_interrupt",
+          "samples": 10,
+          "percent": 0.5221932114882507
+        },
+        {
+          "symbol": "folio_add_lru",
+          "samples": 10,
+          "percent": 0.5221932114882507
+        }
+      ],
+      "inclusive_top_symbols": [
+        {
+          "symbol": "main",
+          "samples": 1762,
+          "percent": 92.01044386422977
+        },
+        {
+          "symbol": "__libc_start_call_main",
+          "samples": 1762,
+          "percent": 92.01044386422977
+        },
+        {
+          "symbol": "tree",
+          "samples": 1036,
+          "percent": 54.099216710182766
+        },
+        {
+          "symbol": "_start",
+          "samples": 756,
+          "percent": 39.47780678851175
+        },
+        {
+          "symbol": "__libc_start_main_impl",
+          "samples": 750,
+          "percent": 39.1644908616188
+        },
+        {
+          "symbol": "allocate_prepared_slow",
+          "samples": 748,
+          "percent": 39.06005221932115
+        },
+        {
+          "symbol": "minor_collect",
+          "samples": 540,
+          "percent": 28.198433420365536
+        },
+        {
+          "symbol": "scan_promote",
+          "samples": 526,
+          "percent": 27.467362924281986
+        },
+        {
+          "symbol": "major_collect",
+          "samples": 467,
+          "percent": 24.386422976501304
+        },
+        {
+          "symbol": "sum_tree",
+          "samples": 467,
+          "percent": 24.386422976501304
+        },
+        {
+          "symbol": "promote",
+          "samples": 444,
+          "percent": 23.18537859007833
+        },
+        {
+          "symbol": "load",
+          "samples": 417,
+          "percent": 21.77545691906005
+        },
+        {
+          "symbol": "new_old",
+          "samples": 288,
+          "percent": 15.03916449086162
+        },
+        {
+          "symbol": "asm_exc_page_fault",
+          "samples": 198,
+          "percent": 10.339425587467362
+        },
+        {
+          "symbol": "exc_page_fault",
+          "samples": 182,
+          "percent": 9.503916449086162
+        },
+        {
+          "symbol": "do_user_addr_fault",
+          "samples": 181,
+          "percent": 9.451697127937337
+        },
+        {
+          "symbol": "handle_mm_fault",
+          "samples": 160,
+          "percent": 8.355091383812011
+        },
+        {
+          "symbol": "__handle_mm_fault",
+          "samples": 154,
+          "percent": 8.04177545691906
+        },
+        {
+          "symbol": "__memset_avx512_unaligned_erms",
+          "samples": 153,
+          "percent": 7.989556135770235
+        },
+        {
+          "symbol": "queue_push",
+          "samples": 139,
+          "percent": 7.258485639686684
+        },
+        {
+          "symbol": "do_anonymous_page",
+          "samples": 133,
+          "percent": 6.945169712793733
+        },
+        {
+          "symbol": "mark",
+          "samples": 109,
+          "percent": 5.691906005221932
+        },
+        {
+          "symbol": "descriptor",
+          "samples": 92,
+          "percent": 4.804177545691906
+        },
+        {
+          "symbol": "root_push",
+          "samples": 66,
+          "percent": 3.446475195822454
+        },
+        {
+          "symbol": "__alloc_pages_noprof",
+          "samples": 59,
+          "percent": 3.0809399477806787
+        }
+      ],
+      "selected_symbols": {
+        "GC_allocobj": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_collect_or_expand": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_generic_malloc_inner": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_generic_malloc_many": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_malloc": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_malloc_atomic": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_mark_from": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_mark_some": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_push_contents_hdr": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_stopped_mark": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_try_to_collect_inner": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "__memcpy_avx512_unaligned_erms": {
+          "flat_samples": 14,
+          "flat_percent": 0.7310704960835509,
+          "inclusive_samples": 14,
+          "inclusive_percent": 0.7310704960835509
+        },
+        "__memmove_avx512_unaligned_erms": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "__memset_avx512_unaligned_erms": {
+          "flat_samples": 22,
+          "flat_percent": 1.1488250652741514,
+          "inclusive_samples": 153,
+          "inclusive_percent": 7.989556135770235
+        },
+        "allocate_prepared": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "allocate_prepared_slow": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 748,
+          "inclusive_percent": 39.06005221932115
+        },
+        "bzero": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "clear_page_erms": {
+          "flat_samples": 41,
+          "flat_percent": 2.1409921671018277,
+          "inclusive_samples": 42,
+          "inclusive_percent": 2.1932114882506526
+        },
+        "major_collect": {
+          "flat_samples": 190,
+          "flat_percent": 9.921671018276763,
+          "inclusive_samples": 467,
+          "inclusive_percent": 24.386422976501304
+        },
+        "memcpy": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "memset": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "minor_collect": {
+          "flat_samples": 9,
+          "flat_percent": 0.4699738903394256,
+          "inclusive_samples": 540,
+          "inclusive_percent": 28.198433420365536
+        },
+        "new_old": {
+          "flat_samples": 174,
+          "flat_percent": 9.086161879895561,
+          "inclusive_samples": 288,
+          "inclusive_percent": 15.03916449086162
+        },
+        "promote": {
+          "flat_samples": 96,
+          "flat_percent": 5.013054830287206,
+          "inclusive_samples": 444,
+          "inclusive_percent": 23.18537859007833
+        },
+        "prototype_caller_alloc": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "prototype_caller_refill": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "root_pop": {
+          "flat_samples": 26,
+          "flat_percent": 1.3577023498694516,
+          "inclusive_samples": 26,
+          "inclusive_percent": 1.3577023498694516
+        },
+        "root_push": {
+          "flat_samples": 45,
+          "flat_percent": 2.349869451697128,
+          "inclusive_samples": 66,
+          "inclusive_percent": 3.446475195822454
+        },
+        "scan_promote": {
+          "flat_samples": 50,
+          "flat_percent": 2.6109660574412534,
+          "inclusive_samples": 526,
+          "inclusive_percent": 27.467362924281986
+        }
+      },
+      "flat_dso_samples": {
+        "/tmp/medaka-retained-profile-c324af5a/custom_AS": {
+          "samples": 1005,
+          "percent": 52.48041775456919
+        },
+        "inlined": {
+          "samples": 650,
+          "percent": 33.942558746736296
+        },
+        "[kernel.kallsyms]": {
+          "samples": 226,
+          "percent": 11.801566579634464
+        },
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": {
+          "samples": 34,
+          "percent": 1.7754569190600522
+        }
+      },
+      "sample_metrics": {
+        "elapsed_seconds": {
+          "min": 0.319731012,
+          "median": 0.35361349799999997,
+          "max": 0.4286249
+        },
+        "process_peak_rss_bytes": {
+          "min": 162332672,
+          "median": 162566144.0,
+          "max": 162639872
+        },
+        "copied_payload_bytes": {
+          "min": 120000000,
+          "median": 120000000.0,
+          "max": 120000000
+        },
+        "nursery_payload_bytes": {
+          "min": 120000000,
+          "median": 120000000.0,
+          "max": 120000000
+        },
+        "exact_live_payload_bytes": {
+          "min": 120000000,
+          "median": 120000000.0,
+          "max": 120000000
+        },
+        "payload_bytes": {
+          "min": 120000000,
+          "median": 120000000.0,
+          "max": 120000000
+        },
+        "allocations": {
+          "min": 5000000,
+          "median": 5000000.0,
+          "max": 5000000
+        },
+        "checksum": {
+          "min": 12499997500000,
+          "median": 12499997500000.0,
+          "max": 12499997500000
+        },
+        "nursery_capacity_bytes": {
+          "min": 262136,
+          "median": 262136.0,
+          "max": 262136
+        },
+        "copied_bytes": {
+          "min": 160000000,
+          "median": 160000000.0,
+          "max": 160000000
+        },
+        "copied_payload_over_nursery_payload_fraction": {
+          "median": 1.0
+        },
+        "final_live_payload_over_total_payload_fraction": {
+          "median": 1.0
+        }
+      },
+      "identity": {
+        "repeats": 30,
+        "allocations": 5000000,
+        "payload_bytes": 120000000,
+        "checksum": 12499997500000,
+        "nursery_capacity_bytes": 262136,
+        "profile": "tree",
+        "count": 5000000
+      }
+    },
+    {
+      "backend": "boehm_caller_inline",
+      "profile": "list",
+      "perf_data_sha256": "00e8b59b5fc1a6c73f0b6ae016c360d7f0e6608072b9ade2b5810b25c5244c59",
+      "runner_jsonl_sha256": "720156c4c3b0703618277664f6d65b75a2e09f928dcf3a750cd6482a56442c65",
+      "sample_count_total": 1087,
+      "sample_count_retained_benchmark_tgids": 887,
+      "sample_count_discarded_other_processes_or_launcher_comm": 200,
+      "discarded_comm_counts": {
+        "perf-exec": 5,
+        "python3": 195
+      },
+      "discarded_launcher_comm_samples": 200,
+      "lost_samples": 0,
+      "benchmark_tgids": [
+        72,
+        73,
+        74,
+        75,
+        76,
+        77,
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        94,
+        95,
+        96,
+        97,
+        98,
+        99,
+        100,
+        101
+      ],
+      "retained_comm_counts": {
+        "boehm_caller_in": 887
+      },
+      "retained_samples_by_thread": {
+        "boehm_caller_in:72": 34,
+        "boehm_caller_in:73": 30,
+        "boehm_caller_in:74": 33,
+        "boehm_caller_in:75": 28,
+        "boehm_caller_in:76": 28,
+        "boehm_caller_in:77": 26,
+        "boehm_caller_in:78": 29,
+        "boehm_caller_in:79": 26,
+        "boehm_caller_in:80": 28,
+        "boehm_caller_in:81": 29,
+        "boehm_caller_in:82": 38,
+        "boehm_caller_in:83": 28,
+        "boehm_caller_in:84": 29,
+        "boehm_caller_in:85": 27,
+        "boehm_caller_in:86": 26,
+        "boehm_caller_in:87": 29,
+        "boehm_caller_in:88": 24,
+        "boehm_caller_in:89": 29,
+        "boehm_caller_in:90": 28,
+        "boehm_caller_in:91": 28,
+        "boehm_caller_in:92": 32,
+        "boehm_caller_in:93": 30,
+        "boehm_caller_in:94": 31,
+        "boehm_caller_in:95": 29,
+        "boehm_caller_in:96": 32,
+        "boehm_caller_in:97": 32,
+        "boehm_caller_in:98": 37,
+        "boehm_caller_in:99": 28,
+        "boehm_caller_in:100": 29,
+        "boehm_caller_in:101": 30
+      },
+      "marker_comm_counts": {},
+      "flat_top_symbols": [
+        {
+          "symbol": "GC_mark_from",
+          "samples": 210,
+          "percent": 23.675310033821873
+        },
+        {
+          "symbol": "GC_push_contents_hdr.isra.0",
+          "samples": 204,
+          "percent": 22.998872604284102
+        },
+        {
+          "symbol": "load",
+          "samples": 187,
+          "percent": 21.08229988726043
+        },
+        {
+          "symbol": "main",
+          "samples": 56,
+          "percent": 6.313416009019166
+        },
+        {
+          "symbol": "clear_page_erms",
+          "samples": 44,
+          "percent": 4.96054114994363
+        },
+        {
+          "symbol": "GC_build_fl",
+          "samples": 18,
+          "percent": 2.0293122886133035
+        },
+        {
+          "symbol": "GC_allochblk_nth",
+          "samples": 16,
+          "percent": 1.8038331454340473
+        },
+        {
+          "symbol": "sum_list",
+          "samples": 16,
+          "percent": 1.8038331454340473
+        },
+        {
+          "symbol": "perf_ctx_enable",
+          "samples": 15,
+          "percent": 1.6910935738444195
+        },
+        {
+          "symbol": "GC_clear_hdr_marks",
+          "samples": 12,
+          "percent": 1.3528748590755355
+        },
+        {
+          "symbol": "GC_apply_to_all_blocks",
+          "samples": 7,
+          "percent": 0.7891770011273957
+        },
+        {
+          "symbol": "__list_del_entry_valid_or_report",
+          "samples": 7,
+          "percent": 0.7891770011273957
+        },
+        {
+          "symbol": "GC_find_header",
+          "samples": 4,
+          "percent": 0.4509582863585118
+        },
+        {
+          "symbol": "asm_sysvec_apic_timer_interrupt",
+          "samples": 4,
+          "percent": 0.4509582863585118
+        },
+        {
+          "symbol": "GC_clear_stack_inner",
+          "samples": 4,
+          "percent": 0.4509582863585118
+        },
+        {
+          "symbol": "GC_mark_some",
+          "samples": 4,
+          "percent": 0.4509582863585118
+        },
+        {
+          "symbol": "store_prepared",
+          "samples": 3,
+          "percent": 0.3382187147688839
+        },
+        {
+          "symbol": "clear_marks_for_block",
+          "samples": 3,
+          "percent": 0.3382187147688839
+        },
+        {
+          "symbol": "__pte_offset_map",
+          "samples": 3,
+          "percent": 0.3382187147688839
+        },
+        {
+          "symbol": "GC_reclaim_block",
+          "samples": 3,
+          "percent": 0.3382187147688839
+        },
+        {
+          "symbol": "__handle_mm_fault",
+          "samples": 2,
+          "percent": 0.2254791431792559
+        },
+        {
+          "symbol": "mas_leaf_max_gap",
+          "samples": 2,
+          "percent": 0.2254791431792559
+        },
+        {
+          "symbol": "GC_end_stubborn_change",
+          "samples": 2,
+          "percent": 0.2254791431792559
+        },
+        {
+          "symbol": "_raw_spin_lock",
+          "samples": 2,
+          "percent": 0.2254791431792559
+        },
+        {
+          "symbol": "folio_add_file_rmap_ptes",
+          "samples": 2,
+          "percent": 0.2254791431792559
+        }
+      ],
+      "inclusive_top_symbols": [
+        {
+          "symbol": "main",
+          "samples": 861,
+          "percent": 97.06877113866967
+        },
+        {
+          "symbol": "__libc_start_call_main",
+          "samples": 861,
+          "percent": 97.06877113866967
+        },
+        {
+          "symbol": "_start",
+          "samples": 850,
+          "percent": 95.82863585118376
+        },
+        {
+          "symbol": "__libc_start_main_impl",
+          "samples": 833,
+          "percent": 93.91206313416009
+        },
+        {
+          "symbol": "GC_try_to_collect_inner",
+          "samples": 462,
+          "percent": 52.08568207440812
+        },
+        {
+          "symbol": "GC_stopped_mark",
+          "samples": 438,
+          "percent": 49.379932356257044
+        },
+        {
+          "symbol": "GC_mark_some",
+          "samples": 438,
+          "percent": 49.379932356257044
+        },
+        {
+          "symbol": "GC_mark_from",
+          "samples": 428,
+          "percent": 48.252536640360766
+        },
+        {
+          "symbol": "major_collect",
+          "samples": 296,
+          "percent": 33.370913190529876
+        },
+        {
+          "symbol": "GC_try_to_collect_general",
+          "samples": 296,
+          "percent": 33.370913190529876
+        },
+        {
+          "symbol": "GC_gcollect",
+          "samples": 296,
+          "percent": 33.370913190529876
+        },
+        {
+          "symbol": "prototype_caller_refill",
+          "samples": 289,
+          "percent": 32.58173618940248
+        },
+        {
+          "symbol": "GC_generic_malloc_many",
+          "samples": 288,
+          "percent": 32.468996617812856
+        },
+        {
+          "symbol": "GC_push_contents_hdr.isra.0",
+          "samples": 215,
+          "percent": 24.23900789177001
+        },
+        {
+          "symbol": "workload",
+          "samples": 215,
+          "percent": 24.23900789177001
+        },
+        {
+          "symbol": "sum_list",
+          "samples": 211,
+          "percent": 23.788049605411498
+        },
+        {
+          "symbol": "load",
+          "samples": 194,
+          "percent": 21.871476888387825
+        },
+        {
+          "symbol": "GC_allocobj",
+          "samples": 167,
+          "percent": 18.827508455467868
+        },
+        {
+          "symbol": "GC_collect_or_expand",
+          "samples": 167,
+          "percent": 18.827508455467868
+        },
+        {
+          "symbol": "GC_generic_malloc_inner",
+          "samples": 167,
+          "percent": 18.827508455467868
+        },
+        {
+          "symbol": "asm_exc_page_fault",
+          "samples": 82,
+          "percent": 9.244644870349493
+        },
+        {
+          "symbol": "do_user_addr_fault",
+          "samples": 81,
+          "percent": 9.131905298759865
+        },
+        {
+          "symbol": "exc_page_fault",
+          "samples": 81,
+          "percent": 9.131905298759865
+        },
+        {
+          "symbol": "GC_build_fl",
+          "samples": 81,
+          "percent": 9.131905298759865
+        },
+        {
+          "symbol": "handle_mm_fault",
+          "samples": 78,
+          "percent": 8.793686583990981
+        }
+      ],
+      "selected_symbols": {
+        "GC_allocobj": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 167,
+          "inclusive_percent": 18.827508455467868
+        },
+        "GC_collect_or_expand": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 167,
+          "inclusive_percent": 18.827508455467868
+        },
+        "GC_generic_malloc_inner": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 167,
+          "inclusive_percent": 18.827508455467868
+        },
+        "GC_generic_malloc_many": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 288,
+          "inclusive_percent": 32.468996617812856
+        },
+        "GC_malloc": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_malloc_atomic": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_mark_from": {
+          "flat_samples": 210,
+          "flat_percent": 23.675310033821873,
+          "inclusive_samples": 428,
+          "inclusive_percent": 48.252536640360766
+        },
+        "GC_mark_some": {
+          "flat_samples": 4,
+          "flat_percent": 0.4509582863585118,
+          "inclusive_samples": 438,
+          "inclusive_percent": 49.379932356257044
+        },
+        "GC_push_contents_hdr": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_stopped_mark": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 438,
+          "inclusive_percent": 49.379932356257044
+        },
+        "GC_try_to_collect_inner": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 462,
+          "inclusive_percent": 52.08568207440812
+        },
+        "__memcpy_avx512_unaligned_erms": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "__memmove_avx512_unaligned_erms": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "__memset_avx512_unaligned_erms": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "allocate_prepared": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "allocate_prepared_slow": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "bzero": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "clear_page_erms": {
+          "flat_samples": 44,
+          "flat_percent": 4.96054114994363,
+          "inclusive_samples": 45,
+          "inclusive_percent": 5.0732807215332585
+        },
+        "major_collect": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 296,
+          "inclusive_percent": 33.370913190529876
+        },
+        "memcpy": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "memset": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 1,
+          "inclusive_percent": 0.11273957158962795
+        },
+        "minor_collect": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "new_old": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "promote": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "prototype_caller_alloc": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "prototype_caller_refill": {
+          "flat_samples": 1,
+          "flat_percent": 0.11273957158962795,
+          "inclusive_samples": 289,
+          "inclusive_percent": 32.58173618940248
+        },
+        "root_pop": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "root_push": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "scan_promote": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        }
+      },
+      "flat_dso_samples": {
+        "/tmp/medaka-retained-profile-c324af5a/boehm_caller_inline": {
+          "samples": 553,
+          "percent": 62.344983089064264
+        },
+        "inlined": {
+          "samples": 211,
+          "percent": 23.788049605411498
+        },
+        "[kernel.kallsyms]": {
+          "samples": 119,
+          "percent": 13.416009019165728
+        },
+        "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2": {
+          "samples": 3,
+          "percent": 0.3382187147688839
+        },
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": {
+          "samples": 1,
+          "percent": 0.11273957158962795
+        }
+      },
+      "sample_metrics": {
+        "elapsed_seconds": {
+          "min": 0.174270239,
+          "median": 0.185519648,
+          "max": 0.229943308
+        },
+        "process_peak_rss_bytes": {
+          "min": 175341568,
+          "median": 175544320.0,
+          "max": 177606656
+        },
+        "payload_bytes": {
+          "min": 120000000,
+          "median": 120000000.0,
+          "max": 120000000
+        },
+        "allocations": {
+          "min": 5000000,
+          "median": 5000000.0,
+          "max": 5000000
+        },
+        "checksum": {
+          "min": 12499997500000,
+          "median": 12499997500000.0,
+          "max": 12499997500000
+        },
+        "copied_payload_over_nursery_payload_fraction": null,
+        "final_live_payload_over_total_payload_fraction": null
+      },
+      "identity": {
+        "repeats": 30,
+        "allocations": 5000000,
+        "payload_bytes": 120000000,
+        "checksum": 12499997500000,
+        "nursery_capacity_bytes": null,
+        "profile": "list",
+        "count": 5000000
+      }
+    },
+    {
+      "backend": "boehm_caller_inline",
+      "profile": "tree",
+      "perf_data_sha256": "6ded2bbfd926a734751f6ca0f7f0f3ebcd761276dbadfae4b4ff70538d2720b7",
+      "runner_jsonl_sha256": "3a760a2b6bf28765c6ec1d082f6b25a0f4aaeee3091d012e0964ba154d85de07",
+      "sample_count_total": 1660,
+      "sample_count_retained_benchmark_tgids": 1466,
+      "sample_count_discarded_other_processes_or_launcher_comm": 194,
+      "discarded_comm_counts": {
+        "perf-exec": 5,
+        "python3": 189
+      },
+      "discarded_launcher_comm_samples": 194,
+      "lost_samples": 0,
+      "benchmark_tgids": [
+        104,
+        105,
+        106,
+        107,
+        108,
+        109,
+        110,
+        111,
+        112,
+        113,
+        114,
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        125,
+        126,
+        127,
+        128,
+        129,
+        130,
+        131,
+        132,
+        133
+      ],
+      "retained_comm_counts": {
+        "boehm_caller_in": 1466
+      },
+      "retained_samples_by_thread": {
+        "boehm_caller_in:104": 48,
+        "boehm_caller_in:105": 48,
+        "boehm_caller_in:106": 52,
+        "boehm_caller_in:107": 46,
+        "boehm_caller_in:108": 47,
+        "boehm_caller_in:109": 57,
+        "boehm_caller_in:110": 51,
+        "boehm_caller_in:111": 46,
+        "boehm_caller_in:112": 48,
+        "boehm_caller_in:113": 51,
+        "boehm_caller_in:114": 50,
+        "boehm_caller_in:115": 49,
+        "boehm_caller_in:116": 47,
+        "boehm_caller_in:117": 45,
+        "boehm_caller_in:118": 47,
+        "boehm_caller_in:119": 44,
+        "boehm_caller_in:120": 48,
+        "boehm_caller_in:121": 56,
+        "boehm_caller_in:122": 48,
+        "boehm_caller_in:123": 47,
+        "boehm_caller_in:124": 47,
+        "boehm_caller_in:125": 43,
+        "boehm_caller_in:126": 60,
+        "boehm_caller_in:127": 48,
+        "boehm_caller_in:128": 45,
+        "boehm_caller_in:129": 49,
+        "boehm_caller_in:130": 49,
+        "boehm_caller_in:131": 47,
+        "boehm_caller_in:132": 47,
+        "boehm_caller_in:133": 56
+      },
+      "marker_comm_counts": {},
+      "flat_top_symbols": [
+        {
+          "symbol": "load",
+          "samples": 610,
+          "percent": 41.60982264665757
+        },
+        {
+          "symbol": "GC_mark_from",
+          "samples": 288,
+          "percent": 19.645293315143245
+        },
+        {
+          "symbol": "GC_push_contents_hdr.isra.0",
+          "samples": 196,
+          "percent": 13.369713506139155
+        },
+        {
+          "symbol": "tree",
+          "samples": 88,
+          "percent": 6.002728512960436
+        },
+        {
+          "symbol": "clear_page_erms",
+          "samples": 57,
+          "percent": 3.888130968622101
+        },
+        {
+          "symbol": "GC_allochblk_nth",
+          "samples": 23,
+          "percent": 1.5688949522510232
+        },
+        {
+          "symbol": "sum_tree",
+          "samples": 22,
+          "percent": 1.500682128240109
+        },
+        {
+          "symbol": "GC_build_fl",
+          "samples": 17,
+          "percent": 1.159618008185539
+        },
+        {
+          "symbol": "asm_sysvec_apic_timer_interrupt",
+          "samples": 14,
+          "percent": 0.9549795361527967
+        },
+        {
+          "symbol": "__list_del_entry_valid_or_report",
+          "samples": 13,
+          "percent": 0.8867667121418826
+        },
+        {
+          "symbol": "GC_header_cache_miss",
+          "samples": 12,
+          "percent": 0.8185538881309686
+        },
+        {
+          "symbol": "GC_clear_hdr_marks",
+          "samples": 10,
+          "percent": 0.6821282401091405
+        },
+        {
+          "symbol": "asm_sysvec_call_function_single",
+          "samples": 9,
+          "percent": 0.6139154160982264
+        },
+        {
+          "symbol": "GC_find_header",
+          "samples": 8,
+          "percent": 0.5457025920873124
+        },
+        {
+          "symbol": "GC_reclaim_block",
+          "samples": 7,
+          "percent": 0.47748976807639837
+        },
+        {
+          "symbol": "mas_walk",
+          "samples": 5,
+          "percent": 0.34106412005457026
+        },
+        {
+          "symbol": "folio_add_new_anon_rmap",
+          "samples": 4,
+          "percent": 0.2728512960436562
+        },
+        {
+          "symbol": "__folio_batch_add_and_move",
+          "samples": 4,
+          "percent": 0.2728512960436562
+        },
+        {
+          "symbol": "GC_clear_stack_inner",
+          "samples": 4,
+          "percent": 0.2728512960436562
+        },
+        {
+          "symbol": "GC_allochblk",
+          "samples": 4,
+          "percent": 0.2728512960436562
+        },
+        {
+          "symbol": "GC_mark_some",
+          "samples": 4,
+          "percent": 0.2728512960436562
+        },
+        {
+          "symbol": "GC_apply_to_all_blocks",
+          "samples": 4,
+          "percent": 0.2728512960436562
+        },
+        {
+          "symbol": "__lruvec_stat_mod_folio",
+          "samples": 3,
+          "percent": 0.20463847203274216
+        },
+        {
+          "symbol": "vma_interval_tree_remove",
+          "samples": 3,
+          "percent": 0.20463847203274216
+        },
+        {
+          "symbol": "clear_marks_for_block",
+          "samples": 2,
+          "percent": 0.1364256480218281
+        }
+      ],
+      "inclusive_top_symbols": [
+        {
+          "symbol": "__libc_start_call_main",
+          "samples": 1432,
+          "percent": 97.68076398362892
+        },
+        {
+          "symbol": "main",
+          "samples": 1431,
+          "percent": 97.61255115961801
+        },
+        {
+          "symbol": "sum_tree",
+          "samples": 642,
+          "percent": 43.79263301500682
+        },
+        {
+          "symbol": "load",
+          "samples": 620,
+          "percent": 42.29195088676671
+        },
+        {
+          "symbol": "GC_try_to_collect_inner",
+          "samples": 537,
+          "percent": 36.630286493860844
+        },
+        {
+          "symbol": "_start",
+          "samples": 531,
+          "percent": 36.22100954979536
+        },
+        {
+          "symbol": "__libc_start_main_impl",
+          "samples": 523,
+          "percent": 35.67530695770805
+        },
+        {
+          "symbol": "GC_stopped_mark",
+          "samples": 514,
+          "percent": 35.06139154160982
+        },
+        {
+          "symbol": "GC_mark_some",
+          "samples": 514,
+          "percent": 35.06139154160982
+        },
+        {
+          "symbol": "GC_mark_from",
+          "samples": 504,
+          "percent": 34.379263301500686
+        },
+        {
+          "symbol": "tree",
+          "samples": 473,
+          "percent": 32.26466575716235
+        },
+        {
+          "symbol": "GC_generic_malloc_many",
+          "samples": 381,
+          "percent": 25.989085948158255
+        },
+        {
+          "symbol": "prototype_caller_refill",
+          "samples": 381,
+          "percent": 25.989085948158255
+        },
+        {
+          "symbol": "major_collect",
+          "samples": 317,
+          "percent": 21.623465211459756
+        },
+        {
+          "symbol": "GC_try_to_collect_general",
+          "samples": 317,
+          "percent": 21.623465211459756
+        },
+        {
+          "symbol": "GC_gcollect",
+          "samples": 317,
+          "percent": 21.623465211459756
+        },
+        {
+          "symbol": "GC_allocobj",
+          "samples": 222,
+          "percent": 15.143246930422919
+        },
+        {
+          "symbol": "GC_generic_malloc_inner",
+          "samples": 222,
+          "percent": 15.143246930422919
+        },
+        {
+          "symbol": "GC_collect_or_expand",
+          "samples": 220,
+          "percent": 15.006821282401091
+        },
+        {
+          "symbol": "GC_push_contents_hdr.isra.0",
+          "samples": 199,
+          "percent": 13.574351978171896
+        },
+        {
+          "symbol": "asm_exc_page_fault",
+          "samples": 115,
+          "percent": 7.844474761255116
+        },
+        {
+          "symbol": "exc_page_fault",
+          "samples": 113,
+          "percent": 7.708049113233288
+        },
+        {
+          "symbol": "do_user_addr_fault",
+          "samples": 111,
+          "percent": 7.571623465211459
+        },
+        {
+          "symbol": "GC_build_fl",
+          "samples": 110,
+          "percent": 7.503410641200546
+        },
+        {
+          "symbol": "__handle_mm_fault",
+          "samples": 105,
+          "percent": 7.162346521145976
+        }
+      ],
+      "selected_symbols": {
+        "GC_allocobj": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 222,
+          "inclusive_percent": 15.143246930422919
+        },
+        "GC_collect_or_expand": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 220,
+          "inclusive_percent": 15.006821282401091
+        },
+        "GC_generic_malloc_inner": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 222,
+          "inclusive_percent": 15.143246930422919
+        },
+        "GC_generic_malloc_many": {
+          "flat_samples": 1,
+          "flat_percent": 0.06821282401091405,
+          "inclusive_samples": 381,
+          "inclusive_percent": 25.989085948158255
+        },
+        "GC_malloc": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_malloc_atomic": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_mark_from": {
+          "flat_samples": 288,
+          "flat_percent": 19.645293315143245,
+          "inclusive_samples": 504,
+          "inclusive_percent": 34.379263301500686
+        },
+        "GC_mark_some": {
+          "flat_samples": 4,
+          "flat_percent": 0.2728512960436562,
+          "inclusive_samples": 514,
+          "inclusive_percent": 35.06139154160982
+        },
+        "GC_push_contents_hdr": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "GC_stopped_mark": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 514,
+          "inclusive_percent": 35.06139154160982
+        },
+        "GC_try_to_collect_inner": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 537,
+          "inclusive_percent": 36.630286493860844
+        },
+        "__memcpy_avx512_unaligned_erms": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "__memmove_avx512_unaligned_erms": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "__memset_avx512_unaligned_erms": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 1,
+          "inclusive_percent": 0.06821282401091405
+        },
+        "allocate_prepared": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "allocate_prepared_slow": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "bzero": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "clear_page_erms": {
+          "flat_samples": 57,
+          "flat_percent": 3.888130968622101,
+          "inclusive_samples": 60,
+          "inclusive_percent": 4.092769440654843
+        },
+        "major_collect": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 317,
+          "inclusive_percent": 21.623465211459756
+        },
+        "memcpy": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "memset": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "minor_collect": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "new_old": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "promote": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "prototype_caller_alloc": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "prototype_caller_refill": {
+          "flat_samples": 1,
+          "flat_percent": 0.06821282401091405,
+          "inclusive_samples": 381,
+          "inclusive_percent": 25.989085948158255
+        },
+        "root_pop": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "root_push": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        },
+        "scan_promote": {
+          "flat_samples": 0,
+          "flat_percent": 0.0,
+          "inclusive_samples": 0,
+          "inclusive_percent": 0.0
+        }
+      },
+      "flat_dso_samples": {
+        "/tmp/medaka-retained-profile-c324af5a/boehm_caller_inline": {
+          "samples": 693,
+          "percent": 47.27148703956344
+        },
+        "inlined": {
+          "samples": 614,
+          "percent": 41.88267394270123
+        },
+        "[kernel.kallsyms]": {
+          "samples": 158,
+          "percent": 10.77762619372442
+        },
+        "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2": {
+          "samples": 1,
+          "percent": 0.06821282401091405
+        }
+      },
+      "sample_metrics": {
+        "elapsed_seconds": {
+          "min": 0.260482423,
+          "median": 0.2803630415,
+          "max": 0.337604497
+        },
+        "process_peak_rss_bytes": {
+          "min": 175349760,
+          "median": 175507456.0,
+          "max": 177700864
+        },
+        "payload_bytes": {
+          "min": 120000000,
+          "median": 120000000.0,
+          "max": 120000000
+        },
+        "allocations": {
+          "min": 5000000,
+          "median": 5000000.0,
+          "max": 5000000
+        },
+        "checksum": {
+          "min": 12499997500000,
+          "median": 12499997500000.0,
+          "max": 12499997500000
+        },
+        "copied_payload_over_nursery_payload_fraction": null,
+        "final_live_payload_over_total_payload_fraction": null
+      },
+      "identity": {
+        "repeats": 30,
+        "allocations": 5000000,
+        "payload_bytes": 120000000,
+        "checksum": 12499997500000,
+        "nursery_capacity_bytes": null,
+        "profile": "tree",
+        "count": 5000000
+      }
+    }
+  ],
+  "tool_limitations": "perf annotate on custom_AS-list symbol new_old terminated with exit 139 (segmentation fault) on this host; perf record, perf script, and perf report resolved stacks and symbols normally. This is an external profiler-tool limitation, not a Medaka defect."
+}

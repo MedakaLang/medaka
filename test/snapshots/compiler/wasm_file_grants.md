@@ -1,5 +1,5 @@
 # META
-source_lines=978
+source_lines=979
 stages=DESUGAR,MARK
 # SOURCE
 -- Wasm file-capability prerequisites on the elaborated AST, shared by the
@@ -82,13 +82,13 @@ prepareWasmFileGrants runtimeDecls kept modules =
 
 keptFunNames : List Decl -> List String -> List String
 keptFunNames [] acc = acc
-keptFunNames ((DFunDef _ n _ _ _) :: rest) acc = keptFunNames rest (n :: acc)
+keptFunNames ((DFunDef _ n _ _ _ _) :: rest) acc = keptFunNames rest (n :: acc)
 keptFunNames ((DAttrib _ d) :: rest) acc = keptFunNames (d :: rest) acc
 keptFunNames (_ :: rest) acc = keptFunNames rest acc
 
 -- DCE drops only plain functions, so every other declaration is read.
 isLiveDecl : OrdMap Unit -> Decl -> Bool
-isLiveDecl live (DFunDef _ n _ _ _) = omHasKey n live
+isLiveDecl live (DFunDef _ n _ _ _ _) = omHasKey n live
 isLiveDecl live (DAttrib _ d) = isLiveDecl live d
 isLiveDecl _ _ = True
 
@@ -334,7 +334,7 @@ addPatScope : List Pat -> Scope -> Scope
 addPatScope ps bound = addNamesScope (flatMap patBoundNames ps) bound
 
 letScope : Bool -> Bool -> Pat -> Expr -> Scope -> Scope
-letScope False recursive (PVar n _) rhs bound =
+letScope False recursive (PVar n _ _) rhs bound =
   let captured = if recursive then addNamesScope [n] bound else bound
   match localFunction captured rhs
     Some binding => omInsert n binding bound
@@ -359,20 +359,20 @@ localGroupScope binds bound =
     addNamesScope
       (map
         (b => match b
-          LetBind n _ _ => n)
+          LetBind n _ _ _ => n)
         binds)
       bound
   fold
     (m b => match b
-      LetBind n [FunClause ps body] _ =>
+      LetBind n [FunClause ps body] _ _ =>
         omInsert n (localBinding ps body captured) m
-      LetBind _ _ _ => m)
+      LetBind _ _ _ _ => m)
     captured
     binds
 
 mapScopedDeclBodies : (Scope -> Expr -> Expr) -> Decl -> Decl
-mapScopedDeclBodies f (DFunDef pub n ps body site) =
-  DFunDef pub n ps (f (addPatScope ps omEmpty) body) site
+mapScopedDeclBodies f (DFunDef pub n ps body site bid) =
+  DFunDef pub n ps (f (addPatScope ps omEmpty) body) site bid
 mapScopedDeclBodies f (DLetGroup pub binds) =
   DLetGroup pub (map (mapScopedLetBind f omEmpty) binds)
 mapScopedDeclBodies f (d@(DImpl { methods, ... })) = DImpl { d |
@@ -414,7 +414,7 @@ mapScopedDeclBodies f (DAttrib attrs d) =
 mapScopedDeclBodies _ d = d
 
 mapScopedLetBind : (Scope -> Expr -> Expr) -> Scope -> LetBind -> LetBind
-mapScopedLetBind f bound (LetBind n clauses site) =
+mapScopedLetBind f bound (LetBind n clauses site bid) =
   LetBind
     n
     (map
@@ -422,6 +422,7 @@ mapScopedLetBind f bound (LetBind n clauses site) =
         FunClause ps body => FunClause ps (f (addPatScope ps bound) body))
       clauses)
     site
+    bid
 
 mapScopedChildren : Scope -> (Scope -> Expr -> Expr) -> Expr -> Expr
 mapScopedChildren bound f (ELam ps body) =
@@ -532,12 +533,12 @@ unknownCall returns bound head argc = match localHead bound head
     None => True
 
 valueParamCount : List Pat -> Int
-valueParamCount ((PVar n _) :: rest)
+valueParamCount ((PVar n _ _) :: rest)
   | startsWith "$dict" n = valueParamCount rest
 valueParamCount ps = listLen ps
 
 declBindingBodies : Decl -> List (String, List Pat, Expr)
-declBindingBodies (DFunDef _ n ps body _) = [(n, ps, body)]
+declBindingBodies (DFunDef _ n ps body _ _) = [(n, ps, body)]
 declBindingBodies (DLetGroup _ binds) = flatMap letBindBodies binds
 declBindingBodies (DImpl { methods, ... }) =
   map
@@ -554,7 +555,7 @@ declBindingBodies (DAttrib _ d) = declBindingBodies d
 declBindingBodies _ = []
 
 letBindBodies : LetBind -> List (String, List Pat, Expr)
-letBindBodies (LetBind n clauses _) =
+letBindBodies (LetBind n clauses _ _) =
   map
     (c => match c
       FunClause ps body => (n, ps, body))
@@ -630,7 +631,7 @@ tailReturns seeds deps owner base bound (ELetGroup binds body) =
     addNamesScope
       (map
         (b => match b
-          LetBind n _ _ => n)
+          LetBind n _ _ _ => n)
         binds)
       bound
   tailReturns seeds deps owner base after body
@@ -761,14 +762,14 @@ methodNoFile aliases write m (DAttrib _ d) = methodNoFile aliases write m d
 methodNoFile _ _ m _ = m
 
 bindingNoFile : OrdMap Bool -> OrdMap Bool -> Ref (OrdMap Bool) -> Decl -> Unit
-bindingNoFile ordinary _ results (DFunDef _ n _ _ _) =
+bindingNoFile ordinary _ results (DFunDef _ n _ _ _ _) =
   results :=
     putNoFile (unmangled n) (optionOr False (omLookup n ordinary)) results.value
 bindingNoFile ordinary _ results (DLetGroup _ binds) =
   let _ =
     map
       (b => match b
-        LetBind n _ _ =>
+        LetBind n _ _ _ =>
           results :=
             putNoFile
               (unmangled n)
@@ -994,11 +995,11 @@ leftLoc e =
 (DFunDef false "prepareWasmFileGrants" ((PVar "runtimeDecls") (PVar "kept") (PVar "modules")) (EBlock (DoLet false false (PVar "live") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "keptFunNames") (EVar "kept")) (EListLit))) (EVar "omEmpty"))) (DoLet false false (PVar "reach") (EApp (EVar "fileReach") (EBinOp "++" (EVar "runtimeDecls") (EVar "kept")))) (DoExpr (EMatch (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EApp (EVar "moduleGrantDiags") (EVar "reach")) (EVar "live")) (EVar "m")))) (EVar "modules")) (arm (PList) () (EApp (EVar "Ok") (EApp (EApp (EVar "map") (EApp (EVar "mapScopedDeclBodies") (EApp (EApp (EApp (EVar "scanGrantSites") (EVar "reach")) (EApp (EVar "Ref") (EListLit))) (EVar "None")))) (EVar "kept")))) (arm (PVar "diags") () (EApp (EVar "Err") (EVar "diags")))))))
 (DTypeSig false "keptFunNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "keptFunNames" ((PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "keptFunNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "keptFunNames") (EVar "rest")) (EBinOp "::" (EVar "n") (EVar "acc"))))
+(DFunDef false "keptFunNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "keptFunNames") (EVar "rest")) (EBinOp "::" (EVar "n") (EVar "acc"))))
 (DFunDef false "keptFunNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "keptFunNames") (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "acc")))
 (DFunDef false "keptFunNames" ((PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "keptFunNames") (EVar "rest")) (EVar "acc")))
 (DTypeSig false "isLiveDecl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Decl") (TyCon "Bool"))))
-(DFunDef false "isLiveDecl" ((PVar "live") (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild)) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "live")))
+(DFunDef false "isLiveDecl" ((PVar "live") (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild)) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "live")))
 (DFunDef false "isLiveDecl" ((PVar "live") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "isLiveDecl") (EVar "live")) (EVar "d")))
 (DFunDef false "isLiveDecl" (PWild PWild) (EVar "True"))
 (DTypeSig false "moduleGrantDiags" (TyFun (TyCon "Reach") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))))))
@@ -1048,7 +1049,7 @@ leftLoc e =
 (DTypeSig false "addPatScope" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Scope") (TyCon "Scope"))))
 (DFunDef false "addPatScope" ((PVar "ps") (PVar "bound")) (EApp (EApp (EVar "addNamesScope") (EApp (EApp (EVar "flatMap") (EVar "patBoundNames")) (EVar "ps"))) (EVar "bound")))
 (DTypeSig false "letScope" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyFun (TyCon "Scope") (TyCon "Scope")))))))
-(DFunDef false "letScope" ((PCon "False") (PVar "recursive") (PCon "PVar" (PVar "n") PWild) (PVar "rhs") (PVar "bound")) (EBlock (DoLet false false (PVar "captured") (EIf (EVar "recursive") (EApp (EApp (EVar "addNamesScope") (EListLit (EVar "n"))) (EVar "bound")) (EVar "bound"))) (DoExpr (EMatch (EApp (EApp (EVar "localFunction") (EVar "captured")) (EVar "rhs")) (arm (PCon "Some" (PVar "binding")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "binding")) (EVar "bound"))) (arm (PCon "None") () (EApp (EApp (EVar "addNamesScope") (EListLit (EVar "n"))) (EVar "bound")))))))
+(DFunDef false "letScope" ((PCon "False") (PVar "recursive") (PCon "PVar" (PVar "n") PWild PWild) (PVar "rhs") (PVar "bound")) (EBlock (DoLet false false (PVar "captured") (EIf (EVar "recursive") (EApp (EApp (EVar "addNamesScope") (EListLit (EVar "n"))) (EVar "bound")) (EVar "bound"))) (DoExpr (EMatch (EApp (EApp (EVar "localFunction") (EVar "captured")) (EVar "rhs")) (arm (PCon "Some" (PVar "binding")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "binding")) (EVar "bound"))) (arm (PCon "None") () (EApp (EApp (EVar "addNamesScope") (EListLit (EVar "n"))) (EVar "bound")))))))
 (DFunDef false "letScope" (PWild PWild (PVar "pat") PWild (PVar "bound")) (EApp (EApp (EVar "addPatScope") (EListLit (EVar "pat"))) (EVar "bound")))
 (DTypeSig false "localFunction" (TyFun (TyCon "Scope") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "LocalBinding")))))
 (DFunDef false "localFunction" ((PVar "bound") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EVar "localFunction") (EVar "bound")) (EVar "e")))
@@ -1058,9 +1059,9 @@ leftLoc e =
 (DFunDef false "localFunction" ((PVar "bound") (PCon "ELam" (PVar "ps") (PVar "body"))) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "localBinding") (EVar "ps")) (EVar "body")) (EVar "bound"))))
 (DFunDef false "localFunction" (PWild PWild) (EVar "None"))
 (DTypeSig false "localGroupScope" (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyCon "Scope") (TyCon "Scope"))))
-(DFunDef false "localGroupScope" ((PVar "binds") (PVar "bound")) (EBlock (DoLet false false (PVar "captured") (EApp (EApp (EVar "addNamesScope") (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") PWild PWild) () (EVar "n"))))) (EVar "binds"))) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") (PList (PCon "FunClause" (PVar "ps") (PVar "body"))) PWild) () (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EApp (EApp (EApp (EVar "localBinding") (EVar "ps")) (EVar "body")) (EVar "captured"))) (EVar "m"))) (arm (PCon "LetBind" PWild PWild PWild) () (EVar "m"))))) (EVar "captured")) (EVar "binds")))))
+(DFunDef false "localGroupScope" ((PVar "binds") (PVar "bound")) (EBlock (DoLet false false (PVar "captured") (EApp (EApp (EVar "addNamesScope") (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") PWild PWild PWild) () (EVar "n"))))) (EVar "binds"))) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") (PList (PCon "FunClause" (PVar "ps") (PVar "body"))) PWild PWild) () (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EApp (EApp (EApp (EVar "localBinding") (EVar "ps")) (EVar "body")) (EVar "captured"))) (EVar "m"))) (arm (PCon "LetBind" PWild PWild PWild PWild) () (EVar "m"))))) (EVar "captured")) (EVar "binds")))))
 (DTypeSig false "mapScopedDeclBodies" (TyFun (TyFun (TyCon "Scope") (TyFun (TyCon "Expr") (TyCon "Expr"))) (TyFun (TyCon "Decl") (TyCon "Decl"))))
-(DFunDef false "mapScopedDeclBodies" ((PVar "f") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "body") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EApp (EVar "f") (EApp (EApp (EVar "addPatScope") (EVar "ps")) (EVar "omEmpty"))) (EVar "body"))) (EVar "site")))
+(DFunDef false "mapScopedDeclBodies" ((PVar "f") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "body") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EApp (EVar "f") (EApp (EApp (EVar "addPatScope") (EVar "ps")) (EVar "omEmpty"))) (EVar "body"))) (EVar "site")) (EVar "bid")))
 (DFunDef false "mapScopedDeclBodies" ((PVar "f") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "mapScopedLetBind") (EVar "f")) (EVar "omEmpty"))) (EVar "binds"))))
 (DFunDef false "mapScopedDeclBodies" ((PVar "f") (PAs "d" (PRec "DImpl" ((rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EMatch (EVar "m") (arm (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "body")) () (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps")) (EApp (EApp (EVar "f") (EApp (EApp (EVar "addPatScope") (EVar "ps")) (EVar "omEmpty"))) (EVar "body"))))))) (EVar "methods"))))))
 (DFunDef false "mapScopedDeclBodies" ((PVar "f") (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EMatch (EVar "m") (arm (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PVar "def") (PVar "loc")) () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EApp (EVar "map") (ELam ((PVar "dm")) (EMatch (EVar "dm") (arm (PCon "MethodDefault" (PVar "ps") (PVar "body")) () (EApp (EApp (EVar "MethodDefault") (EVar "ps")) (EApp (EApp (EVar "f") (EApp (EApp (EVar "addPatScope") (EVar "ps")) (EVar "omEmpty"))) (EVar "body"))))))) (EVar "def"))) (EVar "loc")))))) (EVar "methods"))))))
@@ -1069,7 +1070,7 @@ leftLoc e =
 (DFunDef false "mapScopedDeclBodies" ((PVar "f") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "mapScopedDeclBodies") (EVar "f")) (EVar "d"))))
 (DFunDef false "mapScopedDeclBodies" (PWild (PVar "d")) (EVar "d"))
 (DTypeSig false "mapScopedLetBind" (TyFun (TyFun (TyCon "Scope") (TyFun (TyCon "Expr") (TyCon "Expr"))) (TyFun (TyCon "Scope") (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
-(DFunDef false "mapScopedLetBind" ((PVar "f") (PVar "bound") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site"))) (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PCon "FunClause" (PVar "ps") (PVar "body")) () (EApp (EApp (EVar "FunClause") (EVar "ps")) (EApp (EApp (EVar "f") (EApp (EApp (EVar "addPatScope") (EVar "ps")) (EVar "bound"))) (EVar "body"))))))) (EVar "clauses"))) (EVar "site")))
+(DFunDef false "mapScopedLetBind" ((PVar "f") (PVar "bound") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PCon "FunClause" (PVar "ps") (PVar "body")) () (EApp (EApp (EVar "FunClause") (EVar "ps")) (EApp (EApp (EVar "f") (EApp (EApp (EVar "addPatScope") (EVar "ps")) (EVar "bound"))) (EVar "body"))))))) (EVar "clauses"))) (EVar "site")) (EVar "bid")))
 (DTypeSig false "mapScopedChildren" (TyFun (TyCon "Scope") (TyFun (TyFun (TyCon "Scope") (TyFun (TyCon "Expr") (TyCon "Expr"))) (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "mapScopedChildren" ((PVar "bound") (PVar "f") (PCon "ELam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "ELam") (EVar "ps")) (EApp (EApp (EVar "f") (EApp (EApp (EVar "addPatScope") (EVar "ps")) (EVar "bound"))) (EVar "body"))))
 (DFunDef false "mapScopedChildren" ((PVar "bound") (PVar "f") (PCon "ELet" (PVar "site") (PVar "recursive") (PVar "pat") (PVar "rhs") (PVar "body"))) (EBlock (DoLet false false (PVar "after") (EApp (EApp (EApp (EApp (EApp (EVar "letScope") (EVar "False")) (EVar "recursive")) (EVar "pat")) (EVar "rhs")) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "site")) (EVar "recursive")) (EVar "pat")) (EApp (EApp (EVar "f") (EIf (EVar "recursive") (EVar "after") (EVar "bound"))) (EVar "rhs"))) (EApp (EApp (EVar "f") (EVar "after")) (EVar "body"))))))
@@ -1095,17 +1096,17 @@ leftLoc e =
 (DTypeSig false "unknownCall" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "Scope") (TyFun (TyCon "Expr") (TyFun (TyCon "Int") (TyCon "Bool"))))))
 (DFunDef false "unknownCall" ((PVar "returns") (PVar "bound") (PVar "head") (PVar "argc")) (EMatch (EApp (EApp (EVar "localHead") (EVar "bound")) (EVar "head")) (arm (PCon "Some" (PCon "LocalFunction" (PVar "ps") PWild PWild PWild PWild)) () (EBinOp ">" (EVar "argc") (EApp (EVar "valueParamCount") (EVar "ps")))) (arm (PCon "Some" (PCon "UnknownBinding")) () (EVar "True")) (arm (PCon "None") () (EMatch (EApp (EVar "headRawName") (EVar "head")) (arm (PCon "Some" (PVar "n")) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "returns")) (arm (PCon "Some" (PVar "boundary")) () (EBinOp ">" (EVar "argc") (EVar "boundary"))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "True"))))))
 (DTypeSig false "valueParamCount" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
-(DFunDef false "valueParamCount" ((PCons (PCon "PVar" (PVar "n") PWild) (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "n")) (EApp (EVar "valueParamCount") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "valueParamCount" ((PCons (PCon "PVar" (PVar "n") PWild PWild) (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "n")) (EApp (EVar "valueParamCount") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "valueParamCount" ((PVar "ps")) (EApp (EVar "listLen") (EVar "ps")))
 (DTypeSig false "declBindingBodies" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))
-(DFunDef false "declBindingBodies" ((PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") PWild)) (EListLit (ETuple (EVar "n") (EVar "ps") (EVar "body"))))
+(DFunDef false "declBindingBodies" ((PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") PWild PWild)) (EListLit (ETuple (EVar "n") (EVar "ps") (EVar "body"))))
 (DFunDef false "declBindingBodies" ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EVar "flatMap") (EVar "letBindBodies")) (EVar "binds")))
 (DFunDef false "declBindingBodies" ((PRec "DImpl" ((rf "methods" None)) true)) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EMatch (EVar "m") (arm (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "body")) () (ETuple (EVar "n") (EVar "ps") (EVar "body")))))) (EVar "methods")))
 (DFunDef false "declBindingBodies" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EMatch (EVar "m") (arm (PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "body"))) PWild) () (EListLit (ETuple (EVar "n") (EVar "ps") (EVar "body")))) (arm (PCon "IfaceMethod" PWild PWild (PCon "None") PWild) () (EListLit))))) (EVar "methods")))
 (DFunDef false "declBindingBodies" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declBindingBodies") (EVar "d")))
 (DFunDef false "declBindingBodies" (PWild) (EListLit))
 (DTypeSig false "letBindBodies" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))
-(DFunDef false "letBindBodies" ((PCon "LetBind" (PVar "n") (PVar "clauses") PWild)) (EApp (EApp (EVar "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PCon "FunClause" (PVar "ps") (PVar "body")) () (ETuple (EVar "n") (EVar "ps") (EVar "body")))))) (EVar "clauses")))
+(DFunDef false "letBindBodies" ((PCon "LetBind" (PVar "n") (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PCon "FunClause" (PVar "ps") (PVar "body")) () (ETuple (EVar "n") (EVar "ps") (EVar "body")))))) (EVar "clauses")))
 (DTypeSig false "returnedBoundaries" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyApp (TyCon "OrdMap") (TyCon "Int"))))
 (DFunDef false "returnedBoundaries" ((PVar "bindings")) (EBlock (DoLet false false (PVar "seeds") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "deps") (EApp (EVar "Ref") (EVar "omEmpty"))) (DoLet false false PWild (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "n") (PVar "ps") (PVar "body"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "tailReturns") (EVar "seeds")) (EVar "deps")) (EVar "n")) (EApp (EVar "valueParamCount") (EVar "ps"))) (EApp (EApp (EVar "addPatScope") (EVar "ps")) (EVar "omEmpty"))) (EVar "body")))) (EVar "bindings"))) (DoExpr (EApp (EApp (EApp (EVar "relaxReturns") (EFieldAccess (EVar "deps") "value")) (EFieldAccess (EVar "seeds") "value")) (EVar "omEmpty")))))
 (DTypeSig false "relaxReturns" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int"))))))
@@ -1118,7 +1119,7 @@ leftLoc e =
 (DFunDef false "tailReturns" ((PVar "seeds") (PVar "deps") (PVar "owner") (PVar "base") (PVar "bound") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "tailReturns") (EVar "seeds")) (EVar "deps")) (EVar "owner")) (EVar "base")) (EVar "bound")) (EVar "e")))
 (DFunDef false "tailReturns" ((PVar "seeds") (PVar "deps") (PVar "owner") (PVar "base") (PVar "bound") (PCon "ELam" (PVar "ps") (PVar "body"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "tailReturns") (EVar "seeds")) (EVar "deps")) (EVar "owner")) (EBinOp "+" (EVar "base") (EApp (EVar "valueParamCount") (EVar "ps")))) (EApp (EApp (EVar "addPatScope") (EVar "ps")) (EVar "bound"))) (EVar "body")))
 (DFunDef false "tailReturns" ((PVar "seeds") (PVar "deps") (PVar "owner") (PVar "base") (PVar "bound") (PCon "ELet" PWild PWild (PVar "pat") PWild (PVar "body"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "tailReturns") (EVar "seeds")) (EVar "deps")) (EVar "owner")) (EVar "base")) (EApp (EApp (EVar "addPatScope") (EListLit (EVar "pat"))) (EVar "bound"))) (EVar "body")))
-(DFunDef false "tailReturns" ((PVar "seeds") (PVar "deps") (PVar "owner") (PVar "base") (PVar "bound") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "after") (EApp (EApp (EVar "addNamesScope") (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") PWild PWild) () (EVar "n"))))) (EVar "binds"))) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "tailReturns") (EVar "seeds")) (EVar "deps")) (EVar "owner")) (EVar "base")) (EVar "after")) (EVar "body")))))
+(DFunDef false "tailReturns" ((PVar "seeds") (PVar "deps") (PVar "owner") (PVar "base") (PVar "bound") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "after") (EApp (EApp (EVar "addNamesScope") (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") PWild PWild PWild) () (EVar "n"))))) (EVar "binds"))) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "tailReturns") (EVar "seeds")) (EVar "deps")) (EVar "owner")) (EVar "base")) (EVar "after")) (EVar "body")))))
 (DFunDef false "tailReturns" ((PVar "seeds") (PVar "deps") (PVar "owner") (PVar "base") (PVar "bound") (PCon "EIf" PWild (PVar "yes") (PVar "no"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "tailReturns") (EVar "seeds")) (EVar "deps")) (EVar "owner")) (EVar "base")) (EVar "bound")) (EVar "yes"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "tailReturns") (EVar "seeds")) (EVar "deps")) (EVar "owner")) (EVar "base")) (EVar "bound")) (EVar "no")))))
 (DFunDef false "tailReturns" ((PVar "seeds") (PVar "deps") (PVar "owner") (PVar "base") (PVar "bound") (PCon "EMatch" PWild (PVar "arms"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EMatch (EVar "a") (arm (PCon "Arm" (PVar "pat") (PVar "guards") (PVar "body")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "tailReturns") (EVar "seeds")) (EVar "deps")) (EVar "owner")) (EVar "base")) (EApp (EApp (EVar "guardScope") (EVar "guards")) (EApp (EApp (EVar "addPatScope") (EListLit (EVar "pat"))) (EVar "bound")))) (EVar "body")))))) (EVar "arms"))) (DoExpr (ELit LUnit))))
 (DFunDef false "tailReturns" ((PVar "seeds") (PVar "deps") (PVar "owner") (PVar "base") (PVar "bound") (PCon "EGuards" (PVar "arms"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EMatch (EVar "a") (arm (PCon "GuardArm" (PVar "guards") (PVar "body")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "tailReturns") (EVar "seeds")) (EVar "deps")) (EVar "owner")) (EVar "base")) (EApp (EApp (EVar "guardScope") (EVar "guards")) (EVar "bound"))) (EVar "body")))))) (EVar "arms"))) (DoExpr (ELit LUnit))))
@@ -1152,8 +1153,8 @@ leftLoc e =
 (DFunDef false "methodNoFile" ((PVar "aliases") (PVar "write") (PVar "m") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "methodNoFile") (EVar "aliases")) (EVar "write")) (EVar "m")) (EVar "d")))
 (DFunDef false "methodNoFile" (PWild PWild (PVar "m") PWild) (EVar "m"))
 (DTypeSig false "bindingNoFile" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Bool")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Bool")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Bool"))) (TyFun (TyCon "Decl") (TyCon "Unit"))))))
-(DFunDef false "bindingNoFile" ((PVar "ordinary") PWild (PVar "results") (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild)) (EApp (EApp (EVar "setRef") (EVar "results")) (EApp (EApp (EApp (EVar "putNoFile") (EApp (EVar "unmangled") (EVar "n"))) (EApp (EApp (EVar "optionOr") (EVar "False")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "ordinary")))) (EFieldAccess (EVar "results") "value"))))
-(DFunDef false "bindingNoFile" ((PVar "ordinary") PWild (PVar "results") (PCon "DLetGroup" PWild (PVar "binds"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") PWild PWild) () (EApp (EApp (EVar "setRef") (EVar "results")) (EApp (EApp (EApp (EVar "putNoFile") (EApp (EVar "unmangled") (EVar "n"))) (EApp (EApp (EVar "optionOr") (EVar "False")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "ordinary")))) (EFieldAccess (EVar "results") "value"))))))) (EVar "binds"))) (DoExpr (ELit LUnit))))
+(DFunDef false "bindingNoFile" ((PVar "ordinary") PWild (PVar "results") (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild)) (EApp (EApp (EVar "setRef") (EVar "results")) (EApp (EApp (EApp (EVar "putNoFile") (EApp (EVar "unmangled") (EVar "n"))) (EApp (EApp (EVar "optionOr") (EVar "False")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "ordinary")))) (EFieldAccess (EVar "results") "value"))))
+(DFunDef false "bindingNoFile" ((PVar "ordinary") PWild (PVar "results") (PCon "DLetGroup" PWild (PVar "binds"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") PWild PWild PWild) () (EApp (EApp (EVar "setRef") (EVar "results")) (EApp (EApp (EApp (EVar "putNoFile") (EApp (EVar "unmangled") (EVar "n"))) (EApp (EApp (EVar "optionOr") (EVar "False")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "ordinary")))) (EFieldAccess (EVar "results") "value"))))))) (EVar "binds"))) (DoExpr (ELit LUnit))))
 (DFunDef false "bindingNoFile" (PWild (PVar "methods") (PVar "results") (PRec "DImpl" ((rf "methods" (PVar "bodies"))) true)) (EBlock (DoLet false false PWild (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "ImplMethod" (PVar "n") PWild PWild) () (EApp (EApp (EVar "setRef") (EVar "results")) (EApp (EApp (EApp (EVar "putNoFile") (EApp (EVar "unmangled") (EVar "n"))) (EApp (EApp (EVar "optionOr") (EVar "False")) (EApp (EApp (EVar "omLookup") (EApp (EVar "unmangled") (EVar "n"))) (EVar "methods")))) (EFieldAccess (EVar "results") "value"))))))) (EVar "bodies"))) (DoExpr (ELit LUnit))))
 (DFunDef false "bindingNoFile" (PWild (PVar "methods") (PVar "results") (PRec "DInterface" ((rf "methods" (PVar "bodies"))) true)) (EBlock (DoLet false false PWild (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" PWild) PWild) () (EApp (EApp (EVar "setRef") (EVar "results")) (EApp (EApp (EApp (EVar "putNoFile") (EApp (EVar "unmangled") (EVar "n"))) (EApp (EApp (EVar "optionOr") (EVar "False")) (EApp (EApp (EVar "omLookup") (EApp (EVar "unmangled") (EVar "n"))) (EVar "methods")))) (EFieldAccess (EVar "results") "value")))) (arm (PCon "IfaceMethod" PWild PWild (PCon "None") PWild) () (ELit LUnit))))) (EVar "bodies"))) (DoExpr (ELit LUnit))))
 (DFunDef false "bindingNoFile" ((PVar "ordinary") (PVar "methods") (PVar "results") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "bindingNoFile") (EVar "ordinary")) (EVar "methods")) (EVar "results")) (EVar "d")))
@@ -1240,11 +1241,11 @@ leftLoc e =
 (DFunDef false "prepareWasmFileGrants" ((PVar "runtimeDecls") (PVar "kept") (PVar "modules")) (EBlock (DoLet false false (PVar "live") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "keptFunNames") (EVar "kept")) (EListLit))) (EVar "omEmpty"))) (DoLet false false (PVar "reach") (EApp (EVar "fileReach") (EBinOp "++" (EVar "runtimeDecls") (EVar "kept")))) (DoExpr (EMatch (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EApp (EVar "moduleGrantDiags") (EVar "reach")) (EVar "live")) (EVar "m")))) (EVar "modules")) (arm (PList) () (EApp (EVar "Ok") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapScopedDeclBodies") (EApp (EApp (EApp (EVar "scanGrantSites") (EVar "reach")) (EApp (EVar "Ref") (EListLit))) (EVar "None")))) (EVar "kept")))) (arm (PVar "diags") () (EApp (EVar "Err") (EVar "diags")))))))
 (DTypeSig false "keptFunNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "keptFunNames" ((PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "keptFunNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "keptFunNames") (EVar "rest")) (EBinOp "::" (EVar "n") (EVar "acc"))))
+(DFunDef false "keptFunNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "keptFunNames") (EVar "rest")) (EBinOp "::" (EVar "n") (EVar "acc"))))
 (DFunDef false "keptFunNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "keptFunNames") (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "acc")))
 (DFunDef false "keptFunNames" ((PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "keptFunNames") (EVar "rest")) (EVar "acc")))
 (DTypeSig false "isLiveDecl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Decl") (TyCon "Bool"))))
-(DFunDef false "isLiveDecl" ((PVar "live") (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild)) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "live")))
+(DFunDef false "isLiveDecl" ((PVar "live") (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild)) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "live")))
 (DFunDef false "isLiveDecl" ((PVar "live") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "isLiveDecl") (EVar "live")) (EVar "d")))
 (DFunDef false "isLiveDecl" (PWild PWild) (EVar "True"))
 (DTypeSig false "moduleGrantDiags" (TyFun (TyCon "Reach") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))))))
@@ -1294,7 +1295,7 @@ leftLoc e =
 (DTypeSig false "addPatScope" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Scope") (TyCon "Scope"))))
 (DFunDef false "addPatScope" ((PVar "ps") (PVar "bound")) (EApp (EApp (EVar "addNamesScope") (EApp (EApp (EDictApp "flatMap") (EVar "patBoundNames")) (EVar "ps"))) (EVar "bound")))
 (DTypeSig false "letScope" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyFun (TyCon "Scope") (TyCon "Scope")))))))
-(DFunDef false "letScope" ((PCon "False") (PVar "recursive") (PCon "PVar" (PVar "n") PWild) (PVar "rhs") (PVar "bound")) (EBlock (DoLet false false (PVar "captured") (EIf (EVar "recursive") (EApp (EApp (EVar "addNamesScope") (EListLit (EVar "n"))) (EVar "bound")) (EVar "bound"))) (DoExpr (EMatch (EApp (EApp (EVar "localFunction") (EVar "captured")) (EVar "rhs")) (arm (PCon "Some" (PVar "binding")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "binding")) (EVar "bound"))) (arm (PCon "None") () (EApp (EApp (EVar "addNamesScope") (EListLit (EVar "n"))) (EVar "bound")))))))
+(DFunDef false "letScope" ((PCon "False") (PVar "recursive") (PCon "PVar" (PVar "n") PWild PWild) (PVar "rhs") (PVar "bound")) (EBlock (DoLet false false (PVar "captured") (EIf (EVar "recursive") (EApp (EApp (EVar "addNamesScope") (EListLit (EVar "n"))) (EVar "bound")) (EVar "bound"))) (DoExpr (EMatch (EApp (EApp (EVar "localFunction") (EVar "captured")) (EVar "rhs")) (arm (PCon "Some" (PVar "binding")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "binding")) (EVar "bound"))) (arm (PCon "None") () (EApp (EApp (EVar "addNamesScope") (EListLit (EVar "n"))) (EVar "bound")))))))
 (DFunDef false "letScope" (PWild PWild (PVar "pat") PWild (PVar "bound")) (EApp (EApp (EVar "addPatScope") (EListLit (EVar "pat"))) (EVar "bound")))
 (DTypeSig false "localFunction" (TyFun (TyCon "Scope") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "LocalBinding")))))
 (DFunDef false "localFunction" ((PVar "bound") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EVar "localFunction") (EVar "bound")) (EVar "e")))
@@ -1304,9 +1305,9 @@ leftLoc e =
 (DFunDef false "localFunction" ((PVar "bound") (PCon "ELam" (PVar "ps") (PVar "body"))) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "localBinding") (EVar "ps")) (EVar "body")) (EVar "bound"))))
 (DFunDef false "localFunction" (PWild PWild) (EVar "None"))
 (DTypeSig false "localGroupScope" (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyCon "Scope") (TyCon "Scope"))))
-(DFunDef false "localGroupScope" ((PVar "binds") (PVar "bound")) (EBlock (DoLet false false (PVar "captured") (EApp (EApp (EVar "addNamesScope") (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") PWild PWild) () (EVar "n"))))) (EVar "binds"))) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") (PList (PCon "FunClause" (PVar "ps") (PVar "body"))) PWild) () (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EApp (EApp (EApp (EVar "localBinding") (EVar "ps")) (EVar "body")) (EVar "captured"))) (EVar "m"))) (arm (PCon "LetBind" PWild PWild PWild) () (EVar "m"))))) (EVar "captured")) (EVar "binds")))))
+(DFunDef false "localGroupScope" ((PVar "binds") (PVar "bound")) (EBlock (DoLet false false (PVar "captured") (EApp (EApp (EVar "addNamesScope") (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") PWild PWild PWild) () (EVar "n"))))) (EVar "binds"))) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") (PList (PCon "FunClause" (PVar "ps") (PVar "body"))) PWild PWild) () (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EApp (EApp (EApp (EVar "localBinding") (EVar "ps")) (EVar "body")) (EVar "captured"))) (EVar "m"))) (arm (PCon "LetBind" PWild PWild PWild PWild) () (EVar "m"))))) (EVar "captured")) (EVar "binds")))))
 (DTypeSig false "mapScopedDeclBodies" (TyFun (TyFun (TyCon "Scope") (TyFun (TyCon "Expr") (TyCon "Expr"))) (TyFun (TyCon "Decl") (TyCon "Decl"))))
-(DFunDef false "mapScopedDeclBodies" ((PVar "f") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "body") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EApp (EVar "f") (EApp (EApp (EVar "addPatScope") (EVar "ps")) (EVar "omEmpty"))) (EVar "body"))) (EVar "site")))
+(DFunDef false "mapScopedDeclBodies" ((PVar "f") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "body") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EApp (EVar "f") (EApp (EApp (EVar "addPatScope") (EVar "ps")) (EVar "omEmpty"))) (EVar "body"))) (EVar "site")) (EVar "bid")))
 (DFunDef false "mapScopedDeclBodies" ((PVar "f") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "mapScopedLetBind") (EVar "f")) (EVar "omEmpty"))) (EVar "binds"))))
 (DFunDef false "mapScopedDeclBodies" ((PVar "f") (PAs "d" (PRec "DImpl" ((rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EMatch (EVar "m") (arm (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "body")) () (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps")) (EApp (EApp (EVar "f") (EApp (EApp (EVar "addPatScope") (EVar "ps")) (EVar "omEmpty"))) (EVar "body"))))))) (EVar "methods"))))))
 (DFunDef false "mapScopedDeclBodies" ((PVar "f") (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EMatch (EVar "m") (arm (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PVar "def") (PVar "loc")) () (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "dm")) (EMatch (EVar "dm") (arm (PCon "MethodDefault" (PVar "ps") (PVar "body")) () (EApp (EApp (EVar "MethodDefault") (EVar "ps")) (EApp (EApp (EVar "f") (EApp (EApp (EVar "addPatScope") (EVar "ps")) (EVar "omEmpty"))) (EVar "body"))))))) (EVar "def"))) (EVar "loc")))))) (EVar "methods"))))))
@@ -1315,7 +1316,7 @@ leftLoc e =
 (DFunDef false "mapScopedDeclBodies" ((PVar "f") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "mapScopedDeclBodies") (EVar "f")) (EVar "d"))))
 (DFunDef false "mapScopedDeclBodies" (PWild (PVar "d")) (EVar "d"))
 (DTypeSig false "mapScopedLetBind" (TyFun (TyFun (TyCon "Scope") (TyFun (TyCon "Expr") (TyCon "Expr"))) (TyFun (TyCon "Scope") (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
-(DFunDef false "mapScopedLetBind" ((PVar "f") (PVar "bound") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site"))) (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PCon "FunClause" (PVar "ps") (PVar "body")) () (EApp (EApp (EVar "FunClause") (EVar "ps")) (EApp (EApp (EVar "f") (EApp (EApp (EVar "addPatScope") (EVar "ps")) (EVar "bound"))) (EVar "body"))))))) (EVar "clauses"))) (EVar "site")))
+(DFunDef false "mapScopedLetBind" ((PVar "f") (PVar "bound") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PCon "FunClause" (PVar "ps") (PVar "body")) () (EApp (EApp (EVar "FunClause") (EVar "ps")) (EApp (EApp (EVar "f") (EApp (EApp (EVar "addPatScope") (EVar "ps")) (EVar "bound"))) (EVar "body"))))))) (EVar "clauses"))) (EVar "site")) (EVar "bid")))
 (DTypeSig false "mapScopedChildren" (TyFun (TyCon "Scope") (TyFun (TyFun (TyCon "Scope") (TyFun (TyCon "Expr") (TyCon "Expr"))) (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "mapScopedChildren" ((PVar "bound") (PVar "f") (PCon "ELam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "ELam") (EVar "ps")) (EApp (EApp (EVar "f") (EApp (EApp (EVar "addPatScope") (EVar "ps")) (EVar "bound"))) (EVar "body"))))
 (DFunDef false "mapScopedChildren" ((PVar "bound") (PVar "f") (PCon "ELet" (PVar "site") (PVar "recursive") (PVar "pat") (PVar "rhs") (PVar "body"))) (EBlock (DoLet false false (PVar "after") (EApp (EApp (EApp (EApp (EApp (EVar "letScope") (EVar "False")) (EVar "recursive")) (EVar "pat")) (EVar "rhs")) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "site")) (EVar "recursive")) (EVar "pat")) (EApp (EApp (EVar "f") (EIf (EVar "recursive") (EVar "after") (EVar "bound"))) (EVar "rhs"))) (EApp (EApp (EVar "f") (EVar "after")) (EVar "body"))))))
@@ -1341,17 +1342,17 @@ leftLoc e =
 (DTypeSig false "unknownCall" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "Scope") (TyFun (TyCon "Expr") (TyFun (TyCon "Int") (TyCon "Bool"))))))
 (DFunDef false "unknownCall" ((PVar "returns") (PVar "bound") (PVar "head") (PVar "argc")) (EMatch (EApp (EApp (EVar "localHead") (EVar "bound")) (EVar "head")) (arm (PCon "Some" (PCon "LocalFunction" (PVar "ps") PWild PWild PWild PWild)) () (EBinOp ">" (EVar "argc") (EApp (EVar "valueParamCount") (EVar "ps")))) (arm (PCon "Some" (PCon "UnknownBinding")) () (EVar "True")) (arm (PCon "None") () (EMatch (EApp (EVar "headRawName") (EVar "head")) (arm (PCon "Some" (PVar "n")) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "returns")) (arm (PCon "Some" (PVar "boundary")) () (EBinOp ">" (EVar "argc") (EVar "boundary"))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "True"))))))
 (DTypeSig false "valueParamCount" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
-(DFunDef false "valueParamCount" ((PCons (PCon "PVar" (PVar "n") PWild) (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "n")) (EApp (EVar "valueParamCount") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "valueParamCount" ((PCons (PCon "PVar" (PVar "n") PWild PWild) (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "n")) (EApp (EVar "valueParamCount") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "valueParamCount" ((PVar "ps")) (EApp (EVar "listLen") (EVar "ps")))
 (DTypeSig false "declBindingBodies" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))
-(DFunDef false "declBindingBodies" ((PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") PWild)) (EListLit (ETuple (EVar "n") (EVar "ps") (EVar "body"))))
+(DFunDef false "declBindingBodies" ((PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") PWild PWild)) (EListLit (ETuple (EVar "n") (EVar "ps") (EVar "body"))))
 (DFunDef false "declBindingBodies" ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EDictApp "flatMap") (EVar "letBindBodies")) (EVar "binds")))
 (DFunDef false "declBindingBodies" ((PRec "DImpl" ((rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EMatch (EVar "m") (arm (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "body")) () (ETuple (EVar "n") (EVar "ps") (EVar "body")))))) (EVar "methods")))
 (DFunDef false "declBindingBodies" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EMatch (EVar "m") (arm (PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "body"))) PWild) () (EListLit (ETuple (EVar "n") (EVar "ps") (EVar "body")))) (arm (PCon "IfaceMethod" PWild PWild (PCon "None") PWild) () (EListLit))))) (EVar "methods")))
 (DFunDef false "declBindingBodies" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declBindingBodies") (EVar "d")))
 (DFunDef false "declBindingBodies" (PWild) (EListLit))
 (DTypeSig false "letBindBodies" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))
-(DFunDef false "letBindBodies" ((PCon "LetBind" (PVar "n") (PVar "clauses") PWild)) (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PCon "FunClause" (PVar "ps") (PVar "body")) () (ETuple (EVar "n") (EVar "ps") (EVar "body")))))) (EVar "clauses")))
+(DFunDef false "letBindBodies" ((PCon "LetBind" (PVar "n") (PVar "clauses") PWild PWild)) (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (EMatch (EVar "c") (arm (PCon "FunClause" (PVar "ps") (PVar "body")) () (ETuple (EVar "n") (EVar "ps") (EVar "body")))))) (EVar "clauses")))
 (DTypeSig false "returnedBoundaries" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyApp (TyCon "OrdMap") (TyCon "Int"))))
 (DFunDef false "returnedBoundaries" ((PVar "bindings")) (EBlock (DoLet false false (PVar "seeds") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "deps") (EApp (EVar "Ref") (EVar "omEmpty"))) (DoLet false false PWild (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "n") (PVar "ps") (PVar "body"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "tailReturns") (EVar "seeds")) (EVar "deps")) (EVar "n")) (EApp (EVar "valueParamCount") (EVar "ps"))) (EApp (EApp (EVar "addPatScope") (EVar "ps")) (EVar "omEmpty"))) (EVar "body")))) (EVar "bindings"))) (DoExpr (EApp (EApp (EApp (EVar "relaxReturns") (EFieldAccess (EVar "deps") "value")) (EFieldAccess (EVar "seeds") "value")) (EVar "omEmpty")))))
 (DTypeSig false "relaxReturns" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int"))))))
@@ -1364,7 +1365,7 @@ leftLoc e =
 (DFunDef false "tailReturns" ((PVar "seeds") (PVar "deps") (PVar "owner") (PVar "base") (PVar "bound") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "tailReturns") (EVar "seeds")) (EVar "deps")) (EVar "owner")) (EVar "base")) (EVar "bound")) (EVar "e")))
 (DFunDef false "tailReturns" ((PVar "seeds") (PVar "deps") (PVar "owner") (PVar "base") (PVar "bound") (PCon "ELam" (PVar "ps") (PVar "body"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "tailReturns") (EVar "seeds")) (EVar "deps")) (EVar "owner")) (EBinOp "+" (EVar "base") (EApp (EVar "valueParamCount") (EVar "ps")))) (EApp (EApp (EVar "addPatScope") (EVar "ps")) (EVar "bound"))) (EVar "body")))
 (DFunDef false "tailReturns" ((PVar "seeds") (PVar "deps") (PVar "owner") (PVar "base") (PVar "bound") (PCon "ELet" PWild PWild (PVar "pat") PWild (PVar "body"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "tailReturns") (EVar "seeds")) (EVar "deps")) (EVar "owner")) (EVar "base")) (EApp (EApp (EVar "addPatScope") (EListLit (EVar "pat"))) (EVar "bound"))) (EVar "body")))
-(DFunDef false "tailReturns" ((PVar "seeds") (PVar "deps") (PVar "owner") (PVar "base") (PVar "bound") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "after") (EApp (EApp (EVar "addNamesScope") (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") PWild PWild) () (EVar "n"))))) (EVar "binds"))) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "tailReturns") (EVar "seeds")) (EVar "deps")) (EVar "owner")) (EVar "base")) (EVar "after")) (EVar "body")))))
+(DFunDef false "tailReturns" ((PVar "seeds") (PVar "deps") (PVar "owner") (PVar "base") (PVar "bound") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "after") (EApp (EApp (EVar "addNamesScope") (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") PWild PWild PWild) () (EVar "n"))))) (EVar "binds"))) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "tailReturns") (EVar "seeds")) (EVar "deps")) (EVar "owner")) (EVar "base")) (EVar "after")) (EVar "body")))))
 (DFunDef false "tailReturns" ((PVar "seeds") (PVar "deps") (PVar "owner") (PVar "base") (PVar "bound") (PCon "EIf" PWild (PVar "yes") (PVar "no"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "tailReturns") (EVar "seeds")) (EVar "deps")) (EVar "owner")) (EVar "base")) (EVar "bound")) (EVar "yes"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "tailReturns") (EVar "seeds")) (EVar "deps")) (EVar "owner")) (EVar "base")) (EVar "bound")) (EVar "no")))))
 (DFunDef false "tailReturns" ((PVar "seeds") (PVar "deps") (PVar "owner") (PVar "base") (PVar "bound") (PCon "EMatch" PWild (PVar "arms"))) (EBlock (DoLet false false PWild (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EMatch (EVar "a") (arm (PCon "Arm" (PVar "pat") (PVar "guards") (PVar "body")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "tailReturns") (EVar "seeds")) (EVar "deps")) (EVar "owner")) (EVar "base")) (EApp (EApp (EVar "guardScope") (EVar "guards")) (EApp (EApp (EVar "addPatScope") (EListLit (EVar "pat"))) (EVar "bound")))) (EVar "body")))))) (EVar "arms"))) (DoExpr (ELit LUnit))))
 (DFunDef false "tailReturns" ((PVar "seeds") (PVar "deps") (PVar "owner") (PVar "base") (PVar "bound") (PCon "EGuards" (PVar "arms"))) (EBlock (DoLet false false PWild (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EMatch (EVar "a") (arm (PCon "GuardArm" (PVar "guards") (PVar "body")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "tailReturns") (EVar "seeds")) (EVar "deps")) (EVar "owner")) (EVar "base")) (EApp (EApp (EVar "guardScope") (EVar "guards")) (EVar "bound"))) (EVar "body")))))) (EVar "arms"))) (DoExpr (ELit LUnit))))
@@ -1398,8 +1399,8 @@ leftLoc e =
 (DFunDef false "methodNoFile" ((PVar "aliases") (PVar "write") (PVar "m") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "methodNoFile") (EVar "aliases")) (EVar "write")) (EVar "m")) (EVar "d")))
 (DFunDef false "methodNoFile" (PWild PWild (PVar "m") PWild) (EVar "m"))
 (DTypeSig false "bindingNoFile" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Bool")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Bool")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Bool"))) (TyFun (TyCon "Decl") (TyCon "Unit"))))))
-(DFunDef false "bindingNoFile" ((PVar "ordinary") PWild (PVar "results") (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild)) (EApp (EApp (EVar "setRef") (EVar "results")) (EApp (EApp (EApp (EVar "putNoFile") (EApp (EVar "unmangled") (EVar "n"))) (EApp (EApp (EVar "optionOr") (EVar "False")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "ordinary")))) (EFieldAccess (EVar "results") "value"))))
-(DFunDef false "bindingNoFile" ((PVar "ordinary") PWild (PVar "results") (PCon "DLetGroup" PWild (PVar "binds"))) (EBlock (DoLet false false PWild (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") PWild PWild) () (EApp (EApp (EVar "setRef") (EVar "results")) (EApp (EApp (EApp (EVar "putNoFile") (EApp (EVar "unmangled") (EVar "n"))) (EApp (EApp (EVar "optionOr") (EVar "False")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "ordinary")))) (EFieldAccess (EVar "results") "value"))))))) (EVar "binds"))) (DoExpr (ELit LUnit))))
+(DFunDef false "bindingNoFile" ((PVar "ordinary") PWild (PVar "results") (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild)) (EApp (EApp (EVar "setRef") (EVar "results")) (EApp (EApp (EApp (EVar "putNoFile") (EApp (EVar "unmangled") (EVar "n"))) (EApp (EApp (EVar "optionOr") (EVar "False")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "ordinary")))) (EFieldAccess (EVar "results") "value"))))
+(DFunDef false "bindingNoFile" ((PVar "ordinary") PWild (PVar "results") (PCon "DLetGroup" PWild (PVar "binds"))) (EBlock (DoLet false false PWild (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "LetBind" (PVar "n") PWild PWild PWild) () (EApp (EApp (EVar "setRef") (EVar "results")) (EApp (EApp (EApp (EVar "putNoFile") (EApp (EVar "unmangled") (EVar "n"))) (EApp (EApp (EVar "optionOr") (EVar "False")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "ordinary")))) (EFieldAccess (EVar "results") "value"))))))) (EVar "binds"))) (DoExpr (ELit LUnit))))
 (DFunDef false "bindingNoFile" (PWild (PVar "methods") (PVar "results") (PRec "DImpl" ((rf "methods" (PVar "bodies"))) true)) (EBlock (DoLet false false PWild (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "ImplMethod" (PVar "n") PWild PWild) () (EApp (EApp (EVar "setRef") (EVar "results")) (EApp (EApp (EApp (EVar "putNoFile") (EApp (EVar "unmangled") (EVar "n"))) (EApp (EApp (EVar "optionOr") (EVar "False")) (EApp (EApp (EVar "omLookup") (EApp (EVar "unmangled") (EVar "n"))) (EVar "methods")))) (EFieldAccess (EVar "results") "value"))))))) (EVar "bodies"))) (DoExpr (ELit LUnit))))
 (DFunDef false "bindingNoFile" (PWild (PVar "methods") (PVar "results") (PRec "DInterface" ((rf "methods" (PVar "bodies"))) true)) (EBlock (DoLet false false PWild (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EMatch (EVar "b") (arm (PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" PWild) PWild) () (EApp (EApp (EVar "setRef") (EVar "results")) (EApp (EApp (EApp (EVar "putNoFile") (EApp (EVar "unmangled") (EVar "n"))) (EApp (EApp (EVar "optionOr") (EVar "False")) (EApp (EApp (EVar "omLookup") (EApp (EVar "unmangled") (EVar "n"))) (EVar "methods")))) (EFieldAccess (EVar "results") "value")))) (arm (PCon "IfaceMethod" PWild PWild (PCon "None") PWild) () (ELit LUnit))))) (EVar "bodies"))) (DoExpr (ELit LUnit))))
 (DFunDef false "bindingNoFile" ((PVar "ordinary") (PVar "methods") (PVar "results") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "bindingNoFile") (EVar "ordinary")) (EVar "methods")) (EVar "results")) (EVar "d")))

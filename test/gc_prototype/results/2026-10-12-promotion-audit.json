@@ -1,0 +1,2138 @@
+{
+  "experiment": "promotion-peak-ablation",
+  "date": "2026-10-12",
+  "method": "Six-arm sequential cyclic profile, 5M allocations/profile, six fresh-process repetitions per arm, nursery capacities 262136 (offset) and 262144 (aligned). Timing summaries are descriptive; do not treat as statistical significance. Custom survival is copied payload / nursery payload. Final live payload / total allocated payload is reported separately.",
+  "checks": {
+    "both_artifacts_pass": true,
+    "source_hashes_identical_across_capacities": true,
+    "build_commands_identical_across_capacities": true,
+    "all_sample_rows_preserved": true
+  },
+  "harness_source": {
+    "runner_sha256": "372c18beeaa7693e1d4f3185b5e3e170dc42050cf50468525484a880a8b4fd4a",
+    "runner_fulltext": "#!/usr/bin/env python3\n\"\"\"Prepare, correctness-check, then (only with explicit parent go) run the promotion ablation.\"\"\"\nimport argparse, collections, difflib, hashlib, importlib.util, json, os, pathlib, statistics, subprocess, sys, time\nsys.dont_write_bytecode = True\nREPO = pathlib.Path('/root/.codex/worktrees/f396/medaka')\nROOT = pathlib.Path('/tmp/medaka-promotion-ablation-c324af5a')\nBASE_COMMIT = 'c324af5a926c7e65a4aede0844de459616c6e8f2'\nMANIFEST = ROOT/'variants.json'\nVARIANT_NAMES = ['baseline','peak_only','promotion_only','combined']\nCUSTOM_ARMS = VARIANT_NAMES\nBOEHM_ARMS = ['boehm_caller_inline','boehm_inline']\nARMS = CUSTOM_ARMS + BOEHM_ARMS\nPROFILES = ['ephemeral','list','tree','mutation','atomic','mixed','sizes']\nCOUNTS = 5_000_000\nNURSERIES = {'offset':262_136,'aligned':262_144}\nREPEATS = 6\n\ndef load_runner():\n    path=ROOT/'source/baseline/run.py'\n    spec=importlib.util.spec_from_file_location('gc_run_c324',path)\n    mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)\n    mod.REPO=REPO\n    return mod\n\ndef sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()\ndef tree_hashes(source):\n    return {p.name:sha(p) for p in sorted(source.iterdir()) if p.is_file()}\ndef manifest():\n    if not MANIFEST.exists():\n        raise SystemExit(f'waiting for implementer frozen sources: missing {MANIFEST}')\n    data=json.loads(MANIFEST.read_text())\n    paths={'baseline':ROOT/'source/baseline'}\n    paths.update({name:pathlib.Path(data[name]).resolve() for name in VARIANT_NAMES[1:]})\n    for name,path in paths.items():\n        for req in ('gc.c','gc.h','workload.c'):\n            if not (path/req).is_file(): raise SystemExit(f'{name}: missing {path/req}')\n    return paths,data\n\ndef clean_env(): return {k:v for k,v in os.environ.items() if not k.startswith('GC_')}\n\ndef build_all():\n    r=load_runner(); paths,_=manifest(); binaries={}; commands={}; source_hashes={}; adapter_hashes={}\n    for name in VARIANT_NAMES:\n        builddir=ROOT/'build'/name; builddir.mkdir(parents=True,exist_ok=True)\n        source=paths[name]; r.HERE=source; r.BUILD_COMMANDS={}\n        region_hash=r.adapter(builddir)\n        adapter_hashes[name]={'runtime_allocator_region_sha256':region_hash,'caller_inline_header_sha256':sha(builddir/'boehm_caller.h'),'boehm_adapter_source_sha256':sha(builddir/'boehm_adapter.c')}\n        defines,boehm=r.BACKENDS['custom_AS']\n        binaries[name]=r.build(builddir,'custom_AS',defines,boehm=boehm)\n        commands[name]=r.BUILD_COMMANDS['custom_AS']\n        source_hashes[name]=tree_hashes(source)\n    # Build both Boehm references against the frozen baseline source; same generated adapter and static libgc.\n    source=paths['baseline']; r.HERE=source\n    builddir=ROOT/'build'/'boehm_reference'; builddir.mkdir(parents=True,exist_ok=True)\n    region_hash=r.adapter(builddir)\n    adapter_hashes['boehm_reference']={'runtime_allocator_region_sha256':region_hash,'caller_inline_header_sha256':sha(builddir/'boehm_caller.h'),'boehm_adapter_source_sha256':sha(builddir/'boehm_adapter.c')}\n    for name in BOEHM_ARMS:\n        r.BUILD_COMMANDS={}; defines,boehm=r.BACKENDS[name]\n        binaries[name]=r.build(builddir,name,defines,boehm=boehm)\n        commands[name]=r.BUILD_COMMANDS[name]\n    if r.boehm_config().get('boehm_linkage') != 'static': raise SystemExit('static libgc archive unavailable; refusing comparator build')\n    baseline_gc=(paths['baseline']/'gc.c').read_text().splitlines(keepends=True)\n    patches={name:''.join(difflib.unified_diff(baseline_gc,(paths[name]/'gc.c').read_text().splitlines(keepends=True),fromfile='a/gc.c',tofile='b/gc.c')) for name in VARIANT_NAMES}\n    meta={\n        'git_head':subprocess.run(['git','rev-parse','HEAD'],cwd=REPO,check=True,text=True,capture_output=True).stdout.strip(),\n        'baseline_commit':BASE_COMMIT,\n        'source_paths':{n:str(p) for n,p in paths.items()},'source_sha256':source_hashes,\n        'runner_sha256':sha(ROOT/'source/baseline/run.py'),\n        'runtime_sha256':sha(REPO/'runtime/medaka_rt.c'),\n        'build_commands':commands,'adapter_hashes':adapter_hashes,'variant_patches':{name:{'sha256':hashlib.sha256(patch.encode()).hexdigest(),'unified_diff':patch} for name,patch in patches.items()},'runner_source_sha256':sha(pathlib.Path(__file__)),'binary_sha256':{n:sha(p) for n,p in binaries.items()},\n        'clang':subprocess.run(['clang','--version'],check=True,text=True,capture_output=True).stdout.splitlines()[0],\n        'libgc':{k:(str(v) if isinstance(v,pathlib.Path) else v) for k,v in r.boehm_config().items()},\n        'compile_contract':'run.py helper; -std=c11 -O2 -g -Wall -Wextra -Werror; separate translation units; no LTO; Boehm arms use static libgc',\n    }\n    (ROOT/'build-metadata.json').write_text(json.dumps(meta,indent=2,default=str)+'\\n')\n    return r,paths,binaries,meta\n\ndef correctness():\n    r,paths,binaries,meta=build_all(); env=clean_env(); results={}; identities={}\n    for arm,binary in binaries.items():\n        r.run([str(binary),'--selftest'],env=env)\n        results[arm]={'selftest':'passed','profiles':{}}\n        for profile in PROFILES:\n            row=json.loads(r.run([str(binary),profile,'1024','240'],env=env).stdout)\n            results[arm]['profiles'][profile]=row\n            identities.setdefault(profile,set()).add((row['allocations'],row['payload_bytes'],row['checksum']))\n    checks={f'{p}_identity_equal_across_arms':len(identities[p])==1 for p in PROFILES}\n    checks['all_selftests_pass']=all(v['selftest']=='passed' for v in results.values())\n    checks['all_small_profile_identities_match']=all(checks.values())\n    payload={'status':'passed' if all(checks.values()) else 'failed','count':1024,'nursery_bytes':240,\n             'profiles':PROFILES,'arms':results,'checks':checks,'build_metadata':meta}\n    (ROOT/'correctness/result.json').write_text(json.dumps(payload,indent=2,default=str)+'\\n')\n    print(json.dumps({'correctness':payload['status'],'checks':checks,'path':str(ROOT/'correctness/result.json')}))\n    if not all(checks.values()): raise SystemExit('small correctness mismatch')\n\ndef do_benchmark(label,nursery,go):\n    if go!='parent-authorized-2026-10-12': raise SystemExit('timings disabled: requires parent go token')\n    corr_path=ROOT/'correctness/result.json'\n    if not corr_path.exists() or json.loads(corr_path.read_text())['status']!='passed': raise SystemExit('run correctness first')\n    # Recreate runner context but consume already-built exact binary paths.\n    r=load_runner(); paths,_=manifest(); meta=json.loads((ROOT/'build-metadata.json').read_text())\n    binaries={name:ROOT/'build'/name/'custom_AS' for name in VARIANT_NAMES}\n    binaries.update({name:ROOT/'build'/'boehm_reference'/name for name in BOEHM_ARMS})\n    if {n:sha(p) for n,p in binaries.items()} != meta['binary_sha256']: raise SystemExit('binary hash changed since correctness')\n    out=REPO/f'test/gc_prototype/results/2026-10-12-promotion-5m-{label}.jsonl'\n    env=clean_env(); orders={}; rows=[]; checks={}\n    header={'kind':'header','experiment':'promotion-peak-ablation','label':label,'git_head':meta['git_head'],\n            'nursery_bytes':nursery,'count':COUNTS,'repeats':REPEATS,'arms':ARMS,'profiles':PROFILES,\n            'source_paths':meta['source_paths'],'source_sha256':meta['source_sha256'],\n            'runner_sha256':meta['runner_sha256'],'runtime_sha256':meta['runtime_sha256'],\n            'build_commands':meta['build_commands'],'binary_sha256':meta['binary_sha256'],'clang':meta['clang'],'adapter_hashes':meta['adapter_hashes'],'variant_patches':meta['variant_patches'],'runner_source_sha256':meta['runner_source_sha256'],\n            'environment_policy':'remove all inherited environment variables whose names start with GC_; inherit all others; no CPU affinity or explicit heap cap',\n            'timing_boundary':'heap_init and prepare_workload/layout descriptor setup are outside elapsed_seconds. The timer starts immediately before workload() and stops after it returns; workload includes the profile allocation/store/traversal/checksum computation and final major_collect(). The checksum assertion, stats formatting, getrusage(), and heap_destroy() are outside the timed interval.',\n            'libgc':meta['libgc'],'correctness_sha256':sha(corr_path),\n            'schedule':'six cyclic rotations; each arm occupies each of six positions once per profile'}\n    for profile in PROFILES:\n        orders[profile]=[]; expected=None\n        for repeat in range(REPEATS):\n            offset=repeat % len(ARMS); order=ARMS[offset:]+ARMS[:offset]; orders[profile].append(order)\n            for pos,arm in enumerate(order):\n                row=json.loads(r.run([str(binaries[arm]),profile,str(COUNTS),str(nursery)],env=env).stdout)\n                ident=(row['allocations'],row['payload_bytes'],row['checksum'])\n                if expected is None: expected=ident\n                if ident!=expected: raise AssertionError((profile,repeat,arm,ident,expected))\n                rows.append({'backend':arm,'profile':profile,'repeat':repeat,'execution_position':pos,\n                             'execution_order':order,'sample':row})\n    # Validate balanced positions and per-profile, per-repeat cross-arm identities.\n    checks['all_profiles_arms_repeats_present']=len(rows)==len(ARMS)*len(PROFILES)*REPEATS\n    checks['positions_balanced']=all(sorted(x['execution_position'] for x in rows if x['backend']==a and x['profile']==p)==list(range(REPEATS)) for a in ARMS for p in PROFILES)\n    checks['order_records_match_rows']=all(row['execution_order'][row['execution_position']]==row['backend'] for row in rows)\n    checks['allocation_payload_checksum_identity']=all(len({(x['sample']['allocations'],x['sample']['payload_bytes'],x['sample']['checksum']) for x in rows if x['profile']==p and x['repeat']==r0})==1 for p in PROFILES for r0 in range(REPEATS))\n    dynamic={'elapsed_seconds','preparation_seconds','process_peak_rss_bytes'}\n    stable=[]\n    for p in PROFILES:\n        for rep in range(REPEATS):\n            sample_by={x['backend']:x['sample'] for x in rows if x['profile']==p and x['repeat']==rep}\n            baseline=sample_by['baseline']\n            keys=set().union(*(set(sample_by[a]) for a in CUSTOM_ARMS))-dynamic\n            stable.append(all({k:v for k,v in sample_by[a].items() if k in keys}=={k:v for k,v in baseline.items() if k in keys} for a in CUSTOM_ARMS[1:]))\n    checks['custom_counter_memory_copy_peak_stats_equal_all_126_comparisons_per_capacity']=len(stable)==len(PROFILES)*REPEATS and all(stable)\n    checks['all_checks_pass']=all(checks.values())\n    header['checks']=checks\n    out.write_text('\\n'.join(json.dumps(x,separators=(',',':')) for x in [header,*rows])+'\\n')\n    print(json.dumps({'artifact':str(out),'sha256':sha(out),'checks':checks,'rows':len(rows)}))\n    if not checks['all_checks_pass']: raise SystemExit('artifact validation failed')\n\ndef main():\n    p=argparse.ArgumentParser(); p.add_argument('action',choices=['prepare','correctness','benchmark']); p.add_argument('--label',choices=list(NURSERIES)); p.add_argument('--go')\n    a=p.parse_args()\n    if a.action=='prepare':\n        paths,data=manifest(); print(json.dumps({'status':'sources-ready','source_paths':{k:str(v) for k,v in paths.items()},'manifest':data}))\n    elif a.action=='correctness': correctness()\n    else:\n        if a.label is None: p.error('benchmark requires --label offset|aligned')\n        do_benchmark(a.label,NURSERIES[a.label],a.go)\nif __name__=='__main__': main()\n",
+    "summarizer_sha256": "cd79c2abec4c10233ba8eac83aec0c6c565d8939d202b6cf406bee2b485a53b5",
+    "summarizer_fulltext": "#!/usr/bin/env python3\nimport collections, hashlib, json, pathlib, statistics, sys, tempfile, shutil, subprocess\nREPO=pathlib.Path('/root/.codex/worktrees/f396/medaka')\nROOT=pathlib.Path('/tmp/medaka-promotion-ablation-c324af5a')\nRESULTS=REPO/'test/gc_prototype/results'\nEXPECTED_ARMS=['baseline','peak_only','promotion_only','combined','boehm_caller_inline','boehm_inline']\nPROFILES=['ephemeral','list','tree','mutation','atomic','mixed','sizes']\nREPEATS=6\nDYNAMIC={'elapsed_seconds','preparation_seconds','process_peak_rss_bytes'}\ndef sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()\ndef read(path):\n    records=[json.loads(x) for x in path.read_text().splitlines() if x.strip()]\n    assert records and records[0]['kind']=='header'\n    return records[0],records[1:]\ndef analyze(label):\n    path=RESULTS/f'2026-10-12-promotion-5m-{label}.jsonl'\n    h,rows=read(path)\n    checks={}\n    checks['head_is_frozen_c324']=h['git_head']=='c324af5a926c7e65a4aede0844de459616c6e8f2'\n    checks['correctness_artifact_hash_matches']=h['correctness_sha256']==sha(ROOT/'correctness/result.json')\n    checks['expected_6_arms_7_profiles_6_repeats']=h['arms']==EXPECTED_ARMS and h['profiles']==PROFILES and h['repeats']==REPEATS and len(rows)==len(EXPECTED_ARMS)*len(PROFILES)*REPEATS\n    checks['row_keys_complete']=all(sum(x['backend']==a and x['profile']==p for x in rows)==REPEATS for a in EXPECTED_ARMS for p in PROFILES)\n    checks['balanced_position_per_arm_profile']=all(sorted(x['execution_position'] for x in rows if x['backend']==a and x['profile']==p)==list(range(REPEATS)) for a in EXPECTED_ARMS for p in PROFILES)\n    checks['all_six_orders_rotate_and_are_recorded']=all(len({tuple(x['execution_order']) for x in rows if x['profile']==p})==REPEATS and all(x['execution_order'][x['execution_position']]==x['backend'] for x in rows) for p in PROFILES)\n    checks['allocation_payload_checksum_identity_all_42_profile_repeat_groups']=all(len({(x['sample']['allocations'],x['sample']['payload_bytes'],x['sample']['checksum']) for x in rows if x['profile']==p and x['repeat']==r})==1 for p in PROFILES for r in range(REPEATS))\n    equality=[]\n    for p in PROFILES:\n        for r in range(REPEATS):\n            group={x['backend']:x['sample'] for x in rows if x['profile']==p and x['repeat']==r}\n            base=group['baseline']; keys=set().union(*(set(group[a]) for a in ('baseline','peak_only','promotion_only','combined')))-DYNAMIC\n            equality.append(all({k:v for k,v in group[a].items() if k in keys}=={k:v for k,v in base.items() if k in keys} for a in ('peak_only','promotion_only','combined')))\n    checks['custom_counter_memory_copy_peak_stats_equal_all_126_comparisons_per_capacity']=len(equality)==42 and all(equality)\n    current={name:{q.name:sha(q) for q in sorted(pathlib.Path(src).iterdir()) if q.is_file()} for name,src in h['source_paths'].items()}\n    checks['source_hashes_match_frozen_dirs']=current==h['source_sha256']\n    patch_ok=True\n    baseline_gc=pathlib.Path(h['source_paths']['baseline'])/'gc.c'\n    for variant in ('peak_only','promotion_only','combined'):\n        patch_text=h['variant_patches'][variant]['unified_diff']\n        with tempfile.TemporaryDirectory(prefix='promotion-patch-audit-',dir=ROOT) as td:\n            work=pathlib.Path(td); shutil.copyfile(baseline_gc,work/'gc.c')\n            patchfile=work/'variant.patch'; patchfile.write_text(patch_text)\n            if patch_text:\n                result=subprocess.run(['patch','-s','-p1','-i',str(patchfile)],cwd=work,text=True,capture_output=True)\n                patch_ok=patch_ok and result.returncode==0\n            patch_ok=patch_ok and sha(work/'gc.c')==h['source_sha256'][variant]['gc.c']\n    checks['variant_patches_reproduce_exact_gc_c_hashes']=patch_ok\n    checks['static_libgc_boehm_comparators']=h['libgc'].get('boehm_linkage')=='static' and bool(h['libgc'].get('boehm_archive_sha256')) and all('/usr/lib/x86_64-linux-gnu/libgc.a' in h['build_commands'][a] for a in ('boehm_caller_inline','boehm_inline'))\n    checks['all_checks_pass']=all(checks.values())\n    per_profile={}\n    for p in PROFILES:\n        arms={}\n        for a in EXPECTED_ARMS:\n            samples=[x['sample'] for x in rows if x['backend']==a and x['profile']==p]\n            elapsed=[x['elapsed_seconds'] for x in samples]\n            st={'min_seconds':min(elapsed),'median_seconds':statistics.median(elapsed),'range_seconds':max(elapsed)-min(elapsed),'median_process_peak_rss_bytes':statistics.median(x['process_peak_rss_bytes'] for x in samples)}\n            if a in ('baseline','peak_only','promotion_only','combined'):\n                for k in ('peak_accounted_bytes','accounted_bytes','nursery_capacity_bytes','copied_bytes','copied_payload_bytes','nursery_payload_bytes','exact_live_payload_bytes','payload_bytes'):\n                    if all(k in x for x in samples): st['median_'+k]=statistics.median(x[k] for x in samples)\n                if all('copied_payload_bytes' in x and 'nursery_payload_bytes' in x for x in samples):\n                    st['median_copied_payload_over_nursery_payload_fraction']=statistics.median(x['copied_payload_bytes']/x['nursery_payload_bytes'] for x in samples)\n                else: st['median_copied_payload_over_nursery_payload_fraction']=None\n                if all('exact_live_payload_bytes' in x and 'payload_bytes' in x for x in samples):\n                    st['median_final_live_payload_over_total_payload_fraction']=statistics.median(x['exact_live_payload_bytes']/x['payload_bytes'] for x in samples)\n                else: st['median_final_live_payload_over_total_payload_fraction']=None\n            else:\n                for k in ('boehm_heap_bytes','boehm_heap_minus_free_bytes','boehm_total_allocated_bytes'):\n                    if all(k in x for x in samples): st['median_'+k]=statistics.median(x[k] for x in samples)\n            arms[a]=st\n        baseline=arms['baseline']['median_seconds']\n        boehm=['boehm_caller_inline','boehm_inline']\n        best_median=min(boehm,key=lambda a:arms[a]['median_seconds'])\n        best_min=min(boehm,key=lambda a:arms[a]['min_seconds'])\n        per_profile[p]={'arms':arms,'median_time_ratio_vs_baseline':{a:arms[a]['median_seconds']/baseline for a in EXPECTED_ARMS},'minimum_time_ratio_vs_baseline':{a:arms[a]['min_seconds']/arms['baseline']['min_seconds'] for a in EXPECTED_ARMS},'fastest_Boehm_by_median':best_median,'combined_over_fastest_Boehm_median_ratio':arms['combined']['median_seconds']/arms[best_median]['median_seconds'],'fastest_Boehm_by_min':best_min,'combined_over_fastest_Boehm_min_ratio':arms['combined']['min_seconds']/arms[best_min]['min_seconds']}\n    return {'label':label,'artifact':str(path),'artifact_sha256':sha(path),'header':h,'checks':checks,'per_profile':per_profile}\n\ndef main():\n    audits=[analyze('offset'),analyze('aligned')]\n    checks={'both_artifacts_pass':all(a['checks']['all_checks_pass'] for a in audits),'source_hashes_identical_across_capacities':audits[0]['header']['source_sha256']==audits[1]['header']['source_sha256'],'build_commands_identical_across_capacities':audits[0]['header']['build_commands']==audits[1]['header']['build_commands'],'all_sample_rows_preserved':all(a['header']['repeats']==REPEATS for a in audits)}\n    out={'experiment':'promotion-peak-ablation','date':'2026-10-12','method':'Six-arm sequential cyclic profile, 5M allocations/profile, six fresh-process repetitions per arm, nursery capacities 262136 (offset) and 262144 (aligned). Timing summaries are descriptive; do not treat as statistical significance. Custom survival is copied payload / nursery payload. Final live payload / total allocated payload is reported separately.','checks':checks,'harness_source':{'runner_sha256':sha(ROOT/'runner.py'),'runner_fulltext':(ROOT/'runner.py').read_text(),'summarizer_sha256':sha(ROOT/'summarize.py'),'summarizer_fulltext':(ROOT/'summarize.py').read_text()},'audits':audits}\n    output=RESULTS/'2026-10-12-promotion-audit.json'\n    if not all(checks.values()):\n        print(json.dumps({'failed_checks':checks,'per_artifact':[{a['label']:[k for k,v in a['checks'].items() if not v]} for a in audits]},indent=2),file=sys.stderr)\n        raise SystemExit('audit checks failed')\n    output.write_text(json.dumps(out,indent=2)+'\\n')\n    print(json.dumps({'audit':str(output),'sha256':sha(output),'checks':checks,'artifacts':[{'label':a['label'],'sha256':a['artifact_sha256'],'checks':a['checks']} for a in audits]},indent=2))\nif __name__=='__main__': main()\n"
+  },
+  "audits": [
+    {
+      "label": "offset",
+      "artifact": "/root/.codex/worktrees/f396/medaka/test/gc_prototype/results/2026-10-12-promotion-5m-offset.jsonl",
+      "artifact_sha256": "995e9d2bad30a5277cea1b368d79db79db35e4ed2a8f0269c65348803af192cc",
+      "header": {
+        "kind": "header",
+        "experiment": "promotion-peak-ablation",
+        "label": "offset",
+        "git_head": "c324af5a926c7e65a4aede0844de459616c6e8f2",
+        "nursery_bytes": 262136,
+        "count": 5000000,
+        "repeats": 6,
+        "arms": [
+          "baseline",
+          "peak_only",
+          "promotion_only",
+          "combined",
+          "boehm_caller_inline",
+          "boehm_inline"
+        ],
+        "profiles": [
+          "ephemeral",
+          "list",
+          "tree",
+          "mutation",
+          "atomic",
+          "mixed",
+          "sizes"
+        ],
+        "source_paths": {
+          "baseline": "/tmp/medaka-promotion-ablation-c324af5a/source/baseline",
+          "peak_only": "/tmp/medaka-promotion-ablation-c324af5a/source/peak_only",
+          "promotion_only": "/tmp/medaka-promotion-ablation-c324af5a/source/promotion_only",
+          "combined": "/tmp/medaka-promotion-ablation-c324af5a/source/combined"
+        },
+        "source_sha256": {
+          "baseline": {
+            "gc.c": "6e809f44d36f45d0fa8f355cd0d8a825ae87eac2892996eed11d55225d514231",
+            "gc.h": "c70257e8bb754ac649db073f7aad9960a6a734273b77bc213de14fc45d94cff0",
+            "run.py": "151505c92ac42732de5ca975f61ba65b4592eb55e37fad1a676040488bb59695",
+            "workload.c": "b2c38813145487d506191d7c172048f11c367a2af8968026b603bceb4774c112"
+          },
+          "peak_only": {
+            "gc.c": "7bfbc73e63c197cf7c0b0d3c1e52e0244be1c1ec336308a71831d672e5472b0b",
+            "gc.h": "c70257e8bb754ac649db073f7aad9960a6a734273b77bc213de14fc45d94cff0",
+            "run.py": "151505c92ac42732de5ca975f61ba65b4592eb55e37fad1a676040488bb59695",
+            "workload.c": "b2c38813145487d506191d7c172048f11c367a2af8968026b603bceb4774c112"
+          },
+          "promotion_only": {
+            "gc.c": "a7408a2fcfaa69a27e03dae2f71729af7f3c620c47da16030b0f2d2d56f5eb1e",
+            "gc.h": "c70257e8bb754ac649db073f7aad9960a6a734273b77bc213de14fc45d94cff0",
+            "run.py": "151505c92ac42732de5ca975f61ba65b4592eb55e37fad1a676040488bb59695",
+            "workload.c": "b2c38813145487d506191d7c172048f11c367a2af8968026b603bceb4774c112"
+          },
+          "combined": {
+            "gc.c": "174e98b4a5732c0ead0aa45d876280c2bd35ab848c88ded19cd6443bf1c5ae0a",
+            "gc.h": "c70257e8bb754ac649db073f7aad9960a6a734273b77bc213de14fc45d94cff0",
+            "run.py": "151505c92ac42732de5ca975f61ba65b4592eb55e37fad1a676040488bb59695",
+            "workload.c": "b2c38813145487d506191d7c172048f11c367a2af8968026b603bceb4774c112"
+          }
+        },
+        "runner_sha256": "151505c92ac42732de5ca975f61ba65b4592eb55e37fad1a676040488bb59695",
+        "runtime_sha256": "5ca4ce0a019cabf73ae24ce576223ff13c7536a9ae98f472c5c8371ce45b7667",
+        "build_commands": {
+          "baseline": [
+            "clang",
+            "-std=c11",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-DUSE_PREPARED",
+            "-DINLINE_ALLOC",
+            "-DINLINE_STORE",
+            "-I",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/baseline",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/baseline/gc.c",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/baseline/workload.c",
+            "-o",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/baseline/custom_AS"
+          ],
+          "peak_only": [
+            "clang",
+            "-std=c11",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-DUSE_PREPARED",
+            "-DINLINE_ALLOC",
+            "-DINLINE_STORE",
+            "-I",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/peak_only",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/peak_only/gc.c",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/peak_only/workload.c",
+            "-o",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/peak_only/custom_AS"
+          ],
+          "promotion_only": [
+            "clang",
+            "-std=c11",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-DUSE_PREPARED",
+            "-DINLINE_ALLOC",
+            "-DINLINE_STORE",
+            "-I",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/promotion_only",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/promotion_only/gc.c",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/promotion_only/workload.c",
+            "-o",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/promotion_only/custom_AS"
+          ],
+          "combined": [
+            "clang",
+            "-std=c11",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-DUSE_PREPARED",
+            "-DINLINE_ALLOC",
+            "-DINLINE_STORE",
+            "-I",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/combined",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/combined/gc.c",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/combined/workload.c",
+            "-o",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/combined/custom_AS"
+          ],
+          "boehm_caller_inline": [
+            "clang",
+            "-std=c11",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-DUSE_BOEHM",
+            "-DUSE_CALLER_INLINE",
+            "-DUSE_PREPARED",
+            "-DINLINE_ALLOC",
+            "-DINLINE_STORE",
+            "-I",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/boehm_reference",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/baseline/gc.c",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/baseline/workload.c",
+            "-DGC_THREADS",
+            "-pthread",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/boehm_reference/boehm_adapter.c",
+            "/usr/lib/x86_64-linux-gnu/libgc.a",
+            "-lpthread",
+            "-ldl",
+            "-o",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/boehm_reference/boehm_caller_inline"
+          ],
+          "boehm_inline": [
+            "clang",
+            "-std=c11",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-DUSE_BOEHM",
+            "-DUSE_INLINE",
+            "-I",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/boehm_reference",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/baseline/gc.c",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/baseline/workload.c",
+            "-DGC_THREADS",
+            "-pthread",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/boehm_reference/boehm_adapter.c",
+            "/usr/lib/x86_64-linux-gnu/libgc.a",
+            "-lpthread",
+            "-ldl",
+            "-o",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/boehm_reference/boehm_inline"
+          ]
+        },
+        "binary_sha256": {
+          "baseline": "8ea84cd6737e99515ef4ba3d9fa188e3daa7075a868d985e0a391e48fb3141f8",
+          "peak_only": "b5b555f2de6a711ae4811d59df688a972327596c16bac6a6c0c1b170c013f8fc",
+          "promotion_only": "0b18715d01f4ea10e12a8a3d56d9ad2014c98193658097b534d1efc98ddbc1fc",
+          "combined": "b4d6e98b4172b8968b76f381e749f508a320a5752d7edc380c6ffc6a6cdf5932",
+          "boehm_caller_inline": "4fcfde5e91e4d63c39ab66c444ca86b070ef68ed6948244288242f743488a35b",
+          "boehm_inline": "5ad79f8900c1f60bb035b9c232b35ef8fe03f4fde0f631db31e451558bde1042"
+        },
+        "clang": "Debian clang version 19.1.7 (3+b1)",
+        "adapter_hashes": {
+          "baseline": {
+            "runtime_allocator_region_sha256": [
+              "/tmp/medaka-promotion-ablation-c324af5a/build/baseline/boehm_adapter.c",
+              "9af68bcadb9080fa4630d2428a3f46eed98e771a83aeb8ceb18646d03d4481e4"
+            ],
+            "caller_inline_header_sha256": "5ea44cdef51ef719e43e57e07f73d811873cb4d8b0043117c5706bda071c3e4c",
+            "boehm_adapter_source_sha256": "e1c59e81beb74d163ad96d9adfccae819319fffbb999a8d13f12c47c21f2cf4c"
+          },
+          "peak_only": {
+            "runtime_allocator_region_sha256": [
+              "/tmp/medaka-promotion-ablation-c324af5a/build/peak_only/boehm_adapter.c",
+              "9af68bcadb9080fa4630d2428a3f46eed98e771a83aeb8ceb18646d03d4481e4"
+            ],
+            "caller_inline_header_sha256": "5ea44cdef51ef719e43e57e07f73d811873cb4d8b0043117c5706bda071c3e4c",
+            "boehm_adapter_source_sha256": "e1c59e81beb74d163ad96d9adfccae819319fffbb999a8d13f12c47c21f2cf4c"
+          },
+          "promotion_only": {
+            "runtime_allocator_region_sha256": [
+              "/tmp/medaka-promotion-ablation-c324af5a/build/promotion_only/boehm_adapter.c",
+              "9af68bcadb9080fa4630d2428a3f46eed98e771a83aeb8ceb18646d03d4481e4"
+            ],
+            "caller_inline_header_sha256": "5ea44cdef51ef719e43e57e07f73d811873cb4d8b0043117c5706bda071c3e4c",
+            "boehm_adapter_source_sha256": "e1c59e81beb74d163ad96d9adfccae819319fffbb999a8d13f12c47c21f2cf4c"
+          },
+          "combined": {
+            "runtime_allocator_region_sha256": [
+              "/tmp/medaka-promotion-ablation-c324af5a/build/combined/boehm_adapter.c",
+              "9af68bcadb9080fa4630d2428a3f46eed98e771a83aeb8ceb18646d03d4481e4"
+            ],
+            "caller_inline_header_sha256": "5ea44cdef51ef719e43e57e07f73d811873cb4d8b0043117c5706bda071c3e4c",
+            "boehm_adapter_source_sha256": "e1c59e81beb74d163ad96d9adfccae819319fffbb999a8d13f12c47c21f2cf4c"
+          },
+          "boehm_reference": {
+            "runtime_allocator_region_sha256": [
+              "/tmp/medaka-promotion-ablation-c324af5a/build/boehm_reference/boehm_adapter.c",
+              "9af68bcadb9080fa4630d2428a3f46eed98e771a83aeb8ceb18646d03d4481e4"
+            ],
+            "caller_inline_header_sha256": "5ea44cdef51ef719e43e57e07f73d811873cb4d8b0043117c5706bda071c3e4c",
+            "boehm_adapter_source_sha256": "e1c59e81beb74d163ad96d9adfccae819319fffbb999a8d13f12c47c21f2cf4c"
+          }
+        },
+        "variant_patches": {
+          "baseline": {
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "unified_diff": ""
+          },
+          "peak_only": {
+            "sha256": "b2fa902b592de9030eb6b1bd08a9a8941c2691103328771ffcc564f229316a4c",
+            "unified_diff": "--- a/gc.c\n+++ b/gc.c\n@@ -235,7 +235,10 @@\n   h->info = info;\n   stats.old_live_bytes += bytes; stats.old_live_payload_bytes += bytes - sizeof(Header);\n   stats.old_object_count++; stats.old_total_allocated_bytes += bytes;\n-  account_peak(); return h;\n+  /* Pooled slots add no reserved storage; new_pool already accounts pool growth. */\n+  if (class_index == CLASS_COUNT) account_peak();\n+  else if (stats.old_live_bytes > stats.peak_old_bytes) stats.peak_old_bytes = stats.old_live_bytes;\n+  return h;\n }\n uintptr_t register_layout(size_t words, uint64_t mask) {\n   assert(gc_fast.nursery); return descriptor_info(words, mask);\n"
+          },
+          "promotion_only": {
+            "sha256": "615acede97265a38b566a479f84de3d4d3d88e77435a1d1510003088b3c2063b",
+            "unified_diff": "--- a/gc.c\n+++ b/gc.c\n@@ -212,7 +212,7 @@\n   stats.pool_reserved_bytes += bytes; stats.pool_count++; stats.pool_allocations++;\n   account_peak(); return p;\n }\n-static Header *new_old(uintptr_t info) {\n+static Header *new_old(uintptr_t info, const Header *source) {\n   Descriptor *d = &descriptors[(info >> 3) - 1]; size_t bytes = object_bytes(d->words);\n   Header *h;\n   size_t class_index = 0;\n@@ -229,10 +229,14 @@\n     if (!p->free) { c->available = p->available_next; p->available_next = NULL; }\n     /* Dead slots use bit 2 with a zero descriptor index to distinguish reuse. */\n     if (h->info == FORWARDED) stats.pool_reused_slots++;\n-    memset(h, 0, p->slot_bytes);\n+    if (source) {\n+      /* Promotion overwrites the complete logical payload; only padding needs clearing. */\n+      if (p->slot_bytes > bytes) memset((unsigned char *)h + bytes, 0, p->slot_bytes - bytes);\n+    } else memset(h, 0, p->slot_bytes);\n     stats.old_slot_bytes += p->slot_bytes; stats.pooled_allocations++;\n   }\n   h->info = info;\n+  if (source) memcpy(h + 1, source + 1, bytes - sizeof(Header));\n   stats.old_live_bytes += bytes; stats.old_live_payload_bytes += bytes - sizeof(Header);\n   stats.old_object_count++; stats.old_total_allocated_bytes += bytes;\n   account_peak(); return h;\n@@ -248,7 +252,7 @@\n   size_t bytes = object_bytes(layout.words); Word result;\n   if (stats.old_live_bytes >= gc_fast.old_limit) major_collect();\n   if (bytes > gc_fast.capacity) {\n-    result = payload(new_old(layout.info));\n+    result = payload(new_old(layout.info, NULL));\n     stats.direct_old_allocations++; stats.direct_old_payload_bytes += layout.words * sizeof(Word);\n   } else {\n     if (bytes > gc_fast.capacity - gc_fast.used) {\n@@ -281,8 +285,7 @@\n   Header *from = header(word);\n   if (from->info & FORWARDED) return from->info & ~(uintptr_t)7;\n   size_t words = descriptor(from)->words;\n-  Header *to = new_old(from->info);\n-  memcpy(to + 1, from + 1, words * sizeof(Word));\n+  Header *to = new_old(from->info, from);\n   from->info = payload(to) | FORWARDED;\n   queue_push(&work, to, &stats.work_queue_bytes);\n   stats.promoted_count++; stats.copied_bytes += object_bytes(words);\n@@ -376,7 +379,7 @@\n   if (stats.old_live_bytes >= gc_fast.old_limit) major_collect();\n   uintptr_t info = descriptor_info(words, mask); Word result;\n   if (bytes > gc_fast.capacity) {\n-    result = payload(new_old(info));\n+    result = payload(new_old(info, NULL));\n     stats.direct_old_allocations++; stats.direct_old_payload_bytes += words * sizeof(Word);\n   } else {\n     if (bytes > gc_fast.capacity - gc_fast.used) {\n"
+          },
+          "combined": {
+            "sha256": "77b3886d441c0806a65858507555827c0fd644ce539da34d4ec8192f1e468cab",
+            "unified_diff": "--- a/gc.c\n+++ b/gc.c\n@@ -212,7 +212,7 @@\n   stats.pool_reserved_bytes += bytes; stats.pool_count++; stats.pool_allocations++;\n   account_peak(); return p;\n }\n-static Header *new_old(uintptr_t info) {\n+static Header *new_old(uintptr_t info, const Header *source) {\n   Descriptor *d = &descriptors[(info >> 3) - 1]; size_t bytes = object_bytes(d->words);\n   Header *h;\n   size_t class_index = 0;\n@@ -229,13 +229,20 @@\n     if (!p->free) { c->available = p->available_next; p->available_next = NULL; }\n     /* Dead slots use bit 2 with a zero descriptor index to distinguish reuse. */\n     if (h->info == FORWARDED) stats.pool_reused_slots++;\n-    memset(h, 0, p->slot_bytes);\n+    if (source) {\n+      /* Promotion overwrites the complete logical payload; only padding needs clearing. */\n+      if (p->slot_bytes > bytes) memset((unsigned char *)h + bytes, 0, p->slot_bytes - bytes);\n+    } else memset(h, 0, p->slot_bytes);\n     stats.old_slot_bytes += p->slot_bytes; stats.pooled_allocations++;\n   }\n   h->info = info;\n+  if (source) memcpy(h + 1, source + 1, bytes - sizeof(Header));\n   stats.old_live_bytes += bytes; stats.old_live_payload_bytes += bytes - sizeof(Header);\n   stats.old_object_count++; stats.old_total_allocated_bytes += bytes;\n-  account_peak(); return h;\n+  /* Pooled slots add no reserved storage; new_pool already accounts pool growth. */\n+  if (class_index == CLASS_COUNT) account_peak();\n+  else if (stats.old_live_bytes > stats.peak_old_bytes) stats.peak_old_bytes = stats.old_live_bytes;\n+  return h;\n }\n uintptr_t register_layout(size_t words, uint64_t mask) {\n   assert(gc_fast.nursery); return descriptor_info(words, mask);\n@@ -248,7 +255,7 @@\n   size_t bytes = object_bytes(layout.words); Word result;\n   if (stats.old_live_bytes >= gc_fast.old_limit) major_collect();\n   if (bytes > gc_fast.capacity) {\n-    result = payload(new_old(layout.info));\n+    result = payload(new_old(layout.info, NULL));\n     stats.direct_old_allocations++; stats.direct_old_payload_bytes += layout.words * sizeof(Word);\n   } else {\n     if (bytes > gc_fast.capacity - gc_fast.used) {\n@@ -281,8 +288,7 @@\n   Header *from = header(word);\n   if (from->info & FORWARDED) return from->info & ~(uintptr_t)7;\n   size_t words = descriptor(from)->words;\n-  Header *to = new_old(from->info);\n-  memcpy(to + 1, from + 1, words * sizeof(Word));\n+  Header *to = new_old(from->info, from);\n   from->info = payload(to) | FORWARDED;\n   queue_push(&work, to, &stats.work_queue_bytes);\n   stats.promoted_count++; stats.copied_bytes += object_bytes(words);\n@@ -376,7 +382,7 @@\n   if (stats.old_live_bytes >= gc_fast.old_limit) major_collect();\n   uintptr_t info = descriptor_info(words, mask); Word result;\n   if (bytes > gc_fast.capacity) {\n-    result = payload(new_old(info));\n+    result = payload(new_old(info, NULL));\n     stats.direct_old_allocations++; stats.direct_old_payload_bytes += words * sizeof(Word);\n   } else {\n     if (bytes > gc_fast.capacity - gc_fast.used) {\n"
+          }
+        },
+        "runner_source_sha256": "372c18beeaa7693e1d4f3185b5e3e170dc42050cf50468525484a880a8b4fd4a",
+        "environment_policy": "remove all inherited environment variables whose names start with GC_; inherit all others; no CPU affinity or explicit heap cap",
+        "timing_boundary": "heap_init and prepare_workload/layout descriptor setup are outside elapsed_seconds. The timer starts immediately before workload() and stops after it returns; workload includes the profile allocation/store/traversal/checksum computation and final major_collect(). The checksum assertion, stats formatting, getrusage(), and heap_destroy() are outside the timed interval.",
+        "libgc": {
+          "flags": [
+            "/usr/lib/x86_64-linux-gnu/libgc.a",
+            "-lpthread",
+            "-ldl"
+          ],
+          "boehm_pkg_version": "8.2.8",
+          "boehm_linkage": "static",
+          "boehm_archive": "/usr/lib/x86_64-linux-gnu/libgc.a",
+          "boehm_archive_sha256": "337a7cf7e9ff4a161025fc07b67ea0b613338dfc14ea510033d9c4e102a37045"
+        },
+        "correctness_sha256": "755a4a5d11f99f2ca80e4b54291ca4f8df0dbe7ab6e1c3f90df4b509d57f1490",
+        "schedule": "six cyclic rotations; each arm occupies each of six positions once per profile",
+        "checks": {
+          "all_profiles_arms_repeats_present": true,
+          "positions_balanced": true,
+          "order_records_match_rows": true,
+          "allocation_payload_checksum_identity": true,
+          "custom_counter_memory_copy_peak_stats_equal_all_126_comparisons_per_capacity": true,
+          "all_checks_pass": true
+        }
+      },
+      "checks": {
+        "head_is_frozen_c324": true,
+        "correctness_artifact_hash_matches": true,
+        "expected_6_arms_7_profiles_6_repeats": true,
+        "row_keys_complete": true,
+        "balanced_position_per_arm_profile": true,
+        "all_six_orders_rotate_and_are_recorded": true,
+        "allocation_payload_checksum_identity_all_42_profile_repeat_groups": true,
+        "custom_counter_memory_copy_peak_stats_equal_all_126_comparisons_per_capacity": true,
+        "source_hashes_match_frozen_dirs": true,
+        "variant_patches_reproduce_exact_gc_c_hashes": true,
+        "static_libgc_boehm_comparators": true,
+        "all_checks_pass": true
+      },
+      "per_profile": {
+        "ephemeral": {
+          "arms": {
+            "baseline": {
+              "min_seconds": 0.024513909,
+              "median_seconds": 0.024908952999999998,
+              "range_seconds": 0.002004297999999998,
+              "median_process_peak_rss_bytes": 21905408.0,
+              "median_peak_accounted_bytes": 1348568.0,
+              "median_accounted_bytes": 280456.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 2738592.0,
+              "median_copied_payload_bytes": 2053944.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 1536.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.0171162,
+              "median_final_live_payload_over_total_payload_fraction": 1.28e-05
+            },
+            "peak_only": {
+              "min_seconds": 0.024786136,
+              "median_seconds": 0.02660554,
+              "range_seconds": 0.0030418819999999992,
+              "median_process_peak_rss_bytes": 21905408.0,
+              "median_peak_accounted_bytes": 1348568.0,
+              "median_accounted_bytes": 280456.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 2738592.0,
+              "median_copied_payload_bytes": 2053944.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 1536.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.0171162,
+              "median_final_live_payload_over_total_payload_fraction": 1.28e-05
+            },
+            "promotion_only": {
+              "min_seconds": 0.024486898,
+              "median_seconds": 0.0248183165,
+              "range_seconds": 0.005169112,
+              "median_process_peak_rss_bytes": 21905408.0,
+              "median_peak_accounted_bytes": 1348568.0,
+              "median_accounted_bytes": 280456.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 2738592.0,
+              "median_copied_payload_bytes": 2053944.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 1536.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.0171162,
+              "median_final_live_payload_over_total_payload_fraction": 1.28e-05
+            },
+            "combined": {
+              "min_seconds": 0.024464131,
+              "median_seconds": 0.024875204999999997,
+              "range_seconds": 0.0058362890000000014,
+              "median_process_peak_rss_bytes": 21905408.0,
+              "median_peak_accounted_bytes": 1348568.0,
+              "median_accounted_bytes": 280456.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 2738592.0,
+              "median_copied_payload_bytes": 2053944.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 1536.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.0171162,
+              "median_final_live_payload_over_total_payload_fraction": 1.28e-05
+            },
+            "boehm_caller_inline": {
+              "min_seconds": 0.035983136,
+              "median_seconds": 0.037099048,
+              "range_seconds": 0.0053584900000000005,
+              "median_process_peak_rss_bytes": 21905408.0,
+              "median_boehm_heap_bytes": 552960.0,
+              "median_boehm_heap_minus_free_bytes": 8192.0,
+              "median_boehm_total_allocated_bytes": 160002256.0
+            },
+            "boehm_inline": {
+              "min_seconds": 0.055338101,
+              "median_seconds": 0.0564223415,
+              "range_seconds": 0.005793539,
+              "median_process_peak_rss_bytes": 21905408.0,
+              "median_boehm_heap_bytes": 552960.0,
+              "median_boehm_heap_minus_free_bytes": 8192.0,
+              "median_boehm_total_allocated_bytes": 160002256.0
+            }
+          },
+          "median_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 1.0681115340335663,
+            "promotion_only": 0.9963612882484464,
+            "combined": 0.9986451457835261,
+            "boehm_caller_inline": 1.4893860853966847,
+            "boehm_inline": 2.265143039131352
+          },
+          "minimum_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 1.011105001654367,
+            "promotion_only": 0.9988981357481583,
+            "combined": 0.9979693976998936,
+            "boehm_caller_inline": 1.467866100016933,
+            "boehm_inline": 2.257416432442496
+          },
+          "fastest_Boehm_by_median": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_median_ratio": 0.6705079062945226,
+          "fastest_Boehm_by_min": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_min_ratio": 0.6798776793662453
+        },
+        "list": {
+          "arms": {
+            "baseline": {
+              "min_seconds": 0.198691357,
+              "median_seconds": 0.212501694,
+              "range_seconds": 0.019715026999999996,
+              "median_process_peak_rss_bytes": 162537472.0,
+              "median_peak_accounted_bytes": 160738968.0,
+              "median_accounted_bytes": 160738936.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 160000000.0,
+              "median_copied_payload_bytes": 120000000.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 120000000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 1.0,
+              "median_final_live_payload_over_total_payload_fraction": 1.0
+            },
+            "peak_only": {
+              "min_seconds": 0.176061798,
+              "median_seconds": 0.195271494,
+              "range_seconds": 0.02618933300000001,
+              "median_process_peak_rss_bytes": 162545664.0,
+              "median_peak_accounted_bytes": 160738968.0,
+              "median_accounted_bytes": 160738936.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 160000000.0,
+              "median_copied_payload_bytes": 120000000.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 120000000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 1.0,
+              "median_final_live_payload_over_total_payload_fraction": 1.0
+            },
+            "promotion_only": {
+              "min_seconds": 0.173619524,
+              "median_seconds": 0.181510841,
+              "range_seconds": 0.047960016999999994,
+              "median_process_peak_rss_bytes": 162545664.0,
+              "median_peak_accounted_bytes": 160738968.0,
+              "median_accounted_bytes": 160738936.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 160000000.0,
+              "median_copied_payload_bytes": 120000000.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 120000000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 1.0,
+              "median_final_live_payload_over_total_payload_fraction": 1.0
+            },
+            "combined": {
+              "min_seconds": 0.168360891,
+              "median_seconds": 0.182434826,
+              "range_seconds": 0.03240401399999998,
+              "median_process_peak_rss_bytes": 162543616.0,
+              "median_peak_accounted_bytes": 160738968.0,
+              "median_accounted_bytes": 160738936.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 160000000.0,
+              "median_copied_payload_bytes": 120000000.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 120000000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 1.0,
+              "median_final_live_payload_over_total_payload_fraction": 1.0
+            },
+            "boehm_caller_inline": {
+              "min_seconds": 0.198056483,
+              "median_seconds": 0.213331895,
+              "range_seconds": 0.06227297799999998,
+              "median_process_peak_rss_bytes": 175556608.0,
+              "median_boehm_heap_bytes": 168292352.0,
+              "median_boehm_heap_minus_free_bytes": 160006144.0,
+              "median_boehm_total_allocated_bytes": 160002256.0
+            },
+            "boehm_inline": {
+              "min_seconds": 0.198247532,
+              "median_seconds": 0.21951880099999999,
+              "range_seconds": 0.047040267999999996,
+              "median_process_peak_rss_bytes": 175593472.0,
+              "median_boehm_heap_bytes": 168292352.0,
+              "median_boehm_heap_minus_free_bytes": 160006144.0,
+              "median_boehm_total_allocated_bytes": 160002256.0
+            }
+          },
+          "median_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.9189173522541425,
+            "promotion_only": 0.8541618543520882,
+            "combined": 0.8585099843957009,
+            "boehm_caller_inline": 1.003906797091227,
+            "boehm_inline": 1.0330214167610352
+          },
+          "minimum_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.8861069784731501,
+            "promotion_only": 0.8738151805969093,
+            "combined": 0.8473488406443367,
+            "boehm_caller_inline": 0.9968047226130726,
+            "boehm_inline": 0.9977662591533862
+          },
+          "fastest_Boehm_by_median": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_median_ratio": 0.855169012584827,
+          "fastest_Boehm_by_min": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_min_ratio": 0.8500650342256154
+        },
+        "tree": {
+          "arms": {
+            "baseline": {
+              "min_seconds": 0.340615879,
+              "median_seconds": 0.362049246,
+              "range_seconds": 0.053756903999999994,
+              "median_process_peak_rss_bytes": 162529280.0,
+              "median_peak_accounted_bytes": 160738968.0,
+              "median_accounted_bytes": 160738936.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 160000000.0,
+              "median_copied_payload_bytes": 120000000.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 120000000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 1.0,
+              "median_final_live_payload_over_total_payload_fraction": 1.0
+            },
+            "peak_only": {
+              "min_seconds": 0.339153949,
+              "median_seconds": 0.35396347699999997,
+              "range_seconds": 0.10725758699999999,
+              "median_process_peak_rss_bytes": 162537472.0,
+              "median_peak_accounted_bytes": 160738968.0,
+              "median_accounted_bytes": 160738936.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 160000000.0,
+              "median_copied_payload_bytes": 120000000.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 120000000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 1.0,
+              "median_final_live_payload_over_total_payload_fraction": 1.0
+            },
+            "promotion_only": {
+              "min_seconds": 0.334870704,
+              "median_seconds": 0.3494534855,
+              "range_seconds": 0.024331674999999997,
+              "median_process_peak_rss_bytes": 162527232.0,
+              "median_peak_accounted_bytes": 160738968.0,
+              "median_accounted_bytes": 160738936.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 160000000.0,
+              "median_copied_payload_bytes": 120000000.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 120000000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 1.0,
+              "median_final_live_payload_over_total_payload_fraction": 1.0
+            },
+            "combined": {
+              "min_seconds": 0.319690678,
+              "median_seconds": 0.3321798815,
+              "range_seconds": 0.02369784199999997,
+              "median_process_peak_rss_bytes": 162541568.0,
+              "median_peak_accounted_bytes": 160738968.0,
+              "median_accounted_bytes": 160738936.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 160000000.0,
+              "median_copied_payload_bytes": 120000000.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 120000000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 1.0,
+              "median_final_live_payload_over_total_payload_fraction": 1.0
+            },
+            "boehm_caller_inline": {
+              "min_seconds": 0.274334666,
+              "median_seconds": 0.29918894399999996,
+              "range_seconds": 0.06449080000000001,
+              "median_process_peak_rss_bytes": 175433728.0,
+              "median_boehm_heap_bytes": 168292352.0,
+              "median_boehm_heap_minus_free_bytes": 160006144.0,
+              "median_boehm_total_allocated_bytes": 160002256.0
+            },
+            "boehm_inline": {
+              "min_seconds": 0.302196498,
+              "median_seconds": 0.32227274149999996,
+              "range_seconds": 0.034527520000000034,
+              "median_process_peak_rss_bytes": 175550464.0,
+              "median_boehm_heap_bytes": 168292352.0,
+              "median_boehm_heap_minus_free_bytes": 160006144.0,
+              "median_boehm_total_allocated_bytes": 160002256.0
+            }
+          },
+          "median_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.9776666597449563,
+            "promotion_only": 0.9652098143024443,
+            "combined": 0.917499166674138,
+            "boehm_caller_inline": 0.8263763764336081,
+            "boehm_inline": 0.890135099190346
+          },
+          "minimum_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.9957079804843743,
+            "promotion_only": 0.9831329795402757,
+            "combined": 0.9385665722295935,
+            "boehm_caller_inline": 0.8054077420154566,
+            "boehm_inline": 0.8872061363880219
+          },
+          "fastest_Boehm_by_median": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_median_ratio": 1.110267903148186,
+          "fastest_Boehm_by_min": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_min_ratio": 1.1653309538357794
+        },
+        "mutation": {
+          "arms": {
+            "baseline": {
+              "min_seconds": 0.02482732,
+              "median_seconds": 0.026322501499999998,
+              "range_seconds": 0.007317127,
+              "median_process_peak_rss_bytes": 21905408.0,
+              "median_peak_accounted_bytes": 1332648.0,
+              "median_accounted_bytes": 313832.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 1882560.0,
+              "median_copied_payload_bytes": 1411920.0,
+              "median_nursery_payload_bytes": 120000024.0,
+              "median_exact_live_payload_bytes": 1560.0,
+              "median_payload_bytes": 120000024.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.011765997646800471,
+              "median_final_live_payload_over_total_payload_fraction": 1.299999740000052e-05
+            },
+            "peak_only": {
+              "min_seconds": 0.024479295,
+              "median_seconds": 0.0254781185,
+              "range_seconds": 0.015118680999999998,
+              "median_process_peak_rss_bytes": 21905408.0,
+              "median_peak_accounted_bytes": 1332648.0,
+              "median_accounted_bytes": 313832.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 1882560.0,
+              "median_copied_payload_bytes": 1411920.0,
+              "median_nursery_payload_bytes": 120000024.0,
+              "median_exact_live_payload_bytes": 1560.0,
+              "median_payload_bytes": 120000024.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.011765997646800471,
+              "median_final_live_payload_over_total_payload_fraction": 1.299999740000052e-05
+            },
+            "promotion_only": {
+              "min_seconds": 0.024512708,
+              "median_seconds": 0.027145655,
+              "range_seconds": 0.012317214,
+              "median_process_peak_rss_bytes": 21905408.0,
+              "median_peak_accounted_bytes": 1332648.0,
+              "median_accounted_bytes": 313832.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 1882560.0,
+              "median_copied_payload_bytes": 1411920.0,
+              "median_nursery_payload_bytes": 120000024.0,
+              "median_exact_live_payload_bytes": 1560.0,
+              "median_payload_bytes": 120000024.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.011765997646800471,
+              "median_final_live_payload_over_total_payload_fraction": 1.299999740000052e-05
+            },
+            "combined": {
+              "min_seconds": 0.024406411,
+              "median_seconds": 0.025428571,
+              "range_seconds": 0.012294108000000002,
+              "median_process_peak_rss_bytes": 21905408.0,
+              "median_peak_accounted_bytes": 1332648.0,
+              "median_accounted_bytes": 313832.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 1882560.0,
+              "median_copied_payload_bytes": 1411920.0,
+              "median_nursery_payload_bytes": 120000024.0,
+              "median_exact_live_payload_bytes": 1560.0,
+              "median_payload_bytes": 120000024.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.011765997646800471,
+              "median_final_live_payload_over_total_payload_fraction": 1.299999740000052e-05
+            },
+            "boehm_caller_inline": {
+              "min_seconds": 0.03578101,
+              "median_seconds": 0.0457012455,
+              "range_seconds": 0.016521285999999996,
+              "median_process_peak_rss_bytes": 21905408.0,
+              "median_boehm_heap_bytes": 552960.0,
+              "median_boehm_heap_minus_free_bytes": 16384.0,
+              "median_boehm_total_allocated_bytes": 160002096.0
+            },
+            "boehm_inline": {
+              "min_seconds": 0.057768244,
+              "median_seconds": 0.059442065,
+              "range_seconds": 0.024922549999999995,
+              "median_process_peak_rss_bytes": 21905408.0,
+              "median_boehm_heap_bytes": 552960.0,
+              "median_boehm_heap_minus_free_bytes": 16384.0,
+              "median_boehm_total_allocated_bytes": 160002096.0
+            }
+          },
+          "median_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.9679216278133749,
+            "promotion_only": 1.0312718568939963,
+            "combined": 0.9660393029135169,
+            "boehm_caller_inline": 1.736204497889382,
+            "boehm_inline": 2.258222494545209
+          },
+          "minimum_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.9859821760866659,
+            "promotion_only": 0.987327991905691,
+            "combined": 0.9830465390545576,
+            "boehm_caller_inline": 1.4411950222577388,
+            "boehm_inline": 2.3268014429265826
+          },
+          "fastest_Boehm_by_median": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_median_ratio": 0.5564087088173559,
+          "fastest_Boehm_by_min": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_min_ratio": 0.6821051446004458
+        },
+        "atomic": {
+          "arms": {
+            "baseline": {
+              "min_seconds": 0.017794859,
+              "median_seconds": 0.018166652499999998,
+              "range_seconds": 0.002495217000000001,
+              "median_process_peak_rss_bytes": 21979136.0,
+              "median_peak_accounted_bytes": 296920.0,
+              "median_accounted_bytes": 280456.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 19552.0,
+              "median_copied_payload_bytes": 14664.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 24.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.0001222,
+              "median_final_live_payload_over_total_payload_fraction": 2e-07
+            },
+            "peak_only": {
+              "min_seconds": 0.017504004,
+              "median_seconds": 0.0185480895,
+              "range_seconds": 0.007720027000000001,
+              "median_process_peak_rss_bytes": 21979136.0,
+              "median_peak_accounted_bytes": 296920.0,
+              "median_accounted_bytes": 280456.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 19552.0,
+              "median_copied_payload_bytes": 14664.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 24.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.0001222,
+              "median_final_live_payload_over_total_payload_fraction": 2e-07
+            },
+            "promotion_only": {
+              "min_seconds": 0.017936232,
+              "median_seconds": 0.018243964,
+              "range_seconds": 0.0056787600000000014,
+              "median_process_peak_rss_bytes": 22044672.0,
+              "median_peak_accounted_bytes": 296920.0,
+              "median_accounted_bytes": 280456.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 19552.0,
+              "median_copied_payload_bytes": 14664.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 24.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.0001222,
+              "median_final_live_payload_over_total_payload_fraction": 2e-07
+            },
+            "combined": {
+              "min_seconds": 0.017560643,
+              "median_seconds": 0.018639812,
+              "range_seconds": 0.007657029999999999,
+              "median_process_peak_rss_bytes": 21979136.0,
+              "median_peak_accounted_bytes": 296920.0,
+              "median_accounted_bytes": 280456.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 19552.0,
+              "median_copied_payload_bytes": 14664.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 24.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.0001222,
+              "median_final_live_payload_over_total_payload_fraction": 2e-07
+            },
+            "boehm_caller_inline": {
+              "min_seconds": 0.028884042,
+              "median_seconds": 0.030846846000000004,
+              "range_seconds": 0.022471822000000002,
+              "median_process_peak_rss_bytes": 21979136.0,
+              "median_boehm_heap_bytes": 552960.0,
+              "median_boehm_heap_minus_free_bytes": 4096.0,
+              "median_boehm_total_allocated_bytes": 160000992.0
+            },
+            "boehm_inline": {
+              "min_seconds": 0.050921826,
+              "median_seconds": 0.0545534515,
+              "range_seconds": 0.01824872899999999,
+              "median_process_peak_rss_bytes": 21979136.0,
+              "median_boehm_heap_bytes": 552960.0,
+              "median_boehm_heap_minus_free_bytes": 4096.0,
+              "median_boehm_total_allocated_bytes": 160000992.0
+            }
+          },
+          "median_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 1.020996548483547,
+            "promotion_only": 1.004255682217734,
+            "combined": 1.0260454973749291,
+            "boehm_caller_inline": 1.6979928470586425,
+            "boehm_inline": 3.0029446261494797
+          },
+          "minimum_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.983655110726081,
+            "promotion_only": 1.0079445979313464,
+            "combined": 0.9868379962999426,
+            "boehm_caller_inline": 1.6231677924506174,
+            "boehm_inline": 2.8616032304611125
+          },
+          "fastest_Boehm_by_median": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_median_ratio": 0.6042696228975888,
+          "fastest_Boehm_by_min": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_min_ratio": 0.6079704149440027
+        },
+        "mixed": {
+          "arms": {
+            "baseline": {
+              "min_seconds": 0.022004469,
+              "median_seconds": 0.025284050000000002,
+              "range_seconds": 0.014140048000000002,
+              "median_process_peak_rss_bytes": 22110208.0,
+              "median_peak_accounted_bytes": 3024632.0,
+              "median_accounted_bytes": 3024600.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 3111968.0,
+              "median_copied_payload_bytes": 2333976.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 1875000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.0194498,
+              "median_final_live_payload_over_total_payload_fraction": 0.015625
+            },
+            "peak_only": {
+              "min_seconds": 0.02136561,
+              "median_seconds": 0.022127959500000002,
+              "range_seconds": 0.002277906999999999,
+              "median_process_peak_rss_bytes": 22110208.0,
+              "median_peak_accounted_bytes": 3024632.0,
+              "median_accounted_bytes": 3024600.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 3111968.0,
+              "median_copied_payload_bytes": 2333976.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 1875000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.0194498,
+              "median_final_live_payload_over_total_payload_fraction": 0.015625
+            },
+            "promotion_only": {
+              "min_seconds": 0.02075207,
+              "median_seconds": 0.022932198,
+              "range_seconds": 0.014725535000000001,
+              "median_process_peak_rss_bytes": 22110208.0,
+              "median_peak_accounted_bytes": 3024632.0,
+              "median_accounted_bytes": 3024600.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 3111968.0,
+              "median_copied_payload_bytes": 2333976.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 1875000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.0194498,
+              "median_final_live_payload_over_total_payload_fraction": 0.015625
+            },
+            "combined": {
+              "min_seconds": 0.021280306,
+              "median_seconds": 0.022957813,
+              "range_seconds": 0.01315148,
+              "median_process_peak_rss_bytes": 22110208.0,
+              "median_peak_accounted_bytes": 3024632.0,
+              "median_accounted_bytes": 3024600.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 3111968.0,
+              "median_copied_payload_bytes": 2333976.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 1875000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.0194498,
+              "median_final_live_payload_over_total_payload_fraction": 0.015625
+            },
+            "boehm_caller_inline": {
+              "min_seconds": 0.066111016,
+              "median_seconds": 0.0710559885,
+              "range_seconds": 0.055266957000000005,
+              "median_process_peak_rss_bytes": 22110208.0,
+              "median_boehm_heap_bytes": 8908800.0,
+              "median_boehm_heap_minus_free_bytes": 8908800.0,
+              "median_boehm_total_allocated_bytes": 160001808.0
+            },
+            "boehm_inline": {
+              "min_seconds": 0.08619509,
+              "median_seconds": 0.0960309235,
+              "range_seconds": 0.042348531999999994,
+              "median_process_peak_rss_bytes": 22110208.0,
+              "median_boehm_heap_bytes": 8908800.0,
+              "median_boehm_heap_minus_free_bytes": 8908800.0,
+              "median_boehm_total_allocated_bytes": 160001280.0
+            }
+          },
+          "median_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.8751746456758313,
+            "promotion_only": 0.9069827816350624,
+            "combined": 0.9079958709146675,
+            "boehm_caller_inline": 2.8103088112861663,
+            "boehm_inline": 3.7980831195951597
+          },
+          "minimum_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.9709668522335169,
+            "promotion_only": 0.9430843343686232,
+            "combined": 0.9670901851801105,
+            "boehm_caller_inline": 3.004435871640438,
+            "boehm_inline": 3.917162918132676
+          },
+          "fastest_Boehm_by_median": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_median_ratio": 0.3230946959523334,
+          "fastest_Boehm_by_min": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_min_ratio": 0.32188744459773544
+        },
+        "sizes": {
+          "arms": {
+            "baseline": {
+              "min_seconds": 0.120961361,
+              "median_seconds": 0.134001712,
+              "range_seconds": 0.046260206999999984,
+              "median_process_peak_rss_bytes": 32264192.0,
+              "median_peak_accounted_bytes": 30522504.0,
+              "median_accounted_bytes": 28650152.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 58770704.0,
+              "median_copied_payload_bytes": 57207968.0,
+              "median_nursery_payload_bytes": 1735000000.0,
+              "median_exact_live_payload_bytes": 16722616.0,
+              "median_payload_bytes": 1735000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.032972892219020174,
+              "median_final_live_payload_over_total_payload_fraction": 0.009638395389048992
+            },
+            "peak_only": {
+              "min_seconds": 0.113797314,
+              "median_seconds": 0.129346674,
+              "range_seconds": 0.04201900600000001,
+              "median_process_peak_rss_bytes": 32251904.0,
+              "median_peak_accounted_bytes": 30522504.0,
+              "median_accounted_bytes": 28650152.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 58770704.0,
+              "median_copied_payload_bytes": 57207968.0,
+              "median_nursery_payload_bytes": 1735000000.0,
+              "median_exact_live_payload_bytes": 16722616.0,
+              "median_payload_bytes": 1735000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.032972892219020174,
+              "median_final_live_payload_over_total_payload_fraction": 0.009638395389048992
+            },
+            "promotion_only": {
+              "min_seconds": 0.12096081,
+              "median_seconds": 0.13644639349999999,
+              "range_seconds": 0.031396464999999985,
+              "median_process_peak_rss_bytes": 32280576.0,
+              "median_peak_accounted_bytes": 30522504.0,
+              "median_accounted_bytes": 28650152.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 58770704.0,
+              "median_copied_payload_bytes": 57207968.0,
+              "median_nursery_payload_bytes": 1735000000.0,
+              "median_exact_live_payload_bytes": 16722616.0,
+              "median_payload_bytes": 1735000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.032972892219020174,
+              "median_final_live_payload_over_total_payload_fraction": 0.009638395389048992
+            },
+            "combined": {
+              "min_seconds": 0.106138133,
+              "median_seconds": 0.11380713049999999,
+              "range_seconds": 0.028732292999999992,
+              "median_process_peak_rss_bytes": 32278528.0,
+              "median_peak_accounted_bytes": 30522504.0,
+              "median_accounted_bytes": 28650152.0,
+              "median_nursery_capacity_bytes": 262136.0,
+              "median_copied_bytes": 58770704.0,
+              "median_copied_payload_bytes": 57207968.0,
+              "median_nursery_payload_bytes": 1735000000.0,
+              "median_exact_live_payload_bytes": 16722616.0,
+              "median_payload_bytes": 1735000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.032972892219020174,
+              "median_final_live_payload_over_total_payload_fraction": 0.009638395389048992
+            },
+            "boehm_caller_inline": {
+              "min_seconds": 0.695957423,
+              "median_seconds": 0.7620257795000001,
+              "range_seconds": 0.13654970500000008,
+              "median_process_peak_rss_bytes": 75288576.0,
+              "median_boehm_heap_bytes": 67629056.0,
+              "median_boehm_heap_minus_free_bytes": 41287680.0,
+              "median_boehm_total_allocated_bytes": 1970003104.0
+            },
+            "boehm_inline": {
+              "min_seconds": 0.733606545,
+              "median_seconds": 0.864682688,
+              "range_seconds": 0.17865144300000002,
+              "median_process_peak_rss_bytes": 75255808.0,
+              "median_boehm_heap_bytes": 67629056.0,
+              "median_boehm_heap_minus_free_bytes": 41287680.0,
+              "median_boehm_total_allocated_bytes": 1970002440.0
+            }
+          },
+          "median_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.9652613542728469,
+            "promotion_only": 1.0182436587078827,
+            "combined": 0.849296093321554,
+            "boehm_caller_inline": 5.686686894716689,
+            "boehm_inline": 6.452773439193076
+          },
+          "minimum_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.9407740873550521,
+            "promotion_only": 0.9999954448263855,
+            "combined": 0.8774548510577687,
+            "boehm_caller_inline": 5.753551524606275,
+            "boehm_inline": 6.064800684575631
+          },
+          "fastest_Boehm_by_median": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_median_ratio": 0.1493481369812371,
+          "fastest_Boehm_by_min": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_min_ratio": 0.15250664694756766
+        }
+      }
+    },
+    {
+      "label": "aligned",
+      "artifact": "/root/.codex/worktrees/f396/medaka/test/gc_prototype/results/2026-10-12-promotion-5m-aligned.jsonl",
+      "artifact_sha256": "4ec2eb8bccb53a3d4c8c5117114832304a4d7f64043f5181279350f14f582bc7",
+      "header": {
+        "kind": "header",
+        "experiment": "promotion-peak-ablation",
+        "label": "aligned",
+        "git_head": "c324af5a926c7e65a4aede0844de459616c6e8f2",
+        "nursery_bytes": 262144,
+        "count": 5000000,
+        "repeats": 6,
+        "arms": [
+          "baseline",
+          "peak_only",
+          "promotion_only",
+          "combined",
+          "boehm_caller_inline",
+          "boehm_inline"
+        ],
+        "profiles": [
+          "ephemeral",
+          "list",
+          "tree",
+          "mutation",
+          "atomic",
+          "mixed",
+          "sizes"
+        ],
+        "source_paths": {
+          "baseline": "/tmp/medaka-promotion-ablation-c324af5a/source/baseline",
+          "peak_only": "/tmp/medaka-promotion-ablation-c324af5a/source/peak_only",
+          "promotion_only": "/tmp/medaka-promotion-ablation-c324af5a/source/promotion_only",
+          "combined": "/tmp/medaka-promotion-ablation-c324af5a/source/combined"
+        },
+        "source_sha256": {
+          "baseline": {
+            "gc.c": "6e809f44d36f45d0fa8f355cd0d8a825ae87eac2892996eed11d55225d514231",
+            "gc.h": "c70257e8bb754ac649db073f7aad9960a6a734273b77bc213de14fc45d94cff0",
+            "run.py": "151505c92ac42732de5ca975f61ba65b4592eb55e37fad1a676040488bb59695",
+            "workload.c": "b2c38813145487d506191d7c172048f11c367a2af8968026b603bceb4774c112"
+          },
+          "peak_only": {
+            "gc.c": "7bfbc73e63c197cf7c0b0d3c1e52e0244be1c1ec336308a71831d672e5472b0b",
+            "gc.h": "c70257e8bb754ac649db073f7aad9960a6a734273b77bc213de14fc45d94cff0",
+            "run.py": "151505c92ac42732de5ca975f61ba65b4592eb55e37fad1a676040488bb59695",
+            "workload.c": "b2c38813145487d506191d7c172048f11c367a2af8968026b603bceb4774c112"
+          },
+          "promotion_only": {
+            "gc.c": "a7408a2fcfaa69a27e03dae2f71729af7f3c620c47da16030b0f2d2d56f5eb1e",
+            "gc.h": "c70257e8bb754ac649db073f7aad9960a6a734273b77bc213de14fc45d94cff0",
+            "run.py": "151505c92ac42732de5ca975f61ba65b4592eb55e37fad1a676040488bb59695",
+            "workload.c": "b2c38813145487d506191d7c172048f11c367a2af8968026b603bceb4774c112"
+          },
+          "combined": {
+            "gc.c": "174e98b4a5732c0ead0aa45d876280c2bd35ab848c88ded19cd6443bf1c5ae0a",
+            "gc.h": "c70257e8bb754ac649db073f7aad9960a6a734273b77bc213de14fc45d94cff0",
+            "run.py": "151505c92ac42732de5ca975f61ba65b4592eb55e37fad1a676040488bb59695",
+            "workload.c": "b2c38813145487d506191d7c172048f11c367a2af8968026b603bceb4774c112"
+          }
+        },
+        "runner_sha256": "151505c92ac42732de5ca975f61ba65b4592eb55e37fad1a676040488bb59695",
+        "runtime_sha256": "5ca4ce0a019cabf73ae24ce576223ff13c7536a9ae98f472c5c8371ce45b7667",
+        "build_commands": {
+          "baseline": [
+            "clang",
+            "-std=c11",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-DUSE_PREPARED",
+            "-DINLINE_ALLOC",
+            "-DINLINE_STORE",
+            "-I",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/baseline",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/baseline/gc.c",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/baseline/workload.c",
+            "-o",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/baseline/custom_AS"
+          ],
+          "peak_only": [
+            "clang",
+            "-std=c11",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-DUSE_PREPARED",
+            "-DINLINE_ALLOC",
+            "-DINLINE_STORE",
+            "-I",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/peak_only",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/peak_only/gc.c",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/peak_only/workload.c",
+            "-o",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/peak_only/custom_AS"
+          ],
+          "promotion_only": [
+            "clang",
+            "-std=c11",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-DUSE_PREPARED",
+            "-DINLINE_ALLOC",
+            "-DINLINE_STORE",
+            "-I",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/promotion_only",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/promotion_only/gc.c",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/promotion_only/workload.c",
+            "-o",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/promotion_only/custom_AS"
+          ],
+          "combined": [
+            "clang",
+            "-std=c11",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-DUSE_PREPARED",
+            "-DINLINE_ALLOC",
+            "-DINLINE_STORE",
+            "-I",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/combined",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/combined/gc.c",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/combined/workload.c",
+            "-o",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/combined/custom_AS"
+          ],
+          "boehm_caller_inline": [
+            "clang",
+            "-std=c11",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-DUSE_BOEHM",
+            "-DUSE_CALLER_INLINE",
+            "-DUSE_PREPARED",
+            "-DINLINE_ALLOC",
+            "-DINLINE_STORE",
+            "-I",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/boehm_reference",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/baseline/gc.c",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/baseline/workload.c",
+            "-DGC_THREADS",
+            "-pthread",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/boehm_reference/boehm_adapter.c",
+            "/usr/lib/x86_64-linux-gnu/libgc.a",
+            "-lpthread",
+            "-ldl",
+            "-o",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/boehm_reference/boehm_caller_inline"
+          ],
+          "boehm_inline": [
+            "clang",
+            "-std=c11",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-DUSE_BOEHM",
+            "-DUSE_INLINE",
+            "-I",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/boehm_reference",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/baseline/gc.c",
+            "/tmp/medaka-promotion-ablation-c324af5a/source/baseline/workload.c",
+            "-DGC_THREADS",
+            "-pthread",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/boehm_reference/boehm_adapter.c",
+            "/usr/lib/x86_64-linux-gnu/libgc.a",
+            "-lpthread",
+            "-ldl",
+            "-o",
+            "/tmp/medaka-promotion-ablation-c324af5a/build/boehm_reference/boehm_inline"
+          ]
+        },
+        "binary_sha256": {
+          "baseline": "8ea84cd6737e99515ef4ba3d9fa188e3daa7075a868d985e0a391e48fb3141f8",
+          "peak_only": "b5b555f2de6a711ae4811d59df688a972327596c16bac6a6c0c1b170c013f8fc",
+          "promotion_only": "0b18715d01f4ea10e12a8a3d56d9ad2014c98193658097b534d1efc98ddbc1fc",
+          "combined": "b4d6e98b4172b8968b76f381e749f508a320a5752d7edc380c6ffc6a6cdf5932",
+          "boehm_caller_inline": "4fcfde5e91e4d63c39ab66c444ca86b070ef68ed6948244288242f743488a35b",
+          "boehm_inline": "5ad79f8900c1f60bb035b9c232b35ef8fe03f4fde0f631db31e451558bde1042"
+        },
+        "clang": "Debian clang version 19.1.7 (3+b1)",
+        "adapter_hashes": {
+          "baseline": {
+            "runtime_allocator_region_sha256": [
+              "/tmp/medaka-promotion-ablation-c324af5a/build/baseline/boehm_adapter.c",
+              "9af68bcadb9080fa4630d2428a3f46eed98e771a83aeb8ceb18646d03d4481e4"
+            ],
+            "caller_inline_header_sha256": "5ea44cdef51ef719e43e57e07f73d811873cb4d8b0043117c5706bda071c3e4c",
+            "boehm_adapter_source_sha256": "e1c59e81beb74d163ad96d9adfccae819319fffbb999a8d13f12c47c21f2cf4c"
+          },
+          "peak_only": {
+            "runtime_allocator_region_sha256": [
+              "/tmp/medaka-promotion-ablation-c324af5a/build/peak_only/boehm_adapter.c",
+              "9af68bcadb9080fa4630d2428a3f46eed98e771a83aeb8ceb18646d03d4481e4"
+            ],
+            "caller_inline_header_sha256": "5ea44cdef51ef719e43e57e07f73d811873cb4d8b0043117c5706bda071c3e4c",
+            "boehm_adapter_source_sha256": "e1c59e81beb74d163ad96d9adfccae819319fffbb999a8d13f12c47c21f2cf4c"
+          },
+          "promotion_only": {
+            "runtime_allocator_region_sha256": [
+              "/tmp/medaka-promotion-ablation-c324af5a/build/promotion_only/boehm_adapter.c",
+              "9af68bcadb9080fa4630d2428a3f46eed98e771a83aeb8ceb18646d03d4481e4"
+            ],
+            "caller_inline_header_sha256": "5ea44cdef51ef719e43e57e07f73d811873cb4d8b0043117c5706bda071c3e4c",
+            "boehm_adapter_source_sha256": "e1c59e81beb74d163ad96d9adfccae819319fffbb999a8d13f12c47c21f2cf4c"
+          },
+          "combined": {
+            "runtime_allocator_region_sha256": [
+              "/tmp/medaka-promotion-ablation-c324af5a/build/combined/boehm_adapter.c",
+              "9af68bcadb9080fa4630d2428a3f46eed98e771a83aeb8ceb18646d03d4481e4"
+            ],
+            "caller_inline_header_sha256": "5ea44cdef51ef719e43e57e07f73d811873cb4d8b0043117c5706bda071c3e4c",
+            "boehm_adapter_source_sha256": "e1c59e81beb74d163ad96d9adfccae819319fffbb999a8d13f12c47c21f2cf4c"
+          },
+          "boehm_reference": {
+            "runtime_allocator_region_sha256": [
+              "/tmp/medaka-promotion-ablation-c324af5a/build/boehm_reference/boehm_adapter.c",
+              "9af68bcadb9080fa4630d2428a3f46eed98e771a83aeb8ceb18646d03d4481e4"
+            ],
+            "caller_inline_header_sha256": "5ea44cdef51ef719e43e57e07f73d811873cb4d8b0043117c5706bda071c3e4c",
+            "boehm_adapter_source_sha256": "e1c59e81beb74d163ad96d9adfccae819319fffbb999a8d13f12c47c21f2cf4c"
+          }
+        },
+        "variant_patches": {
+          "baseline": {
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "unified_diff": ""
+          },
+          "peak_only": {
+            "sha256": "b2fa902b592de9030eb6b1bd08a9a8941c2691103328771ffcc564f229316a4c",
+            "unified_diff": "--- a/gc.c\n+++ b/gc.c\n@@ -235,7 +235,10 @@\n   h->info = info;\n   stats.old_live_bytes += bytes; stats.old_live_payload_bytes += bytes - sizeof(Header);\n   stats.old_object_count++; stats.old_total_allocated_bytes += bytes;\n-  account_peak(); return h;\n+  /* Pooled slots add no reserved storage; new_pool already accounts pool growth. */\n+  if (class_index == CLASS_COUNT) account_peak();\n+  else if (stats.old_live_bytes > stats.peak_old_bytes) stats.peak_old_bytes = stats.old_live_bytes;\n+  return h;\n }\n uintptr_t register_layout(size_t words, uint64_t mask) {\n   assert(gc_fast.nursery); return descriptor_info(words, mask);\n"
+          },
+          "promotion_only": {
+            "sha256": "615acede97265a38b566a479f84de3d4d3d88e77435a1d1510003088b3c2063b",
+            "unified_diff": "--- a/gc.c\n+++ b/gc.c\n@@ -212,7 +212,7 @@\n   stats.pool_reserved_bytes += bytes; stats.pool_count++; stats.pool_allocations++;\n   account_peak(); return p;\n }\n-static Header *new_old(uintptr_t info) {\n+static Header *new_old(uintptr_t info, const Header *source) {\n   Descriptor *d = &descriptors[(info >> 3) - 1]; size_t bytes = object_bytes(d->words);\n   Header *h;\n   size_t class_index = 0;\n@@ -229,10 +229,14 @@\n     if (!p->free) { c->available = p->available_next; p->available_next = NULL; }\n     /* Dead slots use bit 2 with a zero descriptor index to distinguish reuse. */\n     if (h->info == FORWARDED) stats.pool_reused_slots++;\n-    memset(h, 0, p->slot_bytes);\n+    if (source) {\n+      /* Promotion overwrites the complete logical payload; only padding needs clearing. */\n+      if (p->slot_bytes > bytes) memset((unsigned char *)h + bytes, 0, p->slot_bytes - bytes);\n+    } else memset(h, 0, p->slot_bytes);\n     stats.old_slot_bytes += p->slot_bytes; stats.pooled_allocations++;\n   }\n   h->info = info;\n+  if (source) memcpy(h + 1, source + 1, bytes - sizeof(Header));\n   stats.old_live_bytes += bytes; stats.old_live_payload_bytes += bytes - sizeof(Header);\n   stats.old_object_count++; stats.old_total_allocated_bytes += bytes;\n   account_peak(); return h;\n@@ -248,7 +252,7 @@\n   size_t bytes = object_bytes(layout.words); Word result;\n   if (stats.old_live_bytes >= gc_fast.old_limit) major_collect();\n   if (bytes > gc_fast.capacity) {\n-    result = payload(new_old(layout.info));\n+    result = payload(new_old(layout.info, NULL));\n     stats.direct_old_allocations++; stats.direct_old_payload_bytes += layout.words * sizeof(Word);\n   } else {\n     if (bytes > gc_fast.capacity - gc_fast.used) {\n@@ -281,8 +285,7 @@\n   Header *from = header(word);\n   if (from->info & FORWARDED) return from->info & ~(uintptr_t)7;\n   size_t words = descriptor(from)->words;\n-  Header *to = new_old(from->info);\n-  memcpy(to + 1, from + 1, words * sizeof(Word));\n+  Header *to = new_old(from->info, from);\n   from->info = payload(to) | FORWARDED;\n   queue_push(&work, to, &stats.work_queue_bytes);\n   stats.promoted_count++; stats.copied_bytes += object_bytes(words);\n@@ -376,7 +379,7 @@\n   if (stats.old_live_bytes >= gc_fast.old_limit) major_collect();\n   uintptr_t info = descriptor_info(words, mask); Word result;\n   if (bytes > gc_fast.capacity) {\n-    result = payload(new_old(info));\n+    result = payload(new_old(info, NULL));\n     stats.direct_old_allocations++; stats.direct_old_payload_bytes += words * sizeof(Word);\n   } else {\n     if (bytes > gc_fast.capacity - gc_fast.used) {\n"
+          },
+          "combined": {
+            "sha256": "77b3886d441c0806a65858507555827c0fd644ce539da34d4ec8192f1e468cab",
+            "unified_diff": "--- a/gc.c\n+++ b/gc.c\n@@ -212,7 +212,7 @@\n   stats.pool_reserved_bytes += bytes; stats.pool_count++; stats.pool_allocations++;\n   account_peak(); return p;\n }\n-static Header *new_old(uintptr_t info) {\n+static Header *new_old(uintptr_t info, const Header *source) {\n   Descriptor *d = &descriptors[(info >> 3) - 1]; size_t bytes = object_bytes(d->words);\n   Header *h;\n   size_t class_index = 0;\n@@ -229,13 +229,20 @@\n     if (!p->free) { c->available = p->available_next; p->available_next = NULL; }\n     /* Dead slots use bit 2 with a zero descriptor index to distinguish reuse. */\n     if (h->info == FORWARDED) stats.pool_reused_slots++;\n-    memset(h, 0, p->slot_bytes);\n+    if (source) {\n+      /* Promotion overwrites the complete logical payload; only padding needs clearing. */\n+      if (p->slot_bytes > bytes) memset((unsigned char *)h + bytes, 0, p->slot_bytes - bytes);\n+    } else memset(h, 0, p->slot_bytes);\n     stats.old_slot_bytes += p->slot_bytes; stats.pooled_allocations++;\n   }\n   h->info = info;\n+  if (source) memcpy(h + 1, source + 1, bytes - sizeof(Header));\n   stats.old_live_bytes += bytes; stats.old_live_payload_bytes += bytes - sizeof(Header);\n   stats.old_object_count++; stats.old_total_allocated_bytes += bytes;\n-  account_peak(); return h;\n+  /* Pooled slots add no reserved storage; new_pool already accounts pool growth. */\n+  if (class_index == CLASS_COUNT) account_peak();\n+  else if (stats.old_live_bytes > stats.peak_old_bytes) stats.peak_old_bytes = stats.old_live_bytes;\n+  return h;\n }\n uintptr_t register_layout(size_t words, uint64_t mask) {\n   assert(gc_fast.nursery); return descriptor_info(words, mask);\n@@ -248,7 +255,7 @@\n   size_t bytes = object_bytes(layout.words); Word result;\n   if (stats.old_live_bytes >= gc_fast.old_limit) major_collect();\n   if (bytes > gc_fast.capacity) {\n-    result = payload(new_old(layout.info));\n+    result = payload(new_old(layout.info, NULL));\n     stats.direct_old_allocations++; stats.direct_old_payload_bytes += layout.words * sizeof(Word);\n   } else {\n     if (bytes > gc_fast.capacity - gc_fast.used) {\n@@ -281,8 +288,7 @@\n   Header *from = header(word);\n   if (from->info & FORWARDED) return from->info & ~(uintptr_t)7;\n   size_t words = descriptor(from)->words;\n-  Header *to = new_old(from->info);\n-  memcpy(to + 1, from + 1, words * sizeof(Word));\n+  Header *to = new_old(from->info, from);\n   from->info = payload(to) | FORWARDED;\n   queue_push(&work, to, &stats.work_queue_bytes);\n   stats.promoted_count++; stats.copied_bytes += object_bytes(words);\n@@ -376,7 +382,7 @@\n   if (stats.old_live_bytes >= gc_fast.old_limit) major_collect();\n   uintptr_t info = descriptor_info(words, mask); Word result;\n   if (bytes > gc_fast.capacity) {\n-    result = payload(new_old(info));\n+    result = payload(new_old(info, NULL));\n     stats.direct_old_allocations++; stats.direct_old_payload_bytes += words * sizeof(Word);\n   } else {\n     if (bytes > gc_fast.capacity - gc_fast.used) {\n"
+          }
+        },
+        "runner_source_sha256": "372c18beeaa7693e1d4f3185b5e3e170dc42050cf50468525484a880a8b4fd4a",
+        "environment_policy": "remove all inherited environment variables whose names start with GC_; inherit all others; no CPU affinity or explicit heap cap",
+        "timing_boundary": "heap_init and prepare_workload/layout descriptor setup are outside elapsed_seconds. The timer starts immediately before workload() and stops after it returns; workload includes the profile allocation/store/traversal/checksum computation and final major_collect(). The checksum assertion, stats formatting, getrusage(), and heap_destroy() are outside the timed interval.",
+        "libgc": {
+          "flags": [
+            "/usr/lib/x86_64-linux-gnu/libgc.a",
+            "-lpthread",
+            "-ldl"
+          ],
+          "boehm_pkg_version": "8.2.8",
+          "boehm_linkage": "static",
+          "boehm_archive": "/usr/lib/x86_64-linux-gnu/libgc.a",
+          "boehm_archive_sha256": "337a7cf7e9ff4a161025fc07b67ea0b613338dfc14ea510033d9c4e102a37045"
+        },
+        "correctness_sha256": "755a4a5d11f99f2ca80e4b54291ca4f8df0dbe7ab6e1c3f90df4b509d57f1490",
+        "schedule": "six cyclic rotations; each arm occupies each of six positions once per profile",
+        "checks": {
+          "all_profiles_arms_repeats_present": true,
+          "positions_balanced": true,
+          "order_records_match_rows": true,
+          "allocation_payload_checksum_identity": true,
+          "custom_counter_memory_copy_peak_stats_equal_all_126_comparisons_per_capacity": true,
+          "all_checks_pass": true
+        }
+      },
+      "checks": {
+        "head_is_frozen_c324": true,
+        "correctness_artifact_hash_matches": true,
+        "expected_6_arms_7_profiles_6_repeats": true,
+        "row_keys_complete": true,
+        "balanced_position_per_arm_profile": true,
+        "all_six_orders_rotate_and_are_recorded": true,
+        "allocation_payload_checksum_identity_all_42_profile_repeat_groups": true,
+        "custom_counter_memory_copy_peak_stats_equal_all_126_comparisons_per_capacity": true,
+        "source_hashes_match_frozen_dirs": true,
+        "variant_patches_reproduce_exact_gc_c_hashes": true,
+        "static_libgc_boehm_comparators": true,
+        "all_checks_pass": true
+      },
+      "per_profile": {
+        "ephemeral": {
+          "arms": {
+            "baseline": {
+              "min_seconds": 0.023155955,
+              "median_seconds": 0.029320995000000002,
+              "range_seconds": 0.021412782999999998,
+              "median_process_peak_rss_bytes": 21909504.0,
+              "median_peak_accounted_bytes": 280496.0,
+              "median_accounted_bytes": 280464.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 2048.0,
+              "median_copied_payload_bytes": 1536.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 1536.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 1.28e-05,
+              "median_final_live_payload_over_total_payload_fraction": 1.28e-05
+            },
+            "peak_only": {
+              "min_seconds": 0.023116521,
+              "median_seconds": 0.023679753499999998,
+              "range_seconds": 0.0022355210000000007,
+              "median_process_peak_rss_bytes": 21909504.0,
+              "median_peak_accounted_bytes": 280496.0,
+              "median_accounted_bytes": 280464.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 2048.0,
+              "median_copied_payload_bytes": 1536.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 1536.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 1.28e-05,
+              "median_final_live_payload_over_total_payload_fraction": 1.28e-05
+            },
+            "promotion_only": {
+              "min_seconds": 0.022961739,
+              "median_seconds": 0.024396050000000002,
+              "range_seconds": 0.011290196999999998,
+              "median_process_peak_rss_bytes": 21909504.0,
+              "median_peak_accounted_bytes": 280496.0,
+              "median_accounted_bytes": 280464.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 2048.0,
+              "median_copied_payload_bytes": 1536.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 1536.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 1.28e-05,
+              "median_final_live_payload_over_total_payload_fraction": 1.28e-05
+            },
+            "combined": {
+              "min_seconds": 0.023615903,
+              "median_seconds": 0.030880086,
+              "range_seconds": 0.011780566999999999,
+              "median_process_peak_rss_bytes": 21909504.0,
+              "median_peak_accounted_bytes": 280496.0,
+              "median_accounted_bytes": 280464.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 2048.0,
+              "median_copied_payload_bytes": 1536.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 1536.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 1.28e-05,
+              "median_final_live_payload_over_total_payload_fraction": 1.28e-05
+            },
+            "boehm_caller_inline": {
+              "min_seconds": 0.03634405,
+              "median_seconds": 0.039427623499999995,
+              "range_seconds": 0.0068519179999999985,
+              "median_process_peak_rss_bytes": 21909504.0,
+              "median_boehm_heap_bytes": 552960.0,
+              "median_boehm_heap_minus_free_bytes": 8192.0,
+              "median_boehm_total_allocated_bytes": 160002256.0
+            },
+            "boehm_inline": {
+              "min_seconds": 0.056489361,
+              "median_seconds": 0.058882479,
+              "range_seconds": 0.017990666000000002,
+              "median_process_peak_rss_bytes": 21909504.0,
+              "median_boehm_heap_bytes": 552960.0,
+              "median_boehm_heap_minus_free_bytes": 8192.0,
+              "median_boehm_total_allocated_bytes": 160002256.0
+            }
+          },
+          "median_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.8076040223055184,
+            "promotion_only": 0.8320334968168713,
+            "combined": 1.0531731955208203,
+            "boehm_caller_inline": 1.3446891382778787,
+            "boehm_inline": 2.0082019385767773
+          },
+          "minimum_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.9982970255383551,
+            "promotion_only": 0.9916126974681027,
+            "combined": 1.0198630546656358,
+            "boehm_caller_inline": 1.5695336253676433,
+            "boehm_inline": 2.4395176532343408
+          },
+          "fastest_Boehm_by_median": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_median_ratio": 0.7832094166162463,
+          "fastest_Boehm_by_min": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_min_ratio": 0.6497873241974959
+        },
+        "list": {
+          "arms": {
+            "baseline": {
+              "min_seconds": 0.222101317,
+              "median_seconds": 0.23875859649999998,
+              "range_seconds": 0.03744574800000003,
+              "median_process_peak_rss_bytes": 162570240.0,
+              "median_peak_accounted_bytes": 160738976.0,
+              "median_accounted_bytes": 160738944.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 160000000.0,
+              "median_copied_payload_bytes": 120000000.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 120000000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 1.0,
+              "median_final_live_payload_over_total_payload_fraction": 1.0
+            },
+            "peak_only": {
+              "min_seconds": 0.196180075,
+              "median_seconds": 0.20258297,
+              "range_seconds": 0.03907986599999999,
+              "median_process_peak_rss_bytes": 162549760.0,
+              "median_peak_accounted_bytes": 160738976.0,
+              "median_accounted_bytes": 160738944.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 160000000.0,
+              "median_copied_payload_bytes": 120000000.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 120000000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 1.0,
+              "median_final_live_payload_over_total_payload_fraction": 1.0
+            },
+            "promotion_only": {
+              "min_seconds": 0.193449539,
+              "median_seconds": 0.20719463500000002,
+              "range_seconds": 0.028947321999999998,
+              "median_process_peak_rss_bytes": 162570240.0,
+              "median_peak_accounted_bytes": 160738976.0,
+              "median_accounted_bytes": 160738944.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 160000000.0,
+              "median_copied_payload_bytes": 120000000.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 120000000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 1.0,
+              "median_final_live_payload_over_total_payload_fraction": 1.0
+            },
+            "combined": {
+              "min_seconds": 0.187340816,
+              "median_seconds": 0.2085975215,
+              "range_seconds": 0.04801293000000001,
+              "median_process_peak_rss_bytes": 162531328.0,
+              "median_peak_accounted_bytes": 160738976.0,
+              "median_accounted_bytes": 160738944.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 160000000.0,
+              "median_copied_payload_bytes": 120000000.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 120000000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 1.0,
+              "median_final_live_payload_over_total_payload_fraction": 1.0
+            },
+            "boehm_caller_inline": {
+              "min_seconds": 0.200462819,
+              "median_seconds": 0.20462690449999998,
+              "range_seconds": 0.025695561000000006,
+              "median_process_peak_rss_bytes": 175466496.0,
+              "median_boehm_heap_bytes": 168292352.0,
+              "median_boehm_heap_minus_free_bytes": 160006144.0,
+              "median_boehm_total_allocated_bytes": 160002256.0
+            },
+            "boehm_inline": {
+              "min_seconds": 0.220533734,
+              "median_seconds": 0.2270034025,
+              "range_seconds": 0.015464860999999996,
+              "median_process_peak_rss_bytes": 175540224.0,
+              "median_boehm_heap_bytes": 168292352.0,
+              "median_boehm_heap_minus_free_bytes": 160006144.0,
+              "median_boehm_total_allocated_bytes": 160002256.0
+            }
+          },
+          "median_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.8484845068185849,
+            "promotion_only": 0.8677996856963432,
+            "combined": 0.8736754385302311,
+            "boehm_caller_inline": 0.8570451807794909,
+            "boehm_inline": 0.9507653580967503
+          },
+          "minimum_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.8832909126783792,
+            "promotion_only": 0.8709968117838761,
+            "combined": 0.8434925939678242,
+            "boehm_caller_inline": 0.9025737519602371,
+            "boehm_inline": 0.9929420364490681
+          },
+          "fastest_Boehm_by_median": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_median_ratio": 1.0194041785937293,
+          "fastest_Boehm_by_min": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_min_ratio": 0.9345414622748571
+        },
+        "tree": {
+          "arms": {
+            "baseline": {
+              "min_seconds": 0.367088323,
+              "median_seconds": 0.3899153475,
+              "range_seconds": 0.09618495900000001,
+              "median_process_peak_rss_bytes": 162555904.0,
+              "median_peak_accounted_bytes": 160738976.0,
+              "median_accounted_bytes": 160738944.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 160000000.0,
+              "median_copied_payload_bytes": 120000000.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 120000000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 1.0,
+              "median_final_live_payload_over_total_payload_fraction": 1.0
+            },
+            "peak_only": {
+              "min_seconds": 0.358216223,
+              "median_seconds": 0.372019919,
+              "range_seconds": 0.21632329100000003,
+              "median_process_peak_rss_bytes": 162533376.0,
+              "median_peak_accounted_bytes": 160738976.0,
+              "median_accounted_bytes": 160738944.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 160000000.0,
+              "median_copied_payload_bytes": 120000000.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 120000000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 1.0,
+              "median_final_live_payload_over_total_payload_fraction": 1.0
+            },
+            "promotion_only": {
+              "min_seconds": 0.358688171,
+              "median_seconds": 0.3673928395,
+              "range_seconds": 0.02377040800000002,
+              "median_process_peak_rss_bytes": 162562048.0,
+              "median_peak_accounted_bytes": 160738976.0,
+              "median_accounted_bytes": 160738944.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 160000000.0,
+              "median_copied_payload_bytes": 120000000.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 120000000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 1.0,
+              "median_final_live_payload_over_total_payload_fraction": 1.0
+            },
+            "combined": {
+              "min_seconds": 0.359061496,
+              "median_seconds": 0.36344934500000003,
+              "range_seconds": 0.03187124700000005,
+              "median_process_peak_rss_bytes": 162545664.0,
+              "median_peak_accounted_bytes": 160738976.0,
+              "median_accounted_bytes": 160738944.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 160000000.0,
+              "median_copied_payload_bytes": 120000000.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 120000000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 1.0,
+              "median_final_live_payload_over_total_payload_fraction": 1.0
+            },
+            "boehm_caller_inline": {
+              "min_seconds": 0.257473326,
+              "median_seconds": 0.2951467445,
+              "range_seconds": 0.127950664,
+              "median_process_peak_rss_bytes": 175460352.0,
+              "median_boehm_heap_bytes": 168292352.0,
+              "median_boehm_heap_minus_free_bytes": 160006144.0,
+              "median_boehm_total_allocated_bytes": 160002256.0
+            },
+            "boehm_inline": {
+              "min_seconds": 0.291387313,
+              "median_seconds": 0.3292158035,
+              "range_seconds": 0.06057107300000003,
+              "median_process_peak_rss_bytes": 175581184.0,
+              "median_boehm_heap_bytes": 168292352.0,
+              "median_boehm_heap_minus_free_bytes": 160006144.0,
+              "median_boehm_total_allocated_bytes": 160002256.0
+            }
+          },
+          "median_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.954104323887892,
+            "promotion_only": 0.9422374416795687,
+            "combined": 0.9321237220599531,
+            "boehm_caller_inline": 0.7569508263585342,
+            "boehm_inline": 0.8443263534272654
+          },
+          "minimum_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.9758311571245485,
+            "promotion_only": 0.9771168095695597,
+            "combined": 0.9781337991511105,
+            "boehm_caller_inline": 0.7013933973595777,
+            "boehm_inline": 0.7937798473638726
+          },
+          "fastest_Boehm_by_median": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_median_ratio": 1.2314191220903,
+          "fastest_Boehm_by_min": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_min_ratio": 1.3945580366643493
+        },
+        "mutation": {
+          "arms": {
+            "baseline": {
+              "min_seconds": 0.02353036,
+              "median_seconds": 0.02394906,
+              "range_seconds": 0.0018451979999999993,
+              "median_process_peak_rss_bytes": 21909504.0,
+              "median_peak_accounted_bytes": 1332656.0,
+              "median_accounted_bytes": 297408.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 1251360.0,
+              "median_copied_payload_bytes": 938520.0,
+              "median_nursery_payload_bytes": 120000024.0,
+              "median_exact_live_payload_bytes": 1560.0,
+              "median_payload_bytes": 120000024.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.007820998435800313,
+              "median_final_live_payload_over_total_payload_fraction": 1.299999740000052e-05
+            },
+            "peak_only": {
+              "min_seconds": 0.022624672,
+              "median_seconds": 0.024723011500000003,
+              "range_seconds": 0.004924879,
+              "median_process_peak_rss_bytes": 21909504.0,
+              "median_peak_accounted_bytes": 1332656.0,
+              "median_accounted_bytes": 297408.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 1251360.0,
+              "median_copied_payload_bytes": 938520.0,
+              "median_nursery_payload_bytes": 120000024.0,
+              "median_exact_live_payload_bytes": 1560.0,
+              "median_payload_bytes": 120000024.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.007820998435800313,
+              "median_final_live_payload_over_total_payload_fraction": 1.299999740000052e-05
+            },
+            "promotion_only": {
+              "min_seconds": 0.02300008,
+              "median_seconds": 0.0250231125,
+              "range_seconds": 0.0029589620000000025,
+              "median_process_peak_rss_bytes": 21909504.0,
+              "median_peak_accounted_bytes": 1332656.0,
+              "median_accounted_bytes": 297408.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 1251360.0,
+              "median_copied_payload_bytes": 938520.0,
+              "median_nursery_payload_bytes": 120000024.0,
+              "median_exact_live_payload_bytes": 1560.0,
+              "median_payload_bytes": 120000024.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.007820998435800313,
+              "median_final_live_payload_over_total_payload_fraction": 1.299999740000052e-05
+            },
+            "combined": {
+              "min_seconds": 0.022834942,
+              "median_seconds": 0.02370291,
+              "range_seconds": 0.010812306999999997,
+              "median_process_peak_rss_bytes": 21909504.0,
+              "median_peak_accounted_bytes": 1332656.0,
+              "median_accounted_bytes": 297408.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 1251360.0,
+              "median_copied_payload_bytes": 938520.0,
+              "median_nursery_payload_bytes": 120000024.0,
+              "median_exact_live_payload_bytes": 1560.0,
+              "median_payload_bytes": 120000024.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.007820998435800313,
+              "median_final_live_payload_over_total_payload_fraction": 1.299999740000052e-05
+            },
+            "boehm_caller_inline": {
+              "min_seconds": 0.032831071,
+              "median_seconds": 0.038370294,
+              "range_seconds": 0.020495298999999995,
+              "median_process_peak_rss_bytes": 21909504.0,
+              "median_boehm_heap_bytes": 552960.0,
+              "median_boehm_heap_minus_free_bytes": 16384.0,
+              "median_boehm_total_allocated_bytes": 160002096.0
+            },
+            "boehm_inline": {
+              "min_seconds": 0.053560296,
+              "median_seconds": 0.0562567015,
+              "range_seconds": 0.014798919,
+              "median_process_peak_rss_bytes": 21909504.0,
+              "median_boehm_heap_bytes": 552960.0,
+              "median_boehm_heap_minus_free_bytes": 16384.0,
+              "median_boehm_total_allocated_bytes": 160002096.0
+            }
+          },
+          "median_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 1.0323165710888027,
+            "promotion_only": 1.044847376055678,
+            "combined": 0.9897219348066271,
+            "boehm_caller_inline": 1.6021628406292354,
+            "boehm_inline": 2.34901501353289
+          },
+          "minimum_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.9615098111546104,
+            "promotion_only": 0.9774640082004695,
+            "combined": 0.970445926029181,
+            "boehm_caller_inline": 1.3952642883491797,
+            "boehm_inline": 2.2762208482998134
+          },
+          "fastest_Boehm_by_median": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_median_ratio": 0.6177411619520038,
+          "fastest_Boehm_by_min": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_min_ratio": 0.695528391382663
+        },
+        "atomic": {
+          "arms": {
+            "baseline": {
+              "min_seconds": 0.017030234,
+              "median_seconds": 0.018346754,
+              "range_seconds": 0.006797299999999999,
+              "median_process_peak_rss_bytes": 21909504.0,
+              "median_peak_accounted_bytes": 296928.0,
+              "median_accounted_bytes": 280464.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 19552.0,
+              "median_copied_payload_bytes": 14664.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 24.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.0001222,
+              "median_final_live_payload_over_total_payload_fraction": 2e-07
+            },
+            "peak_only": {
+              "min_seconds": 0.016981697,
+              "median_seconds": 0.018202664,
+              "range_seconds": 0.008236074999999999,
+              "median_process_peak_rss_bytes": 21909504.0,
+              "median_peak_accounted_bytes": 296928.0,
+              "median_accounted_bytes": 280464.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 19552.0,
+              "median_copied_payload_bytes": 14664.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 24.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.0001222,
+              "median_final_live_payload_over_total_payload_fraction": 2e-07
+            },
+            "promotion_only": {
+              "min_seconds": 0.016937157,
+              "median_seconds": 0.017306029,
+              "range_seconds": 0.006565178999999997,
+              "median_process_peak_rss_bytes": 21909504.0,
+              "median_peak_accounted_bytes": 296928.0,
+              "median_accounted_bytes": 280464.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 19552.0,
+              "median_copied_payload_bytes": 14664.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 24.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.0001222,
+              "median_final_live_payload_over_total_payload_fraction": 2e-07
+            },
+            "combined": {
+              "min_seconds": 0.016492893,
+              "median_seconds": 0.0175718555,
+              "range_seconds": 0.007401557,
+              "median_process_peak_rss_bytes": 21909504.0,
+              "median_peak_accounted_bytes": 296928.0,
+              "median_accounted_bytes": 280464.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 19552.0,
+              "median_copied_payload_bytes": 14664.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 24.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.0001222,
+              "median_final_live_payload_over_total_payload_fraction": 2e-07
+            },
+            "boehm_caller_inline": {
+              "min_seconds": 0.027138568,
+              "median_seconds": 0.0296548935,
+              "range_seconds": 0.012037117000000003,
+              "median_process_peak_rss_bytes": 21909504.0,
+              "median_boehm_heap_bytes": 552960.0,
+              "median_boehm_heap_minus_free_bytes": 4096.0,
+              "median_boehm_total_allocated_bytes": 160000992.0
+            },
+            "boehm_inline": {
+              "min_seconds": 0.045462147,
+              "median_seconds": 0.0485523745,
+              "range_seconds": 0.019350285000000002,
+              "median_process_peak_rss_bytes": 21909504.0,
+              "median_boehm_heap_bytes": 552960.0,
+              "median_boehm_heap_minus_free_bytes": 4096.0,
+              "median_boehm_total_allocated_bytes": 160000992.0
+            }
+          },
+          "median_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.9921462946524492,
+            "promotion_only": 0.9432747067955455,
+            "combined": 0.9577637275781864,
+            "boehm_caller_inline": 1.6163564137830595,
+            "boehm_inline": 2.6463740942948273
+          },
+          "minimum_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.9971499510811184,
+            "promotion_only": 0.9945346024018226,
+            "combined": 0.9684478205055784,
+            "boehm_caller_inline": 1.5935522671033173,
+            "boehm_inline": 2.6694963204850852
+          },
+          "fastest_Boehm_by_median": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_median_ratio": 0.5925448863945507,
+          "fastest_Boehm_by_min": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_min_ratio": 0.60772893396586
+        },
+        "mixed": {
+          "arms": {
+            "baseline": {
+              "min_seconds": 0.02031751,
+              "median_seconds": 0.021261536999999997,
+              "range_seconds": 0.0014067219999999991,
+              "median_process_peak_rss_bytes": 22048768.0,
+              "median_peak_accounted_bytes": 2778160.0,
+              "median_accounted_bytes": 2778128.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 2500000.0,
+              "median_copied_payload_bytes": 1875000.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 1875000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.015625,
+              "median_final_live_payload_over_total_payload_fraction": 0.015625
+            },
+            "peak_only": {
+              "min_seconds": 0.019258421,
+              "median_seconds": 0.021091031,
+              "range_seconds": 0.008811906999999997,
+              "median_process_peak_rss_bytes": 22048768.0,
+              "median_peak_accounted_bytes": 2778160.0,
+              "median_accounted_bytes": 2778128.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 2500000.0,
+              "median_copied_payload_bytes": 1875000.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 1875000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.015625,
+              "median_final_live_payload_over_total_payload_fraction": 0.015625
+            },
+            "promotion_only": {
+              "min_seconds": 0.020116393,
+              "median_seconds": 0.0210363755,
+              "range_seconds": 0.0025840479999999985,
+              "median_process_peak_rss_bytes": 22011904.0,
+              "median_peak_accounted_bytes": 2778160.0,
+              "median_accounted_bytes": 2778128.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 2500000.0,
+              "median_copied_payload_bytes": 1875000.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 1875000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.015625,
+              "median_final_live_payload_over_total_payload_fraction": 0.015625
+            },
+            "combined": {
+              "min_seconds": 0.019277582,
+              "median_seconds": 0.0207185575,
+              "range_seconds": 0.00622116,
+              "median_process_peak_rss_bytes": 21946368.0,
+              "median_peak_accounted_bytes": 2778160.0,
+              "median_accounted_bytes": 2778128.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 2500000.0,
+              "median_copied_payload_bytes": 1875000.0,
+              "median_nursery_payload_bytes": 120000000.0,
+              "median_exact_live_payload_bytes": 1875000.0,
+              "median_payload_bytes": 120000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.015625,
+              "median_final_live_payload_over_total_payload_fraction": 0.015625
+            },
+            "boehm_caller_inline": {
+              "min_seconds": 0.065320677,
+              "median_seconds": 0.068337551,
+              "range_seconds": 0.011158131000000002,
+              "median_process_peak_rss_bytes": 22011904.0,
+              "median_boehm_heap_bytes": 8908800.0,
+              "median_boehm_heap_minus_free_bytes": 8908800.0,
+              "median_boehm_total_allocated_bytes": 160001648.0
+            },
+            "boehm_inline": {
+              "min_seconds": 0.086105539,
+              "median_seconds": 0.0996985905,
+              "range_seconds": 0.021776944000000006,
+              "median_process_peak_rss_bytes": 22048768.0,
+              "median_boehm_heap_bytes": 8908800.0,
+              "median_boehm_heap_minus_free_bytes": 8908800.0,
+              "median_boehm_total_allocated_bytes": 160001328.0
+            }
+          },
+          "median_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.991980542140486,
+            "promotion_only": 0.9894099142503199,
+            "combined": 0.9744618886207521,
+            "boehm_caller_inline": 3.21413973975635,
+            "boehm_inline": 4.689152552799923
+          },
+          "minimum_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.9478730907478328,
+            "promotion_only": 0.9901012968616725,
+            "combined": 0.948816168910462,
+            "boehm_caller_inline": 3.214994209428222,
+            "boehm_inline": 4.237996634430105
+          },
+          "fastest_Boehm_by_median": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_median_ratio": 0.3031796895970123,
+          "fastest_Boehm_by_min": "boehm_caller_inline",
+          "combined_over_fastest_Boehm_min_ratio": 0.2951222015044333
+        },
+        "sizes": {
+          "arms": {
+            "baseline": {
+              "min_seconds": 0.124567896,
+              "median_seconds": 0.137706125,
+              "range_seconds": 0.06312835600000001,
+              "median_process_peak_rss_bytes": 32264192.0,
+              "median_peak_accounted_bytes": 30522512.0,
+              "median_accounted_bytes": 28650160.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 58770704.0,
+              "median_copied_payload_bytes": 57207968.0,
+              "median_nursery_payload_bytes": 1735000000.0,
+              "median_exact_live_payload_bytes": 16722616.0,
+              "median_payload_bytes": 1735000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.032972892219020174,
+              "median_final_live_payload_over_total_payload_fraction": 0.009638395389048992
+            },
+            "peak_only": {
+              "min_seconds": 0.101968605,
+              "median_seconds": 0.1163127575,
+              "range_seconds": 0.027940814999999994,
+              "median_process_peak_rss_bytes": 32278528.0,
+              "median_peak_accounted_bytes": 30522512.0,
+              "median_accounted_bytes": 28650160.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 58770704.0,
+              "median_copied_payload_bytes": 57207968.0,
+              "median_nursery_payload_bytes": 1735000000.0,
+              "median_exact_live_payload_bytes": 16722616.0,
+              "median_payload_bytes": 1735000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.032972892219020174,
+              "median_final_live_payload_over_total_payload_fraction": 0.009638395389048992
+            },
+            "promotion_only": {
+              "min_seconds": 0.107636719,
+              "median_seconds": 0.126438354,
+              "range_seconds": 0.04673000100000001,
+              "median_process_peak_rss_bytes": 32280576.0,
+              "median_peak_accounted_bytes": 30522512.0,
+              "median_accounted_bytes": 28650160.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 58770704.0,
+              "median_copied_payload_bytes": 57207968.0,
+              "median_nursery_payload_bytes": 1735000000.0,
+              "median_exact_live_payload_bytes": 16722616.0,
+              "median_payload_bytes": 1735000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.032972892219020174,
+              "median_final_live_payload_over_total_payload_fraction": 0.009638395389048992
+            },
+            "combined": {
+              "min_seconds": 0.107539397,
+              "median_seconds": 0.115735824,
+              "range_seconds": 0.036522549,
+              "median_process_peak_rss_bytes": 32280576.0,
+              "median_peak_accounted_bytes": 30522512.0,
+              "median_accounted_bytes": 28650160.0,
+              "median_nursery_capacity_bytes": 262144.0,
+              "median_copied_bytes": 58770704.0,
+              "median_copied_payload_bytes": 57207968.0,
+              "median_nursery_payload_bytes": 1735000000.0,
+              "median_exact_live_payload_bytes": 16722616.0,
+              "median_payload_bytes": 1735000000.0,
+              "median_copied_payload_over_nursery_payload_fraction": 0.032972892219020174,
+              "median_final_live_payload_over_total_payload_fraction": 0.009638395389048992
+            },
+            "boehm_caller_inline": {
+              "min_seconds": 0.699724817,
+              "median_seconds": 0.7620860604999999,
+              "range_seconds": 0.24449017799999995,
+              "median_process_peak_rss_bytes": 75337728.0,
+              "median_boehm_heap_bytes": 67629056.0,
+              "median_boehm_heap_minus_free_bytes": 41291776.0,
+              "median_boehm_total_allocated_bytes": 1970003056.0
+            },
+            "boehm_inline": {
+              "min_seconds": 0.663336575,
+              "median_seconds": 0.7494507180000001,
+              "range_seconds": 0.13999473000000007,
+              "median_process_peak_rss_bytes": 75403264.0,
+              "median_boehm_heap_bytes": 67629056.0,
+              "median_boehm_heap_minus_free_bytes": 41297920.0,
+              "median_boehm_total_allocated_bytes": 1970003344.0
+            }
+          },
+          "median_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.8446447643487172,
+            "promotion_only": 0.9181752373033516,
+            "combined": 0.8404551649391049,
+            "boehm_caller_inline": 5.5341478855787996,
+            "boehm_inline": 5.442392035938852
+          },
+          "minimum_time_ratio_vs_baseline": {
+            "baseline": 1.0,
+            "peak_only": 0.8185785284516647,
+            "promotion_only": 0.8640807339316384,
+            "combined": 0.8632994571891942,
+            "boehm_caller_inline": 5.617216309088178,
+            "boehm_inline": 5.325100578081531
+          },
+          "fastest_Boehm_by_median": "boehm_inline",
+          "combined_over_fastest_Boehm_median_ratio": 0.15442753101745643,
+          "fastest_Boehm_by_min": "boehm_inline",
+          "combined_over_fastest_Boehm_min_ratio": 0.1621189017053673
+        }
+      }
+    }
+  ],
+  "independent_review": {
+    "status": "passed",
+    "reviewer": "fast_gc_review",
+    "timing_reruns": 0,
+    "capacities": 2,
+    "arms_per_capacity": 6,
+    "profiles_per_arm": 7,
+    "samples_per_arm_profile": 6,
+    "sample_rows_verified": 504,
+    "cross_arm_identity_groups_verified": 84,
+    "exact_custom_counter_comparisons_verified": 252,
+    "counter_comparison_exclusions": [
+      "elapsed_seconds",
+      "preparation_seconds",
+      "process_peak_rss_bytes"
+    ],
+    "checks": [
+      "Exact semantic allocation counts, payload totals and arithmetic checksums match every sample.",
+      "Six cyclic orders and balanced execution positions match every row.",
+      "Recorded frozen source, binary and generated-adapter hashes match; baseline gc.c matches git show c324af5a926c7e65a4aede0844de459616c6e8f2.",
+      "All four embedded variant patches reconstruct the exact recorded gc.c hashes at both capacities; combined matches the implemented source.",
+      "Every minimum, median, range, best-Boehm selection and timing ratio was independently recomputed and matches.",
+      "Both embedded measurement-script fulltexts match their SHA-256 records."
+    ],
+    "code_review": "No material finding: promotion copies initialized logical payload before forwarding publication, with no collector safepoint inside mature allocation; direct-old and padding zeroing remain intact; all reserved-storage growth and logical peaks remain accounted.",
+    "valgrind": {
+      "artifact": "2026-10-12-promotion-valgrind.json",
+      "runs": 6,
+      "capacities": [
+        32,
+        240,
+        262136
+      ],
+      "api_modes": [
+        "inline",
+        "outline"
+      ],
+      "result": "All exited zero with zero Memcheck errors, zero suppressions and zero outstanding heap blocks."
+    },
+    "documentation_review": "Appended medians and rounded percentages match the artifacts. Synthetic-workload limits, inconsistent short-lived results, previous minima versus current medians, and application candidates as unmeasured integration targets are explicit."
+  }
+}

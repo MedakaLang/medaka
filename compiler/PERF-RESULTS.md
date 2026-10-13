@@ -1705,3 +1705,184 @@ The allocation pin (`test/diff_compiler_closure_alloc.sh`, `getsome`/`tupleloop`
 allocates 320 MB / 480 MB / 192 MB on the base emitter and 32 / 80 / 32 bytes with the attributes.
 The comment at the top of `compiler/frontend/parser.mdk` that called direct-style parsing
 "perf-neutral" did not hold on this head and was replaced.
+
+## GC feasibility baseline after the inline allocator (2026-10-12, #503)
+
+Pinned revision: `6aae2ea97e49656995a23eadaed333f676ee61ca`, including #4048's
+small-object inline allocator. The local compiler was restored by `make medaka`
+and verified with `MEDAKA_STRICT=1`. These measurements use the production
+binary, not the allocation census's instrumented allocator.
+
+Whole-compiler workload: `medaka check compiler/driver/medaka_cli.mdk`.
+Both policies explicitly set `GC_FREE_SPACE_DIVISOR=1`; the initial heap is the
+only changed knob. Three sequential timings and a separate `GC_PRINT_STATS=1`
+run per policy were recorded on the shared Linux x86_64 machine (libgc 8.2.8).
+The initial size does not limit subsequent heap growth.
+
+| Initial heap | Timing samples (s) | Min (s) | Timing-run peak RSS (KiB) | Collections in stats run | Full collection duration (s) | Stats-run elapsed (s) |
+|---|---|---:|---|---:|---:|---:|
+| 128 MiB | 14.771, 15.251, 15.774 | 14.771 | 1,566,212–1,575,136 | 53 | 3.165 | 14.751 |
+| 2 GiB | 15.518, 16.045, 15.658 | 15.518 | 2,365,100–2,365,312 | 12 | 4.751 | 16.122 |
+
+The smaller starting heap was faster in these samples and used less memory.
+This is a policy comparison, not evidence of a scaling defect or a statistical
+significance claim. Full-collection duration was about 21.5% and 29.5% of the
+respective instrumented runs. Boehm performs some lazy sweeping during later
+allocation, so these fractions do not account for all GC work.
+
+Summing allocations logged at collection boundaries gives 13,665,167,888 bytes
+for 128 MiB and 13,122,998,576 for 2 GiB. **These are incomplete totals:**
+allocations after the final collection are absent. The differing totals do not
+establish differing program allocation. Reported freed bytes likewise do not
+establish nursery survival or exact live heap.
+
+A separate 99 Hz DWARF profile (`dwarf,16384`) at 2 GiB captured 2,129 samples
+with none lost. Top flat CPU-cycle shares: `GC_mark_from` 19.88%,
+`GC_header_cache_miss` 9.58%, `GC_push_contents_hdr.isra.0` 8.62%, `mdk_alloc`
+4.80%, and `GC_reclaim_generic` 3.89%. The collector is statically linked into
+the executable. These are CPU samples across parallel marker threads, **not
+wall-time shares**. The old claim that collection is negligible must not be
+generalized to this whole-compiler workload and revision.
+
+At 2 GiB, checking `compiler/frontend/lexer.mdk` took 0.926/0.785/0.834 s and
+checking `test/llvm_fixtures/gc_stress.mdk` took 0.174/0.264/0.174 s. Each logged
+only the startup collection. The latter checks the fixture; it does not execute
+its allocation workload.
+
+All recorded check processes exited 0. Timing stdout and stderr hashes matched
+within each workload and across the whole-compiler heap policies. The compiler
+workload's stderr contains the same 74-byte summary of further imported-module
+diagnostics; it is not an empty-diagnostics claim.
+
+Durable samples and binary identity:
+[Boehm baseline JSON](../test/gc_prototype/results/2026-10-12-boehm.json).
+The reusable `test/gc_prototype/profile_boehm.py` records per-child RSS with
+`wait4`, source/binary identity, raw logs and parsed stats; the historical runs
+used a preceding scratch driver with GNU `time -v` for RSS.
+
+**Decision:** collection is a material cost on this whole-compiler workload,
+but the allocation-reduction plateau has not been reached (#4028/#4029/#4040)
+and this two-policy comparison does not exhaust #503's knob/atomic sweep.
+An isolated collector experiment is justified; replacing production Boehm is
+not established by these measurements. The integration audit and experimental
+boundary are in [GC-FEASIBILITY.md](../docs/design/GC-FEASIBILITY.md).
+
+## Compact mature-heap experiment (2026-10-12)
+
+The standalone explicit-root collector now uses eight-byte headers, shared
+descriptors, and mature size-class pools. This changes experimental C workloads
+only; the compiler and production runtime still use Boehm. At five million
+retained three-word objects, process peak RSS fell from about 482 MB to 163 MB,
+versus about 175 MB for the matched production-inline Boehm comparator.
+
+At a 262,136-byte nursery, minimum-of-three list/tree times fell from
+347.19/525.07 ms to 209.11/364.95 ms, versus Boehm's 183.93/266.98 ms in the new
+run. A mixed lifetime workload retaining every 64th node took 56.53 ms versus
+78.89 ms for Boehm. Short-lived and atomic cases regressed. The eight-byte
+offset avoids exact alignment between 32-byte cells and periodic root drops;
+the ordinary 256 KiB capacity was also measured.
+
+These are shared-machine synthetic results, not compiler speedups. Storage
+accounting now includes reserved pools and descriptor/work/remembered capacities;
+logical live bytes are separate. Full samples, hashes, alignment sensitivity,
+and correctness evidence are in [GC-FEASIBILITY.md](../docs/design/GC-FEASIBILITY.md)
+and [the experiment README](../test/gc_prototype/README.md).
+
+## Prepared native allocation experiment (2026-10-12)
+
+The isolated collector now has prepared layout handles and allocation/store
+paths that inline into the caller. Assertions, accounting, and nursery poisoning
+remain enabled. The comparison adds an equally caller-inline Boehm allocator
+and checked stores; the historical adapter remains available. Assembly was
+inspected to confirm that the new paths actually inline.
+
+At five million allocations, a 262,136-byte nursery, and minimum-of-ten cyclically
+ordered samples, custom versus the fastest measured Boehm variant takes
+24.10/34.27 ms for ephemeral lists, 22.77/32.06 ms for old-to-young replacement,
+16.38/26.89 ms for atomic cells, 20.19/62.10 ms for mixed lifetimes, and
+109.19/584.22 ms for varied sizes/lifetimes. Retained lists and trees still lose:
+182.15/167.20 ms and 331.00/243.18 ms. At 262,144 bytes, the short-lived wins
+remain, but retained lists/trees lose by 24%/45%. Both capacities are recorded
+because object-stride alignment changes nursery survival.
+
+Preparation alone does not establish a speedup; several out-of-line prepared
+variants regress. Exposing allocation and initialization together to the caller
+is the useful result of this API experiment. All arms prepare their layout
+manifest outside timing; setup time/storage are reported separately. Full
+collection remains timed. Static libgc linkage and the default initial Boehm
+heap policy match across Boehm variants.
+
+Retained-graph custom RSS stays about 163 MB versus 175–178 MB for Boehm. The
+varied-size custom profile uses about 32 MB versus 75 MB. These are synthetic
+shared-machine measurements, not compiler performance. Independent sanitizer,
+mutation, generated-root, and Valgrind checks pass. Full samples, API ablations,
+initialization-contract differences, and provenance are in
+[GC-FEASIBILITY.md](../docs/design/GC-FEASIBILITY.md) and the
+[experiment README](../test/gc_prototype/README.md).
+
+## Promotion allocation experiment (2026-10-12)
+
+Retained-graph CPU profiles identified mature allocation as hot. The standalone
+collector now avoids clearing payload bytes immediately overwritten by promotion
+and avoids recomputing storage peaks when taking an already reserved pool slot.
+Direct-old initialization, padding zeroing, collection behavior, and exact
+accounting remain intact.
+
+Six position-balanced rounds at five million allocations compare the previous
+caller-inline collector, each optimization alone, both together, and two Boehm
+arms. Across 262,136/262,144-byte nurseries, median list time improves 14%/13%,
+tree time 8%/7%, and varied-size time 15%/16%. Lists take 182.43/208.60 ms versus
+the fastest Boehm arm's 213.33/204.63 ms; trees take 332.18/363.45 ms versus
+299.19/295.15 ms. Short-lived changes are mixed and noisy, including a 5%
+aligned ephemeral regression; no general gain is claimed for those cases.
+
+All custom variants have identical deterministic counters and memory peaks.
+Sanitizer, mutation, and independent Valgrind checks pass. These are synthetic
+results, with medians rather than the preceding experiment's minima. Full
+ablation samples and reconstruction patches are linked from the
+[experiment README](../test/gc_prototype/README.md); interpretation is in
+[GC-FEASIBILITY.md](../docs/design/GC-FEASIBILITY.md).
+
+## GC application baselines and queue experiment (2026-10-12)
+
+The standalone collector's tracing-queue append now inlines while growth remains
+out of line. Against the preceding promotion-optimized collector, eight balanced
+rounds at each nursery capacity improve retained-list medians 3–6%, with identical
+counters and memory accounting. Trees change only about 1%, which is inconclusive;
+they remain 5–31% slower than the fastest measured Boehm alternative. Small effects
+elsewhere are mixed. Full correctness and independent reviews pass.
+
+Real PDS/gzip native programs now have reusable **Boehm-only** baselines: 120 fresh
+process timings and 24 separate GC diagnostic runs, with independent output checks.
+MST insertion at 2,000 entries takes 353 ms median under the default initial heap
+policy and 295 ms with a 128 MiB initial heap, at higher RSS. Compiler-seed inflate
+produces 26.3 MB in about 2.1 seconds with about 1.29 GB peak RSS under either policy.
+Its diagnostics record over 3.6 GB allocated by the last collection. Source
+inspection identifies word-per-byte vector storage and several large conversions;
+exact live storage and collector-specific retention remain unmeasured.
+
+These are application and standalone-collector measurements, not evidence that
+the applications run with custom GC. Sample ranges, heap-policy caveats, source
+and binary hashes, audits, and reusable commands are in the
+[experiment README](../test/gc_prototype/README.md) and
+[GC-FEASIBILITY.md](../docs/design/GC-FEASIBILITY.md).
+
+## Packed inflate and retained-tree phases (2026-10-12)
+
+The gzip inflater now uses a packed byte builder internally. In paired runs with
+the same compiler and production Boehm, compiler-seed inflate drops from about
+1.29 GB median peak RSS to 348–359 MB, a 72–73% reduction. Median elapsed time
+improves 13–15%, from 1.91–1.94 s to about 1.65 s under default/128 MiB initial
+heap policies. All 80 timing and 16 separate diagnostic executions match system
+gzip's output bytes. Small-input timing effects are mixed, and their RSS is
+mostly hidden by the launcher floor. File output still converts to a word array.
+
+Separately, forced-inline marking improves the custom collector's final tree
+collection by 20–23% but total tree time by only 2–4%, with overlapping ranges.
+Trees remain 8–25% slower than the fastest same-run Boehm arm; construction,
+which includes promotion, accounts for the deficit, while final collection and
+checksum traversal already outperform Boehm. All 32 paired custom counter sets
+match. The actual PDS
+varint encoder now has independent exact-byte boundary and repetition oracles,
+but still runs under production Boehm. Full evidence and OCaml-informed follow-up
+experiments are recorded in [GC-FEASIBILITY.md](../docs/design/GC-FEASIBILITY.md).

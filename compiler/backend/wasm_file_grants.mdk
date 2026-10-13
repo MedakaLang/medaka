@@ -78,13 +78,13 @@ prepareWasmFileGrants runtimeDecls kept modules =
 
 keptFunNames : List Decl -> List String -> List String
 keptFunNames [] acc = acc
-keptFunNames ((DFunDef _ n _ _ _) :: rest) acc = keptFunNames rest (n :: acc)
+keptFunNames ((DFunDef _ n _ _ _ _) :: rest) acc = keptFunNames rest (n :: acc)
 keptFunNames ((DAttrib _ d) :: rest) acc = keptFunNames (d :: rest) acc
 keptFunNames (_ :: rest) acc = keptFunNames rest acc
 
 -- DCE drops only plain functions, so every other declaration is read.
 isLiveDecl : OrdMap Unit -> Decl -> Bool
-isLiveDecl live (DFunDef _ n _ _ _) = omHasKey n live
+isLiveDecl live (DFunDef _ n _ _ _ _) = omHasKey n live
 isLiveDecl live (DAttrib _ d) = isLiveDecl live d
 isLiveDecl _ _ = True
 
@@ -330,7 +330,7 @@ addPatScope : List Pat -> Scope -> Scope
 addPatScope ps bound = addNamesScope (flatMap patBoundNames ps) bound
 
 letScope : Bool -> Bool -> Pat -> Expr -> Scope -> Scope
-letScope False recursive (PVar n _) rhs bound =
+letScope False recursive (PVar n _ _) rhs bound =
   let captured = if recursive then addNamesScope [n] bound else bound
   match localFunction captured rhs
     Some binding => omInsert n binding bound
@@ -355,20 +355,20 @@ localGroupScope binds bound =
     addNamesScope
       (map
         (b => match b
-          LetBind n _ _ => n)
+          LetBind n _ _ _ => n)
         binds)
       bound
   fold
     (m b => match b
-      LetBind n [FunClause ps body] _ =>
+      LetBind n [FunClause ps body] _ _ =>
         omInsert n (localBinding ps body captured) m
-      LetBind _ _ _ => m)
+      LetBind _ _ _ _ => m)
     captured
     binds
 
 mapScopedDeclBodies : (Scope -> Expr -> Expr) -> Decl -> Decl
-mapScopedDeclBodies f (DFunDef pub n ps body site) =
-  DFunDef pub n ps (f (addPatScope ps omEmpty) body) site
+mapScopedDeclBodies f (DFunDef pub n ps body site bid) =
+  DFunDef pub n ps (f (addPatScope ps omEmpty) body) site bid
 mapScopedDeclBodies f (DLetGroup pub binds) =
   DLetGroup pub (map (mapScopedLetBind f omEmpty) binds)
 mapScopedDeclBodies f (d@(DImpl { methods, ... })) = DImpl { d |
@@ -410,7 +410,7 @@ mapScopedDeclBodies f (DAttrib attrs d) =
 mapScopedDeclBodies _ d = d
 
 mapScopedLetBind : (Scope -> Expr -> Expr) -> Scope -> LetBind -> LetBind
-mapScopedLetBind f bound (LetBind n clauses site) =
+mapScopedLetBind f bound (LetBind n clauses site bid) =
   LetBind
     n
     (map
@@ -418,6 +418,7 @@ mapScopedLetBind f bound (LetBind n clauses site) =
         FunClause ps body => FunClause ps (f (addPatScope ps bound) body))
       clauses)
     site
+    bid
 
 mapScopedChildren : Scope -> (Scope -> Expr -> Expr) -> Expr -> Expr
 mapScopedChildren bound f (ELam ps body) =
@@ -528,12 +529,12 @@ unknownCall returns bound head argc = match localHead bound head
     None => True
 
 valueParamCount : List Pat -> Int
-valueParamCount ((PVar n _) :: rest)
+valueParamCount ((PVar n _ _) :: rest)
   | startsWith "$dict" n = valueParamCount rest
 valueParamCount ps = listLen ps
 
 declBindingBodies : Decl -> List (String, List Pat, Expr)
-declBindingBodies (DFunDef _ n ps body _) = [(n, ps, body)]
+declBindingBodies (DFunDef _ n ps body _ _) = [(n, ps, body)]
 declBindingBodies (DLetGroup _ binds) = flatMap letBindBodies binds
 declBindingBodies (DImpl { methods, ... }) =
   map
@@ -550,7 +551,7 @@ declBindingBodies (DAttrib _ d) = declBindingBodies d
 declBindingBodies _ = []
 
 letBindBodies : LetBind -> List (String, List Pat, Expr)
-letBindBodies (LetBind n clauses _) =
+letBindBodies (LetBind n clauses _ _) =
   map
     (c => match c
       FunClause ps body => (n, ps, body))
@@ -626,7 +627,7 @@ tailReturns seeds deps owner base bound (ELetGroup binds body) =
     addNamesScope
       (map
         (b => match b
-          LetBind n _ _ => n)
+          LetBind n _ _ _ => n)
         binds)
       bound
   tailReturns seeds deps owner base after body
@@ -757,14 +758,14 @@ methodNoFile aliases write m (DAttrib _ d) = methodNoFile aliases write m d
 methodNoFile _ _ m _ = m
 
 bindingNoFile : OrdMap Bool -> OrdMap Bool -> Ref (OrdMap Bool) -> Decl -> Unit
-bindingNoFile ordinary _ results (DFunDef _ n _ _ _) =
+bindingNoFile ordinary _ results (DFunDef _ n _ _ _ _) =
   results :=
     putNoFile (unmangled n) (optionOr False (omLookup n ordinary)) results.value
 bindingNoFile ordinary _ results (DLetGroup _ binds) =
   let _ =
     map
       (b => match b
-        LetBind n _ _ =>
+        LetBind n _ _ _ =>
           results :=
             putNoFile
               (unmangled n)

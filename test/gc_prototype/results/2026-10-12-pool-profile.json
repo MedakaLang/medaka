@@ -1,0 +1,213 @@
+{
+  "source_audit": {
+    "2026-10-12-pool-baseline-5m-256k.jsonl": {
+      "all_source_hashes_match": true,
+      "inline_source_hash_matches": true,
+      "head_matches_frozen_head": true,
+      "rows_complete": true,
+      "six_profiles_each_backend": true,
+      "three_samples_and_min": true,
+      "identities_match_within_profile": true,
+      "correctness_passed": true
+    },
+    "2026-10-12-pool-baseline-5m-offset.jsonl": {
+      "all_source_hashes_match": true,
+      "inline_source_hash_matches": true,
+      "head_matches_frozen_head": true,
+      "rows_complete": true,
+      "six_profiles_each_backend": true,
+      "three_samples_and_min": true,
+      "identities_match_within_profile": true,
+      "correctness_passed": true
+    },
+    "2026-10-12-pool-compact-5m-256k.jsonl": {
+      "all_source_hashes_match": true,
+      "inline_source_hash_matches": true,
+      "head_matches_frozen_head": true,
+      "rows_complete": true,
+      "six_profiles_each_backend": true,
+      "three_samples_and_min": true,
+      "identities_match_within_profile": true,
+      "correctness_passed": true
+    },
+    "2026-10-12-pool-compact-5m-offset.jsonl": {
+      "all_source_hashes_match": true,
+      "inline_source_hash_matches": true,
+      "head_matches_frozen_head": true,
+      "rows_complete": true,
+      "six_profiles_each_backend": true,
+      "three_samples_and_min": true,
+      "identities_match_within_profile": true,
+      "correctness_passed": true
+    }
+  },
+  "perf": {
+    "compact:ephemeral": {
+      "count": 500000000,
+      "nursery_bytes": 262136,
+      "frequency_hz": 199,
+      "sample_count": 1379,
+      "lost_samples": 0,
+      "top_flat": [
+        {
+          "cpu_sample_percent": 58.63,
+          "symbol": "allocate"
+        },
+        {
+          "cpu_sample_percent": 17.78,
+          "symbol": "store"
+        },
+        {
+          "cpu_sample_percent": 14.96,
+          "symbol": "main"
+        },
+        {
+          "cpu_sample_percent": 4.46,
+          "symbol": "__memset_avx512_unaligned_erms"
+        },
+        {
+          "cpu_sample_percent": 1.61,
+          "symbol": "__memset_avx512_unaligned"
+        },
+        {
+          "cpu_sample_percent": 1.03,
+          "symbol": "new_old"
+        },
+        {
+          "cpu_sample_percent": 0.37,
+          "symbol": "promote"
+        },
+        {
+          "cpu_sample_percent": 0.22,
+          "symbol": "major_collect"
+        }
+      ]
+    },
+    "compact:atomic": {
+      "count": 500000000,
+      "nursery_bytes": 262136,
+      "frequency_hz": 199,
+      "sample_count": 1217,
+      "lost_samples": 0,
+      "top_flat": [
+        {
+          "cpu_sample_percent": 53.28,
+          "symbol": "allocate"
+        },
+        {
+          "cpu_sample_percent": 31.07,
+          "symbol": "store"
+        },
+        {
+          "cpu_sample_percent": 6.61,
+          "symbol": "main"
+        },
+        {
+          "cpu_sample_percent": 5.36,
+          "symbol": "__memset_avx512_unaligned_erms"
+        },
+        {
+          "cpu_sample_percent": 3.03,
+          "symbol": "__memset_avx512_unaligned"
+        },
+        {
+          "cpu_sample_percent": 0.33,
+          "symbol": "memset@plt"
+        }
+      ]
+    },
+    "baseline:ephemeral": {
+      "count": 500000000,
+      "nursery_bytes": 262136,
+      "frequency_hz": 199,
+      "sample_count": 1045,
+      "lost_samples": 0,
+      "top_flat": [
+        {
+          "cpu_sample_percent": 32.21,
+          "symbol": "allocate"
+        },
+        {
+          "cpu_sample_percent": 22.01,
+          "symbol": "main"
+        },
+        {
+          "cpu_sample_percent": 21.36,
+          "symbol": "store"
+        },
+        {
+          "cpu_sample_percent": 7.12,
+          "symbol": "__memset_avx512_unaligned"
+        },
+        {
+          "cpu_sample_percent": 6.51,
+          "symbol": "__memset_avx512_unaligned_erms"
+        },
+        {
+          "cpu_sample_percent": 2.83,
+          "symbol": "major_collect"
+        },
+        {
+          "cpu_sample_percent": 2.52,
+          "symbol": "_int_malloc"
+        },
+        {
+          "cpu_sample_percent": 2.13,
+          "symbol": "__libc_calloc"
+        }
+      ]
+    },
+    "baseline:atomic": {
+      "count": 500000000,
+      "nursery_bytes": 262136,
+      "frequency_hz": 199,
+      "sample_count": 897,
+      "lost_samples": 0,
+      "top_flat": [
+        {
+          "cpu_sample_percent": 41.32,
+          "symbol": "allocate"
+        },
+        {
+          "cpu_sample_percent": 32.14,
+          "symbol": "store"
+        },
+        {
+          "cpu_sample_percent": 10.07,
+          "symbol": "__memset_avx512_unaligned"
+        },
+        {
+          "cpu_sample_percent": 8.49,
+          "symbol": "main"
+        },
+        {
+          "cpu_sample_percent": 7.62,
+          "symbol": "__memset_avx512_unaligned_erms"
+        },
+        {
+          "cpu_sample_percent": 0.13,
+          "symbol": "memset@plt"
+        },
+        {
+          "cpu_sample_percent": 0.11,
+          "symbol": "_int_malloc"
+        }
+      ]
+    }
+  },
+  "notes": {
+    "build": "Both custom binaries were built through their corresponding run.py build helper with clang -std=c11 -O2 -g -Wall -Wextra -Werror. Temporary binaries live under /tmp.",
+    "interpretation": "CPU samples point to more work in compact allocate path and descriptor metadata. Descriptor-key hashing alone accounts for ~5-7% of sampled CPU. The sample percentages are attribution, not wall time. Compact allocate takes 58.63%/53.28% samples (ephemeral/atomic) versus baseline 32.21%/41.32%; store remains 17.78%/31.07% versus 21.36%/32.14%.",
+    "attribution": "perf annotate with DWARF resolves allocate to current gc.c:314-334, descriptor_info/hash to 135-154, store to 336-348. Current per-allocation calls descriptor_info, and store decodes descriptor from the header each time.",
+    "limitations": "One process/profile per binary at 500M, no repeated perf captures; timings are not used as claims. Existing correctness/sanitizer marker passed in all four artifacts.",
+    "alignment_interpretation": "Report both nursery capacities. Compact ephemeral object stride is 32 B; 262144 holds 8192 objects (32 x 256) and is a favorable exact batch phase, while 262136 holds 8191 and shifts collection into a live batch. In copied-byte fractions, copied_bytes includes headers; copied_payload_bytes counts only payload. Do not treat the aligned case as representative.",
+    "source_attribution": "perf annotate/DWARF maps the current allocation path to gc.c:314-334, descriptor_info/hash to 135-154, and store to 336-348. Flat symbol shares: allocate 58.63%/53.28%, store 17.78%/31.07% (ephemeral/atomic). The inlined descriptor_key path is a subset of allocate samples, about 6.74%/4.86% of total samples; it is not an additional share. These are CPU sample percentages, not absolute costs or wall-time comparisons."
+  },
+  "command": "perf record --call-graph dwarf,16384 -F 199 -o <capture> -- <custom-binary> <ephemeral|atomic> 500000000 262136",
+  "build": "run.py build helper: clang -std=c11 -O2 -g -Wall -Wextra -Werror gc.c workload.c; separate translation units, no LTO",
+  "descriptor_key_inline_subset_percent": {
+    "compact:ephemeral": 6.74,
+    "compact:atomic": 4.86
+  },
+  "evidence": "One process per case. CPU attribution only, not absolute function cost or a timing comparison. Source/toolchain provenance matches the corresponding pool baseline/compact JSONL files. Inlined descriptor-key percentages are subsets of allocate, not additional CPU shares. Raw perf captures were removed after reduction."
+}

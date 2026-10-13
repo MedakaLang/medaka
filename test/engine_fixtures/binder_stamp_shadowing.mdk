@@ -1,0 +1,40 @@
+-- A binder is read at its own runtime type.  A later binder of the same name
+-- and a different scalar type (in one body, in a match arm, in a lambda) does
+-- not change how the earlier one is read, nor the reverse.
+-- Expected, derived from the source:
+-- `body 3`: x = 6, k = 7, then x = 0.25, so 0.25 + 0.25 + 7.0 = `7.5`.
+-- `arm (I 4)` = 4 * 3 = `12`; `arm (F 1.25)` = 1.25 * 2.0 = `2.5`.
+-- `lam 6 3.0`: f 4 = 10, g 1.5 = 4.5, so `(10, 4.5)`.
+-- `inner 1`: x = 2.5 outside; the lambda's own x is an Int, so `(10, 2.5)`.
+data N = I Int | F Float
+
+body : Int -> Float
+body n =
+  let x = n * 2
+  let k = x + 1
+  let x = 0.25
+  x + x + intToFloat k
+
+arm : N -> String
+arm v = match v
+  I x => debug (x * 3)
+  F x => debug (x * 2.0)
+
+lam : Int -> Float -> String
+lam n z =
+  let f = x => x + n
+  let g = x => x * z
+  debug (f 4, g 1.5)
+
+inner : Int -> String
+inner n =
+  let x = 2.5
+  let h = x => x + n
+  debug (h 9, x)
+
+main =
+  println (body 3)
+  println (arm (I 4))
+  println (arm (F 1.25))
+  println (lam 6 3.0)
+  println (inner 1)

@@ -18,9 +18,10 @@
 -- `core_ir_lower` resolves the record by a bare-label first-match guess (the
 -- wrong-slot behaviour issue #38 closed).  Elaborate, mangle, then key every
 -- table off the mangled decls — the order `entry_support.emitModulesWith` runs.
-import frontend.ast.{Decl, Lit(..), noDeclLoc}
+import frontend.ast.{Decl(..), Ty(..), Lit(..), BinderId(..), noDeclLoc}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
+import types.annotate.{annotateProgram}
 import types.typecheck.{
   elaborateModules,
   mainTypeIsUnit,
@@ -37,23 +38,26 @@ import ir.core_ir_lower.{
   selfFnParamTable,
   methodIfaceTable,
   ctorFieldTypeNames,
-  declSigTypeNames,
+  externArities,
   validateFfiExternTypeNames,
 }
 import ir.core_ir.{
-  CProgram(..),
-  CBind(..),
-  CClause(..),
-  CExpr(..),
-  noDeclFacts,
+  CProgram(..), CBind(..), CClause(..), CExpr(..), DeclFacts(..)
 }
-import backend.llvm_emit.{emitProgram, emitProgramRecord, makeEmitInput}
-import entries.entry_support.{driveRuntime, failWith}
+import types.runtime_types.{BinderRow(..), RuntimeType(..)}
+import backend.llvm_emit.{
+  EmitInput, emitProgram, emitProgramRecord, emitProgramWithNativeContract,
+  makeEmitInput
+}
+import backend.native_byteblock_kernel.{validateByteBlockKernel}
+import entries.entry_support.{driveRuntime, driveRuntimeArgs, failWith}
 import support.util.{contains}
+import support.path.{dirOf, joinPath}
 
 export
 oracleMain : Unit -> <IO> Unit
 oracleMain () = match args ()
+  "--byteblock-kernel" :: rest => driveByteBlockKernel rest
   ["--isolation", runtimePath, pPath, pPlusUPath] =>
     emitIsolation runtimePath pPath pPlusUPath
   ["--gap-isolation"] => emitGapIsolation
@@ -88,17 +92,31 @@ emitIsolation runtimePath pPath pPlusUPath =
 -- Record then strict-emit the same unsupported Core node in ONE process. The
 -- record marker reaches stdout before the strict panic; the shell control asserts
 -- both, so an ambient Record mode leak changes the second observation to exit 0.
+-- `main` is stamped, as every lowered binder is, so the emitter reaches the node.
 emitGapIsolation : <IO> Unit
 emitGapIsolation =
   let input = makeEmitInput [] [] [] [] [] False False 0 [] [] "" [] []
+  let mainId = BinderId "" 0
   let cp =
     CProgram
-      [CBind "main" [CClause [] (CMatch (CLit (LInt 0)) [])] noDeclLoc]
+      [CBind "main" [CClause [] (CMatch (CLit (LInt 0)) [])] noDeclLoc mainId]
       []
       []
       []
       []
-      noDeclFacts
+      DeclFacts {
+        factRequires = [],
+        factSupers = [],
+        factBinders = [
+          BinderRow {
+            brId = mainId,
+            brName = "main",
+            brType = RTValue,
+            brReturns = Some RTValue,
+            brSigned = False,
+          },
+        ],
+      }
   let (_, gaps) = emitProgramRecord input cp
   if contains "?\tunsupported Core IR node CMatch" gaps then
     let _ = putStr "LLVM_GAP_RECORD_OK\n"
@@ -114,6 +132,71 @@ emit runtimeDecls preludeDecls userDecls =
 
 runEmit : List Decl -> List Decl -> List Decl -> String
 runEmit runtimeDecls preludeDecls userDecls =
+  let (input, cp) = prepareEmission runtimeDecls preludeDecls userDecls
+  emitProgram input cp
+
+-- Refuse declarations before lowering can erase them.
+driveByteBlockKernel : List String -> <IO> Unit
+driveByteBlockKernel [runtimePath, sourcePath] =
+  let root = dirOf (dirOf (dirOf (executablePath ())))
+  match (
+    readFile (joinPath root "stdlib/runtime.mdk"),
+    readFile runtimePath,
+    readFile sourcePath,
+  )
+    (Ok canonical, Ok runtime, Ok source) if canonical /= ""
+      && canonical == runtime =>
+      emitByteBlockKernel
+        (desugar (parse canonical))
+        []
+        (desugar (parse source))
+    _ =>
+      failWith
+        "byteblock kernel: trusted canonical runtime catalog missing or mismatched"
+driveByteBlockKernel _ =
+  failWith "byteblock kernel: expected runtime catalog and source only"
+
+kernelDeclarations : List Decl -> Bool
+kernelDeclarations [DTypeSig False "main" (TyCon "Int" _ _) _, DFunDef False "main" [] _ _ _] =
+  True
+kernelDeclarations [DFunDef False "main" [] _ _ _, DTypeSig False "main" (TyCon "Int" _ _) _] =
+  True
+kernelDeclarations _ = False
+
+emitByteBlockKernel : List Decl -> List Decl -> List Decl -> <IO> Unit
+emitByteBlockKernel runtimeDecls preludeDecls userDecls =
+  if not (kernelDeclarations userDecls) then
+    failWith "byteblock kernel: only main : Int and its body are allowed"
+  else match preludeDecls
+    [] =>
+      let (input, cp) =
+        prepareEmissionFor True runtimeDecls preludeDecls userDecls
+      match validateByteBlockKernel cp
+        Err message => failWith message
+        Ok proof => match (
+          getEnv "MEDAKA_BYTEBLOCK_KERNEL_PROOF",
+          getEnv "MEDAKA_NATIVE_GC_CONTRACT",
+        )
+          (Some proofPath, Some reportPath) if proofPath /= ""
+            && reportPath /= "" =>
+            let (text, report) = emitProgramWithNativeContract input cp
+            match (writeFile proofPath proof, writeFile reportPath report)
+              (Ok _, Ok _) => putStr text
+              _ => failWith "byteblock kernel: cannot write proof/report"
+          _ =>
+            failWith
+              "byteblock kernel: proof and report output paths are required"
+    _ => failWith "byteblock kernel: empty prelude required"
+
+prepareEmission : List Decl -> List Decl -> List Decl -> (EmitInput, CProgram)
+prepareEmission = prepareEmissionFor False
+
+prepareEmissionFor : Bool ->
+  List Decl ->
+  List Decl ->
+  List Decl ->
+  (EmitInput, CProgram)
+prepareEmissionFor addresses runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp (funNamesOf userDecls) preludeDecls
   let (coreE, modulesE, _, _, _, _) =
     elaborateModules runtimeDecls livePrelude [("__user__", userDecls)]
@@ -125,7 +208,7 @@ runEmit runtimeDecls preludeDecls userDecls =
       (selfFnParamTable mangled)
       (methodIfaceTable mangled)
       (ctorFieldTypeNames mangled)
-      (declSigTypeNames runtimeDecls ++ declSigTypeNames mangled)
+      (externArities runtimeDecls)
       (mainTypeIsUnit ())
       (mainTypeIsFloat ())
       0
@@ -134,6 +217,12 @@ runEmit runtimeDecls preludeDecls userDecls =
       ""
       (declaredRecordFieldOrders mangled)
       (validateFfiExternTypeNames (checkedFfiExternTypeNames mangled))
-  emitProgram input (lowerProgramEmit TargetNative mangled)
+  (
+    input,
+    lowerProgramEmit TargetNative (if addresses then
+      annotateProgram mangled
+    else
+      mangled),
+  )
 
 main = oracleMain ()

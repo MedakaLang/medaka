@@ -1,0 +1,11 @@
+data Box = Box { number : Int }
+data Pair = Pair { left : Box, right : Box }
+data Wrap = Wrap { pair : Pair }
+
+make : Int -> Box
+make n = Box { number = n }
+
+main =
+  let owner = Wrap { pair = Pair { left = make 17, right = make 89 } }
+  let garbage = make 99
+  owner.pair.right.number

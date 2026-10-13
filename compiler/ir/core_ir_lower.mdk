@@ -11,6 +11,8 @@
 -- is a clean diff, not a rewrite).
 
 import frontend.ast.{
+  noBinderId,
+  BinderId(..),
   Lit(..),
   Loc(..),
   noDeclLoc,
@@ -74,8 +76,18 @@ import ir.core_ir.{
   CHead(..),
   FailSite(..),
   siteSentinelName,
+  mapProgramBinders,
+  BinderSite(..),
+  obviousRuntimeType,
+  withBinderRows,
 }
-import frontend.desugar.{mapProg}
+import frontend.desugar.{mapProg, freshBinderId}
+import types.runtime_types.{
+  BinderRow(..),
+  RuntimeType(..),
+  binderRowIfInstalled,
+}
+import map as BM
 import frontend.marker.{localBoundNames}
 import types.disposition.{
   DispositionTable,
@@ -244,7 +256,7 @@ lowerBinop op l r tag = CBinPrim op (lower l) (lower r) tag (exprStartLoc l)
 composeLam : CExpr -> CExpr -> CExpr
 composeLam first second =
   CLam
-    [PVar composeVar (Loc "" 0 0 0 0)]
+    [PVar composeVar (Loc "" 0 0 0 0) noBinderId]
     (mkApp second [mkApp first [CVar composeVar AGlobal]])
 
 lowerArm : Arm -> CArm
@@ -281,9 +293,9 @@ letDecision site pat scrut body =
 -- cannot, and keeps the plain `CLet`.
 patMayFail : Pat -> Bool
 patMayFail PWild = False
-patMayFail (PVar _ _) = False
+patMayFail (PVar _ _ _) = False
 patMayFail (PLit LUnit) = False
-patMayFail (PAs _ _ p) = patMayFail p
+patMayFail (PAs _ _ _ p) = patMayFail p
 patMayFail (PTuple ps) = anyList patMayFail ps
 patMayFail _ = True
 
@@ -309,13 +321,13 @@ armTreeable (Arm pat _ _) = treeablePat pat
 -- ordered semantics exactly.
 treeablePat : Pat -> Bool
 treeablePat PWild = True
-treeablePat (PVar _ _) = True
+treeablePat (PVar _ _ _) = True
 treeablePat (PLit _) = True
 treeablePat (PCon _ args) = allList treeablePat args
 treeablePat (PCons h t) = treeablePat h && treeablePat t
 treeablePat (PList ps) = allList treeablePat ps
 treeablePat (PTuple ps) = allList treeablePat ps
-treeablePat (PAs _ _ p) = treeablePat p
+treeablePat (PAs _ _ _ p) = treeablePat p
 treeablePat (PRng _ _ _) = True
 treeablePat (PRec _ _ _) = True
 
@@ -337,7 +349,7 @@ patNeedsGuard (PCon _ args) = anyList patNeedsGuard args
 patNeedsGuard (PCons h t) = patNeedsGuard h || patNeedsGuard t
 patNeedsGuard (PList ps) = anyList patNeedsGuard ps
 patNeedsGuard (PTuple ps) = anyList patNeedsGuard ps
-patNeedsGuard (PAs _ _ p) = patNeedsGuard p
+patNeedsGuard (PAs _ _ _ p) = patNeedsGuard p
 patNeedsGuard _ = False
 
 -- one matrix row per arm: its (canonicalised) pattern as a single column, paired
@@ -526,7 +538,7 @@ unitName = "__unit__"
 -- arms) — part of the shared backend-neutral decision-tree pass (Axis-1).
 export
 canonPat : Pat -> Pat
-canonPat (PVar _ _) = PWild
+canonPat (PVar _ _ _) = PWild
 canonPat PWild = PWild
 canonPat (PLit (LBool True)) = PCon "True" []
 canonPat (PLit (LBool False)) = PCon "False" []
@@ -537,7 +549,7 @@ canonPat (PCon c args) = PCon c (map canonPat args)
 canonPat (PCons h t) = PCon consName [canonPat h, canonPat t]
 canonPat (PList []) = PCon nilName []
 canonPat (PList (h :: r)) = PCon consName [canonPat h, canonPat (PList r)]
-canonPat (PAs _ _ p) = canonPat p
+canonPat (PAs _ _ _ p) = canonPat p
 canonPat (PRng _ _ _) = PWild
 canonPat (PRec _ _ _) = PWild
 
@@ -755,8 +767,8 @@ lowerField : FieldAssign -> CField
 lowerField (FieldAssign k e) = CField k (-1) (lower e)
 
 lowerBind : LetBind -> CBind
-lowerBind (LetBind name clauses site) =
-  CBind name (map lowerClause clauses) site
+lowerBind (LetBind name clauses site bid) =
+  CBind name (map lowerClause clauses) site bid
 
 lowerClause : FunClause -> CClause
 lowerClause (FunClause pats body) = CClause pats (lower body)
@@ -782,7 +794,9 @@ lowerStmt _ = panic "core_ir lower: unsupported block statement"
 export
 lowerProgram : List Decl -> CProgram
 lowerProgram prog =
-  finishLowering (refoldProgram noLetCheck (lowerProgramWith None [] prog))
+  finishLowering
+    UntypedLowering
+    (refoldProgram noLetCheck (lowerProgramWith None [] prog))
 
 -- Lowering after an elaboration, against the table it published.  Refuses (panics)
 -- when none was published instead of silently lowering every inherited default away.
@@ -790,6 +804,7 @@ export
 lowerTypedProgram : List Decl -> CProgram
 lowerTypedProgram prog =
   finishLowering
+    TypedLowering
     (refoldProgram
       noLetCheck
       (lowerProgramWith (Some (installedDispositions ())) [] prog))
@@ -833,10 +848,10 @@ noLetCheck _ = False
 -- pattern still unresolved after `rewriteProgramRecPats` keeps the plain `let`.
 patCanMiss : OrdMap Bool -> Pat -> Bool
 patCanMiss _ PWild = False
-patCanMiss _ (PVar _ _) = False
+patCanMiss _ (PVar _ _ _) = False
 patCanMiss _ (PLit LUnit) = False
 patCanMiss _ (PLit _) = True
-patCanMiss sib (PAs _ _ p) = patCanMiss sib p
+patCanMiss sib (PAs _ _ _ p) = patCanMiss sib p
 patCanMiss sib (PTuple ps) = anyList (patCanMiss sib) ps
 patCanMiss sib (PCon c ps) = ctorHasSibling sib c || anyList (patCanMiss sib) ps
 patCanMiss _ (PRec _ _ _) = False
@@ -890,8 +905,8 @@ refoldProgram keep (CProgram groups ctorArs ctorTypes implEntries mctx facts) =
     facts
 
 refoldBind : (Pat -> Bool) -> CBind -> CBind
-refoldBind keep (CBind n clauses site) =
-  CBind n (map (refoldClause keep) clauses) site
+refoldBind keep (CBind n clauses site bid) =
+  CBind n (map (refoldClause keep) clauses) site bid
 
 refoldClause : (Pat -> Bool) -> CClause -> CClause
 refoldClause keep (CClause pats body) = CClause pats (refoldExpr keep body)
@@ -1064,7 +1079,13 @@ lowerProgramEmitPinned target pins prog =
   -- than letting clang report it unlocated.  Both backends reach this seam.
   let _ = implSymbolCollisionGuard raw
   let fo = declaredRecordFieldOrders prog
+  -- An emitting lowering is untyped exactly when no elaboration published the
+  -- disposition table it lowered against (`lowerProgramWith`).
+  let lowering = match dispositions
+    Some _ => TypedLowering
+    None => UntypedLowering
   finishLowering
+    lowering
     (hoistNullaryMemo
       (match target
         -- the let decisions are refolded after the record-pattern rewrite, which
@@ -1089,11 +1110,97 @@ emitDeclFacts dispositions decls =
   DeclFacts {
     factRequires = map (k => (k, optionOr 0 (omLookup k reqs))) (omKeys reqs),
     factSupers = map (w => (w, ifaceSuperCount w table)) words,
+    factBinders = [],
   }
 
 withDeclFacts : DeclFacts -> CProgram -> CProgram
 withDeclFacts facts (CProgram groups ctorArs ctorTypes impls mctx _) =
   CProgram groups ctorArs ctorTypes impls mctx facts
+
+-- ── binder stamps: every binder says what it holds ───────────────────────────
+-- Run last, so no later pass can mint a binder it has not stamped.  A binder that
+-- carries a source id is stamped from the typechecker's published table.  In a
+-- typed lowering a row the table lacks stays absent, which
+-- `core_validate.validateBinderStamps` refuses; an untyped lowering has no table
+-- to read, so its source binders hold `RTValue`, the answer "no static fact".
+-- A single-clause function can still state a Bool result in its body; that
+-- intrinsic fact is published as its return stamp.  A binder with no id is
+-- synthesized, by the typechecker or by an earlier lowering pass: it gets a fresh
+-- id and a row of the type its right-hand side states, else `RTValue`.  A
+-- synthesized function returns what its one clause's body states, else
+-- `RTValue`.  The rows are snapshotted into the program's `DeclFacts`, so a
+-- consumer never reads the typechecker's table, which the next elaboration
+-- replaces.
+stampBinders : Lowering -> CProgram -> CProgram
+stampBinders lowering prog =
+  let rows = Ref BM.Tip
+  let stamped = mapProgramBinders (stampVisit lowering rows) prog
+  withBinderRows (BM.values !rows) stamped
+
+-- Whether the program being lowered was elaborated, so that its source binders
+-- have rows in the typechecker's table.
+data Lowering = TypedLowering | UntypedLowering
+
+stampVisit : Lowering ->
+  Ref (BM.Map Int BinderRow) ->
+  BinderSite ->
+  String ->
+  BinderId ->
+  BinderId
+stampVisit lowering rows site x (bid@(BinderId _ n)) =
+  if n >= 0 then
+    match binderRowIfInstalled bid
+      Some row => rows := BM.set n row !rows
+      None => match lowering
+        TypedLowering => ()
+        UntypedLowering => rows := BM.set n (untypedRow bid x site) !rows
+    bid
+  else
+    let fresh = freshBinderId ""
+    let ord = match fresh
+      BinderId _ k => k
+    rows := BM.set ord (mintedRow fresh x site) !rows
+    fresh
+
+mintedRow : BinderId -> String -> BinderSite -> BinderRow
+mintedRow bid x (PatternBinder hint) = BinderRow {
+  brId = bid,
+  brName = x,
+  brType = match hint
+    Some rhs => optionOr RTValue (obviousRuntimeType rhs)
+    None => RTValue,
+  brReturns = None,
+  brSigned = False,
+}
+mintedRow bid x (FunctionBinder clauses) =
+  let ret = match clauses
+    [CClause _ body] => optionOr RTValue (obviousRuntimeType body)
+    _ => RTValue
+  -- A function that takes parameters is itself a closure value.
+  let self = if allList clauseHasParams clauses then RTValue else ret
+  BinderRow {
+    brId = bid,
+    brName = x,
+    brType = self,
+    brReturns = Some ret,
+    brSigned = False,
+  }
+
+-- Untyped source bindings have no value-type fact.  Only an intrinsic Bool
+-- result in one clause supplies a return fact; names and calls supply none.
+untypedRow : BinderId -> String -> BinderSite -> BinderRow
+untypedRow bid x site = BinderRow {
+  brId = bid,
+  brName = x,
+  brType = RTValue,
+  brReturns = match site
+    FunctionBinder [CClause _ body] => Some (match obviousRuntimeType body
+      Some RTBool => RTBool
+      _ => RTValue)
+    FunctionBinder _ => Some RTValue
+    PatternBinder _ => None,
+  brSigned = False,
+}
 
 cprogramCtorTypes : CProgram -> List (String, String)
 cprogramCtorTypes (CProgram _ _ ctorTypes _ _ _) = ctorTypes
@@ -1108,8 +1215,11 @@ cprogramCtorTypes (CProgram _ _ ctorTypes _ _ _) = ctorTypes
 -- clauses the eta pass produced.  `core_validate.validateCalls` reads the same
 -- `definedArityOf`, so the stamp and the check cannot disagree about a table.
 
-finishLowering : CProgram -> CProgram
-finishLowering prog = markTailSites (stampCallModes (etaSaturateProgram prog))
+finishLowering : Lowering -> CProgram -> CProgram
+finishLowering lowering prog =
+  stampBinders
+    lowering
+    (markTailSites (stampCallModes (etaSaturateProgram prog)))
 
 -- A program's defined arities: each top-level binding's clause pattern count,
 -- each constructor's field count, each impl entry's value arity by method and
@@ -1132,7 +1242,7 @@ programArities (CProgram groups ctors _ impls _ _) =
     (leastEntryArities impls omEmpty)
 
 bindArityRow : CBind -> (String, Int)
-bindArityRow (CBind name clauses _) = (name, clausesArity clauses)
+bindArityRow (CBind name clauses _ _) = (name, clausesArity clauses)
 
 clausesArity : List CClause -> Int
 clausesArity ((CClause pats _) :: _) = listLen pats
@@ -1213,21 +1323,21 @@ callModeFor (Some k) n =
 -- local of the lambda's parameter count, any other binder a non-function local.
 export
 bindLetScope : Pat -> CExpr -> CallScope -> CallScope
-bindLetScope (PVar x _) (CLam (ps@(_ :: _)) _) s =
+bindLetScope (PVar x _ _) (CLam (ps@(_ :: _)) _) s =
   omInsert x (Some (listLen ps)) s
 bindLetScope pat _ s = bindPatScope pat s
 
 -- The scope after a pattern: each variable it binds is a non-function local.
 export
 bindPatScope : Pat -> CallScope -> CallScope
-bindPatScope (PVar x _) s = omInsert x None s
+bindPatScope (PVar x _ _) s = omInsert x None s
 bindPatScope PWild s = s
 bindPatScope (PLit _) s = s
 bindPatScope (PCon _ ps) s = bindPatsScope ps s
 bindPatScope (PCons h t) s = bindPatScope t (bindPatScope h s)
 bindPatScope (PTuple ps) s = bindPatsScope ps s
 bindPatScope (PList ps) s = bindPatsScope ps s
-bindPatScope (PAs x _ p) s = bindPatScope p (omInsert x None s)
+bindPatScope (PAs x _ _ p) s = bindPatScope p (omInsert x None s)
 bindPatScope (PRng _ _ _) s = s
 bindPatScope (PRec _ fields _) s = bindRecFieldsScope fields s
 
@@ -1239,16 +1349,16 @@ bindPatsScope (p :: rest) s = bindPatsScope rest (bindPatScope p s)
 -- A punned field `{x}` binds the field's own name.
 bindRecFieldsScope : List RecPatField -> CallScope -> CallScope
 bindRecFieldsScope [] s = s
-bindRecFieldsScope ((RecPatField f _ None) :: rest) s =
+bindRecFieldsScope ((RecPatField f _ _ None) :: rest) s =
   bindRecFieldsScope rest (omInsert f None s)
-bindRecFieldsScope ((RecPatField _ _ (Some p)) :: rest) s =
+bindRecFieldsScope ((RecPatField _ _ _ (Some p)) :: rest) s =
   bindRecFieldsScope rest (bindPatScope p s)
 
 -- A let group's functions, each at its clause pattern count.
 export
 bindGroupScope : List CBind -> CallScope -> CallScope
 bindGroupScope [] s = s
-bindGroupScope ((CBind name clauses _) :: rest) s =
+bindGroupScope ((CBind name clauses _ _) :: rest) s =
   bindGroupScope rest (omInsert name (Some (clausesArity clauses)) s)
 
 -- ── the eta pass ──────────────────────────────────────────────────────────────
@@ -1322,7 +1432,7 @@ mergeTailLambda declared pats (body@(CLam (lamPats@(_ :: _)) inner)) =
 mergeTailLambda _ pats body = (pats, body)
 
 isFreshVarPat : CallScope -> Pat -> Bool
-isFreshVarPat bound (PVar x _) = not (omHasKey x bound)
+isFreshVarPat bound (PVar x _ _) = not (omHasKey x bound)
 isFreshVarPat _ _ = False
 
 -- The (method, route word) groups whose entries take more than one value arity,
@@ -1337,9 +1447,9 @@ splitEntryGroups (ent :: rest) seen split =
   splitEntryGroups rest (omInsert key n seen) split2
 
 etaBind : ArityEnv -> CBind -> CBind
-etaBind env (b@(CBind name [CClause pats body] site)) =
+etaBind env (b@(CBind name [CClause pats body] site bid)) =
   let missing = etaMissing env (bindPatsScope pats omEmpty) body
-  if missing > 0 then CBind name [etaClause missing pats body] site else b
+  if missing > 0 then CBind name [etaClause missing pats body] site bid else b
 etaBind _ b = b
 
 etaEntry : ArityEnv -> CImplEntry -> CImplEntry
@@ -1411,7 +1521,7 @@ isAtomicArg (CApp (CMethod "fromInt" (MethodEvidence _ _ (RKey key _ _) _ _)) [C
 isAtomicArg _ = False
 
 isFunctionBind : CBind -> Bool
-isFunctionBind (CBind _ clauses _) = allList clauseHasParams clauses
+isFunctionBind (CBind _ clauses _ _) = allList clauseHasParams clauses
 
 clauseHasParams : CClause -> Bool
 clauseHasParams (CClause pats _) = isNonEmptyL pats
@@ -1421,7 +1531,7 @@ etaClause : Int -> List Pat -> CExpr -> CClause
 etaClause missing pats body =
   let fresh = map etaParamName (range (listLen pats) (listLen pats + missing))
   CClause
-    (pats ++ map (x => PVar x noDeclLoc) fresh)
+    (pats ++ map (x => PVar x noDeclLoc noBinderId) fresh)
     (applyAtTail body (map (x => CVar x AGlobal) fresh))
 
 etaParamName : Int -> String
@@ -1451,8 +1561,8 @@ stampCallModes (prog@(CProgram groups ctors ctorTypes impls mctx facts)) =
     facts
 
 callsBind : ArityEnv -> CallScope -> CBind -> CBind
-callsBind env scope (CBind name clauses site) =
-  CBind name (map (callsClause env scope) clauses) site
+callsBind env scope (CBind name clauses site bid) =
+  CBind name (map (callsClause env scope) clauses) site bid
 
 callsClause : ArityEnv -> CallScope -> CClause -> CClause
 callsClause env scope (CClause pats body) =
@@ -1627,7 +1737,8 @@ markTailSites (CProgram groups ctors ctorTypes impls mctx facts) =
     facts
 
 tailBind : CBind -> CBind
-tailBind (CBind name clauses site) = CBind name (map tailClause clauses) site
+tailBind (CBind name clauses site bid) =
+  CBind name (map tailClause clauses) site bid
 
 tailClause : CClause -> CClause
 tailClause (CClause pats body) = CClause pats (tailExpr (isNonEmptyL pats) body)
@@ -1813,7 +1924,7 @@ preludeFunName names n
 
 topFunNames : List Decl -> OrdMap Unit -> OrdMap Unit
 topFunNames [] acc = acc
-topFunNames ((DFunDef _ n _ _ _) :: rest) acc =
+topFunNames ((DFunDef _ n _ _ _ _) :: rest) acc =
   topFunNames rest (omInsert n () acc)
 topFunNames ((DAttrib _ d) :: rest) acc = topFunNames (d :: rest) acc
 topFunNames (_ :: rest) acc = topFunNames rest acc
@@ -1835,11 +1946,11 @@ declBinders d = localBoundNames [d] ++ localFunNames d
 
 implMethodBinders : ImplMethod -> List String
 implMethodBinders (ImplMethod n ps body) =
-  declBinders (DFunDef False n ps body noDeclLoc)
+  declBinders (DFunDef False n ps body noDeclLoc noBinderId)
 
 ifaceMethodBinders : IfaceMethod -> List String
 ifaceMethodBinders (IfaceMethod n _ (Some (MethodDefault ps body)) _) =
-  declBinders (DFunDef False n ps body noDeclLoc)
+  declBinders (DFunDef False n ps body noDeclLoc noBinderId)
 ifaceMethodBinders _ = []
 
 -- the names of the `let`/`where` functions [d] defines (`localBoundNames`
@@ -1857,7 +1968,7 @@ noteLocalFuns acc (e@(ELetGroup binds _)) =
 noteLocalFuns _ e = e
 
 letBindName : LetBind -> String
-letBindName (LetBind n _ _) = n
+letBindName (LetBind n _ _ _) = n
 
 -- ── the ONE authority on a record's field order (#1513) ──────────────────────
 -- ctor name → [field label in declared order], from every DData named-field
@@ -1912,7 +2023,7 @@ rewritePat fo (PCon c args) = PCon c (map (rewritePat fo) args)
 rewritePat fo (PCons h t) = PCons (rewritePat fo h) (rewritePat fo t)
 rewritePat fo (PTuple ps) = PTuple (map (rewritePat fo) ps)
 rewritePat fo (PList ps) = PList (map (rewritePat fo) ps)
-rewritePat fo (PAs x l p) = PAs x l (rewritePat fo p)
+rewritePat fo (PAs x l bid p) = PAs x l bid (rewritePat fo p)
 rewritePat _ p = p
 
 -- the sub-pattern bound to declared field `label`: the named field's sub-pattern
@@ -1920,20 +2031,20 @@ rewritePat _ p = p
 -- not named in the pattern (open `..` / subset).
 recPatForLabel : RecOrders -> List RecPatField -> String -> Pat
 recPatForLabel fo recFields label = match findRecField label recFields
-  Some (RecPatField _ fl (Some sub)) => rewritePat fo sub
-  Some (RecPatField _ fl None) => PVar label fl
+  Some (RecPatField _ fl _ (Some sub)) => rewritePat fo sub
+  Some (RecPatField _ fl bid None) => PVar label fl bid
   None => PWild
 
 findRecField : String -> List RecPatField -> Option RecPatField
 findRecField _ [] = None
-findRecField label ((RecPatField l fl sub) :: rest)
-  | l == label = Some (RecPatField l fl sub)
+findRecField label ((RecPatField l fl bid sub) :: rest)
+  | l == label = Some (RecPatField l fl bid sub)
   | otherwise = findRecField label rest
 
 rewriteRecPatField : RecOrders -> RecPatField -> RecPatField
-rewriteRecPatField fo (RecPatField l fl (Some sub)) =
-  RecPatField l fl (Some (rewritePat fo sub))
-rewriteRecPatField _ (RecPatField l fl None) = RecPatField l fl None
+rewriteRecPatField fo (RecPatField l fl bid (Some sub)) =
+  RecPatField l fl bid (Some (rewritePat fo sub))
+rewriteRecPatField _ (RecPatField l fl bid None) = RecPatField l fl bid None
 
 -- ── apply the rewrite to every pattern position the lowered Core IR carries ───
 -- Walks the whole program (groups + impls), rewriting every pattern and — for a
@@ -1952,8 +2063,8 @@ rewriteProgramRecPats fo0 (CProgram groups ctorArs ctorTypes implEntries mctx fa
     facts
 
 rewriteBindRP : RecOrders -> CBind -> CBind
-rewriteBindRP fo (CBind n clauses site) =
-  CBind n (map (rewriteClauseRP fo) clauses) site
+rewriteBindRP fo (CBind n clauses site bid) =
+  CBind n (map (rewriteClauseRP fo) clauses) site bid
 
 rewriteClauseRP : RecOrders -> CClause -> CClause
 rewriteClauseRP fo (CClause pats body) =
@@ -2247,7 +2358,7 @@ bindFieldTemps [] body = body
 bindFieldTemps ((CField k _ ex) :: rest) body =
   CLet
     False
-    (PVar (recTempName k) (Loc "" 0 0 0 0))
+    (PVar (recTempName k) (Loc "" 0 0 0 0) noBinderId)
     ex
     (bindFieldTemps rest body)
 
@@ -2255,7 +2366,7 @@ bindUpdateTemps : List CField -> CExpr -> CExpr -> CExpr
 bindUpdateTemps fields body base =
   CLet
     False
-    (PVar updateBaseTemp (Loc "" 0 0 0 0))
+    (PVar updateBaseTemp (Loc "" 0 0 0 0) noBinderId)
     base
     (bindFieldTemps fields body)
 
@@ -2479,6 +2590,7 @@ memoCafBind (sel, key, method) =
           (MethodEvidence (ifaceWordOfKey key) 0 (RKey key [] []) [] [])),
     ]
     noDeclLoc
+    noBinderId
 
 -- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
 -- private O(n²) `List`-as-a-set scan).  Both components are unconstrained
@@ -2491,8 +2603,8 @@ memoRefKey : (String, String, String) -> String
 memoRefKey (sel, _, method) = lenKey sel ++ method
 
 hoistBind : LowerState -> CBind -> CBind
-hoistBind st (CBind n clauses site) =
-  CBind n (map (hoistClause st) clauses) site
+hoistBind st (CBind n clauses site bid) =
+  CBind n (map (hoistClause st) clauses) site bid
 
 hoistClause : LowerState -> CClause -> CClause
 hoistClause st (CClause pats body) = CClause pats (hoistExpr st body)
@@ -2617,7 +2729,7 @@ lowerGroupsRaw prog = lgGroup (bindSites prog omEmpty) (funClausesOf prog)
 -- clause order within a name AND first-occurrence order of names, via an
 -- index-carrying merge sort (no map, no typeclass dispatch). Replaces the old
 -- O(names·clauses) groupNames+clausesFor rescan. Elements are ((name, idx), clause).
-lgGroup : OrdMap Loc -> List (String, CClause) -> List CBind
+lgGroup : OrdMap (Loc, BinderId) -> List (String, CClause) -> List CBind
 lgGroup sites clauses =
   let groups = lgRuns (lgSortName (lgTag clauses 0))
   map (lgToBind sites) (lgSortIdx groups)
@@ -2695,27 +2807,33 @@ lgMergeIdx (((n1, i1), cs1) :: xs) (((n2, i2), cs2) :: ys) =
   else
     ((n2, i2), cs2) :: lgMergeIdx (((n1, i1), cs1) :: xs) ys
 
-lgToBind : OrdMap Loc -> ((String, Int), List CClause) -> CBind
+-- A coalesced binding takes its first clause's site and id.  Every clause of a
+-- multi-clause function has its own id, and the typechecker records the
+-- function's one return type under each, so the first answers for the binding.
+lgToBind : OrdMap (Loc, BinderId) -> ((String, Int), List CClause) -> CBind
 lgToBind sites ((n, _), cs) = match omLookup n sites
-  Some site => CBind n cs site
-  None => CBind n cs noDeclLoc
+  Some (site, bid) => CBind n cs site bid
+  None => CBind n cs noDeclLoc noBinderId
 
--- name -> the site of its first clause, over the decls `funClausesOf` reads.
-bindSites : List Decl -> OrdMap Loc -> OrdMap Loc
+-- name -> the site and id of its first clause, over the decls `funClausesOf` reads.
+bindSites : List Decl -> OrdMap (Loc, BinderId) -> OrdMap (Loc, BinderId)
 bindSites [] acc = acc
-bindSites ((DFunDef _ n _ _ site) :: rest) acc =
-  bindSites rest (firstSite n site acc)
+bindSites ((DFunDef _ n _ _ site bid) :: rest) acc =
+  bindSites rest (firstSite n (site, bid) acc)
 bindSites ((DLetGroup _ binds) :: rest) acc =
   bindSites rest (letBindSites binds acc)
 bindSites ((DAttrib _ d) :: rest) acc = bindSites (d :: rest) acc
 bindSites (_ :: rest) acc = bindSites rest acc
 
-letBindSites : List LetBind -> OrdMap Loc -> OrdMap Loc
+letBindSites : List LetBind -> OrdMap (Loc, BinderId) -> OrdMap (Loc, BinderId)
 letBindSites [] acc = acc
-letBindSites ((LetBind n _ site) :: rest) acc =
-  letBindSites rest (firstSite n site acc)
+letBindSites ((LetBind n _ site bid) :: rest) acc =
+  letBindSites rest (firstSite n (site, bid) acc)
 
-firstSite : String -> Loc -> OrdMap Loc -> OrdMap Loc
+firstSite : String ->
+  (Loc, BinderId) ->
+  OrdMap (Loc, BinderId) ->
+  OrdMap (Loc, BinderId)
 firstSite n site acc = if omHasKey n acc then acc else omInsert n site acc
 
 -- ── typeclass impls / interface defaults (slice 5) ─────────────────────────
@@ -3209,7 +3327,7 @@ lowerInheritedDefault disp reqCounts arities dt o ifaceName (IfaceMethod mname _
   let receiver = "$dict_\{mname}_\{intToString nMethodDicts}"
   let params =
     take nMethodDicts pats
-      ++ [PVar receiver (Loc "" 0 0 0 0)]
+      ++ [PVar receiver (Loc "" 0 0 0 0) noBinderId]
       ++ drop nMethodDicts pats
       ++ lamParams body
   let lowered = lower (underLam body)
@@ -3361,8 +3479,8 @@ specializeRow row (CListSlice a lo hi incl) =
 specializeRow row (CBlock stmts) = CBlock (map (specializeStmt row) stmts)
 
 specializeBind : DefaultRow -> CBind -> CBind
-specializeBind row (CBind n clauses site) =
-  CBind n (map (specializeClause row) clauses) site
+specializeBind row (CBind n clauses site bid) =
+  CBind n (map (specializeClause row) clauses) site bid
 
 specializeClause : DefaultRow -> CClause -> CClause
 specializeClause row (CClause pats body) = CClause pats (specializeRow row body)
@@ -3452,7 +3570,7 @@ declaredArityOr arities ifaceWord mname pats =
 -- the leading `$dict_*` parameters dict-passing prepended to a default's clause
 export
 leadingDictParams : List Pat -> Int
-leadingDictParams ((PVar x _) :: rest) =
+leadingDictParams ((PVar x _ _) :: rest) =
   if startsWith "$dict" x then 1 + leadingDictParams rest else 0
 leadingDictParams _ = 0
 
@@ -3719,14 +3837,13 @@ tyMentionsTyVar (TyQual t _ _) = tyMentionsTyVar t
 -- Per data-constructor name: the head type-name of each declared field, IN
 -- DECLARED ORDER (e.g. `Rect Float Float` → ("Rect", ["Float","Float"])).  The
 -- LLVM emitter (`bindFields`) reads it to type a match-bound field VARIABLE from
--- the ctor's declared field type rather than guessing from body-use (`paramUseTy`,
--- which defaults Float fields to LTInt → integer arith on a boxed-Float word →
--- SIGSEGV; Gap E2).  A field whose type is not a simple type-constructor head
--- (polymorphic `TyVar`, applied/function/tuple types) maps to "" — the emitter
--- treats "" / unknown-scalar names as "fall back to paramUseTy/LTInt", so the
--- change is ADDITIVE: only fields with a known scalar head (Float/Bool/Int/…)
--- change typing.  Both positional (`ConPos`) and named-field (`ConNamed`)
--- payloads are covered, in the same DECLARED order the cell layout stores.
+-- the ctor's declared field type (an untyped field read as Int is integer arith
+-- on a boxed-Float word → SIGSEGV; Gap E2).  A field whose type is not a simple
+-- type-constructor head (polymorphic `TyVar`, applied/function/tuple types) maps
+-- to "", which the emitter reads as no scalar type: only fields with a known
+-- scalar head (Float/Bool/Int/…) are typed by this table.  Both positional
+-- (`ConPos`) and named-field (`ConNamed`) payloads are covered, in the same
+-- DECLARED order the cell layout stores.
 export
 ctorFieldTypeNames : List Decl -> List (String, List String)
 ctorFieldTypeNames prog = flatMap ctorFieldTypeEntries prog
@@ -3765,18 +3882,14 @@ tyHeadName (TyNamed _ t _) = tyHeadName t
 tyHeadName (TyQual t _ _) = tyHeadName t
 tyHeadName _ = ""
 
--- ── function → DECLARED param/return type-head names (native backend, Gap E1) ─
+-- ── function → DECLARED param/return type-head names (wasm backend, Gap E1) ───
 -- Per top-level function name (from its `DTypeSig` annotation): the head
 -- type-name of each declared PARAMETER (in order) plus the declared RETURN type
 -- head, e.g. `double : Float -> Float` → ("double", (["Float"], "Float")).  The
--- LLVM emitter's signature inference (`inferSigs`/`inferParamTys`/`paramUseTy`)
--- otherwise recovers param/return LTys purely from BODY USE; a literal-free
--- annotated body like `double x = x + x` has no Float anchor → param defaults
--- LTInt → integer arith on a boxed-Float word → garbage (Gap E1).  Seeding the
--- DECLARED scalar type wins over the body-use guess.  A non-scalar head (TyVar /
--- applied / function / tuple) maps to "" and the emitter falls back to the
--- existing guess, so the seed is ADDITIVE: only known-scalar declared params/
--- returns change typing (and `Int`-annotated fns seed LTInt = current default).
+-- wasm emitter seeds its Float registries from it; a literal-free annotated body
+-- like `double x = x + x` has no Float anchor of its own (Gap E1).  A non-scalar
+-- head (TyVar / applied / function / tuple) maps to "", which seeds nothing.
+-- The LLVM emitter reads binder stamps instead (`DeclFacts.factBinders`).
 export
 declSigTypeNames : List Decl -> List (String, (List String, String))
 declSigTypeNames prog = flatMap declSigTypeEntries prog
@@ -3789,9 +3902,21 @@ declSigTypeEntries (DExtern _ name ty) =
 declSigTypeEntries (DAttrib _ inner) = declSigTypeEntries inner
 declSigTypeEntries _ = []
 
+-- The declared arity of each `extern` in [decls]: the parameter count of its
+-- signature, which the LLVM emitter's first-class (eta-wrapped) form of an
+-- extern takes.
+export
+externArities : List Decl -> List (String, Int)
+externArities decls = flatMap externArityEntries decls
+
+externArityEntries : Decl -> List (String, Int)
+externArityEntries (DExtern _ name ty) = [(name, listLen (methodArgTys ty))]
+externArityEntries (DAttrib _ inner) = externArityEntries inner
+externArityEntries _ = []
+
 -- ── user-declared FFI externs → the lowering's own table (#2074) ─────────────
--- The emitter's `declSigIndex` (above) cannot answer "is this name a USER
--- extern?": it is built from `runtimeDecls ++ allDecls` and holds ordinary
+-- A declared-signature table (`declSigTypeNames`, above) cannot answer "is this
+-- name a USER extern?": built from `runtimeDecls ++ allDecls`, it holds ordinary
 -- annotated functions and the `stdlib/runtime.mdk` builtins in the same
 -- flat keyspace.  So the FFI lowering gets its OWN index, minted here from the
 -- same two decl lists the emit drivers already hold, and carried to the emitter
@@ -3929,7 +4054,7 @@ tyIsFunReturningSelf _ _ = False
 
 funClausesOf : List Decl -> List (String, CClause)
 funClausesOf [] = []
-funClausesOf ((DFunDef _ n pats body _) :: rest) =
+funClausesOf ((DFunDef _ n pats body _ _) :: rest) =
   (n, CClause pats (lower body)) :: funClausesOf rest
 -- Top-level `let rec … with …` (DLetGroup): flatten each binding's clauses
 -- into (name, CClause) entries, mirroring eval.mdk's funDefs/letGroupDefs.
@@ -3940,7 +4065,7 @@ funClausesOf (_ :: rest) = funClausesOf rest
 
 letGroupClausesOf : List LetBind -> List (String, CClause)
 letGroupClausesOf [] = []
-letGroupClausesOf ((LetBind n clauses _) :: rest) =
+letGroupClausesOf ((LetBind n clauses _ _) :: rest) =
   map (lowerLetBind n) clauses ++ letGroupClausesOf rest
 
 lowerLetBind : String -> FunClause -> (String, CClause)

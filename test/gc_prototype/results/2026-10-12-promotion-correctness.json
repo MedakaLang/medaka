@@ -1,0 +1,488 @@
+{
+  "command": [
+    "python3",
+    "/root/.codex/worktrees/f396/medaka/test/gc_prototype/run.py",
+    "--correctness-only",
+    "--count",
+    "1024"
+  ],
+  "stdout_redirection": "/tmp/medaka-gc-promotion-ablation/combined-correctness.jsonl",
+  "exit_code": 0,
+  "log_sha256": "20f059e57b32bc82f1250cc2405549ead0d41dfabba29e9bd1ceb8b28bde8b31",
+  "log_jsonl_records": 10,
+  "provenance": {
+    "inline_allocator_source_sha256": "9af68bcadb9080fa4630d2428a3f46eed98e771a83aeb8ceb18646d03d4481e4",
+    "source_sha256": {
+      "gc.h": "c70257e8bb754ac649db073f7aad9960a6a734273b77bc213de14fc45d94cff0",
+      "gc.c": "174e98b4a5732c0ead0aa45d876280c2bd35ab848c88ded19cd6443bf1c5ae0a",
+      "workload.c": "b2c38813145487d506191d7c172048f11c367a2af8968026b603bceb4774c112",
+      "run.py": "151505c92ac42732de5ca975f61ba65b4592eb55e37fad1a676040488bb59695",
+      "adversarial.c": "cc7cf0e4f235996212ba0c15e1992c37289ab6d898b28f7e1b9a5b2d00c1fe6f",
+      "pool_review.c": "f48319266694e39c7d5067551c098718d9fe91102c950361f8441c435501ca22",
+      "prepared_api.c": "11d67906c1ab2c41ad2ea5e8a671159f25a81104a929e3c74945959dcc5c9c47",
+      "llvm_contract/contract.ll": "4ca2df22bbb5c5514650ad30319406b43a2feef7540cab19ca5ea30921fcf803",
+      "llvm_contract/driver.c": "f7c5d448147ecc52c8d0dadd8f025dbfdca1e9fd17ccae420492ec51065de85c",
+      "llvm_contract/validate_llvm.py": "4e3b2ae070705ab5980d326b64731c5b58389d9c18314638ecab062fc8272e15"
+    },
+    "platform": "Linux-6.12.95+deb13-amd64-x86_64-with-glibc2.41",
+    "machine": "x86_64",
+    "git_head": "c324af5a926c7e65a4aede0844de459616c6e8f2",
+    "count": 1024,
+    "nursery_bytes": 262144,
+    "profiles": [
+      "ephemeral",
+      "list",
+      "tree",
+      "mutation",
+      "atomic",
+      "mixed",
+      "sizes"
+    ],
+    "optimization": "-O2; separate translation units; no LTO",
+    "backends": [
+      "custom",
+      "custom_P",
+      "custom_K",
+      "custom_A",
+      "custom_S",
+      "custom_AS",
+      "boehm",
+      "boehm_inline",
+      "boehm_prepared_outline",
+      "boehm_caller_inline"
+    ],
+    "repeats": 3,
+    "backend_defines": {
+      "custom": [],
+      "custom_P": [
+        "USE_PREPARED_ALLOC"
+      ],
+      "custom_K": [
+        "USE_PREPARED"
+      ],
+      "custom_A": [
+        "USE_PREPARED",
+        "INLINE_ALLOC"
+      ],
+      "custom_S": [
+        "USE_PREPARED",
+        "INLINE_STORE"
+      ],
+      "custom_AS": [
+        "USE_PREPARED",
+        "INLINE_ALLOC",
+        "INLINE_STORE"
+      ],
+      "boehm": [
+        "USE_BOEHM"
+      ],
+      "boehm_inline": [
+        "USE_BOEHM",
+        "USE_INLINE"
+      ],
+      "boehm_prepared_outline": [
+        "USE_BOEHM",
+        "USE_CALLER_INLINE",
+        "USE_PREPARED"
+      ],
+      "boehm_caller_inline": [
+        "USE_BOEHM",
+        "USE_CALLER_INLINE",
+        "USE_PREPARED",
+        "INLINE_ALLOC",
+        "INLINE_STORE"
+      ]
+    },
+    "build_commands": {
+      "custom": [
+        "clang",
+        "-std=c11",
+        "-O2",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-I",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/workload.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm/custom"
+      ],
+      "custom_P": [
+        "clang",
+        "-std=c11",
+        "-O2",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-DUSE_PREPARED_ALLOC",
+        "-I",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/workload.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm/custom_P"
+      ],
+      "custom_K": [
+        "clang",
+        "-std=c11",
+        "-O2",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-DUSE_PREPARED",
+        "-I",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/workload.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm/custom_K"
+      ],
+      "custom_A": [
+        "clang",
+        "-std=c11",
+        "-O2",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-DUSE_PREPARED",
+        "-DINLINE_ALLOC",
+        "-I",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/workload.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm/custom_A"
+      ],
+      "custom_S": [
+        "clang",
+        "-std=c11",
+        "-O2",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-DUSE_PREPARED",
+        "-DINLINE_STORE",
+        "-I",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/workload.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm/custom_S"
+      ],
+      "custom_AS": [
+        "clang",
+        "-std=c11",
+        "-O2",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-DUSE_PREPARED",
+        "-DINLINE_ALLOC",
+        "-DINLINE_STORE",
+        "-I",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/workload.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm/custom_AS"
+      ],
+      "boehm": [
+        "clang",
+        "-std=c11",
+        "-O2",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-DUSE_BOEHM",
+        "-I",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/workload.c",
+        "-DGC_THREADS",
+        "-pthread",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm/boehm_adapter.c",
+        "/usr/lib/x86_64-linux-gnu/libgc.a",
+        "-lpthread",
+        "-ldl",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm/boehm"
+      ],
+      "boehm_inline": [
+        "clang",
+        "-std=c11",
+        "-O2",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-DUSE_BOEHM",
+        "-DUSE_INLINE",
+        "-I",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/workload.c",
+        "-DGC_THREADS",
+        "-pthread",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm/boehm_adapter.c",
+        "/usr/lib/x86_64-linux-gnu/libgc.a",
+        "-lpthread",
+        "-ldl",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm/boehm_inline"
+      ],
+      "boehm_prepared_outline": [
+        "clang",
+        "-std=c11",
+        "-O2",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-DUSE_BOEHM",
+        "-DUSE_CALLER_INLINE",
+        "-DUSE_PREPARED",
+        "-I",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/workload.c",
+        "-DGC_THREADS",
+        "-pthread",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm/boehm_adapter.c",
+        "/usr/lib/x86_64-linux-gnu/libgc.a",
+        "-lpthread",
+        "-ldl",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm/boehm_prepared_outline"
+      ],
+      "boehm_caller_inline": [
+        "clang",
+        "-std=c11",
+        "-O2",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-DUSE_BOEHM",
+        "-DUSE_CALLER_INLINE",
+        "-DUSE_PREPARED",
+        "-DINLINE_ALLOC",
+        "-DINLINE_STORE",
+        "-I",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/workload.c",
+        "-DGC_THREADS",
+        "-pthread",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm/boehm_adapter.c",
+        "/usr/lib/x86_64-linux-gnu/libgc.a",
+        "-lpthread",
+        "-ldl",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-prototype-hqhg32qm/boehm_caller_inline"
+      ]
+    },
+    "caller_inline_header_sha256": "5ea44cdef51ef719e43e57e07f73d811873cb4d8b0043117c5706bda071c3e4c",
+    "descriptor_setup": "all eleven workload layouts prepared before timing in every arm",
+    "atomic_zero_contract": "prepared API clears atomic payloads; historical generic Boehm does not promise clearing",
+    "boehm_compile_flags": [
+      "-DGC_THREADS",
+      "-pthread"
+    ],
+    "compiler": "Debian clang version 19.1.7 (3+b1)",
+    "flags": [
+      "/usr/lib/x86_64-linux-gnu/libgc.a",
+      "-lpthread",
+      "-ldl"
+    ],
+    "boehm_pkg_version": "8.2.8",
+    "boehm_linkage": "static",
+    "boehm_archive": "/usr/lib/x86_64-linux-gnu/libgc.a",
+    "boehm_archive_sha256": "337a7cf7e9ff4a161025fc07b67ea0b613338dfc14ea510033d9c4e102a37045"
+  },
+  "gc_variants_sha256": {
+    "baseline": "6e809f44d36f45d0fa8f355cd0d8a825ae87eac2892996eed11d55225d514231",
+    "peak-only": "7bfbc73e63c197cf7c0b0d3c1e52e0244be1c1ec336308a71831d672e5472b0b",
+    "promotion-only": "a7408a2fcfaa69a27e03dae2f71729af7f3c620c47da16030b0f2d2d56f5eb1e",
+    "combined": "174e98b4a5732c0ead0aa45d876280c2bd35ab848c88ded19cd6443bf1c5ae0a"
+  },
+  "optimization": {
+    "promotion": "Copy the complete logical payload inside new_old; clear only pooled padding for promotions. Direct-old allocations stay cleared; large calloc is unchanged.",
+    "peak": "Pooled allocation updates peak_old_bytes; new_pool already accounts reserve transitions. Large allocations retain full peak accounting.",
+    "unchanged": [
+      "root operations",
+      "scan loops",
+      "queues",
+      "assertions",
+      "nursery poisoning",
+      "allocation counters",
+      "collection thresholds"
+    ]
+  },
+  "runner_derived_check_counts": {
+    "note": "Counts follow the executed loops in the source-hashed run.py; the captured success markers show each loop completed. No timing loop ran.",
+    "backend_builds": 10,
+    "backend_selftests": 10,
+    "backend_profile_checks": 70,
+    "profile_count": 7,
+    "profile_allocation_count": 1024,
+    "mutation_profile_allocation_count": 1025,
+    "prepared_workload_sanitizer_checks": 18,
+    "prepared_api_sanitizer_checks": 46,
+    "prepared_api_mutation_checks": 6,
+    "pool_sanitizer_checks": 21,
+    "graph_sanitizer_checks": 35,
+    "generic_mutation_checks": 2,
+    "llvm_positive_checks": 3,
+    "llvm_mutation_checks": 2
+  },
+  "validation_summaries": [
+    {
+      "prepared_api_review": "ASan+UBSan passed",
+      "nursery_capacities": [
+        32,
+        33,
+        39,
+        40,
+        47,
+        48,
+        63,
+        64,
+        239,
+        240,
+        511,
+        512,
+        519,
+        520,
+        521,
+        2047,
+        2048,
+        2049,
+        2055,
+        2056,
+        2057,
+        262136,
+        262144
+      ],
+      "api_modes": [
+        "inline",
+        "outline"
+      ],
+      "fail_capability": [
+        "roots",
+        "zero",
+        "barrier"
+      ]
+    },
+    {
+      "pooled_heap_review": "ASan+UBSan passed",
+      "nursery_capacities": [
+        32,
+        33,
+        39,
+        40,
+        47,
+        48,
+        63,
+        64,
+        127,
+        128,
+        239,
+        240,
+        511,
+        512,
+        2047,
+        2048,
+        2049,
+        2055,
+        2056,
+        2057,
+        262144
+      ]
+    },
+    {
+      "adversarial_graph": "ASan+UBSan passed",
+      "nursery_capacities": [
+        32,
+        33,
+        39,
+        40,
+        41,
+        47,
+        48,
+        49,
+        55,
+        56,
+        63,
+        64,
+        79,
+        80,
+        81,
+        95,
+        96,
+        97,
+        239,
+        240,
+        241,
+        319,
+        320,
+        321,
+        519,
+        520,
+        521,
+        535,
+        536,
+        537,
+        567,
+        568,
+        569,
+        1024,
+        262144
+      ]
+    },
+    {
+      "llvm_contract": [
+        "contract-O0: expected exit 0",
+        "contract-O2: expected exit 0",
+        "sanitizers: using installed GCC ASan/UBSan runtimes",
+        "contract-sanitized: expected exit 0",
+        "missing-reload: expected exit 1",
+        "missing-argument: expected exit 2",
+        "LLVM contract validation: checked 3 builds and 2 failing mutations"
+      ]
+    },
+    {
+      "correctness": "passed",
+      "sanitizers": "ASan+UBSan passed; LeakSanitizer disabled",
+      "fail_capability": [
+        "root relocation",
+        "remembered-set barrier"
+      ]
+    }
+  ],
+  "sanitizer_runtime_messages": [
+    {
+      "sanitizer_runtime": "clang instrumentation; installed GCC ASan/UBSan libraries"
+    },
+    {
+      "sanitizer_runtime": "clang instrumentation; installed GCC ASan/UBSan libraries"
+    },
+    {
+      "sanitizer_runtime": "clang instrumentation; installed GCC ASan/UBSan libraries"
+    },
+    {
+      "sanitizer_runtime": "clang instrumentation; installed GCC ASan/UBSan libraries"
+    }
+  ],
+  "limitations": [
+    "LeakSanitizer disabled for the sandbox; ASan and UBSan passed.",
+    "This record validates the combined variant only. Separate counter matching and timing ablations are subsequent work."
+  ]
+}

@@ -130,7 +130,7 @@ mainSigLoc (_ :: rest) = mainSigLoc rest
 mainDefLoc : List Decl -> Option Loc
 mainDefLoc [] = None
 mainDefLoc ((DAttrib _ d) :: rest) = mainDefLoc (d :: rest)
-mainDefLoc ((DFunDef _ "main" _ _ l) :: _) = Some l
+mainDefLoc ((DFunDef _ "main" _ _ l _) :: _) = Some l
 mainDefLoc (_ :: rest) = mainDefLoc rest
 
 firstOr : String -> List String -> String
