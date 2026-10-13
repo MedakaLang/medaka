@@ -130,12 +130,12 @@ FIXDIR_MODULES="$ROOT/test/wasm/fixtures_modules"
 #    gains the two fixtures `w8d_string_to_int` and `w8d_string_reverse_join`, which
 #    carry all three blocks: 31 + 32 = 63 funcs, and 474514 B against 463399 B
 #    before them (+11115 B for the two fixtures together).
-MODULES_BYTES_CEIL=2880000
-MODULES_FUNCS_CEIL=6403   # PLACEHOLDER: re-measure after the resync build
+MODULES_BYTES_CEIL=2930000   # measured 2919528 B locally after the resync with main, rounded up to the next 10000
+MODULES_FUNCS_CEIL=6493   # measured, exact: main's 6403 for 60 programs plus the 61st (fnctx_trmc_lambda_no_leak)
 MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/awk float compare)
 
 PLAIN_BYTES_CEIL=495000
-PLAIN_FUNCS_CEIL=3570
+PLAIN_FUNCS_CEIL=3610   # measured, exact: the untyped wasm entry takes the generic path for binders no declared signature reaches, which pulls the poly-dispatch helpers
 
 TYPED_BYTES_CEIL=23500
 TYPED_FUNCS_CEIL=145
@@ -160,7 +160,7 @@ TYPED_OK_EXACT=9
 # ("emitted-vs-reachable FUNCTION ratio") — the existing reach-ratio is a UNIT
 # ratio (S1's own notion), not this.
 F1_MODULES_FUNCS_FLOOR=1518
-MODULES_F1_RATIO_CEIL_X1000=4218  # PLACEHOLDER 6403 * 1000 / 1518 = 4218.1; re-measure after the resync build
+MODULES_F1_RATIO_CEIL_X1000=4277  # 6493 * 1000 / 1518 = 4277.3, see the ceilings above
 
 command -v wasm-tools >/dev/null 2>&1 || { echo "wasm-tools not on PATH — skipping S5 emitted-size gate"; exit 2; }
 NODE=node
