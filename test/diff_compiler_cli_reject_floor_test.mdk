@@ -471,6 +471,8 @@ exemptEntries = [
   "compiler/entries/build_main.mdk",
   "compiler/entries/core_ir_modules_main.mdk",
   "compiler/entries/fuzz_gen_main.mdk",
+  -- Standalone typed-emitter probe; its ByteBlock flag is outside CLI dispatch.
+  "compiler/entries/llvm_emit_typed_main.mdk",
   "compiler/entries/refindex_main.mdk",
   "compiler/entries/wasm_emit_typed_main.mdk",
 ]
