@@ -1,7 +1,7 @@
-CASE: a program that CALLS prelude interface defaults: `filter` (Filterable's
-      point-free default, inherited by `Filterable List`), and `max` / `min`
-      (Ord's defaults, inherited by `Ord Float` and `Ord String`, which supply
-      only `compare`).
+CASE: a program that CALLS prelude interface defaults: `max` / `min` (Ord's
+      defaults, inherited by `Ord Float` and `Ord String`, which supply only
+      `compare`), alongside `filter` at `Filterable List` (defined by the
+      instance itself).
 OWNS: nothing. It is the regression guard for the typed Core-IR evaluator
       (`cevalModules`) giving an inheriting instance a body for every default it
       inherits, the way `medaka run` and `medaka build` do. Before that, every one
@@ -20,6 +20,7 @@ Derived from the language semantics before any arm was run:
 ── UNTYPED ARMS ───────────────────────────────────────────────────────────────
 
 The untyped module drivers carry no default mechanism: which instance inherits a
-default is instance identity, which only elaboration establishes. They are pinned
-(`main_single.untyped.txt`) to what they print, not ledgered: there is no defect
-to own.
+default is instance identity, which only elaboration establishes. `Filterable
+List` now defines `filter` itself, so only `max` / `min` still reach a default;
+the untyped arms print the expected value and are graded against expected.txt
+with no pin.

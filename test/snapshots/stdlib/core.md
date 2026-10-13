@@ -1,5 +1,5 @@
 # META
-source_lines=2377
+source_lines=2391
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -272,34 +272,39 @@ export impl Ord String where
 export impl Ord Char where
   compare a b = if a < b then Lt else if a > b then Gt else Eq
 
--- Lexicographic chaining: take the first non-`Eq` result, else the second.
--- Private helper backing the tuple `Ord` impls below.
-thenCmp : Ordering -> Ordering -> Ordering
-thenCmp Eq o = o
-thenCmp o _ = o
-
 -- Lexicographic ordering for tuples (arities 2–5): compare field by field,
 -- left to right, stopping at the first that differs.
 export impl Ord (a, b) requires Ord a, Ord b where
-  compare (a1, b1) (a2, b2) = thenCmp (compare a1 a2) (compare b1 b2)
+  compare (a1, b1) (a2, b2) = match compare a1 a2
+    Eq => compare b1 b2
+    o => o
 
 export impl Ord (a, b, c) requires Ord a, Ord b, Ord c where
-  compare (a1, b1, c1) (a2, b2, c2) =
-    thenCmp (compare a1 a2) (thenCmp (compare b1 b2) (compare c1 c2))
+  compare (a1, b1, c1) (a2, b2, c2) = match compare a1 a2
+    Eq => match compare b1 b2
+      Eq => compare c1 c2
+      o => o
+    o => o
 
 export impl Ord (a, b, c, d) requires Ord a, Ord b, Ord c, Ord d where
-  compare (a1, b1, c1, d1) (a2, b2, c2, d2) =
-    thenCmp
-      (compare a1 a2)
-      (thenCmp (compare b1 b2) (thenCmp (compare c1 c2) (compare d1 d2)))
+  compare (a1, b1, c1, d1) (a2, b2, c2, d2) = match compare a1 a2
+    Eq => match compare b1 b2
+      Eq => match compare c1 c2
+        Eq => compare d1 d2
+        o => o
+      o => o
+    o => o
 
 export impl Ord (a, b, c, d, e) requires Ord a, Ord b, Ord c, Ord d, Ord e where
-  compare (a1, b1, c1, d1, e1) (a2, b2, c2, d2, e2) =
-    thenCmp
-      (compare a1 a2)
-      (thenCmp
-        (compare b1 b2)
-        (thenCmp (compare c1 c2) (thenCmp (compare d1 d2) (compare e1 e2))))
+  compare (a1, b1, c1, d1, e1) (a2, b2, c2, d2, e2) = match compare a1 a2
+    Eq => match compare b1 b2
+      Eq => match compare c1 c2
+        Eq => match compare d1 d2
+          Eq => compare e1 e2
+          o => o
+        o => o
+      o => o
+    o => o
 
 {- | Lists compare lexicographically: element by element, with a proper
    prefix sorting before any list that extends it (`[1] < [1, 2]`,
@@ -1553,6 +1558,14 @@ sliceListGo (x :: xs) i lo hi
   | i >= lo = x :: sliceListGo xs (i + 1) lo hi
   | otherwise = sliceListGo xs (i + 1) lo hi
 
+listRevMap : (a -> <e> b) -> List a -> List b -> <e> List b
+listRevMap _ [] acc = acc
+listRevMap f (x :: xs) acc = listRevMap f xs (f x :: acc)
+
+listFoldMapGo : Monoid m => m -> List m -> m
+listFoldMapGo acc [] = acc
+listFoldMapGo acc (y :: ys) = listFoldMapGo (append y acc) ys
+
 -- `length` goes through the strict left fold; `1 + length xs` would
 -- accumulate stack frames proportional to list length.
 export impl Foldable List where
@@ -1564,8 +1577,7 @@ export impl Foldable List where
   isEmpty [] = True
   isEmpty _ = False
   length = fold (acc _ => acc + 1) 0
-  foldMap f xs =
-    fold (acc y => append y acc) empty (fold (acc x => f x :: acc) [] xs)
+  foldMap f xs = listFoldMapGo empty (listRevMap f xs [])
 
 -- `Option` and `Result e` each fold as a 0-or-1-element container.
 export impl Foldable Option where
@@ -1767,6 +1779,8 @@ export impl Filterable List where
   filterMap f (x :: xs) = match f x
     Some y => y :: filterMap f xs
     None => filterMap f xs
+  filter _ [] = []
+  filter p (x :: xs) = if p x then x :: filter p xs else filter p xs
 
 -- # Booleans
 
@@ -1802,7 +1816,7 @@ or _ _ = True
 -- | Exclusive or.
 export
 xor : Bool -> Bool -> Bool
-xor a b = a /= b
+xor a b = if a then not b else b
 
 -- # Options
 
@@ -2420,13 +2434,10 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DImpl true "Ord" ((TyCon "Float")) () ((im "compare" ((PVar "a") (PVar "b")) (EIf (EBinOp "<" (EVar "a") (EVar "b")) (EVar "Lt") (EIf (EBinOp ">" (EVar "a") (EVar "b")) (EVar "Gt") (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EVar "Eq") (EApp (EApp (EVar "compareNaN") (EVar "a")) (EVar "b")))))) (im "lt" ((PVar "a") (PVar "b")) (EBinOp "<" (EVar "a") (EVar "b"))) (im "gt" ((PVar "a") (PVar "b")) (EBinOp ">" (EVar "a") (EVar "b"))) (im "lte" ((PVar "a") (PVar "b")) (EBinOp "<=" (EVar "a") (EVar "b"))) (im "gte" ((PVar "a") (PVar "b")) (EBinOp ">=" (EVar "a") (EVar "b")))))
 (DImpl true "Ord" ((TyCon "String")) () ((im "compare" ((PVar "a") (PVar "b")) (EIf (EBinOp "<" (EVar "a") (EVar "b")) (EVar "Lt") (EIf (EBinOp ">" (EVar "a") (EVar "b")) (EVar "Gt") (EVar "Eq"))))))
 (DImpl true "Ord" ((TyCon "Char")) () ((im "compare" ((PVar "a") (PVar "b")) (EIf (EBinOp "<" (EVar "a") (EVar "b")) (EVar "Lt") (EIf (EBinOp ">" (EVar "a") (EVar "b")) (EVar "Gt") (EVar "Eq"))))))
-(DTypeSig false "thenCmp" (TyFun (TyCon "Ordering") (TyFun (TyCon "Ordering") (TyCon "Ordering"))))
-(DFunDef false "thenCmp" ((PCon "Eq") (PVar "o")) (EVar "o"))
-(DFunDef false "thenCmp" ((PVar "o") PWild) (EVar "o"))
-(DImpl true "Ord" ((TyTuple (TyVar "a") (TyVar "b"))) ((req "Ord" ((TyVar "a"))) (req "Ord" ((TyVar "b")))) ((im "compare" ((PTuple (PVar "a1") (PVar "b1")) (PTuple (PVar "a2") (PVar "b2"))) (EApp (EApp (EVar "thenCmp") (EApp (EApp (EVar "compare") (EVar "a1")) (EVar "a2"))) (EApp (EApp (EVar "compare") (EVar "b1")) (EVar "b2"))))))
-(DImpl true "Ord" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c"))) ((req "Ord" ((TyVar "a"))) (req "Ord" ((TyVar "b"))) (req "Ord" ((TyVar "c")))) ((im "compare" ((PTuple (PVar "a1") (PVar "b1") (PVar "c1")) (PTuple (PVar "a2") (PVar "b2") (PVar "c2"))) (EApp (EApp (EVar "thenCmp") (EApp (EApp (EVar "compare") (EVar "a1")) (EVar "a2"))) (EApp (EApp (EVar "thenCmp") (EApp (EApp (EVar "compare") (EVar "b1")) (EVar "b2"))) (EApp (EApp (EVar "compare") (EVar "c1")) (EVar "c2")))))))
-(DImpl true "Ord" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d"))) ((req "Ord" ((TyVar "a"))) (req "Ord" ((TyVar "b"))) (req "Ord" ((TyVar "c"))) (req "Ord" ((TyVar "d")))) ((im "compare" ((PTuple (PVar "a1") (PVar "b1") (PVar "c1") (PVar "d1")) (PTuple (PVar "a2") (PVar "b2") (PVar "c2") (PVar "d2"))) (EApp (EApp (EVar "thenCmp") (EApp (EApp (EVar "compare") (EVar "a1")) (EVar "a2"))) (EApp (EApp (EVar "thenCmp") (EApp (EApp (EVar "compare") (EVar "b1")) (EVar "b2"))) (EApp (EApp (EVar "thenCmp") (EApp (EApp (EVar "compare") (EVar "c1")) (EVar "c2"))) (EApp (EApp (EVar "compare") (EVar "d1")) (EVar "d2"))))))))
-(DImpl true "Ord" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d") (TyVar "e"))) ((req "Ord" ((TyVar "a"))) (req "Ord" ((TyVar "b"))) (req "Ord" ((TyVar "c"))) (req "Ord" ((TyVar "d"))) (req "Ord" ((TyVar "e")))) ((im "compare" ((PTuple (PVar "a1") (PVar "b1") (PVar "c1") (PVar "d1") (PVar "e1")) (PTuple (PVar "a2") (PVar "b2") (PVar "c2") (PVar "d2") (PVar "e2"))) (EApp (EApp (EVar "thenCmp") (EApp (EApp (EVar "compare") (EVar "a1")) (EVar "a2"))) (EApp (EApp (EVar "thenCmp") (EApp (EApp (EVar "compare") (EVar "b1")) (EVar "b2"))) (EApp (EApp (EVar "thenCmp") (EApp (EApp (EVar "compare") (EVar "c1")) (EVar "c2"))) (EApp (EApp (EVar "thenCmp") (EApp (EApp (EVar "compare") (EVar "d1")) (EVar "d2"))) (EApp (EApp (EVar "compare") (EVar "e1")) (EVar "e2")))))))))
+(DImpl true "Ord" ((TyTuple (TyVar "a") (TyVar "b"))) ((req "Ord" ((TyVar "a"))) (req "Ord" ((TyVar "b")))) ((im "compare" ((PTuple (PVar "a1") (PVar "b1")) (PTuple (PVar "a2") (PVar "b2"))) (EMatch (EApp (EApp (EVar "compare") (EVar "a1")) (EVar "a2")) (arm (PCon "Eq") () (EApp (EApp (EVar "compare") (EVar "b1")) (EVar "b2"))) (arm (PVar "o") () (EVar "o"))))))
+(DImpl true "Ord" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c"))) ((req "Ord" ((TyVar "a"))) (req "Ord" ((TyVar "b"))) (req "Ord" ((TyVar "c")))) ((im "compare" ((PTuple (PVar "a1") (PVar "b1") (PVar "c1")) (PTuple (PVar "a2") (PVar "b2") (PVar "c2"))) (EMatch (EApp (EApp (EVar "compare") (EVar "a1")) (EVar "a2")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EVar "compare") (EVar "b1")) (EVar "b2")) (arm (PCon "Eq") () (EApp (EApp (EVar "compare") (EVar "c1")) (EVar "c2"))) (arm (PVar "o") () (EVar "o")))) (arm (PVar "o") () (EVar "o"))))))
+(DImpl true "Ord" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d"))) ((req "Ord" ((TyVar "a"))) (req "Ord" ((TyVar "b"))) (req "Ord" ((TyVar "c"))) (req "Ord" ((TyVar "d")))) ((im "compare" ((PTuple (PVar "a1") (PVar "b1") (PVar "c1") (PVar "d1")) (PTuple (PVar "a2") (PVar "b2") (PVar "c2") (PVar "d2"))) (EMatch (EApp (EApp (EVar "compare") (EVar "a1")) (EVar "a2")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EVar "compare") (EVar "b1")) (EVar "b2")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EVar "compare") (EVar "c1")) (EVar "c2")) (arm (PCon "Eq") () (EApp (EApp (EVar "compare") (EVar "d1")) (EVar "d2"))) (arm (PVar "o") () (EVar "o")))) (arm (PVar "o") () (EVar "o")))) (arm (PVar "o") () (EVar "o"))))))
+(DImpl true "Ord" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d") (TyVar "e"))) ((req "Ord" ((TyVar "a"))) (req "Ord" ((TyVar "b"))) (req "Ord" ((TyVar "c"))) (req "Ord" ((TyVar "d"))) (req "Ord" ((TyVar "e")))) ((im "compare" ((PTuple (PVar "a1") (PVar "b1") (PVar "c1") (PVar "d1") (PVar "e1")) (PTuple (PVar "a2") (PVar "b2") (PVar "c2") (PVar "d2") (PVar "e2"))) (EMatch (EApp (EApp (EVar "compare") (EVar "a1")) (EVar "a2")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EVar "compare") (EVar "b1")) (EVar "b2")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EVar "compare") (EVar "c1")) (EVar "c2")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EVar "compare") (EVar "d1")) (EVar "d2")) (arm (PCon "Eq") () (EApp (EApp (EVar "compare") (EVar "e1")) (EVar "e2"))) (arm (PVar "o") () (EVar "o")))) (arm (PVar "o") () (EVar "o")))) (arm (PVar "o") () (EVar "o")))) (arm (PVar "o") () (EVar "o"))))))
 (DImpl true "Ord" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "compare" ((PList) (PList)) (EVar "Eq")) (im "compare" ((PList) PWild) (EVar "Lt")) (im "compare" (PWild (PList)) (EVar "Gt")) (im "compare" ((PCons (PVar "x") (PVar "xs")) (PCons (PVar "y") (PVar "ys"))) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Eq") () (EApp (EApp (EVar "compare") (EVar "xs")) (EVar "ys"))) (arm (PVar "o") () (EVar "o"))))))
 (DImpl true "Ord" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "compare" ((PCon "None") (PCon "None")) (EVar "Eq")) (im "compare" ((PCon "None") (PCon "Some" PWild)) (EVar "Lt")) (im "compare" ((PCon "Some" PWild) (PCon "None")) (EVar "Gt")) (im "compare" ((PCon "Some" (PVar "x")) (PCon "Some" (PVar "y"))) (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")))))
 (DImpl true "Ord" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Ord" ((TyVar "e"))) (req "Ord" ((TyVar "a")))) ((im "compare" ((PCon "Err" (PVar "x")) (PCon "Err" (PVar "y"))) (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y"))) (im "compare" ((PCon "Err" PWild) (PCon "Ok" PWild)) (EVar "Lt")) (im "compare" ((PCon "Ok" PWild) (PCon "Err" PWild)) (EVar "Gt")) (im "compare" ((PCon "Ok" (PVar "x")) (PCon "Ok" (PVar "y"))) (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")))))
@@ -2634,7 +2645,13 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DTypeSig false "sliceListGo" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyVar "a")))))))
 (DFunDef false "sliceListGo" ((PList) (PVar "i") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "i") (EVar "hi")) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "sliceListGo" ((PCons (PVar "x") (PVar "xs")) (PVar "i") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "i") (EVar "hi")) (EListLit) (EIf (EBinOp ">=" (EVar "i") (EVar "lo")) (EBinOp "::" (EVar "x") (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "lo")) (EVar "hi"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "lo")) (EVar "hi")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DImpl true "Foldable" ((TyCon "List")) () ((im "fold" (PWild (PVar "acc") (PList)) (EVar "acc")) (im "fold" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EVar "fold") (EVar "f")) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (EVar "xs"))) (im "foldRight" (PWild (PVar "acc") (PList)) (EVar "acc")) (im "foldRight" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "f") (EVar "x")) (EApp (EApp (EApp (EVar "foldRight") (EVar "f")) (EVar "acc")) (EVar "xs")))) (im "toList" () (EVar "identity")) (im "isEmpty" ((PList)) (EVar "True")) (im "isEmpty" (PWild) (EVar "False")) (im "length" () (EApp (EApp (EVar "fold") (ELam ((PVar "acc") PWild) (EBinOp "+" (EVar "acc") (ELit (LInt 1))))) (ELit (LInt 0)))) (im "foldMap" ((PVar "f") (PVar "xs")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "y")) (EApp (EApp (EVar "append") (EVar "y")) (EVar "acc")))) (EVar "empty")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "::" (EApp (EVar "f") (EVar "x")) (EVar "acc")))) (EListLit)) (EVar "xs"))))))
+(DTypeSig false "listRevMap" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "b")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "b")))))))
+(DFunDef false "listRevMap" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "listRevMap" ((PVar "f") (PCons (PVar "x") (PVar "xs")) (PVar "acc")) (EApp (EApp (EApp (EVar "listRevMap") (EVar "f")) (EVar "xs")) (EBinOp "::" (EApp (EVar "f") (EVar "x")) (EVar "acc"))))
+(DTypeSig false "listFoldMapGo" (TyConstrained ((cstr "Monoid" (TyVar "m"))) (TyFun (TyVar "m") (TyFun (TyApp (TyCon "List") (TyVar "m")) (TyVar "m")))))
+(DFunDef false "listFoldMapGo" ((PVar "acc") (PList)) (EVar "acc"))
+(DFunDef false "listFoldMapGo" ((PVar "acc") (PCons (PVar "y") (PVar "ys"))) (EApp (EApp (EVar "listFoldMapGo") (EApp (EApp (EVar "append") (EVar "y")) (EVar "acc"))) (EVar "ys")))
+(DImpl true "Foldable" ((TyCon "List")) () ((im "fold" (PWild (PVar "acc") (PList)) (EVar "acc")) (im "fold" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EVar "fold") (EVar "f")) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (EVar "xs"))) (im "foldRight" (PWild (PVar "acc") (PList)) (EVar "acc")) (im "foldRight" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "f") (EVar "x")) (EApp (EApp (EApp (EVar "foldRight") (EVar "f")) (EVar "acc")) (EVar "xs")))) (im "toList" () (EVar "identity")) (im "isEmpty" ((PList)) (EVar "True")) (im "isEmpty" (PWild) (EVar "False")) (im "length" () (EApp (EApp (EVar "fold") (ELam ((PVar "acc") PWild) (EBinOp "+" (EVar "acc") (ELit (LInt 1))))) (ELit (LInt 0)))) (im "foldMap" ((PVar "f") (PVar "xs")) (EApp (EApp (EVar "listFoldMapGo") (EVar "empty")) (EApp (EApp (EApp (EVar "listRevMap") (EVar "f")) (EVar "xs")) (EListLit))))))
 (DImpl true "Foldable" ((TyCon "Option")) () ((im "fold" (PWild (PVar "acc") (PCon "None")) (EVar "acc")) (im "fold" ((PVar "f") (PVar "acc") (PCon "Some" (PVar "x"))) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (im "foldRight" (PWild (PVar "acc") (PCon "None")) (EVar "acc")) (im "foldRight" ((PVar "f") (PVar "acc") (PCon "Some" (PVar "x"))) (EApp (EApp (EVar "f") (EVar "x")) (EVar "acc"))) (im "toList" ((PCon "None")) (EListLit)) (im "toList" ((PCon "Some" (PVar "x"))) (EListLit (EVar "x")))))
 (DImpl true "Foldable" ((TyApp (TyCon "Result") (TyVar "e"))) () ((im "fold" (PWild (PVar "acc") (PCon "Err" PWild)) (EVar "acc")) (im "fold" ((PVar "f") (PVar "acc") (PCon "Ok" (PVar "x"))) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (im "foldRight" (PWild (PVar "acc") (PCon "Err" PWild)) (EVar "acc")) (im "foldRight" ((PVar "f") (PVar "acc") (PCon "Ok" (PVar "x"))) (EApp (EApp (EVar "f") (EVar "x")) (EVar "acc"))) (im "toList" ((PCon "Err" PWild)) (EListLit)) (im "toList" ((PCon "Ok" (PVar "x"))) (EListLit (EVar "x")))))
 (DInterface true false "Traversable" ("t") ((super "Mappable" ("t")) (super "Foldable" ("t"))) ((imethod "traverse" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyVar "m") (TyVar "b")))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyVar "m") (TyApp (TyVar "t") (TyVar "b"))))))) None) (imethod "sequence" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyApp (TyVar "t") (TyApp (TyVar "m") (TyVar "a"))) (TyApp (TyVar "m") (TyApp (TyVar "t") (TyVar "a"))))) (mdef ((PVar "ta")) (EApp (EApp (EVar "traverse") (EVar "identity")) (EVar "ta"))))))
@@ -2661,7 +2678,7 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DFunDef false "maximum" ((PVar "xs")) (ELetGroup ((lgb "step" (clause ((PCon "None") (PVar "x")) (EApp (EVar "Some") (EVar "x"))) (clause ((PCon "Some" (PVar "m")) (PVar "x")) (EApp (EVar "Some") (EApp (EApp (EVar "max") (EVar "m")) (EVar "x")))))) (EApp (EApp (EApp (EVar "fold") (EVar "step")) (EVar "None")) (EVar "xs"))))
 (DTypeSig true "minimum" (TyConstrained ((cstr "Foldable" (TyVar "t")) (cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))
 (DFunDef false "minimum" ((PVar "xs")) (ELetGroup ((lgb "step" (clause ((PCon "None") (PVar "x")) (EApp (EVar "Some") (EVar "x"))) (clause ((PCon "Some" (PVar "m")) (PVar "x")) (EApp (EVar "Some") (EApp (EApp (EVar "min") (EVar "m")) (EVar "x")))))) (EApp (EApp (EApp (EVar "fold") (EVar "step")) (EVar "None")) (EVar "xs"))))
-(DImpl true "Filterable" ((TyCon "List")) () ((im "filterMap" (PWild (PList)) (EListLit)) (im "filterMap" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EMatch (EApp (EVar "f") (EVar "x")) (arm (PCon "Some" (PVar "y")) () (EBinOp "::" (EVar "y") (EApp (EApp (EVar "filterMap") (EVar "f")) (EVar "xs")))) (arm (PCon "None") () (EApp (EApp (EVar "filterMap") (EVar "f")) (EVar "xs")))))))
+(DImpl true "Filterable" ((TyCon "List")) () ((im "filterMap" (PWild (PList)) (EListLit)) (im "filterMap" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EMatch (EApp (EVar "f") (EVar "x")) (arm (PCon "Some" (PVar "y")) () (EBinOp "::" (EVar "y") (EApp (EApp (EVar "filterMap") (EVar "f")) (EVar "xs")))) (arm (PCon "None") () (EApp (EApp (EVar "filterMap") (EVar "f")) (EVar "xs"))))) (im "filter" (PWild (PList)) (EListLit)) (im "filter" ((PVar "p") (PCons (PVar "x") (PVar "xs"))) (EIf (EApp (EVar "p") (EVar "x")) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "filter") (EVar "p")) (EVar "xs"))) (EApp (EApp (EVar "filter") (EVar "p")) (EVar "xs"))))))
 (DTypeSig true "otherwise" (TyCon "Bool"))
 (DFunDef false "otherwise" () (EVar "True"))
 (DTypeSig true "not" (TyFun (TyCon "Bool") (TyCon "Bool")))
@@ -2674,7 +2691,7 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DFunDef false "or" ((PCon "False") (PCon "False")) (EVar "False"))
 (DFunDef false "or" (PWild PWild) (EVar "True"))
 (DTypeSig true "xor" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyCon "Bool"))))
-(DFunDef false "xor" ((PVar "a") (PVar "b")) (EBinOp "/=" (EVar "a") (EVar "b")))
+(DFunDef false "xor" ((PVar "a") (PVar "b")) (EIf (EVar "a") (EApp (EVar "not") (EVar "b")) (EVar "b")))
 (DTypeSig true "isSome" (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyCon "Bool")))
 (DFunDef false "isSome" ((PCon "Some" PWild)) (EVar "True"))
 (DFunDef false "isSome" ((PCon "None")) (EVar "False"))
@@ -2849,13 +2866,10 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DImpl true "Ord" ((TyCon "Float")) () ((im "compare" ((PVar "a") (PVar "b")) (EIf (EBinOp "<" (EVar "a") (EVar "b")) (EVar "Lt") (EIf (EBinOp ">" (EVar "a") (EVar "b")) (EVar "Gt") (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EVar "Eq") (EApp (EApp (EVar "compareNaN") (EVar "a")) (EVar "b")))))) (im "lt" ((PVar "a") (PVar "b")) (EBinOp "<" (EVar "a") (EVar "b"))) (im "gt" ((PVar "a") (PVar "b")) (EBinOp ">" (EVar "a") (EVar "b"))) (im "lte" ((PVar "a") (PVar "b")) (EBinOp "<=" (EVar "a") (EVar "b"))) (im "gte" ((PVar "a") (PVar "b")) (EBinOp ">=" (EVar "a") (EVar "b")))))
 (DImpl true "Ord" ((TyCon "String")) () ((im "compare" ((PVar "a") (PVar "b")) (EIf (EBinOp "<" (EVar "a") (EVar "b")) (EVar "Lt") (EIf (EBinOp ">" (EVar "a") (EVar "b")) (EVar "Gt") (EVar "Eq"))))))
 (DImpl true "Ord" ((TyCon "Char")) () ((im "compare" ((PVar "a") (PVar "b")) (EIf (EBinOp "<" (EVar "a") (EVar "b")) (EVar "Lt") (EIf (EBinOp ">" (EVar "a") (EVar "b")) (EVar "Gt") (EVar "Eq"))))))
-(DTypeSig false "thenCmp" (TyFun (TyCon "Ordering") (TyFun (TyCon "Ordering") (TyCon "Ordering"))))
-(DFunDef false "thenCmp" ((PCon "Eq") (PVar "o")) (EVar "o"))
-(DFunDef false "thenCmp" ((PVar "o") PWild) (EVar "o"))
-(DImpl true "Ord" ((TyTuple (TyVar "a") (TyVar "b"))) ((req "Ord" ((TyVar "a"))) (req "Ord" ((TyVar "b")))) ((im "compare" ((PTuple (PVar "a1") (PVar "b1")) (PTuple (PVar "a2") (PVar "b2"))) (EApp (EApp (EVar "thenCmp") (EApp (EApp (EMethodRef "compare") (EVar "a1")) (EVar "a2"))) (EApp (EApp (EMethodRef "compare") (EVar "b1")) (EVar "b2"))))))
-(DImpl true "Ord" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c"))) ((req "Ord" ((TyVar "a"))) (req "Ord" ((TyVar "b"))) (req "Ord" ((TyVar "c")))) ((im "compare" ((PTuple (PVar "a1") (PVar "b1") (PVar "c1")) (PTuple (PVar "a2") (PVar "b2") (PVar "c2"))) (EApp (EApp (EVar "thenCmp") (EApp (EApp (EMethodRef "compare") (EVar "a1")) (EVar "a2"))) (EApp (EApp (EVar "thenCmp") (EApp (EApp (EMethodRef "compare") (EVar "b1")) (EVar "b2"))) (EApp (EApp (EMethodRef "compare") (EVar "c1")) (EVar "c2")))))))
-(DImpl true "Ord" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d"))) ((req "Ord" ((TyVar "a"))) (req "Ord" ((TyVar "b"))) (req "Ord" ((TyVar "c"))) (req "Ord" ((TyVar "d")))) ((im "compare" ((PTuple (PVar "a1") (PVar "b1") (PVar "c1") (PVar "d1")) (PTuple (PVar "a2") (PVar "b2") (PVar "c2") (PVar "d2"))) (EApp (EApp (EVar "thenCmp") (EApp (EApp (EMethodRef "compare") (EVar "a1")) (EVar "a2"))) (EApp (EApp (EVar "thenCmp") (EApp (EApp (EMethodRef "compare") (EVar "b1")) (EVar "b2"))) (EApp (EApp (EVar "thenCmp") (EApp (EApp (EMethodRef "compare") (EVar "c1")) (EVar "c2"))) (EApp (EApp (EMethodRef "compare") (EVar "d1")) (EVar "d2"))))))))
-(DImpl true "Ord" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d") (TyVar "e"))) ((req "Ord" ((TyVar "a"))) (req "Ord" ((TyVar "b"))) (req "Ord" ((TyVar "c"))) (req "Ord" ((TyVar "d"))) (req "Ord" ((TyVar "e")))) ((im "compare" ((PTuple (PVar "a1") (PVar "b1") (PVar "c1") (PVar "d1") (PVar "e1")) (PTuple (PVar "a2") (PVar "b2") (PVar "c2") (PVar "d2") (PVar "e2"))) (EApp (EApp (EVar "thenCmp") (EApp (EApp (EMethodRef "compare") (EVar "a1")) (EVar "a2"))) (EApp (EApp (EVar "thenCmp") (EApp (EApp (EMethodRef "compare") (EVar "b1")) (EVar "b2"))) (EApp (EApp (EVar "thenCmp") (EApp (EApp (EMethodRef "compare") (EVar "c1")) (EVar "c2"))) (EApp (EApp (EVar "thenCmp") (EApp (EApp (EMethodRef "compare") (EVar "d1")) (EVar "d2"))) (EApp (EApp (EMethodRef "compare") (EVar "e1")) (EVar "e2")))))))))
+(DImpl true "Ord" ((TyTuple (TyVar "a") (TyVar "b"))) ((req "Ord" ((TyVar "a"))) (req "Ord" ((TyVar "b")))) ((im "compare" ((PTuple (PVar "a1") (PVar "b1")) (PTuple (PVar "a2") (PVar "b2"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "a1")) (EVar "a2")) (arm (PCon "Eq") () (EApp (EApp (EMethodRef "compare") (EVar "b1")) (EVar "b2"))) (arm (PVar "o") () (EVar "o"))))))
+(DImpl true "Ord" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c"))) ((req "Ord" ((TyVar "a"))) (req "Ord" ((TyVar "b"))) (req "Ord" ((TyVar "c")))) ((im "compare" ((PTuple (PVar "a1") (PVar "b1") (PVar "c1")) (PTuple (PVar "a2") (PVar "b2") (PVar "c2"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "a1")) (EVar "a2")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EMethodRef "compare") (EVar "b1")) (EVar "b2")) (arm (PCon "Eq") () (EApp (EApp (EMethodRef "compare") (EVar "c1")) (EVar "c2"))) (arm (PVar "o") () (EVar "o")))) (arm (PVar "o") () (EVar "o"))))))
+(DImpl true "Ord" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d"))) ((req "Ord" ((TyVar "a"))) (req "Ord" ((TyVar "b"))) (req "Ord" ((TyVar "c"))) (req "Ord" ((TyVar "d")))) ((im "compare" ((PTuple (PVar "a1") (PVar "b1") (PVar "c1") (PVar "d1")) (PTuple (PVar "a2") (PVar "b2") (PVar "c2") (PVar "d2"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "a1")) (EVar "a2")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EMethodRef "compare") (EVar "b1")) (EVar "b2")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EMethodRef "compare") (EVar "c1")) (EVar "c2")) (arm (PCon "Eq") () (EApp (EApp (EMethodRef "compare") (EVar "d1")) (EVar "d2"))) (arm (PVar "o") () (EVar "o")))) (arm (PVar "o") () (EVar "o")))) (arm (PVar "o") () (EVar "o"))))))
+(DImpl true "Ord" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d") (TyVar "e"))) ((req "Ord" ((TyVar "a"))) (req "Ord" ((TyVar "b"))) (req "Ord" ((TyVar "c"))) (req "Ord" ((TyVar "d"))) (req "Ord" ((TyVar "e")))) ((im "compare" ((PTuple (PVar "a1") (PVar "b1") (PVar "c1") (PVar "d1") (PVar "e1")) (PTuple (PVar "a2") (PVar "b2") (PVar "c2") (PVar "d2") (PVar "e2"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "a1")) (EVar "a2")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EMethodRef "compare") (EVar "b1")) (EVar "b2")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EMethodRef "compare") (EVar "c1")) (EVar "c2")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EMethodRef "compare") (EVar "d1")) (EVar "d2")) (arm (PCon "Eq") () (EApp (EApp (EMethodRef "compare") (EVar "e1")) (EVar "e2"))) (arm (PVar "o") () (EVar "o")))) (arm (PVar "o") () (EVar "o")))) (arm (PVar "o") () (EVar "o")))) (arm (PVar "o") () (EVar "o"))))))
 (DImpl true "Ord" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "compare" ((PList) (PList)) (EVar "Eq")) (im "compare" ((PList) PWild) (EVar "Lt")) (im "compare" (PWild (PList)) (EVar "Gt")) (im "compare" ((PCons (PVar "x") (PVar "xs")) (PCons (PVar "y") (PVar "ys"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Eq") () (EApp (EApp (EMethodRef "compare") (EVar "xs")) (EVar "ys"))) (arm (PVar "o") () (EVar "o"))))))
 (DImpl true "Ord" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "compare" ((PCon "None") (PCon "None")) (EVar "Eq")) (im "compare" ((PCon "None") (PCon "Some" PWild)) (EVar "Lt")) (im "compare" ((PCon "Some" PWild) (PCon "None")) (EVar "Gt")) (im "compare" ((PCon "Some" (PVar "x")) (PCon "Some" (PVar "y"))) (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")))))
 (DImpl true "Ord" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Ord" ((TyVar "e"))) (req "Ord" ((TyVar "a")))) ((im "compare" ((PCon "Err" (PVar "x")) (PCon "Err" (PVar "y"))) (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y"))) (im "compare" ((PCon "Err" PWild) (PCon "Ok" PWild)) (EVar "Lt")) (im "compare" ((PCon "Ok" PWild) (PCon "Err" PWild)) (EVar "Gt")) (im "compare" ((PCon "Ok" (PVar "x")) (PCon "Ok" (PVar "y"))) (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")))))
@@ -3063,7 +3077,13 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DTypeSig false "sliceListGo" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyVar "a")))))))
 (DFunDef false "sliceListGo" ((PList) (PVar "i") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "i") (EVar "hi")) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "sliceListGo" ((PCons (PVar "x") (PVar "xs")) (PVar "i") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "i") (EVar "hi")) (EListLit) (EIf (EBinOp ">=" (EVar "i") (EVar "lo")) (EBinOp "::" (EVar "x") (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "lo")) (EVar "hi"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "lo")) (EVar "hi")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DImpl true "Foldable" ((TyCon "List")) () ((im "fold" (PWild (PVar "acc") (PList)) (EVar "acc")) (im "fold" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "f")) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (EVar "xs"))) (im "foldRight" (PWild (PVar "acc") (PList)) (EVar "acc")) (im "foldRight" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "f") (EVar "x")) (EApp (EApp (EApp (EMethodRef "foldRight") (EVar "f")) (EVar "acc")) (EVar "xs")))) (im "toList" () (EVar "identity")) (im "isEmpty" ((PList)) (EVar "True")) (im "isEmpty" (PWild) (EVar "False")) (im "length" () (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") PWild) (EBinOp "+" (EVar "acc") (ELit (LInt 1))))) (ELit (LInt 0)))) (im "foldMap" ((PVar "f") (PVar "xs")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "y")) (EApp (EApp (EMethodRef "append") (EVar "y")) (EVar "acc")))) (EMethodRef "empty")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "::" (EApp (EVar "f") (EVar "x")) (EVar "acc")))) (EListLit)) (EVar "xs"))))))
+(DTypeSig false "listRevMap" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "b")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "b")))))))
+(DFunDef false "listRevMap" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "listRevMap" ((PVar "f") (PCons (PVar "x") (PVar "xs")) (PVar "acc")) (EApp (EApp (EApp (EVar "listRevMap") (EVar "f")) (EVar "xs")) (EBinOp "::" (EApp (EVar "f") (EVar "x")) (EVar "acc"))))
+(DTypeSig false "listFoldMapGo" (TyConstrained ((cstr "Monoid" (TyVar "m"))) (TyFun (TyVar "m") (TyFun (TyApp (TyCon "List") (TyVar "m")) (TyVar "m")))))
+(DFunDef false "listFoldMapGo" ((PVar "acc") (PList)) (EVar "acc"))
+(DFunDef false "listFoldMapGo" ((PVar "acc") (PCons (PVar "y") (PVar "ys"))) (EApp (EApp (EDictApp "listFoldMapGo") (EApp (EApp (EMethodRef "append") (EVar "y")) (EVar "acc"))) (EVar "ys")))
+(DImpl true "Foldable" ((TyCon "List")) () ((im "fold" (PWild (PVar "acc") (PList)) (EVar "acc")) (im "fold" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "f")) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (EVar "xs"))) (im "foldRight" (PWild (PVar "acc") (PList)) (EVar "acc")) (im "foldRight" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "f") (EVar "x")) (EApp (EApp (EApp (EMethodRef "foldRight") (EVar "f")) (EVar "acc")) (EVar "xs")))) (im "toList" () (EVar "identity")) (im "isEmpty" ((PList)) (EVar "True")) (im "isEmpty" (PWild) (EVar "False")) (im "length" () (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") PWild) (EBinOp "+" (EVar "acc") (ELit (LInt 1))))) (ELit (LInt 0)))) (im "foldMap" ((PVar "f") (PVar "xs")) (EApp (EApp (EDictApp "listFoldMapGo") (EMethodRef "empty")) (EApp (EApp (EApp (EVar "listRevMap") (EVar "f")) (EVar "xs")) (EListLit))))))
 (DImpl true "Foldable" ((TyCon "Option")) () ((im "fold" (PWild (PVar "acc") (PCon "None")) (EVar "acc")) (im "fold" ((PVar "f") (PVar "acc") (PCon "Some" (PVar "x"))) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (im "foldRight" (PWild (PVar "acc") (PCon "None")) (EVar "acc")) (im "foldRight" ((PVar "f") (PVar "acc") (PCon "Some" (PVar "x"))) (EApp (EApp (EVar "f") (EVar "x")) (EVar "acc"))) (im "toList" ((PCon "None")) (EListLit)) (im "toList" ((PCon "Some" (PVar "x"))) (EListLit (EVar "x")))))
 (DImpl true "Foldable" ((TyApp (TyCon "Result") (TyVar "e"))) () ((im "fold" (PWild (PVar "acc") (PCon "Err" PWild)) (EVar "acc")) (im "fold" ((PVar "f") (PVar "acc") (PCon "Ok" (PVar "x"))) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (im "foldRight" (PWild (PVar "acc") (PCon "Err" PWild)) (EVar "acc")) (im "foldRight" ((PVar "f") (PVar "acc") (PCon "Ok" (PVar "x"))) (EApp (EApp (EVar "f") (EVar "x")) (EVar "acc"))) (im "toList" ((PCon "Err" PWild)) (EListLit)) (im "toList" ((PCon "Ok" (PVar "x"))) (EListLit (EVar "x")))))
 (DInterface true false "Traversable" ("t") ((super "Mappable" ("t")) (super "Foldable" ("t"))) ((imethod "traverse" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyVar "m") (TyVar "b")))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyVar "m") (TyApp (TyVar "t") (TyVar "b"))))))) None) (imethod "sequence" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyApp (TyVar "t") (TyApp (TyVar "m") (TyVar "a"))) (TyApp (TyVar "m") (TyApp (TyVar "t") (TyVar "a"))))) (mdef ((PVar "ta")) (EApp (EApp (EMethodRef "traverse") (EVar "identity")) (EVar "ta"))))))
@@ -3090,7 +3110,7 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DFunDef false "maximum" ((PVar "xs")) (ELetGroup ((lgb "step" (clause ((PCon "None") (PVar "x")) (EApp (EVar "Some") (EVar "x"))) (clause ((PCon "Some" (PVar "m")) (PVar "x")) (EApp (EVar "Some") (EApp (EApp (EMethodRef "max") (EVar "m")) (EVar "x")))))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "step")) (EVar "None")) (EVar "xs"))))
 (DTypeSig true "minimum" (TyConstrained ((cstr "Foldable" (TyVar "t")) (cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyVar "t") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))
 (DFunDef false "minimum" ((PVar "xs")) (ELetGroup ((lgb "step" (clause ((PCon "None") (PVar "x")) (EApp (EVar "Some") (EVar "x"))) (clause ((PCon "Some" (PVar "m")) (PVar "x")) (EApp (EVar "Some") (EApp (EApp (EMethodRef "min") (EVar "m")) (EVar "x")))))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "step")) (EVar "None")) (EVar "xs"))))
-(DImpl true "Filterable" ((TyCon "List")) () ((im "filterMap" (PWild (PList)) (EListLit)) (im "filterMap" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EMatch (EApp (EVar "f") (EVar "x")) (arm (PCon "Some" (PVar "y")) () (EBinOp "::" (EVar "y") (EApp (EApp (EMethodRef "filterMap") (EVar "f")) (EVar "xs")))) (arm (PCon "None") () (EApp (EApp (EMethodRef "filterMap") (EVar "f")) (EVar "xs")))))))
+(DImpl true "Filterable" ((TyCon "List")) () ((im "filterMap" (PWild (PList)) (EListLit)) (im "filterMap" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EMatch (EApp (EVar "f") (EVar "x")) (arm (PCon "Some" (PVar "y")) () (EBinOp "::" (EVar "y") (EApp (EApp (EMethodRef "filterMap") (EVar "f")) (EVar "xs")))) (arm (PCon "None") () (EApp (EApp (EMethodRef "filterMap") (EVar "f")) (EVar "xs"))))) (im "filter" (PWild (PList)) (EListLit)) (im "filter" ((PVar "p") (PCons (PVar "x") (PVar "xs"))) (EIf (EApp (EVar "p") (EVar "x")) (EBinOp "::" (EVar "x") (EApp (EApp (EMethodRef "filter") (EVar "p")) (EVar "xs"))) (EApp (EApp (EMethodRef "filter") (EVar "p")) (EVar "xs"))))))
 (DTypeSig true "otherwise" (TyCon "Bool"))
 (DFunDef false "otherwise" () (EVar "True"))
 (DTypeSig true "not" (TyFun (TyCon "Bool") (TyCon "Bool")))
@@ -3103,7 +3123,7 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DFunDef false "or" ((PCon "False") (PCon "False")) (EVar "False"))
 (DFunDef false "or" (PWild PWild) (EVar "True"))
 (DTypeSig true "xor" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyCon "Bool"))))
-(DFunDef false "xor" ((PVar "a") (PVar "b")) (EBinOp "/=" (EVar "a") (EVar "b")))
+(DFunDef false "xor" ((PVar "a") (PVar "b")) (EIf (EVar "a") (EApp (EVar "not") (EVar "b")) (EVar "b")))
 (DTypeSig true "isSome" (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyCon "Bool")))
 (DFunDef false "isSome" ((PCon "Some" PWild)) (EVar "True"))
 (DFunDef false "isSome" ((PCon "None")) (EVar "False"))

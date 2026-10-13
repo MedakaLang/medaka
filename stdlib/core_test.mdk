@@ -5,7 +5,7 @@
 -- last. `debug` quotes strings and `display` does not. Indexing a string
 -- counts codepoints, not bytes.
 
-import test.{expectEqual}
+import test.{expectEqual, expectTrue, expectFalse}
 
 -- # Debug and Display of lists
 
@@ -125,3 +125,90 @@ test "list compare decides on the first differing element" =
 
 prop "list compare is Eq exactly when the lists are equal" (xs : List Int) (ys : List Int) =
   compare xs ys == Eq == eq xs ys
+
+test "foldMap over a String monoid concatenates in element order" =
+  expectEqual "123" (foldMap (x => display x) [1, 2, 3])
+
+test "foldMap over a list of lists keeps the element order" =
+  expectEqual [1, 2, 3, 4] (foldMap (x => [x, x + 1]) [1, 3])
+
+-- # Filtering lists
+
+test "filter keeps the elements that satisfy the predicate" =
+  expectEqual [2, 4] (filter (x => x % 2 == 0) [1, 2, 3, 4])
+
+test "filter keeps the order of the surviving elements" =
+  expectEqual [5, 3, 9] (filter (x => x > 2) [5, 1, 3, 0, 9])
+
+test "filter of an empty list is empty" =
+  expectEqual ([] : List Int) (filter (x => x > 0) ([] : List Int))
+
+test "filter drops every element when none satisfies the predicate" =
+  expectEqual ([] : List Int) (filter (x => x > 10) [1, 2])
+
+-- # Exclusive or
+
+test "xor of True and True is False" = expectFalse (xor True True)
+
+test "xor of True and False is True" = expectTrue (xor True False)
+
+test "xor of False and True is True" = expectTrue (xor False True)
+
+test "xor of False and False is False" = expectFalse (xor False False)
+
+-- # Tuple ordering
+
+test "pair compare decides on the first field" =
+  expectEqual [Lt, Gt] [compare (1, 9) (2, 0), compare (3, 0) (2, 9)]
+
+test "pair compare falls through to the second field on a tie" =
+  expectEqual
+    [Lt, Gt, Eq]
+    [compare (1, 2) (1, 3), compare (1, 3) (1, 2), compare (1, 2) (1, 2)]
+
+test "triple compare decides on each field in turn" =
+  expectEqual
+    [Lt, Lt, Gt, Eq]
+    [
+      compare (1, 9, 9) (2, 0, 0),
+      compare (1, 1, 9) (1, 2, 0),
+      compare (1, 2, 9) (1, 2, 0),
+      compare (1, 2, 3) (1, 2, 3),
+    ]
+
+test "quadruple compare decides on each field in turn" =
+  expectEqual
+    [Lt, Lt, Lt, Gt, Eq]
+    [
+      compare (1, 9, 9, 9) (2, 0, 0, 0),
+      compare (1, 1, 9, 9) (1, 2, 0, 0),
+      compare (1, 1, 1, 9) (1, 1, 2, 0),
+      compare (1, 1, 1, 9) (1, 1, 1, 0),
+      compare (1, 1, 2, 3) (1, 1, 2, 3),
+    ]
+
+test "quintuple compare decides on each field in turn" =
+  expectEqual
+    [Lt, Lt, Lt, Lt, Gt, Eq]
+    [
+      compare (1, 9, 9, 9, 9) (2, 0, 0, 0, 0),
+      compare (1, 1, 9, 9, 9) (1, 2, 0, 0, 0),
+      compare (1, 1, 1, 9, 9) (1, 1, 2, 0, 0),
+      compare (1, 1, 1, 1, 9) (1, 1, 1, 2, 0),
+      compare (1, 1, 1, 1, 9) (1, 1, 1, 1, 0),
+      compare (1, 1, 1, 2, 3) (1, 1, 1, 2, 3),
+    ]
+
+test "tuple compare returns Gt from an earlier field" =
+  expectEqual
+    [Gt, Gt, Gt, Gt, Gt, Gt, Gt, Gt]
+    [
+      compare (2, 0, 0) (1, 9, 9),
+      compare (1, 2, 0) (1, 1, 9),
+      compare (2, 0, 0, 0) (1, 9, 9, 9),
+      compare (1, 1, 2, 0) (1, 1, 1, 9),
+      compare (2, 0, 0, 0, 0) (1, 9, 9, 9, 9),
+      compare (1, 2, 0, 0, 0) (1, 1, 9, 9, 9),
+      compare (1, 1, 2, 0, 0) (1, 1, 1, 9, 9),
+      compare (1, 1, 1, 2, 0) (1, 1, 1, 1, 9),
+    ]
