@@ -402,7 +402,10 @@ pageCostFindings pc smallOuts largeOuts = match (
 costCurve : String -> List String -> <Exec, IO> (String, List String)
 costCurve bin args =
   let label = "\{gate} (native cost-curve \{debug args})"
-  let envs = ["MEDAKA_ROOT=\{medakaRoot}", "MEDAKA_STRICT=1"]
+  -- Pinned, not inherited: the harness defaults GC_MARKERS=1, and a
+  -- single-threaded mark of the large corpus's heap moves the large/small
+  -- ratio this probe grades.
+  let envs = ["MEDAKA_ROOT=\{medakaRoot}", "MEDAKA_STRICT=1", "GC_MARKERS=4"]
   spawnFindings label "the built driver" (spawn runSeconds envs bin args)
 
 -- The label that heads the findings of a synthetic corpus of `records`.
