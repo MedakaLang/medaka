@@ -3706,8 +3706,10 @@ data SiteKind =
   -- what lets resolveArgStamp recover the interface's WHOLE param vector
   -- (ifaceParamMonos) — the arg mono alone is only the receiver, and selecting on it
   -- made a multi-param dispatch order-dependent.  Mirrors SKReturn, which has
-  -- carried the method's full type for the same reason since #156 S3a.
-  | SKArg (Ref (List Route)) Mono
+  -- carried the method's full type for the same reason since #156 S3a.  The last
+  -- field is the occurrence's goal variable for each typaram its type never
+  -- mentions (`methodOmittedVars`), which the full mono cannot recover.
+  | SKArg (Ref (List Route)) Mono (List (String, Mono))
   -- operator (EBinOp/EUnOp) site: the inImpl-body flag.  Primary mono = operand mono.
   -- (binop vs unop is carried by WHICH list holds it / the resolveOpSites flag, not here.)
   | SKOp Bool
@@ -8738,13 +8740,14 @@ pushPendingObl : IfaceRef ->
   List String ->
   Ty ->
   Mono ->
+  List (String, Mono) ->
   Provenance ->
   Option Loc ->
   Unit
-pushPendingObl iface typarams mty occ prov loc =
+pushPendingObl iface typarams mty occ omitted prov loc =
   wPush
     perRun.value.implObls
-    (mkMethodOccObl iface typarams mty occ prov loc (captureScope ()))
+    (mkMethodOccObl iface typarams mty occ omitted prov loc (captureScope ()))
 
 pushExactReturnObl : MethodReturnRequest -> Unit
 pushExactReturnObl request = wPush perRun.value.implObls UObligation {
@@ -8860,17 +8863,18 @@ mkMethodOccObl : IfaceRef ->
   List String ->
   Ty ->
   Mono ->
+  List (String, Mono) ->
   Provenance ->
   Option Loc ->
   ScopeId ->
   UObligation
-mkMethodOccObl iface typarams mty occ prov loc scope = UObligation {
+mkMethodOccObl iface typarams mty occ omitted prov loc scope = UObligation {
   pred = Predicate { iface = iface, args = [] },
   originId = 0,
   prov = prov,
   loc = loc,
   uoScope = scope,
-  oblProj = OpMethodOcc typarams mty occ,
+  oblProj = OpMethodOcc typarams mty occ omitted,
 }
 
 pushNumLitObl : ClassPredicate -> Mono -> Option Loc -> ScopeId -> Unit
@@ -9456,7 +9460,9 @@ data Provenance =
 -- read would be SILENT, which is why there is a single accessor rather than a rule.)
 data OblProjection =
   | OpProjected
-  | OpMethodOcc (List String) Ty Mono
+  -- typarams, declared method type, occurrence, and the occurrence's variable for
+  -- each typaram the declared type never mentions (`methodOmittedVars`)
+  | OpMethodOcc (List String) Ty Mono (List (String, Mono))
   | OpExactReturn MethodReturnRequest
   | OpNumLit Mono
 
@@ -9532,7 +9538,8 @@ oblAsTuple o = (o.pred.iface, uOblArgs o, o.loc)
 uOblArgs : UObligation -> List Mono
 uOblArgs o = match o.oblProj
   OpProjected => o.pred.args
-  OpMethodOcc typarams mty occ => dispatchMonosOf typarams mty occ
+  OpMethodOcc typarams mty occ omitted =>
+    occurrenceDispatchMonos typarams mty occ omitted
   OpExactReturn request => optionOr [] (methodReturnArgs request)
   OpNumLit _ => o.pred.args
 
@@ -10060,8 +10067,14 @@ nthArgMono n m = match normalize m
 -- The cell is read later (resolveArgStamps), once inference has solved it.  D3b-1:
 -- also carry [name] + the impl-dicts ref so a concrete-head site can thread the
 -- element dict for a parametric `requires` impl.
-recordArgStamp : String -> Ref Route -> Ref (List Route) -> Int -> Mono -> Unit
-recordArgStamp name tagRef implRef idx mono
+recordArgStamp : String ->
+  Ref Route ->
+  Ref (List Route) ->
+  Int ->
+  Mono ->
+  List (String, Mono) ->
+  Unit
+recordArgStamp name tagRef implRef idx mono omitted
   | toggles.value.suppressArgStamp.value = ()
   | otherwise = match nthArgMono idx mono
     Some am =>
@@ -10072,7 +10085,7 @@ recordArgStamp name tagRef implRef idx mono
           tagRef
           am
           perRun.value.currentFn.value
-          (SKArg implRef mono)
+          (SKArg implRef mono omitted)
           !currentLoc
           (captureScope ())
           (freshEvId ()))
@@ -10110,8 +10123,8 @@ resolveArgStamps [] = goalSiteLoc := None
 resolveArgStamps ((PendingEntry name tagRef am encl kind loc scope _) :: rest) =
   goalSiteLoc := loc
   let _ = match kind
-    SKArg implRef fullMono =>
-      resolveArgStamp name tagRef implRef am fullMono encl loc scope
+    SKArg implRef fullMono omitted =>
+      resolveArgStamp name tagRef implRef am fullMono omitted encl loc scope
     _ => ()
   resolveArgStamps rest
 
@@ -10139,12 +10152,13 @@ resolveArgStamp : String ->
   Ref (List Route) ->
   Mono ->
   Mono ->
+  List (String, Mono) ->
   String ->
   Option Loc ->
   ScopeId ->
   Unit
-resolveArgStamp name tagRef implRef am fullMono encl origin scope =
-  let (route, routes) = entail name am encl scope (EKArg fullMono)
+resolveArgStamp name tagRef implRef am fullMono omitted encl origin scope =
+  let (route, routes) = entail name am encl scope (EKArg fullMono omitted)
   let _ = match route
     RNone => ()
     _ => tagRef := route
@@ -16617,8 +16631,10 @@ inferMethodCandidateAt env name ifaceRef arityRef tagRef implRef methodRef =
       let ret = match argDispatchOf name
         Some idx =>
           let _ = recordMethodDicts name methodRef subst.misTypeSubst
-          let _ = recordMethodObligationGuarded env name s occurrence
-          let _ = recordArgStamp name tagRef implRef idx occurrence
+          -- One variable per omitted typaram, shared by the goal and the route.
+          let omitted = methodOmittedVars name
+          let _ = recordMethodObligationGuarded env name s occurrence omitted
+          let _ = recordArgStamp name tagRef implRef idx occurrence omitted
           let _ = recordArgSiteFn name idx occurrence
           occurrence
         None => recordSite env name s tagRef implRef methodRef occurrence subst
@@ -17006,7 +17022,7 @@ recordSite env name scheme tagRef implRef methodRef methodType subst =
           methodRef
           subst.misTypeSubst
     _ =>
-      let _ = recordMethodObligationGuarded env name scheme methodType
+      let _ = recordMethodObligationGuarded env name scheme methodType []
       recordMethodDicts name methodRef subst.misTypeSubst
   let siteEv = match exact
     Some request => optionOr ev request.mrrGoalEv
@@ -20456,6 +20472,7 @@ recordIfaceObligation c lt
       ["a"]
       (TyVar "a")
       lt
+      []
       POperator
       !currentLoc
   | otherwise = ()
@@ -21262,7 +21279,7 @@ inferVarPlainId env x id = match lookupVar env x
       recordMethodObligationOwned env x s inst.mtiBody inst.mtiSubstitution None
     None =>
       let mono = instantiateVarTrackedId env x id s
-      recordMethodObligationGuarded env x s mono
+      recordMethodObligationGuarded env x s mono (methodOmittedVars x)
   None => unboundVarFresh x
 
 -- #11 soundness (native obligation hole, plain check path): a constrained binding used
@@ -21560,8 +21577,8 @@ lookupSchemeOblsByName x (((n2, _), v) :: rest)
 -- exists once the dispatch type is resolved.  Returns the mono unchanged.  A
 -- non-method name records nothing (the common case).  The marked path records the
 -- same via inferMethodAt; the bare typecheck_main path records here.
-recordImplObligation : String -> Mono -> Mono
-recordImplObligation x mono
+recordImplObligation : String -> Mono -> List (String, Mono) -> Mono
+recordImplObligation x mono omitted
   -- A standalone shadow (a top-level funDef that reuses an interface-method name)
   -- resolves in-scope to that standalone, not the method — the scope-blind marker
   -- still rewrites its occurrences to EMethodAt, but a NO-IMPL receiver legitimately
@@ -21644,7 +21661,8 @@ recordImplObligation x mono
       -- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §10.7.  Positive pair:
       -- `test/dict_fixtures/i4-xmod-method-occurrence-{foreign-iface-rejected,
       -- own-iface-control}`.
-      let _ = pushPendingObl iface typarams mty mono PMethodOcc !currentLoc
+      let _ =
+        pushPendingObl iface typarams mty mono omitted PMethodOcc !currentLoc
       -- #818 (#838 I3): also record each method-level `=>` constraint slot (e.g.
       -- `Ord b` on `peer : Ord b => a -> b -> b -> Bool`) as its OWN obligation, so an
       -- unsatisfiable slot (`Ord NoOrd`) is rejected by the unified checker at check
@@ -21743,12 +21761,17 @@ admittedReceiverMono name (ir :: _) mono = do
   k <- lookupIdxById ir name driverState.value.methodDispatchIdxByIdRef.value
   nthArgMono k mono
 
-recordMethodObligationGuarded : TcEnv -> String -> Scheme -> Mono -> Mono
-recordMethodObligationGuarded env name s mono =
+recordMethodObligationGuarded : TcEnv ->
+  String ->
+  Scheme ->
+  Mono ->
+  List (String, Mono) ->
+  Mono
+recordMethodObligationGuarded env name s mono omitted =
   if lookupLocalFlag env name || isMonoScheme s then
     mono
   else
-    recordImplObligation name mono
+    recordImplObligation name mono omitted
 
 exactReturnRow : TcEnv -> String -> Scheme -> Option MethodSchemeRow
 exactReturnRow env name scheme = match lookupMethodRow env name
@@ -21801,7 +21824,7 @@ recordMethodObligationOwned env name scheme occurrence subst goalEv =
           request.mrrLoc
           request.mrrScope
       recordExactMethodObligation request
-    None => recordMethodObligationGuarded env name scheme occurrence
+    None => recordMethodObligationGuarded env name scheme occurrence []
 
 recordExactMethodObligation : MethodReturnRequest -> Mono
 recordExactMethodObligation request =
@@ -23065,7 +23088,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef hd nodes f x =
           tagRef
           xt
           perRun.value.currentFn.value
-          (SKArg implRef (if dispatches then ft else xt))
+          (SKArg implRef (if dispatches then ft else xt) [])
           !currentLoc
           (captureScope ())
           (freshEvId ()))
@@ -26863,7 +26886,7 @@ numConstrainedIds obls = flatMap numObligIds obls
 
 numObligIds : UObligation -> List Int
 numObligIds o = match o.oblProj
-  OpMethodOcc _ _ occ =>
+  OpMethodOcc _ _ occ _ =>
     if o.pred.iface.irName == "Num" then monoUnboundIds occ else []
   OpExactReturn request =>
     if o.pred.iface.irName == "Num" then
@@ -27333,7 +27356,7 @@ registerAmbiguousConstraintsOwnedBy owner outerBelow obls monos =
 oblDispatchMonos : UObligation -> List Mono
 oblDispatchMonos o = match o.oblProj
   OpProjected => []
-  OpMethodOcc typarams mty occ =>
+  OpMethodOcc typarams mty occ _ =>
     oblDispatchMonosGo o.pred.iface.irName typarams mty occ
   OpExactReturn request =>
     oblDispatchMonosGo
@@ -27366,7 +27389,7 @@ registerAmbiguousGo : List UObligation -> Int -> List Int -> List Int -> Unit
 registerAmbiguousGo [] _ _ _ = ()
 registerAmbiguousGo (o :: rest) groupLevel memberIds anchoredIds =
   let _ = match o.oblProj
-    OpMethodOcc typarams mty occ =>
+    OpMethodOcc typarams mty occ _ =>
       registerOneAmbiguous
         o.pred.iface
         typarams
@@ -27523,7 +27546,7 @@ groundOrWithhold guard id m =
 liveNumVarGo : Int -> List UObligation -> Option Mono
 liveNumVarGo _ [] = None
 liveNumVarGo id (o :: rest) = match o.oblProj
-  OpMethodOcc _ _ occ =>
+  OpMethodOcc _ _ occ _ =>
     if o.pred.iface.irName == "Num" then match findTvarInMono occ id
       Some m => Some m
       None => liveNumVarGo id rest
@@ -28452,10 +28475,21 @@ numericReturnRoute route _ = route
 -- when the method has no registered interface (a plain `=>`-constrained fn) or the
 -- declared/occurrence shapes do not match — resolveSite falls back to [resultMono].
 ifaceParamMonos : String -> Mono -> Option (List Mono)
-ifaceParamMonos name fullMono = match methodEntryHere name
+ifaceParamMonos name fullMono = occurrenceParamMonos name fullMono []
+
+-- `ifaceParamMonos` at an occurrence that posed its goal with [omitted]
+-- (`methodOmittedVars`): a typaram the declared type never mentions reads the
+-- goal's own variable, so the route selects on the vector §3 determined.
+occurrenceParamMonos : String ->
+  Mono ->
+  List (String, Mono) ->
+  Option (List Mono)
+occurrenceParamMonos name fullMono omitted = match methodEntryHere name
   None => None
   Some (_, typarams, mty, _) =>
-    map (subst => map (paramMonoOf subst) typarams) (matchTyMono mty fullMono)
+    map
+      (subst => map (paramMonoOf (subst ++ omitted)) typarams)
+      (matchTyMono mty fullMono)
 
 -- RIGID PRODUCER 2 of 2 (#1110): [tp] is an interface type-PARAMETER name, so
 -- the fallback when the head match bound nothing for it is a rigid variable,
@@ -33572,8 +33606,9 @@ data EntailKind =
   -- #609: also carries the method's full occurrence mono, so this kind can recover
   -- the interface's whole param vector (ifaceParamMonos) exactly as EKReturn does.
   -- Without it the arm could only ever see arg 0 — and the arg-position leg is the
-  -- one an ordinary `ix 1 'x'` call takes, so this is where #609 landed.
-  | EKArg Mono
+  -- one an ordinary `ix 1 'x'` call takes, so this is where #609 landed.  The list
+  -- is the site's `SKArg` omitted-typaram variables (`occurrenceParamMonos`).
+  | EKArg Mono (List (String, Mono))
   -- #156 S3c: operator site (resolveOpSite).  isBinop and the in-impl-body flag
   -- (for opDictVarOf's dict-var policy).  assum = opDictVarOf → RDict;
   -- inst = stampOpRouteVal (builtin head → RNone, else RKey with reqs PACKED in — no
@@ -33725,7 +33760,7 @@ goalRequestOfKind _ (EKNumReturn predicate _ _ _) = Some PredicateRequest {
   prIface = predicate.predicateInterface,
   prArgs = PSArgsKnown predicate.predicateArguments,
 }
-goalRequestOfKind name (EKArg fullMono) = goalPredOf name fullMono
+goalRequestOfKind name (EKArg fullMono _) = goalPredOf name fullMono
 goalRequestOfKind name (EKOp _ _) = goalPredOfOp name
 goalRequestOfKind _ (EKPredicateOp _ _ predicate) = Some PredicateRequest {
   prIface = predicate.predicateInterface,
@@ -33776,7 +33811,7 @@ entailAssumVar _ m encl _ useScope (EKNestedTop iface _ _ rest) =
             LegacyScalar
             (activeDictVarAnswering m useScope (b =>
               scalarGivenAnswers b iface useScope))
-entailAssumVar request m encl _ useScope (EKArg _) =
+entailAssumVar request m encl _ useScope (EKArg _ _) =
   activeDictVarOfEncl request m encl useScope
 entailAssumVar request m encl name useScope (EKOp isBinop inImpl) =
   -- #1318: the in-impl non-append operator arm in opDictVarOf retains its scalar
@@ -33801,7 +33836,7 @@ entailAssumRoute dname (EKReturn _ isRp) =
 entailAssumRoute dname (EKNumReturn _ _ isRp _) =
   if isRp then RDictFwd dname else RDict dname
 entailAssumRoute dname (EKNestedTop _ _ _ _) = RDict dname
-entailAssumRoute dname (EKArg _) = RDict dname
+entailAssumRoute dname (EKArg _ _) = RDict dname
 entailAssumRoute dname (EKOp _ _) = RDict dname
 entailAssumRoute dname (EKPredicateOp _ _ _) = RDict dname
 
@@ -33924,8 +33959,8 @@ entailInst _ m encl useScope tag (EKNestedTop iface _ walk rest) =
 -- the SAME impl, and the first cut of this fix computed the vector here and then
 -- handed the scalar `m` to argImplDictRoutesForEncl, so the two arms could select
 -- differently at n≥2.  Sharing one binding makes them agree by construction.
-entailInst name m encl useScope tag (EKArg fullMono) =
-  let goals = optionOr [m] (ifaceParamMonos name fullMono)
+entailInst name m encl useScope tag (EKArg fullMono omitted) =
+  let goals = optionOr [m] (occurrenceParamMonos name fullMono omitted)
   let (siteKey, selected) = keyForSite name goals
   let routeKey = optionOr tag siteKey
   -- ARCH B-2.1-h: graph-global, off `bodyImplEnvRef` — see `ieDefinesReqMethodAt`,
@@ -34040,7 +34075,7 @@ entailFallback _ _ _ (EKReturn _ _) = RNone
 entailFallback _ _ _ (EKNumReturn _ _ _ _) = RNone
 entailFallback encl scope m (EKNestedTop iface policy walk rest) =
   undeterminedRoute encl scope iface policy walk (m :: rest)
-entailFallback _ _ _ (EKArg _) = RNone
+entailFallback _ _ _ (EKArg _ _) = RNone
 entailFallback _ _ _ (EKOp _ _) = RNone
 entailFallback _ _ _ (EKPredicateOp _ _ _) = RNone
 
@@ -39750,6 +39785,39 @@ dispatchMonosOf typarams mty occ =
   let pairs = walkDispatch typarams (stripTyConstraints mty) occ
   collectByParam typarams pairs
 
+-- `dispatchMonosOf` over a method occurrence's whole interface vector: a typaram
+-- the declared type never mentions reads the occurrence's own variable for it
+-- ([omitted]), so the goal keeps every position (DICT-SEMANTICS §5).
+occurrenceDispatchMonos : List String ->
+  Ty ->
+  Mono ->
+  List (String, Mono) ->
+  List Mono
+occurrenceDispatchMonos typarams mty occ omitted =
+  collectByParam
+    typarams
+    (walkDispatch typarams (stripTyConstraints mty) occ ++ omitted)
+
+-- One fresh variable per interface parameter [mty] never mentions.  DICT-SEMANTICS
+-- §5: the dispatch vector is fixed by the use site's instantiation of the whole
+-- interface, wherever (or whether) a parameter appears in the method's type, so the
+-- occurrence poses that position at a variable of its own for §3 to determine.
+omittedParamVars : List String -> Ty -> List (String, Mono)
+omittedParamVars typarams mty =
+  let named = tyVarNames (stripTyConstraints mty)
+  map
+    (tp => (tp, freshVar ()))
+    (filterList (tp => not (contains tp named)) typarams)
+
+-- `omittedParamVars` for the method [name] resolves to here, when it dispatches on
+-- an argument.  None for a name with no single declaring interface, nor for a
+-- return-dispatched method, whose occurrence carries its absent positions in its
+-- own predicate template (`methodReturnRequest`).
+methodOmittedVars : String -> List (String, Mono)
+methodOmittedVars name = match (argDispatchOf name, methodEntryHere name)
+  (Some _, Some (_, typarams, mty, _)) => omittedParamVars typarams mty
+  _ => []
+
 -- strip leading `=>` constraints / effect rows so the walk aligns the method's
 -- value type with the occurrence mono.
 stripTyConstraints : Ty -> Ty
@@ -40897,7 +40965,7 @@ checkSurvivorObligations subject ownIface ownTyparams mty extraMap (o :: rest) l
   -- typarams only, per the F0 stance: a non-receiver typaram is impl-determined.
   let _ = match o.oblProj
     OpProjected => ()
-    OpMethodOcc otyparams omty occ =>
+    OpMethodOcc otyparams omty occ _ =>
       checkSurvivorDispatchMonos
         subject
         ownIface
@@ -44526,6 +44594,7 @@ numCallObls (o :: rest) = match (o.pred.iface.irName, uOblArgs o)
         ["a"]
         (TyVar "a")
         mono
+        []
         PNumLit
         o.loc
         o.uoScope
@@ -44554,6 +44623,7 @@ numDictObls (app :: rest) =
               ["a"]
               (TyVar "a")
               (snd p)
+              []
               PNumLit
               app.pdaLoc
               app.pdaScope,
@@ -46269,9 +46339,10 @@ schemeObligationsOf generalizing boundIds obls =
 -- site rather than to whatever `currentLoc` holds at a group's close.
 oblPredOf : UObligation -> List (IfaceRef, List Mono, Option Loc)
 oblPredOf o = match o.oblProj
-  OpMethodOcc typarams mty occ => match dispatchMonosOf typarams mty occ
-    [] => []
-    ds => [(o.pred.iface, ds, o.loc)]
+  OpMethodOcc typarams mty occ omitted =>
+    match occurrenceDispatchMonos typarams mty occ omitted
+      [] => []
+      ds => [(o.pred.iface, ds, o.loc)]
   OpExactReturn request => match methodReturnArgs request
     Some ds => match ds
       [] => []
@@ -48574,7 +48645,7 @@ ifaceForConstraintId id =
 ifaceForConstraintIdGo : Int -> List UObligation -> IfaceRef
 ifaceForConstraintIdGo _ [] = ifaceRefNone
 ifaceForConstraintIdGo id (o :: rest) = match o.oblProj
-  OpMethodOcc _ _ occ => match normalize occ
+  OpMethodOcc _ _ occ _ => match normalize occ
     TVar cell =>
       if tyvarId cell == id then
         o.pred.iface

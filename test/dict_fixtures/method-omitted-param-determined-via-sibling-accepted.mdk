@@ -1,0 +1,15 @@
+-- §5 + §3 Determination (#4072): `mk True` poses `K ?a Bool` and fixes
+-- `?a = Box Int`; the outer `k` poses `K (Box Int) ?b` with its own `?b`, which
+-- `impl K (Box Int) Bool`, the one unifying instance, determines.  Both routes
+-- name that impl.  Hand-derived: ACCEPT on all three verbs, prints `main`.
+interface K a b where
+  k : a -> String
+  mk : b -> a
+
+data Box a = Box a
+
+impl K (Box Int) Bool where
+  k _ = "main"
+  mk _ = Box 2
+
+main = println (k (mk True))
