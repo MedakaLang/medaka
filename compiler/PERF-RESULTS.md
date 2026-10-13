@@ -1714,7 +1714,7 @@ The comment at the top of `compiler/frontend/parser.mdk` that called direct-styl
 runtime default. The runtime default is unchanged (interactive `check`: 25.3 CPU-s /
 13.9 s wall with default markers vs 23.0 CPU-s / 23.0 s wall with one marker).
 
-Measured 2026-10-12 on `main` @ `d7e849f51`, quiet 12-core box, `run_gates.sh` at `JOBS=7`
+Measured 2026-10-12 (figures from #4088, not re-run in the PR) on `main` @ `d7e849f51`, quiet 12-core box, `run_gates.sh` at `JOBS=7`
 (default markers → `GC_MARKERS=1`):
 
 | Gate | CPU-s | wall |
