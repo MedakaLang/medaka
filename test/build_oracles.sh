@@ -74,6 +74,10 @@
 # build-all. Only truly NO ARGS means build-all; that is intentional (#474).
 set -u
 
+# Parallel harness: cores are already busy, so Boehm marker threads only add CPU (#4088).
+# A caller's own GC_MARKERS wins.
+export GC_MARKERS="${GC_MARKERS:-1}"
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Keep the build/test write-storm OUT OF RAM (/tmp is a RAM-backed tmpfs).

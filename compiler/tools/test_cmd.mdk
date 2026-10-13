@@ -4112,7 +4112,9 @@ testFilesGo engines _ _ _ cases filterOpt seedOpt files acc =
   let medaka = envOr "MEDAKA" (executablePath ())
   let childArgvs = map (testChildArgs engines cases filterOpt seedOpt) files
   let jobs = testJobs
-  let prefix = childJobsPrefix (min jobs (length files)) jobs
+  let prefix =
+    childJobsPrefix (min jobs (length files)) jobs
+      ++ childGcMarkersPrefix (envOr "GC_MARKERS" "") jobs
   let argvs = map (prefix ++ [medaka] ++ _) childArgvs
   if jobs <= 1 then
     testFilesSerial "env" files argvs acc
@@ -4126,6 +4128,14 @@ export
 childJobsPrefix : Int -> Int -> List String
 childJobsPrefix outer budget =
   ["MEDAKA_TEST_JOBS=\{intToString (max 1 (budget / max 1 outer))}"]
+
+-- Concurrent children already keep every core busy, so Boehm's per-core marker
+-- threads add CPU without shortening wall. The caller's own GC_MARKERS (any
+-- non-empty value) wins; a serial run (budget 1) is left on the runtime default.
+export
+childGcMarkersPrefix : String -> Int -> List String
+childGcMarkersPrefix caller budget =
+  if caller /= "" || budget <= 1 then [] else ["GC_MARKERS=1"]
 
 -- One child at a time, each file's result printed as it completes, so a hang
 -- or kill part-way keeps the earlier files' output. A batch prints nothing

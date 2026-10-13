@@ -1728,6 +1728,25 @@ allocates 320 MB / 480 MB / 192 MB on the base emitter and 32 / 80 / 32 bytes wi
 The comment at the top of `compiler/frontend/parser.mdk` that called direct-style parsing
 "perf-neutral" did not hold on this head and was replaced.
 
+## Harness defaults `GC_MARKERS=1` (#4088)
+
+`test/run_gates.sh`, `test/preflight.sh`, `test/build_oracles.sh` export
+`GC_MARKERS="${GC_MARKERS:-1}"`, and `medaka test` hands its concurrent children
+`GC_MARKERS=1` when the caller has none set. Order: caller env > harness default >
+runtime default. The runtime default is unchanged (interactive `check`: 25.3 CPU-s /
+13.9 s wall with default markers vs 23.0 CPU-s / 23.0 s wall with one marker).
+
+Measured 2026-10-12 (figures from #4088, not re-run in the PR) on `main` @ `d7e849f51`, quiet 12-core box, `run_gates.sh` at `JOBS=7`
+(default markers → `GC_MARKERS=1`):
+
+| Gate | CPU-s | wall |
+|---|---|---|
+| `diff_compiler_engines_part1` | 340 → 307 (−9.7%) | 56.2 → 56.4 s |
+| `diff_compiler_dict_semantics` | 504 → 461 (−8.5%) | 67.9 → 61.6 s |
+
+Negative result: parallel markers combined with `GC_ENABLE_INCREMENTAL` took 378 CPU-s
+for one `check` (vs 23). Never combine them.
+
 ## Box-throughput census: CPU-seconds per agent workload, Boehm knob sweep (#503, #4093)
 
 Measured 2026-10-12 at `d7e849f51` on the dedicated 12-core Debian box with no other
