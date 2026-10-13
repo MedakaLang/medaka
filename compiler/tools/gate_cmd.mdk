@@ -1669,6 +1669,18 @@ invalidMigrationViolations (g :: gs)
     "\{g.name}: migration '\{g.migration}' is not one of \{migrationClassNames}"
       :: invalidMigrationViolations gs
 
+-- Check 13 (#4089): `link` names the link profile run_gates.sh gives the gate's
+-- builds.  An unrecognized value would silently run as the production link,
+-- which is the cost this field exists to remove.
+invalidLinkViolations : List Gate -> List String
+invalidLinkViolations [] = []
+invalidLinkViolations (g :: gs)
+  | g.link == "production" || g.link == "differential" =
+    invalidLinkViolations gs
+  | otherwise =
+    "\{g.name}: link '\{g.link}' is not one of production/differential"
+      :: invalidLinkViolations gs
+
 -- Checks 11 and 12 (#2591, #2595): the two PAIRED migration families.  Both are
 -- claims about the script rather than about the epic's schedule, and a claim one
 -- side grants itself is not reviewable — so the reason is stated where the
@@ -2553,6 +2565,7 @@ verifyClasses root gates shs = match gateCandidates root
       ("invalid cost class", invalidCostViolations gates),
       ("invalid tiers", invalidTiersViolations gates),
       ("invalid migration class", invalidMigrationViolations gates),
+      ("invalid link profile", invalidLinkViolations gates),
       (
         "unpaired shell-because",
         pairedHeaderViolations shellPairing root gates,

@@ -128,6 +128,15 @@
 # it out of the markdown link/symbol gates, which would police prose that is
 # deliberately a verbatim copy of shell/YAML commentary.
 #
+# ── `link` (#4089) ───────────────────────────────────────────────────────────
+#
+# `production` or `differential`: the link the gate's `medaka build`s take.
+# `differential` makes test/run_gates.sh export MEDAKA_NO_LTO=1 and
+# MEDAKA_CLANG_OPT=-O1 for the gate, since a gate that only compares outputs
+# gains nothing from -O2 + ThinLTO. Keep `production` for any gate that grades
+# runtime speed, emitted-code size, stack depth, IR/link behaviour, or that
+# builds the compiler itself. Read by `_link_rows` in test/gate_native_rows.sh.
+#
 # ── `tiers` (S-tier-is-data, #2181) ──────────────────────────────────────────
 #
 # `tiers` is the SET OF RUNS a gate has. It replaced a single `tier = "merge" |
@@ -236,6 +245,7 @@ oracles = []
 sources = ["test/diff_compiler_must_fail.sh"]
 corpus = ["test/must_fail_fixtures"]
 toolchain = []
+link = "production"
 
 # An infra/ratchet gate that reads no oracle and builds nothing. Since S-4
 # (#2177) it reads the REGISTRY for shard membership instead of parsing
@@ -255,6 +265,7 @@ oracles = []
 sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_registry.mdk", "test/diff_compiler_ci_shard_coverage.sh", "test/gates.toml", ".github/workflows/ci.yml"]
 corpus = []
 toolchain = []
+link = "production"
 
 # #2200: the drift check between ci.yml's `detect`-job prose allowlist and
 # `gate_cmd.mdk`'s `isProsePath`. Reads no oracle; runs ci.yml's own extracted
@@ -273,6 +284,7 @@ oracles = []
 sources = ["compiler/tools/gate_cmd.mdk", "test/diff_compiler_prose_classifier.sh"]
 corpus = []
 toolchain = []
+link = "production"
 
 # Named in ci.yml's `backend` shard pattern as a bare `build_cmd`, not
 # `diff_compiler_*` — the registry must not assume the prefix.
@@ -290,6 +302,7 @@ oracles = []
 sources = ["test/compiler_cli_test_support.mdk"]
 corpus = ["test/build_cmd_fixtures"]
 toolchain = ["clang"]
+link = "production"
 
 # The other non-`diff_` name, from ci.yml's `tools` shard pattern.
 [[gate]]
@@ -306,6 +319,7 @@ oracles = []
 sources = []
 corpus = ["test/lsp_fixtures"]
 toolchain = ["clang"]
+link = "production"
 
 # A toolchain-constrained gate: lives in a subdirectory of test/, needs the
 # wasm toolchain and node.
@@ -323,6 +337,7 @@ oracles = ["wasm_emit_main"]
 sources = []
 corpus = ["test/wasm/fixtures"]
 toolchain = ["wasm-tools", "node>=24"]
+link = "production"
 
 # ── Full enrolment (S-2, #2191): the remaining candidates ────────────────────
 #
@@ -350,6 +365,7 @@ oracles = []
 sources = ["gzip/*"]
 corpus = []
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "gzip/test/inflate_oracle"
@@ -365,6 +381,7 @@ oracles = []
 sources = ["gzip/*"]
 corpus = []
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "parsec/test/check"
@@ -380,6 +397,7 @@ oracles = []
 sources = ["parsec/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/nightly/load_harness"
@@ -402,6 +420,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/nightly/repo_vectors_eval_engine"
@@ -422,6 +441,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/nightly/inlang_eval_engine"
@@ -442,6 +462,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/nightly/mst_vectors_eval_engine"
@@ -459,6 +480,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/nightly/read_routes_eval_engine"
@@ -476,6 +498,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/nightly/did_key_eval_engine"
@@ -493,6 +516,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/nightly/secp256k1_point_eval_engine"
@@ -511,6 +535,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/test/atsyntax_vectors"
@@ -526,6 +551,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/test/car_vectors"
@@ -541,6 +567,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
+link = "production"
 
 # One section: a three-engine value differential over this project's own
 # five-row reduction probe. The second section it used to carry (#3036) swept
@@ -563,6 +590,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
+link = "production"
 
 [[gate]]
 name = "pds/test/constant_time_public_key"
@@ -578,6 +606,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "pds/test/constant_time_reductions"
@@ -593,6 +622,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24", "clang"]
+link = "production"
 
 [[gate]]
 name = "pds/test/constant_time_signing"
@@ -608,6 +638,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = ["clang", "valgrind"]
+link = "production"
 
 [[gate]]
 name = "pds/test/dagcbor_cid_vectors"
@@ -623,6 +654,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
+link = "production"
 
 # Two unrelated sections (#2592, #2595), two `test` blocks in one module. One
 # is a native == Wasm value differential over a ledgered corpus, a
@@ -649,6 +681,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
+link = "production"
 
 [[gate]]
 name = "pds/test/ecdsa_vectors"
@@ -664,6 +697,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/test/encodings_vectors"
@@ -679,6 +713,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/test/field_vectors"
@@ -694,6 +729,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
+link = "production"
 
 [[gate]]
 name = "pds/test/hmac_vectors"
@@ -709,6 +745,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/test/inlang_test_oracle"
@@ -729,6 +766,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/test/lexjson_vectors"
@@ -744,6 +782,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/test/mst_vectors"
@@ -759,6 +798,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
+link = "production"
 
 [[gate]]
 name = "pds/test/opaque_field_scalar"
@@ -774,6 +814,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/test/pbkdf2"
@@ -789,6 +830,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 # Two unrelated sections (#2592, #2595), the same pair as
 # pds/test/did_key_all_engines. One is a three-engine value differential over
@@ -811,6 +853,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
+link = "production"
 
 # The same pair of sections as pds/test/protocol_all_engines: a native == Wasm
 # value differential over hand-authored cells (its eval arm is
@@ -834,6 +877,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
+link = "production"
 
 [[gate]]
 name = "pds/test/repo_vectors"
@@ -855,6 +899,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
+link = "production"
 
 [[gate]]
 name = "pds/test/rfc6979_vectors"
@@ -870,6 +915,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/test/scalar_vectors"
@@ -885,6 +931,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
+link = "production"
 
 [[gate]]
 name = "pds/test/secp256k1_point_vectors"
@@ -900,6 +947,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/test/secp256k1_public_key"
@@ -915,6 +963,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/test/sha256_vectors"
@@ -930,6 +979,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/test/signing_corpus"
@@ -945,6 +995,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/test/signing_parity"
@@ -960,6 +1011,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
+link = "production"
 
 [[gate]]
 name = "pds/test/store_persistence"
@@ -975,6 +1027,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/test/trust_boundary_guards"
@@ -990,6 +1043,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/test/vector_provenance"
@@ -1005,6 +1059,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "playground/e2e/run"
@@ -1020,6 +1075,7 @@ oracles = []
 sources = ["playground", "playground/*"]
 corpus = []
 toolchain = ["node>=24"]
+link = "production"
 
 [[gate]]
 name = "sqlite/test/dml_oracle"
@@ -1035,6 +1091,7 @@ oracles = []
 sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
+link = "production"
 
 [[gate]]
 name = "sqlite/test/index_write_oracle"
@@ -1050,6 +1107,7 @@ oracles = []
 sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
+link = "production"
 
 [[gate]]
 name = "sqlite/test/inlang_test_oracle"
@@ -1065,6 +1123,7 @@ oracles = []
 sources = ["sqlite/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 # A gate OUTSIDE test/ entirely, owned by another project, needing an external
 # oracle binary (the real sqlite3 CLI) as a toolchain requirement. It is also
@@ -1085,6 +1144,7 @@ oracles = []
 sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
+link = "production"
 
 [[gate]]
 name = "sqlite/test/overflow_oracle"
@@ -1100,6 +1160,7 @@ oracles = []
 sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
+link = "production"
 
 [[gate]]
 name = "sqlite/test/sql_oracle"
@@ -1115,6 +1176,7 @@ oracles = []
 sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
+link = "production"
 
 # The STORAGE-write group's single row: five `sqlite/test/{writer,writer_api,
 # multipage_write,multitable_write,rowid_roundtrip}_oracle.sh` scripts became
@@ -1134,6 +1196,7 @@ oracles = []
 sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
+link = "production"
 
 [[gate]]
 name = "bootstrap_eval"
@@ -1149,6 +1212,7 @@ oracles = ["eval_main"]
 sources = []
 corpus = ["test/eval_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "bootstrap_lex"
@@ -1164,6 +1228,7 @@ oracles = ["lex_main"]
 sources = []
 corpus = ["test/diff_fixtures"]
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "bootstrap_resolve"
@@ -1179,6 +1244,7 @@ oracles = ["resolve_main"]
 sources = []
 corpus = ["test/resolve_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "bootstrap_typecheck"
@@ -1194,6 +1260,7 @@ oracles = ["typecheck_main"]
 sources = []
 corpus = ["test/typecheck_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "build_construct_coverage"
@@ -1209,6 +1276,7 @@ oracles = []
 sources = ["compiler/backend/*", "compiler/driver/*"]
 corpus = ["test/construct_fixtures"]
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "build_wasm_cmd"
@@ -1224,6 +1292,7 @@ oracles = []
 sources = []
 corpus = ["test/wasm/fixtures_modules"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
+link = "production"
 
 [[gate]]
 name = "check_agent_doc_symbols"
@@ -1239,6 +1308,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "check_build_oracles_for_consistency"
@@ -1254,6 +1324,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "check_doc_links"
@@ -1269,6 +1340,7 @@ oracles = []
 sources = ["playground", "playground/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "check_fingerprint_parity"
@@ -1284,6 +1356,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "check_keyword_sync"
@@ -1299,6 +1372,7 @@ oracles = []
 sources = ["playground", "playground/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "check_mutation_transaction"
@@ -1314,6 +1388,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "check_no_banned_oracle_cmd"
@@ -1329,6 +1404,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
+link = "production"
 
 [[gate]]
 name = "check_recursive_shell_interpreter"
@@ -1344,6 +1420,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "check_removed_constructs"
@@ -1359,6 +1436,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "check_spec_clause_labels"
@@ -1374,6 +1452,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "check_syntax_examples"
@@ -1389,6 +1468,7 @@ oracles = []
 sources = ["compiler/*.md", "docs/*.md", "test/check_syntax_examples.sh"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "cross_project_deps"
@@ -1404,6 +1484,7 @@ oracles = []
 sources = ["compiler/driver/loader.mdk", "test/compiler_cli_test_support.mdk", "test/cross_project_deps_test.mdk"]
 corpus = ["test/cross_project_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_build"
@@ -1419,6 +1500,7 @@ oracles = []
 sources = ["compiler/backend/*", "compiler/driver/*"]
 corpus = ["test/build_diff_fixtures"]
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "diff_compiler_call_arity"
@@ -1434,6 +1516,7 @@ oracles = []
 sources = ["compiler/backend/*", "compiler/ir/*", "compiler/types/*", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/build_diff_fixtures"]
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_capability_matrix"
@@ -1449,6 +1532,7 @@ oracles = []
 sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/core_ir_eval.mdk", "stdlib/runtime.mdk", "test/EXTERN-DOMAIN-LEDGER.txt"]
 corpus = ["test/llvm_fixtures", "test/llvm_fixtures_typed", "test/wasm/fixtures", "test/wasm/fixtures_typed", "test/engine_value_pins"]
 toolchain = []
+link = "production"
 
 
 [[gate]]
@@ -1465,6 +1549,7 @@ oracles = []
 sources = ["compiler/driver/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "test/diff_compiler_check_cli_modules.sh"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_check_json"
@@ -1480,6 +1565,7 @@ oracles = []
 sources = ["compiler/driver/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/check_json_fixtures"]
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_check_policy"
@@ -1495,6 +1581,7 @@ oracles = []
 sources = ["compiler/driver/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "demo", "demo/*", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/check_policy_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "target_fixtures"
@@ -1510,6 +1597,7 @@ oracles = []
 sources = ["compiler/backend/core_validate.mdk", "compiler/driver/*", "compiler/entries/entry_support.mdk", "compiler/support/manifest.mdk", "compiler/tools/*", "compiler/types/*"]
 corpus = ["test/target_fixtures"]
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_check"
@@ -1525,6 +1613,7 @@ oracles = ["check_batch", "check_main", "check_match_main", "check_modules_main"
 sources = ["compiler/driver/*", "compiler/frontend/ast.mdk", "compiler/frontend/exhaust.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "test/compiler_cli_test_support.mdk", "test/diff_compiler_check_test.mdk"]
 corpus = ["test/check_match_fixtures", "test/check_module_fixtures", "test/diff_fixtures", "test/import_error_fixtures", "test/import_form_fixtures", "test/parse_error_fixtures", "test/resolve_fixtures", "test/resolve_module_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_check_wrapper_callers"
@@ -1540,6 +1629,7 @@ oracles = []
 sources = ["compiler/driver/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "test/CHECK-WRAPPER-CALLERS.txt", "test/diff_compiler_check_wrapper_callers_test.mdk"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_ci_guard_failsafe"
@@ -1555,6 +1645,7 @@ oracles = []
 sources = ["test/diff_compiler_ci_guard_failsafe.sh"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_codemod"
@@ -1570,6 +1661,7 @@ oracles = []
 sources = ["test/compiler_cli_test_support.mdk"]
 corpus = ["test/codemod_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_core_ir_typed_modules"
@@ -1585,6 +1677,7 @@ oracles = ["core_ir_modules_main", "core_ir_typed_modules_main", "eval_modules_m
 sources = ["compiler/backend/*", "compiler/eval/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/CORE-IR-TYPED-LEDGER.txt", "test/diff_compiler_core_ir_typed_modules.sh"]
 corpus = ["test/core_ir_typed_modules_fixtures"]
 toolchain = []
+link = "production"
 
 # The verdict + value + diagnostic-code table, and the coverage self-audit that
 # reads it. The module name is what keeps this row's cost history: `baselineKey`
@@ -1604,6 +1697,7 @@ oracles = []
 sources = ["compiler/backend/*", "compiler/driver/*", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "compiler/types/*", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/dict_fixtures"]
 toolchain = ["clang"]
+link = "differential"
 
 # Section 3 of the same conformance suite: `medaka build --keep-ir` and a
 # pinned pattern over the `.ll`, the only section that can see a dead dict slot
@@ -1628,6 +1722,7 @@ oracles = []
 sources = ["compiler/backend/*", "compiler/driver/*", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "compiler/types/*"]
 corpus = ["test/dict_fixtures"]
 toolchain = ["clang"]
+link = "differential"
 
 # Section 4: reverse the `impl` blocks of one interface and require check, run
 # and build to answer identically. The one section that needs no ground truth,
@@ -1649,6 +1744,7 @@ oracles = []
 sources = ["compiler/backend/*", "compiler/driver/*", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "compiler/types/*"]
 corpus = ["test/dict_fixtures"]
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_argtag_matrix"
@@ -1664,6 +1760,7 @@ oracles = []
 sources = ["compiler/backend/*", "compiler/driver/*", "compiler/eval/*", "compiler/frontend/marker.mdk", "compiler/ir/*", "compiler/types/*", "test/diff_compiler_argtag_matrix.sh"]
 corpus = ["test/argtag_matrix_fixtures"]
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_dispatch_shape"
@@ -1679,6 +1776,7 @@ oracles = []
 sources = ["test/compiler_cli_test_support.mdk"]
 corpus = []
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_doc"
@@ -1694,6 +1792,7 @@ oracles = []
 sources = ["test/compiler_cli_test_support.mdk"]
 corpus = ["test/doc_fixtures", "test/doc_goldens"]
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "diff_compiler_doc_stdlib_reference"
@@ -1709,6 +1808,7 @@ oracles = []
 sources = ["compiler/tools/doc.mdk", "stdlib/*.mdk"]
 corpus = ["docs/stdlib"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_stdlib_conventions"
@@ -1724,6 +1824,7 @@ oracles = []
 sources = ["test/diff_compiler_stdlib_conventions_test.mdk", "docs/stdlib/inventory.json"]
 corpus = ["docs/stdlib"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_effect_polarity"
@@ -1739,6 +1840,7 @@ oracles = []
 sources = []
 corpus = ["test/effect_polarity_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_engines_part1"
@@ -1754,6 +1856,7 @@ oracles = ["eval_autoprint_main"]
 sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/diff_compiler_engines_part1.sh", "test/lib_engines_differential.sh", "test/engine_value_pins/*"]
 corpus = ["test/engine_fixtures", "test/llvm_fixtures", "test/llvm_fixtures_modules", "test/llvm_fixtures_typed", "test/wasm/fixtures", "test/wasm/fixtures_typed"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_engines_part2"
@@ -1769,6 +1872,7 @@ oracles = ["eval_autoprint_main"]
 sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/diff_compiler_engines_part2.sh", "test/lib_engines_differential.sh", "test/engine_value_pins/*"]
 corpus = ["test/engine_fixtures", "test/llvm_fixtures", "test/llvm_fixtures_modules", "test/llvm_fixtures_typed", "test/wasm/fixtures", "test/wasm/fixtures_typed"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_engines_part3"
@@ -1784,6 +1888,7 @@ oracles = ["eval_autoprint_main"]
 sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/diff_compiler_engines_part3.sh", "test/lib_engines_differential.sh", "test/engine_value_pins/*"]
 corpus = ["test/engine_fixtures", "test/llvm_fixtures", "test/llvm_fixtures_modules", "test/llvm_fixtures_typed", "test/wasm/fixtures", "test/wasm/fixtures_typed"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_eval_json"
@@ -1799,6 +1904,7 @@ oracles = []
 sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "compiler/driver/*", "test/compiler_cli_test_support.mdk", "compiler/ir/core_ir_lower.mdk", "compiler/backend/llvm_emit.mdk", "compiler/entries/llvm_emit_modules_main.mdk", "runtime/medaka_rt.c"]
 corpus = ["test/error_quality_fixtures", "test/trap_site_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_error_quality_baseline"
@@ -1814,6 +1920,7 @@ oracles = []
 sources = ["compiler/frontend/*", "compiler/types/*", "compiler/eval/*", "compiler/backend/*", "compiler/driver/diagnostics.mdk", "test/error_quality_fixtures/capture.sh", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/error_quality_fixtures"]
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_eval_scaling"
@@ -1829,6 +1936,7 @@ oracles = ["profile_eval_main"]
 sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_scaling.sh"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_eval"
@@ -1844,6 +1952,7 @@ oracles = ["core_ir_main", "core_ir_modules_main", "core_ir_prelude_main", "core
 sources = ["compiler/backend/*", "compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/compiler_cli_test_support.mdk", "test/diff_compiler_eval_test.mdk"]
 corpus = ["test/diff_fixtures", "test/eval_dict_fixtures", "test/eval_fixtures", "test/eval_modules_fixtures", "test/eval_prelude_fixtures", "test/eval_typed_fixtures", "test/eval_typed_modules_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_fixture_corpus_coverage"
@@ -1859,6 +1968,7 @@ oracles = []
 sources = ["test/diff_compiler_fixture_corpus_coverage.sh"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_flat_vs_onemodule"
@@ -1874,6 +1984,7 @@ oracles = ["check_one_diags_main"]
 sources = ["test/diff_compiler_flat_vs_onemodule.sh"]
 corpus = []
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_fmt_roundtrip"
@@ -1889,6 +2000,7 @@ oracles = ["fmt_main", "parse_main"]
 sources = ["test/diff_compiler_fmt_roundtrip.sh"]
 corpus = ["test/fmt_fixtures", "test/parse_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_fmt"
@@ -1904,6 +2016,7 @@ oracles = ["check_main", "diagnostics_project_main", "fmt_main", "lex_main", "li
 sources = ["compiler/backend/private_mangle.mdk", "compiler/driver/*", "compiler/entries/entry_support.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/exhaust.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/parser.mdk", "compiler/ir/*", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/fmt.mdk", "compiler/tools/lint*.mdk", "compiler/tools/new_cmd.mdk", "compiler/tools/printer.mdk", "compiler/tools/prop_runner.mdk", "compiler/tools/repl.mdk", "compiler/types/*", "test/compiler_cli_test_support.mdk", "test/diff_compiler_fmt_test.mdk", "test/probe_runner.mdk"]
 corpus = ["test/analyze_project_fixtures", "test/compiler_test_fixtures", "test/diff_fixtures", "test/fmt_fixtures", "test/lint_fix_fixtures", "test/lint_fixtures", "test/new_golden", "test/parse_fixtures", "test/references_fixtures", "test/repl_fixtures", "test/typecheck_error_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_fmt_write_safety"
@@ -1919,6 +2032,7 @@ oracles = []
 sources = ["compiler/driver/*", "compiler/support/cli_targets.mdk"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_iface_order"
@@ -1934,6 +2048,7 @@ oracles = []
 sources = ["compiler/driver/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/types/*", "test/IFACE-ORDER-LEDGER.txt", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/iface_order_fixtures", "test/must_fail_fixtures"]
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_import_order"
@@ -1949,6 +2064,7 @@ oracles = []
 sources = ["compiler/backend/*", "compiler/driver/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/types/*", "test/EMITTER-VERDICT-LEDGER.txt", "test/IMPORT-ORDER-LEDGER.txt", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/import_order_fixtures"]
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_index_oob"
@@ -1964,6 +2080,7 @@ oracles = []
 sources = ["runtime/medaka_rt.c", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/index_oob_fixtures"]
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_index"
@@ -1979,6 +2096,7 @@ oracles = []
 sources = ["test/compiler_cli_test_support.mdk"]
 corpus = ["test/index_fixtures", "test/index_goldens"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_internal_extern"
@@ -1994,6 +2112,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_ir_scaling"
@@ -2009,6 +2128,7 @@ oracles = []
 sources = ["test/diff_compiler_ir_scaling.sh", "test/perf_shapes.sh"]
 corpus = []
 toolchain = ["clang", "valgrind"]
+link = "production"
 
 [[gate]]
 name = "diff_compiler_ir_size"
@@ -2024,6 +2144,7 @@ oracles = []
 sources = ["test/compiler_cli_test_support.mdk"]
 corpus = []
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "diff_compiler_let_refute"
@@ -2039,6 +2160,7 @@ oracles = []
 sources = ["runtime/medaka_rt.c", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/let_refute_fixtures"]
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_lint_cache"
@@ -2054,6 +2176,7 @@ oracles = []
 sources = ["compiler/support/cli_targets.mdk", "compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/diff_compiler_lint_cache.sh"]
 corpus = ["test/lint_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_lint_multi"
@@ -2069,6 +2192,7 @@ oracles = []
 sources = ["compiler/support/cli_targets.mdk", "compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/lint_multi_fixtures", "test/lint_multi_dir_fixtures", "test/lint_crossfile_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_lint_baseline"
@@ -2084,6 +2208,7 @@ oracles = []
 sources = ["compiler/support/cli_targets.mdk", "compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/lint_baseline.toml", "test/diff_compiler_lint_baseline.sh", ".githooks/pre-commit"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_comment_shout_diff"
@@ -2099,6 +2224,7 @@ oracles = []
 sources = ["*"]
 corpus = []
 toolchain = []
+link = "production"
 
 # Epic #3134 (Bytes) — the per-file Array Int position ratchet, modelled on
 # comment_register_census's --check/--write shape. Only files with a row in
@@ -2118,6 +2244,7 @@ oracles = []
 sources = ["test/bytes_census_baseline.toml"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_llvm_ffi"
@@ -2133,6 +2260,7 @@ oracles = []
 sources = ["compiler/backend/*", "compiler/ir/*", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/ffi_fixtures"]
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "diff_compiler_llvm_modules"
@@ -2148,6 +2276,7 @@ oracles = ["llvm_emit_modules_main"]
 sources = ["compiler/backend/*", "compiler/ir/*", "test/diff_compiler_llvm_modules.sh"]
 corpus = ["test/llvm_fixtures_modules"]
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_llvm"
@@ -2163,6 +2292,7 @@ oracles = ["llvm_emit_main"]
 sources = ["compiler/backend/*", "compiler/ir/*", "test/diff_compiler_llvm.sh"]
 corpus = ["test/llvm_fixtures"]
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_llvm_symbol_collision"
@@ -2178,6 +2308,7 @@ oracles = []
 sources = ["compiler/backend/*", "compiler/ir/*", "test/diff_compiler_llvm_symbol_collision.sh"]
 corpus = ["test/symbol_collision_fixtures"]
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_llvm_typed_ir"
@@ -2193,6 +2324,7 @@ oracles = ["llvm_emit_typed_main"]
 sources = ["compiler/backend/*", "compiler/ir/*", "test/diff_compiler_llvm_typed_ir.sh"]
 corpus = ["test/llvm_fixtures_typed"]
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_llvm_typed"
@@ -2208,6 +2340,7 @@ oracles = ["core_ir_dict_pp_main", "llvm_emit_typed_main"]
 sources = ["compiler/backend/*", "compiler/ir/*", "test/diff_compiler_llvm_typed.sh"]
 corpus = ["test/llvm_fixtures_typed"]
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_lsp"
@@ -2223,6 +2356,7 @@ oracles = []
 sources = ["compiler/tools/lsp.mdk", "test/compiler_cli_test_support.mdk", "test/diff_compiler_lsp_test.mdk", "test/lsp_bless.sh", "test/lsp_warm_session.sh"]
 corpus = ["test/lsp_goldens"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_mcp"
@@ -2238,6 +2372,7 @@ oracles = []
 sources = []
 corpus = ["test/mcp_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_os_entropy"
@@ -2253,6 +2388,7 @@ oracles = []
 sources = ["stdlib/runtime.mdk", "compiler/eval/eval.mdk", "runtime/medaka_rt.c"]
 corpus = ["test/os_entropy_fixtures"]
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "diff_compiler_parse_error_loc"
@@ -2268,6 +2404,7 @@ oracles = []
 sources = ["compiler/frontend/ast.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/parser.mdk", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/parse_error_loc_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_perf_scaling"
@@ -2283,6 +2420,7 @@ oracles = ["profile_main", "profile_modules_main"]
 sources = ["test/diff_compiler_perf_scaling.sh", "test/perf_shapes.sh"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_perf_stage_census"
@@ -2298,6 +2436,7 @@ oracles = []
 sources = ["compiler/entries/profile_main.mdk", "compiler/entries/profile_modules_main.mdk", "test/PERF-STAGE-WAIVERS.txt", "test/diff_compiler_perf_scaling.sh"]
 corpus = []
 toolchain = []
+link = "production"
 
 # `inverted-polarity` here is deliberate and current, not a stale carry-over
 # (#2595 asked "its tests are already native; derived discovery may retire
@@ -2321,6 +2460,7 @@ oracles = []
 sources = ["compiler/eval/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "test/diff_compiler_ported.sh"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_preflight_base"
@@ -2336,6 +2476,7 @@ oracles = []
 sources = ["test/diff_compiler_preflight_base.sh"]
 corpus = []
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "diff_compiler_prelude_obj"
@@ -2351,6 +2492,7 @@ oracles = []
 sources = ["test/compiler_cli_test_support.mdk"]
 corpus = ["test/construct_fixtures", "test/engine_fixtures", "test/llvm_fixtures", "test/prelude_obj_fixtures", "test/wasm/fixtures"]
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "diff_compiler_prelude_shadow_census"
@@ -2366,6 +2508,7 @@ oracles = []
 sources = ["compiler/backend/*", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/parser.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/diff_compiler_prelude_shadow_census.sh"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_project_enrolment"
@@ -2381,6 +2524,7 @@ oracles = []
 sources = ["demo", "demo/*", "playground", "playground/*", "test/diff_compiler_project_enrolment.sh"]
 corpus = ["test/native_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_reach_fail_open"
@@ -2396,6 +2540,7 @@ oracles = []
 sources = [".github/workflows/ci.yml", "test/preflight.sh", "test/gates.toml", "test/diff_compiler_reach_fail_open.sh"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_references_scaling"
@@ -2411,6 +2556,7 @@ oracles = ["refindex_main"]
 sources = ["test/diff_compiler_references_scaling.sh"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_references_tool"
@@ -2426,6 +2572,7 @@ oracles = []
 sources = ["test/compiler_cli_test_support.mdk"]
 corpus = ["test/references_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_rejection_parity"
@@ -2441,6 +2588,7 @@ oracles = []
 sources = ["test/diff_compiler_rejection_parity.sh"]
 corpus = ["test/llvm_fixtures", "test/llvm_fixtures_typed", "test/wasm/fixtures", "test/wasm/fixtures_typed"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_rt_obj"
@@ -2456,6 +2604,7 @@ oracles = []
 sources = []
 corpus = ["test/construct_fixtures", "test/llvm_fixtures"]
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "diff_compiler_run_check_agreement"
@@ -2472,6 +2621,7 @@ oracles = []
 sources = ["test/compiler_cli_test_support.mdk"]
 corpus = ["test/fixed_width_refusal_fixtures", "test/run_check_agreement_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_run_entry_subdir"
@@ -2487,6 +2637,7 @@ oracles = []
 sources = ["compiler/driver/loader.mdk"]
 corpus = []
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_run_stdout_flush"
@@ -2502,6 +2653,7 @@ oracles = []
 sources = ["runtime/medaka_rt.c", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/run_stdout_flush_fixtures"]
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_selfproc"
@@ -2517,6 +2669,7 @@ oracles = ["check_all_main", "eval_modules_main", "eval_typed_modules_main"]
 sources = ["compiler/*.mdk", "compiler/*/*.mdk", "stdlib/core.mdk", "stdlib/runtime.mdk", "test/diff_compiler_selfproc.sh"]
 corpus = ["test/selfproc_goldens"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_shadow_semantics"
@@ -2532,6 +2685,7 @@ oracles = []
 sources = ["compiler/backend/*", "compiler/driver/diagnostics.mdk", "compiler/driver/medaka_cli.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "playground", "playground/*", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/import_order_fixtures", "test/must_fail_fixtures", "test/shadow_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_slice_oob"
@@ -2547,6 +2701,7 @@ oracles = []
 sources = ["runtime/medaka_rt.c", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/slice_oob_fixtures"]
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_snapshot_bless"
@@ -2562,6 +2717,7 @@ oracles = []
 sources = ["compiler/*.mdk", "compiler/*/*.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "compiler/tools/snapshot.mdk", "compiler/types/*", "stdlib/*.mdk", "test/snapshots/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_snapshot_frontend"
@@ -2577,6 +2733,7 @@ oracles = []
 sources = ["compiler/*.mdk", "compiler/*/*.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "compiler/tools/snapshot.mdk", "compiler/types/*", "stdlib/*.mdk", "test/compiler_cli_test_support.mdk", "test/diff_compiler_snapshot_frontend_test.mdk", "test/snapshot_bless.sh", "test/snapshots/*"]
 corpus = ["test/comment_fixtures", "test/diff_fixtures", "test/eval_dict_fixtures", "test/eval_error_fixtures", "test/eval_fixtures", "test/eval_typed_fixtures", "test/parse_fixtures", "test/parse_only_fixtures", "test/positions_fixtures", "test/typecheck_fixtures", "test/typecheck_panic_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_snapshot_wasm_input"
@@ -2592,6 +2749,7 @@ oracles = []
 sources = ["compiler/*.mdk", "compiler/*/*.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "compiler/tools/snapshot.mdk", "compiler/types/*", "stdlib/*.mdk", "test/snapshots/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_source_bytes"
@@ -2607,6 +2765,7 @@ oracles = []
 sources = ["*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_stack_overflow"
@@ -2622,6 +2781,7 @@ oracles = []
 sources = ["runtime/medaka_rt.c", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/stack_overflow_fixtures", "test/stack_overflow_test_fixtures"]
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "diff_compiler_stage_ir_scaling"
@@ -2637,6 +2797,7 @@ oracles = ["profile_main", "profile_modules_main"]
 sources = ["test/diff_compiler_stage_ir_scaling.sh"]
 corpus = []
 toolchain = ["clang", "valgrind"]
+link = "production"
 
 [[gate]]
 name = "diff_compiler_test_native"
@@ -2652,6 +2813,7 @@ oracles = []
 sources = ["compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "test/compiler_cli_test_support.mdk"]
 corpus = []
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "run_command_sigchld"
@@ -2667,6 +2829,7 @@ oracles = []
 sources = ["runtime/medaka_rt.c", "stdlib/runtime.mdk"]
 corpus = ["test/run_command_sigchld_fixtures"]
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "diff_compiler_test_typecheck"
@@ -2682,6 +2845,7 @@ oracles = []
 sources = ["compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk"]
 corpus = []
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_compiler_tmc_parity"
@@ -2697,6 +2861,7 @@ oracles = []
 sources = ["compiler/backend/*"]
 corpus = ["test/stack_fixtures", "test/wasm/fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_wasm_shim_parity"
@@ -2712,6 +2877,7 @@ oracles = []
 sources = ["playground", "playground/*", "test/wasm/run.js", "test/diff_compiler_wasm_shim_parity_test.mdk"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_native_cli"
@@ -2727,6 +2893,7 @@ oracles = []
 sources = []
 corpus = ["test/diff_fixtures", "test/fmt_fixtures", "test/native_cli_fixtures", "test/native_cli_goldens", "test/repl_fixtures"]
 toolchain = ["clang"]
+link = "differential"
 
 [[gate]]
 name = "diff_native_stack"
@@ -2742,6 +2909,7 @@ oracles = ["llvm_emit_main", "llvm_emit_typed_main"]
 sources = []
 corpus = ["test/stack_fixtures", "test/stack_fixtures_typed"]
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "diff_net"
@@ -2757,6 +2925,7 @@ oracles = []
 sources = ["test/compiler_cli_test_support.mdk"]
 corpus = ["test/net_fixtures"]
 toolchain = ["clang", "wasm-tools", "node>=24"]
+link = "production"
 
 [[gate]]
 name = "diff_async"
@@ -2772,6 +2941,7 @@ oracles = ["wasm_emit_modules_main"]
 sources = ["runtime/medaka_rt.c", "compiler/backend/llvm_emit.mdk", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_preamble.mdk", "test/wasm/run.js", "compiler/eval/eval.mdk", "stdlib/runtime.mdk", "stdlib/async.mdk", "stdlib/net_async.mdk", "stdlib/net.mdk", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/async_fixtures"]
 toolchain = ["clang", "wasm-tools", "node>=24"]
+link = "production"
 
 [[gate]]
 name = "effect_builtin_param_domain"
@@ -2787,6 +2957,7 @@ oracles = []
 sources = ["test/compiler_cli_test_support.mdk"]
 corpus = ["test/effect_builtin_param_fixtures"]
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "effect_param_domain"
@@ -2802,6 +2973,7 @@ oracles = []
 sources = ["test/compiler_cli_test_support.mdk"]
 corpus = ["test/effect_param_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "effect_product_domain"
@@ -2817,6 +2989,7 @@ oracles = []
 sources = ["test/compiler_cli_test_support.mdk"]
 corpus = ["test/effect_product_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "effect_set_domain"
@@ -2832,6 +3005,7 @@ oracles = []
 sources = ["test/compiler_cli_test_support.mdk"]
 corpus = ["test/effect_set_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "fuzz_diff"
@@ -2847,6 +3021,7 @@ oracles = ["eval_dict_main", "fuzz_gen_main"]
 sources = []
 corpus = []
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "gen_docs_index"
@@ -2862,6 +3037,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "manifest_emit"
@@ -2877,6 +3053,7 @@ oracles = []
 sources = ["test/compiler_cli_test_support.mdk"]
 corpus = ["test/check_policy_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "must_fail_census"
@@ -2892,6 +3069,7 @@ oracles = []
 sources = []
 corpus = ["test/must_fail_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "native_fixtures/run"
@@ -2907,6 +3085,7 @@ oracles = []
 sources = ["test/native_fixtures/run.sh"]
 corpus = ["test/native_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pr_helper_test"
@@ -2922,6 +3101,7 @@ oracles = []
 sources = []
 corpus = ["test/fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "lsp_warm_session"
@@ -2937,6 +3117,7 @@ oracles = []
 sources = ["compiler/driver/diagnostics.mdk", "compiler/tools/lsp.mdk", "compiler/types/typecheck.mdk", "test/lsp_warm_session.sh"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "registry_keying_ratchet"
@@ -2952,6 +3133,7 @@ oracles = []
 sources = []
 corpus = ["test/check_module_fixtures", "test/shadow_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "selfcompile_build_fixpoint"
@@ -2967,6 +3149,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "selfcompile_emit"
@@ -2982,6 +3165,7 @@ oracles = ["llvm_bootstrap_lex_main", "llvm_emit_modules_main"]
 sources = []
 corpus = ["test/llvm_fixtures_modules"]
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "selfcompile_fixpoint"
@@ -2997,6 +3181,7 @@ oracles = []
 sources = ["compiler/backend/*"]
 corpus = []
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "selfcompile_lex"
@@ -3012,6 +3197,7 @@ oracles = ["lex_main", "llvm_bootstrap_lex_main"]
 sources = []
 corpus = ["test/diff_fixtures"]
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "typecheck_compiler_source"
@@ -3027,6 +3213,7 @@ oracles = ["diagnostics_project_main"]
 sources = []
 corpus = ["test/check_module_fixtures", "test/shadow_fixtures"]
 toolchain = ["clang"]
+link = "production"
 
 [[gate]]
 name = "wasm/diff_gzip"
@@ -3042,6 +3229,7 @@ oracles = []
 sources = []
 corpus = ["gzip"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
+link = "production"
 
 [[gate]]
 name = "wasm/diff_playground_input"
@@ -3057,6 +3245,7 @@ oracles = []
 sources = ["playground", "playground/*"]
 corpus = ["test/engine_fixtures"]
 toolchain = ["wasm-tools", "node>=24"]
+link = "production"
 
 # S4 (#2442, epic #2036 visitor-wait-time arm) — F6's two absolute-ceiling
 # instruments. Deterministic (assembled-tree file size, no box noise) so it
@@ -3076,6 +3265,7 @@ oracles = []
 sources = ["playground", "playground/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
+link = "production"
 
 # S4 (#2442, epic #2036 visitor-wait-time arm) — the latency half of F6's
 # two instruments. NIGHTLY, not merge: the contract's §4 note measured the
@@ -3099,6 +3289,7 @@ oracles = []
 sources = ["playground", "playground/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
+link = "production"
 
 [[gate]]
 name = "wasm/diff_sqlite"
@@ -3114,6 +3305,7 @@ oracles = []
 sources = []
 corpus = ["sqlite"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
+link = "production"
 
 [[gate]]
 name = "wasm/diff_wasm_ffi_wall"
@@ -3129,6 +3321,7 @@ oracles = []
 sources = ["compiler/backend/core_validate.mdk", "compiler/backend/extern_catalog.mdk", "compiler/backend/wasm_emit.mdk", "compiler/entries/entry_support.mdk", "compiler/tools/target_check.mdk"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
+link = "production"
 
 [[gate]]
 name = "wasm/diff_wasm_modules"
@@ -3144,6 +3337,7 @@ oracles = []
 sources = []
 corpus = ["test/wasm/fixtures_modules", "test/trap_site_fixtures"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
+link = "production"
 
 [[gate]]
 name = "wasm/diff_wasm_typed"
@@ -3159,6 +3353,7 @@ oracles = []
 sources = ["compiler/backend/wasm_emit.mdk"]
 corpus = ["test/llvm_fixtures", "test/wasm/fixtures_typed"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
+link = "production"
 
 # S5 (#2359 closure, epic #2036 G1/G2, #2377): absolute ceilings on emitted
 # .wasm bytes + the emitted-vs-reachable function-count ratio, across all
@@ -3180,6 +3375,7 @@ oracles = []
 sources = []
 corpus = ["test/wasm/fixtures", "test/wasm/fixtures_typed", "test/wasm/fixtures_modules"]
 toolchain = ["wasm-tools", "node>=24"]
+link = "production"
 
 # The gate registry's own drift gate (#2176 S-4) — `area = "infra"` alongside
 # diff_compiler_ci_shard_coverage, its closest sibling: both police the map
@@ -3200,6 +3396,7 @@ oracles = []
 sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_registry.mdk", "test/diff_compiler_gate_registry.sh", "test/gates.toml"]
 corpus = ["test/gate_registry_fixtures"]
 toolchain = []
+link = "production"
 
 # The generated gates-matrix region's own drift gate (#2177, S-3): compare
 # `.github/workflows/ci.yml` against what the registry generates, via the
@@ -3235,6 +3432,7 @@ oracles = []
 sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_registry.mdk", "test/diff_compiler_tier_drift.sh", "test/gates.toml", ".github/workflows/ci.yml", ".github/workflows/nightly.yml"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_ci_gen_drift"
@@ -3250,6 +3448,7 @@ oracles = []
 sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_registry.mdk", "compiler/tools/gate_cost.mdk", "compiler/tools/gate_pack.mdk", "test/diff_compiler_ci_gen_drift.sh", "test/gates.toml", "test/gate_cost_baseline.json", ".github/workflows/ci.yml"]
 corpus = []
 toolchain = []
+link = "production"
 
 # The per-gate COST TRANSPORT's own gate (#2178, S-1-S-cost-record). Grades the
 # poisoning guard on both halves — that `test/run_gates.sh` refuses to PRODUCE a
@@ -3274,6 +3473,7 @@ oracles = []
 sources = ["test/run_gates.sh", "test/gate_cost_ingest.sh", "test/diff_compiler_gate_cost.sh", "test/gate_cost_baseline.json"]
 corpus = []
 toolchain = []
+link = "production"
 
 # The SHARD BALANCER's own gate (#2178, S-3-S-balancer). Grades the four
 # properties that make `medaka gate balance` safe to run unattended, each of
@@ -3314,6 +3514,7 @@ oracles = []
 sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_registry.mdk", "compiler/tools/gate_cost.mdk", "compiler/tools/gate_pack.mdk", "test/diff_compiler_gate_balance.sh", "test/gate_cost_baseline.json", "test/gates.toml"]
 corpus = ["test/gate_balance_fixtures"]
 toolchain = []
+link = "production"
 
 # #2180's governor (S-5, epic #2182): reds when (a) a schedulable gate has no
 # cost baseline entry, (b) a gate's measured cost has eaten into the
@@ -3346,6 +3547,7 @@ oracles = []
 sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_registry.mdk", "compiler/tools/gate_cost.mdk", "compiler/tools/gate_pack.mdk", "test/diff_compiler_gate_budget.sh", "test/gate_cost_baseline.json", "test/gates.toml", ".github/workflows/ci.yml"]
 corpus = []
 toolchain = []
+link = "production"
 
 # #2237: regression pin for capture-free closure allocation (S-1 static-cell
 # hoisting + S-2 eta-closure sweep) — builds three probes and asserts
@@ -3366,6 +3568,7 @@ oracles = []
 sources = ["compiler/backend/llvm_emit.mdk", "compiler/backend/llvm_preamble.mdk", "test/diff_compiler_closure_alloc.sh"]
 corpus = ["test/closure_alloc_fixtures"]
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "diff_compiler_check_ir_floor"
@@ -3381,6 +3584,7 @@ oracles = []
 sources = ["test/diff_compiler_check_ir_floor.sh", "compiler/backend/llvm_emit.mdk", "compiler/eval/eval.mdk", "compiler/tools/test_cmd.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/lint.mdk", "compiler/tools/lint_cmd.mdk", "compiler/driver/medaka_cli.mdk", "compiler/tools/mcp.mdk", "compiler/tools/check_policy.mdk"]
 corpus = []
 toolchain = ["clang", "valgrind"]
+link = "production"
 
 [[gate]]
 name = "diff_compiler_emitted_code_floor"
@@ -3396,6 +3600,7 @@ oracles = []
 sources = ["test/diff_compiler_emitted_code_floor.sh", "compiler/backend/llvm_emit.mdk", "compiler/backend/trmc_analysis.mdk", "compiler/ir/dce.mdk", "compiler/driver/build_cmd.mdk"]
 corpus = ["test/bench_fixtures"]
 toolchain = ["clang", "valgrind"]
+link = "production"
 
 # Every help/usage string must describe the CLI that actually exists (#2354,
 # S-help-truthfulness). Asserts three agreement properties, all derived from the
@@ -3426,6 +3631,7 @@ oracles = []
 sources = ["compiler/driver/medaka_cli.mdk", "compiler/tools/gate_cmd.mdk", "compiler/tools/test_cmd.mdk", "stdlib/args.mdk"]
 corpus = []
 toolchain = ["clang"]
+link = "production"
 
 # The ACCEPTANCE FLOOR for convention C2, unknown-flag rejection (#2354,
 # S-unknown-flag-floor; fix-round F1). The help-conformance gate above asserts
@@ -3464,6 +3670,7 @@ oracles = []
 sources = ["test/compiler_cli_test_support.mdk", "compiler/driver/medaka_cli.mdk", "compiler/tools/gate_cmd.mdk", "compiler/tools/test_cmd.mdk", "stdlib/args.mdk"]
 corpus = []
 toolchain = ["clang"]
+link = "production"
 
 # The docs RENDER machine (#2386, S-site-wiring). playground/guide_render_test.mjs
 # holds the assertions; this `.sh` is the enrolment, because nothing in CI runs a
@@ -3505,6 +3712,7 @@ oracles = []
 sources = ["test/diff_compiler_guide_render.sh", "playground/render_docs.mjs", "playground/build_guide.sh", "playground/build_advanced_docs.sh", "playground/build_stdlib_docs.sh", "playground/guide_render_test.mjs", "playground/vendor/marked/marked.js", "docs/guide/*.md", "docs/advanced/*.md", "docs/stdlib/*.md"]
 corpus = ["docs/guide", "docs/advanced", "docs/stdlib"]
 toolchain = ["node>=24"]
+link = "production"
 
 [[gate]]
 name = "pds/test/serve_e2e"
@@ -3520,6 +3728,7 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pds/test/lib_boundary"
@@ -3535,6 +3744,7 @@ oracles = []
 sources = ["pds/lib/*", "pds/shell/*", "pds/serve.mdk"]
 corpus = []
 toolchain = []
+link = "production"
 
 # S-deploy-config (#2958, #2959): pds/pds.service and pds/Caddyfile are one
 # deployment artifact split across two syntaxes, so one gate greps/asserts
@@ -3560,6 +3770,7 @@ oracles = []
 sources = ["pds/pds.service", "pds/Caddyfile", "pds/pds-egress.service", "pds/Caddyfile.egress", "pds/pds-backup.service", "pds/pds-backup.timer", "pds/pds-healthping.service", "pds/pds-healthping.timer", "pds/pds-alert@.service"]
 corpus = []
 toolchain = []
+link = "production"
 
 # S-1-dist-tarball (#74 D3: native distribution, Linux tarball arm; tracking
 # #2514). Proves scripts/make_dist.sh's tarball is genuinely relocatable: builds
@@ -3586,6 +3797,7 @@ oracles = []
 sources = ["scripts/make_dist.sh", "Makefile"]
 corpus = []
 toolchain = []
+link = "production"
 
 # ── the `gates` matrix rows (S-1, #2177) ─────────────────────────────────────
 #
@@ -3662,6 +3874,7 @@ oracles = []
 sources = ["compiler/frontend/ast.mdk", "compiler/types/repr.mdk", "compiler/types/typecheck.mdk", "test/catch_all_census.ledger", "test/decl_runner.ledger", "test/catch_all_census.py", "test/diff_compiler_catch_all_census_test.mdk"]
 corpus = []
 toolchain = []
+link = "production"
 
 # #2780: pins the ThinLTO partitioning property PARALLEL CODEGEN rests on — a
 # one-module source edit changes only that module's own partition(s), so the
@@ -3682,3 +3895,4 @@ oracles = []
 sources = ["test/lib/pcg_partition.sh", "test/build_native_medaka.sh", "test/diff_compiler_partition_stability.sh"]
 corpus = []
 toolchain = []
+link = "production"

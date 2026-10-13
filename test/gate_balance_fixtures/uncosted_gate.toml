@@ -26,6 +26,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "known1"
@@ -41,6 +42,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "known2"
@@ -56,6 +58,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "pinned1"
@@ -71,6 +74,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[shard]]
 name = "pin"

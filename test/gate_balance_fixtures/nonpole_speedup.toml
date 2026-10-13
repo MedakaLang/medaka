@@ -39,6 +39,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "quick1"
@@ -54,6 +55,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "quick2"
@@ -69,6 +71,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "quick3"
@@ -84,6 +87,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "quick4"
@@ -99,6 +103,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "quick5"
@@ -114,6 +119,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "quick6"
@@ -129,6 +135,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[shard]]
 name = "a"

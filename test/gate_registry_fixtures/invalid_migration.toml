@@ -19,6 +19,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "anchored"
@@ -34,6 +35,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[shard]]
 name = "a"

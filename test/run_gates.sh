@@ -257,6 +257,14 @@ if [ "${1:-}" = "--run-one" ]; then
     printf 'BROKEN %s  (SYNTAX ERROR: %s -n rejected this gate — see log)\n' "$name" "$_shell"
     exit 0
   fi
+  # The registry's `link` decides the link the gate's builds take (#4089).
+  # An explicit MEDAKA_NO_LTO / MEDAKA_CLANG_OPT from the caller still wins.
+  case "$(_link_rows | awk -v r="${g#"$ROOT"/}" '$1 == r { print $2; exit }')" in
+    differential)
+      export MEDAKA_NO_LTO="${MEDAKA_NO_LTO:-1}"
+      export MEDAKA_CLANG_OPT="${MEDAKA_CLANG_OPT:--O1}"
+      ;;
+  esac
   if [ "$_native_gate" -eq 1 ]; then
     # Selected by registry NAME, asked of the registry rather than guessed from
     # the filename. `--no-stale-check` because this script already refused above

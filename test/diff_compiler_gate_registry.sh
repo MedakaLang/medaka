@@ -134,6 +134,20 @@ else
   verify_rc=1
 fi
 
+if MEDAKA_ROOT="$FIXTMP" "$MEDAKA" gate verify \
+    --registry "$ROOT/test/gate_registry_fixtures/invalid_link.toml" \
+    >"$FIXTMP/invalid.out" 2>&1; then
+  echo "diff_compiler_gate_registry: FAIL — invalid_link.toml did not red:"
+  cat "$FIXTMP/invalid.out"
+  verify_rc=1
+elif ! grep -q "link 'warp' is not one of production/differential" "$FIXTMP/invalid.out"; then
+  echo "diff_compiler_gate_registry: FAIL — invalid_link.toml reds for the wrong reason:"
+  cat "$FIXTMP/invalid.out"
+  verify_rc=1
+else
+  echo "OK    check 13 regression: invalid_link.toml reds with the link-profile message"
+fi
+
 # ── check 9's own regression (#2181): invalid_tiers.toml must red, and
 #    valid_cost.toml is its control too — the two fixtures differ in exactly
 #    one line, so a green control proves the red is about `tiers` and nothing

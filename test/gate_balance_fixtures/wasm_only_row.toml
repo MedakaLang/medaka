@@ -29,6 +29,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "bigB"
@@ -44,6 +45,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "bigC"
@@ -59,6 +61,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[gate]]
 name = "gw"
@@ -74,6 +77,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
+link = "production"
 
 [[gate]]
 name = "pinned1"
@@ -89,6 +93,7 @@ oracles = []
 sources = []
 corpus = []
 toolchain = []
+link = "production"
 
 [[shard]]
 name = "pin"
