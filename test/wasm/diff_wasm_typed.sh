@@ -1091,11 +1091,11 @@ for required in \
   'synthBind "defaultRequestOne"' \
   'synthBind "defaultRequestTwo"' \
   'defaultStateCensusProgramU : CProgram' \
-  'synthBind "defaultRequestOne" [CClause [PVar "one" defaultStateLoc] (defaultStateCall "UDefault")]' \
-  'synthBind "defaultRequestTwo" [CClause [PVar "two" defaultStateLoc] (defaultStateCall "UDefault")]' \
+  'synthBind "defaultRequestOne" [CClause [PVar "one" defaultStateLoc noBinderId] (defaultStateCall "UDefault")]' \
+  'synthBind "defaultRequestTwo" [CClause [PVar "two" defaultStateLoc noBinderId] (defaultStateCall "UDefault")]' \
   'synthBind "defaultCensusGap" [CClause [] (CVar "missingDefaultCensus" AGlobal)]' \
   'synthBind "main" [CClause [] (CLit (LInt 0))]' \
-  'CImplEntry "synthDefault" 0 1 (CImplDefault "DefaultFace" "UDefault" "DefaultFace|UDefault|" noImplSym [] [PVar "$dict_synthDefault_0" defaultStateLoc, PVar "value" defaultStateLoc] (CLit (LInt 29)))'; do
+  'CImplEntry "synthDefault" 0 1 (CImplDefault "DefaultFace" "UDefault" "DefaultFace|UDefault|" noImplSym [] [PVar "$dict_synthDefault_0" defaultStateLoc noBinderId, PVar "value" defaultStateLoc noBinderId] (CLit (LInt 29)))'; do
   has_typed_pin "$required" || {
     echo "FAIL H2B4-DEFAULT-DEFS: default-state harness is missing $required"
     exit 1
