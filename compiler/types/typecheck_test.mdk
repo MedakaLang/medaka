@@ -1798,7 +1798,9 @@ test "ordinary return carrier distinguishes empty and absent-formal boundaries" 
     expectEqual
       [MRTProduced, MRTChecked, MRTStamped]
       (map (entry => entry.mrtStage) absent),
-    expectEqual [None, None, None] (map methodTraceArgs absent),
+    expectEqual
+      [Some ["Int", "Bool"], Some ["Int", "Bool"], Some ["Int", "Bool"]]
+      (map methodTraceArgs absent),
   ]
 
 absentReturnSource : Bool -> Bool -> String
@@ -1836,9 +1838,9 @@ test "absent return formal completes from the exact enclosing given" =
   let trace = methodCarrierStages "hidden" (absentReturnSource False True)
   expectEach [
     (
-      "arg trace is None then given twice",
+      "arg trace is complete at every stage",
       expectEqual
-        [None, Some ["a", "a"], Some ["a", "a"]]
+        [Some ["a", "a"], Some ["a", "a"], Some ["a", "a"]]
         (map methodTraceArgs trace),
     ),
     (

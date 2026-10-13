@@ -8800,24 +8800,49 @@ methodReturnPredicate : MethodReturnRequest -> Option ClassPredicate
 methodReturnPredicate request =
   methodReturnPredicateFromTemplate
     request.mrrPredicateTemplate
+    request.mrrTyparams
+    request.mrrOmitted
     request.mrrScope
 
+-- A complete template is the goal.  An incomplete one is answered first by the
+-- unique given matching its present positions; failing that, each absent position
+-- is the occurrence's own [omitted] variable (DICT-SEMANTICS §5), for §3 to
+-- determine or the boundary to reject.
 methodReturnPredicateFromTemplate : MethodPredicateTemplate ->
+  List String ->
+  List (String, Mono) ->
   ScopeId ->
   Option ClassPredicate
-methodReturnPredicateFromTemplate template scope =
+methodReturnPredicateFromTemplate template typarams omitted scope =
   match methodPredicateTemplateArgs template.mptArguments
     Some arguments => Some ClassPredicate {
       predicateInterface = template.mptInterface,
       predicateArguments = arguments,
     }
     None =>
-      map
-        (given => ClassPredicate {
+      match uniqueMethodTemplateGiven template scope (givensForScope scope)
+        Some given => Some ClassPredicate {
           predicateInterface = template.mptInterface,
           predicateArguments = predicateSlotKnownArgs given.geSlot.psArgs,
-        })
-        (uniqueMethodTemplateGiven template scope (givensForScope scope))
+        }
+        None =>
+          map
+            (arguments => ClassPredicate {
+              predicateInterface = template.mptInterface,
+              predicateArguments = arguments,
+            })
+            (methodPredicateTemplateArgs
+              (fillOmittedTemplateArgs typarams template.mptArguments omitted))
+
+-- [arguments] with each absent position read from [omitted] by its typaram name.
+fillOmittedTemplateArgs : List String ->
+  List (Option Mono) ->
+  List (String, Mono) ->
+  List (Option Mono)
+fillOmittedTemplateArgs (param :: params) (argument :: arguments) omitted =
+  orElseOpt argument (lookupAssoc param omitted)
+    :: fillOmittedTemplateArgs params arguments omitted
+fillOmittedTemplateArgs _ arguments _ = arguments
 
 methodReturnRequest : MethodSchemeRow ->
   Mono ->
@@ -8830,6 +8855,11 @@ methodReturnRequest row occurrence subst goalEv =
   let qualifiedBody = match row.msrScheme
     Forall _ _ _ _ _ body =>
       substMono subst.misTypeSubst subst.misEffectSubst subst.misAuthSubst body
+  let omitted =
+    if methodPredicateTemplateHasAbsent row.msrPredicateTemplate then
+      omittedParamVars row.msrTyparams row.msrType
+    else
+      []
   MethodReturnRequest {
     mrrIface = row.msrIface,
     mrrName = row.msrName,
@@ -8843,6 +8873,7 @@ methodReturnRequest row occurrence subst goalEv =
     mrrQualifiedBody = qualifiedBody,
     mrrPredicateTemplate =
       instantiateMethodPredicateTemplate row.msrPredicateTemplate subst,
+    mrrOmitted = omitted,
     mrrResolution = Ref None,
   }
 
@@ -9179,7 +9210,8 @@ data MethodPredicateSlot = MethodPredicateSlot {
 -- The interface predicate attached to an ordinary return method before call-site
 -- instantiation.  Every interface formal occupies one ordered position.  An absent
 -- formal stays absent: no fresh inference variable is manufactured for a name the
--- method scheme does not quantify.
+-- method scheme does not quantify.  The occurrence's own variable for it is the
+-- request's `mrrOmitted`.
 data MethodPredicateTemplate = MethodPredicateTemplate {
   mptInterface : IfaceRef,
   mptArguments : List (Option Mono),
@@ -9239,6 +9271,10 @@ data MethodReturnRequest = MethodReturnRequest {
   mrrGoalEv : Option EvId,
   mrrQualifiedBody : Mono,
   mrrPredicateTemplate : MethodPredicateTemplate,
+  -- the occurrence's variable for each typaram the declared type never mentions
+  -- (`omittedParamVars`); it fills an absent template position only when no given
+  -- answers the template (`methodReturnPredicateFromTemplate`)
+  mrrOmitted : List (String, Mono),
   mrrResolution : Ref (Option MethodReturnResolution),
 }
 
@@ -28346,22 +28382,21 @@ resolveExactReturnSite : OrdMap Unit ->
   ScopeId ->
   Unit
 resolveExactReturnSite rpNames name tagRef implRef resultMono request encl origin scope =
-  match methodReturnArgs request
+  if methodReturnAmbiguousWithoutGiven request then
+    noteMethodReturnTrace MRTStamped request None []
+  else match methodReturnArgs request
     None =>
       let _ = noteMethodReturnTrace MRTStamped request None []
-      if methodReturnAmbiguousWithoutGiven request then
-        ()
-      else
-        resolveSite
-          rpNames
-          name
-          tagRef
-          implRef
-          resultMono
-          request.mrrOccurrence
-          encl
-          origin
-          scope
+      resolveSite
+        rpNames
+        name
+        tagRef
+        implRef
+        resultMono
+        request.mrrOccurrence
+        encl
+        origin
+        scope
     Some _ =>
       let resolution = solveExactReturnOnce request
       let _ =
@@ -37550,18 +37585,21 @@ checkCallObligationsU deferNonGround univ (o :: rest) =
   let occs = uOblArgs o
   let loc = o.loc
   let _ = match o.oblProj
-    OpExactReturn request => match methodReturnWanted request
-      Some _ =>
-        let resolution = solveExactReturnOnce request
-        let _ = consumeExactReturnOutcome univ request resolution
-        noteMethodReturnTrace MRTChecked request None []
-      None =>
-        let _ =
-          if methodReturnAmbiguousWithoutGiven request then
-            pushAmbiguityAt False loc (ambiguousImplMsg request.mrrIface.irName)
-          else
+    -- The ambiguity rule reads the present positions before the omitted
+    -- variables can complete the goal.
+    OpExactReturn request =>
+      let _ =
+        if methodReturnAmbiguousWithoutGiven request then
+          pushAmbiguityAt False loc (ambiguousImplMsg request.mrrIface.irName)
+        else match methodReturnWanted request
+          Some _ =>
+            consumeExactReturnOutcome
+              univ
+              request
+              (solveExactReturnOnce request)
+          None =>
             checkOneCallObligation deferNonGround univ iface occs loc o.uoScope
-        noteMethodReturnTrace MRTChecked request None []
+      noteMethodReturnTrace MRTChecked request None []
     _ => checkOneCallObligation deferNonGround univ iface occs loc o.uoScope
   let _ = noteNumericObligationChecked o occs
   checkCallObligationsU deferNonGround univ rest
@@ -37579,7 +37617,11 @@ solveExactReturnOnce request = match request.mrrResolution.value
 methodReturnAmbiguousWithoutGiven : MethodReturnRequest -> Bool
 methodReturnAmbiguousWithoutGiven request =
   methodPredicateTemplateHasAbsent request.mrrPredicateTemplate
-    && isNone (methodReturnPredicate request)
+    && isNone
+      (uniqueMethodTemplateGiven
+        request.mrrPredicateTemplate
+        request.mrrScope
+        (givensForScope request.mrrScope))
     && methodPredicateTemplateCandidateCount
         request.mrrPredicateTemplate
         (ieRowsAll perRun.value.bodyImplEnvRef.value)
@@ -39811,8 +39853,8 @@ omittedParamVars typarams mty =
 
 -- `omittedParamVars` for the method [name] resolves to here, when it dispatches on
 -- an argument.  None for a name with no single declaring interface, nor for a
--- return-dispatched method, whose occurrence carries its absent positions in its
--- own predicate template (`methodReturnRequest`).
+-- return-dispatched method, whose occurrence mints its own beside its predicate
+-- template (`methodReturnRequest`).
 methodOmittedVars : String -> List (String, Mono)
 methodOmittedVars name = match (argDispatchOf name, methodEntryHere name)
   (Some _, Some (_, typarams, mty, _)) => omittedParamVars typarams mty
@@ -47540,8 +47582,9 @@ methodReturnVectorCompletenessProbe _ =
   perRun := savedPerRun
   observed
 
+-- The absent `b` of `Partial` reads the occurrence's own unbound variable.
 -- > methodReturnVectorCompletenessProbe ()
--- (Some [], None, True, False)
+-- (Some [], Some ["Int", "a"], True, False)
 
 export
 methodReturnTemplatePresenceProbe : Unit -> (List Bool, List Bool)
