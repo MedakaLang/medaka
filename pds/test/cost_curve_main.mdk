@@ -245,10 +245,12 @@ repeatPersist dir store n =
 measurePersist : String -> Store -> Int -> <IO, Clock, FileRead, FileWrite> Unit
 measurePersist dir store reps =
   let start = monotonicSec ()
+  let a0 = allocBytes ()
   let () = repeatPersist dir store reps
+  let a1 = allocBytes ()
   let elapsed = monotonicSec () - start
   println
-    "persistTransition us=\{intToString (micros elapsed reps)} reps=\{intToString reps}"
+    "persistTransition us=\{intToString (micros elapsed reps)} reps=\{intToString reps} allocBytes=\{intToString (floatToInt (a1 - a0) / reps)}"
 
 runPersist : String ->
   Int ->

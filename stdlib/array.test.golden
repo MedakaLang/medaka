@@ -2,45 +2,45 @@ running doctests in stdlib/array.mdk
   ok   stdlib/array.mdk:54: toList (singleton 5)
   ok   stdlib/array.mdk:62: toList (make 3 0)
   ok   stdlib/array.mdk:72: toList (makeWith 3 (i => i * 2))
-  ok   stdlib/array.mdk:82: length (makeWith 0 (i => i))
-  ok   stdlib/array.mdk:92: fromList [1, 2, 3]
-  ok   stdlib/array.mdk:102: toList (range 0 4)
-  ok   stdlib/array.mdk:112: copy [|1, 2|]
-  ok   stdlib/array.mdk:128: get 0 (fromList [1, 2, 3])
-  ok   stdlib/array.mdk:130: get 5 (fromList [1, 2, 3])
-  ok   stdlib/array.mdk:139: first (fromList [1, 2, 3])
-  ok   stdlib/array.mdk:147: last (fromList [1, 2, 3])
-  ok   stdlib/array.mdk:160: toList (reverse (fromList [1, 2, 3]))
-  ok   stdlib/array.mdk:173: toList (sliceClamped 1 3 (fromList [1, 2, 3, 4, 5]))
-  ok   stdlib/array.mdk:186: toList (take 2 (fromList [1, 2, 3, 4]))
-  ok   stdlib/array.mdk:194: toList (drop 2 (fromList [1, 2, 3, 4]))
-  ok   stdlib/array.mdk:208: toList (concat (fromList [fromList [1, 2], fromList [3]]))
-  ok   stdlib/array.mdk:257: toList (zip (fromList [1, 2, 3]) (fromList ["a", "b"]))
-  ok   stdlib/array.mdk:269: toList (zipWith (x y => x + y) (fromList [1, 2]) (fromList [10, 20]))
-  ok   stdlib/array.mdk:279: let (xs, ys) = unzip (fromList [(1, 2), (3, 4)]) in (toList xs, toList ys)
-  ok   stdlib/array.mdk:298: toList (filter isEven (fromList [1, 2, 3, 4]))
-  ok   stdlib/array.mdk:335: let arr = fromList [1, 2, 3] in let _ = setInPlace 1 9 arr in toList arr
-  ok   stdlib/array.mdk:349: let arr = fromList [1, 2, 3] in let _ = swap 0 2 arr in toList arr
-  ok   stdlib/array.mdk:361: let arr = fromList [1, 2, 3] in let _ = fill 0 arr in toList arr
-  ok   stdlib/array.mdk:373: let dst = make 4 0 in let _ = blit (fromList [1, 2]) 0 dst 1 2 in toList dst
-  ok   stdlib/array.mdk:400: let arr = fromList [3, 1, 2] in let _ = sortInPlaceBy compare arr in toList arr
-  ok   stdlib/array.mdk:412: let arr = fromList [3, 1, 2] in let _ = sortInPlace arr in toList arr
-  ok   stdlib/array.mdk:423: toList (sortBy (x y => compare y x) (fromList [3, 1, 2]))
-  ok   stdlib/array.mdk:434: toList (sortBy compare (fromList [3, 1, 4, 1, 5]))
-  ok   stdlib/array.mdk:441: toList (sort (fromList [3, 1, 4, 1, 5]))
-  ok   stdlib/array.mdk:452: toList (sortOn (x => 0 - x) (fromList [1, 3, 2]))
-  ok   stdlib/array.mdk:552: find (x => x > 1) (fromList [1, 2, 3])
-  ok   stdlib/array.mdk:569: findIndex (x => x > 2) (fromList [1, 2, 3])
-  ok   stdlib/array.mdk:590: elem 2 (fromList [1, 2, 3])
-  ok   stdlib/array.mdk:592: sum (fromList [1, 2, 3, 4])
-  ok   stdlib/array.mdk:594: product (fromList [1, 2, 3, 4])
-  ok   stdlib/array.mdk:601: maximum (fromList [3, 1, 2])
-  ok   stdlib/array.mdk:603: minimum (fromList [3, 1, 2])
-  ok   stdlib/array.mdk:618: foldWithIndex (acc i x => acc + i * x) 0 (fromList [10, 20, 30])
-  ok   stdlib/array.mdk:624: foldWithIndex (acc i x => (i, x) :: acc) [] (fromList ([] : List Int))
-  ok   stdlib/array.mdk:641: let acc = Ref [] in let _ = forEachWithIndex (i x => acc := (i, x) :: !acc) (fromList [7, 8, 9]) in !acc
-  ok   stdlib/array.mdk:657: toList (mapWithIndex (i x => i * x) (fromList [1, 2, 3]))
-  ok   stdlib/array.mdk:664: toList (mapWithIndex (i x => i + x) (fromList ([] : List Int)))
+  ok   stdlib/array.mdk:78: length (makeWith 0 (i => i))
+  ok   stdlib/array.mdk:83: fromList [1, 2, 3]
+  ok   stdlib/array.mdk:93: toList (range 0 4)
+  ok   stdlib/array.mdk:103: copy [|1, 2|]
+  ok   stdlib/array.mdk:119: get 0 (fromList [1, 2, 3])
+  ok   stdlib/array.mdk:121: get 5 (fromList [1, 2, 3])
+  ok   stdlib/array.mdk:130: first (fromList [1, 2, 3])
+  ok   stdlib/array.mdk:138: last (fromList [1, 2, 3])
+  ok   stdlib/array.mdk:151: toList (reverse (fromList [1, 2, 3]))
+  ok   stdlib/array.mdk:164: toList (sliceClamped 1 3 (fromList [1, 2, 3, 4, 5]))
+  ok   stdlib/array.mdk:183: toList (take 2 (fromList [1, 2, 3, 4]))
+  ok   stdlib/array.mdk:191: toList (drop 2 (fromList [1, 2, 3, 4]))
+  ok   stdlib/array.mdk:205: toList (concat (fromList [fromList [1, 2], fromList [3]]))
+  ok   stdlib/array.mdk:254: toList (zip (fromList [1, 2, 3]) (fromList ["a", "b"]))
+  ok   stdlib/array.mdk:266: toList (zipWith (x y => x + y) (fromList [1, 2]) (fromList [10, 20]))
+  ok   stdlib/array.mdk:276: let (xs, ys) = unzip (fromList [(1, 2), (3, 4)]) in (toList xs, toList ys)
+  ok   stdlib/array.mdk:290: toList (filter isEven (fromList [1, 2, 3, 4]))
+  ok   stdlib/array.mdk:364: let arr = fromList [1, 2, 3] in let _ = setInPlace 1 9 arr in toList arr
+  ok   stdlib/array.mdk:378: let arr = fromList [1, 2, 3] in let _ = swap 0 2 arr in toList arr
+  ok   stdlib/array.mdk:390: let arr = fromList [1, 2, 3] in let _ = fill 0 arr in toList arr
+  ok   stdlib/array.mdk:402: let dst = make 4 0 in let _ = blit (fromList [1, 2]) 0 dst 1 2 in toList dst
+  ok   stdlib/array.mdk:429: let arr = fromList [3, 1, 2] in let _ = sortInPlaceBy compare arr in toList arr
+  ok   stdlib/array.mdk:441: let arr = fromList [3, 1, 2] in let _ = sortInPlace arr in toList arr
+  ok   stdlib/array.mdk:452: toList (sortBy (x y => compare y x) (fromList [3, 1, 2]))
+  ok   stdlib/array.mdk:465: toList (sortBy compare (fromList [3, 1, 4, 1, 5]))
+  ok   stdlib/array.mdk:472: toList (sort (fromList [3, 1, 4, 1, 5]))
+  ok   stdlib/array.mdk:483: toList (sortOn (x => 0 - x) (fromList [1, 3, 2]))
+  ok   stdlib/array.mdk:646: find (x => x > 1) (fromList [1, 2, 3])
+  ok   stdlib/array.mdk:663: findIndex (x => x > 2) (fromList [1, 2, 3])
+  ok   stdlib/array.mdk:684: elem 2 (fromList [1, 2, 3])
+  ok   stdlib/array.mdk:686: sum (fromList [1, 2, 3, 4])
+  ok   stdlib/array.mdk:688: product (fromList [1, 2, 3, 4])
+  ok   stdlib/array.mdk:695: maximum (fromList [3, 1, 2])
+  ok   stdlib/array.mdk:697: minimum (fromList [3, 1, 2])
+  ok   stdlib/array.mdk:712: foldWithIndex (acc i x => acc + i * x) 0 (fromList [10, 20, 30])
+  ok   stdlib/array.mdk:718: foldWithIndex (acc i x => (i, x) :: acc) [] (fromList ([] : List Int))
+  ok   stdlib/array.mdk:735: let acc = Ref [] in let _ = forEachWithIndex (i x => acc := (i, x) :: !acc) (fromList [7, 8, 9]) in !acc
+  ok   stdlib/array.mdk:751: toList (mapWithIndex (i x => i * x) (fromList [1, 2, 3]))
+  ok   stdlib/array.mdk:758: toList (mapWithIndex (i x => i + x) (fromList ([] : List Int)))
 
 stdlib/array.mdk: 42/42 passed
 Testing "sortBy ascending and length-preserving" [eval] ... OK (100 tests passed)
@@ -53,3 +53,9 @@ Testing "forEachWithIndex visits every index once, in order, matching zip with r
 Testing "mapWithIndex with an index-ignoring callback is map" [eval] ... OK (100 tests passed)
 Testing "mapWithIndex hands the callback 0..n-1 in order" [eval] ... OK (100 tests passed)
 Testing "mapWithIndex agrees with zipWith over range" [eval] ... OK (100 tests passed)
+Testing "sortBy is stable on keys with many duplicates" [eval] ... OK (100 tests passed)
+Testing "sort of already-sorted, reversed, and duplicate-heavy input" [eval] ... OK (100 tests passed)
+Testing "sortOn agrees with sortBy on the same key" [eval] ... OK (100 tests passed)
+Testing "filter agrees with List filter" [eval] ... OK (100 tests passed)
+Testing "filterMap agrees with List filterMap" [eval] ... OK (100 tests passed)
+Testing "take, drop and sliceClamped agree with an index filter" [eval] ... OK (100 tests passed)

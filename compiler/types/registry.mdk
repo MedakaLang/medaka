@@ -530,8 +530,8 @@ mregAdd ident v mr = mregAddK (regKeyOf ident) v mr
 --     B-2.1-b2 repointed this leg off the topological-prefix `shadowKeyTableRef`
 --     onto the graph-global `IE`; the order argument here is unaffected, since
 --     neither table is this bucket). The concrete bucket's own
---     readers are `univConcreteBucket`'s two, `implMatchesU` and
---     `implMatchesReceiverU`, and both are boolean EXISTENCE tests
+--     readers are `univConcreteBucket`'s, `implMatchesU`, `implMatchesWithReqsU`
+--     and `oblCallVerdict`, and all are boolean EXISTENCE tests
 --     (`bucketArgsMatch`/`bucketRecvMatch`, `||`-folded), for which bucket
 --     order is immaterial.
 --
@@ -817,8 +817,8 @@ lookupReg k ((k2, v) :: rest) =
 --       (impl side) and `headTyconMono` (goal side).  The one that did NOT
 --       move is deliberate:
 --         * `headTyconNameMono` still answers `None` for an arrow and an effect
---           row (its `TFun` arm would merge two populations
---           `uOblIsDecidableNow` keeps apart).  The CONSTRAINT entry does not
+--           row: it asks for the NAME of a declared type constructor, and an
+--           arrow names no declaration.  The CONSTRAINT entry does not
 --           apply to it at all: it walks `Mono`, and `Mono` has no constrained
 --           constructor — constraints have become obligations by then — so
 --           there is no arm it could gain or decline.

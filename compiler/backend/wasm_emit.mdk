@@ -369,6 +369,9 @@ import backend.wasm_preamble.{
   floatStrImportLines,
   floatStrRuntimeLines,
   strSearchRuntimeLines,
+  strToIntRuntimeLines,
+  strReverseRuntimeLines,
+  strJoinRuntimeLines,
   strCodecRuntimeLines,
   utf8LossyRuntimeLines,
   byteBlockRuntimeLines,
@@ -484,6 +487,9 @@ data WasmEmit = WasmEmit {
   useValueCmpNum : Ref Bool,
   useIO : Ref Bool,
   useClock : Ref Bool,
+  useStrToInt : Ref Bool,
+  useStrReverse : Ref Bool,
+  useStrJoin : Ref Bool,
   tupleArities : Ref (List Int),
   floatGlobals : Ref (List String),
   wDispGroups : Ref (List DispGroup),
@@ -560,6 +566,9 @@ freshWasmEmit mode = WasmEmit {
   useValueCmpNum = Ref False,
   useIO = Ref False,
   useClock = Ref False,
+  useStrToInt = Ref False,
+  useStrReverse = Ref False,
+  useStrJoin = Ref False,
   tupleArities = Ref [],
   floatGlobals = Ref [],
   wDispGroups = Ref [],
@@ -1703,6 +1712,7 @@ externArityW name =
       "intToString",
       "charToStr",
       "stringLength",
+      "stringByteLength",
       "putStr",
       "putStrLn",
       "ePutStr",
@@ -1711,6 +1721,8 @@ externArityW name =
       "stringToLower",
       "hashString",
       "stringConcat",
+      "stringToInt",
+      "stringReverse",
       "setSeed",
       "randomState",
       "restoreRandomState",
@@ -1809,6 +1821,11 @@ externArityW name =
     [
       "randomInt",
       "stringIndexOf",
+      "stringJoin",
+      "stringStartsWith",
+      "stringEndsWith",
+      "stringCountOccurrences",
+      "stringLastIndexOf",
       "stringCompare",
       "arrayGetUnsafe",
       "arrayMake",
@@ -2170,6 +2187,9 @@ noteWasmUse emit UseIO = setRef emit.useIO True
 noteWasmUse emit UseArgs = setRef emit.useArgs True
 noteWasmUse emit UseFileBytes = setRef emit.useFileBytes True
 noteWasmUse emit UseClock = setRef emit.useClock True
+noteWasmUse emit UseStrToInt = setRef emit.useStrToInt True
+noteWasmUse emit UseStrReverse = setRef emit.useStrReverse True
+noteWasmUse emit UseStrJoin = setRef emit.useStrJoin True
 -- `++` is runtime-dispatched ($mdk_append): needs the $str leaf concat ($mdk_str_append)
 -- AND the W7 cons list types ($C_Cons/$T_List) for the list-append branch.
 noteW8Binop : WasmEmit -> String -> Unit
@@ -3198,6 +3218,14 @@ emitRefProgram prog groups =
     if (progEmit prog).useFloatStr.value then floatStrRuntimeLines else []
   let strSearchRt =
     if (progEmit prog).useStrSearch.value then strSearchRuntimeLines else []
+  -- W8d: stringToInt / stringReverse / stringJoin, each behind its own demand.
+  -- strJoin reads the W7 cons list, which its catalog row also demands (UseList).
+  let strToIntRt =
+    if (progEmit prog).useStrToInt.value then strToIntRuntimeLines else []
+  let strReverseRt =
+    if (progEmit prog).useStrReverse.value then strReverseRuntimeLines else []
+  let strJoinRt =
+    if (progEmit prog).useStrJoin.value then strJoinRuntimeLines else []
   -- W11b: the UTF-8 codec ($mdk_str_to_chars / $mdk_chars_to_str) + charFromCode's
   -- range-check runtime ($mdk_char_from_code).  The codec needs the $str rep ($u8arr)
   -- and the $arr rep (both forced via noteW8Extern).  charFromCode alone needs neither
@@ -3297,6 +3325,9 @@ emitRefProgram prog groups =
       ++ hashFloatRt
       ++ randomFloatRt
       ++ strSearchRt
+      ++ strToIntRt
+      ++ strReverseRt
+      ++ strJoinRt
       ++ utf8LossyRt
       ++ strCodecRt
       ++ byteBlockRt
@@ -4023,6 +4054,8 @@ isStrReturningExtern name = contains
     "stringSlice",
     "stringToUpper",
     "stringToLower",
+    "stringReverse",
+    "stringJoin",
     -- W8b: floatToString returns a String.
     "floatToString",
     -- W11b: stringFromChars : Array Char -> String.
@@ -7055,6 +7088,11 @@ emitStrExternRef prog env d "stringLength" [a] =
     ++ ["ref.cast (ref $str)", "struct.get $str $cp_count", "ref.i31"]
 emitStrExternRef prog env d "stringLength" _ =
   gapLP prog "wasm W6: stringLength takes exactly one argument"
+emitStrExternRef prog env d "stringByteLength" [a] =
+  emitRefExpr prog env d a
+    ++ ["ref.cast (ref $str)", "struct.get $str $bytes", "array.len", "ref.i31"]
+emitStrExternRef prog env d "stringByteLength" _ =
+  gapLP prog "wasm W6: stringByteLength takes exactly one argument"
 emitStrExternRef prog env d "putStr" [a] =
   emitRefExpr prog env d a
     ++ ["ref.cast (ref $str)", "call $mdk_print_str", "i32.const 0", "ref.i31"]
@@ -7132,6 +7170,52 @@ emitStrExternRef prog env d "stringIndexOf" [needle, hay] =
     ++ ["ref.cast (ref $str)", "call $mdk_str_index_of"]
 emitStrExternRef prog env d "stringIndexOf" _ =
   gapLP prog "wasm W8b: stringIndexOf takes exactly two arguments"
+-- W8c: byte-level searches over two $str.  Bool / Int results are i32 immediates
+-- from the runtime fns; stringLastIndexOf builds its Option Int like $mdk_str_index_of.
+emitStrExternRef prog env d "stringStartsWith" [p, s] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d s
+    ++ ["ref.cast (ref $str)", "call $mdk_str_starts_with", "ref.i31"]
+emitStrExternRef prog env d "stringStartsWith" _ =
+  gapLP prog "wasm W8c: stringStartsWith takes exactly two arguments"
+emitStrExternRef prog env d "stringEndsWith" [p, s] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d s
+    ++ ["ref.cast (ref $str)", "call $mdk_str_ends_with", "ref.i31"]
+emitStrExternRef prog env d "stringEndsWith" _ =
+  gapLP prog "wasm W8c: stringEndsWith takes exactly two arguments"
+emitStrExternRef prog env d "stringCountOccurrences" [n, h] =
+  emitRefExpr prog env d n
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d h
+    ++ ["ref.cast (ref $str)", "call $mdk_str_count_occ", "ref.i31"]
+emitStrExternRef prog env d "stringCountOccurrences" _ =
+  gapLP prog "wasm W8c: stringCountOccurrences takes exactly two arguments"
+emitStrExternRef prog env d "stringLastIndexOf" [n, h] =
+  emitRefExpr prog env d n
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d h
+    ++ ["ref.cast (ref $str)", "call $mdk_str_last_index_of"]
+emitStrExternRef prog env d "stringLastIndexOf" _ =
+  gapLP prog "wasm W8c: stringLastIndexOf takes exactly two arguments"
+-- W8d: stringToInt / stringReverse take one $str; stringJoin a $str and a cons list.
+emitStrExternRef prog env d "stringToInt" [s] =
+  emitRefExpr prog env d s ++ ["ref.cast (ref $str)", "call $mdk_str_to_int"]
+emitStrExternRef prog env d "stringToInt" _ =
+  gapLP prog "wasm W8d: stringToInt takes exactly one argument"
+emitStrExternRef prog env d "stringReverse" [s] =
+  emitRefExpr prog env d s ++ ["ref.cast (ref $str)", "call $mdk_str_reverse"]
+emitStrExternRef prog env d "stringReverse" _ =
+  gapLP prog "wasm W8d: stringReverse takes exactly one argument"
+emitStrExternRef prog env d "stringJoin" [sep, parts] =
+  emitRefExpr prog env d sep
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d parts
+    ++ ["call $mdk_str_join"]
+emitStrExternRef prog env d "stringJoin" _ =
+  gapLP prog "wasm W8d: stringJoin takes exactly two arguments"
 -- W8b: stringCompare a b : two $str → Ordering (ref eq).  The runtime fn returns the
 -- Lt/Eq/Gt i31 immediate directly.
 emitStrExternRef prog env d "stringCompare" [a, b] =

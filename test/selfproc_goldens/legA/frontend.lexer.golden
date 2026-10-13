@@ -3,10 +3,14 @@ afterNl : Array Char -> Int -> Int -> Int -> Int -> Int -> Int -> List RawTok
 applyNl : Int -> Int -> List RawTok -> List Int -> List BracketFrame -> Option Token -> Bool -> List (Token, Int)
 applyNlFrame : Int -> Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Option Token -> Bool -> List (Token, Int)
 applyNlFramePairs : Int -> Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Option Token -> Bool -> List (Token, Int, Int)
+applyNlFrameToks : Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Token -> Bool -> List Token
 applyNlPairs : Int -> Int -> List RawTok -> List Int -> List BracketFrame -> Option Token -> Bool -> List (Token, Int, Int)
+applyNlToks : Int -> List RawTok -> List Int -> List BracketFrame -> Token -> Bool -> List Token
 applyNlTop : Int -> Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Option Token -> Bool -> List (Token, Int)
 applyNlTopPairs : Int -> Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Option Token -> Bool -> List (Token, Int, Int)
+applyNlTopToks : Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Token -> Bool -> List Token
 armsHerald : Bool -> Option Token -> Bool
+armsHeraldTok : Bool -> Token -> Bool
 at : Array Char -> Int -> Char
 atToken : Array Char -> Int -> Token
 bareUnicodeEscMsgChar : Array Char -> Int -> Int -> String
@@ -25,9 +29,11 @@ charEscDecode : Char -> Option String
 charUntermMsg : String
 closeAll : List Int -> Int -> List (Token, Int)
 closeAllPairs : List Int -> Int -> List (Token, Int, Int)
+closeAllToks : List Int -> List Token
 closeBrace : Array Char -> Int -> Int -> Int -> Int -> List RawTok
 closeDedents : List Int -> Int -> List (Token, Int)
 closeDedentsPairs : List Int -> Int -> List (Token, Int, Int)
+closeDedentsToks : List Int -> List Token
 collectComments : String -> List Comment
 collectNoUs : Array Char -> Int -> Int -> List Char
 commentCol : Comment -> Int
@@ -51,6 +57,7 @@ dropFrame : List BracketFrame -> List BracketFrame
 dropTripleInterpMark : String -> String
 elseFilter : List (Token, Int) -> List (Token, Int)
 elseFilterPairs : List (Token, Int, Int) -> List (Token, Int, Int)
+elseFilterToks : List Token -> List Token
 emit : Array Char -> Int -> Int -> Int -> Int -> Token -> Int -> Int -> List RawTok
 endsWithNl : String -> Bool
 escChar : Array Char -> Int -> Int -> Int -> Int -> Char -> List RawTok
@@ -61,12 +68,16 @@ floatTok : Array Char -> Int -> Int -> Int -> Int -> Int -> List RawTok
 floatTokEnd : Array Char -> Int -> Int -> Int -> Int -> Int -> List RawTok
 flushClose : Token -> Int -> List RawTok -> List Int -> List BracketFrame -> Bool -> List (Token, Int)
 flushCloseGo : Token -> Int -> List RawTok -> List Int -> Int -> List BracketFrame -> Bool -> List (Token, Int)
+flushCloseGoToks : Token -> List RawTok -> List Int -> Int -> List BracketFrame -> Bool -> List Token
 flushClosePairs : Token -> Int -> Int -> List RawTok -> List Int -> List BracketFrame -> Bool -> List (Token, Int, Int)
 flushClosePairsGo : Token -> Int -> Int -> List RawTok -> List Int -> Int -> List BracketFrame -> Bool -> List (Token, Int, Int)
+flushCloseToks : Token -> List RawTok -> List Int -> List BracketFrame -> Bool -> List Token
 flushSep : Token -> Int -> List RawTok -> List Int -> List BracketFrame -> Bool -> List (Token, Int)
 flushSepGo : Token -> Int -> List RawTok -> List Int -> Int -> List BracketFrame -> Bool -> List (Token, Int)
+flushSepGoToks : Token -> List RawTok -> List Int -> Int -> List BracketFrame -> Bool -> List Token
 flushSepPairs : Token -> Int -> Int -> List RawTok -> List Int -> List BracketFrame -> Bool -> List (Token, Int, Int)
 flushSepPairsGo : Token -> Int -> Int -> List RawTok -> List Int -> Int -> List BracketFrame -> Bool -> List (Token, Int, Int)
+flushSepToks : Token -> List RawTok -> List Int -> List BracketFrame -> Bool -> List Token
 frameHasLive : List BracketFrame -> Bool
 handleNewline : Array Char -> Int -> Int -> Int -> Int -> List RawTok
 hasTripleInterpMark : String -> Bool
@@ -95,8 +106,11 @@ isTripleAt : Array Char -> Int -> Int -> Bool
 isUnicodeEsc : Array Char -> Int -> Int -> Char -> Bool
 joinNlStr : List String -> String
 keywordOrIdent : String -> Token
+kwCandidate : Array Char -> Int -> Int -> Bool
+kwStart : Char -> Bool
 layout : List RawTok -> List Int -> List BracketFrame -> Option Token -> Bool -> List (Token, Int)
 layoutPairs : List RawTok -> List Int -> List BracketFrame -> Option Token -> Bool -> List (Token, Int, Int)
+layoutToks : List RawTok -> List Int -> List BracketFrame -> Token -> Bool -> List Token
 layoutWithOffsetPairs : Array Char -> Int -> List (Token, Int, Int)
 layoutWithOffsets : Array Char -> Int -> List (Token, Int)
 leadingOp : Array Char -> Int -> Int -> Option (Token, Int)
@@ -126,8 +140,10 @@ parseIntFrom : Array Char -> Int -> Int -> Int -> Int
 parseIntNeg : Array Char -> Int -> Int -> Int -> Int
 parseRadix : Array Char -> Int -> Int -> Int -> Int -> Int
 parseRadixNeg : Array Char -> Int -> Int -> Int -> Int -> Int
+plainRunEnd : Array Char -> Int -> Int -> Int
 popDedents : Int -> Int -> List Int -> List RawTok -> List BracketFrame -> List (Token, Int)
 popDedentsPairs : Int -> Int -> List Int -> List RawTok -> List BracketFrame -> List (Token, Int, Int)
+popDedentsToks : Int -> List Int -> List RawTok -> List BracketFrame -> List Token
 posLineColFrom : Array Char -> Int -> Int -> Int -> Int -> (Int, Int)
 prevCanEnd : Option Token -> Bool
 prevIsTrailingOp : Option Token -> Bool
@@ -146,6 +162,7 @@ readChar : Array Char -> Int -> Int -> Int -> Int -> List RawTok
 readCharUnicode : Array Char -> Int -> Int -> Int -> Int -> List RawTok
 resolveCont : Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Option Token -> Bool -> List (Token, Int)
 resolveContPairs : Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Option Token -> Bool -> List (Token, Int, Int)
+resolveContToks : Int -> List Int -> List RawTok -> List BracketFrame -> Token -> Bool -> List Token
 scan : Array Char -> Int -> Int -> Int -> Int -> List RawTok
 scanAt : Array Char -> Int -> Int -> Int -> Int -> Char -> List RawTok
 scanBacktick : Array Char -> Int -> Int -> Int -> Int -> List RawTok
@@ -201,3 +218,4 @@ wideHalvesGo : Int -> List Char -> Int -> Int -> Option (Int, Int)
 wideIntTok : Array Char -> Int -> Int -> Int -> Int -> Int -> List Char -> List RawTok
 wouldIndent : Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Option Token -> Bool -> List (Token, Int)
 wouldIndentPairs : Int -> Int -> List Int -> List RawTok -> List BracketFrame -> Option Token -> Bool -> List (Token, Int, Int)
+wouldIndentToks : Int -> List Int -> List RawTok -> List BracketFrame -> Token -> Bool -> List Token

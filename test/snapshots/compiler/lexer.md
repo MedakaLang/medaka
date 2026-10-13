@@ -1,5 +1,5 @@
 # META
-source_lines=2829
+source_lines=3074
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka lexer.
@@ -361,9 +361,11 @@ describeToken (TLexError s) = s
 -- (one per significant source line break, carrying the indentation of the
 -- following line). A second `layout` pass turns those markers into
 -- INDENT/DEDENT/NEWLINE per the OCaml `handle_indent` algorithm.
--- `RComment startPos text` carries a captured comment out-of-band: `startPos`
--- is the source char offset of the opening `--`/`{-`, `text` the full lexeme
--- (including the `--` / `{- … -}` delimiters).  These markers are produced by the comment arms of `scanAt` and
+-- `RComment startPos endPos` carries a captured comment out-of-band: `startPos`
+-- is the source char offset of the opening `--`/`{-`, `endPos` one past its last
+-- char, so the lexeme is `[startPos, endPos)` (delimiters included).  The text
+-- is materialised only by `rawToComments`; `tokenize` never builds it.  These
+-- markers are produced by the comment arms of `scanAt` and
 -- *skipped by the layout pass* (its `RComment` arms are no-ops), so the Token stream the
 -- parser consumes is byte-identical to before — comments are purely a side
 -- channel.  `collectComments` re-reads the raw stream to surface them.
@@ -375,7 +377,7 @@ describeToken (TLexError s) = s
 -- `RNewline col off` carries the offset of the newline char that ended
 -- the preceding line, so synthetic NEWLINE/INDENT/DEDENT tokens inserted by the
 -- layout pass get a source line too.
-data RawTok = RTok Token Int Int | RNewline Int Int | RComment Int String
+data RawTok = RTok Token Int Int | RNewline Int Int | RComment Int Int
 
 -- ── Character classification: ASCII Char -> Bool predicates now live in
 -- support/char.mdk (imported at the top of this module).
@@ -395,8 +397,12 @@ is3 src len pos a b c =
     && at src (pos + 2) == c
 
 substr : Array Char -> Int -> Int -> String
-substr src start endp =
-  stringFromChars (arrayMakeWith (endp - start) (i => at src (start + i)))
+substr src start endp
+  | endp <= start = ""
+  | otherwise =
+    let out = arrayMake (endp - start) (at src start)
+    let _ = arrayBlit src start out 0 (endp - start)
+    stringFromChars out
 
 collectNoUs : Array Char -> Int -> Int -> List Char
 collectNoUs src p endp
@@ -573,13 +579,13 @@ scanAt src len pos depth id c
   | isNL c || isCR c = handleNewline src len pos depth id
   | c == '-' && pos + 1 < len && at src (pos + 1) == '-' =
     let e = skipLineComment src len pos
-    RComment pos (substr src pos e) :: scan src len e depth id
+    RComment pos e :: scan src len e depth id
   | c == '{' && pos + 1 < len && at src (pos + 1) == '-' =
     let e = skipBlockComment src len (pos + 2) 1
     if e < 0 then
       lexErrorTok pos "unterminated block comment"
     else
-      RComment pos (substr src pos e) :: scan src len e depth id
+      RComment pos e :: scan src len e depth id
   | isDigit c = scanNumber src len pos depth id
   | isQuote c && isTripleAt src len pos =
     scanTriple src len (pos + 3) pos depth id False ""
@@ -634,7 +640,34 @@ scanLower src len pos depth id =
 identToken : Array Char -> Int -> Int -> Token
 identToken src pos e
   | at src pos == '_' && e - pos == 1 = TUnderscore
-  | otherwise = keywordOrIdent (substr src pos e)
+  | kwCandidate src pos e = keywordOrIdent (substr src pos e)
+  | otherwise = TIdent (substr src pos e)
+
+-- Necessary condition for `keywordOrIdent` to match: every keyword spelling is
+-- 2 to 9 chars and starts with one of the letters below. Identifiers failing it
+-- skip the keyword chain entirely (they still get `TIdent`, as the chain's
+-- fall-through would give). Keep in step with the `keywordOrIdent` clauses.
+kwCandidate : Array Char -> Int -> Int -> Bool
+kwCandidate src pos e =
+  let n = e - pos
+  n >= 2 && n <= 9 && kwStart (at src pos)
+
+kwStart : Char -> Bool
+kwStart 'a' = True
+kwStart 'b' = True
+kwStart 'd' = True
+kwStart 'e' = True
+kwStart 'f' = True
+kwStart 'i' = True
+kwStart 'l' = True
+kwStart 'm' = True
+kwStart 'n' = True
+kwStart 'o' = True
+kwStart 'p' = True
+kwStart 'r' = True
+kwStart 't' = True
+kwStart 'w' = True
+kwStart _ = False
 
 scanUpper : Array Char -> Int -> Int -> Int -> Int -> List RawTok
 scanUpper src len pos depth id =
@@ -958,7 +991,17 @@ scanStr src len p startQ depth id acc
     scanStrEsc src len p startQ depth id acc (at src (p + 1))
   | isBackslash (at src p) = lexErrorTok p "unterminated string literal"
   | otherwise =
-    scanStr src len (p + 1) startQ depth id (acc ++ charToStr (at src p))
+    let q = plainRunEnd src len (p + 1)
+    scanStr src len q startQ depth id (acc ++ substr src p q)
+
+-- The first index at or after `p` holding a quote or a backslash (or `len`).
+-- A string's plain run is copied in one piece, so `acc` is appended once per
+-- escape or run rather than once per character.
+plainRunEnd : Array Char -> Int -> Int -> Int
+plainRunEnd src len p
+  | p >= len = len
+  | isQuote (at src p) || isBackslash (at src p) = p
+  | otherwise = plainRunEnd src len (p + 1)
 
 -- The escape letters shared by string AND character literals: the decoded
 -- content of `\<e>`, or `None` if `<e>` is not one of them. This ONE table is
@@ -1012,7 +1055,8 @@ scanInterpCont src len p depth acc
   | isBackslash (at src p) && p + 1 < len =
     scanInterpEsc src len p depth acc (at src (p + 1))
   | otherwise =
-    scanInterpCont src len (p + 1) depth (acc ++ charToStr (at src p))
+    let q = plainRunEnd src len (p + 1)
+    scanInterpCont src len q depth (acc ++ substr src p q)
 
 scanInterpEsc : Array Char -> Int -> Int -> Int -> String -> Char -> List RawTok
 scanInterpEsc src len p depth acc e
@@ -2653,7 +2697,208 @@ tokenize : String -> List Token
 tokenize s =
   let src = stringToChars s
   let len = arrayLength src
-  map fst (layoutWithOffsets src len)
+  elseFilterToks
+    (layoutToks (dedentTripleInterp (scan src len 0 0 0)) [0] [] TNewline False)
+
+-- `elseFilter` (the offset-carrying form used by `layoutWithOffsets`) with the
+-- offset projection fused in, so `tokenize` builds one list instead of two.
+-- The clauses must stay in step with `elseFilter`.
+elseFilterToks : List Token -> List Token
+elseFilterToks (TNewline :: TElse :: rest) = TElse :: elseFilterToks rest
+elseFilterToks (TNewline :: TThen :: rest) = TThen :: elseFilterToks rest
+elseFilterToks (t :: rest) = t :: elseFilterToks rest
+elseFilterToks [] = []
+
+-- Token-only twin of the `layout` family (no offsets): the same decisions, so
+-- `tokenize` conses each token once instead of as a `(Token, Int)` pair.  Every
+-- clause must stay in step with its `layout` counterpart.  `prev` is a bare
+-- Token, not an `Option`, so no `Some` is allocated per token: `TNewline` plays
+-- `None`.  That is sound because layout never records a TNewline as `prev`, and
+-- canEndExpr / isTrailingContinuationOp / armsHeraldTok all answer for it as they
+-- do for `None`.
+armsHeraldTok : Bool -> Token -> Bool
+armsHeraldTok _ TDo = True
+armsHeraldTok _ TDefer = True
+armsHeraldTok _ TFatArrow = True
+armsHeraldTok opener _ = opener
+
+layoutToks : List RawTok ->
+  List Int ->
+  List BracketFrame ->
+  Token ->
+  Bool ->
+  List Token
+layoutToks [] stack frames prev opener = closeAllToks stack
+layoutToks ((RTok t _ _) :: rest) stack frames prev opener
+  | bracketOpener t =
+    t
+      :: layoutToks
+        rest
+        stack
+        (BracketFrame 0 (opener || isOpener t) :: frames)
+        t
+        False
+  | bracketCloser t = flushCloseToks t rest stack frames opener
+  | t == TComma && frameHasLive frames = flushSepToks t rest stack frames opener
+  | otherwise = t :: layoutToks rest stack frames t (opener || isOpener t)
+layoutToks ((RComment _ _) :: rest) stack frames prev opener =
+  layoutToks rest stack frames prev opener
+layoutToks ((RNewline col _) :: rest) stack frames prev opener =
+  applyNlToks col rest stack frames prev opener
+
+closeAllToks : List Int -> List Token
+closeAllToks stack = TNewline :: closeDedentsToks stack
+
+closeDedentsToks : List Int -> List Token
+closeDedentsToks [] = [TEof]
+closeDedentsToks [_] = [TEof]
+closeDedentsToks (_ :: tl) = TDedent :: TNewline :: closeDedentsToks tl
+
+flushCloseToks : Token ->
+  List RawTok ->
+  List Int ->
+  List BracketFrame ->
+  Bool ->
+  List Token
+flushCloseToks t rest stack [] opener =
+  t :: layoutToks rest stack [] t (opener || isOpener t)
+flushCloseToks t rest stack ((BracketFrame f saved) :: fs) _ =
+  flushCloseGoToks t rest stack f fs saved
+
+flushCloseGoToks : Token ->
+  List RawTok ->
+  List Int ->
+  Int ->
+  List BracketFrame ->
+  Bool ->
+  List Token
+flushCloseGoToks t rest [] f fs opener =
+  t :: layoutToks rest [] fs t (opener || isOpener t)
+flushCloseGoToks t rest (top :: tl) f fs opener
+  | f <= 0 = t :: layoutToks rest (top :: tl) fs t (opener || isOpener t)
+  | otherwise =
+    TNewline :: TDedent :: flushCloseGoToks t rest tl (f - 1) fs opener
+
+flushSepToks : Token ->
+  List RawTok ->
+  List Int ->
+  List BracketFrame ->
+  Bool ->
+  List Token
+flushSepToks t rest stack [] opener = t :: layoutToks rest stack [] t opener
+flushSepToks t rest stack ((BracketFrame f saved) :: fs) opener =
+  flushSepGoToks t rest stack f (BracketFrame 0 saved :: fs) opener
+
+flushSepGoToks : Token ->
+  List RawTok ->
+  List Int ->
+  Int ->
+  List BracketFrame ->
+  Bool ->
+  List Token
+flushSepGoToks t rest [] _ frames opener =
+  t :: layoutToks rest [] frames t opener
+flushSepGoToks t rest (top :: tl) f frames opener
+  | f <= 0 = t :: layoutToks rest (top :: tl) frames t opener
+  | otherwise =
+    TNewline :: TDedent :: flushSepGoToks t rest tl (f - 1) frames opener
+
+applyNlToks : Int ->
+  List RawTok ->
+  List Int ->
+  List BracketFrame ->
+  Token ->
+  Bool ->
+  List Token
+applyNlToks col rest [] frames prev opener =
+  TNewline :: layoutToks rest [] frames TNewline False
+applyNlToks col rest (top :: tl) frames prev opener =
+  applyNlFrameToks col top (top :: tl) rest frames prev opener
+
+applyNlFrameToks : Int ->
+  Int ->
+  List Int ->
+  List RawTok ->
+  List BracketFrame ->
+  Token ->
+  Bool ->
+  List Token
+applyNlFrameToks col top stack rest [] prev opener =
+  applyNlTopToks col top stack rest [] prev opener
+applyNlFrameToks col top stack rest ((BracketFrame f saved) :: fs) prev opener
+  | f > 0 =
+    applyNlTopToks col top stack rest (BracketFrame f saved :: fs) prev opener
+  | col > top
+    && not (isTrailingContinuationOp prev)
+    && armsHeraldTok opener prev =
+    TIndent
+      :: layoutToks
+        rest
+        (col :: stack)
+        (BracketFrame 1 saved :: fs)
+        TNewline
+        False
+  | otherwise = layoutToks rest stack (BracketFrame f saved :: fs) prev opener
+
+applyNlTopToks : Int ->
+  Int ->
+  List Int ->
+  List RawTok ->
+  List BracketFrame ->
+  Token ->
+  Bool ->
+  List Token
+applyNlTopToks col top stack rest frames prev opener
+  | col > top = wouldIndentToks col stack rest frames prev opener
+  | col == top = TNewline :: layoutToks rest stack frames TNewline False
+  | otherwise = TNewline :: popDedentsToks col stack rest frames
+
+wouldIndentToks : Int ->
+  List Int ->
+  List RawTok ->
+  List BracketFrame ->
+  Token ->
+  Bool ->
+  List Token
+wouldIndentToks col stack rest frames prev opener
+  | isTrailingContinuationOp prev = layoutToks rest stack frames prev opener
+  | opener || not (canEndExpr prev) =
+    TIndent :: layoutToks rest (col :: stack) (bumpFrame frames) TNewline False
+  | otherwise = resolveContToks col stack rest frames prev opener
+
+resolveContToks : Int ->
+  List Int ->
+  List RawTok ->
+  List BracketFrame ->
+  Token ->
+  Bool ->
+  List Token
+resolveContToks col stack ((RTok t toff tend) :: more) frames prev opener
+  | canStartAtom t =
+    layoutToks (RTok t toff tend :: more) stack frames prev opener
+  | t == TThen = layoutToks (RTok t toff tend :: more) stack frames prev opener
+  | t == TElse = layoutToks (RTok t toff tend :: more) stack frames prev opener
+  | otherwise =
+    TIndent
+      :: layoutToks
+        (RTok t toff tend :: more)
+        (col :: stack)
+        (bumpFrame frames)
+        TNewline
+        False
+resolveContToks col stack rest frames prev opener =
+  layoutToks rest stack frames TNewline False
+
+popDedentsToks : Int ->
+  List Int ->
+  List RawTok ->
+  List BracketFrame ->
+  List Token
+popDedentsToks col [] rest frames = layoutToks rest [] frames TNewline False
+popDedentsToks col (top :: tl) rest frames
+  | top > col =
+    TDedent :: TNewline :: popDedentsToks col tl rest (dropFrame frames)
+  | otherwise = layoutToks rest (top :: tl) frames TNewline False
 
 -- Tokenize and return each token paired with the 1-based source line of its
 -- char offset.  The position side-channel (`compiler/frontend/parser.mdk`) consults the
@@ -2803,7 +3048,7 @@ posLineColFrom src target p line lineStart
   | at src p == '\n' = posLineColFrom src target (p + 1) (line + 1) (p + 1)
   | otherwise = posLineColFrom src target (p + 1) line lineStart
 
--- Turn each `RComment startPos text` into a `Comment line col text`.
+-- Turn each `RComment startPos endPos` into a `Comment line col text`.
 -- `RComment` tokens arrive in strictly-ascending `startPos` order (scan is a
 -- single left-to-right pass), so a running `(p, line, lineStart)` cursor lets
 -- `posLineColFrom` resume from the previous comment instead of rescanning from
@@ -2816,10 +3061,10 @@ rawToComments src toks = rawToCommentsGo src toks 0 1 0
 
 rawToCommentsGo : Array Char -> List RawTok -> Int -> Int -> Int -> List Comment
 rawToCommentsGo _ [] _ _ _ = []
-rawToCommentsGo src ((RComment startPos text) :: rest) p line lineStart =
+rawToCommentsGo src ((RComment startPos endPos) :: rest) p line lineStart =
   match posLineColFrom src startPos p line lineStart
     (line2, col) =>
-      Comment line2 col text
+      Comment line2 col (substr src startPos endPos)
         :: rawToCommentsGo src rest startPos line2 (startPos - col)
 rawToCommentsGo src (_ :: rest) p line lineStart =
   rawToCommentsGo src rest p line lineStart
@@ -3030,7 +3275,7 @@ collectComments s =
 (DFunDef false "describeToken" ((PCon "TDedent")) (ELit (LString "a dedent")))
 (DFunDef false "describeToken" ((PCon "TEof")) (ELit (LString "end of input")))
 (DFunDef false "describeToken" ((PCon "TLexError" (PVar "s"))) (EVar "s"))
-(DData Private "RawTok" () ((variant "RTok" (ConPos (TyCon "Token") (TyCon "Int") (TyCon "Int"))) (variant "RNewline" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RComment" (ConPos (TyCon "Int") (TyCon "String")))) ())
+(DData Private "RawTok" () ((variant "RTok" (ConPos (TyCon "Token") (TyCon "Int") (TyCon "Int"))) (variant "RNewline" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RComment" (ConPos (TyCon "Int") (TyCon "Int")))) ())
 (DTypeSig false "at" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Char"))))
 (DFunDef false "at" ((PVar "src") (PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "src")))
 (DTypeSig false "is2" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyCon "Bool")))))))
@@ -3038,7 +3283,7 @@ collectComments s =
 (DTypeSig false "is3" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyCon "Bool"))))))))
 (DFunDef false "is3" ((PVar "src") (PVar "len") (PVar "pos") (PVar "a") (PVar "b") (PVar "c")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 2))) (EVar "len")) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")) (EVar "a"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "b"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "c"))))
 (DTypeSig false "substr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "substr" ((PVar "src") (PVar "start") (PVar "endp")) (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "endp") (EVar "start"))) (ELam ((PVar "i")) (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "start") (EVar "i")))))))
+(DFunDef false "substr" ((PVar "src") (PVar "start") (PVar "endp")) (EIf (EBinOp "<=" (EVar "endp") (EVar "start")) (ELit (LString "")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "out") (EApp (EApp (EVar "arrayMake") (EBinOp "-" (EVar "endp") (EVar "start"))) (EApp (EApp (EVar "at") (EVar "src")) (EVar "start")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EVar "src")) (EVar "start")) (EVar "out")) (ELit (LInt 0))) (EBinOp "-" (EVar "endp") (EVar "start")))) (DoExpr (EApp (EVar "stringFromChars") (EVar "out")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "collectNoUs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Char"))))))
 (DFunDef false "collectNoUs" ((PVar "src") (PVar "p") (PVar "endp")) (EIf (EBinOp ">=" (EVar "p") (EVar "endp")) (EListLit) (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "_"))) (EApp (EApp (EApp (EVar "collectNoUs") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (EApp (EApp (EApp (EVar "collectNoUs") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "substrNoUs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
@@ -3096,7 +3341,7 @@ collectComments s =
 (DTypeSig false "scan" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
 (DFunDef false "scan" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id")) (EIf (EBinOp ">=" (EVar "pos") (EVar "len")) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanAt") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "scanAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyApp (TyCon "List") (TyCon "RawTok")))))))))
-(DFunDef false "scanAt" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id") (PVar "c")) (EIf (EApp (EVar "isSpace") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "depth")) (EVar "id")) (EIf (EBinOp "||" (EApp (EVar "isNL") (EVar "c")) (EApp (EVar "isCR") (EVar "c"))) (EApp (EApp (EApp (EApp (EApp (EVar "handleNewline") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "-"))) (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LChar "-")))) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "skipLineComment") (EVar "src")) (EVar "len")) (EVar "pos"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "RComment") (EVar "pos")) (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id"))))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "{"))) (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LChar "-")))) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EApp (EVar "skipBlockComment") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<" (EVar "e") (ELit (LInt 0))) (EApp (EApp (EVar "lexErrorTok") (EVar "pos")) (ELit (LString "unterminated block comment"))) (EBinOp "::" (EApp (EApp (EVar "RComment") (EVar "pos")) (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id")))))) (EIf (EApp (EVar "isDigit") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanNumber") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "&&" (EApp (EVar "isQuote") (EVar "c")) (EApp (EApp (EApp (EVar "isTripleAt") (EVar "src")) (EVar "len")) (EVar "pos"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanTriple") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 3)))) (EVar "pos")) (EVar "depth")) (EVar "id")) (EVar "False")) (ELit (LString ""))) (EIf (EApp (EVar "isQuote") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanStr") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "pos")) (EVar "depth")) (EVar "id")) (ELit (LString ""))) (EIf (EApp (EVar "isApos") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanChar") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "||" (EApp (EVar "isLower") (EVar "c")) (EBinOp "==" (EVar "c") (ELit (LChar "_")))) (EApp (EApp (EApp (EApp (EApp (EVar "scanLower") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EApp (EVar "isUpper") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanUpper") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EApp (EVar "isBacktick") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanBacktick") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanOp") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EVar "c")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))))))
+(DFunDef false "scanAt" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id") (PVar "c")) (EIf (EApp (EVar "isSpace") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "depth")) (EVar "id")) (EIf (EBinOp "||" (EApp (EVar "isNL") (EVar "c")) (EApp (EVar "isCR") (EVar "c"))) (EApp (EApp (EApp (EApp (EApp (EVar "handleNewline") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "-"))) (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LChar "-")))) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "skipLineComment") (EVar "src")) (EVar "len")) (EVar "pos"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "RComment") (EVar "pos")) (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id"))))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "{"))) (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LChar "-")))) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EApp (EVar "skipBlockComment") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<" (EVar "e") (ELit (LInt 0))) (EApp (EApp (EVar "lexErrorTok") (EVar "pos")) (ELit (LString "unterminated block comment"))) (EBinOp "::" (EApp (EApp (EVar "RComment") (EVar "pos")) (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id")))))) (EIf (EApp (EVar "isDigit") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanNumber") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "&&" (EApp (EVar "isQuote") (EVar "c")) (EApp (EApp (EApp (EVar "isTripleAt") (EVar "src")) (EVar "len")) (EVar "pos"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanTriple") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 3)))) (EVar "pos")) (EVar "depth")) (EVar "id")) (EVar "False")) (ELit (LString ""))) (EIf (EApp (EVar "isQuote") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanStr") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "pos")) (EVar "depth")) (EVar "id")) (ELit (LString ""))) (EIf (EApp (EVar "isApos") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanChar") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "||" (EApp (EVar "isLower") (EVar "c")) (EBinOp "==" (EVar "c") (ELit (LChar "_")))) (EApp (EApp (EApp (EApp (EApp (EVar "scanLower") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EApp (EVar "isUpper") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanUpper") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EApp (EVar "isBacktick") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanBacktick") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanOp") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EVar "c")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))))))
 (DTypeSig false "skipLineComment" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "skipLineComment" ((PVar "src") (PVar "len") (PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "p") (EIf (EApp (EVar "isNL") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "skipLineComment") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "lexErrorTok" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "RawTok")))))
@@ -3108,7 +3353,25 @@ collectComments s =
 (DTypeSig false "scanLower" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
 (DFunDef false "scanLower" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id")) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "identEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1))))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EApp (EApp (EVar "identToken") (EVar "src")) (EVar "pos")) (EVar "e"))) (EVar "pos")) (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id"))))))
 (DTypeSig false "identToken" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Token")))))
-(DFunDef false "identToken" ((PVar "src") (PVar "pos") (PVar "e")) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")) (ELit (LChar "_"))) (EBinOp "==" (EBinOp "-" (EVar "e") (EVar "pos")) (ELit (LInt 1)))) (EVar "TUnderscore") (EIf (EVar "otherwise") (EApp (EVar "keywordOrIdent") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "identToken" ((PVar "src") (PVar "pos") (PVar "e")) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")) (ELit (LChar "_"))) (EBinOp "==" (EBinOp "-" (EVar "e") (EVar "pos")) (ELit (LInt 1)))) (EVar "TUnderscore") (EIf (EApp (EApp (EApp (EVar "kwCandidate") (EVar "src")) (EVar "pos")) (EVar "e")) (EApp (EVar "keywordOrIdent") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (EIf (EVar "otherwise") (EApp (EVar "TIdent") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "kwCandidate" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
+(DFunDef false "kwCandidate" ((PVar "src") (PVar "pos") (PVar "e")) (EBlock (DoLet false false (PVar "n") (EBinOp "-" (EVar "e") (EVar "pos"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "<=" (EVar "n") (ELit (LInt 9)))) (EApp (EVar "kwStart") (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")))))))
+(DTypeSig false "kwStart" (TyFun (TyCon "Char") (TyCon "Bool")))
+(DFunDef false "kwStart" ((PLit (LChar "a"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "b"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "d"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "e"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "f"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "i"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "l"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "m"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "n"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "o"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "p"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "r"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "t"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "w"))) (EVar "True"))
+(DFunDef false "kwStart" (PWild) (EVar "False"))
 (DTypeSig false "scanUpper" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
 (DFunDef false "scanUpper" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id")) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "identEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1))))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TUpper") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e")))) (EVar "pos")) (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id"))))))
 (DTypeSig false "scanBacktick" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
@@ -3190,13 +3453,15 @@ collectComments s =
 (DTypeSig false "floatTokEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok")))))))))
 (DFunDef false "floatTokEnd" ((PVar "src") (PVar "len") (PVar "pos") (PVar "endp") (PVar "depth") (PVar "id")) (EBlock (DoLet false false (PVar "f") (EApp (EApp (EVar "optionOr") (ELit (LFloat 0.0))) (EApp (EVar "stringToFloat") (EApp (EApp (EApp (EVar "substrNoUs") (EVar "src")) (EVar "pos")) (EVar "endp"))))) (DoExpr (EIf (EApp (EVar "floatIsFinite") (EVar "f")) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TFloat") (EVar "f"))) (EVar "pos")) (EVar "endp")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "endp")) (EVar "depth")) (EVar "id"))) (EApp (EApp (EVar "lexErrorTok") (EVar "pos")) (ELit (LString "float literal out of range (overflows to infinity)")))))))
 (DTypeSig false "scanStr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "RawTok"))))))))))
-(DFunDef false "scanStr" ((PVar "src") (PVar "len") (PVar "p") (PVar "startQ") (PVar "depth") (PVar "id") (PVar "acc")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EApp (EApp (EVar "lexErrorTok") (EVar "p")) (ELit (LString "unterminated string literal"))) (EIf (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TString") (EVar "acc"))) (EVar "startQ")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "depth")) (EVar "id"))) (EIf (EBinOp "&&" (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "<" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "len"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanStrEsc") (EVar "src")) (EVar "len")) (EVar "p")) (EVar "startQ")) (EVar "depth")) (EVar "id")) (EVar "acc")) (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (EIf (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EApp (EVar "lexErrorTok") (EVar "p")) (ELit (LString "unterminated string literal"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanStr") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "startQ")) (EVar "depth")) (EVar "id")) (EBinOp "++" (EVar "acc") (EApp (EVar "charToStr") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
+(DFunDef false "scanStr" ((PVar "src") (PVar "len") (PVar "p") (PVar "startQ") (PVar "depth") (PVar "id") (PVar "acc")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EApp (EApp (EVar "lexErrorTok") (EVar "p")) (ELit (LString "unterminated string literal"))) (EIf (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TString") (EVar "acc"))) (EVar "startQ")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "depth")) (EVar "id"))) (EIf (EBinOp "&&" (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "<" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "len"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanStrEsc") (EVar "src")) (EVar "len")) (EVar "p")) (EVar "startQ")) (EVar "depth")) (EVar "id")) (EVar "acc")) (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (EIf (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EApp (EVar "lexErrorTok") (EVar "p")) (ELit (LString "unterminated string literal"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "q") (EApp (EApp (EApp (EVar "plainRunEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanStr") (EVar "src")) (EVar "len")) (EVar "q")) (EVar "startQ")) (EVar "depth")) (EVar "id")) (EBinOp "++" (EVar "acc") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "p")) (EVar "q")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
+(DTypeSig false "plainRunEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "plainRunEnd" ((PVar "src") (PVar "len") (PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "len") (EIf (EBinOp "||" (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "plainRunEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "commonEscDecode" (TyFun (TyCon "Char") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "commonEscDecode" ((PVar "e")) (EIf (EBinOp "==" (EVar "e") (ELit (LChar "n"))) (EApp (EVar "Some") (ELit (LString "\n"))) (EIf (EBinOp "==" (EVar "e") (ELit (LChar "t"))) (EApp (EVar "Some") (ELit (LString "\t"))) (EIf (EBinOp "==" (EVar "e") (ELit (LChar "r"))) (EApp (EVar "Some") (ELit (LString "\r"))) (EIf (EBinOp "==" (EVar "e") (ELit (LChar "0"))) (EApp (EVar "Some") (EApp (EVar "charToStr") (EApp (EApp (EVar "optionOr") (ELit (LChar " "))) (EApp (EVar "charFromCode") (ELit (LInt 0)))))) (EIf (EApp (EVar "isBackslash") (EVar "e")) (EApp (EVar "Some") (ELit (LString "\\"))) (EIf (EApp (EVar "isQuote") (EVar "e")) (EApp (EVar "Some") (ELit (LString "\""))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "scanStrEsc" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Char") (TyApp (TyCon "List") (TyCon "RawTok")))))))))))
 (DFunDef false "scanStrEsc" ((PVar "src") (PVar "len") (PVar "p") (PVar "startQ") (PVar "depth") (PVar "id") (PVar "acc") (PVar "e")) (EIf (EBinOp "==" (EVar "e") (ELit (LChar "{"))) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpOpen") (EVar "acc"))) (EVar "p")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (ELit (LInt 1)))) (EIf (EApp (EApp (EApp (EApp (EVar "isUnicodeEsc") (EVar "src")) (EVar "len")) (EVar "p")) (EVar "e")) (EMatch (EApp (EApp (EApp (EVar "uniEscChar") (EVar "src")) (EVar "len")) (EVar "p")) (arm (PCon "None") () (EApp (EApp (EVar "lexErrorTok") (EVar "p")) (EApp (EApp (EApp (EVar "uniEscErr") (EVar "src")) (EVar "len")) (EVar "p")))) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanStr") (EVar "src")) (EVar "len")) (EApp (EApp (EApp (EVar "uniEscEnd") (EVar "src")) (EVar "len")) (EVar "p"))) (EVar "startQ")) (EVar "depth")) (EVar "id")) (EBinOp "++" (EVar "acc") (EApp (EVar "charToStr") (EVar "c")))))) (EIf (EApp (EApp (EApp (EApp (EVar "isBareUnicodeEsc") (EVar "src")) (EVar "len")) (EVar "p")) (EVar "e")) (EApp (EApp (EVar "lexErrorTok") (EVar "p")) (EApp (EApp (EApp (EVar "bareUnicodeEscMsgStr") (EVar "src")) (EVar "len")) (EVar "p"))) (EIf (EVar "otherwise") (EMatch (EApp (EVar "commonEscDecode") (EVar "e")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanStr") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "startQ")) (EVar "depth")) (EVar "id")) (EBinOp "++" (EVar "acc") (EVar "s")))) (arm (PCon "None") () (EApp (EApp (EVar "lexErrorTok") (EVar "p")) (EBinOp "++" (EBinOp "++" (ELit (LString "invalid escape sequence `\\")) (EApp (EVar "display") (EApp (EVar "charToStr") (EVar "e")))) (ELit (LString "`; valid escapes are \\n \\t \\r \\0 \\\\ \\\" \\u{...}")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "scanInterpCont" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
-(DFunDef false "scanInterpCont" ((PVar "src") (PVar "len") (PVar "p") (PVar "depth") (PVar "acc")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpEnd") (EVar "acc"))) (EVar "p")) (EVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "p")) (EVar "depth")) (ELit (LInt 0)))) (EIf (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpEnd") (EVar "acc"))) (EVar "p")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "depth")) (ELit (LInt 0)))) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "<" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (ELit (LChar "{")))) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpMid") (EVar "acc"))) (EVar "p")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (ELit (LInt 1)))) (EIf (EBinOp "&&" (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "<" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "len"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpEsc") (EVar "src")) (EVar "len")) (EVar "p")) (EVar "depth")) (EVar "acc")) (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpCont") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "depth")) (EBinOp "++" (EVar "acc") (EApp (EVar "charToStr") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
+(DFunDef false "scanInterpCont" ((PVar "src") (PVar "len") (PVar "p") (PVar "depth") (PVar "acc")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpEnd") (EVar "acc"))) (EVar "p")) (EVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "p")) (EVar "depth")) (ELit (LInt 0)))) (EIf (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpEnd") (EVar "acc"))) (EVar "p")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "depth")) (ELit (LInt 0)))) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "<" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (ELit (LChar "{")))) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpMid") (EVar "acc"))) (EVar "p")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (ELit (LInt 1)))) (EIf (EBinOp "&&" (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "<" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "len"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpEsc") (EVar "src")) (EVar "len")) (EVar "p")) (EVar "depth")) (EVar "acc")) (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "q") (EApp (EApp (EApp (EVar "plainRunEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpCont") (EVar "src")) (EVar "len")) (EVar "q")) (EVar "depth")) (EBinOp "++" (EVar "acc") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "p")) (EVar "q")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "scanInterpEsc" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Char") (TyApp (TyCon "List") (TyCon "RawTok")))))))))
 (DFunDef false "scanInterpEsc" ((PVar "src") (PVar "len") (PVar "p") (PVar "depth") (PVar "acc") (PVar "e")) (EIf (EBinOp "==" (EVar "e") (ELit (LChar "n"))) (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpCont") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (EBinOp "++" (EVar "acc") (ELit (LString "\n")))) (EIf (EBinOp "==" (EVar "e") (ELit (LChar "t"))) (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpCont") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (EBinOp "++" (EVar "acc") (ELit (LString "\t")))) (EIf (EApp (EVar "isQuote") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpCont") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (EBinOp "++" (EVar "acc") (ELit (LString "\"")))) (EIf (EApp (EVar "isBackslash") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpCont") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (EBinOp "++" (EVar "acc") (ELit (LString "\\")))) (EIf (EBinOp "==" (EVar "e") (ELit (LChar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpCont") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (EBinOp "++" (EVar "acc") (ELit (LString "\r")))) (EIf (EBinOp "==" (EVar "e") (ELit (LChar "0"))) (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpCont") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (EBinOp "++" (EVar "acc") (EApp (EVar "charToStr") (EApp (EApp (EVar "optionOr") (ELit (LChar " "))) (EApp (EVar "charFromCode") (ELit (LInt 0))))))) (EIf (EApp (EApp (EApp (EApp (EVar "isUnicodeEsc") (EVar "src")) (EVar "len")) (EVar "p")) (EVar "e")) (EMatch (EApp (EApp (EApp (EVar "uniEscChar") (EVar "src")) (EVar "len")) (EVar "p")) (arm (PCon "None") () (EApp (EApp (EVar "lexErrorTok") (EVar "p")) (EApp (EApp (EApp (EVar "uniEscErr") (EVar "src")) (EVar "len")) (EVar "p")))) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpCont") (EVar "src")) (EVar "len")) (EApp (EApp (EApp (EVar "uniEscEnd") (EVar "src")) (EVar "len")) (EVar "p"))) (EVar "depth")) (EBinOp "++" (EVar "acc") (EApp (EVar "charToStr") (EVar "c")))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpCont") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (EBinOp "++" (EVar "acc") (EApp (EVar "charToStr") (EVar "e")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))
 (DTypeSig false "isTripleAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
@@ -3578,7 +3843,56 @@ collectComments s =
 (DTypeSig false "layoutWithOffsetPairs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "layoutWithOffsetPairs" ((PVar "src") (PVar "len")) (EApp (EVar "elseFilterPairs") (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "None")) (EVar "False"))))
 (DTypeSig true "tokenize" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Token"))))
-(DFunDef false "tokenize" ((PVar "s")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "layoutWithOffsets") (EVar "src")) (EVar "len"))))))
+(DFunDef false "tokenize" ((PVar "s")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EVar "elseFilterToks") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "TNewline")) (EVar "False"))))))
+(DTypeSig false "elseFilterToks" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Token"))))
+(DFunDef false "elseFilterToks" ((PCons (PCon "TNewline") (PCons (PCon "TElse") (PVar "rest")))) (EBinOp "::" (EVar "TElse") (EApp (EVar "elseFilterToks") (EVar "rest"))))
+(DFunDef false "elseFilterToks" ((PCons (PCon "TNewline") (PCons (PCon "TThen") (PVar "rest")))) (EBinOp "::" (EVar "TThen") (EApp (EVar "elseFilterToks") (EVar "rest"))))
+(DFunDef false "elseFilterToks" ((PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EVar "elseFilterToks") (EVar "rest"))))
+(DFunDef false "elseFilterToks" ((PList)) (EListLit))
+(DTypeSig false "armsHeraldTok" (TyFun (TyCon "Bool") (TyFun (TyCon "Token") (TyCon "Bool"))))
+(DFunDef false "armsHeraldTok" (PWild (PCon "TDo")) (EVar "True"))
+(DFunDef false "armsHeraldTok" (PWild (PCon "TDefer")) (EVar "True"))
+(DFunDef false "armsHeraldTok" (PWild (PCon "TFatArrow")) (EVar "True"))
+(DFunDef false "armsHeraldTok" ((PVar "opener") PWild) (EVar "opener"))
+(DTypeSig false "layoutToks" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Token") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token"))))))))
+(DFunDef false "layoutToks" ((PList) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EVar "closeAllToks") (EVar "stack")))
+(DFunDef false "layoutToks" ((PCons (PCon "RTok" (PVar "t") PWild PWild) (PVar "rest")) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EIf (EApp (EVar "bracketOpener") (EVar "t")) (EBinOp "::" (EVar "t") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EVar "stack")) (EBinOp "::" (EApp (EApp (EVar "BracketFrame") (ELit (LInt 0))) (EBinOp "||" (EVar "opener") (EApp (EVar "isOpener") (EVar "t")))) (EVar "frames"))) (EVar "t")) (EVar "False"))) (EIf (EApp (EVar "bracketCloser") (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "flushCloseToks") (EVar "t")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "opener")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "t") (EVar "TComma")) (EApp (EVar "frameHasLive") (EVar "frames"))) (EApp (EApp (EApp (EApp (EApp (EVar "flushSepToks") (EVar "t")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "opener")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "t") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "t")) (EBinOp "||" (EVar "opener") (EApp (EVar "isOpener") (EVar "t"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "layoutToks" ((PCons (PCon "RComment" PWild PWild) (PVar "rest")) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")))
+(DFunDef false "layoutToks" ((PCons (PCon "RNewline" (PVar "col") PWild) (PVar "rest")) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlToks") (EVar "col")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")))
+(DTypeSig false "closeAllToks" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Token"))))
+(DFunDef false "closeAllToks" ((PVar "stack")) (EBinOp "::" (EVar "TNewline") (EApp (EVar "closeDedentsToks") (EVar "stack"))))
+(DTypeSig false "closeDedentsToks" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Token"))))
+(DFunDef false "closeDedentsToks" ((PList)) (EListLit (EVar "TEof")))
+(DFunDef false "closeDedentsToks" ((PList PWild)) (EListLit (EVar "TEof")))
+(DFunDef false "closeDedentsToks" ((PCons PWild (PVar "tl"))) (EBinOp "::" (EVar "TDedent") (EBinOp "::" (EVar "TNewline") (EApp (EVar "closeDedentsToks") (EVar "tl")))))
+(DTypeSig false "flushCloseToks" (TyFun (TyCon "Token") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token"))))))))
+(DFunDef false "flushCloseToks" ((PVar "t") (PVar "rest") (PVar "stack") (PList) (PVar "opener")) (EBinOp "::" (EVar "t") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EVar "stack")) (EListLit)) (EVar "t")) (EBinOp "||" (EVar "opener") (EApp (EVar "isOpener") (EVar "t"))))))
+(DFunDef false "flushCloseToks" ((PVar "t") (PVar "rest") (PVar "stack") (PCons (PCon "BracketFrame" (PVar "f") (PVar "saved")) (PVar "fs")) PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "flushCloseGoToks") (EVar "t")) (EVar "rest")) (EVar "stack")) (EVar "f")) (EVar "fs")) (EVar "saved")))
+(DTypeSig false "flushCloseGoToks" (TyFun (TyCon "Token") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token")))))))))
+(DFunDef false "flushCloseGoToks" ((PVar "t") (PVar "rest") (PList) (PVar "f") (PVar "fs") (PVar "opener")) (EBinOp "::" (EVar "t") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EListLit)) (EVar "fs")) (EVar "t")) (EBinOp "||" (EVar "opener") (EApp (EVar "isOpener") (EVar "t"))))))
+(DFunDef false "flushCloseGoToks" ((PVar "t") (PVar "rest") (PCons (PVar "top") (PVar "tl")) (PVar "f") (PVar "fs") (PVar "opener")) (EIf (EBinOp "<=" (EVar "f") (ELit (LInt 0))) (EBinOp "::" (EVar "t") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EBinOp "::" (EVar "top") (EVar "tl"))) (EVar "fs")) (EVar "t")) (EBinOp "||" (EVar "opener") (EApp (EVar "isOpener") (EVar "t"))))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "TNewline") (EBinOp "::" (EVar "TDedent") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "flushCloseGoToks") (EVar "t")) (EVar "rest")) (EVar "tl")) (EBinOp "-" (EVar "f") (ELit (LInt 1)))) (EVar "fs")) (EVar "opener")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "flushSepToks" (TyFun (TyCon "Token") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token"))))))))
+(DFunDef false "flushSepToks" ((PVar "t") (PVar "rest") (PVar "stack") (PList) (PVar "opener")) (EBinOp "::" (EVar "t") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EVar "stack")) (EListLit)) (EVar "t")) (EVar "opener"))))
+(DFunDef false "flushSepToks" ((PVar "t") (PVar "rest") (PVar "stack") (PCons (PCon "BracketFrame" (PVar "f") (PVar "saved")) (PVar "fs")) (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "flushSepGoToks") (EVar "t")) (EVar "rest")) (EVar "stack")) (EVar "f")) (EBinOp "::" (EApp (EApp (EVar "BracketFrame") (ELit (LInt 0))) (EVar "saved")) (EVar "fs"))) (EVar "opener")))
+(DTypeSig false "flushSepGoToks" (TyFun (TyCon "Token") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token")))))))))
+(DFunDef false "flushSepGoToks" ((PVar "t") (PVar "rest") (PList) PWild (PVar "frames") (PVar "opener")) (EBinOp "::" (EVar "t") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EListLit)) (EVar "frames")) (EVar "t")) (EVar "opener"))))
+(DFunDef false "flushSepGoToks" ((PVar "t") (PVar "rest") (PCons (PVar "top") (PVar "tl")) (PVar "f") (PVar "frames") (PVar "opener")) (EIf (EBinOp "<=" (EVar "f") (ELit (LInt 0))) (EBinOp "::" (EVar "t") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EBinOp "::" (EVar "top") (EVar "tl"))) (EVar "frames")) (EVar "t")) (EVar "opener"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "TNewline") (EBinOp "::" (EVar "TDedent") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "flushSepGoToks") (EVar "t")) (EVar "rest")) (EVar "tl")) (EBinOp "-" (EVar "f") (ELit (LInt 1)))) (EVar "frames")) (EVar "opener")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "applyNlToks" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Token") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token")))))))))
+(DFunDef false "applyNlToks" ((PVar "col") (PVar "rest") (PList) (PVar "frames") (PVar "prev") (PVar "opener")) (EBinOp "::" (EVar "TNewline") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EListLit)) (EVar "frames")) (EVar "TNewline")) (EVar "False"))))
+(DFunDef false "applyNlToks" ((PVar "col") (PVar "rest") (PCons (PVar "top") (PVar "tl")) (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlFrameToks") (EVar "col")) (EVar "top")) (EBinOp "::" (EVar "top") (EVar "tl"))) (EVar "rest")) (EVar "frames")) (EVar "prev")) (EVar "opener")))
+(DTypeSig false "applyNlFrameToks" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Token") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token"))))))))))
+(DFunDef false "applyNlFrameToks" ((PVar "col") (PVar "top") (PVar "stack") (PVar "rest") (PList) (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlTopToks") (EVar "col")) (EVar "top")) (EVar "stack")) (EVar "rest")) (EListLit)) (EVar "prev")) (EVar "opener")))
+(DFunDef false "applyNlFrameToks" ((PVar "col") (PVar "top") (PVar "stack") (PVar "rest") (PCons (PCon "BracketFrame" (PVar "f") (PVar "saved")) (PVar "fs")) (PVar "prev") (PVar "opener")) (EIf (EBinOp ">" (EVar "f") (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlTopToks") (EVar "col")) (EVar "top")) (EVar "stack")) (EVar "rest")) (EBinOp "::" (EApp (EApp (EVar "BracketFrame") (EVar "f")) (EVar "saved")) (EVar "fs"))) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "col") (EVar "top")) (EApp (EVar "not") (EApp (EVar "isTrailingContinuationOp") (EVar "prev")))) (EApp (EApp (EVar "armsHeraldTok") (EVar "opener")) (EVar "prev"))) (EBinOp "::" (EVar "TIndent") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EBinOp "::" (EVar "col") (EVar "stack"))) (EBinOp "::" (EApp (EApp (EVar "BracketFrame") (ELit (LInt 1))) (EVar "saved")) (EVar "fs"))) (EVar "TNewline")) (EVar "False"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EVar "stack")) (EBinOp "::" (EApp (EApp (EVar "BracketFrame") (EVar "f")) (EVar "saved")) (EVar "fs"))) (EVar "prev")) (EVar "opener")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "applyNlTopToks" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Token") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token"))))))))))
+(DFunDef false "applyNlTopToks" ((PVar "col") (PVar "top") (PVar "stack") (PVar "rest") (PVar "frames") (PVar "prev") (PVar "opener")) (EIf (EBinOp ">" (EVar "col") (EVar "top")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "wouldIndentToks") (EVar "col")) (EVar "stack")) (EVar "rest")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "col") (EVar "top")) (EBinOp "::" (EVar "TNewline") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "TNewline")) (EVar "False"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "TNewline") (EApp (EApp (EApp (EApp (EVar "popDedentsToks") (EVar "col")) (EVar "stack")) (EVar "rest")) (EVar "frames"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "wouldIndentToks" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Token") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token")))))))))
+(DFunDef false "wouldIndentToks" ((PVar "col") (PVar "stack") (PVar "rest") (PVar "frames") (PVar "prev") (PVar "opener")) (EIf (EApp (EVar "isTrailingContinuationOp") (EVar "prev")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "||" (EVar "opener") (EApp (EVar "not") (EApp (EVar "canEndExpr") (EVar "prev")))) (EBinOp "::" (EVar "TIndent") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EBinOp "::" (EVar "col") (EVar "stack"))) (EApp (EVar "bumpFrame") (EVar "frames"))) (EVar "TNewline")) (EVar "False"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveContToks") (EVar "col")) (EVar "stack")) (EVar "rest")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "resolveContToks" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Token") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token")))))))))
+(DFunDef false "resolveContToks" ((PVar "col") (PVar "stack") (PCons (PCon "RTok" (PVar "t") (PVar "toff") (PVar "tend")) (PVar "more")) (PVar "frames") (PVar "prev") (PVar "opener")) (EIf (EApp (EVar "canStartAtom") (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "t") (EVar "TThen")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "t") (EVar "TElse")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "TIndent") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EBinOp "::" (EVar "col") (EVar "stack"))) (EApp (EVar "bumpFrame") (EVar "frames"))) (EVar "TNewline")) (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "resolveContToks" ((PVar "col") (PVar "stack") (PVar "rest") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "TNewline")) (EVar "False")))
+(DTypeSig false "popDedentsToks" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyApp (TyCon "List") (TyCon "Token")))))))
+(DFunDef false "popDedentsToks" ((PVar "col") (PList) (PVar "rest") (PVar "frames")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EListLit)) (EVar "frames")) (EVar "TNewline")) (EVar "False")))
+(DFunDef false "popDedentsToks" ((PVar "col") (PCons (PVar "top") (PVar "tl")) (PVar "rest") (PVar "frames")) (EIf (EBinOp ">" (EVar "top") (EVar "col")) (EBinOp "::" (EVar "TDedent") (EBinOp "::" (EVar "TNewline") (EApp (EApp (EApp (EApp (EVar "popDedentsToks") (EVar "col")) (EVar "tl")) (EVar "rest")) (EApp (EVar "dropFrame") (EVar "frames"))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EBinOp "::" (EVar "top") (EVar "tl"))) (EVar "frames")) (EVar "TNewline")) (EVar "False")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "tokenizeWithLines" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "tokenizeWithLines" ((PVar "s")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoLet false false (PVar "pairs") (EApp (EApp (EVar "layoutWithOffsets") (EVar "src")) (EVar "len"))) (DoLet false false (PVar "toks") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "pairs"))) (DoLet false false (PVar "lines") (EApp (EApp (EVar "offsetsToLines") (EVar "src")) (EApp (EApp (EVar "map") (EVar "snd")) (EVar "pairs")))) (DoExpr (ETuple (EVar "toks") (EVar "lines")))))
 (DTypeSig true "tokenizeWithOffsets" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Int")))))
@@ -3615,7 +3929,7 @@ collectComments s =
 (DFunDef false "rawToComments" ((PVar "src") (PVar "toks")) (EApp (EApp (EApp (EApp (EApp (EVar "rawToCommentsGo") (EVar "src")) (EVar "toks")) (ELit (LInt 0))) (ELit (LInt 1))) (ELit (LInt 0))))
 (DTypeSig false "rawToCommentsGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Comment"))))))))
 (DFunDef false "rawToCommentsGo" (PWild (PList) PWild PWild PWild) (EListLit))
-(DFunDef false "rawToCommentsGo" ((PVar "src") (PCons (PCon "RComment" (PVar "startPos") (PVar "text")) (PVar "rest")) (PVar "p") (PVar "line") (PVar "lineStart")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "posLineColFrom") (EVar "src")) (EVar "startPos")) (EVar "p")) (EVar "line")) (EVar "lineStart")) (arm (PTuple (PVar "line2") (PVar "col")) () (EBinOp "::" (EApp (EApp (EApp (EVar "Comment") (EVar "line2")) (EVar "col")) (EVar "text")) (EApp (EApp (EApp (EApp (EApp (EVar "rawToCommentsGo") (EVar "src")) (EVar "rest")) (EVar "startPos")) (EVar "line2")) (EBinOp "-" (EVar "startPos") (EVar "col")))))))
+(DFunDef false "rawToCommentsGo" ((PVar "src") (PCons (PCon "RComment" (PVar "startPos") (PVar "endPos")) (PVar "rest")) (PVar "p") (PVar "line") (PVar "lineStart")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "posLineColFrom") (EVar "src")) (EVar "startPos")) (EVar "p")) (EVar "line")) (EVar "lineStart")) (arm (PTuple (PVar "line2") (PVar "col")) () (EBinOp "::" (EApp (EApp (EApp (EVar "Comment") (EVar "line2")) (EVar "col")) (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "startPos")) (EVar "endPos"))) (EApp (EApp (EApp (EApp (EApp (EVar "rawToCommentsGo") (EVar "src")) (EVar "rest")) (EVar "startPos")) (EVar "line2")) (EBinOp "-" (EVar "startPos") (EVar "col")))))))
 (DFunDef false "rawToCommentsGo" ((PVar "src") (PCons PWild (PVar "rest")) (PVar "p") (PVar "line") (PVar "lineStart")) (EApp (EApp (EApp (EApp (EApp (EVar "rawToCommentsGo") (EVar "src")) (EVar "rest")) (EVar "p")) (EVar "line")) (EVar "lineStart")))
 (DTypeSig true "collectComments" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Comment"))))
 (DFunDef false "collectComments" ((PVar "s")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EApp (EVar "rawToComments") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))))
@@ -3818,7 +4132,7 @@ collectComments s =
 (DFunDef false "describeToken" ((PCon "TDedent")) (ELit (LString "a dedent")))
 (DFunDef false "describeToken" ((PCon "TEof")) (ELit (LString "end of input")))
 (DFunDef false "describeToken" ((PCon "TLexError" (PVar "s"))) (EVar "s"))
-(DData Private "RawTok" () ((variant "RTok" (ConPos (TyCon "Token") (TyCon "Int") (TyCon "Int"))) (variant "RNewline" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RComment" (ConPos (TyCon "Int") (TyCon "String")))) ())
+(DData Private "RawTok" () ((variant "RTok" (ConPos (TyCon "Token") (TyCon "Int") (TyCon "Int"))) (variant "RNewline" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RComment" (ConPos (TyCon "Int") (TyCon "Int")))) ())
 (DTypeSig false "at" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Char"))))
 (DFunDef false "at" ((PVar "src") (PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "src")))
 (DTypeSig false "is2" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyCon "Bool")))))))
@@ -3826,7 +4140,7 @@ collectComments s =
 (DTypeSig false "is3" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyCon "Bool"))))))))
 (DFunDef false "is3" ((PVar "src") (PVar "len") (PVar "pos") (PVar "a") (PVar "b") (PVar "c")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 2))) (EVar "len")) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")) (EVar "a"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "b"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "c"))))
 (DTypeSig false "substr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "substr" ((PVar "src") (PVar "start") (PVar "endp")) (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "endp") (EVar "start"))) (ELam ((PVar "i")) (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "start") (EVar "i")))))))
+(DFunDef false "substr" ((PVar "src") (PVar "start") (PVar "endp")) (EIf (EBinOp "<=" (EVar "endp") (EVar "start")) (ELit (LString "")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "out") (EApp (EApp (EVar "arrayMake") (EBinOp "-" (EVar "endp") (EVar "start"))) (EApp (EApp (EVar "at") (EVar "src")) (EVar "start")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EVar "src")) (EVar "start")) (EVar "out")) (ELit (LInt 0))) (EBinOp "-" (EVar "endp") (EVar "start")))) (DoExpr (EApp (EVar "stringFromChars") (EVar "out")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "collectNoUs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Char"))))))
 (DFunDef false "collectNoUs" ((PVar "src") (PVar "p") (PVar "endp")) (EIf (EBinOp ">=" (EVar "p") (EVar "endp")) (EListLit) (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "_"))) (EApp (EApp (EApp (EVar "collectNoUs") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (EApp (EApp (EApp (EVar "collectNoUs") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "substrNoUs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
@@ -3884,7 +4198,7 @@ collectComments s =
 (DTypeSig false "scan" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
 (DFunDef false "scan" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id")) (EIf (EBinOp ">=" (EVar "pos") (EVar "len")) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanAt") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "scanAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyApp (TyCon "List") (TyCon "RawTok")))))))))
-(DFunDef false "scanAt" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id") (PVar "c")) (EIf (EApp (EVar "isSpace") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "depth")) (EVar "id")) (EIf (EBinOp "||" (EApp (EVar "isNL") (EVar "c")) (EApp (EVar "isCR") (EVar "c"))) (EApp (EApp (EApp (EApp (EApp (EVar "handleNewline") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "-"))) (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LChar "-")))) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "skipLineComment") (EVar "src")) (EVar "len")) (EVar "pos"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "RComment") (EVar "pos")) (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id"))))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "{"))) (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LChar "-")))) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EApp (EVar "skipBlockComment") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<" (EVar "e") (ELit (LInt 0))) (EApp (EApp (EVar "lexErrorTok") (EVar "pos")) (ELit (LString "unterminated block comment"))) (EBinOp "::" (EApp (EApp (EVar "RComment") (EVar "pos")) (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id")))))) (EIf (EApp (EVar "isDigit") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanNumber") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "&&" (EApp (EVar "isQuote") (EVar "c")) (EApp (EApp (EApp (EVar "isTripleAt") (EVar "src")) (EVar "len")) (EVar "pos"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanTriple") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 3)))) (EVar "pos")) (EVar "depth")) (EVar "id")) (EVar "False")) (ELit (LString ""))) (EIf (EApp (EVar "isQuote") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanStr") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "pos")) (EVar "depth")) (EVar "id")) (ELit (LString ""))) (EIf (EApp (EVar "isApos") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanChar") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "||" (EApp (EVar "isLower") (EVar "c")) (EBinOp "==" (EVar "c") (ELit (LChar "_")))) (EApp (EApp (EApp (EApp (EApp (EVar "scanLower") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EApp (EVar "isUpper") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanUpper") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EApp (EVar "isBacktick") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanBacktick") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanOp") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EVar "c")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))))))
+(DFunDef false "scanAt" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id") (PVar "c")) (EIf (EApp (EVar "isSpace") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "depth")) (EVar "id")) (EIf (EBinOp "||" (EApp (EVar "isNL") (EVar "c")) (EApp (EVar "isCR") (EVar "c"))) (EApp (EApp (EApp (EApp (EApp (EVar "handleNewline") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "-"))) (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LChar "-")))) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "skipLineComment") (EVar "src")) (EVar "len")) (EVar "pos"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "RComment") (EVar "pos")) (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id"))))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "{"))) (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LChar "-")))) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EApp (EVar "skipBlockComment") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<" (EVar "e") (ELit (LInt 0))) (EApp (EApp (EVar "lexErrorTok") (EVar "pos")) (ELit (LString "unterminated block comment"))) (EBinOp "::" (EApp (EApp (EVar "RComment") (EVar "pos")) (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id")))))) (EIf (EApp (EVar "isDigit") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanNumber") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "&&" (EApp (EVar "isQuote") (EVar "c")) (EApp (EApp (EApp (EVar "isTripleAt") (EVar "src")) (EVar "len")) (EVar "pos"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanTriple") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 3)))) (EVar "pos")) (EVar "depth")) (EVar "id")) (EVar "False")) (ELit (LString ""))) (EIf (EApp (EVar "isQuote") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanStr") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "pos")) (EVar "depth")) (EVar "id")) (ELit (LString ""))) (EIf (EApp (EVar "isApos") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanChar") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "||" (EApp (EVar "isLower") (EVar "c")) (EBinOp "==" (EVar "c") (ELit (LChar "_")))) (EApp (EApp (EApp (EApp (EApp (EVar "scanLower") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EApp (EVar "isUpper") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanUpper") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EApp (EVar "isBacktick") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanBacktick") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanOp") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EVar "c")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))))))
 (DTypeSig false "skipLineComment" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "skipLineComment" ((PVar "src") (PVar "len") (PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "p") (EIf (EApp (EVar "isNL") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "skipLineComment") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "lexErrorTok" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "RawTok")))))
@@ -3896,7 +4210,25 @@ collectComments s =
 (DTypeSig false "scanLower" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
 (DFunDef false "scanLower" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id")) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "identEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1))))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EApp (EApp (EVar "identToken") (EVar "src")) (EVar "pos")) (EVar "e"))) (EVar "pos")) (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id"))))))
 (DTypeSig false "identToken" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Token")))))
-(DFunDef false "identToken" ((PVar "src") (PVar "pos") (PVar "e")) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")) (ELit (LChar "_"))) (EBinOp "==" (EBinOp "-" (EVar "e") (EVar "pos")) (ELit (LInt 1)))) (EVar "TUnderscore") (EIf (EVar "otherwise") (EApp (EVar "keywordOrIdent") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "identToken" ((PVar "src") (PVar "pos") (PVar "e")) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")) (ELit (LChar "_"))) (EBinOp "==" (EBinOp "-" (EVar "e") (EVar "pos")) (ELit (LInt 1)))) (EVar "TUnderscore") (EIf (EApp (EApp (EApp (EVar "kwCandidate") (EVar "src")) (EVar "pos")) (EVar "e")) (EApp (EVar "keywordOrIdent") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (EIf (EVar "otherwise") (EApp (EVar "TIdent") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "kwCandidate" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
+(DFunDef false "kwCandidate" ((PVar "src") (PVar "pos") (PVar "e")) (EBlock (DoLet false false (PVar "n") (EBinOp "-" (EVar "e") (EVar "pos"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "<=" (EVar "n") (ELit (LInt 9)))) (EApp (EVar "kwStart") (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")))))))
+(DTypeSig false "kwStart" (TyFun (TyCon "Char") (TyCon "Bool")))
+(DFunDef false "kwStart" ((PLit (LChar "a"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "b"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "d"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "e"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "f"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "i"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "l"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "m"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "n"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "o"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "p"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "r"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "t"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "w"))) (EVar "True"))
+(DFunDef false "kwStart" (PWild) (EVar "False"))
 (DTypeSig false "scanUpper" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
 (DFunDef false "scanUpper" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id")) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "identEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1))))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TUpper") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e")))) (EVar "pos")) (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id"))))))
 (DTypeSig false "scanBacktick" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
@@ -3978,13 +4310,15 @@ collectComments s =
 (DTypeSig false "floatTokEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok")))))))))
 (DFunDef false "floatTokEnd" ((PVar "src") (PVar "len") (PVar "pos") (PVar "endp") (PVar "depth") (PVar "id")) (EBlock (DoLet false false (PVar "f") (EApp (EApp (EVar "optionOr") (ELit (LFloat 0.0))) (EApp (EVar "stringToFloat") (EApp (EApp (EApp (EVar "substrNoUs") (EVar "src")) (EVar "pos")) (EVar "endp"))))) (DoExpr (EIf (EApp (EVar "floatIsFinite") (EVar "f")) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TFloat") (EVar "f"))) (EVar "pos")) (EVar "endp")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "endp")) (EVar "depth")) (EVar "id"))) (EApp (EApp (EVar "lexErrorTok") (EVar "pos")) (ELit (LString "float literal out of range (overflows to infinity)")))))))
 (DTypeSig false "scanStr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "RawTok"))))))))))
-(DFunDef false "scanStr" ((PVar "src") (PVar "len") (PVar "p") (PVar "startQ") (PVar "depth") (PVar "id") (PVar "acc")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EApp (EApp (EVar "lexErrorTok") (EVar "p")) (ELit (LString "unterminated string literal"))) (EIf (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TString") (EVar "acc"))) (EVar "startQ")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "depth")) (EVar "id"))) (EIf (EBinOp "&&" (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "<" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "len"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanStrEsc") (EVar "src")) (EVar "len")) (EVar "p")) (EVar "startQ")) (EVar "depth")) (EVar "id")) (EVar "acc")) (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (EIf (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EApp (EVar "lexErrorTok") (EVar "p")) (ELit (LString "unterminated string literal"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanStr") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "startQ")) (EVar "depth")) (EVar "id")) (EBinOp "++" (EVar "acc") (EApp (EVar "charToStr") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
+(DFunDef false "scanStr" ((PVar "src") (PVar "len") (PVar "p") (PVar "startQ") (PVar "depth") (PVar "id") (PVar "acc")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EApp (EApp (EVar "lexErrorTok") (EVar "p")) (ELit (LString "unterminated string literal"))) (EIf (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TString") (EVar "acc"))) (EVar "startQ")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "depth")) (EVar "id"))) (EIf (EBinOp "&&" (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "<" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "len"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanStrEsc") (EVar "src")) (EVar "len")) (EVar "p")) (EVar "startQ")) (EVar "depth")) (EVar "id")) (EVar "acc")) (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (EIf (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EApp (EVar "lexErrorTok") (EVar "p")) (ELit (LString "unterminated string literal"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "q") (EApp (EApp (EApp (EVar "plainRunEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanStr") (EVar "src")) (EVar "len")) (EVar "q")) (EVar "startQ")) (EVar "depth")) (EVar "id")) (EBinOp "++" (EVar "acc") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "p")) (EVar "q")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
+(DTypeSig false "plainRunEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "plainRunEnd" ((PVar "src") (PVar "len") (PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "len") (EIf (EBinOp "||" (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "plainRunEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "commonEscDecode" (TyFun (TyCon "Char") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "commonEscDecode" ((PVar "e")) (EIf (EBinOp "==" (EVar "e") (ELit (LChar "n"))) (EApp (EVar "Some") (ELit (LString "\n"))) (EIf (EBinOp "==" (EVar "e") (ELit (LChar "t"))) (EApp (EVar "Some") (ELit (LString "\t"))) (EIf (EBinOp "==" (EVar "e") (ELit (LChar "r"))) (EApp (EVar "Some") (ELit (LString "\r"))) (EIf (EBinOp "==" (EVar "e") (ELit (LChar "0"))) (EApp (EVar "Some") (EApp (EVar "charToStr") (EApp (EApp (EVar "optionOr") (ELit (LChar " "))) (EApp (EVar "charFromCode") (ELit (LInt 0)))))) (EIf (EApp (EVar "isBackslash") (EVar "e")) (EApp (EVar "Some") (ELit (LString "\\"))) (EIf (EApp (EVar "isQuote") (EVar "e")) (EApp (EVar "Some") (ELit (LString "\""))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "scanStrEsc" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Char") (TyApp (TyCon "List") (TyCon "RawTok")))))))))))
 (DFunDef false "scanStrEsc" ((PVar "src") (PVar "len") (PVar "p") (PVar "startQ") (PVar "depth") (PVar "id") (PVar "acc") (PVar "e")) (EIf (EBinOp "==" (EVar "e") (ELit (LChar "{"))) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpOpen") (EVar "acc"))) (EVar "p")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (ELit (LInt 1)))) (EIf (EApp (EApp (EApp (EApp (EVar "isUnicodeEsc") (EVar "src")) (EVar "len")) (EVar "p")) (EVar "e")) (EMatch (EApp (EApp (EApp (EVar "uniEscChar") (EVar "src")) (EVar "len")) (EVar "p")) (arm (PCon "None") () (EApp (EApp (EVar "lexErrorTok") (EVar "p")) (EApp (EApp (EApp (EVar "uniEscErr") (EVar "src")) (EVar "len")) (EVar "p")))) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanStr") (EVar "src")) (EVar "len")) (EApp (EApp (EApp (EVar "uniEscEnd") (EVar "src")) (EVar "len")) (EVar "p"))) (EVar "startQ")) (EVar "depth")) (EVar "id")) (EBinOp "++" (EVar "acc") (EApp (EVar "charToStr") (EVar "c")))))) (EIf (EApp (EApp (EApp (EApp (EVar "isBareUnicodeEsc") (EVar "src")) (EVar "len")) (EVar "p")) (EVar "e")) (EApp (EApp (EVar "lexErrorTok") (EVar "p")) (EApp (EApp (EApp (EVar "bareUnicodeEscMsgStr") (EVar "src")) (EVar "len")) (EVar "p"))) (EIf (EVar "otherwise") (EMatch (EApp (EVar "commonEscDecode") (EVar "e")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanStr") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "startQ")) (EVar "depth")) (EVar "id")) (EBinOp "++" (EVar "acc") (EVar "s")))) (arm (PCon "None") () (EApp (EApp (EVar "lexErrorTok") (EVar "p")) (EBinOp "++" (EBinOp "++" (ELit (LString "invalid escape sequence `\\")) (EApp (EMethodRef "display") (EApp (EVar "charToStr") (EVar "e")))) (ELit (LString "`; valid escapes are \\n \\t \\r \\0 \\\\ \\\" \\u{...}")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "scanInterpCont" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
-(DFunDef false "scanInterpCont" ((PVar "src") (PVar "len") (PVar "p") (PVar "depth") (PVar "acc")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpEnd") (EVar "acc"))) (EVar "p")) (EVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "p")) (EVar "depth")) (ELit (LInt 0)))) (EIf (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpEnd") (EVar "acc"))) (EVar "p")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "depth")) (ELit (LInt 0)))) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "<" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (ELit (LChar "{")))) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpMid") (EVar "acc"))) (EVar "p")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (ELit (LInt 1)))) (EIf (EBinOp "&&" (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "<" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "len"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpEsc") (EVar "src")) (EVar "len")) (EVar "p")) (EVar "depth")) (EVar "acc")) (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpCont") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "depth")) (EBinOp "++" (EVar "acc") (EApp (EVar "charToStr") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
+(DFunDef false "scanInterpCont" ((PVar "src") (PVar "len") (PVar "p") (PVar "depth") (PVar "acc")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpEnd") (EVar "acc"))) (EVar "p")) (EVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "p")) (EVar "depth")) (ELit (LInt 0)))) (EIf (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpEnd") (EVar "acc"))) (EVar "p")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "depth")) (ELit (LInt 0)))) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "<" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (ELit (LChar "{")))) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpMid") (EVar "acc"))) (EVar "p")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (ELit (LInt 1)))) (EIf (EBinOp "&&" (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EBinOp "<" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "len"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpEsc") (EVar "src")) (EVar "len")) (EVar "p")) (EVar "depth")) (EVar "acc")) (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "q") (EApp (EApp (EApp (EVar "plainRunEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpCont") (EVar "src")) (EVar "len")) (EVar "q")) (EVar "depth")) (EBinOp "++" (EVar "acc") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "p")) (EVar "q")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "scanInterpEsc" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Char") (TyApp (TyCon "List") (TyCon "RawTok")))))))))
 (DFunDef false "scanInterpEsc" ((PVar "src") (PVar "len") (PVar "p") (PVar "depth") (PVar "acc") (PVar "e")) (EIf (EBinOp "==" (EVar "e") (ELit (LChar "n"))) (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpCont") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (EBinOp "++" (EVar "acc") (ELit (LString "\n")))) (EIf (EBinOp "==" (EVar "e") (ELit (LChar "t"))) (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpCont") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (EBinOp "++" (EVar "acc") (ELit (LString "\t")))) (EIf (EApp (EVar "isQuote") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpCont") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (EBinOp "++" (EVar "acc") (ELit (LString "\"")))) (EIf (EApp (EVar "isBackslash") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpCont") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (EBinOp "++" (EVar "acc") (ELit (LString "\\")))) (EIf (EBinOp "==" (EVar "e") (ELit (LChar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpCont") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (EBinOp "++" (EVar "acc") (ELit (LString "\r")))) (EIf (EBinOp "==" (EVar "e") (ELit (LChar "0"))) (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpCont") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (EBinOp "++" (EVar "acc") (EApp (EVar "charToStr") (EApp (EApp (EVar "optionOr") (ELit (LChar " "))) (EApp (EVar "charFromCode") (ELit (LInt 0))))))) (EIf (EApp (EApp (EApp (EApp (EVar "isUnicodeEsc") (EVar "src")) (EVar "len")) (EVar "p")) (EVar "e")) (EMatch (EApp (EApp (EApp (EVar "uniEscChar") (EVar "src")) (EVar "len")) (EVar "p")) (arm (PCon "None") () (EApp (EApp (EVar "lexErrorTok") (EVar "p")) (EApp (EApp (EApp (EVar "uniEscErr") (EVar "src")) (EVar "len")) (EVar "p")))) (arm (PCon "Some" (PVar "c")) () (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpCont") (EVar "src")) (EVar "len")) (EApp (EApp (EApp (EVar "uniEscEnd") (EVar "src")) (EVar "len")) (EVar "p"))) (EVar "depth")) (EBinOp "++" (EVar "acc") (EApp (EVar "charToStr") (EVar "c")))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "scanInterpCont") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "depth")) (EBinOp "++" (EVar "acc") (EApp (EVar "charToStr") (EVar "e")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))
 (DTypeSig false "isTripleAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
@@ -4366,7 +4700,56 @@ collectComments s =
 (DTypeSig false "layoutWithOffsetPairs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "layoutWithOffsetPairs" ((PVar "src") (PVar "len")) (EApp (EVar "elseFilterPairs") (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "None")) (EVar "False"))))
 (DTypeSig true "tokenize" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Token"))))
-(DFunDef false "tokenize" ((PVar "s")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "layoutWithOffsets") (EVar "src")) (EVar "len"))))))
+(DFunDef false "tokenize" ((PVar "s")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EVar "elseFilterToks") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "TNewline")) (EVar "False"))))))
+(DTypeSig false "elseFilterToks" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Token"))))
+(DFunDef false "elseFilterToks" ((PCons (PCon "TNewline") (PCons (PCon "TElse") (PVar "rest")))) (EBinOp "::" (EVar "TElse") (EApp (EVar "elseFilterToks") (EVar "rest"))))
+(DFunDef false "elseFilterToks" ((PCons (PCon "TNewline") (PCons (PCon "TThen") (PVar "rest")))) (EBinOp "::" (EVar "TThen") (EApp (EVar "elseFilterToks") (EVar "rest"))))
+(DFunDef false "elseFilterToks" ((PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EVar "elseFilterToks") (EVar "rest"))))
+(DFunDef false "elseFilterToks" ((PList)) (EListLit))
+(DTypeSig false "armsHeraldTok" (TyFun (TyCon "Bool") (TyFun (TyCon "Token") (TyCon "Bool"))))
+(DFunDef false "armsHeraldTok" (PWild (PCon "TDo")) (EVar "True"))
+(DFunDef false "armsHeraldTok" (PWild (PCon "TDefer")) (EVar "True"))
+(DFunDef false "armsHeraldTok" (PWild (PCon "TFatArrow")) (EVar "True"))
+(DFunDef false "armsHeraldTok" ((PVar "opener") PWild) (EVar "opener"))
+(DTypeSig false "layoutToks" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Token") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token"))))))))
+(DFunDef false "layoutToks" ((PList) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EVar "closeAllToks") (EVar "stack")))
+(DFunDef false "layoutToks" ((PCons (PCon "RTok" (PVar "t") PWild PWild) (PVar "rest")) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EIf (EApp (EVar "bracketOpener") (EVar "t")) (EBinOp "::" (EVar "t") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EVar "stack")) (EBinOp "::" (EApp (EApp (EVar "BracketFrame") (ELit (LInt 0))) (EBinOp "||" (EVar "opener") (EApp (EVar "isOpener") (EVar "t")))) (EVar "frames"))) (EVar "t")) (EVar "False"))) (EIf (EApp (EVar "bracketCloser") (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "flushCloseToks") (EVar "t")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "opener")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "t") (EVar "TComma")) (EApp (EVar "frameHasLive") (EVar "frames"))) (EApp (EApp (EApp (EApp (EApp (EVar "flushSepToks") (EVar "t")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "opener")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "t") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "t")) (EBinOp "||" (EVar "opener") (EApp (EVar "isOpener") (EVar "t"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "layoutToks" ((PCons (PCon "RComment" PWild PWild) (PVar "rest")) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")))
+(DFunDef false "layoutToks" ((PCons (PCon "RNewline" (PVar "col") PWild) (PVar "rest")) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlToks") (EVar "col")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")))
+(DTypeSig false "closeAllToks" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Token"))))
+(DFunDef false "closeAllToks" ((PVar "stack")) (EBinOp "::" (EVar "TNewline") (EApp (EVar "closeDedentsToks") (EVar "stack"))))
+(DTypeSig false "closeDedentsToks" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Token"))))
+(DFunDef false "closeDedentsToks" ((PList)) (EListLit (EVar "TEof")))
+(DFunDef false "closeDedentsToks" ((PList PWild)) (EListLit (EVar "TEof")))
+(DFunDef false "closeDedentsToks" ((PCons PWild (PVar "tl"))) (EBinOp "::" (EVar "TDedent") (EBinOp "::" (EVar "TNewline") (EApp (EVar "closeDedentsToks") (EVar "tl")))))
+(DTypeSig false "flushCloseToks" (TyFun (TyCon "Token") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token"))))))))
+(DFunDef false "flushCloseToks" ((PVar "t") (PVar "rest") (PVar "stack") (PList) (PVar "opener")) (EBinOp "::" (EVar "t") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EVar "stack")) (EListLit)) (EVar "t")) (EBinOp "||" (EVar "opener") (EApp (EVar "isOpener") (EVar "t"))))))
+(DFunDef false "flushCloseToks" ((PVar "t") (PVar "rest") (PVar "stack") (PCons (PCon "BracketFrame" (PVar "f") (PVar "saved")) (PVar "fs")) PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "flushCloseGoToks") (EVar "t")) (EVar "rest")) (EVar "stack")) (EVar "f")) (EVar "fs")) (EVar "saved")))
+(DTypeSig false "flushCloseGoToks" (TyFun (TyCon "Token") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token")))))))))
+(DFunDef false "flushCloseGoToks" ((PVar "t") (PVar "rest") (PList) (PVar "f") (PVar "fs") (PVar "opener")) (EBinOp "::" (EVar "t") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EListLit)) (EVar "fs")) (EVar "t")) (EBinOp "||" (EVar "opener") (EApp (EVar "isOpener") (EVar "t"))))))
+(DFunDef false "flushCloseGoToks" ((PVar "t") (PVar "rest") (PCons (PVar "top") (PVar "tl")) (PVar "f") (PVar "fs") (PVar "opener")) (EIf (EBinOp "<=" (EVar "f") (ELit (LInt 0))) (EBinOp "::" (EVar "t") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EBinOp "::" (EVar "top") (EVar "tl"))) (EVar "fs")) (EVar "t")) (EBinOp "||" (EVar "opener") (EApp (EVar "isOpener") (EVar "t"))))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "TNewline") (EBinOp "::" (EVar "TDedent") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "flushCloseGoToks") (EVar "t")) (EVar "rest")) (EVar "tl")) (EBinOp "-" (EVar "f") (ELit (LInt 1)))) (EVar "fs")) (EVar "opener")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "flushSepToks" (TyFun (TyCon "Token") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token"))))))))
+(DFunDef false "flushSepToks" ((PVar "t") (PVar "rest") (PVar "stack") (PList) (PVar "opener")) (EBinOp "::" (EVar "t") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EVar "stack")) (EListLit)) (EVar "t")) (EVar "opener"))))
+(DFunDef false "flushSepToks" ((PVar "t") (PVar "rest") (PVar "stack") (PCons (PCon "BracketFrame" (PVar "f") (PVar "saved")) (PVar "fs")) (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "flushSepGoToks") (EVar "t")) (EVar "rest")) (EVar "stack")) (EVar "f")) (EBinOp "::" (EApp (EApp (EVar "BracketFrame") (ELit (LInt 0))) (EVar "saved")) (EVar "fs"))) (EVar "opener")))
+(DTypeSig false "flushSepGoToks" (TyFun (TyCon "Token") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token")))))))))
+(DFunDef false "flushSepGoToks" ((PVar "t") (PVar "rest") (PList) PWild (PVar "frames") (PVar "opener")) (EBinOp "::" (EVar "t") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EListLit)) (EVar "frames")) (EVar "t")) (EVar "opener"))))
+(DFunDef false "flushSepGoToks" ((PVar "t") (PVar "rest") (PCons (PVar "top") (PVar "tl")) (PVar "f") (PVar "frames") (PVar "opener")) (EIf (EBinOp "<=" (EVar "f") (ELit (LInt 0))) (EBinOp "::" (EVar "t") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EBinOp "::" (EVar "top") (EVar "tl"))) (EVar "frames")) (EVar "t")) (EVar "opener"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "TNewline") (EBinOp "::" (EVar "TDedent") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "flushSepGoToks") (EVar "t")) (EVar "rest")) (EVar "tl")) (EBinOp "-" (EVar "f") (ELit (LInt 1)))) (EVar "frames")) (EVar "opener")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "applyNlToks" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Token") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token")))))))))
+(DFunDef false "applyNlToks" ((PVar "col") (PVar "rest") (PList) (PVar "frames") (PVar "prev") (PVar "opener")) (EBinOp "::" (EVar "TNewline") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EListLit)) (EVar "frames")) (EVar "TNewline")) (EVar "False"))))
+(DFunDef false "applyNlToks" ((PVar "col") (PVar "rest") (PCons (PVar "top") (PVar "tl")) (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlFrameToks") (EVar "col")) (EVar "top")) (EBinOp "::" (EVar "top") (EVar "tl"))) (EVar "rest")) (EVar "frames")) (EVar "prev")) (EVar "opener")))
+(DTypeSig false "applyNlFrameToks" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Token") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token"))))))))))
+(DFunDef false "applyNlFrameToks" ((PVar "col") (PVar "top") (PVar "stack") (PVar "rest") (PList) (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlTopToks") (EVar "col")) (EVar "top")) (EVar "stack")) (EVar "rest")) (EListLit)) (EVar "prev")) (EVar "opener")))
+(DFunDef false "applyNlFrameToks" ((PVar "col") (PVar "top") (PVar "stack") (PVar "rest") (PCons (PCon "BracketFrame" (PVar "f") (PVar "saved")) (PVar "fs")) (PVar "prev") (PVar "opener")) (EIf (EBinOp ">" (EVar "f") (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlTopToks") (EVar "col")) (EVar "top")) (EVar "stack")) (EVar "rest")) (EBinOp "::" (EApp (EApp (EVar "BracketFrame") (EVar "f")) (EVar "saved")) (EVar "fs"))) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "col") (EVar "top")) (EApp (EVar "not") (EApp (EVar "isTrailingContinuationOp") (EVar "prev")))) (EApp (EApp (EVar "armsHeraldTok") (EVar "opener")) (EVar "prev"))) (EBinOp "::" (EVar "TIndent") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EBinOp "::" (EVar "col") (EVar "stack"))) (EBinOp "::" (EApp (EApp (EVar "BracketFrame") (ELit (LInt 1))) (EVar "saved")) (EVar "fs"))) (EVar "TNewline")) (EVar "False"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EVar "stack")) (EBinOp "::" (EApp (EApp (EVar "BracketFrame") (EVar "f")) (EVar "saved")) (EVar "fs"))) (EVar "prev")) (EVar "opener")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "applyNlTopToks" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Token") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token"))))))))))
+(DFunDef false "applyNlTopToks" ((PVar "col") (PVar "top") (PVar "stack") (PVar "rest") (PVar "frames") (PVar "prev") (PVar "opener")) (EIf (EBinOp ">" (EVar "col") (EVar "top")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "wouldIndentToks") (EVar "col")) (EVar "stack")) (EVar "rest")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "col") (EVar "top")) (EBinOp "::" (EVar "TNewline") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "TNewline")) (EVar "False"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "TNewline") (EApp (EApp (EApp (EApp (EVar "popDedentsToks") (EVar "col")) (EVar "stack")) (EVar "rest")) (EVar "frames"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "wouldIndentToks" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Token") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token")))))))))
+(DFunDef false "wouldIndentToks" ((PVar "col") (PVar "stack") (PVar "rest") (PVar "frames") (PVar "prev") (PVar "opener")) (EIf (EApp (EVar "isTrailingContinuationOp") (EVar "prev")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "||" (EVar "opener") (EApp (EVar "not") (EApp (EVar "canEndExpr") (EVar "prev")))) (EBinOp "::" (EVar "TIndent") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EBinOp "::" (EVar "col") (EVar "stack"))) (EApp (EVar "bumpFrame") (EVar "frames"))) (EVar "TNewline")) (EVar "False"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveContToks") (EVar "col")) (EVar "stack")) (EVar "rest")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "resolveContToks" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Token") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token")))))))))
+(DFunDef false "resolveContToks" ((PVar "col") (PVar "stack") (PCons (PCon "RTok" (PVar "t") (PVar "toff") (PVar "tend")) (PVar "more")) (PVar "frames") (PVar "prev") (PVar "opener")) (EIf (EApp (EVar "canStartAtom") (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "t") (EVar "TThen")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "t") (EVar "TElse")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "TIndent") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EBinOp "::" (EVar "col") (EVar "stack"))) (EApp (EVar "bumpFrame") (EVar "frames"))) (EVar "TNewline")) (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "resolveContToks" ((PVar "col") (PVar "stack") (PVar "rest") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "TNewline")) (EVar "False")))
+(DTypeSig false "popDedentsToks" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyApp (TyCon "List") (TyCon "Token")))))))
+(DFunDef false "popDedentsToks" ((PVar "col") (PList) (PVar "rest") (PVar "frames")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EListLit)) (EVar "frames")) (EVar "TNewline")) (EVar "False")))
+(DFunDef false "popDedentsToks" ((PVar "col") (PCons (PVar "top") (PVar "tl")) (PVar "rest") (PVar "frames")) (EIf (EBinOp ">" (EVar "top") (EVar "col")) (EBinOp "::" (EVar "TDedent") (EBinOp "::" (EVar "TNewline") (EApp (EApp (EApp (EApp (EVar "popDedentsToks") (EVar "col")) (EVar "tl")) (EVar "rest")) (EApp (EVar "dropFrame") (EVar "frames"))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EBinOp "::" (EVar "top") (EVar "tl"))) (EVar "frames")) (EVar "TNewline")) (EVar "False")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "tokenizeWithLines" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "tokenizeWithLines" ((PVar "s")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoLet false false (PVar "pairs") (EApp (EApp (EVar "layoutWithOffsets") (EVar "src")) (EVar "len"))) (DoLet false false (PVar "toks") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "pairs"))) (DoLet false false (PVar "lines") (EApp (EApp (EVar "offsetsToLines") (EVar "src")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "pairs")))) (DoExpr (ETuple (EVar "toks") (EVar "lines")))))
 (DTypeSig true "tokenizeWithOffsets" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Int")))))
@@ -4403,7 +4786,7 @@ collectComments s =
 (DFunDef false "rawToComments" ((PVar "src") (PVar "toks")) (EApp (EApp (EApp (EApp (EApp (EVar "rawToCommentsGo") (EVar "src")) (EVar "toks")) (ELit (LInt 0))) (ELit (LInt 1))) (ELit (LInt 0))))
 (DTypeSig false "rawToCommentsGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Comment"))))))))
 (DFunDef false "rawToCommentsGo" (PWild (PList) PWild PWild PWild) (EListLit))
-(DFunDef false "rawToCommentsGo" ((PVar "src") (PCons (PCon "RComment" (PVar "startPos") (PVar "text")) (PVar "rest")) (PVar "p") (PVar "line") (PVar "lineStart")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "posLineColFrom") (EVar "src")) (EVar "startPos")) (EVar "p")) (EVar "line")) (EVar "lineStart")) (arm (PTuple (PVar "line2") (PVar "col")) () (EBinOp "::" (EApp (EApp (EApp (EVar "Comment") (EVar "line2")) (EVar "col")) (EVar "text")) (EApp (EApp (EApp (EApp (EApp (EVar "rawToCommentsGo") (EVar "src")) (EVar "rest")) (EVar "startPos")) (EVar "line2")) (EBinOp "-" (EVar "startPos") (EVar "col")))))))
+(DFunDef false "rawToCommentsGo" ((PVar "src") (PCons (PCon "RComment" (PVar "startPos") (PVar "endPos")) (PVar "rest")) (PVar "p") (PVar "line") (PVar "lineStart")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "posLineColFrom") (EVar "src")) (EVar "startPos")) (EVar "p")) (EVar "line")) (EVar "lineStart")) (arm (PTuple (PVar "line2") (PVar "col")) () (EBinOp "::" (EApp (EApp (EApp (EVar "Comment") (EVar "line2")) (EVar "col")) (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "startPos")) (EVar "endPos"))) (EApp (EApp (EApp (EApp (EApp (EVar "rawToCommentsGo") (EVar "src")) (EVar "rest")) (EVar "startPos")) (EVar "line2")) (EBinOp "-" (EVar "startPos") (EVar "col")))))))
 (DFunDef false "rawToCommentsGo" ((PVar "src") (PCons PWild (PVar "rest")) (PVar "p") (PVar "line") (PVar "lineStart")) (EApp (EApp (EApp (EApp (EApp (EVar "rawToCommentsGo") (EVar "src")) (EVar "rest")) (EVar "p")) (EVar "line")) (EVar "lineStart")))
 (DTypeSig true "collectComments" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Comment"))))
 (DFunDef false "collectComments" ((PVar "s")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EApp (EVar "rawToComments") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))))

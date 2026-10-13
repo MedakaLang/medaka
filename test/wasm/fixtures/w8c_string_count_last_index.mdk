@@ -1,0 +1,13 @@
+-- W8c: stringCountOccurrences (non-overlapping) and stringLastIndexOf (overlapping,
+-- codepoint index of the last hit).
+lastOr : Option Int -> Int
+lastOr o = match o
+  None => 0
+  Some i => i
+
+main =
+  stringCountOccurrences "aa" "aaaa"
+    + 10 * stringCountOccurrences "é" "éaé"
+    + 100 * lastOr (stringLastIndexOf "aa" "aaaaa")
+    + 1000 * lastOr (stringLastIndexOf "日" "a日b日")
+    + 10000 * lastOr (stringLastIndexOf "z" "hello")

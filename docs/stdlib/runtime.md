@@ -1237,6 +1237,14 @@ stringLength : String -> Int
 
 The number of codepoints in a string.
 
+### `stringByteLength`
+
+```
+stringByteLength : String -> Int
+```
+
+The number of UTF-8 bytes in a string.
+
 ### `stringSlice`
 
 ```
@@ -1261,6 +1269,66 @@ stringIndexOf : String -> String -> Option Int
 
 The position of the first occurrence of the first string in the second,
 or `None`.
+
+### `stringStartsWith`
+
+```
+stringStartsWith : String -> String -> Bool
+```
+
+Whether the second string begins with the first.
+
+### `stringEndsWith`
+
+```
+stringEndsWith : String -> String -> Bool
+```
+
+Whether the second string ends with the first.
+
+### `stringCountOccurrences`
+
+```
+stringCountOccurrences : String -> String -> Int
+```
+
+The number of non-overlapping occurrences of the first string in the
+second; `0` for an empty needle.
+
+### `stringLastIndexOf`
+
+```
+stringLastIndexOf : String -> String -> Option Int
+```
+
+The position of the last occurrence of the first string in the second,
+or `None`.  Occurrences may overlap; an empty needle is at the end.
+
+### `stringToInt`
+
+```
+stringToInt : String -> Option Int
+```
+
+The integer written in decimal in the string, with an optional leading
+`-` or `+`, or `None` for an empty or non-numeric string or a value outside
+the `Int` range.
+
+### `stringJoin`
+
+```
+stringJoin : String -> List String -> String
+```
+
+The strings joined with the first between each adjacent pair.
+
+### `stringReverse`
+
+```
+stringReverse : String -> String
+```
+
+The string with its codepoints in reverse order.
 
 ### `stringCompare`
 

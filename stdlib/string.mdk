@@ -15,12 +15,14 @@
 -- externs (`stringSlice`/`stringConcat`/`stringCompare`/`stringLength`), over
 -- a `List Char` of cons cells.  Three tiers, fastest first:
 --   1. operate on the String directly (no char materialization): `take`/`drop`/
---      `sliceClamped`, `startsWith`/`endsWith` (slice + `==`), `concat`/`join`/
---      `repeat`, and substring search via the host `stringIndexOf` (`indexOf`,
---      and `contains`/`replace*` derived from it);
+--      `sliceClamped`, `concat`/`join`/`repeat`, `trim*` (probe the ends one
+--      character at a time, then one slice), and the host byte-level externs
+--      (`stringStartsWith`/`stringEndsWith`, `stringIndexOf`/`stringLastIndexOf`/
+--      `stringCountOccurrences`, `stringReverse`, `stringToInt`,
+--      `stringByteLength`, `stringJoin`), with `contains`/`replace*` derived
+--      from them;
 --   2. decode once to `Array Char`, scan by index, rebuild via `stringFromChars`
---      or carve out `stringSlice`s: `trim*`, `words`, `split`/`lines`,
---      `reverse`, `capitalize`, `toInt`;
+--      or carve out `stringSlice`s: `words`, `split`/`lines`, `capitalize`;
 --   3. `List Char` is avoided internally.
 --
 -- The collection functions (`split`/`words`/`lines`/`concat`/`join`/`unlines`/
@@ -196,7 +198,7 @@ byteLength s = utf8ByteLength s
    6 -}
 export
 utf8ByteLength : String -> Int
-utf8ByteLength s = arrayLength (toUtf8 s)
+utf8ByteLength s = stringByteLength s
 
 {- | The integer written in decimal in `s`, with an optional leading `-` or
    `+`.
@@ -210,9 +212,7 @@ utf8ByteLength s = arrayLength (toUtf8 s)
    None -}
 export
 toInt : String -> Option Int
-toInt s =
-  let a = toChars s
-  parseInt a (arrayLength a)
+toInt s = stringToInt s
 
 -- > toInt "-7"
 -- Some (-7)
@@ -226,55 +226,6 @@ toInt s =
 -- None
 -- > toInt "99999999999999999999"
 -- None
-
-parseInt : Array Char -> Int -> Option Int
-parseInt a n = if n == 0 then None else parseSign a n (arrayGetUnsafe 0 a)
-
-parseSign : Array Char -> Int -> Char -> Option Int
-parseSign a n c
-  | c == '-' = parseDigits a n 1 0 False True
-  | c == '+' = parseDigits a n 1 0 False False
-  | otherwise = parseDigits a n 0 0 False False
-
-{- Accumulates a NON-POSITIVE running magnitude (`acc <= 0`) regardless of
-   the parsed sign, and detects overflow before every multiply/add rather
-   than after (the overflowing operation would itself stop the program).
-   Negative accumulation — not positive-then-negate — is deliberate:
-   `intMinBound`'s magnitude (2^62) is one larger than `intMaxBound`'s
-   (2^62 - 1), so only the negative side can hold it without overflowing;
-   `finishInt` negates back to positive only when the source had no `-`. -}
-parseDigits : Array Char -> Int -> Int -> Int -> Bool -> Bool -> Option Int
-parseDigits a n i acc seen negative
-  | i >= n = finishInt seen acc negative
-  | otherwise = parseDigitStep a n i acc seen negative (arrayGetUnsafe i a)
-
-parseDigitStep : Array Char ->
-  Int ->
-  Int ->
-  Int ->
-  Bool ->
-  Bool ->
-  Char ->
-  Option Int
-parseDigitStep a n i acc seen negative c =
-  if isDigit c then
-    let d = charCode c - 48
-    let limit = if negative then intMinBound else 0 - intMaxBound
-    let multMin = limit / 10
-    if acc < multMin then
-      None
-    else
-      let acc2 = acc * 10
-      if acc2 < limit + d then
-        None
-      else
-        parseDigits a n (i + 1) (acc2 - d) True negative
-  else
-    None
-
-finishInt : Bool -> Int -> Bool -> Option Int
-finishInt seen acc negative =
-  if not seen then None else if negative then Some acc else Some (0 - acc)
 
 {- | The floating-point number written in `s`, or `None` when `s` is not
    one.
@@ -297,7 +248,7 @@ toFloat s = stringToFloat s
    False -}
 export
 startsWith : String -> String -> Bool
-startsWith prefix s = stringSlice 0 (stringLength prefix) s == prefix
+startsWith prefix s = stringStartsWith prefix s
 
 {- | Whether `s` ends with `suffix`.
 
@@ -305,9 +256,7 @@ startsWith prefix s = stringSlice 0 (stringLength prefix) s == prefix
    True -}
 export
 endsWith : String -> String -> Bool
-endsWith suffix s =
-  stringSlice (stringLength s - stringLength suffix) (stringLength s) s
-    == suffix
+endsWith suffix s = stringEndsWith suffix s
 
 {- | `s` without its leading `prefix`, or `None` when `s` does not begin
    with it.
@@ -384,27 +333,7 @@ indexOf needle haystack = stringIndexOf needle haystack
    None -}
 export
 lastIndexOf : String -> String -> Option Int
-lastIndexOf needle haystack
-  | needle == "" = Some (stringLength haystack)
-  | otherwise = match indexOf needle haystack
-    None => None
-    Some _ =>
-      let a = toChars haystack
-      let nA = toChars needle
-      lastIndexOfGo a (arrayLength a) nA (arrayLength nA) 0 None
-
--- Walks forward from each hit, advancing one codepoint so overlapping
--- matches still count, and keeps the latest.
-lastIndexOfGo : Array Char ->
-  Int ->
-  Array Char ->
-  Int ->
-  Int ->
-  Option Int ->
-  Option Int
-lastIndexOfGo a n nA nl from acc = match sepFrom a n nA nl from
-  None => acc
-  Some i => lastIndexOfGo a n nA nl (i + 1) (Some i)
+lastIndexOf needle haystack = stringLastIndexOf needle haystack
 
 {- | The number of non-overlapping occurrences of `needle` in `haystack`.
 
@@ -416,20 +345,7 @@ lastIndexOfGo a n nA nl from acc = match sepFrom a n nA nl from
    2 -}
 export
 countOccurrences : String -> String -> Int
-countOccurrences needle haystack
-  | needle == "" = 0
-  | otherwise = match indexOf needle haystack
-    None => 0
-    Some _ =>
-      let a = toChars haystack
-      let nA = toChars needle
-      countGo a (arrayLength a) nA (arrayLength nA) 0 0
-
--- Non-overlapping: each hit resumes just past its own end.
-countGo : Array Char -> Int -> Array Char -> Int -> Int -> Int -> Int
-countGo a n nA nl from acc = match sepFrom a n nA nl from
-  None => acc
-  Some i => countGo a n nA nl (i + nl) (acc + 1)
+countOccurrences needle haystack = stringCountOccurrences needle haystack
 
 -- # Building
 
@@ -455,12 +371,7 @@ concat parts = stringConcat parts
    "a, b, c" -}
 export
 join : String -> List String -> String
-join sep parts = stringConcat (intersperse sep parts)
-
-intersperse : a -> List a -> List a
-intersperse _ [] = []
-intersperse _ (x :: []) = [x]
-intersperse sep (x :: xs) = x :: sep :: intersperse sep xs
+join sep parts = stringJoin sep parts
 
 {- | `s` repeated `n` times.
 
@@ -492,12 +403,6 @@ repeatDbl k s =
     let h = repeatDbl (k / 2) s
     if isEven k then h ++ h else h ++ h ++ s
 
--- A list of `n` copies of `x` (empty when `n <= 0`).  Used by the padding
--- helpers below, whose `n` is a display width (small in practice) rather
--- than a caller-controlled repeat count.
-replic : Int -> a -> List a
-replic n x = if n <= 0 then [] else x :: replic (n - 1) x
-
 -- # Transformation
 
 {- | The string with its characters in reverse order.
@@ -506,12 +411,7 @@ replic n x = if n <= 0 then [] else x :: replic (n - 1) x
    "cba" -}
 export
 reverse : String -> String
-reverse s =
-  let a = toChars s
-  stringFromChars (reverseArr a (arrayLength a))
-
-reverseArr : Array Char -> Int -> Array Char
-reverseArr a n = arrayMakeWith n (i => arrayGetUnsafe (n - 1 - i) a)
+reverse s = stringReverse s
 
 {- | The string without its leading whitespace.
 
@@ -520,8 +420,8 @@ reverseArr a n = arrayMakeWith n (i => arrayGetUnsafe (n - 1 - i) a)
 export
 trimLeft : String -> String
 trimLeft s =
-  let a = toChars s
-  stringSlice (firstNonSpace a 0 (arrayLength a)) (stringLength s) s
+  let n = stringLength s
+  stringSlice (firstNonSpaceStr s 0 n) n s
 
 {- | The string without its trailing whitespace.
 
@@ -529,9 +429,7 @@ trimLeft s =
    "  hi" -}
 export
 trimRight : String -> String
-trimRight s =
-  let a = toChars s
-  stringSlice 0 (lastNonSpace a (arrayLength a - 1) + 1) s
+trimRight s = stringSlice 0 (lastNonSpaceStr s (stringLength s - 1) 0 + 1) s
 
 {- | The string without leading or trailing whitespace.
 
@@ -540,20 +438,35 @@ trimRight s =
 export
 trim : String -> String
 trim s =
-  let a = toChars s
-  let n = arrayLength a
-  stringSlice (firstNonSpace a 0 n) (lastNonSpace a (n - 1) + 1) s
+  let n = stringLength s
+  let lo = firstNonSpaceStr s 0 n
+  stringSlice lo (lastNonSpaceStr s (n - 1) lo + 1) s
+
+-- Only the characters at the ends are inspected, so trimming costs the
+-- length of the surrounding whitespace, not of the string.
+charAtStr : String -> Int -> Char
+charAtStr s i = arrayGetUnsafe 0 (toChars (stringSlice i (i + 1) s))
+
+-- The first index in [i, n) holding a non-space, or n.
+firstNonSpaceStr : String -> Int -> Int -> Int
+firstNonSpaceStr s i n
+  | i >= n = n
+  | isSpace (charAtStr s i) = firstNonSpaceStr s (i + 1) n
+  | otherwise = i
+
+-- The last index in [lo, i] holding a non-space, or lo - 1 when there is none.
+-- Callers pass lo = 0 for a whole string, or a lo that is already a non-space
+-- index (or the string length), so the scan never passes a non-space at lo.
+lastNonSpaceStr : String -> Int -> Int -> Int
+lastNonSpaceStr s i lo
+  | i < lo = lo - 1
+  | isSpace (charAtStr s i) = lastNonSpaceStr s (i - 1) lo
+  | otherwise = i
 
 firstNonSpace : Array Char -> Int -> Int -> Int
 firstNonSpace a i n
   | i >= n = n
   | isSpace (arrayGetUnsafe i a) = firstNonSpace a (i + 1) n
-  | otherwise = i
-
-lastNonSpace : Array Char -> Int -> Int
-lastNonSpace a i
-  | i < 0 = -1
-  | isSpace (arrayGetUnsafe i a) = lastNonSpace a (i - 1)
   | otherwise = i
 
 firstSpace : Array Char -> Int -> Int -> Int
@@ -611,8 +524,11 @@ replaceFirst old new s = match indexOf old s
   Some i => spliceAt i (stringLength old) new s
 
 spliceAt : Int -> Int -> String -> String -> String
-spliceAt i oldLen new s =
-  stringSlice 0 i s ++ new ++ stringSlice (i + oldLen) (stringLength s) s
+spliceAt i oldLen new s = stringConcat [
+  stringSlice 0 i s,
+  new,
+  stringSlice (i + oldLen) (stringLength s) s,
+]
 
 {- | The string with every non-overlapping occurrence of `old` replaced by
    `new`.
@@ -764,7 +680,30 @@ subChars a lo hi =
    ["a", "b", "c"] -}
 export
 lines : String -> List String
-lines s = map stripCR (split nl s)
+lines s =
+  let a = toChars s
+  linesFrom a (arrayLength a) 0
+
+-- Each line is cut once: the `\r` before the `\n` is left out of the slice,
+-- so no line is copied a second time to strip it.
+linesFrom : Array Char -> Int -> Int -> List String
+linesFrom a n start = match newlineFrom a n start
+  None => [lineSlice a start n]
+  Some i => lineSlice a start i :: linesFrom a n (i + 1)
+
+newlineFrom : Array Char -> Int -> Int -> Option Int
+newlineFrom a n i
+  | i >= n = None
+  | arrayGetUnsafe i a == '\n' = Some i
+  | otherwise = newlineFrom a n (i + 1)
+
+-- The characters `[start, hi)`, minus one trailing `\r` when present.
+lineSlice : Array Char -> Int -> Int -> String
+lineSlice a start hi =
+  if hi > start && arrayGetUnsafe (hi - 1) a == '\r' then
+    subChars a start (hi - 1)
+  else
+    subChars a start hi
 
 {- | The line without one trailing `\r`.
 
@@ -809,10 +748,12 @@ wordsEmit a n start e =
    "a\nb\n" -}
 export
 unlines : List String -> String
-unlines parts = stringConcat (map addNL parts)
+unlines parts = stringConcat (withNewlines parts)
 
-addNL : String -> String
-addNL p = p ++ nl
+-- Interleaves the separator between the pieces, so one concat joins them.
+withNewlines : List String -> List String
+withNewlines [] = []
+withNewlines (p :: ps) = p :: nl :: withNewlines ps
 
 -- A single newline.
 nl : String
@@ -840,7 +781,7 @@ padLeft n c s =
   if stringLength s >= n then
     s
   else
-    stringConcat (replic (n - stringLength s) (charToStr c)) ++ s
+    repeat (n - stringLength s) (charToStr c) ++ s
 
 {- | The string padded on the right with `c` to length `n`.
 
@@ -854,7 +795,7 @@ padRight n c s =
   if stringLength s >= n then
     s
   else
-    s ++ stringConcat (replic (n - stringLength s) (charToStr c))
+    s ++ repeat (n - stringLength s) (charToStr c)
 
 {- | The string centered in a field of width `n`, padded with `c`.
 
@@ -869,17 +810,5 @@ center n c s =
   if stringLength s >= n then
     s
   else
-    centerPad
-      (half (n - stringLength s))
-      (n - stringLength s - half (n - stringLength s))
-      c
-      s
-
-centerPad : Int -> Int -> Char -> String -> String
-centerPad l r c s =
-  stringConcat (replic l (charToStr c))
-    ++ s
-    ++ stringConcat (replic r (charToStr c))
-
-half : Int -> Int
-half k = if k <= 1 then 0 else 1 + half (k - 2)
+    let k = n - stringLength s
+    repeat (k / 2) (charToStr c) ++ s ++ repeat (k - k / 2) (charToStr c)
