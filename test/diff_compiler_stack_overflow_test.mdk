@@ -52,6 +52,9 @@ declaredFixtureCount = 3
 overflow : EngineDeath
 overflow = Coded "E-STACK-OVERFLOW"
 
+-- `deep_recursion` recurses 100M deep so that it overflows the native 256 MB
+-- worker stack whatever frame the optimizer leaves it: even an 8-byte frame
+-- (the return address alone) fits only ~33.5M.
 rows : List (String, RuntimeOutcome)
 rows = [
   ("deep_recursion", Dies overflow overflow silently),
