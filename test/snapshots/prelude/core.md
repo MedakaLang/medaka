@@ -1,5 +1,5 @@
 # META
-source_lines=2392
+source_lines=2391
 stages=TYPES
 diagnostics=TYPES
 # SOURCE
@@ -1817,8 +1817,7 @@ or _ _ = True
 -- | Exclusive or.
 export
 xor : Bool -> Bool -> Bool
-xor True b = not b
-xor False b = b
+xor a b = if a then not b else b
 
 -- # Options
 

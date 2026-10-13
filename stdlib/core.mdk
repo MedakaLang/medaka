@@ -1812,8 +1812,7 @@ or _ _ = True
 -- | Exclusive or.
 export
 xor : Bool -> Bool -> Bool
-xor True b = not b
-xor False b = b
+xor a b = if a then not b else b
 
 -- # Options
 

@@ -1,5 +1,5 @@
 # META
-source_lines=2392
+source_lines=2391
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -1816,8 +1816,7 @@ or _ _ = True
 -- | Exclusive or.
 export
 xor : Bool -> Bool -> Bool
-xor True b = not b
-xor False b = b
+xor a b = if a then not b else b
 
 -- # Options
 
@@ -2692,8 +2691,7 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DFunDef false "or" ((PCon "False") (PCon "False")) (EVar "False"))
 (DFunDef false "or" (PWild PWild) (EVar "True"))
 (DTypeSig true "xor" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyCon "Bool"))))
-(DFunDef false "xor" ((PCon "True") (PVar "b")) (EApp (EVar "not") (EVar "b")))
-(DFunDef false "xor" ((PCon "False") (PVar "b")) (EVar "b"))
+(DFunDef false "xor" ((PVar "a") (PVar "b")) (EIf (EVar "a") (EApp (EVar "not") (EVar "b")) (EVar "b")))
 (DTypeSig true "isSome" (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyCon "Bool")))
 (DFunDef false "isSome" ((PCon "Some" PWild)) (EVar "True"))
 (DFunDef false "isSome" ((PCon "None")) (EVar "False"))
@@ -3125,8 +3123,7 @@ prop "Ord Array: equal prefixes order by length" (xs : List Int) (ys : List Int)
 (DFunDef false "or" ((PCon "False") (PCon "False")) (EVar "False"))
 (DFunDef false "or" (PWild PWild) (EVar "True"))
 (DTypeSig true "xor" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyCon "Bool"))))
-(DFunDef false "xor" ((PCon "True") (PVar "b")) (EApp (EVar "not") (EVar "b")))
-(DFunDef false "xor" ((PCon "False") (PVar "b")) (EVar "b"))
+(DFunDef false "xor" ((PVar "a") (PVar "b")) (EIf (EVar "a") (EApp (EVar "not") (EVar "b")) (EVar "b")))
 (DTypeSig true "isSome" (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyCon "Bool")))
 (DFunDef false "isSome" ((PCon "Some" PWild)) (EVar "True"))
 (DFunDef false "isSome" ((PCon "None")) (EVar "False"))
