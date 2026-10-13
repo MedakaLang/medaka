@@ -7,15 +7,19 @@
  *   MAGIC << 48 | class << 47 | id << 24 | min(n, 2^24 - 1)
  *
  * class 0: an emitted mdk_alloc site, id = its row in sites.tsv (escape.py).
- * class 1: a runtime (C) caller of mdk_alloc, id = a slot keyed by return address;
- *          or, with id >= APP_BASE, a cons cell built by `++` at the call site
- *          `id - APP_BASE` in appsites.tsv (append_sites.py).
+ * class 1: a runtime (C) caller of mdk_alloc, id = a slot keyed by return address
+ *          (id == RT_OVERFLOW once all RT_SLOTS are taken: every further caller
+ *          shares it, reported as an `rtover` row); or, with id >= APP_BASE, a
+ *          cons cell built by `++` at the call site `id - APP_BASE` in appsites.tsv
+ *          (append_sites.py).
  *
  * Every RETAIN_STEP bytes allocated (default 1e9) the census forces a full
  * collection and walks the reachable objects, summing bytes per header.  With
  * RETAIN_REF_SITES (emitted site ids) and/or RETAIN_REF_APP (`++` site ids), it also
  * counts, per referrer header, the fields that point into an object of that target
- * set: what holds the targets live.  Output goes to RETAIN_OUT. */
+ * set: what holds the targets live.  Pointer-free (atomic) objects are never
+ * scanned for referrers: their bytes are data, so a word that happens to look like
+ * a pointer would count a string as a holder.  Output goes to RETAIN_OUT. */
 #define GC_THREADS
 #include <gc.h>
 #include <gc/gc_mark.h>
@@ -29,26 +33,29 @@
 
 #define MAGIC 0xC5A5ULL
 #define RT_SLOTS 8192
+#define RT_OVERFLOW RT_SLOTS
 #define APP_BASE 0x400000u
 #define APP_SLOTS 16384
 #define REF_SLOTS 65536
 
 static unsigned long long site_b[NSITES], site_n[NSITES];
-static unsigned long long rt_b[RT_SLOTS], rt_n[RT_SLOTS];
+static unsigned long long rt_b[RT_SLOTS + 1], rt_n[RT_SLOTS + 1];
 static void *rt_pc[RT_SLOTS];
 static unsigned long long app_b[APP_SLOTS], app_n[APP_SLOTS];
 static unsigned long long untagged_b, untagged_n;
 static unsigned char tgt_site[NSITES], tgt_app[APP_SLOTS];
 static unsigned long long ref_key[REF_SLOTS], ref_cnt[REF_SLOTS];
-static int refs_on, census_no, in_census;
+static int refs_on, census_no, in_census, initialised, atomic_kind = -1;
 static unsigned long long since, step, total_alloc;
 static FILE *out;
 
 static unsigned rt_slot(void *pc) {
   unsigned long h = ((unsigned long)pc >> 2) % RT_SLOTS;
-  while (rt_pc[h] && rt_pc[h] != pc) h = (h + 1) % RT_SLOTS;
-  rt_pc[h] = pc;
-  return (unsigned)h;
+  for (unsigned i = 0; i < RT_SLOTS; i++, h = (h + 1) % RT_SLOTS) {
+    if (rt_pc[h] == pc) return (unsigned)h;
+    if (!rt_pc[h]) { rt_pc[h] = pc; return (unsigned)h; }
+  }
+  return RT_OVERFLOW;
 }
 
 /* the 24 class+id bits of a header word, or -1 when the object carries none */
@@ -84,10 +91,10 @@ static void GC_CALLBACK visit(void *obj, size_t bytes, void *cd) {
     if (id < NSITES) { site_b[id] += bytes; site_n[id]++; }
   } else if (id >= APP_BASE) {
     if (id - APP_BASE < APP_SLOTS) { app_b[id - APP_BASE] += bytes; app_n[id - APP_BASE]++; }
-  } else if (id < RT_SLOTS) {
+  } else if (id <= RT_OVERFLOW) {
     rt_b[id] += bytes; rt_n[id]++;
   }
-  if (refs_on && !is_target(key)) {
+  if (refs_on && !is_target(key) && GC_get_kind_and_size(obj, NULL) != atomic_kind) {
     /* conservative, like the collector: any word that lands in a target object */
     const unsigned long long *f = (const unsigned long long *)obj;
     for (size_t i = 1; i < bytes / 8; i++) {
@@ -119,6 +126,8 @@ static void census(void) {
     if (site_n[i]) fprintf(out, "site\t%ld\t%llu\t%llu\n", i, site_n[i], site_b[i]);
   for (long i = 0; i < RT_SLOTS; i++)
     if (rt_n[i]) fprintf(out, "rt\t%ld\t%p\t%llu\t%llu\n", i, rt_pc[i], rt_n[i], rt_b[i]);
+  if (rt_n[RT_OVERFLOW])
+    fprintf(out, "rtover\t%d\t%llu\t%llu\n", RT_OVERFLOW, rt_n[RT_OVERFLOW], rt_b[RT_OVERFLOW]);
   for (long i = 0; i < APP_SLOTS; i++)
     if (app_n[i]) fprintf(out, "app\t%ld\t%llu\t%llu\n", i, app_n[i], app_b[i]);
   fprintf(out, "untagged\t%llu\t%llu\n", untagged_n, untagged_b);
@@ -139,10 +148,15 @@ static void parse_ids(const char *s, unsigned char *set, long n) {
 }
 
 static void note_alloc(long long n) {
-  if (!step) {
+  if (!initialised) {
+    initialised = 1;
     const char *s = getenv("RETAIN_STEP");
     const char *p = getenv("RETAIN_OUT");
-    step = s ? strtoull(s, NULL, 10) : 1000000000ULL;
+    char *end = NULL;
+    step = s ? strtoull(s, &end, 10) : 0;
+    if (!s || end == s || *end || step == 0) step = 1000000000ULL;
+    /* Boehm 8.2 exports no name for the pointer-free kind; read it off a probe. */
+    atomic_kind = GC_get_kind_and_size(GC_malloc_atomic(8), NULL);
     if (p) out = fopen(p, "w");
     parse_ids(getenv("RETAIN_REF_SITES"), tgt_site, NSITES);
     parse_ids(getenv("RETAIN_REF_APP"), tgt_app, APP_SLOTS);

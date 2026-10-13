@@ -38,6 +38,7 @@ with open(os.path.join(work, 'appsites.tsv')) as f:
 
 censuses = []
 rt_pc = {}
+RT_OVERFLOW = 8192  # retain_count.c's RT_SLOTS: the slot every caller past the table shares
 with open(os.path.join(work, 'retain.out')) as f:
     for ln in f:
         r = ln.rstrip('\n').split('\t')
@@ -50,6 +51,8 @@ with open(os.path.join(work, 'retain.out')) as f:
         elif r[0] == 'rt':
             rt_pc[int(r[1])] = r[2]
             cur['rows'][('rt', int(r[1]))] = [int(r[3]), int(r[4])]
+        elif r[0] == 'rtover':
+            cur['rows'][('rt', RT_OVERFLOW)] = [int(r[2]), int(r[3])]
         elif r[0] == 'app':
             cur['rows'][('app', int(r[1]))] = [int(r[2]), int(r[3])]
         elif r[0] == 'untagged':
@@ -79,6 +82,8 @@ def name(kind, i):
         return fn, k
     if kind == 'app':
         return '++ in ' + app.get(i, '?'), 'Cons'
+    if kind == 'rt' and i == RT_OVERFLOW:
+        return 'rt:<overflow: callers past retain_count.c RT_SLOTS>', ''
     if kind == 'rt':
         return 'rt:' + rt_name.get(i, rt_pc.get(i, '?')), ''
     return '<untagged>', ''
