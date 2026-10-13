@@ -19,7 +19,8 @@ import tools.check.{
   runCheck,
   runCheckFromDecls,
   checkHasErrors,
-  runCheckModulesFromDiags,
+  checkModulesReport,
+  entryExhaust,
 }
 import tools.snapshot.{
   runSnapshotWorker,
@@ -140,7 +141,7 @@ import driver.loader.{
   availableModulesText,
 }
 import driver.diagnostics.{
-  analyzeProjectFull,
+  analyzeLoadedFull,
   analyzeLocated,
   analyzeLocatedG,
   analyzeFrom,
@@ -800,7 +801,7 @@ runCheckCmd argv =
                         csrc
                         tsrc
                         target
-                        mods
+                        modsWithPath
                     let perfTCheck = now ()
                     let _ =
                       emitPhase perfOn "check" (perfTCheck - perfTLoad) target
@@ -920,22 +921,19 @@ locatedProjectDiags : Bool ->
   List String ->
   String ->
   String ->
+  List (String, String, List Decl) ->
   <IO> (Option String, List (String, String, List Diag), Int, List ModDiags)
-locatedProjectDiags allowInternal trusted target roots rsrc csrc =
-  let cacheRef = Ref []
-  let parseCacheRef = Ref []
+locatedProjectDiags allowInternal trusted target roots rsrc csrc modsWithPath =
   let (perMod, results) =
-    analyzeProjectFull
+    analyzeLoadedFull
       cliStdlibExports
       allowInternal
       trusted
-      cacheRef
-      parseCacheRef
-      (_ => None)
       target
       roots
       rsrc
       csrc
+      modsWithPath
   let triples = map readDiagSrc results
   (
     joinedOrNone (flatMap renderTripleErrors triples),
@@ -1135,9 +1133,9 @@ checkRoute : Bool ->
   String ->
   String ->
   String ->
-  List (String, List Decl) ->
+  List (String, String, List Decl) ->
   <IO> Unit
-checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decls)] =
+checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _, decls)] =
   -- BUGFIX (internal-extern noise on stdlib/compiler self-checks): the caller
   -- already computed `trusted` (projectTrustedMods, owning-root based) for
   -- EVERY module count, and this single-module arm must not discard it and
@@ -1201,19 +1199,86 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decl
       let _ =
         ePutStrLn (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
       exit 1
-checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target mods =
+checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target modsWithPath =
+  let mods = map dropPathTriple modsWithPath
+  let (resDiags, exWarns) =
+    checkFrontPass allowInternal trusted pathMap rsrc csrc mods
+  match resDiags
+    "" =>
+      let projDiags =
+        locatedProjectDiags
+          allowInternal
+          trusted
+          target
+          roots
+          rsrc
+          csrc
+          modsWithPath
+      match projDiags
+        -- BUGFIX (imported-module diagnostics): when there ARE type errors, render
+        -- the accumulated per-module diagnostics LOCATED (`file:L:C: msg` + caret),
+        -- across ALL modules — reusing the exact analyzeProject surface `--json`
+        -- mirrors — instead of the entry report's loc-free `TYPE ERROR: …` (which
+        -- also dropped every imported-module error's location).  Clean ⇒ the schemes
+        -- dump + main-shape warnings, unchanged.
+        -- `locatedProjectDiags`, not `locatedProjectErrors`: the SAME single
+        -- `analyzeProject` pass, keeping the coherence warnings its `fst` discards.
+
+        (Some errText, _, _, _) =>
+          let _ = emitAbortTotal ()
+          let _ = putStr errText
+          exit 1
+        (None, projWarns, hiddenCount, perMod) =>
+          let report = checkModulesReport exWarns perMod
+          -- After the report is rendered: the target check elaborates the graph
+          -- again, and a report rendered after that drive can name a scheme's
+          -- type variables differently (`Speak b => a -> String`), #4053.
+          let _ = checkTargetGate rsrc csrc tsrc target mods
+          let _ = putStrLn report
+          -- F-3d: an IMPORTED module's ⊑-incomparable pair, LOCATED against that
+          -- module's own file.  The line above reaches the ENTRY's diagnostics only,
+          -- which is why the entry triple is special-cased here (not the whole list)
+          -- — see `trimEntryTriple` for the four graph positions this was silent in,
+          -- and for why the entry is trimmed by code rather than dropped whole.
+          let _ =
+            emitWarningLines
+              (flatMap renderTripleWarnings (trimEntryTriple projWarns))
+          -- #1719: a non-entry module can carry OTHER warnings (chiefly
+          -- non-exhaustive-match) that the line above does not surface — human
+          -- `check` would otherwise drop these with no trace, reading as a clean
+          -- bill of health.  Say so instead of staying silent; `--json` already
+          -- reports them per-file.
+          let _ = emitHiddenDiagNote hiddenCount
+          -- The main-shape warning reads the entry module's raw decls alone, so its
+          -- first three (ignored) parameters are passed empty.
+          let mainWarns = match lastModPair mods
+            Some (_, edecls) => mainShapeWarnings [] [] [] edecls
+            None => []
+          emitLocatedWarnings tsrc target mainWarns
+    _ => dieMsg resDiags
+
+-- The multi-module arm's whole-graph front pass, ahead of the project analysis:
+-- the rendered resolve errors (empty when the graph resolves) and the entry's
+-- rendered guard-exhaustiveness lines.  It returns strings only, so the desugared
+-- copy of the graph it reads is garbage once it returns rather than live through
+-- the typecheck the analysis runs next.
+--
+-- RESOLVE-phase errors (e.g. importing a name a module does not export —
+-- PrivateNameAccess) go to STDERR + exit 1, mirroring the single-file arm's
+-- channel discipline (errors→stderr).  #41: each module's resolve errors are
+-- attributed to its OWN file (via `pathMap`), not a single `target` fallback that
+-- mislabels every imported-module error as the entry file.
+checkFrontPass : Bool ->
+  List String ->
+  List (String, String) ->
+  String ->
+  String ->
+  List (String, List Decl) ->
+  <IO> (String, String)
+checkFrontPass allowInternal trusted pathMap rsrc csrc mods =
   let rtD = desugaredPrelude rsrc
   let coreD = desugaredPrelude csrc
   let modsD = map desugarPair mods
-  -- RESOLVE-phase errors (e.g. importing a name a module does not export —
-  -- PrivateNameAccess) go to STDERR + exit 1, mirroring the single-file arm's
-  -- channel discipline (errors→stderr).  Previously these were `putStr` to STDOUT
-  -- unprefixed, so they were invisible to any errors-on-stderr consumer (the
-  -- error-quality corpus captured them as empty).  The clean/type-error report
-  -- still goes to STDOUT (the check_cli_modules gate expects TYPE ERROR there).
-  -- #41: attribute each module's resolve errors to its OWN file (via `pathMap`),
-  -- not a single `target` fallback that mislabels every imported-module error as
-  -- the entry file.
   let resDiags =
     ppResolveErrorsByFile
       (hintResErrorPairs
@@ -1227,47 +1292,8 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
           coreD
           modsD))
   match resDiags
-    "" => match locatedProjectDiags allowInternal trusted target roots rsrc csrc
-      -- BUGFIX (imported-module diagnostics): when there ARE type errors, render
-      -- the accumulated per-module diagnostics LOCATED (`file:L:C: msg` + caret),
-      -- across ALL modules — reusing the exact analyzeProject surface `--json`
-      -- mirrors — instead of the entry report's loc-free `TYPE ERROR: …` (which
-      -- also dropped every imported-module error's location).  Clean ⇒ the schemes
-      -- dump + main-shape warnings, unchanged.
-      -- `locatedProjectDiags`, not `locatedProjectErrors`: the SAME single
-      -- `analyzeProject` pass, keeping the coherence warnings its `fst` discards.
-
-      (Some errText, _, _, _) =>
-        let _ = emitAbortTotal ()
-        let _ = putStr errText
-        exit 1
-      (None, projWarns, hiddenCount, perMod) =>
-        let report = runCheckModulesFromDiags rtD coreD modsD perMod
-        -- After the report is rendered: the target check elaborates the graph
-        -- again, and a report rendered after that drive can name a scheme's
-        -- type variables differently (`Speak b => a -> String`), #4053.
-        let _ = checkTargetGate rsrc csrc tsrc target mods
-        let _ = putStrLn report
-        -- F-3d: an IMPORTED module's ⊑-incomparable pair, LOCATED against that
-        -- module's own file.  The line above reaches the ENTRY's diagnostics only,
-        -- which is why the entry triple is special-cased here (not the whole list)
-        -- — see `trimEntryTriple` for the four graph positions this was silent in,
-        -- and for why the entry is TRIMMED BY CODE rather than dropped whole.
-        let _ =
-          emitWarningLines
-            (flatMap renderTripleWarnings (trimEntryTriple projWarns))
-        -- #1719: a non-entry module can carry OTHER warnings (chiefly
-        -- non-exhaustive-match) that the line above does not surface — human
-        -- `check` would otherwise drop these with no trace, reading as a clean
-        -- bill of health.  Say so instead of staying silent; `--json` already
-        -- reports them per-file.
-        let _ = emitHiddenDiagNote hiddenCount
-        -- The main-shape warning, against the entry module's raw decls.
-        let mainWarns = match lastModPair mods
-          Some (emid, edecls) => mainShapeWarnings rtD coreD modsD edecls
-          None => []
-        emitLocatedWarnings tsrc target mainWarns
-    _ => dieMsg resDiags
+    "" => ("", entryExhaust rtD coreD modsD)
+    _ => (resDiags, "")
 
 -- ── main shape ──────────────────────────────────────────────────────────────
 -- `check`'s warning (`mainShapeWarnings`) and `run`/`build`'s refusal

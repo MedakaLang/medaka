@@ -75,12 +75,8 @@ python3 -I "$H/escape.py" "$S/cli/medaka.opt.ll" "$S/cli/medaka.inst.ll" "$S/cli
   || { tail -8 "$S/cli/escape.err"; fail "escape.py failed"; }
 N=$(( $(wc -l < "$S/cli/sites.tsv") - 1 ))
 # alloc_count.c supplies the allocator definitions, so drop the runtime's own
-sed -e 's|^void \*mdk_alloc(long long n) { return GC_malloc((size_t)n); }$|void *mdk_alloc(long long n);|' \
-    -e 's|^void \*mdk_alloc_atomic(long long n) { return GC_malloc_atomic((size_t)n); }$|void *mdk_alloc_atomic(long long n);|' \
-    "${CENSUS_RT:-$WT/runtime/medaka_rt.c}" > "$S/cli/rt_copy.c"
-if [ "$(grep -c '^void \*mdk_alloc\(_atomic\)\{0,1\}(long long n);$' "$S/cli/rt_copy.c")" != 2 ]; then
-  echo "alloc-census: runtime allocator lines not found"
-  echo "alloc-census: INVALID (runtime/medaka_rt.c allocator definitions changed; update the sed in test/alloc_census.sh)"
+if ! sh "$H/rt_copy.sh" "${CENSUS_RT:-$WT/runtime/medaka_rt.c}" "$S/cli/rt_copy.c"; then
+  echo "alloc-census: INVALID (runtime/medaka_rt.c allocator definitions changed)"
   exit 1
 fi
 # shellcheck disable=SC2086

@@ -190,6 +190,21 @@ test/alloc_census/compare       helper of test/alloc_census.sh: compares the pla
                                 instrumented `check` stdout and labels the census run
                                 VALID or INVALID. Never run on its own by CI.
 
+test/alloc_census/rt_copy       helper of test/alloc_census.sh and test/retain_census.sh:
+                                copies runtime/medaka_rt.c with its allocator
+                                definitions reduced to declarations, failing when the
+                                runtime lines it rewrites have moved. Never run on its
+                                own by CI.
+
+test/retain_census              report-only retention census (#4090,
+                                `make retain-census`): builds the CLI non-LTO with
+                                --keep-ir, tags every allocation with its site, and
+                                reports what an instrumented `check` of the compiler
+                                keeps live, by function and module, plus referrers of
+                                chosen sites. Takes ~6 min. Always exits 0 and asserts
+                                nothing — no gate/gates.toml involvement by design.
+                                See the script header.
+
 test/cli_conformance_census    derived CLI conformance census (#2354, S-conformance-table,
                                 `make cli-conformance-census`): re-derives
                                 docs/ops/CLI-CONFORMANCE.md's machine-checkable columns —
