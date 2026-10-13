@@ -1361,7 +1361,6 @@ grantWholeDomain : List Decl -> List Decl
 grantsEnabled : Unit -> Bool
 graphAliasEntry : String -> List ((String, String), a) -> (String, (String, String)) -> List (String, a)
 graphAliasRow : Decl -> List (TabKey, (List String, Ty))
-graphAliasRows : List Decl -> List (TabKey, (List String, Ty))
 graphAmbigValues : String -> List (String, List String)
 graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
 graphCollect : GraphOut -> Bool -> String -> (List Decl, List (String, Scheme), List TcDiag, List TcDiag) -> (List (String, List Decl), List (String, (List (String, Scheme), List TcDiag, List TcDiag))) -> (List (String, List Decl), List (String, (List (String, Scheme), List TcDiag, List TcDiag)))
