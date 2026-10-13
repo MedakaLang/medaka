@@ -27,6 +27,7 @@ import frontend.ast.{
   FunClause(..),
   Addr(..),
   Decl(..),
+  Attr(..),
   Variant(..),
   ConPayload(..),
   Field(..),
@@ -1930,6 +1931,30 @@ topFunNames ((DFunDef _ n _ _ _ _) :: rest) acc =
   topFunNames rest (omInsert n () acc)
 topFunNames ((DAttrib _ d) :: rest) acc = topFunNames (d :: rest) acc
 topFunNames (_ :: rest) acc = topFunNames rest acc
+
+-- The top-level functions a `@noinline` attribute marks, by bind name.  The
+-- attribute wraps the signature above a definition, or a definition written
+-- without one; stacked attributes nest, so the walk looks through each layer.
+export
+noInlineFnNames : List Decl -> List String
+noInlineFnNames [] = []
+noInlineFnNames ((DAttrib attrs d) :: rest) =
+  if hasNoInline attrs then
+    attribTargetName d ++ noInlineFnNames rest
+  else
+    noInlineFnNames (d :: rest)
+noInlineFnNames (_ :: rest) = noInlineFnNames rest
+
+hasNoInline : List Attr -> Bool
+hasNoInline [] = False
+hasNoInline (AttrNoInline :: _) = True
+hasNoInline (_ :: rest) = hasNoInline rest
+
+attribTargetName : Decl -> List String
+attribTargetName (DAttrib _ d) = attribTargetName d
+attribTargetName (DTypeSig _ n _ _) = [n]
+attribTargetName (DFunDef _ n _ _ _ _) = [n]
+attribTargetName _ = []
 
 indexTwinOf : OrdMap String -> Expr -> Option String
 indexTwinOf twins (ELoc _ h) = indexTwinOf twins h

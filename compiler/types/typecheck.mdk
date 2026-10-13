@@ -27656,6 +27656,7 @@ constrainedSigName : Decl -> List String
 constrainedSigName (DTypeSig _ n ty _)
   | isConstrainedTy ty = [n]
   | otherwise = []
+constrainedSigName (DAttrib _ d) = constrainedSigName d
 constrainedSigName _ = []
 
 isConstrainedTy : Ty -> Bool
@@ -43757,6 +43758,7 @@ constraintSlotId typarams tvs c = match constraintSlotDispatchVar typarams c
 sigsOf : List Decl -> List (String, Ty)
 sigsOf [] = []
 sigsOf ((DTypeSig _ n ty _) :: rest) = (n, ty) :: sigsOf rest
+sigsOf ((DAttrib _ d) :: rest) = sigsOf (d :: rest)
 sigsOf (_ :: rest) = sigsOf rest
 
 -- every variable reference in an expr, bound ones included (an over-approximation
@@ -54824,6 +54826,7 @@ constrainedSigPredicateSlots : Decl -> List (String, List PredicateSlot)
 constrainedSigPredicateSlots (DTypeSig _ n ty _)
   | isConstrainedTy ty = [(n, map sigPredicateSlot (sigConstraints ty))]
   | otherwise = []
+constrainedSigPredicateSlots (DAttrib _ d) = constrainedSigPredicateSlots d
 constrainedSigPredicateSlots _ = []
 
 sigPredicateSlot : (IfaceRef, List String) -> PredicateSlot

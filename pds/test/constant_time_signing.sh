@@ -114,16 +114,22 @@ write_source_manifest() {
 # `bytes as B` and calls `B.length`, since an imported `length` was shadowed by
 # Foldable's and every compile of the carrier warned. Outside the signing
 # closure, like the move above.
+# Re-blessed 2026-10-13 for `@noinline`: field.mdk, scalar.mdk, hmac_sha256.mdk
+# and secp256k1.mdk gained one `@noinline` line above each helper this gate and
+# constant_time_public_key.sh require as a linked symbol or disassemble, so LLVM
+# keeps those helpers as symbols however it inlines. No definition changed.
+# stdlib/crypto/sha256.mdk likewise gained one `@noinline`, above
+# sha256AssumeByteDomainFrom, which both linked-closure lists below require.
 expected_internal_source_manifest() {
   cat <<'EOF'
-3731538746 28626  pds/lib/field.mdk
-155881618 41112  pds/lib/scalar.mdk
-2724272250 11762  stdlib/crypto/sha256.mdk
+2571003349 28636  pds/lib/field.mdk
+3298764120 41142  pds/lib/scalar.mdk
+3199207396 11772  stdlib/crypto/sha256.mdk
 2268744627 7364  stdlib/crypto/hmac.mdk
 3074298774 10394  stdlib/u32.mdk
 2001432321 10382  stdlib/u64.mdk
-2873386462 1355  pds/lib/hmac_sha256.mdk
-2537316894 24171  pds/lib/secp256k1.mdk
+2849009910 1365  pds/lib/hmac_sha256.mdk
+2286411630 24231  pds/lib/secp256k1.mdk
 3551598025 4736  pds/test/constant_time_signing_main.mdk
 EOF
 }
@@ -139,16 +145,17 @@ EOF
 # sign.mdk re-pinned 2026-09-30 again for a header-comment rewrite only: the
 # module doc now states which property the types enforce and which the
 # lib_boundary import scan does. No definition changed.
+# The four pds/lib rows re-pinned 2026-10-13 for `@noinline` (see above).
 expected_public_source_manifest() {
   cat <<'EOF'
-3731538746 28626  pds/lib/field.mdk
-155881618 41112  pds/lib/scalar.mdk
-2724272250 11762  stdlib/crypto/sha256.mdk
+2571003349 28636  pds/lib/field.mdk
+3298764120 41142  pds/lib/scalar.mdk
+3199207396 11772  stdlib/crypto/sha256.mdk
 2268744627 7364  stdlib/crypto/hmac.mdk
 3074298774 10394  stdlib/u32.mdk
 2001432321 10382  stdlib/u64.mdk
-2873386462 1355  pds/lib/hmac_sha256.mdk
-2537316894 24171  pds/lib/secp256k1.mdk
+2849009910 1365  pds/lib/hmac_sha256.mdk
+2286411630 24231  pds/lib/secp256k1.mdk
 2451873097 6303  pds/lib/sign.mdk
 1008417625 3197  pds/test/constant_time_signing_public_main.mdk
 EOF
@@ -889,8 +896,9 @@ pass 'emitted closure contains RFC/HMAC/SHA, both complete point paths, inverse,
 # exist: scNegateCt by the low-S route pin in internal_source_routes_ok (red
 # under M09) and by the emitted closure manifest above; compressRounds by the
 # exact control grade over the emitted closure, which counts its branches,
-# comparisons and indexing. The HMAC/SHA leaves below still survive, so the
-# schedule is still in the link.
+# comparisons and indexing. Every symbol below carries `@noinline` in its
+# source, so it survives however the link inlines; the HMAC/SHA leaves among
+# them keep the schedule in the link.
 for symbol in \
   mdk_lib_secp256k1__signCandidate \
   mdk_lib_secp256k1__rfc6979NonceSchedule \
@@ -1136,15 +1144,16 @@ fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"
 
 # Same inlined-guard reasoning as the internal native-symbol list above.
-# The ThinLTO link (#3374) inlines compressRounds, scNegateCt and, in this
-# consumer only, rfc6979NonceSchedule, so they left this list as they left the
-# internal one. What is lost is only the claim that each is a distinct function
-# in this linked binary. All three stay in the public union above, whose exact
-# control grade pins their branches, comparisons and indexing; scNegateCt's
-# low-S route is pinned in source (red under M09); and rfc6979NonceSchedule is
-# still required as a linked symbol of the internal carrier.
+# The ThinLTO link (#3374) inlines compressRounds and scNegateCt, so they left
+# this list as they left the internal one. What is lost is only the claim that
+# each is a distinct function in this linked binary. Both stay in the public
+# union above, whose exact control grade pins their branches, comparisons and
+# indexing, and scNegateCt's low-S route is pinned in source (red under M09).
+# rfc6979NonceSchedule, which the link inlined in this consumer only, carries
+# `@noinline` like every symbol below, and is required here again.
 for symbol in \
   mdk_lib_secp256k1__signCandidate \
+  mdk_lib_secp256k1__rfc6979NonceSchedule \
   mdk_lib_hmac_sha256__hmacSha256FixedKey \
   mdk_crypto_sha256__sha256AssumeByteDomainFrom \
   mdk_lib_secp256k1__scalarLadder \

@@ -396,6 +396,9 @@ source_write_shape_ok() {
   esac
 }
 
+# A column-0 `@` line is an attribute of the next declaration, not part of this
+# body, so it is skipped and a helper's pin does not move when its neighbour
+# gains one.
 extract_source_function() {
   name=$1
   input=$2
@@ -404,6 +407,7 @@ extract_source_function() {
     $0 ~ ("^" name " :") { found = 1; next }
     found && $0 ~ ("^" name " ") { inside = 1 }
     inside && /^[A-Za-z][A-Za-z0-9]* :/ { exit }
+    inside && /^@/ { next }
     inside && $0 !~ /^[[:space:]]*--/ { print }
   ' "$input" > "$output"
   [ -s "$output" ] || return 1

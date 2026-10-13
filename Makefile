@@ -175,6 +175,11 @@ inlang-ir-dce-test:
 inlang-ir-core-ir-sexp-test:
 	./medaka test compiler/ir/core_ir_sexp_test.mdk
 
+## `noInlineFnNames` carries `@noinline` from the declarations to the LLVM
+## emitter; no entry imports this sibling.
+inlang-ir-core-ir-lower-test:
+	./medaka test compiler/ir/core_ir_lower_test.mdk
+
 inlang-eval-eval-test:
 	./medaka test compiler/eval/eval_test.mdk
 

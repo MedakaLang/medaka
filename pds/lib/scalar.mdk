@@ -514,6 +514,7 @@ limbsOfBytes bs = [|
 --   returned scalar is always canonical, including on an invalid input.
 --   This is intentionally separate from the public, branch-bearing
 --   `scFromBytes` wire parser below.
+@noinline
 export
 scSecretCandidate : B.Bytes -> (Int, Sc)
 scSecretCandidate bs =
@@ -675,6 +676,7 @@ scEqualBit a b =
 
 -- | Fixed-control selection. `bit` must be 0 or 1; 0 selects `a` and 1
 --   selects `b`. Every limb is visited and the inputs remain unmodified.
+@noinline
 export
 scSelect : Int -> Sc -> Sc -> Sc
 scSelect bit a b =
@@ -1126,6 +1128,7 @@ scMul x y =
 --
 -- > scEqual (scMul (scInverse scOne) scOne) scOne
 -- True
+@noinline
 export
 scInverse : Sc -> Sc
 scInverse a = powGo a 255 scOne

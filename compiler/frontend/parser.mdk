@@ -3216,7 +3216,7 @@ letRecDeclClause = defer
   body <- parseBody
   deferPure (name, pats, body, locOfSpan s (s + 1))
 
--- declaration attribute `@deprecated "msg"` / `@inline` / `@must_use` wrapping
+-- declaration attribute `@deprecated "msg"` / `@inline` / `@must_use` / `@noinline` wrapping
 -- the following decl.
 parseAttrib : Parser Decl
 parseAttrib = defer
@@ -3237,6 +3237,7 @@ attrArg name _ = deferPure (mkAttr name None)
 mkAttr : String -> Option String -> Attr
 mkAttr "deprecated" (Some msg) = AttrDeprecated msg
 mkAttr "must_use" _ = AttrMustUse
+mkAttr "noinline" _ = AttrNoInline
 mkAttr _ _ = AttrInline
 
 externName : Parser String

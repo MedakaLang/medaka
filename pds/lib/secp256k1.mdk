@@ -128,6 +128,7 @@ rfc6979Candidate bytes =
   let (validBit, scalar) = scSecretCandidate bytes
   Rfc6979Candidate validBit scalar bytes
 
+@noinline
 rfc6979NonceSchedule : Sc -> B.Bytes -> Rfc6979Schedule
 rfc6979NonceSchedule key digest =
   let (Rfc6979State initialKey initialValue) = rfc6979Initialize key digest
@@ -309,6 +310,7 @@ pointNegate : JPoint -> JPoint
 pointNegate (JPoint x y z) = pointCanonicalize (JPoint x (feNegateCt y) z)
 
 -- | One fixed formula for ordinary points, Y=0, and infinity inputs.
+@noinline
 export
 pointDoubleComplete : JPoint -> JPoint
 pointDoubleComplete (JPoint x1 y1 z1) =
@@ -324,6 +326,7 @@ pointDoubleComplete (JPoint x1 y1 z1) =
   pointCanonicalize (JPoint x3 y3 z3)
 
 -- | Complete addition by unconditional candidates then arithmetic selection.
+@noinline
 export
 pointAddComplete : JPoint -> JPoint -> JPoint
 pointAddComplete (p@(JPoint x1 y1 z1)) (q@(JPoint x2 y2 z2)) =
@@ -364,6 +367,7 @@ scalarMultiplySecret : Sc -> JPoint -> JPoint
 scalarMultiplySecret scalar point =
   scalarLadder (scToBytes scalar) pointInfinity point 0
 
+@noinline
 scalarLadder : B.Bytes -> JPoint -> JPoint -> Int -> JPoint
 scalarLadder bytes r0 r1 i =
   if i >= 256 then
@@ -425,6 +429,7 @@ curveRhs : Fe -> Fe
 curveRhs x = feAdd (feMul (feSquare x) x) fieldSeven
 
 -- | Fixed compressed representation of a non-infinity affine point.
+@noinline
 export
 pointCompressed : AffinePoint -> B.Bytes
 pointCompressed (AffinePoint x y) =
@@ -504,6 +509,7 @@ ecdsaSignatureFromCompact compact =
           else
             Ok (EcdsaSignature r s)
 
+@noinline
 signCandidate : Sc -> Sc -> Rfc6979Candidate -> EcdsaCandidate
 signCandidate secret digest (Rfc6979Candidate nonceRangeBit nonce _) =
   let nonceValidBit = bitAnd nonceRangeBit (bitXor (scZeroBit nonce) 1)
