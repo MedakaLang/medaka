@@ -2206,8 +2206,6 @@ TIME_STAGES="parse desugar resolve mark typecheck elaborate dce mangle fmt lint 
 KNOWN_SLOW_TIME="
 manydefs:lint
 modules:typecheck
-nestedparens:parse
-nestedparens:fmt
 nestedparens:lint
 xref:lint
 "
@@ -2307,12 +2305,10 @@ KNOWN_TCEIL_xref_lint="5.6";          KNOWN_TFIXED_xref_lint="1.9"
 # while `stage_ir_scaling` still counted the quadratic. 1.6 sits ~10% under the new floor
 # (1.78); the drain of record stays stage_ir_scaling's KNOWN_FIXED_modules_typecheck.
 KNOWN_TCEIL_modules_typecheck="4.2";  KNOWN_TFIXED_modules_typecheck="1.6"
-# nestedparens:{parse,fmt,lint} (TIME) — see the block above KNOWN_SLOW_TIME for the
+# nestedparens:lint (TIME) — see the block above KNOWN_SLOW_TIME for the
 # sample band and the margin/placement rationale. TFIXED uses the file's 2.60
-# convention on all three (none straddles the 3.0 threshold the way
+# convention (it does not straddle the 3.0 threshold the way
 # modules:typecheck does).
-KNOWN_TCEIL_nestedparens_parse="7.0"; KNOWN_TFIXED_nestedparens_parse="2.60"
-KNOWN_TCEIL_nestedparens_fmt="6.5";   KNOWN_TFIXED_nestedparens_fmt="2.60"
 KNOWN_TCEIL_nestedparens_lint="9.5";  KNOWN_TFIXED_nestedparens_lint="2.60"
 
 is_known_time() {
