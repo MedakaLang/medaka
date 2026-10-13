@@ -1,5 +1,7 @@
 # `==`/`/=` → `Eq` Dispatch (Option A) — Design + Blast-Radius Census
 
+> **Superseded by binder stamps** (sprint binders-say-what-they-hold) for the emitters' type recovery: any mention below of signature-driven or body-use type inference in the emitters is historical.
+
 **Status:** OPEN — `==`/`/=` are still a builtin structural compare that bypasses the
 `Eq` interface (`stdlib/core.mdk:48-49` unchanged: "`==` on primitives is a builtin and
 does *not* dispatch through this interface"), verified live. Staged implementation plan

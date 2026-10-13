@@ -126,15 +126,20 @@ test "TRMC loop: the loop writes the source-named params directly" =
       (expectFalse (blockHas "__wparg" blk)),
   ]
 
--- a body binder that rebinds a param name keeps that param positional, so its wasm
--- local is never the binder's local
+-- a body binder that rebinds a param name is renamed apart (`uniqueBinders`), so the
+-- param keeps its source name and the binder gets its own local
 shadowSrc : String
 shadowSrc = "shadowL xs = let xs = [] in xs\nmain = shadowL []"
 
-test "shadowed param: the header keeps the positional name, not the source name" =
+test "shadowed param: the param keeps its source name, the binder gets a distinct local" =
   let blk = funcBlock "shadowL" (watOf shadowSrc)
-  labelFail
-    "header is positional"
-    (expectTrue
-      (blockHas "(param $u____wparg0 (ref eq))" blk
-        && not (blockHas "(param $xs (ref eq))" blk)))
+  expectAll [
+    labelFail
+      "header names the param by its source variable"
+      (expectTrue
+        (blockHas "(param $xs (ref eq))" blk
+          && not (blockHas "(param $u____wparg0 (ref eq))" blk))),
+    labelFail
+      "the shadowing let binder is a different local"
+      (expectTrue (blockHas "$xs$1" blk)),
+  ]

@@ -107,14 +107,15 @@ FIXDIR_MODULES="$ROOT/test/wasm/fixtures_modules"
 #    shapes of #1349 and #2577 at a depth that needs constant stack) is 101544 B
 #    and 142 funcs on its own; the other 59 programs measure 3105426 B and 5716
 #    funcs, inside the previous ceilings.
-#    The modules figures are 2828068 B, 6111 funcs and F1-floor ratio 4025.  The
-#    funcs ceiling is exact: each distinct fixed trap text a program streams is one
+#    The modules figures are 2871821 B (CI), 6190 funcs and F1-floor ratio 4077,
+#    for 61 programs: `fnctx_trmc_lambda_no_leak.mdk` is the 61st.  The funcs
+#    ceiling is exact: each distinct fixed trap text a program streams is one
 #    `$trapmsg_K` function called from every site, which is the 251 funcs over
-#    5858 across the 60 programs.  Those helpers are reachable, so the unit-kept
-#    ratio is 2693/23199.  The bytes ceiling is the measured size rounded up to the
+#    5858 across the first 60 programs.  Those helpers are reachable, so the
+#    unit-kept ratio is 2730/23524.  The bytes ceiling is the measured size rounded up to the
 #    next 10000 B, so unrelated corpus growth does not trip it.
-MODULES_BYTES_CEIL=2840000
-MODULES_FUNCS_CEIL=6111
+MODULES_BYTES_CEIL=2880000
+MODULES_FUNCS_CEIL=6190
 MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/awk float compare)
 
 PLAIN_BYTES_CEIL=495000
@@ -130,7 +131,7 @@ TYPED_FUNCS_CEIL=145
 # every ceiling above still improves (fewer bytes/funcs/ratio look like a win
 # when they're actually fixtures dropping out). A gap appearing at all here is
 # itself the regression signal this gate exists to catch.
-MODULES_OK_EXACT=60
+MODULES_OK_EXACT=61
 PLAIN_OK_EXACT=168
 TYPED_OK_EXACT=9
 
@@ -143,7 +144,7 @@ TYPED_OK_EXACT=9
 # ("emitted-vs-reachable FUNCTION ratio") — the existing reach-ratio is a UNIT
 # ratio (S1's own notion), not this.
 F1_MODULES_FUNCS_FLOOR=1518
-MODULES_F1_RATIO_CEIL_X1000=4025  # 6111 * 1000 / 1518 = 4025.7, see the ceilings above; emitted-funcs/F1-floor * 1000; measured with the entry marker, see the ceilings above
+MODULES_F1_RATIO_CEIL_X1000=4077  # 6190 * 1000 / 1518 = 4077.7, see the ceilings above; emitted-funcs/F1-floor * 1000; measured with the entry marker, see the ceilings above
 
 command -v wasm-tools >/dev/null 2>&1 || { echo "wasm-tools not on PATH — skipping S5 emitted-size gate"; exit 2; }
 NODE=node
