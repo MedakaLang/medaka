@@ -1,5 +1,5 @@
 # META
-source_lines=2621
+source_lines=2622
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -1775,10 +1775,11 @@ public export data Field = Field String Ty
 public export data ConPayload = ConPos (List Ty) | ConNamed (List Field) Bool
 public export data Variant = Variant String ConPayload
 
--- declaration attributes: `@deprecated "msg"`, `@inline`, `@must_use`,
--- `@noinline` (the native backend keeps the function a separate symbol)
+-- declaration attributes: `@deprecated "msg"` (`None` for a bare `@deprecated`),
+-- `@inline`, `@must_use`, `@noinline` (the native backend keeps the function a
+-- separate symbol)
 public export data Attr =
-  | AttrDeprecated String
+  | AttrDeprecated (Option String)
   | AttrInline
   | AttrMustUse
   | AttrNoInline
@@ -2867,7 +2868,7 @@ mapKvsB f ((k, v) :: rest) =
 (DData Public "Field" () ((variant "Field" (ConPos (TyCon "String") (TyCon "Ty")))) ())
 (DData Public "ConPayload" () ((variant "ConPos" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "ConNamed" (ConPos (TyApp (TyCon "List") (TyCon "Field")) (TyCon "Bool")))) ())
 (DData Public "Variant" () ((variant "Variant" (ConPos (TyCon "String") (TyCon "ConPayload")))) ())
-(DData Public "Attr" () ((variant "AttrDeprecated" (ConPos (TyCon "String"))) (variant "AttrInline" (ConPos)) (variant "AttrMustUse" (ConPos)) (variant "AttrNoInline" (ConPos))) ())
+(DData Public "Attr" () ((variant "AttrDeprecated" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "AttrInline" (ConPos)) (variant "AttrMustUse" (ConPos)) (variant "AttrNoInline" (ConPos))) ())
 (DData Public "DeriveRef" () ((variant "DeriveRef" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "deriveRefName" (TyFun (TyCon "DeriveRef") (TyCon "String")))
 (DFunDef false "deriveRefName" ((PCon "DeriveRef" (PVar "n") PWild)) (EVar "n"))
@@ -3284,7 +3285,7 @@ mapKvsB f ((k, v) :: rest) =
 (DData Public "Field" () ((variant "Field" (ConPos (TyCon "String") (TyCon "Ty")))) ())
 (DData Public "ConPayload" () ((variant "ConPos" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "ConNamed" (ConPos (TyApp (TyCon "List") (TyCon "Field")) (TyCon "Bool")))) ())
 (DData Public "Variant" () ((variant "Variant" (ConPos (TyCon "String") (TyCon "ConPayload")))) ())
-(DData Public "Attr" () ((variant "AttrDeprecated" (ConPos (TyCon "String"))) (variant "AttrInline" (ConPos)) (variant "AttrMustUse" (ConPos)) (variant "AttrNoInline" (ConPos))) ())
+(DData Public "Attr" () ((variant "AttrDeprecated" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "AttrInline" (ConPos)) (variant "AttrMustUse" (ConPos)) (variant "AttrNoInline" (ConPos))) ())
 (DData Public "DeriveRef" () ((variant "DeriveRef" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "deriveRefName" (TyFun (TyCon "DeriveRef") (TyCon "String")))
 (DFunDef false "deriveRefName" ((PCon "DeriveRef" (PVar "n") PWild)) (EVar "n"))
