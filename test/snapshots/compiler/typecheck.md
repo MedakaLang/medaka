@@ -18767,7 +18767,7 @@ checkStmtNotDiscarded stmtObls t e
 -- `exemptInPlaceIndexMutHeads`, not just narrowing further.
 -- `setIndex` is an `IndexMut` interface method, so which node shape this walk
 -- is handed depends on the driver: this file has two output selections of the one
--- graph driver, `driveGraphK` (`checkModulesDiagsChain` for `check`, vs
+-- graph driver, `driveGraphK` (`checkModulesDiagsChain`'s `None` arm, for `check`, vs
 -- `elaborateModules` for `build`/`run`; see harden-typechecker skill).  Both run the dict pre-pass
 -- `prePassDictArg` now (#2705), which rewrites the call to
 -- `EMethodAt "setIndex" …` BEFORE this check runs; before that only the
