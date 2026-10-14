@@ -1,5 +1,5 @@
 # META
-source_lines=1317
+source_lines=1320
 stages=DESUGAR,MARK
 # SOURCE
 -- Checks a lowered program must pass before an emitter writes any of it.  Each
@@ -377,10 +377,13 @@ checkImplSymbolsInjective ((m, tag, key) :: rest) seen =
 -- answers `mzone|nyone`: both tags hash alike, so the shared dispatcher's first arm
 -- wins every call.
 --
--- The pre-image population is read off the program's `CImplTagged` entries: the
--- second field is the canonical key (`route_key.implRouteKeyWord`) of the instance
--- the typechecker selected, the one word a dispatcher arm compares, and the entry's
--- method name is the grouping key of its dispatch chain.  Both hashes are imported
+-- The pre-image population is read off every impl entry, supplied (`CImplTagged`)
+-- and inherited (`CImplDefault`) alike: each carries the canonical key
+-- (`route_key.implRouteKeyWord`) of its instance, the one word its dispatcher arm
+-- compares (`llvm_emit.emitDispatchArm`, `wasm_emit.dispatchKeyTestW`), and the
+-- entry's method name is the grouping key of its dispatch chain.  A supplied impl and
+-- an inherited default of one method share that chain, so their words collide as
+-- surely as two supplied impls' do.  Both hashes are imported
 -- from `backend.private_mangle`, the SAME `hashName` the LLVM emitter stamps and the
 -- SAME `dictTag` the wasm emitter stamps, because a guard with its own copy of the
 -- hash certifies a property of the copy.
@@ -413,7 +416,7 @@ validateDictTags backend cp = match dictTagCollision backend cp
 export
 dictTagCollision : Backend -> CProgram -> Option String
 dictTagCollision backend (CProgram _ _ _ impls _ _) =
-  let rows = dedupBy dictRouteWordKey (flatMap dictRouteWordRow impls)
+  let rows = dedupBy dictRouteWordKey (map dictRouteWordRow impls)
   match checkDictTagsInjective nativeDictTagSpace hashName rows omEmpty
     Some message => Some message
     None => match backend
@@ -429,12 +432,12 @@ wasmDictTagSpace : String
 wasmDictTagSpace =
   "wasm (WasmGC) 30-bit i31 dict tag `dictTag` (`hashName` masked to the low 30 bits) -- the full i64 tags are DISTINCT, so a native build of this program is correct; the wasm tag is this hash masked to a narrower width, which collides"
 
--- (method, route word) of a supplied-method entry: the METHOD NAME that word's
--- dispatch chain is keyed by, and the word a dict witness for this impl carries (its
--- canonical key, which is also the impl's identity).
-dictRouteWordRow : CImplEntry -> List (String, String)
-dictRouteWordRow (CImplEntry m _ _ (CImplTagged _ key _ _ _ _ _)) = [(m, key)]
-dictRouteWordRow _ = []
+-- (method, route word) of an impl entry, supplied or inherited: the METHOD NAME that
+-- word's dispatch chain is keyed by, and the word a dict witness for this impl
+-- carries (its canonical key, which is also the impl's identity).
+dictRouteWordRow : CImplEntry -> (String, String)
+dictRouteWordRow (CImplEntry m _ _ (CImplTagged _ key _ _ _ _ _)) = (m, key)
+dictRouteWordRow (CImplEntry m _ _ (CImplDefault _ _ key _ _ _ _)) = (m, key)
 
 -- Rows are deduplicated by (method, word), first arrival wins, so two DIFFERENT
 -- methods' identical word never dedup against each other.  The joint prelude+module
@@ -1389,14 +1392,14 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DTypeSig true "validateDictTags" (TyFun (TyCon "Backend") (TyFun (TyCon "CProgram") (TyCon "Unit"))))
 (DFunDef false "validateDictTags" ((PVar "backend") (PVar "cp")) (EMatch (EApp (EApp (EVar "dictTagCollision") (EVar "backend")) (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "panic") (EVar "message"))) (arm (PCon "None") () (ELit LUnit))))
 (DTypeSig true "dictTagCollision" (TyFun (TyCon "Backend") (TyFun (TyCon "CProgram") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "dictTagCollision" ((PVar "backend") (PCon "CProgram" PWild PWild PWild (PVar "impls") PWild PWild)) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "dedupBy") (EVar "dictRouteWordKey")) (EApp (EApp (EVar "flatMap") (EVar "dictRouteWordRow")) (EVar "impls")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "nativeDictTagSpace")) (EVar "hashName")) (EVar "rows")) (EVar "omEmpty")) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "Some") (EVar "message"))) (arm (PCon "None") () (EMatch (EVar "backend") (arm (PCon "LlvmBackend") () (EVar "None")) (arm (PCon "WasmBackend") () (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "wasmDictTagSpace")) (EVar "dictTag")) (EVar "rows")) (EVar "omEmpty")))))))))
+(DFunDef false "dictTagCollision" ((PVar "backend") (PCon "CProgram" PWild PWild PWild (PVar "impls") PWild PWild)) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "dedupBy") (EVar "dictRouteWordKey")) (EApp (EApp (EVar "map") (EVar "dictRouteWordRow")) (EVar "impls")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "nativeDictTagSpace")) (EVar "hashName")) (EVar "rows")) (EVar "omEmpty")) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "Some") (EVar "message"))) (arm (PCon "None") () (EMatch (EVar "backend") (arm (PCon "LlvmBackend") () (EVar "None")) (arm (PCon "WasmBackend") () (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "wasmDictTagSpace")) (EVar "dictTag")) (EVar "rows")) (EVar "omEmpty")))))))))
 (DTypeSig false "nativeDictTagSpace" (TyCon "String"))
 (DFunDef false "nativeDictTagSpace" () (ELit (LString "native (LLVM) i64 dict-witness word `hashName` -- BOTH backends, since the wasm tag is this hash masked")))
 (DTypeSig false "wasmDictTagSpace" (TyCon "String"))
 (DFunDef false "wasmDictTagSpace" () (ELit (LString "wasm (WasmGC) 30-bit i31 dict tag `dictTag` (`hashName` masked to the low 30 bits) -- the full i64 tags are DISTINCT, so a native build of this program is correct; the wasm tag is this hash masked to a narrower width, which collides")))
-(DTypeSig false "dictRouteWordRow" (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "dictRouteWordRow" ((PCon "CImplEntry" (PVar "m") PWild PWild (PCon "CImplTagged" PWild (PVar "key") PWild PWild PWild PWild PWild))) (EListLit (ETuple (EVar "m") (EVar "key"))))
-(DFunDef false "dictRouteWordRow" (PWild) (EListLit))
+(DTypeSig false "dictRouteWordRow" (TyFun (TyCon "CImplEntry") (TyTuple (TyCon "String") (TyCon "String"))))
+(DFunDef false "dictRouteWordRow" ((PCon "CImplEntry" (PVar "m") PWild PWild (PCon "CImplTagged" PWild (PVar "key") PWild PWild PWild PWild PWild))) (ETuple (EVar "m") (EVar "key")))
+(DFunDef false "dictRouteWordRow" ((PCon "CImplEntry" (PVar "m") PWild PWild (PCon "CImplDefault" PWild PWild (PVar "key") PWild PWild PWild PWild))) (ETuple (EVar "m") (EVar "key")))
 (DTypeSig false "dictRouteWordKey" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "String")))
 (DFunDef false "dictRouteWordKey" ((PTuple (PVar "m") (PVar "w"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "w"))) (ELit (LString ""))))
 (DTypeSig false "checkDictTagsInjective" (TyFun (TyCon "String") (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))))
@@ -1793,14 +1796,14 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DTypeSig true "validateDictTags" (TyFun (TyCon "Backend") (TyFun (TyCon "CProgram") (TyCon "Unit"))))
 (DFunDef false "validateDictTags" ((PVar "backend") (PVar "cp")) (EMatch (EApp (EApp (EVar "dictTagCollision") (EVar "backend")) (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "panic") (EVar "message"))) (arm (PCon "None") () (ELit LUnit))))
 (DTypeSig true "dictTagCollision" (TyFun (TyCon "Backend") (TyFun (TyCon "CProgram") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "dictTagCollision" ((PVar "backend") (PCon "CProgram" PWild PWild PWild (PVar "impls") PWild PWild)) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "dedupBy") (EVar "dictRouteWordKey")) (EApp (EApp (EDictApp "flatMap") (EVar "dictRouteWordRow")) (EVar "impls")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "nativeDictTagSpace")) (EVar "hashName")) (EVar "rows")) (EVar "omEmpty")) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "Some") (EVar "message"))) (arm (PCon "None") () (EMatch (EVar "backend") (arm (PCon "LlvmBackend") () (EVar "None")) (arm (PCon "WasmBackend") () (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "wasmDictTagSpace")) (EVar "dictTag")) (EVar "rows")) (EVar "omEmpty")))))))))
+(DFunDef false "dictTagCollision" ((PVar "backend") (PCon "CProgram" PWild PWild PWild (PVar "impls") PWild PWild)) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "dedupBy") (EVar "dictRouteWordKey")) (EApp (EApp (EMethodRef "map") (EVar "dictRouteWordRow")) (EVar "impls")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "nativeDictTagSpace")) (EVar "hashName")) (EVar "rows")) (EVar "omEmpty")) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "Some") (EVar "message"))) (arm (PCon "None") () (EMatch (EVar "backend") (arm (PCon "LlvmBackend") () (EVar "None")) (arm (PCon "WasmBackend") () (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "wasmDictTagSpace")) (EVar "dictTag")) (EVar "rows")) (EVar "omEmpty")))))))))
 (DTypeSig false "nativeDictTagSpace" (TyCon "String"))
 (DFunDef false "nativeDictTagSpace" () (ELit (LString "native (LLVM) i64 dict-witness word `hashName` -- BOTH backends, since the wasm tag is this hash masked")))
 (DTypeSig false "wasmDictTagSpace" (TyCon "String"))
 (DFunDef false "wasmDictTagSpace" () (ELit (LString "wasm (WasmGC) 30-bit i31 dict tag `dictTag` (`hashName` masked to the low 30 bits) -- the full i64 tags are DISTINCT, so a native build of this program is correct; the wasm tag is this hash masked to a narrower width, which collides")))
-(DTypeSig false "dictRouteWordRow" (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "dictRouteWordRow" ((PCon "CImplEntry" (PVar "m") PWild PWild (PCon "CImplTagged" PWild (PVar "key") PWild PWild PWild PWild PWild))) (EListLit (ETuple (EVar "m") (EVar "key"))))
-(DFunDef false "dictRouteWordRow" (PWild) (EListLit))
+(DTypeSig false "dictRouteWordRow" (TyFun (TyCon "CImplEntry") (TyTuple (TyCon "String") (TyCon "String"))))
+(DFunDef false "dictRouteWordRow" ((PCon "CImplEntry" (PVar "m") PWild PWild (PCon "CImplTagged" PWild (PVar "key") PWild PWild PWild PWild PWild))) (ETuple (EVar "m") (EVar "key")))
+(DFunDef false "dictRouteWordRow" ((PCon "CImplEntry" (PVar "m") PWild PWild (PCon "CImplDefault" PWild PWild (PVar "key") PWild PWild PWild PWild))) (ETuple (EVar "m") (EVar "key")))
 (DTypeSig false "dictRouteWordKey" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "String")))
 (DFunDef false "dictRouteWordKey" ((PTuple (PVar "m") (PVar "w"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "w"))) (ELit (LString ""))))
 (DTypeSig false "checkDictTagsInjective" (TyFun (TyCon "String") (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))))

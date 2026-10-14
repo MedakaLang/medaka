@@ -960,6 +960,65 @@ test "(v) two distinct impls stamped to one emitted symbol are refused" = expect
     ),
   ]
 
+-- ── inherited defaults in the dict-tag space ────────────────────────────────
+
+-- `zn` has a default.  The first instance supplies `zn`, the second inherits it, so
+-- both entries are arms of `zn`'s one dispatcher, and each arm compares its own
+-- instance's word.  Typechecked, since only an elaborated program lowers the
+-- inherited entries.
+defaultSrc : String -> String -> String
+defaultSrc supplied inherited =
+  "interface Zn a where\n  zn : a -> String\n  zn _ = \"default\"\ndata \{supplied} = \{supplied}\ndata \{inherited} = \{inherited}\nimpl Zn \{supplied} where\n  zn _ = \"s\"\nimpl Zn \{inherited}\nmain = zn \{inherited}"
+
+defaultTags : Backend -> String -> String -> List String
+defaultTags backend supplied inherited =
+  faultList
+    (dictTagCollision backend (typedLowered "" (defaultSrc supplied inherited)))
+
+test "(af) a supplied impl colliding with an inherited default is refused, per tag width" = expectEach
+  [
+    (
+      "a full-width collision is refused for llvm",
+      expectTextContainsAll
+        [
+          "emitted dict-witness tag collision",
+          "method `zn`",
+          "Mzone",
+          "NYone",
+          "native (LLVM) i64",
+        ]
+        (joinNl (defaultTags LlvmBackend "Mzone" "NYone")),
+    ),
+    (
+      "a full-width collision is refused for wasm in the native space",
+      expectTextContainsAll
+        ["emitted dict-witness tag collision", "native (LLVM) i64"]
+        (joinNl (defaultTags WasmBackend "Mzone" "NYone")),
+    ),
+    (
+      "a 30-bit-only collision is not refused for llvm",
+      expectEqual [] (defaultTags LlvmBackend "Dbnfbcp" "Llzhriz"),
+    ),
+    (
+      "a 30-bit-only collision is refused for wasm",
+      expectTextContainsAll
+        [
+          "emitted dict-witness tag collision",
+          "tag space: wasm (WasmGC) 30-bit",
+          "Dbnfbcp",
+          "Llzhriz",
+        ]
+        (joinNl (defaultTags WasmBackend "Dbnfbcp" "Llzhriz")),
+    ),
+    (
+      "distinct words are accepted by both",
+      expectEqual
+        []
+        (defaultTags LlvmBackend "Mzone" "Pqrst"
+          ++ defaultTags WasmBackend "Mzone" "Pqrst"),
+    ),
+  ]
+
 -- ── method contexts ─────────────────────────────────────────────────────────
 
 -- `desc`'s declared context constrains only the interface parameter, so each

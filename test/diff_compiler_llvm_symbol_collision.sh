@@ -501,6 +501,42 @@ else
   ok "no binary produced (dict-witness domain)"
 fi
 
+# the inherited-default shape: `zn` supplied at Mzone, inherited at NYone. Both
+# are arms of `zn`'s one dispatcher, so the colliding pair must still REFUSE.
+checked=$((checked + 1))
+DWDBIN="$WORK/dict_witness_default.bin"
+DWDLOG="$WORK/dict_witness_default.log"
+"$MEDAKA" build "$FIX/dict_witness/default_negative.mdk" -o "$DWDBIN" > "$DWDLOG" 2>&1
+dwdst=$?
+
+if [ "$dwdst" -eq 0 ]; then
+  fail "the inherited-default collision built at exit 0 — the guard skipped the default entry"
+  printf '      a supplied impl and an inherited default of ONE method share its\n'
+  printf '      dispatcher; with colliding words the binary answers default|default.\n'
+  sed 's/^/        /' "$DWDLOG"
+else
+  ok "the inherited-default collision refused (exit $dwdst)"
+fi
+
+checked=$((checked + 1))
+dwdmissing=""
+for want in 'emitted dict-witness tag collision' 'method `zn`' 'Mzone' 'NYone'; do
+  grep -q -- "$want" "$DWDLOG" || dwdmissing="$dwdmissing '$want'"
+done
+if [ -n "$dwdmissing" ]; then
+  fail "inherited-default refusal does not name both route words; missing:$dwdmissing"
+  sed 's/^/        /' "$DWDLOG"
+else
+  ok "inherited-default refusal names both route words and the method"
+fi
+
+checked=$((checked + 1))
+if [ -e "$DWDBIN" ]; then
+  fail "a binary was produced at $DWDBIN despite the inherited-default refusal"
+else
+  ok "no binary produced (inherited-default shape)"
+fi
+
 # ── 6. the WasmGC emitter's own dict-tag arm (#377) ─────────────────────────────
 # Each emitter refuses at its own width. `wasm_only.mdk` collides only in the
 # 30-bit wasm `dictTag`: it must build and run natively, and the wasm emitter must
@@ -571,6 +607,9 @@ wasm_refuses wasm_only_wasm 'emitted dict-witness tag collision' 'tag space: was
 
 wasm_emit "$FIX/dict_witness/negative.mdk" negative_wasm
 wasm_refuses negative_wasm 'emitted dict-witness tag collision' 'tag space: native (LLVM) i64' 'Mzone' 'NYone'
+
+wasm_emit "$FIX/dict_witness/default_negative.mdk" default_negative_wasm
+wasm_refuses default_negative_wasm 'emitted dict-witness tag collision' 'tag space: native (LLVM) i64' 'Mzone' 'NYone'
 
 printf '\nchecked %d assertions: %d failed\n' "$checked" "$fails"
 

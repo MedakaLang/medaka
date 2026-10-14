@@ -373,10 +373,13 @@ checkImplSymbolsInjective ((m, tag, key) :: rest) seen =
 -- answers `mzone|nyone`: both tags hash alike, so the shared dispatcher's first arm
 -- wins every call.
 --
--- The pre-image population is read off the program's `CImplTagged` entries: the
--- second field is the canonical key (`route_key.implRouteKeyWord`) of the instance
--- the typechecker selected, the one word a dispatcher arm compares, and the entry's
--- method name is the grouping key of its dispatch chain.  Both hashes are imported
+-- The pre-image population is read off every impl entry, supplied (`CImplTagged`)
+-- and inherited (`CImplDefault`) alike: each carries the canonical key
+-- (`route_key.implRouteKeyWord`) of its instance, the one word its dispatcher arm
+-- compares (`llvm_emit.emitDispatchArm`, `wasm_emit.dispatchKeyTestW`), and the
+-- entry's method name is the grouping key of its dispatch chain.  A supplied impl and
+-- an inherited default of one method share that chain, so their words collide as
+-- surely as two supplied impls' do.  Both hashes are imported
 -- from `backend.private_mangle`, the SAME `hashName` the LLVM emitter stamps and the
 -- SAME `dictTag` the wasm emitter stamps, because a guard with its own copy of the
 -- hash certifies a property of the copy.
@@ -409,7 +412,7 @@ validateDictTags backend cp = match dictTagCollision backend cp
 export
 dictTagCollision : Backend -> CProgram -> Option String
 dictTagCollision backend (CProgram _ _ _ impls _ _) =
-  let rows = dedupBy dictRouteWordKey (flatMap dictRouteWordRow impls)
+  let rows = dedupBy dictRouteWordKey (map dictRouteWordRow impls)
   match checkDictTagsInjective nativeDictTagSpace hashName rows omEmpty
     Some message => Some message
     None => match backend
@@ -425,12 +428,12 @@ wasmDictTagSpace : String
 wasmDictTagSpace =
   "wasm (WasmGC) 30-bit i31 dict tag `dictTag` (`hashName` masked to the low 30 bits) -- the full i64 tags are DISTINCT, so a native build of this program is correct; the wasm tag is this hash masked to a narrower width, which collides"
 
--- (method, route word) of a supplied-method entry: the METHOD NAME that word's
--- dispatch chain is keyed by, and the word a dict witness for this impl carries (its
--- canonical key, which is also the impl's identity).
-dictRouteWordRow : CImplEntry -> List (String, String)
-dictRouteWordRow (CImplEntry m _ _ (CImplTagged _ key _ _ _ _ _)) = [(m, key)]
-dictRouteWordRow _ = []
+-- (method, route word) of an impl entry, supplied or inherited: the METHOD NAME that
+-- word's dispatch chain is keyed by, and the word a dict witness for this impl
+-- carries (its canonical key, which is also the impl's identity).
+dictRouteWordRow : CImplEntry -> (String, String)
+dictRouteWordRow (CImplEntry m _ _ (CImplTagged _ key _ _ _ _ _)) = (m, key)
+dictRouteWordRow (CImplEntry m _ _ (CImplDefault _ _ key _ _ _ _)) = (m, key)
 
 -- Rows are deduplicated by (method, word), first arrival wins, so two DIFFERENT
 -- methods' identical word never dedup against each other.  The joint prelude+module
