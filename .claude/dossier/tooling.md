@@ -261,7 +261,7 @@ over staged `.mdk` (`test/` fixtures excluded). Re-install: `cp .githooks/pre-co
   A count may only fall; a nonzero count with no row fails closed. Regenerate via `sh
   test/comment_register_census.sh --write test/comment_register_baseline.toml`, never by
   hand. See `.githooks/pre-commit` check 6b; CI twin is
-  `test/diff_compiler_comment_shout_diff_test.mdk`'s second assertion.
+  `test/diff_compiler_comment_shout_diff_test.mdk`'s first assertion (baselineCheck).
 
 Bypass: `git commit --no-verify`. Unbuilt `medaka`: hook warns and allows.
 

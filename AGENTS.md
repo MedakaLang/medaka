@@ -246,7 +246,7 @@ Reinstall: `cp .githooks/pre-commit "$(git rev-parse --git-common-dir)/hooks/pre
   **[H-SNAPSHOT-UNSTAGED]** It reads the working tree. **[H-DEFER]**
   `PRECOMMIT_SNAPSHOT_DEFER=1 git commit` skips the snapshot check only.
   🚨 **[H-DEFER-VS-GUARD]** Bless and stage goldens LAST.
-- **[H-REGISTER-UNSTAGED]** Check 6b reads the working tree, not the index: `git add` every edit before committing, or its verdict can be wrong. CI's twin is authoritative.
+- **[H-REGISTER-UNSTAGED]** Check 6b reads the working tree: `git add` every edit before committing. CI twin `test/diff_compiler_comment_shout_diff_test.mdk` is authoritative.
 - **[H-LEXTOK]** Stale `.lextok.golden` → `sh test/capture_goldens.sh --frozen lextok`.
 - **[H-LINT-BASELINE]** / **[H-COMMENT-REGISTER]** Per-file count ratchets that may only fall.
   Regenerate with `sh test/diff_compiler_lint_baseline.sh --write` /
