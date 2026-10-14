@@ -7,7 +7,7 @@
 // it imports.  The import object, its shims and the flush discipline are
 // playground/medaka_host.mjs; this file supplies the page side: a per-run in-memory
 // vfs, the throttled posting below, and the wording of a failed run.
-import { createHost, runProgram, MemoryVfs, CapabilityError, OldEntryShape } from './medaka_host.mjs';
+import { createHost, runProgram, MemoryVfs, CapabilityError, OldEntryShape, HostKeyError } from './medaka_host.mjs';
 
 // A wasm stack overflow during the run (mdk_main or a value init) is the guest's recursion depth,
 // worded like the interpreter's E-STACK-OVERFLOW.
@@ -97,7 +97,8 @@ self.onmessage = async function(e) {
   // V8 and JavaScriptCore: "Maximum call stack size exceeded"; Firefox: "too
   // much recursion".
   const overflow = /call stack|stack overflow|too much recursion/i.test(engineMsg);
-  const named = err instanceof CapabilityError || err instanceof OldEntryShape;
+  const named = err instanceof CapabilityError || err instanceof OldEntryShape
+    || err instanceof HostKeyError;
   const message = named ? engineMsg
     : overflow ? STACK_OVERFLOW_MSG
     : coded ? coded

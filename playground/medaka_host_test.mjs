@@ -13,7 +13,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import os from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createHost, runProgram, CapabilityError } from './medaka_host.mjs';
+import { createHost, runProgram, CapabilityError, HostKeyError, SLICES } from './medaka_host.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = dirname(here);
@@ -39,10 +39,12 @@ const PROGRAMS = {
   hello: 'main = putStrLn "hello"\n',
 };
 
+const built = [];
 const work = mkdtempSync(join(os.tmpdir(), 'medaka-host-test-'));
 function build(name, profile) {
   const src = join(work, name + '.mdk');
   const out = join(work, `${name}.${profile.replace('/', '-')}.wasm`);
+  built.push(out);
   writeFileSync(src, PROGRAMS[name]);
   const r = spawnSync(medaka, ['build', '--target', profile, src, '-o', out], {
     env: { ...process.env, MEDAKA_STRICT: '1', MEDAKA_WASM_EMITTER: emitter }, encoding: 'utf8',
@@ -139,6 +141,40 @@ function check(name, ok, detail) {
     last(msgs).type === 'done'
       && streamText(msgs, 'stdout') === "missing: ENOENT: no such file or directory, open 'probe.bin'\n",
     JSON.stringify(msgs));
+}
+
+// (f) A module importing an `env` key no slice lists is refused before instantiation,
+// naming the key, on every host path.  The module is `(import "env" "mdk_fake_key" (func))`.
+{
+  const name = new TextEncoder().encode('mdk_fake_key');
+  const imp = [1, 3, 0x65, 0x6e, 0x76, name.length, ...name, 0, 0];
+  const bytes = new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, 1, 4, 1, 0x60, 0, 0, 2, imp.length, ...imp]);
+  const fake = join(work, 'fake_key.wasm');
+  writeFileSync(fake, bytes);
+  const host = createHost('wasmgc/node');
+  const r = await runProgram(bytes, host);
+  check('(f) runProgram: an unknown env key is a HostKeyError naming it',
+    r.kind === 'error' && r.error instanceof HostKeyError && r.error.message.includes('env.mdk_fake_key'),
+    JSON.stringify({ kind: r.kind, error: r.error && r.error.message }));
+  const rr = spawnSync(process.execPath, [runJs, fake], { encoding: 'utf8' });
+  check('(f) run.js: the unknown key is named',
+    rr.status === 1 && rr.stderr.includes('env.mdk_fake_key') && rr.stderr.includes('wasmgc/node'),
+    JSON.stringify({ stderr: rr.stderr, status: rr.status }));
+  const msgs = await runInWorker(fake);
+  check('(f) worker: the unknown key is named',
+    last(msgs).type === 'error' && last(msgs).message.includes('env.mdk_fake_key'),
+    JSON.stringify(msgs));
+}
+
+// Report only: slices no module built above imports a key of.
+{
+  const imported = new Set();
+  for (const f of built)
+    for (const i of WebAssembly.Module.imports(new WebAssembly.Module(readFileSync(f))))
+      if (i.module === 'env') imported.add(i.name);
+  const unused = Object.entries(SLICES)
+    .filter(([, s]) => !s.keys.some((k) => imported.has(k))).map(([n]) => n);
+  console.log(`unused slices (no probe module imports a key): ${unused.join(', ') || 'none'}`);
 }
 
 rmSync(work, { recursive: true, force: true });

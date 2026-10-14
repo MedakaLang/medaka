@@ -118,6 +118,15 @@ export class CapabilityError extends Error {
 // with `main` inside its start function: instantiating it runs the program, and
 // calling `mdk_main` would run it again.  It is refused before instantiation.
 export class OldEntryShape extends Error {}
+// A module imports an `env` key that no slice of the host's profile lists: the compiler
+// emitted a key the host cannot even withhold, so the profile and the slice set have drifted.
+export class HostKeyError extends Error {
+  constructor(message, keys) {
+    super(message);
+    this.name = 'HostKeyError';
+    this.keys = keys;
+  }
+}
 // Thrown by `mdk_exit` to unwind the guest; the host that called `mdk_main` ends the run.
 export class ExitSignal extends Error {
   constructor(code) { super('exit ' + code); this.code = code; }
@@ -382,6 +391,20 @@ export function createHost(profile, opts = {}) {
   return host;
 }
 
+// Every `env` import key of `module` must be a key some slice lists: the host holds a
+// callable for each of those (real, or the CapabilityError one).  A key in no slice
+// would otherwise surface as a LinkError, or worse, a silently absent adapter.
+export function checkImportKeys(module, host) {
+  const known = new Set(Object.values(SLICES).flatMap((s) => s.keys));
+  const missing = [...new Set(WebAssembly.Module.imports(module)
+    .filter((i) => i.module === 'env' && !known.has(i.name))
+    .map((i) => i.name))];
+  if (missing.length > 0)
+    throw new HostKeyError(
+      `module imports ${missing.map((k) => 'env.' + k).join(', ')}, which no slice of ${host.profile} provides`,
+      missing);
+}
+
 export function makeImports(profile, opts) { return createHost(profile, opts).imports; }
 
 // Compile (unless given a Module), refuse an old entry shape, instantiate, call
@@ -395,6 +418,7 @@ export async function runProgram(wasm, host, opts = {}) {
     if (names.includes('mdk_main') && !names.includes('mdk_entry_split'))
       throw new OldEntryShape(opts.oldEntryMessage
         || 'this module was built by an older compiler: its start function runs main itself; rebuild it');
+    checkImportKeys(module, host);
     const instance = await WebAssembly.instantiate(module, host.imports);
     inProgram = true;
     if (typeof instance.exports.mdk_main === 'function') instance.exports.mdk_main();

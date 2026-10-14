@@ -395,8 +395,8 @@ to stay green with a passing ledgered row, **read**:
 ### 6.2 WH1 and WH3
 
 Each new import lands with a `docs/spec/WASM-SEMANTICS.md` §3 row and an
-implementation in **every** host the shim-parity gate derives
-(`test/diff_compiler_wasm_shim_parity_test.mdk`; today `run.js`, `worker.js`,
+implementation in **every** host the shim-parity gate derived
+(retired; `playground/medaka_host.mjs` is now the one host; formerly `run.js`, `worker.js`,
 `compile.mjs`), or, after T3 (#3668), as a `clock` slice of the one host
 module. Until T3 the three copies drift by construction; the parity gate
 covers only the marked blocks (#449), so the import-key-set half is checked by
@@ -538,7 +538,7 @@ is one packet, one PR, acceptance stated as a check.
 
 | ID | Mission | Surface | Acceptance |
 |---|---|---|---|
-| **WA-1 the clock has a wasm binding** | Lower `wallTimeSec`, `monotonicSec`, `sleepMs` to three host imports; implement the `clock` slice in `run.js`, `worker.js`, `compile.mjs` (`Atomics.wait` form); delete the three `WASM-GAP` rows; promote `llvm/clock_monotonic_sleep`. | `compiler/backend/wasm_emit.mdk`, `compiler/backend/wasm_preamble.mdk`, the three hosts, `test/CAPABILITY-EXCEPTIONS.txt`, `test/engine_divergence.txt`, `docs/spec/WASM-SEMANTICS.md` §3. | The sleep probe of §2 builds and prints the native output under `node test/wasm/run.js`; `diff_compiler_capability_matrix`, `diff_compiler_engines`, `diff_compiler_wasm_shim_parity` green; #2426 closed. |
+| **WA-1 the clock has a wasm binding** | Lower `wallTimeSec`, `monotonicSec`, `sleepMs` to three host imports; implement the `clock` slice in `run.js`, `worker.js`, `compile.mjs` (`Atomics.wait` form); delete the three `WASM-GAP` rows; promote `llvm/clock_monotonic_sleep`. | `compiler/backend/wasm_emit.mdk`, `compiler/backend/wasm_preamble.mdk`, the three hosts, `test/CAPABILITY-EXCEPTIONS.txt`, `test/engine_divergence.txt`, `docs/spec/WASM-SEMANTICS.md` §3. | The sleep probe of §2 builds and prints the native output under `node test/wasm/run.js`; `diff_compiler_capability_matrix`, `diff_compiler_engines`, `wasm_host_profile_agreement` green; #2426 closed. |
 | **WA-2 the async gate has a wasm arm** | `diff_async` runs `overlap_sleeps` and `no_starvation` on wasm with the CPU-time assertion; `engine_fixtures/async_deadlock.mdk`; the gate's native-only declaration narrowed to the net fixtures. | `test/diff_async_test.mdk`, `test/async_fixtures/`, `test/engine_fixtures/`, `test/gates.toml` (then `medaka gate balance && make gen-ci`). | `diff_async` reports the wasm arm per fixture; a host whose `mdk_sleep_ms` returns at once reds it; `ci-gen-drift` green. |
 | **WA-3 the playground runs async** | Ship `time`, `math`, `regex`; COOP/COEP on the playground route; `crossOriginIsolated` check with the named error; `compile.mjs` lists trimmed; the two e2e cases; deploy and verify on the live origin. | `playground/main.js`, `playground/build_playground_wasm.sh`, `playground/_headers`, `playground/compile.mjs`, `playground/worker.js`, `playground/e2e/`, `playground/README.md` § Deploying. | `64_async_defer` prints `3` on https://medaka-lang.dev; the 200 ms and 15 s e2e cases pass; `curl -sI https://medaka-lang.dev/` shows both headers; `/blog/` shows neither. |
 | **WA-4 the entry is `mdk_main`** | `$__init` initializes only; every host calls `exports.mdk_main()`; the `compile.mjs` session caveat removed; WH1 text updated. | `compiler/backend/wasm_emit.mdk` `emitRefInit`, the three hosts (`test/visitor_battery/tools/pg_compile.mjs` and the e2e drivers enter through `compile.mjs`, **read**), `docs/spec/WASM-SEMANTICS.md`. | Every wasm gate green with no fixture change; a module instantiated without calling `mdk_main` prints nothing (pinned). |

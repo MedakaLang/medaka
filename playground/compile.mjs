@@ -47,7 +47,7 @@ const USER_PATH = './main.mdk';
 const USER_MODID = 'main';
 
 // ── host ABI: playground/medaka_host.mjs ─────────────────────────────────────
-import { createHost, COMPILER_HOST, MemoryVfs, bufferSink, ExitSignal } from './medaka_host.mjs';
+import { createHost, COMPILER_HOST, MemoryVfs, bufferSink, ExitSignal, checkImportKeys } from './medaka_host.mjs';
 
 const enc = (s) => new TextEncoder().encode(s);
 
@@ -171,6 +171,7 @@ function runGuest(wasmModuleOrBytes, vfsMap, argv) {
         const names = WebAssembly.Module.exports(module).map((e) => e.name);
         if (names.includes('mdk_main') && !names.includes('mdk_entry_split'))
           throw new Error('playground.wasm was built by an older compiler: its start function runs main itself; rebuild it / reload the page');
+        checkImportKeys(module, host);
         return WebAssembly.instantiate(module, host.imports);
       })
       .then((instance) => {
