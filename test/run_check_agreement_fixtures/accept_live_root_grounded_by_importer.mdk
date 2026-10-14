@@ -1,0 +1,8 @@
+-- DICT-SEMANTICS §6.2 T4/T5: `lib.lrq_a`'s `e20` leaves its `Num` variable live at
+-- its module's end, and this module grounds it to `Float`.  Defaulting and route
+-- resolution run at quiescence, after every module, so the variable stays
+-- `Float` on every verb and nothing defaults it at the library's boundary.
+-- Prints `6.0` ((2.5 + 2.5) + 1).
+import lib.lrq_a.{e20}
+
+main = println (e20 2.5)

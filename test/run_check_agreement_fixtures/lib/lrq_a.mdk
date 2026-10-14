@@ -1,0 +1,5 @@
+-- A live `Num` root this module leaves open: `e20` is a partial application, so
+-- it stays monomorphic for an importer to ground.
+double n = n + n
+inc n = n + 1
+export e20 = double >> inc
