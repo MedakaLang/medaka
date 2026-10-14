@@ -4784,10 +4784,15 @@ assignFromLhs startPos lhs rhs = match flattenFieldPath lhs
 
 -- Block field assignment (`v.x = e`, `a.b.c = e`) is removed: bindings are
 -- immutable and it never typechecked.  The hint names the record-update form.
+-- A capitalised head is a module alias or a constructor, never a record
+-- variable, so it gets the generic immutability hint instead.
 fieldAssignRemovedMsg : String -> List String -> String
 fieldAssignRemovedMsg x fs =
   let path = joinWith "." (x :: fs)
-  "field assignment `\{path} = e` has been removed; build an updated record instead, `\{recordUpdateText x fs}`"
+  if isCtorName x then
+    "field assignment `\{path} = e` has been removed; bindings are immutable, so bind the new value to a new name (a record update `{ r | f = e }` needs a record variable)"
+  else
+    "field assignment `\{path} = e` has been removed; build an updated record instead, `\{recordUpdateText x fs}`"
 
 -- `a`, [b, c] → `{ a | b = { a.b | c = e } }`
 recordUpdateText : String -> List String -> String
