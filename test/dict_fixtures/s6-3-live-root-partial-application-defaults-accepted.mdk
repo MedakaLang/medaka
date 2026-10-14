@@ -1,0 +1,10 @@
+-- §6.3 D1/D3 at quiescence (§6.2 T4): `start = count 5` is a partial application,
+-- so it stays monomorphic and the accumulator's `Num` variable is a live root no
+-- later binding grounds.  It defaults to `Int` at quiescence, and `count`'s
+-- dictionaries route `Num Int` (`check` prints `start : Int -> Int`).
+-- Hand-derived: ACCEPT on all three verbs, prints `x`.
+count n acc = if n == 0 then acc else count (n - 1) (acc + 1)
+start = count 5
+main =
+  let _ = [start]
+  println "x"

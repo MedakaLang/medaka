@@ -854,6 +854,7 @@ defaultEachMemberWith : Option Int -> ArmedGuard -> Map String Unit -> List UObl
 defaultEffectLaunderMsg : String -> List Atom -> String
 defaultGroupNumWith : Option Int -> ArmedGuard -> Map String Unit -> List UObligation -> List Mono -> Unit
 defaultKeepsGoalsSatisfiable : ArmedGuard -> Int -> Bool
+defaultLiveNumRoots : Unit -> Unit
 defaultPatLitVarsIn : List Int -> List (Mono, Int, Option Loc) -> Unit
 defaultReceiverOrdinal : Int
 defaultSourcelessAuthorities : Map Int Unit -> EffRow -> Mono -> Unit
@@ -1016,6 +1017,7 @@ entail : String -> Mono -> String -> ScopeId -> EntailKind -> (Route, List Route
 entailAssum : Mono -> String -> String -> ScopeId -> EntailKind -> Option AssumAnswer
 entailAssumRoute : String -> EntailKind -> Route
 entailAssumVar : Option PredicateRequest -> Mono -> String -> String -> ScopeId -> EntailKind -> Option AssumAnswer
+entailDetermined : String -> String -> ScopeId -> EntailKind -> Option (Route, List Route)
 entailFallback : String -> ScopeId -> Mono -> EntailKind -> Route
 entailInst : String -> Mono -> String -> ScopeId -> String -> EntailKind -> (Route, List Route)
 entailRigidLead : Mono -> String -> ScopeId -> EntailKind -> Option (Route, List Route)
@@ -1186,6 +1188,7 @@ findSigTvMap : String -> List (String, Ty, List (String, Mono)) -> Option (List 
 findTupleCand : String -> List (Mono, String, Option (Loc, String)) -> Option (String, Option (Loc, String))
 findTvName : Int -> List (String, Mono) -> Option String
 findTvarInMono : Mono -> Int -> Option Mono
+findTvarInMonos : List Mono -> Int -> Option Mono
 findTvarN : Mono -> Int -> Option Mono
 finishAssumptionTrace : Unit -> List AssumptionTraceEntry
 finishEffectContract : (Map Int Unit, Map Int Unit) -> Unit
@@ -1910,6 +1913,7 @@ literalDomainTop : List EffParamTy -> Param
 literalRouteHead : String -> String
 liveMemberIds : List Mono -> Map String Unit
 liveNumVarGo : Int -> List UObligation -> Option Mono
+liveRootsOpen : Unit -> Bool
 liveTailId : Ref Effvar -> Int
 liveVarIdsOf : Mono -> List Int
 loadDataUniverse : Int -> Unit
@@ -2624,6 +2628,7 @@ recordImplObligation : String -> Mono -> List (String, Mono) -> Mono
 recordInstantiatedMethodLevelSlots : List PredicateSlot -> Option Loc -> ScopeId -> Unit
 recordInvocationView : TcEnv -> Unit
 recordLetBindType : (LetBind, (String, BindingSummary)) -> Unit
+recordLiveRoots : Unit -> Unit
 recordLocalBind : String -> Option Loc -> BinderId -> Mono -> Unit
 recordLocalQuantified : Scheme -> Unit
 recordLocalRecOcc : String -> EvId -> Unit
@@ -2688,6 +2693,7 @@ reexportedOriginsOf : Decl -> String -> List (String, String)
 reexportedOwner : String -> (String, String, Ident) -> List (String, String)
 reexportedTypeDecl : Int -> List DeclEnvModule -> String -> String -> List Decl
 refStored : Mono -> Mono
+refileDeterminedRows : Unit -> Unit
 refileGoals : GoalWindow -> List Int -> Unit
 refuseBoxedLitPat : String -> String -> Option Loc -> Unit
 refuseOpenedExistentials : Unit -> Unit

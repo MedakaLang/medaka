@@ -11526,6 +11526,14 @@ data GraphRun = GraphRun {
   -- The runtime-type table this graph publishes (`types/runtime_types.mdk`),
   -- holding only materialized rows, so a memo snapshot of it shares no cell.
   binderRows : Ref BinderTypeTable,
+  -- The variables non-generalized top-level members left open at their module's
+  -- end (DICT-SEMANTICS §6.2 T2), which a later module can still ground; those of
+  -- them a `Num` goal constrains; and the goals on the latter, which D3 clause 3
+  -- tests when the graph-end drain defaults them (`defaultLiveNumRoots`).  Every
+  -- drain empties them.
+  liveRoots : Ref (List Mono),
+  liveNumRoots : Ref (List Mono),
+  liveNumGoals : Ref (List UObligation),
 }
 
 -- One binder awaiting the drain: its id, source name, type cell, for a
@@ -11558,6 +11566,9 @@ freshGraphRun _ = GraphRun {
   grants = freshGrantState (),
   binderPending = Ref [],
   binderRows = Ref emptyBinderTypes,
+  liveRoots = Ref [],
+  liveNumRoots = Ref [],
+  liveNumGoals = Ref [],
 }
 
 -- #2705: mint the cells for one `EMethodAt` node and return the id the node
@@ -11754,6 +11765,9 @@ copyGraphRun g = GraphRun {
   grants = copyGrantState g.grants,
   binderPending = Ref g.binderPending.value,
   binderRows = Ref g.binderRows.value,
+  liveRoots = Ref g.liveRoots.value,
+  liveNumRoots = Ref g.liveNumRoots.value,
+  liveNumGoals = Ref g.liveNumGoals.value,
 }
 
 -- Memo snapshots are taken only after `checkGraphFinish` drained the prefix.  At
@@ -33772,11 +33786,39 @@ entail name m encl useScope kind = match entailAssum m encl name useScope kind
     Some hk => entailInst name m encl useScope (headKeyTag hk) kind
     None => match entailRigidLead m encl useScope kind
       Some result => result
-      None =>
-        let result = (entailFallback encl useScope m kind, [])
-        let _ =
-          noteNumericEntailment kind useScope None (fst result) (snd result)
-        result
+      None => match entailDetermined name encl useScope kind
+        Some result => result
+        None =>
+          let result = (entailFallback encl useScope m kind, [])
+          let _ =
+            noteNumericEntailment kind useScope None (fst result) (snd result)
+          result
+
+-- An argument-position occurrence whose goal a boundary determined by its one
+-- unifying instance (DICT-SEMANTICS §3 "Determination by the one unifying
+-- instance") dispatches through that instance, though its lead position is still
+-- a variable that selection by head cannot read.
+entailDetermined : String ->
+  String ->
+  ScopeId ->
+  EntailKind ->
+  Option (Route, List Route)
+entailDetermined name encl useScope (EKArg fullMono omitted) = match (
+  occurrenceParamMonos name fullMono omitted,
+  methodIfaceHere name,
+)
+  (Some goals, Some iface) =>
+    map
+      (row => (
+        RKey
+          (rowRouteKey row)
+          []
+          (selectedCallSupers name (Some row) encl useScope goals),
+        implDictRoutesForRow encl useScope goals row,
+      ))
+      (determinedGoalInstance iface goals)
+  _ => None
+entailDetermined _ _ _ _ = None
 
 -- `inst` for a nested/top goal whose lead position is a variable, when every variable
 -- of the vector is one a closed binder declared (DICT-SEMANTICS §6.1 points 2-3, §3
@@ -36729,7 +36771,9 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
     -- reach codegen through `build`'s own elaboration.  `setNumlitFloats` is not called
     -- here on any driver any more: the Float literal stamp is `SSNumlitFloats`,
     -- first step of the graph-end drain every Module-arm driver now runs.
+    let _ = recordLiveRoots ()
     let _ = judgeQuiescentGoals ()
+    let _ = refileDeterminedRows ()
     let _ = checkCallObligationsU True obUniv perRun.value.implObls.items.value
     let _ = checkCallObligationsU False obUniv perRun.value.obls.items.value
     let _ = settleDeferredPatLits ()
@@ -38403,6 +38447,18 @@ fileDeterminedRow row (first :: rest) = match normalize first
       IdMap.set (tyvarId cell) (entry :: filed) table
   _ => ()
 
+-- Files every commit again under the variable now heading its goal.  A later group
+-- or module that unified the committed variable moved its representative, and a
+-- lookup reads the representative.  Called where the lookups run: the module's end
+-- and each module's stamping in the drain.
+refileDeterminedRows : Unit -> Unit
+refileDeterminedRows _ =
+  let table = perRun.value.determinedRowsRef.value
+  if not (IdMap.isEmpty table) then
+    let entries = reverseL (flatMap identity (IdMap.values table))
+    perRun.value.determinedRowsRef := Tip
+    fold (_ entry => fileDeterminedRow (fst entry) (snd entry)) () entries
+
 -- Every variable of the goal is one the boundary holds rigid, so a commit could
 -- bind none of them.
 goalVarsAllHeld : OrdMap Unit -> List Mono -> Bool
@@ -38620,6 +38676,67 @@ undeterminedVectorVerdict rigidIds liveIds window o =
       reportUndeterminedGoal rigidIds window o.pred.iface args o.loc
     else
       reportMixedGoalAmbiguity rigidIds window o.pred.iface args o.loc
+
+-- Records, at the module's end, the variables its non-generalized members still
+-- leave open, for the graph-end drain (`GraphRun.liveRoots`).
+recordLiveRoots : Unit -> Unit
+recordLiveRoots _ =
+  let members = perRun.value.liveMemberMonosRef.value
+  let liveIds = dedupI (flatMap liveVarIdsOf members)
+  if isNonEmptyL liveIds then
+    let goals =
+      perRun.value.implObls.items.value ++ perRun.value.obls.items.value
+    let numObls =
+      perRun.value.implObls.items.value
+        ++ numCallObls perRun.value.obls.items.value
+    let numIds =
+      filterList (i => containsI i liveIds) (numConstrainedIds numObls)
+    let numRoots = filterMap (i => liveNumVarGo i numObls) (dedupI numIds)
+    let g = graphRun.value
+    g.liveRoots :=
+      filterMap (findTvarInMonos members) liveIds ++ g.liveRoots.value
+    if isNonEmptyL numRoots then
+      g.liveNumRoots := numRoots ++ g.liveNumRoots.value
+      g.liveNumGoals :=
+        filterList
+            (o => anyIn (flatMap monoUnboundIds (uOblArgs o)) numIds)
+            goals
+          ++ g.liveNumGoals.value
+
+findTvarInMonos : List Mono -> Int -> Option Mono
+findTvarInMonos [] _ = None
+findTvarInMonos (m :: rest) i = match findTvarInMono m i
+  Some t => Some t
+  None => findTvarInMonos rest i
+
+-- Some live root recorded since the last drain still has a variable a later module
+-- could ground.
+liveRootsOpen : Unit -> Bool
+liveRootsOpen _ =
+  anyList (m => isNonEmptyL (monoUnboundIds m)) graphRun.value.liveRoots.value
+
+-- Quiescence defaulting (DICT-SEMANTICS §6.3 D1, §6.2 T4): a live `Num` root no
+-- module of the graph grounded defaults to `Int`, unless D3 clause 3 withholds it.
+-- Every group of every module has closed, so no channel is left to determine it.
+defaultLiveNumRoots : Unit -> Unit
+defaultLiveNumRoots _ =
+  let g = graphRun.value
+  let roots = g.liveNumRoots.value
+  if isNonEmptyL roots then
+    let guard = armNumGuard NumGuard {
+      ngGoals = g.liveNumGoals.value,
+      ngRigidIds = omEmpty,
+      ngOuterBelow = None,
+    }
+    fold
+      (_ m => match normalize m
+        TVar cell => groundOrWithhold guard (tyvarId cell) m
+        _ => ())
+      ()
+      roots
+  g.liveRoots := []
+  g.liveNumRoots := []
+  g.liveNumGoals := []
 
 -- The verdict on the goals boundaries left to quiescence, once every group of the
 -- module has closed: no later group is left to ground their variables, so each is
@@ -53596,7 +53713,10 @@ chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) 
   let (key, keys2) = match keys
     k :: ks => (k, ks)
     [] => (None, [])
-  match key
+  -- A live root still open is a later module's to ground, so this prefix is not
+  -- closed and records no step: the step's drain would stamp its goals unground.
+  let stepKey = if liveRootsOpen () then None else key
+  match stepKey
     None =>
       -- No key for this module: nothing after it can be resumed either, so the rest
       -- records no step and this is a tail call.  A frame waiting on the rest would
@@ -55771,6 +55891,7 @@ drainStampQueue _ =
   let savedToggles = toggles.value
   let savedModule = driverState.value.currentModuleRef.value
   let savedSupers = driverState.value.superDeclsRef.value
+  let _ = defaultLiveNumRoots ()
   let _ = runStampCtxs ctxs
   let holes = judgeEvidence ctxs
   let _ = materializeBinderTypes ()
@@ -55937,6 +56058,7 @@ runStampCtxs (ctx :: rest) =
   -- (`elabModuleStamp` for the core pass, which is the only module still on it).
   driverState.value.currentModuleRef := ctx.scModule
   driverState.value.superDeclsRef := ctx.scSuperDecls
+  let _ = refileDeterminedRows ()
   let _ = runStampSteps ctx moduleStampOrder
   let _ = recordEvidence ctx.scGoals
   runStampCtxs rest

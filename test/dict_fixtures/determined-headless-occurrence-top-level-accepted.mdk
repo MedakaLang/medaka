@@ -1,0 +1,19 @@
+-- §3 "Determination by the one unifying instance": `probe`'s `pick` occurrence
+-- poses `Pick ?a ?b ?c` with every position a variable.  `impl Pick a a a` is the
+-- one instance that unifies with it, so the boundary commits the goal to it, and
+-- the occurrence dispatches through that instance although its lead position is
+-- still a variable.  `main`'s use unifies the committed variable again, so the
+-- route reads the commit through the variable's representative.  Hand-derived:
+-- ACCEPT on all three verbs, prints `ok` (`probe` is never evaluated).
+anyv : Unit -> a
+anyv u = anyv u
+same : a -> a -> a
+same x _ = x
+interface Pick a b c where
+  pick : a -> b -> c
+impl Pick a a a where
+  pick x y = x
+probe = same (pick (anyv ()) (anyv ())) (anyv ())
+main =
+  let _ = if False then [probe] else []
+  println "ok"

@@ -5590,6 +5590,39 @@ table = [
     pinned = "bools\n",
     codes = [Absent "T-CONFLICTING-IMPL"],
   },
+  Row {
+    entry = "s6-3-live-root-composition-defaults-accepted.mdk",
+    label =
+      "§6.3 D1/D3 at quiescence (§6.2 T4): a value-restricted composition leaves its `Num` variable live, nothing grounds it, so the graph-end drain defaults it to `Int` and every dictionary routes `Num Int`; the head left the slots unrouted and rejected, and the base built binary panicked once the binding was referenced",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "ok\n",
+    codes = [],
+  },
+  Row {
+    entry = "s6-3-live-root-partial-application-defaults-accepted.mdk",
+    label =
+      "§6.3 D1/D3 at quiescence (§6.2 T4): the partial application `count 5` leaves the accumulator's `Num` variable live, and the graph-end drain defaults it to `Int`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "x\n",
+    codes = [],
+  },
+  Row {
+    entry = "determined-headless-occurrence-top-level-accepted.mdk",
+    label =
+      "§3 Determination by the one unifying instance: an argument-position occurrence whose goal is committed to the headless `impl Pick a a a` dispatches through it, read through the representative after a later group unifies the committed variable",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "ok\n",
+    codes = [],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -5601,7 +5634,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 496
+tableRows = 499
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

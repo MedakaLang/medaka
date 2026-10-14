@@ -1,0 +1,14 @@
+-- §6.3 D1/D3 at quiescence (§6.2 T4): `e20 = double >> inc` is a partial
+-- application, so HM-CORE gen-value keeps it monomorphic, and its `Num` variable
+-- survives its group as a live root that no later binding grounds.  `Num` is its
+-- only predicate and nothing outlives the graph to determine it, so it defaults
+-- to `Int` at quiescence and every `double` and `inc` dictionary routes `Num Int`
+-- (`check` prints `e20 : Int -> Int`).  Referencing the bindings keeps them
+-- through emission.  Hand-derived: ACCEPT on all three verbs, prints `ok`.
+double n = n + n
+inc n = n + 1
+e20 = double >> inc
+e21 = inc << double
+main =
+  let _ = [e20, e21]
+  println "ok"
