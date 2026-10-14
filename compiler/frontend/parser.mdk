@@ -4785,7 +4785,7 @@ assignFromLhs startPos lhs rhs = match flattenFieldPath lhs
 -- Block field assignment (`v.x = e`, `a.b.c = e`) is removed: bindings are
 -- immutable and it never typechecked.  A lowercase head is a record variable,
 -- so the hint names its record-update form.  A capitalised head is a module
--- alias or a constructor, never a record variable, so it gets the generic hint.
+-- alias (lowercase aliases do not parse) or a constructor, so it gets the generic hint.
 fieldAssignRemovedMsg : String -> List String -> String
 fieldAssignRemovedMsg x fs =
   let path = joinWith "." (x :: fs)
