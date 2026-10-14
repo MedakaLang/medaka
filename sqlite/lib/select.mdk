@@ -16,7 +16,9 @@
 -- Names are deliberately OFF the prelude (`eGt`/`eEq`/`eAnd`/...) so they never
 -- collide with `Ord`/`Eq`/`Bool` methods (`gt`/`eq`/`and`/...).
 
-import lib.recordfmt.{Cell(..), nthCell, intCell, cellI64, textView}
+import lib.recordfmt.{
+  Cell(..), nthCell, intCell, cellI64, textView, compareBytesLex
+}
 import lib.wideint as W
 import i64
 import lib.sqlite.{
@@ -1969,7 +1971,7 @@ cmpOrder a b = match (textView a, textView b)
   (CFloat x, _) => map (y => W.compareRealInt x y) (cellI64 b)
   (_, CFloat y) => map (x => W.compareFloat x y) (cellI64 a)
   (CText x, CText y) => Some (compare x y)
-  (CBlob x, CBlob y) => Some (compare (arrayLength x) (arrayLength y))
+  (CBlob x, CBlob y) => Some (compareBytesLex x y)
   _ => match (cellI64 a, cellI64 b)
     (Some x, Some y) => Some (compare x y)
     _ => None
@@ -2383,10 +2385,8 @@ isSingleTableSelect (Select { fromAlias = fa, joins = js }) = match (fa, js)
 --
 -- That subset property holds only because `cmpOrder` (the filter's comparator)
 -- and `compareCellsSqlite` (the seek's comparator, `lib.dbwriter`) agree on
--- equality for every `seekableTarget`; the blob exclusion below is the one
--- known instance where they don't, not the whole of the rule — a future
--- change to either comparator must recheck this agreement before widening
--- `seekableTarget`.
+-- equality for every `seekableTarget`; a future change to either comparator
+-- must recheck this agreement before widening `seekableTarget`.
 -- ---------------------------------------------------------------------------
 
 -- | How a single-table query's candidate rows are produced.  `PlanSeekRowid`
@@ -2457,11 +2457,9 @@ planForEquality createSql col lit =
 
 -- | Which literal targets a plan may seek on.
 --
---   Blobs may not: `cmpOrder` (this file, the filter's comparison) orders two
---   blobs by BYTE COUNT alone, while the index seek compares byte content.  A
---   planned blob equality would therefore return strictly fewer rows than the
---   filter admits — the two paths disagree, and it is the filter that is wrong.
---   The exclusion lifts when the filter's blob comparison is fixed.
+--   Blobs are not planned: no check yet compares a planned blob equality with a
+--   full scan, so the scan stays the only blob path.  Under-planning is always
+--   safe (see the rule above).
 seekableTarget : Literal -> Bool
 seekableTarget (LBlob _) = False
 seekableTarget _ = True
@@ -3354,7 +3352,7 @@ cellOrder (CFloat x) (CInt y) = W.compareRealInt x (W.widen y)
 cellOrder (CInt64 x) (CFloat y) = W.compareFloat x y
 cellOrder (CFloat x) (CInt64 y) = W.compareRealInt x y
 cellOrder (CText x) (CText y) = compare x y
-cellOrder (CBlob x) (CBlob y) = compare (arrayLength x) (arrayLength y)
+cellOrder (CBlob x) (CBlob y) = compareBytesLex x y
 cellOrder a b = match (cellI64 a, cellI64 b)
   (Some x, Some y) => compare x y
   _ => compare (cellTypeRank a) (cellTypeRank b)

@@ -106,7 +106,7 @@ import lib.overflow.{
   indexMaxLocalPayload as ovflIndexMaxLocalPayload,
 }
 import lib.recordenc.{encodeRecord}
-import lib.recordfmt.{Cell(..), cellI64, cellTextBytes}
+import lib.recordfmt.{Cell(..), cellI64, cellTextBytes, compareBytesLex}
 import lib.wideint as W
 import i64
 
@@ -1028,24 +1028,6 @@ compareSameClass a b = match (cellTextBytes a, cellTextBytes b)
   _ => match (cellI64 a, cellI64 b)
     (Some x, Some y) => compare x y
     _ => Eq
-
--- | Lexicographic (memcmp) comparison of two byte arrays: shorter-prefix wins a
---   tie, exactly as SQLite's BINARY collation compares text/blob bodies.
-compareBytesLex : Array Int -> Array Int -> Ordering
-compareBytesLex a b = compareBytesGo a b 0 (arrayLength a) (arrayLength b)
-
-compareBytesGo : Array Int -> Array Int -> Int -> Int -> Int -> Ordering
-compareBytesGo a b i la lb =
-  if i >= la && i >= lb then
-    Eq
-  else if i >= la then
-    Lt
-  else if i >= lb then
-    Gt
-  else if a[i] /= b[i] then
-    compare a[i] b[i]
-  else
-    compareBytesGo a b (i + 1) la lb
 
 -- | Order two index entries `(keyCell, rowid)`: by key first, then by rowid.
 --   Because every row's rowid is distinct, this is a TOTAL order, so the sort is

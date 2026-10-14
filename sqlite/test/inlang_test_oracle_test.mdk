@@ -36,7 +36,7 @@ import test_process.{
 -- file:floor pairs — floor = the assertion count committed today. Adding
 -- tests only raises the real count (>= floor still passes); removing them,
 -- or a discovery regression, drops below the floor and fails. Raise a floor
--- when you add tests; never regenerate all nine from a fresh run.
+-- when you add tests; never regenerate all ten from a fresh run.
 suites : List (String, Int)
 suites = [
   ("expr_test", 19),
@@ -48,6 +48,7 @@ suites = [
   ("rowid_seek_test", 5),
   ("index_seek_test", 15),
   ("plan_test", 27),
+  ("blob_compare_test", 3),
 ]
 
 rosterNames : List String
@@ -301,6 +302,9 @@ test "sqlite/test/index_seek_test.mdk executed >= 15 assertions" =
 
 test "sqlite/test/plan_test.mdk executed >= 27 assertions" =
   floorExpectation "plan_test"
+
+test "sqlite/test/blob_compare_test.mdk executed >= 3 assertions" =
+  floorExpectation "blob_compare_test"
 
 -- # Non-vacuity
 
