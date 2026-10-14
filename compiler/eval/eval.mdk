@@ -1438,7 +1438,8 @@ applyValues v (x :: rest) = applyValues (apply v x) rest
 -- carrying the impl's own requires dicts and its supers recursively (Phase 83/84
 -- #5); RDict/RDictFwd forward the enclosing dict param in full; RProj reads a
 -- super (or, past the supers, a `requires` dictionary) out of the dictionary its
--- inner route denotes; RNone is a no-op dict.
+-- inner route denotes.  RNone is no dictionary: the checker rejects every
+-- accepted-program hole (T-UNROUTED-DISPATCH), so none reaches here (#3715).
 export
 dictOfRoute : EvalEnv (Value e) -> Route -> <e> Value e
 dictOfRoute env (RKey key reqs sups) =
@@ -1450,7 +1451,9 @@ dictOfRoute env (RDictFwd d) = match lookupEnv env d
   VDict key reqs sups => VDict key reqs sups
   _ => VDict "" [] []
 dictOfRoute env (RProj r path) = projectDict (dictOfRoute env r) path
-dictOfRoute _ RNone = VDict "" [] []
+dictOfRoute _ RNone =
+  panic
+    "unreachable: an unrouted dictionary slot is rejected at check (T-UNROUTED-DISPATCH, #3715)"
 -- S-1: an RLocal route's OWN dicts (the shadowing standalone's `=>` constraints) are
 -- applied by evalMethodAt's RLocal arm via applyDicts — they are the call's leading
 -- dict ARGS, not a dict witness FOR this route.  So as a *witness* RLocal is still the
@@ -1479,9 +1482,9 @@ methodAtNarrow : EvalEnv (Value e) ->
   Value e ->
   Route ->
   <e> (Value e, List (Value e))
--- RNone is "typecheck could not key this occurrence": the value is left for arg-tag
--- fallback.  (A sibling call inside an interface default is routed to the body's
--- receiver, never RNone — see `inheritedDefaultEntries`.)
+-- RNone is a method occurrence with no interface word, a standalone: the value is
+-- left for arg-tag dispatch.  An occurrence that names its interface never has it
+-- (`requireMethodRoute`).
 methodAtNarrow _ _ v RNone = (v, [])
 methodAtNarrow env method v (RKey key _ _) = (narrowMethod env method v key, [])
 -- ARGSTAMP-UNIFY Phase 2+3 / genuine #21: under eval dict-threading an arg-position
@@ -1513,18 +1516,28 @@ methodAtNarrow _ _ v (RLocal _ _) = (v, [])
 methodAtNarrow _ _ _ (RScalar _) =
   panic "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"
 
+-- The route an interface-naming method occurrence carries is an instance or a
+-- given.  `RNone` there is a hole the checker rejects (T-UNROUTED-DISPATCH, #3715),
+-- and the engine must not fill it by narrowing on the argument's tag.
+export
+requireMethodRoute : String -> String -> Route -> Route
+requireMethodRoute name iface RNone =
+  if iface == "" then
+    RNone
+  else
+    panic
+      "unreachable: method `\{name}` of `\{iface}` has no route; check rejects it (T-UNROUTED-DISPATCH, #3715)"
+requireMethodRoute _ _ route = route
+
 oneOrMultiV : List (Value e) -> List (Value e) -> Value e
 oneOrMultiV [v] _ = v
 oneOrMultiV [] original = VMulti original
 oneOrMultiV many _ = VMulti many
 
--- TYPECHECK-AUDIT C7: a candidate matches a route string when the string equals
--- EITHER its head tycon (field 1, the args-free RHeadKey-analog route) OR its
--- canonical impl key (field 2, the ground route the typechecker stamps).  The two
--- string spaces are disjoint — a bare head tycon ("Pair") never contains "|",
--- while a canonical key always does — so this can't cross-match.  This is what
--- lets two same-head non-overlapping impls (Pair Int Bool vs Pair Bool Int)
--- narrow to the one the checker picked instead of first-impl-wins.
+-- A candidate matches a route string only when the string is its canonical impl
+-- key, the ground route the typechecker stamps.  A bare head tycon names no
+-- instance, so it matches nothing.  That keeps two same-head non-overlapping impls
+-- (Pair Int Bool vs Pair Bool Int) distinct.
 export
 hasKey : String -> Value e -> Bool
 hasKey key (VTypedImpl _ k _ _ _) = k == key
@@ -1797,8 +1810,9 @@ evalMethodAt env name _ (RLocal sym dicts) _ _ =
   applyDicts env (lookupEnv env (if sym == "" then name else sym)) dicts
 evalMethodAt env name iface route implRoutes methodRoutes =
   let lm = narrowToIface iface (lookupMethod env name)
-  let (narrowed, fwdReqs0) = methodAtNarrow env name lm route
-  applyMethodDicts env name route narrowed fwdReqs0 implRoutes methodRoutes
+  let routed = requireMethodRoute name iface route
+  let (narrowed, fwdReqs0) = methodAtNarrow env name lm routed
+  applyMethodDicts env name routed narrowed fwdReqs0 implRoutes methodRoutes
 
 -- The candidates of the interface an occurrence resolved to.  Every interface whose
 -- method is spelled [name] installs under that one name, so the coalesced `VMulti`
