@@ -6387,7 +6387,7 @@ aliasFixturePubM = DTypeAlias {
 aliasFixtureAttribCore : Decl
 aliasFixtureAttribCore =
   DAttrib
-    [AttrDeprecated "old"]
+    [AttrDeprecated (Some "old")]
     DTypeAlias {
       tyAliasPub = True,
       tyAliasName = "AttribCore",
@@ -57721,7 +57721,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "aliasFixturePubM" (TyCon "Decl"))
 (DFunDef false "aliasFixturePubM" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "PubM"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "tyAliasNameLoc" (EVar "None")))))
 (DTypeSig false "aliasFixtureAttribCore" (TyCon "Decl"))
-(DFunDef false "aliasFixtureAttribCore" () (EApp (EApp (EVar "DAttrib") (EListLit (EApp (EVar "AttrDeprecated") (ELit (LString "old"))))) (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "AttribCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))) (fa "tyAliasNameLoc" (EVar "None"))))))
+(DFunDef false "aliasFixtureAttribCore" () (EApp (EApp (EVar "DAttrib") (EListLit (EApp (EVar "AttrDeprecated") (EApp (EVar "Some") (ELit (LString "old")))))) (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "AttribCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))) (fa "tyAliasNameLoc" (EVar "None"))))))
 (DTypeSig false "aliasFixtureEnv" (TyCon "DataEnv"))
 (DFunDef false "aliasFixtureEnv" () (EApp (EVar "buildDataEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "core"))) (EListLit (EVar "aliasFixturePubCore") (EVar "aliasFixturePrivCore") (EVar "aliasFixtureAttribCore"))) (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 1))) (ELit (LString "m"))) (EListLit (EVar "aliasFixturePubM"))))))
 (DTypeSig false "aliasNamesAt" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))
@@ -67122,7 +67122,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "aliasFixturePubM" (TyCon "Decl"))
 (DFunDef false "aliasFixturePubM" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "PubM"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))) (fa "tyAliasNameLoc" (EVar "None")))))
 (DTypeSig false "aliasFixtureAttribCore" (TyCon "Decl"))
-(DFunDef false "aliasFixtureAttribCore" () (EApp (EApp (EVar "DAttrib") (EListLit (EApp (EVar "AttrDeprecated") (ELit (LString "old"))))) (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "AttribCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))) (fa "tyAliasNameLoc" (EVar "None"))))))
+(DFunDef false "aliasFixtureAttribCore" () (EApp (EApp (EVar "DAttrib") (EListLit (EApp (EVar "AttrDeprecated") (EApp (EVar "Some") (ELit (LString "old")))))) (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "AttribCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasParamKinds" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))) (fa "tyAliasNameLoc" (EVar "None"))))))
 (DTypeSig false "aliasFixtureEnv" (TyCon "DataEnv"))
 (DFunDef false "aliasFixtureEnv" () (EApp (EVar "buildDataEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "core"))) (EListLit (EVar "aliasFixturePubCore") (EVar "aliasFixturePrivCore") (EVar "aliasFixtureAttribCore"))) (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 1))) (ELit (LString "m"))) (EListLit (EVar "aliasFixturePubM"))))))
 (DTypeSig false "aliasNamesAt" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))

@@ -1,5 +1,5 @@
 # META
-source_lines=406
+source_lines=407
 stages=DESUGAR,MARK
 # SOURCE
 -- Structural S-expression dump of the AST. Tags are the
@@ -350,7 +350,8 @@ declSexp (DImpl { pub, iface, tys, reqs, methods }) = node "DImpl" [
 ]
 
 attrSexp : Attr -> String
-attrSexp (AttrDeprecated s) = node "AttrDeprecated" [escStr s]
+attrSexp (AttrDeprecated (Some s)) = node "AttrDeprecated" [escStr s]
+attrSexp (AttrDeprecated None) = "AttrDeprecated"
 attrSexp AttrInline = "AttrInline"
 attrSexp AttrMustUse = "AttrMustUse"
 attrSexp AttrNoInline = "AttrNoInline"
@@ -576,7 +577,8 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "declSexp" ((PRec "DInterface" ((rf "pub" None) (rf "def" None) (rf "name" None) (rf "typarams" None) (rf "supers" None) (rf "methods" None)) false)) (EApp (EApp (EVar "node") (ELit (LString "DInterface"))) (EListLit (EApp (EVar "boolStr") (EVar "pub")) (EApp (EVar "boolStr") (EVar "def")) (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "escStr")) (EVar "typarams"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "superSexp")) (EVar "supers"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "ifaceMethodSexp")) (EVar "methods"))))))
 (DFunDef false "declSexp" ((PRec "DImpl" ((rf "pub" None) (rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "methods" None)) false)) (EApp (EApp (EVar "node") (ELit (LString "DImpl"))) (EListLit (EApp (EVar "boolStr") (EVar "pub")) (EApp (EVar "escStr") (EVar "iface")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "tySexp")) (EVar "tys"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "requireSexp")) (EVar "reqs"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "implMethodSexp")) (EVar "methods"))))))
 (DTypeSig false "attrSexp" (TyFun (TyCon "Attr") (TyCon "String")))
-(DFunDef false "attrSexp" ((PCon "AttrDeprecated" (PVar "s"))) (EApp (EApp (EVar "node") (ELit (LString "AttrDeprecated"))) (EListLit (EApp (EVar "escStr") (EVar "s")))))
+(DFunDef false "attrSexp" ((PCon "AttrDeprecated" (PCon "Some" (PVar "s")))) (EApp (EApp (EVar "node") (ELit (LString "AttrDeprecated"))) (EListLit (EApp (EVar "escStr") (EVar "s")))))
+(DFunDef false "attrSexp" ((PCon "AttrDeprecated" (PCon "None"))) (ELit (LString "AttrDeprecated")))
 (DFunDef false "attrSexp" ((PCon "AttrInline")) (ELit (LString "AttrInline")))
 (DFunDef false "attrSexp" ((PCon "AttrMustUse")) (ELit (LString "AttrMustUse")))
 (DFunDef false "attrSexp" ((PCon "AttrNoInline")) (ELit (LString "AttrNoInline")))
@@ -775,7 +777,8 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "declSexp" ((PRec "DInterface" ((rf "pub" None) (rf "def" None) (rf "name" None) (rf "typarams" None) (rf "supers" None) (rf "methods" None)) false)) (EApp (EApp (EVar "node") (ELit (LString "DInterface"))) (EListLit (EApp (EVar "boolStr") (EVar "pub")) (EApp (EVar "boolStr") (EVar "def")) (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "escStr")) (EVar "typarams"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "superSexp")) (EVar "supers"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "ifaceMethodSexp")) (EVar "methods"))))))
 (DFunDef false "declSexp" ((PRec "DImpl" ((rf "pub" None) (rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "methods" None)) false)) (EApp (EApp (EVar "node") (ELit (LString "DImpl"))) (EListLit (EApp (EVar "boolStr") (EVar "pub")) (EApp (EVar "escStr") (EVar "iface")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "tySexp")) (EVar "tys"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "requireSexp")) (EVar "reqs"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "implMethodSexp")) (EVar "methods"))))))
 (DTypeSig false "attrSexp" (TyFun (TyCon "Attr") (TyCon "String")))
-(DFunDef false "attrSexp" ((PCon "AttrDeprecated" (PVar "s"))) (EApp (EApp (EVar "node") (ELit (LString "AttrDeprecated"))) (EListLit (EApp (EVar "escStr") (EVar "s")))))
+(DFunDef false "attrSexp" ((PCon "AttrDeprecated" (PCon "Some" (PVar "s")))) (EApp (EApp (EVar "node") (ELit (LString "AttrDeprecated"))) (EListLit (EApp (EVar "escStr") (EVar "s")))))
+(DFunDef false "attrSexp" ((PCon "AttrDeprecated" (PCon "None"))) (ELit (LString "AttrDeprecated")))
 (DFunDef false "attrSexp" ((PCon "AttrInline")) (ELit (LString "AttrInline")))
 (DFunDef false "attrSexp" ((PCon "AttrMustUse")) (ELit (LString "AttrMustUse")))
 (DFunDef false "attrSexp" ((PCon "AttrNoInline")) (ELit (LString "AttrNoInline")))

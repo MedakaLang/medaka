@@ -350,10 +350,10 @@ import tools.check_policy.{
 
 -- FLAG for user confirmation: exact version NUMBER not yet confirmed — using
 -- "0.1.0-preview" (the 0.1.0 public-preview target named in AGENTS.md)
--- pending sign-off. No existing version constant was found elsewhere in
--- compiler/ (lsp.mdk hardcodes a literal "0.1.0" for its own protocol reply;
--- new_cmd.mdk hardcodes a literal "0.1.0" into scaffolded medaka.toml — neither
--- is a shared constant this could reuse).
+-- pending sign-off. In compiler/, the only other copy of this literal is
+-- `serverVersion` in compiler/entries/lsp_main.mdk, which must match it; lsp.mdk
+-- and mcp.mdk take the value as a parameter. (new_cmd.mdk hardcodes a literal
+-- "0.1.0" into scaffolded medaka.toml.)
 medakaVersion : String
 medakaVersion = "0.1.0-preview"
 
@@ -1233,7 +1233,7 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
 
         (Some errText, _, _, _) =>
           let _ = emitAbortTotal ()
-          let _ = putStr errText
+          let _ = putStrLn errText
           exit 1
         (None, projWarns, hiddenCount, perMod) =>
           let report = checkModulesReport exWarns perMod
@@ -4714,7 +4714,7 @@ runLspServerFromEnv _ =
   let r = do
     rsrc <- readPreludeFile rtPath
     csrc <- readPreludeFile corePath
-    Ok (runServer rsrc csrc)
+    Ok (runServer rsrc csrc medakaVersion)
   match r
     Err msg => dieMsg msg
     Ok v => v

@@ -1029,6 +1029,14 @@ commonEscDecode e
   | isQuote e = Some "\""
   | otherwise = None
 
+-- The diagnostic for a backslash-letter that no string form decodes. Every
+-- string scanner (plain, triple-quoted, and both interpolation continuations)
+-- reports it through this one text, so the spelling and the message cannot
+-- drift apart between them.
+invalidStrEscMsg : Char -> String
+invalidStrEscMsg e =
+  "invalid escape sequence `\\\{charToStr e}`; valid escapes are \\n \\t \\r \\0 \\\\ \\\" \\u{...}"
+
 scanStrEsc : Array Char ->
   Int ->
   Int ->
@@ -1048,10 +1056,7 @@ scanStrEsc src len p startQ depth id acc e
     lexErrorTok p (bareUnicodeEscMsgStr src len p)
   | otherwise = match commonEscDecode e
     Some s => scanStr src len (p + 2) startQ depth id (acc ++ s)
-    None =>
-      lexErrorTok
-        p
-        "invalid escape sequence `\\\{charToStr e}`; valid escapes are \\n \\t \\r \\0 \\\\ \\\" \\u{...}"
+    None => lexErrorTok p (invalidStrEscMsg e)
 
 -- string part after an interpolation's `}` closes (`\{`→INTERP_MID, `"`→INTERP_END)
 scanInterpCont : Array Char -> Int -> Int -> Int -> String -> List RawTok
@@ -1085,7 +1090,9 @@ scanInterpEsc src len p depth acc e
     None => lexErrorTok p (uniEscErr src len p)
     Some c =>
       scanInterpCont src len (uniEscEnd src len p) depth (acc ++ charToStr c)
-  | otherwise = scanInterpCont src len (p + 2) depth (acc ++ charToStr e)
+  | isBareUnicodeEsc src len p e =
+    lexErrorTok p (bareUnicodeEscMsgStr src len p)
+  | otherwise = lexErrorTok p (invalidStrEscMsg e)
 
 -- ── Triple-quoted strings (`""" … """`) ─────────────────────────────────
 -- Only `"""` closes (single/double
@@ -1206,8 +1213,9 @@ scanTripleEsc src len p startQ depth id leadingNl acc e
         id
         leadingNl
         (acc ++ charToStr c)
-  | otherwise =
-    scanTriple src len (p + 2) startQ depth id leadingNl (acc ++ charToStr e)
+  | isBareUnicodeEsc src len p e =
+    lexErrorTok p (bareUnicodeEscMsgStr src len p)
+  | otherwise = lexErrorTok p (invalidStrEscMsg e)
 
 -- string part after an interpolation opened from a triple string closes
 -- (`"""`→INTERP_END, `\{`→INTERP_MID re-marking id = -1). Emitted RAW (no
@@ -1265,7 +1273,9 @@ scanInterpTripleEsc src len p depth acc e
         (uniEscEnd src len p)
         depth
         (acc ++ charToStr c)
-  | otherwise = scanInterpTripleCont src len (p + 2) depth (acc ++ charToStr e)
+  | isBareUnicodeEsc src len p e =
+    lexErrorTok p (bareUnicodeEscMsgStr src len p)
+  | otherwise = lexErrorTok p (invalidStrEscMsg e)
 
 -- Strip the common leading indentation from a multiline string that opens with
 -- '\n'; blank lines are ignored when
@@ -1736,14 +1746,9 @@ uHexEnd src len p
 
 -- ── bare `\uXXXX` unicode escape (no braces) — #515 ─────────────────────────
 -- `isUnicodeEsc` only ever recognizes `\u{` — the ONE spelling Medaka accepts.
--- A `\u` immediately followed by a hex digit instead (`\u0041`, the
--- fixed-width form other languages use) falls through every branch above and
--- lands on the SAME generic "invalid escape sequence '\u'" every other
--- unrecognized escape letter gets, which never says the accepted spelling
--- exists at all. An agent that needed a unicode escape, hit that generic
--- message, and concluded the feature didn't exist hand-built a 621-case test
--- battery out of raw char codes instead of the one line `"\u{41}"` would have
--- been (#515).
+-- A bare `\u` followed by four hex digits (the fixed-width form other languages
+-- use) is not Medaka syntax. It gets a diagnostic of its own that names the braced
+-- spelling.
 --
 -- This is deliberately its OWN diagnostic (`L-BARE-UNICODE-ESCAPE`), not
 -- `L-BAD-UNICODE-ESCAPE`: that code is for a `\u{…}` the lexer already opened

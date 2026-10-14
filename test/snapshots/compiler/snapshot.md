@@ -1,5 +1,5 @@
 # META
-source_lines=1480
+source_lines=1476
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/snapshot.mdk — `medaka snapshot`, the in-process snapshot runner
@@ -365,17 +365,12 @@ blockOf ls = "\{joinNl ls}\n"
 -- byte-identity check caught the blanket normalizer red-handed on TWO of the
 -- compiler's own sources:
 --
---   • driver/build_cmd.mdk holds the literal mktemp template "/tmp/medaka_build_XXXXXX",
---     which normalized to `(ELit (LString "<TMP>"))` in its PARSE/DESUGAR/MARK dumps —
---     silently blinding those sections to the template.
---   • THIS FILE holds the bare prefix `tmpPrefix = "/tmp/medaka_build_"`, and `normTmp`'s
---     unconditional `drop 6` (which assumes a 6-char mktemp suffix always follows) ate
---     the closing `")))` instead, emitting a TRUNCATED, structurally invalid s-expr line:
---         (DFunDef false "tmpPrefix" () (ELit (LString "<TMP>
+--   • driver/build_cmd.mdk's mktemp template is `joinPath root "medaka_build_XXXXXX"`,
+--     which has no leading slash, so the needle below does not match it.
 --
--- A normalizer that can corrupt the thing it normalizes must not be pointed at anything
--- it is not needed for.  (`drop 6` is still unconditional inside `normTmp` — it is sound
--- for a REAL mktemp path, which is all it now ever sees.)
+-- `normTmp` is unconditional: `drop 6` assumes a 6-char mktemp suffix always follows the
+-- needle, which holds for the paths a run section prints.  A normalizer that can corrupt
+-- the thing it normalizes must not be pointed at anything it is not needed for.
 --
 -- NOT included: any symbol-hash / gensym rule.  The self-compile fixpoint reproduces
 -- byte-identical IR, which is direct evidence that emission is deterministic per
@@ -410,8 +405,9 @@ normRoot root line =
   else
     line
 
--- `mktemp -d /tmp/medaka_build_XXXXXX` — the suffix is exactly 6 random chars, so the
--- random run has a known length and needs no scanner.
+-- `<dir>/medaka_build_XXXXXX`: the directory is kept and only the random suffix becomes
+-- `<TMP>`.  The suffix is exactly 6 random chars, so its length is known and no scanner
+-- is needed.
 normTmp : String -> String
 normTmp line = match split tmpPrefix line
   [] => line
@@ -419,7 +415,7 @@ normTmp line = match split tmpPrefix line
   first :: rest => joinWith "<TMP>" (first :: map (drop 6) rest)
 
 tmpPrefix : String
-tmpPrefix = "/tmp/medaka_build_"
+tmpPrefix = "/medaka_build_"
 
 -- Word-wise, so it can only fire on a STANDALONE duration token (`0.197s`, `12ms`).
 -- Splitting on " " and rejoining with " " is lossless (runs of spaces survive as empty
@@ -1551,7 +1547,7 @@ mapUnit f (x :: rest) =
 (DTypeSig false "normTmp" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "normTmp" ((PVar "line")) (EMatch (EApp (EApp (EVar "split") (EVar "tmpPrefix")) (EVar "line")) (arm (PList) () (EVar "line")) (arm (PList (PVar "only")) () (EVar "only")) (arm (PCons (PVar "first") (PVar "rest")) () (EApp (EApp (EVar "joinWith") (ELit (LString "<TMP>"))) (EBinOp "::" (EVar "first") (EApp (EApp (EVar "map") (EApp (EVar "drop") (ELit (LInt 6)))) (EVar "rest")))))))
 (DTypeSig false "tmpPrefix" (TyCon "String"))
-(DFunDef false "tmpPrefix" () (ELit (LString "/tmp/medaka_build_")))
+(DFunDef false "tmpPrefix" () (ELit (LString "/medaka_build_")))
 (DTypeSig false "normDurations" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "normDurations" ((PVar "line")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "durWord")) (EApp (EApp (EVar "split") (ELit (LString " "))) (EVar "line")))))
 (DTypeSig false "durWord" (TyFun (TyCon "String") (TyCon "String")))
@@ -1880,7 +1876,7 @@ mapUnit f (x :: rest) =
 (DTypeSig false "normTmp" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "normTmp" ((PVar "line")) (EMatch (EApp (EApp (EVar "split") (EVar "tmpPrefix")) (EVar "line")) (arm (PList) () (EVar "line")) (arm (PList (PVar "only")) () (EVar "only")) (arm (PCons (PVar "first") (PVar "rest")) () (EApp (EApp (EVar "joinWith") (ELit (LString "<TMP>"))) (EBinOp "::" (EVar "first") (EApp (EApp (EMethodRef "map") (EApp (EVar "drop") (ELit (LInt 6)))) (EVar "rest")))))))
 (DTypeSig false "tmpPrefix" (TyCon "String"))
-(DFunDef false "tmpPrefix" () (ELit (LString "/tmp/medaka_build_")))
+(DFunDef false "tmpPrefix" () (ELit (LString "/medaka_build_")))
 (DTypeSig false "normDurations" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "normDurations" ((PVar "line")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EVar "durWord")) (EApp (EApp (EVar "split") (ELit (LString " "))) (EVar "line")))))
 (DTypeSig false "durWord" (TyFun (TyCon "String") (TyCon "String")))

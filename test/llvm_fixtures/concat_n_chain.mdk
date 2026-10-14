@@ -1,0 +1,40 @@
+-- ++ chains of 3, 4, 7 and 13 operands.  Each chain is one runtime append over all
+-- its operands.  Covers a String-returning call in the middle, multibyte segments,
+-- an empty segment and an interpolation.  Every row prints the chain's value and its
+-- codepoint count (stringLength), so both the bytes and the count are checked.
+-- Hand-computed oracle: the golden lists each row.
+
+tag : String -> String
+tag s = "[" ++ s ++ "]"
+
+interp : Int -> String
+interp n = "a=" ++ intToString n ++ ", b=" ++ intToString (n + 1) ++ ", c=" ++ intToString (n + 2) ++ ", d=end"
+
+row : String -> String
+-- The ++ chains are the thing under test, so interpolating them would test nothing.
+-- lint-disable-next-line rule-concat-to-interp
+row s = s ++ " len=" ++ intToString (stringLength s) ++ "\n"
+
+-- The ++ chains are the thing under test, so interpolating them would test nothing.
+-- lint-disable-next-line rule-concat-to-interp
+main =
+  let r3 = row ("a" ++ "é" ++ "z")
+  let r4 = row ("" ++ "日本" ++ "x" ++ "😀")
+  let r7 = row ("p" ++ "q" ++ tag "mid" ++ "r" ++ intToString 42 ++ "s" ++ "t")
+  let r13 =
+    row
+      ("α"
+        ++ "β"
+        ++ "γ"
+        ++ "δ"
+        ++ "ε"
+        ++ "ζ"
+        ++ "η"
+        ++ "θ"
+        ++ "ι"
+        ++ "κ"
+        ++ "λ"
+        ++ "μ"
+        ++ "ν")
+  let rI = row (interp 7)
+  r3 ++ r4 ++ r7 ++ r13 ++ rI

@@ -1771,10 +1771,11 @@ public export data Field = Field String Ty
 public export data ConPayload = ConPos (List Ty) | ConNamed (List Field) Bool
 public export data Variant = Variant String ConPayload
 
--- declaration attributes: `@deprecated "msg"`, `@inline`, `@must_use`,
--- `@noinline` (the native backend keeps the function a separate symbol)
+-- declaration attributes: `@deprecated "msg"` (`None` for a bare `@deprecated`),
+-- `@inline`, `@must_use`, `@noinline` (the native backend keeps the function a
+-- separate symbol)
 public export data Attr =
-  | AttrDeprecated String
+  | AttrDeprecated (Option String)
   | AttrInline
   | AttrMustUse
   | AttrNoInline

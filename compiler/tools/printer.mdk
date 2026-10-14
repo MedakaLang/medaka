@@ -2505,7 +2505,8 @@ propParamDoc : PropParam -> Doc
 propParamDoc (PropParam x _ ty) = text " (\{x} : \{ppTy ty})"
 
 attrDoc : Attr -> Doc
-attrDoc (AttrDeprecated msg) =
+attrDoc (AttrDeprecated None) = Cat (text "@deprecated") Hardline
+attrDoc (AttrDeprecated (Some msg)) =
   Cat (text ("@deprecated " ++ escStringLit msg)) Hardline
 attrDoc AttrInline = Cat (text "@inline") Hardline
 attrDoc AttrMustUse = Cat (text "@must_use") Hardline

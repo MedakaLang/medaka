@@ -6383,7 +6383,7 @@ aliasFixturePubM = DTypeAlias {
 aliasFixtureAttribCore : Decl
 aliasFixtureAttribCore =
   DAttrib
-    [AttrDeprecated "old"]
+    [AttrDeprecated (Some "old")]
     DTypeAlias {
       tyAliasPub = True,
       tyAliasName = "AttribCore",

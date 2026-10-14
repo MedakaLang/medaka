@@ -652,11 +652,9 @@ writeAll ((path, src) :: rest) = match writeFile path src
 {- | A directory of this test's own, under the process's scratch root.
 
    `test_process.scratchDir` is a top-level nullary, so it is evaluated ONCE
-   per process and every test in this module is handed the same path —
-   including after the sweep above has removed it, which is what `sweepUnits`
-   does when it finishes. A second test in one module therefore has to make
-   its directory rather than assume one; `mkdirAll` remakes the root on the
-   way and is not an error when it is still there. -}
+   per process and every test in this module is handed the same path. Nothing
+   in this module removes the root; `mkdirAll` keeps each test independent of
+   it. -}
 ffiScratch : <Exec, FileWrite> Result String String
 ffiScratch = match scratchDir
   Err e => Err e

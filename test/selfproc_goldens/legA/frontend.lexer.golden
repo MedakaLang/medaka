@@ -88,6 +88,7 @@ indentOf : String -> Int
 indentOfGo : Array Char -> Int -> Int -> Int
 indentSentinel : Int
 intLitOverflows : Array Char -> Int -> Int -> Bool
+invalidStrEscMsg : Char -> String
 is2 : Array Char -> Int -> Int -> Char -> Char -> Bool
 is3 : Array Char -> Int -> Int -> Char -> Char -> Char -> Bool
 isBareUnicodeEsc : Array Char -> Int -> Int -> Char -> Bool
