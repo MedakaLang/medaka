@@ -23,14 +23,14 @@
    threshold.
 
    The page-cost test builds `synth_repo_main.mdk` corpora of 1000 and 10000
-   records and reads the per-request microsecond figures
+   records and reads the per-request figures
    `cost_curve_main.mdk` prints for `listRecords`, `listBlobs` and the
-   `persistTransition` seam. `listBlobs` is graded on a ratio alone, each
-   corpus's figure being the best of `pageCostRuns` runs of the probe, so a
-   load spike during one run cannot fail it; `listRecords` and
-   `persistTransition` keep an absolute ceiling beside their ratio.
-   `persistTransition` also prints the bytes it allocates per call, which the
-   test holds flat across the two corpora.
+   `persistTransition` seam, each corpus's figure being the best of
+   `pageCostRuns` runs of the probe, so a load spike during one run cannot
+   fail it. `listRecords` and `persistTransition` are graded on time, an
+   absolute ceiling beside a ratio. `listBlobs` is too fast to time against a
+   ratio, so it is graded on the bytes it allocates per request, which the
+   test holds flat across the two corpora, as it does `persistTransition`'s.
 
    A red naming a wall-clock bound with every other bound in range is load
    until a rerun on a quieter host says otherwise; a red on a ratio far past
@@ -307,10 +307,10 @@ resourceFindings scratch =
 {- | One per-request figure `cost_curve_main.mdk` prints, graded between a
    small and a large corpus: `ceiling` bounds the large corpus's figure in
    microseconds and `ratio` it against the small corpus's. -}
-data PageCost = PageCost { route : String, ceiling : Option Int, ratio : Float }
+data PageCost = PageCost { route : String, ceiling : Int, ratio : Float }
 
--- Runs of the cost-curve probe per corpus for the routes graded on a ratio
--- alone; each corpus's figure is the smallest of them.
+-- Runs of the cost-curve probe per corpus; each corpus's figure is the
+-- smallest of them.
 pageCostRuns : Int
 pageCostRuns = 5
 
@@ -318,17 +318,22 @@ pageCostRuns = 5
 -- records and 12800 blobs, so a route whose cost followed the repository
 -- rather than the page fails the ratio.
 pageRoutes : List PageCost
-pageRoutes = [
-  PageCost { route = "listRecords", ceiling = Some 6000, ratio = 3.0 },
-  PageCost { route = "listBlobs", ceiling = None, ratio = 3.0 },
-]
+pageRoutes = [PageCost { route = "listRecords", ceiling = 6000, ratio = 3.0 }]
+
+-- `listBlobs` answers in about 100 microseconds, short enough that one
+-- scheduler stall moves its time ratio past any bound that would still catch
+-- a regression, so it is graded on bytes allocated per request alone. A page
+-- read off the whole blob index allocates about 9x as much on the large
+-- corpus as on the small one; the bounded read allocates the same on both.
+listBlobsAllocRatio : Float
+listBlobsAllocRatio = 1.5
 
 -- `persist` times the `persistTransition` seam with the same store on both
 -- sides, so nothing persists and only the decision, `blobsMoved`
 -- included, is measured.
 persistRoute : PageCost
 persistRoute =
-  PageCost { route = "persistTransition", ceiling = Some 60, ratio = 4.0 }
+  PageCost { route = "persistTransition", ceiling = 60, ratio = 4.0 }
 
 -- Repetitions per `persist` run. A call costs a few microseconds, so the
 -- run must last long enough that a load spike cannot cover all of it and the
@@ -342,33 +347,35 @@ persistReps = "50000"
 persistAllocRatio : Float
 persistAllocRatio = 1.5
 
--- The smallest `allocBytes=` figure across `outs`; a run that printed none
--- makes the whole measurement absent.
-bestAlloc : List String -> Option Int
-bestAlloc outs = match somes (map (wordFigure "allocBytes=") outs)
+{- | The `key` figure on the line of `out` that `route` heads:
+   `routeFigure "listBlobs" "allocBytes=" out` reads the `235099` in
+   `listBlobs us=131 reps=50 allocBytes=235099 …`. -}
+routeFigure : String -> String -> String -> Option Int
+routeFigure route key out = match filter (startsWith "\{route} ") (lines out)
+  [] => None
+  l :: _ => wordFigure key l
+
+-- The smallest of the `key` figures `route` printed across `outs`; a run that
+-- printed none makes the whole measurement absent.
+bestFigure : String -> String -> List String -> Option Int
+bestFigure route key outs = match somes (map (routeFigure route key) outs)
   [] => None
   x :: xs => if length xs + 1 == length outs then Some (fold min x xs) else None
 
-persistAllocFindings : List String -> List String -> List String
-persistAllocFindings smallOuts largeOuts = match (
-  bestAlloc smallOuts,
-  bestAlloc largeOuts,
+-- `route`'s bytes allocated per call, small corpus against large, within
+-- `ratio`.
+allocFindings : String -> Float -> List String -> List String -> List String
+allocFindings route ratio smallOuts largeOuts = match (
+  bestFigure route "allocBytes=" smallOuts,
+  bestFigure route "allocBytes=" largeOuts,
 )
   (Some small, Some large) =>
     ratioFindings
-      "persistTransition allocation (bytes per call, small vs large corpus)"
+      "\{route} allocation (bytes per call, small vs large corpus)"
       (intToFloat small)
       (intToFloat large)
-      persistAllocRatio
-  _ =>
-    ["\{gate}: cost-curve output has no persistTransition allocBytes= figure"]
-
--- The smallest of the figures `route` printed across `outs`; a run that
--- printed none makes the whole measurement absent.
-bestFigure : String -> List String -> Option Int
-bestFigure route outs = match somes (map (figureAfter "\{route} us=") outs)
-  [] => None
-  x :: xs => if length xs + 1 == length outs then Some (fold min x xs) else None
+      ratio
+  _ => ["\{gate}: cost-curve output has no \{route} allocBytes= figure"]
 
 ratioFindings : String -> Float -> Float -> Float -> List String
 ratioFindings what small large ratio =
@@ -381,21 +388,16 @@ ratioFindings what small large ratio =
 
 pageCostFindings : PageCost -> List String -> List String -> List String
 pageCostFindings pc smallOuts largeOuts = match (
-  bestFigure pc.route smallOuts,
-  bestFigure pc.route largeOuts,
+  bestFigure pc.route "us=" smallOuts,
+  bestFigure pc.route "us=" largeOuts,
 )
   (Some small, Some large) =>
-    let what =
+    boundFindings
       "\{pc.route} cost (microseconds per request, small vs large corpus)"
-    match pc.ceiling
-      Some ceiling =>
-        boundFindings
-          what
-          (intToFloat small)
-          (intToFloat large)
-          (intToFloat ceiling)
-          pc.ratio
-      None => ratioFindings what (intToFloat small) (intToFloat large) pc.ratio
+      (intToFloat small)
+      (intToFloat large)
+      (intToFloat pc.ceiling)
+      pc.ratio
   _ => ["\{gate}: cost-curve output has no \{pc.route} us= figure"]
 
 -- The cost-curve binary's stdout at `args`, and the findings against it.
@@ -474,6 +476,7 @@ costCorpora scratch synth =
       ((smallOuts, []), (largeOuts, [])) =>
         let pages =
           flatMap (pc => pageCostFindings pc smallOuts largeOuts) pageRoutes
+            ++ allocFindings "listBlobs" listBlobsAllocRatio smallOuts largeOuts
         match (
           costRuns cost ["persist", small, persistReps],
           costRuns cost ["persist", large, persistReps],
@@ -481,7 +484,11 @@ costCorpora scratch synth =
           ((smallP, []), (largeP, [])) =>
             pages
               ++ pageCostFindings persistRoute smallP largeP
-              ++ persistAllocFindings smallP largeP
+              ++ allocFindings
+                "persistTransition"
+                persistAllocRatio
+                smallP
+                largeP
           ((_, fs1), (_, fs2)) => pages ++ fs1 ++ fs2
       ((_, fs1), (_, fs2)) => fs1 ++ fs2
     fs => fs

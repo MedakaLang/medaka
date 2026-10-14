@@ -1809,6 +1809,7 @@ isEmptyStringLit : Expr -> Bool
 isExemptInPlaceSetIndex : Mono -> Expr -> Bool
 isForeignCallAtom : EffAtomTy -> Bool
 isGrantOnlyEv : EvId -> Bool
+isInterfaceDecl : Decl -> Bool
 isLegacyPredicateAnswer : Option AssumAnswer -> Bool
 isLetrecGroup : List String -> Bool
 isLocalAbsName : String -> Bool

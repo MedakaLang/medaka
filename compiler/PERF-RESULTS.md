@@ -28,6 +28,51 @@ gate state, and the numbers (min-of-N, single-threaded, quiet machine).
 
 ---
 
+## 2026-10-13 — `check` retention census and per-module release (#4090)
+
+**Census** (`make retain-census`, new): every allocation carries a header naming its
+site; every 1 GB allocated the run collects and sums reachable bytes per site. On
+`check compiler/driver/medaka_cli.mdk` at `585e3e85e` the tagged live set grew to
+763 MB. Three owners:
+
+| owner | live at end | why |
+|---|---|---|
+| `++` spines, `graphModuleWorker` (`implDecls = accAll ++ prog`) | 117 MB | one fresh copy of the impl universe per module, each held by that module's `StampCtx` until the graph-end drain |
+| `++` spines, `chainGo` (`accAll2`/`accData2`) | 118 MB | the no-key arm was not a tail call, so every frame kept its copies reachable from the stack |
+| parser + desugar trees, twice | ~250 MB of ~330 MB of trees | `check`'s multi-module arm loaded, parsed, desugared and resolved the graph, then `analyzeProjectFull` loaded and did it all again; the first copies stayed live through the typecheck |
+
+**Fix:** `StampCtx` keeps only the interface decls (`ifaceSupersOf` is the
+universe's one reader on the drain); `chainGo`'s no-key arm is a tail call;
+`check` hands its loaded graph to `analyzeLoadedFull` and runs its own front pass
+(desugar, resolve gate, entry exhaust) in a helper that returns strings, so that
+copy is garbage before the typecheck. After: peak tagged live 353 MB. What is left
+at peak: typecheck state 101 MB (per-module `PerRun`s and goals the graph-end drain
+replays), one parse 94 MB, one desugar 39 MB, resolve stamps 21 MB.
+
+**Numbers**, stage-B `./medaka` vs `main`'s, 4 interleaved runs, `GC_MARKERS=1`, box
+under moderate load (CPU = user+sys):
+
+| | main | this change |
+|---|---|---|
+| CPU-s | 22.9 / 23.6 / 24.5 / 25.2 | 20.1 / 19.6 / 21.5 / 19.6 (≈ −16%) |
+| collections | 41–42 | 40 |
+| Σ live over collections | 5.57–5.78 GB | 4.65 GB |
+| mark time (GC_PRINT_STATS sum) | 11.2–12.8 s | 9.3–10.3 s |
+| final heap | 1.43–1.48 GB | 0.97 GB |
+
+**Retention alone is not a CPU lever under the current heap policy.** The two
+retention fixes measured on their own (one-stage builds at the production 128 MiB
+preset) cut peak live 383 → 275 MB and final heap 1.22 → 0.99 GB with Σlive and CPU
+unchanged: Boehm sizes the heap from what survives (free-space divisor 1), so a
+smaller live set means proportionally more frequent collections and the same total
+marking. The CPU win above is the single load, which removes allocation. Heap size,
+by contrast, does move CPU at the top of the range: same binary, `GC_INITIAL_HEAP_SIZE`
+128 MiB / 512 MiB / 1 GiB / 2 GiB → 21.6 / 20.0–21.7 / 20.2 / 16.6–17.2 CPU-s (42 / 24 /
+18 / 9 collections), final heap 1.48 → 2.1 GB at 2 GiB. At 1 GiB this matches the
+negative result on #4093; 2 GiB is not noise.
+
+---
+
 ## 2026-10-12 — per-gate link profile (#4089)
 
 `test/gates.toml` gained a required `link = "production" | "differential"` field;

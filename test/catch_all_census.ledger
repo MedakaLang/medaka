@@ -71,6 +71,7 @@ isDisplayHead	Expr	6/42
 isDoLoweredAndThenCallee	Expr	1/42
 isDoLoweredAndThenCalleeExpr	Expr	2/42
 isEmptyStringLit	Expr	2/42
+isInterfaceDecl	Decl	2/14
 isNonexpansive	Expr	14/42
 isOmittedElse	Expr	1/42
 isSyntacticLambda	Expr	1/42
