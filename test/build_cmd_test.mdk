@@ -3,8 +3,8 @@
 
    Each fixture is built to a native binary, the binary is run, and its
    stdout is pinned to the committed `<fixture>.build.golden`. A stale
-   `/tmp/medaka_build_*` scratch dir must be swept by a real build, and a
-   recent one must survive it.
+   `medaka_build_*` scratch dir under /tmp or the scratch root must be swept
+   by a real build, and a recent one must survive it.
 
    Runs under `medaka test --native`: it spawns `medaka build`, runs the
    produced binaries, and writes fixture-scratch files. -}
@@ -15,6 +15,7 @@ import test.{
   Expectation, expectAll, expectAtLeast, expectEach, expectEqualText, fail, pass
 }
 import fs.{mkdirAll}
+import io.{getEnvOr}
 import string.{replaceAll, trimRight}
 
 fixtures : <IO> String
@@ -63,10 +64,10 @@ setup old new = do
   _ <- mkdirAll new
   writeFile "\{new}/program.ll" "x\n"
 
--- The two /tmp scratch dirs the sweep test plants outlive the test unless it
--- removes them (the build removes only the stale one).
-removeSweep : String -> <Exec, IO> Expectation
-removeSweep work = match boundedVerb "rm" ["-rf", sweepOld work, sweepNew work]
+-- The two scratch dirs a sweep test plants outlive the test unless it removes
+-- them (the build removes only the stale one).
+removeSweep : String -> String -> <Exec, IO> Expectation
+removeSweep old new = match boundedVerb "rm" ["-rf", old, new]
   Err e => fail "tempdir_sweep: could not remove the sweep dirs: \{e}"
   Ok (code, _, _) =>
     if code /= 0 then
@@ -74,11 +75,11 @@ removeSweep work = match boundedVerb "rm" ["-rf", sweepOld work, sweepNew work]
     else
       pass
 
-sweep : String -> <Exec, IO, FileWrite> Expectation
-sweep work = expectAll [sweepBody work, removeSweep work]
+sweep : String -> String -> String -> <Exec, IO, FileWrite> Expectation
+sweep work old new = expectAll [sweepBody work old new, removeSweep old new]
 
-sweepBody : String -> <Exec, IO, FileWrite> Expectation
-sweepBody work = match setup (sweepOld work) (sweepNew work)
+sweepBody : String -> String -> String -> <Exec, IO, FileWrite> Expectation
+sweepBody work old new = match setup old new
   Err e => fail "tempdir_sweep: setup failed: \{e}"
   Ok _ => match boundedInTree 600 medakaBin [
     "build",
@@ -90,9 +91,9 @@ sweepBody work = match setup (sweepOld work) (sweepNew work)
     Ok (bcode, _, _) =>
       if bcode /= 0 then
         fail "tempdir_sweep: build did not succeed (exit \{intToString bcode})"
-      else match probe "-e" (sweepOld work)
+      else match probe "-e" old
         Err e => fail "tempdir_sweep: probe failed: \{e}"
-        Ok oldLeft => match probe "-e" (sweepNew work)
+        Ok oldLeft => match probe "-e" new
           Err e => fail "tempdir_sweep: probe failed: \{e}"
           Ok newLeft => match probe "-x" (sweepBin work)
             Err e => fail "tempdir_sweep: probe failed: \{e}"
@@ -111,11 +112,11 @@ sweepBody work = match setup (sweepOld work) (sweepNew work)
                 fail "tempdir_sweep: RECENT dir wrongly swept",
             ]
 
-sweepOld : String -> String
-sweepOld work = "/tmp/medaka_build_sweepold_\{replaceAll "/" "_" work}"
+sweepOld : String -> String -> String
+sweepOld root work = "\{root}/medaka_build_sweepold_\{replaceAll "/" "_" work}"
 
-sweepNew : String -> String
-sweepNew work = "/tmp/medaka_build_sweepnew_\{replaceAll "/" "_" work}"
+sweepNew : String -> String -> String
+sweepNew root work = "\{root}/medaka_build_sweepnew_\{replaceAll "/" "_" work}"
 
 sweepBin : String -> String
 sweepBin work = "\{work}/tempdir_sweep.bin"
@@ -134,5 +135,73 @@ test "build_cmd: multimodule and standalone-vs-method builds match their goldens
     ("standalone_vs_method", row work "standalone_vs_method" "svm/entry"),
   ])
 
-test "build_cmd: a real build sweeps stale /tmp build dirs and keeps recent ones" =
-  withScratchDir (work => sweep work)
+test "build_cmd: a real build sweeps stale /tmp build dirs and keeps recent ones" = withScratchDir
+  (work => sweep work (sweepOld "/tmp" work) (sweepNew "/tmp" work))
+
+test "build_cmd: a real build sweeps stale build dirs under the scratch root" =
+  withScratchDir (work => sweepUnderScratch work)
+
+-- The scratch root a real build stages under.  test/ cannot import
+-- driver.build_cmd, so this restates its rule: an explicit TMPDIR other than
+-- /tmp wins, else a non-empty MEDAKA_SCRATCH, else the default.
+scratchRootOf : <IO> String
+scratchRootOf =
+  let t = getEnvOr "TMPDIR" ""
+  let s = getEnvOr "MEDAKA_SCRATCH" ""
+  if t /= "" && t /= "/tmp" && t /= "/tmp/" then
+    t
+  else if s /= "" then
+    s
+  else
+    "/var/tmp/medaka-scratch"
+
+sweepUnderScratch : String -> <Exec, IO, FileWrite> Expectation
+sweepUnderScratch work =
+  let root = scratchRootOf
+  sweep work (sweepOld root work) (sweepNew root work)
+
+-- The sweep must read find's output one path per line.  Splitting on whitespace
+-- turns "first second/medaka_build_old" into "first", and the sweep then clears
+-- the sibling directory "first".  The sibling's file must survive.
+test "build_cmd: a sweep under a scratch root with a space spares a sibling directory" =
+  withScratchDir (work => spaceSweep work)
+
+spaceSweep : String -> <Exec, IO, FileWrite> Expectation
+spaceSweep work =
+  let sibling = "\{work}/first"
+  let root = "\{work}/first second"
+  match spaceSetup sibling root
+    Err e => fail "tempdir_space: setup failed: \{e}"
+    Ok _ => match boundedInTree 600 "env" [
+      "TMPDIR=\{root}",
+      medakaBin,
+      "build",
+      fixtureSrc "arith",
+      "-o",
+      "\{work}/space.bin",
+    ]
+      Err e => fail "tempdir_space: could not spawn build: \{e}"
+      Ok (bcode, _, _) =>
+        if bcode /= 0 then
+          fail
+            "tempdir_space: build did not succeed (exit \{intToString bcode})"
+        else match probe "-e" "\{root}/medaka_build_old"
+          Err e => fail "tempdir_space: probe failed: \{e}"
+          Ok staleLeft => match probe "-e" "\{sibling}/keep.txt"
+            Err e => fail "tempdir_space: probe failed: \{e}"
+            Ok siblingKept => expectAll [
+              if staleLeft then
+                fail "tempdir_space: stale dir under the spaced root NOT swept"
+              else
+                pass,
+              if siblingKept then
+                pass
+              else
+                fail "tempdir_space: sibling directory's file was deleted",
+            ]
+
+spaceSetup : String -> String -> <Exec, IO, FileWrite> Result String Unit
+spaceSetup sibling root = do
+  _ <- mkdirAll sibling
+  _ <- writeFile "\{sibling}/keep.txt" "keep\n"
+  setup "\{root}/medaka_build_old" "\{root}/medaka_build_new"

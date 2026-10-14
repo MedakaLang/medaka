@@ -12,6 +12,13 @@ test "absolute root is replaced with <ROOT>" = expectAll [
   expectEqual runLine (normalizeText "/root/medaka" runLine),
 ]
 
+test "a mktemp build dir keeps its directory and loses its random suffix" =
+  expectEqual
+    "x /var/tmp/medaka-scratch<TMP>/y\n"
+    (normalizeText
+      "/root/medaka"
+      "x /var/tmp/medaka-scratch/medaka_build_AbC123/y\n")
+
 test "a relative or empty root never acts as a replace-all needle" = expectAll [
   expectEqual runLine (normalizeText "." runLine),
   expectEqual runLine (normalizeText ".." runLine),

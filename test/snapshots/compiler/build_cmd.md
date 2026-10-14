@@ -1,5 +1,5 @@
 # META
-source_lines=2024
+source_lines=2098
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
@@ -29,7 +29,7 @@ stages=DESUGAR,MARK
 -- the emitter's own diagnostic surfaced.
 
 import support.util.{stringTrim, joinWith, joinNl}
-import string.{words, contains, startsWith, endsWith}
+import string.{words, contains, startsWith, endsWith, split}
 import io.{runCommandOk}
 import support.timer.{perfEnabled, now, emitPhase}
 import driver.loader.{
@@ -247,11 +247,64 @@ stripTrailingUnit s =
 -- template is accepted by both GNU and BSD mktemp (dual-platform).
 export
 makeTempDir : Unit -> <IO> Result String String
-makeTempDir _ = match runCommandOk "mktemp" ["-d", "/tmp/medaka_build_XXXXXX"]
+makeTempDir _ =
+  let candidates =
+    scratchCandidatesFrom
+      (envOr "TMPDIR" "")
+      (envOr "MEDAKA_SCRATCH" defaultScratchRoot)
+  match firstScratchDir candidates
+    Ok dir => Ok dir
+    Err e => Err (stringTrim e)
+
+-- Returns the first candidate root that yields a directory.  When every
+-- candidate fails, the error names each one.
+firstScratchDir : List String -> <IO> Result String String
+firstScratchDir [] = Err "no scratch directory candidate"
+firstScratchDir [root] = makeScratchIn root
+firstScratchDir (root :: rest) = match makeScratchIn root
+  Ok dir => Ok dir
+  Err e => match firstScratchDir rest
+    Ok dir => Ok dir
+    Err e2 => Err "\{e}; \{e2}"
+
+-- `mkdir -p` alone succeeds on a directory the user cannot write to, so the
+-- write test is part of the same probe.
+makeScratchIn : String -> <IO> Result String String
+makeScratchIn root = match runCommand "sh" [
+  "-c",
+  "mkdir -p \"$1\" 2>/dev/null && test -w \"$1\" || { echo \"cannot use scratch root $1\" >&2; exit 1; }",
+  "sh",
+  root,
+]
   Err e => Err e
-  Ok (out, _) =>
-    let dir = stringTrim out
-    if dir == "" then Err "mktemp -d printed no path" else Ok dir
+  Ok (0, _, _) =>
+    match runCommandOk "mktemp" ["-d", joinPath root "medaka_build_XXXXXX"]
+      Err e => Err e
+      Ok (out, _) =>
+        let dir = stringTrim out
+        if dir == "" then Err "mktemp -d printed no path" else Ok dir
+  Ok (_, _, err) => Err (stringTrim err)
+
+-- `mktemp -d` ignores TMPDIR once its template names a directory, so the root
+-- is spelled into the template.  Mirrors test/lib_scratch.sh's routing.
+export
+defaultScratchRoot : String
+defaultScratchRoot = "/var/tmp/medaka-scratch"
+
+-- `/tmp` spelled with or without its trailing slash is the same RAM-backed
+-- directory and routes the same way.
+isTmpRoot : String -> Bool
+isTmpRoot dir = dir == "/tmp" || dir == "/tmp/"
+
+-- An explicit TMPDIR other than /tmp is the user's choice and gets no fallback:
+-- an unusable one fails the build rather than landing on the RAM-backed /tmp.
+isExplicitScratch : String -> Bool
+isExplicitScratch tmpdir = tmpdir /= "" && not (isTmpRoot tmpdir)
+
+export
+scratchCandidatesFrom : String -> String -> List String
+scratchCandidatesFrom tmpdir scratch =
+  if isExplicitScratch tmpdir then [tmpdir] else [scratch, "/tmp"]
 
 -- The manifest a scratch project gets when a probe for `target` is compiled
 -- outside the target's own tree.  It carries the target project's own
@@ -322,7 +375,7 @@ removeEntries dir (n :: rest) =
   let _ = removeFile (joinPath dir n)
   removeEntries dir rest
 
--- Tear the scratch dir down so a build leaks nothing into /tmp.  Every Result is
+-- Tear the scratch dir down so a build leaks nothing into the scratch root.  Every Result is
 -- discarded on purpose: a cleanup failure must never fail an otherwise-good build.
 export
 cleanupTempDir : String -> <IO> Unit
@@ -334,7 +387,7 @@ cleanupTempDir dir = match listDir dir
     ()
 
 -- ---- startup sweep of leaked scratch dirs (issue #97) ----
--- A build stages scratch under makeTempDir's /tmp/medaka_build_* dir and removes
+-- A build stages scratch under makeTempDir's medaka_build_* dir in the scratch root and removes
 -- it on the NORMAL exit path (cleanupTempDir).  A build KILLED before that runs —
 -- `timeout`, Ctrl-C, OOM, SIGKILL — leaks its dir.  Over a long multi-agent
 -- session these accumulated to 96% of a 16 GB RAM-backed tmpfs (1,041 dirs).  A
@@ -360,8 +413,29 @@ cleanupTempDir dir = match listDir dir
 -- listDir + flat removeFile + removeDir tears it down exactly as for a live build.
 sweepStaleTempDirs : Unit -> <IO> Unit
 sweepStaleTempDirs _ =
+  sweepEachRoot
+    (sweepRootsFrom
+      (envOr "TMPDIR" "")
+      (envOr "MEDAKA_SCRATCH" defaultScratchRoot))
+
+-- Every root a build may have staged under, and /tmp.
+sweepRootsFrom : String -> String -> List String
+sweepRootsFrom tmpdir scratch =
+  if isExplicitScratch tmpdir then [tmpdir, "/tmp"] else [scratch, "/tmp"]
+
+sweepEachRoot : List String -> <IO> Unit
+sweepEachRoot [] = ()
+sweepEachRoot (r :: rest) =
+  let _ = sweepRoot r
+  sweepEachRoot rest
+
+sweepRoot : String -> <IO> Unit
+sweepRoot root =
   let findArgs = [
-    "/tmp",
+    "-H",
+    root,
+    "-mindepth",
+    "1",
     "-maxdepth",
     "1",
     "-type",
@@ -372,7 +446,7 @@ sweepStaleTempDirs _ =
     "+360",
   ]
   match runCommand "find" findArgs
-    Ok (_, out, _) => sweepEachStale (words out)
+    Ok (_, out, _) => sweepEachStale (filter (/= "") (split "\n" out))
     Err _ => ()
 
 sweepEachStale : List String -> <IO> Unit
@@ -2028,7 +2102,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
     res
 # DESUGAR
 (DUse false (UseGroup ("support" "util") ((mem "stringTrim" false) (mem "joinWith" false) (mem "joinNl" false))))
-(DUse false (UseGroup ("string") ((mem "words" false) (mem "contains" false) (mem "startsWith" false) (mem "endsWith" false))))
+(DUse false (UseGroup ("string") ((mem "words" false) (mem "contains" false) (mem "startsWith" false) (mem "endsWith" false) (mem "split" false))))
 (DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false) (mem "findProjectRootOrSelf" false) (mem "readDeps" false) (mem "readForeignLibs" false))))
@@ -2061,7 +2135,21 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig false "stripTrailingUnit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripTrailingUnit" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "n")) (EVar "s")) (ELit (LString "()\n")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "s")) (EVar "s")))))
 (DTypeSig true "makeTempDir" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
-(DFunDef false "makeTempDir" (PWild) (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (ELit (LString "/tmp/medaka_build_XXXXXX")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "dir"))))))))
+(DFunDef false "makeTempDir" (PWild) (EBlock (DoLet false false (PVar "candidates") (EApp (EApp (EVar "scratchCandidatesFrom") (EApp (EApp (EVar "envOr") (ELit (LString "TMPDIR"))) (ELit (LString "")))) (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_SCRATCH"))) (EVar "defaultScratchRoot")))) (DoExpr (EMatch (EApp (EVar "firstScratchDir") (EVar "candidates")) (arm (PCon "Ok" (PVar "dir")) () (EApp (EVar "Ok") (EVar "dir"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "stringTrim") (EVar "e"))))))))
+(DTypeSig false "firstScratchDir" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "firstScratchDir" ((PList)) (EApp (EVar "Err") (ELit (LString "no scratch directory candidate"))))
+(DFunDef false "firstScratchDir" ((PList (PVar "root"))) (EApp (EVar "makeScratchIn") (EVar "root")))
+(DFunDef false "firstScratchDir" ((PCons (PVar "root") (PVar "rest"))) (EMatch (EApp (EVar "makeScratchIn") (EVar "root")) (arm (PCon "Ok" (PVar "dir")) () (EApp (EVar "Ok") (EVar "dir"))) (arm (PCon "Err" (PVar "e")) () (EMatch (EApp (EVar "firstScratchDir") (EVar "rest")) (arm (PCon "Ok" (PVar "dir")) () (EApp (EVar "Ok") (EVar "dir"))) (arm (PCon "Err" (PVar "e2")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "e"))) (ELit (LString "; "))) (EApp (EVar "display") (EVar "e2"))) (ELit (LString "")))))))))
+(DTypeSig false "makeScratchIn" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "makeScratchIn" ((PVar "root")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (ELit (LString "-c")) (ELit (LString "mkdir -p \"$1\" 2>/dev/null && test -w \"$1\" || { echo \"cannot use scratch root $1\" >&2; exit 1; }")) (ELit (LString "sh")) (EVar "root"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "medaka_build_XXXXXX"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "dir")))))))) (arm (PCon "Ok" (PTuple PWild PWild (PVar "err"))) () (EApp (EVar "Err") (EApp (EVar "stringTrim") (EVar "err"))))))
+(DTypeSig true "defaultScratchRoot" (TyCon "String"))
+(DFunDef false "defaultScratchRoot" () (ELit (LString "/var/tmp/medaka-scratch")))
+(DTypeSig false "isTmpRoot" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isTmpRoot" ((PVar "dir")) (EBinOp "||" (EBinOp "==" (EVar "dir") (ELit (LString "/tmp"))) (EBinOp "==" (EVar "dir") (ELit (LString "/tmp/")))))
+(DTypeSig false "isExplicitScratch" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isExplicitScratch" ((PVar "tmpdir")) (EBinOp "&&" (EBinOp "/=" (EVar "tmpdir") (ELit (LString ""))) (EApp (EVar "not") (EApp (EVar "isTmpRoot") (EVar "tmpdir")))))
+(DTypeSig true "scratchCandidatesFrom" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "scratchCandidatesFrom" ((PVar "tmpdir") (PVar "scratch")) (EIf (EApp (EVar "isExplicitScratch") (EVar "tmpdir")) (EListLit (EVar "tmpdir")) (EListLit (EVar "scratch") (ELit (LString "/tmp")))))
 (DTypeSig true "scratchProjectManifest" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "scratchProjectManifest" ((PVar "projectName") (PVar "target")) (EBlock (DoLet false false (PVar "root") (EApp (EVar "canonicalizePath") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "target"))))) (DoExpr (EApp (EApp (EVar "scratchManifestText") (EVar "projectName")) (EApp (EVar "readDeps") (EVar "root"))))))
 (DTypeSig true "scratchProbeManifest" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))
@@ -2082,7 +2170,14 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig true "cleanupTempDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "cleanupTempDir" ((PVar "dir")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" (PVar "entries")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "removeEntries") (EVar "dir")) (EVar "entries"))) (DoLet false false PWild (EApp (EVar "removeDir") (EVar "dir"))) (DoExpr (ELit LUnit))))))
 (DTypeSig false "sweepStaleTempDirs" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "sweepStaleTempDirs" (PWild) (EBlock (DoLet false false (PVar "findArgs") (EListLit (ELit (LString "/tmp")) (ELit (LString "-maxdepth")) (ELit (LString "1")) (ELit (LString "-type")) (ELit (LString "d")) (ELit (LString "-name")) (ELit (LString "medaka_build_*")) (ELit (LString "-mmin")) (ELit (LString "+360")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "find"))) (EVar "findArgs")) (arm (PCon "Ok" (PTuple PWild (PVar "out") PWild)) () (EApp (EVar "sweepEachStale") (EApp (EVar "words") (EVar "out")))) (arm (PCon "Err" PWild) () (ELit LUnit))))))
+(DFunDef false "sweepStaleTempDirs" (PWild) (EApp (EVar "sweepEachRoot") (EApp (EApp (EVar "sweepRootsFrom") (EApp (EApp (EVar "envOr") (ELit (LString "TMPDIR"))) (ELit (LString "")))) (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_SCRATCH"))) (EVar "defaultScratchRoot")))))
+(DTypeSig false "sweepRootsFrom" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "sweepRootsFrom" ((PVar "tmpdir") (PVar "scratch")) (EIf (EApp (EVar "isExplicitScratch") (EVar "tmpdir")) (EListLit (EVar "tmpdir") (ELit (LString "/tmp"))) (EListLit (EVar "scratch") (ELit (LString "/tmp")))))
+(DTypeSig false "sweepEachRoot" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "sweepEachRoot" ((PList)) (ELit LUnit))
+(DFunDef false "sweepEachRoot" ((PCons (PVar "r") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "sweepRoot") (EVar "r"))) (DoExpr (EApp (EVar "sweepEachRoot") (EVar "rest")))))
+(DTypeSig false "sweepRoot" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "sweepRoot" ((PVar "root")) (EBlock (DoLet false false (PVar "findArgs") (EListLit (ELit (LString "-H")) (EVar "root") (ELit (LString "-mindepth")) (ELit (LString "1")) (ELit (LString "-maxdepth")) (ELit (LString "1")) (ELit (LString "-type")) (ELit (LString "d")) (ELit (LString "-name")) (ELit (LString "medaka_build_*")) (ELit (LString "-mmin")) (ELit (LString "+360")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "find"))) (EVar "findArgs")) (arm (PCon "Ok" (PTuple PWild (PVar "out") PWild)) () (EApp (EVar "sweepEachStale") (EApp (EApp (EVar "filter") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EApp (EVar "split") (ELit (LString "\n"))) (EVar "out"))))) (arm (PCon "Err" PWild) () (ELit LUnit))))))
 (DTypeSig false "sweepEachStale" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "sweepEachStale" ((PList)) (ELit LUnit))
 (DFunDef false "sweepEachStale" ((PCons (PVar "d") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "d"))) (DoExpr (EApp (EVar "sweepEachStale") (EVar "rest")))))
@@ -2231,7 +2326,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "emitRtObjGo" ((PVar "cc") (PVar "root") (PVar "outObjPath")) (EMatch (EApp (EVar "makeTempDir") (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not create a scratch directory for the runtime compile: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tmpDir")) () (EBlock (DoLet false false (PVar "res") (EMatch (EApp (EApp (EVar "detectGC") (EVar "cc")) (EVar "tmpDir")) (arm (PCon "None") () (EApp (EVar "buildErr") (EApp (EVar "libgcMissingError") (ELit LUnit)))) (arm (PCon "Some" (PTuple (PVar "gcCflags") (PVar "_gcLibs"))) () (EBlock (DoLet false false (PVar "optFlag") (EVar "clangOptFlag")) (DoLet false false (PVar "rtC") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "runtime/medaka_rt.c")))) (DoLet false false (PVar "ccArgs") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EVar "optFlag") (ELit (LString "-pthread"))) (EVar "gcSectionsCflags")) (EVar "gcCflags")) (EApp (EVar "ltoCflags") (EApp (EVar "detectLto") (EVar "cc")))) (EListLit (ELit (LString "-c")) (EVar "rtC") (ELit (LString "-o")) (EVar "outObjPath")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommandOk") (EVar "cc")) (EVar "ccArgs")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (ELit (LString "error: compiling runtime object failed\n")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EVar "buildOk") (EBinOp "++" (EBinOp "++" (ELit (LString "compiled runtime object -> ")) (EApp (EVar "display") (EVar "outObjPath"))) (ELit (LString ""))))))))))) (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "tmpDir"))) (DoExpr (EVar "res"))))))
 # MARK
 (DUse false (UseGroup ("support" "util") ((mem "stringTrim" false) (mem "joinWith" false) (mem "joinNl" false))))
-(DUse false (UseGroup ("string") ((mem "words" false) (mem "contains" false) (mem "startsWith" false) (mem "endsWith" false))))
+(DUse false (UseGroup ("string") ((mem "words" false) (mem "contains" false) (mem "startsWith" false) (mem "endsWith" false) (mem "split" false))))
 (DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false) (mem "findProjectRootOrSelf" false) (mem "readDeps" false) (mem "readForeignLibs" false))))
@@ -2264,7 +2359,21 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig false "stripTrailingUnit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripTrailingUnit" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "n")) (EVar "s")) (ELit (LString "()\n")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "s")) (EVar "s")))))
 (DTypeSig true "makeTempDir" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
-(DFunDef false "makeTempDir" (PWild) (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (ELit (LString "/tmp/medaka_build_XXXXXX")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "dir"))))))))
+(DFunDef false "makeTempDir" (PWild) (EBlock (DoLet false false (PVar "candidates") (EApp (EApp (EVar "scratchCandidatesFrom") (EApp (EApp (EVar "envOr") (ELit (LString "TMPDIR"))) (ELit (LString "")))) (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_SCRATCH"))) (EVar "defaultScratchRoot")))) (DoExpr (EMatch (EApp (EVar "firstScratchDir") (EVar "candidates")) (arm (PCon "Ok" (PVar "dir")) () (EApp (EVar "Ok") (EVar "dir"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "stringTrim") (EVar "e"))))))))
+(DTypeSig false "firstScratchDir" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "firstScratchDir" ((PList)) (EApp (EVar "Err") (ELit (LString "no scratch directory candidate"))))
+(DFunDef false "firstScratchDir" ((PList (PVar "root"))) (EApp (EVar "makeScratchIn") (EVar "root")))
+(DFunDef false "firstScratchDir" ((PCons (PVar "root") (PVar "rest"))) (EMatch (EApp (EVar "makeScratchIn") (EVar "root")) (arm (PCon "Ok" (PVar "dir")) () (EApp (EVar "Ok") (EVar "dir"))) (arm (PCon "Err" (PVar "e")) () (EMatch (EApp (EVar "firstScratchDir") (EVar "rest")) (arm (PCon "Ok" (PVar "dir")) () (EApp (EVar "Ok") (EVar "dir"))) (arm (PCon "Err" (PVar "e2")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EVar "e2"))) (ELit (LString "")))))))))
+(DTypeSig false "makeScratchIn" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "makeScratchIn" ((PVar "root")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (ELit (LString "-c")) (ELit (LString "mkdir -p \"$1\" 2>/dev/null && test -w \"$1\" || { echo \"cannot use scratch root $1\" >&2; exit 1; }")) (ELit (LString "sh")) (EVar "root"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "medaka_build_XXXXXX"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "dir")))))))) (arm (PCon "Ok" (PTuple PWild PWild (PVar "err"))) () (EApp (EVar "Err") (EApp (EVar "stringTrim") (EVar "err"))))))
+(DTypeSig true "defaultScratchRoot" (TyCon "String"))
+(DFunDef false "defaultScratchRoot" () (ELit (LString "/var/tmp/medaka-scratch")))
+(DTypeSig false "isTmpRoot" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isTmpRoot" ((PVar "dir")) (EBinOp "||" (EBinOp "==" (EVar "dir") (ELit (LString "/tmp"))) (EBinOp "==" (EVar "dir") (ELit (LString "/tmp/")))))
+(DTypeSig false "isExplicitScratch" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isExplicitScratch" ((PVar "tmpdir")) (EBinOp "&&" (EBinOp "/=" (EVar "tmpdir") (ELit (LString ""))) (EApp (EVar "not") (EApp (EVar "isTmpRoot") (EVar "tmpdir")))))
+(DTypeSig true "scratchCandidatesFrom" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "scratchCandidatesFrom" ((PVar "tmpdir") (PVar "scratch")) (EIf (EApp (EVar "isExplicitScratch") (EVar "tmpdir")) (EListLit (EVar "tmpdir")) (EListLit (EVar "scratch") (ELit (LString "/tmp")))))
 (DTypeSig true "scratchProjectManifest" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "scratchProjectManifest" ((PVar "projectName") (PVar "target")) (EBlock (DoLet false false (PVar "root") (EApp (EVar "canonicalizePath") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "dirOf") (EVar "target"))))) (DoExpr (EApp (EApp (EVar "scratchManifestText") (EVar "projectName")) (EApp (EVar "readDeps") (EVar "root"))))))
 (DTypeSig true "scratchProbeManifest" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))
@@ -2285,7 +2394,14 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig true "cleanupTempDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "cleanupTempDir" ((PVar "dir")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" (PVar "entries")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "removeEntries") (EVar "dir")) (EVar "entries"))) (DoLet false false PWild (EApp (EVar "removeDir") (EVar "dir"))) (DoExpr (ELit LUnit))))))
 (DTypeSig false "sweepStaleTempDirs" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "sweepStaleTempDirs" (PWild) (EBlock (DoLet false false (PVar "findArgs") (EListLit (ELit (LString "/tmp")) (ELit (LString "-maxdepth")) (ELit (LString "1")) (ELit (LString "-type")) (ELit (LString "d")) (ELit (LString "-name")) (ELit (LString "medaka_build_*")) (ELit (LString "-mmin")) (ELit (LString "+360")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "find"))) (EVar "findArgs")) (arm (PCon "Ok" (PTuple PWild (PVar "out") PWild)) () (EApp (EVar "sweepEachStale") (EApp (EVar "words") (EVar "out")))) (arm (PCon "Err" PWild) () (ELit LUnit))))))
+(DFunDef false "sweepStaleTempDirs" (PWild) (EApp (EVar "sweepEachRoot") (EApp (EApp (EVar "sweepRootsFrom") (EApp (EApp (EVar "envOr") (ELit (LString "TMPDIR"))) (ELit (LString "")))) (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_SCRATCH"))) (EVar "defaultScratchRoot")))))
+(DTypeSig false "sweepRootsFrom" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "sweepRootsFrom" ((PVar "tmpdir") (PVar "scratch")) (EIf (EApp (EVar "isExplicitScratch") (EVar "tmpdir")) (EListLit (EVar "tmpdir") (ELit (LString "/tmp"))) (EListLit (EVar "scratch") (ELit (LString "/tmp")))))
+(DTypeSig false "sweepEachRoot" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "sweepEachRoot" ((PList)) (ELit LUnit))
+(DFunDef false "sweepEachRoot" ((PCons (PVar "r") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "sweepRoot") (EVar "r"))) (DoExpr (EApp (EVar "sweepEachRoot") (EVar "rest")))))
+(DTypeSig false "sweepRoot" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "sweepRoot" ((PVar "root")) (EBlock (DoLet false false (PVar "findArgs") (EListLit (ELit (LString "-H")) (EVar "root") (ELit (LString "-mindepth")) (ELit (LString "1")) (ELit (LString "-maxdepth")) (ELit (LString "1")) (ELit (LString "-type")) (ELit (LString "d")) (ELit (LString "-name")) (ELit (LString "medaka_build_*")) (ELit (LString "-mmin")) (ELit (LString "+360")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "find"))) (EVar "findArgs")) (arm (PCon "Ok" (PTuple PWild (PVar "out") PWild)) () (EApp (EVar "sweepEachStale") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EApp (EVar "split") (ELit (LString "\n"))) (EVar "out"))))) (arm (PCon "Err" PWild) () (ELit LUnit))))))
 (DTypeSig false "sweepEachStale" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "sweepEachStale" ((PList)) (ELit LUnit))
 (DFunDef false "sweepEachStale" ((PCons (PVar "d") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "d"))) (DoExpr (EApp (EVar "sweepEachStale") (EVar "rest")))))
