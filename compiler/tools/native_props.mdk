@@ -6,8 +6,7 @@ import frontend.ast.{
   Decl(..), Expr, PropParam(..), Ty(..), TyConOrigin(..), Variant(..),
   Field(..), ConPayload(..), Pat(..), mapTyFull
 }
-import frontend.parser.{parse}
-import frontend.desugar.{desugar}
+import tools.target_parse.{targetDesugared}
 import driver.build_cmd.{
   ppBuildReport, makeTempDir, scratchProbeManifest, cleanupTempDir,
   runBuildNativeRoots, BuildProfile(..), envOr, defaultMedakaRoot
@@ -302,7 +301,7 @@ nativeProtocolError duplicate r =
     (propRequestCases r)
 
 desugarProps : String -> List Decl
-desugarProps src = desugar (parse src)
+desugarProps src = targetDesugared src
 
 nativeFailureKind : NativeFailure -> PropFailureKind
 nativeFailureKind (NativeBuildFailure _) = PropBuildError

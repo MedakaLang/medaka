@@ -105,7 +105,6 @@ import args.{
 }
 import frontend.ast.{Decl(..), Expr(..), Loc(..), Pat, LetBind(..), EvTable}
 import frontend.parser.{
-  parse,
   parseLocated,
   parseWithPositions,
   parseWithPositionsLocated,
@@ -119,7 +118,8 @@ import frontend.parser.{
 }
 import frontend.lexer.{tokenizeWithOffsetPairs}
 import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
-import frontend.desugar.{desugar, desugarIn}
+import frontend.desugar.{desugarIn}
+import tools.target_parse.{targetDesugared}
 import frontend.resolve.{resolveModulesErrorsByFile, internalGuardFor, ResError}
 import driver.loader.{
   LoadError(..),
@@ -3585,7 +3585,7 @@ runTestJsonCmd engines cases filterOpt target =
     rsrc <- readPreludeFile rtPath
     csrc <- readPreludeFile corePath
     tsrc <- readSource target
-    let userDecls = desugar (parse tsrc)
+    let userDecls = targetDesugared tsrc
     if filterMatchedNothing filterOpt tsrc userDecls then
       Err
         "medaka test: \{target}: --filter matched no doctests, props, or `test \"…\"` decls"
