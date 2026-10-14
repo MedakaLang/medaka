@@ -1740,19 +1740,34 @@ static long long mdk_utf8_decode(const char *p, long long b, long long byte_len,
 }
 /* The output array is sized from the cached cp_count, and the loop stops
  * there even if the bytes would decode to more, so it never writes past the
- * allocation. */
+ * allocation.
+ *
+ * The elements are immediate Chars, so the block holds no pointers and is
+ * allocated pointer-free: mdk_alloc_atomic skips the zero-fill and the scan.
+ * So every slot is written here, and any slot past the decoded count is
+ * zero-filled explicitly. An all-ASCII byte string is its own codepoint
+ * sequence, so it skips the decoder. */
 long long mdk_string_to_chars(long long s) {
   const char *cell = (const char *)s;
   long long byte_len = ((const long long *)cell)[1];
   long long cp_count = ((const long long *)cell)[2];
   const char *bytes = cell + 24;
-  long long *arr = (long long *)mdk_alloc(8 * (cp_count + 1));
+  long long *arr = (long long *)mdk_alloc_atomic(8 * (cp_count + 1));
   arr[0] = cp_count;
-  long long b = 0, i = 0;
-  while (b < byte_len && i < cp_count) {
-    int w; long long cp = mdk_utf8_decode(bytes, b, byte_len, &w);
-    arr[++i] = (cp << 1) | 1; b += w;
+  unsigned char hi = 0;
+  for (long long k = 0; k < byte_len; k++) hi |= (unsigned char)bytes[k];
+  long long i = 0;
+  if (hi < 0x80) {
+    long long n = byte_len < cp_count ? byte_len : cp_count;
+    for (; i < n; i++) arr[i + 1] = ((long long)(unsigned char)bytes[i] << 1) | 1;
+  } else {
+    long long b = 0;
+    while (b < byte_len && i < cp_count) {
+      int w; long long cp = mdk_utf8_decode(bytes, b, byte_len, &w);
+      arr[++i] = (cp << 1) | 1; b += w;
+    }
   }
+  for (; i < cp_count; i++) arr[i + 1] = 0;
   return (long long)arr;
 }
 /* Byte width mdk_utf8_encode writes for a codepoint, from the same thresholds. */
