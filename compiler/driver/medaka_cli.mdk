@@ -1226,7 +1226,7 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
 
         (Some errText, _, _, _) =>
           let _ = emitAbortTotal ()
-          let _ = putStr errText
+          let _ = putStrLn errText
           exit 1
         (None, projWarns, hiddenCount, perMod) =>
           let report = checkModulesReport exWarns perMod
