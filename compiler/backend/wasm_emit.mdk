@@ -326,7 +326,7 @@ import backend.emit_plan.{
   TrmcVerdicts,
   isTrmcFn,
   isTrmcImpl,
-  planBackendFor,
+  checkPlanBackend,
 }
 import backend.emit_support.{
   bindEagerReach,
@@ -1448,14 +1448,10 @@ emitProgramWith emit input plan cp =
 -- any text is emitted: one panic naming each in strict mode, one gap event per
 -- extern in record mode.  The emitter's own fallthrough for such a name then
 -- records nothing (`unprovidedExternW`).
-refuseUnprovidedExternsW : Backend ->
-  WasmEmit ->
-  WasmEmitInput ->
-  CProgram ->
-  Unit
-refuseUnprovidedExternsW target emit input cp =
+refuseUnprovidedExternsW : WasmEmit -> WasmEmitInput -> CProgram -> Unit
+refuseUnprovidedExternsW emit input cp =
   let _ = validateImplSymbolInjectivity cp
-  let _ = validateDictTags target cp
+  let _ = validateDictTags WasmBackend cp
   let _ = match validateRecords cp
     [] => ()
     bad => panic ("internal error: " ++ renderRecordRefusal bad)
@@ -1488,8 +1484,8 @@ emitProgramCore emit input plan cp =
 
 emitUniqueProgram : WasmEmit -> WasmEmitInput -> EmitPlan -> CProgram -> String
 emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _ facts)) =
-  let _ =
-    refuseUnprovidedExternsW (planBackendFor WasmBackend plan) emit input cp
+  let _ = checkPlanBackend WasmBackend plan
+  let _ = refuseUnprovidedExternsW emit input cp
   let _ = setRef emit.useStr (programUsesStr groups)
   -- W7: scan the program for collection usage (gates type-section decls + forces
   -- ref-mode — every collection is a boxed (ref eq) value).  The scan only ever
@@ -1696,9 +1692,9 @@ emitProgramGaps : WasmEmitInput -> EmitPlan -> CProgram -> List String
 emitProgramGaps input plan cp0 =
   let (CProgram groups ctorArs ctorTypes impls mctx facts) = uniqueBinders cp0
   let emit = freshWasmEmit WGapRecord
+  let _ = checkPlanBackend WasmBackend plan
   let _ =
     refuseUnprovidedExternsW
-      WasmBackend
       emit
       input
       (CProgram groups ctorArs ctorTypes impls mctx facts)

@@ -22,9 +22,10 @@ targets differ — what may differ, where, and how the difference is checked.
 That ruling stands. None of it is implemented. Measured on 2026-10-01:
 
 - **No target reaches the typechecker.** `--target native|wasm` is a `medaka
-  build` switch (`compiler/driver/build_cmd.mdk`, `BuildTarget`); the `EmitTarget`
-  in `compiler/ir/core_ir_lower.mdk` narrows one dict-tag collision check and
-  nothing else. `check`, `run` and `test` have no target.
+  build` switch (`compiler/driver/build_cmd.mdk`, `BuildTarget`); below it, each
+  emitter passes its own `Backend` to one check, the dict-tag width of
+  `core_validate.validateDictTags`, and lowering takes none. `check`, `run` and
+  `test` have no target.
 - **An extern wasm cannot lower fails after typechecking**, inside the emitter,
   as `unbound variable 'writeFile'` — an unlocated panic (#380, #2130, #2426).
   Only the 28 net names and user FFI externs get a worded refusal. The one

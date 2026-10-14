@@ -318,7 +318,7 @@ import backend.emit_plan.{
   TrmcVerdicts,
   isTrmcFn,
   isTrmcImpl,
-  planBackendFor,
+  checkPlanBackend,
 }
 import backend.emit_support.{
   bindEagerReach,
@@ -14593,7 +14593,8 @@ emitProgramWithStats : EmitInput ->
   CProgram ->
   (String, List (String, Int))
 emitProgramWithStats input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ facts)) =
-  let _ = unprovidedExterns Strict (planBackendFor LlvmBackend plan) input cp
+  let _ = checkPlanBackend LlvmBackend plan
+  let _ = unprovidedExterns Strict input cp
   let cfg = programEmitConfig Strict input plan groups
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries facts
   let stats = tableStats e
@@ -14775,8 +14776,8 @@ emitProgramMode : GapMode ->
 emitProgramMode gapMode input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ facts)) =
   -- Each half's run checks the whole program it received, so a refused extern
   -- is refused by the half that reaches it, before that half emits anything.
-  let found =
-    unprovidedExterns gapMode (planBackendFor LlvmBackend plan) input cp
+  let _ = checkPlanBackend LlvmBackend plan
+  let found = unprovidedExterns gapMode input cp
   -- issue #118: the two halves are emitted by INDEPENDENT emitter runs, so they
   -- get disjoint gensym ranges or their lifted defines collide — see
   -- programHalfIdBase.  Mode 0 keeps starting at 0, so its IR is unchanged.
@@ -14793,13 +14794,9 @@ emitProgramMode gapMode input plan (cp@(CProgram groups ctorArs ctorTypes implEn
 -- Every free reference to a runtime extern llvm does not lower
 -- (`core_validate.validateExterns`).  Strict mode refuses them here, before any
 -- emitter state is built; record mode returns them for `noteUnprovidedExterns`.
-unprovidedExterns : GapMode ->
-  Backend ->
-  EmitInput ->
-  CProgram ->
-  List ExternFinding
-unprovidedExterns Strict target input cp =
-  let _ = refuseCollidingImpls target cp
+unprovidedExterns : GapMode -> EmitInput -> CProgram -> List ExternFinding
+unprovidedExterns Strict input cp =
+  let _ = refuseCollidingImpls cp
   let _ = refuseUnstampedRecords cp
   let _ = refuseUnstampedBinders cp
   let _ = refuseUnstampedCalls cp
@@ -14807,8 +14804,8 @@ unprovidedExterns Strict target input cp =
   match validateExterns LlvmBackend input.runtimeExterns cp
     [] => []
     found => panic (renderExternRefusal found)
-unprovidedExterns Record target input cp =
-  let _ = refuseCollidingImpls target cp
+unprovidedExterns Record input cp =
+  let _ = refuseCollidingImpls cp
   let _ = refuseUnstampedRecords cp
   let _ = refuseUnstampedBinders cp
   let _ = refuseUnstampedCalls cp
@@ -14817,10 +14814,10 @@ unprovidedExterns Record target input cp =
 
 -- Two distinct impls under one emitted symbol, or one dict-witness tag, are refused
 -- with the user-actionable text of `core_validate`, in strict and record mode alike.
-refuseCollidingImpls : Backend -> CProgram -> Unit
-refuseCollidingImpls target cp =
+refuseCollidingImpls : CProgram -> Unit
+refuseCollidingImpls cp =
   let _ = validateImplSymbolInjectivity cp
-  validateDictTags target cp
+  validateDictTags LlvmBackend cp
 
 -- A record node without its declared field ordinal is an internal error: the
 -- emitter keeps no field-order table to answer for it.
@@ -15176,11 +15173,9 @@ emitProgramGaps input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ 
     trmc = plan.trmc,
     dispGroups = None,
   }
+  let _ = checkPlanBackend LlvmBackend plan
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries facts
-  let _ =
-    noteUnprovidedExterns
-      e
-      (unprovidedExterns Record (planBackendFor LlvmBackend plan) input cp)
+  let _ = noteUnprovidedExterns e (unprovidedExterns Record input cp)
   let _ = emitPreamble e
   let _ = emitFnsGaps e (fnBinds groups)
   let _ = emitImplsGaps e implEntries
