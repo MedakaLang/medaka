@@ -550,7 +550,7 @@ _corpus_gates_for_set() {
 #   `playground/e2e/run` string) and the gate that actually EXECUTES that spec,
 #   playground/e2e/run.sh, never surfaced — masked at the file level.
 #
-#   playground/worker.js matched diff_compiler_wasm_shim_parity at the file level
+#   playground/worker.js matched the (since retired) wasm shim-parity gate at the file level
 #   only through that gate's `echo "… expected at least playground/worker.js …"`
 #   diagnostic, which short-circuited the climb before the same gate's REAL
 #   reference (`grep -rl … "$ROOT/playground"`, one level up) was ever consulted.

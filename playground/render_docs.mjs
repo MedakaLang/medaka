@@ -171,12 +171,12 @@ function patternGrantInMain(text) {
 // Conjunct 3. A top-level `main` binding starts a line, so anchor to one.
 const definesMain = (text) => /^main\b/m.test(text);
 
-// Conjunct 4. Top-level `import <module>` — the module id is the first
-// lowercase token after the keyword; the selective/alias/wildcard tail is
+// Conjunct 4. Top-level `import <module>` — the module id is the dotted path
+// after the keyword (`crypto.sha256`, staged as dist/crypto.sha256.mdk); the selective/alias/wildcard tail is
 // irrelevant to WHICH file the page must have fetched.
 function unshippedImports(text, shipped) {
   const out = [];
-  for (const m of text.matchAll(/^\s*(?:export\s+)?import\s+([a-z][a-z_0-9]*)/gm)) {
+  for (const m of text.matchAll(/^\s*(?:export\s+)?import\s+([a-z][a-z_0-9]*(?:\.[a-z][a-z_0-9]*)*)/gm)) {
     if (!shipped.has(m[1])) out.push(m[1]);
   }
   return out;

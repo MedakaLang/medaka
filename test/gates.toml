@@ -1869,7 +1869,7 @@ kind = "exec"
 migration = "native-rewrite"
 run = "test/diff_compiler_engines_part1.sh"
 oracles = ["eval_autoprint_main"]
-sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/diff_compiler_engines_part1.sh", "test/lib_engines_differential.sh", "test/engine_value_pins/*"]
+sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/diff_compiler_engines_part1.sh", "test/lib_engines_differential.sh", "test/engine_value_pins/*", "test/wasm/run.js", "playground/medaka_host.mjs"]
 corpus = ["test/engine_fixtures", "test/llvm_fixtures", "test/llvm_fixtures_modules", "test/llvm_fixtures_typed", "test/wasm/fixtures", "test/wasm/fixtures_typed"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 link = "differential"
@@ -1885,7 +1885,7 @@ kind = "exec"
 migration = "native-rewrite"
 run = "test/diff_compiler_engines_part2.sh"
 oracles = ["eval_autoprint_main"]
-sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/diff_compiler_engines_part2.sh", "test/lib_engines_differential.sh", "test/engine_value_pins/*"]
+sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/diff_compiler_engines_part2.sh", "test/lib_engines_differential.sh", "test/engine_value_pins/*", "test/wasm/run.js", "playground/medaka_host.mjs"]
 corpus = ["test/engine_fixtures", "test/llvm_fixtures", "test/llvm_fixtures_modules", "test/llvm_fixtures_typed", "test/wasm/fixtures", "test/wasm/fixtures_typed"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 link = "differential"
@@ -1901,7 +1901,7 @@ kind = "exec"
 migration = "native-rewrite"
 run = "test/diff_compiler_engines_part3.sh"
 oracles = ["eval_autoprint_main"]
-sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/diff_compiler_engines_part3.sh", "test/lib_engines_differential.sh", "test/engine_value_pins/*"]
+sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/diff_compiler_engines_part3.sh", "test/lib_engines_differential.sh", "test/engine_value_pins/*", "test/wasm/run.js", "playground/medaka_host.mjs"]
 corpus = ["test/engine_fixtures", "test/llvm_fixtures", "test/llvm_fixtures_modules", "test/llvm_fixtures_typed", "test/wasm/fixtures", "test/wasm/fixtures_typed"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 link = "differential"
@@ -2890,7 +2890,7 @@ kind = "native"
 migration = "done"
 run = "compiler/types/target_profile_host_test.mdk"
 oracles = []
-sources = ["playground/medaka_host.mjs", "test/wasm/host_profile_table.mjs", "compiler/types/target_profile.mdk"]
+sources = ["playground/medaka_host.mjs", "test/wasm/host_profile_table.mjs", "stdlib/runtime.mdk", "compiler/types/target_profile.mdk"]
 corpus = []
 toolchain = ["node>=24"]
 link = "production"
@@ -3741,7 +3741,7 @@ kind = "exec"
 migration = "native-rewrite"
 run = "test/diff_compiler_guide_render.sh"
 oracles = []
-sources = ["test/diff_compiler_guide_render.sh", "playground/render_docs.mjs", "playground/build_guide.sh", "playground/build_advanced_docs.sh", "playground/build_stdlib_docs.sh", "playground/guide_render_test.mjs", "playground/vendor/marked/marked.js", "docs/guide/*.md", "docs/advanced/*.md", "docs/stdlib/*.md"]
+sources = ["test/diff_compiler_guide_render.sh", "playground/render_docs.mjs", "playground/medaka_host.mjs", "playground/build_guide.sh", "playground/build_advanced_docs.sh", "playground/build_stdlib_docs.sh", "playground/guide_render_test.mjs", "playground/vendor/marked/marked.js", "docs/guide/*.md", "docs/advanced/*.md", "docs/stdlib/*.md"]
 corpus = ["docs/guide", "docs/advanced", "docs/stdlib"]
 toolchain = ["node>=24"]
 link = "production"

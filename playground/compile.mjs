@@ -206,44 +206,26 @@ function withGuestStderr(e, host) {
   return e;
 }
 
-// Externs and modules that exist only in the native build.  A program reaching one
-// gets a message naming it, in place of the compiler trap or `unknown module` the
-// toolchain would otherwise surface.  Families follow stdlib/runtime.mdk.
+// Externs the wasm backend does not lower (their wasm row in
+// compiler/backend/extern_catalog.mdk is NotProvided).  A program reaching one gets a
+// message naming it, in place of the compiler trap the toolchain would otherwise
+// surface.  The externs the browser host serves (medaka_host.mjs SLICES) are absent.
 const NATIVE_ONLY_EXTERNS = new Set([
   'readLine', 'readLineOpt', 'readAll', 'readExactly',
-  'readFile', 'readFileBytes', 'writeFile', 'writeFileBytes', 'writeFileMode', 'appendFile',
-  'fileExists', 'fileMode', 'canonicalizePath', 'listDir', 'makeDir', 'removeFile',
+  'writeFile', 'writeFileMode', 'appendFile',
+  'fileMode', 'canonicalizePath', 'listDir', 'makeDir', 'removeFile',
   'rename', 'fsync', 'removeDir', 'statFile',
-  'args', 'getEnv', 'executablePath', 'runCommand',
+  'executablePath', 'runCommand',
   'netResolve', 'netTcpConnect', 'netTcpListen', 'netListenPort', 'netTcpAccept',
   'netSend', 'netSendFrom', 'netRecv', 'netShutdown', 'netClose', 'netCloseListener',
   'netSetTimeout', 'netSetNonblock', 'netTryAccept', 'netTryRecv', 'netTrySend',
 ]);
-const NATIVE_ONLY_MODULES = new Set(['fs', 'net', 'io']);
 
 function nativeOnlyMessage(text) {
   const ext = /runtime extern '([A-Za-z0-9_]+)' is not available on the wasm backend/.exec(text);
   if (ext && NATIVE_ONLY_EXTERNS.has(ext[1]))
     return ext[1] + ' is not available in the browser playground';
   return null;
-}
-
-// Rewrites an `unknown module: X` diagnostic for a native-only module X.
-function nativeOnlyModuleMessage(message) {
-  const m = /^unknown module: ([A-Za-z0-9_.]+)$/.exec(message);
-  if (m && NATIVE_ONLY_MODULES.has(m[1]))
-    return 'module `' + m[1] + '` is native-only and not available in the browser playground';
-  return null;
-}
-
-function friendlyDiagnostics(diag) {
-  if (diag && Array.isArray(diag.files))
-    for (const f of diag.files)
-      for (const d of f.diagnostics || []) {
-        const msg = nativeOnlyModuleMessage(d.message);
-        if (msg) d.message = msg;
-      }
-  return diag;
 }
 
 function trapDiagnostic(e) {
@@ -346,7 +328,7 @@ export async function compile(source, opts = {}) {
   }
   if (marker === '__MEDAKA_DIAGNOSTICS__') {
     try {
-      return { ok: false, diagnostics: friendlyDiagnostics(JSON.parse(payload.trim())) };
+      return { ok: false, diagnostics: JSON.parse(payload.trim()) };
     } catch (e) {
       return { ok: false, diagnostics: synthErr('bad diagnostics JSON: ' + payload.slice(0, 200)) };
     }
@@ -390,7 +372,7 @@ export async function analyze(source, opts = {}) {
 
   if (marker === '__MEDAKA_ANALYZE__' || marker === '__MEDAKA_DIAGNOSTICS__') {
     try {
-      return { ok: marker === '__MEDAKA_ANALYZE__', diagnostics: friendlyDiagnostics(JSON.parse(payload.trim())) };
+      return { ok: marker === '__MEDAKA_ANALYZE__', diagnostics: JSON.parse(payload.trim()) };
     } catch (e) {
       return { ok: false, diagnostics: synthErr('bad diagnostics JSON: ' + payload.slice(0, 200)) };
     }

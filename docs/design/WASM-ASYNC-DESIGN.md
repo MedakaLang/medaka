@@ -92,9 +92,9 @@ Two more things stand between a visitor and a running async program, both on
 the host side (**read**):
 
 - `stdlib/time.mdk` is not in the playground's virtual filesystem. The shipped
-  list is the hand-kept `EXTRA_MODULES` in `playground/main.js` and
-  `playground/build_playground_wasm.sh` (identical lists; `time`, `math`,
-  `fs`, `net`, `io`, `test` excluded). `async.mdk` imports `time`, so the
+  list was hand-kept in `playground/main.js` and `playground/build_playground_wasm.sh`
+  (`time`, `math`, `fs`, `net`, `io`, `test` excluded); it is now derived from
+  `stdlib/` and `stdlib/crypto/` into `dist/stdlib_modules.json`. `async.mdk` imports `time`, so the
   playground compiler reports `unknown module: time`, which
   `playground/compile.mjs` `nativeOnlyModuleMessage` rewrites into the message
   quoted at the top. `time.mdk` in turn imports `math.{floorDiv}` and
@@ -496,8 +496,8 @@ cannot be cached; after the change that caveat disappears.
 
 ## 8. The playground
 
-- `playground/main.js` and `playground/build_playground_wasm.sh`
-  `EXTRA_MODULES` gain `time`, `math`, `regex`. The exclusion comments that
+- The playground's shipped module list gains `time`, `math`, `regex` (derived
+  now: `build_playground_wasm.sh` stages every module under `stdlib/`). The exclusion comments that
   name `math` ("libm") and `time` ("`<Clock>`") are deleted: the libm host
   imports are real in every host (**read**, `docs/spec/WASM-SEMANTICS.md` §3
   rows for the 14 unary libm imports and `mdk_pow`/`mdk_atan2`/`mdk_hypot`),
@@ -507,9 +507,7 @@ cannot be cached; after the change that caveat disappears.
   two false statements `TARGETS-DESIGN.md` §4.3 already schedules for
   deletion (**read**); WA-3 deletes it, since a visitor who opens the `math`
   reference from the playground reads it. `playground/build_site.sh` and
-  `test/wasm/diff_playground_input.sh` read `EXTRA_MODULES` out of `main.js`
-  by regex (**read**), so they follow; the shell list in
-  `build_playground_wasm.sh` is the second copy that must be edited by hand.
+  `test/wasm/diff_playground_input.sh` follow the one derived list.
   T3's §6.4 replaces both with one list derived from the catalog; until then
   `build_site.sh`'s fail-closed asset check is what catches a dist that lacks
   a listed module (**read**, `AGENTS.md` [WEB-SITE-FILE-LIST]).
@@ -538,7 +536,7 @@ is one packet, one PR, acceptance stated as a check.
 
 | ID | Mission | Surface | Acceptance |
 |---|---|---|---|
-| **WA-1 the clock has a wasm binding** | Lower `wallTimeSec`, `monotonicSec`, `sleepMs` to three host imports; implement the `clock` slice in `run.js`, `worker.js`, `compile.mjs` (`Atomics.wait` form); delete the three `WASM-GAP` rows; promote `llvm/clock_monotonic_sleep`. | `compiler/backend/wasm_emit.mdk`, `compiler/backend/wasm_preamble.mdk`, the three hosts, `test/CAPABILITY-EXCEPTIONS.txt`, `test/engine_divergence.txt`, `docs/spec/WASM-SEMANTICS.md` §3. | The sleep probe of §2 builds and prints the native output under `node test/wasm/run.js`; `diff_compiler_capability_matrix`, `diff_compiler_engines`, `wasm_host_profile_agreement` green; #2426 closed. |
+| **WA-1 the clock has a wasm binding** | Lower `wallTimeSec`, `monotonicSec`, `sleepMs` to three host imports; implement the `clock` slice in `run.js`, `worker.js`, `compile.mjs` (`Atomics.wait` form); delete the three `WASM-GAP` rows; promote `llvm/clock_monotonic_sleep`. | `compiler/backend/wasm_emit.mdk`, `compiler/backend/wasm_preamble.mdk`, the three hosts, `test/CAPABILITY-EXCEPTIONS.txt`, `test/engine_divergence.txt`, `docs/spec/WASM-SEMANTICS.md` §3. | The sleep probe of §2 builds and prints the native output under `node test/wasm/run.js`; `diff_compiler_capability_matrix`, `diff_compiler_engines`, `diff_compiler_wasm_shim_parity` green; #2426 closed. |
 | **WA-2 the async gate has a wasm arm** | `diff_async` runs `overlap_sleeps` and `no_starvation` on wasm with the CPU-time assertion; `engine_fixtures/async_deadlock.mdk`; the gate's native-only declaration narrowed to the net fixtures. | `test/diff_async_test.mdk`, `test/async_fixtures/`, `test/engine_fixtures/`, `test/gates.toml` (then `medaka gate balance && make gen-ci`). | `diff_async` reports the wasm arm per fixture; a host whose `mdk_sleep_ms` returns at once reds it; `ci-gen-drift` green. |
 | **WA-3 the playground runs async** | Ship `time`, `math`, `regex`; COOP/COEP on the playground route; `crossOriginIsolated` check with the named error; `compile.mjs` lists trimmed; the two e2e cases; deploy and verify on the live origin. | `playground/main.js`, `playground/build_playground_wasm.sh`, `playground/_headers`, `playground/compile.mjs`, `playground/worker.js`, `playground/e2e/`, `playground/README.md` § Deploying. | `64_async_defer` prints `3` on https://medaka-lang.dev; the 200 ms and 15 s e2e cases pass; `curl -sI https://medaka-lang.dev/` shows both headers; `/blog/` shows neither. |
 | **WA-4 the entry is `mdk_main`** | `$__init` initializes only; every host calls `exports.mdk_main()`; the `compile.mjs` session caveat removed; WH1 text updated. | `compiler/backend/wasm_emit.mdk` `emitRefInit`, the three hosts (`test/visitor_battery/tools/pg_compile.mjs` and the e2e drivers enter through `compile.mjs`, **read**), `docs/spec/WASM-SEMANTICS.md`. | Every wasm gate green with no fixture change; a module instantiated without calling `mdk_main` prints nothing (pinned). |

@@ -14,7 +14,7 @@
    Runs under `medaka test --native`: it spawns node. -}
 
 import string.{unwords}
-import test.{Expectation, expectEqual, fail}
+import test.{Expectation, fail, pass}
 import test_process.{boundedVerbSeconds, underRoot}
 
 probes : <IO, Exec, Env "MEDAKA_ROOT"> Expectation
@@ -23,9 +23,11 @@ probes =
     underRoot "playground/medaka_host_test.mjs",
   ])
     Err e => fail "could not run node: \{e}"
-    Ok (0, _, _) => expectEqual 0 0
     Ok (code, out, err) =>
-      fail
-        "medaka_host_test.mjs exited \{debug code} (2 = setup missing): \{unwords [out, err]}"
+      if code == 0 then
+        pass
+      else
+        fail
+          "medaka_host_test.mjs exited \{debug code} (2 = setup missing): \{unwords [out, err]}"
 
 test "wasm host probes: playground/medaka_host_test.mjs passes" = probes

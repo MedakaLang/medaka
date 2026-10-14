@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import os from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createHost, runProgram, CapabilityError, HostKeyError, SLICES } from './medaka_host.mjs';
+import { createHost, runProgram, CapabilityError, HostKeyError, SLICES, KEY_EXTERN } from './medaka_host.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = dirname(here);
@@ -241,6 +241,23 @@ function check(name, ok, detail) {
   check('(i) compile.mjs: the HostKeyError names the compiler host',
     text.includes('env.mdk_fake_key') && text.includes('no slice of the playground compiler host provides'),
     text.slice(0, 400));
+}
+
+// (j) KEY_EXTERN covers every key a withholdable slice owns alone: a missing row would
+// degrade the CapabilityError message to the raw import key.
+{
+  const alwaysInstalled = new Set(Object.values(SLICES)
+    .filter((s) => s.needs.length === 0 && !s.process).flatMap((s) => s.keys));
+  const bad = [];
+  for (const [name, s] of Object.entries(SLICES))
+    for (const k of s.keys) {
+      if (alwaysInstalled.has(k)) continue;
+      const e = KEY_EXTERN[k];
+      if (e === undefined) bad.push(`${name}: ${k} has no KEY_EXTERN row`);
+      else if (!/ result$/.test(e) && !(s.externs || []).includes(e))
+        bad.push(`${name}: ${k} -> ${e}, not among the slice's externs`);
+    }
+  check('(j) KEY_EXTERN agrees with SLICES externs', bad.length === 0, bad.join('; '));
 }
 
 // Report only: slices no module built above imports a key of.
