@@ -3263,18 +3263,19 @@ findExports : String -> OrdMap ModuleExports -> Option ModuleExports
 findExports mid known = omLookup mid known
 
 -- exported under any value/type/ctor/interface/effect category (lib's
--- imported_names is_pub).  `expEffects` belongs in this disjunction because
--- `importedEffects` installs every label `m` exports on ANY import of `m`: drop
--- it and a selective member list naming a label refuses a name the very same
--- import statement puts in scope, with a message that denies the export (#3293).
+-- imported_names is_pub); `nameSet` is that union.
 isPubExp : ModuleExports -> String -> Bool
 isPubExp exp n = omHasKey n exp.nameSet
 
 -- Fill the derived indexes from the export lists.  Every ModuleExports is built
 -- through here (`coreExports`, `buildExportsWith`), so a consumer never sees an
--- empty index.  `ctorTypes` is built from the reversed pairs so the FIRST
--- (type, ctor) pair wins a duplicate constructor name, as a front-to-back scan of
--- `expTypeCtors` would.
+-- empty index.  `expEffects` belongs in `nameSet` because `importedEffects`
+-- installs every label `m` exports on ANY import of `m`: drop it and a
+-- selective member list naming a label refuses a name the very same import
+-- statement puts in scope, with a message that denies the export (#3293).
+-- `ctorTypes` is built from the reversed pairs so the FIRST (type, ctor) pair
+-- wins a duplicate constructor name, as a front-to-back scan of `expTypeCtors`
+-- would.
 indexExports : ModuleExports -> ModuleExports
 indexExports exp = { exp |
   nameSet =
