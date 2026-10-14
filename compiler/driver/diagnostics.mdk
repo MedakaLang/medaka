@@ -65,7 +65,7 @@ import frontend.marker.{
 }
 import types.repr.{Scheme}
 import types.typecheck.{
-  checkOneDiagsK, checkModulesDiagsChain, chainFullKey, checkModulesK,
+  checkOneDiagsK, checkOneDiagsLinesK, checkModulesDiagsChain, chainFullKey, checkModulesK,
   entryOwnSchemes, dropModSchemes, ModDiags, setCoherenceUserDecls,
   setStdlibOwnership, TcDiag(..), tcMsg,
   -- #2738: the importer peer of `preludeStandaloneShadows`.  It lives in the
@@ -905,17 +905,28 @@ analyzeFrom : (List String -> <e> List (String, List String)) ->
   List String ->
   <e> List Diag
 analyzeFrom exportsFor modName runtimeSrc coreSrc raw internalGuard =
+  fst (analyzeFromDump exportsFor modName runtimeSrc coreSrc raw internalGuard)
+
+export
+analyzeFromDump : (List String -> <e> List (String, List String)) ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  List String ->
+  <e> (List Diag, List String)
+analyzeFromDump exportsFor modName runtimeSrc coreSrc raw internalGuard =
   let s = analyzeSurface exportsFor modName runtimeSrc coreSrc raw internalGuard
-  let tcDiags = match s.resolveClean
+  let (lines, tcDiags) = match s.resolveClean
     True =>
-      let (tcErrs, tcWarns) = checkOneDiagsK
+      let (ls, tcErrs, tcWarns) = checkOneDiagsLinesK
         s.surfacePreludeKey
         s.surfaceRuntimeP
         s.surfaceCoreP
         ("__user__", s.surfaceDesugared)
-      map diagOfTypeError tcErrs ++ map diagOfTypeWarning tcWarns
-    False => []
-  analyzeFinish s tcDiags
+      (ls, map diagOfTypeError tcErrs ++ map diagOfTypeWarning tcWarns)
+    False => ([], [])
+  (analyzeFinish s tcDiags, lines)
 
 -- Everything `analyzeFrom` runs except the typecheck: parse-independent,
 -- AST-level, and safe to run before a caller decides WHICH typecheck produces

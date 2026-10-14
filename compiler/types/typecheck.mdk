@@ -54054,6 +54054,19 @@ checkOneDiagsK preludeKey runtimeDecls coreDecls (rootId, prog) =
     checkModulesEntryFullK preludeKey runtimeDecls coreDecls [(rootId, prog)]
   (errs, warns)
 
+-- `checkOneDiagsK` plus the entry's rendered `name : scheme` lines from the SAME
+-- drive.  The lines are rendered here, before any later drive can run.
+export
+checkOneDiagsLinesK : Option (Int, Int) ->
+  List Decl ->
+  List Decl ->
+  (String, List Decl) ->
+  (List String, List TcDiag, List TcDiag)
+checkOneDiagsLinesK preludeKey runtimeDecls coreDecls (rootId, prog) =
+  let (schemes, errs, warns) =
+    checkModulesEntryFullK preludeKey runtimeDecls coreDecls [(rootId, prog)]
+  (schemeLines schemes ++ map tcMsg warns, errs, warns)
+
 -- `checkModulesEntryFullK` for a SYNTHETIC program graph — one this driver derived
 -- from the user's rather than one the user wrote — with `mainSchemeRef` SAVED AND
 -- RESTORED across it.  General over any module-list shape (`checkModulesEntryFullK`

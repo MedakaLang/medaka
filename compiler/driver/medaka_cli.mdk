@@ -146,6 +146,7 @@ import driver.diagnostics.{
   analyzeLocated,
   analyzeLocatedG,
   analyzeFrom,
+  analyzeFromDump,
   analyzeSurface,
   analyzeFinish,
   tcHalfOfPerModule,
@@ -1153,8 +1154,8 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _, d
   -- `parseLocated tsrc` would redundantly repeat) — call `analyzeFrom`
   -- directly with `decls` instead of going through `analyzeLocatedG`, to skip
   -- that re-parse.  Every OTHER `analyzeLocatedG` caller is untouched.
-  let diags =
-    analyzeFrom
+  let (diags, dumpLines) =
+    analyzeFromDump
       cliStdlibExports
       mid
       rsrc
@@ -1175,7 +1176,7 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _, d
       -- the real-span parse of `tsrc` from the loader, so skip `runCheck`'s
       -- internal placeholder-loc `parse tsrc` and feed `decls` straight into
       -- the extracted decls-accepting body.
-      let dump = stripWarningLines (runCheckFromDecls rsrc csrc decls)
+      let dump = stripWarningLines (joinNl dumpLines)
       let filtered = userSchemeLines decls dump
       let report = if typesMode then dump else filtered
       -- The target check elaborates the program again, so it runs once the
