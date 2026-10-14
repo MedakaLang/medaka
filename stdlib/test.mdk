@@ -594,7 +594,7 @@ expectationActual (Fail _ _ a) = a
 
 -- # Running tests
 
-goTests : List (String, Unit -> Expectation) -> Int -> Int -> <IO> Bool
+goTests : List (String, Unit -> Expectation) -> Int -> Int -> <Stdout> Bool
 goTests [] passed failed =
   println "\n\{intToString passed} passed, \{intToString failed} failed"
   eq failed 0
@@ -611,7 +611,7 @@ goTests ((name, thunk) :: rest) passed failed = match thunk ()
    Each test is a name and a function from `Unit` to an `Expectation`.
    Returns `True` when every test passes. -}
 export
-runTests : List (String, Unit -> Expectation) -> <IO> Bool
+runTests : List (String, Unit -> Expectation) -> <Stdout> Bool
 runTests tests = goTests tests 0 0
 
 -- # Golden files

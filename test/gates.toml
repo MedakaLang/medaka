@@ -1568,6 +1568,22 @@ toolchain = ["clang"]
 link = "differential"
 
 [[gate]]
+name = "stdlib_import_profiles"
+area = "types"
+shard = "gates_3"
+project = "compiler"
+tiers = ["merge"]
+cost = "medium"
+kind = "native"
+migration = "done"
+run = "test/stdlib_import_profiles_test.mdk"
+oracles = []
+sources = ["compiler/types/*", "stdlib/*", "test/compiler_cli_test_support.mdk"]
+corpus = []
+toolchain = []
+link = "production"
+
+[[gate]]
 name = "diff_compiler_check_policy"
 area = "types"
 shard = "gates_3"
