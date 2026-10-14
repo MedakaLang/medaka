@@ -20831,14 +20831,9 @@ inferNumLitVar env n fref dref
 --   • `argDispatchOf` — `fromInt` is return-position (no dispatch argument), so this answered
 --     `None` and fell to `recordSite` on every path already.
 --
--- KEPT, in substance: the obligation.  A literal ALWAYS records the prelude `Num`
--- obligation (DICT §8 I7); no binding spelled `fromInt`, local or standalone, suppresses
--- it.  Only a mono-scheme anchor (nothing to instantiate) skips it.
---
--- #2157 REPLACED the callee: `recordMethodObligationGuarded` →
--- `recordNumLitObligationGuarded`, which records the obligation against the PRELUDE
--- `Num`'s identity-selected row instead of re-deriving the interface from the spelling
--- `"fromInt"` in the bare-name method table.
+-- A literal always records the prelude `Num` obligation (DICT §8 I7); no binding
+-- spelled `fromInt`, local or standalone, suppresses it.  Only a mono-scheme anchor
+-- (nothing to instantiate) skips it.
 inferNumLitMethod : MethodSchemeRow -> Ref Route -> Mono
 inferNumLitMethod anchor tagRef =
   let inst = instantiateTracked anchor.msrScheme
@@ -33645,9 +33640,9 @@ data EntailKind =
   -- the (default-reduced) method; fallback = RNone (the load-bearing do-nothing arm).
   -- #609: also carries the method's full occurrence mono, so this kind can recover
   -- the interface's whole param vector (ifaceParamMonos) exactly as EKReturn does.
-  -- Without it the arm could only ever see arg 0 — and the arg-position leg is the
-  -- one an ordinary `ix 1 'x'` call takes, so this is where #609 landed.  The list
-  -- is the site's `SKArg` omitted-typaram variables (`occurrenceParamMonos`).
+  -- Without it the arm could only ever see arg 0, and the arg-position leg is the
+  -- one an ordinary `ix 1 'x'` call takes.  The list is the site's `SKArg`
+  -- omitted-typaram variables (`occurrenceParamMonos`).
   | EKArg Mono (List (String, Mono))
   -- #156 S3c: operator site (resolveOpSite).  isBinop and the in-impl-body flag
   -- (for opDictVarOf's dict-var policy).  assum = opDictVarOf → RDict;
@@ -33908,7 +33903,7 @@ determinedGoalInstance iface (first :: rest) = match normalize first
 
 -- inst: a concrete head [tag].  EKReturn → canonical full-type key + split element routes
 -- (implRef-bound); EKNestedTop → the min⊑ winner's canonical key with requires PACKED
--- into the primary RKey;
+-- into the primary RKey (the bare head tag when no row answers the vector);
 -- EKArg → same canonical RKey primary as EKReturn but element routes keyed on the
 -- (default-reduced) method via argImplDictRoutesForEncl; EKOp → stampOpRouteVal (builtin
 -- head → RNone do-nothing, else RKey with reqs packed in, no separate element routes).
@@ -33981,16 +33976,19 @@ entailInst name m encl useScope _ (kind@(EKNumReturn predicate _ _ _)) =
 -- (funConstraintArgsRef). Recording it beside `funConstraintsRef`, not inside it,
 -- keeps per-tyvar dict slots — and hence emitted dict arity — exactly as they were.
 -- #607 punch-list item 3 (dict slot = predicate, which would move arity) stays open.
-entailInst _ m encl useScope _ (EKNestedTop iface _ walk rest) =
+entailInst _ m encl useScope tag (EKNestedTop iface _ walk rest) =
   -- Select the row once and hand that same value to both the route-word and
   -- prerequisite projections.  This makes §6 C2 structural: the dictionary names
-  -- the same impl whose context it discharges.  No row means the goal has no
-  -- instance, and the site keeps no route.
+  -- the same impl whose context it discharges.
   let goals = m :: rest
   let env = perRun.value.bodyImplEnvRef.value
   match ieSelectRowByIface env iface goals
     Some row => (nestedRowRoute encl useScope m goals walk row, [])
-    None => (RNone, [])
+    -- Still the head tag, which names no instance: an accepted top-level call of a
+    -- binding whose constraint names a variable its type omits
+    -- (`f : K x y => x -> String`) leaves that position undetermined, so no row
+    -- answers the vector, and the emitter resolves the tag to the head's instance.
+    None => (RKey tag [] (superRoutesAt iface encl useScope goals walk), [])
 -- #609: select on the interface's FULL param vector (§5 — the dispatch type is the
 -- instantiated vector `T̄`), not on the discriminating ARGUMENT's mono alone.
 -- [goals] is bound ONCE and fed to BOTH arms: the method route (`routeKey`) and the

@@ -1,0 +1,19 @@
+-- §3 + §5: `f`'s signature constraint `K x y` names `y`, which its type
+-- omits, so the call `f (Box 2)` poses `K (Box Int) ?y`.  The one instance
+-- answers it.  The top-level dictionary route carries the head tag `Box`,
+-- since no row is selected for the undetermined vector.
+-- Hand-derived: ACCEPT on all three verbs, prints `BOX`.
+interface K a b where
+  k : a -> String
+  mk : b -> a
+
+data Box a = Box a
+
+impl K (Box Int) Bool where
+  k _ = "BOX"
+  mk _ = Box 2
+
+f : K x y => x -> String
+f x = k x
+
+main = println (f (Box (2 : Int)))
