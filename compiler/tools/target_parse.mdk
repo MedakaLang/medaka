@@ -1,4 +1,4 @@
--- One parse and one desugar of a `medaka test` target per process.
+-- One parse, one desugar and one comment scan of a `medaka test` target per process.
 --
 -- The test verb reads the target's declarations from a dozen sites that each
 -- hold only the source text (`tsrc`): the pre-parse, the `test "…"` and `prop`
@@ -6,7 +6,9 @@
 -- through every one of them would re-sign the whole report/driver surface, so
 -- the located parse and its desugaring are memoized here, keyed on the source
 -- string, with a single entry (a test run has one target; an `mcp` session
--- replaces the entry when the source changes).
+-- replaces the entry when the source changes).  The doctest examples are a
+-- pure function of the same source string and are held in a second
+-- single-entry slot with the same key discipline.
 --
 -- Always the LOCATED parse: `parseLocated` primes the loc side-channel from the
 -- source it parses, so the result is a pure function of the source string.  The
@@ -16,6 +18,8 @@
 import frontend.ast.{Decl}
 import frontend.parser.{parse, parseLocatedResult, ParseError}
 import frontend.desugar.{desugar}
+import frontend.lexer.{collectComments}
+import tools.doctest.{Example, extractExamples}
 
 targetRef : Ref (Option (String, List Decl, Option (List Decl)))
 targetRef = Ref None
@@ -54,3 +58,16 @@ targetDesugared src =
       let ds = desugar raw
       targetRef := Some (src, raw, Some ds)
       ds
+
+examplesRef : Ref (Option (String, List Example))
+examplesRef = Ref None
+
+-- `extractExamples (collectComments src)`, computed once.
+export
+targetExamples : String -> List Example
+targetExamples src = match !examplesRef
+  Some (key, exs) if key == src => exs
+  _ =>
+    let exs = extractExamples (collectComments src)
+    examplesRef := Some (src, exs)
+    exs
