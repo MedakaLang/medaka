@@ -621,11 +621,9 @@ writeAll dir ((name, src) :: rest) = match writeFile "\{dir}/\{name}" src
 {- | A directory of this test's own, under the process's scratch root.
 
    `test_process.scratchDir` is a top-level nullary, so it is evaluated ONCE
-   per process and every test in this module is handed the same path —
-   including after the sweep above has removed it, which is what `sweepUnits`
-   does when it finishes. A second test in one module therefore has to make
-   its directory rather than assume one; `mkdirAll` remakes the root on the
-   way and is not an error when it is still there. -}
+   per process and every test in this module is handed the same path. Nothing
+   in this module removes the root; `mkdirAll` keeps each test independent of
+   it. -}
 cycleScratch : <Exec, FileWrite> Result String String
 cycleScratch = match scratchDir
   Err e => Err e
@@ -1072,7 +1070,7 @@ parseErrorsRun : <Exec, FileRead, IO> Expectation
 parseErrorsRun = match parseErrorFixtures
   Err e => fail "test/parse_error_fixtures: \{e}"
   Ok paths =>
-    let expected = 39
+    let expected = 42
     if length paths /= expected then
       fail
         "test/parse_error_fixtures: expected \{intToString expected} fixtures, found \{intToString (length paths)}"

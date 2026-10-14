@@ -80,6 +80,16 @@ case "$bad_out" in
   *) fail=$((fail+1)); printf 'FAIL type-err/bad (no located diagnostic: [%s])\n' "$bad_out" ;;
 esac
 
+# 3b. The multi-module error block must end in a newline, so the caret line is not
+#     joined to whatever is printed next. `$(...)` strips trailing newlines, so the
+#     last byte is read from a file instead.
+MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/bad.mdk" >"$TMP/bad_stdout.txt" 2>/dev/null
+if [ -s "$TMP/bad_stdout.txt" ] && [ "$(tail -c 1 "$TMP/bad_stdout.txt" | wc -l | tr -d ' ')" = 1 ]; then
+  pass=$((pass+1)); printf 'ok   type-err/trailing-newline (error block ends in a newline)\n'
+else
+  fail=$((fail+1)); printf 'FAIL type-err/trailing-newline (error block is empty or has no trailing newline)\n'
+fi
+
 # 4. agree: build rejects the SAME type-error project (exit 1) — check==build.
 MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/bad.mdk" -o "$TMP/bad.out" >/dev/null 2>&1
 build_code=$?

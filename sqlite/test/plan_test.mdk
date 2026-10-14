@@ -17,7 +17,7 @@
 --
 -- Run: `medaka test sqlite/test/plan_test.mdk` from the sqlite root.
 
-import test.{Expectation, expectEqual, fail}
+import test.{Expectation, expectAll, expectEqual, fail}
 import lib.writer.{
   TableSchema,
   Column,
@@ -289,9 +289,9 @@ test "planFor: a FLOAT literal against the rowid stays a scan" =
         (EBin OpEq (ECol "id") (ELit (LFloat 4.0)))
         (selectFrom "people")))
 
--- The filter's blob comparison orders blobs by byte COUNT, the index seek by
--- byte CONTENT.  Until that is fixed, planning a blob equality would make the
--- two arms disagree, so blob targets are never planned.
+-- Blob targets stay unplanned.  No end-to-end test runs a planned blob plan
+-- against the scan; the forced test below checks only the seek arm, by hand.
+-- Under-planning is always safe.
 test "planFor: a BLOB target stays a scan" =
   expectEqual
     (Ok PlanScan)
@@ -301,13 +301,12 @@ test "planFor: a BLOB target stays a scan" =
         (EBin OpEq (ECol "b") (ELit (LBlob (arrayFromList [2, 3]))))
         (selectFrom "mixed")))
 
--- The blob exclusion in `seekableTarget` is load-bearing, not accidentally
--- unreachable: forced BY HAND (bypassing `planFor`, through the exported
--- `Plan`/`runPipelineWithPlan` API) a `PlanSeekIndex` on "b" disagrees with
--- the forced scan on this exact fixture, because `cmpOrder` (the filter)
--- matches blobs by byte COUNT while the index seek matches byte CONTENT —
--- `mixed` holds two 2-byte blobs ([2,3] on id 2, [4,5] on id 4), so the scan's
--- filter admits both while a content seek on [2,3] admits only id 2.
+-- A `PlanSeekIndex` on "b", forced BY HAND (bypassing `planFor`, through the
+-- exported `Plan`/`runPipelineWithPlan` API), must agree with the forced scan
+-- on this exact fixture: `mixed` holds two 2-byte blobs ([2,3] on id 2, [4,5]
+-- on id 4), so a content seek on [2,3] admits only id 2, and so does the
+-- filter.  `seekableTarget` keeps blobs out of planning; this checks the seek
+-- arm anyway.
 forcedBlobSelect : Select
 forcedBlobSelect =
   whereRaw
@@ -327,10 +326,12 @@ forcedBlobScanRows = do
   db <- mixedDb
   runPipelineWithPlan db PlanScan forcedBlobSelect
 
-test "plan: a forced BLOB index seek returns fewer rows than the forced scan" =
+test "plan: a forced BLOB index seek agrees with the forced scan" = expectAll [
   expectEqual
-    (Ok 1, Ok 2)
-    (map length forcedBlobSeekRows, map length forcedBlobScanRows)
+    (Ok 1, Ok 1)
+    (map length forcedBlobSeekRows, map length forcedBlobScanRows),
+  expectEqual forcedBlobScanRows forcedBlobSeekRows,
+]
 
 test "planFor: a top-level OR stays a scan" =
   expectEqual

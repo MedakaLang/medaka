@@ -1,0 +1,70 @@
+-- | In-language test for BLOB comparison in the SELECT filter and in ORDER BY
+--   (`lib.select`'s `cmpOrder` and `cellOrder`).
+--
+-- A BLOB compares by byte content, memcmp-style with the shorter prefix first,
+-- as SQLite's BINARY collation does.  Every expected value here is the answer
+-- the sqlite3 CLI gives on the same rows.
+--
+-- Run: `medaka test test/blob_compare_test.mdk` from the sqlite root.
+
+import test.{expectAll, expectEqual}
+import lib.dbwriter.{buildDatabaseMulti}
+import lib.sqlite.{Db, fromBytes}
+import lib.recordfmt.{Cell(..)}
+import lib.rowtype.{tCells}
+import lib.sqlstmt.{queryString}
+
+createSql : String
+createSql = "CREATE TABLE b(id INTEGER PRIMARY KEY, c BLOB)"
+
+-- Two blobs of length 2 whose contents differ (the length-only bug treats them
+-- as equal), a length-1 blob that sorts between them, and a length-2 blob that
+-- sorts first.  The empty blob sorts before everything, and the one-byte blob
+-- X'01' is a strict prefix of X'0100', so the prefix tie-break is exercised.
+rows : List (List Cell)
+rows = [
+  [CInt 1, CBlob (arrayFromList [2, 3])],
+  [CInt 2, CBlob (arrayFromList [9, 9])],
+  [CInt 3, CBlob (arrayFromList [1, 0])],
+  [CInt 4, CBlob (arrayFromList [5])],
+  [CInt 5, CBlob (arrayFromList [])],
+  [CInt 6, CBlob (arrayFromList [1])],
+]
+
+fixture : Result String Db
+fixture = do
+  bytes <- buildDatabaseMulti [("b", createSql, Some 0, rows)]
+  fromBytes bytes
+
+q : String -> Result String (List (List Cell))
+q sql = do
+  d <- fixture
+  queryString d sql tCells
+
+test "BLOB equality matches content, not length" = expectAll [
+  expectEqual
+    (q "SELECT id FROM b WHERE c = X'0203' ORDER BY id")
+    (Ok [[CInt 1]]),
+  expectEqual
+    (q "SELECT id FROM b WHERE X'0203' = c ORDER BY id")
+    (Ok [[CInt 1]]),
+  expectEqual
+    (q "SELECT id FROM b WHERE c <> X'0203' ORDER BY id")
+    (Ok [[CInt 2], [CInt 3], [CInt 4], [CInt 5], [CInt 6]]),
+  expectEqual (q "SELECT id FROM b WHERE c = X'' ORDER BY id") (Ok [[CInt 5]]),
+]
+
+test "BLOB ordering compares bytes, not lengths" = expectAll [
+  expectEqual
+    (q "SELECT id FROM b WHERE c < X'0300' ORDER BY id")
+    (Ok [[CInt 1], [CInt 3], [CInt 5], [CInt 6]]),
+  expectEqual
+    (q "SELECT id FROM b WHERE c > X'0203' ORDER BY id")
+    (Ok [[CInt 2], [CInt 4]]),
+  expectEqual (q "SELECT id FROM b WHERE c < X'01' ORDER BY id") (Ok [[CInt 5]]),
+]
+
+test "ORDER BY a BLOB column sorts by bytes, empty and prefix first" =
+  expectEqual
+    (q "SELECT id FROM b ORDER BY c")
+    (Ok [[CInt 5], [CInt 6], [CInt 3], [CInt 1], [CInt 4], [CInt 2]])

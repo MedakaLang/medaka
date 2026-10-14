@@ -1,0 +1,4 @@
+-- Lexer error: a backslash-letter that no string form decodes is rejected after an
+-- interpolation inside a triple-quoted string, as it is after an interpolation
+-- inside a plain string (see lex_interp_bad_escape.mdk).
+x = """a \{1} \d+"""

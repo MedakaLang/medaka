@@ -2658,13 +2658,13 @@ tyQualTailFor ty TAt (TIdent n) = defer
   advance
   advance
   q <- getPos
-  deferPure (TyQual ty [EPName n] (Some (locOfSpan s q)))
+  tyQualDone (TyQual ty [EPName n] (Some (locOfSpan s q)))
 tyQualTailFor ty TAt (TString _) = defer
   s <- getPos
   advance
   p <- authTermP
   q <- getPos
-  deferPure (TyQual ty [p] (Some (locOfSpan s q)))
+  tyQualDone (TyQual ty [p] (Some (locOfSpan s q)))
 tyQualTailFor ty TAt TLParen = defer
   s <- getPos
   advance
@@ -2673,7 +2673,7 @@ tyQualTailFor ty TAt TLParen = defer
   rest <- authJoinTail
   expectTok TRParen
   q <- getPos
-  deferPure (TyQual ty (first :: rest) (Some (locOfSpan s q)))
+  tyQualDone (TyQual ty (first :: rest) (Some (locOfSpan s q)))
 tyQualTailFor _ TAsAt (TIdent n) = defer
   pos <- getPos
   fatalAtP
@@ -2690,6 +2690,21 @@ tyQualTailFor _ TAsAt TLParen = defer
     "an authority qualifier needs a space before `@`; write `String @(...)`"
     pos
 tyQualTailFor ty _ _ = deferPure ty
+
+-- A second `@` directly after a qualifier is refused at that `@`.  Left in the
+-- stream it would be read as a declaration attribute on the next declaration,
+-- and `fmt` would then write it there.  Only a qualifier that was just read is
+-- checked, because `(p : T @Label)` is a binder domain, not a qualifier.
+tyQualDone : Ty -> Parser Ty
+tyQualDone ty = defer
+  t <- peekP
+  tyQualDoneFor ty t
+
+tyQualDoneFor : Ty -> Token -> Parser Ty
+tyQualDoneFor _ TAt = defer
+  pos <- getPos
+  fatalAtP "a type takes one authority qualifier" pos
+tyQualDoneFor ty _ = deferPure ty
 
 -- One term of a written authority join, in a qualifier (`@(a | "b/*")`) or
 -- an index (`Handle ("a/*" | p)`): a name, or a domain literal spelled as an
@@ -3217,28 +3232,45 @@ letRecDeclClause = defer
   deferPure (name, pats, body, locOfSpan s (s + 1))
 
 -- declaration attribute `@deprecated "msg"` / `@inline` / `@must_use` / `@noinline` wrapping
--- the following decl.
+-- the following decl.  `atPos` is the `@`, where an unknown or ill-formed
+-- attribute is reported.
 parseAttrib : Parser Decl
 parseAttrib = defer
+  atPos <- getPos
   expectTok TAt
   name <- identNameP
   t <- peekP
-  attr <- attrArg name t
+  attr <- attrArg atPos name t
   skipNewlines
   inner <- parseDecl
   deferPure (DAttrib [attr] inner)
 
-attrArg : String -> Token -> Parser Attr
-attrArg name (TString msg) = defer
+attrArg : Int -> String -> Token -> Parser Attr
+attrArg atPos name (TString msg) = defer
   advance
-  deferPure (mkAttr name (Some msg))
-attrArg name _ = deferPure (mkAttr name None)
+  mkAttr atPos name (Some msg)
+attrArg atPos name _ = mkAttr atPos name None
 
-mkAttr : String -> Option String -> Attr
-mkAttr "deprecated" (Some msg) = AttrDeprecated msg
-mkAttr "must_use" _ = AttrMustUse
-mkAttr "noinline" _ = AttrNoInline
-mkAttr _ _ = AttrInline
+-- Every attribute name is listed here, so a name outside the list is a located
+-- error.  Mapping it to a default would make `fmt` write that default back over
+-- the author's text.  `@deprecated` keeps an absent message as `None`, so it
+-- prints back as written.
+mkAttr : Int -> String -> Option String -> Parser Attr
+mkAttr _ "deprecated" msg = deferPure (AttrDeprecated msg)
+mkAttr atPos name msg = match bareAttr name
+  None =>
+    fatalAtP
+      "unknown declaration attribute `@\{name}`; the attributes are `@deprecated \"msg\"`, `@inline`, `@must_use` and `@noinline`"
+      atPos
+  Some attr => match msg
+    None => deferPure attr
+    Some _ => fatalAtP "`@\{name}` takes no message" atPos
+
+bareAttr : String -> Option Attr
+bareAttr "inline" = Some AttrInline
+bareAttr "must_use" = Some AttrMustUse
+bareAttr "noinline" = Some AttrNoInline
+bareAttr _ = None
 
 externName : Parser String
 externName = defer

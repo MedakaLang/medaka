@@ -1,5 +1,5 @@
 # META
-source_lines=6755
+source_lines=6787
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -2662,13 +2662,13 @@ tyQualTailFor ty TAt (TIdent n) = defer
   advance
   advance
   q <- getPos
-  deferPure (TyQual ty [EPName n] (Some (locOfSpan s q)))
+  tyQualDone (TyQual ty [EPName n] (Some (locOfSpan s q)))
 tyQualTailFor ty TAt (TString _) = defer
   s <- getPos
   advance
   p <- authTermP
   q <- getPos
-  deferPure (TyQual ty [p] (Some (locOfSpan s q)))
+  tyQualDone (TyQual ty [p] (Some (locOfSpan s q)))
 tyQualTailFor ty TAt TLParen = defer
   s <- getPos
   advance
@@ -2677,7 +2677,7 @@ tyQualTailFor ty TAt TLParen = defer
   rest <- authJoinTail
   expectTok TRParen
   q <- getPos
-  deferPure (TyQual ty (first :: rest) (Some (locOfSpan s q)))
+  tyQualDone (TyQual ty (first :: rest) (Some (locOfSpan s q)))
 tyQualTailFor _ TAsAt (TIdent n) = defer
   pos <- getPos
   fatalAtP
@@ -2694,6 +2694,21 @@ tyQualTailFor _ TAsAt TLParen = defer
     "an authority qualifier needs a space before `@`; write `String @(...)`"
     pos
 tyQualTailFor ty _ _ = deferPure ty
+
+-- A second `@` directly after a qualifier is refused at that `@`.  Left in the
+-- stream it would be read as a declaration attribute on the next declaration,
+-- and `fmt` would then write it there.  Only a qualifier that was just read is
+-- checked, because `(p : T @Label)` is a binder domain, not a qualifier.
+tyQualDone : Ty -> Parser Ty
+tyQualDone ty = defer
+  t <- peekP
+  tyQualDoneFor ty t
+
+tyQualDoneFor : Ty -> Token -> Parser Ty
+tyQualDoneFor _ TAt = defer
+  pos <- getPos
+  fatalAtP "a type takes one authority qualifier" pos
+tyQualDoneFor ty _ = deferPure ty
 
 -- One term of a written authority join, in a qualifier (`@(a | "b/*")`) or
 -- an index (`Handle ("a/*" | p)`): a name, or a domain literal spelled as an
@@ -3221,28 +3236,45 @@ letRecDeclClause = defer
   deferPure (name, pats, body, locOfSpan s (s + 1))
 
 -- declaration attribute `@deprecated "msg"` / `@inline` / `@must_use` / `@noinline` wrapping
--- the following decl.
+-- the following decl.  `atPos` is the `@`, where an unknown or ill-formed
+-- attribute is reported.
 parseAttrib : Parser Decl
 parseAttrib = defer
+  atPos <- getPos
   expectTok TAt
   name <- identNameP
   t <- peekP
-  attr <- attrArg name t
+  attr <- attrArg atPos name t
   skipNewlines
   inner <- parseDecl
   deferPure (DAttrib [attr] inner)
 
-attrArg : String -> Token -> Parser Attr
-attrArg name (TString msg) = defer
+attrArg : Int -> String -> Token -> Parser Attr
+attrArg atPos name (TString msg) = defer
   advance
-  deferPure (mkAttr name (Some msg))
-attrArg name _ = deferPure (mkAttr name None)
+  mkAttr atPos name (Some msg)
+attrArg atPos name _ = mkAttr atPos name None
 
-mkAttr : String -> Option String -> Attr
-mkAttr "deprecated" (Some msg) = AttrDeprecated msg
-mkAttr "must_use" _ = AttrMustUse
-mkAttr "noinline" _ = AttrNoInline
-mkAttr _ _ = AttrInline
+-- Every attribute name is listed here, so a name outside the list is a located
+-- error.  Mapping it to a default would make `fmt` write that default back over
+-- the author's text.  `@deprecated` keeps an absent message as `None`, so it
+-- prints back as written.
+mkAttr : Int -> String -> Option String -> Parser Attr
+mkAttr _ "deprecated" msg = deferPure (AttrDeprecated msg)
+mkAttr atPos name msg = match bareAttr name
+  None =>
+    fatalAtP
+      "unknown declaration attribute `@\{name}`; the attributes are `@deprecated \"msg\"`, `@inline`, `@must_use` and `@noinline`"
+      atPos
+  Some attr => match msg
+    None => deferPure attr
+    Some _ => fatalAtP "`@\{name}` takes no message" atPos
+
+bareAttr : String -> Option Attr
+bareAttr "inline" = Some AttrInline
+bareAttr "must_use" = Some AttrMustUse
+bareAttr "noinline" = Some AttrNoInline
+bareAttr _ = None
 
 externName : Parser String
 externName = defer
@@ -7653,13 +7685,18 @@ parseResultWith src tokList offList =
 (DTypeSig false "tyQualTail" (TyFun (TyCon "Ty") (TyApp (TyCon "Parser") (TyCon "Ty"))))
 (DFunDef false "tyQualTail" ((PVar "ty")) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EApp (EVar "tyQualTailFor") (EVar "ty")) (EVar "t")) (EVar "t2")))))))
 (DTypeSig false "tyQualTailFor" (TyFun (TyCon "Ty") (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Ty"))))))
-(DFunDef false "tyQualTailFor" ((PVar "ty") (PCon "TAt") (PCon "TIdent" (PVar "n"))) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "TyQual") (EVar "ty")) (EListLit (EApp (EVar "EPName") (EVar "n")))) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))
-(DFunDef false "tyQualTailFor" ((PVar "ty") (PCon "TAt") (PCon "TString" PWild)) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "authTermP")) (ELam ((PVar "p")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "TyQual") (EVar "ty")) (EListLit (EVar "p"))) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))
-(DFunDef false "tyQualTailFor" ((PVar "ty") (PCon "TAt") (PCon "TLParen")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "authTermP")) (ELam ((PVar "first")) (EApp (EApp (EVar "deferThen") (EVar "authJoinTail")) (ELam ((PVar "rest")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "TyQual") (EVar "ty")) (EBinOp "::" (EVar "first") (EVar "rest"))) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))))))))
+(DFunDef false "tyQualTailFor" ((PVar "ty") (PCon "TAt") (PCon "TIdent" (PVar "n"))) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EVar "tyQualDone") (EApp (EApp (EApp (EVar "TyQual") (EVar "ty")) (EListLit (EApp (EVar "EPName") (EVar "n")))) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))
+(DFunDef false "tyQualTailFor" ((PVar "ty") (PCon "TAt") (PCon "TString" PWild)) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "authTermP")) (ELam ((PVar "p")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EVar "tyQualDone") (EApp (EApp (EApp (EVar "TyQual") (EVar "ty")) (EListLit (EVar "p"))) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))
+(DFunDef false "tyQualTailFor" ((PVar "ty") (PCon "TAt") (PCon "TLParen")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "authTermP")) (ELam ((PVar "first")) (EApp (EApp (EVar "deferThen") (EVar "authJoinTail")) (ELam ((PVar "rest")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EVar "tyQualDone") (EApp (EApp (EApp (EVar "TyQual") (EVar "ty")) (EBinOp "::" (EVar "first") (EVar "rest"))) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))))))))
 (DFunDef false "tyQualTailFor" (PWild (PCon "TAsAt") (PCon "TIdent" (PVar "n"))) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "pos")) (EApp (EApp (EVar "fatalAtP") (EBinOp "++" (EBinOp "++" (ELit (LString "an authority qualifier needs a space before `@`; write `String @")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "`")))) (EVar "pos")))))
 (DFunDef false "tyQualTailFor" (PWild (PCon "TAsAt") (PCon "TString" (PVar "s"))) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "pos")) (EApp (EApp (EVar "fatalAtP") (EBinOp "++" (EBinOp "++" (ELit (LString "an authority qualifier needs a space before `@`; write `String @\"")) (EApp (EVar "display") (EVar "s"))) (ELit (LString "\"`")))) (EVar "pos")))))
 (DFunDef false "tyQualTailFor" (PWild (PCon "TAsAt") (PCon "TLParen")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "pos")) (EApp (EApp (EVar "fatalAtP") (ELit (LString "an authority qualifier needs a space before `@`; write `String @(...)`"))) (EVar "pos")))))
 (DFunDef false "tyQualTailFor" ((PVar "ty") PWild PWild) (EApp (EVar "deferPure") (EVar "ty")))
+(DTypeSig false "tyQualDone" (TyFun (TyCon "Ty") (TyApp (TyCon "Parser") (TyCon "Ty"))))
+(DFunDef false "tyQualDone" ((PVar "ty")) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "tyQualDoneFor") (EVar "ty")) (EVar "t")))))
+(DTypeSig false "tyQualDoneFor" (TyFun (TyCon "Ty") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Ty")))))
+(DFunDef false "tyQualDoneFor" (PWild (PCon "TAt")) (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "pos")) (EApp (EApp (EVar "fatalAtP") (ELit (LString "a type takes one authority qualifier"))) (EVar "pos")))))
+(DFunDef false "tyQualDoneFor" ((PVar "ty") PWild) (EApp (EVar "deferPure") (EVar "ty")))
 (DTypeSig false "authTermP" (TyApp (TyCon "Parser") (TyCon "EffParamTy")))
 (DFunDef false "authTermP" () (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EVar "authTermFor") (EVar "t")) (EVar "t2")))))))
 (DTypeSig false "authTermFor" (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "EffParamTy")))))
@@ -7781,15 +7818,18 @@ parseResultWith src tokList offList =
 (DTypeSig false "letRecDeclClause" (TyApp (TyCon "Parser") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))))
 (DFunDef false "letRecDeclClause" () (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "deferThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EVar "deferThen") (EApp (EVar "many") (EVar "parseParamPat"))) (ELam ((PVar "pats")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TEqual"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseBody")) (ELam ((PVar "body")) (EApp (EVar "deferPure") (ETuple (EVar "name") (EVar "pats") (EVar "body") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EBinOp "+" (EVar "s") (ELit (LInt 1)))))))))))))))))
 (DTypeSig false "parseAttrib" (TyApp (TyCon "Parser") (TyCon "Decl")))
-(DFunDef false "parseAttrib" () (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TAt"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "attrArg") (EVar "name")) (EVar "t"))) (ELam ((PVar "attr")) (EApp (EApp (EVar "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseDecl")) (ELam ((PVar "inner")) (EApp (EVar "deferPure") (EApp (EApp (EVar "DAttrib") (EListLit (EVar "attr"))) (EVar "inner"))))))))))))))))
-(DTypeSig false "attrArg" (TyFun (TyCon "String") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Attr")))))
-(DFunDef false "attrArg" ((PVar "name") (PCon "TString" (PVar "msg"))) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EVar "mkAttr") (EVar "name")) (EApp (EVar "Some") (EVar "msg")))))))
-(DFunDef false "attrArg" ((PVar "name") PWild) (EApp (EVar "deferPure") (EApp (EApp (EVar "mkAttr") (EVar "name")) (EVar "None"))))
-(DTypeSig false "mkAttr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Attr"))))
-(DFunDef false "mkAttr" ((PLit (LString "deprecated")) (PCon "Some" (PVar "msg"))) (EApp (EVar "AttrDeprecated") (EVar "msg")))
-(DFunDef false "mkAttr" ((PLit (LString "must_use")) PWild) (EVar "AttrMustUse"))
-(DFunDef false "mkAttr" ((PLit (LString "noinline")) PWild) (EVar "AttrNoInline"))
-(DFunDef false "mkAttr" (PWild PWild) (EVar "AttrInline"))
+(DFunDef false "parseAttrib" () (EApp (EApp (EVar "deferThen") (EVar "getPos")) (ELam ((PVar "atPos")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TAt"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "deferThen") (EApp (EApp (EApp (EVar "attrArg") (EVar "atPos")) (EVar "name")) (EVar "t"))) (ELam ((PVar "attr")) (EApp (EApp (EVar "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseDecl")) (ELam ((PVar "inner")) (EApp (EVar "deferPure") (EApp (EApp (EVar "DAttrib") (EListLit (EVar "attr"))) (EVar "inner"))))))))))))))))))
+(DTypeSig false "attrArg" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Attr"))))))
+(DFunDef false "attrArg" ((PVar "atPos") (PVar "name") (PCon "TString" (PVar "msg"))) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EApp (EVar "mkAttr") (EVar "atPos")) (EVar "name")) (EApp (EVar "Some") (EVar "msg"))))))
+(DFunDef false "attrArg" ((PVar "atPos") (PVar "name") PWild) (EApp (EApp (EApp (EVar "mkAttr") (EVar "atPos")) (EVar "name")) (EVar "None")))
+(DTypeSig false "mkAttr" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Parser") (TyCon "Attr"))))))
+(DFunDef false "mkAttr" (PWild (PLit (LString "deprecated")) (PVar "msg")) (EApp (EVar "deferPure") (EApp (EVar "AttrDeprecated") (EVar "msg"))))
+(DFunDef false "mkAttr" ((PVar "atPos") (PVar "name") (PVar "msg")) (EMatch (EApp (EVar "bareAttr") (EVar "name")) (arm (PCon "None") () (EApp (EApp (EVar "fatalAtP") (EBinOp "++" (EBinOp "++" (ELit (LString "unknown declaration attribute `@")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`; the attributes are `@deprecated \"msg\"`, `@inline`, `@must_use` and `@noinline`")))) (EVar "atPos"))) (arm (PCon "Some" (PVar "attr")) () (EMatch (EVar "msg") (arm (PCon "None") () (EApp (EVar "deferPure") (EVar "attr"))) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "fatalAtP") (EBinOp "++" (EBinOp "++" (ELit (LString "`@")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` takes no message")))) (EVar "atPos")))))))
+(DTypeSig false "bareAttr" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Attr"))))
+(DFunDef false "bareAttr" ((PLit (LString "inline"))) (EApp (EVar "Some") (EVar "AttrInline")))
+(DFunDef false "bareAttr" ((PLit (LString "must_use"))) (EApp (EVar "Some") (EVar "AttrMustUse")))
+(DFunDef false "bareAttr" ((PLit (LString "noinline"))) (EApp (EVar "Some") (EVar "AttrNoInline")))
+(DFunDef false "bareAttr" (PWild) (EVar "None"))
 (DTypeSig false "externName" (TyApp (TyCon "Parser") (TyCon "String")))
 (DFunDef false "externName" () (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "externNameFor") (EVar "t")))))
 (DTypeSig false "externNameFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "String"))))
@@ -9658,13 +9698,18 @@ parseResultWith src tokList offList =
 (DTypeSig false "tyQualTail" (TyFun (TyCon "Ty") (TyApp (TyCon "Parser") (TyCon "Ty"))))
 (DFunDef false "tyQualTail" ((PVar "ty")) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EMethodRef "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EApp (EVar "tyQualTailFor") (EVar "ty")) (EVar "t")) (EVar "t2")))))))
 (DTypeSig false "tyQualTailFor" (TyFun (TyCon "Ty") (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Ty"))))))
-(DFunDef false "tyQualTailFor" ((PVar "ty") (PCon "TAt") (PCon "TIdent" (PVar "n"))) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "TyQual") (EVar "ty")) (EListLit (EApp (EVar "EPName") (EVar "n")))) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))
-(DFunDef false "tyQualTailFor" ((PVar "ty") (PCon "TAt") (PCon "TString" PWild)) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "authTermP")) (ELam ((PVar "p")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "TyQual") (EVar "ty")) (EListLit (EVar "p"))) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))
-(DFunDef false "tyQualTailFor" ((PVar "ty") (PCon "TAt") (PCon "TLParen")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "authTermP")) (ELam ((PVar "first")) (EApp (EApp (EMethodRef "deferThen") (EVar "authJoinTail")) (ELam ((PVar "rest")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "TyQual") (EVar "ty")) (EBinOp "::" (EVar "first") (EVar "rest"))) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))))))))
+(DFunDef false "tyQualTailFor" ((PVar "ty") (PCon "TAt") (PCon "TIdent" (PVar "n"))) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EVar "tyQualDone") (EApp (EApp (EApp (EVar "TyQual") (EVar "ty")) (EListLit (EApp (EVar "EPName") (EVar "n")))) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))
+(DFunDef false "tyQualTailFor" ((PVar "ty") (PCon "TAt") (PCon "TString" PWild)) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "authTermP")) (ELam ((PVar "p")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EVar "tyQualDone") (EApp (EApp (EApp (EVar "TyQual") (EVar "ty")) (EListLit (EVar "p"))) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))
+(DFunDef false "tyQualTailFor" ((PVar "ty") (PCon "TAt") (PCon "TLParen")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "authTermP")) (ELam ((PVar "first")) (EApp (EApp (EMethodRef "deferThen") (EVar "authJoinTail")) (ELam ((PVar "rest")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TRParen"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EVar "tyQualDone") (EApp (EApp (EApp (EVar "TyQual") (EVar "ty")) (EBinOp "::" (EVar "first") (EVar "rest"))) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))))))))))))))))))))
 (DFunDef false "tyQualTailFor" (PWild (PCon "TAsAt") (PCon "TIdent" (PVar "n"))) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "pos")) (EApp (EApp (EVar "fatalAtP") (EBinOp "++" (EBinOp "++" (ELit (LString "an authority qualifier needs a space before `@`; write `String @")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "`")))) (EVar "pos")))))
 (DFunDef false "tyQualTailFor" (PWild (PCon "TAsAt") (PCon "TString" (PVar "s"))) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "pos")) (EApp (EApp (EVar "fatalAtP") (EBinOp "++" (EBinOp "++" (ELit (LString "an authority qualifier needs a space before `@`; write `String @\"")) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString "\"`")))) (EVar "pos")))))
 (DFunDef false "tyQualTailFor" (PWild (PCon "TAsAt") (PCon "TLParen")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "pos")) (EApp (EApp (EVar "fatalAtP") (ELit (LString "an authority qualifier needs a space before `@`; write `String @(...)`"))) (EVar "pos")))))
 (DFunDef false "tyQualTailFor" ((PVar "ty") PWild PWild) (EApp (EMethodRef "deferPure") (EVar "ty")))
+(DTypeSig false "tyQualDone" (TyFun (TyCon "Ty") (TyApp (TyCon "Parser") (TyCon "Ty"))))
+(DFunDef false "tyQualDone" ((PVar "ty")) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "tyQualDoneFor") (EVar "ty")) (EVar "t")))))
+(DTypeSig false "tyQualDoneFor" (TyFun (TyCon "Ty") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Ty")))))
+(DFunDef false "tyQualDoneFor" (PWild (PCon "TAt")) (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "pos")) (EApp (EApp (EVar "fatalAtP") (ELit (LString "a type takes one authority qualifier"))) (EVar "pos")))))
+(DFunDef false "tyQualDoneFor" ((PVar "ty") PWild) (EApp (EMethodRef "deferPure") (EVar "ty")))
 (DTypeSig false "authTermP" (TyApp (TyCon "Parser") (TyCon "EffParamTy")))
 (DFunDef false "authTermP" () (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EMethodRef "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EVar "authTermFor") (EVar "t")) (EVar "t2")))))))
 (DTypeSig false "authTermFor" (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "EffParamTy")))))
@@ -9786,15 +9831,18 @@ parseResultWith src tokList offList =
 (DTypeSig false "letRecDeclClause" (TyApp (TyCon "Parser") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))))
 (DFunDef false "letRecDeclClause" () (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "deferThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "many") (EVar "parseParamPat"))) (ELam ((PVar "pats")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TEqual"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseBody")) (ELam ((PVar "body")) (EApp (EMethodRef "deferPure") (ETuple (EVar "name") (EVar "pats") (EVar "body") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EBinOp "+" (EVar "s") (ELit (LInt 1)))))))))))))))))
 (DTypeSig false "parseAttrib" (TyApp (TyCon "Parser") (TyCon "Decl")))
-(DFunDef false "parseAttrib" () (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TAt"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "attrArg") (EVar "name")) (EVar "t"))) (ELam ((PVar "attr")) (EApp (EApp (EMethodRef "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseDecl")) (ELam ((PVar "inner")) (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "DAttrib") (EListLit (EVar "attr"))) (EVar "inner"))))))))))))))))
-(DTypeSig false "attrArg" (TyFun (TyCon "String") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Attr")))))
-(DFunDef false "attrArg" ((PVar "name") (PCon "TString" (PVar "msg"))) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "mkAttr") (EVar "name")) (EApp (EVar "Some") (EVar "msg")))))))
-(DFunDef false "attrArg" ((PVar "name") PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "mkAttr") (EVar "name")) (EVar "None"))))
-(DTypeSig false "mkAttr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Attr"))))
-(DFunDef false "mkAttr" ((PLit (LString "deprecated")) (PCon "Some" (PVar "msg"))) (EApp (EVar "AttrDeprecated") (EVar "msg")))
-(DFunDef false "mkAttr" ((PLit (LString "must_use")) PWild) (EVar "AttrMustUse"))
-(DFunDef false "mkAttr" ((PLit (LString "noinline")) PWild) (EVar "AttrNoInline"))
-(DFunDef false "mkAttr" (PWild PWild) (EVar "AttrInline"))
+(DFunDef false "parseAttrib" () (EApp (EApp (EMethodRef "deferThen") (EVar "getPos")) (ELam ((PVar "atPos")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TAt"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EApp (EVar "attrArg") (EVar "atPos")) (EVar "name")) (EVar "t"))) (ELam ((PVar "attr")) (EApp (EApp (EMethodRef "deferThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseDecl")) (ELam ((PVar "inner")) (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "DAttrib") (EListLit (EVar "attr"))) (EVar "inner"))))))))))))))))))
+(DTypeSig false "attrArg" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Attr"))))))
+(DFunDef false "attrArg" ((PVar "atPos") (PVar "name") (PCon "TString" (PVar "msg"))) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EApp (EVar "mkAttr") (EVar "atPos")) (EVar "name")) (EApp (EVar "Some") (EVar "msg"))))))
+(DFunDef false "attrArg" ((PVar "atPos") (PVar "name") PWild) (EApp (EApp (EApp (EVar "mkAttr") (EVar "atPos")) (EVar "name")) (EVar "None")))
+(DTypeSig false "mkAttr" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Parser") (TyCon "Attr"))))))
+(DFunDef false "mkAttr" (PWild (PLit (LString "deprecated")) (PVar "msg")) (EApp (EMethodRef "deferPure") (EApp (EVar "AttrDeprecated") (EVar "msg"))))
+(DFunDef false "mkAttr" ((PVar "atPos") (PVar "name") (PVar "msg")) (EMatch (EApp (EVar "bareAttr") (EVar "name")) (arm (PCon "None") () (EApp (EApp (EVar "fatalAtP") (EBinOp "++" (EBinOp "++" (ELit (LString "unknown declaration attribute `@")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`; the attributes are `@deprecated \"msg\"`, `@inline`, `@must_use` and `@noinline`")))) (EVar "atPos"))) (arm (PCon "Some" (PVar "attr")) () (EMatch (EVar "msg") (arm (PCon "None") () (EApp (EMethodRef "deferPure") (EVar "attr"))) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "fatalAtP") (EBinOp "++" (EBinOp "++" (ELit (LString "`@")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` takes no message")))) (EVar "atPos")))))))
+(DTypeSig false "bareAttr" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Attr"))))
+(DFunDef false "bareAttr" ((PLit (LString "inline"))) (EApp (EVar "Some") (EVar "AttrInline")))
+(DFunDef false "bareAttr" ((PLit (LString "must_use"))) (EApp (EVar "Some") (EVar "AttrMustUse")))
+(DFunDef false "bareAttr" ((PLit (LString "noinline"))) (EApp (EVar "Some") (EVar "AttrNoInline")))
+(DFunDef false "bareAttr" (PWild) (EVar "None"))
 (DTypeSig false "externName" (TyApp (TyCon "Parser") (TyCon "String")))
 (DFunDef false "externName" () (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "externNameFor") (EVar "t")))))
 (DTypeSig false "externNameFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "String"))))

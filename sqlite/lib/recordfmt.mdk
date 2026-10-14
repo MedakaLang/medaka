@@ -242,3 +242,22 @@ cellTextBytes : Cell -> Option (Array Int)
 cellTextBytes (CText s) = Some (toUtf8 s)
 cellTextBytes (CTextRaw b) = Some b
 cellTextBytes _ = None
+
+-- | Lexicographic (memcmp) comparison of two byte arrays: shorter-prefix wins a
+--   tie, exactly as SQLite's BINARY collation compares text/blob bodies.
+export
+compareBytesLex : Array Int -> Array Int -> Ordering
+compareBytesLex a b = compareBytesGo a b 0 (arrayLength a) (arrayLength b)
+
+compareBytesGo : Array Int -> Array Int -> Int -> Int -> Int -> Ordering
+compareBytesGo a b i la lb =
+  if i >= la && i >= lb then
+    Eq
+  else if i >= la then
+    Lt
+  else if i >= lb then
+    Gt
+  else if a[i] /= b[i] then
+    compare a[i] b[i]
+  else
+    compareBytesGo a b (i + 1) la lb

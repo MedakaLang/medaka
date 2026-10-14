@@ -39,12 +39,13 @@ assignTail : Expr -> ParserE <> Expr
 assignTailRaw : Expr -> ParserE <> Expr
 atLetSite : Loc -> Expr -> Expr
 atomRawLocated : Array Token -> Int -> PR Expr
-attrArg : String -> Token -> ParserE <> Attr
+attrArg : Int -> String -> Token -> ParserE <> Attr
 authJoinTail : ParserE <> (List EffParamTy)
 authJoinTailFor : Token -> ParserE <> (List EffParamTy)
 authTermFor : Token -> Token -> ParserE <> EffParamTy
 authTermP : ParserE <> EffParamTy
 backtickInfixMsg : String
+bareAttr : String -> Option Attr
 bareMinusSection : ParserE <> Expr
 benchRemovedMsg : String
 binLevel : Int -> Array Token -> Int -> PR Expr
@@ -410,7 +411,7 @@ methodNameIdxs : Array Token -> Int -> Int -> List (Option Int)
 methodNameStep : Array Token -> Int -> Int -> Int -> Bool -> Token -> List (Option Int)
 missingWhereIfaceMsg : String
 missingWhereImplMsg : String
-mkAttr : String -> Option String -> Attr
+mkAttr : Int -> String -> Option String -> ParserE <> Attr
 mkEffect : (List EffAtomTy, List String) -> Ty -> Ty
 mkLocated : String -> Array Token -> Array Int -> Int -> String -> Int -> ParseError
 mkRec : String -> (List RecPatField, Bool) -> Pat
@@ -685,6 +686,8 @@ tyFor : Token -> ParserE <> Ty
 tyParamFor : Token -> ParserE <> (String, Option KindAnn)
 tyParamP : ParserE <> (String, Option KindAnn)
 tyParamsP : ParserE <> (List (String, Option KindAnn))
+tyQualDone : Ty -> ParserE <> Ty
+tyQualDoneFor : Ty -> Token -> ParserE <> Ty
 tyQualTail : Ty -> ParserE <> Ty
 tyQualTailFor : Ty -> Token -> Token -> ParserE <> Ty
 tyTupleOrSingle : List Ty -> Ty

@@ -3,4 +3,5 @@ exit=1
 error: <fixtures>/user_effect_ffi_cross/cbind.mdk:3:21: foreign declaration `cAdd` names `FFI` in its result row, but that `FFI` is a label declared with `effect FFI`, not the foreign-call effect; rename the declared label so `FFI` here means the foreign call
   |
 3 | export extern cAdd : Int -> Int -> <FFI> Int
-  |                      ^--- stderr
+  |                      ^
+--- stderr

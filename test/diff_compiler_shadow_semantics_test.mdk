@@ -1469,16 +1469,8 @@ test "every fixture in the corpus is wired into the table" = match corpusUnits
    `checkRunBuild` the sweep uses, and asserts both of `binaryRanClean`'s
    branches directly, outside the "every cell grades ok" sweep.
 
-   Declared BEFORE the heavy sweep below deliberately, not just
-   alphabetically, and deliberately leaves its `scratchDir` unremoved: an
-   `rm -rf` of one scratch directory followed later, in the same process, by
-   a *fresh* `scratchDir` and a real link can leave that later link unable
-   to see its own freshly-minted directory (`ld: cannot open output file …
-   No such file or directory`) — reproduced standalone with as few as two
-   prior builds, and specifically tied to the `rm -rf` step, not to spawn
-   volume. Both hazards (declaration order, no cleanup) keep this test and
-   the sweep after it clear of that artifact; it is a process-lifetime
-   spawn defect, not one in this test or in `binaryRanClean`. -}
+   Declared BEFORE the heavy sweep below, and it leaves its `scratchDir` in
+   place: this test never removes the root. -}
 test "binaryRanClean distinguishes a panicking binary from a clean one" =
   let binpanicCorpus = "\{medakaRoot}/test/binpanic_fixtures"
   match scratchDir

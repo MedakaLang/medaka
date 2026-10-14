@@ -725,6 +725,10 @@ gradeInitialize s = match replyTo 1 s.objs
     unless
       (dig ["result", "serverInfo", "name"] init == Some (JString "medaka-lsp"))
       "serverInfo.name is not \"medaka-lsp\"",
+    unless
+      (dig ["result", "serverInfo", "version"] init
+        == Some (JString "0.1.0-preview"))
+      "serverInfo.version is not \"0.1.0-preview\" (medaka_cli.mdk's medakaVersion)",
   ]
 
 gradeProviders : List (String, Option Json) -> Seen -> List String

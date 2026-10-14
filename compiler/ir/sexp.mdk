@@ -346,7 +346,8 @@ declSexp (DImpl { pub, iface, tys, reqs, methods }) = node "DImpl" [
 ]
 
 attrSexp : Attr -> String
-attrSexp (AttrDeprecated s) = node "AttrDeprecated" [escStr s]
+attrSexp (AttrDeprecated (Some s)) = node "AttrDeprecated" [escStr s]
+attrSexp (AttrDeprecated None) = "AttrDeprecated"
 attrSexp AttrInline = "AttrInline"
 attrSexp AttrMustUse = "AttrMustUse"
 attrSexp AttrNoInline = "AttrNoInline"

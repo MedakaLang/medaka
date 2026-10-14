@@ -139,9 +139,9 @@ flush, so a crash after that can still lose it. Closing the gap would
 mean flushing the parent on every call.
 
 ```medaka
-> mkdirAllDurably "stdlib"
+> mkdirAllDurably "/dev/null"
 Ok ()
-> mkdirAllDurably "stdlib/fs.mdk/sub"
+> mkdirAllDurably "/dev/null/sub"
 Err "Not a directory"
 ```
 

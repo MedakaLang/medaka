@@ -94,15 +94,9 @@ checkOrRunGolden verb entry goldenPath = match runMedaka [verb, entry]
       compareGolden goldenPath (stripRootPaths out)
 
 -- | `test_process.scratchDir` is a top-level nullary, so it is evaluated
--- ONCE per process and every caller in this module is handed the same
--- path — this module calls `buildAndRunGolden` twice, one call per corpus.
--- `binName` keeps the two builds from colliding inside that one shared
--- directory, and it is deliberately never `rm -rf`'d: removing it after the
--- first build leaves the second build's own fresh link unable to see its
--- output path (`ld: cannot open output file … No such file or directory`)
--- — reproduced standalone here, and already the documented reason
--- `diff_compiler_shadow_semantics_test.mdk`'s own `scratchDir` use leaves
--- its directory unremoved.
+-- ONCE per process, and both builds this module makes (one per corpus) are
+-- handed the same root. `binName` keeps the two binaries apart inside that
+-- root. Nothing in this module removes the root.
 buildAndRunGolden : String ->
   String ->
   String ->

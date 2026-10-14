@@ -25,7 +25,7 @@
 -- the emitter's own diagnostic surfaced.
 
 import support.util.{stringTrim, joinWith, joinNl}
-import string.{words, contains, startsWith, endsWith}
+import string.{words, contains, startsWith, endsWith, split}
 import io.{runCommandOk}
 import support.timer.{perfEnabled, now, emitPhase}
 import driver.loader.{
@@ -243,11 +243,64 @@ stripTrailingUnit s =
 -- template is accepted by both GNU and BSD mktemp (dual-platform).
 export
 makeTempDir : Unit -> <IO> Result String String
-makeTempDir _ = match runCommandOk "mktemp" ["-d", "/tmp/medaka_build_XXXXXX"]
+makeTempDir _ =
+  let candidates =
+    scratchCandidatesFrom
+      (envOr "TMPDIR" "")
+      (envOr "MEDAKA_SCRATCH" defaultScratchRoot)
+  match firstScratchDir candidates
+    Ok dir => Ok dir
+    Err e => Err (stringTrim e)
+
+-- Returns the first candidate root that yields a directory.  When every
+-- candidate fails, the error names each one.
+firstScratchDir : List String -> <IO> Result String String
+firstScratchDir [] = Err "no scratch directory candidate"
+firstScratchDir [root] = makeScratchIn root
+firstScratchDir (root :: rest) = match makeScratchIn root
+  Ok dir => Ok dir
+  Err e => match firstScratchDir rest
+    Ok dir => Ok dir
+    Err e2 => Err "\{e}; \{e2}"
+
+-- `mkdir -p` alone succeeds on a directory the user cannot write to, so the
+-- write test is part of the same probe.
+makeScratchIn : String -> <IO> Result String String
+makeScratchIn root = match runCommand "sh" [
+  "-c",
+  "mkdir -p \"$1\" 2>/dev/null && test -w \"$1\" || { echo \"cannot use scratch root $1\" >&2; exit 1; }",
+  "sh",
+  root,
+]
   Err e => Err e
-  Ok (out, _) =>
-    let dir = stringTrim out
-    if dir == "" then Err "mktemp -d printed no path" else Ok dir
+  Ok (0, _, _) =>
+    match runCommandOk "mktemp" ["-d", joinPath root "medaka_build_XXXXXX"]
+      Err e => Err e
+      Ok (out, _) =>
+        let dir = stringTrim out
+        if dir == "" then Err "mktemp -d printed no path" else Ok dir
+  Ok (_, _, err) => Err (stringTrim err)
+
+-- `mktemp -d` ignores TMPDIR once its template names a directory, so the root
+-- is spelled into the template.  Mirrors test/lib_scratch.sh's routing.
+export
+defaultScratchRoot : String
+defaultScratchRoot = "/var/tmp/medaka-scratch"
+
+-- `/tmp` spelled with or without its trailing slash is the same RAM-backed
+-- directory and routes the same way.
+isTmpRoot : String -> Bool
+isTmpRoot dir = dir == "/tmp" || dir == "/tmp/"
+
+-- An explicit TMPDIR other than /tmp is the user's choice and gets no fallback:
+-- an unusable one fails the build rather than landing on the RAM-backed /tmp.
+isExplicitScratch : String -> Bool
+isExplicitScratch tmpdir = tmpdir /= "" && not (isTmpRoot tmpdir)
+
+export
+scratchCandidatesFrom : String -> String -> List String
+scratchCandidatesFrom tmpdir scratch =
+  if isExplicitScratch tmpdir then [tmpdir] else [scratch, "/tmp"]
 
 -- The manifest a scratch project gets when a probe for `target` is compiled
 -- outside the target's own tree.  It carries the target project's own
@@ -318,7 +371,7 @@ removeEntries dir (n :: rest) =
   let _ = removeFile (joinPath dir n)
   removeEntries dir rest
 
--- Tear the scratch dir down so a build leaks nothing into /tmp.  Every Result is
+-- Tear the scratch dir down so a build leaks nothing into the scratch root.  Every Result is
 -- discarded on purpose: a cleanup failure must never fail an otherwise-good build.
 export
 cleanupTempDir : String -> <IO> Unit
@@ -330,7 +383,7 @@ cleanupTempDir dir = match listDir dir
     ()
 
 -- ---- startup sweep of leaked scratch dirs (issue #97) ----
--- A build stages scratch under makeTempDir's /tmp/medaka_build_* dir and removes
+-- A build stages scratch under makeTempDir's medaka_build_* dir in the scratch root and removes
 -- it on the NORMAL exit path (cleanupTempDir).  A build KILLED before that runs —
 -- `timeout`, Ctrl-C, OOM, SIGKILL — leaks its dir.  Over a long multi-agent
 -- session these accumulated to 96% of a 16 GB RAM-backed tmpfs (1,041 dirs).  A
@@ -356,8 +409,29 @@ cleanupTempDir dir = match listDir dir
 -- listDir + flat removeFile + removeDir tears it down exactly as for a live build.
 sweepStaleTempDirs : Unit -> <IO> Unit
 sweepStaleTempDirs _ =
+  sweepEachRoot
+    (sweepRootsFrom
+      (envOr "TMPDIR" "")
+      (envOr "MEDAKA_SCRATCH" defaultScratchRoot))
+
+-- Every root a build may have staged under, and /tmp.
+sweepRootsFrom : String -> String -> List String
+sweepRootsFrom tmpdir scratch =
+  if isExplicitScratch tmpdir then [tmpdir, "/tmp"] else [scratch, "/tmp"]
+
+sweepEachRoot : List String -> <IO> Unit
+sweepEachRoot [] = ()
+sweepEachRoot (r :: rest) =
+  let _ = sweepRoot r
+  sweepEachRoot rest
+
+sweepRoot : String -> <IO> Unit
+sweepRoot root =
   let findArgs = [
-    "/tmp",
+    "-H",
+    root,
+    "-mindepth",
+    "1",
     "-maxdepth",
     "1",
     "-type",
@@ -368,7 +442,7 @@ sweepStaleTempDirs _ =
     "+360",
   ]
   match runCommand "find" findArgs
-    Ok (_, out, _) => sweepEachStale (words out)
+    Ok (_, out, _) => sweepEachStale (filter (/= "") (split "\n" out))
     Err _ => ()
 
 sweepEachStale : List String -> <IO> Unit

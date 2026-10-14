@@ -5,7 +5,8 @@
 
 import test.{expectAll, expectEqual}
 import driver.build_cmd.{
-  BuildProfile(..), profileClang, gcStaticLibs, gcSharedLibs
+  BuildProfile(..), profileClang, gcStaticLibs, gcSharedLibs,
+  scratchCandidatesFrom
 }
 
 test "a normal build keeps the opt level it was given and runs LTO detection" = expectAll
@@ -53,3 +54,23 @@ test "the shared fallback leaves flags with no libgc archive unchanged" = expect
       (gcSharedLibs ["-L/opt/gc/lib", "-lgc"]),
     expectEqual ["/opt/x/libgcx.a"] (gcSharedLibs ["/opt/x/libgcx.a"]),
   ]
+
+test "the default scratch root tries MEDAKA_SCRATCH, then /tmp" =
+  expectEqual
+    ["/var/tmp/medaka-scratch", "/tmp"]
+    (scratchCandidatesFrom "" "/var/tmp/medaka-scratch")
+
+test "TMPDIR set to the RAM-backed /tmp routes like an unset TMPDIR" = expectAll
+  [
+    expectEqual
+      ["/data/scratch", "/tmp"]
+      (scratchCandidatesFrom "/tmp" "/data/scratch"),
+    expectEqual
+      ["/data/scratch", "/tmp"]
+      (scratchCandidatesFrom "/tmp/" "/data/scratch"),
+  ]
+
+test "an explicit TMPDIR is the only candidate, with no fallback to /tmp" =
+  expectEqual
+    ["/home/u/scratch"]
+    (scratchCandidatesFrom "/home/u/scratch" "/var/tmp/medaka-scratch")

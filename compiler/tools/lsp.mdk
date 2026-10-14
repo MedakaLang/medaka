@@ -1591,8 +1591,11 @@ semanticTokensData src =
 -- formatting / documentSymbol / definition / documentHighlight (each a plain
 -- `true`).  The richer providers
 -- (hover/completion/inlayHint) and ELoc expr-precise ranges are later slices.
-initializeResult : Json
-initializeResult = jObject [
+-- `serverVersion` is threaded in from the driver (medaka_cli.mdk's
+-- `medakaVersion`), the same way tools/mcp.mdk threads its own: this module
+-- sits below the CLI in the dependency graph and cannot import it.
+initializeResultFor : String -> Json
+initializeResultFor serverVersion = jObject [
   (
     "capabilities",
     jObject [
@@ -1610,7 +1613,7 @@ initializeResult = jObject [
   ),
   (
     "serverInfo",
-    jObject [("name", JString "medaka-lsp"), ("version", JString "0.1.0")],
+    jObject [("name", JString "medaka-lsp"), ("version", JString serverVersion)],
   ),
 ]
 
@@ -2041,12 +2044,14 @@ methodOf msg = fieldStr "method" msg
 -- a flag: True = keep looping, False = `exit` was received (stop).
 public export data Step = Step Docs Bool
 
-dispatch : String -> String -> Json -> Docs -> <IO> Step
-dispatch runtimeSrc coreSrc msg docs = match methodOf msg
+dispatch : String -> String -> String -> Json -> Docs -> <IO> Step
+dispatch runtimeSrc coreSrc serverVersion msg docs = match methodOf msg
   None => Step docs True
   Some meth =>
     if meth == "initialize" then
-      let _ = writeMessage (responseMsg (requestId msg) initializeResult)
+      let _ =
+        writeMessage
+          (responseMsg (requestId msg) (initializeResultFor serverVersion))
       Step docs True
     else if meth == "initialized" then
       Step docs True
@@ -2123,8 +2128,8 @@ dispatch runtimeSrc coreSrc msg docs = match methodOf msg
 
 -- Read one full message (headers + body), parse it, dispatch.  Returns the
 -- next Step, or a terminal Step on EOF.
-serveOnce : String -> String -> Docs -> <IO> Step
-serveOnce runtimeSrc coreSrc docs = match readHeaders 0
+serveOnce : String -> String -> String -> Docs -> <IO> Step
+serveOnce runtimeSrc coreSrc serverVersion docs = match readHeaders 0
   None => Step docs False
   Some len => match readExactly len
     None => Step docs False
@@ -2135,7 +2140,7 @@ serveOnce runtimeSrc coreSrc docs = match readHeaders 0
           let _ = logLine "  parse-error: malformed JSON body (skipped)"
           Step docs True
         Ok msg =>
-          let step = dispatch runtimeSrc coreSrc msg docs
+          let step = dispatch runtimeSrc coreSrc serverVersion msg docs
           let _ = logLine "  handled"
           step
 -- input stream closed
@@ -2145,17 +2150,19 @@ serveOnce runtimeSrc coreSrc docs = match readHeaders 0
 -- malformed JSON body — skip, keep going
 
 -- The session loop: serve messages until `exit` or EOF.
-serve : String -> String -> Docs -> <IO> Unit
-serve runtimeSrc coreSrc docs = match serveOnce runtimeSrc coreSrc docs
-  Step _ False => unit
-  Step docs2 True => serve runtimeSrc coreSrc docs2
+serve : String -> String -> String -> Docs -> <IO> Unit
+serve runtimeSrc coreSrc serverVersion docs =
+  match serveOnce runtimeSrc coreSrc serverVersion docs
+    Step _ False => unit
+    Step docs2 True => serve runtimeSrc coreSrc serverVersion docs2
 
--- Public entry point for the driver.
+-- Public entry point for the driver.  `serverVersion` is reported in the
+-- `initialize` response's serverInfo; see `initializeResultFor`.
 export
-runServer : String -> String -> <IO> Unit
-runServer runtimeSrc coreSrc =
+runServer : String -> String -> String -> <IO> Unit
+runServer runtimeSrc coreSrc serverVersion =
   let _ = logLine "=== medaka-lsp session start ==="
-  serve runtimeSrc coreSrc emptyDocs
+  serve runtimeSrc coreSrc serverVersion emptyDocs
 
 unit : Unit
 unit = ()

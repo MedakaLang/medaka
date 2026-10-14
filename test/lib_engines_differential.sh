@@ -167,6 +167,18 @@
 #         sh test/diff_compiler_engines_part2.sh              # one part, as CI runs it
 #         ENGINE_JOBS=8 bash test/lib_engines_differential.sh
 #         VERBOSE=1 bash test/lib_engines_differential.sh    # every fixture's signature
+#         bash test/lib_engines_differential.sh --one <fixture>  # one fixture, standalone.
+#                                                              # exit 0: no pair of arms that
+#                                                              # both ran disagrees, no pin
+#                                                              # WRONG. exit 1: a pair disagrees
+#                                                              # or a pin is WRONG. exit 2: clang,
+#                                                              # native or eval oracle missing, the
+#                                                              # eval oracle, native binary or node
+#                                                              # runner cannot run, or no pair
+#                                                              # of arms both ran. A missing wasm
+#                                                              # oracle degrades to off and does not
+#                                                              # change the exit code, as on the
+#                                                              # main path.
 #         CAPTURE=1 bash test/lib_engines_differential.sh    # rewrite the ledger (review the diff!)
 #                                                          # (refused under ONLY/CORPUS_GLOB/ENGINE_PART)
 #         ENGINE_PART=2 ENGINE_LIST=1 bash test/lib_engines_differential.sh  # part 2's keys
@@ -249,7 +261,34 @@ keyfor() {
   esac
 }
 
-run_t() { perl -e 'alarm shift; exec @ARGV' "$@"; }   # portable timeout (no coreutils on mac)
+# Portable timeout (no coreutils on mac). A failed exec must not fall through: perl's bare
+# exec would continue and exit 0 with no output, which reads as a clean empty result.
+run_t() { perl -e 'alarm shift; exec @ARGV or do { print STDERR "run_t: cannot exec $ARGV[0]: $!\n"; exit 127 }' "$@"; }
+# unrunnable <status> <stdout-file> <stderr-file>: true when an arm could not run its
+# program. That covers a file that exists but cannot start (a shebang to a missing
+# interpreter, reported by run_t's exec marker), a loader failure (a missing shared
+# library), and a missing helper such as perl, which the shell reports with status 127.
+# The rule is status 126 or 127 with EMPTY stdout, or the exec marker. It treats a program
+# that exits 127 with empty stdout as unrunnable too, so such a program is reported as an
+# oracle failure (exit 2), not scored as a result. No corpus fixture exits that way.
+unrunnable() {
+  [ ! -s "$2" ] && { [ "$1" = 126 ] || [ "$1" = 127 ] || grep -q '^run_t: cannot exec' "$3"; }
+}
+
+# Toolchain and oracle preflight. The main path calls this before the fan-out, and every
+# `--one` invocation calls it again, because a standalone run never passes through the
+# fan-out. Without the per-invocation call, a missing eval oracle runs as an empty result
+# and is scored `ran`, which fabricates a cross-engine disagreement.
+require_toolchain() {
+  # Genuine toolchain absence → exit 2, worded to MATCH run_gates.sh's LEGIT_SKIP_RE.
+  command -v clang >/dev/null 2>&1 || { echo "no C compiler (clang) on PATH — skipping the engine gate"; exit 2; }
+
+  # A missing oracle is NOT a legitimate skip: the gate would compare nothing.  Exit 2
+  # with a message that deliberately does NOT match LEGIT_SKIP_RE, so run_gates.sh
+  # reclassifies it as FAIL* (phantom skip: oracle/binary not built).
+  [ -x "$MEDAKA" ]  || { echo "the native compiler was never built (missing $MEDAKA) — run: make medaka"; exit 2; }
+  [ -x "$EVALBIN" ] || { echo "the eval oracle was never built (missing $EVALBIN) — run: FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one $(basename "$EVALBIN")"; exit 2; }
+}
 
 # Sets WASM_OK / WASM_OFF_WHY / NODE.  Factored out of the (former) inline preflight
 # block so BOTH the normal parallel run and a standalone `--one` invocation (issue
@@ -286,6 +325,7 @@ detect_wasm_ok() {
 # "eq:eq:eq:ran:ran:ran".  Plus <slug>.detail (the three outputs + why an arm is n/a).
 if [ "${1:-}" = "--one" ]; then
   f="$2"
+  require_toolchain
 
   # ── Standalone bootstrap (issue #448) ────────────────────────────────────
   # WORKDIR / RESULTDIR / WASM_OK / MEDAKA_EMITTER / MEDAKA_WASM_EMITTER are
@@ -299,7 +339,9 @@ if [ "${1:-}" = "--one" ]; then
   # compute the same sane single-run values the parallel path's preflight
   # would have exported, so the shared per-fixture body below runs identically
   # either way.
+  standalone=0
   if [ -z "${WORKDIR:-}" ]; then
+    standalone=1
     STANDALONE_TMP="$(mktemp -d)"
     WORKDIR="$STANDALONE_TMP/work"; RESULTDIR="$STANDALONE_TMP/results"
     mkdir -p "$WORKDIR" "$RESULTDIR"
@@ -335,8 +377,17 @@ if [ "${1:-}" = "--one" ]; then
   # carry the program to completion — it has no `exit` primitive, so a nonzero exit
   # is never a program-level exit.  Each such fixture is ledgered with its reason.
   eva=ran
+  eval_rc=0
   run_t "$TIMEOUT" "$EVALBIN" "$RUNTIME" "$CORE" "$f" "$(dirname "$f")" "$STDLIB" \
-    >"$W/eval.out" 2>"$W/eval.err" || true
+    >"$W/eval.out" 2>"$W/eval.err" || eval_rc=$?
+  # An eval oracle that exists but cannot run passes the -x check in require_toolchain.
+  # It writes nothing and would be scored `ran`, which fabricates a disagreement. See
+  # `unrunnable` above for the rule.
+  if unrunnable "$eval_rc" "$W/eval.out" "$W/eval.err"; then
+    echo "the eval oracle cannot be executed (status $eval_rc): $EVALBIN — $(tail -n 1 "$W/eval.err")"
+    rm -rf "$W"
+    exit 2
+  fi
   grep -q 'runtime error \[E-' "$W/eval.err" && eva=na
 
   # -- native -----------------------------------------------------------------
@@ -347,7 +398,13 @@ if [ "${1:-}" = "--one" ]; then
         >"$W/native.err" 2>&1; then
     nat=na
   else
-    run_t "$TIMEOUT" "$W/$slug.bin" >"$W/native.out" 2>>"$W/native.err" || true
+    nrc=0
+    run_t "$TIMEOUT" "$W/$slug.bin" >"$W/native.out" 2>>"$W/native.err" || nrc=$?
+    if unrunnable "$nrc" "$W/native.out" "$W/native.err"; then
+      echo "the native binary for $key cannot be executed (status $nrc): $(tail -n 1 "$W/native.err")"
+      rm -rf "$W"
+      exit 2
+    fi
   fi
 
   # -- wasm -------------------------------------------------------------------
@@ -370,7 +427,13 @@ if [ "${1:-}" = "--one" ]; then
         -o "$W/$slug.wasm" >"$W/wasm.err" 2>&1; then
     wsm=na
   else
-    run_t "$TIMEOUT" "$NODE" "$RUNJS" "$W/$slug.wasm" >"$W/wasm.out" 2>>"$W/wasm.err" || true
+    wrc=0
+    run_t "$TIMEOUT" "$NODE" "$RUNJS" "$W/$slug.wasm" >"$W/wasm.out" 2>>"$W/wasm.err" || wrc=$?
+    if unrunnable "$wrc" "$W/wasm.out" "$W/wasm.err"; then
+      echo "the node runner for $key cannot be executed (status $wrc): $(tail -n 1 "$W/wasm.err")"
+      rm -rf "$W"
+      exit 2
+    fi
   fi
 
   # -- compare ----------------------------------------------------------------
@@ -437,7 +500,25 @@ if [ "${1:-}" = "--one" ]; then
 
   [ -n "${VERBOSE:-}" ] && printf '%-34s %s\n' "$key" "$sig"
   rm -rf "$W"
-  exit 0
+  # Standalone verdict. The fan-out ignores worker status and reads the .sig files, so
+  # the verdict only shapes a direct `--one` call: 2 = no pair of arms both ran, so
+  # nothing was compared; 1 = a pair disagrees or a value pin is WRONG; 0 otherwise.
+  # On a nonzero exit the signature and per-arm detail go to stdout. The detail file
+  # lives in the trapped temp dir, so it cannot be read afterwards, and VERBOSE is not
+  # needed. The fan-out's log is left unchanged.
+  rc=0; compared=0
+  for p in "$en" "$nw" "$ew"; do case "$p" in eq|ne) compared=1 ;; esac; done
+  if [ "$en" = ne ] || [ "$nw" = ne ] || [ "$ew" = ne ]; then rc=1; fi
+  case "$pin_v" in WRONG:*) rc=1 ;; esac
+  if [ "$compared" = 0 ]; then
+    [ "$standalone" = 1 ] && echo "no pair of arms both ran, nothing compared (key $key)" >&2
+    [ "$rc" = 0 ] && rc=2
+  fi
+  if [ "$standalone" = 1 ] && [ "$rc" != 0 ]; then
+    printf '%s  %s\n' "$key" "$sig"
+    cat "$RESULTDIR/$slug.detail"
+  fi
+  exit "$rc"
 fi
 
 # All FOUR emitter corpora — the two untyped (prelude-free) and, since the wasm arm
@@ -611,14 +692,7 @@ if [ -n "${ENGINE_LIST:-}" ]; then
 fi
 
 # ── Preflight ─────────────────────────────────────────────────────────────────
-# Genuine toolchain absence → exit 2, worded to MATCH run_gates.sh's LEGIT_SKIP_RE.
-command -v clang >/dev/null 2>&1 || { echo "no C compiler (clang) on PATH — skipping the engine gate"; exit 2; }
-
-# A missing oracle is NOT a legitimate skip: the gate would compare nothing.  Exit 2
-# with a message that deliberately does NOT match LEGIT_SKIP_RE, so run_gates.sh
-# reclassifies it as FAIL* (phantom skip: oracle/binary not built).
-[ -x "$MEDAKA" ]  || { echo "the native compiler was never built (missing $MEDAKA) — run: make medaka"; exit 2; }
-[ -x "$EVALBIN" ] || { echo "the eval oracle was never built (missing $EVALBIN) — run: FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one $(basename "$EVALBIN")"; exit 2; }
+require_toolchain
 
 # The wasm arm DEGRADES rather than skipping: with no wasm-tools / Node 24 we still
 # run T1 (eval == native), the tier that removes the golden circularity.  Skipping
