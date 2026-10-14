@@ -1,5 +1,5 @@
 # META
-source_lines=1876
+source_lines=1896
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/refindex.mdk — cross-file reference index (#254 Stage 0).
@@ -1360,8 +1360,28 @@ importWildGo ctx useEnv ((ns, name, originKey) :: rest) =
 -- method clause heads under `core\tmethod\teq` (#1002) — that is a project-local
 -- location joining a prelude key, not a descent into stdlib, and it is what makes
 -- `references` on a prelude method show the impls the user actually wrote.
+-- Last parse per prelude slot, keyed by the FULL source string (never a path), so
+-- an edited prelude re-parses.  The cached value is a function of `src` alone
+-- (decls and positions); nothing downstream of seeding reads the parser's loc
+-- state without a fresh parse priming it.
+preludeParseRuntime : Ref (Option (String, Option (List Decl, Positions)))
+preludeParseRuntime = Ref None
+
+preludeParseCore : Ref (Option (String, Option (List Decl, Positions)))
+preludeParseCore = Ref None
+
+preludeParseMemo : String -> String -> Option (List Decl, Positions)
+preludeParseMemo mid src =
+  let slot = if mid == "runtime" then preludeParseRuntime else preludeParseCore
+  match !slot
+    Some (k, r) if k == src => r
+    _ =>
+      let r = parseWithPositionsOpt src
+      slot := Some (src, r)
+      r
+
 seedPrelude : Ctx -> String -> String -> Unit
-seedPrelude ctx mid src = match parseWithPositionsOpt src
+seedPrelude ctx mid src = match preludeParseMemo mid src
   None => ()
   Some (decls, _) =>
     let expSet = collectExportedValues ctx decls
@@ -2283,8 +2303,14 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DTypeSig false "importWildGo" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyCon "Unit")))))
 (DFunDef false "importWildGo" (PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "importWildGo" ((PVar "ctx") (PVar "useEnv") (PCons (PTuple (PVar "ns") (PVar "name") (PVar "originKey")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "hmSetC") (EVar "ctx")) (EVar "useEnv")) (EBinOp "++" (EBinOp "++" (EVar "ns") (EVar "sep")) (EVar "name"))) (EVar "originKey"))) (DoExpr (EApp (EApp (EApp (EVar "importWildGo") (EVar "ctx")) (EVar "useEnv")) (EVar "rest")))))
+(DTypeSig false "preludeParseRuntime" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")))))))
+(DFunDef false "preludeParseRuntime" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig false "preludeParseCore" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")))))))
+(DFunDef false "preludeParseCore" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig false "preludeParseMemo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions"))))))
+(DFunDef false "preludeParseMemo" ((PVar "mid") (PVar "src")) (EBlock (DoLet false false (PVar "slot") (EIf (EBinOp "==" (EVar "mid") (ELit (LString "runtime"))) (EVar "preludeParseRuntime") (EVar "preludeParseCore"))) (DoExpr (EMatch (EUnOp "!" (EVar "slot")) (arm (PCon "Some" (PTuple (PVar "k") (PVar "r"))) ((GBool (EBinOp "==" (EVar "k") (EVar "src")))) (EVar "r")) (arm PWild () (EBlock (DoLet false false (PVar "r") (EApp (EVar "parseWithPositionsOpt") (EVar "src"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "slot")) (EApp (EVar "Some") (ETuple (EVar "src") (EVar "r"))))) (DoExpr (EVar "r"))))))))
 (DTypeSig false "seedPrelude" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit")))))
-(DFunDef false "seedPrelude" ((PVar "ctx") (PVar "mid") (PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PTuple (PVar "decls") PWild)) () (EBlock (DoLet false false (PVar "expSet") (EApp (EApp (EVar "collectExportedValues") (EVar "ctx")) (EVar "decls"))) (DoExpr (EApp (EApp (EApp (EVar "seedPreludeGo") (EVar "ctx")) (EVar "mid")) (EApp (EApp (EApp (EVar "preludeDefEntries") (EVar "expSet")) (EVar "mid")) (EVar "decls"))))))))
+(DFunDef false "seedPrelude" ((PVar "ctx") (PVar "mid") (PVar "src")) (EMatch (EApp (EApp (EVar "preludeParseMemo") (EVar "mid")) (EVar "src")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PTuple (PVar "decls") PWild)) () (EBlock (DoLet false false (PVar "expSet") (EApp (EApp (EVar "collectExportedValues") (EVar "ctx")) (EVar "decls"))) (DoExpr (EApp (EApp (EApp (EVar "seedPreludeGo") (EVar "ctx")) (EVar "mid")) (EApp (EApp (EApp (EVar "preludeDefEntries") (EVar "expSet")) (EVar "mid")) (EVar "decls"))))))))
 (DTypeSig false "preludeDefEntries" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))))
 (DFunDef false "preludeDefEntries" (PWild PWild (PList)) (EListLit))
 (DFunDef false "preludeDefEntries" ((PVar "expSet") (PVar "mid") (PCons (PVar "d") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "preludeDefsOfDecl") (EVar "expSet")) (EVar "mid")) (EVar "d")) (EApp (EApp (EApp (EVar "preludeDefEntries") (EVar "expSet")) (EVar "mid")) (EVar "rest"))))
@@ -2813,8 +2839,14 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DTypeSig false "importWildGo" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyCon "Unit")))))
 (DFunDef false "importWildGo" (PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "importWildGo" ((PVar "ctx") (PVar "useEnv") (PCons (PTuple (PVar "ns") (PVar "name") (PVar "originKey")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "hmSetC") (EVar "ctx")) (EVar "useEnv")) (EBinOp "++" (EBinOp "++" (EVar "ns") (EVar "sep")) (EVar "name"))) (EVar "originKey"))) (DoExpr (EApp (EApp (EApp (EVar "importWildGo") (EVar "ctx")) (EVar "useEnv")) (EVar "rest")))))
+(DTypeSig false "preludeParseRuntime" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")))))))
+(DFunDef false "preludeParseRuntime" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig false "preludeParseCore" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")))))))
+(DFunDef false "preludeParseCore" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig false "preludeParseMemo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions"))))))
+(DFunDef false "preludeParseMemo" ((PVar "mid") (PVar "src")) (EBlock (DoLet false false (PVar "slot") (EIf (EBinOp "==" (EVar "mid") (ELit (LString "runtime"))) (EVar "preludeParseRuntime") (EVar "preludeParseCore"))) (DoExpr (EMatch (EUnOp "!" (EVar "slot")) (arm (PCon "Some" (PTuple (PVar "k") (PVar "r"))) ((GBool (EBinOp "==" (EVar "k") (EVar "src")))) (EVar "r")) (arm PWild () (EBlock (DoLet false false (PVar "r") (EApp (EVar "parseWithPositionsOpt") (EVar "src"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "slot")) (EApp (EVar "Some") (ETuple (EVar "src") (EVar "r"))))) (DoExpr (EVar "r"))))))))
 (DTypeSig false "seedPrelude" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit")))))
-(DFunDef false "seedPrelude" ((PVar "ctx") (PVar "mid") (PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PTuple (PVar "decls") PWild)) () (EBlock (DoLet false false (PVar "expSet") (EApp (EApp (EVar "collectExportedValues") (EVar "ctx")) (EVar "decls"))) (DoExpr (EApp (EApp (EApp (EVar "seedPreludeGo") (EVar "ctx")) (EVar "mid")) (EApp (EApp (EApp (EVar "preludeDefEntries") (EVar "expSet")) (EVar "mid")) (EVar "decls"))))))))
+(DFunDef false "seedPrelude" ((PVar "ctx") (PVar "mid") (PVar "src")) (EMatch (EApp (EApp (EVar "preludeParseMemo") (EVar "mid")) (EVar "src")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PTuple (PVar "decls") PWild)) () (EBlock (DoLet false false (PVar "expSet") (EApp (EApp (EVar "collectExportedValues") (EVar "ctx")) (EVar "decls"))) (DoExpr (EApp (EApp (EApp (EVar "seedPreludeGo") (EVar "ctx")) (EVar "mid")) (EApp (EApp (EApp (EVar "preludeDefEntries") (EVar "expSet")) (EVar "mid")) (EVar "decls"))))))))
 (DTypeSig false "preludeDefEntries" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))))
 (DFunDef false "preludeDefEntries" (PWild PWild (PList)) (EListLit))
 (DFunDef false "preludeDefEntries" ((PVar "expSet") (PVar "mid") (PCons (PVar "d") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "preludeDefsOfDecl") (EVar "expSet")) (EVar "mid")) (EVar "d")) (EApp (EApp (EApp (EVar "preludeDefEntries") (EVar "expSet")) (EVar "mid")) (EVar "rest"))))
