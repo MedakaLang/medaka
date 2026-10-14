@@ -1,0 +1,6 @@
+interface MSIP a where
+  mth : a -> Int
+
+export
+helper : Int -> Int
+helper n = n + 1

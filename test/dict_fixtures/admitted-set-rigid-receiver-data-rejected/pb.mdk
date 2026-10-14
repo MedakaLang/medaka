@@ -1,0 +1,7 @@
+import t.{T(..)}
+
+export interface IB a where
+  mth : a -> a
+
+impl IB T where
+  mth (T n) = T (n * 10)

@@ -1,29 +1,28 @@
 issue: 2017
 what: a re-export hub that exports two same-named interface methods is accepted by
-what: name resolution and answers by the order of its own lines. lib/pa.mdk and lib/pb.mdk
-what: each export an interface with method `mth` and an Int impl (`n + 1` and `n * 10`).
-what: lib/hub.mdk re-exports both (`export import lib.pa.{IA, mth}` then
-what: `lib.pb.{IB, mth}`), and main.mdk imports `{IA, IB, mth}` from the hub and prints
-what: `mth 1`. Importing lib.pa and lib.pb directly is correctly rejected with
-what: R-AMBIGUOUS-OCCURRENCE. This is #1675's S0 shape (closed for top-level values)
-what: reached through a method name. Until the hole-is-a-verdict sprint `check` accepted it
-what: at exit 0 and `run` printed `2` (`10` with the hub lines swapped). Since then the
-what: occurrence's dispatch evidence, a bare head tag `RKey "Int"` with no interface word,
-what: is rejected at `check` as T-UNROUTED-DISPATCH. That is loud, but it is the wrong
-what: diagnostic: the collision itself is still not detected, and the fix (rejecting the
-what: ambiguous re-export at the occurrence or the hub) replaces this code.
+what: name resolution. lib/pa.mdk and lib/pb.mdk each export an interface with method
+what: `mth` and an Int impl (`n + 1` and `n * 10`). lib/hub.mdk re-exports both
+what: (`export import lib.pa.{IA, mth}` then `lib.pb.{IB, mth}`), and main.mdk imports
+what: `{IA, IB, mth}` from the hub and prints `mth 1`. Importing lib.pa and lib.pb
+what: directly is correctly rejected with R-AMBIGUOUS-OCCURRENCE. This is #1675's S0
+what: shape (closed for top-level values) reached through a method name. Until the
+what: hole-is-a-verdict sprint `check` accepted it at exit 0 and `run` printed `2` (`10`
+what: with the hub lines swapped). The program is now rejected on every verb: the
+what: occurrence's two admitted declarations both have an Int impl, so SHADOW S2-DECL (d)
+what: rejects the occurrence as T-AMBIGUOUS-METHOD. The collision itself is still not
+what: detected at the hub or the import; this row pins the stand-in code until it is.
 cmd: check-json main.mdk
 exit: 1
-diag-code: T-UNROUTED-DISPATCH 2:16-2:19
-why-verb: `check-json`, because the observable is now a check verdict, the same on every
+diag-code: T-AMBIGUOUS-METHOD 2:16-2:19
+why-verb: `check-json`, because the observable is a check verdict, the same on every
 why-verb: verb, and the pin must name the code that stands in for the missing collision
 why-verb: reject.
 why-diag-code: `diag-code:`, not `diag:`: the wording is not the defect, the undetected
 why-diag-code: collision is. The range is the `mth` of `main = println (mth 1)` (line 3,
 why-diag-code: col 16, zero-based line 2). A collision reject (an `R-AMBIGUOUS-*` code, at
 why-diag-code: the occurrence or the hub) drains this row: read the actual line before
-why-diag-code: closing #2017. If the row goes red with exit 0 again, the evidence judgment
-why-diag-code: regressed and #2017 is back to answering by hub order.
+why-diag-code: closing #2017. If the row goes red with exit 0 again, the S2-DECL (d)
+why-diag-code: verdict regressed and #2017 is back to answering by hub order.
 control: run control.mdk
 why-control: control.mdk imports `{IA, mth}` from lib/hubone.mdk, which re-exports only
 why-control: lib.pa. No collision, so it must print `2` at exit 0. A red control means

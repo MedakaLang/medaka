@@ -95,8 +95,10 @@ export
 holeMessage : EvidenceRow -> HoleKind -> String
 holeMessage (OccurrenceRow name iface _ _ _) UnroutedMethod =
   "no impl of `\{bareName "::" iface}` is selected for this use of `\{name}`; annotate the type it is used at"
-holeMessage (OccurrenceRow name iface tag impls meths) HeadTagRoute =
-  "\{noImplFor iface} is selected for this use of `\{name}`: its dispatch names the type `\{headOf (tag :: impls ++ meths)}`, not an impl"
+-- The row does not carry the occurrence's receiver, so the text names no type: the
+-- head a route names can be any position's, such as the result's.
+holeMessage (OccurrenceRow name iface _ _ _) HeadTagRoute =
+  "\{noImplFor iface} is selected for this use of `\{name}`: its dispatch names a type, not an impl"
 holeMessage (OccurrenceRow name _ _ _ _) _ =
   "the impl selected for this use of `\{name}` needs a dictionary that no impl or given supplies"
 holeMessage (DictAppRow callee ifaces routes) HeadTagRoute =

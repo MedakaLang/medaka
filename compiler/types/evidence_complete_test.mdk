@@ -75,7 +75,7 @@ test "one diagnostic per row, naming the interface, the use and the type head" =
       ),
       Some (
         HeadTagRoute,
-        "no impl of `JMap` is selected for this use of `jmap`: its dispatch names the type `Later`, not an impl",
+        "no impl of `JMap` is selected for this use of `jmap`: its dispatch names a type, not an impl",
       ),
       Some (
         UnroutedDictSlot,

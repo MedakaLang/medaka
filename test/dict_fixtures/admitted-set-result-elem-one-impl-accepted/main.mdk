@@ -1,0 +1,15 @@
+-- `mid` re-exports two unrelated `mth : f a -> a`, from `IG` and `IP`, and this module
+-- imports both through it.  The result is the element type, so the occurrence's
+-- result (`Int`) names neither instance; the receiver does.  SHADOW-SEMANTICS.md
+-- S2-DECL (d) over the admitted set (ruled 2026-10-14): each declaration is asked
+-- through its own receiver, `W`; only `impl IG W` exists, so the occurrence commits to
+-- it, which returns the first field.  Spec answer: 1 on every verb, the built binary
+-- included.
+import mid.{IP, IG, mth}
+
+data W a = MkW a a
+
+impl IG W where
+  mth (MkW x _) = x
+
+main = println (mth (MkW (1 : Int) 2))

@@ -1,0 +1,14 @@
+-- `hub` re-exports two unrelated `mth : a -> a`, from `IA` (`n + 1`) and `IB`
+-- (`n * 10`), both with an impl at `Int`.  Inside `wrap` the receiver is the rigid
+-- `x`, which no declaration's impl query can be asked about, and `wrap` declares no
+-- constraint, so the two declarations are not shown to agree.  SHADOW-SEMANTICS.md
+-- S2-DECL (d) over the admitted set (ruled 2026-10-14): the located reject
+-- `T-AMBIGUOUS-METHOD` at `mth` in `wrap`, exit 1 on every verb, in either hub order
+-- (`swapped.mdk`).  Never 4 or 30, which the two hub orders printed while the
+-- occurrence kept no route.
+import hub.{IA, IB, mth}
+
+wrap : x -> x
+wrap v = mth v
+
+main = println (wrap (3 : Int))

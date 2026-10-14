@@ -3694,6 +3694,10 @@ data SiteKind =
   -- return-position site: the EMethodAt impl-dicts ref to fill + the method's full
   -- (un-stripped) type.  The primary mono is the result mono.
   | SKReturn (Ref (List Route)) Mono
+  -- an occurrence of a spelling with two or more admitted declarations (S2-DECL
+  -- (d)), whose obligation is the admitted set's (`pushAdmittedOccObl`): the
+  -- EMethodAt interface-word cell, which the commit writes, then SKReturn's fields.
+  | SKAdmittedReturn (Ref String) (Ref (List Route)) Mono
   -- declaration-owned ordinary return: the same immutable request is carried by
   -- the checker obligation and this stamping goal.  The PendingEntry's EvId is the
   -- request's mrrGoalEv; the EMethodAt node's aggregate EvId remains separate.
@@ -16706,7 +16710,17 @@ inferMethodCandidateAt env name ifaceRef arityRef tagRef implRef methodRef =
           let _ = recordArgStamp name tagRef implRef idx occurrence omitted
           let _ = recordArgSiteFn name idx occurrence
           occurrence
-        None => recordSite env name s tagRef implRef methodRef occurrence subst
+        None =>
+          recordSite
+            env
+            name
+            s
+            ifaceRef
+            tagRef
+            implRef
+            methodRef
+            occurrence
+            subst
       let _ = forceInstantiation name inst
       ret
 -- C5: if [name] is a standalone-shadow method, record its discriminating-arg
@@ -17058,20 +17072,24 @@ nthMethodMono 0 (x :: _) = x
 nthMethodMono i (_ :: xs) = nthMethodMono (i - 1) xs
 
 -- record a return-position method occurrence: resolveSite later stamps its route
--- (RKey/RDict) once inference grounds the result mono.
+-- (RKey/RDict) once inference grounds the result mono.  An admitted-set occurrence
+-- (`admittedSetOccurrence`) records the set's obligation and a site its commit
+-- stamps (`resolveAdmittedSite`), both decided by the one test here.
 recordSite : TcEnv ->
   String ->
   Scheme ->
+  Ref String ->
   Ref Route ->
   Ref (List Route) ->
   Ref (List Route) ->
   Mono ->
   MethodInstantiationSubst ->
   Mono
-recordSite env name scheme tagRef implRef methodRef methodType subst =
+recordSite env name scheme ifaceRef tagRef implRef methodRef methodType subst =
   let stripped = stripArrows methodType
   let ev = freshEvId ()
   let exactRow = exactReturnRow env name scheme
+  let admitted = isNone exactRow && admittedSetOccurrence env name scheme
   let exact =
     map (row => methodReturnRequest row methodType subst (Some ev)) exactRow
   let _ = match (exact, exactRow)
@@ -17091,7 +17109,12 @@ recordSite env name scheme tagRef implRef methodRef methodType subst =
           methodRef
           subst.misTypeSubst
     _ =>
-      let _ = recordMethodObligationGuarded env name scheme methodType []
+      let _ =
+        if admitted then
+          pushAdmittedOccObl name methodType
+        else
+          let _ = recordMethodObligationGuarded env name scheme methodType []
+          ()
       recordMethodDicts name methodRef subst.misTypeSubst
   let siteEv = match exact
     Some request => optionOr ev request.mrrGoalEv
@@ -17105,7 +17128,11 @@ recordSite env name scheme tagRef implRef methodRef methodType subst =
       perRun.value.currentFn.value
       (match exact
         Some request => SKExactReturn implRef request
-        None => SKReturn implRef methodType)
+        None =>
+          if admitted then
+            SKAdmittedReturn ifaceRef implRef methodType
+          else
+            SKReturn implRef methodType)
       !currentLoc
       (captureScope ())
       siteEv)
@@ -21759,15 +21786,12 @@ recordImplObligation x mono omitted
 -- always returns its argument), so the check path's return value is byte-identical.
 -- #2705 / S2-DECL (d) for OBLIGATIONS.  An occurrence whose bare spelling has two or
 -- more admitted declarations records no single-interface obligation
--- (`recordImplObligation`); it is decided here, after inference has grounded its
--- receiver, by the same per-declaration (receiver argument, impl query) pairs the
--- importer-shadow arms use (`admittedDeclHits`), read off the occurrence's own
--- instantiated method type: at least one admitted declaration with an impl at the
--- receiver's head is the accept ((d) bullet 2 — distinct interfaces cannot share an
--- impl, so agreement is on the one that exists); none is the reject ((d) bullet 3);
--- an unanswerable receiver (no dispatch index, under-applied, or still ungrounded)
--- defers, exactly as `AdmittedVerdict` does — this clause narrows acceptance and may
--- not do so on a receiver whose head is unknown.
+-- (`recordImplObligation`); it is decided here, at the module's end, by
+-- `admittedSelection`, the function its route commits through at the drain
+-- (`resolveAdmittedSite`).  Exactly one declaration selecting an instance is the
+-- accept; none is the no-impl reject; two or more, or a declaration whose receiver
+-- cannot be asked, is the located ambiguity reject, so no accepted occurrence is
+-- left without a committed route.
 pushAdmittedOccObl : String -> Mono -> Unit
 pushAdmittedOccObl name mono =
   perRun.value.admittedOccObls :=
@@ -21785,10 +21809,10 @@ checkAdmittedOccObls _ =
 checkAdmittedOccObl : ImplEnv -> (String, Mono, Option Loc) -> Unit
 checkAdmittedOccObl env (name, mono, loc) =
   let ifs = methodAdmittedHere name
-  match admittedMonoHitters env name ifs mono
-    None => ()
-    Some True => ()
-    Some False =>
+  match admittedSelection env name mono
+    Selects _ _ _ => ()
+    Undecided => pushAmbiguousMethod name ifs loc
+    SelectsNothing =>
       let recv = match admittedReceiverMono name ifs mono
         Some at => ppMono at
         None => "this receiver"
@@ -21797,33 +21821,79 @@ checkAdmittedOccObl env (name, mono, loc) =
         loc
         "no impl of \{joinWith " or " (map (ir => ir.irName) ifs)} for \{recv}; write an impl of one of them for it"
 
--- `Some True` if any admitted declaration's impl query hits; `Some False` if every
--- one can be asked and none hits; `None` if any one cannot be asked.
-admittedMonoHitters : ImplEnv -> String -> List IfaceRef -> Mono -> Option Bool
-admittedMonoHitters _ _ [] _ = Some False
-admittedMonoHitters env name (ir :: rest) mono =
-  match admittedMonoHits env name ir mono
-    None => None
-    Some True => Some True
-    Some False => admittedMonoHitters env name rest mono
+-- One admitted declaration's answer at an occurrence, or the whole admitted set's:
+-- the instance it selects (with the declaration and the parameter vector it was
+-- selected at), no instance, or no answer.  A declaration has no answer when the
+-- occurrence's type does not instantiate its own declared type or its receiver has
+-- no head yet; the set has none when two or more declarations select or any one has
+-- no answer, since the declarations have then not been shown to agree.
+data AdmittedAnswer =
+  | Selects IfaceRef ImplRow (List Mono)
+  | SelectsNothing
+  | Undecided
 
--- `admittedDeclHits` over the occurrence's instantiated method TYPE rather than an
--- applied argument list: the receiver is the domain at the declaration's own dispatch
--- index.
-admittedMonoHits : ImplEnv -> String -> IfaceRef -> Mono -> Option Bool
-admittedMonoHits env name ir mono = do
-  k <- lookupIdxById ir name driverState.value.methodDispatchIdxByIdRef.value
-  at <- nthArgMono k mono
-  hk <- headTyconMono at
-  Some (ieImplExistsForHeadOf env name hk (Some [ir]))
+-- S2-DECL (d) at the occurrence of [name] whose instantiated method type is [mono]:
+-- each admitted declaration asked through its own parameter vector, read off its own
+-- declared method type, and its own interface's instances (the (b) pairing).
+admittedSelection : ImplEnv -> String -> Mono -> AdmittedAnswer
+admittedSelection env name mono =
+  let visible = methodVisibleHere name
+  let answers =
+    map (admittedDeclAnswer env visible mono) (methodAdmittedHere name)
+  if anyList isUndecided answers then
+    Undecided
+  else match filterList isSelection answers
+    [] => SelectsNothing
+    [one] => one
+    _ => Undecided
 
--- The receiver named in the reject: the first admitted declaration's own receiver
--- argument (they all grounded, or the verdict would have deferred).
+admittedDeclAnswer : ImplEnv ->
+  List MethodRow ->
+  Mono ->
+  IfaceRef ->
+  AdmittedAnswer
+admittedDeclAnswer env visible mono ir =
+  match filterList (r => ieRowIfaceMatches (methodRowIface r) ir) visible
+    r :: _ => match r.mrEntry
+      (iface, typarams, mty, _) => match matchTyMono mty mono
+        Some subst =>
+          let goals = map (paramMonoOf subst) typarams
+          match goalHeadCon goals
+            None => Undecided
+            Some _ => match ieSelectRowByIface env iface goals
+              Some row => Selects iface row goals
+              None => SelectsNothing
+        None => Undecided
+    [] => Undecided
+
+isUndecided : AdmittedAnswer -> Bool
+isUndecided Undecided = True
+isUndecided _ = False
+
+isSelection : AdmittedAnswer -> Bool
+isSelection (Selects _ _ _) = True
+isSelection _ = False
+
+-- The receiver named in the no-impl reject: the first admitted declaration's own
+-- receiver argument.
 admittedReceiverMono : String -> List IfaceRef -> Mono -> Option Mono
 admittedReceiverMono _ [] _ = None
 admittedReceiverMono name (ir :: _) mono = do
   k <- lookupIdxById ir name driverState.value.methodDispatchIdxByIdRef.value
   nthArgMono k mono
+
+-- An occurrence whose obligation is its admitted set's rather than one
+-- declaration's: a spelling with two or more admitted declarations, written where
+-- neither a local (`recordMethodObligationGuarded`) nor a standalone shadow
+-- (`recordImplObligation`) binds it.
+admittedSetOccurrence : TcEnv -> String -> Scheme -> Bool
+admittedSetOccurrence env name s =
+  not
+      (lookupLocalFlag env name
+        || isMonoScheme s
+        || omHasKey name perRun.value.definerShadowNamesRef.value
+        || omHasKey name driverState.value.standaloneValuesRef.value)
+    && listLen (methodAdmittedHere name) >= 2
 
 recordMethodObligationGuarded : TcEnv ->
   String ->
@@ -28318,6 +28388,8 @@ resolveSites rpNames ((PendingEntry name tagRef resultMono encl kind loc scope _
   let _ = match kind
     SKReturn implRef fullMono =>
       resolveSite rpNames name tagRef implRef resultMono fullMono encl loc scope
+    SKAdmittedReturn ifaceRef implRef fullMono =>
+      resolveAdmittedSite name ifaceRef tagRef implRef fullMono encl scope
     SKExactReturn implRef request =>
       resolveExactReturnSite
         rpNames
@@ -28345,8 +28417,8 @@ resolveSites rpNames ((PendingEntry name tagRef resultMono encl kind loc scope _
 
 -- a method occurrence's route: if its discriminating type is a constrained
 -- function's constraint variable, read that function's dict param (RDict);
--- otherwise the concrete impl head tag (RKey); an unresolved polymorphic type
--- stays RNone (arg-tag fallback).  When the route resolves to a concrete head
+-- otherwise the selected impl's key (RKey); an unresolved polymorphic type
+-- stays RNone.  When the route resolves to a concrete head
 -- that names a parametric impl WITH a `requires`, also fill the impl-dicts ref so
 -- eval threads the element dict(s) into the impl body (Phase 83/84 single-level).
 -- Phase 83/84 #5: stamp the route for one pending method site.  At a concrete
@@ -28358,8 +28430,8 @@ resolveSites rpNames ((PendingEntry name tagRef resultMono encl kind loc scope _
 -- TYPECHECK-AUDIT C7: the ground RKey case prefers the canonical impl KEY (via
 -- keyForSite) over the bare head tycon, so two non-overlapping impls sharing a
 -- head tycon (Pair Int Bool vs Pair Bool Int) route to distinct keys; eval's
--- narrowMethod then matches the right VTypedImpl by its key field.  No matching
--- key entry (args-free / unknown) → fall back to the head tag, behaviour unchanged.
+-- narrowMethod then matches the right VTypedImpl by its key field.  No selected
+-- row → no route (`RNone`).
 -- C5 NOTE: standalone-shadow RLocal routing is NOT done here — a return-position
 -- site keys off the RESULT mono (`isEmpty`'s `Bool`), which never names the receiver's
 -- impl, so this gate would mis-route every shadow method.  RLocal is stamped by the
@@ -28398,6 +28470,31 @@ resolveSite rpNames name tagRef implRef resultMono fullMono encl origin scope =
     RNone => ()
     _ => tagRef := route
   implRef := routes
+
+-- An admitted-set occurrence's route, committed by `admittedSelection`, the function
+-- that decided its verdict at the module's end: the selected instance's canonical
+-- key and prerequisites, and the selecting declaration's interface word on the
+-- occurrence, which carried none while its spelling named two or more.  Any other
+-- answer was rejected there, and the site keeps no route.
+resolveAdmittedSite : String ->
+  Ref String ->
+  Ref Route ->
+  Ref (List Route) ->
+  Mono ->
+  String ->
+  ScopeId ->
+  Unit
+resolveAdmittedSite name ifaceRef tagRef implRef fullMono encl scope =
+  match admittedSelection perRun.value.bodyImplEnvRef.value name fullMono
+    Selects iface row goals =>
+      ifaceRef := ifaceWordOf iface.irOrigin iface.irName
+      tagRef :=
+        RKey
+          (rowRouteKey row)
+          []
+          (selectedCallSupers name (Some row) encl scope goals)
+      implRef := implDictRoutesForRow encl scope goals row
+    _ => ()
 
 resolveExactReturnSite : OrdMap Unit ->
   String ->
@@ -28841,6 +28938,18 @@ pushAmbiguousShadowDecl name ifs dloc =
     "T-AMBIGUOUS-SHADOW-DECL"
     dloc
     "`\{name}` is ambiguous here: \{joinWith " and " (map shadowIfaceLabel ifs)} each declare a method `\{name}` and are both in scope; \{ambiguousShadowHelp}"
+    ambiguousShadowHelp
+    None
+
+-- The method-only sibling of `pushAmbiguousShadowDecl`: no standalone is in scope,
+-- so the admitted declarations are the only candidates, and the occurrence decides
+-- none of them (`admittedSelection`).  Same sorted interface list, same help.
+pushAmbiguousMethod : String -> List IfaceRef -> Option Loc -> Unit
+pushAmbiguousMethod name ifs loc =
+  pushTypeErrorHelpFixAt
+    "T-AMBIGUOUS-METHOD"
+    loc
+    "`\{name}` is ambiguous here: \{joinWith " and " (map shadowIfaceLabel ifs)} each declare a method `\{name}`, and this use does not decide which one it means; bring only one of those interfaces into scope"
     ambiguousShadowHelp
     None
 
@@ -32550,10 +32659,9 @@ implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 -- at this site (recovered by `ifaceParamMonos`), or the singleton result mono when
 -- the caller has none.  A general winner's word is its own key (#1128 F-3b), so the
 -- dictionary names the instance actually selected.  `None` when no row is selected:
--- the arg-position caller then stamps the goal's head tag, which names no instance and
--- which the evidence judgment rejects (`compiler/types/evidence_complete.mdk`).  A
--- definer-shadow site reaches that stamp and is restamped `RLocal` afterwards by
--- `resolveRLocalSites` (`moduleStampOrder`).
+-- the arg-position caller then stamps no route word.  A definer-shadow site reaches
+-- that stamp and is restamped `RLocal` afterwards by `resolveRLocalSites`
+-- (`moduleStampOrder`).
 --
 -- An ambiguous method goal is the boundary verdict's to reject (`goalReach`, through
 -- `rejectUndeterminedVectors`): the occurrence's obligation carries the vector selected
@@ -34059,15 +34167,10 @@ entailInst name m encl useScope tag (EKReturn fullMono _) =
             (selectedCallSupers name (Some row) encl useScope [m]),
           routes,
         )
-      -- No vector and no row: the route keeps the goal's head tag, which names no
-      -- instance, and the evidence judgment rejects it as a head-tag route
-      -- (`compiler/types/evidence_complete.mdk`).  An occurrence whose name two
-      -- admitted declarations share (an ambiguous re-export,
-      -- `test/must_fail_fixtures/2017-reexport-hub-method-collision-order-decides`)
-      -- has no interface word and reaches this arm.  The judgment passes an
-      -- empty-word occurrence routed `RNone`, so this arm may become `RNone` only once
-      -- that clause flags such an occurrence.
-      None => (RKey tag [] [], [])
+      -- No vector and no row: the site keeps no route.  An occurrence of a spelling
+      -- with two or more admitted declarations never reaches here: its route is
+      -- `resolveAdmittedSite`'s, and its verdict `checkAdmittedOccObl`'s.
+      None => (RNone, [])
 entailInst name m encl useScope _ (kind@(EKNumReturn predicate _ _ _)) =
   let goals = predicate.predicateArguments
   let env = perRun.value.bodyImplEnvRef.value
@@ -34118,11 +34221,6 @@ entailInst _ m encl useScope _ (EKNestedTop iface _ walk rest) =
 entailInst name m encl useScope tag (EKArg fullMono omitted) =
   let goals = optionOr [m] (occurrenceParamMonos name fullMono omitted)
   let (siteKey, selected) = keyForSite name goals
-  -- No instance answers the vector: the route keeps the goal's head tag, which names
-  -- no instance, and the evidence judgment rejects it as a head-tag route
-  -- (`compiler/types/evidence_complete.mdk`).  A standalone occurrence that reaches
-  -- here is restamped `RLocal` (`resolveRLocalSites`).
-  let routeKey = optionOr tag siteKey
   -- ARCH B-2.1-h: graph-global, off `bodyImplEnvRef` — see `ieDefinesReqMethodAt`,
   -- which carries the measured repro.  The head is `headTyconMono m`, the `HeadKey`
   -- whose name IS this arm's `tag` (`entail` derives `tag` from the same `m` via
@@ -34144,10 +34242,14 @@ entailInst name m encl useScope tag (EKArg fullMono omitted) =
   let subject = match goals
     g :: _ => g
     [] => m
-  (
-    RKey routeKey [] (selectedCallSupers name selected encl useScope goals),
-    argImplDictRoutesForEncl encl useScope dictName tag subject goals,
-  )
+  -- No instance answers the vector: the site keeps no route word, and its
+  -- obligation is the verdict.  A standalone occurrence that reaches here is
+  -- restamped `RLocal` (`resolveRLocalSites`).
+  let word = match siteKey
+    Some routeKey =>
+      RKey routeKey [] (selectedCallSupers name selected encl useScope goals)
+    None => RNone
+  (word, argImplDictRoutesForEncl encl useScope dictName tag subject goals)
 entailInst name m encl useScope tag (EKOp isBinop _) =
   (stampOpRouteVal isBinop encl useScope name m tag, [])
 entailInst name m encl useScope tag (EKPredicateOp _ _ predicate) =
@@ -48069,6 +48171,7 @@ methodReturnProbeSlotCase ownedRow foreignRow retainOwner =
       env
       "make"
       ownedRow.msrScheme
+      (Ref "")
       (Ref RNone)
       (Ref [])
       (Ref [])

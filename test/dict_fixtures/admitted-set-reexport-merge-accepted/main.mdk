@@ -1,0 +1,14 @@
+-- `mid` re-exports two unrelated `mth`s, `IG.mth` and `IP.mth`, both `f a -> Int`,
+-- and this module imports both through it.  No standalone is in scope, so
+-- SHADOW-SEMANTICS.md S2-DECL (d) decides the occurrence over the admitted set (ruled
+-- 2026-10-14): each declaration is asked through its own receiver, `W`; `impl IG W`
+-- answers and `IP` has no impl, so exactly one selects and the occurrence commits to
+-- `IG W`, whose body is 5.  Spec answer: 5 on every verb, the built binary included.
+import mid.{IP, IG, mth}
+
+data W a = MkW a
+
+impl IG W where
+  mth w = 5
+
+main = println (mth (MkW 1))

@@ -19,16 +19,17 @@ addFieldOwners : String -> List String -> Map String (List String) -> Map String
 addRecordIdentRaw : String -> String -> Ident -> List Field -> DataEnv -> DataEnv
 addVariantIdentsRaw : String -> TyConOrigin -> List Variant -> DataEnv -> DataEnv
 addVariants : TcEnv -> List (String, Mono) -> SigVars -> List Int -> List Int -> List Int -> Mono -> List Variant -> List (List (String, KindAnn)) -> TcEnv
+admittedDeclAnswer : ImplEnv -> List MethodRow -> Mono -> IfaceRef -> AdmittedAnswer
 admittedDeclHits : ImplEnv -> String -> IfaceRef -> List Mono -> Option Bool
 admittedDeclHitters : ImplEnv -> String -> List IfaceRef -> List Mono -> Option (List IfaceRef)
 admittedIdxMax : String -> List IfaceRef -> Option Int
 admittedIfaceWord : String -> String
 admittedIn : String -> List (String, String)
-admittedMonoHits : ImplEnv -> String -> IfaceRef -> Mono -> Option Bool
-admittedMonoHitters : ImplEnv -> String -> List IfaceRef -> Mono -> Option Bool
 admittedReceiverMono : String -> List IfaceRef -> Mono -> Option Mono
 admittedRowFor : String -> Registry MethodSchemeRow -> Option MethodSchemeRow
 admittedSchemeFor : String -> Registry MethodSchemeRow -> Option Scheme
+admittedSelection : ImplEnv -> String -> Mono -> AdmittedAnswer
+admittedSetOccurrence : TcEnv -> String -> Scheme -> Bool
 aliasAmbiguityMsg : String -> List (String, String, String, Ident, Loc) -> String
 aliasArgBindings : SigVars -> List (String, Mono) -> List String -> List Kind -> List Ty -> (SigVars, List (String, Mono))
 aliasArgScope : SigVars -> List (String, Mono) -> TabKey -> List String -> List Ty -> (SigVars, List (String, Mono))
@@ -1834,6 +1835,7 @@ isPreludeMid : String -> Bool
 isPreludeOrigin : TyConOrigin -> Bool
 isRigidCell : Ref Effvar -> Bool
 isRowSlotArg : SigVars -> List (String, Mono) -> Ty -> Bool
+isSelection : AdmittedAnswer -> Bool
 isSemanticGivenAnswer : Option AssumAnswer -> Bool
 isShadowStandalone : TcEnv -> String -> Bool
 isSourceless : Int -> Bool
@@ -1841,6 +1843,7 @@ isStringTy : Ty -> Bool
 isSyntacticLambda : Expr -> Bool
 isTupleTyName : String -> Bool
 isUnboundTvar : Mono -> Bool
+isUndecided : AdmittedAnswer -> Bool
 isUnshaped : Mono -> Bool
 joinAnd : List String -> String
 joinCellOf : List (Ref Effvar) -> Ref Effvar
@@ -2522,6 +2525,7 @@ pureRow : EffRow
 pushAdmittedOccObl : String -> Mono -> Unit
 pushAmbiguityAt : Bool -> Option Loc -> String -> Unit
 pushAmbiguousImports : String -> Loc -> List (String, List String) -> Unit
+pushAmbiguousMethod : String -> List IfaceRef -> Option Loc -> Unit
 pushAmbiguousShadowDecl : String -> List IfaceRef -> Option Loc -> Unit
 pushArithGoal : Ref Route -> Mono -> EvId -> Unit
 pushBoundaryAmbiguity : Map String Unit -> List Mono -> Option Loc -> String -> Unit
@@ -2662,7 +2666,7 @@ recordResultMono : RecordInfo -> Mono
 recordSchemeCallObligations : Int -> List VecObl -> List (Int, Mono) -> Unit
 recordSelectedStandaloneRoutes : String -> ShadowDicts -> List (Ref Route) -> Mono -> Unit
 recordShadowStandaloneObls : TcEnv -> String -> List (Int, Mono) -> Unit
-recordSite : TcEnv -> String -> Scheme -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Mono -> MethodInstantiationSubst -> Mono
+recordSite : TcEnv -> String -> Scheme -> Ref String -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Mono -> MethodInstantiationSubst -> Mono
 recordStandaloneAt : String -> Expr -> SelectedValueOccurrence -> Unit
 recordStandaloneGrantOcc : String -> EvId -> Scheme -> List (Int, Authority) -> Int -> Unit
 recordTopBinderTypes : Map String Scheme -> List Decl -> Unit
@@ -2825,6 +2829,7 @@ residualRefutableNow : IfaceRef -> List Mono -> Bool
 residualSelectionStable : List Int -> List (IfaceRef, List Mono) -> IfaceRef -> List Mono -> Bool
 residualVecObls : Bool -> List Int -> IfaceRef -> List Mono -> Option Loc -> List VecObl
 residualsOf : Int -> List (Int, AuthResidual) -> List AuthResidual
+resolveAdmittedSite : String -> Ref String -> Ref Route -> Ref (List Route) -> Mono -> String -> ScopeId -> Unit
 resolveAliasMethodSpellings : (String, List Decl) -> (String, List Decl)
 resolveArgStamp : String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> List (String, Mono) -> String -> Option Loc -> ScopeId -> Unit
 resolveArgStamps : List PendingEntry -> Unit
