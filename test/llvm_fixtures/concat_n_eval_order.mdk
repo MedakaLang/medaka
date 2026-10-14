@@ -1,0 +1,17 @@
+-- ++ evaluates its operands strictly left to right, also on the N-ary String path.
+-- Each segment bumps a counter when it is evaluated and reads the value it saw, so
+-- the output spells out the evaluation order.  Oracle: "a0b1c2d3/4" (a reversed
+-- order would give "a3b2c1d0/4").
+
+bump : Ref Int -> String -> String
+bump c tag =
+  let n = c.value
+  c := n + 1
+  tag ++ intToString n
+
+-- The ++ chain is the thing under test, so interpolating it would test nothing.
+-- lint-disable-next-line rule-concat-to-interp
+main =
+  let c = Ref 0
+  let s = bump c "a" ++ bump c "b" ++ bump c "c" ++ bump c "d"
+  s ++ "/" ++ intToString c.value
