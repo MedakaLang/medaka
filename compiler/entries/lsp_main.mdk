@@ -10,6 +10,11 @@
 
 import tools.lsp.{runServer}
 
+-- Must match medaka_cli.mdk's `medakaVersion`; this probe entry cannot import
+-- the CLI module.
+serverVersion : String
+serverVersion = "0.1.0-preview"
+
 main : <IO> Unit
 main = match args ()
   [runtimePath, corePath] => withFiles runtimePath corePath
@@ -24,5 +29,5 @@ withFiles runtimePath corePath = match readFile runtimePath
 
 withCore : String -> String -> <IO> Unit
 withCore rsrc corePath = match readFile corePath
-  Ok csrc => runServer rsrc csrc
+  Ok csrc => runServer rsrc csrc serverVersion
   Err msg => ePutStrLn msg

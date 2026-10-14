@@ -13,47 +13,51 @@ When examples involve **Medaka** code, use `x y => body`, never curried form.
 
 ## Wiring (three places)
 
-All three are in `compiler/tools/lsp.mdk`. Line numbers are as of 2026-07-13 —
+All three are in `compiler/tools/lsp.mdk`. Line numbers are as of 2026-10-13 —
 grep the name, not the number.
 
-1. **Advertise the capability** — `initializeResult` (`:1183`). It is a plain
-   top-level **value**, not a function and not a record type:
-   `initializeResult : Json`, built with `jObject`. Its `"capabilities"` object
-   (`:1187`) already lists `textDocumentSync`, `documentFormattingProvider`,
+1. **Advertise the capability** — `initializeResultFor` (`:1597`). It is a plain
+   top-level **function** of the server version, not a record type:
+   `initializeResultFor : String -> Json` (the argument is `serverVersion`,
+   threaded from the driver), built with `jObject`. Its `"capabilities"` object
+   (`:1600`) already lists `textDocumentSync`, `documentFormattingProvider`,
    `documentSymbolProvider`, `definitionProvider`, `documentHighlightProvider`,
-   `hoverProvider`, `completionProvider`, `inlayHintProvider`,
+   `referencesProvider`, `hoverProvider`, `completionProvider`, `inlayHintProvider`,
    `semanticTokensProvider`. Add your provider field there so clients know the
    feature exists.
 2. **Implement the handler** — add a `handle<Feature>` function next to the
-   existing ones. Real templates: `handleHover` (`:648`), `handleCompletion`
-   (`:738`), `handleInlayHint` (`:825`) — all with the shape
-   `String -> String -> Json -> Json -> Docs -> <IO, Mut> Unit`
+   existing ones. Real templates: `handleHover` (`:993`), `handleCompletion`
+   (`:1119`), `handleInlayHint` (`:1231`) — all with the shape
+   `String -> String -> Json -> Json -> Docs -> <IO> Unit`
    (`runtimeSrc`, `coreSrc`, the request id, the params `Json`, and the open-document
    table). They write the response themselves rather than returning a value.
-3. **Dispatch** — `dispatch` (`:1471`),
-   `dispatch : String -> String -> Json -> Docs -> <IO, Mut> Step`. It matches on
-   `methodOf msg` (`:1464`) — add an arm for your request's method string and call
-   your handler.
+3. **Dispatch** — `dispatch` (`:2047`),
+   `dispatch : String -> String -> String -> Json -> Docs -> <IO> Step` (the third
+   argument is `serverVersion`). It matches on `methodOf msg` (`:2040`) — add an
+   arm for your request's method string and call your handler.
 
-## Implementing `textDocument/references` (or `rename`)
+## Implementing `rename` (or extending `references`)
 
-Neither is wired yet, but the substrate already exists: `compiler/tools/refindex.mdk`
-(driven standalone by `compiler/entries/refindex_main.mdk`) builds a whole-project
-binder-keyed def/use index — shadow-aware, alias/re-export-collapsing — which is the
-evident foundation for both requests. Read its header before building a references
-handler from scratch.
+`textDocument/references` is already wired (`handleReferences`, `:1873`; dispatch arm
+`:2076`; advertised as `referencesProvider`) on this substrate. `rename` is not wired
+yet, and the same substrate is the evident foundation for it.
+
+The substrate is `compiler/tools/refindex.mdk` (driven standalone by
+`compiler/entries/refindex_main.mdk`). It builds a whole-project binder-keyed def/use
+index, shadow-aware and alias/re-export-collapsing. Read its header before building
+`rename`.
 
 ## Get analysis results
 
-- Open documents live in the `Docs` table (`data Docs`, `:118`), threaded through
-  every handler as the `docs` parameter; read/write with `docsGet` (`:214`) /
-  `docsPut` (`:123`). Resolve by URI.
+- Open documents live in the `Docs` table (`data Docs`, `:95`), threaded through
+  every handler as the `docs` parameter; read/write with `docsGet` (`:209`) /
+  `docsPut` (`:105`). Resolve by URI.
 - Run the compiler front end through the **loader** (multi-file aware) the same
   way the existing handlers do — reuse the shared analysis helper rather than
   re-invoking stages directly.
 - **Resilience:** mid-edit buffers often don't parse. The server keeps a
   session-lived last-good-source cache — **`projectCache : Ref (List (String,
-  String))`** (`:1231`), a module-level `Ref` mapping file path → last source that
+  String))`** (`:1645`), a module-level `Ref` mapping file path → last source that
   parsed, **not** a table type. Features degrade gracefully instead of going blank
   on a transient parse error; fall back to last-good like neighboring handlers do.
 

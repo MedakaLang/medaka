@@ -353,10 +353,10 @@ import tools.check_policy.{
 
 -- FLAG for user confirmation: exact version NUMBER not yet confirmed — using
 -- "0.1.0-preview" (the 0.1.0 public-preview target named in AGENTS.md)
--- pending sign-off. No existing version constant was found elsewhere in
--- compiler/ (lsp.mdk hardcodes a literal "0.1.0" for its own protocol reply;
--- new_cmd.mdk hardcodes a literal "0.1.0" into scaffolded medaka.toml — neither
--- is a shared constant this could reuse).
+-- pending sign-off. In compiler/, the only other copy of this literal is
+-- `serverVersion` in compiler/entries/lsp_main.mdk, which must match it; lsp.mdk
+-- and mcp.mdk take the value as a parameter. (new_cmd.mdk hardcodes a literal
+-- "0.1.0" into scaffolded medaka.toml.)
 medakaVersion : String
 medakaVersion = "0.1.0-preview"
 
@@ -4712,7 +4712,7 @@ runLspServerFromEnv _ =
   let r = do
     rsrc <- readPreludeFile rtPath
     csrc <- readPreludeFile corePath
-    Ok (runServer rsrc csrc)
+    Ok (runServer rsrc csrc medakaVersion)
   match r
     Err msg => dieMsg msg
     Ok v => v
@@ -5270,7 +5270,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "runLspCmd" ((PCons (PLit (LString "-h")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EVar "lspUsageLine"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
 (DFunDef false "runLspCmd" ((PCons (PVar "bad") PWild)) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "unknownFlagMessage") (EVar "lspArgSpec")) (EVar "bad")))) (DoExpr (EApp (EVar "dieMsg") (EVar "lspUsageLine")))))
 (DTypeSig false "runLspServerFromEnv" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runLspServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "r") (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EVar "Ok") (EApp (EApp (EVar "runServer") (EVar "rsrc")) (EVar "csrc")))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
+(DFunDef false "runLspServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "r") (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "runServer") (EVar "rsrc")) (EVar "csrc")) (EVar "medakaVersion")))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
 (DTypeSig false "mcpArgSpec" (TyCon "ArgSpec"))
 (DFunDef false "mcpArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "mcp"))) (EListLit)))
 (DTypeSig false "mcpUsageLine" (TyCon "String"))
@@ -5780,7 +5780,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "runLspCmd" ((PCons (PLit (LString "-h")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EVar "lspUsageLine"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
 (DFunDef false "runLspCmd" ((PCons (PVar "bad") PWild)) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "unknownFlagMessage") (EVar "lspArgSpec")) (EVar "bad")))) (DoExpr (EApp (EVar "dieMsg") (EVar "lspUsageLine")))))
 (DTypeSig false "runLspServerFromEnv" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runLspServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "r") (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EVar "Ok") (EApp (EApp (EVar "runServer") (EVar "rsrc")) (EVar "csrc")))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
+(DFunDef false "runLspServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "r") (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "runServer") (EVar "rsrc")) (EVar "csrc")) (EVar "medakaVersion")))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
 (DTypeSig false "mcpArgSpec" (TyCon "ArgSpec"))
 (DFunDef false "mcpArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "mcp"))) (EListLit)))
 (DTypeSig false "mcpUsageLine" (TyCon "String"))
