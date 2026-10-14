@@ -1,5 +1,5 @@
 # META
-source_lines=673
+source_lines=757
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable set of distinct elements, ordered by `Ord`.
@@ -44,7 +44,7 @@ import core.{
   Option,
   FromEntries,
 }
-import list.{intersperse}
+import list.{intersperse, sort, sortBy}
 
 {- | The set type.
 
@@ -68,6 +68,24 @@ balance x l r
   | size r > 3 * size l = rotateL x l r
   | size l > 3 * size r = rotateR x l r
   | otherwise = bin x l r
+
+-- `balanceL` repairs a node whose left subtree may have grown (an insert into
+-- `l`) or whose right subtree may have shrunk (a delete from `r`); only the
+-- left-heavy check can fire. `balanceR` is the mirror image. Both match each
+-- child once and read the cached sizes directly.
+balanceL : a -> Set a -> Set a -> Set a
+balanceL x Tip r = Bin (size r + 1) x Tip r
+balanceL x (l@(Bin sl _ _ _)) Tip =
+  if sl <= 1 then Bin (sl + 1) x l Tip else rotateR x l Tip
+balanceL x (l@(Bin sl _ _ _)) (r@(Bin sr _ _ _)) =
+  if sl > 3 * sr && sl + sr > 1 then rotateR x l r else Bin (sl + sr + 1) x l r
+
+balanceR : a -> Set a -> Set a -> Set a
+balanceR x l Tip = Bin (size l + 1) x l Tip
+balanceR x Tip (r@(Bin sr _ _ _)) =
+  if sr <= 1 then Bin (sr + 1) x Tip r else rotateL x Tip r
+balanceR x (l@(Bin sl _ _ _)) (r@(Bin sr _ _ _)) =
+  if sr > 3 * sl && sl + sr > 1 then rotateL x l r else Bin (sl + sr + 1) x l r
 
 rotateL : a -> Set a -> Set a -> Set a
 rotateL x l (r@(Bin _ _ rl rr)) =
@@ -118,7 +136,53 @@ singleton x = Bin 1 x Tip Tip
    [1, 2, 3] -}
 export
 fromList : Ord a => List a -> Set a
-fromList xs = fold (s x => insert x s) Tip xs
+fromList xs =
+  let n = ascendingRunLength xs
+  let (s, rest) = buildAscending n xs
+  match rest
+    [] => s
+    _ => fromUnsorted xs
+
+-- Length of the longest prefix whose elements are strictly ascending.
+ascendingRunLength : Ord a => List a -> Int
+ascendingRunLength [] = 0
+ascendingRunLength (x :: rest) = ascendingRunFrom x 1 rest
+
+ascendingRunFrom : Ord a => a -> Int -> List a -> Int
+ascendingRunFrom _ n [] = n
+ascendingRunFrom prev n (x :: rest) =
+  if lt prev x then ascendingRunFrom x (n + 1) rest else n
+
+-- Builds a perfectly balanced tree from the first `n` elements and returns it
+-- with the elements that follow. The first `n` must be strictly ascending.
+buildAscending : Int -> List a -> (Set a, List a)
+buildAscending n xs
+  | n <= 0 = (Tip, xs)
+  | otherwise = buildNode n xs
+
+buildNode : Int -> List a -> (Set a, List a)
+buildNode n xs =
+  let nl = (n - 1) / 2
+  let nr = n - 1 - nl
+  let (l, rest) = buildAscending nl xs
+  match rest
+    x :: rest2 =>
+      let (r, rest3) = buildAscending nr rest2
+      (Bin n x l r, rest3)
+    [] => panic "Set.buildNode: fewer elements than the run length"
+
+-- Stable-sorts, keeps the last of each run of equal elements (the later one
+-- wins, as with `insert`), and builds the tree in one linear pass.
+fromUnsorted : Ord a => List a -> Set a
+fromUnsorted xs =
+  let ys = dedupeLast (sortBy compare xs)
+  fst (buildAscending (length ys) ys)
+
+dedupeLast : Ord a => List a -> List a
+dedupeLast [] = []
+dedupeLast [x] = [x]
+dedupeLast (x :: rest@(y :: _)) =
+  if eq x y then dedupeLast rest else x :: dedupeLast rest
 
 -- > size (Set { 1, 2, 3, 2, 1 })
 -- 3
@@ -162,8 +226,8 @@ export
 insert : Ord a => a -> Set a -> Set a
 insert x Tip = singleton x
 insert x (Bin s y l r) = match compare x y
-  Lt => balance y (insert x l) r
-  Gt => balance y l (insert x r)
+  Lt => balanceL y (insert x l) r
+  Gt => balanceR y l (insert x r)
   Eq => Bin s x l r
 
 -- > size (insert 2 (fromList [1, 2, 3]))
@@ -179,8 +243,8 @@ export
 delete : Ord a => a -> Set a -> Set a
 delete x Tip = Tip
 delete x (Bin _ y l r) = match compare x y
-  Lt => balance y (delete x l) r
-  Gt => balance y l (delete x r)
+  Lt => balanceR y (delete x l) r
+  Gt => balanceL y l (delete x r)
   Eq => glue l r
 
 -- > toList (delete 9 (fromList [1, 2, 3]))
@@ -201,12 +265,12 @@ glue l r
 glueMax : Set a -> Set a -> Set a
 glueMax l r = match maxView l
   None => r
-  Some (x, l') => balance x l' r
+  Some (x, l') => balanceR x l' r
 
 glueMin : Set a -> Set a -> Set a
 glueMin l r = match minView r
   None => l
-  Some (x, r') => balance x l r'
+  Some (x, r') => balanceL x l r'
 
 -- # Minimum and maximum
 
@@ -220,7 +284,7 @@ minView : Set a -> Option (a, Set a)
 minView Tip = None
 minView (Bin _ x l r) = match minView l
   None => Some (x, r)
-  Some (xm, l') => Some (xm, balance x l' r)
+  Some (xm, l') => Some (xm, balanceR x l' r)
 
 -- > minView (Set { } : Set Int)
 -- None
@@ -235,7 +299,7 @@ maxView : Set a -> Option (a, Set a)
 maxView Tip = None
 maxView (Bin _ x l r) = match maxView r
   None => Some (x, l)
-  Some (xm, r') => Some (xm, balance x l r')
+  Some (xm, r') => Some (xm, balanceL x l r')
 
 -- > maxView (Set { } : Set Int)
 -- None
@@ -282,6 +346,10 @@ deleteMax s = match maxView s
 
 -- ── Folds (ascending element order) ─────────────────────────────────────
 
+elementsOnto : Set a -> List a -> List a
+elementsOnto Tip acc = acc
+elementsOnto (Bin _ x l r) acc = elementsOnto l (x :: elementsOnto r acc)
+
 foldrSet : (a -> b -> <e> b) -> b -> Set a -> <e> b
 foldrSet f z Tip = z
 foldrSet f z (Bin _ x l r) = foldrSet f (f x (foldrSet f z r)) l
@@ -307,11 +375,11 @@ foldlSet f z (Bin _ x l r) = foldlSet f (f (foldlSet f z l) x) r
 
 insertMin : a -> Set a -> Set a
 insertMin x Tip = singleton x
-insertMin x (Bin _ y l r) = balance y (insertMin x l) r
+insertMin x (Bin _ y l r) = balanceL y (insertMin x l) r
 
 insertMax : a -> Set a -> Set a
 insertMax x Tip = singleton x
-insertMax x (Bin _ y l r) = balance y l (insertMax x r)
+insertMax x (Bin _ y l r) = balanceR y l (insertMax x r)
 
 -- Join `l < x < r` for arbitrarily unbalanced `l`/`r`: descend the heavy side
 -- until the weights are within `delta`, rebalancing on the way out.
@@ -457,7 +525,7 @@ subsetGo (Bin _ x l r) b =
 export impl Foldable Set where
   fold f z s = foldlSet f z s
   foldRight f z s = foldrSet f z s
-  toList s = foldrSet (::) [] s
+  toList s = elementsOnto s []
   isEmpty Tip = True
   isEmpty _ = False
   length s = size s
@@ -556,6 +624,22 @@ ascending (x :: y :: rest) = lt x y && ascending (y :: rest)
 
 prop "fromList builds a well-formed tree" (xs : List Int) =
   wellFormed (fromList xs)
+
+prop "fromList agrees with naive fold-insert" (xs : List Int) =
+  let naive = fold (s x => insert x s) Tip xs
+  eq (toList (fromList xs)) (toList naive)
+
+prop "fromList agrees with naive on a sorted prefix then an unsorted tail" (xs : List Int) =
+  let ys = sort xs ++ xs
+  eq (toList (fromList ys)) (toList (fold (s x => insert x s) Tip ys))
+    && wellFormed (fromList ys)
+
+prop "minView and maxView keep the set well-formed at every step" (xs : List Int) =
+  let s = fromList xs
+  match (minView s, maxView s)
+    (Some (_, a), Some (_, b)) => wellFormed a && wellFormed b
+    (None, None) => True
+    _ => False
 
 prop "elements come out strictly ascending (sorted, deduped)" (xs : List Int) =
   ascending (toList (fromList xs))
@@ -677,12 +761,20 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
   wellFormed rebuilt && eq (toList rebuilt) (toList (delete x (fromList xs)))
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false) (mem "FromEntries" false))))
-(DUse false (UseGroup ("list") ((mem "intersperse" false))))
+(DUse false (UseGroup ("list") ((mem "intersperse" false) (mem "sort" false) (mem "sortBy" false))))
 (DData Public "Set" ("a") ((variant "Tip" (ConPos)) (variant "Bin" (ConPos (TyCon "Int") (TyVar "a") (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))) ())
 (DTypeSig false "bin" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))))
 (DFunDef false "bin" ((PVar "x") (PVar "l") (PVar "r")) (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EBinOp "+" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (ELit (LInt 1)))) (EVar "x")) (EVar "l")) (EVar "r")))
 (DTypeSig false "balance" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))))
 (DFunDef false "balance" ((PVar "x") (PVar "l") (PVar "r")) (EIf (EBinOp "<=" (EBinOp "+" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (ELit (LInt 1))) (EApp (EApp (EApp (EVar "bin") (EVar "x")) (EVar "l")) (EVar "r")) (EIf (EBinOp ">" (EApp (EVar "size") (EVar "r")) (EBinOp "*" (ELit (LInt 3)) (EApp (EVar "size") (EVar "l")))) (EApp (EApp (EApp (EVar "rotateL") (EVar "x")) (EVar "l")) (EVar "r")) (EIf (EBinOp ">" (EApp (EVar "size") (EVar "l")) (EBinOp "*" (ELit (LInt 3)) (EApp (EVar "size") (EVar "r")))) (EApp (EApp (EApp (EVar "rotateR") (EVar "x")) (EVar "l")) (EVar "r")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "bin") (EVar "x")) (EVar "l")) (EVar "r")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig false "balanceL" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))))
+(DFunDef false "balanceL" ((PVar "x") (PCon "Tip") (PVar "r")) (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EApp (EVar "size") (EVar "r")) (ELit (LInt 1)))) (EVar "x")) (EVar "Tip")) (EVar "r")))
+(DFunDef false "balanceL" ((PVar "x") (PAs "l" (PCon "Bin" (PVar "sl") PWild PWild PWild)) (PCon "Tip")) (EIf (EBinOp "<=" (EVar "sl") (ELit (LInt 1))) (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EVar "sl") (ELit (LInt 1)))) (EVar "x")) (EVar "l")) (EVar "Tip")) (EApp (EApp (EApp (EVar "rotateR") (EVar "x")) (EVar "l")) (EVar "Tip"))))
+(DFunDef false "balanceL" ((PVar "x") (PAs "l" (PCon "Bin" (PVar "sl") PWild PWild PWild)) (PAs "r" (PCon "Bin" (PVar "sr") PWild PWild PWild))) (EIf (EBinOp "&&" (EBinOp ">" (EVar "sl") (EBinOp "*" (ELit (LInt 3)) (EVar "sr"))) (EBinOp ">" (EBinOp "+" (EVar "sl") (EVar "sr")) (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "rotateR") (EVar "x")) (EVar "l")) (EVar "r")) (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EBinOp "+" (EVar "sl") (EVar "sr")) (ELit (LInt 1)))) (EVar "x")) (EVar "l")) (EVar "r"))))
+(DTypeSig false "balanceR" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))))
+(DFunDef false "balanceR" ((PVar "x") (PVar "l") (PCon "Tip")) (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EApp (EVar "size") (EVar "l")) (ELit (LInt 1)))) (EVar "x")) (EVar "l")) (EVar "Tip")))
+(DFunDef false "balanceR" ((PVar "x") (PCon "Tip") (PAs "r" (PCon "Bin" (PVar "sr") PWild PWild PWild))) (EIf (EBinOp "<=" (EVar "sr") (ELit (LInt 1))) (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EVar "sr") (ELit (LInt 1)))) (EVar "x")) (EVar "Tip")) (EVar "r")) (EApp (EApp (EApp (EVar "rotateL") (EVar "x")) (EVar "Tip")) (EVar "r"))))
+(DFunDef false "balanceR" ((PVar "x") (PAs "l" (PCon "Bin" (PVar "sl") PWild PWild PWild)) (PAs "r" (PCon "Bin" (PVar "sr") PWild PWild PWild))) (EIf (EBinOp "&&" (EBinOp ">" (EVar "sr") (EBinOp "*" (ELit (LInt 3)) (EVar "sl"))) (EBinOp ">" (EBinOp "+" (EVar "sl") (EVar "sr")) (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "rotateL") (EVar "x")) (EVar "l")) (EVar "r")) (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EBinOp "+" (EVar "sl") (EVar "sr")) (ELit (LInt 1)))) (EVar "x")) (EVar "l")) (EVar "r"))))
 (DTypeSig false "rotateL" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))))
 (DFunDef false "rotateL" ((PVar "x") (PVar "l") (PAs "r" (PCon "Bin" PWild PWild (PVar "rl") (PVar "rr")))) (EIf (EBinOp "<" (EApp (EVar "size") (EVar "rl")) (EBinOp "*" (ELit (LInt 2)) (EApp (EVar "size") (EVar "rr")))) (EApp (EApp (EApp (EVar "singleL") (EVar "x")) (EVar "l")) (EVar "r")) (EApp (EApp (EApp (EVar "doubleL") (EVar "x")) (EVar "l")) (EVar "r"))))
 (DFunDef false "rotateL" ((PVar "x") (PVar "l") (PCon "Tip")) (EApp (EVar "panic") (ELit (LString "Set.rotateL: empty right subtree"))))
@@ -704,7 +796,23 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DTypeSig true "singleton" (TyFun (TyVar "a") (TyApp (TyCon "Set") (TyVar "a"))))
 (DFunDef false "singleton" ((PVar "x")) (EApp (EApp (EApp (EApp (EVar "Bin") (ELit (LInt 1))) (EVar "x")) (EVar "Tip")) (EVar "Tip")))
 (DTypeSig true "fromList" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a")))))
-(DFunDef false "fromList" ((PVar "xs")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "s") (PVar "x")) (EApp (EApp (EVar "insert") (EVar "x")) (EVar "s")))) (EVar "Tip")) (EVar "xs")))
+(DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "ascendingRunLength") (EVar "xs"))) (DoLet false false (PTuple (PVar "s") (PVar "rest")) (EApp (EApp (EVar "buildAscending") (EVar "n")) (EVar "xs"))) (DoExpr (EMatch (EVar "rest") (arm (PList) () (EVar "s")) (arm PWild () (EApp (EVar "fromUnsorted") (EVar "xs")))))))
+(DTypeSig false "ascendingRunLength" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int"))))
+(DFunDef false "ascendingRunLength" ((PList)) (ELit (LInt 0)))
+(DFunDef false "ascendingRunLength" ((PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EApp (EVar "ascendingRunFrom") (EVar "x")) (ELit (LInt 1))) (EVar "rest")))
+(DTypeSig false "ascendingRunFrom" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int"))))))
+(DFunDef false "ascendingRunFrom" (PWild (PVar "n") (PList)) (EVar "n"))
+(DFunDef false "ascendingRunFrom" ((PVar "prev") (PVar "n") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "lt") (EVar "prev")) (EVar "x")) (EApp (EApp (EApp (EVar "ascendingRunFrom") (EVar "x")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "rest")) (EVar "n")))
+(DTypeSig false "buildAscending" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyTuple (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
+(DFunDef false "buildAscending" ((PVar "n") (PVar "xs")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ETuple (EVar "Tip") (EVar "xs")) (EIf (EVar "otherwise") (EApp (EApp (EVar "buildNode") (EVar "n")) (EVar "xs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "buildNode" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyTuple (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
+(DFunDef false "buildNode" ((PVar "n") (PVar "xs")) (EBlock (DoLet false false (PVar "nl") (EBinOp "/" (EBinOp "-" (EVar "n") (ELit (LInt 1))) (ELit (LInt 2)))) (DoLet false false (PVar "nr") (EBinOp "-" (EBinOp "-" (EVar "n") (ELit (LInt 1))) (EVar "nl"))) (DoLet false false (PTuple (PVar "l") (PVar "rest")) (EApp (EApp (EVar "buildAscending") (EVar "nl")) (EVar "xs"))) (DoExpr (EMatch (EVar "rest") (arm (PCons (PVar "x") (PVar "rest2")) () (EBlock (DoLet false false (PTuple (PVar "r") (PVar "rest3")) (EApp (EApp (EVar "buildAscending") (EVar "nr")) (EVar "rest2"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "n")) (EVar "x")) (EVar "l")) (EVar "r")) (EVar "rest3"))))) (arm (PList) () (EApp (EVar "panic") (ELit (LString "Set.buildNode: fewer elements than the run length"))))))))
+(DTypeSig false "fromUnsorted" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a")))))
+(DFunDef false "fromUnsorted" ((PVar "xs")) (EBlock (DoLet false false (PVar "ys") (EApp (EVar "dedupeLast") (EApp (EApp (EVar "sortBy") (EVar "compare")) (EVar "xs")))) (DoExpr (EApp (EVar "fst") (EApp (EApp (EVar "buildAscending") (EApp (EVar "length") (EVar "ys"))) (EVar "ys"))))))
+(DTypeSig false "dedupeLast" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "dedupeLast" ((PList)) (EListLit))
+(DFunDef false "dedupeLast" ((PList (PVar "x"))) (EListLit (EVar "x")))
+(DFunDef false "dedupeLast" ((PCons (PVar "x") (PAs "rest" (PCons (PVar "y") PWild)))) (EIf (EApp (EApp (EVar "eq") (EVar "x")) (EVar "y")) (EApp (EVar "dedupeLast") (EVar "rest")) (EBinOp "::" (EVar "x") (EApp (EVar "dedupeLast") (EVar "rest")))))
 (DTypeSig true "size" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyCon "Int")))
 (DFunDef false "size" ((PCon "Tip")) (ELit (LInt 0)))
 (DFunDef false "size" ((PCon "Bin" (PVar "s") PWild PWild PWild)) (EVar "s"))
@@ -713,24 +821,24 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DFunDef false "has" ((PVar "x") (PCon "Bin" PWild (PVar "y") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EApp (EApp (EVar "has") (EVar "x")) (EVar "l"))) (arm (PCon "Gt") () (EApp (EApp (EVar "has") (EVar "x")) (EVar "r"))) (arm (PCon "Eq") () (EVar "True"))))
 (DTypeSig true "insert" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))))
 (DFunDef false "insert" ((PVar "x") (PCon "Tip")) (EApp (EVar "singleton") (EVar "x")))
-(DFunDef false "insert" ((PVar "x") (PCon "Bin" (PVar "s") (PVar "y") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EApp (EApp (EApp (EVar "balance") (EVar "y")) (EApp (EApp (EVar "insert") (EVar "x")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EVar "balance") (EVar "y")) (EVar "l")) (EApp (EApp (EVar "insert") (EVar "x")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "x")) (EVar "l")) (EVar "r")))))
+(DFunDef false "insert" ((PVar "x") (PCon "Bin" (PVar "s") (PVar "y") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EApp (EApp (EApp (EVar "balanceL") (EVar "y")) (EApp (EApp (EVar "insert") (EVar "x")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EVar "balanceR") (EVar "y")) (EVar "l")) (EApp (EApp (EVar "insert") (EVar "x")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "x")) (EVar "l")) (EVar "r")))))
 (DTypeSig true "delete" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))))
 (DFunDef false "delete" ((PVar "x") (PCon "Tip")) (EVar "Tip"))
-(DFunDef false "delete" ((PVar "x") (PCon "Bin" PWild (PVar "y") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EApp (EApp (EApp (EVar "balance") (EVar "y")) (EApp (EApp (EVar "delete") (EVar "x")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EVar "balance") (EVar "y")) (EVar "l")) (EApp (EApp (EVar "delete") (EVar "x")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EVar "glue") (EVar "l")) (EVar "r")))))
+(DFunDef false "delete" ((PVar "x") (PCon "Bin" PWild (PVar "y") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EApp (EApp (EApp (EVar "balanceR") (EVar "y")) (EApp (EApp (EVar "delete") (EVar "x")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EVar "balanceL") (EVar "y")) (EVar "l")) (EApp (EApp (EVar "delete") (EVar "x")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EVar "glue") (EVar "l")) (EVar "r")))))
 (DTypeSig false "glue" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a")))))
 (DFunDef false "glue" ((PCon "Tip") (PVar "r")) (EVar "r"))
 (DFunDef false "glue" ((PVar "l") (PCon "Tip")) (EVar "l"))
 (DFunDef false "glue" ((PVar "l") (PVar "r")) (EIf (EBinOp ">" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (EApp (EApp (EVar "glueMax") (EVar "l")) (EVar "r")) (EIf (EVar "otherwise") (EApp (EApp (EVar "glueMin") (EVar "l")) (EVar "r")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "glueMax" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a")))))
-(DFunDef false "glueMax" ((PVar "l") (PVar "r")) (EMatch (EApp (EVar "maxView") (EVar "l")) (arm (PCon "None") () (EVar "r")) (arm (PCon "Some" (PTuple (PVar "x") (PVar "l'"))) () (EApp (EApp (EApp (EVar "balance") (EVar "x")) (EVar "l'")) (EVar "r")))))
+(DFunDef false "glueMax" ((PVar "l") (PVar "r")) (EMatch (EApp (EVar "maxView") (EVar "l")) (arm (PCon "None") () (EVar "r")) (arm (PCon "Some" (PTuple (PVar "x") (PVar "l'"))) () (EApp (EApp (EApp (EVar "balanceR") (EVar "x")) (EVar "l'")) (EVar "r")))))
 (DTypeSig false "glueMin" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a")))))
-(DFunDef false "glueMin" ((PVar "l") (PVar "r")) (EMatch (EApp (EVar "minView") (EVar "r")) (arm (PCon "None") () (EVar "l")) (arm (PCon "Some" (PTuple (PVar "x") (PVar "r'"))) () (EApp (EApp (EApp (EVar "balance") (EVar "x")) (EVar "l")) (EVar "r'")))))
+(DFunDef false "glueMin" ((PVar "l") (PVar "r")) (EMatch (EApp (EVar "minView") (EVar "r")) (arm (PCon "None") () (EVar "l")) (arm (PCon "Some" (PTuple (PVar "x") (PVar "r'"))) () (EApp (EApp (EApp (EVar "balanceL") (EVar "x")) (EVar "l")) (EVar "r'")))))
 (DTypeSig true "minView" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Option") (TyTuple (TyVar "a") (TyApp (TyCon "Set") (TyVar "a"))))))
 (DFunDef false "minView" ((PCon "Tip")) (EVar "None"))
-(DFunDef false "minView" ((PCon "Bin" PWild (PVar "x") (PVar "l") (PVar "r"))) (EMatch (EApp (EVar "minView") (EVar "l")) (arm (PCon "None") () (EApp (EVar "Some") (ETuple (EVar "x") (EVar "r")))) (arm (PCon "Some" (PTuple (PVar "xm") (PVar "l'"))) () (EApp (EVar "Some") (ETuple (EVar "xm") (EApp (EApp (EApp (EVar "balance") (EVar "x")) (EVar "l'")) (EVar "r")))))))
+(DFunDef false "minView" ((PCon "Bin" PWild (PVar "x") (PVar "l") (PVar "r"))) (EMatch (EApp (EVar "minView") (EVar "l")) (arm (PCon "None") () (EApp (EVar "Some") (ETuple (EVar "x") (EVar "r")))) (arm (PCon "Some" (PTuple (PVar "xm") (PVar "l'"))) () (EApp (EVar "Some") (ETuple (EVar "xm") (EApp (EApp (EApp (EVar "balanceR") (EVar "x")) (EVar "l'")) (EVar "r")))))))
 (DTypeSig true "maxView" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Option") (TyTuple (TyVar "a") (TyApp (TyCon "Set") (TyVar "a"))))))
 (DFunDef false "maxView" ((PCon "Tip")) (EVar "None"))
-(DFunDef false "maxView" ((PCon "Bin" PWild (PVar "x") (PVar "l") (PVar "r"))) (EMatch (EApp (EVar "maxView") (EVar "r")) (arm (PCon "None") () (EApp (EVar "Some") (ETuple (EVar "x") (EVar "l")))) (arm (PCon "Some" (PTuple (PVar "xm") (PVar "r'"))) () (EApp (EVar "Some") (ETuple (EVar "xm") (EApp (EApp (EApp (EVar "balance") (EVar "x")) (EVar "l")) (EVar "r'")))))))
+(DFunDef false "maxView" ((PCon "Bin" PWild (PVar "x") (PVar "l") (PVar "r"))) (EMatch (EApp (EVar "maxView") (EVar "r")) (arm (PCon "None") () (EApp (EVar "Some") (ETuple (EVar "x") (EVar "l")))) (arm (PCon "Some" (PTuple (PVar "xm") (PVar "r'"))) () (EApp (EVar "Some") (ETuple (EVar "xm") (EApp (EApp (EApp (EVar "balanceL") (EVar "x")) (EVar "l")) (EVar "r'")))))))
 (DTypeSig true "getMin" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a"))))
 (DFunDef false "getMin" ((PVar "s")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "x") PWild)) (EVar "x"))) (EApp (EVar "minView") (EVar "s"))))
 (DTypeSig true "getMax" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a"))))
@@ -739,6 +847,9 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DFunDef false "deleteMin" ((PVar "s")) (EMatch (EApp (EVar "minView") (EVar "s")) (arm (PCon "None") () (EVar "Tip")) (arm (PCon "Some" (PTuple PWild (PVar "s'"))) () (EVar "s'"))))
 (DTypeSig true "deleteMax" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))
 (DFunDef false "deleteMax" ((PVar "s")) (EMatch (EApp (EVar "maxView") (EVar "s")) (arm (PCon "None") () (EVar "Tip")) (arm (PCon "Some" (PTuple PWild (PVar "s'"))) () (EVar "s'"))))
+(DTypeSig false "elementsOnto" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "elementsOnto" ((PCon "Tip") (PVar "acc")) (EVar "acc"))
+(DFunDef false "elementsOnto" ((PCon "Bin" PWild (PVar "x") (PVar "l") (PVar "r")) (PVar "acc")) (EApp (EApp (EVar "elementsOnto") (EVar "l")) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "elementsOnto") (EVar "r")) (EVar "acc")))))
 (DTypeSig false "foldrSet" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))))
 (DFunDef false "foldrSet" ((PVar "f") (PVar "z") (PCon "Tip")) (EVar "z"))
 (DFunDef false "foldrSet" ((PVar "f") (PVar "z") (PCon "Bin" PWild (PVar "x") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "foldrSet") (EVar "f")) (EApp (EApp (EVar "f") (EVar "x")) (EApp (EApp (EApp (EVar "foldrSet") (EVar "f")) (EVar "z")) (EVar "r")))) (EVar "l")))
@@ -747,10 +858,10 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DFunDef false "foldlSet" ((PVar "f") (PVar "z") (PCon "Bin" PWild (PVar "x") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "foldlSet") (EVar "f")) (EApp (EApp (EVar "f") (EApp (EApp (EApp (EVar "foldlSet") (EVar "f")) (EVar "z")) (EVar "l"))) (EVar "x"))) (EVar "r")))
 (DTypeSig false "insertMin" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a")))))
 (DFunDef false "insertMin" ((PVar "x") (PCon "Tip")) (EApp (EVar "singleton") (EVar "x")))
-(DFunDef false "insertMin" ((PVar "x") (PCon "Bin" PWild (PVar "y") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "balance") (EVar "y")) (EApp (EApp (EVar "insertMin") (EVar "x")) (EVar "l"))) (EVar "r")))
+(DFunDef false "insertMin" ((PVar "x") (PCon "Bin" PWild (PVar "y") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "balanceL") (EVar "y")) (EApp (EApp (EVar "insertMin") (EVar "x")) (EVar "l"))) (EVar "r")))
 (DTypeSig false "insertMax" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a")))))
 (DFunDef false "insertMax" ((PVar "x") (PCon "Tip")) (EApp (EVar "singleton") (EVar "x")))
-(DFunDef false "insertMax" ((PVar "x") (PCon "Bin" PWild (PVar "y") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "balance") (EVar "y")) (EVar "l")) (EApp (EApp (EVar "insertMax") (EVar "x")) (EVar "r"))))
+(DFunDef false "insertMax" ((PVar "x") (PCon "Bin" PWild (PVar "y") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "balanceR") (EVar "y")) (EVar "l")) (EApp (EApp (EVar "insertMax") (EVar "x")) (EVar "r"))))
 (DTypeSig false "link" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))))
 (DFunDef false "link" ((PVar "x") (PCon "Tip") (PVar "r")) (EApp (EApp (EVar "insertMin") (EVar "x")) (EVar "r")))
 (DFunDef false "link" ((PVar "x") (PVar "l") (PCon "Tip")) (EApp (EApp (EVar "insertMax") (EVar "x")) (EVar "l")))
@@ -783,7 +894,7 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DFunDef false "subsetGo" ((PCon "Tip") (PVar "b")) (EVar "True"))
 (DFunDef false "subsetGo" ((PVar "a") (PCon "Tip")) (EVar "False"))
 (DFunDef false "subsetGo" ((PCon "Bin" PWild (PVar "x") (PVar "l") (PVar "r")) (PVar "b")) (EBlock (DoLet false false (PTuple (PVar "bl") (PVar "found") (PVar "br")) (EApp (EApp (EVar "splitMember") (EVar "x")) (EVar "b"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "found") (EApp (EApp (EVar "subsetGo") (EVar "l")) (EVar "bl"))) (EApp (EApp (EVar "subsetGo") (EVar "r")) (EVar "br"))))))
-(DImpl true "Foldable" ((TyCon "Set")) () ((im "fold" ((PVar "f") (PVar "z") (PVar "s")) (EApp (EApp (EApp (EVar "foldlSet") (EVar "f")) (EVar "z")) (EVar "s"))) (im "foldRight" ((PVar "f") (PVar "z") (PVar "s")) (EApp (EApp (EApp (EVar "foldrSet") (EVar "f")) (EVar "z")) (EVar "s"))) (im "toList" ((PVar "s")) (EApp (EApp (EApp (EVar "foldrSet") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "::" (EVar "_a") (EVar "_b")))) (EListLit)) (EVar "s"))) (im "isEmpty" ((PCon "Tip")) (EVar "True")) (im "isEmpty" (PWild) (EVar "False")) (im "length" ((PVar "s")) (EApp (EVar "size") (EVar "s")))))
+(DImpl true "Foldable" ((TyCon "Set")) () ((im "fold" ((PVar "f") (PVar "z") (PVar "s")) (EApp (EApp (EApp (EVar "foldlSet") (EVar "f")) (EVar "z")) (EVar "s"))) (im "foldRight" ((PVar "f") (PVar "z") (PVar "s")) (EApp (EApp (EApp (EVar "foldrSet") (EVar "f")) (EVar "z")) (EVar "s"))) (im "toList" ((PVar "s")) (EApp (EApp (EVar "elementsOnto") (EVar "s")) (EListLit))) (im "isEmpty" ((PCon "Tip")) (EVar "True")) (im "isEmpty" (PWild) (EVar "False")) (im "length" ((PVar "s")) (EApp (EVar "size") (EVar "s")))))
 (DImpl true "Eq" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "a"))) (EApp (EVar "toList") (EVar "b")))))))
 (DImpl true "Ord" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "compare" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "compare") (EApp (EVar "toList") (EVar "a"))) (EApp (EVar "toList") (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "toList") (EVar "s"))))) (ELit (LString ""))))))
@@ -806,6 +917,9 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DFunDef false "ascending" ((PList (PVar "x"))) (EVar "True"))
 (DFunDef false "ascending" ((PCons (PVar "x") (PCons (PVar "y") (PVar "rest")))) (EBinOp "&&" (EApp (EApp (EVar "lt") (EVar "x")) (EVar "y")) (EApp (EVar "ascending") (EBinOp "::" (EVar "y") (EVar "rest")))))
 (DProp false "fromList builds a well-formed tree" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EVar "wellFormed") (EApp (EVar "fromList") (EVar "xs"))))
+(DProp false "fromList agrees with naive fold-insert" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "naive") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "s") (PVar "x")) (EApp (EApp (EVar "insert") (EVar "x")) (EVar "s")))) (EVar "Tip")) (EVar "xs"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EApp (EVar "fromList") (EVar "xs")))) (EApp (EVar "toList") (EVar "naive"))))))
+(DProp false "fromList agrees with naive on a sorted prefix then an unsorted tail" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ys") (EBinOp "++" (EApp (EVar "sort") (EVar "xs")) (EVar "xs"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EApp (EVar "fromList") (EVar "ys")))) (EApp (EVar "toList") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "s") (PVar "x")) (EApp (EApp (EVar "insert") (EVar "x")) (EVar "s")))) (EVar "Tip")) (EVar "ys")))) (EApp (EVar "wellFormed") (EApp (EVar "fromList") (EVar "ys")))))))
+(DProp false "minView and maxView keep the set well-formed at every step" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EMatch (ETuple (EApp (EVar "minView") (EVar "s")) (EApp (EVar "maxView") (EVar "s"))) (arm (PTuple (PCon "Some" (PTuple PWild (PVar "a"))) (PCon "Some" (PTuple PWild (PVar "b")))) () (EBinOp "&&" (EApp (EVar "wellFormed") (EVar "a")) (EApp (EVar "wellFormed") (EVar "b")))) (arm (PTuple (PCon "None") (PCon "None")) () (EVar "True")) (arm PWild () (EVar "False"))))))
 (DProp false "elements come out strictly ascending (sorted, deduped)" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EVar "ascending") (EApp (EVar "toList") (EApp (EVar "fromList") (EVar "xs")))))
 (DProp false "insert then member" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EVar "has") (EVar "x")) (EApp (EApp (EVar "insert") (EVar "x")) (EApp (EVar "fromList") (EVar "xs")))))
 (DProp false "insert preserves well-formedness" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EVar "wellFormed") (EApp (EApp (EVar "insert") (EVar "x")) (EApp (EVar "fromList") (EVar "xs")))))
@@ -840,12 +954,20 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DProp false "link2 rejoins a split without its element" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EVar "splitAt") (EVar "x")) (EApp (EVar "fromList") (EVar "xs")))) (DoLet false false (PVar "rebuilt") (EApp (EApp (EVar "link2") (EVar "below")) (EVar "above"))) (DoExpr (EBinOp "&&" (EApp (EVar "wellFormed") (EVar "rebuilt")) (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "rebuilt"))) (EApp (EVar "toList") (EApp (EApp (EVar "delete") (EVar "x")) (EApp (EVar "fromList") (EVar "xs")))))))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false) (mem "FromEntries" false))))
-(DUse false (UseGroup ("list") ((mem "intersperse" false))))
+(DUse false (UseGroup ("list") ((mem "intersperse" false) (mem "sort" false) (mem "sortBy" false))))
 (DData Public "Set" ("a") ((variant "Tip" (ConPos)) (variant "Bin" (ConPos (TyCon "Int") (TyVar "a") (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))) ())
 (DTypeSig false "bin" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))))
 (DFunDef false "bin" ((PVar "x") (PVar "l") (PVar "r")) (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EBinOp "+" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (ELit (LInt 1)))) (EVar "x")) (EVar "l")) (EVar "r")))
 (DTypeSig false "balance" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))))
 (DFunDef false "balance" ((PVar "x") (PVar "l") (PVar "r")) (EIf (EBinOp "<=" (EBinOp "+" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (ELit (LInt 1))) (EApp (EApp (EApp (EVar "bin") (EVar "x")) (EVar "l")) (EVar "r")) (EIf (EBinOp ">" (EApp (EVar "size") (EVar "r")) (EBinOp "*" (ELit (LInt 3)) (EApp (EVar "size") (EVar "l")))) (EApp (EApp (EApp (EVar "rotateL") (EVar "x")) (EVar "l")) (EVar "r")) (EIf (EBinOp ">" (EApp (EVar "size") (EVar "l")) (EBinOp "*" (ELit (LInt 3)) (EApp (EVar "size") (EVar "r")))) (EApp (EApp (EApp (EVar "rotateR") (EVar "x")) (EVar "l")) (EVar "r")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "bin") (EVar "x")) (EVar "l")) (EVar "r")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig false "balanceL" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))))
+(DFunDef false "balanceL" ((PVar "x") (PCon "Tip") (PVar "r")) (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EApp (EVar "size") (EVar "r")) (ELit (LInt 1)))) (EVar "x")) (EVar "Tip")) (EVar "r")))
+(DFunDef false "balanceL" ((PVar "x") (PAs "l" (PCon "Bin" (PVar "sl") PWild PWild PWild)) (PCon "Tip")) (EIf (EBinOp "<=" (EVar "sl") (ELit (LInt 1))) (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EVar "sl") (ELit (LInt 1)))) (EVar "x")) (EVar "l")) (EVar "Tip")) (EApp (EApp (EApp (EVar "rotateR") (EVar "x")) (EVar "l")) (EVar "Tip"))))
+(DFunDef false "balanceL" ((PVar "x") (PAs "l" (PCon "Bin" (PVar "sl") PWild PWild PWild)) (PAs "r" (PCon "Bin" (PVar "sr") PWild PWild PWild))) (EIf (EBinOp "&&" (EBinOp ">" (EVar "sl") (EBinOp "*" (ELit (LInt 3)) (EVar "sr"))) (EBinOp ">" (EBinOp "+" (EVar "sl") (EVar "sr")) (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "rotateR") (EVar "x")) (EVar "l")) (EVar "r")) (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EBinOp "+" (EVar "sl") (EVar "sr")) (ELit (LInt 1)))) (EVar "x")) (EVar "l")) (EVar "r"))))
+(DTypeSig false "balanceR" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))))
+(DFunDef false "balanceR" ((PVar "x") (PVar "l") (PCon "Tip")) (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EApp (EVar "size") (EVar "l")) (ELit (LInt 1)))) (EVar "x")) (EVar "l")) (EVar "Tip")))
+(DFunDef false "balanceR" ((PVar "x") (PCon "Tip") (PAs "r" (PCon "Bin" (PVar "sr") PWild PWild PWild))) (EIf (EBinOp "<=" (EVar "sr") (ELit (LInt 1))) (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EVar "sr") (ELit (LInt 1)))) (EVar "x")) (EVar "Tip")) (EVar "r")) (EApp (EApp (EApp (EVar "rotateL") (EVar "x")) (EVar "Tip")) (EVar "r"))))
+(DFunDef false "balanceR" ((PVar "x") (PAs "l" (PCon "Bin" (PVar "sl") PWild PWild PWild)) (PAs "r" (PCon "Bin" (PVar "sr") PWild PWild PWild))) (EIf (EBinOp "&&" (EBinOp ">" (EVar "sr") (EBinOp "*" (ELit (LInt 3)) (EVar "sl"))) (EBinOp ">" (EBinOp "+" (EVar "sl") (EVar "sr")) (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "rotateL") (EVar "x")) (EVar "l")) (EVar "r")) (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EBinOp "+" (EVar "sl") (EVar "sr")) (ELit (LInt 1)))) (EVar "x")) (EVar "l")) (EVar "r"))))
 (DTypeSig false "rotateL" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))))
 (DFunDef false "rotateL" ((PVar "x") (PVar "l") (PAs "r" (PCon "Bin" PWild PWild (PVar "rl") (PVar "rr")))) (EIf (EBinOp "<" (EApp (EVar "size") (EVar "rl")) (EBinOp "*" (ELit (LInt 2)) (EApp (EVar "size") (EVar "rr")))) (EApp (EApp (EApp (EVar "singleL") (EVar "x")) (EVar "l")) (EVar "r")) (EApp (EApp (EApp (EVar "doubleL") (EVar "x")) (EVar "l")) (EVar "r"))))
 (DFunDef false "rotateL" ((PVar "x") (PVar "l") (PCon "Tip")) (EApp (EVar "panic") (ELit (LString "Set.rotateL: empty right subtree"))))
@@ -867,7 +989,23 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DTypeSig true "singleton" (TyFun (TyVar "a") (TyApp (TyCon "Set") (TyVar "a"))))
 (DFunDef false "singleton" ((PVar "x")) (EApp (EApp (EApp (EApp (EVar "Bin") (ELit (LInt 1))) (EVar "x")) (EVar "Tip")) (EVar "Tip")))
 (DTypeSig true "fromList" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a")))))
-(DFunDef false "fromList" ((PVar "xs")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "s") (PVar "x")) (EApp (EApp (EDictApp "insert") (EVar "x")) (EVar "s")))) (EVar "Tip")) (EVar "xs")))
+(DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "n") (EApp (EDictApp "ascendingRunLength") (EVar "xs"))) (DoLet false false (PTuple (PVar "s") (PVar "rest")) (EApp (EApp (EVar "buildAscending") (EVar "n")) (EVar "xs"))) (DoExpr (EMatch (EVar "rest") (arm (PList) () (EVar "s")) (arm PWild () (EApp (EDictApp "fromUnsorted") (EVar "xs")))))))
+(DTypeSig false "ascendingRunLength" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int"))))
+(DFunDef false "ascendingRunLength" ((PList)) (ELit (LInt 0)))
+(DFunDef false "ascendingRunLength" ((PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EApp (EDictApp "ascendingRunFrom") (EVar "x")) (ELit (LInt 1))) (EVar "rest")))
+(DTypeSig false "ascendingRunFrom" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int"))))))
+(DFunDef false "ascendingRunFrom" (PWild (PVar "n") (PList)) (EVar "n"))
+(DFunDef false "ascendingRunFrom" ((PVar "prev") (PVar "n") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EMethodRef "lt") (EVar "prev")) (EVar "x")) (EApp (EApp (EApp (EDictApp "ascendingRunFrom") (EVar "x")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "rest")) (EVar "n")))
+(DTypeSig false "buildAscending" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyTuple (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
+(DFunDef false "buildAscending" ((PVar "n") (PVar "xs")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ETuple (EVar "Tip") (EVar "xs")) (EIf (EVar "otherwise") (EApp (EApp (EVar "buildNode") (EVar "n")) (EVar "xs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "buildNode" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyTuple (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
+(DFunDef false "buildNode" ((PVar "n") (PVar "xs")) (EBlock (DoLet false false (PVar "nl") (EBinOp "/" (EBinOp "-" (EVar "n") (ELit (LInt 1))) (ELit (LInt 2)))) (DoLet false false (PVar "nr") (EBinOp "-" (EBinOp "-" (EVar "n") (ELit (LInt 1))) (EVar "nl"))) (DoLet false false (PTuple (PVar "l") (PVar "rest")) (EApp (EApp (EVar "buildAscending") (EVar "nl")) (EVar "xs"))) (DoExpr (EMatch (EVar "rest") (arm (PCons (PVar "x") (PVar "rest2")) () (EBlock (DoLet false false (PTuple (PVar "r") (PVar "rest3")) (EApp (EApp (EVar "buildAscending") (EVar "nr")) (EVar "rest2"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "n")) (EVar "x")) (EVar "l")) (EVar "r")) (EVar "rest3"))))) (arm (PList) () (EApp (EVar "panic") (ELit (LString "Set.buildNode: fewer elements than the run length"))))))))
+(DTypeSig false "fromUnsorted" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a")))))
+(DFunDef false "fromUnsorted" ((PVar "xs")) (EBlock (DoLet false false (PVar "ys") (EApp (EDictApp "dedupeLast") (EApp (EApp (EVar "sortBy") (EMethodRef "compare")) (EVar "xs")))) (DoExpr (EApp (EVar "fst") (EApp (EApp (EVar "buildAscending") (EApp (EMethodRef "length") (EVar "ys"))) (EVar "ys"))))))
+(DTypeSig false "dedupeLast" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "dedupeLast" ((PList)) (EListLit))
+(DFunDef false "dedupeLast" ((PList (PVar "x"))) (EListLit (EVar "x")))
+(DFunDef false "dedupeLast" ((PCons (PVar "x") (PAs "rest" (PCons (PVar "y") PWild)))) (EIf (EApp (EApp (EMethodRef "eq") (EVar "x")) (EVar "y")) (EApp (EDictApp "dedupeLast") (EVar "rest")) (EBinOp "::" (EVar "x") (EApp (EDictApp "dedupeLast") (EVar "rest")))))
 (DTypeSig true "size" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyCon "Int")))
 (DFunDef false "size" ((PCon "Tip")) (ELit (LInt 0)))
 (DFunDef false "size" ((PCon "Bin" (PVar "s") PWild PWild PWild)) (EVar "s"))
@@ -876,24 +1014,24 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DFunDef false "has" ((PVar "x") (PCon "Bin" PWild (PVar "y") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EApp (EApp (EDictApp "has") (EVar "x")) (EVar "l"))) (arm (PCon "Gt") () (EApp (EApp (EDictApp "has") (EVar "x")) (EVar "r"))) (arm (PCon "Eq") () (EVar "True"))))
 (DTypeSig true "insert" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))))
 (DFunDef false "insert" ((PVar "x") (PCon "Tip")) (EApp (EVar "singleton") (EVar "x")))
-(DFunDef false "insert" ((PVar "x") (PCon "Bin" (PVar "s") (PVar "y") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EApp (EApp (EApp (EVar "balance") (EVar "y")) (EApp (EApp (EDictApp "insert") (EVar "x")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EVar "balance") (EVar "y")) (EVar "l")) (EApp (EApp (EDictApp "insert") (EVar "x")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "x")) (EVar "l")) (EVar "r")))))
+(DFunDef false "insert" ((PVar "x") (PCon "Bin" (PVar "s") (PVar "y") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EApp (EApp (EApp (EVar "balanceL") (EVar "y")) (EApp (EApp (EDictApp "insert") (EVar "x")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EVar "balanceR") (EVar "y")) (EVar "l")) (EApp (EApp (EDictApp "insert") (EVar "x")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "x")) (EVar "l")) (EVar "r")))))
 (DTypeSig true "delete" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))))
 (DFunDef false "delete" ((PVar "x") (PCon "Tip")) (EVar "Tip"))
-(DFunDef false "delete" ((PVar "x") (PCon "Bin" PWild (PVar "y") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EApp (EApp (EApp (EVar "balance") (EVar "y")) (EApp (EApp (EDictApp "delete") (EVar "x")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EVar "balance") (EVar "y")) (EVar "l")) (EApp (EApp (EDictApp "delete") (EVar "x")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EVar "glue") (EVar "l")) (EVar "r")))))
+(DFunDef false "delete" ((PVar "x") (PCon "Bin" PWild (PVar "y") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EApp (EApp (EApp (EVar "balanceR") (EVar "y")) (EApp (EApp (EDictApp "delete") (EVar "x")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EVar "balanceL") (EVar "y")) (EVar "l")) (EApp (EApp (EDictApp "delete") (EVar "x")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EVar "glue") (EVar "l")) (EVar "r")))))
 (DTypeSig false "glue" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a")))))
 (DFunDef false "glue" ((PCon "Tip") (PVar "r")) (EVar "r"))
 (DFunDef false "glue" ((PVar "l") (PCon "Tip")) (EVar "l"))
 (DFunDef false "glue" ((PVar "l") (PVar "r")) (EIf (EBinOp ">" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (EApp (EApp (EVar "glueMax") (EVar "l")) (EVar "r")) (EIf (EVar "otherwise") (EApp (EApp (EVar "glueMin") (EVar "l")) (EVar "r")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "glueMax" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a")))))
-(DFunDef false "glueMax" ((PVar "l") (PVar "r")) (EMatch (EApp (EVar "maxView") (EVar "l")) (arm (PCon "None") () (EVar "r")) (arm (PCon "Some" (PTuple (PVar "x") (PVar "l'"))) () (EApp (EApp (EApp (EVar "balance") (EVar "x")) (EVar "l'")) (EVar "r")))))
+(DFunDef false "glueMax" ((PVar "l") (PVar "r")) (EMatch (EApp (EVar "maxView") (EVar "l")) (arm (PCon "None") () (EVar "r")) (arm (PCon "Some" (PTuple (PVar "x") (PVar "l'"))) () (EApp (EApp (EApp (EVar "balanceR") (EVar "x")) (EVar "l'")) (EVar "r")))))
 (DTypeSig false "glueMin" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a")))))
-(DFunDef false "glueMin" ((PVar "l") (PVar "r")) (EMatch (EApp (EVar "minView") (EVar "r")) (arm (PCon "None") () (EVar "l")) (arm (PCon "Some" (PTuple (PVar "x") (PVar "r'"))) () (EApp (EApp (EApp (EVar "balance") (EVar "x")) (EVar "l")) (EVar "r'")))))
+(DFunDef false "glueMin" ((PVar "l") (PVar "r")) (EMatch (EApp (EVar "minView") (EVar "r")) (arm (PCon "None") () (EVar "l")) (arm (PCon "Some" (PTuple (PVar "x") (PVar "r'"))) () (EApp (EApp (EApp (EVar "balanceL") (EVar "x")) (EVar "l")) (EVar "r'")))))
 (DTypeSig true "minView" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Option") (TyTuple (TyVar "a") (TyApp (TyCon "Set") (TyVar "a"))))))
 (DFunDef false "minView" ((PCon "Tip")) (EVar "None"))
-(DFunDef false "minView" ((PCon "Bin" PWild (PVar "x") (PVar "l") (PVar "r"))) (EMatch (EApp (EVar "minView") (EVar "l")) (arm (PCon "None") () (EApp (EVar "Some") (ETuple (EVar "x") (EVar "r")))) (arm (PCon "Some" (PTuple (PVar "xm") (PVar "l'"))) () (EApp (EVar "Some") (ETuple (EVar "xm") (EApp (EApp (EApp (EVar "balance") (EVar "x")) (EVar "l'")) (EVar "r")))))))
+(DFunDef false "minView" ((PCon "Bin" PWild (PVar "x") (PVar "l") (PVar "r"))) (EMatch (EApp (EVar "minView") (EVar "l")) (arm (PCon "None") () (EApp (EVar "Some") (ETuple (EVar "x") (EVar "r")))) (arm (PCon "Some" (PTuple (PVar "xm") (PVar "l'"))) () (EApp (EVar "Some") (ETuple (EVar "xm") (EApp (EApp (EApp (EVar "balanceR") (EVar "x")) (EVar "l'")) (EVar "r")))))))
 (DTypeSig true "maxView" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Option") (TyTuple (TyVar "a") (TyApp (TyCon "Set") (TyVar "a"))))))
 (DFunDef false "maxView" ((PCon "Tip")) (EVar "None"))
-(DFunDef false "maxView" ((PCon "Bin" PWild (PVar "x") (PVar "l") (PVar "r"))) (EMatch (EApp (EVar "maxView") (EVar "r")) (arm (PCon "None") () (EApp (EVar "Some") (ETuple (EVar "x") (EVar "l")))) (arm (PCon "Some" (PTuple (PVar "xm") (PVar "r'"))) () (EApp (EVar "Some") (ETuple (EVar "xm") (EApp (EApp (EApp (EVar "balance") (EVar "x")) (EVar "l")) (EVar "r'")))))))
+(DFunDef false "maxView" ((PCon "Bin" PWild (PVar "x") (PVar "l") (PVar "r"))) (EMatch (EApp (EVar "maxView") (EVar "r")) (arm (PCon "None") () (EApp (EVar "Some") (ETuple (EVar "x") (EVar "l")))) (arm (PCon "Some" (PTuple (PVar "xm") (PVar "r'"))) () (EApp (EVar "Some") (ETuple (EVar "xm") (EApp (EApp (EApp (EVar "balanceL") (EVar "x")) (EVar "l")) (EVar "r'")))))))
 (DTypeSig true "getMin" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a"))))
 (DFunDef false "getMin" ((PVar "s")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "x") PWild)) (EVar "x"))) (EApp (EVar "minView") (EVar "s"))))
 (DTypeSig true "getMax" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a"))))
@@ -902,6 +1040,9 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DFunDef false "deleteMin" ((PVar "s")) (EMatch (EApp (EVar "minView") (EVar "s")) (arm (PCon "None") () (EVar "Tip")) (arm (PCon "Some" (PTuple PWild (PVar "s'"))) () (EVar "s'"))))
 (DTypeSig true "deleteMax" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))
 (DFunDef false "deleteMax" ((PVar "s")) (EMatch (EApp (EVar "maxView") (EVar "s")) (arm (PCon "None") () (EVar "Tip")) (arm (PCon "Some" (PTuple PWild (PVar "s'"))) () (EVar "s'"))))
+(DTypeSig false "elementsOnto" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "elementsOnto" ((PCon "Tip") (PVar "acc")) (EVar "acc"))
+(DFunDef false "elementsOnto" ((PCon "Bin" PWild (PVar "x") (PVar "l") (PVar "r")) (PVar "acc")) (EApp (EApp (EVar "elementsOnto") (EVar "l")) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "elementsOnto") (EVar "r")) (EVar "acc")))))
 (DTypeSig false "foldrSet" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))))
 (DFunDef false "foldrSet" ((PVar "f") (PVar "z") (PCon "Tip")) (EVar "z"))
 (DFunDef false "foldrSet" ((PVar "f") (PVar "z") (PCon "Bin" PWild (PVar "x") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "foldrSet") (EVar "f")) (EApp (EApp (EVar "f") (EVar "x")) (EApp (EApp (EApp (EVar "foldrSet") (EVar "f")) (EVar "z")) (EVar "r")))) (EVar "l")))
@@ -910,10 +1051,10 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DFunDef false "foldlSet" ((PVar "f") (PVar "z") (PCon "Bin" PWild (PVar "x") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "foldlSet") (EVar "f")) (EApp (EApp (EVar "f") (EApp (EApp (EApp (EVar "foldlSet") (EVar "f")) (EVar "z")) (EVar "l"))) (EVar "x"))) (EVar "r")))
 (DTypeSig false "insertMin" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a")))))
 (DFunDef false "insertMin" ((PVar "x") (PCon "Tip")) (EApp (EVar "singleton") (EVar "x")))
-(DFunDef false "insertMin" ((PVar "x") (PCon "Bin" PWild (PVar "y") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "balance") (EVar "y")) (EApp (EApp (EVar "insertMin") (EVar "x")) (EVar "l"))) (EVar "r")))
+(DFunDef false "insertMin" ((PVar "x") (PCon "Bin" PWild (PVar "y") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "balanceL") (EVar "y")) (EApp (EApp (EVar "insertMin") (EVar "x")) (EVar "l"))) (EVar "r")))
 (DTypeSig false "insertMax" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a")))))
 (DFunDef false "insertMax" ((PVar "x") (PCon "Tip")) (EApp (EVar "singleton") (EVar "x")))
-(DFunDef false "insertMax" ((PVar "x") (PCon "Bin" PWild (PVar "y") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "balance") (EVar "y")) (EVar "l")) (EApp (EApp (EVar "insertMax") (EVar "x")) (EVar "r"))))
+(DFunDef false "insertMax" ((PVar "x") (PCon "Bin" PWild (PVar "y") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "balanceR") (EVar "y")) (EVar "l")) (EApp (EApp (EVar "insertMax") (EVar "x")) (EVar "r"))))
 (DTypeSig false "link" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))))
 (DFunDef false "link" ((PVar "x") (PCon "Tip") (PVar "r")) (EApp (EApp (EVar "insertMin") (EVar "x")) (EVar "r")))
 (DFunDef false "link" ((PVar "x") (PVar "l") (PCon "Tip")) (EApp (EApp (EVar "insertMax") (EVar "x")) (EVar "l")))
@@ -946,7 +1087,7 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DFunDef false "subsetGo" ((PCon "Tip") (PVar "b")) (EVar "True"))
 (DFunDef false "subsetGo" ((PVar "a") (PCon "Tip")) (EVar "False"))
 (DFunDef false "subsetGo" ((PCon "Bin" PWild (PVar "x") (PVar "l") (PVar "r")) (PVar "b")) (EBlock (DoLet false false (PTuple (PVar "bl") (PVar "found") (PVar "br")) (EApp (EApp (EDictApp "splitMember") (EVar "x")) (EVar "b"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "found") (EApp (EApp (EDictApp "subsetGo") (EVar "l")) (EVar "bl"))) (EApp (EApp (EDictApp "subsetGo") (EVar "r")) (EVar "br"))))))
-(DImpl true "Foldable" ((TyCon "Set")) () ((im "fold" ((PVar "f") (PVar "z") (PVar "s")) (EApp (EApp (EApp (EVar "foldlSet") (EVar "f")) (EVar "z")) (EVar "s"))) (im "foldRight" ((PVar "f") (PVar "z") (PVar "s")) (EApp (EApp (EApp (EVar "foldrSet") (EVar "f")) (EVar "z")) (EVar "s"))) (im "toList" ((PVar "s")) (EApp (EApp (EApp (EVar "foldrSet") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "::" (EVar "_a") (EVar "_b")))) (EListLit)) (EVar "s"))) (im "isEmpty" ((PCon "Tip")) (EVar "True")) (im "isEmpty" (PWild) (EVar "False")) (im "length" ((PVar "s")) (EApp (EVar "size") (EVar "s")))))
+(DImpl true "Foldable" ((TyCon "Set")) () ((im "fold" ((PVar "f") (PVar "z") (PVar "s")) (EApp (EApp (EApp (EVar "foldlSet") (EVar "f")) (EVar "z")) (EVar "s"))) (im "foldRight" ((PVar "f") (PVar "z") (PVar "s")) (EApp (EApp (EApp (EVar "foldrSet") (EVar "f")) (EVar "z")) (EVar "s"))) (im "toList" ((PVar "s")) (EApp (EApp (EVar "elementsOnto") (EVar "s")) (EListLit))) (im "isEmpty" ((PCon "Tip")) (EVar "True")) (im "isEmpty" (PWild) (EVar "False")) (im "length" ((PVar "s")) (EApp (EVar "size") (EVar "s")))))
 (DImpl true "Eq" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "a"))) (EApp (EMethodRef "toList") (EVar "b")))))))
 (DImpl true "Ord" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "compare" ((PVar "a") (PVar "b")) (EApp (EApp (EMethodRef "compare") (EApp (EMethodRef "toList") (EVar "a"))) (EApp (EMethodRef "toList") (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EMethodRef "toList") (EVar "s"))))) (ELit (LString ""))))))
@@ -969,6 +1110,9 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DFunDef false "ascending" ((PList (PVar "x"))) (EVar "True"))
 (DFunDef false "ascending" ((PCons (PVar "x") (PCons (PVar "y") (PVar "rest")))) (EBinOp "&&" (EApp (EApp (EMethodRef "lt") (EVar "x")) (EVar "y")) (EApp (EDictApp "ascending") (EBinOp "::" (EVar "y") (EVar "rest")))))
 (DProp false "fromList builds a well-formed tree" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EDictApp "wellFormed") (EApp (EDictApp "fromList") (EVar "xs"))))
+(DProp false "fromList agrees with naive fold-insert" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "naive") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "s") (PVar "x")) (EApp (EApp (EDictApp "insert") (EVar "x")) (EVar "s")))) (EVar "Tip")) (EVar "xs"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EApp (EDictApp "fromList") (EVar "xs")))) (EApp (EMethodRef "toList") (EVar "naive"))))))
+(DProp false "fromList agrees with naive on a sorted prefix then an unsorted tail" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ys") (EBinOp "++" (EApp (EVar "sort") (EVar "xs")) (EVar "xs"))) (DoExpr (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EApp (EDictApp "fromList") (EVar "ys")))) (EApp (EMethodRef "toList") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "s") (PVar "x")) (EApp (EApp (EDictApp "insert") (EVar "x")) (EVar "s")))) (EVar "Tip")) (EVar "ys")))) (EApp (EDictApp "wellFormed") (EApp (EDictApp "fromList") (EVar "ys")))))))
+(DProp false "minView and maxView keep the set well-formed at every step" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "s") (EApp (EDictApp "fromList") (EVar "xs"))) (DoExpr (EMatch (ETuple (EApp (EVar "minView") (EVar "s")) (EApp (EVar "maxView") (EVar "s"))) (arm (PTuple (PCon "Some" (PTuple PWild (PVar "a"))) (PCon "Some" (PTuple PWild (PVar "b")))) () (EBinOp "&&" (EApp (EDictApp "wellFormed") (EVar "a")) (EApp (EDictApp "wellFormed") (EVar "b")))) (arm (PTuple (PCon "None") (PCon "None")) () (EVar "True")) (arm PWild () (EVar "False"))))))
 (DProp false "elements come out strictly ascending (sorted, deduped)" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EDictApp "ascending") (EApp (EMethodRef "toList") (EApp (EDictApp "fromList") (EVar "xs")))))
 (DProp false "insert then member" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EDictApp "has") (EVar "x")) (EApp (EApp (EDictApp "insert") (EVar "x")) (EApp (EDictApp "fromList") (EVar "xs")))))
 (DProp false "insert preserves well-formedness" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EDictApp "wellFormed") (EApp (EApp (EDictApp "insert") (EVar "x")) (EApp (EDictApp "fromList") (EVar "xs")))))

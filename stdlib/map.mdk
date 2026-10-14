@@ -44,7 +44,7 @@ import core.{
   FromEntries,
   Index,
 }
-import list.{intersperse, reverse, take, sort}
+import list.{intersperse, reverse, take, sort, sortBy}
 
 {- | The map type.
 
@@ -158,7 +158,22 @@ fromList : Ord k => List (k, v) -> Map k v
 fromList xs =
   let n = ascendingRunLength xs
   let (m, rest) = buildAscending n xs
-  fold (acc (k, v) => set k v acc) m rest
+  match rest
+    [] => m
+    _ => fromUnsorted xs
+
+-- Stable-sorts by key, keeps the last pair of each run of equal keys (the
+-- later pair wins), and builds the tree in one linear pass.
+fromUnsorted : Ord k => List (k, v) -> Map k v
+fromUnsorted xs =
+  let ys = dedupeLast (sortBy ((a, _) (b, _) => compare a b) xs)
+  fst (buildAscending (length ys) ys)
+
+dedupeLast : Ord k => List (k, v) -> List (k, v)
+dedupeLast [] = []
+dedupeLast [p] = [p]
+dedupeLast ((k1, v1) :: rest@((k2, _) :: _)) =
+  if eq k1 k2 then dedupeLast rest else (k1, v1) :: dedupeLast rest
 
 -- Length of the longest prefix whose keys are strictly ascending.
 ascendingRunLength : Ord k => List (k, v) -> Int
@@ -261,9 +276,11 @@ has k (Bin _ k2 _ l r) = match compare k k2
    0 -}
 export
 findWithDefault : Ord k => v -> k -> Map k v -> v
-findWithDefault d k m = match get k m
-  None => d
-  Some v => v
+findWithDefault d k Tip = d
+findWithDefault d k (Bin _ k2 v l r) = match compare k k2
+  Lt => findWithDefault d k l
+  Gt => findWithDefault d k r
+  Eq => v
 
 -- # Insertion
 
@@ -450,7 +467,11 @@ foldlWithKey f z (Bin _ k v l r) = foldlWithKey f (f (foldlWithKey f z l) k v) r
    [(1, 10), (2, 20), (3, 30)] -}
 export
 entries : Map k v -> List (k, v)
-entries m = foldrWithKey (k v acc => (k, v) :: acc) [] m
+entries m = entriesOnto m []
+
+entriesOnto : Map k v -> List (k, v) -> List (k, v)
+entriesOnto Tip acc = acc
+entriesOnto (Bin _ k v l r) acc = entriesOnto l ((k, v) :: entriesOnto r acc)
 
 {- | The entries from `start` upwards in ascending key order, at most `limit`
    of them.
@@ -532,7 +553,11 @@ scanFrom lo (Bin _ k v l r) scan =
    [1, 2, 3] -}
 export
 keys : Map k v -> List k
-keys m = foldrWithKey (k _ acc => k :: acc) [] m
+keys m = keysOnto m []
+
+keysOnto : Map k v -> List k -> List k
+keysOnto Tip acc = acc
+keysOnto (Bin _ k _ l r) acc = keysOnto l (k :: keysOnto r acc)
 
 {- | The values, in ascending order of their keys.
 
@@ -540,7 +565,11 @@ keys m = foldrWithKey (k _ acc => k :: acc) [] m
    [10, 20, 30] -}
 export
 values : Map k v -> List v
-values m = foldrWithKey (k v acc => v :: acc) [] m
+values m = valuesOnto m []
+
+valuesOnto : Map k v -> List v -> List v
+valuesOnto Tip acc = acc
+valuesOnto (Bin _ _ v l r) acc = valuesOnto l (v :: valuesOnto r acc)
 
 {- | The map with `f` applied to every value, where `f` also receives the
    key.

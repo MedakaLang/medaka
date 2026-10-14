@@ -1,5 +1,5 @@
 # META
-source_lines=1334
+source_lines=1363
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable map from keys to values, ordered by key.
@@ -48,7 +48,7 @@ import core.{
   FromEntries,
   Index,
 }
-import list.{intersperse, reverse, take, sort}
+import list.{intersperse, reverse, take, sort, sortBy}
 
 {- | The map type.
 
@@ -162,7 +162,22 @@ fromList : Ord k => List (k, v) -> Map k v
 fromList xs =
   let n = ascendingRunLength xs
   let (m, rest) = buildAscending n xs
-  fold (acc (k, v) => set k v acc) m rest
+  match rest
+    [] => m
+    _ => fromUnsorted xs
+
+-- Stable-sorts by key, keeps the last pair of each run of equal keys (the
+-- later pair wins), and builds the tree in one linear pass.
+fromUnsorted : Ord k => List (k, v) -> Map k v
+fromUnsorted xs =
+  let ys = dedupeLast (sortBy ((a, _) (b, _) => compare a b) xs)
+  fst (buildAscending (length ys) ys)
+
+dedupeLast : Ord k => List (k, v) -> List (k, v)
+dedupeLast [] = []
+dedupeLast [p] = [p]
+dedupeLast ((k1, v1) :: rest@((k2, _) :: _)) =
+  if eq k1 k2 then dedupeLast rest else (k1, v1) :: dedupeLast rest
 
 -- Length of the longest prefix whose keys are strictly ascending.
 ascendingRunLength : Ord k => List (k, v) -> Int
@@ -265,9 +280,11 @@ has k (Bin _ k2 _ l r) = match compare k k2
    0 -}
 export
 findWithDefault : Ord k => v -> k -> Map k v -> v
-findWithDefault d k m = match get k m
-  None => d
-  Some v => v
+findWithDefault d k Tip = d
+findWithDefault d k (Bin _ k2 v l r) = match compare k k2
+  Lt => findWithDefault d k l
+  Gt => findWithDefault d k r
+  Eq => v
 
 -- # Insertion
 
@@ -454,7 +471,11 @@ foldlWithKey f z (Bin _ k v l r) = foldlWithKey f (f (foldlWithKey f z l) k v) r
    [(1, 10), (2, 20), (3, 30)] -}
 export
 entries : Map k v -> List (k, v)
-entries m = foldrWithKey (k v acc => (k, v) :: acc) [] m
+entries m = entriesOnto m []
+
+entriesOnto : Map k v -> List (k, v) -> List (k, v)
+entriesOnto Tip acc = acc
+entriesOnto (Bin _ k v l r) acc = entriesOnto l ((k, v) :: entriesOnto r acc)
 
 {- | The entries from `start` upwards in ascending key order, at most `limit`
    of them.
@@ -536,7 +557,11 @@ scanFrom lo (Bin _ k v l r) scan =
    [1, 2, 3] -}
 export
 keys : Map k v -> List k
-keys m = foldrWithKey (k _ acc => k :: acc) [] m
+keys m = keysOnto m []
+
+keysOnto : Map k v -> List k -> List k
+keysOnto Tip acc = acc
+keysOnto (Bin _ k _ l r) acc = keysOnto l (k :: keysOnto r acc)
 
 {- | The values, in ascending order of their keys.
 
@@ -544,7 +569,11 @@ keys m = foldrWithKey (k _ acc => k :: acc) [] m
    [10, 20, 30] -}
 export
 values : Map k v -> List v
-values m = foldrWithKey (k v acc => v :: acc) [] m
+values m = valuesOnto m []
+
+valuesOnto : Map k v -> List v -> List v
+valuesOnto Tip acc = acc
+valuesOnto (Bin _ _ v l r) acc = valuesOnto l (v :: valuesOnto r acc)
 
 {- | The map with `f` applied to every value, where `f` also receives the
    key.
@@ -1338,7 +1367,7 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
       (filter ((key, _) => gte key k) (entries m))
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false) (mem "FromEntries" false) (mem "Index" false))))
-(DUse false (UseGroup ("list") ((mem "intersperse" false) (mem "reverse" false) (mem "take" false) (mem "sort" false))))
+(DUse false (UseGroup ("list") ((mem "intersperse" false) (mem "reverse" false) (mem "take" false) (mem "sort" false) (mem "sortBy" false))))
 (DData Public "Map" ("k" "v") ((variant "Tip" (ConPos)) (variant "Bin" (ConPos (TyCon "Int") (TyVar "k") (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))) ())
 (DTypeSig false "bin" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "bin" ((PVar "k") (PVar "v") (PVar "l") (PVar "r")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EBinOp "+" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (ELit (LInt 1)))) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")))
@@ -1373,7 +1402,13 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DTypeSig true "singleton" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
 (DFunDef false "singleton" ((PVar "k") (PVar "v")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (ELit (LInt 1))) (EVar "k")) (EVar "v")) (EVar "Tip")) (EVar "Tip")))
 (DTypeSig true "fromList" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
-(DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "ascendingRunLength") (EVar "xs"))) (DoLet false false (PTuple (PVar "m") (PVar "rest")) (EApp (EApp (EVar "buildAscending") (EVar "n")) (EVar "xs"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple (PVar "k") (PVar "v"))) (EApp (EApp (EApp (EVar "set") (EVar "k")) (EVar "v")) (EVar "acc")))) (EVar "m")) (EVar "rest")))))
+(DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "ascendingRunLength") (EVar "xs"))) (DoLet false false (PTuple (PVar "m") (PVar "rest")) (EApp (EApp (EVar "buildAscending") (EVar "n")) (EVar "xs"))) (DoExpr (EMatch (EVar "rest") (arm (PList) () (EVar "m")) (arm PWild () (EApp (EVar "fromUnsorted") (EVar "xs")))))))
+(DTypeSig false "fromUnsorted" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
+(DFunDef false "fromUnsorted" ((PVar "xs")) (EBlock (DoLet false false (PVar "ys") (EApp (EVar "dedupeLast") (EApp (EApp (EVar "sortBy") (ELam ((PTuple (PVar "a") PWild) (PTuple (PVar "b") PWild)) (EApp (EApp (EVar "compare") (EVar "a")) (EVar "b")))) (EVar "xs")))) (DoExpr (EApp (EVar "fst") (EApp (EApp (EVar "buildAscending") (EApp (EVar "length") (EVar "ys"))) (EVar "ys"))))))
+(DTypeSig false "dedupeLast" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))))
+(DFunDef false "dedupeLast" ((PList)) (EListLit))
+(DFunDef false "dedupeLast" ((PList (PVar "p"))) (EListLit (EVar "p")))
+(DFunDef false "dedupeLast" ((PCons (PTuple (PVar "k1") (PVar "v1")) (PAs "rest" (PCons (PTuple (PVar "k2") PWild) PWild)))) (EIf (EApp (EApp (EVar "eq") (EVar "k1")) (EVar "k2")) (EApp (EVar "dedupeLast") (EVar "rest")) (EBinOp "::" (ETuple (EVar "k1") (EVar "v1")) (EApp (EVar "dedupeLast") (EVar "rest")))))
 (DTypeSig false "ascendingRunLength" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyCon "Int"))))
 (DFunDef false "ascendingRunLength" ((PList)) (ELit (LInt 0)))
 (DFunDef false "ascendingRunLength" ((PCons (PTuple (PVar "k") PWild) (PVar "rest"))) (EApp (EApp (EApp (EVar "ascendingRunFrom") (EVar "k")) (ELit (LInt 1))) (EVar "rest")))
@@ -1398,7 +1433,8 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DFunDef false "has" ((PVar "k") (PCon "Tip")) (EVar "False"))
 (DFunDef false "has" ((PVar "k") (PCon "Bin" PWild (PVar "k2") PWild (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EVar "has") (EVar "k")) (EVar "l"))) (arm (PCon "Gt") () (EApp (EApp (EVar "has") (EVar "k")) (EVar "r"))) (arm (PCon "Eq") () (EVar "True"))))
 (DTypeSig true "findWithDefault" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "v") (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyVar "v"))))))
-(DFunDef false "findWithDefault" ((PVar "d") (PVar "k") (PVar "m")) (EMatch (EApp (EApp (EVar "get") (EVar "k")) (EVar "m")) (arm (PCon "None") () (EVar "d")) (arm (PCon "Some" (PVar "v")) () (EVar "v"))))
+(DFunDef false "findWithDefault" ((PVar "d") (PVar "k") (PCon "Tip")) (EVar "d"))
+(DFunDef false "findWithDefault" ((PVar "d") (PVar "k") (PCon "Bin" PWild (PVar "k2") (PVar "v") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EVar "findWithDefault") (EVar "d")) (EVar "k")) (EVar "l"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EVar "findWithDefault") (EVar "d")) (EVar "k")) (EVar "r"))) (arm (PCon "Eq") () (EVar "v"))))
 (DTypeSig true "set" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "set" ((PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
 (DFunDef false "set" ((PVar "k") (PVar "v") (PCon "Bin" (PVar "s") (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balanceL") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EVar "set") (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balanceR") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EVar "set") (EVar "k")) (EVar "v")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")))))
@@ -1448,7 +1484,10 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DFunDef false "foldlWithKey" ((PVar "f") (PVar "z") (PCon "Tip")) (EVar "z"))
 (DFunDef false "foldlWithKey" ((PVar "f") (PVar "z") (PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "foldlWithKey") (EVar "f")) (EApp (EApp (EApp (EVar "f") (EApp (EApp (EApp (EVar "foldlWithKey") (EVar "f")) (EVar "z")) (EVar "l"))) (EVar "k")) (EVar "v"))) (EVar "r")))
 (DTypeSig true "entries" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))))
-(DFunDef false "entries" ((PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (ELam ((PVar "k") (PVar "v") (PVar "acc")) (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EVar "acc")))) (EListLit)) (EVar "m")))
+(DFunDef false "entries" ((PVar "m")) (EApp (EApp (EVar "entriesOnto") (EVar "m")) (EListLit)))
+(DTypeSig false "entriesOnto" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))))
+(DFunDef false "entriesOnto" ((PCon "Tip") (PVar "acc")) (EVar "acc"))
+(DFunDef false "entriesOnto" ((PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r")) (PVar "acc")) (EApp (EApp (EVar "entriesOnto") (EVar "l")) (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EApp (EApp (EVar "entriesOnto") (EVar "r")) (EVar "acc")))))
 (DTypeSig true "entriesFrom" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "Option") (TyVar "k")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))))))
 (DFunDef false "entriesFrom" ((PVar "start") (PVar "limit") (PVar "m")) (EBlock (DoLet false false (PCon "Scan" (PVar "taken") PWild PWild) (EApp (EApp (EApp (EVar "scanFrom") (EVar "start")) (EVar "m")) (EApp (EVar "scanStart") (EVar "limit")))) (DoExpr (EApp (EVar "reverse") (EVar "taken")))))
 (DData Private "Scan" ("k" "v") ((variant "Scan" (ConPos (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyCon "Option") (TyCon "Int")) (TyCon "Bool")))) ())
@@ -1466,9 +1505,15 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DFunDef false "scanFrom" (PWild (PCon "Tip") (PVar "scan")) (EVar "scan"))
 (DFunDef false "scanFrom" ((PVar "lo") (PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r")) (PVar "scan")) (EIf (EApp (EVar "scanDone") (EVar "scan")) (EVar "scan") (EIf (EApp (EApp (EVar "belowBound") (EVar "k")) (EVar "lo")) (EApp (EApp (EApp (EVar "scanFrom") (EVar "lo")) (EVar "r")) (EVar "scan")) (EBlock (DoLet false false (PVar "afterLeft") (EApp (EApp (EApp (EVar "scanFrom") (EVar "lo")) (EVar "l")) (EVar "scan"))) (DoExpr (EIf (EApp (EVar "scanDone") (EVar "afterLeft")) (EVar "afterLeft") (EApp (EApp (EApp (EVar "scanFrom") (EVar "None")) (EVar "r")) (EApp (EApp (EApp (EVar "takeEntry") (EVar "k")) (EVar "v")) (EVar "afterLeft")))))))))
 (DTypeSig true "keys" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyVar "k"))))
-(DFunDef false "keys" ((PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (ELam ((PVar "k") PWild (PVar "acc")) (EBinOp "::" (EVar "k") (EVar "acc")))) (EListLit)) (EVar "m")))
+(DFunDef false "keys" ((PVar "m")) (EApp (EApp (EVar "keysOnto") (EVar "m")) (EListLit)))
+(DTypeSig false "keysOnto" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyCon "List") (TyVar "k")) (TyApp (TyCon "List") (TyVar "k")))))
+(DFunDef false "keysOnto" ((PCon "Tip") (PVar "acc")) (EVar "acc"))
+(DFunDef false "keysOnto" ((PCon "Bin" PWild (PVar "k") PWild (PVar "l") (PVar "r")) (PVar "acc")) (EApp (EApp (EVar "keysOnto") (EVar "l")) (EBinOp "::" (EVar "k") (EApp (EApp (EVar "keysOnto") (EVar "r")) (EVar "acc")))))
 (DTypeSig true "values" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyVar "v"))))
-(DFunDef false "values" ((PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (ELam ((PVar "k") (PVar "v") (PVar "acc")) (EBinOp "::" (EVar "v") (EVar "acc")))) (EListLit)) (EVar "m")))
+(DFunDef false "values" ((PVar "m")) (EApp (EApp (EVar "valuesOnto") (EVar "m")) (EListLit)))
+(DTypeSig false "valuesOnto" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyCon "List") (TyVar "v")) (TyApp (TyCon "List") (TyVar "v")))))
+(DFunDef false "valuesOnto" ((PCon "Tip") (PVar "acc")) (EVar "acc"))
+(DFunDef false "valuesOnto" ((PCon "Bin" PWild PWild (PVar "v") (PVar "l") (PVar "r")) (PVar "acc")) (EApp (EApp (EVar "valuesOnto") (EVar "l")) (EBinOp "::" (EVar "v") (EApp (EApp (EVar "valuesOnto") (EVar "r")) (EVar "acc")))))
 (DTypeSig true "mapWithKey" (TyFun (TyFun (TyVar "k") (TyFun (TyVar "v") (TyEffect () (Some "e") (TyVar "w")))) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "w"))))))
 (DFunDef false "mapWithKey" ((PVar "f") (PCon "Tip")) (EVar "Tip"))
 (DFunDef false "mapWithKey" ((PVar "f") (PCon "Bin" (PVar "s") (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k")) (EApp (EApp (EVar "f") (EVar "k")) (EVar "v"))) (EApp (EApp (EVar "mapWithKey") (EVar "f")) (EVar "l"))) (EApp (EApp (EVar "mapWithKey") (EVar "f")) (EVar "r"))))
@@ -1681,7 +1726,7 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DProp false "entriesFrom bounded on one side only still agrees with entries" ((pp "k" (TyCon "Int")) (pp "n" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EVar "None")) (EVar "None")) (EVar "m"))) (EApp (EVar "entries") (EVar "m"))) (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EVar "None")) (EApp (EVar "Some") (EVar "n"))) (EVar "m"))) (EApp (EApp (EVar "take") (EVar "n")) (EApp (EVar "entries") (EVar "m"))))) (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EApp (EVar "Some") (EVar "k"))) (EVar "None")) (EVar "m"))) (EApp (EApp (EVar "filter") (ELam ((PTuple (PVar "key") PWild)) (EApp (EApp (EVar "gte") (EVar "key")) (EVar "k")))) (EApp (EVar "entries") (EVar "m"))))))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false) (mem "FromEntries" false) (mem "Index" false))))
-(DUse false (UseGroup ("list") ((mem "intersperse" false) (mem "reverse" false) (mem "take" false) (mem "sort" false))))
+(DUse false (UseGroup ("list") ((mem "intersperse" false) (mem "reverse" false) (mem "take" false) (mem "sort" false) (mem "sortBy" false))))
 (DData Public "Map" ("k" "v") ((variant "Tip" (ConPos)) (variant "Bin" (ConPos (TyCon "Int") (TyVar "k") (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))) ())
 (DTypeSig false "bin" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "bin" ((PVar "k") (PVar "v") (PVar "l") (PVar "r")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EBinOp "+" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (ELit (LInt 1)))) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")))
@@ -1716,7 +1761,13 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DTypeSig true "singleton" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
 (DFunDef false "singleton" ((PVar "k") (PVar "v")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (ELit (LInt 1))) (EVar "k")) (EVar "v")) (EVar "Tip")) (EVar "Tip")))
 (DTypeSig true "fromList" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
-(DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "n") (EApp (EDictApp "ascendingRunLength") (EVar "xs"))) (DoLet false false (PTuple (PVar "m") (PVar "rest")) (EApp (EApp (EVar "buildAscending") (EVar "n")) (EVar "xs"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple (PVar "k") (PVar "v"))) (EApp (EApp (EApp (EDictApp "set") (EVar "k")) (EVar "v")) (EVar "acc")))) (EVar "m")) (EVar "rest")))))
+(DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "n") (EApp (EDictApp "ascendingRunLength") (EVar "xs"))) (DoLet false false (PTuple (PVar "m") (PVar "rest")) (EApp (EApp (EVar "buildAscending") (EVar "n")) (EVar "xs"))) (DoExpr (EMatch (EVar "rest") (arm (PList) () (EVar "m")) (arm PWild () (EApp (EDictApp "fromUnsorted") (EVar "xs")))))))
+(DTypeSig false "fromUnsorted" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
+(DFunDef false "fromUnsorted" ((PVar "xs")) (EBlock (DoLet false false (PVar "ys") (EApp (EDictApp "dedupeLast") (EApp (EApp (EVar "sortBy") (ELam ((PTuple (PVar "a") PWild) (PTuple (PVar "b") PWild)) (EApp (EApp (EMethodRef "compare") (EVar "a")) (EVar "b")))) (EVar "xs")))) (DoExpr (EApp (EVar "fst") (EApp (EApp (EVar "buildAscending") (EApp (EMethodRef "length") (EVar "ys"))) (EVar "ys"))))))
+(DTypeSig false "dedupeLast" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))))
+(DFunDef false "dedupeLast" ((PList)) (EListLit))
+(DFunDef false "dedupeLast" ((PList (PVar "p"))) (EListLit (EVar "p")))
+(DFunDef false "dedupeLast" ((PCons (PTuple (PVar "k1") (PVar "v1")) (PAs "rest" (PCons (PTuple (PVar "k2") PWild) PWild)))) (EIf (EApp (EApp (EMethodRef "eq") (EVar "k1")) (EVar "k2")) (EApp (EDictApp "dedupeLast") (EVar "rest")) (EBinOp "::" (ETuple (EVar "k1") (EVar "v1")) (EApp (EDictApp "dedupeLast") (EVar "rest")))))
 (DTypeSig false "ascendingRunLength" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyCon "Int"))))
 (DFunDef false "ascendingRunLength" ((PList)) (ELit (LInt 0)))
 (DFunDef false "ascendingRunLength" ((PCons (PTuple (PVar "k") PWild) (PVar "rest"))) (EApp (EApp (EApp (EDictApp "ascendingRunFrom") (EVar "k")) (ELit (LInt 1))) (EVar "rest")))
@@ -1741,7 +1792,8 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DFunDef false "has" ((PVar "k") (PCon "Tip")) (EVar "False"))
 (DFunDef false "has" ((PVar "k") (PCon "Bin" PWild (PVar "k2") PWild (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EDictApp "has") (EVar "k")) (EVar "l"))) (arm (PCon "Gt") () (EApp (EApp (EDictApp "has") (EVar "k")) (EVar "r"))) (arm (PCon "Eq") () (EVar "True"))))
 (DTypeSig true "findWithDefault" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "v") (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyVar "v"))))))
-(DFunDef false "findWithDefault" ((PVar "d") (PVar "k") (PVar "m")) (EMatch (EApp (EApp (EDictApp "get") (EVar "k")) (EVar "m")) (arm (PCon "None") () (EVar "d")) (arm (PCon "Some" (PVar "v")) () (EVar "v"))))
+(DFunDef false "findWithDefault" ((PVar "d") (PVar "k") (PCon "Tip")) (EVar "d"))
+(DFunDef false "findWithDefault" ((PVar "d") (PVar "k") (PCon "Bin" PWild (PVar "k2") (PVar "v") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EDictApp "findWithDefault") (EVar "d")) (EVar "k")) (EVar "l"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EDictApp "findWithDefault") (EVar "d")) (EVar "k")) (EVar "r"))) (arm (PCon "Eq") () (EVar "v"))))
 (DTypeSig true "set" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "set" ((PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
 (DFunDef false "set" ((PVar "k") (PVar "v") (PCon "Bin" (PVar "s") (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balanceL") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EDictApp "set") (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balanceR") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EDictApp "set") (EVar "k")) (EVar "v")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")))))
@@ -1791,7 +1843,10 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DFunDef false "foldlWithKey" ((PVar "f") (PVar "z") (PCon "Tip")) (EVar "z"))
 (DFunDef false "foldlWithKey" ((PVar "f") (PVar "z") (PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "foldlWithKey") (EVar "f")) (EApp (EApp (EApp (EVar "f") (EApp (EApp (EApp (EVar "foldlWithKey") (EVar "f")) (EVar "z")) (EVar "l"))) (EVar "k")) (EVar "v"))) (EVar "r")))
 (DTypeSig true "entries" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))))
-(DFunDef false "entries" ((PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (ELam ((PVar "k") (PVar "v") (PVar "acc")) (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EVar "acc")))) (EListLit)) (EVar "m")))
+(DFunDef false "entries" ((PVar "m")) (EApp (EApp (EVar "entriesOnto") (EVar "m")) (EListLit)))
+(DTypeSig false "entriesOnto" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))))
+(DFunDef false "entriesOnto" ((PCon "Tip") (PVar "acc")) (EVar "acc"))
+(DFunDef false "entriesOnto" ((PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r")) (PVar "acc")) (EApp (EApp (EVar "entriesOnto") (EVar "l")) (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EApp (EApp (EVar "entriesOnto") (EVar "r")) (EVar "acc")))))
 (DTypeSig true "entriesFrom" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "Option") (TyVar "k")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))))))
 (DFunDef false "entriesFrom" ((PVar "start") (PVar "limit") (PVar "m")) (EBlock (DoLet false false (PCon "Scan" (PVar "taken") PWild PWild) (EApp (EApp (EApp (EDictApp "scanFrom") (EVar "start")) (EVar "m")) (EApp (EVar "scanStart") (EVar "limit")))) (DoExpr (EApp (EVar "reverse") (EVar "taken")))))
 (DData Private "Scan" ("k" "v") ((variant "Scan" (ConPos (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyCon "Option") (TyCon "Int")) (TyCon "Bool")))) ())
@@ -1809,9 +1864,15 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DFunDef false "scanFrom" (PWild (PCon "Tip") (PVar "scan")) (EVar "scan"))
 (DFunDef false "scanFrom" ((PVar "lo") (PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r")) (PVar "scan")) (EIf (EApp (EVar "scanDone") (EVar "scan")) (EVar "scan") (EIf (EApp (EApp (EDictApp "belowBound") (EVar "k")) (EVar "lo")) (EApp (EApp (EApp (EDictApp "scanFrom") (EVar "lo")) (EVar "r")) (EVar "scan")) (EBlock (DoLet false false (PVar "afterLeft") (EApp (EApp (EApp (EDictApp "scanFrom") (EVar "lo")) (EVar "l")) (EVar "scan"))) (DoExpr (EIf (EApp (EVar "scanDone") (EVar "afterLeft")) (EVar "afterLeft") (EApp (EApp (EApp (EDictApp "scanFrom") (EVar "None")) (EVar "r")) (EApp (EApp (EApp (EVar "takeEntry") (EVar "k")) (EVar "v")) (EVar "afterLeft")))))))))
 (DTypeSig true "keys" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyVar "k"))))
-(DFunDef false "keys" ((PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (ELam ((PVar "k") PWild (PVar "acc")) (EBinOp "::" (EVar "k") (EVar "acc")))) (EListLit)) (EVar "m")))
+(DFunDef false "keys" ((PVar "m")) (EApp (EApp (EVar "keysOnto") (EVar "m")) (EListLit)))
+(DTypeSig false "keysOnto" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyCon "List") (TyVar "k")) (TyApp (TyCon "List") (TyVar "k")))))
+(DFunDef false "keysOnto" ((PCon "Tip") (PVar "acc")) (EVar "acc"))
+(DFunDef false "keysOnto" ((PCon "Bin" PWild (PVar "k") PWild (PVar "l") (PVar "r")) (PVar "acc")) (EApp (EApp (EVar "keysOnto") (EVar "l")) (EBinOp "::" (EVar "k") (EApp (EApp (EVar "keysOnto") (EVar "r")) (EVar "acc")))))
 (DTypeSig true "values" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyVar "v"))))
-(DFunDef false "values" ((PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (ELam ((PVar "k") (PVar "v") (PVar "acc")) (EBinOp "::" (EVar "v") (EVar "acc")))) (EListLit)) (EVar "m")))
+(DFunDef false "values" ((PVar "m")) (EApp (EApp (EVar "valuesOnto") (EVar "m")) (EListLit)))
+(DTypeSig false "valuesOnto" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyCon "List") (TyVar "v")) (TyApp (TyCon "List") (TyVar "v")))))
+(DFunDef false "valuesOnto" ((PCon "Tip") (PVar "acc")) (EVar "acc"))
+(DFunDef false "valuesOnto" ((PCon "Bin" PWild PWild (PVar "v") (PVar "l") (PVar "r")) (PVar "acc")) (EApp (EApp (EVar "valuesOnto") (EVar "l")) (EBinOp "::" (EVar "v") (EApp (EApp (EVar "valuesOnto") (EVar "r")) (EVar "acc")))))
 (DTypeSig true "mapWithKey" (TyFun (TyFun (TyVar "k") (TyFun (TyVar "v") (TyEffect () (Some "e") (TyVar "w")))) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "w"))))))
 (DFunDef false "mapWithKey" ((PVar "f") (PCon "Tip")) (EVar "Tip"))
 (DFunDef false "mapWithKey" ((PVar "f") (PCon "Bin" (PVar "s") (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k")) (EApp (EApp (EVar "f") (EVar "k")) (EVar "v"))) (EApp (EApp (EVar "mapWithKey") (EVar "f")) (EVar "l"))) (EApp (EApp (EVar "mapWithKey") (EVar "f")) (EVar "r"))))
