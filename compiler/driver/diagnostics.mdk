@@ -82,6 +82,7 @@ import driver.loader.{
   loadProgramFilesLocatedCached,
   loadProgramFilesLocatedCachedE,
   loadedSourceOf,
+  parseCachedLocated,
   loadProgramFilesLocatedE,
   dropPathTriple,
   projectTrustedMods,
@@ -1327,12 +1328,13 @@ cacheRemove f ((k, v) :: rest)
 -- errors (file → Diag) to append after the graph analysis.
 wrappedRead : Ref (List (String, String)) ->
   Ref (List (String, Diag)) ->
+  Ref (List (String, List Decl)) ->
   (String -> Option String) ->
   String ->
   Option String
-wrappedRead cacheRef staleRef read path = match read path
+wrappedRead cacheRef staleRef parseCacheRef read path = match read path
   None => None
-  Some src => match parseResult src
+  Some src => match parseCachedLocated parseCacheRef src
     Ok _ =>
       cacheRef := cachePut path src !cacheRef
       Some src
@@ -1444,7 +1446,7 @@ analyzeProjectFull : (List String -> <e> List (String, List String)) ->
   <IO | e> (List ModDiags, List (String, List Diag))
 analyzeProjectFull exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let staleRef = newStale ()
-  let wread = p => wrappedRead cacheRef staleRef read p
+  let wread = p => wrappedRead cacheRef staleRef parseCacheRef read p
   match loadProgramFilesLocatedCachedE parseCacheRef wread entry roots
     -- #100: a parse/lex error in a dependency is attributed to THAT module's file
     -- with its own located `P-*`/`L-*` diag — this is the LSP's most common input
@@ -1615,7 +1617,7 @@ projectEntrySchemes : Ref (List (String, String)) ->
   <IO> Option (List (String, Scheme))
 projectEntrySchemes cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let staleRef = newStale ()
-  let wread = p => wrappedRead cacheRef staleRef read p
+  let wread = p => wrappedRead cacheRef staleRef parseCacheRef read p
   let runtimeP = preludeDesugared runtimeSrc
   let coreP = preludeDesugared coreSrc
   -- #2719 (a1): the SAME prelude key `analyzeProject` mints, so hover/completion
