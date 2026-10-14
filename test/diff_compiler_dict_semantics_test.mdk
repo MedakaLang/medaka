@@ -2039,6 +2039,17 @@ table = [
     codes = [Present "T-MISSING-SUPER-IMPL"],
   },
   Row {
+    entry = "inner-hole-below-slot-rejected/main.mdk",
+    label =
+      "§3 evidence completeness BELOW a dictionary's children: `both (W T)` passes `Deriv (W T)`, whose `requires Deriv T` carries the super `Base T` that no impl covers, so the slot's route holds RNone two levels below its top. The judgment reads that depth from the summary the solver notes while it builds the route, not from a walk, so this is the row that goes red if a producer stops noting. HAND-DERIVED: REJECT on every verb, T-MISSING-SUPER-IMPL at `impl Deriv T` and T-UNROUTED-DISPATCH at the call",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-SUPER-IMPL", Present "T-UNROUTED-DISPATCH"],
+  },
+  Row {
     entry = "b1-xmod-same-spelled-iface-impl-selection/main.mdk",
     label =
       "§8 I4 + §3 `inst` -- THE ISSUE 1514 DRAIN, and the ONLY row in this corpus whose VALUE the module-qualified identity decides. Promoted from the drained must_fail pin `1514-xmod-same-spelled-iface-impl-selection`: a pin asserts a bug STILL REPRODUCES, so a fix deletes it and the S0 has NO guard unless a positive row replaces it. TWO UNRELATED modules (no import edge either way) each declare their OWN `Same`/`Blob`/`impl Same Blob`, and each computes its own value INSIDE ITS OWN MODULE, so neither goal has a second candidate. SPEC ANSWER hand-derived from §8 I4 (an interface is identified by its DECLARATION): aValue = 10+1 = 11, zValue = 10+100 = 110, bystanderValue = 5+1+1 = 7. 🚨 MEASURED PRE-BITE, in the drained pins own recorded cells: check exit 0, `run` printed 11 / 11 / 7 -- SILENT WRONGNESS, zValue taking amods `n + 1` -- while the BUILT BINARY printed the correct 11 / 110 / 7. The two engines actively DISAGREED, which is what makes the drain causal; ALL_EXACT requires them to agree with each other AND with the pinned value, so that state fails this row twice over. ⚠️ THE FIVE `b1-*` ROWS ABOVE DO NOT COVER THIS -- they pin the WIRE FORMAT, and the colliding-heads row separates its impls by TYPE ARGUMENT (`Box Int` vs `Box String`), which the pre-bite word already separated; the module prefix is decoration there. ⚠️ SCOPE BOUND (DEBT.md D-2): the DIRECT shape only. The WRAPPER shape -- dispatch reaching the collision through a function in a third module -- is measurably NOT drained and stays import-order-dependent on both arms. A drained fixture is not a drained class",
@@ -5733,7 +5744,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 508
+tableRows = 509
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
