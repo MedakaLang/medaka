@@ -628,8 +628,17 @@ noreturn static void mdk_append_unsupported(void);
  * well-formed UTF-8, which every String cell holds: bytes from outside the
  * program reach a cell only through mdk_str_lossy or a validating producer. */
 static long long mdk_utf8_cp_count(const char *p, long long n) {
-  long long c = 0;
-  for (long long i = 0; i < n; i++)
+  long long c = 0, i = 0;
+  /* Eight bytes at a time.  A continuation byte has bit 7 set and bit 6 clear, so
+   * `w & ~(w << 1)` keeps bit 7 of exactly those lanes; the multiply sums the
+   * one-bit lane flags into the top byte (a partial sum never exceeds 8). */
+  for (; i + 8 <= n; i += 8) {
+    uint64_t w;
+    memcpy(&w, p + i, 8);
+    uint64_t cont = (w & ~(w << 1)) & 0x8080808080808080ULL;
+    c += 8 - (long long)(((cont >> 7) * 0x0101010101010101ULL) >> 56);
+  }
+  for (; i < n; i++)
     if (((unsigned char)p[i] & 0xC0) != 0x80) c++;
   return c;
 }
@@ -2122,17 +2131,48 @@ long long mdk_string_to_float(long long s) {
   return mdk_some(mdk_box_float(d));
 }
 
+/* First byte offset b >= from at which the needle (nl >= 1 bytes at nb) occurs in
+ * the haystack (hl bytes at hb), or -1.  Eight candidate starts per step: a start
+ * can match only if its first byte is nb[0] and its last byte is nb[nl-1], so the
+ * two 8-lane equality masks reject a whole block with one test.  Blocks that
+ * survive are checked start by start.  Reads stay inside [0, hl). */
+static long long mdk_find_bytes(const char *hb, long long hl, const char *nb,
+                                long long nl, long long from) {
+  long long last = hl - nl;   /* largest valid start */
+  long long b = from;
+  if (nl == 1) {
+    if (b > last) return -1;
+    const char *p = memchr(hb + b, nb[0], (size_t)(last - b + 1));
+    return p == NULL ? -1 : (long long)(p - hb);
+  }
+  const uint64_t ones = 0x0101010101010101ULL, lo7 = 0x7F7F7F7F7F7F7F7FULL;
+  uint64_t first = (uint64_t)(unsigned char)nb[0] * ones;
+  uint64_t lastb = (uint64_t)(unsigned char)nb[nl - 1] * ones;
+  for (; b + 7 <= last; b += 8) {
+    uint64_t a, z;
+    memcpy(&a, hb + b, 8);
+    memcpy(&z, hb + b + nl - 1, 8);
+    uint64_t x = a ^ first, y = z ^ lastb;
+    /* 0x80 in each lane whose byte is zero; no carry crosses a lane. */
+    uint64_t zx = ~(((x & lo7) + lo7) | x | lo7);
+    uint64_t zy = ~(((y & lo7) + lo7) | y | lo7);
+    if ((zx & zy) == 0) continue;
+    for (long long k = b; k < b + 8; k++)
+      if (memcmp(hb + k, nb, (size_t)nl) == 0) return k;
+  }
+  for (; b <= last; b++)
+    if (memcmp(hb + b, nb, (size_t)nl) == 0) return b;
+  return -1;
+}
+
 long long mdk_string_index_of(long long needle, long long hay) {
   const char *nc = (const char *)needle, *hc = (const char *)hay;
   long long nl = ((const long long *)nc)[1], hl = ((const long long *)hc)[1];
   const char *nb = nc + 24, *hb = hc + 24;
   if (nl == 0) return mdk_some(1);   /* empty needle -> index 0 (Int immediate) */
-  for (long long b = 0; b + nl <= hl; b++)
-    if (memcmp(hb + b, nb, (size_t)nl) == 0) {
-      long long cp = mdk_utf8_cp_count(hb, b);
-      return mdk_some((cp << 1) | 1);
-    }
-  return mdk_none();
+  long long b = mdk_find_bytes(hb, hl, nb, nl, 0);
+  if (b < 0) return mdk_none();
+  return mdk_some((mdk_utf8_cp_count(hb, b) << 1) | 1);
 }
 
 /* Byte-level searches over String cells.  UTF-8 is self-synchronizing, so a byte
@@ -2158,14 +2198,12 @@ long long mdk_string_count_occurrences(long long needle, long long hay) {
   long long nl = ((const long long *)nc)[1], hl = ((const long long *)hc)[1];
   const char *nb = nc + 24, *hb = hc + 24;
   if (nl == 0) return 0;
-  long long count = 0;
-  long long b = 0;
-  while (b + nl <= hl) {
-    const char *p = memchr(hb + b, nb[0], (size_t)(hl - nl + 1 - b));
-    if (p == NULL) break;
-    b = p - hb;
-    if (memcmp(hb + b, nb, (size_t)nl) == 0) { count++; b += nl; }
-    else b++;
+  long long count = 0, from = 0;
+  for (;;) {
+    long long b = mdk_find_bytes(hb, hl, nb, nl, from);
+    if (b < 0) break;
+    count++;
+    from = b + nl;
   }
   return count;
 }
@@ -2177,14 +2215,12 @@ long long mdk_string_last_index_of(long long needle, long long hay) {
   long long nl = ((const long long *)nc)[1], hl = ((const long long *)hc)[1];
   const char *nb = nc + 24, *hb = hc + 24;
   if (nl == 0) return mdk_some((((const long long *)hc)[2] << 1) | 1);
-  long long last = -1;
-  long long b = 0;
-  while (b + nl <= hl) {
-    const char *p = memchr(hb + b, nb[0], (size_t)(hl - nl + 1 - b));
-    if (p == NULL) break;
-    b = p - hb;
-    if (memcmp(hb + b, nb, (size_t)nl) == 0) last = b;
-    b++;
+  long long last = -1, from = 0;
+  for (;;) {
+    long long b = mdk_find_bytes(hb, hl, nb, nl, from);
+    if (b < 0) break;
+    last = b;
+    from = b + 1;
   }
   if (last < 0) return mdk_none();
   return mdk_some((mdk_utf8_cp_count(hb, last) << 1) | 1);
