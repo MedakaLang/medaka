@@ -1867,6 +1867,7 @@ runTestReport engines runtimeSrc coreSrc target tsrc stdlibDir cases filterOpt i
     coreSrc
     target
     tsrc
+    (desugar (parse tsrc))
     stdlibDir
     cases
     filterOpt
@@ -1879,6 +1880,7 @@ runTestReportPinned : List Engine ->
   String ->
   String ->
   String ->
+  List Decl ->
   String ->
   Int ->
   Option String ->
@@ -1886,12 +1888,11 @@ runTestReportPinned : List Engine ->
   String ->
   PinIndex ->
   <IO> (Option String, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
-runTestReportPinned engines runtimeSrc coreSrc target tsrc stdlibDir cases filterOpt includeTestDecls file index =
+runTestReportPinned engines runtimeSrc coreSrc target tsrc userDecls stdlibDir cases filterOpt includeTestDecls file index =
   -- S-1/#2234 (F-converge): content-keyed prelude memo (see `runTest` above).
   let runtimeDecls = desugaredPrelude runtimeSrc
   let coreDecls = desugaredPrelude coreSrc
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
-  let userDecls = desugar (parse tsrc)
   let exempt = typecheckExempt target userDecls tsrc
   if hasUseDecls userDecls then
     reportMulti
@@ -1942,14 +1943,14 @@ runTestGradedReport : List Engine ->
   String ->
   String ->
   String ->
+  List Decl ->
   String ->
   Int ->
   Option String ->
   Bool ->
   <IO> (Option String, List (Engine, RunResult), List GradedProp, List GradedTest, Bool)
-runTestGradedReport engines runtimeSrc coreSrc target tsrc stdlibDir cases filterOpt includeTestDecls =
+runTestGradedReport engines runtimeSrc coreSrc target tsrc userDecls stdlibDir cases filterOpt includeTestDecls =
   do
-    let userDecls = desugar (parse tsrc)
     match loadPinContext target
       Err err => (Some err, [], [], [], False)
       Ok context =>
@@ -1969,6 +1970,7 @@ runTestGradedReport engines runtimeSrc coreSrc target tsrc stdlibDir cases filte
                   coreSrc
                   target
                   tsrc
+                  userDecls
                   stdlibDir
                   cases
                   filterOpt
