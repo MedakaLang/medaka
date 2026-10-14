@@ -9896,7 +9896,7 @@ crossRun = Ref (freshCrossRun initialEnv)
 -- (checkModuleFullImpl reads them for the FIRST module before any fresh snapshot lands),
 -- while the `*Qual` mirrors are prepend-appended and never truncated → unbounded growth.
 -- Give them exactly ONE reset owner, called at the top of EVERY multi-module entry
--- (`checkModules`, `checkModulesDiags`, `checkModulesEntryFull`, `elaborateModules`), so
+-- (`checkModules`, `checkModulesDiagsChain`, `checkModulesEntryFull`, `elaborateModules`), so
 -- the next entry added cannot silently miss one — and so all are cleared symmetrically.
 -- Replacing `crossRun` with a fresh bundle IS the reset: freshCrossRun re-mints every
 -- field, so the set that resets == the set in CrossRun, enforced by the constructor.
@@ -18767,7 +18767,7 @@ checkStmtNotDiscarded stmtObls t e
 -- `exemptInPlaceIndexMutHeads`, not just narrowing further.
 -- `setIndex` is an `IndexMut` interface method, so which node shape this walk
 -- is handed depends on the driver: this file has TWO whole-program entry
--- points (`checkModulesDiags`, used by `check`, vs `elaborateModules`, used by
+-- points (`checkModulesDiagsChain`, used by `check`, vs `elaborateModules`, used by
 -- `build`/`run`; see harden-typechecker skill).  Both run the dict pre-pass
 -- `prePassDictArg` now (#2705), which rewrites the call to
 -- `EMethodAt "setIndex" …` BEFORE this check runs; before that only the
@@ -30453,7 +30453,7 @@ cohSoftInScope CohSweepGlobal mid1 mid2 = cohIsCrossModule mid1 mid2
 -- two `impl Foo Int`, `medaka check --json` emitted the identical
 -- `T-CONFLICTING-IMPL` message TWICE — once with the declaration's real span (from the
 -- per-module sweep, `checkCoherence` / `CohSweepOwn`) and once span-less (from this
--- whole-graph sweep, prepended by `checkModulesEntryFull` / `checkModulesDiags`).  An
+-- whole-graph sweep, prepended by `attachCoherenceConflict`).  An
 -- IMPORT-BEARING two-module program whose overlap is entry-module-local double-reported
 -- identically, so this was never 1-module-specific and never new to E-1 (#1115): the
 -- prepend has been in `checkModulesEntryFull` since 2026-08-01 (`git log -S
@@ -30612,8 +30612,8 @@ pushCoherenceWarning loc msg =
 -- silently change what gets checked).  The Module caller used to pass `prog`, the
 -- module's own desugared decls as `foldModules` holds them.  `ieRowsOwnedBy ordHere`
 -- returns the rows `implRowsOf` built from `demDecls` at that ordinal.  Those are the
--- same list VALUE: `checkModulesDiags` stamps once (`stampGraphTyOrigins`) and hands
--- the SAME `modules` to `checkModulesPreambleK` → `buildDeclEnvs` and to `foldModules`,
+-- same list VALUE: `driveGraphK` stamps once (`stampGraphDecls`) and hands
+-- the SAME `modules` to `graphPreamble` → `buildDeclEnvs` and to `foldModules`,
 -- and `foldModules` passes each `(mid, prog)` pair's `prog` to the worker verbatim —
 -- no transform on either side.  Harvest equality holds too: `implDeclFact` and the
 -- retired `cohImplsOfMid` match arm-for-arm (unwrap `DAttrib`, take `DImpl`, drop
@@ -52285,7 +52285,7 @@ reexportSeed coreV (_ :: rest) depEnv = reexportSeed coreV rest depEnv
 
 -- ── UNIFIED per-module fold (#151) ─────────────────────────────────────────
 -- The single home for the identical per-module skeleton the four module drivers
--- (checkModules / checkModulesDiags / checkModulesEntryFull / elaborateModules)
+-- (checkModules / checkModulesDiagsChain / checkModulesEntryFull / elaborateModules)
 -- share, so the next import-scoped-seed-style fix touches ONE place instead of
 -- four (the miss would otherwise be path-specific — LSP-only or emit-only).  It
 -- owns: the IMPORT-SCOPED seed (`baseSeed ++ importSeed prog depEnv` — a flat
@@ -54307,7 +54307,7 @@ elaborateModulesWithSchemes runtimeDecls coreDecls0 modulesIn =
 -- elaborateModules promotes INFERRED-constraint user fns exactly as flat
 -- the retired promotion fixpoint did (it reran discovery whenever the eligible set was
 -- non-empty).  The TYPECHECK golden module drivers
--- (checkModulesEntryLines/checkModulesDiags) never reach elaborateModules, so their
+-- (checkModulesEntryLines/checkModulesDiagsChain) never reach elaborateModules, so their
 -- goldens are unaffected; the eval goldens are captured from the OCaml oracle's
 -- run, which dict-passes prelude+modules unconditionally — so promotion-on-eval
 -- matches them. Mirrors the graph driver's dictionary-eligibility seed.
