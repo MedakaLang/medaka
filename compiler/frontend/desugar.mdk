@@ -67,10 +67,14 @@ import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
 -- children are rewritten first, then `f` is applied to the rebuilt node.
 export
 mapExpr : (Expr -> Expr) -> Expr -> Expr
-mapExpr f e = f (mapKids f e)
+mapExpr f e =
+  -- `go` closes over `f` once per traversal; `mapExpr f` per node would
+  -- allocate a fresh partial application at every subexpression.
+  let go x = f (mapKids go x)
+  go e
 
 mapKids : (Expr -> Expr) -> Expr -> Expr
-mapKids f e = mapChildren (mapExpr f) e
+mapKids step e = mapChildren step e
 
 -- `mapChildren g e` applies `g` to each immediate subexpression of `e` and
 -- rebuilds the node, recursing no further: the one-level step both traversal

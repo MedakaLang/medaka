@@ -1,5 +1,5 @@
 # META
-source_lines=1291
+source_lines=1295
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -71,10 +71,14 @@ import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
 -- children are rewritten first, then `f` is applied to the rebuilt node.
 export
 mapExpr : (Expr -> Expr) -> Expr -> Expr
-mapExpr f e = f (mapKids f e)
+mapExpr f e =
+  -- `go` closes over `f` once per traversal; `mapExpr f` per node would
+  -- allocate a fresh partial application at every subexpression.
+  let go x = f (mapKids go x)
+  go e
 
 mapKids : (Expr -> Expr) -> Expr -> Expr
-mapKids f e = mapChildren (mapExpr f) e
+mapKids step e = mapChildren step e
 
 -- `mapChildren g e` applies `g` to each immediate subexpression of `e` and
 -- rebuilds the node, recursing no further: the one-level step both traversal
@@ -1298,9 +1302,9 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DTypeSig true "mapExpr" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "mapExpr" ((PVar "f") (PVar "e")) (EApp (EVar "f") (EApp (EApp (EVar "mapKids") (EVar "f")) (EVar "e"))))
+(DFunDef false "mapExpr" ((PVar "f") (PVar "e")) (EBlock (DoLet false true (PVar "go") (ELam ((PVar "x")) (EApp (EVar "f") (EApp (EApp (EVar "mapKids") (EVar "go")) (EVar "x"))))) (DoExpr (EApp (EVar "go") (EVar "e")))))
 (DTypeSig false "mapKids" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "mapKids" ((PVar "f") (PVar "e")) (EApp (EApp (EVar "mapChildren") (EApp (EVar "mapExpr") (EVar "f"))) (EVar "e")))
+(DFunDef false "mapKids" ((PVar "step") (PVar "e")) (EApp (EApp (EVar "mapChildren") (EVar "step")) (EVar "e")))
 (DTypeSig true "mapChildren" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "ELoc" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EVar "g") (EVar "e"))))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "g") (EVar "e"))))
@@ -1776,9 +1780,9 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DTypeSig true "mapExpr" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "mapExpr" ((PVar "f") (PVar "e")) (EApp (EVar "f") (EApp (EApp (EVar "mapKids") (EVar "f")) (EVar "e"))))
+(DFunDef false "mapExpr" ((PVar "f") (PVar "e")) (EBlock (DoLet false true (PVar "go") (ELam ((PVar "x")) (EApp (EVar "f") (EApp (EApp (EVar "mapKids") (EVar "go")) (EVar "x"))))) (DoExpr (EApp (EVar "go") (EVar "e")))))
 (DTypeSig false "mapKids" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "mapKids" ((PVar "f") (PVar "e")) (EApp (EApp (EVar "mapChildren") (EApp (EVar "mapExpr") (EVar "f"))) (EVar "e")))
+(DFunDef false "mapKids" ((PVar "step") (PVar "e")) (EApp (EApp (EVar "mapChildren") (EVar "step")) (EVar "e")))
 (DTypeSig true "mapChildren" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "ELoc" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EVar "g") (EVar "e"))))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "g") (EVar "e"))))
