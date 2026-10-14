@@ -332,8 +332,11 @@ import surface part of the semantics, with laws:
   streaming host (`worker.js`) also calls it at each newline either stream
   writes, so a partial stdout line is not overtaken by a later stderr line.
   `mdk_exit` throws an `ExitSignal` that unwinds the guest, and the host exits
-  after the flush. (Status: ✅ — #376 fixed; pinned by
-  `playground/medaka_host_test.mjs` probes (a) and (d).)
+  after the flush. Delivered means written out, not queued: `run.js` ends by
+  setting `process.exitCode` and returning, because a write to a pipe past its
+  buffer is still queued when the flush returns and `process.exit` would drop it.
+  (Status: ✅ — #376 fixed; pinned by `playground/medaka_host_test.mjs` probes
+  (a) and (d), and (h) for both streams through pipes on `exit` and on a trap.)
 - **WH5 — GC refs never cross the boundary.** Strings and buffers marshal
   through the byte-channel protocol only: guest pushes path/name bytes
   (`mdk_path_reset`/`mdk_path_push`), host caches result bytes exposed as
@@ -373,6 +376,21 @@ import surface part of the semantics, with laws:
 | `mdk_wall_time_sec` / `mdk_monotonic_sec` / `mdk_sleep_ms` | clock group in `wasm_preamble.mdk` (`clockHostImportLines`) | `wallTimeSec` / `monotonicSec` / `sleepMs` use | real (the host's wall clock, its monotonic clock, a blocking wait on a shared cell) | wall and monotonic reads real; sleep real only when the page is cross-origin isolated, else a named capability error | real (same keys; never sleeps, present to avoid a LinkError) | f64 seconds; f64 seconds; sleep `i64` ms, non-positive returns at once | — |
 | `mdk_write_file_reset` / `_push` / `_commit` | ~1223–1225 | `writeFileBytes` use | real | real over the per-run vfs (`fs` slice) | real over the source vfs (`fs` slice) | streamed file write | WH3 ✅ (#375) |
 | `mdk_write_int` / `mdk_write_bool` | ~53–54 | **never** (dead W2 scaffold; verified unreferenced) | absent | absent | n/a (never emitted in ref mode) | legacy | — |
+
+**The in-memory vfs (`MemoryVfs`, `playground/medaka_host.mjs`).** The worker's
+per-run vfs and the compiler's source vfs share one path model. A path is
+relative to the vfs root, which `.`, `/` and the empty path all name. Empty and
+`.` components are dropped and `..` steps up a level, never above the root, so
+`./a.txt`, `.//a.txt` and `a.txt` are one file. Every component that a `/`
+follows must be an existing directory. The root always exists. Another directory
+exists only when an entry the vfs was built with lies under it, since no call a
+program can make creates one. So `fileExists "."` is `True`, and `readFile "."`,
+a write into a directory that does not exist, and a write to a directory are each
+an `Err`. The error texts are Node's, as on `run.js`: `ENOENT: no such file or
+directory, open '<path>'`, `EISDIR: illegal operation on a directory, read`, and
+`ENOTDIR: not a directory, open '<path>'`. Native prints the C library's text,
+for example `No such file or directory`. Pinned by `playground/medaka_host_test.mjs`
+probes (e) and (g).
 
 **Not an import: `ioPoll`.** No host binds descriptor readiness, and `ioPoll`
 declares no `env.*` import. The emitter lowers it inline (`emitLeafExternRef`
@@ -443,7 +461,7 @@ landed, #370 reached only TWO of the three — `playground/compile.mjs` was left
 `Number()` AND missing the new `mdk_str_to_float_ok` import, LinkError-ing the playground
 dead until #543 completed it and made the gate derive its host set) (leading-ws-only, full consumption, inf/nan spellings, C99 hex floats), derived from the C oracle over a 621-case battery and pinned on all three engines by `test/llvm_fixtures/str_to_float_frontier.mdk`; `mdk_float_fmt` ✅ verified (N9 row) |
 | WH3 — one key set, LinkError ban | ✅ | one host module (`playground/medaka_host.mjs`) installs every slice key on every host, withheld ones as named `CapabilityError` callables; `worker.js`'s missing `mdk_write_file_*` trio (#375) is the `fs` slice over its per-run vfs. The shim copies once byte-diffed across `run.js`, `worker.js` and `compile.mjs` (#543 shipped through an uncounted third copy) are gone; `checkImportKeys` refuses an import key no slice lists, and `compiler/types/target_profile_host_test.mdk` pins the host's grants to the compiler's rows. Probes: `playground/medaka_host_test.mjs` (b), (c) |
-| WH4 — flush discipline | ✅ | one implementation (`deliverAll` in `playground/medaka_host.mjs`, called by `runProgram` on every way out); `run.js` `mdk_exit` now delivers stderr too (#376). Probes: `playground/medaka_host_test.mjs` (a), (d) |
+| WH4 — flush discipline | ✅ | one implementation (`deliverAll` in `playground/medaka_host.mjs`, called by `runProgram` on every way out); `run.js` `mdk_exit` now delivers stderr too (#376), and its exit leaves queued pipe writes to drain. Probes: `playground/medaka_host_test.mjs` (a), (d), (h) |
 | WP10 — eager value-global init ordered by dependency; dispatch-reaching/cyclic globals are lazy | ✅ **RESOLVED — STRUCTURE+CALLS FIXED (#553 A+B); dispatch+cycle deviation CLOSED (#561 PR-A native + PR-B wasm, both SHIPPED)** | Pre-fix, `topoSortValBinds`'s edges came from `eagerVars`, a DIRECT free-var scan that did not follow calls, so a global read reached through a call yielded NO edge and source order decided → `ref.null` + *"dereferencing a null pointer"* at instantiate. **#553 Stage B adds `eagerReachMap` (SCC-condensed eager-reachability closure over `CVar`+`CDict` call heads), closing the call-hidden arm on both backends; the remaining `CMethod` dispatch + genuine-cycle residual was closed by #561, which emits those globals LAZILY (per-global 3-state force function on both backends) instead of extending the sort — see `compiler/EAGER-INIT-DESIGN.md` §10.** Exploited by **#543** (`crossRun` → `freshCrossRun` → `initialEnv`, ordered 97 lines early, playground dead). ⚠️ **NOT wasm-only and NOT playground-only**: `llvm_emit`'s `orderedValBinds` uses the SAME shared `eagerVars`. A **12-line user program** (§1 WP10) measured across the three SHIPPING engines gives **eval `7` / native SIGSEGV (exit 139) / wasm `dereferencing a null pointer`** — only eval is right, so native is **EXPLOITABLE from user code**, not merely exposed. In the COMPILER's own graph native escapes only by luck: `resetCrossModuleState ()` overwrites the poisoned bundle before any reader dereferences it (pre-fix IR receipt: `crossRun` stored at prologue line 1693 vs `initialEnv` at 1768; `global i64 0` loaded inside `freshCrossRun`). **Native fails as a segfault/silent zero, wasm as a named trap** — the asymmetry is why only the playground surfaced it — so #553 must fix BOTH arms; a wasm-only fix leaves the silent one live. #543 restored the edge at the one known site (`freshCrossRun` takes the env as an arg) — a point fix, not the law. **GATED, and DRAINED by #553 Stage B**: `test/llvm_fixtures/eager_global_call_hidden.mdk` pinned the SILENT arm under `emitter:shared-eager-init`; when Stage B landed it went `eval==native==wasm` all `42`, its ledger row was removed and its golden re-blessed to `42` (the self-drain fired as designed). The build-path lock is `test/build_diff_fixtures/eager_call_hidden.mdk`. Its control peer `eager_global_call_ordered.mdk` is green on all 3 engines. The boxed/SIGSEGV arm is NOT pinnable (`diff_compiler_llvm.sh` has no ledger and a segfault has no golden). #543's own symptom is still ungated — only the nightly, non-required playground build compiles the whole compiler to wasm |
 | WH5 — byte-channel only | ✅ | no GC ref crosses an import signature (inventory) |
 | WH6 — engine baseline | ⚠ | node 24 + wasm-tools pinned in CI — **one composite-action pin** (`wasm-tools-version`/`wasm-node-version` inputs, defaulted in `.github/actions/setup-medaka/action.yml`), shared by the two jobs that install the toolchain (`wasm:` and the `engines` gate shard, #597), so the two cannot drift; playground WasmGC feature-detect still open (**#75**). The "wasm job is not a required check" caveat is **retired** — it is required (R1 row) |

@@ -13,7 +13,9 @@
 // accumulated and written when the run ends, stdout before stderr.
 //
 // Exit codes: the program's `exit` code; 0 on completion; 1 on a trap, a failed
-// instantiation or a module built by an older compiler; 2 on a usage error.
+// instantiation or a module built by an older compiler; 2 on a usage error.  A run
+// ends by setting `process.exitCode`, never `process.exit`: a write to a pipe past
+// its buffer is still queued when the flush returns, and `process.exit` drops it.
 const fs = require('fs');
 const nodePath = require('path');
 const { pathToFileURL } = require('url');
@@ -40,18 +42,18 @@ const sink = {
 import(hostUrl).then(async ({ createHost, runProgram, OldEntryShape }) => {
   const host = createHost('wasmgc/node', { vfs, args, getEnv: (n) => process.env[n], sink });
   const r = await runProgram(bytes, host);
-  if (r.kind === 'exit') process.exit(r.code);
+  if (r.kind === 'exit') { process.exitCode = r.code; return; }
   if (r.kind === 'error') {
     const e = r.error;
-    if (e instanceof OldEntryShape) { process.stderr.write('error: ' + e.message + '\n'); process.exit(1); }
+    process.exitCode = 1;
+    if (e instanceof OldEntryShape) { process.stderr.write('error: ' + e.message + '\n'); return; }
     // A Medaka runtime trap streams a coded `runtime error [E-CODE]: …` line to stderr
     // before its `unreachable`; that line, already written by the flush, is the report.
     // Without one, surface the engine's message.
     if (!wroteStderr)
       process.stderr.write((r.inProgram ? 'runtime error: ' : 'instantiate failed: ') + (e && e.message ? e.message : String(e)) + '\n');
-    process.exit(1);
   }
 }).catch((e) => {
   process.stderr.write('run.js: ' + (e && e.stack ? e.stack : String(e)) + '\n');
-  process.exit(1);
+  process.exitCode = 1;
 });

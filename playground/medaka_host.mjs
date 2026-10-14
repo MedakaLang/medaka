@@ -112,6 +112,11 @@ export function withheldExterns(profile) {
     .flatMap((s) => SLICES[s].externs || []);
 }
 
+// Externs of a slice a profile can install that no wasm build lowers (their wasm row in
+// compiler/backend/extern_catalog.mdk is NotProvided): a call to one does not compile
+// for any wasmgc profile, so the runnability rule reads them beside withheldExterns.
+export const WASM_GAP_EXTERNS = ['writeFile', 'osEntropyBytes'];
+
 // The extern a key serves, for a withheld slice's message.
 const KEY_EXTERN = {
   mdk_write_byte: 'putStr', mdk_write_err_byte: 'ePutStr',
@@ -239,15 +244,66 @@ const dec = (a) => new TextDecoder('utf-8').decode(a instanceof Uint8Array ? a :
 // ── vfs ──────────────────────────────────────────────────────────────────────
 // The file source behind the `fs` slice: readFile(path) -> bytes (throws an Error
 // whose message is the guest's Err text), exists(path) -> bool, writeFile(path, bytes).
-// An in-memory vfs: a missing path is an Err naming the path, never empty contents.
+// An in-memory vfs, with the path model of docs/spec/WASM-SEMANTICS.md §3: paths are
+// relative to its root (`.`, `/` and `` all name it), `.` and empty components are
+// dropped, `..` steps up (never above the root), and every component a `/` follows
+// must be an existing directory.  The root always exists; another directory exists
+// when a constructor entry lies under it, since nothing a program calls creates one.
+// A missing path, or a write into a missing directory, is an Err naming the path,
+// never empty contents; the texts are Node's, as on test/wasm/run.js.
 export class MemoryVfs {
-  constructor(entries) { this.files = new Map(entries || []); }
-  readFile(p) {
-    if (!this.files.has(p)) throw new Error(`ENOENT: no such file or directory, open '${p}'`);
-    return this.files.get(p);
+  constructor(entries) {
+    this.files = new Map();
+    this.dirs = new Set(['']);
+    for (const [p, bytes] of entries || []) {
+      const parts = MemoryVfs.split(p);
+      for (let i = 1; i < parts.length; i++) this.dirs.add(parts.slice(0, i).join('/'));
+      this.files.set(parts.join('/'), bytes);
+    }
   }
-  exists(p) { return this.files.has(p); }
-  writeFile(p, bytes) { this.files.set(p, bytes); }
+  // The components of a path with `.` and empty ones dropped and `..` applied lexically.
+  static split(p) {
+    const out = [];
+    for (const s of p.split('/'))
+      if (s === '..') out.pop();
+      else if (s !== '' && s !== '.') out.push(s);
+    return out;
+  }
+  // The key of `p`, or the errno of the first component a `/` follows that is not a
+  // directory.
+  resolve(p) {
+    const parts = p.split('/');
+    const out = [];
+    for (let i = 0; i < parts.length; i++) {
+      const s = parts[i];
+      if (s === '' || s === '.') continue;
+      if (s === '..') { out.pop(); continue; }
+      out.push(s);
+      if (i < parts.length - 1) {
+        const k = out.join('/');
+        if (!this.dirs.has(k))
+          return { error: this.files.has(k) ? 'ENOTDIR: not a directory' : 'ENOENT: no such file or directory' };
+      }
+    }
+    return { key: out.join('/') };
+  }
+  readFile(p) {
+    const { key, error } = this.resolve(p);
+    if (error) throw new Error(`${error}, open '${p}'`);
+    if (this.dirs.has(key)) throw new Error('EISDIR: illegal operation on a directory, read');
+    if (!this.files.has(key)) throw new Error(`ENOENT: no such file or directory, open '${p}'`);
+    return this.files.get(key);
+  }
+  exists(p) {
+    const { key, error } = this.resolve(p);
+    return !error && (this.dirs.has(key) || this.files.has(key));
+  }
+  writeFile(p, bytes) {
+    const { key, error } = this.resolve(p);
+    if (error) throw new Error(`${error}, open '${p}'`);
+    if (this.dirs.has(key)) throw new Error(`EISDIR: illegal operation on a directory, open '${p}'`);
+    this.files.set(key, bytes);
+  }
 }
 
 // A sink that keeps every delivered byte; `text(stream)` decodes what it holds.

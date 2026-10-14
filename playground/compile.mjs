@@ -176,7 +176,7 @@ function runGuest(wasmModuleOrBytes, vfsMap, argv) {
         const names = WebAssembly.Module.exports(module).map((e) => e.name);
         if (names.includes('mdk_main') && !names.includes('mdk_entry_split'))
           throw new Error('playground.wasm was built by an older compiler: its start function runs main itself; rebuild it / reload the page');
-        checkImportKeys(module, host);
+        checkImportKeys(module, host.mh);
         return WebAssembly.instantiate(module, host.imports);
       })
       .then((instance) => {
