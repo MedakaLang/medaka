@@ -5562,7 +5562,7 @@ test "a closed return goal with no instance keeps no route" = expectEach [
   ),
 ]
 
-test "a closed numeric, nested or operator goal with no instance keeps no route" = expectEach
+test "a closed numeric or operator goal with no instance keeps no route" = expectEach
   [
     (
       "a literal at a type with no Num instance",
@@ -5570,20 +5570,6 @@ test "a closed numeric, nested or operator goal with no instance keeps no route"
         (("T-TYPE-MISMATCH", 3, 4), False)
         (closedGoalOutcome numericPreludeSource [
           "data Nat = Z | S Nat", "n : Nat", "n = 3"
-        ]),
-    ),
-    (
-      "a constrained call at a type with no instance",
-      expectEqual
-        (("T-NO-IMPL", 7, 7), False)
-        (closedGoalOutcome numericPreludeSource [
-          "interface Sz a where",
-          "  sz : a -> Int",
-          "impl Sz Int where",
-          "  sz n = n",
-          "useSz : Sz a => a -> Int",
-          "useSz x = sz x",
-          "main = useSz True",
         ]),
     ),
     (

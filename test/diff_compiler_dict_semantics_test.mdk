@@ -924,6 +924,28 @@ table = [
     codes = [],
   },
   Row {
+    entry = "constraint-only-variable-head-tag-accepted.mdk",
+    label =
+      "§3 + §5: a call of `f : K x y => x -> String` leaves the constraint-only `y` undetermined, so its dictionary route is the head tag; the one instance must still run on every engine (an RNone route panicked the build)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "BOX\n",
+    codes = [],
+  },
+  Row {
+    entry = "constraint-only-variable-return-head-tag-accepted.mdk",
+    label =
+      "§3 + §5 (return twin): a call of `f : K x y => Int -> x` leaves the constraint-only `y` undetermined, so its dictionary route is the head tag; the one instance must still run on every engine (an RNone route panicked the build)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [],
+  },
+  Row {
     entry = "s4-gen-sig-superclass-redundant-dropped.mdk",
     label =
       "§4 `gen-sig` + §3 `super` + §6 C2 diamond: `B a` inferred by the body is entailed by the declared `C a` via requires-closure, so it is DROPPED from the scheme (not merged); `super` is projection, and both diamond arms agree",
@@ -5524,7 +5546,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 489
+tableRows = 491
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
