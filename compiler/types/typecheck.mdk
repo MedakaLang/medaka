@@ -29328,8 +29328,18 @@ predicateRequestArgsMatch _ _ = True
 -- NAME compare that cannot see an origin — so the identity selects nothing there yet;
 -- it is the precondition for re-keying those two comparators onto `sameTyConHead`.
 goalPredOf : String -> Mono -> Option PredicateRequest
-goalPredOf name fullMono =
-  let args = match ifaceParamMonos name fullMono
+goalPredOf name fullMono = occurrencePredOf name fullMono []
+
+-- `goalPredOf` at an occurrence that posed its goal with [omitted]: the request
+-- reads the vector `occurrenceParamMonos` builds, the one `entailInst` selects the
+-- impl row on, so a typaram the declared type never mentions compares as the goal's
+-- own variable rather than as the interface's rigid parameter name.
+occurrencePredOf : String ->
+  Mono ->
+  List (String, Mono) ->
+  Option PredicateRequest
+occurrencePredOf name fullMono omitted =
+  let args = match occurrenceParamMonos name fullMono omitted
     Some xs => PSArgsKnown xs
     None => PSArgsUnknown
   map
@@ -32526,11 +32536,10 @@ implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 -- at this site (recovered by `ifaceParamMonos`), or the singleton result mono when
 -- the caller has none.  A general winner's word is its own key (#1128 F-3b), so the
 -- dictionary names the instance actually selected.  `None` when no row is selected:
--- the arg-position caller's `optionOr tag` then stamps the goal's head tag, which
--- names no instance -- a static call through it is an emit gap on both emitters, and
--- the interpreter leaves the method to arg-tag dispatch.  A definer-shadow site
--- reaches that stamp and is restamped `RLocal` afterwards by `resolveRLocalSites`
--- (`moduleStampOrder`).
+-- the arg-position caller then stamps the goal's head tag, which names no instance and
+-- which the evidence judgment rejects (`compiler/types/evidence_complete.mdk`).  A
+-- definer-shadow site reaches that stamp and is restamped `RLocal` afterwards by
+-- `resolveRLocalSites` (`moduleStampOrder`).
 --
 -- An ambiguous method goal is the boundary verdict's to reject (`goalReach`, through
 -- `rejectUndeterminedVectors`): the occurrence's obligation carries the vector selected
@@ -33585,6 +33594,11 @@ matchStep (TyFun a b) m = match peelQual m
   _ => MFail
 matchStep (TyEffect _ _ t) m = MKids [(t, m)]
 matchStep (TyConstrained _ t) m = MKids [(t, m)]
+-- A row written in an `Effect` slot (`f (e | e2) b`) matches any effect row, as the
+-- rows an arrow carries do: a row is not a dispatch position, so it binds nothing.
+matchStep (TyRow _ _ _) m = match peelQual m
+  TEff _ => MOk
+  _ => MFail
 matchStep _ _ = MFail
 
 -- This recursion is aware (constraint-dictionary-routed) and bounded by the shared
@@ -33756,10 +33770,46 @@ entail name m encl useScope kind = match entailAssum m encl name useScope kind
     result
   None => match headTyconMono m
     Some hk => entailInst name m encl useScope (headKeyTag hk) kind
-    None =>
-      let result = (entailFallback encl useScope m kind, [])
-      let _ = noteNumericEntailment kind useScope None (fst result) (snd result)
-      result
+    None => match entailRigidLead m encl useScope kind
+      Some result => result
+      None =>
+        let result = (entailFallback encl useScope m kind, [])
+        let _ =
+          noteNumericEntailment kind useScope None (fst result) (snd result)
+        result
+
+-- `inst` for a nested/top goal whose lead position is a variable, when every variable
+-- of the vector is one a closed binder declared (DICT-SEMANTICS §6.1 points 2-3, §3
+-- W3-inst).  Such a goal is closed: its variables are rigid in the matcher, so an
+-- instance reduces it when some position is constructed, and it selects min⊑ of the
+-- matches.  A goal over variables alone is its own residual and is not reduced.  Only
+-- an instance whose first head position is a variable can match a variable lead, so
+-- the headless bucket is the whole candidate set.  The rung lives here rather than in
+-- `ieSelectRowByIface`'s headless arm because rigidity is a property of the goal's
+-- scope, which that selector's other callers do not share.
+entailRigidLead : Mono ->
+  String ->
+  ScopeId ->
+  EntailKind ->
+  Option (Route, List Route)
+entailRigidLead m encl useScope (EKNestedTop iface _ walk rest) =
+  let goals = m :: rest
+  let ids = flatMap monoUnboundIds goals
+  let declared = perRun.value.declaredSigVarIds.value
+  if isEmptyL ids
+    || anyList (i => not (omHasKey (intToString i) declared)) ids
+    || allList monoIsBareTyvar goals then
+    None
+  else
+    let env = perRun.value.bodyImplEnvRef.value
+    let picked =
+      pickMostSpecificEntry
+        goals
+        (ieEntriesForIface (ieHeadRows None env) iface goals)
+    map
+      (row => (nestedRowRoute encl useScope m goals walk row, []))
+      (ieRowOfEntry env picked)
+entailRigidLead _ _ _ _ = None
 
 noteNumericEntailment : EntailKind ->
   ScopeId ->
@@ -33815,7 +33865,8 @@ goalRequestOfKind _ (EKNumReturn predicate _ _ _) = Some PredicateRequest {
   prIface = predicate.predicateInterface,
   prArgs = PSArgsKnown predicate.predicateArguments,
 }
-goalRequestOfKind name (EKArg fullMono _) = goalPredOf name fullMono
+goalRequestOfKind name (EKArg fullMono omitted) =
+  occurrencePredOf name fullMono omitted
 goalRequestOfKind name (EKOp _ _) = goalPredOfOp name
 goalRequestOfKind _ (EKPredicateOp _ _ predicate) = Some PredicateRequest {
   prIface = predicate.predicateInterface,
@@ -33923,7 +33974,7 @@ determinedGoalInstance iface (first :: rest) = match normalize first
 
 -- inst: a concrete head [tag].  EKReturn → canonical full-type key + split element routes
 -- (implRef-bound); EKNestedTop → the min⊑ winner's canonical key with requires PACKED
--- into the primary RKey (the bare head tag when no row answers the vector);
+-- into the primary RKey (RNone when no row answers the vector);
 -- EKArg → same canonical RKey primary as EKReturn but element routes keyed on the
 -- (default-reduced) method via argImplDictRoutesForEncl; EKOp → stampOpRouteVal (builtin
 -- head → RNone do-nothing, else RKey with reqs packed in, no separate element routes).
@@ -33966,8 +34017,14 @@ entailInst name m encl useScope tag (EKReturn fullMono _) =
             (selectedCallSupers name (Some row) encl useScope [m]),
           routes,
         )
-      -- Still the head tag, which names no instance: an accepted occurrence that two
-      -- admitted declarations share reaches this arm.
+      -- No vector and no row: the route keeps the goal's head tag, which names no
+      -- instance, and the evidence judgment rejects it as a head-tag route
+      -- (`compiler/types/evidence_complete.mdk`).  An occurrence whose name two
+      -- admitted declarations share (an ambiguous re-export,
+      -- `test/must_fail_fixtures/2017-reexport-hub-method-collision-order-decides`)
+      -- has no interface word and reaches this arm.  The judgment passes an
+      -- empty-word occurrence routed `RNone`, so this arm may become `RNone` only once
+      -- that clause flags such an occurrence.
       None => (RKey tag [] [], [])
 entailInst name m encl useScope _ (kind@(EKNumReturn predicate _ _ _)) =
   let goals = predicate.predicateArguments
@@ -33996,7 +34053,7 @@ entailInst name m encl useScope _ (kind@(EKNumReturn predicate _ _ _)) =
 -- (funConstraintArgsRef). Recording it beside `funConstraintsRef`, not inside it,
 -- keeps per-tyvar dict slots — and hence emitted dict arity — exactly as they were.
 -- #607 punch-list item 3 (dict slot = predicate, which would move arity) stays open.
-entailInst _ m encl useScope tag (EKNestedTop iface _ walk rest) =
+entailInst _ m encl useScope _ (EKNestedTop iface _ walk rest) =
   -- Select the row once and hand that same value to both the route-word and
   -- prerequisite projections.  This makes §6 C2 structural: the dictionary names
   -- the same impl whose context it discharges.
@@ -34004,11 +34061,10 @@ entailInst _ m encl useScope tag (EKNestedTop iface _ walk rest) =
   let env = perRun.value.bodyImplEnvRef.value
   match ieSelectRowByIface env iface goals
     Some row => (nestedRowRoute encl useScope m goals walk row, [])
-    -- Still the head tag, which names no instance: an accepted top-level call of a
-    -- binding whose constraint names a variable its type omits
-    -- (`f : K x y => x -> String`) leaves that position undetermined, so no row
-    -- answers the vector, and the emitter resolves the tag to the head's instance.
-    None => (RKey tag [] (superRoutesAt iface encl useScope goals walk), [])
+    -- No instance answers the vector (a call of `f : K x y => x -> String` leaves
+    -- the constraint-only `y` undetermined): the dictionary keeps no route, and the
+    -- evidence judgment rejects the call (`compiler/types/evidence_complete.mdk`).
+    None => (RNone, [])
 -- #609: select on the interface's FULL param vector (§5 — the dispatch type is the
 -- instantiated vector `T̄`), not on the discriminating ARGUMENT's mono alone.
 -- [goals] is bound ONCE and fed to BOTH arms: the method route (`routeKey`) and the
@@ -34020,6 +34076,10 @@ entailInst _ m encl useScope tag (EKNestedTop iface _ walk rest) =
 entailInst name m encl useScope tag (EKArg fullMono omitted) =
   let goals = optionOr [m] (occurrenceParamMonos name fullMono omitted)
   let (siteKey, selected) = keyForSite name goals
+  -- No instance answers the vector: the route keeps the goal's head tag, which names
+  -- no instance, and the evidence judgment rejects it as a head-tag route
+  -- (`compiler/types/evidence_complete.mdk`).  A standalone occurrence that reaches
+  -- here is restamped `RLocal` (`resolveRLocalSites`).
   let routeKey = optionOr tag siteKey
   -- ARCH B-2.1-h: graph-global, off `bodyImplEnvRef` — see `ieDefinesReqMethodAt`,
   -- which carries the measured repro.  The head is `headTyconMono m`, the `HeadKey`
@@ -36530,12 +36590,18 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
       (groupNames defs omEmpty)
       (namesToSet (publicValNames prog) omEmpty)
   let _ = recordTopBinderTypes (omFromPairs topSchemes omEmpty) progS
+  -- The tail bodies (impl, default, prop and test bodies) see the top-level
+  -- bindings as the binding groups do (`processTopGroups`' result env): each
+  -- binding keeps its standalone descriptor, so an occurrence of a top-level value
+  -- spelled like a method resolves to the value in a tail body too.  Marking and
+  -- inference read this one env.
+  let tailEnv =
+    extendTermBindings env1 perRun.value.methodShadowNamesRef.value topSchemes
   -- Module: the marked tree this call returns (the groups' marked clauses written
   -- back, the tail bodies marked with the module's final dict-name set) and its
   -- stamped twin, which the tail-body inference below reads.  Flat: `progS` is both.
   let progOut = match perRun.value.markingRef.value
-    Some mm =>
-      finishModuleMarking mm (extendVars env1 topSchemes) groupedOut progS
+    Some mm => finishModuleMarking mm tailEnv groupedOut progS
     None => progS
   let progT = match perRun.value.markingRef.value
     Some mm => stampTailDecls mm.mmTop progOut
@@ -36547,22 +36613,22 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
   -- invocation.  Collapsing this to one pass reintroduces the prelude-method-shadow
   -- miscompile (List Int vs Int).  MODULE runs the single pass.
 
+  -- Unified impl-body inference form (Module arm, both drivers): inferUserImplBodies
+  -- infers parametric heads and preserves diagnostics. allProg = implDecls
+  -- (interfaces + accumulated impls) grounds the field types. See
+  -- compiler/TYPECHECK-TARGET-ARCHITECTURE.md § "SA-10a. Landing log" (#2546, ARCH Q3a).
+
   let _ =
-    let bodyEnv = extendVars env1 topSchemes
-    -- Unified impl-body inference form (Module arm, both drivers): inferUserImplBodies
-    -- infers parametric heads and preserves diagnostics. allProg = implDecls
-    -- (interfaces + accumulated impls) grounds the field types. See
-    -- compiler/TYPECHECK-TARGET-ARCHITECTURE.md § "SA-10a. Landing log" (#2546, ARCH Q3a).
     let _ =
       inferUserImplBodies
-        bodyEnv
+        tailEnv
         implDecls
         (fst classEnvHere)
         (snd classEnvHere)
         progT
-    let _ = inferDefaultBodiesIfEnabled bodyEnv progT
-    let _ = inferPropBodies bodyEnv progT
-    let _ = inferTestBodies bodyEnv progT
+    let _ = inferDefaultBodiesIfEnabled tailEnv progT
+    let _ = inferPropBodies tailEnv progT
+    let _ = inferTestBodies tailEnv progT
     ()
   -- (#3) cross-module dict-threading SNAPSHOT — MODULE ONLY (flat SKIPS: running it would
   -- pollute the cross-module accumulators with a phantom single-file attribution).

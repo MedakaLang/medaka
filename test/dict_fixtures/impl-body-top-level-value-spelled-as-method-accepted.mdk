@@ -1,0 +1,18 @@
+-- A top-level value `pure` shares its spelling with the prelude method
+-- `Applicative.pure`.  An impl method body is inferred after the binding groups,
+-- and it sees the top-level value as `main` does: the occurrence is the
+-- standalone value (`RLocal`), not an `Applicative` method site at type `Row`.
+-- Hand-derived from SHADOW-SEMANTICS S2 (a top-level standalone wins inside
+-- its module): the occurrence names the value, so `get Q` is `unRow (Row 7)`
+-- and the program prints `7` on every verb.
+data Row = Row Int
+pure : Row
+pure = Row 7
+unRow : Row -> Int
+unRow (Row n) = n
+interface Getter a where
+  get : a -> Int
+data Q = Q
+impl Getter Q where
+  get _ = unRow pure
+main = println (get Q)

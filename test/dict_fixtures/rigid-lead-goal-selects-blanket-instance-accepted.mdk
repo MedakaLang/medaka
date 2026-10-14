@@ -1,0 +1,22 @@
+-- #4119: `g`'s call `useSub v (1 : Int)` poses `Sub x Int` with `x` rigid, and
+-- the only instance is `impl Sub a b`.  The unrelated given `Show2 x` does not
+-- answer it, so the goal reaches `inst`.
+-- Hand-derived from DICT-SEMANTICS §6.1 points 2-3 and §3 W3-inst: a goal over
+-- a signature's rigid variable with a constructed argument is closed, and an
+-- instance reduces it with the variable rigid in the matcher.  `impl Sub a b`
+-- matches (a := x, b := Int) and is the min, so the call passes that instance
+-- (`RKey "<mod>::Sub|a b|"`) and the program prints `sub` on every verb.
+interface Show2 a where
+  show2 : a -> String
+data Q = Q
+impl Show2 Q where
+  show2 _ = "q"
+interface Sub a b where
+  sub : a -> b -> String
+impl Sub a b where
+  sub _ _ = "sub"
+useSub : Sub a b => a -> b -> String
+useSub x y = sub x y
+g : Show2 x => x -> String
+g v = useSub v (1 : Int)
+main = println (g Q)
