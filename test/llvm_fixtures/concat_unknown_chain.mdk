@@ -1,0 +1,13 @@
+-- A 3-operand ++ chain whose head has no static String type.  `acc` has no
+-- type-forcing use before the `++`, so the emitter cannot pick the String path and
+-- the chain stays on the runtime-dispatched fallback (mdk_append).  The result is
+-- projected through stringLength.  Oracle: 7 (= length of "foobar!").
+
+-- acc must stay unannotated: a String signature would type the head and move this
+-- chain off the runtime-dispatched path it is meant to exercise.
+-- lint-disable-next-line rule-missing-signature
+-- The ++ chain is the thing under test, so interpolating it would test nothing.
+-- lint-disable-next-line rule-concat-to-interp
+build acc s = acc ++ s ++ "!"
+
+main = stringLength (build "foo" "bar")

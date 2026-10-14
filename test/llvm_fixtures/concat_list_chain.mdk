@@ -1,0 +1,6 @@
+-- ++ on Lists is a 3-operand chain too.  It stays on the list path (mdk_list_append),
+-- never the String N-ary path.  Oracle: 123.
+
+main = match ([1] ++ [2] ++ [3])
+  a :: b :: c :: _ => a * 100 + b * 10 + c
+  _ => 0

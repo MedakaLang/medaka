@@ -6,8 +6,8 @@
 import string.{
   byteLength, center, countOccurrences, drop, endsWith, fromChars, indexOf,
   join, lastIndexOf, lines, padLeft, padRight, replace, replaceAll, reverse,
-  splitAt, startsWith, stripPrefix, stripSuffix, take, toInt, trim, trimLeft,
-  trimRight, unlines, unwords, utf8ByteLength
+  splitAt, startsWith, stripPrefix, stripSuffix, take, toInt, toLower, toUpper,
+  trim, trimLeft, trimRight, unlines, unwords, utf8ByteLength
 }
 import test.{expectEqual, expectFalse, expectTrue}
 
@@ -678,3 +678,208 @@ test "join with an empty separator keeps an exact codepoint length" =
 
 test "reverse keeps an exact codepoint length on multibyte text" =
   expectEqual 4 (stringLength (reverse "é日→😀"))
+
+-- stringToChars: the Array of Char the extern builds.  The codepoint cases pin
+-- every element, so a byte read where a codepoint belongs shows up.
+
+charCodesFrom : Array Char -> Int -> List Int
+charCodesFrom a i
+  | i >= arrayLength a = []
+  | otherwise = charCode (arrayGetUnsafe i a) :: charCodesFrom a (i + 1)
+
+charCodesOf : String -> List Int
+charCodesOf s = charCodesFrom (stringToChars s) 0
+
+test "stringToChars of the empty string is an empty array" =
+  expectEqual 0 (arrayLength (stringToChars ""))
+
+test "stringToChars of the empty string round-trips" =
+  expectEqual "" (stringFromChars (stringToChars ""))
+
+test "stringToChars of ASCII yields one Char per byte" =
+  expectEqual [104, 101, 108, 108, 111] (charCodesOf "hello")
+
+test "stringToChars of a long ASCII string keeps its length" =
+  expectEqual
+    40
+    (arrayLength (stringToChars "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"))
+
+test "stringToChars of a long ASCII string round-trips" =
+  expectEqual
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"
+    (stringFromChars (stringToChars "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"))
+
+test "stringToChars of a 2-byte-only string" =
+  expectEqual [233, 26085] (charCodesOf "é日")
+
+test "stringToChars of a 4-byte-only string" =
+  expectEqual [128512, 127881] (charCodesOf "😀🎉")
+
+test "stringToChars of a mixed 1/2/3/4-byte string yields codepoints" =
+  expectEqual [97, 233, 8364, 128512, 98] (charCodesOf "aé€😀b")
+
+test "stringToChars of a mixed string round-trips" =
+  expectEqual "aé€😀b" (stringFromChars (stringToChars "aé€😀b"))
+
+test "stringToChars with a non-ASCII lead byte then ASCII" =
+  expectEqual [233, 97, 98, 99] (charCodesOf "éabc")
+
+test "stringToChars with ASCII then a 3-byte tail" =
+  expectEqual [97, 98, 99, 8364] (charCodesOf "abc€")
+
+-- # Native searches over haystacks longer than one 8-byte block
+
+alphabet36 : String
+alphabet36 = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+test "indexOf finds a needle at the start of a long string" =
+  expectEqual (Some 0) (indexOf "abc" alphabet36)
+
+test "indexOf finds a needle in the middle of a long string" =
+  expectEqual (Some 12) (indexOf "mno" alphabet36)
+
+test "indexOf finds a needle at the end of a long string" =
+  expectEqual (Some 33) (indexOf "789" alphabet36)
+
+test "indexOf misses a needle absent from a long string" =
+  expectEqual None (indexOf "9a" alphabet36)
+
+test "lastIndexOf and countOccurrences find one hit at the end" =
+  expectEqual
+    (Some 33, 1)
+    (lastIndexOf "789" alphabet36, countOccurrences "789" alphabet36)
+
+test "an empty needle on a long string is at 0, at the end, and counts 0" =
+  expectEqual
+    (Some 0, Some 36, 0)
+    (
+      indexOf "" alphabet36,
+      lastIndexOf "" alphabet36,
+      countOccurrences "" alphabet36,
+    )
+
+test "a needle equal to a long haystack hits once at 0" =
+  expectEqual
+    (Some 0, Some 0, 1, True)
+    (
+      indexOf alphabet36 alphabet36,
+      lastIndexOf alphabet36 alphabet36,
+      countOccurrences alphabet36 alphabet36,
+      startsWith alphabet36 alphabet36,
+    )
+
+test "a needle longer than a long haystack misses everywhere" =
+  let longer = alphabet36 ++ "!"
+  expectEqual
+    (None, None, 0, False, False)
+    (
+      indexOf longer alphabet36,
+      lastIndexOf longer alphabet36,
+      countOccurrences longer alphabet36,
+      startsWith longer alphabet36,
+      endsWith longer alphabet36,
+    )
+
+test "countOccurrences of an overlapping run takes non-overlapping matches" =
+  let run = "aaaaaaaaaaaaaaaaaaaaa"
+  expectEqual
+    (Some 0, Some (stringLength run - 3), stringLength run / 3)
+    (
+      indexOf "aaa" run,
+      lastIndexOf "aaa" run,
+      countOccurrences "aaa" run,
+    )
+
+test "lastIndexOf finds the end hit across a block boundary" =
+  let s = "abxxxxxxxxxxxxxxxxxxxxxxxxab"
+  expectEqual
+    (Some 0, Some (stringLength s - 2), 2)
+    (indexOf "ab" s, lastIndexOf "ab" s, countOccurrences "ab" s)
+
+test "a window whose first and last bytes match but whose middle does not" =
+  let hay = "aYbaYbaXb" ++ "qqqqqqqqqq"
+  expectEqual (Some 6, 1) (indexOf "aXb" hay, countOccurrences "aXb" hay)
+
+test "indexOf of a multibyte needle past a block returns a codepoint index" =
+  let s = "abcdefgé日xyz"
+  expectEqual
+    (Some 8, Some 9, Some 7)
+    (indexOf "日" s, indexOf "xyz" s, lastIndexOf "é" s)
+
+test "multibyte needles on a long multibyte string" =
+  let t = "日本語日本語日本語日本語"
+  expectEqual
+    (Some 2, Some 8, 3)
+    (indexOf "語日" t, lastIndexOf "語日" t, countOccurrences "語日" t)
+
+test "startsWith and endsWith on a long string" =
+  expectEqual
+    (True, True, False, False)
+    (
+      startsWith "abcdefghi" alphabet36,
+      endsWith "6789" alphabet36,
+      startsWith "bcd" alphabet36,
+      endsWith "abc" alphabet36,
+    )
+
+prop "indexOf of a prefix is 0" (s : String) =
+  indexOf (stringSlice 0 3 s) s == Some 0
+
+prop "lastIndexOf of a two-codepoint suffix ends at the end" (s : String) =
+  if stringLength s < 2 then
+    True
+  else
+    lastIndexOf (stringSlice (stringLength s - 2) (stringLength s) s) s
+      == Some (stringLength s - 2)
+
+-- # Native concat, case map and charToStr
+--
+-- Each assertion pairs the string with its stringLength, because the codepoint
+-- count stored in the cell is what stringLength reads back.
+
+strAndLen : String -> (String, Int)
+strAndLen s = (s, stringLength s)
+
+test "stringConcat of no strings is empty" =
+  expectEqual ("", 0) (strAndLen (stringConcat []))
+
+test "stringConcat of one empty string is empty" =
+  expectEqual ("", 0) (strAndLen (stringConcat [""]))
+
+test "stringConcat of ASCII strings" =
+  expectEqual ("abcdef", 6) (strAndLen (stringConcat ["ab", "cd", "ef"]))
+
+test "stringConcat skips empty pieces" =
+  expectEqual ("é日", 2) (strAndLen (stringConcat ["", "é", "", "日"]))
+
+test "stringConcat of mixed multibyte pieces counts codepoints" =
+  expectEqual ("é日本😀x", 5) (strAndLen (stringConcat ["é", "日本", "😀", "x"]))
+
+test "toUpper of ASCII" =
+  expectEqual ("HELLO, WORLD", 12) (strAndLen (toUpper "hello, world"))
+
+test "toLower of ASCII" = expectEqual ("hello", 5) (strAndLen (toLower "HeLLo"))
+
+test "toUpper of mixed text leaves multibyte codepoints alone" =
+  expectEqual ("HéLLO 日本 😀 ABC", 14) (strAndLen (toUpper "héllo 日本 😀 abc"))
+
+test "toLower of mixed text leaves multibyte codepoints alone" =
+  expectEqual ("École 日本 😀 abc", 14) (strAndLen (toLower "ÉCOLE 日本 😀 ABC"))
+
+test "toUpper of unchanged multibyte text" =
+  expectEqual ("日本語 é 😀", 7) (strAndLen (toUpper "日本語 é 😀"))
+
+test "toLower of unchanged multibyte text" =
+  expectEqual ("日本語ÉÈ", 5) (strAndLen (toLower "日本語ÉÈ"))
+
+test "charToStr of an ASCII char" =
+  expectEqual ("a", 1) (strAndLen (charToStr 'a'))
+
+test "charToStr of a two-byte char" =
+  expectEqual ("é", 1) (strAndLen (charToStr 'é'))
+
+test "charToStr of a three-byte char" =
+  expectEqual ("日", 1) (strAndLen (charToStr '日'))
+
+test "charToStr of a four-byte char" =
+  expectEqual ("😀", 1) (strAndLen (charToStr '😀'))
