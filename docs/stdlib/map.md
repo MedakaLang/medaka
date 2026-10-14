@@ -129,7 +129,7 @@ False
 
 ```
 findWithDefault : Ord k => v -> k -> Map k v -> v
-findWithDefault d k m
+findWithDefault d k _
 ```
 
 The value at `k`, or `d` when the key is absent.
