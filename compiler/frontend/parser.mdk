@@ -4986,10 +4986,6 @@ isNoiseTok TIndent = True
 isNoiseTok TDedent = True
 isNoiseTok _ = False
 
-isBangEqTok : Token -> Bool
-isBangEqTok TBangEq = True
-isBangEqTok _ = False
-
 isColonTok : Token -> Bool
 isColonTok TColon = True
 isColonTok _ = False
@@ -5026,14 +5022,6 @@ isExportTok : Token -> Bool
 isExportTok TExport = True
 isExportTok _ = False
 
-isFunctionTok : Token -> Bool
-isFunctionTok TFunction = True
-isFunctionTok _ = False
-
-isIfTok : Token -> Bool
-isIfTok TIf = True
-isIfTok _ = False
-
 isImplTok : Token -> Bool
 isImplTok TImpl = True
 isImplTok _ = False
@@ -5053,14 +5041,6 @@ isLBraceTok _ = False
 isLetTok : Token -> Bool
 isLetTok TLet = True
 isLetTok _ = False
-
-isMatchTok : Token -> Bool
-isMatchTok TMatch = True
-isMatchTok _ = False
-
-isMutTok : Token -> Bool
-isMutTok TMut = True
-isMutTok _ = False
 
 isNewlineTok : Token -> Bool
 isNewlineTok TNewline = True
@@ -5086,10 +5066,6 @@ isRequiresTok : Token -> Bool
 isRequiresTok TRequires = True
 isRequiresTok _ = False
 
-isSlashTok : Token -> Bool
-isSlashTok TSlash = True
-isSlashTok _ = False
-
 isStarTok : Token -> Bool
 isStarTok TStar = True
 isStarTok _ = False
@@ -5101,10 +5077,6 @@ isThenTok _ = False
 isWhereTok : Token -> Bool
 isWhereTok TWhere = True
 isWhereTok _ = False
-
-isWithTok : Token -> Bool
-isWithTok TWith = True
-isWithTok _ = False
 
 -- Last content (non-noise) token index strictly below `e`, scanning back from
 -- e-1 down to `s`.  Returns `s` if none (degenerate; a decl always has content).
@@ -6086,24 +6058,11 @@ firstLexError toks i
 -- Ref-dereference, nothing in the negation family should spell itself with `!`).
 -- The lexer tags it as a distinct `TBangEq` so we can locate it precisely and
 -- suggest the fix, rather than letting it split into `!` `=` and mislocate.
--- Index of the first `TBangEq` in the stream, or -1 if absent.
-firstBangEqIdx : Array Token -> Int -> Int
-firstBangEqIdx toks i
-  | i >= arrayLength toks = 0 - 1
-  | isBangEqTok (peekTok toks i) = i
-  | otherwise = firstBangEqIdx toks (i + 1)
-
 -- beta mutability model: `let mut` has been removed. `mut` (TMut) is a keyword
 -- with no remaining valid use, so its presence is always the removed `let mut`.
 -- A pre-grammar token scan surfaces a clean, located error (pointing at `mut`)
 -- instead of the recursive-descent's swallowed-then-"expected dedent" fallback
 -- (`stmtsLoop`'s `orElse … (deferPure [])` discards a failed statement's own error).
-firstMutIdx : Array Token -> Int -> Int
-firstMutIdx toks i
-  | i >= arrayLength toks = 0 - 1
-  | isMutTok (peekTok toks i) = i
-  | otherwise = firstMutIdx toks (i + 1)
-
 -- `record` has been removed as a declaration keyword (records are now the
 -- `data X = { … }` short form), but — unlike `mut`/`function` above — the WORD
 -- is an ordinary identifier again (#62; `keywordOrIdent`, lexer.mdk, carries the
@@ -6218,20 +6177,6 @@ recordHeadIdx toks i
     && lineIsRecordBody toks (i + 2) 0 False = i
   | otherwise = 0 - 1
 
--- Index of the `record` starting a removed record declaration, or -1.
--- `depth` is the INDENT nesting: only depth 0 is a declaration position, so a
--- local binding named `record` inside a `do`/`where` block is never touched.
-firstRecordDeclIdx : Array Token -> Int -> Int -> Bool -> Int
-firstRecordDeclIdx toks i depth lineStart
-  | i >= arrayLength toks = 0 - 1
-  | lineStart && depth == 0 && recordHeadIdx toks i >= 0 = recordHeadIdx toks i
-  | isIndentTok (peekTok toks i) =
-    firstRecordDeclIdx toks (i + 1) (depth + 1) True
-  | isDedentTok (peekTok toks i) =
-    firstRecordDeclIdx toks (i + 1) (depth - 1) True
-  | isNewlineTok (peekTok toks i) = firstRecordDeclIdx toks (i + 1) depth True
-  | otherwise = firstRecordDeclIdx toks (i + 1) depth False
-
 -- #935.  `let`/`rec`/`if`/`then`/`else` are reserved, but they are deliberately
 -- absent from `reservedIdentKeyword` (see its comment: a fatal there would
 -- break match-arm guards and every `let rec`), so binding one would otherwise produce a
@@ -6267,32 +6212,11 @@ isBinderTok TEqual = True
 isBinderTok TColon = True
 isBinderTok _ = False
 
-firstCtxKwDeclIdx : Array Token -> Int -> Int -> Bool -> Int
-firstCtxKwDeclIdx toks i depth lineStart
-  | i >= arrayLength toks = 0 - 1
-  | lineStart
-    && depth == 0
-    && isContextualKw (peekTok toks i)
-    && isBinderTok (peekTok toks (i + 1)) = i
-  | isIndentTok (peekTok toks i) =
-    firstCtxKwDeclIdx toks (i + 1) (depth + 1) True
-  | isDedentTok (peekTok toks i) =
-    firstCtxKwDeclIdx toks (i + 1) (depth - 1) True
-  | isNewlineTok (peekTok toks i) = firstCtxKwDeclIdx toks (i + 1) depth True
-  | otherwise = firstCtxKwDeclIdx toks (i + 1) depth False
-
 -- `function` has been removed as a keyword: a point-free one-arg match is
 -- spelled `x => match x { … }`, or as a multi-clause definition.  `function`
 -- (TFunction) is a reserved word with no remaining valid use, so its presence
 -- is always the removed keyword.  A pre-grammar token scan surfaces a located
 -- hint (pointing at `function`).
--- Index of the first `TFunction` in the stream, or -1 if absent.
-firstFunctionIdx : Array Token -> Int -> Int
-firstFunctionIdx toks i
-  | i >= arrayLength toks = 0 - 1
-  | isFunctionTok (peekTok toks i) = i
-  | otherwise = firstFunctionIdx toks (i + 1)
-
 -- Scan forward from token index `i` (depth=accumulated INDENT/DEDENT) looking
 -- for `TIn` at depth=0 before the enclosing block exits (a `TDedent` that would
 -- take depth below 0, or `TEof`).  Returns True if the inline `let` is
@@ -6306,22 +6230,6 @@ scanForLetIn toks i depth
   | isDedentTok (peekTok toks i) = scanForLetIn toks (i + 1) (depth - 1)
   | isEofTok (peekTok toks i) = False
   | otherwise = scanForLetIn toks (i + 1) depth
-
--- Find the first inline `let` that follows `else` or `then` and is missing
--- its `in` (the continuation body is on the next line instead).  Returns the
--- token index of the offending `let`, or -1 if no such pattern is found.
--- Called as a pre-scan in `parseResult` so the helpful error is surfaced
--- before the grammar absorbs the failure as a "leftover tokens" error at 2:0.
-firstInlineLetMissingIn : Array Token -> Int -> Int
-firstInlineLetMissingIn toks i
-  | i + 1 >= arrayLength toks = 0 - 1
-  | (isElseTok (peekTok toks i) || isThenTok (peekTok toks i))
-    && isLetTok (peekTok toks (i + 1)) =
-    if scanForLetIn toks (i + 2) 0 then
-      firstInlineLetMissingIn toks (i + 1)
-    else
-      i + 1
-  | otherwise = firstInlineLetMissingIn toks (i + 1)
 
 inlineLetMissingInMsg : String
 inlineLetMissingInMsg =
@@ -6348,18 +6256,6 @@ caseHasOfBeforeBoundary toks i depth
   | isEofTok (peekTok toks i) = False
   | otherwise = caseHasOfBeforeBoundary toks (i + 1) depth
 
--- Index of the first `case` ident that resolves to a Haskell `case … of`
--- (per the discriminator above), or -1 if none.
-firstHsCaseOfIdx : Array Token -> Int -> Int
-firstHsCaseOfIdx toks i
-  | i >= arrayLength toks = 0 - 1
-  | peekTok toks i == TIdent "case" =
-    if caseHasOfBeforeBoundary toks (i + 1) 0 then
-      i
-    else
-      firstHsCaseOfIdx toks (i + 1)
-  | otherwise = firstHsCaseOfIdx toks (i + 1)
-
 hsCaseOfMsg : String
 hsCaseOfMsg =
   "Medaka has no `case ... of`; write `match e` with indented `pattern => body` arms"
@@ -6367,14 +6263,6 @@ hsCaseOfMsg =
 -- Backtick infix application (``x `f` y``) has been removed.  `TBacktickIdent`
 -- is a sentinel with no remaining valid use, so its presence is always the
 -- removed construct.  A pre-grammar token scan surfaces a located hint.
--- Index of the first `TBacktickIdent` in the stream, or -1 if absent.
-firstBacktickIdx : Array Token -> Int -> Int
-firstBacktickIdx toks i
-  | i >= arrayLength toks = 0 - 1
-  | otherwise = match peekTok toks i
-    TBacktickIdent _ => i
-    _ => firstBacktickIdx toks (i + 1)
-
 backtickInfixMsg : String
 backtickInfixMsg = "Medaka has no infix backticks; write `f x y`"
 
@@ -6382,37 +6270,13 @@ backtickInfixMsg = "Medaka has no infix backticks; write `f x y`"
 -- recursive binding is its own `let rec`.  `with` (TWith) has no live use in
 -- the grammar, but OCaml's `match e with` also spells it, so a `with` is
 -- classified by whether a `match` opened earlier on the same logical line.
--- `inMatch` is set at `TMatch` and cleared by any layout token; `wantMatch`
--- picks which kind of `with` the scan reports.  Returns the index of the first
--- `with` of the wanted kind, or -1.
-firstWithIdx : Array Token -> Int -> Bool -> Bool -> Int
-firstWithIdx toks i inMatch wantMatch
-  | i >= arrayLength toks = 0 - 1
-  | isWithTok (peekTok toks i) =
-    if inMatch == wantMatch then
-      i
-    else
-      firstWithIdx toks (i + 1) False wantMatch
-  | isMatchTok (peekTok toks i) = firstWithIdx toks (i + 1) True wantMatch
-  | isNewlineTok (peekTok toks i)
-    || isIndentTok (peekTok toks i)
-    || isDedentTok (peekTok toks i) = firstWithIdx toks (i + 1) False wantMatch
-  | otherwise = firstWithIdx toks (i + 1) inMatch wantMatch
-
+-- The match flag is set at `TMatch` and cleared by any layout token.
 matchWithMsg : String
 matchWithMsg =
   "Medaka has no `match ... with`; write `match e` with indented `pattern => body` arms"
 
 -- `**` is two adjacent `TStar` tokens (the lexer has no power operator).
 -- Adjacency is checked on source offsets, so `* *` and `(*)` are untouched.
-firstStarStarIdx : Array Token -> Array Int -> Int -> Int
-firstStarStarIdx toks offs i
-  | i + 1 >= arrayLength toks = 0 - 1
-  | isStarTok (peekTok toks i)
-    && isStarTok (peekTok toks (i + 1))
-    && arrayGetUnsafe (i + 1) offs == arrayGetUnsafe i offs + 1 = i
-  | otherwise = firstStarStarIdx toks offs (i + 1)
-
 starStarMsg : String
 starStarMsg = "Medaka has no `**`; write `pow x y`"
 
@@ -6434,17 +6298,6 @@ isForPatTok TLParen = True
 isForPatTok TRParen = True
 isForPatTok _ = False
 
-firstForLoopIdx : Array Token -> Int -> Bool -> Int
-firstForLoopIdx toks i lineStart
-  | i >= arrayLength toks = 0 - 1
-  | lineStart
-    && peekTok toks i == TIdent "for"
-    && forLoopHeadTail toks (i + 1) False = i
-  | isNewlineTok (peekTok toks i)
-    || isIndentTok (peekTok toks i)
-    || isDedentTok (peekTok toks i) = firstForLoopIdx toks (i + 1) True
-  | otherwise = firstForLoopIdx toks (i + 1) False
-
 forLoopMsg : String
 forLoopMsg = "Medaka has no `for` loops; use `map` or `fold` over the list"
 
@@ -6465,25 +6318,6 @@ letRecWithRemovedMsg =
 -- seen at depth 0, or right after a DEDENT that returns to depth 0 — i.e. the
 -- position a new top-level decl can start) AND `TIdent` immediately followed
 -- by `TCons`. `depth` is the same INDENT/DEDENT counter `scanForLetIn` uses.
-isPlainIdentTok : Token -> Bool
-isPlainIdentTok (TIdent _) = True
-isPlainIdentTok _ = False
-
--- Returns the index of the offending `::` (for location purposes), or -1.
-firstHsSigIdx : Array Token -> Int -> Int -> Bool -> Int
-firstHsSigIdx toks i depth boundary
-  | i >= arrayLength toks = 0 - 1
-  | boundary
-    && depth == 0
-    && isPlainIdentTok (peekTok toks i)
-    && isConsTok (peekTok toks (i + 1)) = i + 1
-  | isIndentTok (peekTok toks i) = firstHsSigIdx toks (i + 1) (depth + 1) False
-  | isDedentTok (peekTok toks i) =
-    firstHsSigIdx toks (i + 1) (depth - 1) (depth - 1 == 0)
-  | isNewlineTok (peekTok toks i) =
-    firstHsSigIdx toks (i + 1) depth (depth == 0)
-  | otherwise = firstHsSigIdx toks (i + 1) depth False
-
 hsSigMsg : String
 hsSigMsg = "`::` is the list cons operator; write `f : T` for a type signature"
 
@@ -6513,12 +6347,6 @@ isBracketCloseTok _ = False
 -- The lexer tags `/` `*` as two ordinary operator tokens (`TSlash`, `TStar`);
 -- an adjacent `TSlash TStar` (`/*`) is NEVER valid Medaka — `/` is binary divide
 -- and `*` has no prefix form, so `1 / *x` cannot parse.  Located at the `/`.
-firstBlockCommentIdx : Array Token -> Int -> Int
-firstBlockCommentIdx toks i
-  | i + 1 >= arrayLength toks = 0 - 1
-  | isSlashTok (peekTok toks i) && isStarTok (peekTok toks (i + 1)) = i
-  | otherwise = firstBlockCommentIdx toks (i + 1)
-
 blockCommentMsg : String
 blockCommentMsg =
   "Medaka has no `/* ... */` comments; write `{- ... -}` or `--`"
@@ -6546,16 +6374,6 @@ braceBlockFrom toks i depth cand
   | isBracketCloseTok (peekTok toks i) =
     braceBlockFrom toks (i + 1) (depth - 1) cand
   | otherwise = braceBlockFrom toks (i + 1) depth cand
-
-firstBraceBlockIdx : Array Token -> Int -> Int
-firstBraceBlockIdx toks i
-  | i >= arrayLength toks = 0 - 1
-  | isIfTok (peekTok toks i) =
-    if braceBlockFrom toks (i + 1) 0 (0 - 1) >= 0 then
-      braceBlockFrom toks (i + 1) 0 (0 - 1)
-    else
-      firstBraceBlockIdx toks (i + 1)
-  | otherwise = firstBraceBlockIdx toks (i + 1)
 
 braceBlockMsg : String
 braceBlockMsg =
@@ -6598,17 +6416,6 @@ lineTrailingColonNoEq toks i depth lastColon sawEq
   | isBracketCloseTok (peekTok toks i) =
     lineTrailingColonNoEq toks (i + 1) (depth - 1) False sawEq
   | otherwise = lineTrailingColonNoEq toks (i + 1) depth False sawEq
-
-firstForeignKwIdx : Array Token -> Int -> Bool -> Int
-firstForeignKwIdx toks i lineStart
-  | i >= arrayLength toks = 0 - 1
-  | lineStart
-    && isForeignKwTok (peekTok toks i)
-    && lineTrailingColonNoEq toks i 0 False False = i
-  | isNewlineTok (peekTok toks i)
-    || isIndentTok (peekTok toks i)
-    || isDedentTok (peekTok toks i) = firstForeignKwIdx toks (i + 1) True
-  | otherwise = firstForeignKwIdx toks (i + 1) False
 
 foreignKwMsg : Token -> String
 foreignKwMsg (TIdent "def") = "Medaka has no `def`; write `f x = ...`"
@@ -6669,6 +6476,199 @@ parseLocatedResult src = match tokenizeWithOffsetPairs src
     let _ = setLocState src (arrayFromList offPairs)
     parseResultWith src tokList (map fst offPairs)
 
+-- First-hit index per pre-scan rule (-1 = not hit), filled by one walk over the
+-- token stream.  `phWith` / `phMatchWith` split `with` by whether a `match`
+-- opened earlier on the same logical line.
+data PrescanHits = {
+  phLex : Int,
+  phBangEq : Int,
+  phMut : Int,
+  phRecord : Int,
+  phCtxKw : Int,
+  phFunction : Int,
+  phInlineLet : Int,
+  phCaseOf : Int,
+  phBacktick : Int,
+  phWith : Int,
+  phMatchWith : Int,
+  phStarStar : Int,
+  phForLoop : Int,
+  phHsSig : Int,
+  phBlockComment : Int,
+  phBraceBlock : Int,
+  phForeignKw : Int,
+}
+
+prescanLexError : Array Token -> Int -> Option (Int, String)
+prescanLexError toks i
+  | i < 0 = None
+  | otherwise = match peekTok toks i
+    TLexError msg => Some (i, msg)
+    _ => None
+
+prescanNoHits : PrescanHits
+prescanNoHits = PrescanHits {
+  phLex = 0 - 1,
+  phBangEq = 0 - 1,
+  phMut = 0 - 1,
+  phRecord = 0 - 1,
+  phCtxKw = 0 - 1,
+  phFunction = 0 - 1,
+  phInlineLet = 0 - 1,
+  phCaseOf = 0 - 1,
+  phBacktick = 0 - 1,
+  phWith = 0 - 1,
+  phMatchWith = 0 - 1,
+  phStarStar = 0 - 1,
+  phForLoop = 0 - 1,
+  phHsSig = 0 - 1,
+  phBlockComment = 0 - 1,
+  phBraceBlock = 0 - 1,
+  phForeignKw = 0 - 1,
+}
+
+-- Rules keyed on the start of a logical line; `depth` is the INDENT nesting,
+-- so the declaration-position rules fire only at depth 0.
+prescanLineStart : Array Token ->
+  Int ->
+  Token ->
+  Int ->
+  PrescanHits ->
+  PrescanHits
+prescanLineStart toks i t depth h0 =
+  let h1 =
+    if depth == 0 && h0.phRecord < 0 && recordHeadIdx toks i >= 0 then
+      { h0 | phRecord = recordHeadIdx toks i }
+    else
+      h0
+  let h2 =
+    if depth == 0
+      && h1.phCtxKw < 0
+      && isContextualKw t
+      && isBinderTok (peekTok toks (i + 1)) then
+      { h1 | phCtxKw = i }
+    else
+      h1
+  let h3 =
+    if h2.phForLoop < 0
+      && t == TIdent "for"
+      && forLoopHeadTail toks (i + 1) False then
+      { h2 | phForLoop = i }
+    else
+      h2
+  if h3.phForeignKw < 0
+    && isForeignKwTok t
+    && lineTrailingColonNoEq toks i 0 False False then
+    { h3 | phForeignKw = i }
+  else
+    h3
+
+-- Rules keyed on the token itself (or a short lookahead from it).  `sb` is the
+-- top-level declaration boundary for the Haskell-signature rule and `im` says a
+-- `match` opened earlier on this logical line.
+prescanTokHit : Array Token ->
+  Array Int ->
+  Int ->
+  Token ->
+  Int ->
+  Bool ->
+  Bool ->
+  PrescanHits ->
+  PrescanHits
+-- lint-disable-next-line rule-match-on-param
+prescanTokHit toks offs i t depth sb im h = match t
+  TLexError _ => if h.phLex < 0 then { h | phLex = i } else h
+  TBangEq => if h.phBangEq < 0 then { h | phBangEq = i } else h
+  TMut => if h.phMut < 0 then { h | phMut = i } else h
+  TFunction => if h.phFunction < 0 then { h | phFunction = i } else h
+  TBacktickIdent _ => if h.phBacktick < 0 then { h | phBacktick = i } else h
+  TSlash =>
+    if h.phBlockComment < 0 && isStarTok (peekTok toks (i + 1)) then
+      { h | phBlockComment = i }
+    else
+      h
+  TStar =>
+    if h.phStarStar < 0
+      && isStarTok (peekTok toks (i + 1))
+      && arrayGetUnsafe (i + 1) offs == arrayGetUnsafe i offs + 1 then
+      { h | phStarStar = i }
+    else
+      h
+  TWith =>
+    if im then
+      if h.phMatchWith < 0 then { h | phMatchWith = i } else h
+    else if h.phWith < 0 then
+      { h | phWith = i }
+    else
+      h
+  TIf =>
+    if h.phBraceBlock < 0 && braceBlockFrom toks (i + 1) 0 (0 - 1) >= 0 then
+      { h | phBraceBlock = braceBlockFrom toks (i + 1) 0 (0 - 1) }
+    else
+      h
+  TThen => prescanInlineLet toks i h
+  TElse => prescanInlineLet toks i h
+  TIdent s => prescanIdentHit toks i s depth sb h
+  _ => h
+
+prescanInlineLet : Array Token -> Int -> PrescanHits -> PrescanHits
+prescanInlineLet toks i h =
+  if h.phInlineLet < 0
+    && isLetTok (peekTok toks (i + 1))
+    && not (scanForLetIn toks (i + 2) 0) then
+    { h | phInlineLet = i + 1 }
+  else
+    h
+
+prescanIdentHit : Array Token ->
+  Int ->
+  String ->
+  Int ->
+  Bool ->
+  PrescanHits ->
+  PrescanHits
+prescanIdentHit toks i s depth sb h0 =
+  let h1 =
+    if s == "case"
+      && h0.phCaseOf < 0
+      && caseHasOfBeforeBoundary toks (i + 1) 0 then
+      { h0 | phCaseOf = i }
+    else
+      h0
+  if sb && depth == 0 && h1.phHsSig < 0 && isConsTok (peekTok toks (i + 1)) then
+    { h1 | phHsSig = i + 1 }
+  else
+    h1
+
+-- One walk over the token stream, recording each pre-scan rule's first hit.
+-- `depth`, `ls` (line start), `sb` (signature boundary) and `im` (a `match`
+-- opened on this line) are the states the rules share; a hit never changes them.
+prescanWalk : Array Token ->
+  Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Bool ->
+  Bool ->
+  Bool ->
+  PrescanHits ->
+  PrescanHits
+prescanWalk toks offs n i depth ls sb im h
+  | i >= n = h
+  | otherwise =
+    let t = peekTok toks i
+    let h1 = if ls then prescanLineStart toks i t depth h else h
+    let h2 = prescanTokHit toks offs i t depth sb im h1
+    match t
+      TIndent => prescanWalk toks offs n (i + 1) (depth + 1) True False False h2
+      TDedent =>
+        prescanWalk toks offs n (i + 1) (depth - 1) True (depth == 1) False h2
+      TNewline =>
+        prescanWalk toks offs n (i + 1) depth True (depth == 0) False h2
+      TMatch => prescanWalk toks offs n (i + 1) depth False False True h2
+      TWith => prescanWalk toks offs n (i + 1) depth False False False h2
+      _ => prescanWalk toks offs n (i + 1) depth False False im h2
+
 -- The removed-construct and lex-error pre-scans over an ALREADY-tokenized
 -- stream, in the order the diagnostics take precedence: the first one that
 -- fires is the error.  `None` means no pre-scan fired and the grammar decides.
@@ -6678,23 +6678,25 @@ export
 prescanError : String -> Array Token -> Array Int -> Option ParseError
 prescanError src toks offs =
   let srcLen = stringLength src
-  let beIdx = firstBangEqIdx toks 0
-  let lmIdx = firstMutIdx toks 0
-  let recIdx = firstRecordDeclIdx toks 0 0 True
-  let ckIdx = firstCtxKwDeclIdx toks 0 0 True
-  let fnIdx = firstFunctionIdx toks 0
-  let ilIdx = firstInlineLetMissingIn toks 0
-  let coIdx = firstHsCaseOfIdx toks 0
-  let btIdx = firstBacktickIdx toks 0
-  let wiIdx = firstWithIdx toks 0 False False
-  let mwIdx = firstWithIdx toks 0 False True
-  let ssIdx = firstStarStarIdx toks offs 0
-  let forIdx = firstForLoopIdx toks 0 True
-  let sigIdx = firstHsSigIdx toks 0 0 True
-  let bcIdx = firstBlockCommentIdx toks 0
-  let bbIdx = firstBraceBlockIdx toks 0
-  let fkwIdx = firstForeignKwIdx toks 0 True
-  match firstLexError toks 0
+  let hits =
+    prescanWalk toks offs (arrayLength toks) 0 0 True True False prescanNoHits
+  let beIdx = hits.phBangEq
+  let lmIdx = hits.phMut
+  let recIdx = hits.phRecord
+  let ckIdx = hits.phCtxKw
+  let fnIdx = hits.phFunction
+  let ilIdx = hits.phInlineLet
+  let coIdx = hits.phCaseOf
+  let btIdx = hits.phBacktick
+  let wiIdx = hits.phWith
+  let mwIdx = hits.phMatchWith
+  let ssIdx = hits.phStarStar
+  let forIdx = hits.phForLoop
+  let sigIdx = hits.phHsSig
+  let bcIdx = hits.phBlockComment
+  let bbIdx = hits.phBraceBlock
+  let fkwIdx = hits.phForeignKw
+  match prescanLexError toks hits.phLex
     Some (leIdx, leMsg) =>
       let leMsg2 =
         if leMsg == "unexpected character `;`" then semicolonMsg else leMsg
