@@ -1,5 +1,5 @@
 # META
-source_lines=3982
+source_lines=3983
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -3864,8 +3864,9 @@ validateFfiExternTypeNames rows =
 -- reason.
 --
 -- The three data lines are UNINDENTED on purpose, matching
--- `core_validate.checkImplSymbolsInjective`: they are CONTENT-derived, so a `stdout-line` pin can
--- match them with `grep -qxF` without false-draining on a rewording of the prose.
+-- `core_validate.checkImplSymbolsInjective`: they are CONTENT-derived, so a
+-- `stdout-line` pin can match them with `grep -qxF` without false-draining on a
+-- rewording of the prose.
 ffiCheckExternRowsDistinct : OrdMap String ->
   List (String, (List String, String)) ->
   Unit

@@ -209,7 +209,7 @@ path that could simply be dropped.
 
 > ### ⚠️ CORRECTED 2026-07-14 — this section originally blamed the wrong function, twice
 >
-> 1. **It is NOT `detectDispatchGroups` / `gDispStage1Claims` (`llvm_emit.mdk:9290-9298`).**
+> 1. **It is NOT `detectDispatchGroups` (`compiler/backend/trmc_analysis.mdk`).**
 >    That is **TRMC dispatch-graph grouping** — *tail-recursion-modulo-cons*
 >    (`compiler/backend/trmc_analysis.mdk:3`) — and has **nothing to do with impl dispatch.**
 >    The real builder is `emitMethodDispatchChain` → `emitDispatchChain` → `emitDispatchArm`

@@ -858,7 +858,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'diff_compiler_ci_shard_coverage' 'pds/test/car_vectors' 'pds/test/constant_time_parity' 'pds/test/dagcbor_cid_vectors' 'pds/test/did_key_all_engines' 'pds/test/mst_vectors' 'pds/test/read_routes_all_engines' 'pds/test/rfc6979_vectors' 'pds/test/scalar_vectors' 'pds/test/signing_parity' 'pds/test/vector_provenance' 'bootstrap_eval' 'bootstrap_resolve' 'bootstrap_typecheck' 'check_build_oracles_for_consistency' 'diff_compiler_build' 'diff_compiler_ci_guard_failsafe' 'diff_compiler_argtag_matrix' 'diff_compiler_engines_part3' 'diff_compiler_ir_size' 'diff_compiler_bytes_census' 'diff_compiler_rejection_parity' 'diff_net' 'effect_builtin_param_domain' 'diff_compiler_guide_render' 'diff_compiler_partition_stability'"
+            pattern: "'diff_compiler_ci_shard_coverage' 'pds/test/car_vectors' 'pds/test/constant_time_parity' 'pds/test/dagcbor_cid_vectors' 'pds/test/did_key_all_engines' 'pds/test/mst_vectors' 'pds/test/read_routes_all_engines' 'pds/test/scalar_vectors' 'pds/test/signing_parity' 'pds/test/vector_provenance' 'bootstrap_eval' 'bootstrap_resolve' 'bootstrap_typecheck' 'check_build_oracles_for_consistency' 'diff_compiler_build' 'diff_compiler_ci_guard_failsafe' 'diff_compiler_argtag_matrix' 'diff_compiler_engines_part3' 'diff_compiler_ir_size' 'diff_compiler_bytes_census' 'diff_compiler_rejection_parity' 'diff_net' 'effect_builtin_param_domain' 'diff_compiler_guide_render' 'diff_compiler_partition_stability'"
             wasm_arm: "1"
           - name: gates_2
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
@@ -963,7 +963,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'pds/test/sha256_vectors' 'pds/test/signing_corpus' 'sqlite/test/sql_oracle' 'diff_compiler_check_json' 'diff_compiler_dispatch_shape' 'diff_compiler_stdlib_conventions' 'diff_compiler_effect_polarity' 'diff_compiler_error_quality_baseline' 'diff_compiler_eval_scaling' 'diff_compiler_flat_vs_onemodule' 'diff_compiler_fmt' 'diff_compiler_llvm' 'diff_compiler_llvm_symbol_collision' 'diff_compiler_mcp' 'diff_compiler_perf_scaling' 'diff_compiler_preflight_base' 'diff_compiler_run_stdout_flush' 'diff_compiler_source_bytes' 'diff_compiler_stage_ir_scaling' 'diff_compiler_test_typecheck' 'diff_compiler_tmc_parity' 'diff_compiler_closure_alloc' 'pds/test/lib_boundary' 'dist_install_smoke'"
+            pattern: "'pds/test/rfc6979_vectors' 'pds/test/sha256_vectors' 'pds/test/signing_corpus' 'sqlite/test/sql_oracle' 'diff_compiler_check_json' 'diff_compiler_dispatch_shape' 'diff_compiler_stdlib_conventions' 'diff_compiler_effect_polarity' 'diff_compiler_error_quality_baseline' 'diff_compiler_eval_scaling' 'diff_compiler_flat_vs_onemodule' 'diff_compiler_fmt' 'diff_compiler_llvm' 'diff_compiler_mcp' 'diff_compiler_perf_scaling' 'diff_compiler_preflight_base' 'diff_compiler_run_stdout_flush' 'diff_compiler_source_bytes' 'diff_compiler_stage_ir_scaling' 'diff_compiler_test_typecheck' 'diff_compiler_tmc_parity' 'diff_compiler_closure_alloc' 'pds/test/lib_boundary' 'dist_install_smoke'"
           - name: gates_8
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
@@ -982,7 +982,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'lsp_harness' 'parsec/test/check' 'pds/test/constant_time_reductions' 'pds/test/lexjson_vectors' 'pds/test/opaque_field_scalar' 'pds/test/pbkdf2' 'pds/test/protocol_all_engines' 'sqlite/test/oracle' 'sqlite/test/writer_oracle' 'bootstrap_lex' 'diff_compiler_core_ir_typed_modules' 'diff_compiler_dict_semantics_ir' 'diff_compiler_engines_part1' 'diff_compiler_comment_shout_diff' 'diff_compiler_project_enrolment' 'diff_native_cli' 'diff_native_stack' 'pr_helper_test' 'diff_compiler_cli_help_conformance' 'pds/test/deploy_config_lint' 'diff_compiler_catch_all_census'"
+            pattern: "'lsp_harness' 'parsec/test/check' 'pds/test/constant_time_reductions' 'pds/test/lexjson_vectors' 'pds/test/opaque_field_scalar' 'pds/test/pbkdf2' 'pds/test/protocol_all_engines' 'sqlite/test/oracle' 'sqlite/test/writer_oracle' 'bootstrap_lex' 'diff_compiler_core_ir_typed_modules' 'diff_compiler_dict_semantics_ir' 'diff_compiler_engines_part1' 'diff_compiler_comment_shout_diff' 'diff_compiler_llvm_symbol_collision' 'diff_compiler_project_enrolment' 'diff_native_cli' 'diff_native_stack' 'pr_helper_test' 'diff_compiler_cli_help_conformance' 'pds/test/deploy_config_lint' 'diff_compiler_catch_all_census'"
             wasm_arm: "1"
           # GENERATED:END gates-matrix
     # The job name IS the required status-check context. It is a bare executor

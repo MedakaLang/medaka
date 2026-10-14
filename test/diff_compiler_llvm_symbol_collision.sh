@@ -70,6 +70,12 @@
 # two impls a real dispatch chain could actually compare collide; see the
 # fixtures' own comments for the mechanism.
 #
+# Section 6 is the one WasmGC section: the wasm emitter runs the dict-tag arm itself
+# (`wasm_emit.refuseUnprovidedExternsW`), at its own 30-bit width, so a native build
+# cannot see its wiring. It runs the `wasm_emit_modules_main` oracle, the emitter
+# `medaka build --target wasm` shells out to, directly: the refusal fires before any
+# WAT is written, so no wasm-tools or Node is needed.
+#
 # ⚠️ `medaka build`'s exit code does NOT survive a pipe (AGENTS.md [D-BUILD-PIPE]).
 # Every invocation below redirects to a file and reads `$?` from the redirect.
 #
@@ -83,10 +89,12 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEDAKA="$ROOT/medaka"
 EMITTER="${MEDAKA_EMITTER:-$ROOT/medaka_emitter}"
+WASMEMIT="${MEDAKA_WASM_EMITTER:-$ROOT/test/bin/wasm_emit_modules_main}"
 FIX="$ROOT/test/symbol_collision_fixtures"
 
 [ -x "$MEDAKA" ] || { printf 'no ./medaka at %s — build it first: make medaka\n' "$MEDAKA"; exit 2; }
 [ -x "$EMITTER" ] || { printf 'no native emitter at %s — build it first: make medaka\n' "$EMITTER"; exit 2; }
+[ -x "$WASMEMIT" ] || { printf 'no wasm emitter at %s — build it first: FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one wasm_emit_modules_main\n' "$WASMEMIT"; exit 2; }
 [ -d "$FIX" ] || { printf 'FAIL: fixture corpus missing: %s\n' "$FIX"; exit 1; }
 
 MEDAKA_EMITTER="$EMITTER"
@@ -492,6 +500,116 @@ if [ -e "$DWNBIN" ]; then
 else
   ok "no binary produced (dict-witness domain)"
 fi
+
+# the inherited-default shape: `zn` supplied at Mzone, inherited at NYone. Both
+# are arms of `zn`'s one dispatcher, so the colliding pair must still REFUSE.
+checked=$((checked + 1))
+DWDBIN="$WORK/dict_witness_default.bin"
+DWDLOG="$WORK/dict_witness_default.log"
+"$MEDAKA" build "$FIX/dict_witness/default_negative.mdk" -o "$DWDBIN" > "$DWDLOG" 2>&1
+dwdst=$?
+
+if [ "$dwdst" -eq 0 ]; then
+  fail "the inherited-default collision built at exit 0 — the guard skipped the default entry"
+  printf '      a supplied impl and an inherited default of ONE method share its\n'
+  printf '      dispatcher; with colliding words the binary answers default|default.\n'
+  sed 's/^/        /' "$DWDLOG"
+else
+  ok "the inherited-default collision refused (exit $dwdst)"
+fi
+
+checked=$((checked + 1))
+dwdmissing=""
+for want in 'emitted dict-witness tag collision' 'method `zn`' 'Mzone' 'NYone'; do
+  grep -q -- "$want" "$DWDLOG" || dwdmissing="$dwdmissing '$want'"
+done
+if [ -n "$dwdmissing" ]; then
+  fail "inherited-default refusal does not name both route words; missing:$dwdmissing"
+  sed 's/^/        /' "$DWDLOG"
+else
+  ok "inherited-default refusal names both route words and the method"
+fi
+
+checked=$((checked + 1))
+if [ -e "$DWDBIN" ]; then
+  fail "a binary was produced at $DWDBIN despite the inherited-default refusal"
+else
+  ok "no binary produced (inherited-default shape)"
+fi
+
+# ── 6. the WasmGC emitter's own dict-tag arm (#377) ─────────────────────────────
+# Each emitter refuses at its own width. `wasm_only.mdk` collides only in the
+# 30-bit wasm `dictTag`: it must build and run natively, and the wasm emitter must
+# refuse it. `negative.mdk` collides in the full width, which the wasm emitter
+# checks too.
+
+# wasm_emit <fixture> <tag> : run the wasm emitter, WAT to $tag.wat, set $wst
+wasm_emit() {
+  "$WASMEMIT" "$ROOT/stdlib/runtime.mdk" "$ROOT/stdlib/core.mdk" "$1" "$(dirname "$1")" "$ROOT/stdlib" > "$WORK/$2.wat" 2> "$WORK/$2.log"
+  wst=$?
+}
+
+# wasm_refuses <tag> <want>... : assert $wst, the message lines, and no WAT written
+wasm_refuses() {
+  tag=$1
+  shift
+  checked=$((checked + 1))
+  if [ "$wst" -eq 0 ]; then
+    fail "$tag emitted at exit 0 — the wasm emitter's dict-tag arm did NOT fire"
+    sed 's/^/        /' "$WORK/$tag.log"
+  else
+    ok "$tag refused by the wasm emitter (exit $wst)"
+  fi
+  checked=$((checked + 1))
+  wmissing=""
+  for want in "$@"; do
+    grep -q -- "$want" "$WORK/$tag.log" || wmissing="$wmissing '$want'"
+  done
+  if [ -n "$wmissing" ]; then
+    fail "$tag wasm refusal does not name the space and both route words; missing:$wmissing"
+    sed 's/^/        /' "$WORK/$tag.log"
+  else
+    ok "$tag wasm refusal names the tag space and both route words"
+  fi
+  checked=$((checked + 1))
+  if [ -s "$WORK/$tag.wat" ]; then
+    fail "the wasm emitter wrote WAT for $tag despite the refusal"
+  else
+    ok "no WAT written ($tag)"
+  fi
+}
+
+checked=$((checked + 1))
+WOBIN="$WORK/wasm_only.bin"
+"$MEDAKA" build "$FIX/dict_witness/wasm_only.mdk" -o "$WOBIN" > "$WORK/wasm_only_native.log" 2>&1
+wost=$?
+if [ "$wost" -ne 0 ]; then
+  fail "the wasm-only collision failed to build natively (exit $wost)"
+  printf '      its full i64 tags are distinct, so the native dispatcher is correct\n'
+  printf '      and the native emitter must not refuse. Build output:\n'
+  sed 's/^/        /' "$WORK/wasm_only_native.log"
+else
+  ok "the wasm-only collision builds natively (exit 0)"
+  checked=$((checked + 1))
+  "$WOBIN" > "$WORK/wasm_only.out" 2>&1
+  worst=$?
+  printf 'd|l\n' > "$WORK/wasm_only.expected"
+  if [ "$worst" -ne 0 ] || ! diff -u "$WORK/wasm_only.expected" "$WORK/wasm_only.out" > "$WORK/wasm_only.diff" 2>&1; then
+    fail "the wasm-only collision's native binary did not print the hand-derived d|l (exit $worst)"
+    sed 's/^/        /' "$WORK/wasm_only.out"
+  else
+    ok "the wasm-only collision's native binary prints d|l"
+  fi
+fi
+
+wasm_emit "$FIX/dict_witness/wasm_only.mdk" wasm_only_wasm
+wasm_refuses wasm_only_wasm 'emitted dict-witness tag collision' 'tag space: wasm (WasmGC) 30-bit' 'Dbnfbcp' 'Llzhriz'
+
+wasm_emit "$FIX/dict_witness/negative.mdk" negative_wasm
+wasm_refuses negative_wasm 'emitted dict-witness tag collision' 'tag space: native (LLVM) i64' 'Mzone' 'NYone'
+
+wasm_emit "$FIX/dict_witness/default_negative.mdk" default_negative_wasm
+wasm_refuses default_negative_wasm 'emitted dict-witness tag collision' 'tag space: native (LLVM) i64' 'Mzone' 'NYone'
 
 printf '\nchecked %d assertions: %d failed\n' "$checked" "$fails"
 

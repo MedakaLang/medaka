@@ -40,12 +40,10 @@ import backend.trmc_analysis.{
 -- counts (top-level binds plus impl entries) before and after the dispatch-rooted
 -- reach filter, whose result the plan's other fields were computed over.  Reach is
 -- wasm-only because native whole mode emits every function but `@mdk_program_main`
--- as `define internal`, so clang's GlobalDCE already drops the same functions: the
--- compiler self-build shrinks 0.29% in `.ll` bytes, its CPU-s change (+3.7) sits
--- inside the noise band, and the pass costs 0.155 s and 106 MB per emit.  The
--- prelude-object halves must be identity: a reached prelude half links to a
--- 5-symbol object, and a reached program half links only through `--gc-sections`.
--- Only a small whole-mode build gains (hello saves about 0.09 CPU-s).
+-- as `define internal`, so clang's GlobalDCE already drops the same functions and
+-- the pass would buy no measurable CPU time.  The prelude-object halves must be
+-- identity: the prelude half has to define every prelude symbol a program half may
+-- link against, which no reach from a single program can know.
 --
 -- `target` is the backend the plan was built for; the emitter asserts it is its own.
 -- `lazyGlobals` are the value globals emitted as forced-on-first-use cells.
@@ -82,7 +80,9 @@ public export data ReachUnits = ReachUnits { total : Int, kept : Int }
 -- (`Some`, `Ok`, `Err`, `Cons`, `Tup<n>`).  None of them can head a leaf whose
 -- last field is the self-call: `Some (f x)` returned by `f` would need
 -- `Option T = T`, and the list and tuple cells lower to `::` and tuple nodes, not
--- applications.  So the one table gives both backends the verdict they computed.
+-- applications.  So, for a typechecked program, the one table gives both backends
+-- the verdict they computed.  Untyped input (the `wasm_emit_main` probe) can head
+-- such a leaf, and there the plan's verdict is the narrower one.
 public export data TrmcVerdicts = TrmcVerdicts {
   eligibleFns : OrdMap Unit,
   eligibleImpls : OrdMap Unit,
@@ -138,13 +138,12 @@ export
 isTrmcImpl : TrmcVerdicts -> String -> String -> Bool
 isTrmcImpl v method key = omHasKey (implGroupKey method key) v.eligibleImpls
 
--- The backend a plan was built for, asserted to be the calling emitter's own: a
--- plan built for the other backend would pick the wrong dict-tag width.
+-- Asserts that a plan was built for the calling emitter's own backend.
 export
-planBackendFor : Backend -> EmitPlan -> Backend
-planBackendFor expected plan =
+checkPlanBackend : Backend -> EmitPlan -> Unit
+checkPlanBackend expected plan =
   if backendName plan.target == backendName expected then
-    plan.target
+    ()
   else
     panic
       "internal error: emit plan was built for the \{backendName plan.target} backend but the \{backendName expected} emitter received it"

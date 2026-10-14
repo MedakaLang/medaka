@@ -18,7 +18,7 @@ import test.{
   Expectation, expectAll, expectEqual, expectNotEqual, expectFalse, expectTrue,
   labelFail
 }
-import string.{contains, lines, trimLeft, startsWith}
+import string.{contains, endsWith, lines, trimLeft, startsWith}
 import frontend.ast.{
   Addr(..), Lit(..), Pat(..), Route(..), noDeclLoc, noBinderId
 }
@@ -45,6 +45,7 @@ import backend.emit_plan.{
   buildEmitPlan,
   buildEmitPlanReached,
   isTrmcFn,
+  isTrmcImpl,
 }
 import backend.core_validate.{Backend(..)}
 import backend.trmc_analysis.{ctorTailIsCons, dispMembersOf, dispRootOf}
@@ -151,6 +152,27 @@ test "neither emitter recomputes a plan analysis" = expectAll [
   noRecompute "wasm_emit.mdk",
 ]
 
+-- Each emitter refuses colliding impls itself, at its own dict-tag width.  The
+-- impl-symbol arm can only fire on a defect in the symbol scheme, so no source
+-- program reaches it and this check is its only wiring pin.
+refusesCollisions : String -> String -> <IO, FileRead> Expectation
+refusesCollisions file backend =
+  match readFile "\{medakaRoot}/compiler/backend/\{file}"
+    Err e => expectEqual "readable" "cannot read \{file}: \{e}"
+    Ok text => expectAll [
+      labelFail
+        "\{file} runs the impl-symbol arm"
+        (expectTrue (codeMentions "validateImplSymbolInjectivity cp" text)),
+      labelFail
+        "\{file} runs the dict-tag arm at its own width"
+        (expectTrue (codeMentions "validateDictTags \{backend} cp" text)),
+    ]
+
+test "each emitter runs both collision arms" = expectAll [
+  refusesCollisions "llvm_emit.mdk" "LlvmBackend",
+  refusesCollisions "wasm_emit.mdk" "WasmBackend",
+]
+
 -- Reach belongs to the plan builder: no entry calls the filter itself.
 noEntryReach : String -> <IO, FileRead> Expectation
 noEntryReach file = match readFile "\{medakaRoot}/compiler/entries/\{file}"
@@ -160,11 +182,14 @@ noEntryReach file = match readFile "\{medakaRoot}/compiler/entries/\{file}"
       "\{file} calls wasmReachFilter"
       (expectFalse (codeMentions "wasmReachFilter" text))
 
-test "the wasm modules entries leave reach to the plan builder" = expectAll [
-  noEntryReach "wasm_emit_modules_main.mdk",
-  noEntryReach "playground_main.mdk",
-  noEntryReach "wasm_emit_gaps_main.mdk",
-]
+test "no entry runs reach itself" =
+  match listDir "\{medakaRoot}/compiler/entries"
+    Err e => expectEqual "listable" "cannot list compiler/entries: \{e}"
+    Ok names =>
+      let entries = filter (n => endsWith ".mdk" n) names
+      expectAll
+        (labelFail "compiler/entries holds entries" (expectNotEqual [] entries)
+          :: map noEntryReach entries)
 
 -- ── wasm-only reach ─────────────────────────────────────────────────────────
 
@@ -375,3 +400,29 @@ test "a mutually tail-calling cons family is one dispatch group" =
     (map
       (g => (dispRootOf g, dispMembersOf g))
       (trmcPlan [] consFamily).dispGroups)
+
+-- impl Upto Int where
+--   upto lo hi = if lo > hi then [] else lo :: upto (lo + 1) hi
+-- The recursion dispatches through the instance's own word, `K`, so the group is
+-- eligible.  The same body recursing through another instance's word has no
+-- self-call, so its group is not.
+uptoImpl : String -> CImplEntry
+uptoImpl word =
+  let self = CMethod "upto" (MethodEvidence "Upto" 2 (RKey word [] []) [] [])
+  let leaf =
+    prim "::" (ref "lo") (mkApp self [prim "+" (ref "lo") (int 1), ref "hi"])
+  let body = CIf (prim ">" (ref "lo") (ref "hi")) (CList []) leaf
+  let pats = map (p => PVar p noDeclLoc noBinderId) ["lo", "hi"]
+  CImplEntry "upto" 0 2 (CImplTagged "Int" "K" "Upto" noImplSym [] pats body)
+
+implTrmc : String -> Bool
+implTrmc word =
+  let plan =
+    buildEmitPlan LlvmBackend (CProgram [] [] [] [uptoImpl word] [] noDeclFacts)
+  isTrmcImpl plan.trmc "upto" "K"
+
+test "an impl group recursing through its own instance word is TRMC-eligible" = expectAll
+  [
+    labelFail "self word" (expectTrue (implTrmc "K")),
+    labelFail "another instance's word" (expectFalse (implTrmc "Other")),
+  ]

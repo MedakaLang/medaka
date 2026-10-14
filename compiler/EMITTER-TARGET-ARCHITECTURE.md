@@ -183,8 +183,8 @@ scattered places, moved rather than reinvented:
 |---|---|
 | reachability roots and edges | `ir/dce.mdk` (pre-lower) and `backend/wasm_reach.mdk` (post-lower, Wasm only) |
 | lazy/eager global classification | `emit_support.eagerReachMap` / `lazyGlobalNames`, computed once by `backend/emit_plan.mdk`'s `buildEmitPlan` and read by both backends |
-| TRMC eligibility and groups | `backend/trmc_analysis.mdk`, computed per backend |
-| linkage map and injectivity | `private_mangle` and the three X-L.H guards, run inside lowering |
+| TRMC eligibility and groups | `backend/trmc_analysis.mdk`'s predicates, computed once by `buildEmitPlan` (`EmitPlan.trmc`, `EmitPlan.dispGroups`) and read by both backends |
+| linkage map and injectivity | `private_mangle`; of the three X-L.H guards, the module-symbol guard runs in `private_mangle.mangleUnits`, and the impl-symbol and dict-tag guards are `core_validate` arms (`validateImplSymbolInjectivity`, `validateDictTags`) each emitter runs before it writes any text |
 | reachable extern requirements | per-backend extern ladders |
 | target | `core_validate.Backend`, chosen by each emit entry; lowering is target-neutral (L4) |
 
@@ -194,9 +194,10 @@ The two emit-input records converge into this one over time; the four facts
 upstream dependency and is landable now. `wasmReachFilter`'s post-lower pruning
 is landed as the plan's wasm-only field `wasmOnlyReach` (`buildEmitPlanReached`,
 used by the two wasm modules entries). Native does not share it: whole mode emits
-`define internal`, so clang's GlobalDCE already drops the same functions (compiler
-self-build -0.29% `.ll`, +3.7 CPU-s inside the noise band, 0.155 s / 106 MB for the
-pass), and the prelude-object halves must be identity.
+`define internal`, so clang's GlobalDCE already drops the same functions and the
+pass would buy no measurable CPU time, and the prelude-object halves must be
+identity, since the prelude half has to define every symbol a program half may
+link against.
 
 ### R6. The Core validator
 
