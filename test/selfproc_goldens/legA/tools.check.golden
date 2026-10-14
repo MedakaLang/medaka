@@ -8,4 +8,3 @@ reportFor : String -> String -> String -> List Decl -> List Decl -> List Decl ->
 routeImportCheck : String -> String -> String -> List Decl -> List Decl -> List Decl -> List Decl -> String
 runCheck : String -> String -> String -> String
 runCheckFromDecls : String -> String -> List Decl -> String
-runCheckModulesFromDiags : List Decl -> List Decl -> List (String, List Decl) -> List (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> String

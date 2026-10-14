@@ -912,7 +912,7 @@ moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) =
 -- already have been caught upstream), not a second independent gate.
 -- The fourth component is the per-module `(schemes, errs, warns)` this ONE pass
 -- produced.  `check`'s multi-module arm renders its ENTRY REPORT from it
--- (`runCheckModulesFromDiags`) rather than typechecking the graph a second time
+-- (`checkModulesReport`) rather than typechecking the graph a second time
 -- through the entry-only driver, which differed from this one in its collector
 -- alone.
 locatedProjectDiags : Bool ->

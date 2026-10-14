@@ -170,21 +170,10 @@ checkHasErrors rsrc csrc tsrc =
 -- per-module diagnostics.  Imports are RESOLVED (vs the single-file path's
 -- `UnknownModule`), mirroring how `build`/`run` route through loadProgram → the
 -- multi-module typecheck.  Output mirrors runCheck's shape over the entry module.
--- `rtD`/`coreD` are the DESUGARED runtime/core decls; `mods` are the DESUGARED
--- loaded modules (entry last).  The guard-exhaustiveness pass is AST-only (no
--- typecheck) over the same entry module; the entry report is a projection of
--- `perMod`, never a second graph pass.
-export
-runCheckModulesFromDiags : List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  List ModDiags ->
-  String
-runCheckModulesFromDiags rtD coreD mods perMod =
-  checkModulesReport (entryExhaust rtD coreD mods) perMod
-
--- `runCheckModulesFromDiags` with the entry's guard-exhaustiveness lines already
--- rendered, for a caller that renders them before the graph is typechecked so the
+-- The guard-exhaustiveness pass (`entryExhaust`) is AST-only (no typecheck) over
+-- the same entry module; the entry report is a projection of `perMod`, never a
+-- second graph pass.  `exWarns` is the entry's guard-exhaustiveness lines, already
+-- rendered by a caller that renders them before the graph is typechecked so the
 -- desugared modules they read need not stay live through the typecheck.
 export
 checkModulesReport : String -> List ModDiags -> String
