@@ -650,19 +650,23 @@ healthRequest method headers body =
   encodeUtf8
     "\{method} /xrpc/_health HTTP/1.1\r\nHost: \{accountHostText}\r\n\{headers}\r\n\{body}"
 
--- | The `message` of a refusal envelope, or a marker when there is none.
-messageOf : Bytes -> String
-messageOf bytes = match parse (bodyText bytes)
-  Ok value => match get "message" value
+-- | A string field of a JSON response body, or a marker when there is none.
+stringFieldOf : String -> Bytes -> String
+stringFieldOf name bytes = match parse (bodyText bytes)
+  Ok value => match get name value
     Some (JString text) => text
-    _ => "<no-message-field>"
+    _ => "<no-\{name}-field>"
   Err _ => "<not-json>"
 
 healthRefusal : Bytes -> String
-healthRefusal bytes = "\{statusOf bytes} \{messageOf bytes}"
+healthRefusal bytes = "\{statusOf bytes} \{stringFieldOf "message" bytes}"
 
-test "the health probe answers 200 to a bodiless GET" =
-  expectEqual (statusOf (realWire (healthRequest "GET" "" ""))) "200"
+test "the health probe answers 200 with its version to a bodiless GET" =
+  let reply = realWire (healthRequest "GET" "" "")
+  expectEach [
+    ("status", expectEqual (statusOf reply) "200"),
+    ("version", expectEqual (stringFieldOf "version" reply) "test-driver"),
+  ]
 
 test "the health probe refuses POST, HEAD and DELETE with 405" = expectEach [
   (

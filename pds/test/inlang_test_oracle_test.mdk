@@ -100,7 +100,7 @@ suites =
       ("jwt_test", (32, NativeSpeed)),
       ("credential_test", (20, NativeSpeed)),
       ("session_routes_test", (49, NativeCapability)),
-      ("auth_seam_test", (32, NativeCapability)),
+      ("auth_seam_test", (36, NativeCapability)),
       ("blob_routes_test", (15, NativeCapability)),
       -- the native arm fails `allocBytes` scaling in "a decision's allocation
       -- cost does not scale 100x with other active identities", so this row
@@ -577,7 +577,7 @@ test "pds/test/credential_test.mdk executed >= 20 assertions" =
 test "pds/test/session_routes_test.mdk executed >= 49 assertions" =
   floorExpectation "session_routes_test"
 
-test "pds/test/auth_seam_test.mdk executed >= 32 assertions" =
+test "pds/test/auth_seam_test.mdk executed >= 36 assertions" =
   floorExpectation "auth_seam_test"
 
 test "pds/test/blob_routes_test.mdk executed >= 15 assertions" =
