@@ -87,6 +87,7 @@ import frontend.parser.{
   parseWithPositionsOpt,
   positionsDecls,
   DeclPos,
+  Positions,
   declPosNameLoc,
   declPosChildLocs,
 }
@@ -1348,6 +1349,26 @@ importWildGo ctx useEnv ((ns, name, originKey) :: rest) =
   let _ = hmSetC ctx useEnv (ns ++ sep ++ name) originKey
   importWildGo ctx useEnv rest
 
+-- Last parse per prelude slot, keyed by the FULL source string (never a path), so
+-- an edited prelude re-parses.  The cached value is a function of `src` alone
+-- (decls and positions); nothing downstream of seeding reads the parser's loc
+-- state without a fresh parse priming it.
+preludeParseRuntime : Ref (Option (String, Option (List Decl, Positions)))
+preludeParseRuntime = Ref None
+
+preludeParseCore : Ref (Option (String, Option (List Decl, Positions)))
+preludeParseCore = Ref None
+
+preludeParseMemo : String -> String -> Option (List Decl, Positions)
+preludeParseMemo mid src =
+  let slot = if mid == "runtime" then preludeParseRuntime else preludeParseCore
+  match !slot
+    Some (k, r) if k == src => r
+    _ =>
+      let r = parseWithPositionsOpt src
+      slot := Some (src, r)
+      r
+
 -- ── prelude seeding (core + runtime): export origins WITHOUT def recording ───
 -- F1: intra-project scope.  Prelude names resolve to stable `core`/`runtime`
 -- origin keys so uses group, but the PRELUDE's own decls record no def site, and
@@ -1356,7 +1377,7 @@ importWildGo ctx useEnv ((ns, name, originKey) :: rest) =
 -- location joining a prelude key, not a descent into stdlib, and it is what makes
 -- `references` on a prelude method show the impls the user actually wrote.
 seedPrelude : Ctx -> String -> String -> Unit
-seedPrelude ctx mid src = match parseWithPositionsOpt src
+seedPrelude ctx mid src = match preludeParseMemo mid src
   None => ()
   Some (decls, _) =>
     let expSet = collectExportedValues ctx decls
@@ -1443,17 +1464,24 @@ seedUseEnvPrelude ctx useEnv =
 indexModule : Ctx -> String -> String -> String -> Unit
 indexModule ctx mid uri src = match parseWithPositionsOpt src
   None => ()
-  Some (decls, positions) =>
-    let paired = zipL decls (positionsDecls positions)
-    let expSet = collectExportedValues ctx decls
-    let ownDefs = collectDefs ctx expSet mid uri paired
-    let useEnv = hmNew ()
-    let aliasM = hmNew ()
-    let _ = seedUseEnvPrelude ctx useEnv
-    let _ = addOwnToEnv ctx useEnv ownDefs
-    let _ = processImports ctx useEnv aliasM decls
-    let _ = registerExports ctx mid ownDefs decls
-    walkDecls (W ctx mid uri useEnv aliasM) paired
+  Some (decls, positions) => indexParsed ctx mid uri decls positions
+
+-- The indexing half of `indexModule`, over a module that is ALREADY parsed. The
+-- whole-project path parses each file once (in `topoVisit`) and indexes from
+-- that parse via `processParsed`. Nothing here reads the source text, so no
+-- `src` is taken.
+indexParsed : Ctx -> String -> String -> List Decl -> Positions -> Unit
+indexParsed ctx mid uri decls positions =
+  let paired = zipL decls (positionsDecls positions)
+  let expSet = collectExportedValues ctx decls
+  let ownDefs = collectDefs ctx expSet mid uri paired
+  let useEnv = hmNew ()
+  let aliasM = hmNew ()
+  let _ = seedUseEnvPrelude ctx useEnv
+  let _ = addOwnToEnv ctx useEnv ownDefs
+  let _ = processImports ctx useEnv aliasM decls
+  let _ = registerExports ctx mid ownDefs decls
+  walkDecls (W ctx mid uri useEnv aliasM) paired
 
 processModules : Ctx ->
   (String -> Option String) ->
@@ -1465,6 +1493,14 @@ processModules ctx read ((mid, path, _) :: rest) =
     None => ()
     Some src => indexModule ctx mid path src
   processModules ctx read rest
+
+-- The whole-project walk: `topoOrderModules` has already read and parsed every
+-- module, so this neither reads nor parses.
+processParsed : Ctx -> List (String, String, List Decl, Positions) -> Unit
+processParsed _ [] = ()
+processParsed ctx ((mid, path, decls, positions) :: rest) =
+  let _ = indexParsed ctx mid path decls positions
+  processParsed ctx rest
 
 getSrc : (String -> Option String) -> String -> <IO> Option String
 getSrc read path = match read path
@@ -1543,15 +1579,16 @@ noOverride _ = None
 -- reverse-dependent is never on the entry's own import closure). This section
 -- closes that gap: enumerate every `.mdk` file under the PROJECT ROOT
 -- (recursive `listDir`, F1-scoped — never descends into stdlib, which is a
--- SEPARATE root never nested under a project root) and feed the SAME
--- `processModules` walk `buildRefIndex` already uses, just over the FULL file
--- set instead of one entry's closure. F2 (best-effort) is inherited for free:
--- `processModules` -> `indexModule` already no-ops a file that fails to parse
--- (`parseWithPositionsOpt … None => ()`) — one broken sibling never aborts the
--- whole build, whole-project or entry-rooted alike.
+-- SEPARATE root never nested under a project root) and index the FULL file set
+-- instead of one entry's closure, through `processParsed` (the parsed half of
+-- the SAME `indexModule` `buildRefIndex` uses). F2 (best-effort): `topoVisit`
+-- drops a file that fails to read or parse, so it never reaches the
+-- accumulator — one broken sibling never aborts the whole build,
+-- whole-project or entry-rooted alike.
 --
--- LINEARITY: `processModules ctx read mods` is UNCHANGED (still one O(1)
--- hash/push per token, per file) — the only new cost is the recursive
+-- LINEARITY: `processParsed ctx mods` does the same per-file indexing work as
+-- `processModules` did (one O(1) hash/push per token, per file), with no second
+-- read or parse — the only new cost is the recursive
 -- directory walk itself, O(#dirs + #files) with an O(1) `Ref`-list push per
 -- discovered file, never a `List`-as-set/`++`-in-a-fold. Total build stays
 -- O(total project tokens); see test/diff_compiler_references_scaling.sh's
@@ -1620,9 +1657,10 @@ midPathsOf root =
 
 -- ── dependency-first ORDERING (the part `listDir` doesn't give you) ─────────
 --
--- `processModules`/`indexModule` (shared with entry-rooted `buildRefIndex`)
--- assume dependency-first order: `registerReExports`/`processImports` look up
--- an imported module's origin in `ctx.originOf`, which is only populated once
+-- `processParsed`/`indexParsed` (the project path; `processModules`/`indexModule`
+-- serve entry-rooted `buildRefIndex`) assume dependency-first order:
+-- `registerReExports`/`processImports` look up an imported module's origin in
+-- `ctx.originOf`, which is only populated once
 -- THAT module has itself been indexed (`registerOwnExports`). The entry-
 -- rooted loader's DFS guarantees this by construction (a module is only
 -- appended to its result after every import it walked); a plain `listDir`
@@ -1639,10 +1677,11 @@ midPathsOf root =
 -- an unreadable sibling) is simply not followed further (F2: best-effort,
 -- never fatal; a cycle is broken the same way — mark-before-recurse).
 --
--- COST: this parses every file ONCE here (to read its own `DUse` imports)
--- and `processModules` parses it AGAIN afterwards — a bounded 2x constant,
--- not a re-walk of OTHER files' work, so the build stays O(total project
--- tokens) (see test/diff_compiler_references_scaling.sh's `--project` run).
+-- COST: this is the ONLY read and parse of each project file. It parses every
+-- file here (to read its own `DUse` imports) and keeps that parse in the
+-- accumulator; `processParsed` indexes from it, so nothing is parsed again. The
+-- build stays O(total project tokens) (see
+-- test/diff_compiler_references_scaling.sh's `--project` run).
 -- The ordering pass's own hash-map ops are routed through the SAME `ctx`
 -- op-counting wrappers (`hmGetC`/`hmSetC`) as the rest of the build, so this
 -- cost is NOT invisible to `riOps` / the scaling gate.
@@ -1668,7 +1707,7 @@ topoVisitAll : Ctx ->
   (String -> Option String) ->
   HashMap String String ->
   HashMap String Unit ->
-  Ref (List (String, String, List Decl)) ->
+  Ref (List (String, String, List Decl, Positions)) ->
   List String ->
   <IO> Unit
 topoVisitAll _ _ _ _ _ [] = ()
@@ -1685,7 +1724,7 @@ topoVisit : Ctx ->
   (String -> Option String) ->
   HashMap String String ->
   HashMap String Unit ->
-  Ref (List (String, String, List Decl)) ->
+  Ref (List (String, String, List Decl, Positions)) ->
   String ->
   <IO> Unit
 topoVisit ctx read byMid visited acc mid = match hmGetC ctx visited mid
@@ -1698,18 +1737,19 @@ topoVisit ctx read byMid visited acc mid = match hmGetC ctx visited mid
         None => ()
         Some src => match parseWithPositionsOpt src
           None => ()
-          Some (decls, _) =>
+          Some (decls, positions) =>
             let _ =
               topoVisitAll ctx read byMid visited acc (directImportIds decls)
-            acc := (mid, path, decls) :: !acc
+            acc := (mid, path, decls, positions) :: !acc
 
 -- Order the whole-project file set dependency-first (see block comment
--- above). O(N) — each enumerated file is visited (parsed once, hashed twice)
--- exactly once, regardless of how many OTHER files import it.
+-- above). O(N) — each enumerated file is visited (read and parsed, hashed
+-- twice) exactly once, regardless of how many OTHER files import it. The
+-- result carries each module's parse, so indexing needs no second read.
 topoOrderModules : Ctx ->
   (String -> Option String) ->
   List (String, String) ->
-  <IO> List (String, String, List Decl)
+  <IO> List (String, String, List Decl, Positions)
 topoOrderModules ctx read midPaths =
   let byMid = hmNew ()
   let _ = registerMidPaths ctx byMid midPaths
@@ -1739,7 +1779,7 @@ buildRefIndexProject read projectRoot runtimeSrc coreSrc =
   let _ = ctx.opCnt := 0
   let midPaths = midPathsOf projectRoot
   let mods = topoOrderModules ctx read midPaths
-  let _ = processModules ctx read mods
+  let _ = processParsed ctx mods
   RefIndex { defs = ctx.defs, refs = ctx.refs, occ = ctx.occ, ops = !ctx.opCnt }
 
 -- Disk-only convenience (no editor-buffer overrides) — the CLI/probe entry.
