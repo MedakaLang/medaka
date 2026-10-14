@@ -1,5 +1,5 @@
 # META
-source_lines=1295
+source_lines=1297
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -1021,9 +1021,11 @@ concatLists (xs :: rest) = xs ++ concatLists rest
 -- `Name { a, b }` (all bare vars, no `=`) parses as ESetLit; when Name is a
 -- record type this is pun sugar for `Name { a = a, b = b }` → ERecordCreate.
 -- Runs before container-literal lowering so genuine Map/Set literals remain.
+-- With no record names no `ESetLit` can match, so the traversal is skipped.
 desugarRecordPuns : List Decl -> List Decl
-desugarRecordPuns prog =
-  mapProg (rewriteRecordPun (collectRecordNames prog)) prog
+desugarRecordPuns prog = match collectRecordNames prog
+  [] => prog
+  recordNames => mapProg (rewriteRecordPun recordNames) prog
 
 -- Names that can head a record-literal brace = every ConNamed constructor of a
 -- `data` decl (records are the `data X = { … }` short form, whose synthesized
@@ -1662,7 +1664,7 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DFunDef false "concatLists" ((PList)) (EListLit))
 (DFunDef false "concatLists" ((PCons (PVar "xs") (PVar "rest"))) (EBinOp "++" (EVar "xs") (EApp (EVar "concatLists") (EVar "rest"))))
 (DTypeSig false "desugarRecordPuns" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
-(DFunDef false "desugarRecordPuns" ((PVar "prog")) (EApp (EApp (EVar "mapProg") (EApp (EVar "rewriteRecordPun") (EApp (EVar "collectRecordNames") (EVar "prog")))) (EVar "prog")))
+(DFunDef false "desugarRecordPuns" ((PVar "prog")) (EMatch (EApp (EVar "collectRecordNames") (EVar "prog")) (arm (PList) () (EVar "prog")) (arm (PVar "recordNames") () (EApp (EApp (EVar "mapProg") (EApp (EVar "rewriteRecordPun") (EVar "recordNames"))) (EVar "prog")))))
 (DTypeSig false "collectRecordNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectRecordNames" ((PList)) (EListLit))
 (DFunDef false "collectRecordNames" ((PCons (PRec "DData" ((rf "dataCtors" (PVar "variants"))) false) (PVar "rest"))) (EBinOp "++" (EApp (EVar "conNamedCtorNames") (EVar "variants")) (EApp (EVar "collectRecordNames") (EVar "rest"))))
@@ -2140,7 +2142,7 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DFunDef false "concatLists" ((PList)) (EListLit))
 (DFunDef false "concatLists" ((PCons (PVar "xs") (PVar "rest"))) (EBinOp "++" (EVar "xs") (EApp (EVar "concatLists") (EVar "rest"))))
 (DTypeSig false "desugarRecordPuns" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
-(DFunDef false "desugarRecordPuns" ((PVar "prog")) (EApp (EApp (EVar "mapProg") (EApp (EVar "rewriteRecordPun") (EApp (EVar "collectRecordNames") (EVar "prog")))) (EVar "prog")))
+(DFunDef false "desugarRecordPuns" ((PVar "prog")) (EMatch (EApp (EVar "collectRecordNames") (EVar "prog")) (arm (PList) () (EVar "prog")) (arm (PVar "recordNames") () (EApp (EApp (EVar "mapProg") (EApp (EVar "rewriteRecordPun") (EVar "recordNames"))) (EVar "prog")))))
 (DTypeSig false "collectRecordNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectRecordNames" ((PList)) (EListLit))
 (DFunDef false "collectRecordNames" ((PCons (PRec "DData" ((rf "dataCtors" (PVar "variants"))) false) (PVar "rest"))) (EBinOp "++" (EApp (EVar "conNamedCtorNames") (EVar "variants")) (EApp (EVar "collectRecordNames") (EVar "rest"))))

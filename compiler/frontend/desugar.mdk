@@ -1017,9 +1017,11 @@ concatLists (xs :: rest) = xs ++ concatLists rest
 -- `Name { a, b }` (all bare vars, no `=`) parses as ESetLit; when Name is a
 -- record type this is pun sugar for `Name { a = a, b = b }` → ERecordCreate.
 -- Runs before container-literal lowering so genuine Map/Set literals remain.
+-- With no record names no `ESetLit` can match, so the traversal is skipped.
 desugarRecordPuns : List Decl -> List Decl
-desugarRecordPuns prog =
-  mapProg (rewriteRecordPun (collectRecordNames prog)) prog
+desugarRecordPuns prog = match collectRecordNames prog
+  [] => prog
+  recordNames => mapProg (rewriteRecordPun recordNames) prog
 
 -- Names that can head a record-literal brace = every ConNamed constructor of a
 -- `data` decl (records are the `data X = { … }` short form, whose synthesized
