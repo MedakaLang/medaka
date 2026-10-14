@@ -1,5 +1,5 @@
 # META
-source_lines=2168
+source_lines=2173
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -76,7 +76,7 @@ import types.typecheck.{
   checkOneSchemeFullK, ppSchemeNamed, ppSchemeNamedFull, currentLocalSchemes,
   currentLocalSchemesLoc, currentSeedSchemes
 }
-import tools.fmt.{formatSource}
+import tools.fmt.{formatSourceChecked}
 import tools.refindex.{RefIndex, buildRefIndexProject, binderAt, usesOf, defsOf}
 import list.{sortBy}
 import frontend.ast.{
@@ -225,21 +225,26 @@ docsLookup uri ((k, v) :: rest)
 -- whole document with the formatted source.  The replaced range is
 -- (0,0)..(lineCount+1, 0), using
 -- `nl = newline_count + 1` for the end line so every line (incl. the last) is
--- covered without knowing its width.  A formatter/parse failure yields [] here
--- rather than crashing (the compiler formatSource is total on parseable input;
--- a parse error short-circuits to []).
+-- covered without knowing its width.  A parse failure yields [] here: the source
+-- is lexed once and `formatSourceChecked` returns the parse error instead of
+-- panicking.
 fullDocRangeFmt : String -> Json
 fullDocRangeFmt src = jRange 0 0 (countLines src + 1) 0
 
 formattingEdits : String -> List Json
-formattingEdits src = match parseResult src
-  Err _ => []
-  Ok _ =>
-    let formatted = formatSource src
-    if formatted == src then
-      []
-    else
-      [jObject [("range", fullDocRangeFmt src), ("newText", JString formatted)]]
+formattingEdits src = match tokenizeWithOffsetPairs src
+  (toks, pairs) => match formatSourceChecked src toks pairs
+    Err _ => []
+    Ok formatted =>
+      if formatted == src then
+        []
+      else
+        [
+          jObject [
+            ("range", fullDocRangeFmt src),
+            ("newText", JString formatted),
+          ],
+        ]
 -- unparseable → no edits (client keeps buffer)
 
 -- ── identifier-at-cursor + occurrence scan (pure string ops) ────────────────
@@ -2184,7 +2189,7 @@ unit = ()
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFullK" false) (mem "ppSchemeNamed" false) (mem "ppSchemeNamedFull" false) (mem "currentLocalSchemes" false) (mem "currentLocalSchemesLoc" false) (mem "currentSeedSchemes" false))))
-(DUse false (UseGroup ("tools" "fmt") ((mem "formatSource" false))))
+(DUse false (UseGroup ("tools" "fmt") ((mem "formatSourceChecked" false))))
 (DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProject" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "Loc" true) (mem "Variant" false) (mem "ConPayload" true) (mem "Field" false) (mem "IfaceMethod" false) (mem "ImplMethod" false) (mem "LetBind" false) (mem "UsePath" true))))
@@ -2228,7 +2233,7 @@ unit = ()
 (DTypeSig false "fullDocRangeFmt" (TyFun (TyCon "String") (TyCon "Json")))
 (DFunDef false "fullDocRangeFmt" ((PVar "src")) (EApp (EApp (EApp (EApp (EVar "jRange") (ELit (LInt 0))) (ELit (LInt 0))) (EBinOp "+" (EApp (EVar "countLines") (EVar "src")) (ELit (LInt 1)))) (ELit (LInt 0))))
 (DTypeSig false "formattingEdits" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Json"))))
-(DFunDef false "formattingEdits" ((PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "formatted") (EApp (EVar "formatSource") (EVar "src"))) (DoExpr (EIf (EBinOp "==" (EVar "formatted") (EVar "src")) (EListLit) (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EVar "fullDocRangeFmt") (EVar "src"))) (ETuple (ELit (LString "newText")) (EApp (EVar "JString") (EVar "formatted"))))))))))))
+(DFunDef false "formattingEdits" ((PVar "src")) (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "toks") (PVar "pairs")) () (EMatch (EApp (EApp (EApp (EVar "formatSourceChecked") (EVar "src")) (EVar "toks")) (EVar "pairs")) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "formatted")) () (EIf (EBinOp "==" (EVar "formatted") (EVar "src")) (EListLit) (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EVar "fullDocRangeFmt") (EVar "src"))) (ETuple (ELit (LString "newText")) (EApp (EVar "JString") (EVar "formatted"))))))))))))
 (DTypeSig false "offsetOfLineCol" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "offsetOfLineCol" ((PVar "arr") (PVar "line") (PVar "col")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "offsetGo") (EVar "arr")) (EApp (EVar "arrayLength") (EVar "arr"))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "line")) (EVar "col")))
 (DTypeSig false "offsetGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))))))
@@ -2635,7 +2640,7 @@ unit = ()
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFullK" false) (mem "ppSchemeNamed" false) (mem "ppSchemeNamedFull" false) (mem "currentLocalSchemes" false) (mem "currentLocalSchemesLoc" false) (mem "currentSeedSchemes" false))))
-(DUse false (UseGroup ("tools" "fmt") ((mem "formatSource" false))))
+(DUse false (UseGroup ("tools" "fmt") ((mem "formatSourceChecked" false))))
 (DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProject" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "Loc" true) (mem "Variant" false) (mem "ConPayload" true) (mem "Field" false) (mem "IfaceMethod" false) (mem "ImplMethod" false) (mem "LetBind" false) (mem "UsePath" true))))
@@ -2679,7 +2684,7 @@ unit = ()
 (DTypeSig false "fullDocRangeFmt" (TyFun (TyCon "String") (TyCon "Json")))
 (DFunDef false "fullDocRangeFmt" ((PVar "src")) (EApp (EApp (EApp (EApp (EVar "jRange") (ELit (LInt 0))) (ELit (LInt 0))) (EBinOp "+" (EApp (EVar "countLines") (EVar "src")) (ELit (LInt 1)))) (ELit (LInt 0))))
 (DTypeSig false "formattingEdits" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Json"))))
-(DFunDef false "formattingEdits" ((PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "formatted") (EApp (EVar "formatSource") (EVar "src"))) (DoExpr (EIf (EBinOp "==" (EVar "formatted") (EVar "src")) (EListLit) (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EVar "fullDocRangeFmt") (EVar "src"))) (ETuple (ELit (LString "newText")) (EApp (EVar "JString") (EVar "formatted"))))))))))))
+(DFunDef false "formattingEdits" ((PVar "src")) (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "toks") (PVar "pairs")) () (EMatch (EApp (EApp (EApp (EVar "formatSourceChecked") (EVar "src")) (EVar "toks")) (EVar "pairs")) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "formatted")) () (EIf (EBinOp "==" (EVar "formatted") (EVar "src")) (EListLit) (EListLit (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "range")) (EApp (EVar "fullDocRangeFmt") (EVar "src"))) (ETuple (ELit (LString "newText")) (EApp (EVar "JString") (EVar "formatted"))))))))))))
 (DTypeSig false "offsetOfLineCol" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "offsetOfLineCol" ((PVar "arr") (PVar "line") (PVar "col")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "offsetGo") (EVar "arr")) (EApp (EVar "arrayLength") (EVar "arr"))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "line")) (EVar "col")))
 (DTypeSig false "offsetGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))))))
