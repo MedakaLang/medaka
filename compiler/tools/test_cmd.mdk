@@ -55,6 +55,7 @@ import tools.target_parse.{
   parseTargetResult,
   targetRaw,
   targetDesugared,
+  targetExamples,
 }
 import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
 import driver.loader.{
@@ -76,7 +77,6 @@ import types.typecheck.{
 import types.route_key.{withEvidencePreserved}
 import backend.private_mangle.{mangleCtorCollisionsPair}
 import frontend.marker.{declRefs}
-import frontend.lexer.{collectComments}
 import eval.eval.{
   Value,
   EvalEnv,
@@ -98,7 +98,6 @@ import tools.doctest.{
   RunResult(..),
   Engine(..),
   engineName,
-  extractExamples,
   buildSynthResults,
   buildSynthDecls,
   buildDetailsFrom,
@@ -428,7 +427,7 @@ pinIndexForTarget target userDecls = do
 -- deliberately still is.
 typecheckExempt : String -> List Decl -> String -> <IO> Bool
 typecheckExempt target userDecls tsrc
-  | isNonEmptyL (extractExamples (collectComments tsrc)) = False
+  | isNonEmptyL (targetExamples tsrc) = False
   | isNewVehiclePath target = False
   | otherwise = hasProps userDecls || hasTests userDecls
 
@@ -647,10 +646,7 @@ filterMatchedNothing : Option String -> String -> List Decl -> Bool
 filterMatchedNothing None _ _ = False
 filterMatchedNothing (Some sub) tsrc userDecls =
   not
-    (isNonEmptyL
-        (filterExamplesByName
-          (Some sub)
-          (extractExamples (collectComments tsrc)))
+    (isNonEmptyL (filterExamplesByName (Some sub) (targetExamples tsrc))
       || isNonEmptyL (filterPropsByName (Some sub) (filterProps userDecls))
       || isNonEmptyL (filterTestsByName (Some sub) (nativeRawTests tsrc)))
 
@@ -1013,7 +1009,7 @@ driveMulti : List Engine ->
   <IO> Bool
 driveMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases filterOpt userDecls exempt file index =
   currentEvalFile := target
-  let allExamples = extractExamples (collectComments tsrc)
+  let allExamples = targetExamples tsrc
   let examples = filterExamplesByName filterOpt allExamples
   let synthResults = buildSynthResults userDecls examples
   let synthDecls = buildSynthDecls synthResults
@@ -1089,8 +1085,7 @@ driveSingle : List Engine ->
   <IO> Bool
 driveSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases filterOpt userDecls file index =
   currentEvalFile := target
-  let examples =
-    filterExamplesByName filterOpt (extractExamples (collectComments tsrc))
+  let examples = filterExamplesByName filterOpt (targetExamples tsrc)
   if filterMatchedNothing filterOpt tsrc userDecls then
     let _ = filterMatchedNothingNotice target
     False
@@ -2018,7 +2013,7 @@ reportMulti : List Engine ->
   PinIndex ->
   <IO> (Option String, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
 reportMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases filterOpt includeTestDecls userDecls exempt file index =
-  let allExamples = extractExamples (collectComments tsrc)
+  let allExamples = targetExamples tsrc
   let examples = filterExamplesByName filterOpt allExamples
   let synthResults = buildSynthResults userDecls examples
   let prepared =
@@ -2088,8 +2083,7 @@ reportSingle : List Engine ->
   PinIndex ->
   <IO> (Option String, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
 reportSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases filterOpt includeTestDecls userDecls exempt file index =
-  let examples =
-    filterExamplesByName filterOpt (extractExamples (collectComments tsrc))
+  let examples = filterExamplesByName filterOpt (targetExamples tsrc)
   let doctestRuns =
     doctestReport
       engines

@@ -107,6 +107,18 @@ runtimeDependencyName nonce =
 export
 mintNonce : Unit -> <IO> String
 mintNonce _ = nonceBytes (osEntropyBytes 16) 0
+tokensRef : Ref (Option (String, (List Token, List (Int, Int))))
+tokensRef = Ref None
+
+-- `tokenizeWithOffsetPairs src`, held for the latest source: one probe build
+-- asks `freshProbeNonce` and `renameUserMain` about the same target text.
+probeTokens : String -> (List Token, List (Int, Int))
+probeTokens src = match !tokensRef
+  Some (key, toks) if key == src => toks
+  _ =>
+    let toks = tokenizeWithOffsetPairs src
+    tokensRef := Some (src, toks)
+    toks
 
 nonceBytes : Array Int -> Int -> String
 nonceBytes bytes i =
@@ -122,7 +134,7 @@ nonceBytes bytes i =
 export
 freshProbeNonce : String -> List String -> String -> String
 freshProbeNonce nonce prefixes source =
-  let (tokens, _) = tokenizeWithOffsetPairs source
+  let (tokens, _) = probeTokens source
   let occupied = occupiedNonceTokens nonce prefixes tokens omEmpty
   let index = freeNonceIndex occupied 0
   if index == 0 then nonce else "\{nonce}_\{intToString index}"
@@ -321,7 +333,7 @@ userMainName = "__probe_user_main__"
 export
 renameUserMain : String -> String
 renameUserMain src =
-  let (toks, spans) = tokenizeWithOffsetPairs src
+  let (toks, spans) = probeTokens src
   match mainHeadLines (lineStartsOf src) toks spans
     [] => src
     heads => joinNl (renameHeads 1 heads (splitNl src))
