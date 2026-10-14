@@ -5200,26 +5200,86 @@ emitBin e env op l r tag site
     let (lv, _) = emitExpr e env l
     let (rv, _) = emitExpr e env r
     emitCtorAlloc e "Cons" [lv, rv]
-  | op == "++" =
-    let (lv, lty) = emitExpr e env l
-    let (rv, _) = emitExpr e env r
-    let r2 = freshReg e
-    match lty
-      LTStr =>
-        let _ =
-          emit e "  \{r2} = call i64 @mdk_string_append(i64 \{lv}, i64 \{rv})"
-        (r2, LTStr)
-      LTCon =>
-        let _ =
-          emit e "  \{r2} = call i64 @mdk_list_append(i64 \{lv}, i64 \{rv})"
-        (r2, LTCon)
-      LTUnknown =>
-        let _ = emit e "  \{r2} = call i64 @mdk_append(i64 \{lv}, i64 \{rv})"
-        (r2, LTUnknown)
-      _ =>
-        let _ = emit e "  \{r2} = call i64 @mdk_append(i64 \{lv}, i64 \{rv})"
-        (r2, LTUnknown)
+  | op == "++" = emitConcatChain e env (flattenConcat l [r])
   | otherwise = gapE e ("unsupported binary operator '" ++ op ++ "'")
+
+-- the operands of a LEFT-nested `++` spine, left to right, given the already
+-- collected `rest` (the right-hand operands of the enclosing nodes).  Descends only
+-- through the left operand; any other node is one operand.  Inner nodes' tag/site
+-- are not used by `++`, so they are ignored.
+flattenConcat : CExpr -> List CExpr -> List CExpr
+flattenConcat (CBinPrim "++" x y _ _) rest = flattenConcat x (y :: rest)
+flattenConcat other rest = other :: rest
+
+-- `a ++ b ++ ...` (>= 2 operands, left to right).  The head's static LTy decides
+-- the lowering, and it is known only after the head is emitted, so the head is
+-- emitted first.  A String head with >= 3 operands becomes ONE
+-- @mdk_string_append_n over all operands (one allocation, one blit each).  Every
+-- other shape is the left fold of the 2-operand lowering below, which emits the
+-- same instructions in the same order as the old nested emitBin recursion did.
+emitConcatChain : Emit -> OrdMap (String, LTy) -> List CExpr -> (String, LTy)
+emitConcatChain e env (first :: rest) =
+  let (v0, t0) = emitExpr e env first
+  match t0
+    LTStr =>
+      if lengthS rest >= 2 then
+        emitStrConcatN e env v0 rest
+      else
+        concatFoldEmit e env v0 LTStr rest
+    _ => concatFoldEmit e env v0 t0 rest
+emitConcatChain e _ [] = gapE e "empty '++' operand chain"
+
+-- fold the remaining operands onto the accumulated value `v` of static kind `t`:
+-- one binary append per operand, the kind chosen as the old 2-operand `++` did.
+concatFoldEmit : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  LTy ->
+  List CExpr ->
+  (String, LTy)
+concatFoldEmit _ _ v t [] = (v, t)
+concatFoldEmit e env v t (x :: xs) =
+  let (rv, _) = emitExpr e env x
+  let r2 = freshReg e
+  match t
+    LTStr =>
+      let _ =
+        emit e "  \{r2} = call i64 @mdk_string_append(i64 \{v}, i64 \{rv})"
+      concatFoldEmit e env r2 LTStr xs
+    LTCon =>
+      let _ = emit e "  \{r2} = call i64 @mdk_list_append(i64 \{v}, i64 \{rv})"
+      concatFoldEmit e env r2 LTCon xs
+    _ =>
+      let _ = emit e "  \{r2} = call i64 @mdk_append(i64 \{v}, i64 \{rv})"
+      concatFoldEmit e env r2 LTUnknown xs
+
+-- the N-ary String chain: operands emitted in order (the head already is `v0`),
+-- their words stored in an argv alloca, then one runtime call.  Same shape as
+-- emitApplyRuntime.
+emitStrConcatN : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  List CExpr ->
+  (String, LTy)
+emitStrConcatN e env v0 rest =
+  let ops = v0 :: emitOperandWords e env rest
+  let n = lengthS ops
+  let arr = freshReg e
+  let _ = emit e "  \{arr} = alloca i64, i64 \{intToString n}"
+  let _ = storeArgv e arr ops 0
+  let r = freshReg e
+  let _ =
+    emit
+      e
+      "  \{r} = call i64 @mdk_string_append_n(i64 \{intToString n}, ptr \{arr})"
+  (r, LTStr)
+
+-- emit each expression strictly left to right, returning the operand words.
+emitOperandWords : Emit -> OrdMap (String, LTy) -> List CExpr -> List String
+emitOperandWords _ _ [] = []
+emitOperandWords e env (x :: xs) =
+  let (v, _) = emitExpr e env x
+  v :: emitOperandWords e env xs
 -- LTUnknown: the left operand is itself a runtime-dispatched-append result
 -- (a CHAINED `++`, e.g. `a ++ b ++ c`).  Its kind is genuinely unknown — it
 -- may be a String OR a list (typecheck.mdk's `freeEffvars` builds `List Int`

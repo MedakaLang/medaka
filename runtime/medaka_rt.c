@@ -1334,6 +1334,35 @@ long long mdk_string_append(long long a, long long b) {
   return (long long)cell;
 }
 
+/* Append n String cells in one allocation: the emitter's left-nested `++` chain
+   `a ++ b ++ c ...` with three or more String operands (llvm_emit.mdk emitBin).
+   argv[i] is the i-th operand's cell word, in left-to-right order.  Same invariant
+   as mdk_string_append above: the codepoint count is additive over the operands,
+   so the result's count is the sum of each operand's stored count.  One atomic
+   allocation and one blit per operand, instead of n-1 allocations and a re-copy
+   of the growing prefix. */
+long long mdk_string_append_n(long long n, const long long *argv) {
+  long long total = 0;
+  long long cps = 0;
+  for (long long i = 0; i < n; i++) {
+    const long long *s = (const long long *)argv[i];
+    total += s[1];
+    cps += s[2];
+  }
+  char *cell = (char *)mdk_alloc_atomic(24 + total + 1);
+  ((long long *)cell)[0] = MDK_STR_TAG;
+  ((long long *)cell)[1] = total;
+  ((long long *)cell)[2] = cps;
+  char *dst = cell + 24;
+  for (long long i = 0; i < n; i++) {
+    const long long *s = (const long long *)argv[i];
+    memcpy(dst, (const char *)s + 24, (size_t)s[1]);
+    dst += s[1];
+  }
+  cell[24 + total] = '\0';
+  return (long long)cell;
+}
+
 /* Append two persistent lists (++ on List, E2a).
    Walks xs collecting heads into a stack array, then conses them onto ys
    back-to-front so the result is xs ++ ys.  ys is shared (not copied). */
