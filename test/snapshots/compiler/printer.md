@@ -1,5 +1,5 @@
 # META
-source_lines=2680
+source_lines=2681
 stages=DESUGAR,MARK
 # SOURCE
 -- Pretty printer for Medaka, producing parseable source from the AST
@@ -2509,7 +2509,8 @@ propParamDoc : PropParam -> Doc
 propParamDoc (PropParam x _ ty) = text " (\{x} : \{ppTy ty})"
 
 attrDoc : Attr -> Doc
-attrDoc (AttrDeprecated msg) =
+attrDoc (AttrDeprecated None) = Cat (text "@deprecated") Hardline
+attrDoc (AttrDeprecated (Some msg)) =
   Cat (text ("@deprecated " ++ escStringLit msg)) Hardline
 attrDoc AttrInline = Cat (text "@inline") Hardline
 attrDoc AttrMustUse = Cat (text "@must_use") Hardline
@@ -3560,7 +3561,8 @@ effAxesDoc axes =
 (DTypeSig false "propParamDoc" (TyFun (TyCon "PropParam") (TyCon "Doc")))
 (DFunDef false "propParamDoc" ((PCon "PropParam" (PVar "x") PWild (PVar "ty"))) (EApp (EVar "text") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EVar "display") (EVar "x"))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "ppTy") (EVar "ty")))) (ELit (LString ")")))))
 (DTypeSig false "attrDoc" (TyFun (TyCon "Attr") (TyCon "Doc")))
-(DFunDef false "attrDoc" ((PCon "AttrDeprecated" (PVar "msg"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EBinOp "++" (ELit (LString "@deprecated ")) (EApp (EVar "escStringLit") (EVar "msg"))))) (EVar "Hardline")))
+(DFunDef false "attrDoc" ((PCon "AttrDeprecated" (PCon "None"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "@deprecated")))) (EVar "Hardline")))
+(DFunDef false "attrDoc" ((PCon "AttrDeprecated" (PCon "Some" (PVar "msg")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EBinOp "++" (ELit (LString "@deprecated ")) (EApp (EVar "escStringLit") (EVar "msg"))))) (EVar "Hardline")))
 (DFunDef false "attrDoc" ((PCon "AttrInline")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "@inline")))) (EVar "Hardline")))
 (DFunDef false "attrDoc" ((PCon "AttrMustUse")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "@must_use")))) (EVar "Hardline")))
 (DFunDef false "attrDoc" ((PCon "AttrNoInline")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "@noinline")))) (EVar "Hardline")))
@@ -4514,7 +4516,8 @@ effAxesDoc axes =
 (DTypeSig false "propParamDoc" (TyFun (TyCon "PropParam") (TyCon "Doc")))
 (DFunDef false "propParamDoc" ((PCon "PropParam" (PVar "x") PWild (PVar "ty"))) (EApp (EVar "text") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString " : "))) (EApp (EMethodRef "display") (EApp (EVar "ppTy") (EVar "ty")))) (ELit (LString ")")))))
 (DTypeSig false "attrDoc" (TyFun (TyCon "Attr") (TyCon "Doc")))
-(DFunDef false "attrDoc" ((PCon "AttrDeprecated" (PVar "msg"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EBinOp "++" (ELit (LString "@deprecated ")) (EApp (EVar "escStringLit") (EVar "msg"))))) (EVar "Hardline")))
+(DFunDef false "attrDoc" ((PCon "AttrDeprecated" (PCon "None"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "@deprecated")))) (EVar "Hardline")))
+(DFunDef false "attrDoc" ((PCon "AttrDeprecated" (PCon "Some" (PVar "msg")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EBinOp "++" (ELit (LString "@deprecated ")) (EApp (EVar "escStringLit") (EVar "msg"))))) (EVar "Hardline")))
 (DFunDef false "attrDoc" ((PCon "AttrInline")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "@inline")))) (EVar "Hardline")))
 (DFunDef false "attrDoc" ((PCon "AttrMustUse")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "@must_use")))) (EVar "Hardline")))
 (DFunDef false "attrDoc" ((PCon "AttrNoInline")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "@noinline")))) (EVar "Hardline")))

@@ -1231,6 +1231,9 @@ baz : Int -> Int
 baz x = x
 ```
 
+The names are `deprecated`, `inline`, `must_use` and `noinline`. Any other name is
+a parse error. `@deprecated` takes its message optionally, and the others take none.
+
 `@noinline` keeps a top-level function a separate symbol in a native binary:
 every define the LLVM backend emits for it, its float and raw workers
 included, carries LLVM's `noinline`, so a check that reads its machine code

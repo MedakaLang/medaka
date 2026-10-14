@@ -1,9 +1,0 @@
-@foo
-double : Int -> Int
-double x = x * 2
-
-@deprecatd "use triple"
-halve : Int -> Int
-halve x = x / 2
-
-main = println (double (halve 4))

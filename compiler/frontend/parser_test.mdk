@@ -4,7 +4,7 @@
    binary-operator ladder: precedence, associativity, and an operator whose
    right operand fails. -}
 
-import frontend.ast.{Expr(..), Decl(..)}
+import frontend.ast.{Expr(..), Decl(..), Attr(..)}
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
 import frontend.parser.{
   PR(..),
@@ -22,7 +22,8 @@ import frontend.parser.{
   prescanErrorPairs,
 }
 import test.{
-  expectEqual, expectEach, expectAll, expectSome, expectNone, Expectation
+  expectEqual, expectEach, expectAll, expectSome, expectNone, expectTrue,
+  Expectation
 }
 import frontend.parser as P
 
@@ -311,3 +312,68 @@ test "prescanError is silent on a clean program and on a record used as an ident
     expectNone (prescanVerdict "main = println 1\n"),
     expectNone (prescanVerdict "record = 3\n\nmain = println 1\n"),
   ]
+
+-- ── declaration attributes ────────────────────────────────────────────────
+-- An attribute name is one of the four the parser knows, or a located error.
+-- Each outcome is rendered as text so a wrong one shows in the assertion diff.
+attrText : Attr -> String
+attrText (AttrDeprecated None) = "@deprecated"
+attrText (AttrDeprecated (Some msg)) = "@deprecated \"\{msg}\""
+attrText AttrInline = "@inline"
+attrText AttrMustUse = "@must_use"
+attrText AttrNoInline = "@noinline"
+
+declAttrText : List Decl -> String
+declAttrText ((DAttrib [a] _) :: _) = attrText a
+declAttrText _ = "no single attribute"
+
+attrOutcome : String -> String
+attrOutcome src = match parseResult src
+  Err e =>
+    "error at \{parseErrorLine e}:\{parseErrorCol e}: \{parseErrorMessage e}"
+  Ok ds => declAttrText ds
+
+parsesOk : String -> Bool
+parsesOk src = match parseResult src
+  Ok _ => True
+  Err _ => False
+
+test "a bare @deprecated keeps its spelling as AttrDeprecated None" =
+  expectEqual
+    "@deprecated"
+    (attrOutcome "@deprecated\nold : Int -> Int\nold x = x\n")
+
+test "@deprecated with a message keeps the message" =
+  expectEqual
+    "@deprecated \"use new\""
+    (attrOutcome "@deprecated \"use new\"\nold : Int -> Int\nold x = x\n")
+
+test "the known bare attributes parse to themselves" = expectAll [
+  expectEqual "@inline" (attrOutcome "@inline\nf : Int -> Int\nf x = x\n"),
+  expectEqual "@must_use" (attrOutcome "@must_use\nf : Int -> Int\nf x = x\n"),
+  expectEqual "@noinline" (attrOutcome "@noinline\nf : Int -> Int\nf x = x\n"),
+]
+
+test "an unknown attribute name is a located error, never @inline" =
+  expectEqual
+    "error at 1:0: unknown declaration attribute `@foo`; the attributes are `@deprecated \"msg\"`, `@inline`, `@must_use` and `@noinline`"
+    (attrOutcome "@foo\ndouble : Int -> Int\ndouble x = x * 2\n")
+
+test "a misspelt @deprecated is a located error that names the misspelling" =
+  expectEqual
+    "error at 3:0: unknown declaration attribute `@deprecatd`; the attributes are `@deprecated \"msg\"`, `@inline`, `@must_use` and `@noinline`"
+    (attrOutcome
+      "main = println 1\n\n@deprecatd \"use triple\"\nhalve : Int -> Int\nhalve x = x / 2\n")
+
+test "an attribute that takes no message is an error when given one" =
+  expectEqual
+    "error at 1:0: `@inline` takes no message"
+    (attrOutcome "@inline \"use x\"\nf : Int -> Int\nf x = x\n")
+
+test "a second authority qualifier after a type is refused at that @" =
+  expectEqual
+    "error at 1:45: a type takes one authority qualifier"
+    (attrOutcome "idp : (p : String) -> <FileRead p> String @p @p\nidp p = p\n")
+
+test "a single authority qualifier before an attribute line still parses" =
+  expectTrue (parsesOk "f : (p : String) -> String @p\n@inline\nf s = s\n")
