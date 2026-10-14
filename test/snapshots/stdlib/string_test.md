@@ -1,5 +1,5 @@
 # META
-source_lines=680
+source_lines=885
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -10,8 +10,8 @@ stages=DESUGAR,MARK
 import string.{
   byteLength, center, countOccurrences, drop, endsWith, fromChars, indexOf,
   join, lastIndexOf, lines, padLeft, padRight, replace, replaceAll, reverse,
-  splitAt, startsWith, stripPrefix, stripSuffix, take, toInt, trim, trimLeft,
-  trimRight, unlines, unwords, utf8ByteLength
+  splitAt, startsWith, stripPrefix, stripSuffix, take, toInt, toLower, toUpper,
+  trim, trimLeft, trimRight, unlines, unwords, utf8ByteLength
 }
 import test.{expectEqual, expectFalse, expectTrue}
 
@@ -682,8 +682,213 @@ test "join with an empty separator keeps an exact codepoint length" =
 
 test "reverse keeps an exact codepoint length on multibyte text" =
   expectEqual 4 (stringLength (reverse "é日→😀"))
+
+-- stringToChars: the Array of Char the extern builds.  The codepoint cases pin
+-- every element, so a byte read where a codepoint belongs shows up.
+
+charCodesFrom : Array Char -> Int -> List Int
+charCodesFrom a i
+  | i >= arrayLength a = []
+  | otherwise = charCode (arrayGetUnsafe i a) :: charCodesFrom a (i + 1)
+
+charCodesOf : String -> List Int
+charCodesOf s = charCodesFrom (stringToChars s) 0
+
+test "stringToChars of the empty string is an empty array" =
+  expectEqual 0 (arrayLength (stringToChars ""))
+
+test "stringToChars of the empty string round-trips" =
+  expectEqual "" (stringFromChars (stringToChars ""))
+
+test "stringToChars of ASCII yields one Char per byte" =
+  expectEqual [104, 101, 108, 108, 111] (charCodesOf "hello")
+
+test "stringToChars of a long ASCII string keeps its length" =
+  expectEqual
+    40
+    (arrayLength (stringToChars "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"))
+
+test "stringToChars of a long ASCII string round-trips" =
+  expectEqual
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"
+    (stringFromChars (stringToChars "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"))
+
+test "stringToChars of a 2-byte-only string" =
+  expectEqual [233, 26085] (charCodesOf "é日")
+
+test "stringToChars of a 4-byte-only string" =
+  expectEqual [128512, 127881] (charCodesOf "😀🎉")
+
+test "stringToChars of a mixed 1/2/3/4-byte string yields codepoints" =
+  expectEqual [97, 233, 8364, 128512, 98] (charCodesOf "aé€😀b")
+
+test "stringToChars of a mixed string round-trips" =
+  expectEqual "aé€😀b" (stringFromChars (stringToChars "aé€😀b"))
+
+test "stringToChars with a non-ASCII lead byte then ASCII" =
+  expectEqual [233, 97, 98, 99] (charCodesOf "éabc")
+
+test "stringToChars with ASCII then a 3-byte tail" =
+  expectEqual [97, 98, 99, 8364] (charCodesOf "abc€")
+
+-- # Native searches over haystacks longer than one 8-byte block
+
+alphabet36 : String
+alphabet36 = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+test "indexOf finds a needle at the start of a long string" =
+  expectEqual (Some 0) (indexOf "abc" alphabet36)
+
+test "indexOf finds a needle in the middle of a long string" =
+  expectEqual (Some 12) (indexOf "mno" alphabet36)
+
+test "indexOf finds a needle at the end of a long string" =
+  expectEqual (Some 33) (indexOf "789" alphabet36)
+
+test "indexOf misses a needle absent from a long string" =
+  expectEqual None (indexOf "9a" alphabet36)
+
+test "lastIndexOf and countOccurrences find one hit at the end" =
+  expectEqual
+    (Some 33, 1)
+    (lastIndexOf "789" alphabet36, countOccurrences "789" alphabet36)
+
+test "an empty needle on a long string is at 0, at the end, and counts 0" =
+  expectEqual
+    (Some 0, Some 36, 0)
+    (
+      indexOf "" alphabet36,
+      lastIndexOf "" alphabet36,
+      countOccurrences "" alphabet36,
+    )
+
+test "a needle equal to a long haystack hits once at 0" =
+  expectEqual
+    (Some 0, Some 0, 1, True)
+    (
+      indexOf alphabet36 alphabet36,
+      lastIndexOf alphabet36 alphabet36,
+      countOccurrences alphabet36 alphabet36,
+      startsWith alphabet36 alphabet36,
+    )
+
+test "a needle longer than a long haystack misses everywhere" =
+  let longer = alphabet36 ++ "!"
+  expectEqual
+    (None, None, 0, False, False)
+    (
+      indexOf longer alphabet36,
+      lastIndexOf longer alphabet36,
+      countOccurrences longer alphabet36,
+      startsWith longer alphabet36,
+      endsWith longer alphabet36,
+    )
+
+test "countOccurrences of an overlapping run takes non-overlapping matches" =
+  let run = "aaaaaaaaaaaaaaaaaaaaa"
+  expectEqual
+    (Some 0, Some (stringLength run - 3), stringLength run / 3)
+    (
+      indexOf "aaa" run,
+      lastIndexOf "aaa" run,
+      countOccurrences "aaa" run,
+    )
+
+test "lastIndexOf finds the end hit across a block boundary" =
+  let s = "abxxxxxxxxxxxxxxxxxxxxxxxxab"
+  expectEqual
+    (Some 0, Some (stringLength s - 2), 2)
+    (indexOf "ab" s, lastIndexOf "ab" s, countOccurrences "ab" s)
+
+test "a window whose first and last bytes match but whose middle does not" =
+  let hay = "aYbaYbaXb" ++ "qqqqqqqqqq"
+  expectEqual (Some 6, 1) (indexOf "aXb" hay, countOccurrences "aXb" hay)
+
+test "indexOf of a multibyte needle past a block returns a codepoint index" =
+  let s = "abcdefgé日xyz"
+  expectEqual
+    (Some 8, Some 9, Some 7)
+    (indexOf "日" s, indexOf "xyz" s, lastIndexOf "é" s)
+
+test "multibyte needles on a long multibyte string" =
+  let t = "日本語日本語日本語日本語"
+  expectEqual
+    (Some 2, Some 8, 3)
+    (indexOf "語日" t, lastIndexOf "語日" t, countOccurrences "語日" t)
+
+test "startsWith and endsWith on a long string" =
+  expectEqual
+    (True, True, False, False)
+    (
+      startsWith "abcdefghi" alphabet36,
+      endsWith "6789" alphabet36,
+      startsWith "bcd" alphabet36,
+      endsWith "abc" alphabet36,
+    )
+
+prop "indexOf of a prefix is 0" (s : String) =
+  indexOf (stringSlice 0 3 s) s == Some 0
+
+prop "lastIndexOf of a two-codepoint suffix ends at the end" (s : String) =
+  if stringLength s < 2 then
+    True
+  else
+    lastIndexOf (stringSlice (stringLength s - 2) (stringLength s) s) s
+      == Some (stringLength s - 2)
+
+-- # Native concat, case map and charToStr
+--
+-- Each assertion pairs the string with its stringLength, because the codepoint
+-- count stored in the cell is what stringLength reads back.
+
+strAndLen : String -> (String, Int)
+strAndLen s = (s, stringLength s)
+
+test "stringConcat of no strings is empty" =
+  expectEqual ("", 0) (strAndLen (stringConcat []))
+
+test "stringConcat of one empty string is empty" =
+  expectEqual ("", 0) (strAndLen (stringConcat [""]))
+
+test "stringConcat of ASCII strings" =
+  expectEqual ("abcdef", 6) (strAndLen (stringConcat ["ab", "cd", "ef"]))
+
+test "stringConcat skips empty pieces" =
+  expectEqual ("é日", 2) (strAndLen (stringConcat ["", "é", "", "日"]))
+
+test "stringConcat of mixed multibyte pieces counts codepoints" =
+  expectEqual ("é日本😀x", 5) (strAndLen (stringConcat ["é", "日本", "😀", "x"]))
+
+test "toUpper of ASCII" =
+  expectEqual ("HELLO, WORLD", 12) (strAndLen (toUpper "hello, world"))
+
+test "toLower of ASCII" = expectEqual ("hello", 5) (strAndLen (toLower "HeLLo"))
+
+test "toUpper of mixed text leaves multibyte codepoints alone" =
+  expectEqual ("HéLLO 日本 😀 ABC", 14) (strAndLen (toUpper "héllo 日本 😀 abc"))
+
+test "toLower of mixed text leaves multibyte codepoints alone" =
+  expectEqual ("École 日本 😀 abc", 14) (strAndLen (toLower "ÉCOLE 日本 😀 ABC"))
+
+test "toUpper of unchanged multibyte text" =
+  expectEqual ("日本語 é 😀", 7) (strAndLen (toUpper "日本語 é 😀"))
+
+test "toLower of unchanged multibyte text" =
+  expectEqual ("日本語ÉÈ", 5) (strAndLen (toLower "日本語ÉÈ"))
+
+test "charToStr of an ASCII char" =
+  expectEqual ("a", 1) (strAndLen (charToStr 'a'))
+
+test "charToStr of a two-byte char" =
+  expectEqual ("é", 1) (strAndLen (charToStr 'é'))
+
+test "charToStr of a three-byte char" =
+  expectEqual ("日", 1) (strAndLen (charToStr '日'))
+
+test "charToStr of a four-byte char" =
+  expectEqual ("😀", 1) (strAndLen (charToStr '😀'))
 # DESUGAR
-(DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
+(DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -862,8 +1067,58 @@ test "reverse keeps an exact codepoint length on multibyte text" =
 (DTest false "join keeps an exact codepoint length on multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LInt 7))) (EApp (EVar "stringLength") (EApp (EApp (EVar "join") (ELit (LString "→"))) (EListLit (ELit (LString "é")) (ELit (LString "日本")) (ELit (LString "")) (ELit (LString "x")))))))
 (DTest false "join with an empty separator keeps an exact codepoint length" (EApp (EApp (EVar "expectEqual") (ELit (LInt 2))) (EApp (EVar "stringLength") (EApp (EApp (EVar "join") (ELit (LString ""))) (EListLit (ELit (LString "é")) (ELit (LString "日")))))))
 (DTest false "reverse keeps an exact codepoint length on multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LInt 4))) (EApp (EVar "stringLength") (EApp (EVar "reverse") (ELit (LString "é日→😀"))))))
+(DTypeSig false "charCodesFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "charCodesFrom" ((PVar "a") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "a"))) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EApp (EVar "charCodesFrom") (EVar "a")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "charCodesOf" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))))
+(DFunDef false "charCodesOf" ((PVar "s")) (EApp (EApp (EVar "charCodesFrom") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))))
+(DTest false "stringToChars of the empty string is an empty array" (EApp (EApp (EVar "expectEqual") (ELit (LInt 0))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (ELit (LString ""))))))
+(DTest false "stringToChars of the empty string round-trips" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EVar "stringFromChars") (EApp (EVar "stringToChars") (ELit (LString ""))))))
+(DTest false "stringToChars of ASCII yields one Char per byte" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 104)) (ELit (LInt 101)) (ELit (LInt 108)) (ELit (LInt 108)) (ELit (LInt 111)))) (EApp (EVar "charCodesOf") (ELit (LString "hello")))))
+(DTest false "stringToChars of a long ASCII string keeps its length" (EApp (EApp (EVar "expectEqual") (ELit (LInt 40))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (ELit (LString "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"))))))
+(DTest false "stringToChars of a long ASCII string round-trips" (EApp (EApp (EVar "expectEqual") (ELit (LString "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"))) (EApp (EVar "stringFromChars") (EApp (EVar "stringToChars") (ELit (LString "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"))))))
+(DTest false "stringToChars of a 2-byte-only string" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 233)) (ELit (LInt 26085)))) (EApp (EVar "charCodesOf") (ELit (LString "é日")))))
+(DTest false "stringToChars of a 4-byte-only string" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 128512)) (ELit (LInt 127881)))) (EApp (EVar "charCodesOf") (ELit (LString "😀🎉")))))
+(DTest false "stringToChars of a mixed 1/2/3/4-byte string yields codepoints" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 97)) (ELit (LInt 233)) (ELit (LInt 8364)) (ELit (LInt 128512)) (ELit (LInt 98)))) (EApp (EVar "charCodesOf") (ELit (LString "aé€😀b")))))
+(DTest false "stringToChars of a mixed string round-trips" (EApp (EApp (EVar "expectEqual") (ELit (LString "aé€😀b"))) (EApp (EVar "stringFromChars") (EApp (EVar "stringToChars") (ELit (LString "aé€😀b"))))))
+(DTest false "stringToChars with a non-ASCII lead byte then ASCII" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 233)) (ELit (LInt 97)) (ELit (LInt 98)) (ELit (LInt 99)))) (EApp (EVar "charCodesOf") (ELit (LString "éabc")))))
+(DTest false "stringToChars with ASCII then a 3-byte tail" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 97)) (ELit (LInt 98)) (ELit (LInt 99)) (ELit (LInt 8364)))) (EApp (EVar "charCodesOf") (ELit (LString "abc€")))))
+(DTypeSig false "alphabet36" (TyCon "String"))
+(DFunDef false "alphabet36" () (ELit (LString "abcdefghijklmnopqrstuvwxyz0123456789")))
+(DTest false "indexOf finds a needle at the start of a long string" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 0)))) (EApp (EApp (EVar "indexOf") (ELit (LString "abc"))) (EVar "alphabet36"))))
+(DTest false "indexOf finds a needle in the middle of a long string" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 12)))) (EApp (EApp (EVar "indexOf") (ELit (LString "mno"))) (EVar "alphabet36"))))
+(DTest false "indexOf finds a needle at the end of a long string" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 33)))) (EApp (EApp (EVar "indexOf") (ELit (LString "789"))) (EVar "alphabet36"))))
+(DTest false "indexOf misses a needle absent from a long string" (EApp (EApp (EVar "expectEqual") (EVar "None")) (EApp (EApp (EVar "indexOf") (ELit (LString "9a"))) (EVar "alphabet36"))))
+(DTest false "lastIndexOf and countOccurrences find one hit at the end" (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 33))) (ELit (LInt 1)))) (ETuple (EApp (EApp (EVar "lastIndexOf") (ELit (LString "789"))) (EVar "alphabet36")) (EApp (EApp (EVar "countOccurrences") (ELit (LString "789"))) (EVar "alphabet36")))))
+(DTest false "an empty needle on a long string is at 0, at the end, and counts 0" (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 0))) (EApp (EVar "Some") (ELit (LInt 36))) (ELit (LInt 0)))) (ETuple (EApp (EApp (EVar "indexOf") (ELit (LString ""))) (EVar "alphabet36")) (EApp (EApp (EVar "lastIndexOf") (ELit (LString ""))) (EVar "alphabet36")) (EApp (EApp (EVar "countOccurrences") (ELit (LString ""))) (EVar "alphabet36")))))
+(DTest false "a needle equal to a long haystack hits once at 0" (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 0))) (EApp (EVar "Some") (ELit (LInt 0))) (ELit (LInt 1)) (EVar "True"))) (ETuple (EApp (EApp (EVar "indexOf") (EVar "alphabet36")) (EVar "alphabet36")) (EApp (EApp (EVar "lastIndexOf") (EVar "alphabet36")) (EVar "alphabet36")) (EApp (EApp (EVar "countOccurrences") (EVar "alphabet36")) (EVar "alphabet36")) (EApp (EApp (EVar "startsWith") (EVar "alphabet36")) (EVar "alphabet36")))))
+(DTest false "a needle longer than a long haystack misses everywhere" (EBlock (DoLet false false (PVar "longer") (EBinOp "++" (EVar "alphabet36") (ELit (LString "!")))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (EVar "None") (EVar "None") (ELit (LInt 0)) (EVar "False") (EVar "False"))) (ETuple (EApp (EApp (EVar "indexOf") (EVar "longer")) (EVar "alphabet36")) (EApp (EApp (EVar "lastIndexOf") (EVar "longer")) (EVar "alphabet36")) (EApp (EApp (EVar "countOccurrences") (EVar "longer")) (EVar "alphabet36")) (EApp (EApp (EVar "startsWith") (EVar "longer")) (EVar "alphabet36")) (EApp (EApp (EVar "endsWith") (EVar "longer")) (EVar "alphabet36")))))))
+(DTest false "countOccurrences of an overlapping run takes non-overlapping matches" (EBlock (DoLet false false (PVar "run") (ELit (LString "aaaaaaaaaaaaaaaaaaaaa"))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 0))) (EApp (EVar "Some") (EBinOp "-" (EApp (EVar "stringLength") (EVar "run")) (ELit (LInt 3)))) (EBinOp "/" (EApp (EVar "stringLength") (EVar "run")) (ELit (LInt 3))))) (ETuple (EApp (EApp (EVar "indexOf") (ELit (LString "aaa"))) (EVar "run")) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aaa"))) (EVar "run")) (EApp (EApp (EVar "countOccurrences") (ELit (LString "aaa"))) (EVar "run")))))))
+(DTest false "lastIndexOf finds the end hit across a block boundary" (EBlock (DoLet false false (PVar "s") (ELit (LString "abxxxxxxxxxxxxxxxxxxxxxxxxab"))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 0))) (EApp (EVar "Some") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 2)))) (ELit (LInt 2)))) (ETuple (EApp (EApp (EVar "indexOf") (ELit (LString "ab"))) (EVar "s")) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "ab"))) (EVar "s")) (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")))))))
+(DTest false "a window whose first and last bytes match but whose middle does not" (EBlock (DoLet false false (PVar "hay") (EBinOp "++" (ELit (LString "aYbaYbaXb")) (ELit (LString "qqqqqqqqqq")))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 6))) (ELit (LInt 1)))) (ETuple (EApp (EApp (EVar "indexOf") (ELit (LString "aXb"))) (EVar "hay")) (EApp (EApp (EVar "countOccurrences") (ELit (LString "aXb"))) (EVar "hay")))))))
+(DTest false "indexOf of a multibyte needle past a block returns a codepoint index" (EBlock (DoLet false false (PVar "s") (ELit (LString "abcdefgé日xyz"))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 8))) (EApp (EVar "Some") (ELit (LInt 9))) (EApp (EVar "Some") (ELit (LInt 7))))) (ETuple (EApp (EApp (EVar "indexOf") (ELit (LString "日"))) (EVar "s")) (EApp (EApp (EVar "indexOf") (ELit (LString "xyz"))) (EVar "s")) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (EVar "s")))))))
+(DTest false "multibyte needles on a long multibyte string" (EBlock (DoLet false false (PVar "t") (ELit (LString "日本語日本語日本語日本語"))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 2))) (EApp (EVar "Some") (ELit (LInt 8))) (ELit (LInt 3)))) (ETuple (EApp (EApp (EVar "indexOf") (ELit (LString "語日"))) (EVar "t")) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "語日"))) (EVar "t")) (EApp (EApp (EVar "countOccurrences") (ELit (LString "語日"))) (EVar "t")))))))
+(DTest false "startsWith and endsWith on a long string" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "True") (EVar "True") (EVar "False") (EVar "False"))) (ETuple (EApp (EApp (EVar "startsWith") (ELit (LString "abcdefghi"))) (EVar "alphabet36")) (EApp (EApp (EVar "endsWith") (ELit (LString "6789"))) (EVar "alphabet36")) (EApp (EApp (EVar "startsWith") (ELit (LString "bcd"))) (EVar "alphabet36")) (EApp (EApp (EVar "endsWith") (ELit (LString "abc"))) (EVar "alphabet36")))))
+(DProp false "indexOf of a prefix is 0" ((pp "s" (TyCon "String"))) (EBinOp "==" (EApp (EApp (EVar "indexOf") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 3))) (EVar "s"))) (EVar "s")) (EApp (EVar "Some") (ELit (LInt 0)))))
+(DProp false "lastIndexOf of a two-codepoint suffix ends at the end" ((pp "s" (TyCon "String"))) (EIf (EBinOp "<" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 2))) (EVar "True") (EBinOp "==" (EApp (EApp (EVar "lastIndexOf") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 2)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (EVar "s")) (EApp (EVar "Some") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 2)))))))
+(DTypeSig false "strAndLen" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int"))))
+(DFunDef false "strAndLen" ((PVar "s")) (ETuple (EVar "s") (EApp (EVar "stringLength") (EVar "s"))))
+(DTest false "stringConcat of no strings is empty" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LInt 0)))) (EApp (EVar "strAndLen") (EApp (EVar "stringConcat") (EListLit)))))
+(DTest false "stringConcat of one empty string is empty" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LInt 0)))) (EApp (EVar "strAndLen") (EApp (EVar "stringConcat") (EListLit (ELit (LString "")))))))
+(DTest false "stringConcat of ASCII strings" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "abcdef")) (ELit (LInt 6)))) (EApp (EVar "strAndLen") (EApp (EVar "stringConcat") (EListLit (ELit (LString "ab")) (ELit (LString "cd")) (ELit (LString "ef")))))))
+(DTest false "stringConcat skips empty pieces" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é日")) (ELit (LInt 2)))) (EApp (EVar "strAndLen") (EApp (EVar "stringConcat") (EListLit (ELit (LString "")) (ELit (LString "é")) (ELit (LString "")) (ELit (LString "日")))))))
+(DTest false "stringConcat of mixed multibyte pieces counts codepoints" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é日本😀x")) (ELit (LInt 5)))) (EApp (EVar "strAndLen") (EApp (EVar "stringConcat") (EListLit (ELit (LString "é")) (ELit (LString "日本")) (ELit (LString "😀")) (ELit (LString "x")))))))
+(DTest false "toUpper of ASCII" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "HELLO, WORLD")) (ELit (LInt 12)))) (EApp (EVar "strAndLen") (EApp (EVar "toUpper") (ELit (LString "hello, world"))))))
+(DTest false "toLower of ASCII" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "hello")) (ELit (LInt 5)))) (EApp (EVar "strAndLen") (EApp (EVar "toLower") (ELit (LString "HeLLo"))))))
+(DTest false "toUpper of mixed text leaves multibyte codepoints alone" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "HéLLO 日本 😀 ABC")) (ELit (LInt 14)))) (EApp (EVar "strAndLen") (EApp (EVar "toUpper") (ELit (LString "héllo 日本 😀 abc"))))))
+(DTest false "toLower of mixed text leaves multibyte codepoints alone" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "École 日本 😀 abc")) (ELit (LInt 14)))) (EApp (EVar "strAndLen") (EApp (EVar "toLower") (ELit (LString "ÉCOLE 日本 😀 ABC"))))))
+(DTest false "toUpper of unchanged multibyte text" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "日本語 é 😀")) (ELit (LInt 7)))) (EApp (EVar "strAndLen") (EApp (EVar "toUpper") (ELit (LString "日本語 é 😀"))))))
+(DTest false "toLower of unchanged multibyte text" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "日本語ÉÈ")) (ELit (LInt 5)))) (EApp (EVar "strAndLen") (EApp (EVar "toLower") (ELit (LString "日本語ÉÈ"))))))
+(DTest false "charToStr of an ASCII char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "a")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "a"))))))
+(DTest false "charToStr of a two-byte char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "é"))))))
+(DTest false "charToStr of a three-byte char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "日")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "日"))))))
+(DTest false "charToStr of a four-byte char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "😀")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "😀"))))))
 # MARK
-(DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
+(DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -1042,3 +1297,53 @@ test "reverse keeps an exact codepoint length on multibyte text" =
 (DTest false "join keeps an exact codepoint length on multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LInt 7))) (EApp (EVar "stringLength") (EApp (EApp (EVar "join") (ELit (LString "→"))) (EListLit (ELit (LString "é")) (ELit (LString "日本")) (ELit (LString "")) (ELit (LString "x")))))))
 (DTest false "join with an empty separator keeps an exact codepoint length" (EApp (EApp (EVar "expectEqual") (ELit (LInt 2))) (EApp (EVar "stringLength") (EApp (EApp (EVar "join") (ELit (LString ""))) (EListLit (ELit (LString "é")) (ELit (LString "日")))))))
 (DTest false "reverse keeps an exact codepoint length on multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LInt 4))) (EApp (EVar "stringLength") (EApp (EVar "reverse") (ELit (LString "é日→😀"))))))
+(DTypeSig false "charCodesFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "charCodesFrom" ((PVar "a") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "a"))) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EApp (EVar "charCodesFrom") (EVar "a")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "charCodesOf" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))))
+(DFunDef false "charCodesOf" ((PVar "s")) (EApp (EApp (EVar "charCodesFrom") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))))
+(DTest false "stringToChars of the empty string is an empty array" (EApp (EApp (EVar "expectEqual") (ELit (LInt 0))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (ELit (LString ""))))))
+(DTest false "stringToChars of the empty string round-trips" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EVar "stringFromChars") (EApp (EVar "stringToChars") (ELit (LString ""))))))
+(DTest false "stringToChars of ASCII yields one Char per byte" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 104)) (ELit (LInt 101)) (ELit (LInt 108)) (ELit (LInt 108)) (ELit (LInt 111)))) (EApp (EVar "charCodesOf") (ELit (LString "hello")))))
+(DTest false "stringToChars of a long ASCII string keeps its length" (EApp (EApp (EVar "expectEqual") (ELit (LInt 40))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (ELit (LString "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"))))))
+(DTest false "stringToChars of a long ASCII string round-trips" (EApp (EApp (EVar "expectEqual") (ELit (LString "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"))) (EApp (EVar "stringFromChars") (EApp (EVar "stringToChars") (ELit (LString "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"))))))
+(DTest false "stringToChars of a 2-byte-only string" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 233)) (ELit (LInt 26085)))) (EApp (EVar "charCodesOf") (ELit (LString "é日")))))
+(DTest false "stringToChars of a 4-byte-only string" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 128512)) (ELit (LInt 127881)))) (EApp (EVar "charCodesOf") (ELit (LString "😀🎉")))))
+(DTest false "stringToChars of a mixed 1/2/3/4-byte string yields codepoints" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 97)) (ELit (LInt 233)) (ELit (LInt 8364)) (ELit (LInt 128512)) (ELit (LInt 98)))) (EApp (EVar "charCodesOf") (ELit (LString "aé€😀b")))))
+(DTest false "stringToChars of a mixed string round-trips" (EApp (EApp (EVar "expectEqual") (ELit (LString "aé€😀b"))) (EApp (EVar "stringFromChars") (EApp (EVar "stringToChars") (ELit (LString "aé€😀b"))))))
+(DTest false "stringToChars with a non-ASCII lead byte then ASCII" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 233)) (ELit (LInt 97)) (ELit (LInt 98)) (ELit (LInt 99)))) (EApp (EVar "charCodesOf") (ELit (LString "éabc")))))
+(DTest false "stringToChars with ASCII then a 3-byte tail" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 97)) (ELit (LInt 98)) (ELit (LInt 99)) (ELit (LInt 8364)))) (EApp (EVar "charCodesOf") (ELit (LString "abc€")))))
+(DTypeSig false "alphabet36" (TyCon "String"))
+(DFunDef false "alphabet36" () (ELit (LString "abcdefghijklmnopqrstuvwxyz0123456789")))
+(DTest false "indexOf finds a needle at the start of a long string" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 0)))) (EApp (EApp (EVar "indexOf") (ELit (LString "abc"))) (EVar "alphabet36"))))
+(DTest false "indexOf finds a needle in the middle of a long string" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 12)))) (EApp (EApp (EVar "indexOf") (ELit (LString "mno"))) (EVar "alphabet36"))))
+(DTest false "indexOf finds a needle at the end of a long string" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 33)))) (EApp (EApp (EVar "indexOf") (ELit (LString "789"))) (EVar "alphabet36"))))
+(DTest false "indexOf misses a needle absent from a long string" (EApp (EApp (EVar "expectEqual") (EVar "None")) (EApp (EApp (EVar "indexOf") (ELit (LString "9a"))) (EVar "alphabet36"))))
+(DTest false "lastIndexOf and countOccurrences find one hit at the end" (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 33))) (ELit (LInt 1)))) (ETuple (EApp (EApp (EVar "lastIndexOf") (ELit (LString "789"))) (EVar "alphabet36")) (EApp (EApp (EVar "countOccurrences") (ELit (LString "789"))) (EVar "alphabet36")))))
+(DTest false "an empty needle on a long string is at 0, at the end, and counts 0" (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 0))) (EApp (EVar "Some") (ELit (LInt 36))) (ELit (LInt 0)))) (ETuple (EApp (EApp (EVar "indexOf") (ELit (LString ""))) (EVar "alphabet36")) (EApp (EApp (EVar "lastIndexOf") (ELit (LString ""))) (EVar "alphabet36")) (EApp (EApp (EVar "countOccurrences") (ELit (LString ""))) (EVar "alphabet36")))))
+(DTest false "a needle equal to a long haystack hits once at 0" (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 0))) (EApp (EVar "Some") (ELit (LInt 0))) (ELit (LInt 1)) (EVar "True"))) (ETuple (EApp (EApp (EVar "indexOf") (EVar "alphabet36")) (EVar "alphabet36")) (EApp (EApp (EVar "lastIndexOf") (EVar "alphabet36")) (EVar "alphabet36")) (EApp (EApp (EVar "countOccurrences") (EVar "alphabet36")) (EVar "alphabet36")) (EApp (EApp (EVar "startsWith") (EVar "alphabet36")) (EVar "alphabet36")))))
+(DTest false "a needle longer than a long haystack misses everywhere" (EBlock (DoLet false false (PVar "longer") (EBinOp "++" (EVar "alphabet36") (ELit (LString "!")))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (EVar "None") (EVar "None") (ELit (LInt 0)) (EVar "False") (EVar "False"))) (ETuple (EApp (EApp (EVar "indexOf") (EVar "longer")) (EVar "alphabet36")) (EApp (EApp (EVar "lastIndexOf") (EVar "longer")) (EVar "alphabet36")) (EApp (EApp (EVar "countOccurrences") (EVar "longer")) (EVar "alphabet36")) (EApp (EApp (EVar "startsWith") (EVar "longer")) (EVar "alphabet36")) (EApp (EApp (EVar "endsWith") (EVar "longer")) (EVar "alphabet36")))))))
+(DTest false "countOccurrences of an overlapping run takes non-overlapping matches" (EBlock (DoLet false false (PVar "run") (ELit (LString "aaaaaaaaaaaaaaaaaaaaa"))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 0))) (EApp (EVar "Some") (EBinOp "-" (EApp (EVar "stringLength") (EVar "run")) (ELit (LInt 3)))) (EBinOp "/" (EApp (EVar "stringLength") (EVar "run")) (ELit (LInt 3))))) (ETuple (EApp (EApp (EVar "indexOf") (ELit (LString "aaa"))) (EVar "run")) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aaa"))) (EVar "run")) (EApp (EApp (EVar "countOccurrences") (ELit (LString "aaa"))) (EVar "run")))))))
+(DTest false "lastIndexOf finds the end hit across a block boundary" (EBlock (DoLet false false (PVar "s") (ELit (LString "abxxxxxxxxxxxxxxxxxxxxxxxxab"))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 0))) (EApp (EVar "Some") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 2)))) (ELit (LInt 2)))) (ETuple (EApp (EApp (EVar "indexOf") (ELit (LString "ab"))) (EVar "s")) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "ab"))) (EVar "s")) (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")))))))
+(DTest false "a window whose first and last bytes match but whose middle does not" (EBlock (DoLet false false (PVar "hay") (EBinOp "++" (ELit (LString "aYbaYbaXb")) (ELit (LString "qqqqqqqqqq")))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 6))) (ELit (LInt 1)))) (ETuple (EApp (EApp (EVar "indexOf") (ELit (LString "aXb"))) (EVar "hay")) (EApp (EApp (EVar "countOccurrences") (ELit (LString "aXb"))) (EVar "hay")))))))
+(DTest false "indexOf of a multibyte needle past a block returns a codepoint index" (EBlock (DoLet false false (PVar "s") (ELit (LString "abcdefgé日xyz"))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 8))) (EApp (EVar "Some") (ELit (LInt 9))) (EApp (EVar "Some") (ELit (LInt 7))))) (ETuple (EApp (EApp (EVar "indexOf") (ELit (LString "日"))) (EVar "s")) (EApp (EApp (EVar "indexOf") (ELit (LString "xyz"))) (EVar "s")) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (EVar "s")))))))
+(DTest false "multibyte needles on a long multibyte string" (EBlock (DoLet false false (PVar "t") (ELit (LString "日本語日本語日本語日本語"))) (DoExpr (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LInt 2))) (EApp (EVar "Some") (ELit (LInt 8))) (ELit (LInt 3)))) (ETuple (EApp (EApp (EVar "indexOf") (ELit (LString "語日"))) (EVar "t")) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "語日"))) (EVar "t")) (EApp (EApp (EVar "countOccurrences") (ELit (LString "語日"))) (EVar "t")))))))
+(DTest false "startsWith and endsWith on a long string" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "True") (EVar "True") (EVar "False") (EVar "False"))) (ETuple (EApp (EApp (EVar "startsWith") (ELit (LString "abcdefghi"))) (EVar "alphabet36")) (EApp (EApp (EVar "endsWith") (ELit (LString "6789"))) (EVar "alphabet36")) (EApp (EApp (EVar "startsWith") (ELit (LString "bcd"))) (EVar "alphabet36")) (EApp (EApp (EVar "endsWith") (ELit (LString "abc"))) (EVar "alphabet36")))))
+(DProp false "indexOf of a prefix is 0" ((pp "s" (TyCon "String"))) (EBinOp "==" (EApp (EApp (EVar "indexOf") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 3))) (EVar "s"))) (EVar "s")) (EApp (EVar "Some") (ELit (LInt 0)))))
+(DProp false "lastIndexOf of a two-codepoint suffix ends at the end" ((pp "s" (TyCon "String"))) (EIf (EBinOp "<" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 2))) (EVar "True") (EBinOp "==" (EApp (EApp (EVar "lastIndexOf") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 2)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (EVar "s")) (EApp (EVar "Some") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 2)))))))
+(DTypeSig false "strAndLen" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int"))))
+(DFunDef false "strAndLen" ((PVar "s")) (ETuple (EVar "s") (EApp (EVar "stringLength") (EVar "s"))))
+(DTest false "stringConcat of no strings is empty" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LInt 0)))) (EApp (EVar "strAndLen") (EApp (EVar "stringConcat") (EListLit)))))
+(DTest false "stringConcat of one empty string is empty" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LInt 0)))) (EApp (EVar "strAndLen") (EApp (EVar "stringConcat") (EListLit (ELit (LString "")))))))
+(DTest false "stringConcat of ASCII strings" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "abcdef")) (ELit (LInt 6)))) (EApp (EVar "strAndLen") (EApp (EVar "stringConcat") (EListLit (ELit (LString "ab")) (ELit (LString "cd")) (ELit (LString "ef")))))))
+(DTest false "stringConcat skips empty pieces" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é日")) (ELit (LInt 2)))) (EApp (EVar "strAndLen") (EApp (EVar "stringConcat") (EListLit (ELit (LString "")) (ELit (LString "é")) (ELit (LString "")) (ELit (LString "日")))))))
+(DTest false "stringConcat of mixed multibyte pieces counts codepoints" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é日本😀x")) (ELit (LInt 5)))) (EApp (EVar "strAndLen") (EApp (EVar "stringConcat") (EListLit (ELit (LString "é")) (ELit (LString "日本")) (ELit (LString "😀")) (ELit (LString "x")))))))
+(DTest false "toUpper of ASCII" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "HELLO, WORLD")) (ELit (LInt 12)))) (EApp (EVar "strAndLen") (EApp (EVar "toUpper") (ELit (LString "hello, world"))))))
+(DTest false "toLower of ASCII" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "hello")) (ELit (LInt 5)))) (EApp (EVar "strAndLen") (EApp (EVar "toLower") (ELit (LString "HeLLo"))))))
+(DTest false "toUpper of mixed text leaves multibyte codepoints alone" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "HéLLO 日本 😀 ABC")) (ELit (LInt 14)))) (EApp (EVar "strAndLen") (EApp (EVar "toUpper") (ELit (LString "héllo 日本 😀 abc"))))))
+(DTest false "toLower of mixed text leaves multibyte codepoints alone" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "École 日本 😀 abc")) (ELit (LInt 14)))) (EApp (EVar "strAndLen") (EApp (EVar "toLower") (ELit (LString "ÉCOLE 日本 😀 ABC"))))))
+(DTest false "toUpper of unchanged multibyte text" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "日本語 é 😀")) (ELit (LInt 7)))) (EApp (EVar "strAndLen") (EApp (EVar "toUpper") (ELit (LString "日本語 é 😀"))))))
+(DTest false "toLower of unchanged multibyte text" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "日本語ÉÈ")) (ELit (LInt 5)))) (EApp (EVar "strAndLen") (EApp (EVar "toLower") (ELit (LString "日本語ÉÈ"))))))
+(DTest false "charToStr of an ASCII char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "a")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "a"))))))
+(DTest false "charToStr of a two-byte char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "é"))))))
+(DTest false "charToStr of a three-byte char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "日")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "日"))))))
+(DTest false "charToStr of a four-byte char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "😀")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "😀"))))))

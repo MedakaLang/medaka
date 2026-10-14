@@ -855,7 +855,24 @@ control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
 # `off + n` sums, whose operands now have Int stamps, are inline
 # overflow-checked adds instead of a generic numeric call; the trap tests the
 # public running length.
-[ "$control_grade" = '4117642617 5772' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+# Re-derived 2026-10-14 for flat String `++` chains, row by row against the
+# grade above. Five rows moved and only the call column did: a chain of three
+# or more String operands is now one `mdk_string_append_n` call, where the
+# left-nested chain was one `mdk_string_append` per `++`. The chains are the
+# interpolated messages of panics on public guards, not on the emitter's own
+# trap branches: the u32 shift wrappers' negative-amount guard, inlined into
+# the SHA round and schedule, and the 32-byte length checks. Every chain is
+# three operands, a literal around `Int_display` of a literal-derived shift
+# amount or of the public input length, or a caller's literal label. So
+# `compressRounds__rw` went 63 -> 51 (12 chains) and `extendSchedule` 54 -> 44
+# (10), and `feFromBytesReduce`, `scFromBytesReduce` and `rfc6979Require32`
+# each lost one. In all 127 rows the callee multiset differs only by
+# `mdk_string_append` giving way to `mdk_string_append_n`, and no branch,
+# comparison, index, set, make, copy or trap column moved. Each chain also
+# adds a three-word stack `alloca` and its stores in the panic block, which no
+# column counts. Other constant names (`@.strc`, `@.u64c`, one lifted lambda)
+# are renumbered, with identical definitions.
+[ "$control_grade" = '449559333 5772' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -1138,7 +1155,13 @@ public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " 
 # same two row changes as the internal grade above (concatLength and
 # concatFill, 3 calls and 0 traps to 2 calls and 1 trap) and no others. The
 # closure is unchanged.
-if [ "$public_closure_grade" != '2151910788 4065' ] || [ "$public_control_grade" != '797838777 6324' ]; then
+# Re-derived 2026-10-14 for flat String `++` chains: the same five call-column
+# changes as the internal grade above (compressRounds__rw 63 -> 51,
+# extendSchedule 54 -> 44, and one call each off feFromBytesReduce,
+# scFromBytesReduce and rfc6979Require32), with the same causes, no other row
+# moved in any column across the 139, the callee multisets differ only by the
+# append giving way to `mdk_string_append_n`, and the closure is unchanged.
+if [ "$public_closure_grade" != '2151910788 4065' ] || [ "$public_control_grade" != '2797855792 6324' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"

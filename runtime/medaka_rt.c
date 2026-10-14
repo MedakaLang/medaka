@@ -628,8 +628,17 @@ noreturn static void mdk_append_unsupported(void);
  * well-formed UTF-8, which every String cell holds: bytes from outside the
  * program reach a cell only through mdk_str_lossy or a validating producer. */
 static long long mdk_utf8_cp_count(const char *p, long long n) {
-  long long c = 0;
-  for (long long i = 0; i < n; i++)
+  long long c = 0, i = 0;
+  /* Eight bytes at a time.  A continuation byte has bit 7 set and bit 6 clear, so
+   * `w & ~(w << 1)` keeps bit 7 of exactly those lanes; the multiply sums the
+   * one-bit lane flags into the top byte (a partial sum never exceeds 8). */
+  for (; i + 8 <= n; i += 8) {
+    uint64_t w;
+    memcpy(&w, p + i, 8);
+    uint64_t cont = (w & ~(w << 1)) & 0x8080808080808080ULL;
+    c += 8 - (long long)(((cont >> 7) * 0x0101010101010101ULL) >> 56);
+  }
+  for (; i < n; i++)
     if (((unsigned char)p[i] & 0xC0) != 0x80) c++;
   return c;
 }
@@ -805,28 +814,39 @@ void mdk_print_str(long long w) {
 }
 
 /* intToString : Int -> String  (LEAF, RUNTIME-DESIGN.md §5).  The argument is a
- * TAGGED immediate int word; untag (arithmetic shift), render decimal to match
- * OCaml string_of_int, and box the result through mdk_str_lit. */
+ * TAGGED immediate int word; untag (arithmetic shift) and render decimal to match
+ * OCaml string_of_int.  The rendering is ASCII, so every codepoint is one byte and
+ * the cell's cp_count is its byte length: the cell is allocated once and the digits
+ * are written straight into it, with no scratch buffer, copy or rescan.  The
+ * magnitude is taken in unsigned space so LLONG_MIN is exact. */
 long long mdk_int_to_string(long long tagged) {
   long long n = tagged >> 1;
-  char buf[32];
-  /* Hand-rolled decimal, byte-identical to "%lld": snprintf's machinery was
-   * the largest single cost under every key build (lenKey, "\{n}"). The
-   * magnitude is taken in unsigned space so LLONG_MIN is exact. */
   unsigned long long u = n < 0 ? 0ULL - (unsigned long long)n : (unsigned long long)n;
-  char *p = buf + sizeof buf;
+  /* Digit count by power-of-ten comparison; u <= 2^63 < 10^19, so p never wraps. */
+  long long digits = 1;
+  for (unsigned long long p = 10; u >= p; p *= 10) digits++;
+  long long len = digits + (n < 0 ? 1 : 0);
+  char *cell = (char *)mdk_alloc_atomic(24 + len + 1);
+  ((long long *)cell)[0] = MDK_STR_TAG;
+  ((long long *)cell)[1] = len;
+  ((long long *)cell)[2] = len;
+  char *p = cell + 24 + len;
   do {
     *--p = (char)('0' + u % 10);
     u /= 10;
   } while (u != 0);
   if (n < 0) *--p = '-';
-  return mdk_str_lit(p, (long long)(buf + sizeof buf - p));
+  cell[24 + len] = '\0';
+  return (long long)cell;
 }
 
+/* floatToString: the lexeme is ASCII (digits, '.', '-', 'e', '+', "inf"/"nan"),
+ * so its codepoint count is its byte length, as in mdk_int_to_string. */
 long long mdk_float_to_string(double d) {
   char buf[96];
   mdk_float_lexeme(d, buf);   /* shared canonical lexeme (see mdk_float_lexeme) */
-  return mdk_str_lit(buf, (long long)strlen(buf));
+  long long len = (long long)strlen(buf);
+  return mdk_str_cell(buf, len, len);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1263,21 +1283,30 @@ noreturn void mdk_exit(long long tagged) {
 
 /* Concatenate a built-in List String (native extern catalog slice 5).
    Nil = odd immediate (low bit 1, stop); Cons = even pointer to [tag | head@8 | tail@16].
-   head is a String cell (byte_len@8, bytes@24). Two passes: sum byte_lens, then blit;
-   mdk_str_lit recomputes cp_count correctly. Empty list (Nil) -> "" string cell. */
+   head is a String cell (byte_len@8, cp_count@16, bytes@24).  Pass 1 sums byte_len and
+   cp_count of every piece; pass 2 blits the pieces straight into ONE result cell.  The
+   cp_count sum is additive for the same reason mdk_string_append's is (see its
+   comment): each piece already stores a conforming count.  Empty list (Nil) -> "" cell. */
 long long mdk_string_concat(long long list) {
-  long long total = 0;
-  for (long long w = list; (w & 1) == 0; w = ((const long long *)w)[2])
-    total += ((const long long *)(((const long long *)w)[1]))[1];
-  char *buf = (char *)mdk_alloc_atomic(total + 1);
+  long long total = 0, cps = 0;
+  for (long long w = list; (w & 1) == 0; w = ((const long long *)w)[2]) {
+    const long long *s = (const long long *)((const long long *)w)[1];
+    total += s[1];
+    cps += s[2];
+  }
+  char *cell = (char *)mdk_alloc_atomic(24 + total + 1);
+  ((long long *)cell)[0] = MDK_STR_TAG;
+  ((long long *)cell)[1] = total;
+  ((long long *)cell)[2] = cps;
   long long off = 0;
   for (long long w = list; (w & 1) == 0; w = ((const long long *)w)[2]) {
-    long long s = ((const long long *)w)[1];
+    const char *s = (const char *)((const long long *)w)[1];
     long long bl = ((const long long *)s)[1];
-    memcpy(buf + off, (const char *)s + 24, (size_t)bl);
+    memcpy(cell + 24 + off, s + 24, (size_t)bl);
     off += bl;
   }
-  return mdk_str_lit(buf, total);
+  cell[24 + total] = '\0';
+  return (long long)cell;
 }
 
 /* Append two String cells (++ on String, E2a).
@@ -1330,6 +1359,35 @@ long long mdk_string_append(long long a, long long b) {
   ((long long *)cell)[2] = ((const long long *)a)[2] + ((const long long *)b)[2];
   memcpy(cell + 24,      (const char *)a + 24, (size_t)al);
   memcpy(cell + 24 + al, (const char *)b + 24, (size_t)bl);
+  cell[24 + total] = '\0';
+  return (long long)cell;
+}
+
+/* Append n String cells in one allocation: the emitter's left-nested `++` chain
+   `a ++ b ++ c ...` with three or more String operands (llvm_emit.mdk emitBin).
+   argv[i] is the i-th operand's cell word, in left-to-right order.  Same invariant
+   as mdk_string_append above: the codepoint count is additive over the operands,
+   so the result's count is the sum of each operand's stored count.  One atomic
+   allocation and one blit per operand, instead of n-1 allocations and a re-copy
+   of the growing prefix. */
+long long mdk_string_append_n(long long n, const long long *argv) {
+  long long total = 0;
+  long long cps = 0;
+  for (long long i = 0; i < n; i++) {
+    const long long *s = (const long long *)argv[i];
+    total += s[1];
+    cps += s[2];
+  }
+  char *cell = (char *)mdk_alloc_atomic(24 + total + 1);
+  ((long long *)cell)[0] = MDK_STR_TAG;
+  ((long long *)cell)[1] = total;
+  ((long long *)cell)[2] = cps;
+  char *dst = cell + 24;
+  for (long long i = 0; i < n; i++) {
+    const long long *s = (const long long *)argv[i];
+    memcpy(dst, (const char *)s + 24, (size_t)s[1]);
+    dst += s[1];
+  }
   cell[24 + total] = '\0';
   return (long long)cell;
 }
@@ -1675,7 +1733,7 @@ void mdk_print_char(long long tagged) {
 }
 long long mdk_char_to_str(long long tagged) {
   char buf[4]; int n = mdk_utf8_encode(tagged >> 1, buf);
-  return mdk_str_lit(buf, n);
+  return mdk_str_cell(buf, n, 1);
 }
 
 /* String↔Char + codepoint slicing (native extern catalog slice 9).
@@ -1729,19 +1787,34 @@ static long long mdk_utf8_decode(const char *p, long long b, long long byte_len,
 }
 /* The output array is sized from the cached cp_count, and the loop stops
  * there even if the bytes would decode to more, so it never writes past the
- * allocation. */
+ * allocation.
+ *
+ * The elements are immediate Chars, so the block holds no pointers and is
+ * allocated pointer-free: mdk_alloc_atomic skips the zero-fill and the scan.
+ * So every slot is written here, and any slot past the decoded count is
+ * zero-filled explicitly. An all-ASCII byte string is its own codepoint
+ * sequence, so it skips the decoder. */
 long long mdk_string_to_chars(long long s) {
   const char *cell = (const char *)s;
   long long byte_len = ((const long long *)cell)[1];
   long long cp_count = ((const long long *)cell)[2];
   const char *bytes = cell + 24;
-  long long *arr = (long long *)mdk_alloc(8 * (cp_count + 1));
+  long long *arr = (long long *)mdk_alloc_atomic(8 * (cp_count + 1));
   arr[0] = cp_count;
-  long long b = 0, i = 0;
-  while (b < byte_len && i < cp_count) {
-    int w; long long cp = mdk_utf8_decode(bytes, b, byte_len, &w);
-    arr[++i] = (cp << 1) | 1; b += w;
+  unsigned char hi = 0;
+  for (long long k = 0; k < byte_len; k++) hi |= (unsigned char)bytes[k];
+  long long i = 0;
+  if (hi < 0x80) {
+    long long n = byte_len < cp_count ? byte_len : cp_count;
+    for (; i < n; i++) arr[i + 1] = ((long long)(unsigned char)bytes[i] << 1) | 1;
+  } else {
+    long long b = 0;
+    while (b < byte_len && i < cp_count) {
+      int w; long long cp = mdk_utf8_decode(bytes, b, byte_len, &w);
+      arr[++i] = (cp << 1) | 1; b += w;
+    }
   }
+  for (; i < cp_count; i++) arr[i + 1] = 0;
   return (long long)arr;
 }
 /* Byte width mdk_utf8_encode writes for a codepoint, from the same thresholds. */
@@ -1859,26 +1932,34 @@ long long mdk_char_to_lower(long long t) {
 /* Byte-wise ASCII case map: bytes >=0x80 (UTF-8 lead/continuation) are left
    untouched, so multibyte codepoints pass through unchanged. */
 long long mdk_string_to_upper(long long s) {
-  const char *cell = (const char *)s;
-  long long bl = ((const long long *)cell)[1];
-  const char *src = cell + 24;
-  char *buf = (char *)mdk_alloc(bl + 1);
+  const long long *src_cell = (const long long *)s;
+  long long bl = src_cell[1];
+  char *cell = (char *)mdk_alloc_atomic(24 + bl + 1);
+  ((long long *)cell)[0] = MDK_STR_TAG;
+  ((long long *)cell)[1] = bl;
+  ((long long *)cell)[2] = src_cell[2];
+  const char *src = (const char *)s + 24;
   for (long long i = 0; i < bl; i++) {
     char c = src[i];
-    buf[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
+    cell[24 + i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
   }
-  return mdk_str_lit(buf, bl);
+  cell[24 + bl] = '\0';
+  return (long long)cell;
 }
 long long mdk_string_to_lower(long long s) {
-  const char *cell = (const char *)s;
-  long long bl = ((const long long *)cell)[1];
-  const char *src = cell + 24;
-  char *buf = (char *)mdk_alloc(bl + 1);
+  const long long *src_cell = (const long long *)s;
+  long long bl = src_cell[1];
+  char *cell = (char *)mdk_alloc_atomic(24 + bl + 1);
+  ((long long *)cell)[0] = MDK_STR_TAG;
+  ((long long *)cell)[1] = bl;
+  ((long long *)cell)[2] = src_cell[2];
+  const char *src = (const char *)s + 24;
   for (long long i = 0; i < bl; i++) {
     char c = src[i];
-    buf[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+    cell[24 + i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
   }
-  return mdk_str_lit(buf, bl);
+  cell[24 + bl] = '\0';
+  return (long long)cell;
 }
 
 /* ── Reserved ADT tags + cell constructors (native extern catalog, slice 10) ──
@@ -2122,17 +2203,48 @@ long long mdk_string_to_float(long long s) {
   return mdk_some(mdk_box_float(d));
 }
 
+/* First byte offset b >= from at which the needle (nl >= 1 bytes at nb) occurs in
+ * the haystack (hl bytes at hb), or -1.  Eight candidate starts per step: a start
+ * can match only if its first byte is nb[0] and its last byte is nb[nl-1], so the
+ * two 8-lane equality masks reject a whole block with one test.  Blocks that
+ * survive are checked start by start.  Reads stay inside [0, hl). */
+static long long mdk_find_bytes(const char *hb, long long hl, const char *nb,
+                                long long nl, long long from) {
+  long long last = hl - nl;   /* largest valid start */
+  long long b = from;
+  if (nl == 1) {
+    if (b > last) return -1;
+    const char *p = memchr(hb + b, nb[0], (size_t)(last - b + 1));
+    return p == NULL ? -1 : (long long)(p - hb);
+  }
+  const uint64_t ones = 0x0101010101010101ULL, lo7 = 0x7F7F7F7F7F7F7F7FULL;
+  uint64_t first = (uint64_t)(unsigned char)nb[0] * ones;
+  uint64_t lastb = (uint64_t)(unsigned char)nb[nl - 1] * ones;
+  for (; b + 7 <= last; b += 8) {
+    uint64_t a, z;
+    memcpy(&a, hb + b, 8);
+    memcpy(&z, hb + b + nl - 1, 8);
+    uint64_t x = a ^ first, y = z ^ lastb;
+    /* 0x80 in each lane whose byte is zero; no carry crosses a lane. */
+    uint64_t zx = ~(((x & lo7) + lo7) | x | lo7);
+    uint64_t zy = ~(((y & lo7) + lo7) | y | lo7);
+    if ((zx & zy) == 0) continue;
+    for (long long k = b; k < b + 8; k++)
+      if (memcmp(hb + k, nb, (size_t)nl) == 0) return k;
+  }
+  for (; b <= last; b++)
+    if (memcmp(hb + b, nb, (size_t)nl) == 0) return b;
+  return -1;
+}
+
 long long mdk_string_index_of(long long needle, long long hay) {
   const char *nc = (const char *)needle, *hc = (const char *)hay;
   long long nl = ((const long long *)nc)[1], hl = ((const long long *)hc)[1];
   const char *nb = nc + 24, *hb = hc + 24;
   if (nl == 0) return mdk_some(1);   /* empty needle -> index 0 (Int immediate) */
-  for (long long b = 0; b + nl <= hl; b++)
-    if (memcmp(hb + b, nb, (size_t)nl) == 0) {
-      long long cp = mdk_utf8_cp_count(hb, b);
-      return mdk_some((cp << 1) | 1);
-    }
-  return mdk_none();
+  long long b = mdk_find_bytes(hb, hl, nb, nl, 0);
+  if (b < 0) return mdk_none();
+  return mdk_some((mdk_utf8_cp_count(hb, b) << 1) | 1);
 }
 
 /* Byte-level searches over String cells.  UTF-8 is self-synchronizing, so a byte
@@ -2158,14 +2270,12 @@ long long mdk_string_count_occurrences(long long needle, long long hay) {
   long long nl = ((const long long *)nc)[1], hl = ((const long long *)hc)[1];
   const char *nb = nc + 24, *hb = hc + 24;
   if (nl == 0) return 0;
-  long long count = 0;
-  long long b = 0;
-  while (b + nl <= hl) {
-    const char *p = memchr(hb + b, nb[0], (size_t)(hl - nl + 1 - b));
-    if (p == NULL) break;
-    b = p - hb;
-    if (memcmp(hb + b, nb, (size_t)nl) == 0) { count++; b += nl; }
-    else b++;
+  long long count = 0, from = 0;
+  for (;;) {
+    long long b = mdk_find_bytes(hb, hl, nb, nl, from);
+    if (b < 0) break;
+    count++;
+    from = b + nl;
   }
   return count;
 }
@@ -2177,14 +2287,12 @@ long long mdk_string_last_index_of(long long needle, long long hay) {
   long long nl = ((const long long *)nc)[1], hl = ((const long long *)hc)[1];
   const char *nb = nc + 24, *hb = hc + 24;
   if (nl == 0) return mdk_some((((const long long *)hc)[2] << 1) | 1);
-  long long last = -1;
-  long long b = 0;
-  while (b + nl <= hl) {
-    const char *p = memchr(hb + b, nb[0], (size_t)(hl - nl + 1 - b));
-    if (p == NULL) break;
-    b = p - hb;
-    if (memcmp(hb + b, nb, (size_t)nl) == 0) last = b;
-    b++;
+  long long last = -1, from = 0;
+  for (;;) {
+    long long b = mdk_find_bytes(hb, hl, nb, nl, from);
+    if (b < 0) break;
+    last = b;
+    from = b + 1;
   }
   if (last < 0) return mdk_none();
   return mdk_some((mdk_utf8_cp_count(hb, last) << 1) | 1);
@@ -3480,7 +3588,7 @@ long long mdk_debug_string_lit(long long w) {
   const char *cell = (const char *)w;
   long long byte_len = ((const long long *)cell)[1];
   const unsigned char *bytes = (const unsigned char *)(cell + 24);
-  char *buf = (char *)mdk_alloc(2 + 2 * byte_len + 1);  /* worst case 2 bytes/char */
+  char *buf = (char *)mdk_alloc_atomic(2 + 2 * byte_len + 1);  /* worst case 2 bytes/char */
   long long off = 0;
   buf[off++] = '"';
   for (long long i = 0; i < byte_len; i++) mdk_escape_byte(buf, &off, bytes[i], '"');

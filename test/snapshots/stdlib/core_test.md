@@ -1,5 +1,5 @@
 # META
-source_lines=214
+source_lines=259
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the list and array rendering and string indexing in
@@ -216,6 +216,51 @@ test "tuple compare returns Gt from an earlier field" =
       compare (1, 1, 2, 0, 0) (1, 1, 1, 9, 9),
       compare (1, 1, 1, 2, 0) (1, 1, 1, 1, 9),
     ]
+
+-- # intToString and floatToString
+
+test "intToString renders zero, single digits, carries and negatives" =
+  expectEqual
+    ["0", "1", "-1", "9", "10", "99", "100", "-100"]
+    [
+      intToString 0,
+      intToString 1,
+      intToString (-1),
+      intToString 9,
+      intToString 10,
+      intToString 99,
+      intToString 100,
+      intToString (-100),
+    ]
+
+test "intToString renders the Int bounds and a large value exactly" =
+  expectEqual
+    ["4611686018427387903", "-4611686018427387904", "1234567890123"]
+    [
+      intToString 4611686018427387903,
+      intToString -4611686018427387904,
+      intToString 1234567890123,
+    ]
+
+test "intToString cell reports its byte length as its codepoint count" =
+  expectEqual
+    [1, 20, 3]
+    [
+      stringLength (intToString 7),
+      stringLength (intToString -4611686018427387904),
+      stringLength (intToString (-1) ++ "x"),
+    ]
+
+test "floatToString renders the canonical lexeme" =
+  expectEqual
+    ["0.5", "100.0", "-2.5", "1e-07", "1e+20"]
+    [
+      floatToString 0.5,
+      floatToString 100.0,
+      floatToString (-2.5),
+      floatToString 1e-07,
+      floatToString 1e+20,
+    ]
 # DESUGAR
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectTrue" false) (mem "expectFalse" false))))
 (DTest false "debug of an empty list" (EApp (EApp (EVar "expectEqual") (ELit (LString "[]"))) (EApp (EVar "debug") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int"))))))
@@ -271,6 +316,10 @@ test "tuple compare returns Gt from an earlier field" =
 (DTest false "quadruple compare decides on each field in turn" (EApp (EApp (EVar "expectEqual") (EListLit (EVar "Lt") (EVar "Lt") (EVar "Lt") (EVar "Gt") (EVar "Eq"))) (EListLit (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))))))
 (DTest false "quintuple compare decides on each field in turn" (EApp (EApp (EVar "expectEqual") (EListLit (EVar "Lt") (EVar "Lt") (EVar "Lt") (EVar "Lt") (EVar "Gt") (EVar "Eq"))) (EListLit (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 0)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))))))
 (DTest false "tuple compare returns Gt from an earlier field" (EApp (EApp (EVar "expectEqual") (EListLit (EVar "Gt") (EVar "Gt") (EVar "Gt") (EVar "Gt") (EVar "Gt") (EVar "Gt") (EVar "Gt") (EVar "Gt"))) (EListLit (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)))) (ETuple (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)))) (ETuple (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)))) (ETuple (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)))) (EApp (EApp (EVar "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))))))
+(DTest false "intToString renders zero, single digits, carries and negatives" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "0")) (ELit (LString "1")) (ELit (LString "-1")) (ELit (LString "9")) (ELit (LString "10")) (ELit (LString "99")) (ELit (LString "100")) (ELit (LString "-100")))) (EListLit (EApp (EVar "intToString") (ELit (LInt 0))) (EApp (EVar "intToString") (ELit (LInt 1))) (EApp (EVar "intToString") (EUnOp "-" (ELit (LInt 1)))) (EApp (EVar "intToString") (ELit (LInt 9))) (EApp (EVar "intToString") (ELit (LInt 10))) (EApp (EVar "intToString") (ELit (LInt 99))) (EApp (EVar "intToString") (ELit (LInt 100))) (EApp (EVar "intToString") (EUnOp "-" (ELit (LInt 100)))))))
+(DTest false "intToString renders the Int bounds and a large value exactly" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "4611686018427387903")) (ELit (LString "-4611686018427387904")) (ELit (LString "1234567890123")))) (EListLit (EApp (EVar "intToString") (ELit (LInt 4611686018427387903))) (EApp (EVar "intToString") (ELit (LInt -4611686018427387904))) (EApp (EVar "intToString") (ELit (LInt 1234567890123))))))
+(DTest false "intToString cell reports its byte length as its codepoint count" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 1)) (ELit (LInt 20)) (ELit (LInt 3)))) (EListLit (EApp (EVar "stringLength") (EApp (EVar "intToString") (ELit (LInt 7)))) (EApp (EVar "stringLength") (EApp (EVar "intToString") (ELit (LInt -4611686018427387904)))) (EApp (EVar "stringLength") (EBinOp "++" (EApp (EVar "intToString") (EUnOp "-" (ELit (LInt 1)))) (ELit (LString "x")))))))
+(DTest false "floatToString renders the canonical lexeme" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "0.5")) (ELit (LString "100.0")) (ELit (LString "-2.5")) (ELit (LString "1e-07")) (ELit (LString "1e+20")))) (EListLit (EApp (EVar "floatToString") (ELit (LFloat 0.5))) (EApp (EVar "floatToString") (ELit (LFloat 100.0))) (EApp (EVar "floatToString") (EUnOp "-" (ELit (LFloat 2.5)))) (EApp (EVar "floatToString") (ELit (LFloat 1e-07))) (EApp (EVar "floatToString") (ELit (LFloat 1e+20))))))
 # MARK
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectTrue" false) (mem "expectFalse" false))))
 (DTest false "debug of an empty list" (EApp (EApp (EVar "expectEqual") (ELit (LString "[]"))) (EApp (EMethodRef "debug") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int"))))))
@@ -326,3 +375,7 @@ test "tuple compare returns Gt from an earlier field" =
 (DTest false "quadruple compare decides on each field in turn" (EApp (EApp (EVar "expectEqual") (EListLit (EVar "Lt") (EVar "Lt") (EVar "Lt") (EVar "Gt") (EVar "Eq"))) (EListLit (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))))))
 (DTest false "quintuple compare decides on each field in turn" (EApp (EApp (EVar "expectEqual") (EListLit (EVar "Lt") (EVar "Lt") (EVar "Lt") (EVar "Lt") (EVar "Gt") (EVar "Eq"))) (EListLit (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 0)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))))))
 (DTest false "tuple compare returns Gt from an earlier field" (EApp (EApp (EVar "expectEqual") (EListLit (EVar "Gt") (EVar "Gt") (EVar "Gt") (EVar "Gt") (EVar "Gt") (EVar "Gt") (EVar "Gt") (EVar "Gt"))) (EListLit (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)))) (ETuple (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)))) (ETuple (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)))) (ETuple (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)) (ELit (LInt 9)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)) (ELit (LInt 0)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)) (ELit (LInt 9)))) (EApp (EApp (EMethodRef "compare") (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 0)))) (ETuple (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 1)) (ELit (LInt 9)))))))
+(DTest false "intToString renders zero, single digits, carries and negatives" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "0")) (ELit (LString "1")) (ELit (LString "-1")) (ELit (LString "9")) (ELit (LString "10")) (ELit (LString "99")) (ELit (LString "100")) (ELit (LString "-100")))) (EListLit (EApp (EVar "intToString") (ELit (LInt 0))) (EApp (EVar "intToString") (ELit (LInt 1))) (EApp (EVar "intToString") (EUnOp "-" (ELit (LInt 1)))) (EApp (EVar "intToString") (ELit (LInt 9))) (EApp (EVar "intToString") (ELit (LInt 10))) (EApp (EVar "intToString") (ELit (LInt 99))) (EApp (EVar "intToString") (ELit (LInt 100))) (EApp (EVar "intToString") (EUnOp "-" (ELit (LInt 100)))))))
+(DTest false "intToString renders the Int bounds and a large value exactly" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "4611686018427387903")) (ELit (LString "-4611686018427387904")) (ELit (LString "1234567890123")))) (EListLit (EApp (EVar "intToString") (ELit (LInt 4611686018427387903))) (EApp (EVar "intToString") (ELit (LInt -4611686018427387904))) (EApp (EVar "intToString") (ELit (LInt 1234567890123))))))
+(DTest false "intToString cell reports its byte length as its codepoint count" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 1)) (ELit (LInt 20)) (ELit (LInt 3)))) (EListLit (EApp (EVar "stringLength") (EApp (EVar "intToString") (ELit (LInt 7)))) (EApp (EVar "stringLength") (EApp (EVar "intToString") (ELit (LInt -4611686018427387904)))) (EApp (EVar "stringLength") (EBinOp "++" (EApp (EVar "intToString") (EUnOp "-" (ELit (LInt 1)))) (ELit (LString "x")))))))
+(DTest false "floatToString renders the canonical lexeme" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "0.5")) (ELit (LString "100.0")) (ELit (LString "-2.5")) (ELit (LString "1e-07")) (ELit (LString "1e+20")))) (EListLit (EApp (EVar "floatToString") (ELit (LFloat 0.5))) (EApp (EVar "floatToString") (ELit (LFloat 100.0))) (EApp (EVar "floatToString") (EUnOp "-" (ELit (LFloat 2.5)))) (EApp (EVar "floatToString") (ELit (LFloat 1e-07))) (EApp (EVar "floatToString") (ELit (LFloat 1e+20))))))
