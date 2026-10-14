@@ -1,0 +1,6 @@
+-- A second module that repeats the literals ", " and "" that entry.mdk uses, so a
+-- per-scope string-literal cell is shared within this module and never across modules.
+export tag : String -> String
+tag ", " = "L1"
+tag "" = "L0"
+tag s = s ++ "!" ++ ", " ++ ""

@@ -1,0 +1,17 @@
+-- String literals repeated inside one function, across functions of one module, and
+-- across two modules (lits.mdk). Each use must still yield its own value, string
+-- literal patterns must still match, and the program output must not change.
+import lits.{tag}
+
+sep : String
+sep = ", "
+
+join2 : String -> String -> String
+join2 a b = a ++ ", " ++ b ++ ", " ++ ""
+
+classify : String -> String
+classify "" = "empty"
+classify ", " = "sep"
+classify s = "other:" ++ s
+
+main = putStrLn (join2 "x" "y" ++ "|" ++ join2 "" ", " ++ "|" ++ classify "" ++ "|" ++ classify ", " ++ "|" ++ classify "q" ++ "|" ++ tag ", " ++ "|" ++ tag "" ++ "|" ++ sep)

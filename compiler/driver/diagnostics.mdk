@@ -1201,7 +1201,7 @@ analyzeToLines runtimeSrc coreSrc progSrc =
 --     the implicit prelude (it lives in stdlib/map.mdk, unreachable from the
 --     single-root compiler tree).
 --   * Per-module TYPECHECK threads the shared prelude (core) + runtime externs
---     through the exported multi-module `checkModulesDiags`, which runs each
+--     through the exported multi-module `checkModulesDiagsChain`, which runs each
 --     module ISOLATED via `checkModuleFull` (only earlier modules' PUBLIC
 --     schemes/data are seeded) and harvests that module's own diagnostics by
 --     snapshotting the typeErrors/matchWarnings refs after its check (each module
@@ -1714,7 +1714,7 @@ resolvePass exportsFor allowInternal trustedMods preludeKey rt core known keys (
       )
 
 -- ── typecheck pass (per module, ISOLATED) ───────────────────────────────────
--- Run the shared multi-module typecheck (`checkModulesDiags`): core + runtime are
+-- Run the shared multi-module typecheck (`checkModulesDiagsChain`): core + runtime are
 -- seeded ONCE and each module is checked in its OWN frame via `checkModuleFull`
 -- (only earlier modules' PUBLIC schemes/data carry forward), harvesting that
 -- module's own diagnostics from the typeErrors/matchWarnings refs.  This gives the
@@ -1973,7 +1973,7 @@ desugaredModPairs mods = map midToDesugaredPair mods
 rawPairOf : (String, String, List Decl) -> (String, List Decl)
 rawPairOf (mid, _, prog) = (mid, prog)
 
--- (mid, path, rawDecls) → (mid, desugared decls) for checkModulesDiags.
+-- (mid, path, rawDecls) → (mid, desugared decls) for checkModulesDiagsChain.
 export
 midToDesugaredPair : (String, String, List Decl) -> (String, List Decl)
 midToDesugaredPair (mid, path, prog) = (mid, desugarModule path prog)

@@ -307,9 +307,9 @@ asleep or otherwise unavailable:
   stops receiving pings while the PDS is unhealthy and can still report an
   ongoing outage. See [Down-detection](PDS-DEPLOY.md#down-detection-two-mechanisms-deliberately).
 - **After** the service is healthy and this incident has been acknowledged,
-  re-arm its push path with `systemctl reset-failed pds-alert@pds.service`
-  **then** `systemctl stop pds-alert@pds.service` (for a backup failure,
-  substitute `pds-alert@pds-backup.service`). Resetting clears a failed-
+  re-arm its push path with `systemctl reset-failed pds-alert@pds.service.service`
+  **then** `systemctl stop pds-alert@pds.service.service` (for a backup failure,
+  substitute `pds-alert@pds-backup.service.service`). Resetting clears a failed-
   delivery start limit; stopping clears the successful active (exited) state.
   Do this in that order: after stopping, an inactive instance may unload and
   `reset-failed` would report "Unit not loaded". Both states must be cleared
