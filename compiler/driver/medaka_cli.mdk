@@ -3597,6 +3597,7 @@ runTestJsonCmd engines cases filterOpt target =
           csrc
           target
           tsrc
+          userDecls
           stdlibDir
           cases
           filterOpt
