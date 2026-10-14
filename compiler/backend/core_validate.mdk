@@ -780,6 +780,7 @@ evidenceFaults env _ facts scope (node@(CMethod name (MethodEvidence iface _ rou
       _ => [])
     ++ flatMap (builtDictFaults facts) (headParts route ++ prereqs ++ meths)
     ++ ifaceWordFaults iface route
+    ++ methodNoRouteFault iface route
 evidenceFaults _ dcounts facts scope (CDict f routes) =
   unboundFaults scope routes
     ++ flatMap routeShapeFaults routes
@@ -840,6 +841,14 @@ ifaceWordFaults "" (RDict _) = ["dispatches with no interface word"]
 ifaceWordFaults "" (RDictFwd _) = ["dispatches with no interface word"]
 ifaceWordFaults "" (RProj _ _) = ["dispatches with no interface word"]
 ifaceWordFaults _ _ = []
+
+-- A method occurrence that names its interface is answered by an instance or a
+-- given.  The interface-less `RNone` is a standalone, which dispatches by its
+-- own name.
+methodNoRouteFault : String -> Route -> List String
+methodNoRouteFault "" _ = []
+methodNoRouteFault _ RNone = ["has no route"]
+methodNoRouteFault _ _ = []
 
 noRouteFault : Route -> List String
 noRouteFault RNone = ["has a dictionary slot with no route"]
