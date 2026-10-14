@@ -1,0 +1,16 @@
+import base.{Base(..), btag}
+import deriv.{Deriv(..), dtag}
+
+public export data T = T
+
+public export data W a = W a
+
+-- No `impl Base T`: `impl Deriv T`'s superinterface has no instance.
+impl Deriv T where
+  dtag _ = 2
+
+impl Base (W a) where
+  btag _ = 10
+
+impl Deriv (W a) requires Deriv a where
+  dtag (W x) = dtag x + 10

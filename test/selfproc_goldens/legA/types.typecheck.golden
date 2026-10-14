@@ -174,7 +174,6 @@ argumentIntoTyped : Mono -> Mono -> Unit
 argumentNoun : Int -> String
 arithDispatchMethod : String -> Option String
 arithEntry : Obligation -> List (Ref Route, Mono)
-arithGoalsIn : List Obligation -> List (Ref Route, Mono)
 armDictSites : Arm -> List (List Route)
 armEVars : Arm -> List String
 armIsUnguarded : List Guard -> Bool
@@ -868,9 +867,9 @@ definerPairsOf : String -> Map String (List (String, String)) -> List (String, S
 definerReceiverDispatches : String -> Mono -> Bool
 definerReceiverIsDictVar : String -> Mono -> Bool
 definerRowsOf : List (String, (String, String)) -> List (String, String)
-definerShadowArgHead : Expr -> Option (String, Ref (Option Int), Ref Route, Ref (List Route))
-definerShadowArgHeadCell : String -> EvCell -> Option (String, Ref (Option Int), Ref Route, Ref (List Route))
-definerShadowSpineArgAt : Expr -> Option (String, Ref (Option Int), Ref Route, Ref (List Route), Expr, List Expr)
+definerShadowArgHead : Expr -> Option (String, Ref (Option Int), Ref Route, Ref (List Route), Ref Inner)
+definerShadowArgHeadCell : String -> EvCell -> Option (String, Ref (Option Int), Ref Route, Ref (List Route), Ref Inner)
+definerShadowSpineArgAt : Expr -> Option (String, Ref (Option Int), Ref Route, Ref (List Route), Ref Inner, Expr, List Expr)
 definerShadowSpineVarAt : Expr -> Option (String, Expr, List Expr)
 definerShadowVarHead : Expr -> Option String
 definerShadowsFromSet : (String -> Bool) -> List Decl -> List String
@@ -1430,7 +1429,7 @@ headVarRootOf : Mono -> Option HeadVarRoot
 headVarsNarrowedBy : List (String, HeadVarRoot) -> List (String, Mono) -> List String
 headlessBucketKey : RegKey
 headsUnifier : Map String Unit -> List Mono -> List Mono -> Option (Ref (List (Int, Mono)))
-holeDiags : String -> Option Loc -> EvidenceRow -> List (String, TcDiag)
+holeDiags : String -> Option Loc -> Inner -> EvidenceRow -> List (String, TcDiag)
 holeKey : (String, TcDiag) -> String
 holesOnto : List (String, TcDiag) -> (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> (String, (List (String, Scheme), List TcDiag, List TcDiag))
 i64RangeText : String
@@ -1650,8 +1649,8 @@ inferDefaultBodies : TcEnv -> List Decl -> Unit
 inferDefaultBodiesIfEnabled : TcEnv -> List Decl -> Unit
 inferDefaultMethod : TcEnv -> IfaceRef -> List (String, List Kind) -> List String -> IfaceMethod -> Unit
 inferDefaultMethods : TcEnv -> IfaceRef -> List (String, List Kind) -> List String -> List IfaceMethod -> Unit
-inferDefinerShadowApp : TcEnv -> String -> Ref (Option Int) -> Ref Route -> Ref (List Route) -> Expr -> Expr -> Mono
-inferDefinerShadowAppAt : TcEnv -> String -> Ref (Option Int) -> Ref Route -> Ref (List Route) -> Expr -> List Expr -> Expr -> Expr -> Mono
+inferDefinerShadowApp : TcEnv -> String -> Ref (Option Int) -> Ref Route -> Ref (List Route) -> Ref Inner -> Expr -> Expr -> Mono
+inferDefinerShadowAppAt : TcEnv -> String -> Ref (Option Int) -> Ref Route -> Ref (List Route) -> Ref Inner -> Expr -> List Expr -> Expr -> Expr -> Mono
 inferDefinerShadowVarApp : TcEnv -> String -> Expr -> Expr -> Mono
 inferDefinerShadowVarAppAt : TcEnv -> String -> Expr -> List Expr -> Expr -> Expr -> Mono
 inferDefinerStandaloneVarAppAt : TcEnv -> String -> Expr -> List (Expr, Mono) -> Expr -> Expr -> Mono -> Option Loc -> Mono
@@ -1684,10 +1683,10 @@ inferLocalDictAt : TcEnv -> String -> EvId -> Mono
 inferMatch : TcEnv -> Mono -> List Arm -> Mono
 inferMemberClauses : TcEnv -> Option Mono -> BindingSummary -> List (List Pat, Expr) -> List Atom
 inferMembers : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> List ScopedMember -> Unit
-inferMethodAt : TcEnv -> String -> Ref String -> Ref (Option Int) -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Mono
+inferMethodAt : TcEnv -> String -> Ref String -> Ref (Option Int) -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Ref Inner -> Mono
 inferMethodAtCell : TcEnv -> String -> EvCell -> Mono
 inferMethodBody : TcEnv -> IfaceRef -> MethodBodyKind -> (List String, Ty, List (String, List Kind)) -> String -> List Pat -> Expr -> Unit
-inferMethodCandidateAt : TcEnv -> String -> Ref String -> Ref (Option Int) -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Mono
+inferMethodCandidateAt : TcEnv -> String -> Ref String -> Ref (Option Int) -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Ref Inner -> Mono
 inferNumLit : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
 inferNumLitBare : Int -> Ref (Option Float) -> Mono
 inferNumLitMethod : MethodSchemeRow -> Ref Route -> Mono
@@ -1723,11 +1722,11 @@ inferRecordUpdatePicked : String -> Mono -> TcEnv -> List FieldAssign -> RecordI
 inferRecordUpdateWith : TcEnv -> String -> Expr -> List FieldAssign -> RecordInfo -> Mono
 inferRecursiveValue : TcEnv -> String -> Expr -> (Mono, List (Int, AuthResidual))
 inferRequiresImpl : TcEnv -> List String -> ClassEnv -> Int -> IfaceRef -> List Ty -> List Require -> List ImplMethod -> Unit
-inferShadowApp : TcEnv -> String -> List (Ref (Option Int)) -> List (Ref Route) -> Expr -> Expr -> Mono
-inferShadowAppAt : TcEnv -> String -> List (Ref (Option Int)) -> List (Ref Route) -> Expr -> List Expr -> Expr -> Expr -> Mono
+inferShadowApp : TcEnv -> String -> List (Ref (Option Int)) -> List (Ref Route, Ref Inner) -> Expr -> Expr -> Mono
+inferShadowAppAt : TcEnv -> String -> List (Ref (Option Int)) -> List (Ref Route, Ref Inner) -> Expr -> List Expr -> Expr -> Expr -> Mono
 inferShadowAppHead : TcEnv -> Expr -> Mono
-inferShadowStandaloneArm : TcEnv -> String -> List (Ref (Option Int)) -> List (Ref Route) -> Expr -> Expr -> Mono -> Mono
-inferShadowStandaloneArmAt : TcEnv -> String -> List (Ref (Option Int)) -> List (Ref Route) -> Expr -> List (Expr, Mono) -> Expr -> Expr -> Mono -> Mono
+inferShadowStandaloneArm : TcEnv -> String -> List (Ref (Option Int)) -> List (Ref Route, Ref Inner) -> Expr -> Expr -> Mono -> Mono
+inferShadowStandaloneArmAt : TcEnv -> String -> List (Ref (Option Int)) -> List (Ref Route, Ref Inner) -> Expr -> List (Expr, Mono) -> Expr -> Expr -> Mono -> Mono
 inferSpineArgs : TcEnv -> List Expr -> List (Expr, Mono)
 inferStmt : TcEnv -> DoStmt -> TcEnv
 inferTestBodies : TcEnv -> List Decl -> Unit
@@ -1755,6 +1754,7 @@ inferredSlotBuckets : List PredicateSlot -> Map String (List PredicateSlot) -> M
 inferredSlotCoveredIds : List PredicateSlot -> Map String Unit -> Map String Unit
 initialEnv : TcEnv
 innerDefaultMethod : String -> String
+innerNotes : Ref Inner
 insertCtorPop : TcEnv -> List Decl -> SpellingPop Scheme -> SpellingPop Scheme
 insertCtorRow : TcEnv -> String -> TyConOrigin -> String -> SpellingPop Scheme -> SpellingPop Scheme
 insertCtorVariants : TcEnv -> String -> TyConOrigin -> List Variant -> SpellingPop Scheme -> SpellingPop Scheme
@@ -2050,7 +2050,6 @@ methodDictArityAtOrigin : TyConOrigin -> String -> Int
 methodDictArityInClassEnv : ClassEnv -> Int -> IfaceRef -> String -> Int
 methodDictArityOf : String -> Int
 methodDictEntry : Obligation -> List PendingMethodDict
-methodDictsIn : List Obligation -> List PendingMethodDict
 methodDispatchIdx : String -> Option Int
 methodEffArgOccs : List (String, List Kind) -> Ty -> List (String, List Atom)
 methodEffChargedOccs : Ty -> List (String, List Atom)
@@ -2278,6 +2277,8 @@ noteAssumption : ScopeId -> AssumAnswer -> Unit
 noteBuiltinExternNames : List Decl -> Unit
 noteEvidenceObservation : Obligation -> Unit
 noteHeadCtor : Pat -> Map String Unit -> Map String Unit
+noteInner : Inner -> Unit
+noteInnerRoute : Route -> Route
 noteMethodReturnTrace : MethodReturnTraceStage -> MethodReturnRequest -> Option Route -> List Route -> Unit
 noteNumericEntailment : EntailKind -> ScopeId -> Option IfaceRef -> Route -> List Route -> Unit
 noteNumericObligationChecked : UObligation -> List Mono -> Unit
@@ -2545,7 +2546,7 @@ pushNumLitObl : ClassPredicate -> Mono -> Option Loc -> ScopeId -> Unit
 pushNumlit : (Mono, Ref (Option Float), Int, Ref Route) -> Unit
 pushPendingObl : IfaceRef -> List String -> Ty -> Mono -> List (String, Mono) -> Provenance -> Option Loc -> Unit
 pushRecDictAppGoal : RecDictApp -> Unit
-pushSiteGoal : GoalKind -> PendingEntry -> Unit
+pushSiteGoal : GoalKind -> Ref Inner -> PendingEntry -> Unit
 pushTypeError : String -> String -> Unit
 pushTypeErrorAt : String -> Option Loc -> String -> Unit
 pushTypeErrorHelpFixAt : String -> Option Loc -> String -> String -> Option (Loc, String) -> Unit
@@ -2584,7 +2585,6 @@ rebuildGroupDecls : Map String (List (List Pat, Expr)) -> List Decl -> List Decl
 rebuildGroupDeclsGo : Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> List Decl -> (List Decl, Map String (List (List Pat, Expr)))
 rebuildLetBinds : Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> List LetBind -> (List LetBind, Map String (List (List Pat, Expr)))
 recDictAppEntry : Obligation -> List RecDictApp
-recDictAppsIn : List Obligation -> List RecDictApp
 recFieldMono : SigVars -> List (String, Mono) -> Field -> (String, Mono)
 recMarkMembers : Map String Unit -> List (String, Mono) -> List ScopedMember -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
 recPatFieldOpens : TcEnv -> RecPatField -> Bool
@@ -2597,7 +2597,7 @@ receiverTypeIdent : Mono -> Option Ident
 receiverTypeWord : Mono -> String -> String
 recordAbsorptions : List Atom -> Ref Effvar -> Unit
 recordArgSiteFn : String -> Int -> Mono -> Unit
-recordArgStamp : String -> Ref Route -> Ref (List Route) -> Int -> Mono -> List (String, Mono) -> Unit
+recordArgStamp : String -> Ref Route -> Ref (List Route) -> Ref Inner -> Int -> Mono -> List (String, Mono) -> Unit
 recordAuthCells : List Int -> Mono -> List (String, Mono) -> Map Int (Ref Authvar)
 recordBinderType : BinderId -> String -> Mono -> Option Int -> Bool -> Unit
 recordBinopGoals : String -> Ref Route -> Mono -> Unit
@@ -2636,8 +2636,8 @@ recordLiveRoots : Unit -> Unit
 recordLocalBind : String -> Option Loc -> BinderId -> Mono -> Unit
 recordLocalQuantified : Scheme -> Unit
 recordLocalRecOcc : String -> EvId -> Unit
-recordMethodDicts : String -> Ref (List Route) -> List (Int, Mono) -> Unit
-recordMethodDictsFromSlots : List MethodPredicateSlot -> Ref (List Route) -> List (Int, Mono) -> Unit
+recordMethodDicts : String -> Ref (List Route) -> Ref Inner -> List (Int, Mono) -> Unit
+recordMethodDictsFromSlots : List MethodPredicateSlot -> Ref (List Route) -> Ref Inner -> List (Int, Mono) -> Unit
 recordMethodGrantOcc : String -> EvId -> Scheme -> List (Int, Authority) -> Unit
 recordMethodGrants : List MethodSchemeRow -> Unit
 recordMethodLevelObls : List String -> Ty -> Mono -> Unit
@@ -2660,13 +2660,13 @@ recordOwnerModule : RecordInfo -> Option String
 recordParamKinds : TyConOrigin -> String -> List Kind -> Unit
 recordParamPolarities : TyConOrigin -> String -> List Polarity -> Unit
 recordParamRowAtoms : TyConOrigin -> String -> List (List Atom) -> Unit
-recordRLocalSite : TcEnv -> String -> Ref Route -> Mono -> Unit
+recordRLocalSite : TcEnv -> String -> Ref Route -> Ref Inner -> Mono -> Unit
 recordRecursiveGrants : String -> String -> List (String, List Int) -> Expr -> Unit
 recordResultMono : RecordInfo -> Mono
 recordSchemeCallObligations : Int -> List VecObl -> List (Int, Mono) -> Unit
-recordSelectedStandaloneRoutes : String -> ShadowDicts -> List (Ref Route) -> Mono -> Unit
+recordSelectedStandaloneRoutes : String -> ShadowDicts -> List (Ref Route, Ref Inner) -> Mono -> Unit
 recordShadowStandaloneObls : TcEnv -> String -> List (Int, Mono) -> Unit
-recordSite : TcEnv -> String -> Scheme -> Ref String -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Mono -> MethodInstantiationSubst -> Mono
+recordSite : TcEnv -> String -> Scheme -> Ref String -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Ref Inner -> Mono -> MethodInstantiationSubst -> Mono
 recordStandaloneAt : String -> Expr -> SelectedValueOccurrence -> Unit
 recordStandaloneGrantOcc : String -> EvId -> Scheme -> List (Int, Authority) -> Int -> Unit
 recordTopBinderTypes : Map String Scheme -> List Decl -> Unit
@@ -2894,7 +2894,7 @@ routePrerequisiteRoutes : Route -> List Route
 routeRDictName : Route -> List String
 routeUndeterminedTop : ScopeId -> IfaceRef -> List Mono -> Route
 routeWalkMemoized : String -> ScopeId -> List Mono -> ImplRow -> ReqWalk -> (Unit -> List Route) -> List Route
-routeWalkRecorded : IfaceRef -> List Mono -> ImplRow -> String -> ScopeId -> List RouteWalkEntry -> Option (List Route)
+routeWalkRecorded : IfaceRef -> List Mono -> ImplRow -> String -> ScopeId -> List RouteWalkEntry -> Option RouteWalkEntry
 routesOfMonosTop : String -> ScopeId -> List Mono -> List IfaceRef -> List Route
 routesOfMonosTopV : String -> ScopeId -> List Mono -> List IfaceRef -> List (List Mono) -> List Route
 rowArgAtomsApp : List (String, List Kind) -> TyConOrigin -> String -> List Ty -> Option (List (String, List Atom))
@@ -3010,8 +3010,8 @@ shadowSpineNodesAt : String -> Expr -> Option (List Expr)
 shadowSpineNodesAtImporter : String -> Expr -> Option (List Expr)
 shadowStandaloneDictSlots : List CSlot -> List (List Mono) -> List (Int, Mono) -> ShadowDicts
 shadowStandaloneDictSlotsAt : Option ValueScheme -> String -> String -> Mono -> ShadowDicts
-shadowStandaloneHead : TcEnv -> Expr -> Option (String, List (Ref (Option Int)), List (Ref Route))
-shadowStandaloneSpineHeadAt : TcEnv -> Expr -> Option (String, List (Ref (Option Int)), List (Ref Route), Expr, List Expr)
+shadowStandaloneHead : TcEnv -> Expr -> Option (String, List (Ref (Option Int)), List (Ref Route, Ref Inner))
+shadowStandaloneSpineHeadAt : TcEnv -> Expr -> Option (String, List (Ref (Option Int)), List (Ref Route, Ref Inner), Expr, List Expr)
 shadowSymSpelledBare : SpellCtx -> List (String, String) -> String -> Bool
 shadowVarHeadMethodScheme : TcEnv -> String -> Expr -> Mono
 sharedAuthority : Int -> Option (Ref Authvar) -> Authority
@@ -3045,8 +3045,7 @@ signedTopNames : List Decl -> Map String Unit -> Map String Unit
 sigsOf : List Decl -> List (String, Ty)
 singleTyparamIfaceMethod : String -> Bool
 siteEntry : Obligation -> List PendingEntry
-siteGoalsIn : GoalKind -> List Obligation -> List PendingEntry
-siteObligation : GoalKind -> PendingEntry -> Obligation
+siteObligation : GoalKind -> Ref Inner -> PendingEntry -> Obligation
 siteRDictName : Ref Route -> List String
 siteRDictNamesL : List Route -> List String
 sitesFor : String -> Map String (List a) -> List a
@@ -3075,9 +3074,11 @@ splitOnCommaGo : String -> Int -> Int -> List String -> List String
 stableGoalReach : List Int -> IfaceRef -> List Mono -> GoalReach
 stableMinimum : List Mono -> List ImplRow -> ImplRow -> Bool
 stampCtxOf : String -> List Decl -> List Obligation -> List (Mono, Ref (Option Float), Int, Ref Route) -> StampCtx
+stampEach : (Obligation -> Unit) -> GoalKind -> StampCtx -> Unit
 stampGraphDecls : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 stampGroupClauses : ModuleMarking -> List String -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
 stampMethodArities : List (Ref (Option Int)) -> Int -> Unit
+stampNoting : (Obligation -> Unit) -> Obligation -> Unit
 stampOpRouteVal : Bool -> String -> ScopeId -> String -> Mono -> String -> Route
 stampPredicateOpRouteVal : String -> ScopeId -> String -> Mono -> String -> ClassPredicate -> Route
 stampRoutes : List (Ref Route) -> Unit

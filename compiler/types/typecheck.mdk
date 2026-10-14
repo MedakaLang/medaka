@@ -511,7 +511,9 @@ import types.disposition.{
 import types.target_profile.{
   TargetProfile, hostLabels, ioJoinGrants, profileName, selectedProfile
 }
-import types.evidence_complete.{EvidenceRow(..), rowHole}
+import types.evidence_complete.{
+  EvidenceRow(..), Inner, innerNone, innerOfRoute, innerOr, rowHoleWith
+}
 import types.runtime_types.{
   BinderRow(..),
   BinderTypeTable,
@@ -3812,6 +3814,11 @@ data Obligation = Obligation {
   oLoc : Option Loc,
   oScope : ScopeId,
   oPayload : GoalPayload,
+  -- What the stamper built below the destination's top level
+  -- (`types/evidence_complete.mdk`'s `Inner`).  A method-cell goal shares its cell's
+  -- `ecInner`, as `oDest` shares the cell's route, so a cell several goals write ORs
+  -- their notes.
+  oInner : Ref Inner,
 }
 
 goalKindTag : GoalKind -> Int
@@ -3831,8 +3838,8 @@ pushGoal o =
   g.goals := o :: g.goals.value
   g.goalsN := g.goalsN.value + 1
 
-siteObligation : GoalKind -> PendingEntry -> Obligation
-siteObligation k (PendingEntry name tagRef m encl site loc scope ev) = Obligation {
+siteObligation : GoalKind -> Ref Inner -> PendingEntry -> Obligation
+siteObligation k inner (PendingEntry name tagRef m encl site loc scope ev) = Obligation {
   oKind = k,
   oDest = EvRoute tagRef,
   oEv = ev,
@@ -3840,10 +3847,13 @@ siteObligation k (PendingEntry name tagRef m encl site loc scope ev) = Obligatio
   oLoc = loc,
   oScope = scope,
   oPayload = GPSite name m site,
+  oInner = inner,
 }
 
-pushSiteGoal : GoalKind -> PendingEntry -> Unit
-pushSiteGoal k e = pushGoal (siteObligation k e)
+-- [inner] is the destination's summary: the method cell's `ecInner` when [e]'s route
+-- ref is a cell's, a fresh one otherwise.
+pushSiteGoal : GoalKind -> Ref Inner -> PendingEntry -> Unit
+pushSiteGoal k inner e = pushGoal (siteObligation k inner e)
 
 -- an arithmetic operator site: only its operand mono and its route cell
 pushArithGoal : Ref Route -> Mono -> EvId -> Unit
@@ -3855,6 +3865,7 @@ pushArithGoal dref m ev = pushGoal Obligation {
   oLoc = None,
   oScope = captureScope (),
   oPayload = GPArith m,
+  oInner = Ref innerNone,
 }
 
 pushDictApp : PendingDictApp -> Unit
@@ -3866,6 +3877,7 @@ pushDictApp app = pushGoal Obligation {
   oLoc = app.pdaLoc,
   oScope = app.pdaScope,
   oPayload = GPDictApp app,
+  oInner = Ref innerNone,
 }
 
 pushMethodDictGoal : PendingMethodDict -> Unit
@@ -3877,6 +3889,7 @@ pushMethodDictGoal pmd = pushGoal Obligation {
   oLoc = None,
   oScope = pmd.pmdScope,
   oPayload = GPMethodDict pmd,
+  oInner = pmd.pmdInner,
 }
 
 pushRecDictAppGoal : RecDictApp -> Unit
@@ -3889,6 +3902,7 @@ pushRecDictAppGoal (r@(RecDictApp routesRef _ encl _ scope ev)) = pushGoal
     oLoc = None,
     oScope = scope,
     oPayload = GPRecDictApp r,
+    oInner = Ref innerNone,
   }
 
 -- the goals recorded since `mark` (a length of the channel: a module's start mark
@@ -3900,9 +3914,6 @@ goalsSince mark =
 goalsOfKindIn : GoalKind -> List Obligation -> List Obligation
 goalsOfKindIn k gs = filterList (o => goalKindTag o.oKind == goalKindTag k) gs
 
-siteGoalsIn : GoalKind -> List Obligation -> List PendingEntry
-siteGoalsIn k gs = flatMap siteEntry (goalsOfKindIn k gs)
-
 siteEntry : Obligation -> List PendingEntry
 siteEntry o = match o.oPayload
   GPSite name m site =>
@@ -3912,9 +3923,6 @@ siteEntry o = match o.oPayload
 evCell : EvDest -> Ref Route
 evCell (EvRoute r) = r
 evCell (EvRoutes _) = Ref RNone
-
-arithGoalsIn : List Obligation -> List (Ref Route, Mono)
-arithGoalsIn gs = flatMap arithEntry (goalsOfKindIn GKArithSite gs)
 
 arithEntry : Obligation -> List (Ref Route, Mono)
 arithEntry o = match o.oPayload
@@ -3932,16 +3940,10 @@ dictAppEntry o = match o.oPayload
   GPDictApp a => [a]
   _ => []
 
-methodDictsIn : List Obligation -> List PendingMethodDict
-methodDictsIn gs = flatMap methodDictEntry gs
-
 methodDictEntry : Obligation -> List PendingMethodDict
 methodDictEntry o = match o.oPayload
   GPMethodDict d => [d]
   _ => []
-
-recDictAppsIn : List Obligation -> List RecDictApp
-recDictAppsIn gs = flatMap recDictAppEntry gs
 
 recDictAppEntry : Obligation -> List RecDictApp
 recDictAppEntry o = match o.oPayload
@@ -9744,6 +9746,8 @@ data PendingMethodDict = PendingMethodDict {
   pmdSlots : List PredicateSlot,
   pmdEncl : String,
   pmdScope : ScopeId,
+  -- the method cell's `ecInner`
+  pmdInner : Ref Inner,
 }
 
 -- #158 PR2: the 22 per-run cross-module accumulators declared above (the six
@@ -10112,16 +10116,18 @@ nthArgMono n m = match normalize m
 recordArgStamp : String ->
   Ref Route ->
   Ref (List Route) ->
+  Ref Inner ->
   Int ->
   Mono ->
   List (String, Mono) ->
   Unit
-recordArgStamp name tagRef implRef idx mono omitted
+recordArgStamp name tagRef implRef innerRef idx mono omitted
   | toggles.value.suppressArgStamp.value = ()
   | otherwise = match nthArgMono idx mono
     Some am =>
       pushSiteGoal
         GKArgStamp
+        innerRef
         (PendingEntry
           name
           tagRef
@@ -11449,6 +11455,9 @@ data EvCell = EvCell {
   -- node no inference reached
   ecLoc : Ref (Option Loc),
   ecName : Ref String,
+  -- what the stampers built below the top level of the three routes, noted by every
+  -- goal that writes them (`Obligation.oInner`)
+  ecInner : Ref Inner,
 }
 
 data GraphRun = GraphRun {
@@ -11624,6 +11633,7 @@ mintMethodCellRaw iface arity tag impls =
         ecMeth = Ref [],
         ecLoc = Ref None,
         ecName = Ref "",
+        ecInner = Ref innerNone,
       })
       arr
   ev
@@ -12396,6 +12406,8 @@ data RouteWalkEntry = RouteWalkEntry {
   rweEncl : String,
   rweScope : ScopeId,
   rweRoutes : List Route,
+  -- what building [rweRoutes] noted below a destination's top level, replayed on a hit
+  rweInner : Inner,
 }
 
 newWalkMemo : Unit -> WalkMemo
@@ -12472,10 +12484,16 @@ routeWalkMemoized encl useScope goals row walk follow =
   let key = enteredGoalKey walk
   let entries = optionOr [] (omLookup key memo.wmRoutes.value)
   match routeWalkRecorded iface goals row encl useScope entries
-    Some routes => routes
+    Some entry =>
+      let _ = noteInner entry.rweInner
+      entry.rweRoutes
     None =>
       let cutsBefore = memo.wmCuts.value
+      let outer = innerNotes.value
+      innerNotes := innerNone
       let (erred, routes) = erredDuring follow
+      let inner = innerNotes.value
+      innerNotes := innerOr outer inner
       let _ =
         if erred || memo.wmCuts.value /= cutsBefore then
           ()
@@ -12487,6 +12505,7 @@ routeWalkMemoized encl useScope goals row walk follow =
             rweEncl = encl,
             rweScope = useScope,
             rweRoutes = routes,
+            rweInner = inner,
           }
           memo.wmRoutes :=
             omInsert
@@ -12501,7 +12520,7 @@ routeWalkRecorded : IfaceRef ->
   String ->
   ScopeId ->
   List RouteWalkEntry ->
-  Option (List Route)
+  Option RouteWalkEntry
 routeWalkRecorded _ _ _ _ _ [] = None
 routeWalkRecorded iface goals row encl useScope (entry :: rest) =
   if entry.rweEncl == encl
@@ -12509,9 +12528,25 @@ routeWalkRecorded iface goals row encl useScope (entry :: rest) =
     && sameIfaceDecl entry.rweIface iface
     && monoVecSameGiven entry.rweGoals goals
     && rowRouteKey entry.rweRow == rowRouteKey row then
-    Some entry.rweRoutes
+    Some entry
   else
     routeWalkRecorded iface goals row encl useScope rest
+
+-- What the stamper running now has built below its destination's top level.  The
+-- three producers of the routes inside a dictionary (`argReqRoute`, `superRouteAt`,
+-- `undeterminedRowRoute`'s supers) note each route they return, so a sub-route the
+-- solver shares between paths is noted once, where it is built.
+innerNotes : Ref Inner
+innerNotes = Ref innerNone
+
+noteInner : Inner -> Unit
+noteInner inner = innerNotes := innerOr innerNotes.value inner
+
+-- [r], noted as a route inside a dictionary.
+noteInnerRoute : Route -> Route
+noteInnerRoute r =
+  let _ = noteInner (innerOfRoute r)
+  r
 
 -- A route walk's cut, counted so no subtree containing one is recorded.
 noteRouteWalkCut : ReqWalk -> Unit
@@ -16599,6 +16634,7 @@ inferMethodAt : TcEnv ->
   Ref Route ->
   Ref (List Route) ->
   Ref (List Route) ->
+  Ref Inner ->
   Mono
 inferMethodAtCell : TcEnv -> String -> EvCell -> Mono
 inferMethodAtCell env name c =
@@ -16607,7 +16643,16 @@ inferMethodAtCell env name c =
   st.gsLastStandalone := None
   c.ecLoc := !currentLoc
   c.ecName := name
-  let t = inferMethodAt env name c.ecIface c.ecArity c.ecTag c.ecImpl c.ecMeth
+  let t =
+    inferMethodAt
+      env
+      name
+      c.ecIface
+      c.ecArity
+      c.ecTag
+      c.ecImpl
+      c.ecMeth
+      c.ecInner
   let _ = match (st.gsLastStandalone.value, st.gsLastMethodInst.value)
     (Some (scheme, subst), _) =>
       recordStandaloneGrantOcc
@@ -16646,7 +16691,7 @@ recordShadowStandaloneObls env name subst
         None => ()
   | otherwise = ()
 
-inferMethodAt env name ifaceRef arityRef tagRef implRef methodRef =
+inferMethodAt env name ifaceRef arityRef tagRef implRef methodRef innerRef =
   let selected = match standaloneValueBinding env name
     Some scheme => Some scheme
     None => standaloneValueBindingEmit env name tagRef
@@ -16667,6 +16712,7 @@ inferMethodAt env name ifaceRef arityRef tagRef implRef methodRef =
       let _ =
         pushSiteGoal
           GKRLocalSite
+          innerRef
           (PendingEntry
             name
             tagRef
@@ -16678,7 +16724,15 @@ inferMethodAt env name ifaceRef arityRef tagRef implRef methodRef =
             (freshEvId ()))
       inst.mtiBody
     None =>
-      inferMethodCandidateAt env name ifaceRef arityRef tagRef implRef methodRef
+      inferMethodCandidateAt
+        env
+        name
+        ifaceRef
+        arityRef
+        tagRef
+        implRef
+        methodRef
+        innerRef
 
 -- Selection precedes instantiation: the returned value, forcing row, obligations,
 -- and route slots above share one occurrence's substitution. A discarded method
@@ -16690,8 +16744,9 @@ inferMethodCandidateAt : TcEnv ->
   Ref Route ->
   Ref (List Route) ->
   Ref (List Route) ->
+  Ref Inner ->
   Mono
-inferMethodCandidateAt env name ifaceRef arityRef tagRef implRef methodRef =
+inferMethodCandidateAt env name ifaceRef arityRef tagRef implRef methodRef innerRef =
   match lookupVar env name
     -- Routed standalone recovery already ran before candidate selection.
     None => panic ("unbound method: " ++ name)
@@ -16702,14 +16757,15 @@ inferMethodCandidateAt env name ifaceRef arityRef tagRef implRef methodRef =
       graphRun.value.grants.gsLastMethodInst := Some (s, subst.misAuthSubst)
       arityRef := Some (funArity occurrence)
       ifaceRef := admittedIfaceWord name
-      let _ = recordRLocalSite env name tagRef occurrence
+      let _ = recordRLocalSite env name tagRef innerRef occurrence
       let ret = match argDispatchOf name
         Some idx =>
-          let _ = recordMethodDicts name methodRef subst.misTypeSubst
+          let _ = recordMethodDicts name methodRef innerRef subst.misTypeSubst
           -- One variable per omitted typaram, shared by the goal and the route.
           let omitted = methodOmittedVars name
           let _ = recordMethodObligationGuarded env name s occurrence omitted
-          let _ = recordArgStamp name tagRef implRef idx occurrence omitted
+          let _ =
+            recordArgStamp name tagRef implRef innerRef idx occurrence omitted
           let _ = recordArgSiteFn name idx occurrence
           occurrence
         None =>
@@ -16721,6 +16777,7 @@ inferMethodCandidateAt env name ifaceRef arityRef tagRef implRef methodRef =
             tagRef
             implRef
             methodRef
+            innerRef
             occurrence
             subst
       let _ = forceInstantiation name inst
@@ -16750,8 +16807,8 @@ inferMethodCandidateAt env name ifaceRef arityRef tagRef implRef methodRef =
 -- standalone arm is never reached) both take.  Both must carry the standalone's dicts or
 -- they under-apply exactly like the headline bug.  Slots only — NOT obligations; see
 -- shadowStandaloneDictSlotsAt.
-recordRLocalSite : TcEnv -> String -> Ref Route -> Mono -> Unit
-recordRLocalSite env name tagRef inst
+recordRLocalSite : TcEnv -> String -> Ref Route -> Ref Inner -> Mono -> Unit
+recordRLocalSite env name tagRef innerRef inst
   | toggles.value.suppressRLocalRecord.value = ()
   -- #1430 (S2, row 39): a RETURN-POSITION method has NO dispatch argument, so
   -- `methodDispatchIdx` answers None and every arm below declined — no pending site, no
@@ -16773,6 +16830,7 @@ recordRLocalSite env name tagRef inst
   | isNone (methodDispatchIdx name) && standaloneValuePinned env name =
     pushSiteGoal
       GKRLocalSite
+      innerRef
       (PendingEntry
         name
         tagRef
@@ -16796,6 +16854,7 @@ recordRLocalSite env name tagRef inst
             am
         pushSiteGoal
           GKRLocalSite
+          innerRef
           (PendingEntry
             name
             tagRef
@@ -16970,27 +17029,33 @@ lookupIdxById iface n (((ir, mn), i) :: rest)
 -- instantiation subst to its concrete mono and record the (methodRef, monos) so
 -- resolveMethodDicts can route them after inference.  A method with no method-level
 -- constraint records nothing — methodRef stays [], eval's fold is a no-op.
-recordMethodDicts : String -> Ref (List Route) -> List (Int, Mono) -> Unit
-recordMethodDicts name methodRef subst = match methodIfaceHere name
+recordMethodDicts : String ->
+  Ref (List Route) ->
+  Ref Inner ->
+  List (Int, Mono) ->
+  Unit
+recordMethodDicts name methodRef innerRef subst = match methodIfaceHere name
   None => ()
   Some iface =>
     match (lookupMethodPredicateSlots
       (methodSlotKey iface (originMethodName name))
       perRun.value.methodPredicateSlotsRef.value)
       None => ()
-      Some slots => recordMethodDictsFromSlots slots methodRef subst
+      Some slots => recordMethodDictsFromSlots slots methodRef innerRef subst
 
 recordMethodDictsFromSlots : List MethodPredicateSlot ->
   Ref (List Route) ->
+  Ref Inner ->
   List (Int, Mono) ->
   Unit
-recordMethodDictsFromSlots slots methodRef subst = pushMethodDictGoal
+recordMethodDictsFromSlots slots methodRef innerRef subst = pushMethodDictGoal
   PendingMethodDict {
     pmdRoutesRef = methodRef,
     pmdEv = freshEvId (),
     pmdSlots = instantiateMethodPredicateSlots slots subst,
     pmdEncl = perRun.value.currentFn.value,
     pmdScope = captureScope (),
+    pmdInner = innerRef,
   }
 
 -- Instantiate the authoritative method carrier for THIS occurrence.  The carrier's
@@ -17084,10 +17149,11 @@ recordSite : TcEnv ->
   Ref Route ->
   Ref (List Route) ->
   Ref (List Route) ->
+  Ref Inner ->
   Mono ->
   MethodInstantiationSubst ->
   Mono
-recordSite env name scheme ifaceRef tagRef implRef methodRef methodType subst =
+recordSite env name scheme ifaceRef tagRef implRef methodRef innerRef methodType subst =
   let stripped = stripArrows methodType
   let ev = freshEvId ()
   let exactRow = exactReturnRow env name scheme
@@ -17109,6 +17175,7 @@ recordSite env name scheme ifaceRef tagRef implRef methodRef methodType subst =
         recordMethodDictsFromSlots
           row.msrMethodSlots
           methodRef
+          innerRef
           subst.misTypeSubst
     _ =>
       let _ =
@@ -17117,12 +17184,13 @@ recordSite env name scheme ifaceRef tagRef implRef methodRef methodType subst =
         else
           let _ = recordMethodObligationGuarded env name scheme methodType []
           ()
-      recordMethodDicts name methodRef subst.misTypeSubst
+      recordMethodDicts name methodRef innerRef subst.misTypeSubst
   let siteEv = match exact
     Some request => optionOr ev request.mrrGoalEv
     None => ev
   pushSiteGoal
     GKReturnSite
+    innerRef
     (PendingEntry
       name
       tagRef
@@ -17155,6 +17223,7 @@ recordNumLitSite predicate tagRef occurrence origin scope =
   let stripped = stripArrows occurrence
   pushSiteGoal
     GKReturnSite
+    (Ref innerNone)
     (PendingEntry
       "fromInt"
       tagRef
@@ -20372,6 +20441,7 @@ recordBinopSite op dref m = match binopMethod op
   Some method =>
     pushSiteGoal
       GKBinopSite
+      (Ref innerNone)
       (PendingEntry
         method
         dref
@@ -20416,6 +20486,7 @@ recordBinopGoals op dref m = match arithDispatchMethod op
       let _ =
         pushSiteGoal
           GKBinopSite
+          (Ref innerNone)
           (PendingEntry
             method
             dref
@@ -20471,6 +20542,7 @@ recordUnopSite op dref m = match unopMethod op
         SKOp inImpl
     pushSiteGoal
       GKUnopSite
+      (Ref innerNone)
       (PendingEntry
         method
         dref
@@ -20926,7 +20998,12 @@ inferNumLitMethod anchor tagRef =
   let scope = captureScope ()
   let _ =
     noteNumericPredicateTrace NPTProduced predicate scope origin None None []
-  let _ = recordMethodDictsFromSlots anchor.msrMethodSlots (Ref []) (snd inst)
+  let _ =
+    recordMethodDictsFromSlots
+      anchor.msrMethodSlots
+      (Ref [])
+      (Ref innerNone)
+      (snd inst)
   let _ = recordNumLitObligationGuarded anchor predicate occurrence origin scope
   recordNumLitSite predicate tagRef occurrence origin scope
 
@@ -22524,13 +22601,14 @@ inferAppExpr env f x = match lamUnderLoc x
       -- declared type on the enclosing annotated function.  They decline at k == 0 (a
       -- bare head has no applied nodes), so the index-0 path below is byte-unchanged.
       None => match definerShadowSpineArgAt f
-        Some (dname, darityRef, dtagRef, dimplRef, dhd, dnodes) =>
+        Some (dname, darityRef, dtagRef, dimplRef, dinnerRef, dhd, dnodes) =>
           inferDefinerShadowAppAt
             env
             dname
             darityRef
             dtagRef
             dimplRef
+            dinnerRef
             dhd
             dnodes
             f
@@ -22539,8 +22617,16 @@ inferAppExpr env f x = match lamUnderLoc x
           Some (dname, dhd, dnodes) =>
             inferDefinerShadowVarAppAt env dname dhd dnodes f x
           None => match definerShadowArgHead f
-            Some (dname, darityRef, dtagRef, dimplRef) =>
-              inferDefinerShadowApp env dname darityRef dtagRef dimplRef f x
+            Some (dname, darityRef, dtagRef, dimplRef, dinnerRef) =>
+              inferDefinerShadowApp
+                env
+                dname
+                darityRef
+                dtagRef
+                dimplRef
+                dinnerRef
+                f
+                x
             None => match definerShadowVarHead f
               Some dname => inferDefinerShadowVarApp env dname f x
               None =>
@@ -22574,12 +22660,12 @@ inferAppExpr env f x = match lamUnderLoc x
 -- else (no shadow, multi-param iface, non-method head) returns None → the ordinary path.
 shadowStandaloneHead : TcEnv ->
   Expr ->
-  Option (String, List (Ref (Option Int)), List (Ref Route))
+  Option (String, List (Ref (Option Int)), List (Ref Route, Ref Inner))
 shadowStandaloneHead env (ELoc _ f) = shadowStandaloneHead env f
 shadowStandaloneHead env (EMethodAt name _ ev)
   | isShadowStandalone env name =
     let c = methodCellOf ev
-    Some (name, [c.ecArity], [c.ecTag])
+    Some (name, [c.ecArity], [(c.ecTag, c.ecInner)])
   | otherwise = None
 shadowStandaloneHead env (EVar name)
   | isShadowStandalone env name = Some (name, [], [])
@@ -22599,7 +22685,7 @@ shadowStandaloneHead _ _ = None
 -- shadowStandaloneHead / inferShadowApp path stays byte-identical.
 shadowStandaloneSpineHeadAt : TcEnv ->
   Expr ->
-  Option (String, List (Ref (Option Int)), List (Ref Route), Expr, List Expr)
+  Option (String, List (Ref (Option Int)), List (Ref Route, Ref Inner), Expr, List Expr)
 shadowStandaloneSpineHeadAt env f =
   match shadowStandaloneHead env (appSpineHead f)
     None => None
@@ -22700,7 +22786,7 @@ ifaceMethodName name =
 inferShadowApp : TcEnv ->
   String ->
   List (Ref (Option Int)) ->
-  List (Ref Route) ->
+  List (Ref Route, Ref Inner) ->
   Expr ->
   Expr ->
   Mono
@@ -22751,7 +22837,7 @@ inferShadowApp env mname arityRefs tagRefs f x =
 inferShadowStandaloneArm : TcEnv ->
   String ->
   List (Ref (Option Int)) ->
-  List (Ref Route) ->
+  List (Ref Route, Ref Inner) ->
   Expr ->
   Expr ->
   Mono ->
@@ -22772,7 +22858,7 @@ inferShadowStandaloneArm env mname arityRefs tagRefs f x tx =
       let r = freshVar ()
       let eff = applicationRow env (EApp f x) smono tx r
       let _ = performEffect perRun.value.curEffect eff
-      let _ = stampRoutes tagRefs
+      let _ = stampRoutes (map fst tagRefs)
       -- S-1 (Fork D — the importer half): an IMPORTED constrained standalone shadowing
       -- a method breaks identically to a local one (its def is dict-passed in its own
       -- module; this call must supply the dicts).  Compute them off the head type we
@@ -22812,7 +22898,7 @@ inferShadowAppHead env f =
 inferShadowAppAt : TcEnv ->
   String ->
   List (Ref (Option Int)) ->
-  List (Ref Route) ->
+  List (Ref Route, Ref Inner) ->
   Expr ->
   List Expr ->
   Expr ->
@@ -22860,7 +22946,7 @@ inferShadowAppAt env mname arityRefs tagRefs hd nodes f x =
 inferShadowStandaloneArmAt : TcEnv ->
   String ->
   List (Ref (Option Int)) ->
-  List (Ref Route) ->
+  List (Ref Route, Ref Inner) ->
   Expr ->
   List (Expr, Mono) ->
   Expr ->
@@ -22881,7 +22967,7 @@ inferShadowStandaloneArmAt env mname arityRefs tagRefs hd pre f x tx =
       let smono = occurrence.svoInstance.mtiBody
       let _ = stampMethodArities arityRefs (funArity smono)
       let r = unifySpineResult env f smono (pre ++ [(x, tx)])
-      let _ = stampRoutes tagRefs
+      let _ = stampRoutes (map fst tagRefs)
       let _ =
         recordSelectedStandaloneRoutes mname occurrence.svoDicts tagRefs tx
       r
@@ -22921,16 +23007,17 @@ importerShadowDomainAt env mname k = match lookupStandaloneVar env mname
 -- Inert (no dicts, same RLocal stamp) for an unconstrained imported standalone.
 recordSelectedStandaloneRoutes : String ->
   ShadowDicts ->
-  List (Ref Route) ->
+  List (Ref Route, Ref Inner) ->
   Mono ->
   Unit
 recordSelectedStandaloneRoutes _ _ [] _ = ()
 -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
 -- lint-disable-next-line rule-prefer-assign-op
-recordSelectedStandaloneRoutes mname dicts (r :: rest) tx =
+recordSelectedStandaloneRoutes mname dicts ((r, inner) :: rest) tx =
   let _ =
     pushSiteGoal
       GKRLocalSite
+      inner
       (PendingEntry
         mname
         r
@@ -22967,7 +23054,7 @@ recordSelectedStandaloneRoutes mname dicts (r :: rest) tx =
 -- definer shadow.  On the un-mangled run/check path the route is RNone (sym ""), so
 -- this branch is inert there and the ordinary definerShadowNames branch governs.
 definerShadowArgHead : Expr ->
-  Option (String, Ref (Option Int), Ref Route, Ref (List Route))
+  Option (String, Ref (Option Int), Ref Route, Ref (List Route), Ref Inner)
 definerShadowArgHead (ELoc _ f) = definerShadowArgHead f
 -- ⚠️ #54: the two disjuncts carry DIFFERENT gates, because they serve different shadow
 -- KINDS — this predicate is a Fork-1 boundary, not an arity test.  `isDefinerShadow` is
@@ -22982,10 +23069,10 @@ definerShadowArgHead _ = None
 
 definerShadowArgHeadCell : String ->
   EvCell ->
-  Option (String, Ref (Option Int), Ref Route, Ref (List Route))
+  Option (String, Ref (Option Int), Ref Route, Ref (List Route), Ref Inner)
 definerShadowArgHeadCell name c
   | isDefinerShadow name || importerShadowOnEmitPath name c.ecTag =
-    Some (name, c.ecArity, c.ecTag, c.ecImpl)
+    Some (name, c.ecArity, c.ecTag, c.ecImpl, c.ecInner)
   | otherwise = None
 
 -- L4 (xmod-identity #1351 spine, RUN-XMOD-022/026): the mark pass's own per-occurrence
@@ -23064,11 +23151,12 @@ inferDefinerShadowApp : TcEnv ->
   Ref (Option Int) ->
   Ref Route ->
   Ref (List Route) ->
+  Ref Inner ->
   Expr ->
   Expr ->
   Mono
-inferDefinerShadowApp env name arityRef tagRef implRef f x =
-  inferDefinerShadowAppAt env name arityRef tagRef implRef f [] f x
+inferDefinerShadowApp env name arityRef tagRef implRef innerRef f x =
+  inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef f [] f x
 
 -- #1815: the marked twin at an arbitrary dispatch index — the peer of
 -- inferDefinerShadowVarAppAt, and the two must still agree cell-for-cell (S7).  [hd] is
@@ -23081,12 +23169,13 @@ inferDefinerShadowAppAt : TcEnv ->
   Ref (Option Int) ->
   Ref Route ->
   Ref (List Route) ->
+  Ref Inner ->
   Expr ->
   List Expr ->
   Expr ->
   Expr ->
   Mono
-inferDefinerShadowAppAt env name arityRef tagRef implRef hd nodes f x =
+inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
   -- #2809: the RECOVERED symbol, not the raw route seed — every use of [sym] below is
   -- a typing decision that presumes "the bare name no longer denotes the standalone"
   -- (see `recoveredShadowSym`).  The two `SKRLocal (routeLocalSym !tagRef)` stamps
@@ -23212,6 +23301,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef hd nodes f x =
     else
       pushSiteGoal
         GKRLocalSite
+        innerRef
         (PendingEntry
           name
           tagRef
@@ -23235,6 +23325,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef hd nodes f x =
     Some _ =>
       pushSiteGoal
         GKArgStamp
+        innerRef
         (PendingEntry
           name
           tagRef
@@ -23734,12 +23825,13 @@ shadowSpineNodesAtImporter name f =
 
 -- the MARKED (run/build) spine arm — peer of definerShadowArgHead.
 definerShadowSpineArgAt : Expr ->
-  Option (String, Ref (Option Int), Ref Route, Ref (List Route), Expr, List Expr)
+  Option (String, Ref (Option Int), Ref Route, Ref (List Route), Ref Inner, Expr, List Expr)
 definerShadowSpineArgAt f = match definerShadowArgHead (appSpineHead f)
   None => None
-  Some (name, arityRef, tagRef, implRef) =>
+  Some (name, arityRef, tagRef, implRef, innerRef) =>
     map
-      (nodes => (name, arityRef, tagRef, implRef, appSpineHead f, nodes))
+      (nodes =>
+        (name, arityRef, tagRef, implRef, innerRef, appSpineHead f, nodes))
       (shadowSpineNodesAt name f)
 
 -- the UNMARKED (`check`) spine arm — peer of definerShadowVarHead.
@@ -34294,8 +34386,9 @@ superRouteAt : String ->
   (IfaceRef, Option (List Mono)) ->
   Route
 superRouteAt encl useScope walk (superIface, superArgs) = match superArgs
-  Some (g0 :: gs) => routeOfD superIface encl useScope CommitSuper g0 gs walk
-  _ => RNone
+  Some (g0 :: gs) =>
+    noteInnerRoute (routeOfD superIface encl useScope CommitSuper g0 gs walk)
+  _ => noteInnerRoute RNone
 
 -- The dictionary of a goal's selected instance [row]: the row's word, its `requires`
 -- answered at [goals], and its own supers.  The word and the context are projections
@@ -34523,7 +34616,8 @@ undeterminedRowRoute scope ifaceRef (m :: rest) row =
     (rowRouteKey row)
     (argImplRequiresRoutesForRow "" scope m (m :: rest) (reqWalkStart ()) row)
     (map
-      ((superIface, _) => routeUndeterminedTop scope superIface (m :: rest))
+      ((superIface, _) =>
+        noteInnerRoute (routeUndeterminedTop scope superIface (m :: rest)))
       (directSuperGoals ifaceRef []))
 
 ambiguousImplMsg : String -> String
@@ -34689,20 +34783,21 @@ argReqRoute : IfaceRef ->
   List Ty ->
   ReqWalk ->
   Route
-argReqRoute _ _ _ _ [] _ = RNone
+argReqRoute _ _ _ _ [] _ = noteInnerRoute RNone
 -- #1154 (F-3a): `(arg::_)` USED TO DROP every argument past arg 0, so a multi-param
 -- `requires Ix a Char` reached the selector as the singleton `[Int]` and matched every
 -- `Ix Int _` impl.  Keep the whole vector; `routeOfD` threads the tail down the
 -- EKNestedTop leg.  Single-param requires bind `more == []` ⇒ unchanged.
 argReqRoute iface encl useScope subst (arg :: more) walk =
-  routeOfD
-    iface
-    encl
-    useScope
-    KeepNone
-    (fromAstType subst arg)
-    (map (fromAstType subst) more)
-    walk
+  noteInnerRoute
+    (routeOfD
+      iface
+      encl
+      useScope
+      KeepNone
+      (fromAstType subst arg)
+      (map (fromAstType subst) more)
+      walk)
 
 -- Phase 69.x-e: fill each method occurrence's method-dicts ref — one route per
 -- method-level constraint, from the instantiated constraint mono.  A concrete head
@@ -48193,6 +48288,7 @@ methodReturnProbeSlotCase ownedRow foreignRow retainOwner =
       (Ref RNone)
       (Ref [])
       (Ref [])
+      (Ref innerNone)
       inst.mtiBody
       inst.mtiSubstitution
   (
@@ -55940,7 +56036,7 @@ isInterfaceDecl (DAttrib _ d) = isInterfaceDecl d
 isInterfaceDecl (DInterface {  }) = True
 isInterfaceDecl _ = False
 
--- This module's windows, cut now — see `siteGoalsIn`.
+-- This module's windows, cut now — see `goalsOfKindIn`.
 enqueueStampCtx : String -> List Decl -> Unit
 enqueueStampCtx mid implDecls =
   let mk = currentModuleMarks ()
@@ -55957,21 +56053,36 @@ runStampSteps ctx (s :: rest) =
 runStampStep : StampCtx -> StampStep -> Unit
 runStampStep ctx SSNumlitFloats = setNumlitFloatsGo ctx.scNumlits
 runStampStep ctx SSReturnSites =
-  resolveSites
-    (omFromNames ctx.scRpNames omEmpty)
-    (siteGoalsIn GKReturnSite ctx.scGoals)
+  let rpNames = omFromNames ctx.scRpNames omEmpty
+  stampEach (o => resolveSites rpNames (siteEntry o)) GKReturnSite ctx
 runStampStep ctx SSBinopSites =
-  resolveOpSites True (siteGoalsIn GKBinopSite ctx.scGoals)
+  stampEach (o => resolveOpSites True (siteEntry o)) GKBinopSite ctx
 runStampStep ctx SSUnopSites =
-  resolveOpSites False (siteGoalsIn GKUnopSite ctx.scGoals)
-runStampStep ctx SSArithSites = resolveArithSites (arithGoalsIn ctx.scGoals)
+  stampEach (o => resolveOpSites False (siteEntry o)) GKUnopSite ctx
+runStampStep ctx SSArithSites =
+  stampEach (o => resolveArithSites (arithEntry o)) GKArithSite ctx
 runStampStep ctx SSArgStamps =
-  resolveArgStamps (siteGoalsIn GKArgStamp ctx.scGoals)
+  stampEach (o => resolveArgStamps (siteEntry o)) GKArgStamp ctx
 runStampStep ctx SSRLocalSites =
-  resolveRLocalSites (siteGoalsIn GKRLocalSite ctx.scGoals)
-runStampStep ctx SSRecDictApps = realizeRecDictApps (recDictAppsIn ctx.scGoals)
-runStampStep ctx SSDictApps = resolveDictApps (dictAppsIn ctx.scGoals)
-runStampStep ctx SSMethodDicts = resolveMethodDicts (methodDictsIn ctx.scGoals)
+  stampEach (o => resolveRLocalSites (siteEntry o)) GKRLocalSite ctx
+runStampStep ctx SSRecDictApps =
+  stampEach (o => realizeRecDictApps (recDictAppEntry o)) GKRecDictApp ctx
+runStampStep ctx SSDictApps =
+  stampEach (o => resolveDictApps (dictAppEntry o)) GKDictApp ctx
+runStampStep ctx SSMethodDicts =
+  stampEach (o => resolveMethodDicts (methodDictEntry o)) GKMethodDict ctx
+
+-- Stamps [ctx]'s goals of kind [k] one at a time, in channel order, and ORs what
+-- each stamp noted below its destination's top level into that goal's `oInner`.
+stampEach : (Obligation -> Unit) -> GoalKind -> StampCtx -> Unit
+stampEach stamp k ctx =
+  fold (_ o => stampNoting stamp o) () (goalsOfKindIn k ctx.scGoals)
+
+stampNoting : (Obligation -> Unit) -> Obligation -> Unit
+stampNoting stamp o =
+  innerNotes := innerNone
+  let _ = stamp o
+  o.oInner := innerOr o.oInner.value innerNotes.value
 
 -- #2548 (ARCH M3/Q2, DICT §6.2 T4): ONE ordered resolve pass over the whole graph,
 -- at quiescence.  Every module's goals are stamped after every module has been
@@ -56062,7 +56173,8 @@ judgeCells arr i hi acc
           arr
           (i + 1)
           hi
-          (holeDiags (evIdModule c.ecId) c.ecLoc.value row ++ acc)
+          (holeDiags (evIdModule c.ecId) c.ecLoc.value c.ecInner.value row
+            ++ acc)
       None => judgeCells arr (i + 1) hi acc
     None => judgeCells arr (i + 1) hi acc
 
@@ -56075,20 +56187,25 @@ judgeGoal mid o = match (o.oPayload, evValueOf o.oDest)
     holeDiags
       mid
       o.oLoc
+      o.oInner.value
       (DictAppRow app.pdaCallee (map (r => r.irName) app.pdaIfaces) rs)
   (GPRecDictApp (RecDictApp _ callee _ _ _ _), EvMany rs) =>
-    holeDiags mid o.oLoc (DictAppRow callee [] rs)
-  (GPArith _, EvOne r) => holeDiags mid o.oLoc (SiteRow r)
+    holeDiags mid o.oLoc o.oInner.value (DictAppRow callee [] rs)
+  (GPArith _, EvOne r) => holeDiags mid o.oLoc o.oInner.value (SiteRow r)
   (GPSite _ _ _, EvOne r) =>
     if goalKindTag o.oKind == goalKindTag GKBinopSite
       || goalKindTag o.oKind == goalKindTag GKUnopSite then
-      holeDiags mid o.oLoc (SiteRow r)
+      holeDiags mid o.oLoc o.oInner.value (SiteRow r)
     else
       []
   _ => []
 
-holeDiags : String -> Option Loc -> EvidenceRow -> List (String, TcDiag)
-holeDiags mid loc row = match rowHole row
+holeDiags : String ->
+  Option Loc ->
+  Inner ->
+  EvidenceRow ->
+  List (String, TcDiag)
+holeDiags mid loc inner row = match rowHoleWith inner row
   None => []
   Some (_, msg) => [(mid, TcDiag "T-UNROUTED-DISPATCH" 1 loc msg None None)]
 

@@ -7,7 +7,10 @@ import frontend.ast.{Route(..)}
 import types.evidence_complete.{
   EvidenceRow(..),
   HoleKind(..),
+  Inner(..),
   holeKindsOf,
+  holeKindsWith,
+  innerNone,
   rowHole,
 }
 
@@ -139,4 +142,78 @@ test "every row shape names its hole in its own words" =
           [instanceKey, RKey "m::Show|m.Box|" [RNone] []]),
       rowHole (SiteRow (RKey "m.Box" [] [])),
       rowHole (SiteRow (RKey "m::Eq|m.Box|" [RNone] [])),
+    ]
+
+-- A solver row with nothing noted below: the judgment still reads every child's own
+-- word, whichever list it sits in (a numeric return site's `requires` routes are
+-- its tag's children).
+test "every child's own word is judged without a summary" =
+  expectEqual
+    [
+      [HeadTagRoute],
+      [UnroutedPrerequisite],
+      [HeadTagRoute],
+      [UnroutedPrerequisite],
+    ]
+    [
+      holeKindsWith
+        innerNone
+        (OccurrenceRow
+          "fromInt"
+          "m::Num"
+          (RKey "m::Num|m.Box|" [RKey "m.Elem" [] []] [])
+          []
+          []),
+      holeKindsWith
+        innerNone
+        (OccurrenceRow
+          "fromInt"
+          "m::Num"
+          (RKey "m::Num|m.Box|" [RNone] [])
+          []
+          []),
+      holeKindsWith
+        innerNone
+        (DictAppRow "f" ["K"] [RKey "m::K|m.Box|" [] [RKey "Int" [] []]]),
+      holeKindsWith innerNone (SiteRow (RLocal "m__eq" [RNone])),
+    ]
+
+test "what lies below the children comes from the summary" =
+  expectEqual
+    [[UnroutedPrerequisite], [HeadTagRoute], [UnroutedPrerequisite], []]
+    [
+      holeKindsWith (Inner True False) (DictAppRow "f" ["K"] [instanceKey]),
+      holeKindsWith (Inner False True) (SiteRow instanceKey),
+      holeKindsWith
+        (Inner True False)
+        (OccurrenceRow "k" "m::K" instanceKey [] []),
+      holeKindsWith
+        innerNone
+        (OccurrenceRow
+          "k"
+          "m::K"
+          (RKey "m::K|m.Box|" [RKey "m::K|m.Box|" [RNone] []] [])
+          []
+          []),
+    ]
+
+test "the walk finds an RNone at any depth" =
+  expectEqual
+    [[UnroutedPrerequisite], [HeadTagRoute]]
+    [
+      holeKindsOf
+        (OccurrenceRow
+          "k"
+          "m::K"
+          (RKey
+            "m::K|m.Box|"
+            [RKey "m::K|m.Box|" [RKey "m::K|m.Box|" [RNone] []] []]
+            [])
+          []
+          []),
+      holeKindsOf
+        (DictAppRow
+          "f"
+          ["K"]
+          [RKey "m::K|m.Box|" [RKey "m::K|m.Box|" [] [RKey "m.T" [] []]] []]),
     ]
