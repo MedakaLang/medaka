@@ -4435,18 +4435,18 @@ if want starimports; then   # PERF_ONLY unit: starimports
 #
 # TWO shapes, graded on DIFFERENT metrics — and the split is the whole #925/#926 story:
 #
-#   starimports  — GRADED ON OP-COUNT (deterministic, one run per size, no floor/min-of-K).
-#         Its resolve op-count is ~6*N (`isPubExp`'s contains per `import m.{v}` member;
-#         it was 5*N before #925 converted realImport/importValueNames' membership to
-#         OrdMap sets). Linear regression guard on the counted import-membership path; its
-#         real findExports cost is now O(N log N) after #926's Map (was O(N^2), uncounted).
-#         STAR_N=400 so op1 = 6*400 = 2400 clears the OP_FLOOR (1000) with 2.4x of
-#         headroom (measured; this read "3*N ... 1200" until 2026-08-29).
+#   starimports  — GRADED ON ALLOCATION plus an OP-REGRESSION ASSERTION, like `reexports`.
+#         Its resolve op-count was ~6*N (`isPubExp`'s counted `contains` per `import m.{v}`
+#         member) until `isPubExp` became an uncounted OrdMap membership on
+#         `ModuleExports.nameSet`; the counted column is now a deterministic 0, so it cannot
+#         be ratio-graded. A column back over OP_FLOOR means a counted scan returned and
+#         fails; the resolve-stage allocation is graded against THRESH (linear expected).
+#         Its real findExports cost is O(N log N) after #926's Map.
 #
 #   reexports    — GRADED ON ALLOCATION, plus a cheap OP-REGRESSION ASSERTION. WHY NOT OP:
 #         #925/#926 drained this shape's counted op to a deterministic 0 (the three cubic
 #         `contains` scans became uncounted OrdMap-set membership; findExports/provenance
-#         are Maps). Op-invisible => cannot be RATIO-graded (would trip the TOOSMALL guard).
+#         are Maps). Op-invisible => cannot be RATIO-graded (it would be TOOSMALL).
 #         The shape's RESIDUAL cost is an INTRINSIC O(N^2): gen_reexports is CUMULATIVE
 #         (each m_i re-exports the whole accumulated set via `export import m{i-1}.*`), so
 #         the exports total sum(i)=O(N^2) name entries — resolve MUST allocate O(N^2). Alloc
@@ -4456,9 +4456,8 @@ if want starimports; then   # PERF_ONLY unit: starimports
 #         load/desugar/mark/typecheck terms don't dilute the signal. The op arm still runs as
 #         a near-free ASSERTION: a reintroduced counted-scan cubic (the exact #925 mechanism)
 #         would lift resolve op OFF 0 and past the floor — caught, even though op can't be
-#         ratio-graded. (Profiler-break safety: a dead profiler emits op=0 for BOTH shapes,
-#         and starimports' op1<FLOOR trips its own TOOSMALL=fail — so reexports op=0 can only
-#         mean "fixed", never "profiler broke".)
+#         ratio-graded. (Profiler-break safety: a dead profiler emits an EMPTY op column,
+#         which both shapes reject as a harness bug; a numeric 0 can only mean "fixed".)
 #
 # ⚠️ ADDITIVE: the resolve stage discards its `List ResError` and does NOT transform the
 # module list, so the `modules` block above (mark/typecheck) is byte-unchanged by it.
@@ -4491,22 +4490,42 @@ for rshape in starimports reexports; do
     # An UNMEASURABLE op shape is a harness problem, never a pass. grade_op_stage SKIPs a
     # reading under OP_FLOOR WITHOUT setting op_bad, so without this guard starimports would
     # fall through to pass++ having graded NOTHING — the silent-green this suite forbids.
-    rsmall="$(awk -v v="$ro1" -v f="$OP_FLOOR" 'BEGIN{print (v+0 < f+0) ? 1 : 0}')"
-    if [ "$rsmall" = "1" ]; then
+    # The counted `contains` in isPubExp drained to an uncounted OrdMap membership, so the
+    # op column is 0 by construction and cannot be ratio-graded. An EMPTY column is the
+    # profiler breaking; a column back over the floor is a counted scan returning.
+    if [ -z "$ro1" ] || [ -z "$ro2" ] || [ -z "$ro3" ]; then
       fail=$((fail+1))
-      printf '%-12s %8s  resolve-ops %s -> %s -> %s  ** N TOO SMALL (op1 < OP_FLOOR %s) — raise STAR_N **\n' \
+      printf '%-12s %8s  ** NO OP MEASUREMENT from the profiler (harness bug — missing op column) **\n' "$rshape" "$rn1"
+      continue
+    fi
+    opback="$(awk -v v="$ro1" -v f="$OP_FLOOR" 'BEGIN{print (v+0 >= f+0) ? 1 : 0}')"
+    if [ "$opback" = "1" ]; then
+      fail=$((fail+1))
+      printf '%-12s %8s  ** COUNTED import-membership SCAN IS BACK ** resolve op %s -> %s -> %s (>= OP_FLOOR %s; the fixed state is ~0) **\n' \
         "$rshape" "$rn1" "$ro1" "$ro2" "$ro3" "$OP_FLOOR"
       continue
     fi
-    grade_op_stage "$rshape" resolve "$ro1" "$ro2" "$ro3" "$rn1" "$rn2" "$rn3"
-    if [ "$op_bad" = "1" ]; then
+    # Allocation grade on the RESOLVE STAGE ($3, MB), deterministic, linear threshold.
+    sa1="$(awk -F'\t' '/^\[perf\] resolve/{gsub(/MB/,"",$3); print $3; exit}' "$RR1")"
+    sa2="$(awk -F'\t' '/^\[perf\] resolve/{gsub(/MB/,"",$3); print $3; exit}' "$RR2")"
+    sa3="$(awk -F'\t' '/^\[perf\] resolve/{gsub(/MB/,"",$3); print $3; exit}' "$RR3")"
+    if [ -z "$sa1" ] || [ -z "$sa2" ] || [ -z "$sa3" ]; then
       fail=$((fail+1))
+      printf '%-12s %8s  ** NO RESOLVE-ALLOC MEASUREMENT (harness bug — missing $3 MB column) **\n' "$rshape" "$rn1"
+      continue
+    fi
+    sr1="$(awk -v a="$sa1" -v b="$sa2" 'BEGIN{printf "%.2f", b/a}')"
+    sr2="$(awk -v a="$sa2" -v b="$sa3" 'BEGIN{printf "%.2f", b/a}')"
+    sworse="$(awk -v r="$sr2" -v c="$THRESH" 'BEGIN{print (r > c) ? 1 : 0}')"
+    if [ "$sworse" = "1" ]; then
+      fail=$((fail+1))
+      printf '%-12s %8s  ** SUPERLINEAR (ALLOC), star-import resolve regressed ** resolve-alloc %sMB -> %sMB -> %sMB  r1=%s r2=%s (threshold %s, band N=%s->%s->%s)\n' \
+        "$rshape" "$rn1" "$sa1" "$sa2" "$sa3" "$sr1" "$sr2" "$THRESH" "$rn1" "$rn2" "$rn3"
     else
       pass=$((pass+1))
+      printf '%-12s %8s  resolve-alloc %sMB -> %sMB -> %sMB  r1=%s r2=%s (LINEAR, threshold %s, band N=%s->%s->%s) — op held at %s (fixed)\n' \
+        "$rshape" "$rn1" "$sa1" "$sa2" "$sa3" "$sr1" "$sr2" "$THRESH" "$rn1" "$rn2" "$rn3" "$ro1"
     fi
-    printf '%-12s %8s  resolve-ops %s -> %s -> %s  (band N=%s->%s->%s)\n' \
-      "$rshape" "$rn1" "$ro1" "$ro2" "$ro3" "$rn1" "$rn2" "$rn3"
-    printf '%s' "$op_lines"
     continue
   fi
 
