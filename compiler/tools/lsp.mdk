@@ -72,7 +72,7 @@ import types.typecheck.{
   checkOneSchemeFullK, ppSchemeNamed, ppSchemeNamedFull, currentLocalSchemes,
   currentLocalSchemesLoc, currentSeedSchemes
 }
-import tools.fmt.{formatSource}
+import tools.fmt.{formatSourceChecked}
 import tools.refindex.{RefIndex, buildRefIndexProject, binderAt, usesOf, defsOf}
 import list.{sortBy}
 import frontend.ast.{
@@ -221,21 +221,26 @@ docsLookup uri ((k, v) :: rest)
 -- whole document with the formatted source.  The replaced range is
 -- (0,0)..(lineCount+1, 0), using
 -- `nl = newline_count + 1` for the end line so every line (incl. the last) is
--- covered without knowing its width.  A formatter/parse failure yields [] here
--- rather than crashing (the compiler formatSource is total on parseable input;
--- a parse error short-circuits to []).
+-- covered without knowing its width.  A parse failure yields [] here: the source
+-- is lexed once and `formatSourceChecked` returns the parse error instead of
+-- panicking.
 fullDocRangeFmt : String -> Json
 fullDocRangeFmt src = jRange 0 0 (countLines src + 1) 0
 
 formattingEdits : String -> List Json
-formattingEdits src = match parseResult src
-  Err _ => []
-  Ok _ =>
-    let formatted = formatSource src
-    if formatted == src then
-      []
-    else
-      [jObject [("range", fullDocRangeFmt src), ("newText", JString formatted)]]
+formattingEdits src = match tokenizeWithOffsetPairs src
+  (toks, pairs) => match formatSourceChecked src toks pairs
+    Err _ => []
+    Ok formatted =>
+      if formatted == src then
+        []
+      else
+        [
+          jObject [
+            ("range", fullDocRangeFmt src),
+            ("newText", JString formatted),
+          ],
+        ]
 -- unparseable → no edits (client keeps buffer)
 
 -- ── identifier-at-cursor + occurrence scan (pure string ops) ────────────────
