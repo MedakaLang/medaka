@@ -746,6 +746,52 @@ test "pds-alert@.service has no self-referential OnFailure" =
     "pds/pds-alert@.service has a self-referential OnFailure"
     (presentForbidden alertService alertServiceForbidden)
 
+-- The ops docs must name the instance `OnFailure=` starts. That instance is
+-- the full unit name inside the template, so the short spelling is a
+-- different instance: systemctl accepts it, and a re-arm step written that
+-- way silently re-arms nothing. Each pair is (short spelling, full spelling).
+alertInstanceSpellings : List (String, String)
+alertInstanceSpellings = [
+  ("pds-alert@pds.service", "pds-alert@pds.service.service"),
+  ("pds-alert@pds-backup.service", "pds-alert@pds-backup.service.service"),
+]
+
+-- The full spelling contains the short one as a prefix, so the short name
+-- occurs once more than the full name for every phantom.
+phantomSpelling : String -> (String, String) -> Bool
+phantomSpelling text (phantom, real) =
+  countOccurrences phantom text /= countOccurrences real text
+
+phantomFinding : String -> (String, String) -> String
+phantomFinding path (phantom, real) =
+  "\{path} names `\{phantom}`, which is not the instance OnFailure= starts; use `\{real}`"
+
+-- A file that names no alert instance at all would pass the phantom check
+-- vacuously, so the check also requires the re-arm text to be present.
+alertInstanceFindings : String -> <FileRead, IO> Result String (List String)
+alertInstanceFindings path = match readFile (underRoot path)
+  Err e => Err "could not read \{path}: \{e}"
+  Ok text =>
+    if countOccurrences "pds-alert@" text == 0 then
+      Ok [
+        "\{path} names no pds-alert@ instance, so the re-arm commands cannot be graded",
+      ]
+    else
+      Ok
+        (map
+          (phantomFinding path)
+          (filter (phantomSpelling text) alertInstanceSpellings))
+
+test "ops runbook names only the real pds-alert instances" =
+  expectNoFindings
+    "docs/ops/PDS-RUNBOOK.md re-arms an alert instance that OnFailure= never starts"
+    (alertInstanceFindings "docs/ops/PDS-RUNBOOK.md")
+
+test "ops deploy doc names only the real pds-alert instances" =
+  expectNoFindings
+    "docs/ops/PDS-DEPLOY.md re-arms an alert instance that OnFailure= never starts"
+    (alertInstanceFindings "docs/ops/PDS-DEPLOY.md")
+
 -- # Mutation controls
 --
 -- Each one derives a copy of the real file with exactly one hardening
