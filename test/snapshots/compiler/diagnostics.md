@@ -1,5 +1,5 @@
 # META
-source_lines=3059
+source_lines=3085
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -86,7 +86,8 @@ import driver.loader.{
   loadProgramFilesLocatedCached,
   loadProgramFilesLocatedCachedE,
   loadedSourceOf,
-  loadProgramE,
+  loadProgramFilesLocatedE,
+  dropPathTriple,
   projectTrustedMods,
   stdlibOwnership,
   entrySearchRoots,
@@ -2913,13 +2914,41 @@ checkJsonSingleParts exportsFor modName allowInternal rsrc csrc target src =
           []
         else
           let entryRaw = parseLocated src
-          mainShapeWarnings [] [] [(target, desugar entryRaw)] entryRaw
+          mainShapeWarnings [] [] [] entryRaw
       (CjParts target [(target, src, diags ++ mainWarns)], hasErr)
 
--- File check → JSON.  Reads `target`, then routes exactly like runCheckJsonCmd:
--- parse error → single diag; load error (bad import) → R-MODULE-LOAD diag with the
--- import span + available-modules hint; single module → checkJsonSingle (honouring
--- the owning-root trust signal); multi-module → analyzeProject.  `stdlibDir` is the
+-- `checkJsonSingleParts` for a caller that already holds the entry's real-span
+-- `decls` from the located loader: analysis and the main-shape warning both read
+-- them, so the entry is parsed once.  The parse-error rejection the other
+-- function opens with is the loader's job here.
+checkJsonSingleFromDecls : (List String -> <e> List (String, List String)) ->
+  String ->
+  Bool ->
+  String ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  <e> (CheckJson, Bool)
+checkJsonSingleFromDecls exportsFor modName allowInternal rsrc csrc target src decls =
+  let diags =
+    analyzeFrom
+      exportsFor
+      modName
+      rsrc
+      csrc
+      decls
+      (internalGuardFor allowInternal)
+  let hasErr = anyList diagIsError diags
+  -- Only on a clean program, as in `checkJsonSingleParts`.
+  let mainWarns = if hasErr then [] else mainShapeWarnings [] [] [] decls
+  (CjParts target [(target, src, diags ++ mainWarns)], hasErr)
+
+-- File check → JSON.  Reads `target`, loads its graph once, then routes exactly
+-- like runCheckJsonCmd: load failure → the entry's parse error if it has one, else
+-- the loader's diag (bad import → R-MODULE-LOAD with the import span +
+-- available-modules hint); single module → checkJsonSingleFromDecls (honouring the
+-- owning-root trust signal); multi-module → analyzeLoadedFull.  `stdlibDir` is the
 -- <root>/stdlib dir; roots are derived from the target's directory + stdlibDir.
 export
 checkJsonFile : Bool ->
@@ -2946,121 +2975,118 @@ checkJsonFileParts : Bool ->
 checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
   let src = readFileSafe target
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
-  match parseResult src
-    Err e => (CjRendered (cjParseErrJson target src e), True)
-    Ok _ => match loadProgramE target roots
-      -- #100: a parse/lex error in an IMPORTED module serializes exactly like one
-      -- in the entry — same `P-*`/`L-*` code, same real range — only attributed to
-      -- the MODULE's file and rendered against the module's OWN source.
-      Err (LoadParseFailed mpath msrc pe) =>
-        (CjRendered (cjParseErrJson mpath msrc pe), True)
-      Err (LoadCycle cmsg cpath csite) => match csite
-        Some (csrc, cloc) => (
-          CjParts target [
-            (
-              cpath,
-              csrc,
-              [Diag SevError "R-MODULE-LOAD" cmsg (Some cloc) None None],
-            ),
-          ],
-          True,
-        )
-        None => (
-          CjParts target [
-            (target, src, [Diag SevError "R-MODULE-LOAD" cmsg None None None]),
-          ],
-          True,
-        )
-      Err (LoadMsg lmsg) =>
-        let mloc = match unknownModuleIdOf lmsg
-          None => None
-          Some mid => findImportLoc mid (parseLocated src)
-        let mhelp = match unknownModuleIdOf lmsg
-          None => None
-          Some _ => match availableModulesText stdlibDir
-            "" => None
-            txt => Some txt
-        let jmsg =
-          lmsg
-            ++ (match unknownModuleIdOf lmsg
-              None => ""
-              Some _ => availableModulesHint stdlibDir)
-        (
-          CjParts target [
-            (target, src, [Diag SevError "R-MODULE-LOAD" jmsg mloc mhelp None]),
-          ],
-          True,
-        )
-      Ok mods => match mods
-        [(mid, _)] =>
-          let trusted = projectTrustedMods target roots stdlibDir mods
-          -- #2072: the FFI-stamp discriminator (stdlib-root ownership, NO
-          -- `allow-internal` opt-out) — see `stdlibOwnedMods` in loader.mdk for
-          -- why it is not `trusted` above.
-          let (flatStdlib, ownedStdlib) =
-            stdlibOwnership target roots stdlibDir mods
-          let _ = setStdlibOwnership flatStdlib ownedStdlib
-          checkJsonSingleParts
-            (stdlibExportsReader stdlibDir)
-            mid
-            (allowInternal || contains mid trusted)
-            rsrc
-            csrc
-            target
-            src
-        _ =>
-          -- #1362: the single-module arm above computes `trusted` and threads
-          -- `allowInternal || contains mid trusted` through to its guarded
-          -- analyzer — this arm previously computed no trust set at all and
-          -- passed none through, so the internal-extern guard was always
-          -- empty (silent accept). Same trust computation, hoisted one level.
-          let trusted = projectTrustedMods target roots stdlibDir mods
-          -- #2072: same discriminator as the single-module arm above.
-          let (flatStdlib, ownedStdlib) =
-            stdlibOwnership target roots stdlibDir mods
-          let _ = setStdlibOwnership flatStdlib ownedStdlib
-          let cacheRef = Ref []
-          let parseCacheRef = Ref []
-          let results =
-            analyzeProject
-              (stdlibExportsReader stdlibDir)
-              allowInternal
-              trusted
-              cacheRef
-              parseCacheRef
-              (_ => None)
-              target
-              roots
-              rsrc
-              csrc
-          let hasErr = anyList cjHasErrD results
-          -- #1236: same main-shape fold as the single-module arm above, only on
-          -- a clean project.  `analyzeProject` already parsed+cached the entry
-          -- module's LOCATED decls in `parseCacheRef` (keyed by source text, see
-          -- `parseCachedLocated`) — reuse that instead of re-parsing, so the
-          -- `Loc` this warning carries matches the one every other diagnostic on
-          -- this file would.
-          let mainWarns =
-            if hasErr then
-              []
-            else
-              let entryRaw = match lookupAssoc src !parseCacheRef
-                Some decls => decls
-                None => parseLocated src
-              -- #2246/S-1 (F-converge): `mainShapeWarnings` ignores its first THREE
-              -- parameters unconditionally (see its definition above), so the
-              -- whole-graph desugar this used to compute was dead work on every
-              -- clean multi-module `check --json`.  Pass `[]`, matching the
-              -- single-module arm's `[] [] []`.
-              mainShapeWarnings [] [] [] entryRaw
-          let triples = map readDiagSrc results
-          let root = dirOf stdlibDir
-          let relTriples = map (relDiagTriple root) triples
-          let entryKey = relDiagPath root target
-          (
-            CjParts entryKey (cjFoldIntoFile entryKey mainWarns relTriples),
-            hasErr,
-          )
+  match loadProgramFilesLocatedE (_ => None) target roots
+    -- An unparsable entry is reported against the spelling the caller gave, not
+    -- the path the loader minted, so the entry's own parse is checked first.
+    Err le => match parseResult src
+      Err e => (CjRendered (cjParseErrJson target src e), True)
+      Ok _ => checkJsonLoadErr target src stdlibDir le
+    Ok [(mid, _, decls)] =>
+      let mods = [(mid, decls)]
+      let trusted = projectTrustedMods target roots stdlibDir mods
+      -- #2072: the FFI-stamp discriminator (stdlib-root ownership, NO
+      -- `allow-internal` opt-out) — see `stdlibOwnedMods` in loader.mdk for
+      -- why it is not `trusted` above.
+      let (flatStdlib, ownedStdlib) =
+        stdlibOwnership target roots stdlibDir mods
+      let _ = setStdlibOwnership flatStdlib ownedStdlib
+      checkJsonSingleFromDecls
+        (stdlibExportsReader stdlibDir)
+        mid
+        (allowInternal || contains mid trusted)
+        rsrc
+        csrc
+        target
+        src
+        decls
+    Ok modsWithPath =>
+      let mods = map dropPathTriple modsWithPath
+      -- #1362: the single-module arm above computes `trusted` and threads
+      -- `allowInternal || contains mid trusted` through to its guarded
+      -- analyzer; this arm needs the same trust set for the same guard.
+      let trusted = projectTrustedMods target roots stdlibDir mods
+      -- #2072: same discriminator as the single-module arm above.
+      let (flatStdlib, ownedStdlib) =
+        stdlibOwnership target roots stdlibDir mods
+      let _ = setStdlibOwnership flatStdlib ownedStdlib
+      let (_, results) =
+        analyzeLoadedFull
+          (stdlibExportsReader stdlibDir)
+          allowInternal
+          trusted
+          target
+          roots
+          rsrc
+          csrc
+          modsWithPath
+          (desugaredModPairs modsWithPath)
+      let hasErr = anyList cjHasErrD results
+      -- #1236: same main-shape fold as the single-module arm, only on a clean
+      -- project.  The entry is the last loaded module; its located decls give
+      -- the warning the same `Loc` every other diagnostic on this file carries.
+      let mainWarns = match (hasErr, lastDecls mods)
+        (False, Some edecls) => mainShapeWarnings [] [] [] edecls
+        _ => []
+      let triples = map readDiagSrc results
+      let root = dirOf stdlibDir
+      let relTriples = map (relDiagTriple root) triples
+      let entryKey = relDiagPath root target
+      (
+        CjParts entryKey (cjFoldIntoFile entryKey mainWarns relTriples),
+        hasErr,
+      )
+
+-- The entry of a loaded graph is its last module.
+lastDecls : List (String, List Decl) -> Option (List Decl)
+lastDecls [] = None
+lastDecls [(_, ds)] = Some ds
+lastDecls (_ :: rest) = lastDecls rest
+
+-- The loader's `Err` rendered as a `check --json` envelope, for an entry whose
+-- own parse was already found clean.  #100: a parse/lex error in an IMPORTED
+-- module serializes exactly like one in the entry — same `P-*`/`L-*` code, same
+-- real range — only attributed to the MODULE's file and rendered against the
+-- module's OWN source.
+checkJsonLoadErr : String ->
+  String ->
+  String ->
+  LoadError ->
+  <IO> (CheckJson, Bool)
+checkJsonLoadErr _ _ _ (LoadParseFailed mpath msrc pe) =
+  (CjRendered (cjParseErrJson mpath msrc pe), True)
+checkJsonLoadErr target src _ (LoadCycle cmsg cpath csite) = match csite
+  Some (csrc, cloc) => (
+    CjParts target [
+      (cpath, csrc, [Diag SevError "R-MODULE-LOAD" cmsg (Some cloc) None None]),
+    ],
+    True,
+  )
+  None => (
+    CjParts target [
+      (target, src, [Diag SevError "R-MODULE-LOAD" cmsg None None None]),
+    ],
+    True,
+  )
+checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
+  let mloc = match unknownModuleIdOf lmsg
+    None => None
+    Some mid => findImportLoc mid (parseLocated src)
+  let mhelp = match unknownModuleIdOf lmsg
+    None => None
+    Some _ => match availableModulesText stdlibDir
+      "" => None
+      txt => Some txt
+  let jmsg =
+    lmsg
+      ++ (match unknownModuleIdOf lmsg
+        None => ""
+        Some _ => availableModulesHint stdlibDir)
+  (
+    CjParts target [
+      (target, src, [Diag SevError "R-MODULE-LOAD" jmsg mloc mhelp None]),
+    ],
+    True,
+  )
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "Ty" false) (mem "intMinLiteralMsg" false) (mem "intMinLiteralHelp" false) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
@@ -3075,7 +3101,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkOneDiagsLinesK" false) (mem "checkModulesDiagsChain" false) (mem "chainFullKey" false) (mem "checkModulesK" false) (mem "entryOwnSchemes" false) (mem "dropModSchemes" false) (mem "ModDiags" false) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "importedStandaloneShadows" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
-(DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "loadProgramE" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false) (mem "availableModuleIds" false) (mem "fileOfModuleId" false) (mem "importModId" false))))
+(DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "loadProgramFilesLocatedE" false) (mem "dropPathTriple" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false) (mem "availableModuleIds" false) (mem "fileOfModuleId" false) (mem "importModId" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAutoPrintMain" false) (mem "autoPrintWrapModules" false) (mem "autoPrintPinCore" false) (mem "underivedMainDiags" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "dropAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false) (mem "joinDot" false))))
@@ -3469,11 +3495,21 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "checkJsonSingle" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect () (Some "e") (TyTuple (TyCon "String") (TyCon "Bool")))))))))))
 (DFunDef false "checkJsonSingle" ((PVar "exportsFor") (PVar "modName") (PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "src")) (EBlock (DoLet false false (PTuple (PVar "cj") (PVar "hasErr")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonSingleParts") (EVar "exportsFor")) (EVar "modName")) (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "src"))) (DoExpr (ETuple (EApp (EVar "ppCheckJson") (EVar "cj")) (EVar "hasErr")))))
 (DTypeSig true "checkJsonSingleParts" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect () (Some "e") (TyTuple (TyCon "CheckJson") (TyCon "Bool")))))))))))
-(DFunDef false "checkJsonSingleParts" ((PVar "exportsFor") (PVar "modName") (PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "target")) (EVar "src")) (EVar "e"))) (EVar "True"))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeLocatedG") (EVar "exportsFor")) (EVar "modName")) (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "src"))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "diagIsError")) (EVar "diags"))) (DoLet false false (PVar "mainWarns") (EIf (EVar "hasErr") (EListLit) (EBlock (DoLet false false (PVar "entryRaw") (EApp (EVar "parseLocated") (EVar "src"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit (ETuple (EVar "target") (EApp (EVar "desugar") (EVar "entryRaw"))))) (EVar "entryRaw")))))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EBinOp "++" (EVar "diags") (EVar "mainWarns"))))) (EVar "hasErr")))))))
+(DFunDef false "checkJsonSingleParts" ((PVar "exportsFor") (PVar "modName") (PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "target")) (EVar "src")) (EVar "e"))) (EVar "True"))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeLocatedG") (EVar "exportsFor")) (EVar "modName")) (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "src"))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "diagIsError")) (EVar "diags"))) (DoLet false false (PVar "mainWarns") (EIf (EVar "hasErr") (EListLit) (EBlock (DoLet false false (PVar "entryRaw") (EApp (EVar "parseLocated") (EVar "src"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "entryRaw")))))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EBinOp "++" (EVar "diags") (EVar "mainWarns"))))) (EVar "hasErr")))))))
+(DTypeSig false "checkJsonSingleFromDecls" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect () (Some "e") (TyTuple (TyCon "CheckJson") (TyCon "Bool"))))))))))))
+(DFunDef false "checkJsonSingleFromDecls" ((PVar "exportsFor") (PVar "modName") (PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "src") (PVar "decls")) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "exportsFor")) (EVar "modName")) (EVar "rsrc")) (EVar "csrc")) (EVar "decls")) (EApp (EVar "internalGuardFor") (EVar "allowInternal")))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "diagIsError")) (EVar "diags"))) (DoLet false false (PVar "mainWarns") (EIf (EVar "hasErr") (EListLit) (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "decls")))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EBinOp "++" (EVar "diags") (EVar "mainWarns"))))) (EVar "hasErr")))))
 (DTypeSig true "checkJsonFile" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "Bool")))))))))
 (DFunDef false "checkJsonFile" ((PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "stdlibDir")) (EBlock (DoLet false false (PTuple (PVar "cj") (PVar "hasErr")) (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonFileParts") (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "stdlibDir"))) (DoExpr (ETuple (EApp (EVar "ppCheckJson") (EVar "cj")) (EVar "hasErr")))))
 (DTypeSig true "checkJsonFileParts" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "CheckJson") (TyCon "Bool")))))))))
-(DFunDef false "checkJsonFileParts" ((PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "stdlibDir")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "target"))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "target")) (EVar "src")) (EVar "e"))) (EVar "True"))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "loadProgramE") (EVar "target")) (EVar "roots")) (arm (PCon "Err" (PCon "LoadParseFailed" (PVar "mpath") (PVar "msrc") (PVar "pe"))) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "mpath")) (EVar "msrc")) (EVar "pe"))) (EVar "True"))) (arm (PCon "Err" (PCon "LoadCycle" (PVar "cmsg") (PVar "cpath") (PVar "csite"))) () (EMatch (EVar "csite") (arm (PCon "Some" (PTuple (PVar "csrc") (PVar "cloc"))) () (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "cpath") (EVar "csrc") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "cmsg")) (EApp (EVar "Some") (EVar "cloc"))) (EVar "None")) (EVar "None")))))) (EVar "True"))) (arm (PCon "None") () (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "cmsg")) (EVar "None")) (EVar "None")) (EVar "None")))))) (EVar "True"))))) (arm (PCon "Err" (PCon "LoadMsg" (PVar "lmsg"))) () (EBlock (DoLet false false (PVar "mloc") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "mid")) () (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EApp (EVar "parseLocated") (EVar "src")))))) (DoLet false false (PVar "mhelp") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "availableModulesText") (EVar "stdlibDir")) (arm (PLit (LString "")) () (EVar "None")) (arm (PVar "txt") () (EApp (EVar "Some") (EVar "txt"))))))) (DoLet false false (PVar "jmsg") (EBinOp "++" (EVar "lmsg") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" PWild) () (EApp (EVar "availableModulesHint") (EVar "stdlibDir")))))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "jmsg")) (EVar "mloc")) (EVar "mhelp")) (EVar "None")))))) (EVar "True"))))) (arm (PCon "Ok" (PVar "mods")) () (EMatch (EVar "mods") (arm (PList (PTuple (PVar "mid") PWild)) () (EBlock (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonSingleParts") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "mid")) (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "src"))))) (arm PWild () (EBlock (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoLet false false (PVar "cacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parseCacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProject") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "allowInternal")) (EVar "trusted")) (EVar "cacheRef")) (EVar "parseCacheRef")) (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc"))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "cjHasErrD")) (EVar "results"))) (DoLet false false (PVar "mainWarns") (EIf (EVar "hasErr") (EListLit) (EBlock (DoLet false false (PVar "entryRaw") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "parseCacheRef"))) (arm (PCon "Some" (PVar "decls")) () (EVar "decls")) (arm (PCon "None") () (EApp (EVar "parseLocated") (EVar "src"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "entryRaw")))))) (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (EVar "readDiagSrc")) (EVar "results"))) (DoLet false false (PVar "root") (EApp (EVar "dirOf") (EVar "stdlibDir"))) (DoLet false false (PVar "relTriples") (EApp (EApp (EVar "map") (EApp (EVar "relDiagTriple") (EVar "root"))) (EVar "triples"))) (DoLet false false (PVar "entryKey") (EApp (EApp (EVar "relDiagPath") (EVar "root")) (EVar "target"))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "entryKey")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "entryKey")) (EVar "mainWarns")) (EVar "relTriples"))) (EVar "hasErr")))))))))))))
+(DFunDef false "checkJsonFileParts" ((PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "stdlibDir")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "target"))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (arm (PCon "Err" (PVar "le")) () (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "target")) (EVar "src")) (EVar "e"))) (EVar "True"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EVar "checkJsonLoadErr") (EVar "target")) (EVar "src")) (EVar "stdlibDir")) (EVar "le"))))) (arm (PCon "Ok" (PList (PTuple (PVar "mid") PWild (PVar "decls")))) () (EBlock (DoLet false false (PVar "mods") (EListLit (ETuple (EVar "mid") (EVar "decls")))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonSingleFromDecls") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "mid")) (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "src")) (EVar "decls"))))) (arm (PCon "Ok" (PVar "modsWithPath")) () (EBlock (DoLet false false (PVar "mods") (EApp (EApp (EVar "map") (EVar "dropPathTriple")) (EVar "modsWithPath"))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoLet false false (PTuple PWild (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeLoadedFull") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "allowInternal")) (EVar "trusted")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "modsWithPath")) (EApp (EVar "desugaredModPairs") (EVar "modsWithPath")))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "cjHasErrD")) (EVar "results"))) (DoLet false false (PVar "mainWarns") (EMatch (ETuple (EVar "hasErr") (EApp (EVar "lastDecls") (EVar "mods"))) (arm (PTuple (PCon "False") (PCon "Some" (PVar "edecls"))) () (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "edecls"))) (arm PWild () (EListLit)))) (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (EVar "readDiagSrc")) (EVar "results"))) (DoLet false false (PVar "root") (EApp (EVar "dirOf") (EVar "stdlibDir"))) (DoLet false false (PVar "relTriples") (EApp (EApp (EVar "map") (EApp (EVar "relDiagTriple") (EVar "root"))) (EVar "triples"))) (DoLet false false (PVar "entryKey") (EApp (EApp (EVar "relDiagPath") (EVar "root")) (EVar "target"))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "entryKey")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "entryKey")) (EVar "mainWarns")) (EVar "relTriples"))) (EVar "hasErr")))))))))
+(DTypeSig false "lastDecls" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "lastDecls" ((PList)) (EVar "None"))
+(DFunDef false "lastDecls" ((PList (PTuple PWild (PVar "ds")))) (EApp (EVar "Some") (EVar "ds")))
+(DFunDef false "lastDecls" ((PCons PWild (PVar "rest"))) (EApp (EVar "lastDecls") (EVar "rest")))
+(DTypeSig false "checkJsonLoadErr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LoadError") (TyEffect ("IO") None (TyTuple (TyCon "CheckJson") (TyCon "Bool"))))))))
+(DFunDef false "checkJsonLoadErr" (PWild PWild PWild (PCon "LoadParseFailed" (PVar "mpath") (PVar "msrc") (PVar "pe"))) (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "mpath")) (EVar "msrc")) (EVar "pe"))) (EVar "True")))
+(DFunDef false "checkJsonLoadErr" ((PVar "target") (PVar "src") PWild (PCon "LoadCycle" (PVar "cmsg") (PVar "cpath") (PVar "csite"))) (EMatch (EVar "csite") (arm (PCon "Some" (PTuple (PVar "csrc") (PVar "cloc"))) () (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "cpath") (EVar "csrc") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "cmsg")) (EApp (EVar "Some") (EVar "cloc"))) (EVar "None")) (EVar "None")))))) (EVar "True"))) (arm (PCon "None") () (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "cmsg")) (EVar "None")) (EVar "None")) (EVar "None")))))) (EVar "True")))))
+(DFunDef false "checkJsonLoadErr" ((PVar "target") (PVar "src") (PVar "stdlibDir") (PCon "LoadMsg" (PVar "lmsg"))) (EBlock (DoLet false false (PVar "mloc") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "mid")) () (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EApp (EVar "parseLocated") (EVar "src")))))) (DoLet false false (PVar "mhelp") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "availableModulesText") (EVar "stdlibDir")) (arm (PLit (LString "")) () (EVar "None")) (arm (PVar "txt") () (EApp (EVar "Some") (EVar "txt"))))))) (DoLet false false (PVar "jmsg") (EBinOp "++" (EVar "lmsg") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" PWild) () (EApp (EVar "availableModulesHint") (EVar "stdlibDir")))))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "jmsg")) (EVar "mloc")) (EVar "mhelp")) (EVar "None")))))) (EVar "True")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "Ty" false) (mem "intMinLiteralMsg" false) (mem "intMinLiteralHelp" false) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
@@ -3488,7 +3524,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkOneDiagsLinesK" false) (mem "checkModulesDiagsChain" false) (mem "chainFullKey" false) (mem "checkModulesK" false) (mem "entryOwnSchemes" false) (mem "dropModSchemes" false) (mem "ModDiags" false) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "importedStandaloneShadows" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
-(DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "loadProgramE" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false) (mem "availableModuleIds" false) (mem "fileOfModuleId" false) (mem "importModId" false))))
+(DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "loadProgramFilesLocatedE" false) (mem "dropPathTriple" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false) (mem "availableModuleIds" false) (mem "fileOfModuleId" false) (mem "importModId" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAutoPrintMain" false) (mem "autoPrintWrapModules" false) (mem "autoPrintPinCore" false) (mem "underivedMainDiags" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "dropAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false) (mem "joinDot" false))))
@@ -3882,8 +3918,18 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "checkJsonSingle" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect () (Some "e") (TyTuple (TyCon "String") (TyCon "Bool")))))))))))
 (DFunDef false "checkJsonSingle" ((PVar "exportsFor") (PVar "modName") (PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "src")) (EBlock (DoLet false false (PTuple (PVar "cj") (PVar "hasErr")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonSingleParts") (EVar "exportsFor")) (EVar "modName")) (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "src"))) (DoExpr (ETuple (EApp (EVar "ppCheckJson") (EVar "cj")) (EVar "hasErr")))))
 (DTypeSig true "checkJsonSingleParts" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect () (Some "e") (TyTuple (TyCon "CheckJson") (TyCon "Bool")))))))))))
-(DFunDef false "checkJsonSingleParts" ((PVar "exportsFor") (PVar "modName") (PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "target")) (EVar "src")) (EVar "e"))) (EVar "True"))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeLocatedG") (EVar "exportsFor")) (EVar "modName")) (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "src"))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "diagIsError")) (EVar "diags"))) (DoLet false false (PVar "mainWarns") (EIf (EVar "hasErr") (EListLit) (EBlock (DoLet false false (PVar "entryRaw") (EApp (EVar "parseLocated") (EVar "src"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit (ETuple (EVar "target") (EApp (EVar "desugar") (EVar "entryRaw"))))) (EVar "entryRaw")))))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EBinOp "++" (EVar "diags") (EVar "mainWarns"))))) (EVar "hasErr")))))))
+(DFunDef false "checkJsonSingleParts" ((PVar "exportsFor") (PVar "modName") (PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "target")) (EVar "src")) (EVar "e"))) (EVar "True"))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeLocatedG") (EVar "exportsFor")) (EVar "modName")) (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "src"))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "diagIsError")) (EVar "diags"))) (DoLet false false (PVar "mainWarns") (EIf (EVar "hasErr") (EListLit) (EBlock (DoLet false false (PVar "entryRaw") (EApp (EVar "parseLocated") (EVar "src"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "entryRaw")))))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EBinOp "++" (EVar "diags") (EVar "mainWarns"))))) (EVar "hasErr")))))))
+(DTypeSig false "checkJsonSingleFromDecls" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect () (Some "e") (TyTuple (TyCon "CheckJson") (TyCon "Bool"))))))))))))
+(DFunDef false "checkJsonSingleFromDecls" ((PVar "exportsFor") (PVar "modName") (PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "src") (PVar "decls")) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "exportsFor")) (EVar "modName")) (EVar "rsrc")) (EVar "csrc")) (EVar "decls")) (EApp (EVar "internalGuardFor") (EVar "allowInternal")))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "diagIsError")) (EVar "diags"))) (DoLet false false (PVar "mainWarns") (EIf (EVar "hasErr") (EListLit) (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "decls")))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EBinOp "++" (EVar "diags") (EVar "mainWarns"))))) (EVar "hasErr")))))
 (DTypeSig true "checkJsonFile" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "Bool")))))))))
 (DFunDef false "checkJsonFile" ((PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "stdlibDir")) (EBlock (DoLet false false (PTuple (PVar "cj") (PVar "hasErr")) (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonFileParts") (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "stdlibDir"))) (DoExpr (ETuple (EApp (EVar "ppCheckJson") (EVar "cj")) (EVar "hasErr")))))
 (DTypeSig true "checkJsonFileParts" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "CheckJson") (TyCon "Bool")))))))))
-(DFunDef false "checkJsonFileParts" ((PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "stdlibDir")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "target"))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "target")) (EVar "src")) (EVar "e"))) (EVar "True"))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "loadProgramE") (EVar "target")) (EVar "roots")) (arm (PCon "Err" (PCon "LoadParseFailed" (PVar "mpath") (PVar "msrc") (PVar "pe"))) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "mpath")) (EVar "msrc")) (EVar "pe"))) (EVar "True"))) (arm (PCon "Err" (PCon "LoadCycle" (PVar "cmsg") (PVar "cpath") (PVar "csite"))) () (EMatch (EVar "csite") (arm (PCon "Some" (PTuple (PVar "csrc") (PVar "cloc"))) () (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "cpath") (EVar "csrc") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "cmsg")) (EApp (EVar "Some") (EVar "cloc"))) (EVar "None")) (EVar "None")))))) (EVar "True"))) (arm (PCon "None") () (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "cmsg")) (EVar "None")) (EVar "None")) (EVar "None")))))) (EVar "True"))))) (arm (PCon "Err" (PCon "LoadMsg" (PVar "lmsg"))) () (EBlock (DoLet false false (PVar "mloc") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "mid")) () (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EApp (EVar "parseLocated") (EVar "src")))))) (DoLet false false (PVar "mhelp") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "availableModulesText") (EVar "stdlibDir")) (arm (PLit (LString "")) () (EVar "None")) (arm (PVar "txt") () (EApp (EVar "Some") (EVar "txt"))))))) (DoLet false false (PVar "jmsg") (EBinOp "++" (EVar "lmsg") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" PWild) () (EApp (EVar "availableModulesHint") (EVar "stdlibDir")))))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "jmsg")) (EVar "mloc")) (EVar "mhelp")) (EVar "None")))))) (EVar "True"))))) (arm (PCon "Ok" (PVar "mods")) () (EMatch (EVar "mods") (arm (PList (PTuple (PVar "mid") PWild)) () (EBlock (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonSingleParts") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "mid")) (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "src"))))) (arm PWild () (EBlock (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoLet false false (PVar "cacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parseCacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProject") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "allowInternal")) (EVar "trusted")) (EVar "cacheRef")) (EVar "parseCacheRef")) (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc"))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "cjHasErrD")) (EVar "results"))) (DoLet false false (PVar "mainWarns") (EIf (EVar "hasErr") (EListLit) (EBlock (DoLet false false (PVar "entryRaw") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "parseCacheRef"))) (arm (PCon "Some" (PVar "decls")) () (EVar "decls")) (arm (PCon "None") () (EApp (EVar "parseLocated") (EVar "src"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "entryRaw")))))) (DoLet false false (PVar "triples") (EApp (EApp (EMethodRef "map") (EVar "readDiagSrc")) (EVar "results"))) (DoLet false false (PVar "root") (EApp (EVar "dirOf") (EVar "stdlibDir"))) (DoLet false false (PVar "relTriples") (EApp (EApp (EMethodRef "map") (EApp (EVar "relDiagTriple") (EVar "root"))) (EVar "triples"))) (DoLet false false (PVar "entryKey") (EApp (EApp (EVar "relDiagPath") (EVar "root")) (EVar "target"))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "entryKey")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "entryKey")) (EVar "mainWarns")) (EVar "relTriples"))) (EVar "hasErr")))))))))))))
+(DFunDef false "checkJsonFileParts" ((PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "stdlibDir")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "target"))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (arm (PCon "Err" (PVar "le")) () (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "target")) (EVar "src")) (EVar "e"))) (EVar "True"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EVar "checkJsonLoadErr") (EVar "target")) (EVar "src")) (EVar "stdlibDir")) (EVar "le"))))) (arm (PCon "Ok" (PList (PTuple (PVar "mid") PWild (PVar "decls")))) () (EBlock (DoLet false false (PVar "mods") (EListLit (ETuple (EVar "mid") (EVar "decls")))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonSingleFromDecls") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "mid")) (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "src")) (EVar "decls"))))) (arm (PCon "Ok" (PVar "modsWithPath")) () (EBlock (DoLet false false (PVar "mods") (EApp (EApp (EMethodRef "map") (EVar "dropPathTriple")) (EVar "modsWithPath"))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoLet false false (PTuple PWild (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeLoadedFull") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "allowInternal")) (EVar "trusted")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "modsWithPath")) (EApp (EVar "desugaredModPairs") (EVar "modsWithPath")))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "cjHasErrD")) (EVar "results"))) (DoLet false false (PVar "mainWarns") (EMatch (ETuple (EVar "hasErr") (EApp (EVar "lastDecls") (EVar "mods"))) (arm (PTuple (PCon "False") (PCon "Some" (PVar "edecls"))) () (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "edecls"))) (arm PWild () (EListLit)))) (DoLet false false (PVar "triples") (EApp (EApp (EMethodRef "map") (EVar "readDiagSrc")) (EVar "results"))) (DoLet false false (PVar "root") (EApp (EVar "dirOf") (EVar "stdlibDir"))) (DoLet false false (PVar "relTriples") (EApp (EApp (EMethodRef "map") (EApp (EVar "relDiagTriple") (EVar "root"))) (EVar "triples"))) (DoLet false false (PVar "entryKey") (EApp (EApp (EVar "relDiagPath") (EVar "root")) (EVar "target"))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "entryKey")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "entryKey")) (EVar "mainWarns")) (EVar "relTriples"))) (EVar "hasErr")))))))))
+(DTypeSig false "lastDecls" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "lastDecls" ((PList)) (EVar "None"))
+(DFunDef false "lastDecls" ((PList (PTuple PWild (PVar "ds")))) (EApp (EVar "Some") (EVar "ds")))
+(DFunDef false "lastDecls" ((PCons PWild (PVar "rest"))) (EApp (EVar "lastDecls") (EVar "rest")))
+(DTypeSig false "checkJsonLoadErr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LoadError") (TyEffect ("IO") None (TyTuple (TyCon "CheckJson") (TyCon "Bool"))))))))
+(DFunDef false "checkJsonLoadErr" (PWild PWild PWild (PCon "LoadParseFailed" (PVar "mpath") (PVar "msrc") (PVar "pe"))) (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "mpath")) (EVar "msrc")) (EVar "pe"))) (EVar "True")))
+(DFunDef false "checkJsonLoadErr" ((PVar "target") (PVar "src") PWild (PCon "LoadCycle" (PVar "cmsg") (PVar "cpath") (PVar "csite"))) (EMatch (EVar "csite") (arm (PCon "Some" (PTuple (PVar "csrc") (PVar "cloc"))) () (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "cpath") (EVar "csrc") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "cmsg")) (EApp (EVar "Some") (EVar "cloc"))) (EVar "None")) (EVar "None")))))) (EVar "True"))) (arm (PCon "None") () (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "cmsg")) (EVar "None")) (EVar "None")) (EVar "None")))))) (EVar "True")))))
+(DFunDef false "checkJsonLoadErr" ((PVar "target") (PVar "src") (PVar "stdlibDir") (PCon "LoadMsg" (PVar "lmsg"))) (EBlock (DoLet false false (PVar "mloc") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "mid")) () (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EApp (EVar "parseLocated") (EVar "src")))))) (DoLet false false (PVar "mhelp") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "availableModulesText") (EVar "stdlibDir")) (arm (PLit (LString "")) () (EVar "None")) (arm (PVar "txt") () (EApp (EVar "Some") (EVar "txt"))))))) (DoLet false false (PVar "jmsg") (EBinOp "++" (EVar "lmsg") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" PWild) () (EApp (EVar "availableModulesHint") (EVar "stdlibDir")))))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "jmsg")) (EVar "mloc")) (EVar "mhelp")) (EVar "None")))))) (EVar "True")))))
