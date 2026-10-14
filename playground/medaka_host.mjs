@@ -117,8 +117,9 @@ export function withheldExterns(profile) {
 // for any wasmgc profile, so the runnability rule reads them beside withheldExterns.
 export const WASM_GAP_EXTERNS = ['writeFile', 'osEntropyBytes'];
 
-// The extern a key serves, for a withheld slice's message.
-const KEY_EXTERN = {
+// The extern a key serves, for a withheld slice's message.  medaka_host_test.mjs asserts
+// every key of a withholdable slice has a row naming one of that slice's `externs`.
+export const KEY_EXTERN = {
   mdk_write_byte: 'putStr', mdk_write_err_byte: 'ePutStr',
   mdk_read_file: 'readFile', mdk_file_exists: 'fileExists',
   mdk_write_file_reset: 'writeFileBytes', mdk_write_file_push: 'writeFileBytes',
@@ -192,7 +193,7 @@ export function fmt12g(d) {
 }
 
 // ── string -> float (WH2: ≡ medaka_rt.c mdk_string_to_float) ─────────────────
-// #370 stringToFloat host seam. The C runtime is the oracle (WH2): medaka_rt.c
+// The C runtime is the oracle for stringToFloat (WH2): medaka_rt.c
 // mdk_string_to_float is `strtod` + an endptr FULL-CONSUMPTION check + an empty-string
 // reject. JS Number() is NOT strtod: Number("") === 0, Number("1.5 ") trims,
 // Number("nan"/"inf") is NaN, and Number rejects C99 hex floats ("0x1p3" -> NaN).
@@ -200,8 +201,8 @@ export function fmt12g(d) {
 // case-insensitively, and accepts hex floats. Because native requires full
 // consumption, longest-match is unnecessary — the whole post-whitespace string must
 // match the grammar, or the endptr check would reject it anyway.
-// Returns { ok, value }; ok === 0 means None. Verified case-for-case against the
-// native C oracle over a 621-case battery (test/llvm_fixtures/str_to_float_frontier.mdk).
+// Returns { ok, value }; ok === 0 means None. The native C oracle's frontier cases are
+// test/llvm_fixtures/str_to_float_frontier.mdk.
 export function mdkStrToFloat(s) {
   if (s.length === 0) return { ok: 0, value: 0 };   // medaka_rt.c: bl == 0 -> None
   const b = s.replace(/^[ \t\n\v\f\r]+/, '');       // strtod skips leading isspace
@@ -385,7 +386,7 @@ export function createHost(profile, opts = {}) {
     // module then reads each byte via mdk_float_fmt_byte to rebuild a $str.
     mdk_float_fmt: (d) => { host.floatFmtBuf = enc(fmt12g(d)); return host.floatFmtBuf.length; },
     mdk_float_fmt_byte: (i) => host.floatFmtBuf[i] & 0xff,
-    // #101 libm math: the transcendentals (+ pow/atan2/hypot) have no WasmGC opcode,
+    // libm math: the transcendentals (+ pow/atan2/hypot) have no WasmGC opcode,
     // so they route to JS Math.*; the IEEE-exact ops lower to wasm opcodes.
     mdk_cbrt: Math.cbrt, mdk_exp: Math.exp, mdk_log: Math.log,
     mdk_log2: Math.log2, mdk_log10: Math.log10,
@@ -393,7 +394,7 @@ export function createHost(profile, opts = {}) {
     mdk_asin: Math.asin, mdk_acos: Math.acos, mdk_atan: Math.atan,
     mdk_sinh: Math.sinh, mdk_cosh: Math.cosh, mdk_tanh: Math.tanh,
     mdk_pow: Math.pow, mdk_atan2: Math.atan2, mdk_hypot: Math.hypot,
-    // stringToFloat (#370): the guest pushes the text through the path channel, then
+    // stringToFloat: the guest pushes the text through the path channel, then
     // calls mdk_str_to_float (parse AND latch the ok flag), then mdk_str_to_float_ok.
     // Two channels because Some(nan) is a legal strtod result, so NaN cannot double as
     // the failure signal.

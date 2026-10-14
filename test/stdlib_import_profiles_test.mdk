@@ -12,7 +12,7 @@
 
 import test_process.{medakaBin, underRoot, withScratchDir}
 import compiler_cli_test_support.{boundedVerbsSeconds}
-import test.{expectEqual}
+import test.{expectAtLeast, expectEqual}
 import list.{filterMap, sort, zipWith}
 import string.{contains, lines, stripSuffix}
 
@@ -89,3 +89,6 @@ verdict (p, m) res =
 
 test "stdlib_import_profiles: no unexpected refusal on any wasm profile" =
   withScratchDir (dir => expectEqual [] (sweep dir))
+
+test "stdlib_import_profiles: the sweep finds stdlib modules to check" =
+  expectAtLeast 1 (length stdlibModules)

@@ -94,12 +94,12 @@ const GUIDE_DIR = opts.guide
   : (existsSync(join(HERE, 'site', 'guide')) ? join(HERE, 'site', 'guide') : join(HERE, 'site-guide'));
 
 // ── the runnability rule, restated INDEPENDENTLY of render_docs.mjs ───────────
-// Deliberately a second copy rather than an import: this file's job is to catch
-// the render and the rule drifting apart, and a shared constant cannot disagree
-// with itself. Keep in sync with render_docs.mjs `classifyRunnable`. The stubbed
-// names are the externs of the slices playground/medaka_host.mjs withholds on
-// wasmgc/browser-worker, plus its WASM_GAP_EXTERNS (no wasm build lowers them), read
-// from the host here as render_docs.mjs reads them.
+// The rule's conjuncts (fence label, grant in `main`, a top-level `main`, shipped
+// imports) are restated here rather than imported, so a change to one copy shows up
+// as a disagreement; keep them in sync with render_docs.mjs `classifyRunnable`. The
+// stubbed set is NOT independent: both copies derive it from the same
+// `withheldExterns('wasmgc/browser-worker')` plus WASM_GAP_EXTERNS in
+// playground/medaka_host.mjs.
 const STUBBED_CAPABILITY_RE = new RegExp(
   `\\b(${[...withheldExterns('wasmgc/browser-worker'), ...WASM_GAP_EXTERNS].join('|')})\\b`);
 
@@ -140,7 +140,7 @@ const definesMain = (source) => /^main\b/m.test(source);
 //     fetches), never hardcoded here.
 function unshippedImports(source, shipped) {
   const out = [];
-  for (const m of source.matchAll(/^\s*(?:export\s+)?import\s+([a-z][a-z_0-9]*)/gm)) {
+  for (const m of source.matchAll(/^\s*(?:export\s+)?import\s+([a-z][a-z_0-9]*(?:\.[a-z][a-z_0-9]*)*)/gm)) {
     if (!shipped.has(m[1])) out.push(m[1]);
   }
   return out;

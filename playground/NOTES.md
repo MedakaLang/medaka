@@ -123,9 +123,10 @@ it needs two more:
    They are fragments; native `build`/`run` refuse them with one located error
    (`W-MAIN-MISSING`) and the browser answers the same code.
 2. **does it import a module the page SHIPS?** `10-tooling-and-workflow#5` does
-   `import test`, and `test` is deliberately excluded from `EXTRA_MODULES`
-   (native-only externs). The current rule only inspects stubbed *calls*, never
-   unshipped *imports*.
+   `import test`, and `test` was excluded from the
+   hand-kept shipped list then in force (the set is now derived into
+   `dist/stdlib_modules.json` by `build_playground_wasm.sh`). The rule then only
+   inspected stubbed *calls*, never unshipped *imports*.
 
 The differential deliberately does **not** patch that rule — it reports the gap
 and recomputes the rule independently of `render_docs.mjs`, so a future
