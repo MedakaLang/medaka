@@ -1,5 +1,5 @@
 # META
-source_lines=680
+source_lines=728
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -682,6 +682,54 @@ test "join with an empty separator keeps an exact codepoint length" =
 
 test "reverse keeps an exact codepoint length on multibyte text" =
   expectEqual 4 (stringLength (reverse "é日→😀"))
+
+-- stringToChars: the Array of Char the extern builds.  The codepoint cases pin
+-- every element, so a byte read where a codepoint belongs shows up.
+
+charCodesFrom : Array Char -> Int -> List Int
+charCodesFrom a i
+  | i >= arrayLength a = []
+  | otherwise = charCode (arrayGetUnsafe i a) :: charCodesFrom a (i + 1)
+
+charCodesOf : String -> List Int
+charCodesOf s = charCodesFrom (stringToChars s) 0
+
+test "stringToChars of the empty string is an empty array" =
+  expectEqual 0 (arrayLength (stringToChars ""))
+
+test "stringToChars of the empty string round-trips" =
+  expectEqual "" (stringFromChars (stringToChars ""))
+
+test "stringToChars of ASCII yields one Char per byte" =
+  expectEqual [104, 101, 108, 108, 111] (charCodesOf "hello")
+
+test "stringToChars of a long ASCII string keeps its length" =
+  expectEqual
+    40
+    (arrayLength (stringToChars "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"))
+
+test "stringToChars of a long ASCII string round-trips" =
+  expectEqual
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"
+    (stringFromChars (stringToChars "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"))
+
+test "stringToChars of a 2-byte-only string" =
+  expectEqual [233, 26085] (charCodesOf "é日")
+
+test "stringToChars of a 4-byte-only string" =
+  expectEqual [128512, 127881] (charCodesOf "😀🎉")
+
+test "stringToChars of a mixed 1/2/3/4-byte string yields codepoints" =
+  expectEqual [97, 233, 8364, 128512, 98] (charCodesOf "aé€😀b")
+
+test "stringToChars of a mixed string round-trips" =
+  expectEqual "aé€😀b" (stringFromChars (stringToChars "aé€😀b"))
+
+test "stringToChars with a non-ASCII lead byte then ASCII" =
+  expectEqual [233, 97, 98, 99] (charCodesOf "éabc")
+
+test "stringToChars with ASCII then a 3-byte tail" =
+  expectEqual [97, 98, 99, 8364] (charCodesOf "abc€")
 # DESUGAR
 (DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
@@ -862,6 +910,21 @@ test "reverse keeps an exact codepoint length on multibyte text" =
 (DTest false "join keeps an exact codepoint length on multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LInt 7))) (EApp (EVar "stringLength") (EApp (EApp (EVar "join") (ELit (LString "→"))) (EListLit (ELit (LString "é")) (ELit (LString "日本")) (ELit (LString "")) (ELit (LString "x")))))))
 (DTest false "join with an empty separator keeps an exact codepoint length" (EApp (EApp (EVar "expectEqual") (ELit (LInt 2))) (EApp (EVar "stringLength") (EApp (EApp (EVar "join") (ELit (LString ""))) (EListLit (ELit (LString "é")) (ELit (LString "日")))))))
 (DTest false "reverse keeps an exact codepoint length on multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LInt 4))) (EApp (EVar "stringLength") (EApp (EVar "reverse") (ELit (LString "é日→😀"))))))
+(DTypeSig false "charCodesFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "charCodesFrom" ((PVar "a") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "a"))) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EApp (EVar "charCodesFrom") (EVar "a")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "charCodesOf" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))))
+(DFunDef false "charCodesOf" ((PVar "s")) (EApp (EApp (EVar "charCodesFrom") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))))
+(DTest false "stringToChars of the empty string is an empty array" (EApp (EApp (EVar "expectEqual") (ELit (LInt 0))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (ELit (LString ""))))))
+(DTest false "stringToChars of the empty string round-trips" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EVar "stringFromChars") (EApp (EVar "stringToChars") (ELit (LString ""))))))
+(DTest false "stringToChars of ASCII yields one Char per byte" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 104)) (ELit (LInt 101)) (ELit (LInt 108)) (ELit (LInt 108)) (ELit (LInt 111)))) (EApp (EVar "charCodesOf") (ELit (LString "hello")))))
+(DTest false "stringToChars of a long ASCII string keeps its length" (EApp (EApp (EVar "expectEqual") (ELit (LInt 40))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (ELit (LString "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"))))))
+(DTest false "stringToChars of a long ASCII string round-trips" (EApp (EApp (EVar "expectEqual") (ELit (LString "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"))) (EApp (EVar "stringFromChars") (EApp (EVar "stringToChars") (ELit (LString "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"))))))
+(DTest false "stringToChars of a 2-byte-only string" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 233)) (ELit (LInt 26085)))) (EApp (EVar "charCodesOf") (ELit (LString "é日")))))
+(DTest false "stringToChars of a 4-byte-only string" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 128512)) (ELit (LInt 127881)))) (EApp (EVar "charCodesOf") (ELit (LString "😀🎉")))))
+(DTest false "stringToChars of a mixed 1/2/3/4-byte string yields codepoints" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 97)) (ELit (LInt 233)) (ELit (LInt 8364)) (ELit (LInt 128512)) (ELit (LInt 98)))) (EApp (EVar "charCodesOf") (ELit (LString "aé€😀b")))))
+(DTest false "stringToChars of a mixed string round-trips" (EApp (EApp (EVar "expectEqual") (ELit (LString "aé€😀b"))) (EApp (EVar "stringFromChars") (EApp (EVar "stringToChars") (ELit (LString "aé€😀b"))))))
+(DTest false "stringToChars with a non-ASCII lead byte then ASCII" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 233)) (ELit (LInt 97)) (ELit (LInt 98)) (ELit (LInt 99)))) (EApp (EVar "charCodesOf") (ELit (LString "éabc")))))
+(DTest false "stringToChars with ASCII then a 3-byte tail" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 97)) (ELit (LInt 98)) (ELit (LInt 99)) (ELit (LInt 8364)))) (EApp (EVar "charCodesOf") (ELit (LString "abc€")))))
 # MARK
 (DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
@@ -1042,3 +1105,18 @@ test "reverse keeps an exact codepoint length on multibyte text" =
 (DTest false "join keeps an exact codepoint length on multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LInt 7))) (EApp (EVar "stringLength") (EApp (EApp (EVar "join") (ELit (LString "→"))) (EListLit (ELit (LString "é")) (ELit (LString "日本")) (ELit (LString "")) (ELit (LString "x")))))))
 (DTest false "join with an empty separator keeps an exact codepoint length" (EApp (EApp (EVar "expectEqual") (ELit (LInt 2))) (EApp (EVar "stringLength") (EApp (EApp (EVar "join") (ELit (LString ""))) (EListLit (ELit (LString "é")) (ELit (LString "日")))))))
 (DTest false "reverse keeps an exact codepoint length on multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LInt 4))) (EApp (EVar "stringLength") (EApp (EVar "reverse") (ELit (LString "é日→😀"))))))
+(DTypeSig false "charCodesFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "charCodesFrom" ((PVar "a") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "a"))) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EApp (EVar "charCodesFrom") (EVar "a")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "charCodesOf" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))))
+(DFunDef false "charCodesOf" ((PVar "s")) (EApp (EApp (EVar "charCodesFrom") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))))
+(DTest false "stringToChars of the empty string is an empty array" (EApp (EApp (EVar "expectEqual") (ELit (LInt 0))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (ELit (LString ""))))))
+(DTest false "stringToChars of the empty string round-trips" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EVar "stringFromChars") (EApp (EVar "stringToChars") (ELit (LString ""))))))
+(DTest false "stringToChars of ASCII yields one Char per byte" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 104)) (ELit (LInt 101)) (ELit (LInt 108)) (ELit (LInt 108)) (ELit (LInt 111)))) (EApp (EVar "charCodesOf") (ELit (LString "hello")))))
+(DTest false "stringToChars of a long ASCII string keeps its length" (EApp (EApp (EVar "expectEqual") (ELit (LInt 40))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (ELit (LString "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"))))))
+(DTest false "stringToChars of a long ASCII string round-trips" (EApp (EApp (EVar "expectEqual") (ELit (LString "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"))) (EApp (EVar "stringFromChars") (EApp (EVar "stringToChars") (ELit (LString "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN"))))))
+(DTest false "stringToChars of a 2-byte-only string" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 233)) (ELit (LInt 26085)))) (EApp (EVar "charCodesOf") (ELit (LString "é日")))))
+(DTest false "stringToChars of a 4-byte-only string" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 128512)) (ELit (LInt 127881)))) (EApp (EVar "charCodesOf") (ELit (LString "😀🎉")))))
+(DTest false "stringToChars of a mixed 1/2/3/4-byte string yields codepoints" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 97)) (ELit (LInt 233)) (ELit (LInt 8364)) (ELit (LInt 128512)) (ELit (LInt 98)))) (EApp (EVar "charCodesOf") (ELit (LString "aé€😀b")))))
+(DTest false "stringToChars of a mixed string round-trips" (EApp (EApp (EVar "expectEqual") (ELit (LString "aé€😀b"))) (EApp (EVar "stringFromChars") (EApp (EVar "stringToChars") (ELit (LString "aé€😀b"))))))
+(DTest false "stringToChars with a non-ASCII lead byte then ASCII" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 233)) (ELit (LInt 97)) (ELit (LInt 98)) (ELit (LInt 99)))) (EApp (EVar "charCodesOf") (ELit (LString "éabc")))))
+(DTest false "stringToChars with ASCII then a 3-byte tail" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 97)) (ELit (LInt 98)) (ELit (LInt 99)) (ELit (LInt 8364)))) (EApp (EVar "charCodesOf") (ELit (LString "abc€")))))
