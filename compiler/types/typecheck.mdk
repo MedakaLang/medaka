@@ -18762,9 +18762,9 @@ checkStmtNotDiscarded stmtObls t e
 -- `IndexMut` impl (`setIndex` returning a NEW value) would need EXCLUDING from
 -- `exemptInPlaceIndexMutHeads`, not just narrowing further.
 -- `setIndex` is an `IndexMut` interface method, so which node shape this walk
--- is handed depends on the driver: this file has TWO whole-program entry
--- points (`checkModulesDiagsChain`, used by `check`, vs `elaborateModules`, used by
--- `build`/`run`; see harden-typechecker skill).  Both run the dict pre-pass
+-- is handed depends on the driver: this file has two output selections of the one
+-- graph driver, `driveGraphK` (`checkModulesDiagsChain` for `check`, vs
+-- `elaborateModules` for `build`/`run`; see harden-typechecker skill).  Both run the dict pre-pass
 -- `prePassDictArg` now (#2705), which rewrites the call to
 -- `EMethodAt "setIndex" …` BEFORE this check runs; before that only the
 -- elaborate driver marked, and a bare-`EVar` node reached here under `check` —
@@ -30449,11 +30449,11 @@ cohSoftInScope CohSweepGlobal mid1 mid2 = cohIsCrossModule mid1 mid2
 -- two `impl Foo Int`, `medaka check --json` emitted the identical
 -- `T-CONFLICTING-IMPL` message TWICE — once with the declaration's real span (from the
 -- per-module sweep, `checkCoherence` / `CohSweepOwn`) and once span-less (from this
--- whole-graph sweep, prepended by `attachCoherenceConflict`).  An
--- IMPORT-BEARING two-module program whose overlap is entry-module-local double-reported
--- identically, so this was never 1-module-specific and never new to E-1 (#1115): the
--- prepend has been in `checkModulesEntryFull` since 2026-08-01 (`git log -S
--- 'prependDiagOpt "T-CONFLICTING-IMPL" 1 None hard errs'`).
+-- whole-graph sweep, prepended by `attachCoherenceConflict`, which `driveGraphK` and
+-- the keyed arm of `checkModulesDiagsChain` both call.  An IMPORT-BEARING two-module
+-- program whose overlap is entry-module-local double-reports identically, so the
+-- double report is not specific to one module.  Per-module sweep and whole-graph
+-- sweep each report the pair: one with the declaration span, one without it.
 --
 -- ⚠️ NOT loud→silent, and here is why that is a claim and not a hope.  The pair this
 -- now declines is INTRA-module, and the per-module sweep's population
