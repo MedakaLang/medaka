@@ -5476,6 +5476,23 @@ UPPER "None"
 NEWLINE
 DEDENT
 NEWLINE
+IDENT "invalidStrEscMsg"
+COLON
+UPPER "Char"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "invalidStrEscMsg"
+IDENT "e"
+EQUAL
+INDENT
+INTERP_OPEN "invalid escape sequence `\\"
+IDENT "charToStr"
+IDENT "e"
+INTERP_END "`; valid escapes are \\n \\t \\r \\0 \\\\ \\\" \\u{...}"
+NEWLINE
+DEDENT
+NEWLINE
 IDENT "scanStrEsc"
 COLON
 UPPER "Array"
@@ -5645,15 +5662,12 @@ RPAREN
 NEWLINE
 UPPER "None"
 FAT_ARROW
-INDENT
 IDENT "lexErrorTok"
 IDENT "p"
-INTERP_OPEN "invalid escape sequence `\\"
-IDENT "charToStr"
+LPAREN
+IDENT "invalidStrEscMsg"
 IDENT "e"
-INTERP_END "`; valid escapes are \\n \\t \\r \\0 \\\\ \\\" \\u{...}"
-NEWLINE
-DEDENT
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -6058,21 +6072,31 @@ NEWLINE
 DEDENT
 NEWLINE
 PIPE
-IDENT "otherwise"
-EQUAL
-IDENT "scanInterpCont"
+IDENT "isBareUnicodeEsc"
 IDENT "src"
 IDENT "len"
-LPAREN
 IDENT "p"
-PLUS
-INT 2
-RPAREN
-IDENT "depth"
+IDENT "e"
+EQUAL
+INDENT
+IDENT "lexErrorTok"
+IDENT "p"
 LPAREN
-IDENT "acc"
-PLUSPLUS
-IDENT "charToStr"
+IDENT "bareUnicodeEscMsgStr"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "lexErrorTok"
+IDENT "p"
+LPAREN
+IDENT "invalidStrEscMsg"
 IDENT "e"
 RPAREN
 NEWLINE
@@ -6770,29 +6794,33 @@ NEWLINE
 DEDENT
 NEWLINE
 PIPE
-IDENT "otherwise"
-EQUAL
-INDENT
-IDENT "scanTriple"
+IDENT "isBareUnicodeEsc"
 IDENT "src"
 IDENT "len"
-LPAREN
 IDENT "p"
-PLUS
-INT 2
-RPAREN
-IDENT "startQ"
-IDENT "depth"
-IDENT "id"
-IDENT "leadingNl"
-LPAREN
-IDENT "acc"
-PLUSPLUS
-IDENT "charToStr"
 IDENT "e"
+EQUAL
+INDENT
+IDENT "lexErrorTok"
+IDENT "p"
+LPAREN
+IDENT "bareUnicodeEscMsgStr"
+IDENT "src"
+IDENT "len"
+IDENT "p"
 RPAREN
 NEWLINE
 DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "lexErrorTok"
+IDENT "p"
+LPAREN
+IDENT "invalidStrEscMsg"
+IDENT "e"
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -7291,21 +7319,31 @@ NEWLINE
 DEDENT
 NEWLINE
 PIPE
-IDENT "otherwise"
-EQUAL
-IDENT "scanInterpTripleCont"
+IDENT "isBareUnicodeEsc"
 IDENT "src"
 IDENT "len"
-LPAREN
 IDENT "p"
-PLUS
-INT 2
-RPAREN
-IDENT "depth"
+IDENT "e"
+EQUAL
+INDENT
+IDENT "lexErrorTok"
+IDENT "p"
 LPAREN
-IDENT "acc"
-PLUSPLUS
-IDENT "charToStr"
+IDENT "bareUnicodeEscMsgStr"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "lexErrorTok"
+IDENT "p"
+LPAREN
+IDENT "invalidStrEscMsg"
 IDENT "e"
 RPAREN
 NEWLINE
