@@ -142,6 +142,7 @@ import driver.loader.{
 }
 import driver.diagnostics.{
   analyzeLoadedFull,
+  desugaredModPairs,
   analyzeLocated,
   analyzeLocatedG,
   analyzeFrom,
@@ -922,8 +923,9 @@ locatedProjectDiags : Bool ->
   String ->
   String ->
   List (String, String, List Decl) ->
+  List (String, List Decl) ->
   <IO> (Option String, List (String, String, List Diag), Int, List ModDiags)
-locatedProjectDiags allowInternal trusted target roots rsrc csrc modsWithPath =
+locatedProjectDiags allowInternal trusted target roots rsrc csrc modsWithPath modPairs =
   let (perMod, results) =
     analyzeLoadedFull
       cliStdlibExports
@@ -934,6 +936,7 @@ locatedProjectDiags allowInternal trusted target roots rsrc csrc modsWithPath =
       rsrc
       csrc
       modsWithPath
+      modPairs
   let triples = map readDiagSrc results
   (
     joinedOrNone (flatMap renderTripleErrors triples),
@@ -1201,8 +1204,11 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _, d
       exit 1
 checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target modsWithPath =
   let mods = map dropPathTriple modsWithPath
+  -- One desugar per module for the whole check: the front pass and the typecheck
+  -- analysis read these same trees.
+  let modPairs = desugaredModPairs modsWithPath
   let (resDiags, exWarns) =
-    checkFrontPass allowInternal trusted pathMap rsrc csrc mods
+    checkFrontPass allowInternal trusted pathMap rsrc csrc modPairs
   match resDiags
     "" =>
       let projDiags =
@@ -1214,6 +1220,7 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
           rsrc
           csrc
           modsWithPath
+          modPairs
       match projDiags
         -- BUGFIX (imported-module diagnostics): when there ARE type errors, render
         -- the accumulated per-module diagnostics LOCATED (`file:L:C: msg` + caret),
@@ -1259,9 +1266,9 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
 
 -- The multi-module arm's whole-graph front pass, ahead of the project analysis:
 -- the rendered resolve errors (empty when the graph resolves) and the entry's
--- rendered guard-exhaustiveness lines.  It returns strings only, so the desugared
--- copy of the graph it reads is garbage once it returns rather than live through
--- the typecheck the analysis runs next.
+-- rendered guard-exhaustiveness lines.  `modsD` is the caller's
+-- `desugaredModPairs`, the same trees the typecheck the analysis runs next reads,
+-- so each module is desugared once per check.
 --
 -- RESOLVE-phase errors (e.g. importing a name a module does not export —
 -- PrivateNameAccess) go to STDERR + exit 1, mirroring the single-file arm's
@@ -1275,10 +1282,9 @@ checkFrontPass : Bool ->
   String ->
   List (String, List Decl) ->
   <IO> (String, String)
-checkFrontPass allowInternal trusted pathMap rsrc csrc mods =
+checkFrontPass allowInternal trusted pathMap rsrc csrc modsD =
   let rtD = desugaredPrelude rsrc
   let coreD = desugaredPrelude csrc
-  let modsD = map desugarPair mods
   let resDiags =
     ppResolveErrorsByFile
       (hintResErrorPairs
