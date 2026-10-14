@@ -1,5 +1,5 @@
 # META
-source_lines=612
+source_lines=610
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cmd.mdk — the `medaka lint` engine.
@@ -139,10 +139,11 @@ lintCacheCtx True False
 -- `medaka check --json` emits (via `cjAllToJson`) — one schema for both
 -- surfaces (#249).  Each `Finding` becomes a `Diag` via `findingToDiag`
 -- (inside `lintFileDiagTripleParsed`), which stamps the lint RULE NAME into
--- the diagnostic's `code` field.  Cross-file rules DO participate now (#2701
+-- the diagnostic's `code` field.  Cross-file rules DO participate (#2701
 -- leg 3): the per-file pass already parses every target
--- (`lintFileDiagTripleParsed`), so those parses are reused — never re-read —
--- to run `runCrossFileRules` exactly like the human-text path does, and each
+-- (`lintFileDiagTripleParsed`), and `--json` runs `runCrossFileRules` over
+-- those parses (the human-text path reaches the tier from entries instead,
+-- see `runCrossFileReportCached`).  Each
 -- resulting `Finding` is folded into its OWN file's `diagnostics` array via
 -- `mergeCrossFileIntoTriples` (never a new top-level key).  A duplicate whose
 -- partner file lay outside `files` would be folded into a synthesized entry
@@ -291,9 +292,10 @@ baselineFileCodes : String ->
 baselineFileCodes cwd (path, _, diags) =
   (baselineKeyOf cwd path, map diagCodeOf diags)
 
--- Run the cross-file rule tier over the whole set, REUSING the parses the per-file
--- pass already produced (#394 — this used to call `parseLintFiles`, re-reading and
--- re-parsing every target, plus `readLintSrcs` for a third read of the same bytes).
+-- Run the cross-file rule tier over the whole set from the parses the per-file
+-- pass produced.  This is the fallback route: the human-text path takes it only
+-- when `crossFileCacheSound` is False (a registry with a second cross-file rule);
+-- otherwise it reaches the tier through `runCrossFileReportCached` over entries.
 -- Findings render AFTER the per-file output under a `cross-file:` header.
 -- --only/--disable are honored inside `runCrossFileRules`; --deny promotion is
 -- applied here (mirrors the per-file path).  Returns whether any finding is an
@@ -410,11 +412,11 @@ resolveLintTargets targets = flatMap expandLintTarget targets
 -- Under --cache these are what gets persisted, and the dirty ones are the files
 -- that actually had to be linted this run.
 --
--- `parsedFiles` is threaded to the cross-file tier so it need not re-read/re-parse
--- the same targets (#394); it is empty in --fix mode, which runs no cross-file
--- rules, and empty under --cache, where a cache HIT has no parse to hand on and
--- the tier is reached from `entries` instead.  Not accumulating it under --cache
--- is also why a warm run holds no decls in memory.
+-- `parsedFiles` feeds the parse-based cross-file tier (`runCrossFileReport`).
+-- It is empty whenever `crossFileCacheSound` holds (the tier is reached from
+-- `entries` instead, whether or not --cache is on), in --fix mode, which runs
+-- no cross-file rules, and under --cache.  Not accumulating it is also why a
+-- warm run holds no decls in memory.
 --
 -- The per-file printing order is unchanged: each file's report is emitted
 -- (strictly) before the recursion.
@@ -474,14 +476,10 @@ lintFilesGo idx fixMode multiFile disableNames onlyNames denyNames baseCtx cache
 -- multiFile=False: output is byte-for-byte identical to single-file v1 behavior.
 -- multiFile=True: prints "path:" header before findings (only when there are findings).
 -- Returns (hadError, parsed) where `parsed` is a 0-or-1 element list carrying this
--- file's (path, src, Positions, decls) for the cross-file tier to REUSE — empty
--- when the file could not be read (mirroring the old parseLintFiles/readLintSrcs
--- skip-unreadable behavior).  Handing the parse out rather than letting the
--- cross-file tier redo it is issue #394: the tier would otherwise `parseLintFiles` (a full
--- re-read + re-parse of every target, 11.4% of a whole-tree lint's runtime) AND
--- `readLintSrcs` (a THIRD read of the same bytes) after this pass has already read
--- and parsed each file. Memory-neutral: runCrossFileReport already materialised
--- every triple at once.
+-- file's (path, src, Positions, decls) for the parse-based cross-file tier
+-- (`runCrossFileReport`).  It is empty when the file could not be read, and
+-- whenever `crossFileCacheSound` holds, since that tier is then reached from
+-- the entries.
 lintOneFileReport : StdlibIndex ->
   Bool ->
   List String ->
@@ -534,9 +532,9 @@ lintOneFileReport idx multiFile disableNames onlyNames denyNames baseCtx cacheCt
       (anyList isFindingError findings, [entry], parsed)
 
 -- One file's lint result, from the cache when it can be trusted and from a real
--- parse otherwise.  Also returns the parse for the #394 cross-file reuse — empty
--- on a cache hit (there is no parse) and, deliberately, empty whenever the cache
--- is on at all, since that path does not consume it.
+-- parse otherwise.  Also returns the parse for the parse-based cross-file tier —
+-- empty on a cache hit (there is no parse) and whenever `crossFileCacheSound`
+-- holds, since the tier is then reached from entries.
 --
 -- The `--cache` decision, in full: a HIT requires the shard to decode, and to
 -- agree on the format version, the rule-set stamp, the path, AND the content
@@ -569,7 +567,7 @@ lintEntryOf idx (Some (cacheDir, stamp)) _ _ target src =
 -- that key is an `exprSexp` of every eligible body, i.e. the single most
 -- expensive thing the cross-file tier does.  So the field is filled only when
 -- the cross-file tier will consume it via runCrossFileReportCached (--cache, or
--- a multi-file uncached run); the keys come from the same per-clause pass the
+-- a multi-file uncached run with `crossFileCacheSound`); the keys come from the same per-clause pass the
 -- same-file duplicate-body rule reads, so they are computed once.
 lintFileFresh : StdlibIndex ->
   List Rule ->
