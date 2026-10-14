@@ -756,31 +756,26 @@ alertInstanceSpellings = [
   ("pds-alert@pds-backup.service", "pds-alert@pds-backup.service.service"),
 ]
 
--- The full spelling contains the short one as a prefix, so the short name
--- occurs once more than the full name for every phantom.
-phantomSpelling : String -> (String, String) -> Bool
-phantomSpelling text (phantom, real) =
-  countOccurrences phantom text /= countOccurrences real text
+-- Every full occurrence is also a short occurrence, so the two counts differ
+-- by exactly the short occurrences that are not followed by `.service`.
+-- Each real spelling must also appear, so a doc that lost its re-arm steps
+-- fails here; the template row in the deploy doc contains `pds-alert@` and
+-- would satisfy a bare presence test.
+spellingFindings : String -> String -> (String, String) -> List String
+spellingFindings path text (phantom, real) =
+  if countOccurrences phantom text /= countOccurrences real text then
+    [
+      "\{path} names `\{phantom}`, which is not the instance OnFailure= starts; use `\{real}`",
+    ]
+  else if countOccurrences real text == 0 then
+    ["\{path} never names `\{real}`, the instance the ops steps must name"]
+  else
+    []
 
-phantomFinding : String -> (String, String) -> String
-phantomFinding path (phantom, real) =
-  "\{path} names `\{phantom}`, which is not the instance OnFailure= starts; use `\{real}`"
-
--- A file that names no alert instance at all would pass the phantom check
--- vacuously, so the check also requires the re-arm text to be present.
 alertInstanceFindings : String -> <FileRead, IO> Result String (List String)
 alertInstanceFindings path = match readFile (underRoot path)
   Err e => Err "could not read \{path}: \{e}"
-  Ok text =>
-    if countOccurrences "pds-alert@" text == 0 then
-      Ok [
-        "\{path} names no pds-alert@ instance, so the re-arm commands cannot be graded",
-      ]
-    else
-      Ok
-        (map
-          (phantomFinding path)
-          (filter (phantomSpelling text) alertInstanceSpellings))
+  Ok text => Ok (flatMap (spellingFindings path text) alertInstanceSpellings)
 
 test "ops runbook names only the real pds-alert instances" =
   expectNoFindings

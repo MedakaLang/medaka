@@ -783,7 +783,8 @@ systemctl stop pds-alert@pds.service.service
 
 The instance name is the full unit name, so the instance for `pds.service` is
 `pds-alert@pds.service.service`. Dropping the trailing `.service` names a
-different instance, `pds`, that nothing starts.
+different instance, `pds`, which `OnFailure=` never starts; a re-arm step that
+names it leaves the real instance unchanged.
 
 Use `pds-alert@pds-backup.service.service` for a backup incident. **Do not re-arm
 while the source unit is still flapping**: another failed transition can
