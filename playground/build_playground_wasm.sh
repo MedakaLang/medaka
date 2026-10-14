@@ -13,6 +13,8 @@
 #   * playground.wasm   — the combined compiler, as WasmGC  (do NOT commit)
 #   * runtime.mdk       — copy of stdlib/runtime.mdk (browser feeds via vfs)
 #   * core.mdk          — copy of stdlib/core.mdk     (browser feeds via vfs)
+#   * <id>.mdk          — every other stdlib module   (browser feeds via vfs)
+#   * stdlib_modules.json — the ids of those modules, generated (do NOT commit)
 #
 # Pipeline:
 #   1. make medaka                         -> native OCaml-free compiler (./medaka)
@@ -94,19 +96,34 @@ rm -f "$WAT"  # keep dist lean; WAT is huge and regenerable
 cp "$RUNTIME" "$DIST/runtime.mdk"
 cp "$CORE"    "$DIST/core.mdk"
 
-# Stdlib modules the browser bundles so `import <mod>` works.
-# EXCLUDED on purpose (native-only externs that trap/LinkError on wasm):
-#   fs (file IO), net (sockets), io (file/stdin), test (runExpectation).
-#   Keep this list in sync with EXTRA_MODULES in main.js.
-EXTRA_MODULES="args array async base64 bytebuilder byteparser bytes hash_map hash_set hex \
-i32 i64 json list map math mut_bytes nonempty path regex set string time toml u16 u32 u64 u8 validation vector"
+# Every stdlib module ships (docs/design/TARGETS-DESIGN.md §6.4): a program that
+# uses one whose labels `wasmgc/browser-worker` withholds is refused by the
+# compiler's target check, with the same located T-TARGET-CAPABILITY diagnostic
+# `medaka check --target` gives, rather than by a module that is missing.
+# The module ids are derived from stdlib/ and stdlib/crypto/ (no `_test`
+# siblings), staged flat as dist/<id>.mdk (`crypto.sha256` -> dist/crypto.sha256.mdk),
+# and listed in dist/stdlib_modules.json: the one list main.js fetches from and
+# build_site.sh checks the site against.
+EXTRA_MODULES=$(
+  cd "$ROOT/stdlib"
+  for f in *.mdk crypto/*.mdk; do
+    case "$f" in
+      *_test.mdk|runtime.mdk|core.mdk) ;;
+      *) echo "$f" | sed 's/\.mdk$//; s#/#.#g' ;;
+    esac
+  done | LC_ALL=C sort
+)
+[ -n "$EXTRA_MODULES" ] || { echo "FAIL: no stdlib modules found under $ROOT/stdlib"; exit 1; }
 for m in $EXTRA_MODULES; do
-  cp "$ROOT/stdlib/$m.mdk" "$DIST/$m.mdk"
+  cp "$ROOT/stdlib/$(echo "$m" | tr . /).mdk" "$DIST/$m.mdk"
 done
+printf '%s\n' $EXTRA_MODULES \
+  | awk 'BEGIN { printf "[" } { printf "%s\"%s\"", (NR > 1 ? "," : ""), $0 } END { print "]" }' \
+  > "$DIST/stdlib_modules.json"
 
 echo
 echo "artifacts in $DIST:"
-for f in playground.wasm runtime.mdk core.mdk $(for m in $EXTRA_MODULES; do echo "$m.mdk"; done); do
-  [ -f "$DIST/$f" ] && printf '  %-16s %10d bytes\n' "$f" "$(wc -c < "$DIST/$f")"
+for f in playground.wasm runtime.mdk core.mdk stdlib_modules.json $(for m in $EXTRA_MODULES; do echo "$m.mdk"; done); do
+  [ -f "$DIST/$f" ] && printf '  %-20s %10d bytes\n' "$f" "$(wc -c < "$DIST/$f")"
 done
 echo "DONE"

@@ -25,7 +25,7 @@ support, so a file using them runs under `medaka test --native`.
 ### `medakaRoot`
 
 ```
-medakaRoot : <IO> String
+medakaRoot : <Env "MEDAKA_ROOT"> String
 ```
 
 The root of the Medaka tree under test: `MEDAKA_ROOT`, or `"."` when
@@ -37,7 +37,7 @@ directory, which a test does not control.
 ### `underRoot`
 
 ```
-underRoot : String -> <IO> String
+underRoot : String -> <Env "MEDAKA_ROOT"> String
 underRoot rel
 ```
 
@@ -46,7 +46,7 @@ The path `rel`, relative to the tree root, resolved under `medakaRoot`.
 ### `medakaBin`
 
 ```
-medakaBin : <IO> String
+medakaBin : <Env "MEDAKA_ROOT", Env "MEDAKA"> String
 ```
 
 The Medaka binary to spawn: `MEDAKA`, or the binary named medaka in
@@ -304,7 +304,7 @@ Fail "s/a.mdk — only 2 assertions ran, expected >= 3 (vacuous-green guard: dis
 ### `testAssertionCount`
 
 ```
-testAssertionCount : String -> List String -> <Exec, IO> Result String Int
+testAssertionCount : String -> List String -> <Exec, Env "MEDAKA_ROOT", Env "MEDAKA"> Result String Int
 testAssertionCount path extraArgs
 ```
 
@@ -319,7 +319,7 @@ failing run carries the tail of its output.
 ### `testAssertionCounts`
 
 ```
-testAssertionCounts : List (String, List String) -> <Exec, IO> List (Result String Int)
+testAssertionCounts : List (String, List String) -> <Exec, Env "MEDAKA_ROOT", Env "MEDAKA", Env "MEDAKA_TEST_JOBS"> List (Result String Int)
 testAssertionCounts rows
 ```
 
@@ -339,7 +339,7 @@ True
 ### `testJobs`
 
 ```
-testJobs : <Exec, IO> Int
+testJobs : <Exec, Env "MEDAKA_TEST_JOBS"> Int
 ```
 
 How many `medaka test` runs start at once, in `testAssertionCounts` and

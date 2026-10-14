@@ -92,6 +92,7 @@ import { fileURLToPath } from 'node:url';
 
 import { Marked } from './vendor/marked/marked.js';
 import { highlightMedaka } from './highlight_medaka.mjs';
+import { withheldExterns, WASM_GAP_EXTERNS } from './medaka_host.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -118,12 +119,16 @@ const escapeHtml = (s) =>
 //      multi-file, the playground has one buffer; not `medaka-nocheck` — a
 //      fragment never meant to stand alone; and not `medaka-expect`/`toml`/an
 //      unlabelled fence, none of which are Medaka source to run at all), AND
-//   2. its source contains no call to a host capability the playground's wasm
-//      import object stubs out (playground/worker.js `capabilityStub`):
-//      readFile, writeFile, readLine, readLines, getEnv, fileExists, args,
-//      exit. Calling one of these does not fail to COMPILE — the wasm module
-//      loads fine — it throws a `CapabilityError` at run time instead of
-//      producing the documented output, which is worse than no link.
+//   2. its source names no extern of a slice the playground's runner withholds
+//      (playground/medaka_host.mjs `withheldExterns('wasmgc/browser-worker')`:
+//      getEnv, args, exit and the stdin family), nor one no wasm build lowers
+//      (`WASM_GAP_EXTERNS` there: text-mode writeFile, osEntropyBytes), and
+//      `main` names no binding whose declared row writes a pattern file grant
+//      (`<FileRead "cfg/*">`), which the wasm build refuses (T-WASM-FILE-GRANT).
+//      A program reaching one is refused by the compiler or throws a
+//      `CapabilityError` at run time instead of producing the documented
+//      output, which is worse than no link.  The grant test reads text, not
+//      liveness: a grant reached only through a further call is not seen.
 //   3. it defines a top-level `main`. A block without one is not a program:
 //      natively `medaka run`/`build` refuse it with one located error
 //      (W-MAIN-MISSING), and the browser answers the same code. The ▶ button would open a guaranteed
@@ -144,18 +149,34 @@ const escapeHtml = (s) =>
 // constant cannot disagree with itself, and the differential's job is to catch
 // the render and the rule drifting apart — so a change here needs the mirror
 // there.
-const UNSUPPORTED_CALL_RE =
-  /\b(readFile|writeFile|readLine|readLines|getEnv|fileExists|args|exit)\b/;
+const UNSUPPORTED_CALL_RE = new RegExp(
+  `\\b(${[...withheldExterns('wasmgc/browser-worker'), ...WASM_GAP_EXTERNS].join('|')})\\b`);
+
+// Conjunct 2, grants: the top-level bindings whose signature line writes a pattern
+// file grant, and the first of them that a line of `main`'s definition names.
+function patternGrantInMain(text) {
+  const granted = [...text.matchAll(/^([a-z][A-Za-z0-9_']*)\s*:.*\bFile(?:Read|Write)\s+"[^"\n]*\*"/gm)]
+    .map((m) => m[1]);
+  const mainLines = [];
+  let inMain = false;
+  for (const line of text.split('\n')) {
+    if (/^main\b/.test(line)) inMain = true;
+    else if (!/^(\s|$)/.test(line)) inMain = false;
+    if (inMain) mainLines.push(line);
+  }
+  const body = mainLines.join('\n');
+  return granted.find((g) => new RegExp(`(^|[^A-Za-z0-9_'])${g}($|[^A-Za-z0-9_'])`).test(body)) || null;
+}
 
 // Conjunct 3. A top-level `main` binding starts a line, so anchor to one.
 const definesMain = (text) => /^main\b/m.test(text);
 
-// Conjunct 4. Top-level `import <module>` — the module id is the first
-// lowercase token after the keyword; the selective/alias/wildcard tail is
+// Conjunct 4. Top-level `import <module>` — the module id is the dotted path
+// after the keyword (`crypto.sha256`, staged as dist/crypto.sha256.mdk); the selective/alias/wildcard tail is
 // irrelevant to WHICH file the page must have fetched.
 function unshippedImports(text, shipped) {
   const out = [];
-  for (const m of text.matchAll(/^\s*(?:export\s+)?import\s+([a-z][a-z_0-9]*)/gm)) {
+  for (const m of text.matchAll(/^\s*(?:export\s+)?import\s+([a-z][a-z_0-9]*(?:\.[a-z][a-z_0-9]*)*)/gm)) {
     if (!shipped.has(m[1])) out.push(m[1]);
   }
   return out;
@@ -186,6 +207,10 @@ export function classifyRunnable(label, text, shipped) {
   const m = text.match(UNSUPPORTED_CALL_RE);
   if (m) {
     return { runnable: false, reason: `uses \`${m[1]}\`, which the browser playground has no host support for` };
+  }
+  const g = patternGrantInMain(text);
+  if (g) {
+    return { runnable: false, reason: `\`${g}\` has a pattern file grant, which a wasm build cannot confine` };
   }
   if (!definesMain(text)) {
     return { runnable: false, reason: 'defines no top-level `main`, so there is no program to run' };
