@@ -492,7 +492,16 @@ gradeSplit _ _ _ _ = []
 -- Runs `body` in a scratch directory made for this call, then removes it.
 inFreshScratch : (String -> <Exec, FileRead, IO> Expectation) ->
   <Exec, FileRead, IO> Expectation
-inFreshScratch body = inFreshDirOf body (msg => fail msg)
+inFreshScratch body = match runVerb "mktemp" ["-d"]
+  Err e => fail "could not make a scratch directory: \{e}"
+  Ok (0, out, _) =>
+    let scratch = trim out
+    let result = body scratch
+    let _ = runVerb "rm" ["-rf", scratch]
+    result
+  Ok (code, _, err) =>
+    fail
+      "could not make a scratch directory: mktemp -d exited \{intToString code}: \{err}"
 
 {- | Runs `body` in a directory made for this call, removes it, and returns
    what `body` returned. `fromMsg` turns a failure to make the directory into
