@@ -1,0 +1,10 @@
+-- `hub` re-exports two unrelated `mth : a -> Int`, from `IA` (one impl, at `Int`) and
+-- `IB` (one impl, at `Bool`).  SHADOW-SEMANTICS.md S2-DECL (d) over the admitted set
+-- (ruled 2026-10-14) decides each occurrence by its own receiver: at `True` only
+-- `IB Bool` selects (7), at `1` only `IA Int` selects (2).  Spec answer: `7` then `2`
+-- on every verb, the built binary included.
+import hub.{IA, IB, mth}
+
+main =
+  let _ = println (mth True)
+  println (mth 1)

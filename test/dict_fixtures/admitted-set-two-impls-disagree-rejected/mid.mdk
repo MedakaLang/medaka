@@ -1,0 +1,2 @@
+export import g.{IG, mth}
+export import p.{IP, mth}

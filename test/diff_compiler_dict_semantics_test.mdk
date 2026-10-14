@@ -3677,6 +3677,105 @@ table = [
     codes = [Present "T-AMBIGUOUS-SHADOW-DECL", Absent "T-TYPE-MISMATCH"],
   },
   Row {
+    entry = "admitted-set-wildcard-private-iface-accepted/main.mdk",
+    label =
+      "S2-DECL (d) for a method-only admitted set, ruled 2026-10-14 (#1302's program): `IB.mth` and the private `MSIP.mth` that `import mspriv.*` admits; only `impl IB Blob` answers at the receiver, so the occurrence commits to it and prints `helper 5`. Before the fix the evidence judgment rejected it with a head-tag route naming the result type `Int`, and before that `build` panicked on an occurrence with no interface word",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "6\n",
+    codes = [Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-reexport-merge-accepted/main.mdk",
+    label =
+      "S2-DECL (d) for a method-only admitted set, ruled 2026-10-14 (#1530's program): a re-export merge of `IG.mth` and `IP.mth`, with only `impl IG W`; exactly one declaration selects at the receiver, so the occurrence commits to `IG W` and prints 5 on every engine",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "5\n",
+    codes = [Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-result-elem-one-impl-accepted/main.mdk",
+    label =
+      "the same admitted set with `mth : f a -> a`: the result (`Int`) names neither instance, the receiver `W` does, and only `impl IG W` exists, so the occurrence commits to it and prints the first field",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n",
+    codes = [Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-receiver-decides-per-occurrence-accepted/main.mdk",
+    label =
+      "S2-DECL (d) decides each occurrence by its own receiver: `mth True` has only `IB Bool` and `mth 1` only `IA Int`, so the two occurrences commit to different interfaces and print 7 then 2",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n2\n",
+    codes = [Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-two-impls-disagree-rejected/main.mdk",
+    label =
+      "S2-DECL (d), two admitted declarations that disagree: `impl IG W` and `impl IP W` both select at the receiver, so the occurrence is the located `T-AMBIGUOUS-METHOD` on every verb; before the fix `run` printed 1 (a silent pick) and then the judgment named the result type as a head-tag route",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-rigid-receiver-rejected/main.mdk",
+    label =
+      "#4131: S2-DECL (d) with a rigid receiver (`wrap : x -> x`, `wrap v = mth v`) asks no declaration, so the two Int impls are not shown to agree and the occurrence is the located `T-AMBIGUOUS-METHOD`; before the fix check accepted it with an empty-word `RNone` route and `run` printed 4 or 30 by hub order",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-rigid-receiver-rejected/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the hub's two lines swapped, the same located reject",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-rigid-receiver-data-rejected/main.mdk",
+    label =
+      "#4131 with a data receiver: the same rigid `wrap` over two `T` impls is the located `T-AMBIGUOUS-METHOD`; before the fix `run` printed 4 or 30 by hub order and the built binary died with `E-AMBIGUOUS-DISPATCH`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-rigid-receiver-data-rejected/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the hub's two lines swapped, the same located reject",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
     entry = "alias-beside-bare-method/main.mdk",
     label =
       "SYNTAX.md \"Import aliasing\": `import ma as A` binds `ma`'s methods as `A.sh` only, so beside `import mb.{Sh, sh}` the bare `sh` is `mb.sh` alone (`mb`'s `Sh Int` adds 2000). 2007, hand-derived from the declarations; never `ma`'s 1007 by import order and never an emitter panic",
@@ -5634,7 +5733,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 499
+tableRows = 508
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

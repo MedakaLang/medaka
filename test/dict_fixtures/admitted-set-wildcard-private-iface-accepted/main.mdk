@@ -1,0 +1,16 @@
+-- `mth` has two admitted declarations here: `IB.mth`, imported by name, and
+-- `MSIP.mth`, which `import mspriv.*` brings in although `MSIP` is private to
+-- `mspriv`.  No standalone is in scope, so SHADOW-SEMANTICS.md S2-DECL (d) decides the
+-- occurrence over the admitted set (ruled 2026-10-14): each declaration is asked
+-- through its own receiver, `Blob`; `impl IB Blob` answers and `MSIP` has no impl, so
+-- exactly one selects and the occurrence commits to `IB Blob`, whose body is 5.
+-- Spec answer: `helper 5` = 6 on every verb, the built binary included.
+import ifb.{IB, mth}
+import mspriv.*
+
+public export data Blob = Blob
+
+export impl IB Blob where
+  mth b = 5
+
+main = println (helper (mth Blob))

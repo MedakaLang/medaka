@@ -1,0 +1,17 @@
+-- `mid` re-exports two unrelated `mth : f a -> a`, from `IG` and `IP`, and this module
+-- imports both through it and writes an impl of each at `W`: `IG` returns the first
+-- field, `IP` the second.  SHADOW-SEMANTICS.md S2-DECL (d) over the admitted set
+-- (ruled 2026-10-14): both declarations select an instance at the receiver `W`, and
+-- they disagree, so nothing decides the occurrence.  Spec answer: the located reject
+-- `T-AMBIGUOUS-METHOD` at `mth`, exit 1 on every verb; never 1 or 2.
+import mid.{IP, IG, mth}
+
+data W a = MkW a a
+
+impl IG W where
+  mth (MkW x _) = x
+
+impl IP W where
+  mth (MkW _ y) = y
+
+main = println (mth (MkW (1 : Int) 2))

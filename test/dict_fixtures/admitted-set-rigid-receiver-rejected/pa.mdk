@@ -1,0 +1,5 @@
+export interface IA a where
+  mth : a -> a
+
+impl IA Int where
+  mth n = n + 1

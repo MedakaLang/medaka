@@ -1,0 +1,7 @@
+import t.{T(..)}
+
+export interface IA a where
+  mth : a -> a
+
+impl IA T where
+  mth (T n) = T (n + 1)
