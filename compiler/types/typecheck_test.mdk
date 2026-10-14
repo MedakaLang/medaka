@@ -783,6 +783,11 @@ test "declared and inferred arithmetic retain one Num slot at finalized queries"
       "arithmeticErrorCodes' bindings for the cold query",
       expectEqual
         [
+          ("binding:inferredRem", "binding:inferredRem", 0),
+          ("binding:inferredDiv", "binding:inferredDiv", 0),
+          ("binding:inferredMul", "binding:inferredMul", 0),
+          ("binding:inferredSub", "binding:inferredSub", 0),
+          ("binding:inferredAdd", "binding:inferredAdd", 0),
           ("binding:signedRem", "binding:signedRem", 0),
           ("binding:signedDiv", "binding:signedDiv", 0),
           ("binding:signedMul", "binding:signedMul", 0),

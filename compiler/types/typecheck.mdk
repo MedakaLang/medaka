@@ -9720,6 +9720,8 @@ data PendingDictApp = PendingDictApp {
   pdaEncl : String,
   pdaLoc : Option Loc,
   pdaScope : ScopeId,
+  -- the callee as written, which the completeness judgment's diagnostic names
+  pdaCallee : String,
 }
 
 -- Method-level-constraint dict-passing.  `methodPredicateSlotsRef` is the sole
@@ -17346,7 +17348,7 @@ registerLocalAbs name lscope sch oblN0 callN0 =
         laParams = localAbsParams lscope 0 slots,
       }
       st.lasBinders := omInsert name (Some la) st.lasBinders.value
-      fold (_ occ => pushLocalDictApp (fst occ) la [] (snd occ)) () recOccs
+      fold (_ occ => pushLocalDictApp name (fst occ) la [] (snd occ)) () recOccs
 
 localAbsSlots : String -> List Int -> Int -> Int -> List PredicateSlot
 localAbsSlots name boundIds oblN0 callN0 =
@@ -17366,8 +17368,13 @@ localAbsParams lscope i (_ :: rest) =
 -- One dictionary application of a local: each slot's predicate at the occurrence's
 -- instantiation [subst] (empty for a recursive use, whose predicate is the binder's
 -- own), solved in the occurrence's scope.
-pushLocalDictApp : EvId -> LocalAbs -> List (Int, Mono) -> ScopeId -> Unit
-pushLocalDictApp ev la subst useScope =
+pushLocalDictApp : String ->
+  EvId ->
+  LocalAbs ->
+  List (Int, Mono) ->
+  ScopeId ->
+  Unit
+pushLocalDictApp name ev la subst useScope =
   let monos = map (localSlotLead subst) la.laSlots
   let _ = pushDictApp PendingDictApp {
     pdaRoutesRef = Ref [],
@@ -17378,6 +17385,7 @@ pushLocalDictApp ev la subst useScope =
     pdaEncl = perRun.value.currentFn.value,
     pdaLoc = !currentLoc,
     pdaScope = useScope,
+    pdaCallee = localSourceName name,
   }
   perRun.value.dictAppFns :=
     consSiteFn perRun.value.currentFn.value monos perRun.value.dictAppFns.value
@@ -17405,6 +17413,7 @@ inferLocalDictAt env name ev =
         let inst = instantiateVarTrackedWithSubst env name 0 s
         let _ =
           pushLocalDictApp
+            name
             ev
             la
             inst.mtiSubstitution.misTypeSubst
@@ -17476,7 +17485,7 @@ inferGlobalDictAt env name ev = match lookupVar env name
     let inst = instantiateValueTracked name scheme
     let occurrence = (inst.mtiBody, inst.mtiSubstitution.misTypeSubst)
     match bindingDeclaredAt env name inst
-      Some dc => inferDeclaredDictAt ev dc occurrence
+      Some dc => inferDeclaredDictAt name ev dc occurrence
       None => inferDictAtFound name ev occurrence
 
 -- ── authority grants (EFFECTS-SEMANTICS §8) ──────────────────────────────────
@@ -18383,12 +18392,16 @@ inferDictAtFound name ev inst =
       pdaEncl = perRun.value.currentFn.value,
       pdaLoc = !currentLoc,
       pdaScope = captureScope (),
+      pdaCallee = localSourceName name,
     }
     fst inst
   else if known
     && (anyIdPinned declaredIds (snd inst)
       || calleeIsGeneralized name q (snd inst)) then
-    inferDeclaredDictAt ev dc (fst inst, pinUnboundIds declaredIds (snd inst))
+    inferDeclaredDictAt name ev dc (
+      fst inst,
+      pinUnboundIds declaredIds (snd inst),
+    )
   else
     pushRecDictAppGoal
       (RecDictApp
@@ -18400,8 +18413,12 @@ inferDictAtFound name ev inst =
         ev)
     fst inst
 
-inferDeclaredDictAt : EvId -> CDeclared -> (Mono, List (Int, Mono)) -> Mono
-inferDeclaredDictAt ev dc inst =
+inferDeclaredDictAt : String ->
+  EvId ->
+  CDeclared ->
+  (Mono, List (Int, Mono)) ->
+  Mono
+inferDeclaredDictAt name ev dc inst =
   -- One dict per distinct declared slot (`dedupSlotVecs`), each carrying its argument
   -- vector — the same sequence `dedupPredicateSlotsTable` leaves on the define side,
   -- so the dict params `dictArityOf`/dictPass prepend agree slot for slot.  A slot's
@@ -18423,6 +18440,7 @@ inferDeclaredDictAt ev dc inst =
     pdaEncl = perRun.value.currentFn.value,
     pdaLoc = !currentLoc,
     pdaScope = captureScope (),
+    pdaCallee = localSourceName name,
   }
   perRun.value.dictAppFns :=
     consSiteFn
@@ -53100,14 +53118,12 @@ checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =
 -- `schemes` twice — once as the pubV source foldModules needs, once as the payload
 -- checkModules collects.
 --
--- #1508 (U2a): this worker used to call `checkModuleFull`, i.e. `checkModuleFullImpl ""`,
--- DISCARDING the module id `foldModules` hands it — so on the `checkModules` driver every
--- USER module reached `checkBodyImpl`'s Module arm claiming to be the prelude (`""`,
--- `declEnvsOrdOf` ordinal 0).  Its sibling worker (`graphModuleWorker`) always passed the
--- real `mid` through `checkModuleFullDiags`; this one was the outlier.
--- It calls `checkModuleFullImpl` directly rather than `checkModuleFull` so the id can be
--- threaded — everything else (`accData`, the `[]` implDecls that keep the #154 PR-C perf
--- property) is byte-identically what `checkModuleFull` passed then.
+-- #1508 (U2a): it calls `checkModuleFullImpl` with the module id `foldModules` hands
+-- it, so every user module reaches `checkBodyImpl`'s Module arm under its own id
+-- (`declEnvsOrdOf`), as `graphModuleWorker` does through `checkModuleFullDiags`; only
+-- the prelude is `""`, and a user module keyed `""` loses the qualified cross-module
+-- tables (below).  It passes `accData` and `[]` implDecls (the #154 PR-C perf
+-- property).
 --
 -- 🚨 THIS IS NOT ATTRIBUTION-ONLY, AND THE FIRST DRAFT OF THIS COMMENT SAID IT WAS.
 -- The `""` key made `crossModuleSchemeOblsQualRef` and its three sibling qual tables
@@ -53334,7 +53350,7 @@ checkModuleFullDiags mid seedVars accData accAll prog =
           declEnvsHere.deModules
         ++ accData)
   -- Bug C: pass the cumulative full impl universe (core + earlier modules) as
-  -- implDecls (was implDecls=[]) so buildStandaloneShadows sees
+  -- implDecls so buildStandaloneShadows sees
   -- an imported standalone funDef that shadows an interface method (`map`'s `isEmpty`
   -- vs Foldable's): without it the importer-shadow set is EMPTY on the CHECK path and
   -- `isEmpty m` routes to method dispatch rather than to the standalone the importer
@@ -56056,7 +56072,10 @@ evIdModule (EvId m _) = m
 judgeGoal : String -> Obligation -> List (String, TcDiag)
 judgeGoal mid o = match (o.oPayload, evValueOf o.oDest)
   (GPDictApp app, EvMany rs) =>
-    holeDiags mid o.oLoc (DictAppRow "" (map (r => r.irName) app.pdaIfaces) rs)
+    holeDiags
+      mid
+      o.oLoc
+      (DictAppRow app.pdaCallee (map (r => r.irName) app.pdaIfaces) rs)
   (GPRecDictApp (RecDictApp _ callee _ _ _ _), EvMany rs) =>
     holeDiags mid o.oLoc (DictAppRow callee [] rs)
   (GPArith _, EvOne r) => holeDiags mid o.oLoc (SiteRow r)

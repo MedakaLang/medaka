@@ -89,3 +89,54 @@ test "one diagnostic per row, naming the interface, the use and the type head" =
       rowHole (DictAppRow "" ["Sub"] [RNone]),
       rowHole (OccurrenceRow "k" "m::K" instanceKey [] []),
     ]
+
+test "every row shape names its hole in its own words" =
+  expectEqual
+    [
+      Some (
+        UnroutedMethod,
+        "no impl of `K` is selected for this use of `k`; annotate the type it is used at",
+      ),
+      Some (
+        HeadTagRoute,
+        "no impl of `JMap` is selected for this use of `jmap`: its dispatch names a type, not an impl",
+      ),
+      Some (
+        UnroutedPrerequisite,
+        "the impl selected for this use of `k` needs a dictionary that no impl or given supplies",
+      ),
+      Some (
+        HeadTagRoute,
+        "this call to `f` passes the type `Box` where its `K` constraint needs an impl",
+      ),
+      Some (
+        UnroutedDictSlot,
+        "this call to `useSub` is missing the dictionary for its a constraint: no impl or given was selected for it",
+      ),
+      Some (
+        UnroutedPrerequisite,
+        "the impl passed for the `Show` constraint of this call to `f` needs a dictionary that no impl or given supplies",
+      ),
+      Some (
+        HeadTagRoute,
+        "this operator's dispatch names the type `Box`, not an impl",
+      ),
+      Some (
+        UnroutedPrerequisite,
+        "the impl selected for this operator needs a dictionary that no impl or given supplies",
+      ),
+    ]
+    [
+      rowHole (OccurrenceRow "k" "m::K" RNone [] []),
+      rowHole (OccurrenceRow "jmap" "m::JMap" (RKey "m.Later" [] []) [] []),
+      rowHole (OccurrenceRow "k" "m::K" instanceKey [RNone] []),
+      rowHole (DictAppRow "f" ["K"] [RKey "m.Box" [] []]),
+      rowHole (DictAppRow "useSub" ["Sub"] [RDict "$dict_g_0", RNone]),
+      rowHole
+        (DictAppRow
+          "f"
+          ["Ord", "Show"]
+          [instanceKey, RKey "m::Show|m.Box|" [RNone] []]),
+      rowHole (SiteRow (RKey "m.Box" [] [])),
+      rowHole (SiteRow (RKey "m::Eq|m.Box|" [RNone] [])),
+    ]

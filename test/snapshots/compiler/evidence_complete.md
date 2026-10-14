@@ -1,5 +1,5 @@
 # META
-source_lines=176
+source_lines=196
 stages=DESUGAR,MARK
 # SOURCE
 -- The completeness judgment over the solver's final evidence: does every
@@ -71,8 +71,7 @@ holeKindsOf (OccurrenceRow _ iface tag impls meths) =
     (HeadTagRoute, namesHead tag || anyList namesHead dicts),
     (
       UnroutedPrerequisite,
-      hasUnroutedPart tag
-        || anyList (r => isUnrouted r || hasUnroutedPart r) dicts,
+      hasUnroutedPart tag || anyList unroutedWithin dicts,
     ),
   ]
 holeKindsOf (DictAppRow _ _ routes) = kindsWhere [
@@ -97,23 +96,42 @@ rowHole row = match holeKindsOf row
 -- The `T-UNROUTED-DISPATCH` text for [kind] at [row].
 export
 holeMessage : EvidenceRow -> HoleKind -> String
+-- A kind `holeKindsOf` never gives a row's shape takes that shape's prerequisite
+-- text.
 holeMessage (OccurrenceRow name iface _ _ _) UnroutedMethod =
   "no impl of `\{bareName "::" iface}` is selected for this use of `\{name}`; annotate the type it is used at"
 -- The row does not carry the occurrence's receiver, so the text names no type: the
 -- head a route names can be any position's, such as the result's.
 holeMessage (OccurrenceRow name iface _ _ _) HeadTagRoute =
   "\{noImplFor iface} is selected for this use of `\{name}`: its dispatch names a type, not an impl"
-holeMessage (OccurrenceRow name _ _ _ _) _ =
-  "the impl selected for this use of `\{name}` needs a dictionary that no impl or given supplies"
+holeMessage (OccurrenceRow name _ _ _ _) UnroutedPrerequisite =
+  occurrencePrerequisite name
+holeMessage (OccurrenceRow name _ _ _ _) UnroutedDictSlot =
+  occurrencePrerequisite name
 holeMessage (DictAppRow callee ifaces routes) HeadTagRoute =
   "\{theCall callee} passes the type `\{headOf routes}` where its \{slotIface ifaces routes namesHead} constraint needs an impl"
 holeMessage (DictAppRow callee ifaces routes) UnroutedDictSlot =
   "\{theCall callee} is missing the dictionary for its \{slotIface ifaces routes isUnrouted} constraint: no impl or given was selected for it"
-holeMessage (DictAppRow callee ifaces routes) _ =
-  "the impl passed for the \{slotIface ifaces routes hasUnroutedPart} constraint of \{theCall callee} needs a dictionary that no impl or given supplies"
+holeMessage (DictAppRow callee ifaces routes) UnroutedPrerequisite =
+  dictAppPrerequisite callee ifaces routes
+holeMessage (DictAppRow callee ifaces routes) UnroutedMethod =
+  dictAppPrerequisite callee ifaces routes
 holeMessage (SiteRow r) HeadTagRoute =
   "this operator's dispatch names the type `\{headOf [r]}`, not an impl"
-holeMessage (SiteRow _) _ =
+holeMessage (SiteRow _) UnroutedPrerequisite = sitePrerequisite
+holeMessage (SiteRow _) UnroutedMethod = sitePrerequisite
+holeMessage (SiteRow _) UnroutedDictSlot = sitePrerequisite
+
+occurrencePrerequisite : String -> String
+occurrencePrerequisite name =
+  "the impl selected for this use of `\{name}` needs a dictionary that no impl or given supplies"
+
+dictAppPrerequisite : String -> List String -> List Route -> String
+dictAppPrerequisite callee ifaces routes =
+  "the impl passed for the \{slotIface ifaces routes hasUnroutedPart} constraint of \{theCall callee} needs a dictionary that no impl or given supplies"
+
+sitePrerequisite : String
+sitePrerequisite =
   "the impl selected for this operator needs a dictionary that no impl or given supplies"
 
 kindsWhere : List (HoleKind, Bool) -> List HoleKind
@@ -134,12 +152,14 @@ namesHead (RProj r _) = namesHead r
 namesHead _ = False
 
 hasUnroutedPart : Route -> Bool
-hasUnroutedPart (RKey _ ds ms) =
-  anyList (r => isUnrouted r || hasUnroutedPart r) (ds ++ ms)
-hasUnroutedPart (RLocal _ ds) =
-  anyList (r => isUnrouted r || hasUnroutedPart r) ds
-hasUnroutedPart (RProj r _) = isUnrouted r || hasUnroutedPart r
+hasUnroutedPart (RKey _ ds ms) = anyList unroutedWithin (ds ++ ms)
+hasUnroutedPart (RLocal _ ds) = anyList unroutedWithin ds
+hasUnroutedPart (RProj r _) = unroutedWithin r
 hasUnroutedPart _ = False
+
+-- [r] is `RNone` or has an unrouted part.
+unroutedWithin : Route -> Bool
+unroutedWithin r = isUnrouted r || hasUnroutedPart r
 
 -- The first type head named anywhere in [routes], unqualified.
 headOf : List Route -> String
@@ -188,7 +208,7 @@ slotIface ifaces routes bad = match findIndex bad routes
 (DImpl true "Debug" ((TyCon "HoleKind")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "UnroutedMethod") () (ELit (LString "UnroutedMethod"))) (arm (PCon "HeadTagRoute") () (ELit (LString "HeadTagRoute"))) (arm (PCon "UnroutedPrerequisite") () (ELit (LString "UnroutedPrerequisite"))) (arm (PCon "UnroutedDictSlot") () (ELit (LString "UnroutedDictSlot")))))))
 (DData Public "EvidenceRow" () ((variant "OccurrenceRow" (ConPos (TyCon "String") (TyCon "String") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))) (variant "DictAppRow" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Route")))) (variant "SiteRow" (ConPos (TyCon "Route")))) ())
 (DTypeSig true "holeKindsOf" (TyFun (TyCon "EvidenceRow") (TyApp (TyCon "List") (TyCon "HoleKind"))))
-(DFunDef false "holeKindsOf" ((PCon "OccurrenceRow" PWild (PVar "iface") (PVar "tag") (PVar "impls") (PVar "meths"))) (EBlock (DoLet false false (PVar "dicts") (EBinOp "++" (EVar "impls") (EVar "meths"))) (DoExpr (EApp (EVar "kindsWhere") (EListLit (ETuple (EVar "UnroutedMethod") (EBinOp "&&" (EBinOp "/=" (EVar "iface") (ELit (LString ""))) (EApp (EVar "isUnrouted") (EVar "tag")))) (ETuple (EVar "HeadTagRoute") (EBinOp "||" (EApp (EVar "namesHead") (EVar "tag")) (EApp (EApp (EVar "anyList") (EVar "namesHead")) (EVar "dicts")))) (ETuple (EVar "UnroutedPrerequisite") (EBinOp "||" (EApp (EVar "hasUnroutedPart") (EVar "tag")) (EApp (EApp (EVar "anyList") (ELam ((PVar "r")) (EBinOp "||" (EApp (EVar "isUnrouted") (EVar "r")) (EApp (EVar "hasUnroutedPart") (EVar "r"))))) (EVar "dicts")))))))))
+(DFunDef false "holeKindsOf" ((PCon "OccurrenceRow" PWild (PVar "iface") (PVar "tag") (PVar "impls") (PVar "meths"))) (EBlock (DoLet false false (PVar "dicts") (EBinOp "++" (EVar "impls") (EVar "meths"))) (DoExpr (EApp (EVar "kindsWhere") (EListLit (ETuple (EVar "UnroutedMethod") (EBinOp "&&" (EBinOp "/=" (EVar "iface") (ELit (LString ""))) (EApp (EVar "isUnrouted") (EVar "tag")))) (ETuple (EVar "HeadTagRoute") (EBinOp "||" (EApp (EVar "namesHead") (EVar "tag")) (EApp (EApp (EVar "anyList") (EVar "namesHead")) (EVar "dicts")))) (ETuple (EVar "UnroutedPrerequisite") (EBinOp "||" (EApp (EVar "hasUnroutedPart") (EVar "tag")) (EApp (EApp (EVar "anyList") (EVar "unroutedWithin")) (EVar "dicts")))))))))
 (DFunDef false "holeKindsOf" ((PCon "DictAppRow" PWild PWild (PVar "routes"))) (EApp (EVar "kindsWhere") (EListLit (ETuple (EVar "HeadTagRoute") (EApp (EApp (EVar "anyList") (EVar "namesHead")) (EVar "routes"))) (ETuple (EVar "UnroutedPrerequisite") (EApp (EApp (EVar "anyList") (EVar "hasUnroutedPart")) (EVar "routes"))) (ETuple (EVar "UnroutedDictSlot") (EApp (EApp (EVar "anyList") (EVar "isUnrouted")) (EVar "routes"))))))
 (DFunDef false "holeKindsOf" ((PCon "SiteRow" (PVar "r"))) (EApp (EVar "kindsWhere") (EListLit (ETuple (EVar "HeadTagRoute") (EApp (EVar "namesHead") (EVar "r"))) (ETuple (EVar "UnroutedPrerequisite") (EApp (EVar "hasUnroutedPart") (EVar "r"))))))
 (DTypeSig true "rowHole" (TyFun (TyCon "EvidenceRow") (TyApp (TyCon "Option") (TyTuple (TyCon "HoleKind") (TyCon "String")))))
@@ -196,12 +216,22 @@ slotIface ifaces routes bad = match findIndex bad routes
 (DTypeSig true "holeMessage" (TyFun (TyCon "EvidenceRow") (TyFun (TyCon "HoleKind") (TyCon "String"))))
 (DFunDef false "holeMessage" ((PCon "OccurrenceRow" (PVar "name") (PVar "iface") PWild PWild PWild) (PCon "UnroutedMethod")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "no impl of `")) (EApp (EVar "display") (EApp (EApp (EVar "bareName") (ELit (LString "::"))) (EVar "iface")))) (ELit (LString "` is selected for this use of `"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`; annotate the type it is used at"))))
 (DFunDef false "holeMessage" ((PCon "OccurrenceRow" (PVar "name") (PVar "iface") PWild PWild PWild) (PCon "HeadTagRoute")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "noImplFor") (EVar "iface")))) (ELit (LString " is selected for this use of `"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`: its dispatch names a type, not an impl"))))
-(DFunDef false "holeMessage" ((PCon "OccurrenceRow" (PVar "name") PWild PWild PWild PWild) PWild) (EBinOp "++" (EBinOp "++" (ELit (LString "the impl selected for this use of `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` needs a dictionary that no impl or given supplies"))))
+(DFunDef false "holeMessage" ((PCon "OccurrenceRow" (PVar "name") PWild PWild PWild PWild) (PCon "UnroutedPrerequisite")) (EApp (EVar "occurrencePrerequisite") (EVar "name")))
+(DFunDef false "holeMessage" ((PCon "OccurrenceRow" (PVar "name") PWild PWild PWild PWild) (PCon "UnroutedDictSlot")) (EApp (EVar "occurrencePrerequisite") (EVar "name")))
 (DFunDef false "holeMessage" ((PCon "DictAppRow" (PVar "callee") (PVar "ifaces") (PVar "routes")) (PCon "HeadTagRoute")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "theCall") (EVar "callee")))) (ELit (LString " passes the type `"))) (EApp (EVar "display") (EApp (EVar "headOf") (EVar "routes")))) (ELit (LString "` where its "))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "slotIface") (EVar "ifaces")) (EVar "routes")) (EVar "namesHead")))) (ELit (LString " constraint needs an impl"))))
 (DFunDef false "holeMessage" ((PCon "DictAppRow" (PVar "callee") (PVar "ifaces") (PVar "routes")) (PCon "UnroutedDictSlot")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "theCall") (EVar "callee")))) (ELit (LString " is missing the dictionary for its "))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "slotIface") (EVar "ifaces")) (EVar "routes")) (EVar "isUnrouted")))) (ELit (LString " constraint: no impl or given was selected for it"))))
-(DFunDef false "holeMessage" ((PCon "DictAppRow" (PVar "callee") (PVar "ifaces") (PVar "routes")) PWild) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the impl passed for the ")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "slotIface") (EVar "ifaces")) (EVar "routes")) (EVar "hasUnroutedPart")))) (ELit (LString " constraint of "))) (EApp (EVar "display") (EApp (EVar "theCall") (EVar "callee")))) (ELit (LString " needs a dictionary that no impl or given supplies"))))
+(DFunDef false "holeMessage" ((PCon "DictAppRow" (PVar "callee") (PVar "ifaces") (PVar "routes")) (PCon "UnroutedPrerequisite")) (EApp (EApp (EApp (EVar "dictAppPrerequisite") (EVar "callee")) (EVar "ifaces")) (EVar "routes")))
+(DFunDef false "holeMessage" ((PCon "DictAppRow" (PVar "callee") (PVar "ifaces") (PVar "routes")) (PCon "UnroutedMethod")) (EApp (EApp (EApp (EVar "dictAppPrerequisite") (EVar "callee")) (EVar "ifaces")) (EVar "routes")))
 (DFunDef false "holeMessage" ((PCon "SiteRow" (PVar "r")) (PCon "HeadTagRoute")) (EBinOp "++" (EBinOp "++" (ELit (LString "this operator's dispatch names the type `")) (EApp (EVar "display") (EApp (EVar "headOf") (EListLit (EVar "r"))))) (ELit (LString "`, not an impl"))))
-(DFunDef false "holeMessage" ((PCon "SiteRow" PWild) PWild) (ELit (LString "the impl selected for this operator needs a dictionary that no impl or given supplies")))
+(DFunDef false "holeMessage" ((PCon "SiteRow" PWild) (PCon "UnroutedPrerequisite")) (EVar "sitePrerequisite"))
+(DFunDef false "holeMessage" ((PCon "SiteRow" PWild) (PCon "UnroutedMethod")) (EVar "sitePrerequisite"))
+(DFunDef false "holeMessage" ((PCon "SiteRow" PWild) (PCon "UnroutedDictSlot")) (EVar "sitePrerequisite"))
+(DTypeSig false "occurrencePrerequisite" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "occurrencePrerequisite" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "the impl selected for this use of `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` needs a dictionary that no impl or given supplies"))))
+(DTypeSig false "dictAppPrerequisite" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "String")))))
+(DFunDef false "dictAppPrerequisite" ((PVar "callee") (PVar "ifaces") (PVar "routes")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the impl passed for the ")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "slotIface") (EVar "ifaces")) (EVar "routes")) (EVar "hasUnroutedPart")))) (ELit (LString " constraint of "))) (EApp (EVar "display") (EApp (EVar "theCall") (EVar "callee")))) (ELit (LString " needs a dictionary that no impl or given supplies"))))
+(DTypeSig false "sitePrerequisite" (TyCon "String"))
+(DFunDef false "sitePrerequisite" () (ELit (LString "the impl selected for this operator needs a dictionary that no impl or given supplies")))
 (DTypeSig false "kindsWhere" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "HoleKind") (TyCon "Bool"))) (TyApp (TyCon "List") (TyCon "HoleKind"))))
 (DFunDef false "kindsWhere" ((PVar "cases")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "filterList") (EVar "snd")) (EVar "cases"))))
 (DTypeSig false "isUnrouted" (TyFun (TyCon "Route") (TyCon "Bool")))
@@ -215,10 +245,12 @@ slotIface ifaces routes bad = match findIndex bad routes
 (DFunDef false "namesHead" ((PCon "RProj" (PVar "r") PWild)) (EApp (EVar "namesHead") (EVar "r")))
 (DFunDef false "namesHead" (PWild) (EVar "False"))
 (DTypeSig false "hasUnroutedPart" (TyFun (TyCon "Route") (TyCon "Bool")))
-(DFunDef false "hasUnroutedPart" ((PCon "RKey" PWild (PVar "ds") (PVar "ms"))) (EApp (EApp (EVar "anyList") (ELam ((PVar "r")) (EBinOp "||" (EApp (EVar "isUnrouted") (EVar "r")) (EApp (EVar "hasUnroutedPart") (EVar "r"))))) (EBinOp "++" (EVar "ds") (EVar "ms"))))
-(DFunDef false "hasUnroutedPart" ((PCon "RLocal" PWild (PVar "ds"))) (EApp (EApp (EVar "anyList") (ELam ((PVar "r")) (EBinOp "||" (EApp (EVar "isUnrouted") (EVar "r")) (EApp (EVar "hasUnroutedPart") (EVar "r"))))) (EVar "ds")))
-(DFunDef false "hasUnroutedPart" ((PCon "RProj" (PVar "r") PWild)) (EBinOp "||" (EApp (EVar "isUnrouted") (EVar "r")) (EApp (EVar "hasUnroutedPart") (EVar "r"))))
+(DFunDef false "hasUnroutedPart" ((PCon "RKey" PWild (PVar "ds") (PVar "ms"))) (EApp (EApp (EVar "anyList") (EVar "unroutedWithin")) (EBinOp "++" (EVar "ds") (EVar "ms"))))
+(DFunDef false "hasUnroutedPart" ((PCon "RLocal" PWild (PVar "ds"))) (EApp (EApp (EVar "anyList") (EVar "unroutedWithin")) (EVar "ds")))
+(DFunDef false "hasUnroutedPart" ((PCon "RProj" (PVar "r") PWild)) (EApp (EVar "unroutedWithin") (EVar "r")))
 (DFunDef false "hasUnroutedPart" (PWild) (EVar "False"))
+(DTypeSig false "unroutedWithin" (TyFun (TyCon "Route") (TyCon "Bool")))
+(DFunDef false "unroutedWithin" ((PVar "r")) (EBinOp "||" (EApp (EVar "isUnrouted") (EVar "r")) (EApp (EVar "hasUnroutedPart") (EVar "r"))))
 (DTypeSig false "headOf" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "String")))
 (DFunDef false "headOf" ((PVar "routes")) (EMatch (EApp (EVar "firstHead") (EVar "routes")) (arm (PCon "Some" (PVar "key")) () (EApp (EApp (EVar "bareName") (ELit (LString "."))) (EVar "key"))) (arm (PCon "None") () (ELit (LString "?")))))
 (DTypeSig false "firstHead" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "Option") (TyCon "String"))))
@@ -247,7 +279,7 @@ slotIface ifaces routes bad = match findIndex bad routes
 (DImpl true "Debug" ((TyCon "HoleKind")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "UnroutedMethod") () (ELit (LString "UnroutedMethod"))) (arm (PCon "HeadTagRoute") () (ELit (LString "HeadTagRoute"))) (arm (PCon "UnroutedPrerequisite") () (ELit (LString "UnroutedPrerequisite"))) (arm (PCon "UnroutedDictSlot") () (ELit (LString "UnroutedDictSlot")))))))
 (DData Public "EvidenceRow" () ((variant "OccurrenceRow" (ConPos (TyCon "String") (TyCon "String") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))) (variant "DictAppRow" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Route")))) (variant "SiteRow" (ConPos (TyCon "Route")))) ())
 (DTypeSig true "holeKindsOf" (TyFun (TyCon "EvidenceRow") (TyApp (TyCon "List") (TyCon "HoleKind"))))
-(DFunDef false "holeKindsOf" ((PCon "OccurrenceRow" PWild (PVar "iface") (PVar "tag") (PVar "impls") (PVar "meths"))) (EBlock (DoLet false false (PVar "dicts") (EBinOp "++" (EVar "impls") (EVar "meths"))) (DoExpr (EApp (EVar "kindsWhere") (EListLit (ETuple (EVar "UnroutedMethod") (EBinOp "&&" (EBinOp "/=" (EVar "iface") (ELit (LString ""))) (EApp (EVar "isUnrouted") (EVar "tag")))) (ETuple (EVar "HeadTagRoute") (EBinOp "||" (EApp (EVar "namesHead") (EVar "tag")) (EApp (EApp (EVar "anyList") (EVar "namesHead")) (EVar "dicts")))) (ETuple (EVar "UnroutedPrerequisite") (EBinOp "||" (EApp (EVar "hasUnroutedPart") (EVar "tag")) (EApp (EApp (EVar "anyList") (ELam ((PVar "r")) (EBinOp "||" (EApp (EVar "isUnrouted") (EVar "r")) (EApp (EVar "hasUnroutedPart") (EVar "r"))))) (EVar "dicts")))))))))
+(DFunDef false "holeKindsOf" ((PCon "OccurrenceRow" PWild (PVar "iface") (PVar "tag") (PVar "impls") (PVar "meths"))) (EBlock (DoLet false false (PVar "dicts") (EBinOp "++" (EVar "impls") (EVar "meths"))) (DoExpr (EApp (EVar "kindsWhere") (EListLit (ETuple (EVar "UnroutedMethod") (EBinOp "&&" (EBinOp "/=" (EVar "iface") (ELit (LString ""))) (EApp (EVar "isUnrouted") (EVar "tag")))) (ETuple (EVar "HeadTagRoute") (EBinOp "||" (EApp (EVar "namesHead") (EVar "tag")) (EApp (EApp (EVar "anyList") (EVar "namesHead")) (EVar "dicts")))) (ETuple (EVar "UnroutedPrerequisite") (EBinOp "||" (EApp (EVar "hasUnroutedPart") (EVar "tag")) (EApp (EApp (EVar "anyList") (EVar "unroutedWithin")) (EVar "dicts")))))))))
 (DFunDef false "holeKindsOf" ((PCon "DictAppRow" PWild PWild (PVar "routes"))) (EApp (EVar "kindsWhere") (EListLit (ETuple (EVar "HeadTagRoute") (EApp (EApp (EVar "anyList") (EVar "namesHead")) (EVar "routes"))) (ETuple (EVar "UnroutedPrerequisite") (EApp (EApp (EVar "anyList") (EVar "hasUnroutedPart")) (EVar "routes"))) (ETuple (EVar "UnroutedDictSlot") (EApp (EApp (EVar "anyList") (EVar "isUnrouted")) (EVar "routes"))))))
 (DFunDef false "holeKindsOf" ((PCon "SiteRow" (PVar "r"))) (EApp (EVar "kindsWhere") (EListLit (ETuple (EVar "HeadTagRoute") (EApp (EVar "namesHead") (EVar "r"))) (ETuple (EVar "UnroutedPrerequisite") (EApp (EVar "hasUnroutedPart") (EVar "r"))))))
 (DTypeSig true "rowHole" (TyFun (TyCon "EvidenceRow") (TyApp (TyCon "Option") (TyTuple (TyCon "HoleKind") (TyCon "String")))))
@@ -255,12 +287,22 @@ slotIface ifaces routes bad = match findIndex bad routes
 (DTypeSig true "holeMessage" (TyFun (TyCon "EvidenceRow") (TyFun (TyCon "HoleKind") (TyCon "String"))))
 (DFunDef false "holeMessage" ((PCon "OccurrenceRow" (PVar "name") (PVar "iface") PWild PWild PWild) (PCon "UnroutedMethod")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "no impl of `")) (EApp (EMethodRef "display") (EApp (EApp (EVar "bareName") (ELit (LString "::"))) (EVar "iface")))) (ELit (LString "` is selected for this use of `"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`; annotate the type it is used at"))))
 (DFunDef false "holeMessage" ((PCon "OccurrenceRow" (PVar "name") (PVar "iface") PWild PWild PWild) (PCon "HeadTagRoute")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "noImplFor") (EVar "iface")))) (ELit (LString " is selected for this use of `"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`: its dispatch names a type, not an impl"))))
-(DFunDef false "holeMessage" ((PCon "OccurrenceRow" (PVar "name") PWild PWild PWild PWild) PWild) (EBinOp "++" (EBinOp "++" (ELit (LString "the impl selected for this use of `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` needs a dictionary that no impl or given supplies"))))
+(DFunDef false "holeMessage" ((PCon "OccurrenceRow" (PVar "name") PWild PWild PWild PWild) (PCon "UnroutedPrerequisite")) (EApp (EVar "occurrencePrerequisite") (EVar "name")))
+(DFunDef false "holeMessage" ((PCon "OccurrenceRow" (PVar "name") PWild PWild PWild PWild) (PCon "UnroutedDictSlot")) (EApp (EVar "occurrencePrerequisite") (EVar "name")))
 (DFunDef false "holeMessage" ((PCon "DictAppRow" (PVar "callee") (PVar "ifaces") (PVar "routes")) (PCon "HeadTagRoute")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "theCall") (EVar "callee")))) (ELit (LString " passes the type `"))) (EApp (EMethodRef "display") (EApp (EVar "headOf") (EVar "routes")))) (ELit (LString "` where its "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "slotIface") (EVar "ifaces")) (EVar "routes")) (EVar "namesHead")))) (ELit (LString " constraint needs an impl"))))
 (DFunDef false "holeMessage" ((PCon "DictAppRow" (PVar "callee") (PVar "ifaces") (PVar "routes")) (PCon "UnroutedDictSlot")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "theCall") (EVar "callee")))) (ELit (LString " is missing the dictionary for its "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "slotIface") (EVar "ifaces")) (EVar "routes")) (EVar "isUnrouted")))) (ELit (LString " constraint: no impl or given was selected for it"))))
-(DFunDef false "holeMessage" ((PCon "DictAppRow" (PVar "callee") (PVar "ifaces") (PVar "routes")) PWild) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the impl passed for the ")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "slotIface") (EVar "ifaces")) (EVar "routes")) (EVar "hasUnroutedPart")))) (ELit (LString " constraint of "))) (EApp (EMethodRef "display") (EApp (EVar "theCall") (EVar "callee")))) (ELit (LString " needs a dictionary that no impl or given supplies"))))
+(DFunDef false "holeMessage" ((PCon "DictAppRow" (PVar "callee") (PVar "ifaces") (PVar "routes")) (PCon "UnroutedPrerequisite")) (EApp (EApp (EApp (EVar "dictAppPrerequisite") (EVar "callee")) (EVar "ifaces")) (EVar "routes")))
+(DFunDef false "holeMessage" ((PCon "DictAppRow" (PVar "callee") (PVar "ifaces") (PVar "routes")) (PCon "UnroutedMethod")) (EApp (EApp (EApp (EVar "dictAppPrerequisite") (EVar "callee")) (EVar "ifaces")) (EVar "routes")))
 (DFunDef false "holeMessage" ((PCon "SiteRow" (PVar "r")) (PCon "HeadTagRoute")) (EBinOp "++" (EBinOp "++" (ELit (LString "this operator's dispatch names the type `")) (EApp (EMethodRef "display") (EApp (EVar "headOf") (EListLit (EVar "r"))))) (ELit (LString "`, not an impl"))))
-(DFunDef false "holeMessage" ((PCon "SiteRow" PWild) PWild) (ELit (LString "the impl selected for this operator needs a dictionary that no impl or given supplies")))
+(DFunDef false "holeMessage" ((PCon "SiteRow" PWild) (PCon "UnroutedPrerequisite")) (EVar "sitePrerequisite"))
+(DFunDef false "holeMessage" ((PCon "SiteRow" PWild) (PCon "UnroutedMethod")) (EVar "sitePrerequisite"))
+(DFunDef false "holeMessage" ((PCon "SiteRow" PWild) (PCon "UnroutedDictSlot")) (EVar "sitePrerequisite"))
+(DTypeSig false "occurrencePrerequisite" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "occurrencePrerequisite" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "the impl selected for this use of `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` needs a dictionary that no impl or given supplies"))))
+(DTypeSig false "dictAppPrerequisite" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "String")))))
+(DFunDef false "dictAppPrerequisite" ((PVar "callee") (PVar "ifaces") (PVar "routes")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the impl passed for the ")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "slotIface") (EVar "ifaces")) (EVar "routes")) (EVar "hasUnroutedPart")))) (ELit (LString " constraint of "))) (EApp (EMethodRef "display") (EApp (EVar "theCall") (EVar "callee")))) (ELit (LString " needs a dictionary that no impl or given supplies"))))
+(DTypeSig false "sitePrerequisite" (TyCon "String"))
+(DFunDef false "sitePrerequisite" () (ELit (LString "the impl selected for this operator needs a dictionary that no impl or given supplies")))
 (DTypeSig false "kindsWhere" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "HoleKind") (TyCon "Bool"))) (TyApp (TyCon "List") (TyCon "HoleKind"))))
 (DFunDef false "kindsWhere" ((PVar "cases")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "filterList") (EVar "snd")) (EVar "cases"))))
 (DTypeSig false "isUnrouted" (TyFun (TyCon "Route") (TyCon "Bool")))
@@ -274,10 +316,12 @@ slotIface ifaces routes bad = match findIndex bad routes
 (DFunDef false "namesHead" ((PCon "RProj" (PVar "r") PWild)) (EApp (EVar "namesHead") (EVar "r")))
 (DFunDef false "namesHead" (PWild) (EVar "False"))
 (DTypeSig false "hasUnroutedPart" (TyFun (TyCon "Route") (TyCon "Bool")))
-(DFunDef false "hasUnroutedPart" ((PCon "RKey" PWild (PVar "ds") (PVar "ms"))) (EApp (EApp (EVar "anyList") (ELam ((PVar "r")) (EBinOp "||" (EApp (EVar "isUnrouted") (EVar "r")) (EApp (EVar "hasUnroutedPart") (EVar "r"))))) (EBinOp "++" (EVar "ds") (EVar "ms"))))
-(DFunDef false "hasUnroutedPart" ((PCon "RLocal" PWild (PVar "ds"))) (EApp (EApp (EVar "anyList") (ELam ((PVar "r")) (EBinOp "||" (EApp (EVar "isUnrouted") (EVar "r")) (EApp (EVar "hasUnroutedPart") (EVar "r"))))) (EVar "ds")))
-(DFunDef false "hasUnroutedPart" ((PCon "RProj" (PVar "r") PWild)) (EBinOp "||" (EApp (EVar "isUnrouted") (EVar "r")) (EApp (EVar "hasUnroutedPart") (EVar "r"))))
+(DFunDef false "hasUnroutedPart" ((PCon "RKey" PWild (PVar "ds") (PVar "ms"))) (EApp (EApp (EVar "anyList") (EVar "unroutedWithin")) (EBinOp "++" (EVar "ds") (EVar "ms"))))
+(DFunDef false "hasUnroutedPart" ((PCon "RLocal" PWild (PVar "ds"))) (EApp (EApp (EVar "anyList") (EVar "unroutedWithin")) (EVar "ds")))
+(DFunDef false "hasUnroutedPart" ((PCon "RProj" (PVar "r") PWild)) (EApp (EVar "unroutedWithin") (EVar "r")))
 (DFunDef false "hasUnroutedPart" (PWild) (EVar "False"))
+(DTypeSig false "unroutedWithin" (TyFun (TyCon "Route") (TyCon "Bool")))
+(DFunDef false "unroutedWithin" ((PVar "r")) (EBinOp "||" (EApp (EVar "isUnrouted") (EVar "r")) (EApp (EVar "hasUnroutedPart") (EVar "r"))))
 (DTypeSig false "headOf" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "String")))
 (DFunDef false "headOf" ((PVar "routes")) (EMatch (EApp (EVar "firstHead") (EVar "routes")) (arm (PCon "Some" (PVar "key")) () (EApp (EApp (EVar "bareName") (ELit (LString "."))) (EVar "key"))) (arm (PCon "None") () (ELit (LString "?")))))
 (DTypeSig false "firstHead" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "Option") (TyCon "String"))))

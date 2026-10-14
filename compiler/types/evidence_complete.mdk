@@ -67,8 +67,7 @@ holeKindsOf (OccurrenceRow _ iface tag impls meths) =
     (HeadTagRoute, namesHead tag || anyList namesHead dicts),
     (
       UnroutedPrerequisite,
-      hasUnroutedPart tag
-        || anyList (r => isUnrouted r || hasUnroutedPart r) dicts,
+      hasUnroutedPart tag || anyList unroutedWithin dicts,
     ),
   ]
 holeKindsOf (DictAppRow _ _ routes) = kindsWhere [
@@ -93,23 +92,42 @@ rowHole row = match holeKindsOf row
 -- The `T-UNROUTED-DISPATCH` text for [kind] at [row].
 export
 holeMessage : EvidenceRow -> HoleKind -> String
+-- A kind `holeKindsOf` never gives a row's shape takes that shape's prerequisite
+-- text.
 holeMessage (OccurrenceRow name iface _ _ _) UnroutedMethod =
   "no impl of `\{bareName "::" iface}` is selected for this use of `\{name}`; annotate the type it is used at"
 -- The row does not carry the occurrence's receiver, so the text names no type: the
 -- head a route names can be any position's, such as the result's.
 holeMessage (OccurrenceRow name iface _ _ _) HeadTagRoute =
   "\{noImplFor iface} is selected for this use of `\{name}`: its dispatch names a type, not an impl"
-holeMessage (OccurrenceRow name _ _ _ _) _ =
-  "the impl selected for this use of `\{name}` needs a dictionary that no impl or given supplies"
+holeMessage (OccurrenceRow name _ _ _ _) UnroutedPrerequisite =
+  occurrencePrerequisite name
+holeMessage (OccurrenceRow name _ _ _ _) UnroutedDictSlot =
+  occurrencePrerequisite name
 holeMessage (DictAppRow callee ifaces routes) HeadTagRoute =
   "\{theCall callee} passes the type `\{headOf routes}` where its \{slotIface ifaces routes namesHead} constraint needs an impl"
 holeMessage (DictAppRow callee ifaces routes) UnroutedDictSlot =
   "\{theCall callee} is missing the dictionary for its \{slotIface ifaces routes isUnrouted} constraint: no impl or given was selected for it"
-holeMessage (DictAppRow callee ifaces routes) _ =
-  "the impl passed for the \{slotIface ifaces routes hasUnroutedPart} constraint of \{theCall callee} needs a dictionary that no impl or given supplies"
+holeMessage (DictAppRow callee ifaces routes) UnroutedPrerequisite =
+  dictAppPrerequisite callee ifaces routes
+holeMessage (DictAppRow callee ifaces routes) UnroutedMethod =
+  dictAppPrerequisite callee ifaces routes
 holeMessage (SiteRow r) HeadTagRoute =
   "this operator's dispatch names the type `\{headOf [r]}`, not an impl"
-holeMessage (SiteRow _) _ =
+holeMessage (SiteRow _) UnroutedPrerequisite = sitePrerequisite
+holeMessage (SiteRow _) UnroutedMethod = sitePrerequisite
+holeMessage (SiteRow _) UnroutedDictSlot = sitePrerequisite
+
+occurrencePrerequisite : String -> String
+occurrencePrerequisite name =
+  "the impl selected for this use of `\{name}` needs a dictionary that no impl or given supplies"
+
+dictAppPrerequisite : String -> List String -> List Route -> String
+dictAppPrerequisite callee ifaces routes =
+  "the impl passed for the \{slotIface ifaces routes hasUnroutedPart} constraint of \{theCall callee} needs a dictionary that no impl or given supplies"
+
+sitePrerequisite : String
+sitePrerequisite =
   "the impl selected for this operator needs a dictionary that no impl or given supplies"
 
 kindsWhere : List (HoleKind, Bool) -> List HoleKind
@@ -130,12 +148,14 @@ namesHead (RProj r _) = namesHead r
 namesHead _ = False
 
 hasUnroutedPart : Route -> Bool
-hasUnroutedPart (RKey _ ds ms) =
-  anyList (r => isUnrouted r || hasUnroutedPart r) (ds ++ ms)
-hasUnroutedPart (RLocal _ ds) =
-  anyList (r => isUnrouted r || hasUnroutedPart r) ds
-hasUnroutedPart (RProj r _) = isUnrouted r || hasUnroutedPart r
+hasUnroutedPart (RKey _ ds ms) = anyList unroutedWithin (ds ++ ms)
+hasUnroutedPart (RLocal _ ds) = anyList unroutedWithin ds
+hasUnroutedPart (RProj r _) = unroutedWithin r
 hasUnroutedPart _ = False
+
+-- [r] is `RNone` or has an unrouted part.
+unroutedWithin : Route -> Bool
+unroutedWithin r = isUnrouted r || hasUnroutedPart r
 
 -- The first type head named anywhere in [routes], unqualified.
 headOf : List Route -> String
