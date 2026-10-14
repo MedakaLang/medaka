@@ -334,7 +334,7 @@ kind = "exec"
 migration = "native-rewrite"
 run = "test/wasm/diff_wasm.sh"
 oracles = ["wasm_emit_main"]
-sources = []
+sources = ["playground/medaka_host.mjs"]
 corpus = ["test/wasm/fixtures"]
 toolchain = ["wasm-tools", "node>=24"]
 link = "production"
@@ -1289,7 +1289,7 @@ kind = "exec"
 migration = "native-rewrite"
 run = "test/build_wasm_cmd.sh"
 oracles = []
-sources = []
+sources = ["playground/medaka_host.mjs"]
 corpus = ["test/wasm/fixtures_modules"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 link = "production"
@@ -2880,7 +2880,23 @@ toolchain = []
 link = "production"
 
 [[gate]]
-name = "diff_compiler_wasm_shim_parity"
+name = "wasm_host_profile_agreement"
+area = "wasm"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "native"
+migration = "done"
+run = "compiler/types/target_profile_host_test.mdk"
+oracles = []
+sources = ["playground/medaka_host.mjs", "test/wasm/host_profile_table.mjs", "compiler/types/target_profile.mdk"]
+corpus = []
+toolchain = ["node>=24"]
+link = "production"
+
+[[gate]]
+name = "wasm_host_probes"
 area = "wasm"
 shard = "gates_2"
 project = "compiler"
@@ -2888,11 +2904,11 @@ tiers = ["merge"]
 cost = "medium"
 kind = "native"
 migration = "done"
-run = "test/diff_compiler_wasm_shim_parity_test.mdk"
-oracles = []
-sources = ["playground", "playground/*", "test/wasm/run.js", "test/diff_compiler_wasm_shim_parity_test.mdk"]
+run = "test/wasm_host_probes_test.mdk"
+oracles = ["wasm_emit_modules_main"]
+sources = ["playground/medaka_host.mjs", "playground/medaka_host_test.mjs", "playground/worker.js", "playground/compile.mjs", "test/wasm/run.js", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_preamble.mdk"]
 corpus = []
-toolchain = []
+toolchain = ["node>=24"]
 link = "production"
 
 [[gate]]
@@ -2954,7 +2970,7 @@ kind = "native"
 migration = "done"
 run = "test/diff_async_test.mdk"
 oracles = ["wasm_emit_modules_main"]
-sources = ["runtime/medaka_rt.c", "compiler/backend/llvm_emit.mdk", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_preamble.mdk", "test/wasm/run.js", "compiler/eval/eval.mdk", "stdlib/runtime.mdk", "stdlib/async.mdk", "stdlib/net_async.mdk", "stdlib/net.mdk", "test/compiler_cli_test_support.mdk"]
+sources = ["runtime/medaka_rt.c", "compiler/backend/llvm_emit.mdk", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_preamble.mdk", "test/wasm/run.js", "compiler/eval/eval.mdk", "stdlib/runtime.mdk", "stdlib/async.mdk", "stdlib/net_async.mdk", "stdlib/net.mdk", "test/compiler_cli_test_support.mdk", "playground/medaka_host.mjs"]
 corpus = ["test/async_fixtures"]
 toolchain = ["clang", "wasm-tools", "node>=24"]
 link = "production"
@@ -3242,7 +3258,7 @@ kind = "exec"
 migration = "native-rewrite"
 run = "test/wasm/diff_gzip.sh"
 oracles = []
-sources = []
+sources = ["playground/medaka_host.mjs"]
 corpus = ["gzip"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 link = "production"
@@ -3258,7 +3274,7 @@ kind = "exec"
 migration = "native-rewrite"
 run = "test/wasm/diff_playground_input.sh"
 oracles = []
-sources = ["playground", "playground/*"]
+sources = ["playground", "playground/*", "playground/medaka_host.mjs"]
 corpus = ["test/engine_fixtures"]
 toolchain = ["wasm-tools", "node>=24"]
 link = "production"
@@ -3318,7 +3334,7 @@ kind = "exec"
 migration = "native-rewrite"
 run = "test/wasm/diff_sqlite.sh"
 oracles = []
-sources = []
+sources = ["playground/medaka_host.mjs"]
 corpus = ["sqlite"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 link = "differential"
@@ -3350,7 +3366,7 @@ kind = "exec"
 migration = "native-rewrite"
 run = "test/wasm/diff_wasm_modules.sh"
 oracles = []
-sources = []
+sources = ["playground/medaka_host.mjs"]
 corpus = ["test/wasm/fixtures_modules", "test/trap_site_fixtures"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 link = "production"
@@ -3366,7 +3382,7 @@ kind = "exec"
 migration = "native-rewrite"
 run = "test/wasm/diff_wasm_typed.sh"
 oracles = []
-sources = ["compiler/backend/wasm_emit.mdk"]
+sources = ["compiler/backend/wasm_emit.mdk", "playground/medaka_host.mjs"]
 corpus = ["test/llvm_fixtures", "test/wasm/fixtures_typed"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 link = "production"

@@ -1,0 +1,31 @@
+{- | The host probes of `playground/medaka_host_test.mjs`, as a gate.
+
+   The probes build small programs with `./medaka build --target wasmgc/<profile>` and
+   run them through `test/wasm/run.js` and `playground/worker.js`, so they hold the
+   host's behaviour that no emitted-module differential sees: stderr surviving
+   `exit` (#376), the browser-worker `writeFileBytes` trio (#375), withheld slices as
+   named `CapabilityError`s, flush order on a trap, a per-run vfs, and the import key
+   check. They also print which host slices no built module imports.
+
+   The probe script exits 2 when `./medaka` or the wasm emitter oracle
+   (`sh test/wasm/build_wasm_oracle.sh`, the `wasm_emit_modules_main` oracle of this
+   gate's row) is missing; that is a failure here, never a pass.
+
+   Runs under `medaka test --native`: it spawns node. -}
+
+import string.{unwords}
+import test.{Expectation, expectEqual, fail}
+import test_process.{boundedVerbSeconds, underRoot}
+
+probes : <IO, Exec, Env "MEDAKA_ROOT"> Expectation
+probes =
+  match (boundedVerbSeconds 300 "node" [
+    underRoot "playground/medaka_host_test.mjs",
+  ])
+    Err e => fail "could not run node: \{e}"
+    Ok (0, _, _) => expectEqual 0 0
+    Ok (code, out, err) =>
+      fail
+        "medaka_host_test.mjs exited \{debug code} (2 = setup missing): \{unwords [out, err]}"
+
+test "wasm host probes: playground/medaka_host_test.mjs passes" = probes

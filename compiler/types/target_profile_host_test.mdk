@@ -1,0 +1,118 @@
+{- | The host's capability table agrees with the compiler's profile table.
+
+   `playground/medaka_host.mjs` grants labels per profile (`PROFILES`) and installs a
+   slice only when its `needs` are granted; `compiler/types/target_profile.mdk`
+   (`profileRows`) is the table the compile-time profile check reads. This test runs
+   `test/wasm/host_profile_table.mjs` under node, which prints what the host grants and
+   what it observably does for each slice of each profile (a real callable, or one that
+   throws `CapabilityError`), and compares that with the compiler's rows:
+
+     * the host has exactly the compiler's wasmgc profiles, with the same grants;
+     * a slice whose labels a profile grants is real there, and any other slice is a
+       `CapabilityError` callable. The process slices (`args`, `exit`) carry no label
+       and are real only on `wasmgc/node`.
+
+   `COMPILER_HOST` (the playground compiler's configuration) is not a profile row and
+   is not compared here.
+
+   Runs under `medaka test --native`: it spawns node. -}
+
+import list.{sort}
+import string.{startsWith, unwords, lines, words}
+import test.{Expectation, expectEqual, fail}
+import test_process.{boundedVerb, underRoot}
+import types.target_profile.{lookupProfile, profileGrants, profileNames}
+
+processProfile : String
+processProfile = "wasmgc/node"
+
+-- The labels the compiler's table grants `name`, sorted.
+compilerGrants : String -> List String
+compilerGrants name = match lookupProfile name
+  Ok p => sort (map fst (profileGrants p))
+  Err _ => []
+
+compilerProfiles : List String
+compilerProfiles = filter (startsWith "wasmgc/") profileNames
+
+-- word lists of the lines of the table that start with `tag`, tag dropped.
+rowsOf : String -> List String -> List (List String)
+rowsOf tag ls =
+  filterMap
+    (l => match words l
+      t :: rest => if t == tag then Some rest else None
+      [] => None)
+    ls
+
+hostGrants : List (List String) -> List (String, List String)
+hostGrants rows =
+  filterMap
+    (r => match r
+      p :: labels => Some (p, labels)
+      [] => None)
+    rows
+
+grantFindings : List (String, List String) -> List String
+grantFindings host =
+  map
+      (p =>
+        "profile \{p}: host grants \{debug (lookupOr p host)}, compiler row grants \{debug (compilerGrants p)}")
+      (filter (p => lookupOr p host /= compilerGrants p) compilerProfiles)
+    ++ map
+      (p => "profile \{p}: in the host's PROFILES, not a compiler wasmgc row")
+      (filter (p => not (elem p compilerProfiles)) (map fst host))
+
+lookupOr : String -> List (String, List String) -> List String
+lookupOr key [] = []
+lookupOr key ((k, v) :: rest) = if k == key then v else lookupOr key rest
+
+-- (slice, process-only?, needs)
+data SliceNeeds = SliceNeeds String Bool (List String)
+
+sliceNeeds : List (List String) -> List SliceNeeds
+sliceNeeds rows =
+  filterMap
+    (r => match r
+      s :: p :: needs => Some (SliceNeeds s (p == "p") needs)
+      _ => None)
+    rows
+
+observedFindings : List SliceNeeds -> List (List String) -> List String
+observedFindings needs rows = flatMap (observedFinding needs) rows
+
+observedFinding : List SliceNeeds -> List String -> List String
+observedFinding needs (p :: s :: seen :: _) =
+  let granted = compilerGrants p
+  match filter (n => sliceName n == s) needs
+    [] => ["slice \{s}: observed on \{p} but missing from the host's SLICES"]
+    (SliceNeeds _ proc ns) :: _ =>
+      let missing = filter (l => not (elem l granted)) ns
+      let wantReal = missing == [] && (not proc || p == processProfile)
+      let want = if wantReal then "real" else "withheld"
+      if want == seen then
+        []
+      else
+        [
+          "profile \{p} slice \{s}: host is \{seen}, compiler row wants it \{want} (missing labels \{debug missing}, process-only \{debug proc})",
+        ]
+observedFinding _ _ = ["malformed observation row"]
+
+sliceName : SliceNeeds -> String
+sliceName (SliceNeeds s _ _) = s
+
+agreement : <IO, Exec, Env "MEDAKA_ROOT"> Expectation
+agreement =
+  match boundedVerb "node" [underRoot "test/wasm/host_profile_table.mjs"]
+    Err e => fail "could not run node: \{e}"
+    Ok (0, out, _) =>
+      let ls = lines out
+      expectEqual
+        []
+        (grantFindings (hostGrants (rowsOf "G" ls))
+          ++ observedFindings (sliceNeeds (rowsOf "N" ls)) (rowsOf "O" ls))
+    Ok (code, out, err) =>
+      fail
+        "node host_profile_table.mjs exited \{debug code}: \{unwords [out, err]}"
+
+test "wasm host profile agreement: host PROFILES grants and slices match target_profile.mdk" =
+  agreement
