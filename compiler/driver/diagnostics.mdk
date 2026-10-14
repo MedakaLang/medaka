@@ -1480,6 +1480,28 @@ analyzeLoadedFull exportsFor allowInternal trustedMods entry roots runtimeSrc co
     mods
     modPairs
 
+-- `analyzeLoadedFull` for a caller that has ALREADY resolved this exact graph
+-- clean (`check`'s front pass, same guard and same desugared trees): resolve is
+-- not run again, its buckets are the empty per-file buckets.  `ResError` has no
+-- warning variant, so a clean resolve contributes no diagnostic to any bucket.
+export
+analyzeLoadedResolvedClean : String ->
+  List String ->
+  String ->
+  String ->
+  List (String, String, List Decl) ->
+  List (String, List Decl) ->
+  (List ModDiags, List (String, List Diag))
+analyzeLoadedResolvedClean entry roots runtimeSrc coreSrc mods modPairs =
+  typecheckPassFull
+    (preludeDesugared runtimeSrc)
+    (preludeDesugared coreSrc)
+    (Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc))
+    (chainKeyOf entry roots)
+    mods
+    modPairs
+    (seedAll (map midPath mods) [])
+
 -- `analyzeProject` minus the load: resolve, then typecheck, then bucket — over a
 -- graph the caller has already loaded.  `medaka test` loads once and calls this,
 -- rather than handing `analyzeProject` an entry it would load a second time.
@@ -1521,8 +1543,14 @@ projectDiagsLoadedFull : (List String -> <e> List (String, List String)) ->
   List (String, List Decl) ->
   <e> (List ModDiags, List (String, List Diag))
 projectDiagsLoadedFull exportsFor allowInternal trustedMods runtimeP coreP preludeKey chainKey mods modPairs =
-  let buckets =
-    resolvedBuckets
+  typecheckPassFull
+    runtimeP
+    coreP
+    preludeKey
+    chainKey
+    mods
+    modPairs
+    (resolvedBuckets
       exportsFor
       allowInternal
       trustedMods
@@ -1531,8 +1559,7 @@ projectDiagsLoadedFull exportsFor allowInternal trustedMods runtimeP coreP prelu
       runtimeP
       coreP
       mods
-      modPairs
-  typecheckPassFull runtimeP coreP preludeKey chainKey mods modPairs buckets
+      modPairs)
 -- A load error (cycle / unknown module / unreadable file) is attributed to the
 -- entry file (the compiler loader returns a single Err string without a per-file
 -- split, unlike the OCaml attribute_load_error; entry is the conservative
@@ -1873,8 +1900,8 @@ multiModuleAutoPrintDiags runtimeP coreP modPairs =
 -- Resolve a graph the caller has already loaded, bucketing each module's errors
 -- by its file.  The shared prefix of `projectDiagsLoaded` and
 -- `projectDiagsFromTc`, which differ only in where the typecheck half comes
--- from — the two must resolve identically or their verdicts diverge on a
--- channel that has nothing to do with typing.
+-- from.  They resolve identically so their verdicts agree on a channel that has
+-- nothing to do with typing.
 resolvedBuckets : (List String -> <e> List (String, List String)) ->
   Bool ->
   List String ->
