@@ -17,7 +17,6 @@
 
 import tools.check.{
   runCheck,
-  runCheckFromDecls,
   checkHasErrors,
   checkModulesReport,
   entryExhaust,
@@ -1155,15 +1154,13 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _, d
     [] =>
       -- Clean (no errors): the scheme dump goes to STDOUT loc-free, but any
       -- non-exhaustive-match WARNING is re-rendered LOCATED (file:L:C: + caret)
-      -- to STDERR, byte-consistent with how errors render (line ~277).  runCheck
+      -- to STDERR, byte-consistent with how errors render (line ~277).  The dump
       -- bundles the warning loc-free into stdout, so we strip its "Warning: …"
       -- lines and re-emit them from `diags` (which carries the real Loc the
       -- --json path already reports).  See ERROR-QUALITY.md (Located dimension).
       let warns = filter diagIsWarn diags
-      -- S-3/#164: same rationale as `analyzeFrom` above — `decls` is already
-      -- the real-span parse of `tsrc` from the loader, so skip `runCheck`'s
-      -- internal placeholder-loc `parse tsrc` and feed `decls` straight into
-      -- the extracted decls-accepting body.
+      -- The dump comes from the typecheck drive `analyzeFromDump` already ran,
+      -- so no second front end or elaboration is needed to print it.
       let dump = stripWarningLines (joinNl dumpLines)
       let filtered = userSchemeLines decls dump
       let report = if typesMode then dump else filtered
@@ -1741,7 +1738,7 @@ cjUnlocatedJson target code msg =
     jObject [("file", JString target), ("diagnostics", jArray [diagJson])]
   stringify (jObject [("files", jArray [filesJson])])
 
--- Drop the loc-free "Warning: …" lines runCheck bundles into its scheme dump, so
+-- Drop the loc-free "Warning: …" lines the scheme dump carries, so
 -- the located re-render (emitLocatedWarnings) is the single warning surface —
 -- otherwise the CLI would print each warning twice (loc-free + located).  Scheme
 -- lines are "name : type", never "Warning: …", so this only removes warnings.
@@ -1749,7 +1746,7 @@ stripWarningLines : String -> String
 stripWarningLines s =
   joinNl (filter (l => not (startsWith "Warning: " l)) (splitNl s))
 
--- 0.1.0 preview UX (audit #6): filter `runCheck`'s "name : scheme" dump down to
+-- 0.1.0 preview UX (audit #6): filter the "name : scheme" dump down to
 -- just the lines naming one of THIS file's own top-level bindings, dropping the
 -- prelude's ~120 always-present schemes (eq/append/map/println/…). Each kept
 -- line's name is matched by exact "\{name} : " prefix (scheme lines are never

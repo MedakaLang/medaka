@@ -1,5 +1,5 @@
 # META
-source_lines=4757
+source_lines=4754
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -21,7 +21,6 @@ stages=DESUGAR,MARK
 
 import tools.check.{
   runCheck,
-  runCheckFromDecls,
   checkHasErrors,
   checkModulesReport,
   entryExhaust,
@@ -1159,15 +1158,13 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _, d
     [] =>
       -- Clean (no errors): the scheme dump goes to STDOUT loc-free, but any
       -- non-exhaustive-match WARNING is re-rendered LOCATED (file:L:C: + caret)
-      -- to STDERR, byte-consistent with how errors render (line ~277).  runCheck
+      -- to STDERR, byte-consistent with how errors render (line ~277).  The dump
       -- bundles the warning loc-free into stdout, so we strip its "Warning: …"
       -- lines and re-emit them from `diags` (which carries the real Loc the
       -- --json path already reports).  See ERROR-QUALITY.md (Located dimension).
       let warns = filter diagIsWarn diags
-      -- S-3/#164: same rationale as `analyzeFrom` above — `decls` is already
-      -- the real-span parse of `tsrc` from the loader, so skip `runCheck`'s
-      -- internal placeholder-loc `parse tsrc` and feed `decls` straight into
-      -- the extracted decls-accepting body.
+      -- The dump comes from the typecheck drive `analyzeFromDump` already ran,
+      -- so no second front end or elaboration is needed to print it.
       let dump = stripWarningLines (joinNl dumpLines)
       let filtered = userSchemeLines decls dump
       let report = if typesMode then dump else filtered
@@ -1745,7 +1742,7 @@ cjUnlocatedJson target code msg =
     jObject [("file", JString target), ("diagnostics", jArray [diagJson])]
   stringify (jObject [("files", jArray [filesJson])])
 
--- Drop the loc-free "Warning: …" lines runCheck bundles into its scheme dump, so
+-- Drop the loc-free "Warning: …" lines the scheme dump carries, so
 -- the located re-render (emitLocatedWarnings) is the single warning surface —
 -- otherwise the CLI would print each warning twice (loc-free + located).  Scheme
 -- lines are "name : type", never "Warning: …", so this only removes warnings.
@@ -1753,7 +1750,7 @@ stripWarningLines : String -> String
 stripWarningLines s =
   joinNl (filter (l => not (startsWith "Warning: " l)) (splitNl s))
 
--- 0.1.0 preview UX (audit #6): filter `runCheck`'s "name : scheme" dump down to
+-- 0.1.0 preview UX (audit #6): filter the "name : scheme" dump down to
 -- just the lines naming one of THIS file's own top-level bindings, dropping the
 -- prelude's ~120 always-present schemes (eq/append/map/println/…). Each kept
 -- line's name is matched by exact "\{name} : " prefix (scheme lines are never
@@ -4760,7 +4757,7 @@ runMcpServerFromEnv _ =
     Err msg => dieMsg msg
     Ok v => v
 # DESUGAR
-(DUse false (UseGroup ("tools" "check") ((mem "runCheck" false) (mem "runCheckFromDecls" false) (mem "checkHasErrors" false) (mem "checkModulesReport" false) (mem "entryExhaust" false))))
+(DUse false (UseGroup ("tools" "check") ((mem "runCheck" false) (mem "checkHasErrors" false) (mem "checkModulesReport" false) (mem "entryExhaust" false))))
 (DUse false (UseGroup ("tools" "snapshot") ((mem "runSnapshotWorker" false) (mem "runSnapshotSupervisor" false) (mem "parseStages" false) (mem "SnapMode" true))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSourceChecked" false) (mem "FmtMode" true))))
 (DUse false (UseGroup ("tools" "gate_cmd") ((mem "gateHelpText" false) (mem "runGateCmd" false))))
@@ -5270,7 +5267,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "runMcpServerFromEnv" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runMcpServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "r") (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EVar "runMcpServer") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "sourceStalenessVerdict")) (EVar "medakaVersion")))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
 # MARK
-(DUse false (UseGroup ("tools" "check") ((mem "runCheck" false) (mem "runCheckFromDecls" false) (mem "checkHasErrors" false) (mem "checkModulesReport" false) (mem "entryExhaust" false))))
+(DUse false (UseGroup ("tools" "check") ((mem "runCheck" false) (mem "checkHasErrors" false) (mem "checkModulesReport" false) (mem "entryExhaust" false))))
 (DUse false (UseGroup ("tools" "snapshot") ((mem "runSnapshotWorker" false) (mem "runSnapshotSupervisor" false) (mem "parseStages" false) (mem "SnapMode" true))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSourceChecked" false) (mem "FmtMode" true))))
 (DUse false (UseGroup ("tools" "gate_cmd") ((mem "gateHelpText" false) (mem "runGateCmd" false))))

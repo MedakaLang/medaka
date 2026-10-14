@@ -892,11 +892,8 @@ public export data SurfaceAnalysis = SurfaceAnalysis {
 -- `W-PRELUDE-METHOD-SHADOW`).  "" = the caller has no module id in hand (the
 -- LSP live buffer, the playground, an inline `source`), and the text falls back
 -- to "this module" — the flat path analyses exactly one module either way.
--- S-3/#164: exported so `checkRoute`'s single-module clean arm
--- (`compiler/driver/medaka_cli.mdk`) can call this directly with the loader's
--- already-parsed, real-span `decls` instead of going through `analyzeLocatedG`
--- (which would re-parse `tsrc` via `parseLocated` — the loader already ran the
--- structurally-identical `parseLocatedResult` over the same source).
+-- Exported so callers that already hold the real-span `decls` (the loader's
+-- located parse) skip `analyzeLocatedG`'s re-parse of the source.
 export
 analyzeFrom : (List String -> <e> List (String, List String)) ->
   String ->
@@ -906,8 +903,24 @@ analyzeFrom : (List String -> <e> List (String, List String)) ->
   List String ->
   <e> List Diag
 analyzeFrom exportsFor modName runtimeSrc coreSrc raw internalGuard =
-  fst (analyzeFromDump exportsFor modName runtimeSrc coreSrc raw internalGuard)
+  fst
+    (analyzeFromBy
+      (preludeKey rt core up =>
+        let (tcErrs, tcWarns) = checkOneDiagsK preludeKey rt core up
+        ([], tcErrs, tcWarns))
+      exportsFor
+      modName
+      runtimeSrc
+      coreSrc
+      raw
+      internalGuard)
 
+-- `analyzeFrom` plus the entry's rendered `name : scheme` lines from the SAME
+-- typecheck drive, for the one caller that prints them (`checkRoute`'s
+-- single-file arm).  The lines are rendered inside that drive, before the
+-- auto-print obligation drive or a target check can run: a scheme rendered
+-- after another elaboration can name its type variables differently (#4053).
+-- Every other caller uses `analyzeFrom`, which does not render them.
 export
 analyzeFromDump : (List String -> <e> List (String, List String)) ->
   String ->
@@ -917,10 +930,28 @@ analyzeFromDump : (List String -> <e> List (String, List String)) ->
   List String ->
   <e> (List Diag, List String)
 analyzeFromDump exportsFor modName runtimeSrc coreSrc raw internalGuard =
+  analyzeFromBy
+    checkOneDiagsLinesK
+    exportsFor
+    modName
+    runtimeSrc
+    coreSrc
+    raw
+    internalGuard
+
+analyzeFromBy : (Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List String, List TcDiag, List TcDiag)) ->
+  (List String -> <e> List (String, List String)) ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  List String ->
+  <e> (List Diag, List String)
+analyzeFromBy tc exportsFor modName runtimeSrc coreSrc raw internalGuard =
   let s = analyzeSurface exportsFor modName runtimeSrc coreSrc raw internalGuard
   let (lines, tcDiags) = match s.resolveClean
     True =>
-      let (ls, tcErrs, tcWarns) = checkOneDiagsLinesK
+      let (ls, tcErrs, tcWarns) = tc
         s.surfacePreludeKey
         s.surfaceRuntimeP
         s.surfaceCoreP
