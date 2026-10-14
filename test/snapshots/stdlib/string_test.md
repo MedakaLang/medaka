@@ -1,5 +1,5 @@
 # META
-source_lines=680
+source_lines=732
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -10,8 +10,8 @@ stages=DESUGAR,MARK
 import string.{
   byteLength, center, countOccurrences, drop, endsWith, fromChars, indexOf,
   join, lastIndexOf, lines, padLeft, padRight, replace, replaceAll, reverse,
-  splitAt, startsWith, stripPrefix, stripSuffix, take, toInt, trim, trimLeft,
-  trimRight, unlines, unwords, utf8ByteLength
+  splitAt, startsWith, stripPrefix, stripSuffix, take, toInt, toLower, toUpper,
+  trim, trimLeft, trimRight, unlines, unwords, utf8ByteLength
 }
 import test.{expectEqual, expectFalse, expectTrue}
 
@@ -682,8 +682,60 @@ test "join with an empty separator keeps an exact codepoint length" =
 
 test "reverse keeps an exact codepoint length on multibyte text" =
   expectEqual 4 (stringLength (reverse "é日→😀"))
+
+-- # Native concat, case map and charToStr
+--
+-- Each assertion pairs the string with its stringLength, because the codepoint
+-- count stored in the cell is what stringLength reads back.
+
+strAndLen : String -> (String, Int)
+strAndLen s = (s, stringLength s)
+
+test "stringConcat of no strings is empty" =
+  expectEqual ("", 0) (strAndLen (stringConcat []))
+
+test "stringConcat of one empty string is empty" =
+  expectEqual ("", 0) (strAndLen (stringConcat [""]))
+
+test "stringConcat of ASCII strings" =
+  expectEqual ("abcdef", 6) (strAndLen (stringConcat ["ab", "cd", "ef"]))
+
+test "stringConcat skips empty pieces" =
+  expectEqual ("é日", 2) (strAndLen (stringConcat ["", "é", "", "日"]))
+
+test "stringConcat of mixed multibyte pieces counts codepoints" =
+  expectEqual ("é日本😀x", 5) (strAndLen (stringConcat ["é", "日本", "😀", "x"]))
+
+test "toUpper of ASCII" =
+  expectEqual ("HELLO, WORLD", 12) (strAndLen (toUpper "hello, world"))
+
+test "toLower of ASCII" = expectEqual ("hello", 5) (strAndLen (toLower "HeLLo"))
+
+test "toUpper of mixed text leaves multibyte codepoints alone" =
+  expectEqual ("HéLLO 日本 😀 ABC", 14) (strAndLen (toUpper "héllo 日本 😀 abc"))
+
+test "toLower of mixed text leaves multibyte codepoints alone" =
+  expectEqual ("École 日本 😀 abc", 14) (strAndLen (toLower "ÉCOLE 日本 😀 ABC"))
+
+test "toUpper of unchanged multibyte text" =
+  expectEqual ("日本語 é 😀", 7) (strAndLen (toUpper "日本語 é 😀"))
+
+test "toLower of unchanged multibyte text" =
+  expectEqual ("日本語ÉÈ", 5) (strAndLen (toLower "日本語ÉÈ"))
+
+test "charToStr of an ASCII char" =
+  expectEqual ("a", 1) (strAndLen (charToStr 'a'))
+
+test "charToStr of a two-byte char" =
+  expectEqual ("é", 1) (strAndLen (charToStr 'é'))
+
+test "charToStr of a three-byte char" =
+  expectEqual ("日", 1) (strAndLen (charToStr '日'))
+
+test "charToStr of a four-byte char" =
+  expectEqual ("😀", 1) (strAndLen (charToStr '😀'))
 # DESUGAR
-(DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
+(DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -862,8 +914,25 @@ test "reverse keeps an exact codepoint length on multibyte text" =
 (DTest false "join keeps an exact codepoint length on multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LInt 7))) (EApp (EVar "stringLength") (EApp (EApp (EVar "join") (ELit (LString "→"))) (EListLit (ELit (LString "é")) (ELit (LString "日本")) (ELit (LString "")) (ELit (LString "x")))))))
 (DTest false "join with an empty separator keeps an exact codepoint length" (EApp (EApp (EVar "expectEqual") (ELit (LInt 2))) (EApp (EVar "stringLength") (EApp (EApp (EVar "join") (ELit (LString ""))) (EListLit (ELit (LString "é")) (ELit (LString "日")))))))
 (DTest false "reverse keeps an exact codepoint length on multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LInt 4))) (EApp (EVar "stringLength") (EApp (EVar "reverse") (ELit (LString "é日→😀"))))))
+(DTypeSig false "strAndLen" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int"))))
+(DFunDef false "strAndLen" ((PVar "s")) (ETuple (EVar "s") (EApp (EVar "stringLength") (EVar "s"))))
+(DTest false "stringConcat of no strings is empty" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LInt 0)))) (EApp (EVar "strAndLen") (EApp (EVar "stringConcat") (EListLit)))))
+(DTest false "stringConcat of one empty string is empty" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LInt 0)))) (EApp (EVar "strAndLen") (EApp (EVar "stringConcat") (EListLit (ELit (LString "")))))))
+(DTest false "stringConcat of ASCII strings" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "abcdef")) (ELit (LInt 6)))) (EApp (EVar "strAndLen") (EApp (EVar "stringConcat") (EListLit (ELit (LString "ab")) (ELit (LString "cd")) (ELit (LString "ef")))))))
+(DTest false "stringConcat skips empty pieces" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é日")) (ELit (LInt 2)))) (EApp (EVar "strAndLen") (EApp (EVar "stringConcat") (EListLit (ELit (LString "")) (ELit (LString "é")) (ELit (LString "")) (ELit (LString "日")))))))
+(DTest false "stringConcat of mixed multibyte pieces counts codepoints" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é日本😀x")) (ELit (LInt 5)))) (EApp (EVar "strAndLen") (EApp (EVar "stringConcat") (EListLit (ELit (LString "é")) (ELit (LString "日本")) (ELit (LString "😀")) (ELit (LString "x")))))))
+(DTest false "toUpper of ASCII" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "HELLO, WORLD")) (ELit (LInt 12)))) (EApp (EVar "strAndLen") (EApp (EVar "toUpper") (ELit (LString "hello, world"))))))
+(DTest false "toLower of ASCII" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "hello")) (ELit (LInt 5)))) (EApp (EVar "strAndLen") (EApp (EVar "toLower") (ELit (LString "HeLLo"))))))
+(DTest false "toUpper of mixed text leaves multibyte codepoints alone" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "HéLLO 日本 😀 ABC")) (ELit (LInt 14)))) (EApp (EVar "strAndLen") (EApp (EVar "toUpper") (ELit (LString "héllo 日本 😀 abc"))))))
+(DTest false "toLower of mixed text leaves multibyte codepoints alone" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "École 日本 😀 abc")) (ELit (LInt 14)))) (EApp (EVar "strAndLen") (EApp (EVar "toLower") (ELit (LString "ÉCOLE 日本 😀 ABC"))))))
+(DTest false "toUpper of unchanged multibyte text" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "日本語 é 😀")) (ELit (LInt 7)))) (EApp (EVar "strAndLen") (EApp (EVar "toUpper") (ELit (LString "日本語 é 😀"))))))
+(DTest false "toLower of unchanged multibyte text" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "日本語ÉÈ")) (ELit (LInt 5)))) (EApp (EVar "strAndLen") (EApp (EVar "toLower") (ELit (LString "日本語ÉÈ"))))))
+(DTest false "charToStr of an ASCII char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "a")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "a"))))))
+(DTest false "charToStr of a two-byte char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "é"))))))
+(DTest false "charToStr of a three-byte char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "日")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "日"))))))
+(DTest false "charToStr of a four-byte char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "😀")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "😀"))))))
 # MARK
-(DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
+(DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "join" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "reverse" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "toInt" false) (mem "toLower" false) (mem "toUpper" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "unwords" false) (mem "utf8ByteLength" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -1042,3 +1111,20 @@ test "reverse keeps an exact codepoint length on multibyte text" =
 (DTest false "join keeps an exact codepoint length on multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LInt 7))) (EApp (EVar "stringLength") (EApp (EApp (EVar "join") (ELit (LString "→"))) (EListLit (ELit (LString "é")) (ELit (LString "日本")) (ELit (LString "")) (ELit (LString "x")))))))
 (DTest false "join with an empty separator keeps an exact codepoint length" (EApp (EApp (EVar "expectEqual") (ELit (LInt 2))) (EApp (EVar "stringLength") (EApp (EApp (EVar "join") (ELit (LString ""))) (EListLit (ELit (LString "é")) (ELit (LString "日")))))))
 (DTest false "reverse keeps an exact codepoint length on multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LInt 4))) (EApp (EVar "stringLength") (EApp (EVar "reverse") (ELit (LString "é日→😀"))))))
+(DTypeSig false "strAndLen" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int"))))
+(DFunDef false "strAndLen" ((PVar "s")) (ETuple (EVar "s") (EApp (EVar "stringLength") (EVar "s"))))
+(DTest false "stringConcat of no strings is empty" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LInt 0)))) (EApp (EVar "strAndLen") (EApp (EVar "stringConcat") (EListLit)))))
+(DTest false "stringConcat of one empty string is empty" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LInt 0)))) (EApp (EVar "strAndLen") (EApp (EVar "stringConcat") (EListLit (ELit (LString "")))))))
+(DTest false "stringConcat of ASCII strings" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "abcdef")) (ELit (LInt 6)))) (EApp (EVar "strAndLen") (EApp (EVar "stringConcat") (EListLit (ELit (LString "ab")) (ELit (LString "cd")) (ELit (LString "ef")))))))
+(DTest false "stringConcat skips empty pieces" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é日")) (ELit (LInt 2)))) (EApp (EVar "strAndLen") (EApp (EVar "stringConcat") (EListLit (ELit (LString "")) (ELit (LString "é")) (ELit (LString "")) (ELit (LString "日")))))))
+(DTest false "stringConcat of mixed multibyte pieces counts codepoints" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é日本😀x")) (ELit (LInt 5)))) (EApp (EVar "strAndLen") (EApp (EVar "stringConcat") (EListLit (ELit (LString "é")) (ELit (LString "日本")) (ELit (LString "😀")) (ELit (LString "x")))))))
+(DTest false "toUpper of ASCII" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "HELLO, WORLD")) (ELit (LInt 12)))) (EApp (EVar "strAndLen") (EApp (EVar "toUpper") (ELit (LString "hello, world"))))))
+(DTest false "toLower of ASCII" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "hello")) (ELit (LInt 5)))) (EApp (EVar "strAndLen") (EApp (EVar "toLower") (ELit (LString "HeLLo"))))))
+(DTest false "toUpper of mixed text leaves multibyte codepoints alone" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "HéLLO 日本 😀 ABC")) (ELit (LInt 14)))) (EApp (EVar "strAndLen") (EApp (EVar "toUpper") (ELit (LString "héllo 日本 😀 abc"))))))
+(DTest false "toLower of mixed text leaves multibyte codepoints alone" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "École 日本 😀 abc")) (ELit (LInt 14)))) (EApp (EVar "strAndLen") (EApp (EVar "toLower") (ELit (LString "ÉCOLE 日本 😀 ABC"))))))
+(DTest false "toUpper of unchanged multibyte text" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "日本語 é 😀")) (ELit (LInt 7)))) (EApp (EVar "strAndLen") (EApp (EVar "toUpper") (ELit (LString "日本語 é 😀"))))))
+(DTest false "toLower of unchanged multibyte text" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "日本語ÉÈ")) (ELit (LInt 5)))) (EApp (EVar "strAndLen") (EApp (EVar "toLower") (ELit (LString "日本語ÉÈ"))))))
+(DTest false "charToStr of an ASCII char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "a")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "a"))))))
+(DTest false "charToStr of a two-byte char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "é"))))))
+(DTest false "charToStr of a three-byte char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "日")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "日"))))))
+(DTest false "charToStr of a four-byte char" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "😀")) (ELit (LInt 1)))) (EApp (EVar "strAndLen") (EApp (EVar "charToStr") (ELit (LChar "😀"))))))

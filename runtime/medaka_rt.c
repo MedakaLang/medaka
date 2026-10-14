@@ -1263,21 +1263,30 @@ noreturn void mdk_exit(long long tagged) {
 
 /* Concatenate a built-in List String (native extern catalog slice 5).
    Nil = odd immediate (low bit 1, stop); Cons = even pointer to [tag | head@8 | tail@16].
-   head is a String cell (byte_len@8, bytes@24). Two passes: sum byte_lens, then blit;
-   mdk_str_lit recomputes cp_count correctly. Empty list (Nil) -> "" string cell. */
+   head is a String cell (byte_len@8, cp_count@16, bytes@24).  Pass 1 sums byte_len and
+   cp_count of every piece; pass 2 blits the pieces straight into ONE result cell.  The
+   cp_count sum is additive for the same reason mdk_string_append's is (see its
+   comment): each piece already stores a conforming count.  Empty list (Nil) -> "" cell. */
 long long mdk_string_concat(long long list) {
-  long long total = 0;
-  for (long long w = list; (w & 1) == 0; w = ((const long long *)w)[2])
-    total += ((const long long *)(((const long long *)w)[1]))[1];
-  char *buf = (char *)mdk_alloc_atomic(total + 1);
+  long long total = 0, cps = 0;
+  for (long long w = list; (w & 1) == 0; w = ((const long long *)w)[2]) {
+    const long long *s = (const long long *)((const long long *)w)[1];
+    total += s[1];
+    cps += s[2];
+  }
+  char *cell = (char *)mdk_alloc_atomic(24 + total + 1);
+  ((long long *)cell)[0] = MDK_STR_TAG;
+  ((long long *)cell)[1] = total;
+  ((long long *)cell)[2] = cps;
   long long off = 0;
   for (long long w = list; (w & 1) == 0; w = ((const long long *)w)[2]) {
-    long long s = ((const long long *)w)[1];
+    const char *s = (const char *)((const long long *)w)[1];
     long long bl = ((const long long *)s)[1];
-    memcpy(buf + off, (const char *)s + 24, (size_t)bl);
+    memcpy(cell + 24 + off, s + 24, (size_t)bl);
     off += bl;
   }
-  return mdk_str_lit(buf, total);
+  cell[24 + total] = '\0';
+  return (long long)cell;
 }
 
 /* Append two String cells (++ on String, E2a).
@@ -1675,7 +1684,7 @@ void mdk_print_char(long long tagged) {
 }
 long long mdk_char_to_str(long long tagged) {
   char buf[4]; int n = mdk_utf8_encode(tagged >> 1, buf);
-  return mdk_str_lit(buf, n);
+  return mdk_str_cell(buf, n, 1);
 }
 
 /* String↔Char + codepoint slicing (native extern catalog slice 9).
@@ -1859,26 +1868,34 @@ long long mdk_char_to_lower(long long t) {
 /* Byte-wise ASCII case map: bytes >=0x80 (UTF-8 lead/continuation) are left
    untouched, so multibyte codepoints pass through unchanged. */
 long long mdk_string_to_upper(long long s) {
-  const char *cell = (const char *)s;
-  long long bl = ((const long long *)cell)[1];
-  const char *src = cell + 24;
-  char *buf = (char *)mdk_alloc(bl + 1);
+  const long long *src_cell = (const long long *)s;
+  long long bl = src_cell[1];
+  char *cell = (char *)mdk_alloc_atomic(24 + bl + 1);
+  ((long long *)cell)[0] = MDK_STR_TAG;
+  ((long long *)cell)[1] = bl;
+  ((long long *)cell)[2] = src_cell[2];
+  const char *src = (const char *)s + 24;
   for (long long i = 0; i < bl; i++) {
     char c = src[i];
-    buf[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
+    cell[24 + i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
   }
-  return mdk_str_lit(buf, bl);
+  cell[24 + bl] = '\0';
+  return (long long)cell;
 }
 long long mdk_string_to_lower(long long s) {
-  const char *cell = (const char *)s;
-  long long bl = ((const long long *)cell)[1];
-  const char *src = cell + 24;
-  char *buf = (char *)mdk_alloc(bl + 1);
+  const long long *src_cell = (const long long *)s;
+  long long bl = src_cell[1];
+  char *cell = (char *)mdk_alloc_atomic(24 + bl + 1);
+  ((long long *)cell)[0] = MDK_STR_TAG;
+  ((long long *)cell)[1] = bl;
+  ((long long *)cell)[2] = src_cell[2];
+  const char *src = (const char *)s + 24;
   for (long long i = 0; i < bl; i++) {
     char c = src[i];
-    buf[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+    cell[24 + i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
   }
-  return mdk_str_lit(buf, bl);
+  cell[24 + bl] = '\0';
+  return (long long)cell;
 }
 
 /* ── Reserved ADT tags + cell constructors (native extern catalog, slice 10) ──
@@ -3480,7 +3497,7 @@ long long mdk_debug_string_lit(long long w) {
   const char *cell = (const char *)w;
   long long byte_len = ((const long long *)cell)[1];
   const unsigned char *bytes = (const unsigned char *)(cell + 24);
-  char *buf = (char *)mdk_alloc(2 + 2 * byte_len + 1);  /* worst case 2 bytes/char */
+  char *buf = (char *)mdk_alloc_atomic(2 + 2 * byte_len + 1);  /* worst case 2 bytes/char */
   long long off = 0;
   buf[off++] = '"';
   for (long long i = 0; i < byte_len; i++) mdk_escape_byte(buf, &off, bytes[i], '"');
