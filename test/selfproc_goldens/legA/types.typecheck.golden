@@ -1018,6 +1018,7 @@ entailAssumRoute : String -> EntailKind -> Route
 entailAssumVar : Option PredicateRequest -> Mono -> String -> String -> ScopeId -> EntailKind -> Option AssumAnswer
 entailFallback : String -> ScopeId -> Mono -> EntailKind -> Route
 entailInst : String -> Mono -> String -> ScopeId -> String -> EntailKind -> (Route, List Route)
+entailRigidLead : Mono -> String -> ScopeId -> EntailKind -> Option (Route, List Route)
 entailedByDeclared : String -> String -> Ty -> Bool
 enterLevel : Unit -> Unit
 enteredGoalKey : ReqWalk -> String
@@ -2321,6 +2322,7 @@ occsOfTails : List String -> List EffAtomTy -> List (String, List Atom)
 occurrenceCarriesMangledShadowSym : String -> Ref Route -> Bool
 occurrenceDispatchMonos : List String -> Ty -> Mono -> List (String, Mono) -> List Mono
 occurrenceParamMonos : String -> Mono -> List (String, Mono) -> Option (List Mono)
+occurrencePredOf : String -> Mono -> List (String, Mono) -> Option PredicateRequest
 occursAdjust : Int -> Int -> Mono -> Unit
 occursAdjustUnbound : Int -> Int -> Ref Tyvar -> Int -> Int -> Unit
 occursAdjustVar : Int -> Int -> Ref Tyvar -> Unit

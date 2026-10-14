@@ -957,37 +957,48 @@ table = [
     codes = [Present "T-UNROUTED-DISPATCH"],
   },
   Row {
-    entry = "unrouted-let-bound-method-rejected.mdk",
+    entry = "let-bound-method-value-reads-own-dict-accepted.mdk",
     label =
-      "#4116 open: the let-bound method value `let f = k` keeps an RNone route in its body; T-UNROUTED-DISPATCH at 19:10 on every verb until the value reads its own dictionary parameter (spec: prints INTBOOL)",
-    expCheck = "REJECT",
-    expRun = "REJECT",
-    expBuild = "REJECT",
-    mode = NoValue,
-    pinned = "",
-    codes = [Present "T-UNROUTED-DISPATCH"],
+      "#4116, §3 `assum` before `inst`: the let-bound method value `let f = k` reads its own dictionary parameter in its body (the given's vector includes the omitted `b`), and the call passes `impl K (Box Int) Bool`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "INTBOOL\n",
+    codes = [],
   },
   Row {
-    entry = "unrouted-recursive-impl-occurrence-rejected.mdk",
+    entry = "row-join-method-routes-instance-accepted.mdk",
     label =
-      "#4117 open: the recursive `jmap` inside `impl JMap Later` and the call in `main` route to the head tag `Later`, not the instance; T-UNROUTED-DISPATCH at 13:31 and 17:23 on every verb until R-ARITY1 routes them (spec: prints 42)",
-    expCheck = "REJECT",
-    expRun = "REJECT",
-    expBuild = "REJECT",
-    mode = NoValue,
-    pinned = "",
-    codes = [Present "T-UNROUTED-DISPATCH"],
+      "#4117, §3 R-ARITY1: a row join `f (e | e2) b` in the method's declared type does not hide the vector `[Later]`, so the recursive `jmap` in `impl JMap Later` and the call in `main` route to the instance key",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "42\n",
+    codes = [],
   },
   Row {
-    entry = "unrouted-unrelated-given-dict-slot-rejected.mdk",
+    entry = "rigid-lead-goal-selects-blanket-instance-accepted.mdk",
     label =
-      "#4119 open: `useSub v (1 : Int)` under the unrelated given `Show2 x` leaves its `Sub x Int` slot RNone; T-UNROUTED-DISPATCH at 21:6 on every verb until DICT §3 decides the goal (spec: prints sub, or rejects like its given-less twin)",
-    expCheck = "REJECT",
-    expRun = "REJECT",
-    expBuild = "REJECT",
-    mode = NoValue,
-    pinned = "",
-    codes = [Present "T-UNROUTED-DISPATCH"],
+      "#4119, §6.1 points 2-3 + §3 W3-inst: `Sub x Int` over `g`'s rigid `x` is a closed goal with a constructed argument; `inst` reduces it by `impl Sub a b` (route `Sub|a b|`), whatever unrelated given `g` declares",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "sub\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-body-top-level-value-spelled-as-method-accepted.mdk",
+    label =
+      "SHADOW S2 in a tail body: an impl method body sees a top-level value `pure` as the binding groups do, so the occurrence is the standalone (`RLocal`), not an `Applicative` site at `Row`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [],
   },
   Row {
     entry = "s4-gen-sig-superclass-redundant-dropped.mdk",
@@ -5590,7 +5601,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 495
+tableRows = 496
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

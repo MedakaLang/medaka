@@ -1,10 +1,10 @@
 -- #4116: `let f = k` binds a method value whose receiver type the body of
--- `main` fixes only at the later call `f (Box 2)`.  The let-bound value is
--- generalized with its own dictionary parameter, but its body's occurrence of
--- `k` is left with no route (`RNone`), so no instance is committed for it.
+-- `main` fixes only at the later call `f (Box 2)`.  The let-bound value takes
+-- its own dictionary parameter, and its body's occurrence of `k` reads it
+-- (`RDict`), as an assumption answers a goal before any instance does.
 -- Hand-derived from DICT-SEMANTICS §3: the call's goal `K (Box Int) ?b` has one
--- matching instance and the program should print `INTBOOL`.  Today the hole is
--- a check reject: T-UNROUTED-DISPATCH at 19:10 (the `k` of `let f = k`).
+-- matching instance, so the dictionary passed is `impl K (Box Int) Bool` and the
+-- program prints `INTBOOL` on every verb.
 interface K a b where
   k : a -> String
   mk : b -> a
