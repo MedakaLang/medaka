@@ -805,28 +805,39 @@ void mdk_print_str(long long w) {
 }
 
 /* intToString : Int -> String  (LEAF, RUNTIME-DESIGN.md §5).  The argument is a
- * TAGGED immediate int word; untag (arithmetic shift), render decimal to match
- * OCaml string_of_int, and box the result through mdk_str_lit. */
+ * TAGGED immediate int word; untag (arithmetic shift) and render decimal to match
+ * OCaml string_of_int.  The rendering is ASCII, so every codepoint is one byte and
+ * the cell's cp_count is its byte length: the cell is allocated once and the digits
+ * are written straight into it, with no scratch buffer, copy or rescan.  The
+ * magnitude is taken in unsigned space so LLONG_MIN is exact. */
 long long mdk_int_to_string(long long tagged) {
   long long n = tagged >> 1;
-  char buf[32];
-  /* Hand-rolled decimal, byte-identical to "%lld": snprintf's machinery was
-   * the largest single cost under every key build (lenKey, "\{n}"). The
-   * magnitude is taken in unsigned space so LLONG_MIN is exact. */
   unsigned long long u = n < 0 ? 0ULL - (unsigned long long)n : (unsigned long long)n;
-  char *p = buf + sizeof buf;
+  /* Digit count by power-of-ten comparison; u <= 2^63 < 10^19, so p never wraps. */
+  long long digits = 1;
+  for (unsigned long long p = 10; u >= p; p *= 10) digits++;
+  long long len = digits + (n < 0 ? 1 : 0);
+  char *cell = (char *)mdk_alloc_atomic(24 + len + 1);
+  ((long long *)cell)[0] = MDK_STR_TAG;
+  ((long long *)cell)[1] = len;
+  ((long long *)cell)[2] = len;
+  char *p = cell + 24 + len;
   do {
     *--p = (char)('0' + u % 10);
     u /= 10;
   } while (u != 0);
   if (n < 0) *--p = '-';
-  return mdk_str_lit(p, (long long)(buf + sizeof buf - p));
+  cell[24 + len] = '\0';
+  return (long long)cell;
 }
 
+/* floatToString: the lexeme is ASCII (digits, '.', '-', 'e', '+', "inf"/"nan"),
+ * so its codepoint count is its byte length, as in mdk_int_to_string. */
 long long mdk_float_to_string(double d) {
   char buf[96];
   mdk_float_lexeme(d, buf);   /* shared canonical lexeme (see mdk_float_lexeme) */
-  return mdk_str_lit(buf, (long long)strlen(buf));
+  long long len = (long long)strlen(buf);
+  return mdk_str_cell(buf, len, len);
 }
 
 /* ---------------------------------------------------------------------------
