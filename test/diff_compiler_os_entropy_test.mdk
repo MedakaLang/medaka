@@ -21,13 +21,13 @@
 import fs.{expectUnitCount, fixtureFiles}
 import list.{dropWhile, takeWhile}
 import string.{contains, endsWith, lines, startsWith, unlines}
+import compiler_cli_test_support.{inFreshDirOf}
 import test.{Expectation, expectAll, fail, pass}
 import test_process.{
   boundedVerb,
   boundedVerbSeconds,
   medakaBin,
   medakaRoot,
-  scratchDir,
 }
 
 corpus : <IO> String
@@ -51,16 +51,6 @@ strictSpawn : Int ->
   <Exec, IO> Result String (Int, String, String)
 strictSpawn secs args =
   boundedVerbSeconds secs "env" (["MEDAKA_STRICT=1", medakaBin] ++ args)
-
--- Removes a scratch directory a build wrote into. The exit code is read and
--- discarded on purpose — cleanup failing is never the reason a check reports
--- red.
-cleanup : String -> <Exec, IO> Unit
-cleanup scratch = match boundedVerb "rm" ["-rf", scratch]
-  Ok (code, _, _) =>
-    let _ = code == 0
-    ()
-  Err _ => ()
 
 okShape : (Int, String, String) -> Bool
 okShape (code, out, _) = code == 0 && startsWith "ok:" out
@@ -122,10 +112,8 @@ test "os_entropy: too-large length is rejected by `medaka run`" =
   runRejected tooLargeFixture "osEntropyBytes: requested length is too large"
 
 -- Builds `fixture` into `\{scratch}/\{name}` and executes it once. `scratch`
--- is `test_process.scratchDir`'s memoized directory — one per process, never
--- a fresh one per call — so every build below shares it and is keyed apart
--- by `name` alone; deleting it between builds (rather than once, after the
--- last one) would hand the next build a directory that no longer exists.
+-- is the directory the caller made for its own builds (`inFreshDirOf`), so
+-- every build sharing it is keyed apart by `name` alone.
 builtOnce : String ->
   String ->
   String ->
@@ -153,11 +141,7 @@ buildIndependence scratch name fixture = match builtOnce scratch name fixture
 
 -- `fixture`, built once into `scratch` under `name` and executed once: the
 -- binary must fail nonzero with `wantSubstring` on stderr.
-buildRejected : String ->
-  String ->
-  String ->
-  String ->
-  <Exec, IO> Expectation
+buildRejected : String -> String -> String -> String -> <Exec, IO> Expectation
 buildRejected scratch name fixture wantSubstring =
   match builtOnce scratch name fixture
     Err e => fail e
@@ -171,24 +155,21 @@ buildRejected scratch name fixture wantSubstring =
         pass
 
 test "os_entropy: build+exec — positive is independent, negative and too-large are rejected" =
-  match scratchDir
-    Err e => fail "could not make a scratch directory: \{e}"
-    Ok scratch =>
-      let result = expectAll [
-        buildIndependence scratch "positive" positiveFixture,
-        buildRejected
-          scratch
-          "negative"
-          negativeFixture
-          "osEntropyBytes: length must be non-negative",
-        buildRejected
-          scratch
-          "too_large"
-          tooLargeFixture
-          "osEntropyBytes: requested length is too large",
-      ]
-      let _ = cleanup scratch
-      result
+  inFreshDirOf
+    (scratch => expectAll [
+      buildIndependence scratch "positive" positiveFixture,
+      buildRejected
+        scratch
+        "negative"
+        negativeFixture
+        "osEntropyBytes: length must be non-negative",
+      buildRejected
+        scratch
+        "too_large"
+        tooLargeFixture
+        "osEntropyBytes: requested length is too large",
+    ])
+    (msg => fail msg)
 
 -- # Structural anti-rot checks — none of these touch a spawn
 

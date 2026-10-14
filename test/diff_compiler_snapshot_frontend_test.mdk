@@ -69,7 +69,7 @@
    and the write tool, none of which the interpreter binds. -}
 
 import compiler_cli_test_support.{boundedInTree, summarizeSweep, sweepUnits}
-import fs.{fixtureFiles}
+import fs.{fixtureFiles, isDir}
 import list.{somes, sort}
 import path.{dirname}
 import string.{
@@ -85,7 +85,7 @@ import string.{
   unlines,
   words,
 }
-import test.{fail, pass}
+import test.{Expectation, expectAll, fail, pass}
 import test_process.{medakaBin, medakaRoot}
 
 -- # The table
@@ -501,6 +501,40 @@ familyFailure o = match o.failures
 
 test "every snapshot family reproduces its committed snapshots" =
   sweepUnits families gradeFamily familyFailure summarizeSweep
+
+-- # Each sweep grades in a directory that exists
+
+-- Names the scratch directory a sweep was handed when it is not there.
+sweepDirMissing : String -> <FileRead> Option String
+sweepDirMissing scratch = match isDir scratch
+  Ok True => None
+  _ => Some scratch
+
+sweepFoundDirs : Int -> List String -> Expectation
+sweepFoundDirs _ [] = pass
+sweepFoundDirs _ (missing :: _) =
+  fail "a sweep was handed no scratch directory: \{missing}"
+
+-- Each sweep removes the directory it grades in, so the sweeps of one
+-- process must each be handed a directory of their own.
+test "sweepUnits gives every sweep in one process a scratch directory that exists" = expectAll
+  [
+    sweepUnits
+      [1, 2]
+      (scratch _ => sweepDirMissing scratch)
+      (r => r)
+      sweepFoundDirs,
+    sweepUnits
+      [1, 2]
+      (scratch _ => sweepDirMissing scratch)
+      (r => r)
+      sweepFoundDirs,
+    sweepUnits
+      [1, 2]
+      (scratch _ => sweepDirMissing scratch)
+      (r => r)
+      sweepFoundDirs,
+  ]
 
 -- # The write tool carries the same table
 

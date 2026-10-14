@@ -25,7 +25,6 @@ import test_process.{
   boundedVerbSeconds,
   medakaBin,
   medakaRoot,
-  scratchDir,
   spawnTimeoutSeconds,
   testJobs,
 }
@@ -371,13 +370,13 @@ sweepUnits : List unit ->
   (row -> Option String) ->
   (Int -> List String -> Expectation) ->
   <Exec, FileRead, IO> Expectation
-sweepUnits units gradeOne rowFailure summarize = match scratchDir
-  Err e => fail "could not make a scratch directory: \{e}"
-  Ok scratch =>
-    let graded = map (gradeOne scratch) units
-    let failures = somes (map rowFailure graded)
-    let _ = runVerb "rm" ["-rf", scratch]
-    summarize (length graded) failures
+sweepUnits units gradeOne rowFailure summarize =
+  inFreshDirOf
+    (scratch =>
+      let graded = map (gradeOne scratch) units
+      let failures = somes (map rowFailure graded)
+      summarize (length graded) failures)
+    (msg => fail msg)
 
 {- | `sweepUnits` for a corpus graded by `checkRunBuild`: `plan` names each
    unit's `(entry, binPath)` under the scratch directory, or settles its row
@@ -493,16 +492,7 @@ gradeSplit _ _ _ _ = []
 -- Runs `body` in a scratch directory made for this call, then removes it.
 inFreshScratch : (String -> <Exec, FileRead, IO> Expectation) ->
   <Exec, FileRead, IO> Expectation
-inFreshScratch body = match runVerb "mktemp" ["-d"]
-  Err e => fail "could not make a scratch directory: \{e}"
-  Ok (0, out, _) =>
-    let scratch = trim out
-    let result = body scratch
-    let _ = runVerb "rm" ["-rf", scratch]
-    result
-  Ok (code, _, err) =>
-    fail
-      "could not make a scratch directory: mktemp -d exited \{intToString code}: \{err}"
+inFreshScratch body = inFreshDirOf body (msg => fail msg)
 
 {- | Runs `body` in a directory made for this call, removes it, and returns
    what `body` returned. `fromMsg` turns a failure to make the directory into

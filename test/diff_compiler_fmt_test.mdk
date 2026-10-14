@@ -94,10 +94,9 @@
    which is the price of a corpus that shrinks reding too. -}
 
 import compiler_cli_test_support.{
-  boundedVerbsSeconds, chompNewlines, stripUnitAutoPrint
+  boundedVerbsSeconds, chompNewlines, inFreshDirOf, stripUnitAutoPrint
 }
 import fs.{fixtureDirs, fixtureFiles}
-import io.{runVerb}
 import json.{Json, asArray, asInt, asString, get, parse}
 import list.{
   chunks,
@@ -121,8 +120,8 @@ import string.{
   toInt, toLower, trim, unlines
 }
 import test_process.{
-  boundedVerb, boundedVerbSeconds, medakaBin, medakaRoot, scratchDir,
-  spawnTimeoutSeconds, testJobs, underRoot
+  boundedVerb, boundedVerbSeconds, medakaBin, medakaRoot, spawnTimeoutSeconds,
+  testJobs, underRoot
 }
 
 -- | The stdlib modules `diff_compiler_lex_files` lexed, in its own order.
@@ -402,11 +401,8 @@ effectHoleRejectOuterComputedSrc = unlines [
 ]
 
 {- | Writes `name`.mdk under `scratch` as `src`, then runs `use` on its
-   path. `scratch` is shared across every synthesized fixture this test
-   needs — `test_process.scratchDir` is a top-level nullary, evaluated ONCE
-   per process, so a helper that
-   called `scratchDir` and then `rm -rf`ed it per fixture would delete the
-   ONE shared directory out from under every fixture after the first. -}
+   path. `scratch` is the directory the caller made for all of its synthesized
+   fixtures (`inFreshDirOf`), so the caller removes it once, after the last. -}
 withScratchFile : String ->
   String ->
   String ->
@@ -451,36 +447,36 @@ effectHoleFailures =
               Some "native-cli/check did not infer the hole/wildcard rows"
           let typesFail =
             effectTypesSuperset effectHoleSnapshot host rt core fix
-          let synthesized = match scratchDir
-            Err e => Err "could not make a scratch directory: \{e}"
-            Ok scratch =>
-              let ws2Fail =
-                withScratchFile
+          let synthesized =
+            inFreshDirOf
+              (scratch =>
+                let ws2Fail =
+                  withScratchFile
+                    scratch
+                    "ws2_outer"
+                    effectHoleWs2Src
+                    (effectHoleWs2Check host rt core)
+                let rejectSibling = withScratchFile
                   scratch
-                  "ws2_outer"
-                  effectHoleWs2Src
-                  (effectHoleWs2Check host rt core)
-              let rejectSibling = withScratchFile
-                scratch
-                "reject_sibling"
-                effectHoleRejectSiblingSrc
-                (f => effectHoleRejectCheck native "reject_sibling" f)
-              let rejectComputed = withScratchFile
-                scratch
-                "reject_computed"
-                effectHoleRejectComputedSrc
-                (f => effectHoleRejectCheck native "reject_computed" f)
-              let rejectOuterComputed = withScratchFile
-                scratch
-                "reject_outer_computed"
-                effectHoleRejectOuterComputedSrc
-                (f => effectHoleRejectCheck native "reject_outer_computed" f)
-              let _ = runVerb "rm" ["-rf", scratch]
-              let synth =
-                [ws2Fail, rejectSibling, rejectComputed, rejectOuterComputed]
-              Ok
-                (countFloor "effect-hole synthesized assertions" 4 synth
-                  ++ somes synth)
+                  "reject_sibling"
+                  effectHoleRejectSiblingSrc
+                  (f => effectHoleRejectCheck native "reject_sibling" f)
+                let rejectComputed = withScratchFile
+                  scratch
+                  "reject_computed"
+                  effectHoleRejectComputedSrc
+                  (f => effectHoleRejectCheck native "reject_computed" f)
+                let rejectOuterComputed = withScratchFile
+                  scratch
+                  "reject_outer_computed"
+                  effectHoleRejectOuterComputedSrc
+                  (f => effectHoleRejectCheck native "reject_outer_computed" f)
+                let synth =
+                  [ws2Fail, rejectSibling, rejectComputed, rejectOuterComputed]
+                Ok
+                  (countFloor "effect-hole synthesized assertions" 4 synth
+                    ++ somes synth))
+              (msg => Err msg)
           let synthFails = match synthesized
             Err e => [e]
             Ok fs => fs
