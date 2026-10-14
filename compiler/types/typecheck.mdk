@@ -9251,7 +9251,6 @@ data MethodReturnResolution = MethodReturnResolution {
   mrrWanted : Wanted,
   mrrOutcome : SolverOutcome,
   mrrSelectedRow : Option ImplRow,
-  mrrFallbackTag : Option String,
 }
 
 -- One ordinary method occurrence, tied to the declaration row that supplied its
@@ -28437,12 +28436,10 @@ exactReturnRoutes name encl scope isReturnPosition resolution = match (
       (selectedCallSupers name (Some row) encl scope args),
     methodReturnEvidenceRoutes encl scope prerequisites,
   )
-  (Deferred _ _, None) => match resolution.mrrFallbackTag
-    Some tag => (RKey tag [] [], [])
-    None => (RNone, [])
-  (Insoluble _ _, None) => match resolution.mrrFallbackTag
-    Some tag => (RKey tag [] [], [])
-    None => (RNone, [])
+  -- No instance was selected: the site keeps no route, never the occurrence's head
+  -- tag, which names no instance.
+  (Deferred _ _, None) => (RNone, [])
+  (Insoluble _ _, None) => (RNone, [])
   _ => panic "ordinary return outcome and selected row disagree"
 
 givenRoute : Bool -> EvidenceBinderId -> Route
@@ -29613,7 +29610,6 @@ stampOpRouteVal isBinop encl useScope method operandMono tag =
     -- to the pre-#609 scan.  Every operator interface (Eq/Ord/Num) is single-param
     -- anyway, where the singleton IS the full vector.
     let (siteKey, selected) = keyForSite method [operandMono]
-    let key = optionOr tag siteKey
     -- ARCH B-2.1-h: graph-global, off `bodyImplEnvRef` — see `ieDefinesReqMethodAt`.
     -- The head projection is `headTyconMono operandMono`, i.e. the `HeadKey` whose
     -- `headKeyName` IS the `tag` this arm was passed (`entail` derives both from the
@@ -29639,10 +29635,14 @@ stampOpRouteVal isBinop encl useScope method operandMono tag =
       tag
       operandMono
       [operandMono]
-    RKey
-      key
-      reqs
-      (selectedCallSupers method selected encl useScope [operandMono])
+    -- No row: the operand's type has no instance, and the site keeps its RNone seed.
+    match siteKey
+      Some key =>
+        RKey
+          key
+          reqs
+          (selectedCallSupers method selected encl useScope [operandMono])
+      None => RNone
 
 -- Exact Num arithmetic uses the predicate selected by the producer for both the
 -- implementation word and its prerequisite routes.  Only the language primitive
@@ -32511,13 +32511,18 @@ implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 -- at this site (recovered by `ifaceParamMonos`), or the singleton result mono when
 -- the caller has none.  A general winner's word is its own key (#1128 F-3b), so the
 -- dictionary names the instance actually selected.  `None` when no row is selected:
--- the caller's `optionOr tag` then stamps the goal's head tag, which names no
--- instance -- a static call through it is an emit gap on both emitters, and the
--- interpreter leaves the method to arg-tag dispatch.
+-- the arg-position caller's `optionOr tag` then stamps the goal's head tag, which
+-- names no instance -- a static call through it is an emit gap on both emitters, and
+-- the interpreter leaves the method to arg-tag dispatch.  A definer-shadow site
+-- reaches that stamp and is restamped `RLocal` afterwards by `resolveRLocalSites`
+-- (`moduleStampOrder`).
 --
--- Route stamping runs on `check` as well as `run` and `build`, so a diagnostic pushed
--- from here would reach all three.  None is: an ambiguous goal is reported by the
--- boundary verdict (`goalReach` at quiescence), not at the route.
+-- An ambiguous method goal is the boundary verdict's to reject (`goalReach`, through
+-- `rejectUndeterminedVectors`): the occurrence's obligation carries the vector selected
+-- on here, omitted interface positions included (`occurrenceDispatchMonos`).  Nothing
+-- here can report it instead: stamping runs in the graph-end drain
+-- (`drainStampQueue`), after `check` has collected each module's diagnostics, so a
+-- diagnostic pushed from here reaches `run` and `build` but never `check`.
 -- The site's route word and the row it names, selected once: a caller that also
 -- needs the row (`selectedCallSupers`) must not select a second time.
 keyForSite : String -> List Mono -> (Option String, Option ImplRow)
@@ -33902,8 +33907,7 @@ determinedGoalInstance iface (first :: rest) = match normalize first
   _ => None
 
 -- inst: a concrete head [tag].  EKReturn → canonical full-type key + split element routes
--- (implRef-bound); EKNestedTop → the min⊑ winner's canonical key (bare head only when the
--- iface-keyed collision gate is False — see the arm's own body comment) with requires PACKED
+-- (implRef-bound); EKNestedTop → the min⊑ winner's canonical key with requires PACKED
 -- into the primary RKey;
 -- EKArg → same canonical RKey primary as EKReturn but element routes keyed on the
 -- (default-reduced) method via argImplDictRoutesForEncl; EKOp → stampOpRouteVal (builtin
@@ -33932,7 +33936,8 @@ entailInst name m encl useScope tag (EKReturn fullMono _) =
             (selectedCallSupers name (Some row) encl useScope goals),
           routes,
         )
-      None => (RKey tag [] [], [])
+      -- No row: the goal has no instance, and the site keeps no route.
+      None => (RNone, [])
     -- A method without predicate-vector metadata retains the scalar result-head
     -- selection and substitution used by the compatibility path.
     None => match ieSelectRowByMethod env name [m]
@@ -33946,8 +33951,10 @@ entailInst name m encl useScope tag (EKReturn fullMono _) =
             (selectedCallSupers name (Some row) encl useScope [m]),
           routes,
         )
+      -- Still the head tag, which names no instance: an accepted occurrence that two
+      -- admitted declarations share reaches this arm.
       None => (RKey tag [] [], [])
-entailInst name m encl useScope tag (kind@(EKNumReturn predicate _ _ _)) =
+entailInst name m encl useScope _ (kind@(EKNumReturn predicate _ _ _)) =
   let goals = predicate.predicateArguments
   let env = perRun.value.bodyImplEnvRef.value
   match ieSelectRowByIface env predicate.predicateInterface goals
@@ -33959,12 +33966,10 @@ entailInst name m encl useScope tag (kind@(EKNumReturn predicate _ _ _)) =
         noteNumericEntailment kind useScope (Some selectedIface) route routes
       (route, routes)
     None =>
-      let route = RKey tag [] []
-      let _ = noteNumericEntailment kind useScope None route []
-      (route, [])
--- The primary route is the canonical key of the MOST-SPECIFIC impl (iface-keyed,
--- head-collision-gated exactly like keyForSite; a non-overlapping site keeps its bare
--- tag), and every nested-`requires`/super-projection goal funnels through here, with
+      let _ = noteNumericEntailment kind useScope None RNone []
+      (RNone, [])
+-- The primary route is the canonical key of the MOST-SPECIFIC impl (iface-keyed),
+-- and every nested-`requires`/super-projection goal funnels through here, with
 -- the packed requires coming from that same winner.
 --
 -- A nested/top `requires` goal is a PREDICATE: its goal is the predicate's whole
@@ -33976,16 +33981,16 @@ entailInst name m encl useScope tag (kind@(EKNumReturn predicate _ _ _)) =
 -- (funConstraintArgsRef). Recording it beside `funConstraintsRef`, not inside it,
 -- keeps per-tyvar dict slots — and hence emitted dict arity — exactly as they were.
 -- #607 punch-list item 3 (dict slot = predicate, which would move arity) stays open.
-entailInst _ m encl useScope tag (EKNestedTop iface _ walk rest) =
+entailInst _ m encl useScope _ (EKNestedTop iface _ walk rest) =
   -- Select the row once and hand that same value to both the route-word and
   -- prerequisite projections.  This makes §6 C2 structural: the dictionary names
-  -- the same impl whose context it discharges.  If selection cannot recover a row,
-  -- preserve the historical bare-head route with no prerequisites.
+  -- the same impl whose context it discharges.  No row means the goal has no
+  -- instance, and the site keeps no route.
   let goals = m :: rest
   let env = perRun.value.bodyImplEnvRef.value
   match ieSelectRowByIface env iface goals
     Some row => (nestedRowRoute encl useScope m goals walk row, [])
-    None => (RKey tag [] (superRoutesAt iface encl useScope goals walk), [])
+    None => (RNone, [])
 -- #609: select on the interface's FULL param vector (§5 — the dispatch type is the
 -- instantiated vector `T̄`), not on the discriminating ARGUMENT's mono alone.
 -- [goals] is bound ONCE and fed to BOTH arms: the method route (`routeKey`) and the
@@ -37689,13 +37694,8 @@ solveExactReturn request = match methodReturnWanted request
           mrrWanted = wanted,
           mrrOutcome = Solved (assumAnswerEvidence answer),
           mrrSelectedRow = None,
-          mrrFallbackTag = methodReturnFallbackTag request,
         }
       None => solveExactReturnInstance request wanted args
-
-methodReturnFallbackTag : MethodReturnRequest -> Option String
-methodReturnFallbackTag request =
-  map headKeyTag (headTyconMono (stripArrows request.mrrOccurrence))
 
 solveExactReturnInstance : MethodReturnRequest ->
   Wanted ->
@@ -37705,7 +37705,6 @@ solveExactReturnInstance request wanted [] = MethodReturnResolution {
   mrrWanted = wanted,
   mrrOutcome = Deferred wanted [BlockingFinalization],
   mrrSelectedRow = None,
-  mrrFallbackTag = methodReturnFallbackTag request,
 }
 solveExactReturnInstance request wanted args =
   let env = perRun.value.bodyImplEnvRef.value
@@ -37727,7 +37726,6 @@ solveExactReturnInstance request wanted args =
               prerequisites
               (instanceSuperEvidence selectedIface args)),
         mrrSelectedRow = Some row,
-        mrrFallbackTag = methodReturnFallbackTag request,
       }
     None =>
       let outcome =
@@ -37739,7 +37737,6 @@ solveExactReturnInstance request wanted args =
         mrrWanted = wanted,
         mrrOutcome = outcome,
         mrrSelectedRow = None,
-        mrrFallbackTag = methodReturnFallbackTag request,
       }
 
 exactReturnDefers : Wanted -> List Mono -> Bool
@@ -47778,7 +47775,6 @@ methodReturnResolutionMutationProbe _ =
               prerequisites
               supers),
         mrrSelectedRow = resolution.mrrSelectedRow,
-        mrrFallbackTag = resolution.mrrFallbackTag,
       },
       MethodReturnResolution {
         mrrWanted = resolution.mrrWanted,
@@ -47795,7 +47791,6 @@ methodReturnResolutionMutationProbe _ =
                 :: prerequisites)
               supers),
         mrrSelectedRow = resolution.mrrSelectedRow,
-        mrrFallbackTag = resolution.mrrFallbackTag,
       },
     )
     _ => panic "ordinary return mutation probe expected instance evidence"
@@ -47811,7 +47806,6 @@ methodReturnResolutionMutationProbe _ =
     mrrWanted = wrongWanted,
     mrrOutcome = resolution.mrrOutcome,
     mrrSelectedRow = resolution.mrrSelectedRow,
-    mrrFallbackTag = resolution.mrrFallbackTag,
   }
   let observed = (
     valid,

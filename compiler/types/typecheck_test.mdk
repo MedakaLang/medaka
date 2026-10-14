@@ -107,8 +107,8 @@ import types.typecheck.{
 }
 import types.target_profile.{selectProfile, selectedProfile}
 import support.util.{
-  contains, isEmptyL, joinNl, joinWith, listLen, lookupAssoc, splitNl,
-  startsWith
+  contains, endsWith, isEmptyL, joinNl, joinWith, listLen, lookupAssoc, splitNl,
+  splitOnChar, startsWith
 }
 import list.{last}
 
@@ -5477,3 +5477,121 @@ test "a stable super selection builds each use's super" =
         "useSup x = sup x ++ sub x",
         "main = useSup (Box True) ++ \" \" ++ useSup (Box (Two True))",
       ]))
+
+-- A closed goal that no instance row answers keeps no route.  What the program
+-- gets instead is the boundary's own located diagnostic: the first residual of
+-- the drive, as (code, line, column), and whether the lowered tree still holds a
+-- bare head-tag `RKey` (a key without the canonical `|`, which names no
+-- instance).
+closedGoalOutcome : String -> List String -> ((String, Int, Int), Bool)
+closedGoalOutcome prelude lines =
+  let (coreD, modules, _, residual, _, _) = elaborateModules [] (desugar
+    (parse prelude)) [
+    ("closed_goal", desugar (parseLocated (joinNl lines))),
+  ]
+  let first = match residual
+    (_, TcDiag code _ (Some (Loc _ line col _ _)) _ _ _) :: _ =>
+      (code, line, col)
+    (_, TcDiag code _ None _ _ _) :: _ => (code, 0, 0)
+    [] => ("", 0, 0)
+  let sexp = cprogramToSexp (lowerProgram (coreD ++ flatMap snd modules))
+  (first, hasBareRKey (splitOnChar '"' sexp))
+
+-- [segments] is the sexp split at every quote, so a route key is the segment
+-- that follows one ending in `RKey `.
+hasBareRKey : List String -> Bool
+hasBareRKey (before :: rest@(key :: _)) =
+  endsWith "RKey " before && listLen (splitOnChar '|' key) == 1
+    || hasBareRKey rest
+hasBareRKey _ = False
+
+closedGoalEqPrelude : String
+closedGoalEqPrelude = joinNl [
+  "interface Eq a where",
+  "  eq : a -> a -> Bool",
+  "impl Eq Int where",
+  "  eq a b = True",
+]
+
+test "a closed return goal with no instance keeps no route" = expectEach [
+  (
+    "deferred: a rigid result the one instance does not cover",
+    expectEqual
+      (("T-MISSING-CONSTRAINT", 7, 9), False)
+      (closedGoalOutcome numericPreludeSource [
+        "interface Mk a where",
+        "  mk : Int -> a",
+        "data Box a = Box a",
+        "impl Mk (Box Int) where",
+        "  mk n = Box n",
+        "g : Int -> Box a",
+        "g n = mk n",
+      ]),
+  ),
+  (
+    "insoluble: a ground result with no instance",
+    expectEqual
+      (("T-NO-IMPL", 8, 14), False)
+      (closedGoalOutcome numericPreludeSource [
+        "interface Mk a where",
+        "  mk : Int -> a",
+        "data Box a = Box a",
+        "impl Mk Int where",
+        "  mk n = n",
+        "unbox : Box Int -> Int",
+        "unbox (Box n) = n",
+        "main = unbox (mk 1)",
+      ]),
+  ),
+  (
+    "vector: a phantom method selected on its interface vector",
+    expectEqual
+      (("T-PHANTOM-METHOD", 7, 12), False)
+      (closedGoalOutcome numericPreludeSource [
+        "interface Mk a where",
+        "  mk : Int -> a",
+        "  phantom : Int",
+        "data Red = Red Int",
+        "impl Mk Red where",
+        "  mk n = Red n",
+        "  phantom = 7",
+        "useBoth : Mk a => a -> Int",
+        "useBoth _ = phantom",
+        "main = useBoth (Red 1)",
+      ]),
+  ),
+]
+
+test "a closed numeric, nested or operator goal with no instance keeps no route" = expectEach
+  [
+    (
+      "a literal at a type with no Num instance",
+      expectEqual
+        (("T-TYPE-MISMATCH", 3, 4), False)
+        (closedGoalOutcome numericPreludeSource [
+          "data Nat = Z | S Nat", "n : Nat", "n = 3"
+        ]),
+    ),
+    (
+      "a constrained call at a type with no instance",
+      expectEqual
+        (("T-NO-IMPL", 7, 7), False)
+        (closedGoalOutcome numericPreludeSource [
+          "interface Sz a where",
+          "  sz : a -> Int",
+          "impl Sz Int where",
+          "  sz n = n",
+          "useSz : Sz a => a -> Int",
+          "useSz x = sz x",
+          "main = useSz True",
+        ]),
+    ),
+    (
+      "an operator over a type with no instance",
+      expectEqual
+        (("T-NO-IMPL", 2, 7), False)
+        (closedGoalOutcome closedGoalEqPrelude [
+          "data Color = Red | Green | Blue", "main = Red == Green"
+        ]),
+    ),
+  ]
