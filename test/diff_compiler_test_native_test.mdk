@@ -1,7 +1,7 @@
 {- | Gate for native doctest execution honesty, over stdlib/string, list and map,
    the prelude's named native skip, the exceptions ledger, and the native
    probe's strictness, abort, exec, main and sentinel rules. Replaces
-   test/diff_compiler_test_native.sh (checks 1-18).
+   test/diff_compiler_test_native.sh (checks 1-19; check 19 is native-only).
 
    Runs under `medaka test --native`: it spawns the medaka binary and clang,
    which the interpreter does not bind. -}
@@ -495,3 +495,41 @@ floatKeyRow path = match runVerb 120 ["test", "--native", path]
 
 test "native_test_float_key: a Float-keyed Index in a test body defaults its key and passes (#3822)" =
   floatKeyRow (fixture "native_test_float_key.mdk")
+
+-- ── the native doctest probe gets the same MEDAKA pair as the test probes ─────
+
+-- Runs medaka with MEDAKA_ROOT set and MEDAKA unset, so the probe's own MEDAKA
+-- comes only from the runner. argv: root bin args...
+unsetMedakaScript : String
+unsetMedakaScript =
+  "unset MEDAKA; export MEDAKA_ROOT=\"$1\"; shift; exec \"$@\""
+
+envProbeSrc : String -> String
+envProbeSrc expected =
+  "{- | Reports the MEDAKA the probe sees.\n\n   > getEnv \"MEDAKA\"\n   Some \"\{expected}\" -}\nexport\nenvProbeValue : Int\nenvProbeValue = 1\n"
+
+envProbeRow : String -> <Exec, IO, FileRead, FileWrite> Expectation
+envProbeRow dir =
+  match writeFile "\{dir}/env_probe.mdk" (envProbeSrc "\{medakaRoot}/medaka")
+    Err e => fail "could not write env_probe.mdk: \{e}"
+    Ok _ =>
+      match (boundedVerbSeconds 120 "sh" [
+        "-c",
+        unsetMedakaScript,
+        "medaka",
+        medakaRoot,
+        medakaBin,
+        "test",
+        "--native",
+        "\{dir}/env_probe.mdk",
+      ])
+        Err e => fail "env_probe.mdk: could not spawn: \{e}"
+        Ok (code, out, err) =>
+          if code /= 0 then
+            fail
+              "env_probe.mdk: 'medaka test --native' exited \{intToString code} (expected 0): \{out ++ err}"
+          else
+            requireText "env_probe.mdk" (out ++ err) "1/1 passed"
+
+test "native doctest probe: MEDAKA reaches the probe as the test probes set it (check 19)" =
+  withScratchDir envProbeRow
