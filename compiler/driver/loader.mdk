@@ -1477,6 +1477,7 @@ parseCacheLimit = 24
 -- caching it would widen the session-lived cache's type to a Result, which every
 -- LSP caller's `Ref (List (String, List Decl))` signature would have to follow for
 -- no gain.
+export
 parseCachedLocated : Ref (List (String, List Decl)) ->
   String ->
   Result ParseError (List Decl)

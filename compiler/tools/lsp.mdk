@@ -38,7 +38,7 @@ import json.{
 import driver.diagnostics.{
   Diag,
   Severity(..),
-  analyzeLocated,
+  analyzeFrom,
   analyzeProject,
   projectEntrySchemes,
   stdlibExportsReader,
@@ -180,28 +180,6 @@ jRangeOfLoc (Loc _ sl sc el ec) = jRange (sl - 1) sc (el - 1) ec
 diagToJson : String -> Diag -> Json
 diagToJson src (Diag sev _ msg loc _ _) =
   jDiagnostic (severityCode sev) (rangeOfLoc src loc) msg
-
--- Produce the LSP diagnostics array for a source.  A parse failure short-
--- circuits to a single located diagnostic (parseResult); otherwise run the
--- full resolve+typecheck `analyzeLocated` pipeline (real ELoc spans, so type
--- errors carry expr-level ranges).
-diagnosticsFor : String -> String -> String -> <IO> List Json
-diagnosticsFor runtimeSrc coreSrc src = match parseResult src
-  Err e =>
-    let ln = maxI 0 (parseErrorLine e - 1)
-    let col = maxI 0 (parseErrorCol e)
-    let r = jRange ln col ln (col + 1)
-    [jDiagnostic 1 r (parseErrorMessage e)]
-  Ok _ =>
-    map
-      (diagToJson src)
-      (analyzeLocated
-        (stdlibExportsReader (lspMedakaRoot "." ++ "/stdlib"))
-        runtimeSrc
-        coreSrc
-        src)
--- parseResult line is 1-based, col 0-based (matches the OCaml loader); LSP
--- wants 0-based lines, so subtract 1 from the line.
 
 -- ── document store accessor (request handlers) ──────────────────────────────
 -- Look up an open document's source by uri.  Request handlers (formatting/
@@ -1622,12 +1600,40 @@ initializeResultFor serverVersion = jObject [
   ),
 ]
 
--- Build + send a publishDiagnostics notification for one uri.
-publishDiagnostics : String -> String -> String -> String -> <IO> Unit
-publishDiagnostics runtimeSrc coreSrc uri src =
-  let diags = diagnosticsFor runtimeSrc coreSrc src
+-- The single located diagnostic for an unparseable buffer.  The parser's line
+-- is 1-based and col 0-based; LSP wants 0-based lines.
+parseErrorDiags : ParseError -> List Json
+parseErrorDiags e =
+  let ln = maxI 0 (parseErrorLine e - 1)
+  let col = maxI 0 (parseErrorCol e)
+  let r = jRange ln col ln (col + 1)
+  [jDiagnostic 1 r (parseErrorMessage e)]
+
+publishDiagnosticsList : String -> List Json -> <IO> Unit
+publishDiagnosticsList uri diags =
   let params = jObject [("uri", JString uri), ("diagnostics", jArray diags)]
   writeMessage (notificationMsg "textDocument/publishDiagnostics" params)
+
+-- Single-document diagnostics over the buffer's located decls (the
+-- `analyzeLocated` pipeline minus its re-parse).
+publishDiagnosticsFrom : String ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  <IO> Unit
+publishDiagnosticsFrom runtimeSrc coreSrc uri src decls =
+  publishDiagnosticsList
+    uri
+    (map
+      (diagToJson src)
+      (analyzeFrom
+        (stdlibExportsReader (lspMedakaRoot "." ++ "/stdlib"))
+        ""
+        runtimeSrc
+        coreSrc
+        decls
+        []))
 
 -- ── B.10.5: project-wide (multi-file) diagnostics ───────────────────────────
 --
@@ -1776,11 +1782,13 @@ publishEach ((file, ds) :: rest) =
 
 -- Choose the single-document or project path for a freshly-edited buffer.
 publishFor : String -> String -> String -> String -> Docs -> <IO> Unit
-publishFor runtimeSrc coreSrc uri text docs =
-  if bufferHasImports text then
-    publishProjectDiagnostics runtimeSrc coreSrc uri docs
-  else
-    publishDiagnostics runtimeSrc coreSrc uri text
+publishFor runtimeSrc coreSrc uri text docs = match parseLocatedResult text
+  Err e => publishDiagnosticsList uri (parseErrorDiags e)
+  Ok decls =>
+    if anyImport decls then
+      publishProjectDiagnostics runtimeSrc coreSrc uri docs
+    else
+      publishDiagnosticsFrom runtimeSrc coreSrc uri text decls
 
 -- Extract a textDocument/{didOpen,didChange} uri + text and publish.
 -- didOpen:   params.textDocument.{uri,text}
