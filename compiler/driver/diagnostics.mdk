@@ -65,7 +65,7 @@ import frontend.marker.{
 }
 import types.repr.{Scheme}
 import types.typecheck.{
-  checkOneDiagsK, checkModulesDiagsChain, chainFullKey, checkModulesK,
+  checkOneDiagsK, checkOneDiagsLinesK, checkModulesDiagsChain, chainFullKey, checkModulesK,
   entryOwnSchemes, dropModSchemes, ModDiags, setCoherenceUserDecls,
   setStdlibOwnership, TcDiag(..), tcMsg,
   -- #2738: the importer peer of `preludeStandaloneShadows`.  It lives in the
@@ -82,7 +82,8 @@ import driver.loader.{
   loadProgramFilesLocatedCached,
   loadProgramFilesLocatedCachedE,
   loadedSourceOf,
-  loadProgramE,
+  loadProgramFilesLocatedE,
+  dropPathTriple,
   projectTrustedMods,
   stdlibOwnership,
   entrySearchRoots,
@@ -891,11 +892,8 @@ public export data SurfaceAnalysis = SurfaceAnalysis {
 -- `W-PRELUDE-METHOD-SHADOW`).  "" = the caller has no module id in hand (the
 -- LSP live buffer, the playground, an inline `source`), and the text falls back
 -- to "this module" — the flat path analyses exactly one module either way.
--- S-3/#164: exported so `checkRoute`'s single-module clean arm
--- (`compiler/driver/medaka_cli.mdk`) can call this directly with the loader's
--- already-parsed, real-span `decls` instead of going through `analyzeLocatedG`
--- (which would re-parse `tsrc` via `parseLocated` — the loader already ran the
--- structurally-identical `parseLocatedResult` over the same source).
+-- Exported so callers that already hold the real-span `decls` (the loader's
+-- located parse) skip `analyzeLocatedG`'s re-parse of the source.
 export
 analyzeFrom : (List String -> <e> List (String, List String)) ->
   String ->
@@ -905,17 +903,62 @@ analyzeFrom : (List String -> <e> List (String, List String)) ->
   List String ->
   <e> List Diag
 analyzeFrom exportsFor modName runtimeSrc coreSrc raw internalGuard =
+  fst
+    (analyzeFromBy
+      (preludeKey rt core up =>
+        let (tcErrs, tcWarns) = checkOneDiagsK preludeKey rt core up
+        ([], tcErrs, tcWarns))
+      exportsFor
+      modName
+      runtimeSrc
+      coreSrc
+      raw
+      internalGuard)
+
+-- `analyzeFrom` plus the entry's rendered `name : scheme` lines from the SAME
+-- typecheck drive, for the one caller that prints them (`checkRoute`'s
+-- single-file arm).  The lines are rendered inside that drive, before the
+-- auto-print obligation drive or a target check can run: a scheme rendered
+-- after another elaboration can name its type variables differently (#4053).
+-- Every other caller uses `analyzeFrom`, which does not render them.
+export
+analyzeFromDump : (List String -> <e> List (String, List String)) ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  List String ->
+  <e> (List Diag, List String)
+analyzeFromDump exportsFor modName runtimeSrc coreSrc raw internalGuard =
+  analyzeFromBy
+    checkOneDiagsLinesK
+    exportsFor
+    modName
+    runtimeSrc
+    coreSrc
+    raw
+    internalGuard
+
+analyzeFromBy : (Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List String, List TcDiag, List TcDiag)) ->
+  (List String -> <e> List (String, List String)) ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  List String ->
+  <e> (List Diag, List String)
+analyzeFromBy tc exportsFor modName runtimeSrc coreSrc raw internalGuard =
   let s = analyzeSurface exportsFor modName runtimeSrc coreSrc raw internalGuard
-  let tcDiags = match s.resolveClean
+  let (lines, tcDiags) = match s.resolveClean
     True =>
-      let (tcErrs, tcWarns) = checkOneDiagsK
+      let (ls, tcErrs, tcWarns) = tc
         s.surfacePreludeKey
         s.surfaceRuntimeP
         s.surfaceCoreP
         ("__user__", s.surfaceDesugared)
-      map diagOfTypeError tcErrs ++ map diagOfTypeWarning tcWarns
-    False => []
-  analyzeFinish s tcDiags
+      (ls, map diagOfTypeError tcErrs ++ map diagOfTypeWarning tcWarns)
+    False => ([], [])
+  (analyzeFinish s tcDiags, lines)
 
 -- Everything `analyzeFrom` runs except the typecheck: parse-independent,
 -- AST-level, and safe to run before a caller decides WHICH typecheck produces
@@ -1469,6 +1512,28 @@ analyzeLoadedFull exportsFor allowInternal trustedMods entry roots runtimeSrc co
     mods
     modPairs
 
+-- `analyzeLoadedFull` for a caller that has ALREADY resolved this exact graph
+-- clean (`check`'s front pass, same guard and same desugared trees): resolve is
+-- not run again, its buckets are the empty per-file buckets.  `ResError` has no
+-- warning variant, so a clean resolve contributes no diagnostic to any bucket.
+export
+analyzeLoadedResolvedClean : String ->
+  List String ->
+  String ->
+  String ->
+  List (String, String, List Decl) ->
+  List (String, List Decl) ->
+  (List ModDiags, List (String, List Diag))
+analyzeLoadedResolvedClean entry roots runtimeSrc coreSrc mods modPairs =
+  typecheckPassFull
+    (preludeDesugared runtimeSrc)
+    (preludeDesugared coreSrc)
+    (Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc))
+    (chainKeyOf entry roots)
+    mods
+    modPairs
+    (seedAll (map midPath mods) [])
+
 -- `analyzeProject` minus the load: resolve, then typecheck, then bucket — over a
 -- graph the caller has already loaded.  `medaka test` loads once and calls this,
 -- rather than handing `analyzeProject` an entry it would load a second time.
@@ -1510,8 +1575,14 @@ projectDiagsLoadedFull : (List String -> <e> List (String, List String)) ->
   List (String, List Decl) ->
   <e> (List ModDiags, List (String, List Diag))
 projectDiagsLoadedFull exportsFor allowInternal trustedMods runtimeP coreP preludeKey chainKey mods modPairs =
-  let buckets =
-    resolvedBuckets
+  typecheckPassFull
+    runtimeP
+    coreP
+    preludeKey
+    chainKey
+    mods
+    modPairs
+    (resolvedBuckets
       exportsFor
       allowInternal
       trustedMods
@@ -1520,8 +1591,7 @@ projectDiagsLoadedFull exportsFor allowInternal trustedMods runtimeP coreP prelu
       runtimeP
       coreP
       mods
-      modPairs
-  typecheckPassFull runtimeP coreP preludeKey chainKey mods modPairs buckets
+      modPairs)
 -- A load error (cycle / unknown module / unreadable file) is attributed to the
 -- entry file (the compiler loader returns a single Err string without a per-file
 -- split, unlike the OCaml attribute_load_error; entry is the conservative
@@ -1862,8 +1932,8 @@ multiModuleAutoPrintDiags runtimeP coreP modPairs =
 -- Resolve a graph the caller has already loaded, bucketing each module's errors
 -- by its file.  The shared prefix of `projectDiagsLoaded` and
 -- `projectDiagsFromTc`, which differ only in where the typecheck half comes
--- from — the two must resolve identically or their verdicts diverge on a
--- channel that has nothing to do with typing.
+-- from.  They resolve identically so their verdicts agree on a channel that has
+-- nothing to do with typing.
 resolvedBuckets : (List String -> <e> List (String, List String)) ->
   Bool ->
   List String ->
@@ -2871,13 +2941,41 @@ checkJsonSingleParts exportsFor modName allowInternal rsrc csrc target src =
           []
         else
           let entryRaw = parseLocated src
-          mainShapeWarnings [] [] [(target, desugar entryRaw)] entryRaw
+          mainShapeWarnings [] [] [] entryRaw
       (CjParts target [(target, src, diags ++ mainWarns)], hasErr)
 
--- File check → JSON.  Reads `target`, then routes exactly like runCheckJsonCmd:
--- parse error → single diag; load error (bad import) → R-MODULE-LOAD diag with the
--- import span + available-modules hint; single module → checkJsonSingle (honouring
--- the owning-root trust signal); multi-module → analyzeProject.  `stdlibDir` is the
+-- `checkJsonSingleParts` for a caller that already holds the entry's real-span
+-- `decls` from the located loader: analysis and the main-shape warning both read
+-- them, so the entry is parsed once.  The parse-error rejection the other
+-- function opens with is the loader's job here.
+checkJsonSingleFromDecls : (List String -> <e> List (String, List String)) ->
+  String ->
+  Bool ->
+  String ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  <e> (CheckJson, Bool)
+checkJsonSingleFromDecls exportsFor modName allowInternal rsrc csrc target src decls =
+  let diags =
+    analyzeFrom
+      exportsFor
+      modName
+      rsrc
+      csrc
+      decls
+      (internalGuardFor allowInternal)
+  let hasErr = anyList diagIsError diags
+  -- Only on a clean program, as in `checkJsonSingleParts`.
+  let mainWarns = if hasErr then [] else mainShapeWarnings [] [] [] decls
+  (CjParts target [(target, src, diags ++ mainWarns)], hasErr)
+
+-- File check → JSON.  Reads `target`, loads its graph once, then routes exactly
+-- like runCheckJsonCmd: load failure → the entry's parse error if it has one, else
+-- the loader's diag (bad import → R-MODULE-LOAD with the import span +
+-- available-modules hint); single module → checkJsonSingleFromDecls (honouring the
+-- owning-root trust signal); multi-module → analyzeLoadedFull.  `stdlibDir` is the
 -- <root>/stdlib dir; roots are derived from the target's directory + stdlibDir.
 export
 checkJsonFile : Bool ->
@@ -2904,118 +3002,115 @@ checkJsonFileParts : Bool ->
 checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
   let src = readFileSafe target
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
-  match parseResult src
-    Err e => (CjRendered (cjParseErrJson target src e), True)
-    Ok _ => match loadProgramE target roots
-      -- #100: a parse/lex error in an IMPORTED module serializes exactly like one
-      -- in the entry — same `P-*`/`L-*` code, same real range — only attributed to
-      -- the MODULE's file and rendered against the module's OWN source.
-      Err (LoadParseFailed mpath msrc pe) =>
-        (CjRendered (cjParseErrJson mpath msrc pe), True)
-      Err (LoadCycle cmsg cpath csite) => match csite
-        Some (csrc, cloc) => (
-          CjParts target [
-            (
-              cpath,
-              csrc,
-              [Diag SevError "R-MODULE-LOAD" cmsg (Some cloc) None None],
-            ),
-          ],
-          True,
-        )
-        None => (
-          CjParts target [
-            (target, src, [Diag SevError "R-MODULE-LOAD" cmsg None None None]),
-          ],
-          True,
-        )
-      Err (LoadMsg lmsg) =>
-        let mloc = match unknownModuleIdOf lmsg
-          None => None
-          Some mid => findImportLoc mid (parseLocated src)
-        let mhelp = match unknownModuleIdOf lmsg
-          None => None
-          Some _ => match availableModulesText stdlibDir
-            "" => None
-            txt => Some txt
-        let jmsg =
-          lmsg
-            ++ (match unknownModuleIdOf lmsg
-              None => ""
-              Some _ => availableModulesHint stdlibDir)
-        (
-          CjParts target [
-            (target, src, [Diag SevError "R-MODULE-LOAD" jmsg mloc mhelp None]),
-          ],
-          True,
-        )
-      Ok mods => match mods
-        [(mid, _)] =>
-          let trusted = projectTrustedMods target roots stdlibDir mods
-          -- #2072: the FFI-stamp discriminator (stdlib-root ownership, NO
-          -- `allow-internal` opt-out) — see `stdlibOwnedMods` in loader.mdk for
-          -- why it is not `trusted` above.
-          let (flatStdlib, ownedStdlib) =
-            stdlibOwnership target roots stdlibDir mods
-          let _ = setStdlibOwnership flatStdlib ownedStdlib
-          checkJsonSingleParts
-            (stdlibExportsReader stdlibDir)
-            mid
-            (allowInternal || contains mid trusted)
-            rsrc
-            csrc
-            target
-            src
-        _ =>
-          -- #1362: the single-module arm above computes `trusted` and threads
-          -- `allowInternal || contains mid trusted` through to its guarded
-          -- analyzer — this arm previously computed no trust set at all and
-          -- passed none through, so the internal-extern guard was always
-          -- empty (silent accept). Same trust computation, hoisted one level.
-          let trusted = projectTrustedMods target roots stdlibDir mods
-          -- #2072: same discriminator as the single-module arm above.
-          let (flatStdlib, ownedStdlib) =
-            stdlibOwnership target roots stdlibDir mods
-          let _ = setStdlibOwnership flatStdlib ownedStdlib
-          let cacheRef = Ref []
-          let parseCacheRef = Ref []
-          let results =
-            analyzeProject
-              (stdlibExportsReader stdlibDir)
-              allowInternal
-              trusted
-              cacheRef
-              parseCacheRef
-              (_ => None)
-              target
-              roots
-              rsrc
-              csrc
-          let hasErr = anyList cjHasErrD results
-          -- #1236: same main-shape fold as the single-module arm above, only on
-          -- a clean project.  `analyzeProject` already parsed+cached the entry
-          -- module's LOCATED decls in `parseCacheRef` (keyed by source text, see
-          -- `parseCachedLocated`) — reuse that instead of re-parsing, so the
-          -- `Loc` this warning carries matches the one every other diagnostic on
-          -- this file would.
-          let mainWarns =
-            if hasErr then
-              []
-            else
-              let entryRaw = match lookupAssoc src !parseCacheRef
-                Some decls => decls
-                None => parseLocated src
-              -- #2246/S-1 (F-converge): `mainShapeWarnings` ignores its first THREE
-              -- parameters unconditionally (see its definition above), so the
-              -- whole-graph desugar this used to compute was dead work on every
-              -- clean multi-module `check --json`.  Pass `[]`, matching the
-              -- single-module arm's `[] [] []`.
-              mainShapeWarnings [] [] [] entryRaw
-          let triples = map readDiagSrc results
-          let root = dirOf stdlibDir
-          let relTriples = map (relDiagTriple root) triples
-          let entryKey = relDiagPath root target
-          (
-            CjParts entryKey (cjFoldIntoFile entryKey mainWarns relTriples),
-            hasErr,
-          )
+  match loadProgramFilesLocatedE (_ => None) target roots
+    -- An unparsable entry is reported against the spelling the caller gave, not
+    -- the path the loader minted, so the entry's own parse is checked first.
+    Err le => match parseResult src
+      Err e => (CjRendered (cjParseErrJson target src e), True)
+      Ok _ => checkJsonLoadErr target src stdlibDir le
+    Ok [(mid, _, decls)] =>
+      let mods = [(mid, decls)]
+      let trusted = projectTrustedMods target roots stdlibDir mods
+      -- #2072: the FFI-stamp discriminator (stdlib-root ownership, NO
+      -- `allow-internal` opt-out) — see `stdlibOwnedMods` in loader.mdk for
+      -- why it is not `trusted` above.
+      let (flatStdlib, ownedStdlib) =
+        stdlibOwnership target roots stdlibDir mods
+      let _ = setStdlibOwnership flatStdlib ownedStdlib
+      checkJsonSingleFromDecls
+        (stdlibExportsReader stdlibDir)
+        mid
+        (allowInternal || contains mid trusted)
+        rsrc
+        csrc
+        target
+        src
+        decls
+    Ok modsWithPath =>
+      let mods = map dropPathTriple modsWithPath
+      -- #1362: the single-module arm above computes `trusted` and threads
+      -- `allowInternal || contains mid trusted` through to its guarded
+      -- analyzer; this arm needs the same trust set for the same guard.
+      let trusted = projectTrustedMods target roots stdlibDir mods
+      -- #2072: same discriminator as the single-module arm above.
+      let (flatStdlib, ownedStdlib) =
+        stdlibOwnership target roots stdlibDir mods
+      let _ = setStdlibOwnership flatStdlib ownedStdlib
+      let (_, results) =
+        analyzeLoadedFull
+          (stdlibExportsReader stdlibDir)
+          allowInternal
+          trusted
+          target
+          roots
+          rsrc
+          csrc
+          modsWithPath
+          (desugaredModPairs modsWithPath)
+      let hasErr = anyList cjHasErrD results
+      -- #1236: same main-shape fold as the single-module arm, only on a clean
+      -- project.  The entry is the last loaded module; its located decls give
+      -- the warning the same `Loc` every other diagnostic on this file carries.
+      let mainWarns = match (hasErr, lastDecls mods)
+        (False, Some edecls) => mainShapeWarnings [] [] [] edecls
+        _ => []
+      let triples = map readDiagSrc results
+      let root = dirOf stdlibDir
+      let relTriples = map (relDiagTriple root) triples
+      let entryKey = relDiagPath root target
+      (
+        CjParts entryKey (cjFoldIntoFile entryKey mainWarns relTriples),
+        hasErr,
+      )
+
+-- The entry of a loaded graph is its last module.
+lastDecls : List (String, List Decl) -> Option (List Decl)
+lastDecls [] = None
+lastDecls [(_, ds)] = Some ds
+lastDecls (_ :: rest) = lastDecls rest
+
+-- The loader's `Err` rendered as a `check --json` envelope, for an entry whose
+-- own parse was already found clean.  #100: a parse/lex error in an IMPORTED
+-- module serializes exactly like one in the entry — same `P-*`/`L-*` code, same
+-- real range — only attributed to the MODULE's file and rendered against the
+-- module's OWN source.
+checkJsonLoadErr : String ->
+  String ->
+  String ->
+  LoadError ->
+  <IO> (CheckJson, Bool)
+checkJsonLoadErr _ _ _ (LoadParseFailed mpath msrc pe) =
+  (CjRendered (cjParseErrJson mpath msrc pe), True)
+checkJsonLoadErr target src _ (LoadCycle cmsg cpath csite) = match csite
+  Some (csrc, cloc) => (
+    CjParts target [
+      (cpath, csrc, [Diag SevError "R-MODULE-LOAD" cmsg (Some cloc) None None]),
+    ],
+    True,
+  )
+  None => (
+    CjParts target [
+      (target, src, [Diag SevError "R-MODULE-LOAD" cmsg None None None]),
+    ],
+    True,
+  )
+checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
+  let mloc = match unknownModuleIdOf lmsg
+    None => None
+    Some mid => findImportLoc mid (parseLocated src)
+  let mhelp = match unknownModuleIdOf lmsg
+    None => None
+    Some _ => match availableModulesText stdlibDir
+      "" => None
+      txt => Some txt
+  let jmsg =
+    lmsg
+      ++ (match unknownModuleIdOf lmsg
+        None => ""
+        Some _ => availableModulesHint stdlibDir)
+  (
+    CjParts target [
+      (target, src, [Diag SevError "R-MODULE-LOAD" jmsg mloc mhelp None]),
+    ],
+    True,
+  )

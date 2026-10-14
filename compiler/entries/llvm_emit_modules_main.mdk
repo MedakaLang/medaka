@@ -28,9 +28,6 @@
 
 import frontend.ast.{Decl(..)}
 import types.typecheck.{
-  constrainedSigNames,
-  preludeReturnPosDictNames,
-  preludeArgPosDictNames,
   mainTypeIsUnit,
   mainTypeIsFloat,
   checkedFfiExternTypeNamesModules,
@@ -148,10 +145,6 @@ emitTail mods runtimeDecls coreD modules1 =
   let allDecls = if half == 0 then dceFilter allDecls0 else allDecls0
   let (preludeBinds, preludeImpls) =
     if half == 2 then preludeSymsOf coreD else ([], [])
-  let _ =
-    preludeReturnPosDictNames coreD allDecls
-      ++ preludeArgPosDictNames coreD allDecls
-      ++ constrainedSigNames allDecls
   let base =
     withRuntimeExterns
       (runtimeExternNames runtimeDecls)
@@ -192,11 +185,5 @@ emitTail mods runtimeDecls coreD modules1 =
 -- whole build.  CONSERVATIVE + SOUND: all impls/interfaces (dynamic-dispatch
 -- targets) are retained whole; only unreachable DFunDefs are removed.  Order-
 -- preserving ⇒ IR stays byte-stable.  See compiler/ir/dce.mdk.
-
--- Dict-name wiring mirrored from llvm_emit_typed_main.mdk: coreD is the
--- elaborated prelude, allDecls the whole program.  THIS `let _` is itself inert
--- (the result is discarded) — the real arg-/return-position dict-passing happens
--- INSIDE elaborateModules above (E4 landed; runs unconditionally).  Kept for
--- parity with the single-file typed driver.
 
 main = oracleMain ()
