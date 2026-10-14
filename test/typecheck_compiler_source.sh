@@ -1234,16 +1234,21 @@ require_typecheck_arm oblPredOf vecOblOfPred 'OpExactReturn request => match met
 require_typecheck_arm ifaceForConstraintIdGo registerActiveDictVars 'OpExactReturn request => match normalize request.mrrOccurrence'
 
 ordinary_return_check_body="$(sed -n '/^checkCallObligationsU deferNonGround univ (o :: rest) =/,/^solveExactReturnOnce :/p' "$predicate_slot_src")"
-ordinary_return_complete_check="$(printf '%s\n' "$ordinary_return_check_body" | sed -n '/OpExactReturn request => match methodReturnWanted request/,/      None =>/p')"
-ordinary_return_check_required='        let resolution = solveExactReturnOnce request
-        let _ = consumeExactReturnOutcome univ request resolution
-        noteMethodReturnTrace MRTChecked request None []'
-printf '%s\n' "$ordinary_return_check_required" | while IFS= read -r required; do
-  if ! printf '%s\n' "$ordinary_return_complete_check" | grep -Fq "$required"; then
-    echo "FAIL: complete ordinary return checker does not consume the one outcome: $required"
-    exit 1
-  fi
-done || exit 1
+# The complete arm (`methodReturnWanted` is `Some`) is compared whitespace-flattened,
+# so the call's line breaks are not part of the contract; its whole body must be the
+# consumption of the one solver outcome.
+ordinary_return_arm="$(printf '%s\n' "$ordinary_return_check_body" | sed -n '/^    OpExactReturn request =>/,/^    _ =>/p')"
+ordinary_return_complete_check="$(printf '%s\n' "$ordinary_return_arm" | sed -n '/match methodReturnWanted request/,/ None =>/p')"
+ordinary_return_complete_flat="$(printf '%s\n' "$ordinary_return_complete_check" | tr '\n' ' ' | tr -s ' ')"
+ordinary_return_complete_required='match methodReturnWanted request Some _ => consumeExactReturnOutcome univ request (solveExactReturnOnce request) None =>'
+if ! printf '%s\n' "$ordinary_return_complete_flat" | grep -Fq "$ordinary_return_complete_required"; then
+  echo "FAIL: complete ordinary return checker does not consume the one outcome: $ordinary_return_complete_required"
+  exit 1
+fi
+if ! printf '%s\n' "$ordinary_return_arm" | grep -Fq 'noteMethodReturnTrace MRTChecked request None []'; then
+  echo "FAIL: ordinary return checker no longer records its checked trace"
+  exit 1
+fi
 if printf '%s\n' "$ordinary_return_complete_check" | grep -Fq 'checkOneCallObligation'; then
   echo "FAIL: complete ordinary return still reaches the independent obligation selector"
   exit 1

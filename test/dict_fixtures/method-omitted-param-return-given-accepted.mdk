@@ -1,0 +1,21 @@
+-- §5 given precedence: inside `viaGiven`, the `r` occurrence's goal
+-- `K x ?b` is answered by the given `K x y`, so the route forwards that
+-- dictionary rather than posing a fresh `?b`.  The call fixes `K (Box Int) Bool`.
+-- Hand-derived: ACCEPT on all three verbs, prints `7`.
+interface K a b where
+  r : Int -> a
+  mk : b -> a
+
+data Box a = Box a
+
+impl K (Box Int) Bool where
+  r _ = Box 7
+  mk _ = Box 2
+
+unbox : Box Int -> Int
+unbox (Box n) = n
+
+viaGiven : K x y => y -> x
+viaGiven _ = r 1
+
+main = println (unbox (viaGiven True))

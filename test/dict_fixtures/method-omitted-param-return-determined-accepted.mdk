@@ -1,0 +1,19 @@
+-- §5 + §3 Determination: `r : Int -> a` dispatches on its result and never
+-- mentions `K`'s `b`, so the occurrence poses `K (Box Int) ?b`.
+-- `impl K (Box Int) Bool` is the one instance that unifies with it, so `?b` is
+-- determined to `Bool` and the route names that impl.  Hand-derived: ACCEPT on
+-- all three verbs, prints `7`.
+interface K a b where
+  r : Int -> a
+  mk : b -> a
+
+data Box a = Box a
+
+impl K (Box Int) Bool where
+  r _ = Box 7
+  mk _ = Box 2
+
+unbox : Box Int -> Int
+unbox (Box n) = n
+
+main = println (unbox (r 1))

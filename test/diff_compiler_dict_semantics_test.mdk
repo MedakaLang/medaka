@@ -836,6 +836,116 @@ table = [
     codes = [],
   },
   Row {
+    entry = "literal-fromint-binding-no-num-impl-rejected.mdk",
+    label =
+      "§8 I7 (#3956): a literal at `Nat`, which has no prelude `Num` impl, is rejected although a standalone `fromInt` is bound; it was accepted at exit 0 and the built binary panicked",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-TYPE-MISMATCH"],
+  },
+  Row {
+    entry = "literal-fromint-binding-beside-num-impl-accepted.mdk",
+    label =
+      "§8 I7 ACCEPT control for the row above: with a real `impl Num Money` the literal `4` dispatches through the prelude `Num`, not the standalone `fromInt` (which would give 104), on every engine",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [],
+  },
+  Row {
+    entry = "method-omitted-param-determined-accepted.mdk",
+    label =
+      "§5 + §3 Determination (#4072): a method whose type omits `b` poses `K (Box Int) ?b`, and the one unifying instance determines `?b`; the route was a bare head tag and the built binary panicked",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "main\n",
+    codes = [],
+  },
+  Row {
+    entry = "method-omitted-param-determined-via-sibling-accepted.mdk",
+    label =
+      "§5 + §3 Determination (#4072): `k (mk True)`, the receiver fixed by a sibling method's goal, still poses its own `?b` and the one unifying instance determines it",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "main\n",
+    codes = [],
+  },
+  Row {
+    entry = "method-omitted-param-ambiguous-rejected.mdk",
+    label =
+      "§5 + §3 (#4072): two instances differing only at the omitted `b` leave `?b` undetermined, so the boundary rejects; `check` accepted it and `run` failed at dispatch",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "method-omitted-param-return-determined-accepted.mdk",
+    label =
+      "§5 + §3 Determination (exact-return twin of #4072): a return-dispatched method whose type omits `b` poses `K (Box Int) ?b`, and the one unifying instance determines `?b`; the route was a bare head tag and the built binary panicked",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [],
+  },
+  Row {
+    entry = "method-omitted-param-return-ambiguous-rejected.mdk",
+    label =
+      "§5 + §3 (exact-return twin of #4072): two instances differing only at the omitted `b`, and no given, leave `?b` undetermined, so the occurrence is rejected",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "method-omitted-param-return-given-accepted.mdk",
+    label =
+      "§5 given precedence (exact-return twin of #4072): a given `K x y` answers the return-dispatched occurrence's `K x ?b` before any fresh `?b` is posed",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [],
+  },
+  Row {
+    entry = "constraint-only-variable-head-tag-accepted.mdk",
+    label =
+      "§3 + §5: a call of `f : K x y => x -> String` leaves the constraint-only `y` undetermined, so its dictionary route is the head tag; the one instance must still run on every engine (an RNone route panicked the build)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "BOX\n",
+    codes = [],
+  },
+  Row {
+    entry = "constraint-only-variable-return-head-tag-accepted.mdk",
+    label =
+      "§3 + §5 (return twin): a call of `f : K x y => Int -> x` leaves the constraint-only `y` undetermined, so its dictionary route is the head tag; the one instance must still run on every engine (an RNone route panicked the build)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [],
+  },
+  Row {
     entry = "s4-gen-sig-superclass-redundant-dropped.mdk",
     label =
       "§4 `gen-sig` + §3 `super` + §6 C2 diamond: `B a` inferred by the body is entailed by the declared `C a` via requires-closure, so it is DROPPED from the scheme (not merged); `super` is projection, and both diamond arms agree",
@@ -5316,6 +5426,28 @@ table = [
     codes = [],
   },
   Row {
+    entry = "requires-super-selection-rigid-variable-commits.mdk",
+    label =
+      "§6.1.3 a super goal over a rigid variable alone (#4065 (super route of a construction goal is empty)): the signed `g : b -> String` holds `b` rigid, so the super `D b` of `impl C (Box a) b` commits to the only matching instance, `impl D a`. Hand-derived: BLANKETc. Was an empty super slot: run printed INTc by re-selecting at the value and the built binary exited 133",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "BLANKETc\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-super-selection-stable-variable-requires.mdk",
+    label =
+      "§6.1.3 R-STABLE super half over a generalized variable alone (#4070 (super route re-answered at the value)): `impl Sup a requires Show2 a` is the only `Sup` instance, so the super of `Sub (Wrap Bool) b` commits to it carrying `g`'s `Show2` dictionary (section 2 pins `g : Show2 a => a -> String`). Hand-derived: SUPbsub. Was an empty super slot: run panicked `++ requires Semigroup` and the built binary exited 133",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "SUPbsub\n",
+    codes = [],
+  },
+  Row {
     entry = "requires-cycle-each-site-reported.mdk",
     label =
       "§3 R-SC3 (#3998 (pushTypeErrorOnceAt dedups on message text)): two goal sites reach the same never-ending `requires` chain, and the two messages share their text, so each site is its own `T-REQUIRES-CYCLE`; section 5 grades both spans on every verb. Was one diagnostic, the second site silently folded",
@@ -5414,7 +5546,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 479
+tableRows = 491
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -5679,10 +5811,16 @@ data SchemeRow = SchemeRow { entry : String, label : String, want : String }
 {- | How many rows `schemeTable` owes -- see `tableRows`'s header for why
    this is written down rather than discovered. -}
 schemeRows : Int
-schemeRows = 34
+schemeRows = 35
 
 schemeTable : List SchemeRow
 schemeTable = [
+  SchemeRow {
+    entry = "requires-super-selection-stable-variable-requires.mdk",
+    label =
+      "§6.1.3 the stable super `Sup b` is reduced through `impl Sup a requires Show2 a`, whose context is the `Show2 b` the `Sub` instance already leaves, so the scheme carries `Show2` alone (#4070)",
+    want = "g : Show2 a => a -> String",
+  },
   SchemeRow {
     entry = "s1-nary-predicate-scheme-kept.mdk",
     label =

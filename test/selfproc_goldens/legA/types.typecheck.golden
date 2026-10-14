@@ -621,6 +621,7 @@ collectRowEffvarIds : List Mono -> List Int
 collectTyIds : List Mono -> List Int
 collectValueAllowance : List EffRow -> EffRow
 commitImprovement : Map String Unit -> List (Mono, Mono) -> Unit
+committedSuperRoute : String -> ScopeId -> IfaceRef -> ReqWalk -> List Mono -> Route
 composeOp : Mono -> Mono -> Bool -> Mono
 computeMangledShadowMap : List Decl -> List (String, List Decl) -> List (String, String)
 concreteAtom : Atom -> Bool
@@ -1014,7 +1015,7 @@ entail : String -> Mono -> String -> ScopeId -> EntailKind -> (Route, List Route
 entailAssum : Mono -> String -> String -> ScopeId -> EntailKind -> Option AssumAnswer
 entailAssumRoute : String -> EntailKind -> Route
 entailAssumVar : Option PredicateRequest -> Mono -> String -> String -> ScopeId -> EntailKind -> Option AssumAnswer
-entailFallback : ScopeId -> Mono -> EntailKind -> Route
+entailFallback : String -> ScopeId -> Mono -> EntailKind -> Route
 entailInst : String -> Mono -> String -> ScopeId -> String -> EntailKind -> (Route, List Route)
 entailedByDeclared : String -> String -> Ty -> Bool
 enterLevel : Unit -> Unit
@@ -1171,6 +1172,7 @@ fileGoal : Int -> UObligation -> Map Int (List Int) -> Map Int (List Int)
 fileGrantExterns : Map String (Int, Int)
 fileValueKey : String -> Expr -> Option String
 fileValueShape : Expr -> String
+fillOmittedTemplateArgs : List String -> List (Option Mono) -> List (String, Mono) -> List (Option Mono)
 filterNonSelf : String -> List String -> List String
 finalizeNumBoundary : NumBoundary -> List Mono
 findIfaceDecl : List Decl -> String -> Option (List String, List (Option KindAnn), List IfaceMethod)
@@ -1678,7 +1680,7 @@ inferMethodBody : TcEnv -> IfaceRef -> MethodBodyKind -> (List String, Ty, List 
 inferMethodCandidateAt : TcEnv -> String -> Ref String -> Ref (Option Int) -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Mono
 inferNumLit : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
 inferNumLitBare : Int -> Ref (Option Float) -> Mono
-inferNumLitMethod : TcEnv -> MethodSchemeRow -> Ref Route -> Mono
+inferNumLitMethod : MethodSchemeRow -> Ref Route -> Mono
 inferNumLitVar : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
 inferOneIfaceDefaults : TcEnv -> Decl -> Unit
 inferOneImpl : TcEnv -> List String -> ClassEnv -> Int -> Decl -> Unit
@@ -2056,6 +2058,7 @@ methodLevelPredicateSlots : List String -> Ty -> List (String, Mono) -> List Pre
 methodMarkCtx : MarkSets -> String -> List Decl -> MarkCtx
 methodMembersOf : List String -> Loc -> List UseMember
 methodNameDeclaredAt : Int -> MethodEnv -> String -> Bool
+methodOmittedVars : String -> List (String, Mono)
 methodOwnScope : Bool -> List Decl -> String -> List MethodRow -> MethodScope
 methodPredicateRoute : String -> ScopeId -> PredicateSlot -> Route
 methodPredicateRoutes : String -> ScopeId -> List PredicateSlot -> List Route
@@ -2074,7 +2077,6 @@ methodReturnArgs : MethodReturnRequest -> Option (List Mono)
 methodReturnChainStats : List ChainStep -> (Int, Int, Int)
 methodReturnEvidenceRoute : String -> ScopeId -> PrerequisiteEvidence -> Route
 methodReturnEvidenceRoutes : String -> ScopeId -> List PrerequisiteEvidence -> List Route
-methodReturnFallbackTag : MethodReturnRequest -> Option String
 methodReturnInstanceMatches : RequestInstanceId -> ImplRow -> Bool
 methodReturnInstantiation : MethodReturnRequest -> Option Instantiation
 methodReturnMemoArguments : List Mono -> List String
@@ -2093,7 +2095,7 @@ methodReturnMemoView : List EvEntry -> Obligation -> MethodReturnRequest -> Meth
 methodReturnOrigin : Option Loc -> GoalOrigin
 methodReturnOwnershipProbe : Unit -> (List String, List String, Bool, Bool)
 methodReturnPredicate : MethodReturnRequest -> Option ClassPredicate
-methodReturnPredicateFromTemplate : MethodPredicateTemplate -> ScopeId -> Option ClassPredicate
+methodReturnPredicateFromTemplate : MethodPredicateTemplate -> List String -> List (String, Mono) -> ScopeId -> Option ClassPredicate
 methodReturnPrerequisites : List Mono -> ImplRow -> List PrerequisiteEvidence
 methodReturnPrerequisitesMatch : List PrerequisiteEvidence -> List PrerequisiteEvidence -> Bool
 methodReturnProbeCodes : MethodSchemeRow -> List Decl -> List String
@@ -2170,7 +2172,7 @@ missingConstraintMsg : String -> String -> String -> String
 missingConstraintVecMsg : String -> String -> List String -> String
 missingFieldMsg : String -> String -> String
 missingImplMethodMsg : String -> List Ty -> String -> String
-mkMethodOccObl : IfaceRef -> List String -> Ty -> Mono -> Provenance -> Option Loc -> ScopeId -> UObligation
+mkMethodOccObl : IfaceRef -> List String -> Ty -> Mono -> List (String, Mono) -> Provenance -> Option Loc -> ScopeId -> UObligation
 modInScope : String -> Map String Unit -> Bool
 moduleAliasEntry : String -> String -> ((String, String), a) -> List (String, a)
 moduleAliasKeys : UsePath -> Loc -> List (String, String, String, Ident, Loc)
@@ -2237,6 +2239,7 @@ negatedInI32 : Int -> Option Int
 nestedRequireGoals : Map String Unit -> Map String Unit -> List UObligation -> List UObligation
 nestedRequireGoalsGo : Map String Unit -> Map String Unit -> List (UObligation, ReqWalk) -> List UObligation
 nestedRequireGoalsOnce : Map String Unit -> Map String Unit -> List (UObligation, ReqWalk) -> List UObligation
+nestedRowRoute : String -> ScopeId -> Mono -> List Mono -> ReqWalk -> ImplRow -> Route
 newEffvarId : Unit -> Int
 newTyvarId : Unit -> Int
 newWalkMemo : Unit -> WalkMemo
@@ -2308,9 +2311,12 @@ obligationSiteHere : Bool -> ObligationSite
 observeMethodSchemeRowsForTest : Unit -> MethodRowTestObservation
 occsOfTails : List String -> List EffAtomTy -> List (String, List Atom)
 occurrenceCarriesMangledShadowSym : String -> Ref Route -> Bool
+occurrenceDispatchMonos : List String -> Ty -> Mono -> List (String, Mono) -> List Mono
+occurrenceParamMonos : String -> Mono -> List (String, Mono) -> Option (List Mono)
 occursAdjust : Int -> Int -> Mono -> Unit
 occursAdjustUnbound : Int -> Int -> Ref Tyvar -> Int -> Int -> Unit
 occursAdjustVar : Int -> Int -> Ref Tyvar -> Unit
+omittedParamVars : List String -> Ty -> List (String, Mono)
 opDictVarOf : Option PredicateRequest -> Bool -> String -> Mono -> Bool -> String -> ScopeId -> Option AssumAnswer
 openExistentialScope : List (Ref Authvar) -> ExistentialScope
 openExistentials : List (Ref Authvar) -> Unit
@@ -2519,7 +2525,7 @@ pushMethodDictGoal : PendingMethodDict -> Unit
 pushNoImplError : String -> Option Loc -> List Mono -> Unit
 pushNumLitObl : ClassPredicate -> Mono -> Option Loc -> ScopeId -> Unit
 pushNumlit : (Mono, Ref (Option Float), Int, Ref Route) -> Unit
-pushPendingObl : IfaceRef -> List String -> Ty -> Mono -> Provenance -> Option Loc -> Unit
+pushPendingObl : IfaceRef -> List String -> Ty -> Mono -> List (String, Mono) -> Provenance -> Option Loc -> Unit
 pushRecDictAppGoal : RecDictApp -> Unit
 pushSiteGoal : GoalKind -> PendingEntry -> Unit
 pushTypeError : String -> String -> Unit
@@ -2573,7 +2579,7 @@ receiverTypeIdent : Mono -> Option Ident
 receiverTypeWord : Mono -> String -> String
 recordAbsorptions : List Atom -> Ref Effvar -> Unit
 recordArgSiteFn : String -> Int -> Mono -> Unit
-recordArgStamp : String -> Ref Route -> Ref (List Route) -> Int -> Mono -> Unit
+recordArgStamp : String -> Ref Route -> Ref (List Route) -> Int -> Mono -> List (String, Mono) -> Unit
 recordAuthCells : List Int -> Mono -> List (String, Mono) -> Map Int (Ref Authvar)
 recordBinderType : BinderId -> String -> Mono -> Option Int -> Bool -> Unit
 recordBinopGoals : String -> Ref Route -> Mono -> Unit
@@ -2604,7 +2610,7 @@ recordForReceiverIdent : Mono -> String -> Option RecordInfo
 recordGrantOcc : String -> EvId -> Scheme -> List (Int, Authority) -> Unit
 recordHasExistentials : Option RecordInfo -> Bool
 recordIfaceObligation : BuiltinClass -> Mono -> Unit
-recordImplObligation : String -> Mono -> Mono
+recordImplObligation : String -> Mono -> List (String, Mono) -> Mono
 recordInstantiatedMethodLevelSlots : List PredicateSlot -> Option Loc -> ScopeId -> Unit
 recordInvocationView : TcEnv -> Unit
 recordLetBindType : (LetBind, (String, BindingSummary)) -> Unit
@@ -2618,12 +2624,12 @@ recordMethodGrants : List MethodSchemeRow -> Unit
 recordMethodLevelObls : List String -> Ty -> Mono -> Unit
 recordMethodLevelSlotObls : List Constraint -> List (String, Mono) -> Unit
 recordMethodLevelSlotsOwned : MethodSchemeRow -> List (Int, Mono) -> Option Loc -> ScopeId -> Unit
-recordMethodObligationGuarded : TcEnv -> String -> Scheme -> Mono -> Mono
+recordMethodObligationGuarded : TcEnv -> String -> Scheme -> Mono -> List (String, Mono) -> Mono
 recordMethodObligationOwned : TcEnv -> String -> Scheme -> Mono -> MethodInstantiationSubst -> Option EvId -> Mono
 recordModuleStart : String -> Unit
 recordNegatedLitRange : Mono -> Expr -> Unit
 recordNumLitImplObligation : MethodSchemeRow -> ClassPredicate -> Mono -> Option Loc -> ScopeId -> Mono
-recordNumLitObligationGuarded : TcEnv -> MethodSchemeRow -> ClassPredicate -> Mono -> Option Loc -> ScopeId -> Mono
+recordNumLitObligationGuarded : MethodSchemeRow -> ClassPredicate -> Mono -> Option Loc -> ScopeId -> Mono
 recordNumLitSite : ClassPredicate -> Ref Route -> Mono -> Option Loc -> ScopeId -> Mono
 recordNumlitLoc : Mono -> Unit
 recordNumlitRange : Mono -> Int -> Unit
@@ -2804,7 +2810,7 @@ residualSelectionStable : List Int -> List (IfaceRef, List Mono) -> IfaceRef -> 
 residualVecObls : Bool -> List Int -> IfaceRef -> List Mono -> Option Loc -> List VecObl
 residualsOf : Int -> List (Int, AuthResidual) -> List AuthResidual
 resolveAliasMethodSpellings : (String, List Decl) -> (String, List Decl)
-resolveArgStamp : String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> Option Loc -> ScopeId -> Unit
+resolveArgStamp : String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> List (String, Mono) -> String -> Option Loc -> ScopeId -> Unit
 resolveArgStamps : List PendingEntry -> Unit
 resolveArithSite : Ref Route -> Mono -> Unit
 resolveArithSites : List (Ref Route, Mono) -> Unit
@@ -3045,6 +3051,7 @@ spineHeadMono : Mono -> Mono
 spliceRowTails : List (String, Ty) -> List String -> (List EffAtomTy, List String)
 splitOnComma : String -> List String
 splitOnCommaGo : String -> Int -> Int -> List String -> List String
+stableGoalReach : List Int -> IfaceRef -> List Mono -> GoalReach
 stableMinimum : List Mono -> List ImplRow -> ImplRow -> Bool
 stampCtxOf : String -> List Decl -> List Obligation -> List (Mono, Ref (Option Float), Int, Ref Route) -> StampCtx
 stampGraphDecls : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
@@ -3217,7 +3224,7 @@ undeclaredImplPrerequisiteMsg : String -> String -> String -> String
 undeterminedGoalExempt : IfaceRef -> List Mono -> ScopeId -> Bool
 undeterminedNoImplMsg : String -> List Mono -> String
 undeterminedRetEffVars : List (String, List Kind) -> Ty -> List String
-undeterminedRoute : ScopeId -> Undetermined -> List Mono -> Route
+undeterminedRoute : String -> ScopeId -> IfaceRef -> Undetermined -> ReqWalk -> List Mono -> Route
 undeterminedRowRoute : ScopeId -> IfaceRef -> List Mono -> ImplRow -> Route
 undeterminedVectorVerdict : Map String Unit -> Map String Unit -> GoalWindow -> UObligation -> Unit
 unifiedRowReqs : Map String Unit -> List Mono -> ImplRow -> Option (List (String, Mono), List Int, List Require)

@@ -1,0 +1,22 @@
+-- §5 + §3: `r : Int -> a` never mentions `K`'s `b`, so the occurrence poses
+-- `K (Box Int) ?b`.  Two instances unify with it and differ only at `b`, and no
+-- given answers it, so nothing determines `?b`.  Hand-derived: REJECT on all
+-- three verbs, T-AMBIGUOUS-INSTANCE at the `r` occurrence.
+interface K a b where
+  r : Int -> a
+  mk : b -> a
+
+data Box a = Box a
+
+impl K (Box Int) Bool where
+  r _ = Box 7
+  mk _ = Box 2
+
+impl K (Box Int) Int where
+  r _ = Box 8
+  mk _ = Box 3
+
+unbox : Box Int -> Int
+unbox (Box n) = n
+
+main = println (unbox (r 1))

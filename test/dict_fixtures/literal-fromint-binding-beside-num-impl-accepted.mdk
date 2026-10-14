@@ -1,0 +1,20 @@
+data Money = Money Int deriving (Eq)
+
+impl Num Money where
+  add (Money a) (Money b) = Money (a + b)
+  sub (Money a) (Money b) = Money (a - b)
+  mul (Money a) (Money b) = Money (a * b)
+  div (Money a) (Money b) = Money (a / b)
+  negate (Money a) = Money (0 - a)
+  abs (Money a) = Money a
+  signum (Money a) = Money 1
+  fromInt n = Money n
+  rem (Money a) (Money b) = Money (a % b)
+
+fromInt : Int -> Int
+fromInt n = n + 100
+
+cents : Money -> Int
+cents (Money c) = c
+
+main = println (intToString (cents (Money 3 + 4)))

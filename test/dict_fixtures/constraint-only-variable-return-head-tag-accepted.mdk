@@ -1,0 +1,23 @@
+-- §3 + §5 (return twin): `f`'s signature constraint `K x y` names `y`, which
+-- its type omits, and `x` is fixed only by the result.  The call poses
+-- `K (Box Int) ?y`, which the one instance answers.  The top-level dictionary
+-- route carries the head tag `Box`, since no row is selected for the
+-- undetermined vector.
+-- Hand-derived: ACCEPT on all three verbs, prints `7`.
+interface K a b where
+  r : Int -> a
+  mk : b -> a
+
+data Box a = Box a
+
+impl K (Box Int) Bool where
+  r _ = Box 7
+  mk _ = Box 2
+
+unbox : Box Int -> Int
+unbox (Box n) = n
+
+f : K x y => Int -> x
+f n = r n
+
+main = println (unbox (f 1))
