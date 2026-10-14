@@ -1,5 +1,5 @@
 # META
-source_lines=4756
+source_lines=4757
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -1559,12 +1559,13 @@ requireArgs sp argv = match parseArgs sp argv
 --   position:     character, line
 
 -- Run check --json: mirrors OCaml's check --json (analyze_project → JSON).
--- Routes by module count (mirrors checkRoute) because the compiler analyzeProject
--- multi-module path has a known limitation for single-file type errors:
---   single module (no non-core imports) → analyzeLocated (single-file path)
---   multi-module → analyzeProject (loader path)
--- The ENTRY's parse errors are detected FIRST via parseResult; an IMPORTED
--- module's are reported by the loader itself (#100), attributed to that module.
+-- Loads the graph once with the located loader and routes by module count
+-- (mirrors checkRoute):
+--   single module (no non-core imports) → analyzeFrom over the loaded decls
+--   multi-module → analyzeLoadedFull over the loaded graph
+-- When the load fails, the ENTRY's parse errors are detected FIRST via
+-- parseResult; an IMPORTED module's are reported by the loader itself (#100),
+-- attributed to that module.
 -- Output: {"files":[{"file":<path>,"diagnostics":[...]}]}
 -- Exits 1 if any error diagnostic; 0 otherwise.
 -- The whole routing (parse-error / load-error / single / multi module) now lives
