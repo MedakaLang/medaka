@@ -32,7 +32,6 @@ import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{
   declaredRecordFieldOrders,
   lowerProgramEmit,
-  EmitTarget(..),
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
@@ -45,6 +44,8 @@ import ir.core_ir.{
 }
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
 import backend.llvm_emit.{emitProgram, emitProgramRecord, makeEmitInput}
+import backend.emit_plan.{buildEmitPlan}
+import backend.core_validate.{Backend(..)}
 import entries.entry_support.{driveRuntime, failWith}
 import support.util.{contains}
 
@@ -110,10 +111,11 @@ emitGapIsolation =
           },
         ],
       }
-  let (_, gaps) = emitProgramRecord input cp
+  let plan = buildEmitPlan LlvmBackend cp
+  let (_, gaps) = emitProgramRecord input plan cp
   if contains "?\tunsupported Core IR node CMatch" gaps then
     let _ = putStr "LLVM_GAP_RECORD_OK\n"
-    let _ = emitProgram input cp
+    let _ = emitProgram input (buildEmitPlan LlvmBackend cp) cp
     failWith
       "LLVM gap isolation failure: strict emission returned after a recorded gap"
   else
@@ -145,6 +147,7 @@ runEmit runtimeDecls preludeDecls userDecls =
       ""
       (declaredRecordFieldOrders mangled)
       (validateFfiExternTypeNames (checkedFfiExternTypeNames mangled))
-  emitProgram input (lowerProgramEmit TargetNative mangled)
+  let cp = lowerProgramEmit mangled
+  emitProgram input (buildEmitPlan LlvmBackend cp) cp
 
 main = oracleMain ()

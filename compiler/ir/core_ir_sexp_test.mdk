@@ -37,7 +37,7 @@ import ir.core_ir.{
   noDeclFacts,
   programBinderIds,
 }
-import ir.core_ir_lower.{EmitTarget(..), lowerProgramEmit}
+import ir.core_ir_lower.{lowerProgramEmit}
 import ir.core_ir_sexp.{cprogramToSexp}
 import ir.core_ir_sexp_parse.{parseCProgram}
 import ir.dce.{dceFilter}
@@ -200,7 +200,6 @@ src =
 typed : CProgram
 typed =
   lowerProgramEmit
-    TargetNative
     (elaborateOne [] (desugar (parse prelude)) (
       "sexp",
       grantWholeDomain (desugar (parse src)),
@@ -304,7 +303,6 @@ fnSrc =
 test "a function's return type survives the round trip" =
   let typed =
     lowerProgramEmit
-      TargetNative
       (elaborateOne [] (desugar (parse prelude)) (
         "sexp",
         grantWholeDomain (desugar (parse fnSrc)),
@@ -372,10 +370,7 @@ loweredEntry runtimeDecls coreDecls entry roots =
           coreDecls
           (map (p => (fst p, desugarIn (fst p) (snd p))) pairs)
       let (coreD, modules2) = mangleUnitsEv coreE modulesE
-      Ok
-        (lowerProgramEmit
-          TargetNative
-          (dceFilter (coreD ++ flatMap snd modules2)))
+      Ok (lowerProgramEmit (dceFilter (coreD ++ flatMap snd modules2)))
 
 -- Each binder occurrence's row, in the binder walk's order, as text: what an
 -- emitter reads when it looks a binder up.  `-` is an occurrence with no row.

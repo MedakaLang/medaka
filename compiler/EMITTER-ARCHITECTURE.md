@@ -29,10 +29,10 @@ loader module graph
   -> resolve / mark / typecheck / dictionary elaboration
   -> backend-specific emitTail
        -> dce.dceFilter (except native half modes that deliberately retain all)
-       -> core_ir_lower.lowerProgramEmit <EmitTarget>   (TargetNative | TargetWasm | TargetBothUnknown)
+       -> core_ir_lower.lowerProgramEmit   (target-neutral: it takes no backend)
        -> CProgram
             -> llvm_emit.emitProgram -> LLVM text -> clang -> native binary
-            -> wasm_reach.wasmReachFilter (Wasm product paths only, post-lower)
+            -> emit_plan.buildEmitPlanReached -> wasm_reach (Wasm modules paths only, post-lower)
                -> wasm_emit.emitProgram -> WAT -> wasm-tools -> WasmGC module
 ```
 
@@ -69,15 +69,15 @@ product entry passes the validated FFI extern table, so a user FFI extern in
 the browser died as an unbound variable instead of the named WasmGC rejection.
 Fixed by the 2026-09-03 parity change; the shape remains a trap.
 
-Two things entered this pipeline after the 2026-08-07 map without a doc row.
 `backend/wasm_reach.mdk` (#2359/#2377) is a second, dispatch-rooted
 reachability pass over the lowered `CProgram`, on both Wasm product paths and
-on neither native path: a whole-program analysis that exists on one backend.
-`lowerProgramEmit` takes an `EmitTarget` first parameter (#1970): only
-`TargetNative` narrows anything (it relaxes the 30-bit Wasm `dictTag`
-collision check), so a physical fact is threaded up into the shared lowering
-seam. Both are absorbed by the shared plan record in
-`EMITTER-TARGET-ARCHITECTURE.md` R5.
+on neither native path. It runs inside `emit_plan.buildEmitPlanReached`, and
+the plan names it as the Wasm physical choice `wasmOnlyReach`
+(`EMITTER-TARGET-ARCHITECTURE.md` R5). Lowering takes no target. The one
+backend-specific width check, dict-witness tag injectivity, runs in each
+emitter before it writes any text: `core_validate.validateDictTags` checks the
+full `hashName` for `LlvmBackend`, and also the 30-bit `dictTag` for
+`WasmBackend`.
 
 The canonical `run` path is not a Core-IR consumer. It evaluates the elaborated
 AST through `compiler/eval/eval.mdk`. `compiler/ir/core_ir_eval.mdk` is a
@@ -215,7 +215,7 @@ Core. That distinction is not represented in their types.
 | Record field slot | `Emit.recByName`/`recByLabel`/`recFields` | record-name and label indexes built into `WasmEmitInput` | record-name strings on some nodes; ordinals nowhere |
 | Dispatch arm/default | one `icmp` per arm keyed on the canonical row key (`implEntryKey`), dispatch/default chain synthesis | `findByKeyW`, dispatch chains, incomplete default synthesis | `Route` plus incomplete `CImplEntry` set |
 | Closure captures/layout | LLVM free-variable and allocation paths | Wasm closure-use scan and lifted functions | none |
-| Global forcing | native realization of shared classification | Wasm realization of shared classification | `emit_support.eagerReachMap` / `lazyGlobalNames` |
+| Global forcing | native realization of shared classification | Wasm realization of shared classification | `emit_plan.EmitPlan` (built from `emit_support.eagerReachMap` / `lazyGlobalNames`) |
 | Tail/TRMC realization | `musttail`, destination cells, dispatch-group inlining | `return_call`, typed destination structs | `trmc_analysis` eligibility/groups |
 | Link symbols/tags | LLVM sanitization and tagged-word spaces | WAT identifiers and i32 tag spaces | `private_mangle`, dense logical ctor ordinals |
 | Extern capability/runtime group | LLVM extern predicate ladders and C declarations | Wasm extern ladders and host/runtime inclusion flags | `stdlib/runtime.mdk` plus capability ledgers |
@@ -357,7 +357,8 @@ implementation:
 7. Conformance must include malformed-plan rejection, unrelated-code controls,
    and hand-derived expected behavior, not parity alone.
 8. (added 2026-09-03) A physical fact must not travel up into the shared
-   lowering seam. `EmitTarget` on `lowerProgramEmit` is the live instance.
+   lowering seam. The dict-tag width is the model: each emitter passes its own
+   `Backend` to `core_validate.validateDictTags`, and lowering takes none.
 9. (added 2026-09-03) A whole-program analysis that exists on one backend only
    (`wasm_reach`) is a divergence, not a feature; it becomes shared or it is
    named as a Wasm physical choice.

@@ -39,13 +39,14 @@ import types.typecheck.{
 }
 import ir.core_ir_lower.{
   lowerProgramEmit,
-  EmitTarget(..),
   methodIfaceTable,
   declaredRecordFieldOrders,
 }
 import backend.private_mangle.{mangleUnitsEv}
 import ir.dce.{dceFilter}
 import backend.wasm_emit.{emitProgramGaps, makeWasmEmitInputFull}
+import backend.emit_plan.{buildEmitPlan}
+import backend.core_validate.{Backend(..)}
 import entries.entry_support.{driveModules}
 
 main : <IO> Unit
@@ -75,7 +76,8 @@ runEmit runtimeDecls coreDecls modules =
       False
       (declaredRecordFieldOrders allDecls)
       []
-  let gaps = emitProgramGaps input (lowerProgramEmit TargetWasm allDecls)
+  let cp = lowerProgramEmit allDecls
+  let gaps = emitProgramGaps input (buildEmitPlan WasmBackend cp) cp
   printGaps gaps
 
 printGaps : List String -> <IO> Unit

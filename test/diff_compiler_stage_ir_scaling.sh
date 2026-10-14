@@ -1,7 +1,7 @@
 #!/bin/sh
 # shell-because: instrumentation — valgrind/cachegrind/wall-clock instrumentation plus statistics; wrap gains nothing
 # diff_compiler_stage_ir_scaling.sh — the DETERMINISTIC superlinearity detector for
-# the BUILD-PATH stages (lower / emit / mangle / dce / trmc), the single-file
+# the BUILD-PATH stages (lower / emit / plan / mangle / dce / trmc), the single-file
 # FRONTEND stages (parse / exhaust / desugar / resolve / mark / typecheck), the
 # single-file TOOL stages (fmt / lint), and the
 # MULTI-MODULE frontend stages (parse / load / desugar / resolve / mark /
@@ -134,8 +134,10 @@
 #           reachability closure (`emit_support.eagerReachMap`) folds an empty
 #           graph on both. Here reach(g_i) = {g_0..g_{i-1}}, so the reach sets grow
 #           linearly and the fold that builds them is the graded term.
-#           ⚠️ The GRADED stage for this shape is `emit` — `eagerReachMap` is called
-#           from `orderedValBinds` inside `emitProgram`, on BOTH backends.
+#           ⚠️ The GRADED stage for this shape is `plan`, not `emit`: `eagerReachMap`
+#           runs once per emission inside `emit_plan.buildEmitPlan`, which each
+#           emit driver calls before `emitProgram`, and both backends read the
+#           result from the plan.
 #
 #   modules — N import-chained MODULE FILES (m0 <- ... <- m{N-1} <- entry), K=8
 #           `Widget` impls + 4x4 records per module, driven by the MULTI-MODULE
@@ -405,11 +407,13 @@ MIN_NET_FRAC="${STAGE_IR_MIN_NET_FRAC:-0.02}"
 # names profile_main's own `[perf]` rows use, deliberately, so a reader can line the
 # two up (one deliberate exception: `exhaust`, whose `[perf]` row is spelled
 # `exhaust-guards`; the short name is used here because it is also a ledger key and
-# `<shape>:exhaust-guards` reads badly in one). `trmc` is `detectDispatchGroups`,
-# which runs INSIDE emitProgram — its inclusive count is therefore a SUBSET of
-# `emit`'s, not a sibling of it. That is intentional and it is why it is listed
-# separately: #1029's cubic lived there and a 5% slice of emit is invisible in emit's
-# own ratio. The same containment holds across the frontend rows below: `exhaust`
+# `<shape>:exhaust-guards` reads badly in one). `plan` is `buildEmitPlan`, the
+# whole-program analyses each emission runs once before `emitProgram` (the value-init
+# reach closure, the TRMC verdict, the dispatch groups); it is a SIBLING of `emit`,
+# not inside it. `trmc` is `detectDispatchGroups`, which runs INSIDE buildEmitPlan —
+# its inclusive count is therefore a SUBSET of `plan`'s. That is intentional and it
+# is why it is listed separately: #1029's cubic lived there and a slice of plan is
+# invisible in plan's own ratio. The same containment holds across the frontend rows below: `exhaust`
 # runs INSIDE typecheck ([P-EXHAUST-IN-TYPECHECK]), so its count is a subset of
 # `typecheck`'s, for the same reason and to the same purpose.
 #
@@ -465,6 +469,7 @@ mark=mdk_frontend_marker__markWithPrelude \
 typecheck=mdk_types_typecheck__checkOneToLinesWithRuntime \
 lower=mdk_ir_core_ir_lower__lowerProgramEmit \
 emit=mdk_backend_llvm_emit__emitProgram \
+plan=mdk_backend_emit_plan__buildEmitPlan \
 mangle=mdk_backend_private_mangle__mangleUnits \
 dce=mdk_ir_dce__dceFilter \
 trmc=mdk_backend_trmc_analysis__detectDispatchGroups \

@@ -60,21 +60,38 @@ import ir.core_ir_lower.{
   stampCallModes,
   stampImplSymbols,
   stampUntypedBinders,
-  EmitTarget(..),
   ctorFieldTypeNames,
   declaredRecordFieldOrders,
   methodIfaceTable,
 }
 import backend.wasm_emit.{
   WasmEmitInput,
-  emitProgram,
-  emitProgramUnchecked,
-  emitProgramRecord,
-  emitProgramGaps,
+  emitProgram as emitWithPlan,
+  emitProgramUnchecked as emitUncheckedWithPlan,
+  emitProgramRecord as emitRecordWithPlan,
+  emitProgramGaps as emitGapsWithPlan,
   makeWasmEmitInput,
   makeWasmEmitInputFull,
 }
 import entries.entry_support.{driveRuntime}
+import backend.emit_plan.{buildEmitPlan}
+import backend.core_validate.{Backend(..)}
+
+-- Every emission here builds its own plan from the program it emits.
+emitProgram : WasmEmitInput -> CProgram -> String
+emitProgram input cp = emitWithPlan input (buildEmitPlan WasmBackend cp) cp
+
+emitProgramUnchecked : WasmEmitInput -> CProgram -> String
+emitProgramUnchecked input cp =
+  emitUncheckedWithPlan input (buildEmitPlan WasmBackend cp) cp
+
+emitProgramRecord : WasmEmitInput -> CProgram -> (String, List String)
+emitProgramRecord input cp =
+  emitRecordWithPlan input (buildEmitPlan WasmBackend cp) cp
+
+emitProgramGaps : WasmEmitInput -> CProgram -> List String
+emitProgramGaps input cp =
+  emitGapsWithPlan input (buildEmitPlan WasmBackend cp) cp
 
 main = match args ()
   "--reemit-trmc-state" :: _ => reemitTrmcState ()
@@ -150,9 +167,7 @@ cprogram groups ctorArs ctorTypes impls =
 
 typedProgram : List Decl -> List Decl -> List Decl -> CProgram
 typedProgram runtimeDecls preludeDecls userDecls =
-  lowerProgramEmit
-    TargetWasm
-    (typedElaborated runtimeDecls preludeDecls userDecls)
+  lowerProgramEmit (typedElaborated runtimeDecls preludeDecls userDecls)
 
 -- Same-process input-isolation harness for X-W.H1. It lowers P once, then emits
 -- that exact CProgram with P's complete input, one U-derived field at a time, and

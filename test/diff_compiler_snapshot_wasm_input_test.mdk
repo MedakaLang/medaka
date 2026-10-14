@@ -89,11 +89,11 @@ apiCheck = match readFile wasmEmitPath
       (exportDeclPresent "makeWasmEmitInput" "" ls
         && exportDeclPresent
           "emitProgram"
-          "emitProgram : WasmEmitInput -> CProgram -> String"
+          "emitProgram : WasmEmitInput -> EmitPlan -> CProgram -> String"
           ls
         && exportDeclPresent
           "emitProgramGaps"
-          "emitProgramGaps : WasmEmitInput -> CProgram -> List String"
+          "emitProgramGaps : WasmEmitInput -> EmitPlan -> CProgram -> List String"
           ls)
       "FAIL: WasmEmitInput API is incomplete"
 

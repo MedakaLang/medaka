@@ -754,7 +754,8 @@ trap 'rm -rf "$WORK"' EXIT
 #              See gen_conlocal.
 #   consfam  — the BACKEND shape (issue #1029). N mutually cons-tail-recursive fns — the
 #              only thing in this corpus that reaches trmc_analysis's dispatch-TMC group
-#              GROWTH WALK, which runs unconditionally in both backends' emitProgram.
+#              GROWTH WALK, which runs unconditionally in every emission's plan build
+#              (emit_plan.buildEmitPlan), whichever the backend.
 #              `xref` chains N fns but with no cons tail, so the walk's consTargets
 #              pre-gate rejects every root and xref reads clean linear. Graded on the
 #              ALLOC arm; pre-fix it read NEAR-CUBIC. See gen_consfam.
@@ -1223,8 +1224,8 @@ gen_emittables() {
 # gen_consfam — THE DISPATCH-TMC GROUP-GROWTH SHAPE (issue #1029). N mutually
 # cons-tail-recursive functions: `c_i k = if k <= 0 then c_{i-1} 1 else i :: c_i (k - 1)`.
 # It is the ONLY shape that reaches backend/trmc_analysis.mdk's (b') dispatch-group
-# growth walk at all — and `detectDispatchGroups` runs UNCONDITIONALLY in BOTH backends'
-# emitProgram, i.e. on every `medaka build`.
+# growth walk at all — and `detectDispatchGroups` runs UNCONDITIONALLY in every
+# emission's plan build (emit_plan.buildEmitPlan), i.e. on every `medaka build`.
 #
 # WHY NO OTHER SHAPE SEES IT, and why that is a property of the SHAPE and not the band:
 # the walk is pre-gated on `consTargets` — a candidate root must be the bottom callee of

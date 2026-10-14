@@ -41,7 +41,6 @@ import ir.core_ir_lower.{
   declaredRecordFieldOrders,
   lowerProgramEmit,
   lowerProgramEmitPinned,
-  EmitTarget(..),
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
@@ -50,6 +49,8 @@ import ir.core_ir_lower.{
   validateFfiExternTypeNames,
   noInlineFnNames,
 }
+import backend.emit_plan.{buildEmitPlan}
+import backend.core_validate.{Backend(..)}
 import backend.llvm_emit.{
   emitProgram,
   emitProgramWithStats,
@@ -114,7 +115,7 @@ emitHalfOfEnv = match getEnv "MEDAKA_EMIT_HALF"
 -- to always DEFINE it in the program half instead of asking the shared object
 -- for it.
 preludeSymsOf : List Decl -> (List String, List (String, String, String))
-preludeSymsOf coreD = match lowerProgramEmit TargetNative coreD
+preludeSymsOf coreD = match lowerProgramEmit coreD
   CProgram groups _ _ impls _ _ => (
     filterList
       (n => not (endsWith autoPrintPinName n))
@@ -171,18 +172,14 @@ emitTail mods runtimeDecls coreD modules1 =
           (checkedFfiExternTypeNamesModules modules2)))
   let input = withNoInlineFns (noInlineFnNames allDecls) base
   let statsOn = statsEnabled ()
+  let cp = lowerProgramEmitPinned preludeImpls allDecls
+  let plan = buildEmitPlan LlvmBackend cp
   if statsOn then
-    let (text, stats) =
-      emitProgramWithStats
-        input
-        (lowerProgramEmitPinned TargetNative preludeImpls allDecls)
+    let (text, stats) = emitProgramWithStats input plan cp
     let _ = emitStats statsOn stats
     putStr text
   else
-    putStr
-      (emitProgram
-        input
-        (lowerProgramEmitPinned TargetNative preludeImpls allDecls))
+    putStr (emitProgram input plan cp)
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
 -- across units, AFTER elaborateModules and over its output (#2809) — same
 -- flat-emit @mdk_<name> collision risk the bootstrap driver fixes.  The gate

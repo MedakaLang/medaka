@@ -1482,7 +1482,7 @@ hexNibble n = stringSlice n (n + 1) "0123456789abcdef"
 -- shape "astronomically unlikely" is wrong about the mechanism: the hash's
 -- non-injectivity has nothing to do with the tag alphabet being small, and
 -- nothing to do with the mask width.
--- `core_ir_lower.dictWitnessTagGuard` is what makes it loud; keep the two together.
+-- `core_validate.validateDictTags` is what makes it loud; keep the two together.
 --
 -- Each step is computed in `U64`, which wraps by definition, and narrowed to its
 -- low 63 bits: the value the tags have always had, when `Int` itself wrapped.
@@ -1511,7 +1511,7 @@ hashChars cs i acc
 -- primitive in the compiler subset; `% 2^30` is the mask.)
 --
 -- Lives HERE, beside `hashName`, rather than in `wasm_emit`, because
--- `core_ir_lower.dictWitnessTagGuard` must check the WASM tag space with the SAME
+-- `core_validate.validateDictTags` must check the WASM tag space with the SAME
 -- expression the wasm emitter mints — a second copy of the mask in the guard is a
 -- copy that can drift, and a drifted guard certifies the wrong property.  The
 -- 30-bit space inherits every `hashName` collision (masking cannot separate equal
