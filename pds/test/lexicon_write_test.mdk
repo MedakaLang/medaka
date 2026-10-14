@@ -751,9 +751,10 @@ test "updateHandle with a __proto__ key is refused and announces nothing" =
   ]
 
 -- The slur is joined from two fragments at run time, so no whole slur is
--- written in source. `ch.ink` is the case only the squeezed form catches: its
--- dot splits the word in the handle and dropping the dots joins it. The near
--- miss is refused for its DID, which shows the slur check let it through.
+-- written in source. The dot-split form is the case only the squeezed form
+-- catches: its dot splits the word in the handle and dropping the dots joins
+-- it. The near miss is refused for its DID, which shows the slur check let it
+-- through.
 slurHead : String
 slurHead = "ch"
 
