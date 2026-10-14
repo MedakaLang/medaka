@@ -39,8 +39,8 @@ Browser
 │            └─► ok=true, wat  → vendor/wat2wasm (Rust blob)        │
 │                  wat2wasm_bg.wasm assembles WAT → binary bytes     │
 │                      │                                             │
-│                      └─► worker.js (runner Worker)                 │
-│                            WebAssembly.instantiate(bytes, glue)   │
+│                      └─► worker.js (runner module Worker)          │
+│                            medaka_host.mjs: browser-worker host   │
 │                            then exports.mdk_main() runs main      │
 │                            mdk_write_byte → console (#console)    │
 │                            10 s wall-clock kill-timer             │
@@ -56,7 +56,8 @@ Data flow: `source → compile.mjs (playground.wasm) → diagnostics | WAT → w
 | `compiler/entries/playground_main.mdk` | Combined compiler entry: runs the front-end once; outputs `__MEDAKA_DIAGNOSTICS__` + JSON (check errors) or `__MEDAKA_WAT__` + WAT (clean) |
 | `playground/compile.mjs` | Env-agnostic compile seam: `compile(source,{wasm,stdlib})` → `{ok:true,wat}` or `{ok:false,diagnostics}` |
 | `playground/compiler-worker.js` | Module Worker: runs compile + wat2wasm assembly off the UI thread |
-| `playground/worker.js` | Runner Worker: instantiates the assembled user wasm with host-import glue + 10 s kill-timer |
+| `playground/worker.js` | Runner module Worker: runs the assembled user wasm on the `wasmgc/browser-worker` host (per-run in-memory vfs); main.js holds the 10 s kill-timer |
+| `playground/medaka_host.mjs` | The one wasm host: the `env` import object built from capability slices per profile, the float/strtod shims, and the flush discipline; also used by `test/wasm/run.js` and `compile.mjs` |
 | `playground/main.js` | Page glue: fetches 4 static assets once, orchestrates compiler-worker → runner worker, renders output |
 | `playground/server.js` | Static file server only — no `/compile` endpoint, no medaka subprocess at runtime |
 | `playground/vendor/wat2wasm/` | Committed browser WAT→wasm assembler: Rust `wat` crate v1.252.0 wrapped with wasm-bindgen (~708 KB `_bg.wasm`) |
@@ -156,7 +157,7 @@ preview on purpose.
 ⚠️ **`sleep` needs cross-origin isolation.** `_headers` sends
 `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy:
 require-corp` on the playground route, its three workers, and every module the module
-workers import (`compile.mjs`, `vendor/wat2wasm/wat2wasm.js`), and on nothing else
+workers import (`compile.mjs`, `medaka_host.mjs`, `vendor/wat2wasm/wat2wasm.js`), and on nothing else
 (the blog and guide embed third-party content). WebKit, and so every iOS browser,
 refuses a module worker's import that lacks COEP; Chrome checks only the worker
 script, so a Chrome-only check passes while Safari's Run fails with
@@ -165,7 +166,7 @@ the import set from the workers' source. After a deploy, check both sides:
 
 ```sh
 curl -sI https://medaka-lang.dev/ | grep -i '^cross-origin'            # both headers
-for p in worker.js compiler-worker.js language-worker.js compile.mjs vendor/wat2wasm/wat2wasm.js; do
+for p in worker.js compiler-worker.js language-worker.js compile.mjs medaka_host.mjs vendor/wat2wasm/wat2wasm.js; do
   curl -sI "https://medaka-lang.dev/$p" | grep -ci '^cross-origin-embedder'   # 1 each
 done
 curl -sI https://medaka-lang.dev/blog/index.html | grep -ci '^cross-origin'  # 0

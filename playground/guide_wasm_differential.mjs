@@ -21,9 +21,9 @@
 // Two deliberate, named deltas from a real browser tab, neither in the compiler:
 //   * assembly:  wasm-tools parse here, vendor/wat2wasm in the page. Both are
 //                WAT→wasm assemblers over the same emitter output.
-//   * host ABI:  test/wasm/run.js here, playground/worker.js in the page. Their
-//                numeric shims are byte-identical BY GATE
-//                (test/diff_compiler_wasm_shim_parity_test.mdk).
+//   * host ABI:  test/wasm/run.js here, playground/worker.js in the page. Both
+//                build their imports from playground/medaka_host.mjs, on the
+//                wasmgc/node and wasmgc/browser-worker profiles respectively.
 // The browser-driven sample in playground/e2e (SITE=1 bash playground/e2e/run.sh,
 // tests/playground.spec.mjs "guide example round-trip") closes both deltas
 // empirically for a few examples by running them in an actual Chrome.
@@ -96,7 +96,8 @@ const GUIDE_DIR = opts.guide
 // Deliberately a second copy rather than an import: this file's job is to catch
 // the render and the rule drifting apart, and a shared constant cannot disagree
 // with itself. Keep in sync with render_docs.mjs `classifyRunnable` /
-// UNSUPPORTED_CALL_RE and with playground/worker.js `capabilityStub`.
+// UNSUPPORTED_CALL_RE and with the slices playground/medaka_host.mjs withholds or
+// confines on wasmgc/browser-worker.
 const STUBBED_CAPABILITY_RE =
   /\b(readFile|writeFile|readLine|readLines|getEnv|fileExists|args|exit)\b/;
 const KIND_MEDAKA_LABELS = new Set(['medaka', 'medaka-project', 'medaka-nocheck']);

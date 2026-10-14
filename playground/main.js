@@ -497,7 +497,7 @@ async function runProgram() {
   renderProblems();
   setStatus('running…');
 
-  const runner = new Worker('worker.js');
+  const runner = new Worker('worker.js', { type: 'module' });
   activeRunner = runner;
 
   killTimer = setTimeout(() => killRunner(`stopped after ${RUN_TIMEOUT_MS / 1000} s (the playground's time limit)`), RUN_TIMEOUT_MS);
