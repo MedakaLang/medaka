@@ -16,7 +16,8 @@
 #   vendor/codemirror/codemirror.js
 #   dist/playground.wasm
 #   dist/runtime.mdk  dist/core.mdk
-#   dist/<m>.mdk      for every EXTRA_MODULES entry in main.js (array, list, …)
+#   dist/<m>.mdk      for every stdlib module (array, list, crypto.sha256, …)
+#   dist/stdlib_modules.json  their ids, the list main.js fetches from
 #   guide/<chapter>.html  one page per docs/guide/*.md (OUTLINE.md excluded)
 #   guide/guide.css
 #   advanced/<chapter>.html  one page per docs/advanced/*.md
@@ -42,12 +43,13 @@ SITE="$SCRIPT_DIR/site"
 DIST="$SCRIPT_DIR/dist"
 
 # ── Build dist artifacts if missing ─────────────────────────────────────────
-if [ ! -f "$DIST/playground.wasm" ]; then
-  echo "[build_site] dist/playground.wasm not found — running build_playground_wasm.sh ..."
+if [ ! -f "$DIST/playground.wasm" ] || [ ! -f "$DIST/stdlib_modules.json" ]; then
+  echo "[build_site] dist/playground.wasm or dist/stdlib_modules.json not found — running build_playground_wasm.sh ..."
   bash "$SCRIPT_DIR/build_playground_wasm.sh"
 fi
 
 [ -f "$DIST/playground.wasm" ] || { echo "FAIL: dist/playground.wasm still missing after build"; exit 1; }
+[ -f "$DIST/stdlib_modules.json" ] || { echo "FAIL: dist/stdlib_modules.json still missing after build"; exit 1; }
 [ -f "$DIST/runtime.mdk" ]     || { echo "FAIL: dist/runtime.mdk missing"; exit 1; }
 [ -f "$DIST/core.mdk" ]        || { echo "FAIL: dist/core.mdk missing"; exit 1; }
 
@@ -84,13 +86,13 @@ cp "$SCRIPT_DIR/vendor/codemirror/codemirror.js" "$SITE/vendor/codemirror/"
 # Compiler wasm + stdlib sources.
 #
 # Copy EVERY .mdk build_playground_wasm.sh staged, not a hardcoded subset: the
-# page fetches runtime.mdk + core.mdk *and* the ~20 EXTRA_MODULES it lists in
-# main.js, so `import array` in a user program needs dist/array.mdk present. A
-# hand-maintained list here silently drops modules added to main.js later —
-# which is exactly how dist/array.mdk went missing and every `import` 404'd at
-# Run time.
-cp "$DIST/playground.wasm" "$SITE/dist/"
-cp "$DIST"/*.mdk           "$SITE/dist/"
+# page fetches runtime.mdk + core.mdk *and* every module dist/stdlib_modules.json
+# lists, so `import array` in a user program needs dist/array.mdk present. A
+# hand-maintained list here silently drops modules added later — which is
+# exactly how dist/array.mdk went missing and every `import` 404'd at Run time.
+cp "$DIST/playground.wasm"     "$SITE/dist/"
+cp "$DIST/stdlib_modules.json" "$SITE/dist/"
+cp "$DIST"/*.mdk               "$SITE/dist/"
 
 # Cloudflare Pages `_headers` file — see the file itself for why this exists
 # (routes /dist/*.mdk through Cloudflare's compressible-content-type list).
@@ -169,10 +171,13 @@ node "$SCRIPT_DIR/render_docs.mjs" \
 cp "$SCRIPT_DIR"/blog-cards/* "$SITE/blog/"
 
 # ── Verify the site can actually serve what the page asks for ───────────────
-# Derived from main.js, so this check cannot drift from the page's real needs.
+# Derived from dist/stdlib_modules.json, the list main.js fetches from, so this
+# check cannot drift from the page's real needs. An empty list is a failure:
+# build_playground_wasm.sh lists every stdlib module.
 missing=""
-for m in $(sed -n '/^const EXTRA_MODULES = \[/,/\];/p' "$SCRIPT_DIR/main.js" \
-             | grep -o "'[a-z_0-9]*'" | tr -d "'"); do
+listed=$( { grep -o '"[a-z_0-9.]*"' "$SITE/dist/stdlib_modules.json" || true; } | tr -d '"')
+[ -n "$listed" ] || missing=" (dist/stdlib_modules.json lists no module)"
+for m in $listed; do
   [ -f "$SITE/dist/$m.mdk" ] || missing="$missing $m.mdk"
 done
 for f in runtime.mdk core.mdk; do
@@ -185,15 +190,16 @@ fi
 
 # Import closure: a shipped module may only import modules that are shipped
 # too, else `import <mod>` dies in the browser with "unknown module: <dep>".
-# Reads the `import` lines of the .mdk files actually in site/dist.
+# Reads the `import` lines of the .mdk files actually in site/dist; a dotted
+# module id is staged flat (`crypto.sha256` -> dist/crypto.sha256.mdk).
 unshipped=""
 for f in "$SITE"/dist/*.mdk; do
-  for dep in $(sed -n 's/^import \([a-z_0-9]*\).*/\1/p' "$f" | sort -u); do
+  for dep in $(sed -n 's/^import \([a-z_0-9.]*[a-z_0-9]\).*/\1/p' "$f" | sort -u); do
     [ -f "$SITE/dist/$dep.mdk" ] || unshipped="$unshipped $(basename "$f" .mdk)->$dep"
   done
 done
 if [ -n "$unshipped" ]; then
-  echo "FAIL: shipped modules import modules that are not shipped (add to EXTRA_MODULES in main.js and build_playground_wasm.sh):$unshipped" >&2
+  echo "FAIL: shipped modules import modules that are not shipped (build_playground_wasm.sh stages stdlib/ and stdlib/crypto/):$unshipped" >&2
   exit 1
 fi
 

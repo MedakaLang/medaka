@@ -81,14 +81,19 @@ function compiledModuleFor(wasmModuleOrBytes) {
 // every mode (compile / analyze / hover / complete) so they cannot drift.
 function buildVfs(source, stdlib) {
   const vfsMap = new Map();
-  vfsMap.set(RUNTIME_PATH, enc(stdlib.runtime));
+  const runtimeBytes = enc(stdlib.runtime);
+  vfsMap.set(RUNTIME_PATH, runtimeBytes);
+  // `import runtime` resolves through the loader, as natively; `core` is the
+  // implicit prelude and is never loaded as a module.
+  vfsMap.set(USER_ROOT + '/' + RUNTIME_PATH, runtimeBytes);
   vfsMap.set(CORE_PATH, enc(stdlib.core));
   vfsMap.set(USER_PATH, enc(source));
   // A prelude-only program resolves no sibling imports.  Extra stdlib modules
   // (list/map/...) a program imports go in opts.stdlib.extra as { '<id>': text }
-  // (e.g. { 'list': '...' }), registered under the loader's "./<id>.mdk" key.
+  // (e.g. { 'list': '...' }), registered under the loader's key for the id:
+  // "./<id>.mdk", a dotted id's segments as directories ("./crypto/sha256.mdk").
   if (stdlib.extra) for (const [id, text] of Object.entries(stdlib.extra)) {
-    vfsMap.set(USER_ROOT + '/' + id + '.mdk', enc(text));
+    vfsMap.set(USER_ROOT + '/' + id.replace(/\./g, '/') + '.mdk', enc(text));
   }
   return vfsMap;
 }

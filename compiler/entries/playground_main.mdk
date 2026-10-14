@@ -38,8 +38,9 @@
 --     desugared once per SESSION, not once per keystroke.  User modules are
 --     loaded through the loader's source-keyed parse memo, likewise held for
 --     the session (`playgroundParseCache`).
---   `compile` — all of the above, plus exactly one emit-side `elaborateModules`
---     inside `runEmit`.
+--   Both modes then elaborate the program exactly once (`analyzeProgram` in
+--     `finishClean`): the `wasmgc/browser-worker` target check judges that
+--     elaboration, and `compile` emits from it.
 -- Before S2 this entry additionally re-loaded and re-parsed every user module, re-parsed
 -- and re-desugared runtime.mdk + core.mdk, and ran a whole extra `elaborateModules`
 -- whose result it threw away — ~161ms and ~99ms respectively of a 454ms `analyze` of a
@@ -109,16 +110,22 @@ import driver.diagnostics.{
   codeKind,
   diagOfTypeError,
   missingMainDiag,
+  cjFoldIntoFile,
 }
 import driver.main_autoprint.{
   shouldAutoPrintMain,
   autoPrintWrapModules,
   autoPrintPinCore,
+  autoPrintPinName,
   underivedMainDiags,
   shouldAsyncWrapMain,
   asyncWrapModules,
   asyncMainShapeError,
 }
+import types.target_profile.{selectedProfile, lookupProfile}
+import tools.check_policy.{EntryAnalysis(..), analyzeProgram}
+import tools.target_check.{targetRefusal}
+import list.{last}
 import json.{
   Json(..),
   jObject,
@@ -136,7 +143,7 @@ import entries.entry_support.{
 import support.util.{startsWith, lookupAssoc, splitOnChar, filterList}
 import types.repr.{Scheme}
 import types.typecheck.{
-  TcDiag, elaborateModules, constrainedSigNames, preludeReturnPosDictNames,
+  TcDiag, ElabResult, constrainedSigNames, preludeReturnPosDictNames,
   preludeArgPosDictNames, mainTypeIsFloat, mainTypeIsUnit,
   checkedFfiExternTypeNamesModules, ppSchemeNamedFull, checkOneSchemeFullK
 }
@@ -181,18 +188,36 @@ import backend.emit_plan.{buildEmitPlanReached}
 -- diverges at exactly ONE point (`finishClean`) so the two modes cannot drift in
 -- what diagnostics they report.
 main : <IO> Unit
-main = match args ()
-  "compile" :: runtimeP :: coreP :: entry :: rest =>
-    runWithShipped True runtimeP coreP entry rest
-  "analyze" :: runtimeP :: coreP :: entry :: rest =>
-    runWithShipped False runtimeP coreP entry rest
-  "hover" :: runtimeP :: coreP :: entry :: rest =>
-    runQuery True runtimeP coreP entry rest
-  "complete" :: runtimeP :: coreP :: entry :: rest =>
-    runQuery False runtimeP coreP entry rest
-  _ =>
-    ePutStrLn
-      "usage: playground_main <compile|analyze|hover|complete> <runtime.mdk> <core.mdk> <entry.mdk> [root ... | line col]"
+main =
+  let _ = selectPlaygroundProfile ()
+  match args ()
+    "compile" :: runtimeP :: coreP :: entry :: rest =>
+      runWithShipped True runtimeP coreP entry rest
+    "analyze" :: runtimeP :: coreP :: entry :: rest =>
+      runWithShipped False runtimeP coreP entry rest
+    "hover" :: runtimeP :: coreP :: entry :: rest =>
+      runQuery True runtimeP coreP entry rest
+    "complete" :: runtimeP :: coreP :: entry :: rest =>
+      runQuery False runtimeP coreP entry rest
+    _ =>
+      ePutStrLn
+        "usage: playground_main <compile|analyze|hover|complete> <runtime.mdk> <core.mdk> <entry.mdk> [root ... | line col]"
+
+-- The profile the browser runner (playground/medaka_host.mjs, worker.js)
+-- installs.  It is selected before any typecheck, as `check --target` selects
+-- it: the typechecker bounds `IO` by the profile's join, and `finishClean`
+-- refuses an entry performing a label the profile withholds.  Every mode
+-- selects it, because the host re-enters `main` on one instance and a hover
+-- must see the same `IO` whichever mode ran before it.
+playgroundProfileName : String
+playgroundProfileName = "wasmgc/browser-worker"
+
+selectPlaygroundProfile : Unit -> <IO> Unit
+selectPlaygroundProfile _ = match lookupProfile playgroundProfileName
+  Ok p => selectedProfile := Some p
+  Err m =>
+    let _ = ePutStrLn ("error: " ++ m)
+    exit 1
 
 -- ── driver ────────────────────────────────────────────────────────────────
 
@@ -525,12 +550,19 @@ doEmit emit rsrc csrc tsrc entry paths mods warnTriples =
   let rt = desugaredPrelude rsrc
   let core = desugaredPrelude csrc
   let modules = map desugarPair mods
+  let written =
+    printed => WrittenEntry {
+      wePath = entry,
+      weSource = tsrc,
+      weDecls = entryDeclsOf modules,
+      wePrinted = printed,
+    }
   if shouldAutoPrintMain core modules then
     -- coreW carries the wrap's prelude-pinned callee (autoPrintPinCore, #2185).
     let coreW = autoPrintPinCore core
     let modulesW = autoPrintWrapModules modules
     match underivedMainDiags rt coreW modulesW
-      [] => finishClean emit paths warnTriples rt coreW modulesW
+      [] => finishClean emit (written True) paths warnTriples rt coreW modulesW
       errs =>
         emitDiagnostics (cjAllToJson [(entry, tsrc, map diagOfTypeError errs)])
   else match asyncMainShapeError modules
@@ -551,12 +583,29 @@ doEmit emit rsrc csrc tsrc entry paths mods warnTriples =
         -- Re-check the rewritten program, as the auto-print branch does.
         let modulesW = asyncWrapModules "runAsyncMain" modules
         match underivedMainDiags rt core modulesW
-          [] => finishClean emit paths warnTriples rt core modulesW
+          [] =>
+            finishClean emit (written False) paths warnTriples rt core modulesW
           errs =>
             emitDiagnostics
               (cjAllToJson [(entry, tsrc, map diagOfTypeError errs)])
       else
-        finishClean emit paths warnTriples rt core modules
+        finishClean emit (written False) paths warnTriples rt core modules
+
+-- The entry as the user wrote it, which `finishClean` may receive wrapped:
+-- its path and source (where a refusal lands), its desugared decls (where
+-- `main` is declared and what it calls), and whether the drivers print it.
+data WrittenEntry = WrittenEntry {
+  wePath : String,
+  weSource : String,
+  weDecls : List Decl,
+  wePrinted : Bool,
+}
+
+-- The entry module's decls: the loader's list is dependency-first.
+entryDeclsOf : List (String, List Decl) -> List Decl
+entryDeclsOf modules = match last modules
+  Some (_, decls) => decls
+  None => []
 
 -- ACCEPTED TRADEOFF (Val, 2026-09-01, #2442 review round F1): because `analyze`
 -- deliberately never reaches `runEmit` below, it CANNOT detect a codegen-only
@@ -575,24 +624,62 @@ doEmit emit rsrc csrc tsrc entry paths mods warnTriples =
 -- bug to fix here.
 --
 -- The ONE divergence point between `compile` and `analyze`.  Every diagnostic
--- from the frontend has already been produced here. Compile additionally checks
--- the target file-capability prerequisites before printing WAT; analyze prints its
--- own marker and the same warnings JSON — no lowerProgramEmit, no reach,
--- no emitProgram, and no `elaborateModules` at all (`runEmit`'s is now the only one
--- on either path — see doEmit's obituary for the discarded one that preceded
--- it, which is why `analyze` reaches here having elaborated the user's program once).
+-- from the frontend has already been produced here.  Both modes then run the
+-- program's one elaboration (`analyzeProgram`, the drive `elaborateModules`
+-- runs, with the entry's schemes and invocation table kept) and judge the entry
+-- against the selected profile on it, as `check --target` does; a refusal is
+-- the verdict in either mode.  Compile then emits from that same elaboration;
+-- analyze prints its own marker and the same warnings JSON — no
+-- lowerProgramEmit, no reach, no emitProgram.  See doEmit's obituary for the
+-- discarded elaboration that once preceded this one: there is exactly one per
+-- run, on either path.
 finishClean : Bool ->
+  WrittenEntry ->
   List (String, String) ->
   List (String, String, List Diag) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   <IO> Unit
-finishClean emit paths warnTriples runtimeDecls coreDecls modules =
-  if emit then
-    runEmit paths warnTriples runtimeDecls coreDecls modules
+finishClean emit written paths warnTriples runtimeDecls coreDecls modules =
+  let analysis = analyzeProgram runtimeDecls coreDecls modules
+  match targetRefusalOf written analysis
+    Some d => emitDiagnostics (cjAllToJson (withRefusal written d warnTriples))
+    None =>
+      if emit then
+        runEmit paths warnTriples runtimeDecls analysis.eaElab
+      else
+        emitAnalyzeMarker warnTriples
+
+-- The selected profile's refusal of the entry.  The analysis may be of the
+-- wrapped program, so it is judged with the entry's own decls, and a printed
+-- entry with the `println` the wrap applies: the refusal then names what
+-- `check --target` names for the same source, at the same place.
+targetRefusalOf : WrittenEntry -> EntryAnalysis -> <IO> Option Diag
+targetRefusalOf written analysis = match !selectedProfile
+  None => None
+  Some profile =>
+    let printedCall =
+      if written.wePrinted then
+        lookupAssoc autoPrintPinName analysis.eaSchemes
+      else
+        None
+    targetRefusal profile written.wePath { analysis |
+      eaEntryDecls = written.weDecls,
+      eaAutoPrintCall = printedCall,
+    }
+
+-- The warnings' report with the refusal folded into the entry's file, as
+-- `check --json --target` folds it; an entry with no row of its own gets one.
+withRefusal : WrittenEntry ->
+  Diag ->
+  List (String, String, List Diag) ->
+  List (String, String, List Diag)
+withRefusal written d triples =
+  if any ((p, _, _) => p == written.wePath) triples then
+    cjFoldIntoFile written.wePath [d] triples
   else
-    emitAnalyzeMarker warnTriples
+    triples ++ [(written.wePath, written.weSource, [d])]
 
 -- `analyze`'s terminal marker: ALWAYS a marker line plus a one-line JSON payload.
 -- The payload is byte-identical to the warnings JSON `emitWatMarker` writes when
@@ -626,13 +713,12 @@ nonEmptyDiags _ = True
 runEmit : List (String, String) ->
   List (String, String, List Diag) ->
   List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
+  ElabResult ->
   <IO> Unit
-runEmit paths warnTriples runtimeDecls coreDecls modules =
-  -- #2809: elaborate the program as written, then mangle its elaborated trees.
-  let (coreE, modulesE, _, _, _, _) =
-    elaborateModules runtimeDecls coreDecls modules
+runEmit paths warnTriples runtimeDecls elaborated =
+  -- #2809: the program is elaborated as written (`finishClean`), then its
+  -- elaborated trees are mangled.
+  let (coreE, modulesE, _, _, _, _) = elaborated
   let (coreD, modulesM) = mangleUnitsEv coreE modulesE
   let modules2 = stampModulePaths paths modulesM
   let allDecls0 = coreD ++ flatMap snd modules2

@@ -598,7 +598,7 @@ expectationActual (Fail _ _ a) = a
 
 -- # Running tests
 
-goTests : List (String, Unit -> Expectation) -> Int -> Int -> <IO> Bool
+goTests : List (String, Unit -> Expectation) -> Int -> Int -> <Stdout> Bool
 goTests [] passed failed =
   println "\n\{intToString passed} passed, \{intToString failed} failed"
   eq failed 0
@@ -615,7 +615,7 @@ goTests ((name, thunk) :: rest) passed failed = match thunk ()
    Each test is a name and a function from `Unit` to an `Expectation`.
    Returns `True` when every test passes. -}
 export
-runTests : List (String, Unit -> Expectation) -> <IO> Bool
+runTests : List (String, Unit -> Expectation) -> <Stdout> Bool
 runTests tests = goTests tests 0 0
 
 -- # Golden files
@@ -783,10 +783,10 @@ prop "expectEqualText never conflates a value with that value plus a digit" (n :
 (DTypeSig true "expectationActual" (TyFun (TyCon "Expectation") (TyCon "String")))
 (DFunDef false "expectationActual" ((PCon "Pass" PWild (PVar "a"))) (EVar "a"))
 (DFunDef false "expectationActual" ((PCon "Fail" PWild PWild (PVar "a"))) (EVar "a"))
-(DTypeSig false "goTests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyFun (TyCon "Unit") (TyCon "Expectation")))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Bool"))))))
+(DTypeSig false "goTests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyFun (TyCon "Unit") (TyCon "Expectation")))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Stdout") None (TyCon "Bool"))))))
 (DFunDef false "goTests" ((PList) (PVar "passed") (PVar "failed")) (EBlock (DoExpr (EApp (EVar "println") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "passed")))) (ELit (LString " passed, "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "failed")))) (ELit (LString " failed"))))) (DoExpr (EApp (EApp (EVar "eq") (EVar "failed")) (ELit (LInt 0))))))
 (DFunDef false "goTests" ((PCons (PTuple (PVar "name") (PVar "thunk")) (PVar "rest")) (PVar "passed") (PVar "failed")) (EMatch (EApp (EVar "thunk") (ELit LUnit)) (arm (PCon "Pass" PWild PWild) () (EBlock (DoExpr (EApp (EVar "println") (EBinOp "++" (ELit (LString "  ok   ")) (EVar "name")))) (DoExpr (EApp (EApp (EApp (EVar "goTests") (EVar "rest")) (EBinOp "+" (EVar "passed") (ELit (LInt 1)))) (EVar "failed"))))) (arm (PCon "Fail" (PVar "msg") PWild PWild) () (EBlock (DoExpr (EApp (EVar "println") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  FAIL ")) (EApp (EVar "display") (EVar "name"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EApp (EVar "goTests") (EVar "rest")) (EVar "passed")) (EBinOp "+" (EVar "failed") (ELit (LInt 1)))))))))
-(DTypeSig true "runTests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyFun (TyCon "Unit") (TyCon "Expectation")))) (TyEffect ("IO") None (TyCon "Bool"))))
+(DTypeSig true "runTests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyFun (TyCon "Unit") (TyCon "Expectation")))) (TyEffect ("Stdout") None (TyCon "Bool"))))
 (DFunDef false "runTests" ((PVar "tests")) (EApp (EApp (EApp (EVar "goTests") (EVar "tests")) (ELit (LInt 0))) (ELit (LInt 0))))
 (DTypeSig true "expectGolden" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyCon "String") (TyEffect ((atom "FileRead" (name "path"))) None (TyCon "Expectation")))))
 (DFunDef false "expectGolden" ((PVar "path") (PVar "actual")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "expected golden ")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (ELit (LString ""))) (EVar "actual"))) (arm (PCon "Ok" (PVar "golden")) () (EApp (EApp (EVar "expectEqualText") (EVar "golden")) (EVar "actual")))))
@@ -902,10 +902,10 @@ prop "expectEqualText never conflates a value with that value plus a digit" (n :
 (DTypeSig true "expectationActual" (TyFun (TyCon "Expectation") (TyCon "String")))
 (DFunDef false "expectationActual" ((PCon "Pass" PWild (PVar "a"))) (EVar "a"))
 (DFunDef false "expectationActual" ((PCon "Fail" PWild PWild (PVar "a"))) (EVar "a"))
-(DTypeSig false "goTests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyFun (TyCon "Unit") (TyCon "Expectation")))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Bool"))))))
+(DTypeSig false "goTests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyFun (TyCon "Unit") (TyCon "Expectation")))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ("Stdout") None (TyCon "Bool"))))))
 (DFunDef false "goTests" ((PList) (PVar "passed") (PVar "failed")) (EBlock (DoExpr (EApp (EDictApp "println") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "passed")))) (ELit (LString " passed, "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "failed")))) (ELit (LString " failed"))))) (DoExpr (EApp (EApp (EMethodRef "eq") (EVar "failed")) (ELit (LInt 0))))))
 (DFunDef false "goTests" ((PCons (PTuple (PVar "name") (PVar "thunk")) (PVar "rest")) (PVar "passed") (PVar "failed")) (EMatch (EApp (EVar "thunk") (ELit LUnit)) (arm (PCon "Pass" PWild PWild) () (EBlock (DoExpr (EApp (EDictApp "println") (EBinOp "++" (ELit (LString "  ok   ")) (EVar "name")))) (DoExpr (EApp (EApp (EApp (EVar "goTests") (EVar "rest")) (EBinOp "+" (EVar "passed") (ELit (LInt 1)))) (EVar "failed"))))) (arm (PCon "Fail" (PVar "msg") PWild PWild) () (EBlock (DoExpr (EApp (EDictApp "println") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  FAIL ")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EApp (EVar "goTests") (EVar "rest")) (EVar "passed")) (EBinOp "+" (EVar "failed") (ELit (LInt 1)))))))))
-(DTypeSig true "runTests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyFun (TyCon "Unit") (TyCon "Expectation")))) (TyEffect ("IO") None (TyCon "Bool"))))
+(DTypeSig true "runTests" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyFun (TyCon "Unit") (TyCon "Expectation")))) (TyEffect ("Stdout") None (TyCon "Bool"))))
 (DFunDef false "runTests" ((PVar "tests")) (EApp (EApp (EApp (EVar "goTests") (EVar "tests")) (ELit (LInt 0))) (ELit (LInt 0))))
 (DTypeSig true "expectGolden" (TyFun (TyNamed "path" (TyCon "String")) (TyFun (TyCon "String") (TyEffect ((atom "FileRead" (name "path"))) None (TyCon "Expectation")))))
 (DFunDef false "expectGolden" ((PVar "path") (PVar "actual")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "expected golden ")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (ELit (LString ""))) (EVar "actual"))) (arm (PCon "Ok" (PVar "golden")) () (EApp (EApp (EVar "expectEqualText") (EVar "golden")) (EVar "actual")))))

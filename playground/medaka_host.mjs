@@ -36,9 +36,11 @@ const MATH_KEYS = [
   'mdk_sin', 'mdk_cos', 'mdk_tan', 'mdk_asin', 'mdk_acos', 'mdk_atan',
   'mdk_sinh', 'mdk_cosh', 'mdk_tanh', 'mdk_pow', 'mdk_atan2', 'mdk_hypot',
 ];
+// `externs` names the stdlib/runtime.mdk externs a slice that a profile can withhold
+// serves, keyless slices included: the names a program calls to reach it.
 export const SLICES = {
-  stdout: { needs: ['Stdout'], keys: ['mdk_write_byte'] },
-  stderr: { needs: ['Stderr'], keys: ['mdk_write_err_byte'] },
+  stdout: { needs: ['Stdout'], keys: ['mdk_write_byte'], externs: ['putStr'] },
+  stderr: { needs: ['Stderr'], keys: ['mdk_write_err_byte'], externs: ['ePutStr'] },
   floatfmt: { needs: [], keys: ['mdk_float_fmt', 'mdk_float_fmt_byte'] },
   math: { needs: [], keys: MATH_KEYS },
   strtod: { needs: [], keys: ['mdk_str_to_float', 'mdk_str_to_float_ok', ...PATH_KEYS] },
@@ -49,13 +51,18 @@ export const SLICES = {
       'mdk_write_file_reset', 'mdk_write_file_push', 'mdk_write_file_commit',
       ...PATH_KEYS, ...RESULT_KEYS,
     ],
+    externs: ['readFile', 'readFileBytes', 'fileExists', 'writeFile', 'writeFileBytes'],
   },
-  env: { needs: ['Env'], keys: ['mdk_get_env', ...PATH_KEYS, ...RESULT_KEYS] },
-  args: { needs: [], process: true, keys: ['mdk_args_count', 'mdk_arg_len', 'mdk_arg_byte'] },
-  exit: { needs: [], process: true, keys: ['mdk_exit'] },
-  clock: { needs: ['Clock'], keys: ['mdk_wall_time_sec', 'mdk_monotonic_sec', 'mdk_sleep_ms'] },
-  entropy: { needs: ['Rand'], keys: [] },
-  stdin: { needs: ['Stdin'], keys: [] },
+  env: { needs: ['Env'], keys: ['mdk_get_env', ...PATH_KEYS, ...RESULT_KEYS], externs: ['getEnv'] },
+  args: { needs: [], process: true, keys: ['mdk_args_count', 'mdk_arg_len', 'mdk_arg_byte'], externs: ['args'] },
+  exit: { needs: [], process: true, keys: ['mdk_exit'], externs: ['exit'] },
+  clock: {
+    needs: ['Clock'],
+    keys: ['mdk_wall_time_sec', 'mdk_monotonic_sec', 'mdk_sleep_ms'],
+    externs: ['wallTimeSec', 'monotonicSec', 'sleepMs'],
+  },
+  entropy: { needs: ['Rand'], keys: [], externs: ['osEntropyBytes'] },
+  stdin: { needs: ['Stdin'], keys: [], externs: ['readLine', 'readLineOpt', 'readAll', 'readExactly'] },
 };
 
 // The wasmgc rows of compiler/types/target_profile.mdk `profileRows`: the labels
@@ -92,6 +99,17 @@ export function profileSlices(profile) {
 export function installedKeys(profile) {
   const slices = typeof profile === 'string' ? profileSlices(profile) : profile.slices;
   return [...new Set(slices.flatMap((s) => SLICES[s].keys))];
+}
+
+// The externs of the slices a profile withholds: a program calling one cannot run
+// there as documented.  The playground's runnability rule (render_docs.mjs and,
+// restated independently, guide_wasm_differential.mjs) reads this for
+// `wasmgc/browser-worker`.
+export function withheldExterns(profile) {
+  const installed = new Set(profileSlices(profile));
+  return Object.keys(SLICES)
+    .filter((s) => !installed.has(s))
+    .flatMap((s) => SLICES[s].externs || []);
 }
 
 // The extern a key serves, for a withheld slice's message.

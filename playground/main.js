@@ -302,50 +302,45 @@ function applyDiagnostics(files) {
   setSquiggles(view, files || []);
 }
 
-// Stdlib modules bundled into the vfs so `import <mod>` works in the browser.
-// EXCLUDED (native-only externs that trap/LinkError on wasm): fs, net, io, test.
-// Keep in sync with EXTRA_MODULES in build_playground_wasm.sh (these are fetched
-// from dist/<id>.mdk).
-const EXTRA_MODULES = [
-  'args', 'array', 'async', 'base64', 'bytebuilder', 'byteparser', 'bytes',
-  'hash_map', 'hash_set', 'hex', 'i32', 'i64', 'json', 'list', 'map', 'math',
-  'mut_bytes', 'nonempty', 'path', 'regex', 'set', 'string', 'time', 'toml', 'u16', 'u32',
-  'u64', 'u8', 'validation', 'vector',
-];
-
 // ── Asset loader ──────────────────────────────────────────────────────────────
+// Every stdlib module is bundled into the vfs so `import <mod>` resolves in the
+// browser as it does natively; one the profile cannot run is refused by the
+// compiler's target check.  The ids come from dist/stdlib_modules.json, which
+// build_playground_wasm.sh generates; each is fetched from dist/<id>.mdk.
+async function fetchOk(name) {
+  const r = await fetch(name);
+  if (!r.ok) throw new Error('failed to fetch ' + name + ' (' + r.status + ')');
+  return r;
+}
+
+async function loadStdlibModules() {
+  const ids = await (await fetchOk('dist/stdlib_modules.json')).json();
+  const texts = await Promise.all(ids.map(async (m) => (await fetchOk('dist/' + m + '.mdk')).text()));
+  const extra = {};
+  ids.forEach((m, i) => { extra[m] = texts[i]; });
+  return extra;
+}
+
 async function loadAssets() {
   if (cachedAssets) return cachedAssets;
   if (assetsLoading) return assetsLoading;
 
   assetsLoading = (async () => {
-    // One wave: every fetch in flight at once (the extras used to wait for the
-    // four core responses to land first — a whole round trip on a cold visit).
-    const [wasmResp, runtimeResp, coreResp, wat2wasmResp, ...extraResps] = await Promise.all([
-      fetch('dist/playground.wasm'),
-      fetch('dist/runtime.mdk'),
-      fetch('dist/core.mdk'),
-      fetch('vendor/wat2wasm/wat2wasm_bg.wasm'),
-      ...EXTRA_MODULES.map((m) => fetch('dist/' + m + '.mdk')),
+    // One wave: every fetch in flight at once.  The modules wait only for their
+    // (small) list, while the compiler wasm is still arriving.
+    const [wasmResp, runtimeResp, coreResp, wat2wasmResp, extra] = await Promise.all([
+      fetchOk('dist/playground.wasm'),
+      fetchOk('dist/runtime.mdk'),
+      fetchOk('dist/core.mdk'),
+      fetchOk('vendor/wat2wasm/wat2wasm_bg.wasm'),
+      loadStdlibModules(),
     ]);
-    for (const [name, r] of [
-      ['dist/playground.wasm', wasmResp],
-      ['dist/runtime.mdk',     runtimeResp],
-      ['dist/core.mdk',        coreResp],
-      ['vendor/wat2wasm/wat2wasm_bg.wasm', wat2wasmResp],
-      ...EXTRA_MODULES.map((m, i) => ['dist/' + m + '.mdk', extraResps[i]]),
-    ]) {
-      if (!r.ok) throw new Error('failed to fetch ' + name + ' (' + r.status + ')');
-    }
     const [wasm, runtime, core, wat2wasmBytes] = await Promise.all([
       wasmResp.arrayBuffer(),
       runtimeResp.text(),
       coreResp.text(),
       wat2wasmResp.arrayBuffer(),
     ]);
-    const extraTexts = await Promise.all(extraResps.map((r) => r.text()));
-    const extra = {};
-    EXTRA_MODULES.forEach((m, i) => { extra[m] = extraTexts[i]; });
     cachedAssets = { wasm, runtime, core, wat2wasmBytes, extra };
     assetsLoading = null;
     return cachedAssets;
