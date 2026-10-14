@@ -1,5 +1,5 @@
 # META
-source_lines=1291
+source_lines=1297
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -71,10 +71,14 @@ import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
 -- children are rewritten first, then `f` is applied to the rebuilt node.
 export
 mapExpr : (Expr -> Expr) -> Expr -> Expr
-mapExpr f e = f (mapKids f e)
+mapExpr f e =
+  -- `go` closes over `f` once per traversal; `mapExpr f` per node would
+  -- allocate a fresh partial application at every subexpression.
+  let go x = f (mapKids go x)
+  go e
 
 mapKids : (Expr -> Expr) -> Expr -> Expr
-mapKids f e = mapChildren (mapExpr f) e
+mapKids step e = mapChildren step e
 
 -- `mapChildren g e` applies `g` to each immediate subexpression of `e` and
 -- rebuilds the node, recursing no further: the one-level step both traversal
@@ -1017,9 +1021,11 @@ concatLists (xs :: rest) = xs ++ concatLists rest
 -- `Name { a, b }` (all bare vars, no `=`) parses as ESetLit; when Name is a
 -- record type this is pun sugar for `Name { a = a, b = b }` → ERecordCreate.
 -- Runs before container-literal lowering so genuine Map/Set literals remain.
+-- With no record names no `ESetLit` can match, so the traversal is skipped.
 desugarRecordPuns : List Decl -> List Decl
-desugarRecordPuns prog =
-  mapProg (rewriteRecordPun (collectRecordNames prog)) prog
+desugarRecordPuns prog = match collectRecordNames prog
+  [] => prog
+  recordNames => mapProg (rewriteRecordPun recordNames) prog
 
 -- Names that can head a record-literal brace = every ConNamed constructor of a
 -- `data` decl (records are the `data X = { … }` short form, whose synthesized
@@ -1298,9 +1304,9 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DTypeSig true "mapExpr" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "mapExpr" ((PVar "f") (PVar "e")) (EApp (EVar "f") (EApp (EApp (EVar "mapKids") (EVar "f")) (EVar "e"))))
+(DFunDef false "mapExpr" ((PVar "f") (PVar "e")) (EBlock (DoLet false true (PVar "go") (ELam ((PVar "x")) (EApp (EVar "f") (EApp (EApp (EVar "mapKids") (EVar "go")) (EVar "x"))))) (DoExpr (EApp (EVar "go") (EVar "e")))))
 (DTypeSig false "mapKids" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "mapKids" ((PVar "f") (PVar "e")) (EApp (EApp (EVar "mapChildren") (EApp (EVar "mapExpr") (EVar "f"))) (EVar "e")))
+(DFunDef false "mapKids" ((PVar "step") (PVar "e")) (EApp (EApp (EVar "mapChildren") (EVar "step")) (EVar "e")))
 (DTypeSig true "mapChildren" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "ELoc" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EVar "g") (EVar "e"))))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "g") (EVar "e"))))
@@ -1658,7 +1664,7 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DFunDef false "concatLists" ((PList)) (EListLit))
 (DFunDef false "concatLists" ((PCons (PVar "xs") (PVar "rest"))) (EBinOp "++" (EVar "xs") (EApp (EVar "concatLists") (EVar "rest"))))
 (DTypeSig false "desugarRecordPuns" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
-(DFunDef false "desugarRecordPuns" ((PVar "prog")) (EApp (EApp (EVar "mapProg") (EApp (EVar "rewriteRecordPun") (EApp (EVar "collectRecordNames") (EVar "prog")))) (EVar "prog")))
+(DFunDef false "desugarRecordPuns" ((PVar "prog")) (EMatch (EApp (EVar "collectRecordNames") (EVar "prog")) (arm (PList) () (EVar "prog")) (arm (PVar "recordNames") () (EApp (EApp (EVar "mapProg") (EApp (EVar "rewriteRecordPun") (EVar "recordNames"))) (EVar "prog")))))
 (DTypeSig false "collectRecordNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectRecordNames" ((PList)) (EListLit))
 (DFunDef false "collectRecordNames" ((PCons (PRec "DData" ((rf "dataCtors" (PVar "variants"))) false) (PVar "rest"))) (EBinOp "++" (EApp (EVar "conNamedCtorNames") (EVar "variants")) (EApp (EVar "collectRecordNames") (EVar "rest"))))
@@ -1776,9 +1782,9 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DTypeSig true "mapExpr" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "mapExpr" ((PVar "f") (PVar "e")) (EApp (EVar "f") (EApp (EApp (EVar "mapKids") (EVar "f")) (EVar "e"))))
+(DFunDef false "mapExpr" ((PVar "f") (PVar "e")) (EBlock (DoLet false true (PVar "go") (ELam ((PVar "x")) (EApp (EVar "f") (EApp (EApp (EVar "mapKids") (EVar "go")) (EVar "x"))))) (DoExpr (EApp (EVar "go") (EVar "e")))))
 (DTypeSig false "mapKids" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "mapKids" ((PVar "f") (PVar "e")) (EApp (EApp (EVar "mapChildren") (EApp (EVar "mapExpr") (EVar "f"))) (EVar "e")))
+(DFunDef false "mapKids" ((PVar "step") (PVar "e")) (EApp (EApp (EVar "mapChildren") (EVar "step")) (EVar "e")))
 (DTypeSig true "mapChildren" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "ELoc" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EVar "g") (EVar "e"))))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "g") (EVar "e"))))
@@ -2136,7 +2142,7 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DFunDef false "concatLists" ((PList)) (EListLit))
 (DFunDef false "concatLists" ((PCons (PVar "xs") (PVar "rest"))) (EBinOp "++" (EVar "xs") (EApp (EVar "concatLists") (EVar "rest"))))
 (DTypeSig false "desugarRecordPuns" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
-(DFunDef false "desugarRecordPuns" ((PVar "prog")) (EApp (EApp (EVar "mapProg") (EApp (EVar "rewriteRecordPun") (EApp (EVar "collectRecordNames") (EVar "prog")))) (EVar "prog")))
+(DFunDef false "desugarRecordPuns" ((PVar "prog")) (EMatch (EApp (EVar "collectRecordNames") (EVar "prog")) (arm (PList) () (EVar "prog")) (arm (PVar "recordNames") () (EApp (EApp (EVar "mapProg") (EApp (EVar "rewriteRecordPun") (EVar "recordNames"))) (EVar "prog")))))
 (DTypeSig false "collectRecordNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectRecordNames" ((PList)) (EListLit))
 (DFunDef false "collectRecordNames" ((PCons (PRec "DData" ((rf "dataCtors" (PVar "variants"))) false) (PVar "rest"))) (EBinOp "++" (EApp (EVar "conNamedCtorNames") (EVar "variants")) (EApp (EVar "collectRecordNames") (EVar "rest"))))

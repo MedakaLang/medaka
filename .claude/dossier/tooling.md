@@ -62,6 +62,15 @@ carried the OLD golden. This was a SILENT version of the exact "bless in the sam
 the check exists to prevent. Fixed: an unstaged snapshot diff now fails check 4 outright,
 unconditionally, before the suite runs.
 
+## [H-REGISTER-UNSTAGED] comment-register check 6b reads the disk, not the index
+
+Check 6b runs the comment-register census over each staged file as it sits on disk. A partially
+staged file is judged on its unstaged edits: a clean staged blob can be rejected, and a violating
+staged blob can pass. The check cannot see the index, so the mitigation is procedural: `git add`
+every edit before committing. The CI twin, `test/diff_compiler_comment_shout_diff_test.mdk`
+(assertion 1, baselineCheck), runs the same ratchet over a clean checkout of the commit, so a locally wrong
+verdict cannot reach main. Documented, not changed (#3039).
+
 ## [H-DEFER] why the defer flag is sound despite skipping check 4
 
 "Bless in the same commit" and "goldens are re-cut in their own terminal commit" are only in
@@ -252,7 +261,7 @@ over staged `.mdk` (`test/` fixtures excluded). Re-install: `cp .githooks/pre-co
   A count may only fall; a nonzero count with no row fails closed. Regenerate via `sh
   test/comment_register_census.sh --write test/comment_register_baseline.toml`, never by
   hand. See `.githooks/pre-commit` check 6b; CI twin is
-  `test/diff_compiler_comment_shout_diff_test.mdk`'s second assertion.
+  `test/diff_compiler_comment_shout_diff_test.mdk`'s first assertion (baselineCheck).
 
 Bypass: `git commit --no-verify`. Unbuilt `medaka`: hook warns and allows.
 

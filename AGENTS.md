@@ -238,14 +238,19 @@ Reinstall: `cp .githooks/pre-commit "$(git rev-parse --git-common-dir)/hooks/pre
 - **[H-FMT]** `medaka fmt --write <abs path>` then re-`git add` (bare `fmt` is read-only). The
   tree is not fully fmt-clean; to see the current set: `make fmt-clean-census`.
 - **[H-LINT]** All rules gated. Run `medaka lint` on what you touch; read the output, because
-  the exit code lies without `--deny` (#1822). Suppress with `-- lint-disable-next-line
-  <rule>`. `--fix` bails on decls with interior comments.
+  the exit code is 1 for a usage error, a finding whose rule `--deny=<rules>` names (a rule-name
+  list, not a path; no `all`), or a file whose count is over, or has no row in, its
+  `--baseline=<file>` (#1822). `--only` and `--disable` filter before `--deny` and the baseline,
+  so they can suppress exit 1.
+  Suppress with `-- lint-disable-next-line <rule>`. `--fix` bails on decls with interior
+  comments.
 - **[H-SNAPSHOT]** Check only: `make snapshot-check`. Bless with
   `sh test/snapshot_bless.sh --bless <file>` and stage `test/snapshots/`.
   **[H-SNAPSHOT-NEW]** For a new source file use `--new` (suite-wide), then re-run the check.
   **[H-SNAPSHOT-UNSTAGED]** It reads the working tree. **[H-DEFER]**
   `PRECOMMIT_SNAPSHOT_DEFER=1 git commit` skips the snapshot check only.
   🚨 **[H-DEFER-VS-GUARD]** Bless and stage goldens LAST.
+- **[H-REGISTER-UNSTAGED]** Check 6b reads the working tree: `git add` every edit before committing. CI twin `test/diff_compiler_comment_shout_diff_test.mdk` is authoritative.
 - **[H-LEXTOK]** Stale `.lextok.golden` → `sh test/capture_goldens.sh --frozen lextok`.
 - **[H-LINT-BASELINE]** / **[H-COMMENT-REGISTER]** Per-file count ratchets that may only fall.
   Regenerate with `sh test/diff_compiler_lint_baseline.sh --write` /

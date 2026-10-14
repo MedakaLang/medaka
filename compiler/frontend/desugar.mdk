@@ -67,10 +67,14 @@ import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
 -- children are rewritten first, then `f` is applied to the rebuilt node.
 export
 mapExpr : (Expr -> Expr) -> Expr -> Expr
-mapExpr f e = f (mapKids f e)
+mapExpr f e =
+  -- `go` closes over `f` once per traversal; `mapExpr f` per node would
+  -- allocate a fresh partial application at every subexpression.
+  let go x = f (mapKids go x)
+  go e
 
 mapKids : (Expr -> Expr) -> Expr -> Expr
-mapKids f e = mapChildren (mapExpr f) e
+mapKids step e = mapChildren step e
 
 -- `mapChildren g e` applies `g` to each immediate subexpression of `e` and
 -- rebuilds the node, recursing no further: the one-level step both traversal
@@ -1013,9 +1017,11 @@ concatLists (xs :: rest) = xs ++ concatLists rest
 -- `Name { a, b }` (all bare vars, no `=`) parses as ESetLit; when Name is a
 -- record type this is pun sugar for `Name { a = a, b = b }` → ERecordCreate.
 -- Runs before container-literal lowering so genuine Map/Set literals remain.
+-- With no record names no `ESetLit` can match, so the traversal is skipped.
 desugarRecordPuns : List Decl -> List Decl
-desugarRecordPuns prog =
-  mapProg (rewriteRecordPun (collectRecordNames prog)) prog
+desugarRecordPuns prog = match collectRecordNames prog
+  [] => prog
+  recordNames => mapProg (rewriteRecordPun recordNames) prog
 
 -- Names that can head a record-literal brace = every ConNamed constructor of a
 -- `data` decl (records are the `data X = { … }` short form, whose synthesized

@@ -1201,7 +1201,7 @@ analyzeToLines runtimeSrc coreSrc progSrc =
 --     the implicit prelude (it lives in stdlib/map.mdk, unreachable from the
 --     single-root compiler tree).
 --   * Per-module TYPECHECK threads the shared prelude (core) + runtime externs
---     through the exported multi-module `checkModulesDiags`, which runs each
+--     through the exported multi-module `checkModulesDiagsChain`, which runs each
 --     module ISOLATED via `checkModuleFull` (only earlier modules' PUBLIC
 --     schemes/data are seeded) and harvests that module's own diagnostics by
 --     snapshotting the typeErrors/matchWarnings refs after its check (each module
@@ -1437,12 +1437,15 @@ analyzeProjectFull exportsFor allowInternal trustedMods cacheRef parseCacheRef r
           runtimeSrc
           coreSrc
           mods
+          (desugaredModPairs mods)
       (full, appendStale staleRef results)
 
 -- `analyzeProjectFull` over a graph the caller has already loaded from disk with
 -- `entry` and `roots`, so it has no unsaved-buffer source and no stale parse errors
 -- to fold in.  Human `check` loads once and hands its graph here; loading it a
 -- second time costs a whole-graph parse and keeps two copies of every tree live.
+-- `modPairs` is `desugaredModPairs mods`, passed in so the caller that also reads
+-- the desugared graph (`check`'s front pass) desugars each module once.
 export
 analyzeLoadedFull : (List String -> <e> List (String, List String)) ->
   Bool ->
@@ -1452,8 +1455,9 @@ analyzeLoadedFull : (List String -> <e> List (String, List String)) ->
   String ->
   String ->
   List (String, String, List Decl) ->
+  List (String, List Decl) ->
   <e> (List ModDiags, List (String, List Diag))
-analyzeLoadedFull exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc mods =
+analyzeLoadedFull exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc mods modPairs =
   projectDiagsLoadedFull
     exportsFor
     allowInternal
@@ -1463,6 +1467,7 @@ analyzeLoadedFull exportsFor allowInternal trustedMods entry roots runtimeSrc co
     (Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc))
     (chainKeyOf entry roots)
     mods
+    modPairs
 
 -- `analyzeProject` minus the load: resolve, then typecheck, then bucket — over a
 -- graph the caller has already loaded.  `medaka test` loads once and calls this,
@@ -1487,11 +1492,13 @@ projectDiagsLoaded exportsFor allowInternal trustedMods runtimeP coreP preludeKe
       coreP
       preludeKey
       chainKey
-      mods)
+      mods
+      (desugaredModPairs mods))
 
 -- `projectDiagsLoaded` also handing back the per-module `(schemes, errs, warns)` --
--- see `typecheckPassFull`.  One `desugarModule` per module here too: the resolve
--- half and the typecheck half read the same trees.
+-- see `typecheckPassFull`.  `modPairs` is the caller's `desugaredModPairs mods`:
+-- the resolve half and the typecheck half read the same trees, and a caller that
+-- has already desugared the graph (`check`'s front pass) hands its copy in.
 projectDiagsLoadedFull : (List String -> <e> List (String, List String)) ->
   Bool ->
   List String ->
@@ -1500,9 +1507,9 @@ projectDiagsLoadedFull : (List String -> <e> List (String, List String)) ->
   Option (Int, Int) ->
   String ->
   List (String, String, List Decl) ->
+  List (String, List Decl) ->
   <e> (List ModDiags, List (String, List Diag))
-projectDiagsLoadedFull exportsFor allowInternal trustedMods runtimeP coreP preludeKey chainKey mods =
-  let modPairs = desugaredModPairs mods
+projectDiagsLoadedFull exportsFor allowInternal trustedMods runtimeP coreP preludeKey chainKey mods modPairs =
   let buckets =
     resolvedBuckets
       exportsFor
@@ -1714,7 +1721,7 @@ resolvePass exportsFor allowInternal trustedMods preludeKey rt core known keys (
       )
 
 -- ── typecheck pass (per module, ISOLATED) ───────────────────────────────────
--- Run the shared multi-module typecheck (`checkModulesDiags`): core + runtime are
+-- Run the shared multi-module typecheck (`checkModulesDiagsChain`): core + runtime are
 -- seeded ONCE and each module is checked in its OWN frame via `checkModuleFull`
 -- (only earlier modules' PUBLIC schemes/data carry forward), harvesting that
 -- module's own diagnostics from the typeErrors/matchWarnings refs.  This gives the
@@ -1973,7 +1980,7 @@ desugaredModPairs mods = map midToDesugaredPair mods
 rawPairOf : (String, String, List Decl) -> (String, List Decl)
 rawPairOf (mid, _, prog) = (mid, prog)
 
--- (mid, path, rawDecls) → (mid, desugared decls) for checkModulesDiags.
+-- (mid, path, rawDecls) → (mid, desugared decls) for checkModulesDiagsChain.
 export
 midToDesugaredPair : (String, String, List Decl) -> (String, List Decl)
 midToDesugaredPair (mid, path, prog) = (mid, desugarModule path prog)

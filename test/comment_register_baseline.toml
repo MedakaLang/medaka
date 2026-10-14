@@ -37,7 +37,7 @@ count = 6
 [[entry]]
 file = "compiler/backend/llvm_emit.mdk"
 class = "history"
-count = 6
+count = 3
 
 [[entry]]
 file = "compiler/backend/llvm_emit.mdk"
@@ -47,12 +47,12 @@ count = 3
 [[entry]]
 file = "compiler/backend/llvm_emit.mdk"
 class = "emoji"
-count = 22
+count = 16
 
 [[entry]]
 file = "compiler/backend/llvm_emit.mdk"
 class = "shout"
-count = 27
+count = 19
 
 [[entry]]
 file = "compiler/backend/private_mangle.mdk"
@@ -92,12 +92,12 @@ count = 2
 [[entry]]
 file = "compiler/backend/wasm_emit.mdk"
 class = "emoji"
-count = 6
+count = 5
 
 [[entry]]
 file = "compiler/backend/wasm_emit.mdk"
 class = "shout"
-count = 9
+count = 6
 
 [[entry]]
 file = "compiler/backend/wasm_preamble.mdk"
@@ -182,7 +182,7 @@ count = 14
 [[entry]]
 file = "compiler/driver/medaka_cli.mdk"
 class = "shout"
-count = 15
+count = 14
 
 [[entry]]
 file = "compiler/entries/check_batch.mdk"
@@ -272,12 +272,12 @@ count = 1
 [[entry]]
 file = "compiler/eval/eval.mdk"
 class = "emoji"
-count = 21
+count = 20
 
 [[entry]]
 file = "compiler/eval/eval.mdk"
 class = "shout"
-count = 27
+count = 26
 
 [[entry]]
 file = "compiler/frontend/ast.mdk"
@@ -371,28 +371,18 @@ count = 49
 
 [[entry]]
 file = "compiler/ir/core_ir.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/ir/core_ir.mdk"
 class = "shout"
-count = 1
-
-[[entry]]
-file = "compiler/ir/core_ir_lower.mdk"
-class = "ruling"
 count = 1
 
 [[entry]]
 file = "compiler/ir/core_ir_lower.mdk"
 class = "emoji"
-count = 11
+count = 2
 
 [[entry]]
 file = "compiler/ir/core_ir_lower.mdk"
 class = "shout"
-count = 12
+count = 7
 
 [[entry]]
 file = "compiler/support/opcount.mdk"
@@ -522,7 +512,7 @@ count = 4
 [[entry]]
 file = "compiler/tools/mcp.mdk"
 class = "shout"
-count = 2
+count = 1
 
 [[entry]]
 file = "compiler/tools/native_doctest.mdk"
@@ -552,7 +542,7 @@ count = 3
 [[entry]]
 file = "compiler/tools/prop_runner.mdk"
 class = "emoji"
-count = 4
+count = 1
 
 [[entry]]
 file = "compiler/tools/refindex.mdk"
@@ -577,7 +567,7 @@ count = 4
 [[entry]]
 file = "compiler/tools/test_cmd.mdk"
 class = "emoji"
-count = 5
+count = 4
 
 [[entry]]
 file = "compiler/tools/test_cmd.mdk"
@@ -597,7 +587,7 @@ count = 1
 [[entry]]
 file = "compiler/types/registry.mdk"
 class = "emoji"
-count = 41
+count = 39
 
 [[entry]]
 file = "compiler/types/registry.mdk"
@@ -632,12 +622,12 @@ count = 7
 [[entry]]
 file = "compiler/types/route_key.mdk"
 class = "shout"
-count = 10
+count = 9
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "history"
-count = 138
+count = 130
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -647,27 +637,27 @@ count = 6
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "tombstone"
-count = 7
+count = 5
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "emoji"
-count = 675
+count = 617
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "draft"
-count = 19
+count = 18
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "deictic"
-count = 4
+count = 3
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "shout"
-count = 613
+count = 553
 
 [[entry]]
 file = "pds/lib/accesslog.mdk"

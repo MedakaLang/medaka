@@ -750,6 +750,42 @@ test "updateHandle with a __proto__ key is refused and announces nothing" =
     ),
   ]
 
+-- The slur is joined from two fragments at run time, so no whole slur is
+-- written in source. The dot-split form is the case only the squeezed form
+-- catches: its dot splits the word in the handle and dropping the dots joins
+-- it. The near miss is refused for its DID, which shows the slur check let it
+-- through.
+slurHead : String
+slurHead = "ch"
+
+slurTail : String
+slurTail = "ink"
+
+test "updateHandle refuses a slur and announces nothing" =
+  let joined = "\{slurHead}\{slurTail}.dev"
+  let dotted = "\{slurHead}.\{slurTail}"
+  let nearMiss = "\{slurHead}in.dev"
+  expectEach [
+    (
+      "the slur as a label",
+      expectEqual
+        (400, "InvalidHandle", False)
+        (updateHandleOutcome [("handle", JString joined)]),
+    ),
+    (
+      "the slur split by a dot",
+      expectEqual
+        (400, "InvalidHandle", False)
+        (updateHandleOutcome [("handle", JString dotted)]),
+    ),
+    (
+      "a near miss",
+      expectEqual
+        (400, "InvalidRequest", False)
+        (updateHandleOutcome [("handle", JString nearMiss)]),
+    ),
+  ]
+
 -- The DID an `updateHandle` call asks the shell to charge, for the verbatim
 -- JSON `bodyJson` sent with `bearer` ("" sends no credential at all).
 updateHandleCharge : String ->

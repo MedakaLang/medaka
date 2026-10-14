@@ -1171,9 +1171,10 @@ A small, fixed set of declaration attributes for metadata the compiler or toolin
 - `@inline` — hint to inline the body (advisory)
 - `@noinline` — keep a top-level function a separate symbol in a native binary
 - `@must_use` — warn if the result is discarded
-- `@test` / `@prop` / `@bench` — already the keywords for `test`/`prop`/`bench` declarations
 
 Attributes are not user-extensible. Same philosophy as the rest of the language: a closed set, no extension mechanism.
+
+`test` and `prop` declarations are reserved keywords, not attributes; `@test` and `@prop` are not attributes either. There is no `bench` declaration: `bench "name" = expr` is a parse error (see `docs/spec/SYNTAX.md`, "Removed — do not use").
 
 ---
 

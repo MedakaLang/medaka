@@ -1,0 +1,1 @@
+{"files":[{"file":"<fixture>","diagnostics":[{"code":"P-PARSE","kind":"parse","message":"field assignment `M.empty = e` has been removed; bindings are immutable, so bind the new value to a new name","range":{"end":{"character":3,"line":6},"start":{"character":2,"line":6}},"severity":1,"source":"medaka"}]}]}
