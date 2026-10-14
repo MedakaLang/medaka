@@ -56,3 +56,7 @@
 # scripts/jev response cache (Jev API answers keyed by content hash). Regenerable;
 # a miss just re-asks the model. Never commit: it is derived from an external API.
 /.jev-cache/
+
+# Python bytecode caches: interpreter-version-specific; never track them, or any import dirties the tree.
+__pycache__/
+*.pyc
