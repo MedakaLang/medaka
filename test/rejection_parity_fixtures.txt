@@ -44,5 +44,6 @@ llvmT/disp_ord_default_lt
 llvmT/disp_ord_default_lte
 llvmT/disp_req_compare_list_int
 llvmT/disp_req_eq_list_int
+llvmT/iface_default_scalar_cells
 llvmT/impl_append_list
 llvmT/impl_append_str

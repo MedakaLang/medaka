@@ -75,7 +75,7 @@ initSession : List Decl -> List Decl -> Unit
 initSession runtimeDecls preludeDecls =
   runtimeDeclsRef := runtimeDecls
   preludeDeclsRef := preludeDecls
-  let prelSchemes = checkOneScheme [] [] ("__user__", preludeDecls)
+  let prelSchemes = checkOneScheme runtimeDecls [] ("__user__", preludeDecls)
   let prelNames = map fst prelSchemes
   preludeNamesRef := prelNames
   knownNamesRef := prelNames
@@ -233,7 +233,8 @@ runPipeline combined =
       match tcErrs
         e :: _ => (map tcMsg tcErrs, [], [])
         [] =>
-          let allSchemes = checkOneScheme [] preludeDecls ("__user__", combined)
+          let allSchemes =
+            checkOneScheme runtimeDecls preludeDecls ("__user__", combined)
           -- Evaluate the ELABORATED program, as `run` and `test` do: an interface
           -- default reaches an instance only through the elaboration's
           -- disposition table, so elaboration is the last typecheck before eval.
