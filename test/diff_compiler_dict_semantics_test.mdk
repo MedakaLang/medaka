@@ -924,26 +924,70 @@ table = [
     codes = [],
   },
   Row {
-    entry = "constraint-only-variable-head-tag-accepted.mdk",
+    entry = "constraint-only-variable-head-tag-rejected.mdk",
     label =
-      "§3 + §5: a call of `f : K x y => x -> String` leaves the constraint-only `y` undetermined, so its dictionary route is the head tag; the one instance must still run on every engine (an RNone route panicked the build)",
-    expCheck = "ACCEPT",
-    expRun = "ACCEPT",
-    expBuild = "ACCEPT",
-    mode = AllExact,
-    pinned = "BOX\n",
-    codes = [],
+      "§3 + §5, narrowed by Val's ruling on #4121: a call of `f : K x y => x -> String` leaves the constraint-only `y` undetermined, so its dictionary route is the head tag `Box` and `k` in `f`'s body is RNone; a hole is a check verdict on every verb (T-UNROUTED-DISPATCH at 17:6 and 19:16), not a head the engines resolve",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-UNROUTED-DISPATCH"],
   },
   Row {
-    entry = "constraint-only-variable-return-head-tag-accepted.mdk",
+    entry = "constraint-only-variable-return-head-tag-rejected.mdk",
     label =
-      "§3 + §5 (return twin): a call of `f : K x y => Int -> x` leaves the constraint-only `y` undetermined, so its dictionary route is the head tag; the one instance must still run on every engine (an RNone route panicked the build)",
-    expCheck = "ACCEPT",
-    expRun = "ACCEPT",
-    expBuild = "ACCEPT",
-    mode = AllExact,
-    pinned = "7\n",
-    codes = [],
+      "§3 + §5 (return twin), narrowed by Val's ruling on #4121: a call of `f : K x y => Int -> x` leaves the constraint-only `y` undetermined, so its dictionary route is the head tag `Box`; a hole is a check verdict on every verb (T-UNROUTED-DISPATCH at 23:23)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "unrouted-single-impl-omitted-position-rejected.mdk",
+    label =
+      "#4121's narrowed shape (Val's ruling at the hole-is-a-verdict cut): `k x` in `f : K x y => x -> String` is RNone and the call passes the head tag `Box`; T-UNROUTED-DISPATCH at 15:6 and 16:16 on every verb",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "unrouted-let-bound-method-rejected.mdk",
+    label =
+      "#4116 open: the let-bound method value `let f = k` keeps an RNone route in its body; T-UNROUTED-DISPATCH at 19:10 on every verb until the value reads its own dictionary parameter (spec: prints INTBOOL)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "unrouted-recursive-impl-occurrence-rejected.mdk",
+    label =
+      "#4117 open: the recursive `jmap` inside `impl JMap Later` and the call in `main` route to the head tag `Later`, not the instance; T-UNROUTED-DISPATCH at 13:31 and 17:23 on every verb until R-ARITY1 routes them (spec: prints 42)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "unrouted-unrelated-given-dict-slot-rejected.mdk",
+    label =
+      "#4119 open: `useSub v (1 : Int)` under the unrelated given `Show2 x` leaves its `Sub x Int` slot RNone; T-UNROUTED-DISPATCH at 21:6 on every verb until DICT §3 decides the goal (spec: prints sub, or rejects like its given-less twin)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-UNROUTED-DISPATCH"],
   },
   Row {
     entry = "s4-gen-sig-superclass-redundant-dropped.mdk",
@@ -5546,7 +5590,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 491
+tableRows = 495
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

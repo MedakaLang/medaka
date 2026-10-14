@@ -1,0 +1,17 @@
+-- #4117: inside `impl JMap Later`, the recursive `jmap g (t u)` and the call in
+-- `main` are routed to the type head `Later` (`RKey "<mod>.Later"`, no `|`), not
+-- to the instance key.  A head names no instance, so no impl is committed.
+-- Hand-derived from DICT-SEMANTICS §3 (R-ARITY1): the one unifying instance is
+-- `impl JMap Later`, so both occurrences should route to it and the program
+-- should print `42`.  Today the holes are check rejects: T-UNROUTED-DISPATCH at
+-- 13:31 (the recursive `jmap`) and 17:23 (the `jmap` in `main`).
+data Later (e : Effect) a = Now a | Wait (Unit -> <e> Later e a)
+interface JMap (f : Effect -> Type -> Type) where
+  jmap : (a -> <e2> b) -> f e a -> f (e | e2) b
+impl JMap Later where
+  jmap g (Now a) = Wait (u => Now (g a))
+  jmap g (Wait t) = Wait (u => jmap g (t u))
+force : Later <> Int -> Int
+force (Now n) = n
+force (Wait t) = force (t ())
+main = println (force (jmap (x => x + 1) (Wait (u => Now 41))))
