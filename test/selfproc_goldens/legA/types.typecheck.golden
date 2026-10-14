@@ -207,6 +207,7 @@ atomsOfWrittenIn : SigVars -> List EffAtomTy -> List Atom
 atomsSame : List Atom -> List Atom -> Bool
 attachCoherenceConflict : List (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> List (String, (List (String, Scheme), List TcDiag, List TcDiag))
 attachEntryPayload : (a -> a) -> List (String, a) -> List (String, a)
+attachEvidenceHoles : List (String, TcDiag) -> List (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> List (String, (List (String, Scheme), List TcDiag, List TcDiag))
 attachStandaloneSources : Map String Scheme -> List (String, EnvBinding) -> List (String, EnvBinding)
 attributeMethodModulePredicateSlots : String -> List Decl -> List (String, List MethodPredicateSlot) -> List ((String, String), List MethodPredicateSlot)
 attributeModuleEntries : String -> List Decl -> List (String, a) -> List ((String, String), a)
@@ -443,7 +444,7 @@ checkGradedImplHeadDecl : ClassEnv -> Int -> Decl -> Unit
 checkGradedImplHeadKinds : String -> String -> Option Loc -> Int -> List Kind -> List Kind -> Unit
 checkGradedImplHeads : ClassEnv -> Int -> List Decl -> Unit
 checkGradedImplTys : ClassEnv -> Int -> TyConOrigin -> String -> Int -> List Ty -> Unit
-checkGraphFinish : Unit -> Unit
+checkGraphFinish : Unit -> List (String, TcDiag)
 checkHeadKinds : String -> List String -> List (Option KindAnn) -> List Ty -> Unit
 checkHeadKindsGo : String -> List String -> List Ty -> List String -> List (Option KindAnn) -> Unit
 checkIfaceHeadKinds : String -> List String -> List (Option KindAnn) -> List IfaceMethod -> Unit
@@ -936,7 +937,7 @@ domainHasPatterns : Param -> Bool
 domainIsTupleOfArity : Mono -> Int -> Bool
 domainParam : Option String -> Param
 domainParamWith : Option String -> List (String, String) -> Param
-drainStampQueue : Unit -> Unit
+drainStampQueue : Unit -> List (String, TcDiag)
 driveGraphK : GraphOut -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> GraphDrive
 driverState : Ref DriverState
 dropFirst : Int -> List a -> List a
@@ -1035,6 +1036,7 @@ eqStr : String -> String -> Bool
 erredDuring : (Unit -> a) -> (Bool, a)
 evCell : EvDest -> Ref Route
 evEntriesOf : List Obligation -> List EvEntry
+evIdModule : EvId -> String
 evOrdinal : EvId -> Int
 evValueOf : EvDest -> EvVal
 evidenceObservationEnabled : Ref Bool
@@ -1423,6 +1425,9 @@ headVarRootOf : Mono -> Option HeadVarRoot
 headVarsNarrowedBy : List (String, HeadVarRoot) -> List (String, Mono) -> List String
 headlessBucketKey : RegKey
 headsUnifier : Map String Unit -> List Mono -> List Mono -> Option (Ref (List (Int, Mono)))
+holeDiags : String -> Option Loc -> EvidenceRow -> List (String, TcDiag)
+holeKey : (String, TcDiag) -> String
+holesOnto : List (String, TcDiag) -> (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> (String, (List (String, Scheme), List TcDiag, List TcDiag))
 i64RangeText : String
 idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
 idSetInsertAll : List Int -> Map Int Unit -> Map Int Unit
@@ -1845,6 +1850,9 @@ joinResultIs : Int -> PendingJoin -> Bool
 joinSideCheck : Bool -> List Atom -> List Atom -> List Atom -> List Atom -> Unit
 joinValueEqual : JoinContext -> Option Loc -> Mono -> Mono -> Unit
 joinValueTypes : JoinContext -> List (Option Loc, Mono) -> Mono
+judgeCells : Array (Option EvCell) -> Int -> Int -> List (String, TcDiag) -> List (String, TcDiag)
+judgeEvidence : List StampCtx -> List (String, TcDiag)
+judgeGoal : String -> Obligation -> List (String, TcDiag)
 judgeQuiescentGoals : Unit -> Unit
 kauthArgVarNames : List Kind -> List Ty -> List (String, Param)
 kauthCells : List String -> List Kind -> List Mono -> List (String, Ref Authvar)

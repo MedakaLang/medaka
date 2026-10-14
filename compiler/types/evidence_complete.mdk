@@ -1,0 +1,174 @@
+-- The completeness judgment over the solver's final evidence: does every
+-- dispatch destination of a program name an instance or a given?
+--
+-- `types/typecheck.mdk` builds one `EvidenceRow` per evidence destination at the
+-- graph-end drain, after the stampers have written their last route, and reports
+-- each row this module calls a hole as `T-UNROUTED-DISPATCH` at the row's site.
+-- Nothing here reads inference state: a row is plain data, so a reader can audit
+-- the predicate below without knowing how the solver reached its answer.
+--
+-- The predicate.  A route names a head when it is an `RKey` whose key has no `|`
+-- (a type head such as `RKey "m.Box"`, not an instance key `m::I|heads|`), or when
+-- such an `RKey` occurs inside it (an `RKey`'s dictionary lists, an `RLocal`'s
+-- dictionaries, an `RProj`'s base).  A route has an unrouted part when `RNone`
+-- occurs strictly inside it, at those same positions.  Then a row is a hole of:
+--
+--   * `UnroutedMethod` -- a method occurrence whose interface word is non-empty
+--     and whose dispatch route is `RNone`;
+--   * `HeadTagRoute` -- any route of the row names a head;
+--   * `UnroutedPrerequisite` -- a method occurrence's impl or method dictionary
+--     list holds `RNone`, or any route of the row has an unrouted part;
+--   * `UnroutedDictSlot` -- a dictionary application has `RNone` in a slot.
+--
+-- Everything else passes, and each of these is a legitimate final answer:
+--   * an operator or arithmetic site whose route is `RNone` (the structural and
+--     primitive paths take it);
+--   * a dictionary application with no slots (`EvMany []`);
+--   * an occurrence with an empty interface word (a standalone) routed `RLocal`
+--     or `RNone`;
+--   * `RDict`, `RDictFwd`, `RScalar`, an `RProj` of a dictionary, and an `RKey`
+--     whose key is an instance key.
+-- An engine arm that treats a value as a hole may consume only what this
+-- predicate flags; a value it lets through must keep a defined meaning there.
+
+import frontend.ast.{Route(..)}
+import list.{drop, findIndex}
+import string.{contains, split}
+import support.util.{anyList, filterList, splitLast}
+
+public export data HoleKind =
+  | UnroutedMethod
+  | HeadTagRoute
+  | UnroutedPrerequisite
+  | UnroutedDictSlot
+  deriving (Eq, Debug)
+
+-- One evidence destination, as the drain left it.
+public export data EvidenceRow =
+  -- A method occurrence: method name, interface word (`""` for a standalone),
+  -- dispatch route, the selected impl's `requires` dictionaries and the method's
+  -- own `=>` dictionaries.
+  | OccurrenceRow String String Route (List Route) (List Route)
+  -- A dictionary application: the callee's name (`""` when the goal does not
+  -- carry it), the slot-ordered interface names (possibly shorter than the
+  -- slots), and the slot-ordered routes.
+  | DictAppRow String (List String) (List Route)
+  -- An operator or arithmetic site's route.
+  | SiteRow Route
+
+-- Every hole kind [row] exhibits, in `HoleKind` declaration order; `[]` for a
+-- complete row.
+export
+holeKindsOf : EvidenceRow -> List HoleKind
+holeKindsOf (OccurrenceRow _ iface tag impls meths) =
+  let dicts = impls ++ meths
+  kindsWhere [
+    (UnroutedMethod, iface /= "" && isUnrouted tag),
+    (HeadTagRoute, namesHead tag || anyList namesHead dicts),
+    (
+      UnroutedPrerequisite,
+      hasUnroutedPart tag
+        || anyList (r => isUnrouted r || hasUnroutedPart r) dicts,
+    ),
+  ]
+holeKindsOf (DictAppRow _ _ routes) = kindsWhere [
+  (HeadTagRoute, anyList namesHead routes),
+  (UnroutedPrerequisite, anyList hasUnroutedPart routes),
+  (UnroutedDictSlot, anyList isUnrouted routes),
+]
+holeKindsOf (SiteRow r) = kindsWhere [
+  (HeadTagRoute, namesHead r),
+  (UnroutedPrerequisite, hasUnroutedPart r),
+]
+
+-- The row's first hole kind and the diagnostic text for it, or `None` for a
+-- complete row.  One diagnostic per row: its later kinds describe the same
+-- unselected instance.
+export
+rowHole : EvidenceRow -> Option (HoleKind, String)
+rowHole row = match holeKindsOf row
+  [] => None
+  k :: _ => Some (k, holeMessage row k)
+
+-- The `T-UNROUTED-DISPATCH` text for [kind] at [row].
+export
+holeMessage : EvidenceRow -> HoleKind -> String
+holeMessage (OccurrenceRow name iface _ _ _) UnroutedMethod =
+  "no impl of `\{bareName "::" iface}` is selected for this use of `\{name}`; annotate the type it is used at"
+holeMessage (OccurrenceRow name iface tag impls meths) HeadTagRoute =
+  "\{noImplFor iface} is selected for this use of `\{name}`: its dispatch names the type `\{headOf (tag :: impls ++ meths)}`, not an impl"
+holeMessage (OccurrenceRow name _ _ _ _) _ =
+  "the impl selected for this use of `\{name}` needs a dictionary that no impl or given supplies"
+holeMessage (DictAppRow callee ifaces routes) HeadTagRoute =
+  "\{theCall callee} passes the type `\{headOf routes}` where its \{slotIface ifaces routes namesHead} constraint needs an impl"
+holeMessage (DictAppRow callee ifaces routes) UnroutedDictSlot =
+  "\{theCall callee} is missing the dictionary for its \{slotIface ifaces routes isUnrouted} constraint: no impl or given was selected for it"
+holeMessage (DictAppRow callee ifaces routes) _ =
+  "the impl passed for the \{slotIface ifaces routes hasUnroutedPart} constraint of \{theCall callee} needs a dictionary that no impl or given supplies"
+holeMessage (SiteRow r) HeadTagRoute =
+  "this operator's dispatch names the type `\{headOf [r]}`, not an impl"
+holeMessage (SiteRow _) _ =
+  "the impl selected for this operator needs a dictionary that no impl or given supplies"
+
+kindsWhere : List (HoleKind, Bool) -> List HoleKind
+kindsWhere cases = map fst (filterList snd cases)
+
+isUnrouted : Route -> Bool
+isUnrouted RNone = True
+isUnrouted _ = False
+
+isInstanceKey : String -> Bool
+isInstanceKey key = contains "|" key
+
+namesHead : Route -> Bool
+namesHead (RKey key ds ms) =
+  not (isInstanceKey key) || anyList namesHead ds || anyList namesHead ms
+namesHead (RLocal _ ds) = anyList namesHead ds
+namesHead (RProj r _) = namesHead r
+namesHead _ = False
+
+hasUnroutedPart : Route -> Bool
+hasUnroutedPart (RKey _ ds ms) =
+  anyList (r => isUnrouted r || hasUnroutedPart r) (ds ++ ms)
+hasUnroutedPart (RLocal _ ds) =
+  anyList (r => isUnrouted r || hasUnroutedPart r) ds
+hasUnroutedPart (RProj r _) = isUnrouted r || hasUnroutedPart r
+hasUnroutedPart _ = False
+
+-- The first type head named anywhere in [routes], unqualified.
+headOf : List Route -> String
+headOf routes = match firstHead routes
+  Some key => bareName "." key
+  None => "?"
+
+firstHead : List Route -> Option String
+firstHead [] = None
+firstHead ((RKey key ds ms) :: rest)
+  | not (isInstanceKey key) = Some key
+  | otherwise = firstHead (ds ++ ms ++ rest)
+firstHead ((RLocal _ ds) :: rest) = firstHead (ds ++ rest)
+firstHead ((RProj r _) :: rest) = firstHead (r :: rest)
+firstHead (_ :: rest) = firstHead rest
+
+-- The last [sep]-separated segment of [word]: the unqualified name.
+bareName : String -> String -> String
+bareName sep word = match splitLast (split sep word)
+  Some (_, last) => last
+  None => word
+
+noImplFor : String -> String
+noImplFor "" = "no impl"
+noImplFor iface = "no impl of `\{bareName "::" iface}`"
+
+theCall : String -> String
+theCall "" = "this call"
+theCall callee = "this call to `\{callee}`"
+
+-- The interface of the first slot [bad] flags, as "`I`", or "a" when the
+-- application does not name it.
+slotIface : List String -> List Route -> (Route -> Bool) -> String
+slotIface ifaces routes bad = match findIndex bad routes
+  Some i => match drop i ifaces
+    iface :: _ => "`\{iface}`"
+    [] => "a"
+  None => "a"

@@ -1,9 +1,9 @@
 -- §3 + §5 (return twin): `f`'s signature constraint `K x y` names `y`, which
 -- its type omits, and `x` is fixed only by the result.  The call poses
--- `K (Box Int) ?y`, which the one instance answers.  The top-level dictionary
--- route carries the head tag `Box`, since no row is selected for the
--- undetermined vector.
--- Hand-derived: ACCEPT on all three verbs, prints `7`.
+-- `K (Box Int) ?y`.  No row is selected for the undetermined vector, so the
+-- call's dictionary route is the head tag `Box` and no instance is committed.
+-- Hand-derived (Val's ruling on #4121): REJECT on every verb,
+-- T-UNROUTED-DISPATCH at 23:23 (the call to `f`).
 interface K a b where
   r : Int -> a
   mk : b -> a

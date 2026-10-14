@@ -1,0 +1,22 @@
+-- #4119: `g`'s call `useSub v (1 : Int)` poses `Sub x Int` with `x` rigid, and
+-- the only instance is `impl Sub a b`.  The call's dictionary slot is left
+-- `RNone`: neither the instance nor `g`'s unrelated given `Show2 x` was
+-- committed to it.
+-- Hand-derived from DICT-SEMANTICS §3 (R-ARITY1): the one unifying instance
+-- determines the goal, so the program should print `sub`, or be rejected like
+-- its given-less twin.  Today the hole is a check reject: T-UNROUTED-DISPATCH at
+-- 21:6 (the call to `useSub`).
+interface Show2 a where
+  show2 : a -> String
+data Q = Q
+impl Show2 Q where
+  show2 _ = "q"
+interface Sub a b where
+  sub : a -> b -> String
+impl Sub a b where
+  sub _ _ = "sub"
+useSub : Sub a b => a -> b -> String
+useSub x y = sub x y
+g : Show2 x => x -> String
+g v = useSub v (1 : Int)
+main = println (g Q)

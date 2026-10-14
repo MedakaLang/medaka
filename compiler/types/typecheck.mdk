@@ -511,6 +511,7 @@ import types.disposition.{
 import types.target_profile.{
   TargetProfile, hostLabels, ioJoinGrants, profileName, selectedProfile
 }
+import types.evidence_complete.{EvidenceRow(..), rowHole}
 import types.runtime_types.{
   BinderRow(..),
   BinderTypeTable,
@@ -11437,6 +11438,11 @@ data EvCell = EvCell {
   ecTag : Ref Route,
   ecImpl : Ref (List Route),
   ecMeth : Ref (List Route),
+  -- the occurrence's span and spelling, written when it is inferred, for the
+  -- completeness judgment's diagnostic (`judgeEvidence`); `None` and `""` for a
+  -- node no inference reached
+  ecLoc : Ref (Option Loc),
+  ecName : Ref String,
 }
 
 data GraphRun = GraphRun {
@@ -11485,6 +11491,11 @@ data GraphRun = GraphRun {
   -- monotone, so `EvId <module> <ordinal>` is unique across the whole run without a
   -- per-module reset — see `freshEvId`.
   evCounter : Ref Int,
+  -- The ordinal below which every method cell has been judged complete
+  -- (`judgeEvidence`).  Each drain judges the cells minted since the last one and
+  -- raises it to `evCounter`; it rides `copyGraphRun`, so a memo hit restores a
+  -- prefix already judged and the prefix's holes are not reported a second time.
+  evJudged : Ref Int,
   -- #2549 M2: the solved evidence, one entry per goal, appended by the graph-end
   -- drain as each module's stampers finish.  It is a SECOND RENDERING of the routes
   -- the stampers wrote into their cells, read back from those same cells, never an
@@ -11538,6 +11549,7 @@ freshGraphRun _ = GraphRun {
   stampCtxs = Ref [],
   goalsN = Ref 0,
   evCounter = Ref 0,
+  evJudged = Ref 0,
   evTable = Ref [],
   memoMethodReturns = Ref [],
   evCells = Ref (arrayMake 0 None),
@@ -11593,6 +11605,8 @@ mintMethodCellRaw iface arity tag impls =
         ecTag = Ref tag,
         ecImpl = Ref impls,
         ecMeth = Ref [],
+        ecLoc = Ref None,
+        ecName = Ref "",
       })
       arr
   ev
@@ -11698,6 +11712,9 @@ resetGraphState _ =
   graphRun := freshGraphRun ()
   graphRun.value.evCounter := n
   graphRun.value.evCells := cells
+  -- The cells below the carried ordinal belong to an earlier drive, which judged
+  -- them or never solved them; this drive judges only the cells it mints.
+  graphRun.value.evJudged := n
   -- The binder names survive; the quantified ids do not: they are type-variable
   -- ids, and the fresh run restarts the counter that minted them.
   localAbs.lasQuantified := omEmpty
@@ -11725,6 +11742,7 @@ copyGraphRun g = GraphRun {
   stampCtxs = Ref g.stampCtxs.value,
   goalsN = Ref g.goalsN.value,
   evCounter = Ref g.evCounter.value,
+  evJudged = Ref g.evJudged.value,
   evTable = Ref g.evTable.value,
   memoMethodReturns = Ref g.memoMethodReturns.value,
   -- The cells themselves are shared, not re-minted: a memoized tree still holds
@@ -16567,6 +16585,8 @@ inferMethodAtCell env name c =
   let st = graphRun.value.grants
   st.gsLastMethodInst := None
   st.gsLastStandalone := None
+  c.ecLoc := !currentLoc
+  c.ecName := name
   let t = inferMethodAt env name c.ecIface c.ecArity c.ecTag c.ecImpl c.ecMeth
   let _ = match (st.gsLastStandalone.value, st.gsLastMethodInst.value)
     (Some (scheme, subst), _) =>
@@ -48756,16 +48776,19 @@ seedCheckRun oracleDecls =
 -- (the per-module-frame property, without a frame) — plus its public ctors.
 -- Returns each module's OWN value schemes, in load order.
 
--- typecheck one program with seeded value schemes + accumulated data decls.
--- Re-registers prior modules' public data declarations
+-- typecheck one program with seeded value schemes + accumulated data decls, as
+-- the prelude's core pass.  Re-registers prior modules' public data declarations
 -- (`accData ++ prog`) so imported constructors AND named-field-variant record
--- info (e.g. ast's DInterface) resolve.  Returns the module's own value schemes.
+-- info (e.g. ast's DInterface) resolve.  The program's own impls are its impl
+-- universe, as the tree arm's core pass (`elabModuleStamp`) has them: an impl
+-- body's occurrence then routes through the impl's `requires` given on both arms.
+-- Returns the module's own value schemes.
 checkModuleFull : List (String, Scheme) ->
   List Decl ->
   List Decl ->
   (ModuleBindings, List Decl)
 checkModuleFull seedVars accData prog =
-  checkModuleFullImpl "" (plainModuleSeed seedVars) accData [] prog
+  checkModuleFullImpl "" (plainModuleSeed seedVars) accData prog prog
 
 -- E5: like checkModuleFull but takes [implDecls] (core + every EARLIER module — NOT this
 -- module: foldModules only grows the accumulator for LATER modules, so a module is never in
@@ -52513,7 +52536,10 @@ checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
     -- restores a graph whose queue is empty and core is solved once per process
     -- rather than once per analyze.  This treats core as closed at its own end —
     -- the closure the memo already assumes by snapshotting core's solution here.
-    let _ = checkGraphFinish ()
+    -- The prelude has no diagnostics list for a hole to land in.
+    let _ = match checkGraphFinish ()
+      [] => ()
+      (_, d) :: _ => panic "evidence hole in the prelude: \{tcMsg d}"
     -- #673: snapshot core's OWN obligations NOW — perRun.schemeObligationsRef still holds core's
     -- bindings (the next module's resetState has not run yet).  This is the source-exact store a
     -- plain-EVar use of a PRELUDE constrained fn (`println`) reads in instantiateVarTracked, so
@@ -52753,17 +52779,14 @@ graphPreamble sel preludeKey runtimeDecls coreDecls modules =
   -- return-position/non-nameable axis it scopes is expressed by
   -- `test/shadow_fixtures/d24_definer_return_pos_not_nameable/`.
   let ms = markSetsOf prelude.ppMarkFacts coreDecls modules declEnvs.deAllDecls
-  -- Only the tree arm PROMOTES: an unsignatured user fn whose body dispatches a
-  -- method gets an inferred constraint, joins the dict-name set and is dict-passed.
-  -- A check driver's dict-name set stays bare, so both the eligible set and the
-  -- harvest are CLEARED for it — an elaboration earlier in this process (`run`'s
-  -- auto-print re-check runs after its elaboration; the playground analyzes after
-  -- an emit) leaves both populated on `driverState`, which no reset touches, and
-  -- `maybeInferConstraint` reads the set.
-  let eligible = match sel
-    GOutTrees => moduleUserFnNames modules
-    GOutDiags => []
-  let _ = setDictEligible eligible
+  -- Both arms PROMOTE: an unsignatured user fn whose body dispatches a method gets
+  -- an inferred constraint and joins the dict-name set, so its occurrences route
+  -- through its own dictionary parameter on every verb.  The completeness judgment
+  -- reads those routes, and a check driver that left such a body unpromoted would
+  -- see `RNone` where the tree arm sees `RDict`.  The eligible set is written and
+  -- the harvest cleared on every drive, because `driverState` has no reset point
+  -- and `maybeInferConstraint` reads the set.
+  let _ = setDictEligible (moduleUserFnNames modules)
   driverState.value.promotionHarvestRef := []
   -- The core pass.  The diags arm memoizes it under the caller's prelude key (see
   -- `checkCoreMemoized`, which also drains core's stamping context so a hit
@@ -52798,7 +52821,7 @@ checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =
 -- real `mid` through `checkModuleFullDiags`; this one was the outlier.
 -- It calls `checkModuleFullImpl` directly rather than `checkModuleFull` so the id can be
 -- threaded — everything else (`accData`, the `[]` implDecls that keep the #154 PR-C perf
--- property) is byte-identically what `checkModuleFull` passed.
+-- property) is byte-identically what `checkModuleFull` passed then.
 --
 -- 🚨 THIS IS NOT ATTRIBUTION-ONLY, AND THE FIRST DRAFT OF THIS COMMENT SAID IT WAS.
 -- The `""` key made `crossModuleSchemeOblsQualRef` and its three sibling qual tables
@@ -53025,7 +53048,7 @@ checkModuleFullDiags mid seedVars accData accAll prog =
           declEnvsHere.deModules
         ++ accData)
   -- Bug C: pass the cumulative full impl universe (core + earlier modules) as
-  -- implDecls (was checkModuleFull, i.e. implDecls=[]) so buildStandaloneShadows sees
+  -- implDecls (was implDecls=[]) so buildStandaloneShadows sees
   -- an imported standalone funDef that shadows an interface method (`map`'s `isEmpty`
   -- vs Foldable's): without it the importer-shadow set is EMPTY on the CHECK path and
   -- `isEmpty m` routes to method dispatch rather than to the standalone the importer
@@ -53468,8 +53491,8 @@ checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0
     }
   -- #2705: the graph-end drain for what the steps did not already drain (the entry
   -- module, and any module after the last recorded step) — see `chainGo`.
-  let _ = checkGraphFinish ()
-  attachCoherenceConflict (reverseL finalResults)
+  let holes = checkGraphFinish ()
+  attachCoherenceConflict (attachEvidenceHoles holes (reverseL finalResults))
 
 -- The fold itself, iterative, recording a step after each non-entry module while
 -- keys are available.  Mirrors `driveGraphK GOutDiags`'s `foldModules` exactly:
@@ -53522,19 +53545,20 @@ chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) 
       -- prefix as closed at its own end — the closure this memo already assumes by
       -- snapshotting its solution here — and it is a second resolution schedule
       -- beside the graph-end one; folding the two back into one is #2719's.
-      let _ = checkGraphFinish ()
+      -- The drain's holes join the results the step records, so a hit replays them.
+      let results3 = attachEvidenceHoles (checkGraphFinish ()) results2
       let step = ChainStep {
         csKey = k,
         csDepEnv = depEnv2,
         csAccData = accData2,
         csAccAll = accAll2,
-        csResults = results2,
+        csResults = results3,
         csCrossRun = copyCrossRun crossRun.value,
         csGraphRun = copyGraphRunForMemo graphRun.value,
         csDriver = copyDriverState driverState.value,
       }
       let (finalResults, moreSteps) =
-        chainGo baseSeed coreV depEnv2 accData2 accAll2 results2 keys2 rest
+        chainGo baseSeed coreV depEnv2 accData2 accAll2 results3 keys2 rest
       (finalResults, moreSteps ++ [step])
 
 -- #1112 A-3: the disposition producer.  For every accepted instance
@@ -53746,7 +53770,7 @@ driveGraphK sel preludeKey runtimeDecls coreDecls0 modulesIn =
   -- #2548: quiescence.  Every module (core first) has been inferred and has queued
   -- its stamping context; drain them all now, in module order, before any tree goes
   -- to `dictPassModulesIfEnabled`.
-  let _ = drainStampQueue ()
+  let holes = drainStampQueue ()
   -- D3 / WS-2 part-2: attach any cross-module coherence conflict to the ENTRY
   -- module's diagnostics (last in dependency-first order), so LSP/analyzeProject
   -- surfaces it too.  User modules only (prelude excluded).
@@ -53757,7 +53781,7 @@ driveGraphK sel preludeKey runtimeDecls coreDecls0 modulesIn =
   -- what excludes the prelude, replacing "walk the user `modules` list".
   -- It reads `deImpls` only, which nothing between here and the tree arm's return
   -- writes, so attaching once here serves both selections.
-  let perMod = attachCoherenceConflict perModRaw
+  let perMod = attachCoherenceConflict (attachEvidenceHoles holes perModRaw)
   -- #1112 A-3: the whole-graph IE/CE `buildDeclEnvs` filled in the preamble
   -- above is already complete at this point — installed here, once per
   -- elaboration, on both arms alike (mirroring `installEvidence`'s own
@@ -55660,16 +55684,21 @@ runStampStep ctx SSMethodDicts = resolveMethodDicts (methodDictsIn ctx.scGoals)
 -- The sticky type-error cells are saved before the drain and restored after it, so
 -- a memo snapshot never carries a drain's diagnostics.  The unkeyed drive
 -- (`driveGraphK`) keeps them instead; the two agree because the drain raises none on
--- an accepted program.
-checkGraphFinish : Unit -> Unit
+-- an accepted program.  The drain's evidence holes are returned, not recorded: a
+-- per-module diagnostics list is closed before any drain, so the caller attaches
+-- them to it (`attachEvidenceHoles`).
+checkGraphFinish : Unit -> List (String, TcDiag)
 checkGraphFinish _ =
   let savedSticky = !typeErrorsSticky
   let savedStickyDiags = typeErrorsStickyDiags.value
-  let _ = drainStampQueue ()
+  let holes = drainStampQueue ()
   typeErrorsSticky := savedSticky
   typeErrorsStickyDiags := savedStickyDiags
+  holes
 
-drainStampQueue : Unit -> Unit
+-- Runs every queued stamping context, then judges the evidence they finished.
+-- Returns one `T-UNROUTED-DISPATCH` per hole, under the module it belongs to.
+drainStampQueue : Unit -> List (String, TcDiag)
 drainStampQueue _ =
   let ctxs = reverseL graphRun.value.stampCtxs.value
   let savedPerRun = perRun.value
@@ -55677,12 +55706,105 @@ drainStampQueue _ =
   let savedModule = driverState.value.currentModuleRef.value
   let savedSupers = driverState.value.superDeclsRef.value
   let _ = runStampCtxs ctxs
+  let holes = judgeEvidence ctxs
   let _ = materializeBinderTypes ()
   graphRun.value.stampCtxs := []
   perRun := savedPerRun
   toggles := savedToggles
   driverState.value.currentModuleRef := savedModule
   driverState.value.superDeclsRef := savedSupers
+  holes
+
+-- The completeness judgment (`types/evidence_complete.mdk`) over the evidence this
+-- drain finished: every method cell minted since the last drain, and the goals of
+-- [ctxs] whose destination is not a method cell.  A return-site, arg-stamp or
+-- RLocal goal writes its cell's dispatch route and a method-dict goal its method
+-- dictionaries, so those are judged once, as the cell.
+judgeEvidence : List StampCtx -> List (String, TcDiag)
+judgeEvidence ctxs =
+  let g = graphRun.value
+  let lo = g.evJudged.value
+  g.evJudged := g.evCounter.value
+  let cellHoles = judgeCells g.evCells.value lo g.evCounter.value []
+  let goalHoles = flatMap (c => flatMap (judgeGoal c.scModule) c.scGoals) ctxs
+  dedupBy holeKey (cellHoles ++ goalHoles)
+
+holeKey : (String, TcDiag) -> String
+holeKey (m, TcDiag _ _ loc msg _ _) =
+  "\{lenKey m}\{lenKey (locGoalKey loc)}\{msg}"
+
+-- The cells with ordinals in [i, hi), last first onto [acc].  A cell no inference
+-- reached (no arity) carries no answer to judge.
+judgeCells : Array (Option EvCell) ->
+  Int ->
+  Int ->
+  List (String, TcDiag) ->
+  List (String, TcDiag)
+judgeCells arr i hi acc
+  | i >= hi || i >= arrayLength arr = acc
+  | otherwise = match arrayGetUnsafe i arr
+    Some c => match c.ecArity.value
+      Some _ =>
+        let row =
+          OccurrenceRow
+            c.ecName.value
+            c.ecIface.value
+            c.ecTag.value
+            c.ecImpl.value
+            c.ecMeth.value
+        judgeCells
+          arr
+          (i + 1)
+          hi
+          (holeDiags (evIdModule c.ecId) c.ecLoc.value row ++ acc)
+      None => judgeCells arr (i + 1) hi acc
+    None => judgeCells arr (i + 1) hi acc
+
+evIdModule : EvId -> String
+evIdModule (EvId m _) = m
+
+judgeGoal : String -> Obligation -> List (String, TcDiag)
+judgeGoal mid o = match (o.oPayload, evValueOf o.oDest)
+  (GPDictApp app, EvMany rs) =>
+    holeDiags mid o.oLoc (DictAppRow "" (map (r => r.irName) app.pdaIfaces) rs)
+  (GPRecDictApp (RecDictApp _ callee _ _ _ _), EvMany rs) =>
+    holeDiags mid o.oLoc (DictAppRow callee [] rs)
+  (GPArith _, EvOne r) => holeDiags mid o.oLoc (SiteRow r)
+  (GPSite _ _ _, EvOne r) =>
+    if goalKindTag o.oKind == goalKindTag GKBinopSite
+      || goalKindTag o.oKind == goalKindTag GKUnopSite then
+      holeDiags mid o.oLoc (SiteRow r)
+    else
+      []
+  _ => []
+
+holeDiags : String -> Option Loc -> EvidenceRow -> List (String, TcDiag)
+holeDiags mid loc row = match rowHole row
+  None => []
+  Some (_, msg) => [(mid, TcDiag "T-UNROUTED-DISPATCH" 1 loc msg None None)]
+
+-- Each hole joins the errors of the module it belongs to, unless that module
+-- already has errors: a hole beside a type error is usually its consequence.  A
+-- hole in no module of [perMod] is a module the drive has no list for, which only
+-- the prelude is.
+attachEvidenceHoles : List (String, TcDiag) -> List ModDiags -> List ModDiags
+attachEvidenceHoles [] perMod = perMod
+attachEvidenceHoles holes perMod =
+  let _ =
+    match filterList (h => not (anyList (pm => fst pm == fst h) perMod)) holes
+      [] => ()
+      (m, d) :: _ =>
+        panic
+          "evidence hole in module `\{m}`, which has no diagnostics list: \{tcMsg d}"
+  map (pm => holesOnto holes pm) perMod
+
+holesOnto : List (String, TcDiag) -> ModDiags -> ModDiags
+holesOnto holes (mid, (schemes, errs, warns)) = match errs
+  [] => (
+    mid,
+    (schemes, map snd (filterList (h => fst h == mid) holes), warns),
+  )
+  _ => (mid, (schemes, errs, warns))
 
 -- Read every queued binder's type cell into the graph's runtime-type table, now
 -- that the stampers have run and nothing left in the graph can refine a drained
