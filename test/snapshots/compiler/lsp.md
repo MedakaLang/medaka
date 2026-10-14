@@ -1,5 +1,5 @@
 # META
-source_lines=2181
+source_lines=2182
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -47,7 +47,7 @@ import driver.diagnostics.{
   projectEntrySchemes,
   stdlibExportsReader,
 }
-import driver.loader.{findProjectRootOrSelf}
+import driver.loader.{findProjectRootOrSelf, parseCachedLocated}
 import frontend.parser.{
   ParseError,
   parseResult,
@@ -1645,7 +1645,7 @@ publishDiagnosticsFrom runtimeSrc coreSrc uri src decls =
 -- whole import graph (with the OPEN BUFFERS as unsaved-source overrides) and
 -- publish one publishDiagnostics PER affected file.
 -- A buffer with no (non-core)
--- imports keeps the single-document path (publishDiagnostics above).
+-- imports keeps the single-document path (publishDiagnosticsFrom above).
 --
 -- Simplifications (consistent with the single-root compiler
 -- loader, which has no medaka.toml / multi-root support — see loader.mdk):
@@ -1786,13 +1786,14 @@ publishEach ((file, ds) :: rest) =
 
 -- Choose the single-document or project path for a freshly-edited buffer.
 publishFor : String -> String -> String -> String -> Docs -> <IO> Unit
-publishFor runtimeSrc coreSrc uri text docs = match parseLocatedResult text
-  Err e => publishDiagnosticsList uri (parseErrorDiags e)
-  Ok decls =>
-    if anyImport decls then
-      publishProjectDiagnostics runtimeSrc coreSrc uri docs
-    else
-      publishDiagnosticsFrom runtimeSrc coreSrc uri text decls
+publishFor runtimeSrc coreSrc uri text docs =
+  match parseCachedLocated projectParseCache text
+    Err e => publishDiagnosticsList uri (parseErrorDiags e)
+    Ok decls =>
+      if anyImport decls then
+        publishProjectDiagnostics runtimeSrc coreSrc uri docs
+      else
+        publishDiagnosticsFrom runtimeSrc coreSrc uri text decls
 
 -- Extract a textDocument/{didOpen,didChange} uri + text and publish.
 -- didOpen:   params.textDocument.{uri,text}
@@ -2186,7 +2187,7 @@ unit = ()
 # DESUGAR
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "Severity" true) (mem "analyzeFrom" false) (mem "analyzeProject" false) (mem "projectEntrySchemes" false) (mem "stdlibExportsReader" false))))
-(DUse false (UseGroup ("driver" "loader") ((mem "findProjectRootOrSelf" false))))
+(DUse false (UseGroup ("driver" "loader") ((mem "findProjectRootOrSelf" false) (mem "parseCachedLocated" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
@@ -2583,7 +2584,7 @@ unit = ()
 (DFunDef false "publishEach" ((PList)) (ELit LUnit))
 (DFunDef false "publishEach" ((PCons (PTuple (PVar "file") (PVar "ds")) (PVar "rest"))) (EBlock (DoLet false false (PVar "uri") (EApp (EVar "uriOfPath") (EVar "file"))) (DoLet false false (PVar "params") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EApp (EVar "diagToJson") (ELit (LString "")))) (EVar "ds"))))))) (DoLet false false PWild (EApp (EVar "writeMessage") (EApp (EApp (EVar "notificationMsg") (ELit (LString "textDocument/publishDiagnostics"))) (EVar "params")))) (DoExpr (EApp (EVar "publishEach") (EVar "rest")))))
 (DTypeSig false "publishFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))))
-(DFunDef false "publishFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "text") (PVar "docs")) (EMatch (EApp (EVar "parseLocatedResult") (EVar "text")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EVar "publishDiagnosticsList") (EVar "uri")) (EApp (EVar "parseErrorDiags") (EVar "e")))) (arm (PCon "Ok" (PVar "decls")) () (EIf (EApp (EVar "anyImport") (EVar "decls")) (EApp (EApp (EApp (EApp (EVar "publishProjectDiagnostics") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "docs")) (EApp (EApp (EApp (EApp (EApp (EVar "publishDiagnosticsFrom") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "text")) (EVar "decls"))))))
+(DFunDef false "publishFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "text") (PVar "docs")) (EMatch (EApp (EApp (EVar "parseCachedLocated") (EVar "projectParseCache")) (EVar "text")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EVar "publishDiagnosticsList") (EVar "uri")) (EApp (EVar "parseErrorDiags") (EVar "e")))) (arm (PCon "Ok" (PVar "decls")) () (EIf (EApp (EVar "anyImport") (EVar "decls")) (EApp (EApp (EApp (EApp (EVar "publishProjectDiagnostics") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "docs")) (EApp (EApp (EApp (EApp (EApp (EVar "publishDiagnosticsFrom") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "text")) (EVar "decls"))))))
 (DTypeSig false "handleDidOpen" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Docs")))))))
 (DFunDef false "handleDidOpen" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "params") (PVar "docs")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "uri"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "textDocument"))) (EVar "params"))) (arm (PCon "None") () (EVar "docs")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "text"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "textDocument"))) (EVar "params"))) (arm (PCon "None") () (EVar "docs")) (arm (PCon "Some" (PVar "text")) () (EBlock (DoLet false false (PVar "docs2") (EApp (EApp (EApp (EVar "docsPut") (EVar "uri")) (EVar "text")) (EVar "docs"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "publishFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "text")) (EVar "docs2"))) (DoExpr (EVar "docs2"))))))))
 (DTypeSig false "handleDidChange" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Docs")))))))
@@ -2639,7 +2640,7 @@ unit = ()
 # MARK
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "Severity" true) (mem "analyzeFrom" false) (mem "analyzeProject" false) (mem "projectEntrySchemes" false) (mem "stdlibExportsReader" false))))
-(DUse false (UseGroup ("driver" "loader") ((mem "findProjectRootOrSelf" false))))
+(DUse false (UseGroup ("driver" "loader") ((mem "findProjectRootOrSelf" false) (mem "parseCachedLocated" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
@@ -3036,7 +3037,7 @@ unit = ()
 (DFunDef false "publishEach" ((PList)) (ELit LUnit))
 (DFunDef false "publishEach" ((PCons (PTuple (PVar "file") (PVar "ds")) (PVar "rest"))) (EBlock (DoLet false false (PVar "uri") (EApp (EVar "uriOfPath") (EVar "file"))) (DoLet false false (PVar "params") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EApp (EVar "diagToJson") (ELit (LString "")))) (EVar "ds"))))))) (DoLet false false PWild (EApp (EVar "writeMessage") (EApp (EApp (EVar "notificationMsg") (ELit (LString "textDocument/publishDiagnostics"))) (EVar "params")))) (DoExpr (EApp (EVar "publishEach") (EVar "rest")))))
 (DTypeSig false "publishFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))))
-(DFunDef false "publishFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "text") (PVar "docs")) (EMatch (EApp (EVar "parseLocatedResult") (EVar "text")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EVar "publishDiagnosticsList") (EVar "uri")) (EApp (EVar "parseErrorDiags") (EVar "e")))) (arm (PCon "Ok" (PVar "decls")) () (EIf (EApp (EVar "anyImport") (EVar "decls")) (EApp (EApp (EApp (EApp (EVar "publishProjectDiagnostics") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "docs")) (EApp (EApp (EApp (EApp (EApp (EVar "publishDiagnosticsFrom") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "text")) (EVar "decls"))))))
+(DFunDef false "publishFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "text") (PVar "docs")) (EMatch (EApp (EApp (EVar "parseCachedLocated") (EVar "projectParseCache")) (EVar "text")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EVar "publishDiagnosticsList") (EVar "uri")) (EApp (EVar "parseErrorDiags") (EVar "e")))) (arm (PCon "Ok" (PVar "decls")) () (EIf (EApp (EVar "anyImport") (EVar "decls")) (EApp (EApp (EApp (EApp (EVar "publishProjectDiagnostics") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "docs")) (EApp (EApp (EApp (EApp (EApp (EVar "publishDiagnosticsFrom") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "text")) (EVar "decls"))))))
 (DTypeSig false "handleDidOpen" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Docs")))))))
 (DFunDef false "handleDidOpen" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "params") (PVar "docs")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "uri"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "textDocument"))) (EVar "params"))) (arm (PCon "None") () (EVar "docs")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "text"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "textDocument"))) (EVar "params"))) (arm (PCon "None") () (EVar "docs")) (arm (PCon "Some" (PVar "text")) () (EBlock (DoLet false false (PVar "docs2") (EApp (EApp (EApp (EVar "docsPut") (EVar "uri")) (EVar "text")) (EVar "docs"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "publishFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "uri")) (EVar "text")) (EVar "docs2"))) (DoExpr (EVar "docs2"))))))))
 (DTypeSig false "handleDidChange" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Docs")))))))

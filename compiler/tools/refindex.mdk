@@ -1349,13 +1349,6 @@ importWildGo ctx useEnv ((ns, name, originKey) :: rest) =
   let _ = hmSetC ctx useEnv (ns ++ sep ++ name) originKey
   importWildGo ctx useEnv rest
 
--- ── prelude seeding (core + runtime): export origins WITHOUT def recording ───
--- F1: intra-project scope.  Prelude names resolve to stable `core`/`runtime`
--- origin keys so uses group, but the PRELUDE's own decls record no def site, and
--- we never walk prelude bodies.  A project-local `impl Eq MyType` DOES record its
--- method clause heads under `core\tmethod\teq` (#1002) — that is a project-local
--- location joining a prelude key, not a descent into stdlib, and it is what makes
--- `references` on a prelude method show the impls the user actually wrote.
 -- Last parse per prelude slot, keyed by the FULL source string (never a path), so
 -- an edited prelude re-parses.  The cached value is a function of `src` alone
 -- (decls and positions); nothing downstream of seeding reads the parser's loc
@@ -1376,6 +1369,13 @@ preludeParseMemo mid src =
       slot := Some (src, r)
       r
 
+-- ── prelude seeding (core + runtime): export origins WITHOUT def recording ───
+-- F1: intra-project scope.  Prelude names resolve to stable `core`/`runtime`
+-- origin keys so uses group, but the PRELUDE's own decls record no def site, and
+-- we never walk prelude bodies.  A project-local `impl Eq MyType` DOES record its
+-- method clause heads under `core\tmethod\teq` (#1002) — that is a project-local
+-- location joining a prelude key, not a descent into stdlib, and it is what makes
+-- `references` on a prelude method show the impls the user actually wrote.
 seedPrelude : Ctx -> String -> String -> Unit
 seedPrelude ctx mid src = match preludeParseMemo mid src
   None => ()

@@ -43,7 +43,7 @@ import driver.diagnostics.{
   projectEntrySchemes,
   stdlibExportsReader,
 }
-import driver.loader.{findProjectRootOrSelf}
+import driver.loader.{findProjectRootOrSelf, parseCachedLocated}
 import frontend.parser.{
   ParseError,
   parseResult,
@@ -1641,7 +1641,7 @@ publishDiagnosticsFrom runtimeSrc coreSrc uri src decls =
 -- whole import graph (with the OPEN BUFFERS as unsaved-source overrides) and
 -- publish one publishDiagnostics PER affected file.
 -- A buffer with no (non-core)
--- imports keeps the single-document path (publishDiagnostics above).
+-- imports keeps the single-document path (publishDiagnosticsFrom above).
 --
 -- Simplifications (consistent with the single-root compiler
 -- loader, which has no medaka.toml / multi-root support — see loader.mdk):
@@ -1782,13 +1782,14 @@ publishEach ((file, ds) :: rest) =
 
 -- Choose the single-document or project path for a freshly-edited buffer.
 publishFor : String -> String -> String -> String -> Docs -> <IO> Unit
-publishFor runtimeSrc coreSrc uri text docs = match parseLocatedResult text
-  Err e => publishDiagnosticsList uri (parseErrorDiags e)
-  Ok decls =>
-    if anyImport decls then
-      publishProjectDiagnostics runtimeSrc coreSrc uri docs
-    else
-      publishDiagnosticsFrom runtimeSrc coreSrc uri text decls
+publishFor runtimeSrc coreSrc uri text docs =
+  match parseCachedLocated projectParseCache text
+    Err e => publishDiagnosticsList uri (parseErrorDiags e)
+    Ok decls =>
+      if anyImport decls then
+        publishProjectDiagnostics runtimeSrc coreSrc uri docs
+      else
+        publishDiagnosticsFrom runtimeSrc coreSrc uri text decls
 
 -- Extract a textDocument/{didOpen,didChange} uri + text and publish.
 -- didOpen:   params.textDocument.{uri,text}

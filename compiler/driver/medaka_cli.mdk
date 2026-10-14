@@ -4211,10 +4211,10 @@ runLintCmd argv0 =
       _ => False
     let cacheCtx = lintCacheCtx (flag "--cache" a) fixMode
     -- `parsed` carries each readable target's (path, src, Positions, decls) out of
-    -- the per-file pass so the cross-file tier reuses them instead of re-reading
-    -- and re-parsing every file (#394).  It is EMPTY under --cache, where a hit
-    -- has no parse to hand on — that path reaches the cross-file tier through the
-    -- entries' cached occurrences instead (see runCrossFileReportCached).
+    -- the per-file pass, for the parse-based cross-file tier (runCrossFileReport).
+    -- It is EMPTY whenever `crossFileCacheSound` holds, with or without --cache:
+    -- the tier is then reached through the entries' occurrences instead (see
+    -- runCrossFileReportCached).
     let (perFileErr, entries, parsed) =
       lintFilesGo
         stdlibIdx

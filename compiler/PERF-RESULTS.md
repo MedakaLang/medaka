@@ -1117,9 +1117,10 @@ not the compiler. The native proxy is **`medaka lsp` driven over batch stdio**, 
 `compiler/tools/lsp.mdk` and `compiler/entries/playground_main.mdk` are the same shape on
 the two axes that decide this cost:
 
-* **The route.** `publishFor` (lsp.mdk) branches on `bufferHasImports` into
-  `analyzeLocated` / `analyzeProject`, exactly as `playground_main`'s `run` branches into
-  `analyzeSingle` / `analyzeMulti`. Both reach `checkCoreMemoized`
+* **The route.** `publishFor` (lsp.mdk) parses the buffer once through
+  `parseCachedLocated` and branches on `anyImport` into `publishDiagnosticsFrom` (via
+  `analyzeFrom`) / `publishProjectDiagnostics` (via `analyzeProject`), exactly as
+  `playground_main`'s `run` branches into `analyzeSingle` / `analyzeMulti`. Both reach `checkCoreMemoized`
   (`compiler/types/typecheck.mdk`) through the keyed prelude that
   `compiler/driver/diagnostics.mdk` mints in `analyzeFrom` and `analyzeProject`.
 * **The session.** The memo layer and a session-lived dependency parse cache both survive
