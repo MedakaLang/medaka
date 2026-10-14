@@ -5,9 +5,10 @@
 //
 // It builds its wasm inputs with the tree's ./medaka (`build --target wasmgc/<profile>`)
 // and the wasm emitter from `sh test/wasm/build_wasm_oracle.sh` (MEDAKA_WASM_EMITTER
-// overrides test/bin/wasm_emit_modules_main).  MEDAKA_HOST_TEST_RUNJS and
-// MEDAKA_HOST_TEST_WORKER point the probes at another run.js or worker.js, which is how
-// a probe is shown red against an older host.
+// overrides test/bin/wasm_emit_modules_main).  MEDAKA_HOST_TEST_RUNJS,
+// MEDAKA_HOST_TEST_WORKER and MEDAKA_HOST_TEST_COMPILE point the probes at another
+// run.js, worker.js or compile.mjs, which is how a probe is shown red against an older
+// host.
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -21,11 +22,26 @@ const medaka = join(root, 'medaka');
 const emitter = process.env.MEDAKA_WASM_EMITTER || join(root, 'test', 'bin', 'wasm_emit_modules_main');
 const runJs = process.env.MEDAKA_HOST_TEST_RUNJS || join(root, 'test', 'wasm', 'run.js');
 const workerJs = process.env.MEDAKA_HOST_TEST_WORKER || join(here, 'worker.js');
+const compileMjs = process.env.MEDAKA_HOST_TEST_COMPILE || join(here, 'compile.mjs');
 for (const [what, p] of [['medaka binary', medaka], ['wasm emitter', emitter]])
   if (!existsSync(p)) {
     console.error(`SETUP: no ${what} at ${p} (make medaka; sh test/wasm/build_wasm_oracle.sh)`);
     process.exit(2);
   }
+
+// 20000 lines on each stream: far past the 64 KiB a pipe holds.
+const BIG_LINES = 20000;
+const BIG_LOOP = String.raw`loop : Int -> <Stdout, Stderr> Unit
+loop i =
+  if i > ${BIG_LINES} then
+    ()
+  else
+    let _ = putStrLn "stdout line \{i} of the run"
+    let _ = ePutStrLn "stderr line \{i}"
+    loop (i + 1)
+
+`;
+const bigText = (line) => Array.from({ length: BIG_LINES }, (_, i) => line(i + 1) + '\n').join('');
 
 const PROGRAMS = {
   exit: 'main =\n  let _ = putStrLn "out-before-exit"\n  let _ = ePutStrLn "err-before-exit"\n  exit 3\n',
@@ -37,6 +53,25 @@ const PROGRAMS = {
   trap: 'main =\n  let _ = putStr "out-partial"\n  let _ = ePutStr "err-partial"\n'
     + '  let z = length [1] - 1\n  println (10 / z)\n',
   hello: 'main = putStrLn "hello"\n',
+  vfs: String.raw`okErr : Result String a -> String
+okErr r = match r
+  Ok _ => "Ok"
+  Err _ => "Err"
+
+main =
+  let _ = putStrLn "write a.txt: \{okErr (writeFileBytes "a.txt" (arrayFromList [120]))}"
+  let _ = putStrLn "exists ./a.txt: \{debug (fileExists "./a.txt")}"
+  let _ = match readFile "./a.txt"
+    Ok s => putStrLn "read ./a.txt: \{s}"
+    Err _ => putStrLn "read ./a.txt: Err"
+  let _ = putStrLn "read .//a.txt: \{okErr (readFile ".//a.txt")}"
+  let _ = putStrLn "write nodir_zz/a.txt: \{okErr (writeFileBytes "nodir_zz/a.txt" (arrayFromList [120]))}"
+  let _ = putStrLn "exists nodir_zz/a.txt: \{debug (fileExists "nodir_zz/a.txt")}"
+  let _ = putStrLn "exists .: \{debug (fileExists ".")}"
+  putStrLn "read .: \{okErr (readFile ".")}"
+`,
+  bigexit: BIG_LOOP + 'main =\n  let _ = loop 1\n  exit 3\n',
+  bigtrap: BIG_LOOP + 'main =\n  let _ = loop 1\n  let z = length [1] - 1\n  println (10 / z)\n',
 };
 
 const built = [];
@@ -164,6 +199,48 @@ function check(name, ok, detail) {
   check('(f) worker: the unknown key is named',
     last(msgs).type === 'error' && last(msgs).message.includes('env.mdk_fake_key'),
     JSON.stringify(msgs));
+}
+
+// (g) The worker's vfs path model (WASM-SEMANTICS §3): `./a.txt` is `a.txt`, the root
+// exists and is a directory, and a write into a directory never created is an Err.  The
+// expected text is what the native build of the same program prints.
+{
+  const msgs = await runInWorker(build('vfs', 'wasmgc/browser-worker'));
+  const native = 'write a.txt: Ok\nexists ./a.txt: True\nread ./a.txt: x\nread .//a.txt: Ok\n'
+    + 'write nodir_zz/a.txt: Err\nexists nodir_zz/a.txt: False\nexists .: True\nread .: Err\n';
+  check('(g) worker: path spellings alias, `.` is a directory, a write needs its directory',
+    last(msgs).type === 'done' && streamText(msgs, 'stdout') === native,
+    JSON.stringify(msgs));
+}
+
+// (h) WH4 through pipes: run.js delivers every byte of both streams on `exit` and on a
+// trap, past what a pipe buffers, with the program's exit status (3), and 1 on a trap.
+{
+  const out = bigText((i) => `stdout line ${i} of the run`);
+  const err = bigText((i) => `stderr line ${i}`);
+  const piped = { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 };
+  const r = spawnSync(process.execPath, [runJs, build('bigexit', 'wasmgc/node')], piped);
+  check('(h) run.js: piped stdout and stderr survive mdk_exit whole',
+    r.status === 3 && r.stdout === out && r.stderr === err,
+    JSON.stringify({ stdout: r.stdout.length, want: out.length, stderr: r.stderr.length, wantErr: err.length, status: r.status }));
+  const t = spawnSync(process.execPath, [runJs, build('bigtrap', 'wasmgc/node')], piped);
+  check('(h) run.js: piped stdout and stderr survive a trap whole',
+    t.status === 1 && t.stdout === out && t.stderr.startsWith(err) && t.stderr.includes('E-DIV-ZERO'),
+    JSON.stringify({ stdout: t.stdout.length, want: out.length, stderr: t.stderr.length, status: t.status }));
+}
+
+// (i) compile.mjs names its host when the compiler module imports a key no slice lists.
+{
+  const { compile } = await import(pathToFileURL(compileMjs).href);
+  const name = new TextEncoder().encode('mdk_fake_key');
+  const imp = [1, 3, 0x65, 0x6e, 0x76, name.length, ...name, 0, 0];
+  const bytes = new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, 1, 4, 1, 0x60, 0, 0, 2, imp.length, ...imp]);
+  const r = await compile('main = ()\n', { wasm: bytes, stdlib: { runtime: '', core: '' } })
+    .catch((e) => ({ threw: String(e && e.message) }));
+  const text = JSON.stringify(r);
+  check('(i) compile.mjs: the HostKeyError names the compiler host',
+    text.includes('env.mdk_fake_key') && text.includes('no slice of the playground compiler host provides'),
+    text.slice(0, 400));
 }
 
 // Report only: slices no module built above imports a key of.

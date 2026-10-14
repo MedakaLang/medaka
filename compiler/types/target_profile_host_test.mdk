@@ -8,6 +8,8 @@
    throws `CapabilityError`), and compares that with the compiler's rows:
 
      * the host has exactly the compiler's wasmgc profiles, with the same grants;
+     * each slice's `needs` are exactly the labels the effect rows of its externs carry
+       in `stdlib/runtime.mdk`, and a slice that names no extern needs nothing;
      * a slice whose labels a profile grants is real there, and any other slice is a
        `CapabilityError` callable. The process slices (`args`, `exit`) carry no label
        and are real only on `wasmgc/node`.
@@ -17,11 +19,13 @@
 
    Runs under `medaka test --native`: it spawns node. -}
 
-import list.{sort}
+import list.{nub, sort}
 import string.{startsWith, unwords, lines, words}
 import test.{Expectation, expectEqual, fail}
 import test_process.{boundedVerb, underRoot}
 import types.target_profile.{lookupProfile, profileGrants, profileNames}
+import frontend.parser.{parse}
+import backend.core_validate.{externLabels}
 
 processProfile : String
 processProfile = "wasmgc/node"
@@ -100,19 +104,53 @@ observedFinding _ _ = ["malformed observation row"]
 sliceName : SliceNeeds -> String
 sliceName (SliceNeeds s _ _) = s
 
-agreement : <IO, Exec, Env "MEDAKA_ROOT"> Expectation
-agreement =
-  match boundedVerb "node" [underRoot "test/wasm/host_profile_table.mjs"]
-    Err e => fail "could not run node: \{e}"
-    Ok (0, out, _) =>
-      let ls = lines out
-      expectEqual
-        []
-        (grantFindings (hostGrants (rowsOf "G" ls))
-          ++ observedFindings (sliceNeeds (rowsOf "N" ls)) (rowsOf "O" ls))
-    Ok (code, out, err) =>
-      fail
-        "node host_profile_table.mjs exited \{debug code}: \{unwords [out, err]}"
+-- `declared` is each runtime.mdk extern with the labels of its result row; a row is
+-- a slice and the externs it serves.
+labelFindings : List (String, List String) ->
+  List SliceNeeds ->
+  List (List String) ->
+  List String
+labelFindings declared needs rows = flatMap (labelFinding declared needs) rows
+
+labelFinding : List (String, List String) ->
+  List SliceNeeds ->
+  List String ->
+  List String
+labelFinding declared needs (s :: externs) =
+  let names = map fst declared
+  let carried = sort (nub (flatMap (e => lookupOr e declared) externs))
+  let wanted = match filter (n => sliceName n == s) needs
+    (SliceNeeds _ _ ns) :: _ => sort ns
+    [] => []
+  map
+      (e => "slice \{s}: extern \{e} is not declared in stdlib/runtime.mdk")
+      (filter (e => not (elem e names)) externs)
+    ++ (if carried == wanted then
+      []
+    else
+      [
+        "slice \{s}: needs \{debug wanted}, but its externs \{debug externs} carry \{debug carried} in stdlib/runtime.mdk",
+      ])
+labelFinding _ _ [] = ["malformed extern row"]
+
+agreement : <IO, Exec, Env "MEDAKA_ROOT", FileRead> Expectation
+agreement = match (
+  boundedVerb "node" [underRoot "test/wasm/host_profile_table.mjs"],
+  readFile (underRoot "stdlib/runtime.mdk"),
+)
+  (Err e, _) => fail "could not run node: \{e}"
+  (_, Err e) => fail "could not read stdlib/runtime.mdk: \{e}"
+  (Ok (0, out, _), Ok runtimeSrc) =>
+    let ls = lines out
+    let needs = sliceNeeds (rowsOf "N" ls)
+    expectEqual
+      []
+      (grantFindings (hostGrants (rowsOf "G" ls))
+        ++ labelFindings (externLabels (parse runtimeSrc)) needs (rowsOf "X" ls)
+        ++ observedFindings needs (rowsOf "O" ls))
+  (Ok (code, out, err), _) =>
+    fail
+      "node host_profile_table.mjs exited \{debug code}: \{unwords [out, err]}"
 
 test "wasm host profile agreement: host PROFILES grants and slices match target_profile.mdk" =
   agreement
