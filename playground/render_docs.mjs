@@ -118,11 +118,12 @@ const escapeHtml = (s) =>
 //      multi-file, the playground has one buffer; not `medaka-nocheck` — a
 //      fragment never meant to stand alone; and not `medaka-expect`/`toml`/an
 //      unlabelled fence, none of which are Medaka source to run at all), AND
-//   2. its source contains no call to a host capability the playground's wasm
-//      import object stubs out (playground/worker.js `capabilityStub`):
+//   2. its source contains no call to a host capability the playground's runner
+//      withholds or confines (playground/medaka_host.mjs, wasmgc/browser-worker):
 //      readFile, writeFile, readLine, readLines, getEnv, fileExists, args,
 //      exit. Calling one of these does not fail to COMPILE — the wasm module
-//      loads fine — it throws a `CapabilityError` at run time instead of
+//      loads fine — it throws a `CapabilityError` at run time, or (the file
+//      operations) runs over an empty per-run in-memory vfs, instead of
 //      producing the documented output, which is worse than no link.
 //   3. it defines a top-level `main`. A block without one is not a program:
 //      natively `medaka run`/`build` refuse it with one located error

@@ -32,5 +32,7 @@
   Cross-Origin-Embedder-Policy: require-corp
 /compile.mjs
   Cross-Origin-Embedder-Policy: require-corp
+/medaka_host.mjs
+  Cross-Origin-Embedder-Policy: require-corp
 /vendor/wat2wasm/wat2wasm.js
   Cross-Origin-Embedder-Policy: require-corp

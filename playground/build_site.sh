@@ -68,6 +68,7 @@ cp "$SCRIPT_DIR/medaka_tokenizer.js" "$SITE/"
 cp "$SCRIPT_DIR/diagnostics_map.js"  "$SITE/"
 cp "$SCRIPT_DIR/language-worker.js"  "$SITE/"
 cp "$SCRIPT_DIR/compile.mjs"         "$SITE/"
+cp "$SCRIPT_DIR/medaka_host.mjs"     "$SITE/"
 cp "$SCRIPT_DIR/compiler-worker.js"  "$SITE/"
 cp "$SCRIPT_DIR/worker.js"           "$SITE/"
 
