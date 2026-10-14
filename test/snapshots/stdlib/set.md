@@ -1,5 +1,5 @@
 # META
-source_lines=757
+source_lines=758
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable set of distinct elements, ordered by `Ord`.
@@ -21,7 +21,7 @@ stages=DESUGAR,MARK
 --   • search:   elements in the left subtree < node element < the right
 --   • balance:  neither subtree is more than `delta` (= 3) times the other
 --
--- maintained by the smart constructor `balance`.  Most operations carry an
+-- maintained by the smart constructors `balance`, `balanceL` and `balanceR`.  Most operations carry an
 -- `Ord a` constraint while the pure walks (`size`, `toList`, the folds) do
 -- not.
 --
@@ -133,15 +133,14 @@ singleton x = Bin 1 x Tip Tip
    The `Set { x, ... }` literal is the same operation.
 
    > toList (fromList [3, 1, 2, 3, 1])
-   [1, 2, 3] -}
+   [1, 2, 3]
+   > size (fromList [0.0 / 0.0, 1.0, 0.0 / 0.0])
+   2 -}
 export
 fromList : Ord a => List a -> Set a
 fromList xs =
   let n = ascendingRunLength xs
-  let (s, rest) = buildAscending n xs
-  match rest
-    [] => s
-    _ => fromUnsorted xs
+  if n == length xs then fst (buildAscending n xs) else fromUnsorted xs
 
 -- Length of the longest prefix whose elements are strictly ascending.
 ascendingRunLength : Ord a => List a -> Int
@@ -171,8 +170,9 @@ buildNode n xs =
       (Bin n x l r, rest3)
     [] => panic "Set.buildNode: fewer elements than the run length"
 
--- Stable-sorts, keeps the last of each run of equal elements (the later one
--- wins, as with `insert`), and builds the tree in one linear pass.
+-- Stable-sorts, keeps the last of each run of elements that `compare` calls
+-- equal (the later one wins, as with `insert`), and builds the tree in one
+-- linear pass.
 fromUnsorted : Ord a => List a -> Set a
 fromUnsorted xs =
   let ys = dedupeLast (sortBy compare xs)
@@ -181,8 +181,9 @@ fromUnsorted xs =
 dedupeLast : Ord a => List a -> List a
 dedupeLast [] = []
 dedupeLast [x] = [x]
-dedupeLast (x :: rest@(y :: _)) =
-  if eq x y then dedupeLast rest else x :: dedupeLast rest
+dedupeLast (x :: rest@(y :: _)) = match compare x y
+  Eq => dedupeLast rest
+  _ => x :: dedupeLast rest
 
 -- > size (Set { 1, 2, 3, 2, 1 })
 -- 3
@@ -796,7 +797,7 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DTypeSig true "singleton" (TyFun (TyVar "a") (TyApp (TyCon "Set") (TyVar "a"))))
 (DFunDef false "singleton" ((PVar "x")) (EApp (EApp (EApp (EApp (EVar "Bin") (ELit (LInt 1))) (EVar "x")) (EVar "Tip")) (EVar "Tip")))
 (DTypeSig true "fromList" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a")))))
-(DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "ascendingRunLength") (EVar "xs"))) (DoLet false false (PTuple (PVar "s") (PVar "rest")) (EApp (EApp (EVar "buildAscending") (EVar "n")) (EVar "xs"))) (DoExpr (EMatch (EVar "rest") (arm (PList) () (EVar "s")) (arm PWild () (EApp (EVar "fromUnsorted") (EVar "xs")))))))
+(DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "ascendingRunLength") (EVar "xs"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (EApp (EVar "length") (EVar "xs"))) (EApp (EVar "fst") (EApp (EApp (EVar "buildAscending") (EVar "n")) (EVar "xs"))) (EApp (EVar "fromUnsorted") (EVar "xs"))))))
 (DTypeSig false "ascendingRunLength" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int"))))
 (DFunDef false "ascendingRunLength" ((PList)) (ELit (LInt 0)))
 (DFunDef false "ascendingRunLength" ((PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EApp (EVar "ascendingRunFrom") (EVar "x")) (ELit (LInt 1))) (EVar "rest")))
@@ -812,7 +813,7 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DTypeSig false "dedupeLast" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "dedupeLast" ((PList)) (EListLit))
 (DFunDef false "dedupeLast" ((PList (PVar "x"))) (EListLit (EVar "x")))
-(DFunDef false "dedupeLast" ((PCons (PVar "x") (PAs "rest" (PCons (PVar "y") PWild)))) (EIf (EApp (EApp (EVar "eq") (EVar "x")) (EVar "y")) (EApp (EVar "dedupeLast") (EVar "rest")) (EBinOp "::" (EVar "x") (EApp (EVar "dedupeLast") (EVar "rest")))))
+(DFunDef false "dedupeLast" ((PCons (PVar "x") (PAs "rest" (PCons (PVar "y") PWild)))) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Eq") () (EApp (EVar "dedupeLast") (EVar "rest"))) (arm PWild () (EBinOp "::" (EVar "x") (EApp (EVar "dedupeLast") (EVar "rest"))))))
 (DTypeSig true "size" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyCon "Int")))
 (DFunDef false "size" ((PCon "Tip")) (ELit (LInt 0)))
 (DFunDef false "size" ((PCon "Bin" (PVar "s") PWild PWild PWild)) (EVar "s"))
@@ -989,7 +990,7 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DTypeSig true "singleton" (TyFun (TyVar "a") (TyApp (TyCon "Set") (TyVar "a"))))
 (DFunDef false "singleton" ((PVar "x")) (EApp (EApp (EApp (EApp (EVar "Bin") (ELit (LInt 1))) (EVar "x")) (EVar "Tip")) (EVar "Tip")))
 (DTypeSig true "fromList" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a")))))
-(DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "n") (EApp (EDictApp "ascendingRunLength") (EVar "xs"))) (DoLet false false (PTuple (PVar "s") (PVar "rest")) (EApp (EApp (EVar "buildAscending") (EVar "n")) (EVar "xs"))) (DoExpr (EMatch (EVar "rest") (arm (PList) () (EVar "s")) (arm PWild () (EApp (EDictApp "fromUnsorted") (EVar "xs")))))))
+(DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "n") (EApp (EDictApp "ascendingRunLength") (EVar "xs"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (EApp (EMethodRef "length") (EVar "xs"))) (EApp (EVar "fst") (EApp (EApp (EVar "buildAscending") (EVar "n")) (EVar "xs"))) (EApp (EDictApp "fromUnsorted") (EVar "xs"))))))
 (DTypeSig false "ascendingRunLength" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int"))))
 (DFunDef false "ascendingRunLength" ((PList)) (ELit (LInt 0)))
 (DFunDef false "ascendingRunLength" ((PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EApp (EDictApp "ascendingRunFrom") (EVar "x")) (ELit (LInt 1))) (EVar "rest")))
@@ -1005,7 +1006,7 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DTypeSig false "dedupeLast" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "dedupeLast" ((PList)) (EListLit))
 (DFunDef false "dedupeLast" ((PList (PVar "x"))) (EListLit (EVar "x")))
-(DFunDef false "dedupeLast" ((PCons (PVar "x") (PAs "rest" (PCons (PVar "y") PWild)))) (EIf (EApp (EApp (EMethodRef "eq") (EVar "x")) (EVar "y")) (EApp (EDictApp "dedupeLast") (EVar "rest")) (EBinOp "::" (EVar "x") (EApp (EDictApp "dedupeLast") (EVar "rest")))))
+(DFunDef false "dedupeLast" ((PCons (PVar "x") (PAs "rest" (PCons (PVar "y") PWild)))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Eq") () (EApp (EDictApp "dedupeLast") (EVar "rest"))) (arm PWild () (EBinOp "::" (EVar "x") (EApp (EDictApp "dedupeLast") (EVar "rest"))))))
 (DTypeSig true "size" (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyCon "Int")))
 (DFunDef false "size" ((PCon "Tip")) (ELit (LInt 0)))
 (DFunDef false "size" ((PCon "Bin" (PVar "s") PWild PWild PWild)) (EVar "s"))

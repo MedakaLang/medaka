@@ -152,18 +152,18 @@ singleton k v = Bin 1 k v Tip Tip
    > keys (fromList [(3, 0), (1, 0), (2, 0)])
    [1, 2, 3]
    > findWithDefault 0 1 (fromList [(1, 10), (1, 20)])
-   20 -}
+   20
+   > size (fromList [(0.0 / 0.0, 1), (1.0, 2), (0.0 / 0.0, 3)])
+   2 -}
 export
 fromList : Ord k => List (k, v) -> Map k v
 fromList xs =
   let n = ascendingRunLength xs
-  let (m, rest) = buildAscending n xs
-  match rest
-    [] => m
-    _ => fromUnsorted xs
+  if n == length xs then fst (buildAscending n xs) else fromUnsorted xs
 
--- Stable-sorts by key, keeps the last pair of each run of equal keys (the
--- later pair wins), and builds the tree in one linear pass.
+-- Stable-sorts by key, keeps the last pair of each run of keys that `compare`
+-- calls equal (the later pair wins, as `set` decides it), and builds the tree
+-- in one linear pass.
 fromUnsorted : Ord k => List (k, v) -> Map k v
 fromUnsorted xs =
   let ys = dedupeLast (sortBy ((a, _) (b, _) => compare a b) xs)
@@ -172,8 +172,9 @@ fromUnsorted xs =
 dedupeLast : Ord k => List (k, v) -> List (k, v)
 dedupeLast [] = []
 dedupeLast [p] = [p]
-dedupeLast ((k1, v1) :: rest@((k2, _) :: _)) =
-  if eq k1 k2 then dedupeLast rest else (k1, v1) :: dedupeLast rest
+dedupeLast ((k1, v1) :: rest@((k2, _) :: _)) = match compare k1 k2
+  Eq => dedupeLast rest
+  _ => (k1, v1) :: dedupeLast rest
 
 -- Length of the longest prefix whose keys are strictly ascending.
 ascendingRunLength : Ord k => List (k, v) -> Int

@@ -17,7 +17,7 @@
 --   • search:   elements in the left subtree < node element < the right
 --   • balance:  neither subtree is more than `delta` (= 3) times the other
 --
--- maintained by the smart constructor `balance`.  Most operations carry an
+-- maintained by the smart constructors `balance`, `balanceL` and `balanceR`.  Most operations carry an
 -- `Ord a` constraint while the pure walks (`size`, `toList`, the folds) do
 -- not.
 --
@@ -129,15 +129,14 @@ singleton x = Bin 1 x Tip Tip
    The `Set { x, ... }` literal is the same operation.
 
    > toList (fromList [3, 1, 2, 3, 1])
-   [1, 2, 3] -}
+   [1, 2, 3]
+   > size (fromList [0.0 / 0.0, 1.0, 0.0 / 0.0])
+   2 -}
 export
 fromList : Ord a => List a -> Set a
 fromList xs =
   let n = ascendingRunLength xs
-  let (s, rest) = buildAscending n xs
-  match rest
-    [] => s
-    _ => fromUnsorted xs
+  if n == length xs then fst (buildAscending n xs) else fromUnsorted xs
 
 -- Length of the longest prefix whose elements are strictly ascending.
 ascendingRunLength : Ord a => List a -> Int
@@ -167,8 +166,9 @@ buildNode n xs =
       (Bin n x l r, rest3)
     [] => panic "Set.buildNode: fewer elements than the run length"
 
--- Stable-sorts, keeps the last of each run of equal elements (the later one
--- wins, as with `insert`), and builds the tree in one linear pass.
+-- Stable-sorts, keeps the last of each run of elements that `compare` calls
+-- equal (the later one wins, as with `insert`), and builds the tree in one
+-- linear pass.
 fromUnsorted : Ord a => List a -> Set a
 fromUnsorted xs =
   let ys = dedupeLast (sortBy compare xs)
@@ -177,8 +177,9 @@ fromUnsorted xs =
 dedupeLast : Ord a => List a -> List a
 dedupeLast [] = []
 dedupeLast [x] = [x]
-dedupeLast (x :: rest@(y :: _)) =
-  if eq x y then dedupeLast rest else x :: dedupeLast rest
+dedupeLast (x :: rest@(y :: _)) = match compare x y
+  Eq => dedupeLast rest
+  _ => x :: dedupeLast rest
 
 -- > size (Set { 1, 2, 3, 2, 1 })
 -- 3

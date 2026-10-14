@@ -1,5 +1,5 @@
 # META
-source_lines=1363
+source_lines=1364
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable map from keys to values, ordered by key.
@@ -156,18 +156,18 @@ singleton k v = Bin 1 k v Tip Tip
    > keys (fromList [(3, 0), (1, 0), (2, 0)])
    [1, 2, 3]
    > findWithDefault 0 1 (fromList [(1, 10), (1, 20)])
-   20 -}
+   20
+   > size (fromList [(0.0 / 0.0, 1), (1.0, 2), (0.0 / 0.0, 3)])
+   2 -}
 export
 fromList : Ord k => List (k, v) -> Map k v
 fromList xs =
   let n = ascendingRunLength xs
-  let (m, rest) = buildAscending n xs
-  match rest
-    [] => m
-    _ => fromUnsorted xs
+  if n == length xs then fst (buildAscending n xs) else fromUnsorted xs
 
--- Stable-sorts by key, keeps the last pair of each run of equal keys (the
--- later pair wins), and builds the tree in one linear pass.
+-- Stable-sorts by key, keeps the last pair of each run of keys that `compare`
+-- calls equal (the later pair wins, as `set` decides it), and builds the tree
+-- in one linear pass.
 fromUnsorted : Ord k => List (k, v) -> Map k v
 fromUnsorted xs =
   let ys = dedupeLast (sortBy ((a, _) (b, _) => compare a b) xs)
@@ -176,8 +176,9 @@ fromUnsorted xs =
 dedupeLast : Ord k => List (k, v) -> List (k, v)
 dedupeLast [] = []
 dedupeLast [p] = [p]
-dedupeLast ((k1, v1) :: rest@((k2, _) :: _)) =
-  if eq k1 k2 then dedupeLast rest else (k1, v1) :: dedupeLast rest
+dedupeLast ((k1, v1) :: rest@((k2, _) :: _)) = match compare k1 k2
+  Eq => dedupeLast rest
+  _ => (k1, v1) :: dedupeLast rest
 
 -- Length of the longest prefix whose keys are strictly ascending.
 ascendingRunLength : Ord k => List (k, v) -> Int
@@ -1402,13 +1403,13 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DTypeSig true "singleton" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
 (DFunDef false "singleton" ((PVar "k") (PVar "v")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (ELit (LInt 1))) (EVar "k")) (EVar "v")) (EVar "Tip")) (EVar "Tip")))
 (DTypeSig true "fromList" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
-(DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "ascendingRunLength") (EVar "xs"))) (DoLet false false (PTuple (PVar "m") (PVar "rest")) (EApp (EApp (EVar "buildAscending") (EVar "n")) (EVar "xs"))) (DoExpr (EMatch (EVar "rest") (arm (PList) () (EVar "m")) (arm PWild () (EApp (EVar "fromUnsorted") (EVar "xs")))))))
+(DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "ascendingRunLength") (EVar "xs"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (EApp (EVar "length") (EVar "xs"))) (EApp (EVar "fst") (EApp (EApp (EVar "buildAscending") (EVar "n")) (EVar "xs"))) (EApp (EVar "fromUnsorted") (EVar "xs"))))))
 (DTypeSig false "fromUnsorted" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
 (DFunDef false "fromUnsorted" ((PVar "xs")) (EBlock (DoLet false false (PVar "ys") (EApp (EVar "dedupeLast") (EApp (EApp (EVar "sortBy") (ELam ((PTuple (PVar "a") PWild) (PTuple (PVar "b") PWild)) (EApp (EApp (EVar "compare") (EVar "a")) (EVar "b")))) (EVar "xs")))) (DoExpr (EApp (EVar "fst") (EApp (EApp (EVar "buildAscending") (EApp (EVar "length") (EVar "ys"))) (EVar "ys"))))))
 (DTypeSig false "dedupeLast" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))))
 (DFunDef false "dedupeLast" ((PList)) (EListLit))
 (DFunDef false "dedupeLast" ((PList (PVar "p"))) (EListLit (EVar "p")))
-(DFunDef false "dedupeLast" ((PCons (PTuple (PVar "k1") (PVar "v1")) (PAs "rest" (PCons (PTuple (PVar "k2") PWild) PWild)))) (EIf (EApp (EApp (EVar "eq") (EVar "k1")) (EVar "k2")) (EApp (EVar "dedupeLast") (EVar "rest")) (EBinOp "::" (ETuple (EVar "k1") (EVar "v1")) (EApp (EVar "dedupeLast") (EVar "rest")))))
+(DFunDef false "dedupeLast" ((PCons (PTuple (PVar "k1") (PVar "v1")) (PAs "rest" (PCons (PTuple (PVar "k2") PWild) PWild)))) (EMatch (EApp (EApp (EVar "compare") (EVar "k1")) (EVar "k2")) (arm (PCon "Eq") () (EApp (EVar "dedupeLast") (EVar "rest"))) (arm PWild () (EBinOp "::" (ETuple (EVar "k1") (EVar "v1")) (EApp (EVar "dedupeLast") (EVar "rest"))))))
 (DTypeSig false "ascendingRunLength" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyCon "Int"))))
 (DFunDef false "ascendingRunLength" ((PList)) (ELit (LInt 0)))
 (DFunDef false "ascendingRunLength" ((PCons (PTuple (PVar "k") PWild) (PVar "rest"))) (EApp (EApp (EApp (EVar "ascendingRunFrom") (EVar "k")) (ELit (LInt 1))) (EVar "rest")))
@@ -1761,13 +1762,13 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DTypeSig true "singleton" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
 (DFunDef false "singleton" ((PVar "k") (PVar "v")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (ELit (LInt 1))) (EVar "k")) (EVar "v")) (EVar "Tip")) (EVar "Tip")))
 (DTypeSig true "fromList" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
-(DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "n") (EApp (EDictApp "ascendingRunLength") (EVar "xs"))) (DoLet false false (PTuple (PVar "m") (PVar "rest")) (EApp (EApp (EVar "buildAscending") (EVar "n")) (EVar "xs"))) (DoExpr (EMatch (EVar "rest") (arm (PList) () (EVar "m")) (arm PWild () (EApp (EDictApp "fromUnsorted") (EVar "xs")))))))
+(DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "n") (EApp (EDictApp "ascendingRunLength") (EVar "xs"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (EApp (EMethodRef "length") (EVar "xs"))) (EApp (EVar "fst") (EApp (EApp (EVar "buildAscending") (EVar "n")) (EVar "xs"))) (EApp (EDictApp "fromUnsorted") (EVar "xs"))))))
 (DTypeSig false "fromUnsorted" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
 (DFunDef false "fromUnsorted" ((PVar "xs")) (EBlock (DoLet false false (PVar "ys") (EApp (EDictApp "dedupeLast") (EApp (EApp (EVar "sortBy") (ELam ((PTuple (PVar "a") PWild) (PTuple (PVar "b") PWild)) (EApp (EApp (EMethodRef "compare") (EVar "a")) (EVar "b")))) (EVar "xs")))) (DoExpr (EApp (EVar "fst") (EApp (EApp (EVar "buildAscending") (EApp (EMethodRef "length") (EVar "ys"))) (EVar "ys"))))))
 (DTypeSig false "dedupeLast" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))))
 (DFunDef false "dedupeLast" ((PList)) (EListLit))
 (DFunDef false "dedupeLast" ((PList (PVar "p"))) (EListLit (EVar "p")))
-(DFunDef false "dedupeLast" ((PCons (PTuple (PVar "k1") (PVar "v1")) (PAs "rest" (PCons (PTuple (PVar "k2") PWild) PWild)))) (EIf (EApp (EApp (EMethodRef "eq") (EVar "k1")) (EVar "k2")) (EApp (EDictApp "dedupeLast") (EVar "rest")) (EBinOp "::" (ETuple (EVar "k1") (EVar "v1")) (EApp (EDictApp "dedupeLast") (EVar "rest")))))
+(DFunDef false "dedupeLast" ((PCons (PTuple (PVar "k1") (PVar "v1")) (PAs "rest" (PCons (PTuple (PVar "k2") PWild) PWild)))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "k1")) (EVar "k2")) (arm (PCon "Eq") () (EApp (EDictApp "dedupeLast") (EVar "rest"))) (arm PWild () (EBinOp "::" (ETuple (EVar "k1") (EVar "v1")) (EApp (EDictApp "dedupeLast") (EVar "rest"))))))
 (DTypeSig false "ascendingRunLength" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyCon "Int"))))
 (DFunDef false "ascendingRunLength" ((PList)) (ELit (LInt 0)))
 (DFunDef false "ascendingRunLength" ((PCons (PTuple (PVar "k") PWild) (PVar "rest"))) (EApp (EApp (EApp (EDictApp "ascendingRunFrom") (EVar "k")) (ELit (LInt 1))) (EVar "rest")))
