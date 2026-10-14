@@ -1,5 +1,5 @@
 # META
-source_lines=275
+source_lines=276
 stages=DESUGAR,MARK
 # SOURCE
 {- | Filesystem helpers built on the host file primitives.
@@ -112,6 +112,7 @@ mkdirAll path =
       -- EEXIST (strerror "File exists") is success; other errors propagate.
       Err e2 => if contains "exists" e2 then Ok () else Err e2
 
+-- The examples use absolute paths: a relative one resolves against the directory the doctests run from, and would create directories there.
 {- | Creates a directory and every missing parent, like `mkdirAll`, and
    makes each directory it creates durable by flushing that directory's
    parent right after creating it.
@@ -125,9 +126,9 @@ mkdirAll path =
    flush, so a crash after that can still lose it. Closing the gap would
    mean flushing the parent on every call.
 
-   > mkdirAllDurably "stdlib"
+   > mkdirAllDurably "/dev/null"
    Ok ()
-   > mkdirAllDurably "stdlib/fs.mdk/sub"
+   > mkdirAllDurably "/dev/null/sub"
    Err "Not a directory" -}
 export
 mkdirAllDurably : String -> <FileRead, FileWrite> Result String Unit
