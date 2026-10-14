@@ -59,6 +59,8 @@ The `Set { x, ... }` literal is the same operation.
 ```medaka
 > toList (fromList [3, 1, 2, 3, 1])
 [1, 2, 3]
+> size (fromList [0.0 / 0.0, 1.0, 0.0 / 0.0])
+2
 ```
 
 ## Query
