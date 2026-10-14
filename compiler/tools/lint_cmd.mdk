@@ -38,6 +38,7 @@ import support.cli_targets.{collectMdkFiles, expandLintTarget}
 import tools.lint.{
   Directive,
   Finding,
+  Rule,
   StdlibIndex,
   allRules,
   applyFindingDeny,
@@ -46,14 +47,17 @@ import tools.lint.{
   applySuppressionsDirs,
   applySuppressionsMulti,
   applySuppressionsMultiDirs,
-  collectDirectives,
   crossFileCacheSound,
-  fileDupOccs,
+  factDirectives,
+  factDupOccs,
   findingToDiag,
   isFindingError,
   lintFileDiagTriple,
   lintFileDiagTripleParsed,
-  lintProgram,
+  lintProgramFacts,
+  mkFileFacts,
+  crossFileSelected,
+  selectRules,
   mergeCrossFileIntoTriples,
   runCrossFileRules,
   runCrossFileRulesFromOccs,
@@ -489,7 +493,17 @@ lintOneFileReport idx multiFile disableNames onlyNames denyNames baseCtx cacheCt
       let _ = ePutStrLn msg
       (True, [], [])
     Ok src =>
-      let (entry, parsed) = lintEntryOf idx cacheCtx target src
+      -- Uncached, the excluded rules are skipped outright (their findings
+      -- would be filtered below anyway); under --cache the shard must hold the
+      -- full roster, so every rule runs.  The occurrence list is wanted whenever
+      -- the cross-file tier will read it from entries instead of re-walking
+      -- parses.
+      let rules = selectRules onlyNames disableNames
+      let wantOccs =
+        multiFile
+          && crossFileCacheSound
+          && crossFileSelected onlyNames disableNames
+      let (entry, parsed) = lintEntryOf idx cacheCtx rules wantOccs target src
       -- Suppress findings silenced by inline `-- lint-disable-*` directives before
       -- applying the CLI flag filters (--only/--disable/--deny).  Both the cached
       -- and uncached paths render from THIS one expression over the entry, so a
@@ -526,47 +540,50 @@ lintOneFileReport idx multiFile disableNames onlyNames denyNames baseCtx cacheCt
 -- this function only decides when to ask.
 lintEntryOf : StdlibIndex ->
   Option (String, String) ->
+  List Rule ->
+  Bool ->
   String ->
   String ->
   <IO> (LintEntry, List (String, String, Positions, List Decl))
-lintEntryOf idx None target src =
-  let (entry, pos, decls) = lintFileFresh idx target src "" False
-  (entry, [(target, src, pos, decls)])
-lintEntryOf idx (Some (cacheDir, stamp)) target src =
+lintEntryOf idx None rules wantOccs target src =
+  let (entry, pos, decls) = lintFileFresh idx rules target src "" wantOccs
+  (entry, if crossFileCacheSound then [] else [(target, src, pos, decls)])
+lintEntryOf idx (Some (cacheDir, stamp)) _ _ target src =
   let hash = contentHashOf src
   match loadEntry cacheDir stamp target hash
     Some hit => (hit, [])
     None =>
-      let (entry, _, _) = lintFileFresh idx target src hash True
+      let (entry, _, _) = lintFileFresh idx allRules target src hash True
       (entry, [])
 
 -- Parse and lint a file for real: the miss path, and the whole of the uncached
 -- path.  The returned entry is `dirty` — it is this run's work and its shard (if
 -- any) needs writing.
 --
--- `wantOccs` exists because Medaka is STRICT: an unconditional `fileDupOccs`
--- here would make every UNCACHED run compute each body's `structuralKey` twice
--- — once for this field and once inside `runCrossFileRules`, which walks the
--- parses itself — and that key is an `exprSexp` of every eligible body, i.e.
--- the single most expensive thing the cross-file tier does.  So the field is
--- filled only on the path that consumes it (--cache, via
--- runCrossFileReportCached); the uncached path leaves it empty and keeps
--- reaching the tier through the parses, exactly as before #395.
+-- `wantOccs` exists because Medaka is STRICT: an unconditional occurrence list
+-- would compute each body's `structuralKey` for a run that never reads it, and
+-- that key is an `exprSexp` of every eligible body, i.e. the single most
+-- expensive thing the cross-file tier does.  So the field is filled only when
+-- the cross-file tier will consume it via runCrossFileReportCached (--cache, or
+-- a multi-file uncached run); the keys come from the same per-clause pass the
+-- same-file duplicate-body rule reads, so they are computed once.
 lintFileFresh : StdlibIndex ->
+  List Rule ->
   String ->
   String ->
   String ->
   Bool ->
   <IO> (LintEntry, Positions, List Decl)
-lintFileFresh idx target src hash wantOccs =
+lintFileFresh idx rules target src hash wantOccs =
   let (decls, pos) = parseWithPositionsLocated src
+  let facts = mkFileFacts src decls pos
   (
     LintEntry {
       path = target,
       contentHash = hash,
-      findings = lintProgram idx allRules target src pos decls,
-      dupOccs = if wantOccs then fileDupOccs (target, pos, decls) else [],
-      directives = collectDirectives src,
+      findings = lintProgramFacts idx rules target facts pos decls,
+      dupOccs = if wantOccs then factDupOccs target facts else [],
+      directives = factDirectives facts,
       dirty = True,
     },
     pos,

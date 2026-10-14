@@ -1,5 +1,5 @@
 # META
-source_lines=7137
+source_lines=7227
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -152,6 +152,63 @@ public export data Finding = Finding {
   loc : Option Loc,
 }
 
+-- A write-once cell holding a derived value, forced on first demand.  Rules run
+-- under a pure `check`, and the cell is private to one file's `FileFacts`, so
+-- two rules asking for the same derived value share one computation without any
+-- table keyed by source text.
+data Memo a = Memo (Ref (Option a)) (Unit -> a)
+
+memoNew : (Unit -> a) -> Memo a
+memoNew f = Memo (Ref None) f
+
+memoGet : Memo a -> a
+memoGet (Memo cell f) = match !cell
+  Some v => v
+  None =>
+    let v = f ()
+    cell := Some v
+    v
+
+-- What every rule may ask of the one file being linted, each derived at most
+-- once per file and only if some active rule asks: the source text, its comment
+-- side channel, the constructor `Oracle`, and the per-clause duplicate-body keys
+-- shared by the same-file rule and the cross-file occurrence list.
+export data FileFacts = FileFacts {
+  ffSrc : String,
+  ffComments : Memo (List Comment),
+  ffOracle : Memo Oracle,
+  ffDupClauses : Memo (List DupClause),
+}
+
+export
+mkFileFacts : String -> List Decl -> Positions -> FileFacts
+mkFileFacts src prog pos = FileFacts {
+  ffSrc = src,
+  ffComments = memoNew (_ => collectComments src),
+  ffOracle = memoNew (_ => buildOracle prog),
+  ffDupClauses = memoNew (_ => flatMap dupClauseOfDecl (declLocList pos prog)),
+}
+
+factComments : FileFacts -> List Comment
+factComments ff = memoGet ff.ffComments
+
+factOracle : FileFacts -> Oracle
+factOracle ff = memoGet ff.ffOracle
+
+factDupClauses : FileFacts -> List DupClause
+factDupClauses ff = memoGet ff.ffDupClauses
+
+-- The file's inline-suppression directives, off the shared comment channel.
+export
+factDirectives : FileFacts -> List Directive
+factDirectives ff = collectDirectives (factComments ff)
+
+-- The file's cross-file duplicate-body occurrences (what `--cache` persists),
+-- off the clause keys the same-file rule also reads.
+export
+factDupOccs : String -> FileFacts -> List (String, Int, String, String)
+factDupOccs path ff = dupOccsOfClauses path (factDupClauses ff)
+
 -- A registered rule.  `check` is the whole pass for that rule: the STDLIB INDEX
 -- (`StdlibIndex`, below — every exported stdlib name with its declared
 -- signature, so a rule can ask what the stdlib actually provides instead of
@@ -170,7 +227,7 @@ public export data Rule = Rule {
   descr : String,
   severity : Severity,
   enabled : Bool,
-  check : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding,
+  check : StdlibIndex -> String -> FileFacts -> Positions -> List Decl -> List Finding,
   fix : Option (Oracle -> Decl -> Option (List Decl)),
 }
 
@@ -714,17 +771,48 @@ lintProgram : StdlibIndex ->
   List Decl ->
   List Finding
 lintProgram idx rules path src pos prog =
-  flatMap (runRuleOn idx path src pos prog) rules
+  lintProgramFacts idx rules path (mkFileFacts src prog pos) pos prog
+
+-- `lintProgram` over facts the caller already holds, so the caller's own
+-- comment/directive/key needs share the rules' derivations.
+export
+lintProgramFacts : StdlibIndex ->
+  List Rule ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+lintProgramFacts idx rules path facts pos prog =
+  flatMap (runRuleOn idx path facts pos prog) rules
+
+-- The registry narrowed to the rules `--only`/`--disable` leave active, for runs
+-- whose findings are filtered in this same process.  Findings are still filtered
+-- by name afterwards; this only stops the excluded rules from computing.
+export
+selectRules : List String -> List String -> List Rule
+selectRules only disable = filterList (ruleSelected only disable) allRules
+
+ruleSelected : List String -> List String -> Rule -> Bool
+ruleSelected only disable r =
+  (isEmptyL only || contains r.name only) && not (contains r.name disable)
+
+-- Does `--only`/`--disable` leave the cross-file duplicate-body rule active?
+export
+crossFileSelected : List String -> List String -> Bool
+crossFileSelected only disable =
+  anyList (crossRuleActive only disable) allCrossFileRules
 
 runRuleOn : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   Rule ->
   List Finding
-runRuleOn idx path src pos prog r
-  | r.enabled = map (restampSeverity r.severity) (r.check idx path src pos prog)
+runRuleOn idx path facts pos prog r
+  | r.enabled =
+    map (restampSeverity r.severity) (r.check idx path facts pos prog)
   | otherwise = []
 
 restampSeverity : Severity -> Finding -> Finding
@@ -1412,8 +1500,11 @@ lintFileDiagTripleParsed : StdlibIndex ->
 lintFileDiagTripleParsed idx disable only deny path =
   let src = readFileSafe path
   let (decls, pos) = parseWithPositionsLocated src
+  let facts = mkFileFacts src decls pos
   let allFindings =
-    applySuppressions src (lintProgram idx allRules path src pos decls)
+    applySuppressionsDirs
+      (factDirectives facts)
+      (lintProgramFacts idx (selectRules only disable) path facts pos decls)
   let findings = applyFindingFilters disable only deny allFindings
   (path, src, map findingToDiag findings, pos, decls)
 
@@ -1497,7 +1588,7 @@ public export data Directive = Directive DirScope (List String)
 export
 applySuppressions : String -> List Finding -> List Finding
 applySuppressions src findings =
-  applySuppressionsDirs (collectDirectives src) findings
+  applySuppressionsDirs (directivesOfSource src) findings
 
 -- The same filter, but taking the file's ALREADY-PARSED directives instead of
 -- re-deriving them from source.  `--cache` (#395) stores a file's directives in
@@ -1532,7 +1623,7 @@ applySuppressionsMultiDirs dirTable findings =
   filterList (f => not (findingSuppressedMulti dirTable f)) findings
 
 fileDirectivesOf : (String, String) -> (String, List Directive)
-fileDirectivesOf (path, src) = (path, collectDirectives src)
+fileDirectivesOf (path, src) = (path, directivesOfSource src)
 
 findingSuppressedMulti : List (String, List Directive) -> Finding -> Bool
 findingSuppressedMulti dirTable f = match lookupDirs (findingFileOf f) dirTable
@@ -1549,10 +1640,12 @@ lookupDirs _ [] = None
 lookupDirs path ((p, ds) :: rest) =
   if p == path then Some ds else lookupDirs path rest
 
+directivesOfSource : String -> List Directive
+directivesOfSource src = collectDirectives (collectComments src)
+
 export
-collectDirectives : String -> List Directive
-collectDirectives src =
-  flatMap (c => dirToList (parseDirective c)) (collectComments src)
+collectDirectives : List Comment -> List Directive
+collectDirectives cmts = flatMap (c => dirToList (parseDirective c)) cmts
 
 dirToList : Option Directive -> List Directive
 dirToList None = []
@@ -1688,7 +1781,7 @@ declPosToLoc p = let l = declPosLine p in Loc "" l 1 l 1
 -- matches are skipped (STYLE's "when not to convert").
 ruleMatchOnParam : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -1879,12 +1972,12 @@ wholeWordPattern name =
 -- code (they could turn a total match into a partial function clause).
 ruleDestructureInParam : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
-ruleDestructureInParam _ _ _ pos prog =
-  let orc = buildOracle prog
+ruleDestructureInParam _ _ facts pos prog =
+  let orc = factOracle facts
   flatMap (destructureDeclL orc) (declLocList pos prog)
 
 destructureDeclL : Oracle -> (Decl, Option Loc) -> List Finding
@@ -2015,14 +2108,14 @@ derivableIfaces = ["Eq", "Ord", "Debug"]
 -- returns `Some`) — a primitive has none, so `impl Eq for Int` is never flagged.
 ruleDerivable : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
-ruleDerivable _ path _ pos prog
+ruleDerivable _ path facts pos prog
   | isStdlibPath path = []
   | otherwise =
-    let orc = buildOracle prog
+    let orc = factOracle facts
     flatMap (derivableDeclL orc) (declLocList pos prog)
 
 derivableDeclL : Oracle -> (Decl, Option Loc) -> List Finding
@@ -2137,7 +2230,7 @@ tyHeadName _ = None
 -- candidate is ever skipped.
 ruleStdlibReimpl : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -2602,7 +2695,7 @@ indexInGo x (y :: ys) i
 -- name (entry-point boilerplate).  Multi-clause defs dedupe to one finding.
 ruleMissingSignature : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -2663,7 +2756,7 @@ missingSigFinding (name, loc) = Finding {
 -- is spared.  Purely syntactic, no false-fire risk beyond genuinely-looping code.
 ruleSelfShadowExtern : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -2812,12 +2905,12 @@ splitTail2 stmts = match reverseL stmts
 -- ── check ────────────────────────────────────────────────────────────────────
 ruleBindThenDestructure : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
-ruleBindThenDestructure _ _ _ pos prog =
-  let orc = buildOracle prog
+ruleBindThenDestructure _ _ facts pos prog =
+  let orc = factOracle facts
   flatMap (bindDestructureDeclL orc) (declLocList pos prog)
 
 bindDestructureDeclL : Oracle -> (Decl, Option Loc) -> List Finding
@@ -3168,7 +3261,7 @@ lamSection2 _ _ _ = None
 -- ── check ─────────────────────────────────────────────────────────────────────
 ruleLambdaSection : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -3408,7 +3501,7 @@ ifMaxMinOf cond t el = match unwrapLoc cond
 -- ── check ─────────────────────────────────────────────────────────────────────
 ruleIfMaxMin : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -3664,7 +3757,7 @@ andThenPureMapBody _ _ _ = None
 -- ── check ─────────────────────────────────────────────────────────────────────
 ruleAndThenPureMap : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -4241,7 +4334,7 @@ collectConcatHits e = match concatChainOf e
 
 ruleConcatToInterp : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -4311,7 +4404,7 @@ notEqOf e = match notArgOf e
 
 ruleNotEq : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -4366,7 +4459,7 @@ boolEqResult op v constIsTrue = if op == "==" == constIsTrue then v else mkNot v
 
 ruleBoolSimplify : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -4417,7 +4510,7 @@ parityFn op = if op == "==" then "isEven" else "isOdd"
 
 ruleRemParity : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -4446,7 +4539,7 @@ doubleReverseOf _ = None
 
 ruleDoubleReverse : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -4545,7 +4638,7 @@ isAssignWrite _ = False
 
 ruleForPreferAssign : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -4601,7 +4694,7 @@ whenUnlessOf _ = None
 
 ruleWhenUnless : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -4672,7 +4765,7 @@ complementPredOf e = do
 
 ruleComplementPredicate : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -4795,7 +4888,7 @@ matchToMapOf _ = None
 
 ruleMatchToMap : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -4946,7 +5039,7 @@ clauseMapFnOf name prog = match clausesOf name prog
 
 ruleClauseMap : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -5103,7 +5196,7 @@ bindChainImplHeads (ImplMethod _ _ body) = bindChainHeads body
 
 ruleBindChainToDo : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -5229,7 +5322,7 @@ orElseImplHeads (ImplMethod _ _ body) = orElseHeads body
 
 ruleOrElseStaircase : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -5329,7 +5422,7 @@ cloneTyHeadList t = match tyHeadName t
 
 ruleCloneType : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -5389,13 +5482,13 @@ cloneTypeFinding loc n shape = Finding {
 -- practice of recording inertness.
 rulePromissoryReader : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
-rulePromissoryReader _ path src _ _ =
-  let ls = splitNl src
-  let comments = collectComments src
+rulePromissoryReader _ path facts _ _ =
+  let ls = splitNl facts.ffSrc
+  let comments = factComments facts
   let codeLines = arrayFromList (codePortions ls comments 1)
   flatMap
     (promissoryFinding path codeLines)
@@ -5717,12 +5810,12 @@ assignFollows cs n i
 -- "dead").  `fix = None` (suggest-only — deletion is by hand).
 ruleDeadCode : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
-ruleDeadCode _ _ src pos prog =
-  let reach = reachableNames src prog
+ruleDeadCode _ _ facts pos prog =
+  let reach = reachableNames facts prog
   map deadFinding (filterList (deadPair reach) (privateDefLocs pos prog))
 
 deadPair : HashMap String Unit -> (String, Option Loc) -> Bool
@@ -5795,12 +5888,13 @@ isOrdinaryIdent s
 -- the BFS tested membership with `contains` over a `visited` LIST.  Now: O(1)-
 -- average membership + O(1) graph lookup -> ~O(names + edges).  Consumed only by
 -- `deadPair`'s membership test, so order and duplicates are irrelevant.
-reachableNames : String -> List Decl -> HashMap String Unit
-reachableNames src prog =
+reachableNames : FileFacts -> List Decl -> HashMap String Unit
+reachableNames facts prog =
   let refMap = mergeRefs (flatMap defRefPair prog)
   let seed =
     exportedNames prog
-      ++ ("main" :: flatMap nonDefRefL prog ++ doctestIdents src)
+      ++ ("main"
+        :: flatMap nonDefRefL prog ++ doctestIdents (factComments facts))
   let visited = new ()
   let _ = bfsReach refMap visited seed
   visited
@@ -5935,8 +6029,8 @@ identEnd cs n i
 -- Identifiers on `>` input lines of doctests (both `-- > expr` line-comment and
 -- `{- … > expr … -}` block-comment forms).  `collectComments` is the lexer's
 -- string-aware comment scanner, so `>`/`--` inside string literals never leak in.
-doctestIdents : String -> List String
-doctestIdents src = flatMap commentDocIdents (collectComments src)
+doctestIdents : List Comment -> List String
+doctestIdents cmts = flatMap commentDocIdents cmts
 
 commentDocIdents : Comment -> List String
 commentDocIdents c =
@@ -6194,11 +6288,6 @@ isUpperFirst s =
 dupSameFileComplexityThreshold : Int
 dupSameFileComplexityThreshold = 20
 
-dupEligibleSameFile : Expr -> Bool
-dupEligibleSameFile body =
-  bodyComplexity body >= dupSameFileComplexityThreshold
-    && not (isPureDataExpr body)
-
 ruleDuplicateBody : List (String, Positions, List Decl) -> List Finding
 ruleDuplicateBody files = dupJoin (flatMap fileDupOccs files)
 
@@ -6376,9 +6465,13 @@ export
 fileDupOccs : (String, Positions, List Decl) ->
   List (String, Int, String, String)
 fileDupOccs (path, pos, decls) =
-  flatMap
-    (dupOccsOfGroup path)
-    (dupClauseGroups (flatMap dupClauseOfDecl (declLocList pos decls)))
+  dupOccsOfClauses path (flatMap dupClauseOfDecl (declLocList pos decls))
+
+dupOccsOfClauses : String ->
+  List DupClause ->
+  List (String, Int, String, String)
+dupOccsOfClauses path clauses =
+  flatMap (dupOccsOfGroup path) (dupClauseGroups clauses)
 
 dupClauseOfDecl : (Decl, Option Loc) -> List DupClause
 dupClauseOfDecl (d, loc) = match d
@@ -6539,7 +6632,7 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 -- so two byte-identical top-level bodies in the SAME file (e.g. parser.mdk's
 -- `parseBracketBlock`/`indentedBody`) were structurally invisible to it.  This
 -- is the in-file counterpart: same structural key (`structuralKey`), its own
--- higher floor (`dupEligibleSameFile` — size threshold + not-pure-data), but
+-- higher floor (`dupSameFileComplexityThreshold` + not-pure-data), but
 -- grouped within ONE file's own decls instead of across the whole project.
 -- Registered under the SAME rule name (`ruleNameDuplicateBody`) so
 -- `--disable`/`--only`/`-- lint-disable-*` address both halves with one name.
@@ -6550,24 +6643,21 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 -- once PER CLAUSE rather than once.  Both are left as they are deliberately —
 -- the same-file collision space is O(bindings²) (see the floor note above), so
 -- widening this half needs an over-fire budget of its own.
-sameFileOccOfDecl : (Decl, Option Loc) -> List (String, Int, String)
-sameFileOccOfDecl (d, loc) = match d
-  DFunDef _ name pats body _ _ =>
-    if dupEligibleSameFile body then
-      [(name, locLineOf loc, structuralKey pats body)]
-    else
-      []
-  DAttrib _ inner => sameFileOccOfDecl (inner, loc)
-  _ => []
+sameFileOccOfClause : DupClause -> List (String, Int, String)
+sameFileOccOfClause c =
+  if c.dcCost >= dupSameFileComplexityThreshold && not c.dcPure then
+    [(c.dcName, c.dcLine, c.dcKey)]
+  else
+    []
 
 ruleDuplicateBodySameFile : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
-ruleDuplicateBodySameFile _ _ _ pos decls =
-  let occs = flatMap sameFileOccOfDecl (declLocList pos decls)
+ruleDuplicateBodySameFile _ _ facts _ _ =
+  let occs = flatMap sameFileOccOfClause (factDupClauses facts)
   let groups = sameFileGroupByKey occs
   let live =
     filterList
@@ -6697,13 +6787,13 @@ duplicateBodySameFileRule = Rule {
 -- either, so `-- see #1234` does not count as a reason.
 ruleDirectiveReason : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
-ruleDirectiveReason _ _ src pos prog =
-  let comments = collectComments src
-  let ls = splitNl src
+ruleDirectiveReason _ _ facts pos prog =
+  let comments = factComments facts
+  let ls = splitNl facts.ffSrc
   let codeLines = arrayFromList (codePortions ls comments 1)
   let blocks = commentBlocks comments codeLines
   let declZips = zipDeclPos prog (positionsDecls pos)
@@ -6928,7 +7018,7 @@ regexLocalNamesInPath _ _ = []
 
 ruleRegexLiteral : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -7017,7 +7107,7 @@ testBoolLitEqSwap a b
 
 ruleTestBoolLiteralEqual : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -7074,7 +7164,7 @@ testEqCall nm a b = EApp (EApp (EVar nm) a) b
 
 ruleTestEqualInTrue : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -7115,7 +7205,7 @@ preludeShadowedNames = ["isOk", "isErr", "isSome", "isNone"]
 
 ruleTestPreludeShadow : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -7157,7 +7247,25 @@ preludeShadowFinding name loc = Finding {
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "oGetCtors" false) (mem "oGetCtorSiblings" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentCol" false) (mem "commentText" false))))
 (DData Public "Finding" () ((variant "Finding" (ConNamed (field "rule" (TyCon "String")) (field "message" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "loc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
-(DData Public "Rule" () ((variant "Rule" (ConNamed (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))) (field "fix" (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))))) ())
+(DData Private "Memo" ("a") ((variant "Memo" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyCon "Unit") (TyVar "a"))))) ())
+(DTypeSig false "memoNew" (TyFun (TyFun (TyCon "Unit") (TyVar "a")) (TyApp (TyCon "Memo") (TyVar "a"))))
+(DFunDef false "memoNew" ((PVar "f")) (EApp (EApp (EVar "Memo") (EApp (EVar "Ref") (EVar "None"))) (EVar "f")))
+(DTypeSig false "memoGet" (TyFun (TyApp (TyCon "Memo") (TyVar "a")) (TyVar "a")))
+(DFunDef false "memoGet" ((PCon "Memo" (PVar "cell") (PVar "f"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "v") (EApp (EVar "f") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Some") (EVar "v")))) (DoExpr (EVar "v"))))))
+(DData Abstract "FileFacts" () ((variant "FileFacts" (ConNamed (field "ffSrc" (TyCon "String")) (field "ffComments" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "Comment")))) (field "ffOracle" (TyApp (TyCon "Memo") (TyCon "Oracle"))) (field "ffDupClauses" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "DupClause"))))))) ())
+(DTypeSig true "mkFileFacts" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyCon "FileFacts")))))
+(DFunDef false "mkFileFacts" ((PVar "src") (PVar "prog") (PVar "pos")) (ERecordCreate "FileFacts" ((fa "ffSrc" (EVar "src")) (fa "ffComments" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "collectComments") (EVar "src"))))) (fa "ffOracle" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildOracle") (EVar "prog"))))) (fa "ffDupClauses" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EVar "flatMap") (EVar "dupClauseOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog")))))))))
+(DTypeSig false "factComments" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Comment"))))
+(DFunDef false "factComments" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffComments")))
+(DTypeSig false "factOracle" (TyFun (TyCon "FileFacts") (TyCon "Oracle")))
+(DFunDef false "factOracle" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffOracle")))
+(DTypeSig false "factDupClauses" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "DupClause"))))
+(DFunDef false "factDupClauses" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffDupClauses")))
+(DTypeSig true "factDirectives" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Directive"))))
+(DFunDef false "factDirectives" ((PVar "ff")) (EApp (EVar "collectDirectives") (EApp (EVar "factComments") (EVar "ff"))))
+(DTypeSig true "factDupOccs" (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
+(DFunDef false "factDupOccs" ((PVar "path") (PVar "ff")) (EApp (EApp (EVar "dupOccsOfClauses") (EVar "path")) (EApp (EVar "factDupClauses") (EVar "ff"))))
+(DData Public "Rule" () ((variant "Rule" (ConNamed (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))) (field "fix" (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))))) ())
 (DData Public "CrossFileRule" () ((variant "CrossFileRule" (ConNamed (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DTypeSig false "ruleNameMatchParam" (TyCon "String"))
 (DFunDef false "ruleNameMatchParam" () (ELit (LString "rule-match-on-param")))
@@ -7294,9 +7402,17 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "crossRuleNameOf" (TyFun (TyCon "CrossFileRule") (TyCon "String")))
 (DFunDef false "crossRuleNameOf" ((PVar "r")) (EFieldAccess (EVar "r") "name"))
 (DTypeSig true "lintProgram" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))))
-(DFunDef false "lintProgram" ((PVar "idx") (PVar "rules") (PVar "path") (PVar "src") (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EApp (EVar "runRuleOn") (EVar "idx")) (EVar "path")) (EVar "src")) (EVar "pos")) (EVar "prog"))) (EVar "rules")))
-(DTypeSig false "runRuleOn" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Rule") (TyApp (TyCon "List") (TyCon "Finding")))))))))
-(DFunDef false "runRuleOn" ((PVar "idx") (PVar "path") (PVar "src") (PVar "pos") (PVar "prog") (PVar "r")) (EIf (EFieldAccess (EVar "r") "enabled") (EApp (EApp (EVar "map") (EApp (EVar "restampSeverity") (EFieldAccess (EVar "r") "severity"))) (EApp (EApp (EApp (EApp (EApp (EFieldAccess (EVar "r") "check") (EVar "idx")) (EVar "path")) (EVar "src")) (EVar "pos")) (EVar "prog"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "lintProgram" ((PVar "idx") (PVar "rules") (PVar "path") (PVar "src") (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramFacts") (EVar "idx")) (EVar "rules")) (EVar "path")) (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "prog")) (EVar "pos"))) (EVar "pos")) (EVar "prog")))
+(DTypeSig true "lintProgramFacts" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))))
+(DFunDef false "lintProgramFacts" ((PVar "idx") (PVar "rules") (PVar "path") (PVar "facts") (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EApp (EVar "runRuleOn") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog"))) (EVar "rules")))
+(DTypeSig true "selectRules" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Rule")))))
+(DFunDef false "selectRules" ((PVar "only") (PVar "disable")) (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "ruleSelected") (EVar "only")) (EVar "disable"))) (EVar "allRules")))
+(DTypeSig false "ruleSelected" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Rule") (TyCon "Bool")))))
+(DFunDef false "ruleSelected" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))))
+(DTypeSig true "crossFileSelected" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "crossFileSelected" ((PVar "only") (PVar "disable")) (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "crossRuleActive") (EVar "only")) (EVar "disable"))) (EVar "allCrossFileRules")))
+(DTypeSig false "runRuleOn" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Rule") (TyApp (TyCon "List") (TyCon "Finding")))))))))
+(DFunDef false "runRuleOn" ((PVar "idx") (PVar "path") (PVar "facts") (PVar "pos") (PVar "prog") (PVar "r")) (EIf (EFieldAccess (EVar "r") "enabled") (EApp (EApp (EVar "map") (EApp (EVar "restampSeverity") (EFieldAccess (EVar "r") "severity"))) (EApp (EApp (EApp (EApp (EApp (EFieldAccess (EVar "r") "check") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "restampSeverity" (TyFun (TyCon "Severity") (TyFun (TyCon "Finding") (TyCon "Finding"))))
 (DFunDef false "restampSeverity" ((PVar "sev") (PVar "f")) (ERecordCreate "Finding" ((fa "rule" (EFieldAccess (EVar "f") "rule")) (fa "message" (EFieldAccess (EVar "f") "message")) (fa "severity" (EVar "sev")) (fa "loc" (EFieldAccess (EVar "f") "loc")))))
 (DTypeSig false "isStdlibPath" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -7458,7 +7574,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig true "findingToDiag" (TyFun (TyCon "Finding") (TyCon "Diag")))
 (DFunDef false "findingToDiag" ((PVar "f")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EFieldAccess (EVar "f") "severity")) (EFieldAccess (EVar "f") "rule")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EFieldAccess (EVar "f") "rule"))) (ELit (LString "] "))) (EApp (EVar "display") (EFieldAccess (EVar "f") "message"))) (ELit (LString "")))) (EFieldAccess (EVar "f") "loc")) (EVar "None")) (EVar "None")))
 (DTypeSig true "lintFileDiagTripleParsed" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
-(DFunDef false "lintFileDiagTripleParsed" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "path")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "path"))) (DoLet false false (PTuple (PVar "decls") (PVar "pos")) (EApp (EVar "parseWithPositionsLocated") (EVar "src"))) (DoLet false false (PVar "allFindings") (EApp (EApp (EVar "applySuppressions") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgram") (EVar "idx")) (EVar "allRules")) (EVar "path")) (EVar "src")) (EVar "pos")) (EVar "decls")))) (DoLet false false (PVar "findings") (EApp (EApp (EApp (EApp (EVar "applyFindingFilters") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "allFindings"))) (DoExpr (ETuple (EVar "path") (EVar "src") (EApp (EApp (EVar "map") (EVar "findingToDiag")) (EVar "findings")) (EVar "pos") (EVar "decls")))))
+(DFunDef false "lintFileDiagTripleParsed" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "path")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "path"))) (DoLet false false (PTuple (PVar "decls") (PVar "pos")) (EApp (EVar "parseWithPositionsLocated") (EVar "src"))) (DoLet false false (PVar "facts") (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "allFindings") (EApp (EApp (EVar "applySuppressionsDirs") (EApp (EVar "factDirectives") (EVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramFacts") (EVar "idx")) (EApp (EApp (EVar "selectRules") (EVar "only")) (EVar "disable"))) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "decls")))) (DoLet false false (PVar "findings") (EApp (EApp (EApp (EApp (EVar "applyFindingFilters") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "allFindings"))) (DoExpr (ETuple (EVar "path") (EVar "src") (EApp (EApp (EVar "map") (EVar "findingToDiag")) (EVar "findings")) (EVar "pos") (EVar "decls")))))
 (DTypeSig true "lintFileDiagTriple" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))
 (DFunDef false "lintFileDiagTriple" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "path")) (EApp (EVar "dropParsedTriple") (EApp (EApp (EApp (EApp (EApp (EVar "lintFileDiagTripleParsed") (EVar "idx")) (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "path"))))
 (DTypeSig false "dropParsedTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
@@ -7470,7 +7586,7 @@ preludeShadowFinding name loc = Finding {
 (DData Public "DirScope" () ((variant "DScopeLine" (ConPos (TyCon "Int"))) (variant "DScopeFile" (ConPos))) ())
 (DData Public "Directive" () ((variant "Directive" (ConPos (TyCon "DirScope") (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DTypeSig true "applySuppressions" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding")))))
-(DFunDef false "applySuppressions" ((PVar "src") (PVar "findings")) (EApp (EApp (EVar "applySuppressionsDirs") (EApp (EVar "collectDirectives") (EVar "src"))) (EVar "findings")))
+(DFunDef false "applySuppressions" ((PVar "src") (PVar "findings")) (EApp (EApp (EVar "applySuppressionsDirs") (EApp (EVar "directivesOfSource") (EVar "src"))) (EVar "findings")))
 (DTypeSig true "applySuppressionsDirs" (TyFun (TyApp (TyCon "List") (TyCon "Directive")) (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "applySuppressionsDirs" ((PVar "dirs") (PVar "findings")) (EApp (EApp (EVar "filterList") (ELam ((PVar "f")) (EApp (EVar "not") (EApp (EApp (EVar "isSuppressed") (EVar "dirs")) (EVar "f"))))) (EVar "findings")))
 (DTypeSig true "applySuppressionsMulti" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding")))))
@@ -7478,7 +7594,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig true "applySuppressionsMultiDirs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Directive")))) (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "applySuppressionsMultiDirs" ((PVar "dirTable") (PVar "findings")) (EApp (EApp (EVar "filterList") (ELam ((PVar "f")) (EApp (EVar "not") (EApp (EApp (EVar "findingSuppressedMulti") (EVar "dirTable")) (EVar "f"))))) (EVar "findings")))
 (DTypeSig false "fileDirectivesOf" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Directive")))))
-(DFunDef false "fileDirectivesOf" ((PTuple (PVar "path") (PVar "src"))) (ETuple (EVar "path") (EApp (EVar "collectDirectives") (EVar "src"))))
+(DFunDef false "fileDirectivesOf" ((PTuple (PVar "path") (PVar "src"))) (ETuple (EVar "path") (EApp (EVar "directivesOfSource") (EVar "src"))))
 (DTypeSig false "findingSuppressedMulti" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Directive")))) (TyFun (TyCon "Finding") (TyCon "Bool"))))
 (DFunDef false "findingSuppressedMulti" ((PVar "dirTable") (PVar "f")) (EMatch (EApp (EApp (EVar "lookupDirs") (EApp (EVar "findingFileOf") (EVar "f"))) (EVar "dirTable")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "dirs")) () (EApp (EApp (EVar "isSuppressed") (EVar "dirs")) (EVar "f")))))
 (DTypeSig false "findingFileOf" (TyFun (TyCon "Finding") (TyCon "String")))
@@ -7486,8 +7602,10 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "lookupDirs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Directive")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Directive"))))))
 (DFunDef false "lookupDirs" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupDirs" ((PVar "path") (PCons (PTuple (PVar "p") (PVar "ds")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "p") (EVar "path")) (EApp (EVar "Some") (EVar "ds")) (EApp (EApp (EVar "lookupDirs") (EVar "path")) (EVar "rest"))))
-(DTypeSig true "collectDirectives" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Directive"))))
-(DFunDef false "collectDirectives" ((PVar "src")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EApp (EVar "dirToList") (EApp (EVar "parseDirective") (EVar "c"))))) (EApp (EVar "collectComments") (EVar "src"))))
+(DTypeSig false "directivesOfSource" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Directive"))))
+(DFunDef false "directivesOfSource" ((PVar "src")) (EApp (EVar "collectDirectives") (EApp (EVar "collectComments") (EVar "src"))))
+(DTypeSig true "collectDirectives" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "Directive"))))
+(DFunDef false "collectDirectives" ((PVar "cmts")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EApp (EVar "dirToList") (EApp (EVar "parseDirective") (EVar "c"))))) (EVar "cmts")))
 (DTypeSig false "dirToList" (TyFun (TyApp (TyCon "Option") (TyCon "Directive")) (TyApp (TyCon "List") (TyCon "Directive"))))
 (DFunDef false "dirToList" ((PCon "None")) (EListLit))
 (DFunDef false "dirToList" ((PCon "Some" (PVar "d"))) (EListLit (EVar "d")))
@@ -7538,7 +7656,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "zipDeclLoc" ((PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps"))) (EBinOp "::" (ETuple (EVar "d") (EApp (EVar "Some") (EApp (EVar "declPosToLoc") (EVar "p")))) (EApp (EApp (EVar "zipDeclLoc") (EVar "ds")) (EVar "ps"))))
 (DTypeSig false "declPosToLoc" (TyFun (TyCon "DeclPos") (TyCon "Loc")))
 (DFunDef false "declPosToLoc" ((PVar "p")) (ELet false (PVar "l") (EApp (EVar "declPosLine") (EVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EVar "l")) (ELit (LInt 1))) (EVar "l")) (ELit (LInt 1)))))
-(DTypeSig false "ruleMatchOnParam" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleMatchOnParam" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleMatchOnParam" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "matchParamDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
 (DTypeSig false "matchParamDeclL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "matchParamDeclL" ((PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EVar "matchParamDecl") (EVar "loc")) (EVar "d")))
@@ -7591,8 +7709,8 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "wholeWordIn" ((PVar "name") (PVar "s")) (EApp (EApp (EVar "isMatch") (EApp (EVar "mustCompile") (EApp (EVar "wholeWordPattern") (EVar "name")))) (EVar "s")))
 (DTypeSig false "wholeWordPattern" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "wholeWordPattern" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "(?:^|[^A-Za-z0-9_'])")) (EApp (EVar "escape") (EVar "name"))) (ELit (LString "(?:$|[^A-Za-z0-9_'])"))))
-(DTypeSig false "ruleDestructureInParam" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleDestructureInParam" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "orc") (EApp (EVar "buildOracle") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EVar "destructureDeclL") (EVar "orc"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
+(DTypeSig false "ruleDestructureInParam" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleDestructureInParam" (PWild PWild (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "orc") (EApp (EVar "factOracle") (EVar "facts"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EVar "destructureDeclL") (EVar "orc"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
 (DTypeSig false "destructureDeclL" (TyFun (TyCon "Oracle") (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "destructureDeclL" ((PVar "orc") (PTuple (PVar "d") (PVar "loc"))) (EMatch (EVar "d") (arm (PCon "DFunDef" PWild (PVar "name") (PVar "pats") (PVar "body") PWild PWild) () (EApp (EApp (EApp (EApp (EApp (EVar "destructureFinding") (EVar "orc")) (EVar "loc")) (EVar "name")) (EVar "pats")) (EVar "body"))) (arm PWild () (EListLit))))
 (DTypeSig false "destructureFinding" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))))
@@ -7628,8 +7746,8 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "destructureInParamFixArms" (PWild PWild PWild PWild PWild PWild PWild) (EVar "None"))
 (DTypeSig false "derivableIfaces" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "derivableIfaces" () (EListLit (ELit (LString "Eq")) (ELit (LString "Ord")) (ELit (LString "Debug"))))
-(DTypeSig false "ruleDerivable" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleDerivable" (PWild (PVar "path") PWild (PVar "pos") (PVar "prog")) (EIf (EApp (EVar "isStdlibPath") (EVar "path")) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "orc") (EApp (EVar "buildOracle") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EVar "derivableDeclL") (EVar "orc"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ruleDerivable" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleDerivable" (PWild (PVar "path") (PVar "facts") (PVar "pos") (PVar "prog")) (EIf (EApp (EVar "isStdlibPath") (EVar "path")) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "orc") (EApp (EVar "factOracle") (EVar "facts"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EVar "derivableDeclL") (EVar "orc"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "derivableDeclL" (TyFun (TyCon "Oracle") (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "derivableDeclL" ((PVar "orc") (PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EApp (EVar "derivableDecl") (EVar "orc")) (EVar "loc")) (EVar "d")))
 (DTypeSig false "derivableDecl" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))
@@ -7647,7 +7765,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "tyHeadName" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "tyHeadName" ((PCon "TyApp" (PVar "f") PWild)) (EApp (EVar "tyHeadName") (EVar "f")))
 (DFunDef false "tyHeadName" (PWild) (EVar "None"))
-(DTypeSig false "ruleStdlibReimpl" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleStdlibReimpl" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleStdlibReimpl" ((PVar "idx") (PVar "path") PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "ownMod") (EApp (EVar "stdlibModuleOf") (EVar "path"))) (DoLet false false (PVar "names") (EApp (EVar "stdlibIndexNames") (EVar "idx"))) (DoLet false false (PVar "sigs") (EApp (EVar "sigTyMapOf") (EVar "prog"))) (DoLet false false (PVar "locals") (EApp (EVar "nameSetOf") (EApp (EApp (EVar "flatMap") (EVar "localTyNamesL")) (EVar "prog")))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reimplHit") (EVar "idx")) (EVar "ownMod")) (EVar "names")) (EVar "sigs")) (EVar "locals")) (EVar "prog"))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))))
 (DTypeSig false "localTyNamesL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "localTyNamesL" ((PRec "DData" ((rf "dataName" (PVar "n"))) false)) (EListLit (EVar "n")))
@@ -7813,7 +7931,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "indexInGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "indexInGo" (PWild (PList) PWild) (EUnOp "-" (ELit (LInt 1))))
 (DFunDef false "indexInGo" ((PVar "x") (PCons (PVar "y") (PVar "ys")) (PVar "i")) (EIf (EBinOp "==" (EVar "x") (EVar "y")) (EVar "i") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "indexInGo") (EVar "x")) (EVar "ys")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "ruleMissingSignature" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleMissingSignature" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleMissingSignature" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "map") (EVar "missingSigFinding")) (EApp (EApp (EVar "filterList") (EApp (EVar "missingSigPair") (EApp (EVar "nameSetOf") (EApp (EApp (EVar "flatMap") (EVar "topSigNameL")) (EVar "prog"))))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog")))))))
 (DTypeSig false "topSigNameL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "topSigNameL" ((PCon "DTypeSig" PWild (PVar "name") PWild PWild)) (EListLit (EVar "name")))
@@ -7823,7 +7941,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "missingSigPair" ((PVar "sigNames") (PTuple (PVar "n") PWild)) (EApp (EVar "not") (EBinOp "||" (EBinOp "==" (EVar "n") (ELit (LString "main"))) (EApp (EApp (EVar "has") (EVar "n")) (EVar "sigNames")))))
 (DTypeSig false "missingSigFinding" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Finding")))
 (DFunDef false "missingSigFinding" ((PTuple (PVar "name") (PVar "loc"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameMissingSignature")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' has no type signature. Add a `"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString " : …` declaration")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
-(DTypeSig false "ruleSelfShadowExtern" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleSelfShadowExtern" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleSelfShadowExtern" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EVar "selfShadowFindings") (EApp (EApp (EVar "flatMap") (EVar "selfShadowClauseL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog")))))
 (DTypeSig false "selfShadowFindings" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "selfShadowFindings" ((PVar "clauses")) (EApp (EApp (EVar "map") (EVar "selfShadowFinding")) (EApp (EApp (EVar "filterList") (EApp (EVar "allClausesSelfCall") (EVar "clauses"))) (EApp (EApp (EVar "dedupBy") (EVar "fst")) (EApp (EApp (EVar "map") (EVar "clauseNameLoc")) (EVar "clauses"))))))
@@ -7876,8 +7994,8 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "scrutIsVar" (PWild PWild) (EVar "False"))
 (DTypeSig false "splitTail2" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "DoStmt")) (TyCon "DoStmt") (TyCon "DoStmt")))))
 (DFunDef false "splitTail2" ((PVar "stmts")) (EMatch (EApp (EVar "reverseL") (EVar "stmts")) (arm (PCons (PVar "lst") (PCons (PVar "scd") (PVar "restRev"))) () (EApp (EVar "Some") (ETuple (EApp (EVar "reverseL") (EVar "restRev")) (EVar "scd") (EVar "lst")))) (arm PWild () (EVar "None"))))
-(DTypeSig false "ruleBindThenDestructure" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleBindThenDestructure" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "orc") (EApp (EVar "buildOracle") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EVar "bindDestructureDeclL") (EVar "orc"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
+(DTypeSig false "ruleBindThenDestructure" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleBindThenDestructure" (PWild PWild (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "orc") (EApp (EVar "factOracle") (EVar "facts"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EVar "bindDestructureDeclL") (EVar "orc"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
 (DTypeSig false "bindDestructureDeclL" (TyFun (TyCon "Oracle") (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "bindDestructureDeclL" ((PVar "orc") (PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EVar "map") (EApp (EVar "bindDestructureFinding") (EVar "loc"))) (EApp (EApp (EVar "declBindHits") (EVar "orc")) (EVar "d"))))
 (DTypeSig false "declBindHits" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String")))))
@@ -8050,7 +8168,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "lamSection2" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Section"))))))
 (DFunDef false "lamSection2" ((PVar "x") (PVar "y") (PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild)) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "isEVarNamed") (EVar "x")) (EVar "a")) (EApp (EApp (EVar "isEVarNamed") (EVar "y")) (EVar "b"))) (EApp (EVar "bareSectionOp") (EVar "op"))) (EApp (EVar "Some") (EApp (EVar "SecBare") (EVar "op"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "lamSection2" (PWild PWild PWild) (EVar "None"))
-(DTypeSig false "ruleLambdaSection" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleLambdaSection" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleLambdaSection" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "lambdaSectionDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
 (DTypeSig false "lambdaSectionDeclL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "lambdaSectionDeclL" ((PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EVar "map") (EApp (EVar "lambdaSectionFinding") (EVar "loc"))) (EApp (EVar "declLamSections") (EVar "d"))))
@@ -8156,7 +8274,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "isLiteralExpr" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "ENumLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "EWideLit" PWild PWild PWild PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "ifMaxMinOf" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Expr") (TyCon "Expr")))))))
 (DFunDef false "ifMaxMinOf" ((PVar "cond") (PVar "t") (PVar "el")) (EMatch (EApp (EVar "unwrapLoc") (EVar "cond")) (arm (PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild) ((GBool (EApp (EVar "ifMaxMinCompareOp") (EVar "op")))) (EBlock (DoLet false false (PVar "aK") (EApp (EVar "exprSexp") (EVar "a"))) (DoLet false false (PVar "bK") (EApp (EVar "exprSexp") (EVar "b"))) (DoLet false false (PVar "tK") (EApp (EVar "exprSexp") (EVar "t"))) (DoLet false false (PVar "eK") (EApp (EVar "exprSexp") (EVar "el"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "aK") (EVar "bK")) (EApp (EVar "isLiteralExpr") (EVar "a"))) (EApp (EVar "isLiteralExpr") (EVar "b"))) (EVar "None") (EIf (EBinOp "&&" (EBinOp "==" (EVar "tK") (EVar "aK")) (EBinOp "==" (EVar "eK") (EVar "bK"))) (EApp (EVar "Some") (ETuple (EApp (EVar "ifMaxMinFnNormal") (EVar "op")) (EVar "a") (EVar "b"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "tK") (EVar "bK")) (EBinOp "==" (EVar "eK") (EVar "aK"))) (EApp (EVar "Some") (ETuple (EApp (EVar "ifMaxMinFnReversed") (EVar "op")) (EVar "a") (EVar "b"))) (EVar "None"))))))) (arm PWild () (EVar "None"))))
-(DTypeSig false "ruleIfMaxMin" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleIfMaxMin" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleIfMaxMin" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ifMaxMinDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
 (DTypeSig false "ifMaxMinDeclL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "ifMaxMinDeclL" ((PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EVar "map") (EApp (EVar "ifMaxMinFinding") (EVar "loc"))) (EApp (EVar "declIfMaxMinHits") (EVar "d"))))
@@ -8268,7 +8386,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "andThenPureMapBody" (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))))
 (DFunDef false "andThenPureMapBody" ((PVar "m") (PVar "x") (PCon "EApp" (PVar "pureHd") (PVar "arg"))) (EIf (EBinOp "&&" (EApp (EApp (EVar "isEVarNamed") (ELit (LString "pure"))) (EVar "pureHd")) (EBinOp "<=" (EApp (EApp (EVar "countVar") (EVar "x")) (EVar "arg")) (ELit (LInt 1)))) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "buildAndThenMap") (EVar "x")) (EVar "arg")) (EVar "m"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "andThenPureMapBody" (PWild PWild PWild) (EVar "None"))
-(DTypeSig false "ruleAndThenPureMap" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleAndThenPureMap" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleAndThenPureMap" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "andThenPureMapDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
 (DTypeSig false "andThenPureMapDeclL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "andThenPureMapDeclL" ((PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EVar "map") (EApp (EVar "andThenPureMapFinding") (EVar "loc"))) (EApp (EVar "declAndThenPureMapHits") (EVar "d"))))
@@ -8453,7 +8571,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "rewriteConcatExpr" ((PVar "e")) (EMatch (EApp (EVar "concatChainOf") (EVar "e")) (arm (PCon "Some" (PVar "e2")) () (EVar "e2")) (arm (PCon "None") () (EApp (EApp (EVar "mapChildExprs") (EVar "rewriteConcatExpr")) (EVar "e")))))
 (DTypeSig false "collectConcatHits" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
 (DFunDef false "collectConcatHits" ((PVar "e")) (EMatch (EApp (EVar "concatChainOf") (EVar "e")) (arm (PCon "Some" (PVar "e2")) () (EBinOp "::" (EVar "e2") (EApp (EApp (EVar "flatMap") (EVar "collectConcatHits")) (EApp (EVar "concatOperands") (EVar "e"))))) (arm (PCon "None") () (EApp (EApp (EVar "flatMap") (EVar "collectConcatHits")) (EApp (EVar "childExprs") (EVar "e"))))))
-(DTypeSig false "ruleConcatToInterp" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleConcatToInterp" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleConcatToInterp" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "concatToInterpDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
 (DTypeSig false "concatToInterpDeclL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "concatToInterpDeclL" ((PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EVar "map") (EApp (EVar "concatToInterpFinding") (EVar "loc"))) (EApp (EVar "declConcatHits") (EVar "d"))))
@@ -8475,7 +8593,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "fixImplMethodConcat" ((PCon "ImplMethod" (PVar "nm") (PVar "ps") (PVar "body"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "nm")) (EVar "ps")) (EApp (EVar "rewriteConcatExpr") (EVar "body"))))
 (DTypeSig false "notEqOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "notEqOf" ((PVar "e")) (EMatch (EApp (EVar "notArgOf") (EVar "e")) (arm (PCon "Some" (PVar "inner")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "inner")) (arm (PCon "EBinOp" (PLit (LString "==")) (PVar "a") (PVar "b") (PVar "r")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString "/="))) (EVar "a")) (EVar "b")) (EVar "r")))) (arm (PCon "EBinOp" (PLit (LString "/=")) (PVar "a") (PVar "b") (PVar "r")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString "=="))) (EVar "a")) (EVar "b")) (EVar "r")))) (arm PWild () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
-(DTypeSig false "ruleNotEq" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleNotEq" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleNotEq" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EVar "notEqOf")) (EVar "notEqFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "notEqFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "notEqFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameNotEq")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "negated equality. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
@@ -8491,7 +8609,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "boolSimplifyEq" ((PVar "op") (PVar "a") (PVar "b")) (EIf (EBinOp "&&" (EApp (EVar "isBoolLit") (EVar "a")) (EApp (EVar "isBoolLit") (EVar "b"))) (EVar "None") (EIf (EApp (EVar "isTrueLit") (EVar "b")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "boolEqResult") (EVar "op")) (EVar "a")) (EVar "True"))) (EIf (EApp (EVar "isFalseLit") (EVar "b")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "boolEqResult") (EVar "op")) (EVar "a")) (EVar "False"))) (EIf (EApp (EVar "isTrueLit") (EVar "a")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "boolEqResult") (EVar "op")) (EVar "b")) (EVar "True"))) (EIf (EApp (EVar "isFalseLit") (EVar "a")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "boolEqResult") (EVar "op")) (EVar "b")) (EVar "False"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
 (DTypeSig false "boolEqResult" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Bool") (TyCon "Expr")))))
 (DFunDef false "boolEqResult" ((PVar "op") (PVar "v") (PVar "constIsTrue")) (EIf (EBinOp "==" (EBinOp "==" (EVar "op") (ELit (LString "=="))) (EVar "constIsTrue")) (EVar "v") (EApp (EVar "mkNot") (EVar "v"))))
-(DTypeSig false "ruleBoolSimplify" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleBoolSimplify" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleBoolSimplify" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EVar "boolSimplifyOf")) (EVar "boolSimplifyFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "boolSimplifyFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "boolSimplifyFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameBoolSimplify")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "redundant boolean expression — rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
@@ -8507,7 +8625,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "remParityFrom" (PWild PWild) (EVar "None"))
 (DTypeSig false "parityFn" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "parityFn" ((PVar "op")) (EIf (EBinOp "==" (EVar "op") (ELit (LString "=="))) (ELit (LString "isEven")) (ELit (LString "isOdd"))))
-(DTypeSig false "ruleRemParity" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleRemParity" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleRemParity" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "remParityExcl")) (EVar "remParityOf")) (EVar "remParityFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "remParityFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "remParityFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRemParity")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "parity test. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
@@ -8516,7 +8634,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "doubleReverseOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "doubleReverseOf" ((PCon "EApp" (PVar "hd1") (PVar "arg1"))) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "reverse"))) (EVar "hd1")) (EMatch (EApp (EVar "unwrapLoc") (EVar "arg1")) (arm (PCon "EApp" (PVar "hd2") (PVar "inner")) () (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "reverse"))) (EVar "hd2")) (EApp (EVar "Some") (EVar "inner")) (EVar "None"))) (arm PWild () (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "doubleReverseOf" (PWild) (EVar "None"))
-(DTypeSig false "ruleDoubleReverse" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleDoubleReverse" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleDoubleReverse" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EVar "doubleReverseOf")) (EVar "doubleReverseFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "doubleReverseFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "doubleReverseFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDoubleReverse")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`reverse (reverse …)` is a no-op. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
@@ -8537,7 +8655,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "isAssignWrite" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "isAssignWrite" ((PCon "EBinOp" (PLit (LString ":=")) PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isAssignWrite" (PWild) (EVar "False"))
-(DTypeSig false "ruleForPreferAssign" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleForPreferAssign" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleForPreferAssign" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EVar "preferAssignOf")) (EVar "preferAssignFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "preferAssignFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "preferAssignFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNamePreferAssignOp")) (fa "message" (EApp (EVar "preferAssignMessage") (EVar "rewritten"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
@@ -8556,7 +8674,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "whenUnlessOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "whenUnlessOf" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "el"))) (EIf (EApp (EVar "isPureUnit") (EVar "el")) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "when")))) (EVar "c"))) (EVar "t"))) (EIf (EApp (EVar "isPureUnit") (EVar "t")) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "unless")))) (EVar "c"))) (EVar "el"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DFunDef false "whenUnlessOf" (PWild) (EVar "None"))
-(DTypeSig false "ruleWhenUnless" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleWhenUnless" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleWhenUnless" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "whenUnlessExcl")) (EVar "whenUnlessOf")) (EVar "whenUnlessFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "whenUnlessFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "whenUnlessFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameWhenUnless")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "conditional effect with a `pure ()` branch. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
@@ -8580,7 +8698,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "renameSpineHead" ((PVar "newName") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" PWild) () (EApp (EVar "EVar") (EVar "newName"))) (arm (PCon "EApp" (PVar "hd") (PVar "arg")) () (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "renameSpineHead") (EVar "newName")) (EVar "hd"))) (EVar "arg"))) (arm PWild () (EVar "e"))))
 (DTypeSig false "complementPredOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "complementPredOf" ((PVar "e")) (EApp (EApp (EVar "andThen") (EApp (EVar "notArgOf") (EVar "e"))) (ELam ((PVar "inner")) (EApp (EApp (EVar "andThen") (EApp (EVar "appSpineHead") (EApp (EVar "unwrapLoc") (EVar "inner")))) (ELam ((PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EVar "complementOf") (EVar "name"))) (ELam ((PVar "comp")) (EApp (EVar "Some") (EApp (EApp (EVar "renameSpineHead") (EVar "comp")) (EApp (EVar "unwrapLoc") (EVar "inner")))))))))))
-(DTypeSig false "ruleComplementPredicate" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleComplementPredicate" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleComplementPredicate" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "complementExcl")) (EVar "complementPredOf")) (EVar "complementPredicateFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "complementPredicateFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "complementPredicateFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameComplementPredicate")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "negated predicate. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
@@ -8611,7 +8729,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "matchToMapOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "matchToMapOf" ((PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EMatch (EVar "arms") (arm (PList (PVar "a1") (PVar "a2")) () (EApp (EApp (EApp (EVar "matchToMapPair") (EVar "scrut")) (EVar "a1")) (EVar "a2"))) (arm PWild () (EVar "None"))))
 (DFunDef false "matchToMapOf" (PWild) (EVar "None"))
-(DTypeSig false "ruleMatchToMap" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleMatchToMap" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleMatchToMap" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EVar "matchToMapOf")) (EVar "matchToMapFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "matchToMapFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "matchToMapFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameMatchToMap")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "2-arm match maps over an Option/Result — rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
@@ -8645,7 +8763,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "clauseMapFnOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Expr")))))
 (DFunDef false "clauseMapFnOf" ((PLit (LString "map")) PWild) (EVar "None"))
 (DFunDef false "clauseMapFnOf" ((PVar "name") (PVar "prog")) (EMatch (EApp (EApp (EVar "clausesOf") (EVar "name")) (EVar "prog")) (arm (PList (PVar "a") (PVar "b")) () (EMatch (EApp (EApp (EApp (EVar "clauseMapPair") (EVar "name")) (EVar "a")) (EVar "b")) (arm (PCon "Some" (PVar "g")) () (EApp (EVar "Some") (EVar "g"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "clauseMapPair") (EVar "name")) (EVar "b")) (EVar "a"))))) (arm PWild () (EVar "None"))))
-(DTypeSig false "ruleClauseMap" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleClauseMap" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleClauseMap" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EApp (EVar "clauseMapHit") (EVar "prog"))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
 (DTypeSig false "clauseMapHit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "clauseMapHit" ((PVar "prog") (PTuple (PVar "name") (PVar "loc"))) (EMatch (EApp (EApp (EVar "clauseMapFnOf") (EVar "name")) (EVar "prog")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "g")) () (EListLit (EApp (EApp (EApp (EVar "clauseMapFinding") (EVar "name")) (EVar "g")) (EVar "loc"))))))
@@ -8683,7 +8801,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "bindChainDeclHeads" (PWild) (EListLit))
 (DTypeSig false "bindChainImplHeads" (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyCon "Expr"))))
 (DFunDef false "bindChainImplHeads" ((PCon "ImplMethod" PWild PWild (PVar "body"))) (EApp (EVar "bindChainHeads") (EVar "body")))
-(DTypeSig false "ruleBindChainToDo" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleBindChainToDo" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleBindChainToDo" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "bindChainDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
 (DTypeSig false "bindChainDeclL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "bindChainDeclL" ((PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EVar "map") (EApp (EVar "bindChainFinding") (EVar "loc"))) (EApp (EVar "bindChainDeclHeads") (EVar "d"))))
@@ -8716,7 +8834,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "orElseDeclHeads" (PWild) (EListLit))
 (DTypeSig false "orElseImplHeads" (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "Expr")))))
 (DFunDef false "orElseImplHeads" ((PCon "ImplMethod" PWild PWild (PVar "body"))) (EApp (EVar "orElseHeads") (EVar "body")))
-(DTypeSig false "ruleOrElseStaircase" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleOrElseStaircase" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleOrElseStaircase" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "orElseDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
 (DTypeSig false "orElseDeclL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "orElseDeclL" ((PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EVar "map") (EApp (EVar "orElseHeadFinding") (EVar "loc"))) (EApp (EVar "orElseDeclHeads") (EVar "d"))))
@@ -8746,7 +8864,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "cloneImplTargetsOf" (PWild) (EListLit))
 (DTypeSig false "cloneTyHeadList" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "cloneTyHeadList" ((PVar "t")) (EMatch (EApp (EVar "tyHeadName") (EVar "t")) (arm (PCon "Some" (PVar "n")) () (EListLit (EVar "n"))) (arm (PCon "None") () (EListLit))))
-(DTypeSig false "ruleCloneType" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleCloneType" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleCloneType" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "impls") (EApp (EVar "cloneImplTargets") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EVar "cloneTypeDeclL") (EVar "impls"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
 (DTypeSig false "cloneTypeDeclL" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "cloneTypeDeclL" ((PVar "impls") (PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EApp (EVar "cloneTypeDecl") (EVar "impls")) (EVar "loc")) (EVar "d")))
@@ -8758,8 +8876,8 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "cloneTypeHit" ((PVar "impls") (PVar "loc") (PVar "n") (PVar "ctors")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "impls")) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "cloneShapeName") (EVar "ctors")) (arm (PCon "Some" (PVar "shape")) () (EListLit (EApp (EApp (EApp (EVar "cloneTypeFinding") (EVar "loc")) (EVar "n")) (EVar "shape")))) (arm (PCon "None") () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cloneTypeFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Finding")))))
 (DFunDef false "cloneTypeFinding" ((PVar "loc") (PVar "n") (PVar "shape")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameCloneType")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' re-declares `"))) (EApp (EVar "display") (EVar "shape"))) (ELit (LString "`'s constructor shape and its file writes no `impl` for it -- prefer the stdlib `"))) (EApp (EVar "display") (EVar "shape"))) (ELit (LString "`, whose combinators come with it")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
-(DTypeSig false "rulePromissoryReader" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "rulePromissoryReader" (PWild (PVar "path") (PVar "src") PWild PWild) (EBlock (DoLet false false (PVar "ls") (EApp (EVar "splitNl") (EVar "src"))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "codeLines") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "codePortions") (EVar "ls")) (EVar "comments")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "promissoryFinding") (EVar "path")) (EVar "codeLines"))) (EApp (EVar "promissoryClaims") (EApp (EApp (EVar "commentBlocks") (EVar "comments")) (EVar "codeLines")))))))
+(DTypeSig false "rulePromissoryReader" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "rulePromissoryReader" (PWild (PVar "path") (PVar "facts") PWild PWild) (EBlock (DoLet false false (PVar "ls") (EApp (EVar "splitNl") (EFieldAccess (EVar "facts") "ffSrc"))) (DoLet false false (PVar "comments") (EApp (EVar "factComments") (EVar "facts"))) (DoLet false false (PVar "codeLines") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "codePortions") (EVar "ls")) (EVar "comments")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "promissoryFinding") (EVar "path")) (EVar "codeLines"))) (EApp (EVar "promissoryClaims") (EApp (EApp (EVar "commentBlocks") (EVar "comments")) (EVar "codeLines")))))))
 (DTypeSig false "codePortions" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "codePortions" ((PList) PWild PWild) (EListLit))
 (DFunDef false "codePortions" ((PCons (PVar "l") (PVar "rest")) (PList) (PVar "n")) (EBinOp "::" (EVar "l") (EApp (EApp (EApp (EVar "codePortions") (EVar "rest")) (EListLit)) (EBinOp "+" (EVar "n") (ELit (LInt 1))))))
@@ -8838,8 +8956,8 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "wordReadOk" ((PVar "cs") (PVar "n") (PVar "m")) (EBinOp "&&" (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "m") "start") (ELit (LInt 0))) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EFieldAccess (EVar "m") "start") (ELit (LInt 1)))) (EVar "cs"))))) (EApp (EApp (EVar "identBoundaryAt") (EVar "cs")) (EFieldAccess (EVar "m") "end"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "assignFollows") (EVar "cs")) (EVar "n")) (EFieldAccess (EVar "m") "end")))))
 (DTypeSig false "assignFollows" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "assignFollows" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "n")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar " ")))) (EApp (EApp (EApp (EVar "assignFollows") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "n")) (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ":"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "=")))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "ruleDeadCode" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleDeadCode" (PWild PWild (PVar "src") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "reach") (EApp (EApp (EVar "reachableNames") (EVar "src")) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "map") (EVar "deadFinding")) (EApp (EApp (EVar "filterList") (EApp (EVar "deadPair") (EVar "reach"))) (EApp (EApp (EVar "privateDefLocs") (EVar "pos")) (EVar "prog")))))))
+(DTypeSig false "ruleDeadCode" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleDeadCode" (PWild PWild (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "reach") (EApp (EApp (EVar "reachableNames") (EVar "facts")) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "map") (EVar "deadFinding")) (EApp (EApp (EVar "filterList") (EApp (EVar "deadPair") (EVar "reach"))) (EApp (EApp (EVar "privateDefLocs") (EVar "pos")) (EVar "prog")))))))
 (DTypeSig false "deadPair" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Bool"))))
 (DFunDef false "deadPair" ((PVar "reach") (PTuple (PVar "n") PWild)) (EApp (EVar "not") (EApp (EApp (EVar "has") (EVar "n")) (EVar "reach"))))
 (DTypeSig false "deadFinding" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Finding")))
@@ -8859,8 +8977,8 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "candidatePair" ((PVar "exported") (PTuple (PVar "n") PWild)) (EBinOp "&&" (EApp (EVar "isOrdinaryIdent") (EVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "has") (EVar "n")) (EVar "exported")))))
 (DTypeSig false "isOrdinaryIdent" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isOrdinaryIdent" ((PVar "s")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EVar "False") (EIf (EVar "otherwise") (EApp (EVar "isIdentStart") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "s")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "reachableNames" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "reachableNames" ((PVar "src") (PVar "prog")) (EBlock (DoLet false false (PVar "refMap") (EApp (EVar "mergeRefs") (EApp (EApp (EVar "flatMap") (EVar "defRefPair")) (EVar "prog")))) (DoLet false false (PVar "seed") (EBinOp "++" (EApp (EVar "exportedNames") (EVar "prog")) (EBinOp "::" (ELit (LString "main")) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "nonDefRefL")) (EVar "prog")) (EApp (EVar "doctestIdents") (EVar "src")))))) (DoLet false false (PVar "visited") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EVar "seed"))) (DoExpr (EVar "visited"))))
+(DTypeSig false "reachableNames" (TyFun (TyCon "FileFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")))))
+(DFunDef false "reachableNames" ((PVar "facts") (PVar "prog")) (EBlock (DoLet false false (PVar "refMap") (EApp (EVar "mergeRefs") (EApp (EApp (EVar "flatMap") (EVar "defRefPair")) (EVar "prog")))) (DoLet false false (PVar "seed") (EBinOp "++" (EApp (EVar "exportedNames") (EVar "prog")) (EBinOp "::" (ELit (LString "main")) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "nonDefRefL")) (EVar "prog")) (EApp (EVar "doctestIdents") (EApp (EVar "factComments") (EVar "facts"))))))) (DoLet false false (PVar "visited") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EVar "seed"))) (DoExpr (EVar "visited"))))
 (DTypeSig false "defRefPair" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "defRefPair" ((PVar "d")) (EMatch (EApp (EVar "defNameOf") (EVar "d")) (arm (PCon "Some" (PVar "name")) () (EListLit (ETuple (EVar "name") (EApp (EVar "sortUniqS") (EApp (EVar "identTokens") (EApp (EVar "declToString") (EApp (EVar "unAttrib") (EVar "d")))))))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "defNameOf" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -8910,8 +9028,8 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "isIdentStart" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isLower") (EVar "c")) (EApp (EVar "isUpper") (EVar "c"))) (EBinOp "==" (EVar "c") (ELit (LChar "_")))))
 (DTypeSig false "identEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "identEnd" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "i") (EIf (EApp (EVar "isAlnum") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EApp (EApp (EVar "identEnd") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "doctestIdents" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "doctestIdents" ((PVar "src")) (EApp (EApp (EVar "flatMap") (EVar "commentDocIdents")) (EApp (EVar "collectComments") (EVar "src"))))
+(DTypeSig false "doctestIdents" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "doctestIdents" ((PVar "cmts")) (EApp (EApp (EVar "flatMap") (EVar "commentDocIdents")) (EVar "cmts")))
 (DTypeSig false "commentDocIdents" (TyFun (TyCon "Comment") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "commentDocIdents" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "commentText") (EVar "c"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "{-"))) (EVar "t")) (EApp (EApp (EVar "flatMap") (EVar "blockDocLineIdents")) (EApp (EVar "splitNl") (EApp (EVar "blockInner") (EVar "t")))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "-- >"))) (EVar "t")) (EApp (EVar "identTokens") (EApp (EApp (EVar "strDrop") (ELit (LInt 4))) (EVar "t"))) (EListLit))))))
 (DTypeSig false "blockInner" (TyFun (TyCon "String") (TyCon "String")))
@@ -8963,8 +9081,6 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "isUpperFirst" ((PVar "s")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EVar "False") (EApp (EVar "isUpper") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "s"))))))
 (DTypeSig false "dupSameFileComplexityThreshold" (TyCon "Int"))
 (DFunDef false "dupSameFileComplexityThreshold" () (ELit (LInt 20)))
-(DTypeSig false "dupEligibleSameFile" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "dupEligibleSameFile" ((PVar "body")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "bodyComplexity") (EVar "body")) (EVar "dupSameFileComplexityThreshold")) (EApp (EVar "not") (EApp (EVar "isPureDataExpr") (EVar "body")))))
 (DTypeSig false "ruleDuplicateBody" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "ruleDuplicateBody" ((PVar "files")) (EApp (EVar "dupJoin") (EApp (EApp (EVar "flatMap") (EVar "fileDupOccs")) (EVar "files"))))
 (DTypeSig true "dupJoin" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "Finding"))))
@@ -8993,7 +9109,9 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "dupGroupFires" ((PVar "grp")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "grp")) (ELit (LInt 2))) (EBinOp ">=" (EApp (EVar "listLen") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (EVar "occFile")) (EVar "grp")))) (ELit (LInt 2)))))
 (DData Private "DupClause" () ((variant "DupClause" (ConNamed (field "dcName" (TyCon "String")) (field "dcLine" (TyCon "Int")) (field "dcKey" (TyCon "String")) (field "dcCost" (TyCon "Int")) (field "dcPure" (TyCon "Bool"))))) ())
 (DTypeSig true "fileDupOccs" (TyFun (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))))
-(DFunDef false "fileDupOccs" ((PTuple (PVar "path") (PVar "pos") (PVar "decls"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "dupOccsOfGroup") (EVar "path"))) (EApp (EVar "dupClauseGroups") (EApp (EApp (EVar "flatMap") (EVar "dupClauseOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "decls"))))))
+(DFunDef false "fileDupOccs" ((PTuple (PVar "path") (PVar "pos") (PVar "decls"))) (EApp (EApp (EVar "dupOccsOfClauses") (EVar "path")) (EApp (EApp (EVar "flatMap") (EVar "dupClauseOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "decls")))))
+(DTypeSig false "dupOccsOfClauses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
+(DFunDef false "dupOccsOfClauses" ((PVar "path") (PVar "clauses")) (EApp (EApp (EVar "flatMap") (EApp (EVar "dupOccsOfGroup") (EVar "path"))) (EApp (EVar "dupClauseGroups") (EVar "clauses"))))
 (DTypeSig false "dupClauseOfDecl" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "DupClause"))))
 (DFunDef false "dupClauseOfDecl" ((PTuple (PVar "d") (PVar "loc"))) (EMatch (EVar "d") (arm (PCon "DFunDef" PWild (PVar "name") (PVar "pats") (PVar "body") PWild PWild) () (EListLit (ERecordCreate "DupClause" ((fa "dcName" (EVar "name")) (fa "dcLine" (EApp (EVar "locLineOf") (EVar "loc"))) (fa "dcKey" (EApp (EApp (EVar "structuralKey") (EVar "pats")) (EVar "body"))) (fa "dcCost" (EApp (EVar "bodyComplexity") (EVar "body"))) (fa "dcPure" (EApp (EVar "isPureDataExpr") (EVar "body"))))))) (arm (PCon "DAttrib" PWild (PVar "inner")) () (EApp (EVar "dupClauseOfDecl") (ETuple (EVar "inner") (EVar "loc")))) (arm PWild () (EListLit))))
 (DTypeSig false "dupClauseGroups" (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "DupClause")))))
@@ -9044,10 +9162,10 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "dupInsert" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EApp (EApp (EVar "dupOccLe") (EVar "x")) (EVar "y")) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "y") (EApp (EApp (EVar "dupInsert") (EVar "x")) (EVar "ys"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dupOccLe" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "dupOccLe" ((PVar "a") (PVar "b")) (EMatch (EApp (EApp (EVar "stringCompare") (EApp (EVar "occFile") (EVar "a"))) (EApp (EVar "occFile") (EVar "b"))) (arm (PCon "Lt") () (EVar "True")) (arm (PCon "Gt") () (EVar "False")) (arm (PCon "Eq") () (EBinOp "<=" (EApp (EVar "occLine") (EVar "a")) (EApp (EVar "occLine") (EVar "b"))))))
-(DTypeSig false "sameFileOccOfDecl" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")))))
-(DFunDef false "sameFileOccOfDecl" ((PTuple (PVar "d") (PVar "loc"))) (EMatch (EVar "d") (arm (PCon "DFunDef" PWild (PVar "name") (PVar "pats") (PVar "body") PWild PWild) () (EIf (EApp (EVar "dupEligibleSameFile") (EVar "body")) (EListLit (ETuple (EVar "name") (EApp (EVar "locLineOf") (EVar "loc")) (EApp (EApp (EVar "structuralKey") (EVar "pats")) (EVar "body")))) (EListLit))) (arm (PCon "DAttrib" PWild (PVar "inner")) () (EApp (EVar "sameFileOccOfDecl") (ETuple (EVar "inner") (EVar "loc")))) (arm PWild () (EListLit))))
-(DTypeSig false "ruleDuplicateBodySameFile" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleDuplicateBodySameFile" (PWild PWild PWild (PVar "pos") (PVar "decls")) (EBlock (DoLet false false (PVar "occs") (EApp (EApp (EVar "flatMap") (EVar "sameFileOccOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "decls")))) (DoLet false false (PVar "groups") (EApp (EVar "sameFileGroupByKey") (EVar "occs"))) (DoLet false false (PVar "live") (EApp (EApp (EVar "filterList") (ELam ((PVar "k")) (EBinOp ">=" (EApp (EVar "listLen") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups"))) (ELit (LInt 2))))) (EApp (EVar "sameFileDistinctKeys") (EVar "occs")))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "k")) (EApp (EVar "emitSameFileGroup") (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups")))))) (EApp (EVar "sortUniqS") (EVar "live"))))))
+(DTypeSig false "sameFileOccOfClause" (TyFun (TyCon "DupClause") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")))))
+(DFunDef false "sameFileOccOfClause" ((PVar "c")) (EIf (EBinOp "&&" (EBinOp ">=" (EFieldAccess (EVar "c") "dcCost") (EVar "dupSameFileComplexityThreshold")) (EApp (EVar "not") (EFieldAccess (EVar "c") "dcPure"))) (EListLit (ETuple (EFieldAccess (EVar "c") "dcName") (EFieldAccess (EVar "c") "dcLine") (EFieldAccess (EVar "c") "dcKey"))) (EListLit)))
+(DTypeSig false "ruleDuplicateBodySameFile" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleDuplicateBodySameFile" (PWild PWild (PVar "facts") PWild PWild) (EBlock (DoLet false false (PVar "occs") (EApp (EApp (EVar "flatMap") (EVar "sameFileOccOfClause")) (EApp (EVar "factDupClauses") (EVar "facts")))) (DoLet false false (PVar "groups") (EApp (EVar "sameFileGroupByKey") (EVar "occs"))) (DoLet false false (PVar "live") (EApp (EApp (EVar "filterList") (ELam ((PVar "k")) (EBinOp ">=" (EApp (EVar "listLen") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups"))) (ELit (LInt 2))))) (EApp (EVar "sameFileDistinctKeys") (EVar "occs")))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "k")) (EApp (EVar "emitSameFileGroup") (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups")))))) (EApp (EVar "sortUniqS") (EVar "live"))))))
 (DTypeSig false "sameFileGroupByKey" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "sameFileGroupByKey" ((PVar "occs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "sameFileGroupGo") (EVar "m")) (EVar "occs"))) (DoExpr (EVar "m"))))
 (DTypeSig false "sameFileGroupGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyCon "Unit"))))
@@ -9076,8 +9194,8 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "sameFileInsert" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EBinOp "<=" (EApp (EVar "sameFileOccLine") (EVar "x")) (EApp (EVar "sameFileOccLine") (EVar "y"))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "y") (EApp (EApp (EVar "sameFileInsert") (EVar "x")) (EVar "ys"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "duplicateBodySameFileRule" (TyCon "Rule"))
 (DFunDef false "duplicateBodySameFileRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBodySameFile")) (fa "fix" (EVar "None")))))
-(DTypeSig false "ruleDirectiveReason" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleDirectiveReason" (PWild PWild (PVar "src") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "ls") (EApp (EVar "splitNl") (EVar "src"))) (DoLet false false (PVar "codeLines") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "codePortions") (EVar "ls")) (EVar "comments")) (ELit (LInt 1))))) (DoLet false false (PVar "blocks") (EApp (EApp (EVar "commentBlocks") (EVar "comments")) (EVar "codeLines"))) (DoLet false false (PVar "declZips") (EApp (EApp (EVar "zipDeclPos") (EVar "prog")) (EApp (EVar "positionsDecls") (EVar "pos")))) (DoLet false false (PVar "dirCmts") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "isSome") (EApp (EVar "parseDirective") (EVar "c"))))) (EVar "comments"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "directiveReasonCheck") (EVar "comments")) (EVar "blocks")) (EVar "declZips"))) (EVar "dirCmts")))))
+(DTypeSig false "ruleDirectiveReason" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleDirectiveReason" (PWild PWild (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "factComments") (EVar "facts"))) (DoLet false false (PVar "ls") (EApp (EVar "splitNl") (EFieldAccess (EVar "facts") "ffSrc"))) (DoLet false false (PVar "codeLines") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "codePortions") (EVar "ls")) (EVar "comments")) (ELit (LInt 1))))) (DoLet false false (PVar "blocks") (EApp (EApp (EVar "commentBlocks") (EVar "comments")) (EVar "codeLines"))) (DoLet false false (PVar "declZips") (EApp (EApp (EVar "zipDeclPos") (EVar "prog")) (EApp (EVar "positionsDecls") (EVar "pos")))) (DoLet false false (PVar "dirCmts") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "isSome") (EApp (EVar "parseDirective") (EVar "c"))))) (EVar "comments"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "directiveReasonCheck") (EVar "comments")) (EVar "blocks")) (EVar "declZips"))) (EVar "dirCmts")))))
 (DTypeSig false "directiveReasonCheck" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyCon "Comment") (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "directiveReasonCheck" ((PVar "comments") (PVar "blocks") (PVar "declZips") (PVar "c")) (EIf (EApp (EApp (EApp (EApp (EVar "directiveReasoned") (EVar "comments")) (EVar "blocks")) (EVar "declZips")) (EVar "c")) (EListLit) (EListLit (EApp (EVar "directiveReasonFinding") (EVar "c")))))
 (DTypeSig false "directiveReasoned" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyCon "Comment") (TyCon "Bool"))))))
@@ -9142,7 +9260,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "regexLocalNamesInPath" ((PVar "stdName") (PCon "UseWild" (PVar "path"))) (EIf (EBinOp "==" (EApp (EVar "lastSegOf") (EVar "path")) (ELit (LString "regex"))) (EListLit (EVar "stdName")) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "regexLocalNamesInPath" ((PVar "stdName") (PCon "UseAlias" (PVar "path") (PVar "alias"))) (EIf (EBinOp "==" (EApp (EVar "lastSegOf") (EVar "path")) (ELit (LString "regex"))) (EListLit (EApp (EApp (EVar "qualifiedLocal") (EVar "alias")) (EVar "stdName"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "regexLocalNamesInPath" (PWild PWild) (EListLit))
-(DTypeSig false "ruleRegexLiteral" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleRegexLiteral" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleRegexLiteral" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EApp (EVar "regexLiteralOf") (EBinOp "++" (EVar "regexLiteralCallNames") (EApp (EVar "regexImportedCallNames") (EVar "prog"))))) (EVar "regexLiteralFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "regexLiteralOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
 (DFunDef false "regexLiteralOf" ((PVar "names") (PVar "e")) (EApp (EApp (EApp (EVar "regexLiteralOfSpine") (EVar "names")) (EVar "e")) (EApp (EVar "stripELoc") (EVar "e"))))
@@ -9169,7 +9287,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "testBoolLitEqOf" (PWild) (EVar "None"))
 (DTypeSig false "testBoolLitEqSwap" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
 (DFunDef false "testBoolLitEqSwap" ((PVar "a") (PVar "b")) (EIf (EBinOp "&&" (EApp (EVar "isBoolLit") (EApp (EVar "unwrapLoc") (EVar "a"))) (EApp (EVar "isBoolLit") (EApp (EVar "unwrapLoc") (EVar "b")))) (EVar "None") (EIf (EApp (EVar "isTrueLit") (EApp (EVar "unwrapLoc") (EVar "a"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "expectTrue")))) (EVar "b"))) (EIf (EApp (EVar "isFalseLit") (EApp (EVar "unwrapLoc") (EVar "a"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "expectFalse")))) (EVar "b"))) (EIf (EApp (EVar "isTrueLit") (EApp (EVar "unwrapLoc") (EVar "b"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "expectTrue")))) (EVar "a"))) (EIf (EApp (EVar "isFalseLit") (EApp (EVar "unwrapLoc") (EVar "b"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "expectFalse")))) (EVar "a"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
-(DTypeSig false "ruleTestBoolLiteralEqual" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleTestBoolLiteralEqual" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleTestBoolLiteralEqual" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindingsInTests") (EVar "noExcl")) (EVar "testBoolLitEqOf")) (EVar "testBoolLitEqFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "testBoolLitEqFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "testBoolLitEqFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestBoolLiteralEqual")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`expectEqual` against a boolean literal. Rewrite as '")) (EApp (EVar "display") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
@@ -9184,7 +9302,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "testEqVerbOf" (PWild PWild) (EVar "None"))
 (DTypeSig false "testEqCall" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "testEqCall" ((PVar "nm") (PVar "a") (PVar "b")) (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "nm"))) (EVar "a"))) (EVar "b")))
-(DTypeSig false "ruleTestEqualInTrue" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleTestEqualInTrue" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleTestEqualInTrue" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindingsInTests") (EVar "noExcl")) (EVar "testEqInTrueOf")) (EVar "testEqInTrueFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "testEqInTrueFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "testEqInTrueFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestEqualInTrue")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "an equality comparison inside `expectTrue`/`expectFalse` reports neither operand on failure. Rewrite as '")) (EApp (EVar "display") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
@@ -9192,7 +9310,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "testEqualInTrueFix" (PWild (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFixInTests") (EVar "noExcl")) (EApp (EVar "detApply") (EVar "testEqInTrueOf"))) (EVar "d")))
 (DTypeSig false "preludeShadowedNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preludeShadowedNames" () (EListLit (ELit (LString "isOk")) (ELit (LString "isErr")) (ELit (LString "isSome")) (ELit (LString "isNone"))))
-(DTypeSig false "ruleTestPreludeShadow" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleTestPreludeShadow" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleTestPreludeShadow" (PWild (PVar "path") PWild (PVar "pos") (PVar "prog")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "path"))) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EVar "flatMap") (EVar "preludeShadowHit")) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "preludeShadowHit" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "preludeShadowHit" ((PTuple (PVar "name") (PVar "loc"))) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EVar "preludeShadowedNames")) (EListLit (EApp (EApp (EVar "preludeShadowFinding") (EVar "name")) (EVar "loc"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -9216,7 +9334,25 @@ preludeShadowFinding name loc = Finding {
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "oGetCtors" false) (mem "oGetCtorSiblings" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentCol" false) (mem "commentText" false))))
 (DData Public "Finding" () ((variant "Finding" (ConNamed (field "rule" (TyCon "String")) (field "message" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "loc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
-(DData Public "Rule" () ((variant "Rule" (ConNamed (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))) (field "fix" (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))))) ())
+(DData Private "Memo" ("a") ((variant "Memo" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyCon "Unit") (TyVar "a"))))) ())
+(DTypeSig false "memoNew" (TyFun (TyFun (TyCon "Unit") (TyVar "a")) (TyApp (TyCon "Memo") (TyVar "a"))))
+(DFunDef false "memoNew" ((PVar "f")) (EApp (EApp (EVar "Memo") (EApp (EVar "Ref") (EVar "None"))) (EVar "f")))
+(DTypeSig false "memoGet" (TyFun (TyApp (TyCon "Memo") (TyVar "a")) (TyVar "a")))
+(DFunDef false "memoGet" ((PCon "Memo" (PVar "cell") (PVar "f"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "v") (EApp (EVar "f") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Some") (EVar "v")))) (DoExpr (EVar "v"))))))
+(DData Abstract "FileFacts" () ((variant "FileFacts" (ConNamed (field "ffSrc" (TyCon "String")) (field "ffComments" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "Comment")))) (field "ffOracle" (TyApp (TyCon "Memo") (TyCon "Oracle"))) (field "ffDupClauses" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "DupClause"))))))) ())
+(DTypeSig true "mkFileFacts" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyCon "FileFacts")))))
+(DFunDef false "mkFileFacts" ((PVar "src") (PVar "prog") (PVar "pos")) (ERecordCreate "FileFacts" ((fa "ffSrc" (EVar "src")) (fa "ffComments" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "collectComments") (EVar "src"))))) (fa "ffOracle" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildOracle") (EVar "prog"))))) (fa "ffDupClauses" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EDictApp "flatMap") (EVar "dupClauseOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog")))))))))
+(DTypeSig false "factComments" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Comment"))))
+(DFunDef false "factComments" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffComments")))
+(DTypeSig false "factOracle" (TyFun (TyCon "FileFacts") (TyCon "Oracle")))
+(DFunDef false "factOracle" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffOracle")))
+(DTypeSig false "factDupClauses" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "DupClause"))))
+(DFunDef false "factDupClauses" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffDupClauses")))
+(DTypeSig true "factDirectives" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Directive"))))
+(DFunDef false "factDirectives" ((PVar "ff")) (EApp (EVar "collectDirectives") (EApp (EVar "factComments") (EVar "ff"))))
+(DTypeSig true "factDupOccs" (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
+(DFunDef false "factDupOccs" ((PVar "path") (PVar "ff")) (EApp (EApp (EVar "dupOccsOfClauses") (EVar "path")) (EApp (EVar "factDupClauses") (EVar "ff"))))
+(DData Public "Rule" () ((variant "Rule" (ConNamed (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))) (field "fix" (TyApp (TyCon "Option") (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))))) ())
 (DData Public "CrossFileRule" () ((variant "CrossFileRule" (ConNamed (field "name" (TyCon "String")) (field "descr" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "enabled" (TyCon "Bool")) (field "check" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DTypeSig false "ruleNameMatchParam" (TyCon "String"))
 (DFunDef false "ruleNameMatchParam" () (ELit (LString "rule-match-on-param")))
@@ -9353,9 +9489,17 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "crossRuleNameOf" (TyFun (TyCon "CrossFileRule") (TyCon "String")))
 (DFunDef false "crossRuleNameOf" ((PVar "r")) (EFieldAccess (EVar "r") "name"))
 (DTypeSig true "lintProgram" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))))
-(DFunDef false "lintProgram" ((PVar "idx") (PVar "rules") (PVar "path") (PVar "src") (PVar "pos") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EApp (EVar "runRuleOn") (EVar "idx")) (EVar "path")) (EVar "src")) (EVar "pos")) (EVar "prog"))) (EVar "rules")))
-(DTypeSig false "runRuleOn" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Rule") (TyApp (TyCon "List") (TyCon "Finding")))))))))
-(DFunDef false "runRuleOn" ((PVar "idx") (PVar "path") (PVar "src") (PVar "pos") (PVar "prog") (PVar "r")) (EIf (EFieldAccess (EVar "r") "enabled") (EApp (EApp (EMethodRef "map") (EApp (EVar "restampSeverity") (EFieldAccess (EVar "r") "severity"))) (EApp (EApp (EApp (EApp (EApp (EFieldAccess (EVar "r") "check") (EVar "idx")) (EVar "path")) (EVar "src")) (EVar "pos")) (EVar "prog"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "lintProgram" ((PVar "idx") (PVar "rules") (PVar "path") (PVar "src") (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramFacts") (EVar "idx")) (EVar "rules")) (EVar "path")) (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "prog")) (EVar "pos"))) (EVar "pos")) (EVar "prog")))
+(DTypeSig true "lintProgramFacts" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))))
+(DFunDef false "lintProgramFacts" ((PVar "idx") (PVar "rules") (PVar "path") (PVar "facts") (PVar "pos") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EApp (EVar "runRuleOn") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog"))) (EVar "rules")))
+(DTypeSig true "selectRules" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Rule")))))
+(DFunDef false "selectRules" ((PVar "only") (PVar "disable")) (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "ruleSelected") (EVar "only")) (EVar "disable"))) (EVar "allRules")))
+(DTypeSig false "ruleSelected" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Rule") (TyCon "Bool")))))
+(DFunDef false "ruleSelected" ((PVar "only") (PVar "disable") (PVar "r")) (EBinOp "&&" (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "only"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "name")) (EVar "disable")))))
+(DTypeSig true "crossFileSelected" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "crossFileSelected" ((PVar "only") (PVar "disable")) (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "crossRuleActive") (EVar "only")) (EVar "disable"))) (EVar "allCrossFileRules")))
+(DTypeSig false "runRuleOn" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Rule") (TyApp (TyCon "List") (TyCon "Finding")))))))))
+(DFunDef false "runRuleOn" ((PVar "idx") (PVar "path") (PVar "facts") (PVar "pos") (PVar "prog") (PVar "r")) (EIf (EFieldAccess (EVar "r") "enabled") (EApp (EApp (EMethodRef "map") (EApp (EVar "restampSeverity") (EFieldAccess (EVar "r") "severity"))) (EApp (EApp (EApp (EApp (EApp (EFieldAccess (EVar "r") "check") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "restampSeverity" (TyFun (TyCon "Severity") (TyFun (TyCon "Finding") (TyCon "Finding"))))
 (DFunDef false "restampSeverity" ((PVar "sev") (PVar "f")) (ERecordCreate "Finding" ((fa "rule" (EFieldAccess (EVar "f") "rule")) (fa "message" (EFieldAccess (EVar "f") "message")) (fa "severity" (EVar "sev")) (fa "loc" (EFieldAccess (EVar "f") "loc")))))
 (DTypeSig false "isStdlibPath" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -9517,7 +9661,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig true "findingToDiag" (TyFun (TyCon "Finding") (TyCon "Diag")))
 (DFunDef false "findingToDiag" ((PVar "f")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EFieldAccess (EVar "f") "severity")) (EFieldAccess (EVar "f") "rule")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EFieldAccess (EVar "f") "rule"))) (ELit (LString "] "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "f") "message"))) (ELit (LString "")))) (EFieldAccess (EVar "f") "loc")) (EVar "None")) (EVar "None")))
 (DTypeSig true "lintFileDiagTripleParsed" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
-(DFunDef false "lintFileDiagTripleParsed" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "path")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "path"))) (DoLet false false (PTuple (PVar "decls") (PVar "pos")) (EApp (EVar "parseWithPositionsLocated") (EVar "src"))) (DoLet false false (PVar "allFindings") (EApp (EApp (EVar "applySuppressions") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgram") (EVar "idx")) (EVar "allRules")) (EVar "path")) (EVar "src")) (EVar "pos")) (EVar "decls")))) (DoLet false false (PVar "findings") (EApp (EApp (EApp (EApp (EVar "applyFindingFilters") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "allFindings"))) (DoExpr (ETuple (EVar "path") (EVar "src") (EApp (EApp (EMethodRef "map") (EVar "findingToDiag")) (EVar "findings")) (EVar "pos") (EVar "decls")))))
+(DFunDef false "lintFileDiagTripleParsed" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "path")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "path"))) (DoLet false false (PTuple (PVar "decls") (PVar "pos")) (EApp (EVar "parseWithPositionsLocated") (EVar "src"))) (DoLet false false (PVar "facts") (EApp (EApp (EApp (EVar "mkFileFacts") (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "allFindings") (EApp (EApp (EVar "applySuppressionsDirs") (EApp (EVar "factDirectives") (EVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramFacts") (EVar "idx")) (EApp (EApp (EVar "selectRules") (EVar "only")) (EVar "disable"))) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "decls")))) (DoLet false false (PVar "findings") (EApp (EApp (EApp (EApp (EVar "applyFindingFilters") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "allFindings"))) (DoExpr (ETuple (EVar "path") (EVar "src") (EApp (EApp (EMethodRef "map") (EVar "findingToDiag")) (EVar "findings")) (EVar "pos") (EVar "decls")))))
 (DTypeSig true "lintFileDiagTriple" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))
 (DFunDef false "lintFileDiagTriple" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "path")) (EApp (EVar "dropParsedTriple") (EApp (EApp (EApp (EApp (EApp (EVar "lintFileDiagTripleParsed") (EVar "idx")) (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "path"))))
 (DTypeSig false "dropParsedTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
@@ -9529,7 +9673,7 @@ preludeShadowFinding name loc = Finding {
 (DData Public "DirScope" () ((variant "DScopeLine" (ConPos (TyCon "Int"))) (variant "DScopeFile" (ConPos))) ())
 (DData Public "Directive" () ((variant "Directive" (ConPos (TyCon "DirScope") (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DTypeSig true "applySuppressions" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding")))))
-(DFunDef false "applySuppressions" ((PVar "src") (PVar "findings")) (EApp (EApp (EVar "applySuppressionsDirs") (EApp (EVar "collectDirectives") (EVar "src"))) (EVar "findings")))
+(DFunDef false "applySuppressions" ((PVar "src") (PVar "findings")) (EApp (EApp (EVar "applySuppressionsDirs") (EApp (EVar "directivesOfSource") (EVar "src"))) (EVar "findings")))
 (DTypeSig true "applySuppressionsDirs" (TyFun (TyApp (TyCon "List") (TyCon "Directive")) (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "applySuppressionsDirs" ((PVar "dirs") (PVar "findings")) (EApp (EApp (EVar "filterList") (ELam ((PVar "f")) (EApp (EVar "not") (EApp (EApp (EVar "isSuppressed") (EVar "dirs")) (EVar "f"))))) (EVar "findings")))
 (DTypeSig true "applySuppressionsMulti" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding")))))
@@ -9537,7 +9681,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig true "applySuppressionsMultiDirs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Directive")))) (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "applySuppressionsMultiDirs" ((PVar "dirTable") (PVar "findings")) (EApp (EApp (EVar "filterList") (ELam ((PVar "f")) (EApp (EVar "not") (EApp (EApp (EVar "findingSuppressedMulti") (EVar "dirTable")) (EVar "f"))))) (EVar "findings")))
 (DTypeSig false "fileDirectivesOf" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Directive")))))
-(DFunDef false "fileDirectivesOf" ((PTuple (PVar "path") (PVar "src"))) (ETuple (EVar "path") (EApp (EVar "collectDirectives") (EVar "src"))))
+(DFunDef false "fileDirectivesOf" ((PTuple (PVar "path") (PVar "src"))) (ETuple (EVar "path") (EApp (EVar "directivesOfSource") (EVar "src"))))
 (DTypeSig false "findingSuppressedMulti" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Directive")))) (TyFun (TyCon "Finding") (TyCon "Bool"))))
 (DFunDef false "findingSuppressedMulti" ((PVar "dirTable") (PVar "f")) (EMatch (EApp (EApp (EVar "lookupDirs") (EApp (EVar "findingFileOf") (EVar "f"))) (EVar "dirTable")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "dirs")) () (EApp (EApp (EVar "isSuppressed") (EVar "dirs")) (EVar "f")))))
 (DTypeSig false "findingFileOf" (TyFun (TyCon "Finding") (TyCon "String")))
@@ -9545,8 +9689,10 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "lookupDirs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Directive")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Directive"))))))
 (DFunDef false "lookupDirs" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupDirs" ((PVar "path") (PCons (PTuple (PVar "p") (PVar "ds")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "p") (EVar "path")) (EApp (EVar "Some") (EVar "ds")) (EApp (EApp (EVar "lookupDirs") (EVar "path")) (EVar "rest"))))
-(DTypeSig true "collectDirectives" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Directive"))))
-(DFunDef false "collectDirectives" ((PVar "src")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EApp (EVar "dirToList") (EApp (EVar "parseDirective") (EVar "c"))))) (EApp (EVar "collectComments") (EVar "src"))))
+(DTypeSig false "directivesOfSource" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Directive"))))
+(DFunDef false "directivesOfSource" ((PVar "src")) (EApp (EVar "collectDirectives") (EApp (EVar "collectComments") (EVar "src"))))
+(DTypeSig true "collectDirectives" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "Directive"))))
+(DFunDef false "collectDirectives" ((PVar "cmts")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EApp (EVar "dirToList") (EApp (EVar "parseDirective") (EVar "c"))))) (EVar "cmts")))
 (DTypeSig false "dirToList" (TyFun (TyApp (TyCon "Option") (TyCon "Directive")) (TyApp (TyCon "List") (TyCon "Directive"))))
 (DFunDef false "dirToList" ((PCon "None")) (EListLit))
 (DFunDef false "dirToList" ((PCon "Some" (PVar "d"))) (EListLit (EVar "d")))
@@ -9597,7 +9743,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "zipDeclLoc" ((PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps"))) (EBinOp "::" (ETuple (EVar "d") (EApp (EVar "Some") (EApp (EVar "declPosToLoc") (EVar "p")))) (EApp (EApp (EVar "zipDeclLoc") (EVar "ds")) (EVar "ps"))))
 (DTypeSig false "declPosToLoc" (TyFun (TyCon "DeclPos") (TyCon "Loc")))
 (DFunDef false "declPosToLoc" ((PVar "p")) (ELet false (PVar "l") (EApp (EVar "declPosLine") (EVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EVar "l")) (ELit (LInt 1))) (EVar "l")) (ELit (LInt 1)))))
-(DTypeSig false "ruleMatchOnParam" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleMatchOnParam" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleMatchOnParam" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "matchParamDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
 (DTypeSig false "matchParamDeclL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "matchParamDeclL" ((PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EVar "matchParamDecl") (EVar "loc")) (EVar "d")))
@@ -9650,8 +9796,8 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "wholeWordIn" ((PVar "name") (PVar "s")) (EApp (EApp (EVar "isMatch") (EApp (EVar "mustCompile") (EApp (EVar "wholeWordPattern") (EVar "name")))) (EVar "s")))
 (DTypeSig false "wholeWordPattern" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "wholeWordPattern" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "(?:^|[^A-Za-z0-9_'])")) (EApp (EVar "escape") (EVar "name"))) (ELit (LString "(?:$|[^A-Za-z0-9_'])"))))
-(DTypeSig false "ruleDestructureInParam" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleDestructureInParam" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "orc") (EApp (EVar "buildOracle") (EVar "prog"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EVar "destructureDeclL") (EVar "orc"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
+(DTypeSig false "ruleDestructureInParam" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleDestructureInParam" (PWild PWild (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "orc") (EApp (EVar "factOracle") (EVar "facts"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EVar "destructureDeclL") (EVar "orc"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
 (DTypeSig false "destructureDeclL" (TyFun (TyCon "Oracle") (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "destructureDeclL" ((PVar "orc") (PTuple (PVar "d") (PVar "loc"))) (EMatch (EVar "d") (arm (PCon "DFunDef" PWild (PVar "name") (PVar "pats") (PVar "body") PWild PWild) () (EApp (EApp (EApp (EApp (EApp (EVar "destructureFinding") (EVar "orc")) (EVar "loc")) (EVar "name")) (EVar "pats")) (EVar "body"))) (arm PWild () (EListLit))))
 (DTypeSig false "destructureFinding" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))))
@@ -9687,8 +9833,8 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "destructureInParamFixArms" (PWild PWild PWild PWild PWild PWild PWild) (EVar "None"))
 (DTypeSig false "derivableIfaces" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "derivableIfaces" () (EListLit (ELit (LString "Eq")) (ELit (LString "Ord")) (ELit (LString "Debug"))))
-(DTypeSig false "ruleDerivable" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleDerivable" (PWild (PVar "path") PWild (PVar "pos") (PVar "prog")) (EIf (EApp (EVar "isStdlibPath") (EVar "path")) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "orc") (EApp (EVar "buildOracle") (EVar "prog"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EVar "derivableDeclL") (EVar "orc"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ruleDerivable" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleDerivable" (PWild (PVar "path") (PVar "facts") (PVar "pos") (PVar "prog")) (EIf (EApp (EVar "isStdlibPath") (EVar "path")) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "orc") (EApp (EVar "factOracle") (EVar "facts"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EVar "derivableDeclL") (EVar "orc"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "derivableDeclL" (TyFun (TyCon "Oracle") (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "derivableDeclL" ((PVar "orc") (PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EApp (EVar "derivableDecl") (EVar "orc")) (EVar "loc")) (EVar "d")))
 (DTypeSig false "derivableDecl" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))
@@ -9706,7 +9852,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "tyHeadName" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "tyHeadName" ((PCon "TyApp" (PVar "f") PWild)) (EApp (EVar "tyHeadName") (EVar "f")))
 (DFunDef false "tyHeadName" (PWild) (EVar "None"))
-(DTypeSig false "ruleStdlibReimpl" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleStdlibReimpl" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleStdlibReimpl" ((PVar "idx") (PVar "path") PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "ownMod") (EApp (EVar "stdlibModuleOf") (EVar "path"))) (DoLet false false (PVar "names") (EApp (EVar "stdlibIndexNames") (EVar "idx"))) (DoLet false false (PVar "sigs") (EApp (EVar "sigTyMapOf") (EVar "prog"))) (DoLet false false (PVar "locals") (EApp (EVar "nameSetOf") (EApp (EApp (EDictApp "flatMap") (EVar "localTyNamesL")) (EVar "prog")))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reimplHit") (EVar "idx")) (EVar "ownMod")) (EVar "names")) (EVar "sigs")) (EVar "locals")) (EVar "prog"))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EDictApp "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))))
 (DTypeSig false "localTyNamesL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "localTyNamesL" ((PRec "DData" ((rf "dataName" (PVar "n"))) false)) (EListLit (EVar "n")))
@@ -9872,7 +10018,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "indexInGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "indexInGo" (PWild (PList) PWild) (EUnOp "-" (ELit (LInt 1))))
 (DFunDef false "indexInGo" ((PVar "x") (PCons (PVar "y") (PVar "ys")) (PVar "i")) (EIf (EBinOp "==" (EVar "x") (EVar "y")) (EVar "i") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "indexInGo") (EVar "x")) (EVar "ys")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "ruleMissingSignature" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleMissingSignature" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleMissingSignature" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EMethodRef "map") (EVar "missingSigFinding")) (EApp (EApp (EVar "filterList") (EApp (EVar "missingSigPair") (EApp (EVar "nameSetOf") (EApp (EApp (EDictApp "flatMap") (EVar "topSigNameL")) (EVar "prog"))))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EDictApp "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog")))))))
 (DTypeSig false "topSigNameL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "topSigNameL" ((PCon "DTypeSig" PWild (PVar "name") PWild PWild)) (EListLit (EVar "name")))
@@ -9882,7 +10028,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "missingSigPair" ((PVar "sigNames") (PTuple (PVar "n") PWild)) (EApp (EVar "not") (EBinOp "||" (EBinOp "==" (EVar "n") (ELit (LString "main"))) (EApp (EApp (EVar "has") (EVar "n")) (EVar "sigNames")))))
 (DTypeSig false "missingSigFinding" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Finding")))
 (DFunDef false "missingSigFinding" ((PTuple (PVar "name") (PVar "loc"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameMissingSignature")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' has no type signature. Add a `"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString " : …` declaration")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
-(DTypeSig false "ruleSelfShadowExtern" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleSelfShadowExtern" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleSelfShadowExtern" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EVar "selfShadowFindings") (EApp (EApp (EDictApp "flatMap") (EVar "selfShadowClauseL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog")))))
 (DTypeSig false "selfShadowFindings" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "selfShadowFindings" ((PVar "clauses")) (EApp (EApp (EMethodRef "map") (EVar "selfShadowFinding")) (EApp (EApp (EVar "filterList") (EApp (EVar "allClausesSelfCall") (EVar "clauses"))) (EApp (EApp (EVar "dedupBy") (EVar "fst")) (EApp (EApp (EMethodRef "map") (EVar "clauseNameLoc")) (EVar "clauses"))))))
@@ -9935,8 +10081,8 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "scrutIsVar" (PWild PWild) (EVar "False"))
 (DTypeSig false "splitTail2" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "DoStmt")) (TyCon "DoStmt") (TyCon "DoStmt")))))
 (DFunDef false "splitTail2" ((PVar "stmts")) (EMatch (EApp (EVar "reverseL") (EVar "stmts")) (arm (PCons (PVar "lst") (PCons (PVar "scd") (PVar "restRev"))) () (EApp (EVar "Some") (ETuple (EApp (EVar "reverseL") (EVar "restRev")) (EVar "scd") (EVar "lst")))) (arm PWild () (EVar "None"))))
-(DTypeSig false "ruleBindThenDestructure" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleBindThenDestructure" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "orc") (EApp (EVar "buildOracle") (EVar "prog"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EVar "bindDestructureDeclL") (EVar "orc"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
+(DTypeSig false "ruleBindThenDestructure" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleBindThenDestructure" (PWild PWild (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "orc") (EApp (EVar "factOracle") (EVar "facts"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EVar "bindDestructureDeclL") (EVar "orc"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
 (DTypeSig false "bindDestructureDeclL" (TyFun (TyCon "Oracle") (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "bindDestructureDeclL" ((PVar "orc") (PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "bindDestructureFinding") (EVar "loc"))) (EApp (EApp (EVar "declBindHits") (EVar "orc")) (EVar "d"))))
 (DTypeSig false "declBindHits" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String")))))
@@ -10109,7 +10255,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "lamSection2" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Section"))))))
 (DFunDef false "lamSection2" ((PVar "x") (PVar "y") (PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild)) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "isEVarNamed") (EVar "x")) (EVar "a")) (EApp (EApp (EVar "isEVarNamed") (EVar "y")) (EVar "b"))) (EApp (EVar "bareSectionOp") (EVar "op"))) (EApp (EVar "Some") (EApp (EVar "SecBare") (EVar "op"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "lamSection2" (PWild PWild PWild) (EVar "None"))
-(DTypeSig false "ruleLambdaSection" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleLambdaSection" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleLambdaSection" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "lambdaSectionDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
 (DTypeSig false "lambdaSectionDeclL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "lambdaSectionDeclL" ((PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "lambdaSectionFinding") (EVar "loc"))) (EApp (EVar "declLamSections") (EVar "d"))))
@@ -10215,7 +10361,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "isLiteralExpr" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "ENumLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "EWideLit" PWild PWild PWild PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "ifMaxMinOf" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Expr") (TyCon "Expr")))))))
 (DFunDef false "ifMaxMinOf" ((PVar "cond") (PVar "t") (PVar "el")) (EMatch (EApp (EVar "unwrapLoc") (EVar "cond")) (arm (PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild) ((GBool (EApp (EVar "ifMaxMinCompareOp") (EVar "op")))) (EBlock (DoLet false false (PVar "aK") (EApp (EVar "exprSexp") (EVar "a"))) (DoLet false false (PVar "bK") (EApp (EVar "exprSexp") (EVar "b"))) (DoLet false false (PVar "tK") (EApp (EVar "exprSexp") (EVar "t"))) (DoLet false false (PVar "eK") (EApp (EVar "exprSexp") (EVar "el"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "aK") (EVar "bK")) (EApp (EVar "isLiteralExpr") (EVar "a"))) (EApp (EVar "isLiteralExpr") (EVar "b"))) (EVar "None") (EIf (EBinOp "&&" (EBinOp "==" (EVar "tK") (EVar "aK")) (EBinOp "==" (EVar "eK") (EVar "bK"))) (EApp (EVar "Some") (ETuple (EApp (EVar "ifMaxMinFnNormal") (EVar "op")) (EVar "a") (EVar "b"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "tK") (EVar "bK")) (EBinOp "==" (EVar "eK") (EVar "aK"))) (EApp (EVar "Some") (ETuple (EApp (EVar "ifMaxMinFnReversed") (EVar "op")) (EVar "a") (EVar "b"))) (EVar "None"))))))) (arm PWild () (EVar "None"))))
-(DTypeSig false "ruleIfMaxMin" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleIfMaxMin" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleIfMaxMin" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ifMaxMinDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
 (DTypeSig false "ifMaxMinDeclL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "ifMaxMinDeclL" ((PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ifMaxMinFinding") (EVar "loc"))) (EApp (EVar "declIfMaxMinHits") (EVar "d"))))
@@ -10327,7 +10473,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "andThenPureMapBody" (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))))
 (DFunDef false "andThenPureMapBody" ((PVar "m") (PVar "x") (PCon "EApp" (PVar "pureHd") (PVar "arg"))) (EIf (EBinOp "&&" (EApp (EApp (EVar "isEVarNamed") (ELit (LString "pure"))) (EVar "pureHd")) (EBinOp "<=" (EApp (EApp (EVar "countVar") (EVar "x")) (EVar "arg")) (ELit (LInt 1)))) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "buildAndThenMap") (EVar "x")) (EVar "arg")) (EVar "m"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "andThenPureMapBody" (PWild PWild PWild) (EVar "None"))
-(DTypeSig false "ruleAndThenPureMap" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleAndThenPureMap" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleAndThenPureMap" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "andThenPureMapDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
 (DTypeSig false "andThenPureMapDeclL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "andThenPureMapDeclL" ((PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "andThenPureMapFinding") (EVar "loc"))) (EApp (EVar "declAndThenPureMapHits") (EVar "d"))))
@@ -10512,7 +10658,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "rewriteConcatExpr" ((PVar "e")) (EMatch (EApp (EVar "concatChainOf") (EVar "e")) (arm (PCon "Some" (PVar "e2")) () (EVar "e2")) (arm (PCon "None") () (EApp (EApp (EVar "mapChildExprs") (EVar "rewriteConcatExpr")) (EVar "e")))))
 (DTypeSig false "collectConcatHits" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
 (DFunDef false "collectConcatHits" ((PVar "e")) (EMatch (EApp (EVar "concatChainOf") (EVar "e")) (arm (PCon "Some" (PVar "e2")) () (EBinOp "::" (EVar "e2") (EApp (EApp (EDictApp "flatMap") (EVar "collectConcatHits")) (EApp (EVar "concatOperands") (EVar "e"))))) (arm (PCon "None") () (EApp (EApp (EDictApp "flatMap") (EVar "collectConcatHits")) (EApp (EVar "childExprs") (EVar "e"))))))
-(DTypeSig false "ruleConcatToInterp" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleConcatToInterp" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleConcatToInterp" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "concatToInterpDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
 (DTypeSig false "concatToInterpDeclL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "concatToInterpDeclL" ((PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "concatToInterpFinding") (EVar "loc"))) (EApp (EVar "declConcatHits") (EVar "d"))))
@@ -10534,7 +10680,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "fixImplMethodConcat" ((PCon "ImplMethod" (PVar "nm") (PVar "ps") (PVar "body"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "nm")) (EVar "ps")) (EApp (EVar "rewriteConcatExpr") (EVar "body"))))
 (DTypeSig false "notEqOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "notEqOf" ((PVar "e")) (EMatch (EApp (EVar "notArgOf") (EVar "e")) (arm (PCon "Some" (PVar "inner")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "inner")) (arm (PCon "EBinOp" (PLit (LString "==")) (PVar "a") (PVar "b") (PVar "r")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString "/="))) (EVar "a")) (EVar "b")) (EVar "r")))) (arm (PCon "EBinOp" (PLit (LString "/=")) (PVar "a") (PVar "b") (PVar "r")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString "=="))) (EVar "a")) (EVar "b")) (EVar "r")))) (arm PWild () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
-(DTypeSig false "ruleNotEq" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleNotEq" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleNotEq" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EVar "notEqOf")) (EVar "notEqFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "notEqFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "notEqFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameNotEq")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "negated equality. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
@@ -10550,7 +10696,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "boolSimplifyEq" ((PVar "op") (PVar "a") (PVar "b")) (EIf (EBinOp "&&" (EApp (EVar "isBoolLit") (EVar "a")) (EApp (EVar "isBoolLit") (EVar "b"))) (EVar "None") (EIf (EApp (EVar "isTrueLit") (EVar "b")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "boolEqResult") (EVar "op")) (EVar "a")) (EVar "True"))) (EIf (EApp (EVar "isFalseLit") (EVar "b")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "boolEqResult") (EVar "op")) (EVar "a")) (EVar "False"))) (EIf (EApp (EVar "isTrueLit") (EVar "a")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "boolEqResult") (EVar "op")) (EVar "b")) (EVar "True"))) (EIf (EApp (EVar "isFalseLit") (EVar "a")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "boolEqResult") (EVar "op")) (EVar "b")) (EVar "False"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
 (DTypeSig false "boolEqResult" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Bool") (TyCon "Expr")))))
 (DFunDef false "boolEqResult" ((PVar "op") (PVar "v") (PVar "constIsTrue")) (EIf (EBinOp "==" (EBinOp "==" (EVar "op") (ELit (LString "=="))) (EVar "constIsTrue")) (EVar "v") (EApp (EVar "mkNot") (EVar "v"))))
-(DTypeSig false "ruleBoolSimplify" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleBoolSimplify" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleBoolSimplify" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EVar "boolSimplifyOf")) (EVar "boolSimplifyFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "boolSimplifyFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "boolSimplifyFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameBoolSimplify")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "redundant boolean expression — rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
@@ -10566,7 +10712,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "remParityFrom" (PWild PWild) (EVar "None"))
 (DTypeSig false "parityFn" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "parityFn" ((PVar "op")) (EIf (EBinOp "==" (EVar "op") (ELit (LString "=="))) (ELit (LString "isEven")) (ELit (LString "isOdd"))))
-(DTypeSig false "ruleRemParity" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleRemParity" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleRemParity" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "remParityExcl")) (EVar "remParityOf")) (EVar "remParityFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "remParityFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "remParityFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRemParity")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "parity test. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
@@ -10575,7 +10721,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "doubleReverseOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "doubleReverseOf" ((PCon "EApp" (PVar "hd1") (PVar "arg1"))) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "reverse"))) (EVar "hd1")) (EMatch (EApp (EVar "unwrapLoc") (EVar "arg1")) (arm (PCon "EApp" (PVar "hd2") (PVar "inner")) () (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "reverse"))) (EVar "hd2")) (EApp (EVar "Some") (EVar "inner")) (EVar "None"))) (arm PWild () (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "doubleReverseOf" (PWild) (EVar "None"))
-(DTypeSig false "ruleDoubleReverse" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleDoubleReverse" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleDoubleReverse" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EVar "doubleReverseOf")) (EVar "doubleReverseFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "doubleReverseFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "doubleReverseFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDoubleReverse")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`reverse (reverse …)` is a no-op. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
@@ -10596,7 +10742,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "isAssignWrite" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "isAssignWrite" ((PCon "EBinOp" (PLit (LString ":=")) PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isAssignWrite" (PWild) (EVar "False"))
-(DTypeSig false "ruleForPreferAssign" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleForPreferAssign" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleForPreferAssign" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EVar "preferAssignOf")) (EVar "preferAssignFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "preferAssignFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "preferAssignFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNamePreferAssignOp")) (fa "message" (EApp (EVar "preferAssignMessage") (EVar "rewritten"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
@@ -10615,7 +10761,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "whenUnlessOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "whenUnlessOf" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "el"))) (EIf (EApp (EVar "isPureUnit") (EVar "el")) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "when")))) (EVar "c"))) (EVar "t"))) (EIf (EApp (EVar "isPureUnit") (EVar "t")) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "unless")))) (EVar "c"))) (EVar "el"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DFunDef false "whenUnlessOf" (PWild) (EVar "None"))
-(DTypeSig false "ruleWhenUnless" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleWhenUnless" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleWhenUnless" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "whenUnlessExcl")) (EVar "whenUnlessOf")) (EVar "whenUnlessFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "whenUnlessFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "whenUnlessFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameWhenUnless")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "conditional effect with a `pure ()` branch. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
@@ -10639,7 +10785,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "renameSpineHead" ((PVar "newName") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" PWild) () (EApp (EVar "EVar") (EVar "newName"))) (arm (PCon "EApp" (PVar "hd") (PVar "arg")) () (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "renameSpineHead") (EVar "newName")) (EVar "hd"))) (EVar "arg"))) (arm PWild () (EVar "e"))))
 (DTypeSig false "complementPredOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "complementPredOf" ((PVar "e")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "notArgOf") (EVar "e"))) (ELam ((PVar "inner")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "appSpineHead") (EApp (EVar "unwrapLoc") (EVar "inner")))) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "complementOf") (EVar "name"))) (ELam ((PVar "comp")) (EApp (EVar "Some") (EApp (EApp (EVar "renameSpineHead") (EVar "comp")) (EApp (EVar "unwrapLoc") (EVar "inner")))))))))))
-(DTypeSig false "ruleComplementPredicate" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleComplementPredicate" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleComplementPredicate" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "complementExcl")) (EVar "complementPredOf")) (EVar "complementPredicateFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "complementPredicateFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "complementPredicateFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameComplementPredicate")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "negated predicate. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
@@ -10670,7 +10816,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "matchToMapOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "matchToMapOf" ((PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EMatch (EVar "arms") (arm (PList (PVar "a1") (PVar "a2")) () (EApp (EApp (EApp (EVar "matchToMapPair") (EVar "scrut")) (EVar "a1")) (EVar "a2"))) (arm PWild () (EVar "None"))))
 (DFunDef false "matchToMapOf" (PWild) (EVar "None"))
-(DTypeSig false "ruleMatchToMap" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleMatchToMap" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleMatchToMap" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EVar "matchToMapOf")) (EVar "matchToMapFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "matchToMapFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "matchToMapFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameMatchToMap")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "2-arm match maps over an Option/Result — rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
@@ -10704,7 +10850,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "clauseMapFnOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Expr")))))
 (DFunDef false "clauseMapFnOf" ((PLit (LString "map")) PWild) (EVar "None"))
 (DFunDef false "clauseMapFnOf" ((PVar "name") (PVar "prog")) (EMatch (EApp (EApp (EVar "clausesOf") (EVar "name")) (EVar "prog")) (arm (PList (PVar "a") (PVar "b")) () (EMatch (EApp (EApp (EApp (EVar "clauseMapPair") (EVar "name")) (EVar "a")) (EVar "b")) (arm (PCon "Some" (PVar "g")) () (EApp (EVar "Some") (EVar "g"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "clauseMapPair") (EVar "name")) (EVar "b")) (EVar "a"))))) (arm PWild () (EVar "None"))))
-(DTypeSig false "ruleClauseMap" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleClauseMap" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleClauseMap" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "clauseMapHit") (EVar "prog"))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EDictApp "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
 (DTypeSig false "clauseMapHit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "clauseMapHit" ((PVar "prog") (PTuple (PVar "name") (PVar "loc"))) (EMatch (EApp (EApp (EVar "clauseMapFnOf") (EVar "name")) (EVar "prog")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "g")) () (EListLit (EApp (EApp (EApp (EVar "clauseMapFinding") (EVar "name")) (EVar "g")) (EVar "loc"))))))
@@ -10742,7 +10888,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "bindChainDeclHeads" (PWild) (EListLit))
 (DTypeSig false "bindChainImplHeads" (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyCon "Expr"))))
 (DFunDef false "bindChainImplHeads" ((PCon "ImplMethod" PWild PWild (PVar "body"))) (EApp (EVar "bindChainHeads") (EVar "body")))
-(DTypeSig false "ruleBindChainToDo" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleBindChainToDo" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleBindChainToDo" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "bindChainDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
 (DTypeSig false "bindChainDeclL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "bindChainDeclL" ((PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "bindChainFinding") (EVar "loc"))) (EApp (EVar "bindChainDeclHeads") (EVar "d"))))
@@ -10775,7 +10921,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "orElseDeclHeads" (PWild) (EListLit))
 (DTypeSig false "orElseImplHeads" (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "Expr")))))
 (DFunDef false "orElseImplHeads" ((PCon "ImplMethod" PWild PWild (PVar "body"))) (EApp (EVar "orElseHeads") (EVar "body")))
-(DTypeSig false "ruleOrElseStaircase" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleOrElseStaircase" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleOrElseStaircase" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "orElseDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
 (DTypeSig false "orElseDeclL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "orElseDeclL" ((PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "orElseHeadFinding") (EVar "loc"))) (EApp (EVar "orElseDeclHeads") (EVar "d"))))
@@ -10805,7 +10951,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "cloneImplTargetsOf" (PWild) (EListLit))
 (DTypeSig false "cloneTyHeadList" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "cloneTyHeadList" ((PVar "t")) (EMatch (EApp (EVar "tyHeadName") (EVar "t")) (arm (PCon "Some" (PVar "n")) () (EListLit (EVar "n"))) (arm (PCon "None") () (EListLit))))
-(DTypeSig false "ruleCloneType" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleCloneType" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleCloneType" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "impls") (EApp (EVar "cloneImplTargets") (EVar "prog"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EVar "cloneTypeDeclL") (EVar "impls"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
 (DTypeSig false "cloneTypeDeclL" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "cloneTypeDeclL" ((PVar "impls") (PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EApp (EVar "cloneTypeDecl") (EVar "impls")) (EVar "loc")) (EVar "d")))
@@ -10817,8 +10963,8 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "cloneTypeHit" ((PVar "impls") (PVar "loc") (PVar "n") (PVar "ctors")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "impls")) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "cloneShapeName") (EVar "ctors")) (arm (PCon "Some" (PVar "shape")) () (EListLit (EApp (EApp (EApp (EVar "cloneTypeFinding") (EVar "loc")) (EVar "n")) (EVar "shape")))) (arm (PCon "None") () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cloneTypeFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Finding")))))
 (DFunDef false "cloneTypeFinding" ((PVar "loc") (PVar "n") (PVar "shape")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameCloneType")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' re-declares `"))) (EApp (EMethodRef "display") (EVar "shape"))) (ELit (LString "`'s constructor shape and its file writes no `impl` for it -- prefer the stdlib `"))) (EApp (EMethodRef "display") (EVar "shape"))) (ELit (LString "`, whose combinators come with it")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
-(DTypeSig false "rulePromissoryReader" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "rulePromissoryReader" (PWild (PVar "path") (PVar "src") PWild PWild) (EBlock (DoLet false false (PVar "ls") (EApp (EVar "splitNl") (EVar "src"))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "codeLines") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "codePortions") (EVar "ls")) (EVar "comments")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "promissoryFinding") (EVar "path")) (EVar "codeLines"))) (EApp (EVar "promissoryClaims") (EApp (EApp (EVar "commentBlocks") (EVar "comments")) (EVar "codeLines")))))))
+(DTypeSig false "rulePromissoryReader" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "rulePromissoryReader" (PWild (PVar "path") (PVar "facts") PWild PWild) (EBlock (DoLet false false (PVar "ls") (EApp (EVar "splitNl") (EFieldAccess (EVar "facts") "ffSrc"))) (DoLet false false (PVar "comments") (EApp (EVar "factComments") (EVar "facts"))) (DoLet false false (PVar "codeLines") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "codePortions") (EVar "ls")) (EVar "comments")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "promissoryFinding") (EVar "path")) (EVar "codeLines"))) (EApp (EVar "promissoryClaims") (EApp (EApp (EVar "commentBlocks") (EVar "comments")) (EVar "codeLines")))))))
 (DTypeSig false "codePortions" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "codePortions" ((PList) PWild PWild) (EListLit))
 (DFunDef false "codePortions" ((PCons (PVar "l") (PVar "rest")) (PList) (PVar "n")) (EBinOp "::" (EVar "l") (EApp (EApp (EApp (EVar "codePortions") (EVar "rest")) (EListLit)) (EBinOp "+" (EVar "n") (ELit (LInt 1))))))
@@ -10897,8 +11043,8 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "wordReadOk" ((PVar "cs") (PVar "n") (PVar "m")) (EBinOp "&&" (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "m") "start") (ELit (LInt 0))) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EFieldAccess (EVar "m") "start") (ELit (LInt 1)))) (EVar "cs"))))) (EApp (EApp (EVar "identBoundaryAt") (EVar "cs")) (EFieldAccess (EVar "m") "end"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "assignFollows") (EVar "cs")) (EVar "n")) (EFieldAccess (EVar "m") "end")))))
 (DTypeSig false "assignFollows" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "assignFollows" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "n")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar " ")))) (EApp (EApp (EApp (EVar "assignFollows") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "n")) (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ":"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "=")))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "ruleDeadCode" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleDeadCode" (PWild PWild (PVar "src") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "reach") (EApp (EApp (EVar "reachableNames") (EVar "src")) (EVar "prog"))) (DoExpr (EApp (EApp (EMethodRef "map") (EVar "deadFinding")) (EApp (EApp (EVar "filterList") (EApp (EVar "deadPair") (EVar "reach"))) (EApp (EApp (EVar "privateDefLocs") (EVar "pos")) (EVar "prog")))))))
+(DTypeSig false "ruleDeadCode" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleDeadCode" (PWild PWild (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "reach") (EApp (EApp (EVar "reachableNames") (EVar "facts")) (EVar "prog"))) (DoExpr (EApp (EApp (EMethodRef "map") (EVar "deadFinding")) (EApp (EApp (EVar "filterList") (EApp (EVar "deadPair") (EVar "reach"))) (EApp (EApp (EVar "privateDefLocs") (EVar "pos")) (EVar "prog")))))))
 (DTypeSig false "deadPair" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Bool"))))
 (DFunDef false "deadPair" ((PVar "reach") (PTuple (PVar "n") PWild)) (EApp (EVar "not") (EApp (EApp (EVar "has") (EVar "n")) (EVar "reach"))))
 (DTypeSig false "deadFinding" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Finding")))
@@ -10918,8 +11064,8 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "candidatePair" ((PVar "exported") (PTuple (PVar "n") PWild)) (EBinOp "&&" (EApp (EVar "isOrdinaryIdent") (EVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "has") (EVar "n")) (EVar "exported")))))
 (DTypeSig false "isOrdinaryIdent" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isOrdinaryIdent" ((PVar "s")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EVar "False") (EIf (EVar "otherwise") (EApp (EVar "isIdentStart") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "s")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "reachableNames" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "reachableNames" ((PVar "src") (PVar "prog")) (EBlock (DoLet false false (PVar "refMap") (EApp (EVar "mergeRefs") (EApp (EApp (EDictApp "flatMap") (EVar "defRefPair")) (EVar "prog")))) (DoLet false false (PVar "seed") (EBinOp "++" (EApp (EVar "exportedNames") (EVar "prog")) (EBinOp "::" (ELit (LString "main")) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "nonDefRefL")) (EVar "prog")) (EApp (EVar "doctestIdents") (EVar "src")))))) (DoLet false false (PVar "visited") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EVar "seed"))) (DoExpr (EVar "visited"))))
+(DTypeSig false "reachableNames" (TyFun (TyCon "FileFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")))))
+(DFunDef false "reachableNames" ((PVar "facts") (PVar "prog")) (EBlock (DoLet false false (PVar "refMap") (EApp (EVar "mergeRefs") (EApp (EApp (EDictApp "flatMap") (EVar "defRefPair")) (EVar "prog")))) (DoLet false false (PVar "seed") (EBinOp "++" (EApp (EVar "exportedNames") (EVar "prog")) (EBinOp "::" (ELit (LString "main")) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "nonDefRefL")) (EVar "prog")) (EApp (EVar "doctestIdents") (EApp (EVar "factComments") (EVar "facts"))))))) (DoLet false false (PVar "visited") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EVar "seed"))) (DoExpr (EVar "visited"))))
 (DTypeSig false "defRefPair" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "defRefPair" ((PVar "d")) (EMatch (EApp (EVar "defNameOf") (EVar "d")) (arm (PCon "Some" (PVar "name")) () (EListLit (ETuple (EVar "name") (EApp (EVar "sortUniqS") (EApp (EVar "identTokens") (EApp (EVar "declToString") (EApp (EVar "unAttrib") (EVar "d")))))))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "defNameOf" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -10969,8 +11115,8 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "isIdentStart" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isLower") (EVar "c")) (EApp (EVar "isUpper") (EVar "c"))) (EBinOp "==" (EVar "c") (ELit (LChar "_")))))
 (DTypeSig false "identEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "identEnd" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "i") (EIf (EApp (EVar "isAlnum") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EApp (EApp (EVar "identEnd") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "doctestIdents" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "doctestIdents" ((PVar "src")) (EApp (EApp (EDictApp "flatMap") (EVar "commentDocIdents")) (EApp (EVar "collectComments") (EVar "src"))))
+(DTypeSig false "doctestIdents" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "doctestIdents" ((PVar "cmts")) (EApp (EApp (EDictApp "flatMap") (EVar "commentDocIdents")) (EVar "cmts")))
 (DTypeSig false "commentDocIdents" (TyFun (TyCon "Comment") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "commentDocIdents" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "commentText") (EVar "c"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "{-"))) (EVar "t")) (EApp (EApp (EDictApp "flatMap") (EVar "blockDocLineIdents")) (EApp (EVar "splitNl") (EApp (EVar "blockInner") (EVar "t")))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "-- >"))) (EVar "t")) (EApp (EVar "identTokens") (EApp (EApp (EVar "strDrop") (ELit (LInt 4))) (EVar "t"))) (EListLit))))))
 (DTypeSig false "blockInner" (TyFun (TyCon "String") (TyCon "String")))
@@ -11022,8 +11168,6 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "isUpperFirst" ((PVar "s")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EVar "False") (EApp (EVar "isUpper") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "s"))))))
 (DTypeSig false "dupSameFileComplexityThreshold" (TyCon "Int"))
 (DFunDef false "dupSameFileComplexityThreshold" () (ELit (LInt 20)))
-(DTypeSig false "dupEligibleSameFile" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "dupEligibleSameFile" ((PVar "body")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "bodyComplexity") (EVar "body")) (EVar "dupSameFileComplexityThreshold")) (EApp (EVar "not") (EApp (EVar "isPureDataExpr") (EVar "body")))))
 (DTypeSig false "ruleDuplicateBody" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "ruleDuplicateBody" ((PVar "files")) (EApp (EVar "dupJoin") (EApp (EApp (EDictApp "flatMap") (EVar "fileDupOccs")) (EVar "files"))))
 (DTypeSig true "dupJoin" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "Finding"))))
@@ -11052,7 +11196,9 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "dupGroupFires" ((PVar "grp")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "grp")) (ELit (LInt 2))) (EBinOp ">=" (EApp (EVar "listLen") (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (EVar "occFile")) (EVar "grp")))) (ELit (LInt 2)))))
 (DData Private "DupClause" () ((variant "DupClause" (ConNamed (field "dcName" (TyCon "String")) (field "dcLine" (TyCon "Int")) (field "dcKey" (TyCon "String")) (field "dcCost" (TyCon "Int")) (field "dcPure" (TyCon "Bool"))))) ())
 (DTypeSig true "fileDupOccs" (TyFun (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))))
-(DFunDef false "fileDupOccs" ((PTuple (PVar "path") (PVar "pos") (PVar "decls"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "dupOccsOfGroup") (EVar "path"))) (EApp (EVar "dupClauseGroups") (EApp (EApp (EDictApp "flatMap") (EVar "dupClauseOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "decls"))))))
+(DFunDef false "fileDupOccs" ((PTuple (PVar "path") (PVar "pos") (PVar "decls"))) (EApp (EApp (EVar "dupOccsOfClauses") (EVar "path")) (EApp (EApp (EDictApp "flatMap") (EVar "dupClauseOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "decls")))))
+(DTypeSig false "dupOccsOfClauses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))))))
+(DFunDef false "dupOccsOfClauses" ((PVar "path") (PVar "clauses")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "dupOccsOfGroup") (EVar "path"))) (EApp (EVar "dupClauseGroups") (EVar "clauses"))))
 (DTypeSig false "dupClauseOfDecl" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "DupClause"))))
 (DFunDef false "dupClauseOfDecl" ((PTuple (PVar "d") (PVar "loc"))) (EMatch (EVar "d") (arm (PCon "DFunDef" PWild (PVar "name") (PVar "pats") (PVar "body") PWild PWild) () (EListLit (ERecordCreate "DupClause" ((fa "dcName" (EVar "name")) (fa "dcLine" (EApp (EVar "locLineOf") (EVar "loc"))) (fa "dcKey" (EApp (EApp (EVar "structuralKey") (EVar "pats")) (EVar "body"))) (fa "dcCost" (EApp (EVar "bodyComplexity") (EVar "body"))) (fa "dcPure" (EApp (EVar "isPureDataExpr") (EVar "body"))))))) (arm (PCon "DAttrib" PWild (PVar "inner")) () (EApp (EVar "dupClauseOfDecl") (ETuple (EVar "inner") (EVar "loc")))) (arm PWild () (EListLit))))
 (DTypeSig false "dupClauseGroups" (TyFun (TyApp (TyCon "List") (TyCon "DupClause")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "DupClause")))))
@@ -11103,10 +11249,10 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "dupInsert" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EApp (EApp (EVar "dupOccLe") (EVar "x")) (EVar "y")) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "y") (EApp (EApp (EVar "dupInsert") (EVar "x")) (EVar "ys"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dupOccLe" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "dupOccLe" ((PVar "a") (PVar "b")) (EMatch (EApp (EApp (EVar "stringCompare") (EApp (EVar "occFile") (EVar "a"))) (EApp (EVar "occFile") (EVar "b"))) (arm (PCon "Lt") () (EVar "True")) (arm (PCon "Gt") () (EVar "False")) (arm (PCon "Eq") () (EBinOp "<=" (EApp (EVar "occLine") (EVar "a")) (EApp (EVar "occLine") (EVar "b"))))))
-(DTypeSig false "sameFileOccOfDecl" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")))))
-(DFunDef false "sameFileOccOfDecl" ((PTuple (PVar "d") (PVar "loc"))) (EMatch (EVar "d") (arm (PCon "DFunDef" PWild (PVar "name") (PVar "pats") (PVar "body") PWild PWild) () (EIf (EApp (EVar "dupEligibleSameFile") (EVar "body")) (EListLit (ETuple (EVar "name") (EApp (EVar "locLineOf") (EVar "loc")) (EApp (EApp (EVar "structuralKey") (EVar "pats")) (EVar "body")))) (EListLit))) (arm (PCon "DAttrib" PWild (PVar "inner")) () (EApp (EVar "sameFileOccOfDecl") (ETuple (EVar "inner") (EVar "loc")))) (arm PWild () (EListLit))))
-(DTypeSig false "ruleDuplicateBodySameFile" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleDuplicateBodySameFile" (PWild PWild PWild (PVar "pos") (PVar "decls")) (EBlock (DoLet false false (PVar "occs") (EApp (EApp (EDictApp "flatMap") (EVar "sameFileOccOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "decls")))) (DoLet false false (PVar "groups") (EApp (EVar "sameFileGroupByKey") (EVar "occs"))) (DoLet false false (PVar "live") (EApp (EApp (EVar "filterList") (ELam ((PVar "k")) (EBinOp ">=" (EApp (EVar "listLen") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups"))) (ELit (LInt 2))))) (EApp (EVar "sameFileDistinctKeys") (EVar "occs")))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "k")) (EApp (EVar "emitSameFileGroup") (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups")))))) (EApp (EVar "sortUniqS") (EVar "live"))))))
+(DTypeSig false "sameFileOccOfClause" (TyFun (TyCon "DupClause") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")))))
+(DFunDef false "sameFileOccOfClause" ((PVar "c")) (EIf (EBinOp "&&" (EBinOp ">=" (EFieldAccess (EVar "c") "dcCost") (EVar "dupSameFileComplexityThreshold")) (EApp (EVar "not") (EFieldAccess (EVar "c") "dcPure"))) (EListLit (ETuple (EFieldAccess (EVar "c") "dcName") (EFieldAccess (EVar "c") "dcLine") (EFieldAccess (EVar "c") "dcKey"))) (EListLit)))
+(DTypeSig false "ruleDuplicateBodySameFile" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleDuplicateBodySameFile" (PWild PWild (PVar "facts") PWild PWild) (EBlock (DoLet false false (PVar "occs") (EApp (EApp (EDictApp "flatMap") (EVar "sameFileOccOfClause")) (EApp (EVar "factDupClauses") (EVar "facts")))) (DoLet false false (PVar "groups") (EApp (EVar "sameFileGroupByKey") (EVar "occs"))) (DoLet false false (PVar "live") (EApp (EApp (EVar "filterList") (ELam ((PVar "k")) (EBinOp ">=" (EApp (EVar "listLen") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups"))) (ELit (LInt 2))))) (EApp (EVar "sameFileDistinctKeys") (EVar "occs")))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "k")) (EApp (EVar "emitSameFileGroup") (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "k")) (EVar "groups")))))) (EApp (EVar "sortUniqS") (EVar "live"))))))
 (DTypeSig false "sameFileGroupByKey" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "sameFileGroupByKey" ((PVar "occs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "sameFileGroupGo") (EVar "m")) (EVar "occs"))) (DoExpr (EVar "m"))))
 (DTypeSig false "sameFileGroupGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyCon "Unit"))))
@@ -11135,8 +11281,8 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "sameFileInsert" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EBinOp "<=" (EApp (EVar "sameFileOccLine") (EVar "x")) (EApp (EVar "sameFileOccLine") (EVar "y"))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "y") (EApp (EApp (EVar "sameFileInsert") (EVar "x")) (EVar "ys"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "duplicateBodySameFileRule" (TyCon "Rule"))
 (DFunDef false "duplicateBodySameFileRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBodySameFile")) (fa "fix" (EVar "None")))))
-(DTypeSig false "ruleDirectiveReason" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleDirectiveReason" (PWild PWild (PVar "src") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "ls") (EApp (EVar "splitNl") (EVar "src"))) (DoLet false false (PVar "codeLines") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "codePortions") (EVar "ls")) (EVar "comments")) (ELit (LInt 1))))) (DoLet false false (PVar "blocks") (EApp (EApp (EVar "commentBlocks") (EVar "comments")) (EVar "codeLines"))) (DoLet false false (PVar "declZips") (EApp (EApp (EVar "zipDeclPos") (EVar "prog")) (EApp (EVar "positionsDecls") (EVar "pos")))) (DoLet false false (PVar "dirCmts") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "isSome") (EApp (EVar "parseDirective") (EVar "c"))))) (EVar "comments"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "directiveReasonCheck") (EVar "comments")) (EVar "blocks")) (EVar "declZips"))) (EVar "dirCmts")))))
+(DTypeSig false "ruleDirectiveReason" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleDirectiveReason" (PWild PWild (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "factComments") (EVar "facts"))) (DoLet false false (PVar "ls") (EApp (EVar "splitNl") (EFieldAccess (EVar "facts") "ffSrc"))) (DoLet false false (PVar "codeLines") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "codePortions") (EVar "ls")) (EVar "comments")) (ELit (LInt 1))))) (DoLet false false (PVar "blocks") (EApp (EApp (EVar "commentBlocks") (EVar "comments")) (EVar "codeLines"))) (DoLet false false (PVar "declZips") (EApp (EApp (EVar "zipDeclPos") (EVar "prog")) (EApp (EVar "positionsDecls") (EVar "pos")))) (DoLet false false (PVar "dirCmts") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "isSome") (EApp (EVar "parseDirective") (EVar "c"))))) (EVar "comments"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "directiveReasonCheck") (EVar "comments")) (EVar "blocks")) (EVar "declZips"))) (EVar "dirCmts")))))
 (DTypeSig false "directiveReasonCheck" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyCon "Comment") (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "directiveReasonCheck" ((PVar "comments") (PVar "blocks") (PVar "declZips") (PVar "c")) (EIf (EApp (EApp (EApp (EApp (EVar "directiveReasoned") (EVar "comments")) (EVar "blocks")) (EVar "declZips")) (EVar "c")) (EListLit) (EListLit (EApp (EVar "directiveReasonFinding") (EVar "c")))))
 (DTypeSig false "directiveReasoned" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyCon "Comment") (TyCon "Bool"))))))
@@ -11201,7 +11347,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "regexLocalNamesInPath" ((PVar "stdName") (PCon "UseWild" (PVar "path"))) (EIf (EBinOp "==" (EApp (EVar "lastSegOf") (EVar "path")) (ELit (LString "regex"))) (EListLit (EVar "stdName")) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "regexLocalNamesInPath" ((PVar "stdName") (PCon "UseAlias" (PVar "path") (PVar "alias"))) (EIf (EBinOp "==" (EApp (EVar "lastSegOf") (EVar "path")) (ELit (LString "regex"))) (EListLit (EApp (EApp (EVar "qualifiedLocal") (EVar "alias")) (EVar "stdName"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "regexLocalNamesInPath" (PWild PWild) (EListLit))
-(DTypeSig false "ruleRegexLiteral" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleRegexLiteral" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleRegexLiteral" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EApp (EVar "regexLiteralOf") (EBinOp "++" (EVar "regexLiteralCallNames") (EApp (EVar "regexImportedCallNames") (EVar "prog"))))) (EVar "regexLiteralFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "regexLiteralOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
 (DFunDef false "regexLiteralOf" ((PVar "names") (PVar "e")) (EApp (EApp (EApp (EVar "regexLiteralOfSpine") (EVar "names")) (EVar "e")) (EApp (EVar "stripELoc") (EVar "e"))))
@@ -11228,7 +11374,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "testBoolLitEqOf" (PWild) (EVar "None"))
 (DTypeSig false "testBoolLitEqSwap" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
 (DFunDef false "testBoolLitEqSwap" ((PVar "a") (PVar "b")) (EIf (EBinOp "&&" (EApp (EVar "isBoolLit") (EApp (EVar "unwrapLoc") (EVar "a"))) (EApp (EVar "isBoolLit") (EApp (EVar "unwrapLoc") (EVar "b")))) (EVar "None") (EIf (EApp (EVar "isTrueLit") (EApp (EVar "unwrapLoc") (EVar "a"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "expectTrue")))) (EVar "b"))) (EIf (EApp (EVar "isFalseLit") (EApp (EVar "unwrapLoc") (EVar "a"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "expectFalse")))) (EVar "b"))) (EIf (EApp (EVar "isTrueLit") (EApp (EVar "unwrapLoc") (EVar "b"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "expectTrue")))) (EVar "a"))) (EIf (EApp (EVar "isFalseLit") (EApp (EVar "unwrapLoc") (EVar "b"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "expectFalse")))) (EVar "a"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
-(DTypeSig false "ruleTestBoolLiteralEqual" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleTestBoolLiteralEqual" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleTestBoolLiteralEqual" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindingsInTests") (EVar "noExcl")) (EVar "testBoolLitEqOf")) (EVar "testBoolLitEqFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "testBoolLitEqFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "testBoolLitEqFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestBoolLiteralEqual")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`expectEqual` against a boolean literal. Rewrite as '")) (EApp (EMethodRef "display") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
@@ -11243,7 +11389,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "testEqVerbOf" (PWild PWild) (EVar "None"))
 (DTypeSig false "testEqCall" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "testEqCall" ((PVar "nm") (PVar "a") (PVar "b")) (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "nm"))) (EVar "a"))) (EVar "b")))
-(DTypeSig false "ruleTestEqualInTrue" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleTestEqualInTrue" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleTestEqualInTrue" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindingsInTests") (EVar "noExcl")) (EVar "testEqInTrueOf")) (EVar "testEqInTrueFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "testEqInTrueFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
 (DFunDef false "testEqInTrueFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestEqualInTrue")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "an equality comparison inside `expectTrue`/`expectFalse` reports neither operand on failure. Rewrite as '")) (EApp (EMethodRef "display") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
@@ -11251,7 +11397,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "testEqualInTrueFix" (PWild (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFixInTests") (EVar "noExcl")) (EApp (EVar "detApply") (EVar "testEqInTrueOf"))) (EVar "d")))
 (DTypeSig false "preludeShadowedNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preludeShadowedNames" () (EListLit (ELit (LString "isOk")) (ELit (LString "isErr")) (ELit (LString "isSome")) (ELit (LString "isNone"))))
-(DTypeSig false "ruleTestPreludeShadow" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DTypeSig false "ruleTestPreludeShadow" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleTestPreludeShadow" (PWild (PVar "path") PWild (PVar "pos") (PVar "prog")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "path"))) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EDictApp "flatMap") (EVar "preludeShadowHit")) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EDictApp "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "preludeShadowHit" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "preludeShadowHit" ((PTuple (PVar "name") (PVar "loc"))) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EVar "preludeShadowedNames")) (EListLit (EApp (EApp (EVar "preludeShadowFinding") (EVar "name")) (EVar "loc"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
