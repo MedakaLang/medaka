@@ -92,6 +92,7 @@ import { fileURLToPath } from 'node:url';
 
 import { Marked } from './vendor/marked/marked.js';
 import { highlightMedaka } from './highlight_medaka.mjs';
+import { withheldExterns } from './medaka_host.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -118,13 +119,12 @@ const escapeHtml = (s) =>
 //      multi-file, the playground has one buffer; not `medaka-nocheck` — a
 //      fragment never meant to stand alone; and not `medaka-expect`/`toml`/an
 //      unlabelled fence, none of which are Medaka source to run at all), AND
-//   2. its source contains no call to a host capability the playground's runner
-//      withholds or confines (playground/medaka_host.mjs, wasmgc/browser-worker):
-//      readFile, writeFile, readLine, readLines, getEnv, fileExists, args,
-//      exit. Calling one of these does not fail to COMPILE — the wasm module
-//      loads fine — it throws a `CapabilityError` at run time, or (the file
-//      operations) runs over an empty per-run in-memory vfs, instead of
-//      producing the documented output, which is worse than no link.
+//   2. its source names no extern of a slice the playground's runner withholds
+//      (playground/medaka_host.mjs `withheldExterns('wasmgc/browser-worker')`:
+//      getEnv, args, exit and the stdin family). A program reaching one is
+//      refused by the compiler's target check or throws a `CapabilityError` at
+//      run time instead of producing the documented output, which is worse
+//      than no link.
 //   3. it defines a top-level `main`. A block without one is not a program:
 //      natively `medaka run`/`build` refuse it with one located error
 //      (W-MAIN-MISSING), and the browser answers the same code. The ▶ button would open a guaranteed
@@ -146,7 +146,7 @@ const escapeHtml = (s) =>
 // the render and the rule drifting apart — so a change here needs the mirror
 // there.
 const UNSUPPORTED_CALL_RE =
-  /\b(readFile|writeFile|readLine|readLines|getEnv|fileExists|args|exit)\b/;
+  new RegExp(`\\b(${withheldExterns('wasmgc/browser-worker').join('|')})\\b`);
 
 // Conjunct 3. A top-level `main` binding starts a line, so anchor to one.
 const definesMain = (text) => /^main\b/m.test(text);

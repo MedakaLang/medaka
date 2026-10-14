@@ -355,6 +355,16 @@ label diagnostic (`T-TARGET-CAPABILITY`, naming the label and the via-chain),
 the same one a native `--target` check gives. This amends the mechanism, not
 the ruling: the generated list feeds `build_site.sh`'s asset check only.
 
+As built (#3669): `playground/build_playground_wasm.sh` generates
+`playground/dist/stdlib_modules.json`, naming every module under `stdlib/` and
+`stdlib/crypto/` (no `_test` siblings), and stages each as `dist/<id>.mdk`.
+`playground/main.js` fetches the modules it names into the vfs, and
+`build_site.sh` checks the site against it. `compiler/entries/playground_main.mdk`
+selects `wasmgc/browser-worker` and refuses through `targetRefusal`, over the one
+elaboration its `compile` emits from. The runnability rule's withheld calls
+(`render_docs.mjs`, `guide_wasm_differential.mjs`) come from
+`withheldExterns('wasmgc/browser-worker')` in `playground/medaka_host.mjs`.
+
 ### 6.5 The host receives the grant
 
 Native and `medaka run` confine a file operation to the authority granted at the

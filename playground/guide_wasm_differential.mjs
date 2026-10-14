@@ -66,6 +66,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { compile, loadCompiler } from './compile.mjs';
+import { withheldExterns } from './medaka_host.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -95,11 +96,11 @@ const GUIDE_DIR = opts.guide
 // ── the runnability rule, restated INDEPENDENTLY of render_docs.mjs ───────────
 // Deliberately a second copy rather than an import: this file's job is to catch
 // the render and the rule drifting apart, and a shared constant cannot disagree
-// with itself. Keep in sync with render_docs.mjs `classifyRunnable` /
-// UNSUPPORTED_CALL_RE and with the slices playground/medaka_host.mjs withholds or
-// confines on wasmgc/browser-worker.
+// with itself. Keep in sync with render_docs.mjs `classifyRunnable`. The stubbed
+// names are the externs of the slices playground/medaka_host.mjs withholds on
+// wasmgc/browser-worker, read from the host here as render_docs.mjs reads them.
 const STUBBED_CAPABILITY_RE =
-  /\b(readFile|writeFile|readLine|readLines|getEnv|fileExists|args|exit)\b/;
+  new RegExp(`\\b(${withheldExterns('wasmgc/browser-worker').join('|')})\\b`);
 const KIND_MEDAKA_LABELS = new Set(['medaka', 'medaka-project', 'medaka-nocheck']);
 
 // Two further conditions decide whether the ▶ button does anything, and both are
@@ -202,8 +203,9 @@ function preflight() {
   return { wasm, medaka, runjs };
 }
 
-// The browser feeds runtime.mdk + core.mdk directly and every EXTRA_MODULES
-// sibling through the loader's "./<id>.mdk" key (playground/main.js). Mirror that
+// The browser feeds runtime.mdk + core.mdk directly and every other stdlib module
+// (dist/stdlib_modules.json) through the loader's key for its id (playground/main.js,
+// compile.mjs `buildVfs`). Mirror that
 // exactly: read them from dist/, which build_playground_wasm.sh staged, so the
 // module set here is the module set the page ships and cannot drift from it.
 function loadStdlib() {
