@@ -141,7 +141,7 @@ import driver.loader.{
   availableModulesText,
 }
 import driver.diagnostics.{
-  analyzeLoadedFull,
+  analyzeLoadedResolvedClean,
   desugaredModPairs,
   analyzeLocated,
   analyzeLocatedG,
@@ -907,37 +907,25 @@ moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) =
 -- diagnostics" note instead of silently reading as clean; `run`/`build` (the
 -- other two callers) ignore it, so their narrow-to-coherence behaviour and
 -- its measured perf/noise rationale (see `isCoherenceWarn`) are untouched.
--- #1362: `allowInternal`/`trusted` gate the internal-extern guard on the
--- resolve half of this pass, exactly like the `resolveModulesErrorsByFile`
--- gate every caller here already runs BEFORE this one — this call is
--- redundant-but-consistent (a resolve error this pass could newly find would
--- already have been caught upstream), not a second independent gate.
+-- #1362: the internal-extern guard (`allowInternal`/`trusted`) is applied by the
+-- `resolveModulesErrorsByFile` gate `checkRoute` runs BEFORE this one, and this
+-- pass does not resolve again: it is entered only on a clean front pass, so its
+-- resolve buckets are the empty per-file buckets.
 -- The fourth component is the per-module `(schemes, errs, warns)` this ONE pass
 -- produced.  `check`'s multi-module arm renders its ENTRY REPORT from it
 -- (`checkModulesReport`) rather than typechecking the graph a second time
 -- through the entry-only driver, which differed from this one in its collector
 -- alone.
-locatedProjectDiags : Bool ->
-  List String ->
-  String ->
+locatedProjectDiags : String ->
   List String ->
   String ->
   String ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
   <IO> (Option String, List (String, String, List Diag), Int, List ModDiags)
-locatedProjectDiags allowInternal trusted target roots rsrc csrc modsWithPath modPairs =
+locatedProjectDiags target roots rsrc csrc modsWithPath modPairs =
   let (perMod, results) =
-    analyzeLoadedFull
-      cliStdlibExports
-      allowInternal
-      trusted
-      target
-      roots
-      rsrc
-      csrc
-      modsWithPath
-      modPairs
+    analyzeLoadedResolvedClean target roots rsrc csrc modsWithPath modPairs
   let triples = map readDiagSrc results
   (
     joinedOrNone (flatMap renderTripleErrors triples),
@@ -1213,15 +1201,7 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
   match resDiags
     "" =>
       let projDiags =
-        locatedProjectDiags
-          allowInternal
-          trusted
-          target
-          roots
-          rsrc
-          csrc
-          modsWithPath
-          modPairs
+        locatedProjectDiags target roots rsrc csrc modsWithPath modPairs
       match projDiags
         -- BUGFIX (imported-module diagnostics): when there ARE type errors, render
         -- the accumulated per-module diagnostics LOCATED (`file:L:C: msg` + caret),
