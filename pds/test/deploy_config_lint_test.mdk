@@ -746,6 +746,76 @@ test "pds-alert@.service has no self-referential OnFailure" =
     "pds/pds-alert@.service has a self-referential OnFailure"
     (presentForbidden alertService alertServiceForbidden)
 
+-- The ops docs must name the instance `OnFailure=` starts. That instance is
+-- the full unit name inside the template, so the short spelling is a
+-- different instance: systemctl accepts it, and a re-arm step written that
+-- way silently re-arms nothing. Each pair is (short spelling, full spelling).
+alertInstanceSpellings : List (String, String)
+alertInstanceSpellings = [
+  ("pds-alert@pds.service", "pds-alert@pds.service.service"),
+  ("pds-alert@pds-backup.service", "pds-alert@pds-backup.service.service"),
+]
+
+-- Every full occurrence is also a short occurrence, so the two counts differ
+-- by exactly the short occurrences that are not followed by `.service`.
+-- The backup instance is checked by presence only: the deploy doc has no
+-- backup `systemctl` line to require.
+spellingFindings : String -> String -> (String, String) -> List String
+spellingFindings path text (phantom, real) =
+  if countOccurrences phantom text /= countOccurrences real text then
+    [
+      "\{path} names `\{phantom}`, which is not the instance OnFailure= starts; use `\{real}`",
+    ]
+  else if countOccurrences real text == 0 then
+    ["\{path} never names `\{real}`, the instance the ops steps must name"]
+  else
+    []
+
+-- The re-arm and push-test commands themselves are required, as `systemctl`
+-- substrings. A bare presence test would be satisfied by the same spelling
+-- in prose, so deleting a command would pass while its name survives.
+alertRearmLines : List (String, String)
+alertRearmLines = [
+  (
+    "docs/ops/PDS-RUNBOOK.md",
+    "systemctl reset-failed pds-alert@pds.service.service",
+  ),
+  ("docs/ops/PDS-RUNBOOK.md", "systemctl stop pds-alert@pds.service.service"),
+  (
+    "docs/ops/PDS-DEPLOY.md",
+    "systemctl reset-failed pds-alert@pds.service.service",
+  ),
+  ("docs/ops/PDS-DEPLOY.md", "systemctl stop pds-alert@pds.service.service"),
+  ("docs/ops/PDS-DEPLOY.md", "systemctl start pds-alert@pds.service.service"),
+]
+
+rearmLineFindings : String -> String -> (String, String) -> List String
+rearmLineFindings path text (doc, line) =
+  if doc == path && not (contains line text) then
+    [
+      "\{path} has no `\{line}` line, so that re-arm or push-test step is missing",
+    ]
+  else
+    []
+
+alertInstanceFindings : String -> <FileRead, IO> Result String (List String)
+alertInstanceFindings path = match readFile (underRoot path)
+  Err e => Err "could not read \{path}: \{e}"
+  Ok text =>
+    let spelling = flatMap (spellingFindings path text) alertInstanceSpellings
+    let rearm = flatMap (rearmLineFindings path text) alertRearmLines
+    Ok (flatMap (findings => findings) [spelling, rearm])
+
+test "ops runbook re-arms the real pds-alert instances, not a short spelling" =
+  expectNoFindings
+    "docs/ops/PDS-RUNBOOK.md re-arms an alert instance that OnFailure= never starts"
+    (alertInstanceFindings "docs/ops/PDS-RUNBOOK.md")
+
+test "ops deploy doc re-arms and starts the real pds-alert instances, not a short spelling" =
+  expectNoFindings
+    "docs/ops/PDS-DEPLOY.md re-arms an alert instance that OnFailure= never starts"
+    (alertInstanceFindings "docs/ops/PDS-DEPLOY.md")
+
 -- # Mutation controls
 --
 -- Each one derives a copy of the real file with exactly one hardening

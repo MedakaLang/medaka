@@ -631,3 +631,72 @@ test "a well-known answers without a token" =
 
 test "the did:web document answers without a token" =
   expectEqual (realGet "/.well-known/did.json") "200"
+
+-- ── the health probe ────────────────────────────────────────────────────────
+
+-- `_health` fails NSID syntax, so the registry-derived cases above never reach
+-- it; its own arms are graded here, against the real registry.
+
+-- | A request on the wire, through the real registry, as its response bytes.
+realWire : Bytes -> <Mint {"access", "refresh"}, Sign "commit"> Bytes
+realWire bytes =
+  let (_, response) = handleBytes pdsServerValue testContext storeEmpty bytes
+  response
+
+-- | A request to `/xrpc/_health` with the given method, extra header lines
+-- (each ending in CRLF) and body.
+healthRequest : String -> String -> String -> Bytes
+healthRequest method headers body =
+  encodeUtf8
+    "\{method} /xrpc/_health HTTP/1.1\r\nHost: \{accountHostText}\r\n\{headers}\r\n\{body}"
+
+-- | A string field of a JSON response body, or a marker when there is none.
+stringFieldOf : String -> Bytes -> String
+stringFieldOf name bytes = match parse (bodyText bytes)
+  Ok value => match get name value
+    Some (JString text) => text
+    _ => "<no-\{name}-field>"
+  Err _ => "<not-json>"
+
+healthRefusal : Bytes -> String
+healthRefusal bytes = "\{statusOf bytes} \{stringFieldOf "message" bytes}"
+
+test "the health probe answers 200 with its version to a bodiless GET" =
+  let reply = realWire (healthRequest "GET" "" "")
+  expectEach [
+    ("status", expectEqual (statusOf reply) "200"),
+    ("version", expectEqual (stringFieldOf "version" reply) "test-driver"),
+  ]
+
+test "the health probe refuses POST, HEAD and DELETE with 405" = expectEach [
+  (
+    "POST",
+    expectEqual
+      (healthRefusal (realWire (healthRequest "POST" "" "")))
+      "405 the health probe requires GET",
+  ),
+  (
+    "HEAD",
+    expectEqual
+      (healthRefusal (realWire (healthRequest "HEAD" "" "")))
+      "405 the health probe requires GET",
+  ),
+  (
+    "DELETE",
+    expectEqual
+      (healthRefusal (realWire (healthRequest "DELETE" "" "")))
+      "405 the health probe requires GET",
+  ),
+]
+
+test "a GET to the health probe with a body is refused 400" =
+  expectEqual
+    (healthRefusal (realWire (healthRequest "GET" "Content-Length: 1\r\n" "x")))
+    "400 the health probe does not accept request body framing"
+
+test "a GET to the health probe declaring a body is refused 400" =
+  expectEqual
+    (healthRefusal
+      (realWire
+        (healthRequest "GET" "Transfer-Encoding: chunked\r\n" "0\r\n\r\n")))
+    "400 the health probe does not accept request body framing"

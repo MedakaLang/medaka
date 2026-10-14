@@ -1,0 +1,8 @@
+-- Block field assignment `M.empty = 9` with `M` an import alias: the hint must
+-- not suggest a record update on the module. The construct is removed.
+import map as M
+
+main : <IO> Unit
+main =
+  M.empty = 9
+  println 1

@@ -1,5 +1,5 @@
 # META
-source_lines=6750
+source_lines=6755
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -4787,11 +4787,16 @@ assignFromLhs startPos lhs rhs = match flattenFieldPath lhs
   None => failP "invalid assignment target in this block"
 
 -- Block field assignment (`v.x = e`, `a.b.c = e`) is removed: bindings are
--- immutable and it never typechecked.  The hint names the record-update form.
+-- immutable and it never typechecked.  A lowercase head is a record variable,
+-- so the hint names its record-update form.  A capitalised head is a module
+-- alias (lowercase aliases do not parse) or a constructor, so it gets the generic hint.
 fieldAssignRemovedMsg : String -> List String -> String
 fieldAssignRemovedMsg x fs =
   let path = joinWith "." (x :: fs)
-  "field assignment `\{path} = e` has been removed; build an updated record instead, `\{recordUpdateText x fs}`"
+  if isCtorName x then
+    "field assignment `\{path} = e` has been removed; bindings are immutable, so bind the new value to a new name"
+  else
+    "field assignment `\{path} = e` has been removed; build an updated record instead, `\{recordUpdateText x fs}`"
 
 -- `a`, [b, c] → `{ a | b = { a.b | c = e } }`
 recordUpdateText : String -> List String -> String
@@ -8241,7 +8246,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "assignFromLhs" (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "DoStmt"))))))
 (DFunDef false "assignFromLhs" ((PVar "startPos") (PVar "lhs") (PVar "rhs")) (EMatch (EApp (EVar "flattenFieldPath") (EVar "lhs")) (arm (PCon "Some" (PTuple (PVar "x") (PList))) () (EApp (EVar "deferPure") (EApp (EApp (EVar "DoAssign") (EVar "x")) (EVar "rhs")))) (arm (PCon "Some" (PTuple (PVar "x") (PVar "fs"))) () (EApp (EApp (EVar "fatalAtP") (EApp (EApp (EVar "fieldAssignRemovedMsg") (EVar "x")) (EVar "fs"))) (EVar "startPos"))) (arm (PCon "None") () (EApp (EVar "failP") (ELit (LString "invalid assignment target in this block"))))))
 (DTypeSig false "fieldAssignRemovedMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "fieldAssignRemovedMsg" ((PVar "x") (PVar "fs")) (EBlock (DoLet false false (PVar "path") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EBinOp "::" (EVar "x") (EVar "fs")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "field assignment `")) (EApp (EVar "display") (EVar "path"))) (ELit (LString " = e` has been removed; build an updated record instead, `"))) (EApp (EVar "display") (EApp (EApp (EVar "recordUpdateText") (EVar "x")) (EVar "fs")))) (ELit (LString "`"))))))
+(DFunDef false "fieldAssignRemovedMsg" ((PVar "x") (PVar "fs")) (EBlock (DoLet false false (PVar "path") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EBinOp "::" (EVar "x") (EVar "fs")))) (DoExpr (EIf (EApp (EVar "isCtorName") (EVar "x")) (EBinOp "++" (EBinOp "++" (ELit (LString "field assignment `")) (EApp (EVar "display") (EVar "path"))) (ELit (LString " = e` has been removed; bindings are immutable, so bind the new value to a new name"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "field assignment `")) (EApp (EVar "display") (EVar "path"))) (ELit (LString " = e` has been removed; build an updated record instead, `"))) (EApp (EVar "display") (EApp (EApp (EVar "recordUpdateText") (EVar "x")) (EVar "fs")))) (ELit (LString "`")))))))
 (DTypeSig false "recordUpdateText" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "recordUpdateText" (PWild (PList)) (ELit (LString "e")))
 (DFunDef false "recordUpdateText" ((PVar "base") (PList (PVar "f"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "{ ")) (EApp (EVar "display") (EVar "base"))) (ELit (LString " | "))) (EApp (EVar "display") (EVar "f"))) (ELit (LString " = e }"))))
@@ -10246,7 +10251,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "assignFromLhs" (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "DoStmt"))))))
 (DFunDef false "assignFromLhs" ((PVar "startPos") (PVar "lhs") (PVar "rhs")) (EMatch (EApp (EVar "flattenFieldPath") (EVar "lhs")) (arm (PCon "Some" (PTuple (PVar "x") (PList))) () (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "DoAssign") (EVar "x")) (EVar "rhs")))) (arm (PCon "Some" (PTuple (PVar "x") (PVar "fs"))) () (EApp (EApp (EVar "fatalAtP") (EApp (EApp (EVar "fieldAssignRemovedMsg") (EVar "x")) (EVar "fs"))) (EVar "startPos"))) (arm (PCon "None") () (EApp (EVar "failP") (ELit (LString "invalid assignment target in this block"))))))
 (DTypeSig false "fieldAssignRemovedMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "fieldAssignRemovedMsg" ((PVar "x") (PVar "fs")) (EBlock (DoLet false false (PVar "path") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EBinOp "::" (EVar "x") (EVar "fs")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "field assignment `")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString " = e` has been removed; build an updated record instead, `"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "recordUpdateText") (EVar "x")) (EVar "fs")))) (ELit (LString "`"))))))
+(DFunDef false "fieldAssignRemovedMsg" ((PVar "x") (PVar "fs")) (EBlock (DoLet false false (PVar "path") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EBinOp "::" (EVar "x") (EVar "fs")))) (DoExpr (EIf (EApp (EVar "isCtorName") (EVar "x")) (EBinOp "++" (EBinOp "++" (ELit (LString "field assignment `")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString " = e` has been removed; bindings are immutable, so bind the new value to a new name"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "field assignment `")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString " = e` has been removed; build an updated record instead, `"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "recordUpdateText") (EVar "x")) (EVar "fs")))) (ELit (LString "`")))))))
 (DTypeSig false "recordUpdateText" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "recordUpdateText" (PWild (PList)) (ELit (LString "e")))
 (DFunDef false "recordUpdateText" ((PVar "base") (PList (PVar "f"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "{ ")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString " = e }"))))

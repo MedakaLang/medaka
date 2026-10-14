@@ -777,11 +777,16 @@ re-arms an alert. After confirming the affected service is healthy and
 acknowledging the incident, run:
 
 ```sh
-systemctl reset-failed pds-alert@pds.service
-systemctl stop pds-alert@pds.service
+systemctl reset-failed pds-alert@pds.service.service
+systemctl stop pds-alert@pds.service.service
 ```
 
-Use `pds-alert@pds-backup.service` for a backup incident. **Do not re-arm
+The instance name is the full unit name, so the instance for `pds.service` is
+`pds-alert@pds.service.service`. Dropping the trailing `.service` names a
+different instance, `pds`, which `OnFailure=` never starts; a re-arm step that
+names it leaves the real instance unchanged.
+
+Use `pds-alert@pds-backup.service.service` for a backup incident. **Do not re-arm
 while the source unit is still flapping**: another failed transition can
 send another push from the same outage. The active state and start counter
 are manager memory, not durable incident storage: a manager restart/reboot
@@ -818,7 +823,7 @@ interval — fifteen minutes is a reasonable pairing.
 **Test it before trusting it**, which is what E5 actually asks for:
 
 ```sh
-systemctl start pds-alert@pds.service     # the push path alone; consumes its one-start allowance
+systemctl start pds-alert@pds.service.service     # the push path alone; consumes its one-start allowance
 kill -9 $(systemctl show -p MainPID --value pds); sleep 40
 systemctl status pds                      # restarted, or failed after the burst
 ```
