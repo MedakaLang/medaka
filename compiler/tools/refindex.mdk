@@ -1356,8 +1356,28 @@ importWildGo ctx useEnv ((ns, name, originKey) :: rest) =
 -- method clause heads under `core\tmethod\teq` (#1002) — that is a project-local
 -- location joining a prelude key, not a descent into stdlib, and it is what makes
 -- `references` on a prelude method show the impls the user actually wrote.
+-- Last parse per prelude slot, keyed by the FULL source string (never a path), so
+-- an edited prelude re-parses.  The cached value is a function of `src` alone
+-- (decls and positions); nothing downstream of seeding reads the parser's loc
+-- state without a fresh parse priming it.
+preludeParseRuntime : Ref (Option (String, Option (List Decl, Positions)))
+preludeParseRuntime = Ref None
+
+preludeParseCore : Ref (Option (String, Option (List Decl, Positions)))
+preludeParseCore = Ref None
+
+preludeParseMemo : String -> String -> Option (List Decl, Positions)
+preludeParseMemo mid src =
+  let slot = if mid == "runtime" then preludeParseRuntime else preludeParseCore
+  match !slot
+    Some (k, r) if k == src => r
+    _ =>
+      let r = parseWithPositionsOpt src
+      slot := Some (src, r)
+      r
+
 seedPrelude : Ctx -> String -> String -> Unit
-seedPrelude ctx mid src = match parseWithPositionsOpt src
+seedPrelude ctx mid src = match preludeParseMemo mid src
   None => ()
   Some (decls, _) =>
     let expSet = collectExportedValues ctx decls
