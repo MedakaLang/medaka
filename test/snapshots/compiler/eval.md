@@ -3248,7 +3248,7 @@ startOrNext l next = if isNoLoc l then exprStartLoc next else l
 -- left in the compiler — every OTHER compile-time channel now renders through
 -- `driver.diagnostics.ppDiagCliLines` (severity prefix + `file:L:C:` + caret).
 -- The other is filed, not fixed, and is NOT this site's residual:
---   • `runCheckModulesFromDiags`'s multi-module warning dump (`compiler/tools/check.mdk`
+--   • `check`'s multi-module warning dump (`compiler/tools/check.mdk`
 --     `entryExhaust` → `frontend.exhaust.exhaustToLinesWith`), printed bare on
 --     STDOUT by `checkRoute`'s multi-module arm — capital `Warning:`, no loc, no
 --     caret, where the single-file arm strips and re-emits the same warnings

@@ -2,8 +2,10 @@
 """usage: append_sites.py <in.ll> <out.ll> <appsites.tsv>
 
 Helper of test/retain_census.sh.  Rewrites every `call i64 @mdk_list_append(a, b)`
-and `call i64 @mdk_append(a, b)` in the IR into a site-numbered
-`@mdk_list_append_site(a, b, ID)` / `@mdk_append_site(a, b, ID)`, so the cons
+and `call i64 @mdk_append(a, b)` in the IR, including those carrying a calling
+convention or return attributes (`call noundef i64 @mdk_list_append(...)`, which
+clang -O2 emits), into a site-numbered `@mdk_list_append_site(a, b, ID)` /
+`@mdk_append_site(a, b, ID)`, keeping those tokens, so the cons
 cells a `++` builds are attributed to the function that called it rather than to
 the runtime.  Writes `id<TAB>function<TAB>callee` per site.  Arguments are matched
 with balanced parentheses: a constant-expression operand carries its own commas.
@@ -12,7 +14,8 @@ import re
 import sys
 
 DEFINE = re.compile(r'^define [^@]*@("[^"]*"|[-\w.$]+)\(')
-CALLEE = re.compile(r'call i64 @(mdk_list_append|mdk_append)\(')
+# tokens between `call` and the return type: calling convention, return attributes
+CALLEE = re.compile(r'(?<![%\w.$-])call((?: [^\s@(),]+)*?) i64 @(mdk_list_append|mdk_append)\(')
 
 
 def rewrite(raw, func, rows):
@@ -30,9 +33,10 @@ def rewrite(raw, func, rows):
                 depth -= 1
             i += 1
         sid = len(rows)
-        rows.append((sid, func, m.group(1)))
+        rows.append((sid, func, m.group(2)))
         out.append(raw[pos:m.start()])
-        out.append('call i64 @%s_site(%s, i64 %d)' % (m.group(1), raw[m.end():i - 1], sid))
+        out.append('call%s i64 @%s_site(%s, i64 %d)'
+                   % (m.group(1), m.group(2), raw[m.end():i - 1], sid))
         pos = i
 
 
@@ -47,7 +51,7 @@ def main():
                 func = m.group(1).strip('"')
             elif raw.startswith('}'):
                 func = None
-            if func is not None and 'call i64 @mdk_' in raw:
+            if func is not None and 'append(' in raw:
                 raw = rewrite(raw, func, rows)
             o.write(raw)
         o.write('\ndeclare i64 @mdk_list_append_site(i64, i64, i64)\n'

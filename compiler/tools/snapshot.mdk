@@ -169,7 +169,6 @@ import ir.core_ir_lower.{
   declaredRecordFieldOrders,
   lowerProgram,
   lowerProgramEmit,
-  EmitTarget(..),
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
@@ -192,6 +191,8 @@ import types.typecheck.{
 }
 import backend.private_mangle.{mangleUnitsEv}
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp, noMainMsg}
+import backend.emit_plan.{buildEmitPlan}
+import backend.core_validate.{Backend(..)}
 import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
 -- A member alias gives the Wasm emitter a distinct local name, so BOTH backends are driven from ONE process
 -- over ONE lowered CProgram.  (This is what retired `tools/snap_wasm.mdk`, a re-export
@@ -624,10 +625,7 @@ emitBoth root sel runtimeDecls userDecls =
     elaborateModules runtimeDecls [] [("__user__", userDecls)]
   let (coreD, modules2) = mangleUnitsEv coreE modulesE
   let allDecls = coreD ++ flatMap snd modules2
-  -- #1970: this ONE lowered CProgram feeds BOTH backends below (`llvmOf`/`wasmOf`),
-  -- so it cannot pass `TargetNative` or `TargetWasm` -- either would narrow the
-  -- guard for the backend that does not get to see it here.
-  let cp = lowerProgramEmit TargetBothUnknown allDecls
+  let cp = lowerProgramEmit allDecls
   let _ =
     if wants sel "LLVM" then
       emitSection root "LLVM" (llvmOf runtimeDecls allDecls cp)
@@ -651,7 +649,7 @@ llvmOf runtimeDecls allDecls cp =
       ""
       (declaredRecordFieldOrders allDecls)
       (ffiExternTypeNames runtimeDecls allDecls)
-  let (text, gaps) = emitProgramRecord input cp
+  let (text, gaps) = emitProgramRecord input (buildEmitPlan LlvmBackend cp) cp
   withGaps ";" text gaps
 
 wasmOf : List Decl -> List Decl -> CProgram -> String
@@ -664,7 +662,7 @@ wasmOf runtimeDecls allDecls cp =
       (mainTypeIsUnit ())
       (declaredRecordFieldOrders allDecls)
       []
-  let (text, gaps) = wasmRecord input cp
+  let (text, gaps) = wasmRecord input (buildEmitPlan WasmBackend cp) cp
   withGaps ";;" text gaps
 
 withGaps : String -> String -> List String -> String

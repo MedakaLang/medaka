@@ -29,6 +29,7 @@ import ir.core_ir.{
   CField(..),
   CImplBody(..),
   CImplEntry(..),
+  ImplSym(..),
   MethodEvidence(..),
   CProgram(..),
   DeclFacts(..),
@@ -44,7 +45,6 @@ import frontend.ast.{Lit(..), Pat(..), Route(..), noDeclLoc, noBinderId}
 import types.runtime_types.{BinderRow(..), RuntimeType(..), binderOrdinal}
 import frontend.ast.{BinderId(..)}
 import ir.core_ir_lower.{
-  EmitTarget(..),
   ctorFieldTypeNames,
   declaredRecordFieldOrders,
   lowerProgramEmit,
@@ -64,6 +64,8 @@ import backend.core_validate.{
   validateDispatchEvidence,
   validateExterns,
   validateImplSymbols,
+  implSymbolCollision,
+  dictTagCollision,
   validateMethodContexts,
   validateRecords,
   validateTails,
@@ -75,31 +77,27 @@ import backend.wasm_emit.{
   makeWasmEmitInputFull,
 }
 import backend.llvm_emit.{emitProgramRecord as llvmRecord, makeEmitInput}
+import backend.emit_plan.{buildEmitPlan}
+import backend.core_validate.{Backend(..)}
 import types.target_profile.{lookupProfile}
 import test_process.{underRoot}
 
-lowered : EmitTarget -> String -> CProgram
-lowered target src =
-  lowerProgramEmit
-    target
-    (annotateProgram (grantWholeDomain (desugar (parse src))))
+lowered : String -> CProgram
+lowered src =
+  lowerProgramEmit (annotateProgram (grantWholeDomain (desugar (parse src))))
 
 -- The extern names `backend` refuses in `src`, in order of first reference.
 refused : Backend -> String -> List String
 refused LlvmBackend src =
-  map findingExtern (validateExterns LlvmBackend [] (lowered TargetNative src))
+  map findingExtern (validateExterns LlvmBackend [] (lowered src))
 refused WasmBackend src =
-  map findingExtern (validateExterns WasmBackend [] (lowered TargetWasm src))
+  map findingExtern (validateExterns WasmBackend [] (lowered src))
 
 refusalLines : Backend -> String -> List String
 refusalLines LlvmBackend src =
-  map
-    renderExternFinding
-    (validateExterns LlvmBackend [] (lowered TargetNative src))
+  map renderExternFinding (validateExterns LlvmBackend [] (lowered src))
 refusalLines WasmBackend src =
-  map
-    renderExternFinding
-    (validateExterns WasmBackend [] (lowered TargetWasm src))
+  map renderExternFinding (validateExterns WasmBackend [] (lowered src))
 
 -- The reason the extern's wasm or llvm row gives, as the row states it.
 wasmReason : String -> String
@@ -193,15 +191,19 @@ test "(e) record mode logs one event per refused extern, and no unbound-variable
       False
       (declaredRecordFieldOrders decls)
       []
-  let cp = lowerProgramEmit TargetWasm (annotateProgram decls)
-  let (_, events) = wasmRecord input cp
+  let cp = lowerProgramEmit (annotateProgram decls)
+  let (_, events) = wasmRecord input (buildEmitPlan WasmBackend cp) cp
   let expected = map ("main\t" ++ _) (refusalLines WasmBackend recordSrc)
   expectAll [
     labelFail
       "the refused externs"
       (expectEqual ["writeFile", "netSend"] (refused WasmBackend recordSrc)),
     labelFail "record emission" (expectEqual expected events),
-    labelFail "gap census" (expectEqual expected (emitProgramGaps input cp)),
+    labelFail
+      "gap census"
+      (expectEqual
+        expected
+        (emitProgramGaps input (buildEmitPlan WasmBackend cp) cp)),
   ]
 
 assertSnapshotSrc : String
@@ -246,8 +248,8 @@ llvmRecordEvents =
       ""
       (declaredRecordFieldOrders decls)
       []
-  let (_, events) =
-    llvmRecord input (lowerProgramEmit TargetNative (annotateProgram decls))
+  let cp = lowerProgramEmit (annotateProgram decls)
+  let (_, events) = llvmRecord input (buildEmitPlan LlvmBackend cp) cp
   expectEqual
     (map ("main\t" ++ _) (refusalLines LlvmBackend assertSnapshotSrc))
     events
@@ -280,7 +282,7 @@ wasmRefusalUnder profile src =
     (t =>
       renderExternRefusalUnder
         (Some t)
-        (validateExterns WasmBackend [] (lowered TargetWasm src)))
+        (validateExterns WasmBackend [] (lowered src)))
     (checkedUnder profile)
 
 -- What a build says of an extern the profile withholds.  `check` admits a
@@ -364,7 +366,7 @@ test "(y) under a checked target, a withheld label names what check admits and a
           (validateExterns
             WasmBackend
             []
-            (lowered TargetWasm "main = netTcpConnect \"localhost\" 80")),
+            (lowered "main = netTcpConnect \"localhost\" 80")),
       ],
     ),
   ]
@@ -390,9 +392,9 @@ ffiWallEvents checked =
       False
       (declaredRecordFieldOrders decls)
       ffiTypes
-  let cp = lowerProgramEmit TargetWasm (annotateProgram decls)
+  let cp = lowerProgramEmit (annotateProgram decls)
   checkedTarget := checked
-  let (_, events) = wasmRecord input cp
+  let (_, events) = wasmRecord input (buildEmitPlan WasmBackend cp) cp
   checkedTarget := None
   events
 
@@ -426,8 +428,8 @@ recordOrderSrc : String
 recordOrderSrc =
   "data P = P { a : Int, b : Int }\ndata Q = Q { b : Int, a : Int }\ndata V = V { x : Int, y : Int, z : Int } | W { y : Int }\nmain =\n  let p = P { b = 1, a = 2 }\n  let q = { p | b = 3, a = 4 }\n  let v = V { z = 1, y = 2, x = 3 }\n  let w = V { v | z = 5, x = 6 }\n  p.b + q.a + w.y"
 
-recordFindings : EmitTarget -> String -> List String
-recordFindings target src = validateRecords (lowered target src)
+recordFindings : String -> List String
+recordFindings src = validateRecords (lowered src)
 
 unstamped : CExpr -> CProgram
 unstamped body =
@@ -444,10 +446,8 @@ zero = CLit (LInt 0)
 
 test "(h) lowering stamps every record node, so a permuted program validates clean" = expectAll
   [
-    labelFail
-      "native"
-      (expectEqual [] (recordFindings TargetNative recordOrderSrc)),
-    labelFail "wasm" (expectEqual [] (recordFindings TargetWasm recordOrderSrc)),
+    labelFail "native" (expectEqual [] (recordFindings recordOrderSrc)),
+    labelFail "wasm" (expectEqual [] (recordFindings recordOrderSrc)),
   ]
 
 test "(i) a record node the lowering did not stamp is refused, naming the node and binding" = expectEach
@@ -531,7 +531,6 @@ i2078Src =
 typedLowered : String -> String -> CProgram
 typedLowered preludeSrc src =
   lowerProgramEmit
-    TargetNative
     (elaborateOne [] (desugar (parse preludeSrc)) (
       "calls",
       grantWholeDomain (desugar (parse src)),
@@ -586,11 +585,11 @@ test "(k) lowering stamps every application, so a lowered program validates clea
     ),
     (
       "a local named like a global",
-      expectEqual [] (validateCalls (lowered TargetNative shadowSrc)),
+      expectEqual [] (validateCalls (lowered shadowSrc)),
     ),
     (
       "an over-application",
-      expectEqual [] (validateCalls (lowered TargetWasm overSrc)),
+      expectEqual [] (validateCalls (lowered overSrc)),
     ),
   ]
 
@@ -607,22 +606,19 @@ test "(l) an application stamped against the wrong arity is refused, naming head
       "a known head stamped dynamic",
       expectEqual
         ["call: pickEq applied to 3 of 3, stamped CallDynamic [in main]"]
-        (validateCalls
-          (restamp "pickEq" CallDynamic (lowered TargetNative shadowSrc))),
+        (validateCalls (restamp "pickEq" CallDynamic (lowered shadowSrc))),
     ),
     (
       "an over-application with the wrong surplus",
       expectEqual
         ["call: pre applied to 2 of 1, stamped (CallOver 2) [in main]"]
-        (validateCalls
-          (restamp "pre" (CallOver 2) (lowered TargetWasm overSrc))),
+        (validateCalls (restamp "pre" (CallOver 2) (lowered overSrc))),
     ),
     (
       "a local `eq` stamped against the global `eq`'s two parameters",
       expectEqual
         ["call: eq has no static arity, stamped CallExact [in pickEq]"]
-        (validateCalls
-          (restamp "eq" CallExact (lowered TargetNative shadowSrc))),
+        (validateCalls (restamp "eq" CallExact (lowered shadowSrc))),
     ),
   ]
 
@@ -690,15 +686,15 @@ test "(n) lowering flags every tail call, so a lowered program's tails validate 
   [
     (
       "a call in a clause body",
-      expectEqual [] (validateTails (lowered TargetNative tailSrc)),
+      expectEqual [] (validateTails (lowered tailSrc)),
     ),
     (
       "if, match, let and where bodies",
-      expectEqual [] (validateTails (lowered TargetNative tailShapesSrc)),
+      expectEqual [] (validateTails (lowered tailShapesSrc)),
     ),
     (
       "wasm lowering",
-      expectEqual [] (validateTails (lowered TargetWasm tailShapesSrc)),
+      expectEqual [] (validateTails (lowered tailShapesSrc)),
     ),
   ]
 
@@ -708,7 +704,7 @@ test "(o) a tail flag against the position is refused, naming head and binding" 
       "flagged outside tail position",
       expectEqual
         ["tail: f is flagged as a tail call outside tail position [in main]"]
-        (validateTails (reflag "f" True (lowered TargetNative tailSrc))),
+        (validateTails (reflag "f" True (lowered tailSrc))),
     ),
     (
       "flagged but partial",
@@ -717,10 +713,7 @@ test "(o) a tail flag against the position is refused, naming head and binding" 
           "tail: g is flagged as a tail call but is a partial application (CallPartial 1) [in f]",
         ]
         (validateTails
-          (reflag
-            "g"
-            True
-            (restamp "g" (CallPartial 1) (lowered TargetNative tailSrc)))),
+          (reflag "g" True (restamp "g" (CallPartial 1) (lowered tailSrc)))),
     ),
     (
       "in tail position but not flagged",
@@ -728,7 +721,7 @@ test "(o) a tail flag against the position is refused, naming head and binding" 
         [
           "tail: g is in tail position, stamped CallExact, but not flagged [in f]",
         ]
-        (validateTails (reflag "g" False (lowered TargetNative tailSrc))),
+        (validateTails (reflag "g" False (lowered tailSrc))),
     ),
   ]
 
@@ -748,24 +741,23 @@ test "(p) a call of a let-bound lambda is read against the lambda's parameters" 
   [
     (
       "lowering stamps both calls, so the program validates clean",
-      expectEqual [] (validateCalls (lowered TargetNative letLamSrc)),
+      expectEqual [] (validateCalls (lowered letLamSrc)),
     ),
     (
       "a `let ... in` of a lambda validates clean",
-      expectEqual [] (validateCalls (lowered TargetNative letInLamSrc)),
+      expectEqual [] (validateCalls (lowered letInLamSrc)),
     ),
     (
       "an exact call stamped dynamic",
       expectEqual
         ["call: f applied to 1 of 1, stamped CallDynamic [in main]"]
-        (validateCalls
-          (restamp "f" CallDynamic (lowered TargetNative letLamSrc))),
+        (validateCalls (restamp "f" CallDynamic (lowered letLamSrc))),
     ),
     (
       "an over-application stamped dynamic",
       expectEqual
         ["call: g applied to 2 of 1, stamped CallDynamic [in main]"]
-        (validateCalls (restamp "g" CallDynamic (lowered TargetWasm letLamSrc))),
+        (validateCalls (restamp "g" CallDynamic (lowered letLamSrc))),
     ),
   ]
 
@@ -847,7 +839,7 @@ test "(t) every impl entry carries its stamped symbol and its qualified interfac
   [
     (
       "lowering stamps both, so a lowered program validates clean",
-      expectEqual [] (validateImplSymbols (lowered TargetNative mixedGroupSrc)),
+      expectEqual [] (validateImplSymbols (lowered mixedGroupSrc)),
     ),
     (
       "an entry with no stamped symbol is refused",
@@ -856,8 +848,7 @@ test "(t) every impl entry carries its stamped symbol and its qualified interfac
           "impl symbol: entry has no stamped symbol [in impl foo@T]",
           "impl symbol: entry has no stamped symbol [in impl foo@T]",
         ]
-        (validateImplSymbols
-          (unstampImpls (lowered TargetNative mixedGroupSrc))),
+        (validateImplSymbols (unstampImpls (lowered mixedGroupSrc))),
     ),
     (
       "an interface word that is not the qualified word of the entry's key is refused",
@@ -866,8 +857,165 @@ test "(t) every impl entry carries its stamped symbol and its qualified interfac
           "impl symbol: interface word `Other` is not the qualified word `Foo` of its key [in impl foo@T]",
           "impl symbol: interface word `Other` is not the qualified word `Foo` of its key [in impl foo@T]",
         ]
-        (validateImplSymbols
-          (reword "Other" (lowered TargetNative mixedGroupSrc))),
+        (validateImplSymbols (reword "Other" (lowered mixedGroupSrc))),
+    ),
+  ]
+
+-- ── impl-symbol and dict-tag injectivity ────────────────────────────────────
+
+-- Two impls of one method at head tycons whose djb2 hashes agree in the full
+-- width (`hashName "Mzone" == hashName "NYone"`).
+fullWidthSrc : String
+fullWidthSrc =
+  "interface Zn a where\n  zn : a -> String\ndata Mzone = Mzone\ndata NYone = NYone\nimpl Zn Mzone where\n  zn _ = \"mzone\"\nimpl Zn NYone where\n  zn _ = \"nyone\"\nmain = zn Mzone"
+
+-- The same shape at head tycons whose hashes differ but agree in the low 30 bits.
+narrowWidthSrc : String
+narrowWidthSrc =
+  "interface Zn a where\n  zn : a -> String\ndata Dbnfbcp = Dbnfbcp\ndata Llzhriz = Llzhriz\nimpl Zn Dbnfbcp where\n  zn _ = \"d\"\nimpl Zn Llzhriz where\n  zn _ = \"l\"\nmain = zn Dbnfbcp"
+
+faultList : Option String -> List String
+faultList (Some message) = [message]
+faultList None = []
+
+-- [prog] with every supplied method's emitted symbol restamped to one tag.
+sameSymbol : CProgram -> CProgram
+sameSymbol (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram groups ctors ctorTypes (map sameSymbolEntry impls) mctx facts
+
+sameSymbolEntry : CImplEntry -> CImplEntry
+sameSymbolEntry (CImplEntry n s d (CImplTagged tag key iface _ pos pats body)) =
+  CImplEntry
+    n
+    s
+    d
+    (CImplTagged tag key iface (ImplSym "Same" "Same" "Same") pos pats body)
+sameSymbolEntry ent = ent
+
+test "(u) two distinct impls colliding on one dict-witness tag are refused, per tag width" = expectEach
+  [
+    (
+      "a full-width hash collision is refused for llvm",
+      expectTextContainsAll
+        [
+          "emitted dict-witness tag collision",
+          "method `zn`",
+          "Mzone",
+          "NYone",
+          "native (LLVM) i64",
+        ]
+        (joinNl
+          (faultList (dictTagCollision LlvmBackend (lowered fullWidthSrc)))),
+    ),
+    (
+      "a full-width hash collision is refused for wasm in the native space",
+      expectTextContainsAll
+        ["emitted dict-witness tag collision", "native (LLVM) i64"]
+        (joinNl
+          (faultList (dictTagCollision WasmBackend (lowered fullWidthSrc)))),
+    ),
+    (
+      "a 30-bit-only collision is not refused for llvm",
+      expectEqual
+        []
+        (faultList (dictTagCollision LlvmBackend (lowered narrowWidthSrc))),
+    ),
+    (
+      "a 30-bit-only collision is refused for wasm",
+      expectTextContainsAll
+        [
+          "emitted dict-witness tag collision",
+          "tag space: wasm (WasmGC) 30-bit"
+        ]
+        (joinNl
+          (faultList (dictTagCollision WasmBackend (lowered narrowWidthSrc)))),
+    ),
+    (
+      "a program without a collision is accepted by both",
+      expectEqual
+        []
+        (faultList (dictTagCollision LlvmBackend (lowered mixedGroupSrc))
+          ++ faultList (dictTagCollision WasmBackend (lowered mixedGroupSrc))),
+    ),
+  ]
+
+test "(v) two distinct impls stamped to one emitted symbol are refused" = expectEach
+  [
+    (
+      "restamped to one symbol tag, the pair is refused",
+      expectTextContainsAll
+        ["emitted impl-symbol collision", "mdk_impl_Same_zn"]
+        (joinNl
+          (faultList (implSymbolCollision (sameSymbol (lowered fullWidthSrc))))),
+    ),
+    (
+      "as lowered, the symbols are distinct",
+      expectEqual [] (faultList (implSymbolCollision (lowered fullWidthSrc))),
+    ),
+    (
+      "the clauses of one impl share its symbol without a collision",
+      expectEqual
+        []
+        (faultList (implSymbolCollision (sameSymbol (lowered mixedGroupSrc)))),
+    ),
+  ]
+
+-- ── inherited defaults in the dict-tag space ────────────────────────────────
+
+-- `zn` has a default.  The first instance supplies `zn`, the second inherits it, so
+-- both entries are arms of `zn`'s one dispatcher, and each arm compares its own
+-- instance's word.  Typechecked, since only an elaborated program lowers the
+-- inherited entries.
+defaultSrc : String -> String -> String
+defaultSrc supplied inherited =
+  "interface Zn a where\n  zn : a -> String\n  zn _ = \"default\"\ndata \{supplied} = \{supplied}\ndata \{inherited} = \{inherited}\nimpl Zn \{supplied} where\n  zn _ = \"s\"\nimpl Zn \{inherited}\nmain = zn \{inherited}"
+
+defaultTags : Backend -> String -> String -> List String
+defaultTags backend supplied inherited =
+  faultList
+    (dictTagCollision backend (typedLowered "" (defaultSrc supplied inherited)))
+
+test "(af) a supplied impl colliding with an inherited default is refused, per tag width" = expectEach
+  [
+    (
+      "a full-width collision is refused for llvm",
+      expectTextContainsAll
+        [
+          "emitted dict-witness tag collision",
+          "method `zn`",
+          "Mzone",
+          "NYone",
+          "native (LLVM) i64",
+        ]
+        (joinNl (defaultTags LlvmBackend "Mzone" "NYone")),
+    ),
+    (
+      "a full-width collision is refused for wasm in the native space",
+      expectTextContainsAll
+        ["emitted dict-witness tag collision", "native (LLVM) i64"]
+        (joinNl (defaultTags WasmBackend "Mzone" "NYone")),
+    ),
+    (
+      "a 30-bit-only collision is not refused for llvm",
+      expectEqual [] (defaultTags LlvmBackend "Dbnfbcp" "Llzhriz"),
+    ),
+    (
+      "a 30-bit-only collision is refused for wasm",
+      expectTextContainsAll
+        [
+          "emitted dict-witness tag collision",
+          "tag space: wasm (WasmGC) 30-bit",
+          "Dbnfbcp",
+          "Llzhriz",
+        ]
+        (joinNl (defaultTags WasmBackend "Dbnfbcp" "Llzhriz")),
+    ),
+    (
+      "distinct words are accepted by both",
+      expectEqual
+        []
+        (defaultTags LlvmBackend "Mzone" "Pqrst"
+          ++ defaultTags WasmBackend "Mzone" "Pqrst"),
     ),
   ]
 
@@ -1242,10 +1390,8 @@ test "(s) `.value` is the Ref read, never a record field" = expectEach [
   (
     "lowering leaves `!r` unstamped though a record declares `value`",
     expectAll [
-      labelFail
-        "native"
-        (expectEqual [] (recordFindings TargetNative refValueSrc)),
-      labelFail "wasm" (expectEqual [] (recordFindings TargetWasm refValueSrc)),
+      labelFail "native" (expectEqual [] (recordFindings refValueSrc)),
+      labelFail "wasm" (expectEqual [] (recordFindings refValueSrc)),
     ],
   ),
   (
@@ -1302,7 +1448,6 @@ loweredSource src = do
   csrc <- readFile (underRoot "stdlib/core.mdk")
   Ok
     (lowerProgramEmit
-      TargetNative
       (elaborateOne (desugar (parse rsrc)) (desugar (parse csrc)) (
         "main",
         grantWholeDomain (desugar (parse src)),

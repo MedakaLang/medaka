@@ -904,7 +904,7 @@ link = "production"
 [[gate]]
 name = "pds/test/rfc6979_vectors"
 area = "engines"
-shard = "gates_1"
+shard = "gates_7"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -2297,7 +2297,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_llvm_symbol_collision"
 area = "backend"
-shard = "gates_7"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2307,7 +2307,7 @@ run = "test/diff_compiler_llvm_symbol_collision.sh"
 oracles = []
 sources = ["compiler/backend/*", "compiler/ir/*", "test/diff_compiler_llvm_symbol_collision.sh"]
 corpus = ["test/symbol_collision_fixtures"]
-toolchain = ["clang"]
+toolchain = ["clang", "wasm-tools"]
 link = "differential"
 
 [[gate]]

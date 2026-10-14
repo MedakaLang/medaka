@@ -244,6 +244,8 @@ import backend.core_validate.{
   renderTailRefusal,
   validateCalls,
   validateImplSymbols,
+  validateImplSymbolInjectivity,
+  validateDictTags,
   validateMethodContexts,
   validateDispatchEvidence,
   validateTails,
@@ -297,7 +299,6 @@ import backend.trmc_analysis.{
   SelfRef(..),
   methodSelf,
   freeGivens,
-  trmcEligible,
   isCtorTail,
   isSelfSatApp,
   consTailArgs,
@@ -309,10 +310,8 @@ import backend.trmc_analysis.{
   dispRootOf,
   dispMembersOf,
   dispGroupOf,
-  detectDispatchGroups,
   dispSpineParts,
   dispIsSatRootCall,
-  dictUniformClauses,
   dropFirstN,
   flattenApp,
   clauseArityOf,
@@ -322,11 +321,16 @@ import backend.trmc_analysis.{
 }
 import backend.private_mangle.{dictTag, hashName, injectiveIdent}
 import types.disposition.{ifaceSuperCount, installedDispositionsOpt}
+import backend.emit_plan.{
+  EmitPlan(..),
+  TrmcVerdicts,
+  isTrmcFn,
+  isTrmcImpl,
+  checkPlanBackend,
+}
 import backend.emit_support.{
-  eagerReachMap,
   bindEagerReach,
   bindNameMap,
-  lazyGlobalNames,
   isDictParamName,
   ftPrefix,
   labelFallthrough,
@@ -650,6 +654,8 @@ data WasmFnImplIndex = WasmFnImplIndex {
   arities : ArityEnv,
   implBuckets : OrdMap (List CImplEntry),
   lazyGlobals : OrdMap Unit,
+  -- the plan's self-recursive TRMC verdict (`EmitPlan.trmc`)
+  trmc : TrmcVerdicts,
 }
 
 data WasmRecordValueIndex = WasmRecordValueIndex { fnValues : OrdMap Unit }
@@ -779,6 +785,9 @@ indexImplsByMethodW index = index.fnImpl.implBuckets
 indexLazyGlobalsW : WasmProgramIndex -> OrdMap Unit
 indexLazyGlobalsW index = index.fnImpl.lazyGlobals
 
+progTrmcW : Prog -> TrmcVerdicts
+progTrmcW prog = (progIndex prog).fnImpl.trmc
+
 indexFnsUsedAsValuesW : WasmProgramIndex -> OrdMap Unit
 indexFnsUsedAsValuesW index = index.recordValue.fnValues
 
@@ -902,6 +911,7 @@ groupImplsByMethodW entries =
   omMapValues reverseL (foldImplsByMethodW entries omEmpty)
 
 makeWasmProgramIndex : WasmEmitInput ->
+  EmitPlan ->
   List BinderRow ->
   List CBind ->
   List (String, Int) ->
@@ -910,7 +920,7 @@ makeWasmProgramIndex : WasmEmitInput ->
   List String ->
   List String ->
   WasmProgramIndex
-makeWasmProgramIndex _ binderRows groups ctorArs ctorTypes impls fnNames valNames =
+makeWasmProgramIndex _ plan binderRows groups ctorArs ctorTypes impls fnNames valNames =
   makeWasmProgramIndexWithLazy
     binderRows
     groups
@@ -919,9 +929,11 @@ makeWasmProgramIndex _ binderRows groups ctorArs ctorTypes impls fnNames valName
     impls
     fnNames
     valNames
-    (lazyGlobalNames groups)
+    plan.lazyGlobals
+    plan.trmc
 
 makeWasmProgramIndexGaps : WasmEmitInput ->
+  TrmcVerdicts ->
   List BinderRow ->
   List CBind ->
   List (String, Int) ->
@@ -930,7 +942,7 @@ makeWasmProgramIndexGaps : WasmEmitInput ->
   List String ->
   List String ->
   WasmProgramIndex
-makeWasmProgramIndexGaps _ binderRows groups ctorArs ctorTypes impls fnNames valNames =
+makeWasmProgramIndexGaps _ trmc binderRows groups ctorArs ctorTypes impls fnNames valNames =
   makeWasmProgramIndexWithLazy
     binderRows
     groups
@@ -940,6 +952,7 @@ makeWasmProgramIndexGaps _ binderRows groups ctorArs ctorTypes impls fnNames val
     fnNames
     valNames
     []
+    trmc
 
 makeWasmProgramIndexWithLazy : List BinderRow ->
   List CBind ->
@@ -949,8 +962,9 @@ makeWasmProgramIndexWithLazy : List BinderRow ->
   List String ->
   List String ->
   List String ->
+  TrmcVerdicts ->
   WasmProgramIndex
-makeWasmProgramIndexWithLazy binderRows groups ctorArs ctorTypes impls fnNames valNames lazyNames =
+makeWasmProgramIndexWithLazy binderRows groups ctorArs ctorTypes impls fnNames valNames lazyNames trmc =
   let fnIndex = omFromNames fnNames omEmpty
   let valIndex = omFromNames valNames omEmpty
   let ctorArIndex = omFromPairs (reverseL ctorArs) omEmpty
@@ -969,6 +983,7 @@ makeWasmProgramIndexWithLazy binderRows groups ctorArs ctorTypes impls fnNames v
         programArities (CProgram groups ctorArs ctorTypes impls [] noDeclFacts),
       implBuckets = groupImplsByMethodW impls,
       lazyGlobals = omFromNames lazyNames omEmpty,
+      trmc = trmc,
     },
     recordValue = WasmRecordValueIndex {
       fnValues = omFromNames usedFns omEmpty,
@@ -1382,8 +1397,9 @@ noteFuncRef emit nm =
     setRef emit.functionReferences (nm :: !emit.functionReferences)
 
 export
-emitProgram : WasmEmitInput -> CProgram -> String
-emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp
+emitProgram : WasmEmitInput -> EmitPlan -> CProgram -> String
+emitProgram input plan cp =
+  emitProgramWith (freshWasmEmit WGapStrict) input plan cp
 
 -- The X-W.H1/H2 same-process input/state-isolation harnesses (`reemitInput` and
 -- peers, compiler/entries/wasm_emit_typed_main.mdk) deliberately re-emit ONE
@@ -1399,22 +1415,25 @@ emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp
 -- for that harness ONLY; every real caller (build/run, every fixture-driven
 -- gate) stays on the checked `emitProgram`.
 export
-emitProgramUnchecked : WasmEmitInput -> CProgram -> String
-emitProgramUnchecked input cp =
-  emitProgramCore (freshWasmEmit WGapStrict) input cp
+emitProgramUnchecked : WasmEmitInput -> EmitPlan -> CProgram -> String
+emitProgramUnchecked input plan cp =
+  emitProgramCore (freshWasmEmit WGapStrict) input plan cp
 
 -- Record mode is a complete ordinary emission with a fresh event lifecycle.
 -- It is intentionally separate from the all-binding/no-main census below.
 export
-emitProgramRecord : WasmEmitInput -> CProgram -> (String, List String)
-emitProgramRecord input cp =
+emitProgramRecord : WasmEmitInput ->
+  EmitPlan ->
+  CProgram ->
+  (String, List String)
+emitProgramRecord input plan cp =
   let emit = freshWasmEmit WGapRecord
-  let text = emitProgramWith emit input cp
+  let text = emitProgramWith emit input plan cp
   (text, gapEventsOfW emit)
 
-emitProgramWith : WasmEmit -> WasmEmitInput -> CProgram -> String
-emitProgramWith emit input cp =
-  let text = emitProgramCore emit input cp
+emitProgramWith : WasmEmit -> WasmEmitInput -> EmitPlan -> CProgram -> String
+emitProgramWith emit input plan cp =
+  let text = emitProgramCore emit input plan cp
   -- WGapRecord is the tolerant/census mode (mirrors emitProgramGaps below): it
   -- continues past an unsupported node by RECORDING a gap event instead of
   -- aborting, so its assembled text is intentionally allowed to be incomplete/
@@ -1431,6 +1450,8 @@ emitProgramWith emit input cp =
 -- records nothing (`unprovidedExternW`).
 refuseUnprovidedExternsW : WasmEmit -> WasmEmitInput -> CProgram -> Unit
 refuseUnprovidedExternsW emit input cp =
+  let _ = validateImplSymbolInjectivity cp
+  let _ = validateDictTags WasmBackend cp
   let _ = match validateRecords cp
     [] => ()
     bad => panic ("internal error: " ++ renderRecordRefusal bad)
@@ -1457,11 +1478,13 @@ refuseUnprovidedExternsW emit input cp =
           (f => noteGapAtW emit (findingBinding f) (renderExternFinding f))
           findings
 
-emitProgramCore : WasmEmit -> WasmEmitInput -> CProgram -> String
-emitProgramCore emit input cp = emitUniqueProgram emit input (uniqueBinders cp)
+emitProgramCore : WasmEmit -> WasmEmitInput -> EmitPlan -> CProgram -> String
+emitProgramCore emit input plan cp =
+  emitUniqueProgram emit input plan (uniqueBinders cp)
 
-emitUniqueProgram : WasmEmit -> WasmEmitInput -> CProgram -> String
-emitUniqueProgram emit input (cp@(CProgram groups ctorArs ctorTypes impls _ facts)) =
+emitUniqueProgram : WasmEmit -> WasmEmitInput -> EmitPlan -> CProgram -> String
+emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _ facts)) =
+  let _ = checkPlanBackend WasmBackend plan
   let _ = refuseUnprovidedExternsW emit input cp
   let _ = setRef emit.useStr (programUsesStr groups)
   -- W7: scan the program for collection usage (gates type-section decls + forces
@@ -1479,6 +1502,7 @@ emitUniqueProgram emit input (cp@(CProgram groups ctorArs ctorTypes impls _ fact
   let index =
     makeWasmProgramIndex
       input
+      plan
       facts.factBinders
       groups
       ctorArs
@@ -1513,9 +1537,9 @@ emitUniqueProgram emit input (cp@(CProgram groups ctorArs ctorTypes impls _ fact
   let typeNames = distinctTypeNames ctorTypes
   let prog = Prog index typeNames valNames useClos impls input emit freshFnCtx
   if useRef then
-    emitRefProgram prog groups
+    emitRefProgram prog plan groups
   else
-    emitScalarProgram emit fnNames valNames groups
+    emitScalarProgram emit plan fnNames valNames groups
 
 -- ── emit-time closure check (#392) ──────────────────────────────────────────
 -- The runtime-line gating graph (which WAT helper block a program's use-flags
@@ -1664,10 +1688,11 @@ checkCalledNamesW defined (name :: rest) =
 -- calls the main-requiring emitRefMain.  Each binding is wrapped with setGapBindingOfW
 -- so a recorded gap is attributed to its source binding.
 export
-emitProgramGaps : WasmEmitInput -> CProgram -> List String
-emitProgramGaps input cp0 =
+emitProgramGaps : WasmEmitInput -> EmitPlan -> CProgram -> List String
+emitProgramGaps input plan cp0 =
   let (CProgram groups ctorArs ctorTypes impls mctx facts) = uniqueBinders cp0
   let emit = freshWasmEmit WGapRecord
+  let _ = checkPlanBackend WasmBackend plan
   let _ =
     refuseUnprovidedExternsW
       emit
@@ -1682,6 +1707,7 @@ emitProgramGaps input cp0 =
   let index =
     makeWasmProgramIndexGaps
       input
+      plan.trmc
       facts.factBinders
       groups
       ctorArs
@@ -2585,11 +2611,12 @@ anyList p (x :: xs) = if p x then True else anyList p xs
 -- ════════════════════════════════════════════════════════════════════════════
 
 emitScalarProgram : WasmEmit ->
+  EmitPlan ->
   List String ->
   List String ->
   List CBind ->
   String
-emitScalarProgram emit fnNames valNames groups =
+emitScalarProgram emit plan fnNames valNames groups =
   -- the scalar type section (W2 shape) with the byte-write IO import (W6 collapse)
   -- replacing the old mdk_write_int/mdk_write_bool scaffold imports.
   let header =
@@ -2603,7 +2630,7 @@ emitScalarProgram emit fnNames valNames groups =
   let globals = map oneGlobalI32 valNames
   let fns =
     flatMap (emitScalarFnBind emit fnNames valNames) (userFnBinds groups)
-  let initLines = emitScalarInit emit fnNames valNames groups
+  let initLines = emitScalarInit emit plan fnNames valNames groups
   -- B5: the stderr byte-write import for a coded div/mod trap.  Computed AFTER the
   -- body-emit bindings above (Medaka `let` is strict) so trapImportNeeded — set during
   -- emit by wasmTrapBytes — is visible.  wasm-tools text assembles fields into
@@ -2630,12 +2657,13 @@ oneGlobalI32 : String -> String
 oneGlobalI32 n = "  (global $" ++ gname n ++ " (mut i64) (i64.const 0))"
 
 emitScalarInit : WasmEmit ->
+  EmitPlan ->
   List String ->
   List String ->
   List CBind ->
   List String
-emitScalarInit emit fnNames valNames groups =
-  let valBinds = topoSortValBinds groups (filterList isValBind groups)
+emitScalarInit emit plan fnNames valNames groups =
+  let valBinds = topoSortValBinds plan (filterList isValBind groups)
   let valInit = flatMap (emitScalarValInit emit fnNames valNames) valBinds
   let mainLines = emitScalarMain emit fnNames valNames groups
   let valLocals = flatMap collectBindLocals valBinds
@@ -3098,8 +3126,8 @@ emitAppI32 emit fnNames valNames env app =
 -- REF MODE (W3, uniform (ref eq) + i31/structs) — the ADT path.
 -- ════════════════════════════════════════════════════════════════════════════
 
-emitRefProgram : Prog -> List CBind -> String
-emitRefProgram prog groups =
+emitRefProgram : Prog -> EmitPlan -> List CBind -> String
+emitRefProgram prog plan groups =
   let header = preambleHeadLines
   let typeSection = emitTypeSection prog
   -- W8: ePutStr/ePutStrLn (`WasmEmit.useEPut`) and B5 coded traps both need the
@@ -3124,12 +3152,11 @@ emitRefProgram prog groups =
       else
         [])
   let valNames = progValNames prog
-  -- Stage-2/3 (b′) WASMGC-TRMC: detect dispatch-graph TMC groups (the lexer's `scan`
-  -- token spine, the offside-rule `layout` family, `intersperse`) BEFORE emitting fns,
-  -- so emitRefFnBind can route a group member to the dest-passing reset-wrapper +
-  -- inner-loop emit.  ALL binds are passed (not just fn binds): the external-entry
-  -- root-selection check must see references from value-bind bodies too.
-  let dispGroups = wDetectDispatchGroups prog groups
+  -- Stage-2/3 (b′) WASMGC-TRMC: the plan's dispatch-graph TMC groups (the lexer's
+  -- `scan` token spine, the offside-rule `layout` family, `intersperse`), installed
+  -- BEFORE emitting fns, so emitRefFnBind can route a group member to the
+  -- dest-passing reset-wrapper + inner-loop emit.
+  let dispGroups = plan.dispGroups
   let _ = setRef (progEmit prog).wDispGroups dispGroups
   -- W8: the SplitMix64 seed lives in a mutable i64 global (emitted before the value globals).
   let rngGlobal =
@@ -3151,7 +3178,7 @@ emitRefProgram prog groups =
   -- alongside initLines so its body-emit runs BEFORE the trapImport binding below reads
   -- trapImportNeeded (an E-CYCLIC-VALUE trap sets it); mirrors value-init order.
   let forceFns = emitRefForceFns prog groups
-  let initLines = emitRefInit prog groups
+  let initLines = emitRefInit prog plan groups
   -- now drain the lifted-lambda defs + the closure-apply runtime + elem-declare.
   let lifted =
     if progUseClos prog then
@@ -3587,13 +3614,13 @@ emitReservedCtorStruct ty ctor =
 -- A genuine EAGER value cycle (mutual recursion through nullary globals with no
 -- intervening closure — none arise in practice) keeps source order via the back-edge
 -- guard, the pre-existing behaviour.
--- `allBinds` is the WHOLE program (functions included) so the eager-reachability
--- closure can follow calls; `binds` is the nullary value bindings to be ordered.
-topoSortValBinds : List CBind -> List CBind -> List CBind
+-- The plan's `eagerReach` was computed over the WHOLE program (functions included)
+-- so the closure follows calls; `binds` is the nullary value bindings to be ordered.
+topoSortValBinds : EmitPlan -> List CBind -> List CBind
 -- Intentional cross-file duplicate of the same helper in llvm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
-topoSortValBinds allBinds binds =
-  let rm = eagerReachMap allBinds
+topoSortValBinds plan binds =
+  let rm = plan.eagerReach
   -- #623: ONE name→bind map replaces the `all : List CBind` + `names : List
   -- String` pair; `done`/`visiting` are sets, not lists; and `acc` is built by
   -- PREPEND + one final reverse instead of `acc ++ [b]` per binding.  Mirrors
@@ -3672,8 +3699,8 @@ entryExports = [
   "  (export \"mdk_entry_split\" (func $__entry_split))",
 ]
 
-emitRefInit : Prog -> List CBind -> List String
-emitRefInit prog groups =
+emitRefInit : Prog -> EmitPlan -> List CBind -> List String
+emitRefInit prog plan groups =
   -- #561 PR-B: only SAFE (statically-orderable) value globals are eager-initialised in
   -- $__init — byte-identical to the pre-#561 emitter whenever no global is lazy.  A SAFE
   -- global's whole eager reach is SAFE (the taint is downward-closed over reads), so this
@@ -3682,7 +3709,7 @@ emitRefInit prog groups =
   let valBinds =
     filterList
       (b => not (isLazyGlobalW prog (bindName b)))
-      (topoSortValBinds groups (filterList isValBind groups))
+      (topoSortValBinds plan (filterList isValBind groups))
   let initW7Outer = w7ScopeOpen (progEmit prog)
   let valInit = flatMap (emitRefValInit prog) valBinds
   let initW7Used = w7ScopeClose (progEmit prog) initW7Outer
@@ -5498,7 +5525,7 @@ findByKeyArityW prog method tag siteArity (entry :: rest) =
 
 -- `dictTag` (the i31-safe 30-bit mask of `hashName`) and its `posMod` helper moved
 -- to `backend.private_mangle`, beside `hashName`, in #377/#348: the emit-time
--- collision guard (`core_ir_lower.dictWitnessTagGuard`) has to check THIS tag space
+-- collision guard (`core_validate.validateDictTags`) has to check THIS tag space
 -- with the SAME expression this emitter mints, and a second copy of the mask is a
 -- copy that can drift.  Imported at the top of this file; the emitted `i32.const`s
 -- are unchanged.
@@ -8554,10 +8581,11 @@ wTrmcStoreGo (p :: ps) (_ :: as_) base k =
     ++ wTrmcStoreGo ps as_ base (k + 1)
 
 -- ── the Stage-1 driver: decide eligibility + emit the destination-passing loop ──
--- Returns `Some fnDef` when `name`/`clauses` is a top-level self-recursive define
--- that is `trmcEligible` for the self-only cons/ctor-tail shape (a).  Dict-carrying
--- defines (every unannotated polymorphic builder — F2(b) shape (a)) are admitted
--- when the leading-dict count is uniform across clauses (`dictUniformClauses`); the
+-- Returns `Some fnDef` when the plan's verdict (`EmitPlan.trmc`) holds `name`: a
+-- top-level self-recursive define that is `trmcEligible` for the self-only
+-- cons/ctor-tail shape (a).  Dict-carrying defines (every unannotated polymorphic
+-- builder — F2(b) shape (a)) are admitted when the leading-dict count is uniform
+-- across clauses; the
 -- emit is arity-keyed and types every param `(ref eq)`, so the dict is just another
 -- loop slot.
 -- Otherwise `None` → the caller falls back to the ordinary (stack-growing)
@@ -8576,14 +8604,7 @@ wasmTrmcTry prog name arity clauses =
   -- ordinary emitClausesRef path emits.  All-PVar single/multi-clause stays the fast
   -- direct-body path.  (Mirrors llvm_emit's trmcTryFn forceSingle=False / emitClauseTree
   -- reuse.)
-  if arity > 0
-    && dictUniformClauses clauses
-    && trmcEligible
-      (c => isCtor prog c)
-      (c => ctorArity prog c)
-      self
-      arity
-      pairs then
+  if isTrmcFn (progTrmcW prog) name then
     Some
       (emitWasmTrmcFn
         prog
@@ -8629,14 +8650,7 @@ wTrmcImplTry prog method key fnName arity clauses =
   let self = methodSelf method key (match pairs
     (ps, _) :: _ => ps
     [] => [])
-  if arity > 0
-    && dictUniformClauses clauses
-    && trmcEligible
-      (c => isCtor prog c)
-      (c => ctorArity prog c)
-      self
-      arity
-      pairs then
+  if isTrmcImpl (progTrmcW prog) method key then
     Some
       (emitWasmTrmcCore
         prog
@@ -8903,39 +8917,10 @@ wDispGlobalLines grp =
   ]
 
 -- ── group detection (SHARED — backend/trmc_analysis.mdk) ─────────────────────
--- The Stage-3 dispatch-graph detection (candidate roots, tail-closure growth,
--- the v2–v7 soundness validations, the spine classifier) was lifted into the
--- shared `backend/trmc_analysis.mdk` (TMC-parity arc) so both backends detect
--- the SAME groups.  The program-coupled lookups are passed as hooks; these thin
--- wrappers close over `prog` so the emit-side call sites stay unchanged.
-wDetectDispatchGroups : Prog -> List CBind -> List DispGroup
-wDetectDispatchGroups prog allBinds =
-  detectDispatchGroups
-    (n => canonFn prog n)
-    (n => progFnMemberW prog n)
-    (n => fnParamCountW prog n)
-    (nm ar cs => wDispStage1Claims prog nm ar cs)
-    (userFnBinds allBinds)
-    allBinds
-    (progImpls prog)
-
--- would Stage-1 (wasmTrmcTry) already claim this fn as a self-TMC loop?  (The
--- shared dispValidate v5 keeps such singletons on Stage-1 — no group machinery.)
--- Since the uniform-ctor gate retired (P3), this predicate is semantically
--- IDENTICAL to the LLVM backend's gDispStage1Claims — v5 decides the same way
--- on both backends by construction.
-wDispStage1Claims : Prog -> String -> Int -> List CClause -> Bool
-wDispStage1Claims prog name arity clauses =
-  let self = SelfByVar name
-  let pairs = map clauseToPair clauses
-  arity > 0
-    && dictUniformClauses clauses
-    && trmcEligible
-      (c => isCtor prog c)
-      (c => ctorArity prog c)
-      self
-      arity
-      pairs
+-- The Stage-3 dispatch-graph groups are detected once, by the plan
+-- (`emit_plan.buildEmitPlan`), with the shared detection in
+-- `backend/trmc_analysis.mdk`; both backends route the SAME groups.  The spine
+-- classifier below closes the shared one over `prog`.
 
 -- shared spine classifier, closed over `prog` (detection, validation, and the
 -- leaf emit below all agree on what is — and is not — a spine cons).

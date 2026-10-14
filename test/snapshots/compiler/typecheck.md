@@ -53113,9 +53113,9 @@ checkModuleFullDiags mid seedVars accData accAll prog =
 -- CANNOT drift on the universe or the seed.
 --
 -- The `GOutTrees` writes are the only per-module divergence, and each is a
--- consequence of dict-passing rather than of checking: `superDeclsRef` is the impl
--- universe the stampers' super-expansion replays against (`drainStampQueue`
--- restores it), `mainSchemeRef` is written Some-only so the last module binding
+-- consequence of dict-passing rather than of checking: `superDeclsRef` holds the
+-- interface decls of this module's universe, which the stampers' super-expansion
+-- replays against (`drainStampQueue` restores them from `StampCtx.scSuperDecls`), `mainSchemeRef` is written Some-only so the last module binding
 -- `main` wins (the diags arm's `collect` writes it SET-OR-CLEAR on the entry module
 -- instead), and the promotion harvest unions THIS module's inferred-constraint
 -- promotions before the next module's `resetState` wipes `promotedRef` —
@@ -55748,8 +55748,8 @@ runStampCtxs (ctx :: rest) =
   toggles := ctx.scToggles
   -- Deferred goals select their `gGiven` bucket from their captured scope frames;
   -- `currentModuleRef` remains the legacy routing context, and `superDeclsRef` is
-  -- the impl universe the stampers'
-  -- super-expansion reads — both are what `graphModuleWorker` set for this module
+  -- the interface decls of the universe `graphModuleWorker` set for this module
+  -- (`StampCtx.scSuperDecls`), the only decls the stampers' super-expansion reads
   -- (`elabModuleStamp` for the core pass, which is the only module still on it).
   driverState.value.currentModuleRef := ctx.scModule
   driverState.value.superDeclsRef := ctx.scSuperDecls

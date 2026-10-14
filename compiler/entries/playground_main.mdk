@@ -143,7 +143,6 @@ import types.typecheck.{
 import ir.core_ir_lower.{
   lowerProgramEmit,
   validateFfiExternTypeNames,
-  EmitTarget(..),
   methodIfaceTable,
   declaredRecordFieldOrders,
   ctorFieldTypeNames,
@@ -156,7 +155,7 @@ import backend.wasm_emit.{
   withRuntimeExternsW,
 }
 import backend.wasm_file_grants.{prepareWasmFileGrants}
-import backend.wasm_reach.{wasmReachFilter}
+import backend.emit_plan.{buildEmitPlanReached}
 
 -- ARG CONTRACT (Stage 3): the FIRST arg is a MODE, dispatched below.
 --   compile  <runtime> <core> <entry> [root ...]      → analyze→emit (today's behavior)
@@ -578,7 +577,7 @@ doEmit emit rsrc csrc tsrc entry paths mods warnTriples =
 -- The ONE divergence point between `compile` and `analyze`.  Every diagnostic
 -- from the frontend has already been produced here. Compile additionally checks
 -- the target file-capability prerequisites before printing WAT; analyze prints its
--- own marker and the same warnings JSON — no lowerProgramEmit, no wasmReachFilter,
+-- own marker and the same warnings JSON — no lowerProgramEmit, no reach,
 -- no emitProgram, and no `elaborateModules` at all (`runEmit`'s is now the only one
 -- on either path — see doEmit's obituary for the discarded one that preceded
 -- it, which is why `analyze` reaches here having elaborated the user's program once).
@@ -660,10 +659,10 @@ runEmit paths warnTriples runtimeDecls coreDecls modules =
       -- program, then drop the impl bodies (and the plain bindings only they
       -- reached) that no dispatchable method name in this program can reach.  Without
       -- this the in-browser compiler emitted ~84k lines of WAT for a one-line program.
-      let lowered = lowerProgramEmit TargetWasm allDecls
-      let filtered = wasmReachFilter lowered
+      let lowered = lowerProgramEmit allDecls
+      let (plan, reached) = buildEmitPlanReached lowered
       let _ = emitWatMarker warnTriples
-      putStr (emitProgram input filtered)
+      putStr (emitProgram input plan reached)
 
 wasmGrantDiagTriple : List (String, String) ->
   (String, TcDiag) ->

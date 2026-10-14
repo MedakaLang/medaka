@@ -24,11 +24,12 @@ import types.typecheck.{grantWholeDomain}
 import ir.core_ir_lower.{
   lowerProgramEmit,
   stampDeclaredSignatures,
-  EmitTarget(..),
   ctorFieldTypeNames,
   declaredRecordFieldOrders,
 }
 import backend.wasm_emit.{emitProgram, makeWasmEmitInputFull}
+import backend.emit_plan.{buildEmitPlan}
+import backend.core_validate.{Backend(..)}
 
 main = match args ()
   [targetPath] => withTarget targetPath
@@ -53,8 +54,6 @@ withTarget targetPath = match readFile targetPath
         []
     -- No typechecker ran, so the lowering stamps every binder `RTValue`; the
     -- signatures the source declares restate what they type.
-    putStr
-      (emitProgram
-        input
-        (stampDeclaredSignatures decls (lowerProgramEmit TargetWasm annotated)))
+    let cp = stampDeclaredSignatures decls (lowerProgramEmit annotated)
+    putStr (emitProgram input (buildEmitPlan WasmBackend cp) cp)
   Err msg => ePutStrLn msg

@@ -22,6 +22,8 @@ import ir.core_ir.{
 }
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
 import backend.core_validate.{validateBinderStamps}
+import backend.emit_plan.{buildEmitPlan}
+import backend.core_validate.{Backend(..)}
 import backend.llvm_emit.{emitProgram as llvmEmit, makeEmitInput}
 import backend.wasm_emit.{emitProgram as wasmEmit, makeWasmEmitInputFull}
 
@@ -72,10 +74,17 @@ program paramRow =
 
 llvmText : CProgram -> String
 llvmText cp =
-  llvmEmit (makeEmitInput [] [] [] [] [] False False 0 [] [] "" [] []) cp
+  llvmEmit
+    (makeEmitInput [] [] [] [] [] False False 0 [] [] "" [] [])
+    (buildEmitPlan LlvmBackend cp)
+    cp
 
 wasmText : CProgram -> String
-wasmText cp = wasmEmit (makeWasmEmitInputFull [] [] False False [] []) cp
+wasmText cp =
+  wasmEmit
+    (makeWasmEmitInputFull [] [] False False [] [])
+    (buildEmitPlan WasmBackend cp)
+    cp
 
 -- What the refusal says about `x`.
 refusal : String

@@ -2,11 +2,11 @@
 -- word `JMt` is engineered to djb2-collide with the prelude's `Int` route word
 -- for a completely UNRELATED method (`hashName "Int" == hashName "JMt"`, via the
 -- adjacent-position `Delta_i=+1, Delta_{i+1}=-33` shift documented on
--- `private_mangle.hashName`). Before FR-1, `dictWitnessTagGuard` pooled every
--- impl's route words PROGRAM-WIDE, so this refused even though nothing in the
--- emitted dispatcher ever compares `Int`'s route word against `JMt`'s -- they
--- belong to different method names' dispatch chains (`nm` here vs whatever
--- prelude method routes through `Int`'s colliding word). Must BUILD and RUN.
+-- `private_mangle.hashName`). `validateDictTags` partitions route words by
+-- method name, because nothing in the emitted dispatcher ever compares `Int`'s
+-- route word against `JMt`'s -- they belong to different method names' dispatch
+-- chains (`nm` here vs whatever prelude method routes through `Int`'s colliding
+-- word). Must BUILD and RUN.
 interface Nm a where
   nm : a -> String
 

@@ -182,22 +182,26 @@ scattered places, moved rather than reinvented:
 | Field | Today |
 |---|---|
 | reachability roots and edges | `ir/dce.mdk` (pre-lower) and `backend/wasm_reach.mdk` (post-lower, Wasm only) |
-| lazy/eager global classification | `emit_support.eagerReachMap` / `lazyGlobalNames`, computed per backend |
-| TRMC eligibility and groups | `backend/trmc_analysis.mdk`, computed per backend |
-| linkage map and injectivity | `private_mangle` and the three X-L.H guards, run inside lowering |
+| lazy/eager global classification | `emit_support.eagerReachMap` / `lazyGlobalNames`, computed once by `backend/emit_plan.mdk`'s `buildEmitPlan` and read by both backends |
+| TRMC eligibility and groups | `backend/trmc_analysis.mdk`'s predicates, computed once by `buildEmitPlan` (`EmitPlan.trmc`, `EmitPlan.dispGroups`) and read by both backends |
+| linkage map and injectivity | `private_mangle`; of the three X-L.H guards, the module-symbol guard runs in `private_mangle.mangleUnits`, and the impl-symbol and dict-tag guards are `core_validate` arms (`validateImplSymbolInjectivity`, `validateDictTags`) each emitter runs before it writes any text |
 | reachable extern requirements | per-backend extern ladders |
-| target | the `EmitTarget` parameter of `lowerProgramEmit`, which moves here so lowering itself is target-neutral again (L4) |
+| target | `core_validate.Backend`, chosen by each emit entry; lowering is target-neutral (L4) |
 
 The two emit-input records converge into this one over time; the four facts
 `WasmEmitInput` lacks relative to `EmitInput` (`returnsSelf`, `selfFnParams`,
 `methodConstraintIfaces`, `mainIsUnit`) are the first to move. This unit has no
 upstream dependency and is landable now. `wasmReachFilter`'s post-lower pruning
-becomes the shared reachability pass once F3 gives it identity-keyed dispatch
-edges; until then it stays a Wasm-only field, named as such.
+is landed as the plan's wasm-only field `wasmOnlyReach` (`buildEmitPlanReached`,
+used by the two wasm modules entries). Native does not share it: whole mode emits
+`define internal`, so clang's GlobalDCE already drops the same functions and the
+pass would buy no measurable CPU time, and the prelude-object halves must be
+identity, since the prelude half has to define every symbol a program half may
+link against.
 
 ### R6. The Core validator
 
-`coreValidate : EmitTarget -> CProgram -> Plan -> List CoreDefect`, run by every
+`coreValidate : Backend -> CProgram -> Plan -> List CoreDefect`, run by every
 build entry between lowering and emission. It rejects, before any text is
 produced: a record operation without an ordinal once F1 has landed, an
 application without a call mode once F2 has landed, a dispatch node without

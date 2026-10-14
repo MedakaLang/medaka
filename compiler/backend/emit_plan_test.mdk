@@ -1,0 +1,428 @@
+-- Sibling test for `compiler/backend/emit_plan.mdk` ([P-TEST-SIBLING]).
+--
+-- Run natively: the structural test reads the two emitter sources.
+--
+-- Each program is a list of value globals.  Verdicts follow from the eager-init
+-- rules, not from a captured run: a literal reads nothing so it is eager; a global
+-- whose body names a lazy global is lazy (taint is downward-closed over reads); a
+-- self-loop or a mutual cycle has no static init order so its members are lazy;
+-- `main` is never lazy.
+--
+-- The TRMC programs are Core for small source functions, written next to each
+-- one.  A function is eligible when every tail leaf is a self-free base or a
+-- constructor whose last field is a saturated self-call (at least one such leaf),
+-- and no self-call sits anywhere else, a match guard included.
+
+import test_process.{medakaRoot}
+import test.{
+  Expectation, expectAll, expectEqual, expectNotEqual, expectFalse, expectTrue,
+  labelFail
+}
+import string.{contains, endsWith, lines, trimLeft, startsWith}
+import frontend.ast.{
+  Addr(..), Lit(..), Pat(..), Route(..), noDeclLoc, noBinderId
+}
+import ir.core_ir.{
+  CArm(..),
+  CBind(..),
+  CClause(..),
+  CExpr(..),
+  CGuard(..),
+  CImplBody(..),
+  CImplEntry(..),
+  CProgram(..),
+  MethodEvidence(..),
+  noImplSym,
+  CTree(..),
+  mkApp,
+  noDeclFacts,
+  synthBind,
+}
+import support.ordmap.{omLookup}
+import backend.emit_plan.{
+  EmitPlan(..),
+  ReachUnits(..),
+  buildEmitPlan,
+  buildEmitPlanReached,
+  isTrmcFn,
+  isTrmcImpl,
+}
+import backend.core_validate.{Backend(..)}
+import backend.trmc_analysis.{ctorTailIsCons, dispMembersOf, dispRootOf}
+
+val : String -> CExpr -> CBind
+val name rhs = synthBind name [CClause [] rhs]
+
+ref : String -> CExpr
+ref n = CVar n AGlobal
+
+program : List CBind -> CProgram
+program binds = CProgram binds [] [] [] [] noDeclFacts
+
+planOf : List CBind -> EmitPlan
+planOf binds = buildEmitPlan LlvmBackend (program binds)
+
+reachOf : String -> EmitPlan -> List String
+reachOf n plan = match omLookup n plan.eagerReach
+  Some rs => rs
+  None => ["<no entry>"]
+
+-- a = 1 (eager)  b = a (eager)  c = c (self loop)  d = c (reads a lazy one)
+-- x = y, y = x (a cycle)  main = 0 (never lazy)
+mixed : List CBind
+mixed = [
+  val "a" (CLit (LInt 1)),
+  val "b" (ref "a"),
+  val "c" (ref "c"),
+  val "d" (ref "c"),
+  val "x" (ref "y"),
+  val "y" (ref "x"),
+  val "main" (CLit (LInt 0)),
+]
+
+test "a pure literal global and a reader of it are eager" = expectAll [
+  labelFail
+    "no eager global is lazy"
+    (expectEqual
+      []
+      (planOf [
+        val "a" (CLit (LInt 1)),
+        val "b" (ref "a"),
+      ]).lazyGlobals),
+  labelFail "a reaches nothing" (expectEqual [] (reachOf "a" (planOf mixed))),
+  labelFail "b reaches a" (expectEqual ["a"] (reachOf "b" (planOf mixed))),
+]
+
+test "a self loop, a reader of it, and a mutual cycle are lazy; main is not" =
+  expectEqual ["c", "d", "x", "y"] (planOf mixed).lazyGlobals
+
+test "a cycle's members share one reach set" = expectAll [
+  labelFail
+    "x reaches y and x"
+    (expectTrue (hasAll ["x", "y"] (reachOf "x" (planOf mixed)))),
+  labelFail
+    "y reaches y and x"
+    (expectTrue (hasAll ["x", "y"] (reachOf "y" (planOf mixed)))),
+]
+
+test "the plan carries the target it was built with" = expectAll [
+  labelFail
+    "wasm"
+    (expectTrue (isWasm (buildEmitPlan WasmBackend (program mixed)).target)),
+  labelFail "native" (expectFalse (isWasm (planOf mixed).target)),
+]
+
+hasAll : List String -> List String -> Bool
+hasAll wanted have = all (w => any (== w) have) wanted
+
+isWasm : Backend -> Bool
+isWasm WasmBackend = True
+isWasm _ = False
+
+-- The emitters read the global classification, the TRMC verdict and the dispatch
+-- groups from the plan; neither may recompute them.
+-- Comment lines are skipped: they may name the analyses.
+codeMentions : String -> String -> Bool
+codeMentions word text =
+  any (l => not (startsWith "--" (trimLeft l)) && contains word l) (lines text)
+
+noRecompute : String -> <IO, FileRead> Expectation
+noRecompute file = match readFile "\{medakaRoot}/compiler/backend/\{file}"
+  Err e => expectEqual "readable" "cannot read \{file}: \{e}"
+  Ok text => expectAll [
+    labelFail
+      "\{file} calls eagerReachMap"
+      (expectFalse (codeMentions "eagerReachMap" text)),
+    labelFail
+      "\{file} calls lazyGlobalNames"
+      (expectFalse (codeMentions "lazyGlobalNames" text)),
+    labelFail
+      "\{file} calls trmcEligible"
+      (expectFalse (codeMentions "trmcEligible" text)),
+    labelFail
+      "\{file} calls detectDispatchGroups"
+      (expectFalse (codeMentions "detectDispatchGroups" text)),
+    labelFail
+      "\{file} calls wasmReachFilter"
+      (expectFalse (codeMentions "wasmReachFilter" text)),
+  ]
+
+test "neither emitter recomputes a plan analysis" = expectAll [
+  noRecompute "llvm_emit.mdk",
+  noRecompute "wasm_emit.mdk",
+]
+
+-- Each emitter refuses colliding impls itself, at its own dict-tag width.  The
+-- impl-symbol arm can only fire on a defect in the symbol scheme, so no source
+-- program reaches it and this check is its only wiring pin.
+refusesCollisions : String -> String -> <IO, FileRead> Expectation
+refusesCollisions file backend =
+  match readFile "\{medakaRoot}/compiler/backend/\{file}"
+    Err e => expectEqual "readable" "cannot read \{file}: \{e}"
+    Ok text => expectAll [
+      labelFail
+        "\{file} runs the impl-symbol arm"
+        (expectTrue (codeMentions "validateImplSymbolInjectivity cp" text)),
+      labelFail
+        "\{file} runs the dict-tag arm at its own width"
+        (expectTrue (codeMentions "validateDictTags \{backend} cp" text)),
+    ]
+
+test "each emitter runs both collision arms" = expectAll [
+  refusesCollisions "llvm_emit.mdk" "LlvmBackend",
+  refusesCollisions "wasm_emit.mdk" "WasmBackend",
+]
+
+-- Reach belongs to the plan builder: no entry calls the filter itself.
+noEntryReach : String -> <IO, FileRead> Expectation
+noEntryReach file = match readFile "\{medakaRoot}/compiler/entries/\{file}"
+  Err e => expectEqual "readable" "cannot read \{file}: \{e}"
+  Ok text =>
+    labelFail
+      "\{file} calls wasmReachFilter"
+      (expectFalse (codeMentions "wasmReachFilter" text))
+
+test "no entry runs reach itself" =
+  match listDir "\{medakaRoot}/compiler/entries"
+    Err e => expectEqual "listable" "cannot list compiler/entries: \{e}"
+    Ok names =>
+      let entries = filter (n => endsWith ".mdk" n) names
+      expectAll
+        (labelFail "compiler/entries holds entries" (expectNotEqual [] entries)
+          :: map noEntryReach entries)
+
+-- ── wasm-only reach ─────────────────────────────────────────────────────────
+
+-- main = m            (dispatch only: a CMethod, no static reference to the impl)
+-- impl m for Int = g  (the impl body reads the lazy global g)
+-- g = g               (a self-loop, so lazy)
+-- dead = 2            (named by nothing)
+-- impl k for Int = 3  (k is mentioned by nothing reachable)
+-- Units: 3 binds + 2 impls = 5; reach keeps main, g and the m impl = 3.
+methodRef : String -> CExpr
+methodRef name = CMethod name (MethodEvidence "" 0 RNone [] [])
+
+implOf : String -> CExpr -> CImplEntry
+implOf method body =
+  CImplEntry method 0 0 (CImplTagged "Int" "Int" "I" noImplSym [] [] body)
+
+reachProgram : CProgram
+reachProgram =
+  CProgram
+    [
+      val "main" (methodRef "m"),
+      val "g" (ref "g"),
+      val "dead" (CLit (LInt 2)),
+    ]
+    []
+    []
+    [implOf "m" (ref "g"), implOf "k" (CLit (LInt 3))]
+    []
+    noDeclFacts
+
+implMethods : CProgram -> List String
+implMethods (CProgram _ _ _ impls _ _) = map implName impls
+
+implName : CImplEntry -> String
+implName (CImplEntry m _ _ _) = m
+
+bindNames : CProgram -> List String
+bindNames (CProgram groups _ _ _ _ _) = map bindNm groups
+
+bindNm : CBind -> String
+bindNm (CBind n _ _ _) = n
+
+test "wasm reach keeps a dispatch-only impl and its lazy global, drops the rest" =
+  let (plan, reached) = buildEmitPlanReached reachProgram
+  expectAll [
+    labelFail
+      "the m impl survives, the k impl does not"
+      (expectEqual ["m"] (implMethods reached)),
+    labelFail
+      "main and g survive, dead does not"
+      (expectEqual ["main", "g"] (bindNames reached)),
+    labelFail
+      "the plan counts 5 total and 3 kept units"
+      (expectEqual "Some (5, 3)" (match plan.wasmOnlyReach
+        Some u => "Some (\{u.total}, \{u.kept})"
+        None => "None")),
+    labelFail "g is lazy" (expectEqual ["g"] plan.lazyGlobals),
+    labelFail
+      "dead has no eagerReach entry"
+      (expectEqual ["<no entry>"] (reachOf "dead" plan)),
+    labelFail
+      "g has an eagerReach entry"
+      (expectNotEqual (reachOf "g" plan) ["<no entry>"]),
+  ]
+
+test "an unreached plan reports no reach and keeps every unit" =
+  let plan = buildEmitPlan WasmBackend reachProgram
+  expectAll [
+    labelFail
+      "no wasmOnlyReach"
+      (expectTrue (match plan.wasmOnlyReach
+        Some _ => False
+        None => True)),
+    labelFail
+      "dead keeps its eagerReach entry"
+      (expectNotEqual (reachOf "dead" plan) ["<no entry>"]),
+  ]
+
+-- ── TRMC verdict and dispatch groups ────────────────────────────────────────
+
+fn : String -> List String -> CExpr -> CBind
+fn name params body =
+  synthBind name [CClause (map (p => PVar p noDeclLoc noBinderId) params) body]
+
+call : String -> List CExpr -> CExpr
+call f args = mkApp (ref f) args
+
+int : Int -> CExpr
+int n = CLit (LInt n)
+
+prim : String -> CExpr -> CExpr -> CExpr
+prim op l r = CBinPrim op l r "" noDeclLoc
+
+trmcPlan : List (String, Int) -> List CBind -> EmitPlan
+trmcPlan ctors binds =
+  buildEmitPlan LlvmBackend (CProgram binds ctors [] [] [] noDeclFacts)
+
+-- upto lo hi = if lo > hi then [] else lo :: upto (lo + 1) hi
+uptoLeaf : CExpr
+uptoLeaf =
+  prim "::" (ref "lo") (call "upto" [prim "+" (ref "lo") (int 1), ref "hi"])
+
+upto : CBind
+upto =
+  fn
+    "upto"
+    ["lo", "hi"]
+    (CIf (prim ">" (ref "lo") (ref "hi")) (CList []) uptoLeaf)
+
+-- data T = Leaf | Node Int T
+-- build n = if n == 0 then Leaf else Node n (build (n - 1))
+buildLeaf : CExpr
+buildLeaf = call "Node" [ref "n", call "build" [prim "-" (ref "n") (int 1)]]
+
+build : CBind
+build =
+  fn "build" ["n"] (CIf (prim "==" (ref "n") (int 0)) (ref "Leaf") buildLeaf)
+
+treeCtors : List (String, Int)
+treeCtors = [("Leaf", 0), ("Node", 2)]
+
+test "a cons-tail builder is TRMC-eligible" =
+  expectTrue (isTrmcFn (trmcPlan [] [upto]).trmc "upto")
+
+-- Both backends realize this verdict.  Which cell the loop links is per backend:
+-- wasm asks `ctorTailIsCons` of each leaf and builds the built-in list cell only
+-- for `::`, the user constructor's struct otherwise.
+test "a user constructor tail is eligible, and is not the built-in list cell" = expectAll
+  [
+    labelFail
+      "build is eligible"
+      (expectTrue (isTrmcFn (trmcPlan treeCtors [build]).trmc "build")),
+    labelFail
+      "the Node leaf is a user cell"
+      (expectFalse (ctorTailIsCons buildLeaf)),
+    labelFail
+      "the :: leaf is the list cell"
+      (expectTrue (ctorTailIsCons uptoLeaf)),
+    labelFail
+      "without the program's constructor table, Node is no constructor"
+      (expectFalse (isTrmcFn (trmcPlan [] [build]).trmc "build")),
+  ]
+
+-- keep xs = match xs
+--   y :: ys | keep ys == [] => [y]
+--   y :: ys => y :: keep ys
+--   [] => []
+consArm : CArm
+consArm =
+  CArm
+    (PCons (PVar "y" noDeclLoc noBinderId) (PVar "ys" noDeclLoc noBinderId))
+    []
+    (prim "::" (ref "y") (call "keep" [ref "ys"]))
+
+nilArm : CArm
+nilArm = CArm (PList []) [] (CList [])
+
+guardArm : CArm
+guardArm =
+  CArm
+    (PCons (PVar "y" noDeclLoc noBinderId) (PVar "ys" noDeclLoc noBinderId))
+    [CGBool (prim "==" (call "keep" [ref "ys"]) (CList []))]
+    (CList [ref "y"])
+
+keepWith : List CArm -> CBind
+keepWith arms = fn "keep" ["xs"] (CDecision (ref "xs") arms (CTLeaf 0))
+
+test "a self-call in a match guard disqualifies the function" = expectAll [
+  labelFail
+    "without the guard arm it is eligible"
+    (expectTrue
+      (isTrmcFn (trmcPlan [] [keepWith [consArm, nilArm]]).trmc "keep")),
+  labelFail
+    "with it, it is not"
+    (expectFalse
+      (isTrmcFn
+        (trmcPlan [] [keepWith [guardArm, consArm, nilArm]]).trmc
+        "keep")),
+]
+
+-- c0 k = if k <= 0 then [] else 0 :: c0 (k - 1)
+-- c1 k = if k <= 0 then c0 1 else 1 :: c1 (k - 1)
+-- main = c1 5
+-- c0 builds its own spine, so it stays a singleton.  c1 conses onto itself and
+-- tail-calls c0, and nothing outside reaches c0, so c1 roots the group {c1, c0}.
+consFamily : List CBind
+consFamily = [
+  fn
+    "c0"
+    ["k"]
+    (CIf
+      (prim "<=" (ref "k") (int 0))
+      (CList [])
+      (prim "::" (int 0) (call "c0" [prim "-" (ref "k") (int 1)]))),
+  fn
+    "c1"
+    ["k"]
+    (CIf
+      (prim "<=" (ref "k") (int 0))
+      (call "c0" [int 1])
+      (prim "::" (int 1) (call "c1" [prim "-" (ref "k") (int 1)]))),
+  val "main" (call "c1" [int 5]),
+]
+
+test "a mutually tail-calling cons family is one dispatch group" =
+  expectEqual
+    [("c1", ["c1", "c0"])]
+    (map
+      (g => (dispRootOf g, dispMembersOf g))
+      (trmcPlan [] consFamily).dispGroups)
+
+-- impl Upto Int where
+--   upto lo hi = if lo > hi then [] else lo :: upto (lo + 1) hi
+-- The recursion dispatches through the instance's own word, `K`, so the group is
+-- eligible.  The same body recursing through another instance's word has no
+-- self-call, so its group is not.
+uptoImpl : String -> CImplEntry
+uptoImpl word =
+  let self = CMethod "upto" (MethodEvidence "Upto" 2 (RKey word [] []) [] [])
+  let leaf =
+    prim "::" (ref "lo") (mkApp self [prim "+" (ref "lo") (int 1), ref "hi"])
+  let body = CIf (prim ">" (ref "lo") (ref "hi")) (CList []) leaf
+  let pats = map (p => PVar p noDeclLoc noBinderId) ["lo", "hi"]
+  CImplEntry "upto" 0 2 (CImplTagged "Int" "K" "Upto" noImplSym [] pats body)
+
+implTrmc : String -> Bool
+implTrmc word =
+  let plan =
+    buildEmitPlan LlvmBackend (CProgram [] [] [] [uptoImpl word] [] noDeclFacts)
+  isTrmcImpl plan.trmc "upto" "K"
+
+test "an impl group recursing through its own instance word is TRMC-eligible" = expectAll
+  [
+    labelFail "self word" (expectTrue (implTrmc "K")),
+    labelFail "another instance's word" (expectFalse (implTrmc "Other")),
+  ]

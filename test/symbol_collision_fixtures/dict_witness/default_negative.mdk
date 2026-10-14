@@ -1,0 +1,22 @@
+-- Negative control, inherited-default shape: `zn` has a default, `Mzone`
+-- supplies it and `NYone` inherits it. Both instances are arms of `zn`'s one
+-- dispatcher, each comparing its own instance's canonical key, and those keys
+-- hash alike (`hashName "Mzone" == hashName "NYone"`; see negative.mdk). A
+-- build that let it through would answer `default|default` where `run`
+-- answers `mzone|default`. Must REFUSE on both backends.
+interface Zn a where
+  zn : a -> String
+  zn _ = "default"
+
+data Mzone = Mzone
+data NYone = NYone
+
+impl Zn Mzone where
+  zn _ = "mzone"
+
+impl Zn NYone
+
+callZn : Zn a => a -> String
+callZn x = zn x
+
+main = println (callZn Mzone ++ "|" ++ callZn NYone)

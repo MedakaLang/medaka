@@ -145,7 +145,7 @@ done
   echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: independent functions must start from progInFn"
   exit 1
 }
-has_wasm_pin 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' &&
+has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: strict, record, census freshness routes changed"
   exit 1
@@ -176,7 +176,7 @@ for required in \
   'addLifted (progEmit prog) def' \
   'let lifted = if progUseClos prog then flatMap (x => x) (reverseL (progEmit prog).liftedDefinitions.value) else []' \
   'let names = "$mdk_pap" :: reverseL !emit.functionReferences' \
-  'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' \
+  'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' \
   'let emit = freshWasmEmit WGapRecord'; do
   has_wasm_pin "$required" || {
     echo "FAIL H2B7-CARRIER: missing $required"
@@ -192,7 +192,7 @@ done
   echo "FAIL H2B7-ROUTES: named lifts or function-reference routes changed"
   exit 1
 }
-has_wasm_pin 'emitScalarProgram emit fnNames valNames groups' || {
+has_wasm_pin 'emitScalarProgram emit plan fnNames valNames groups' || {
   echo "FAIL H2B7-NEAREST-MISS: scalar emission route changed"
   exit 1
 }
@@ -382,7 +382,7 @@ has_wasm_pin 'noteWasmUse emit UseFileBytes = setRef emit.useFileBytes True' &&
   }
 [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useFileBytes True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useFileBytes.value' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  has_wasm_pin 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' &&
+  has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL A4-FILEBYTES-ROUTES: writer/read cardinality or fresh routes changed"
     exit 1
@@ -438,7 +438,7 @@ has_wasm_pin 'noteWasmUse emit UseArgs = setRef emit.useArgs True' &&
   }
 [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useArgs True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useArgs.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  has_wasm_pin 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' &&
+  has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL A3-ARGS-ROUTES: writer/read cardinality or fresh routes changed"
     exit 1
@@ -484,7 +484,7 @@ has_wasm_pin 'noteWasmUse emit UseFloatStr = setRef emit.useFloatStr True' &&
   }
 [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useFloatStr True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useFloatStr.value' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  has_wasm_pin 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' &&
+  has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL A2-FLOATSTR-ROUTES: writer/read cardinality or fresh routes changed"
     exit 1
@@ -537,7 +537,7 @@ has_wasm_pin 'noteWasmUse emit UseCharClass = setRef emit.useCharClass True' &&
 [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useCharClass True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '!emit.useCharClass' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useCharClass.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  has_wasm_pin 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' &&
+  has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL H2B-LR-CHARCLASS-ROUTES: writer/read cardinality or fresh route changed"
     exit 1
@@ -563,7 +563,7 @@ has_wasm_pin 'noteWasmUse emit UseFloatRng = setRef emit.useFloatRng True' &&
   }
 [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useFloatRng True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useFloatRng.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  has_wasm_pin 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' &&
+  has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL H2B-LR-FLOATRNG-ROUTES: writer/read cardinality or fresh route changed"
     exit 1
@@ -589,7 +589,7 @@ has_wasm_pin 'noteWasmUse emit UseStrCodec = setRef emit.useStrCodec True' &&
   }
 [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useStrCodec True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useStrCodec.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  has_wasm_pin 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' &&
+  has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL H2B-LR-STRCODEC-ROUTES: writer/reader cardinality or fresh route changed"
     exit 1
@@ -617,7 +617,7 @@ VALUECMP_WRITER_LINE="$(grep -n -F 'let _ = setRef (progEmit prog).useValueCmp T
   }
 [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef (progEmit prog).useValueCmp True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useValueCmp.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  has_wasm_pin 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' &&
+  has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL H2B-LR-VALUECMP-ROUTES: writer/reader cardinality or fresh route changed"
     exit 1
@@ -656,7 +656,7 @@ has_wasm_pin 'noteWasmUse emit UseMath = setRef emit.useMath True' &&
   }
 [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useMath True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useMath.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  has_wasm_pin 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' &&
+  has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL H2B-LR-MATH-ROUTES: writer/reader cardinality or fresh route changed"
     exit 1
@@ -688,7 +688,7 @@ has_wasm_pin 'noteWasmUse emit UseCharFromCode = setRef emit.useCharFromCode Tru
   echo "FAIL H2B11-CHAR-FROM-CODE-ROUTES: expected one charFromCode writer and reader"
   exit 1
 }
-has_wasm_pin 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' &&
+has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B11-CHAR-FROM-CODE-ROUTES: strict, record, census freshness routes changed"
   exit 1
@@ -720,7 +720,7 @@ has_wasm_pin 'noteWasmUse emit UseFloatHash = setRef emit.useFloatHash True' &&
   echo "FAIL H2B10-FLOAT-HASH-ROUTES: expected one hashFloat writer and reader"
   exit 1
 }
-has_wasm_pin 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' &&
+has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B10-FLOAT-HASH-ROUTES: strict, record, census freshness routes changed"
   exit 1
@@ -778,9 +778,9 @@ for required in \
   'setRef emit.nextStringSegmentId (i + 1)' \
   'setRef emit.stringSegments ((i, bytes) :: !emit.stringSegments)' \
   'reverseL !emit.stringSegments' \
-  'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' \
-  'emitProgramRecord input cp =' \
-  'emitProgramGaps input cp0 =' \
+  'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' \
+  'emitProgramRecord input plan cp =' \
+  'emitProgramGaps input plan cp0 =' \
   'let emit = freshWasmEmit WGapRecord' \
   'let dataSegs = emitDataSegs (progEmit prog)' \
   'emitRefExpr prog env d (CLit l) = emitLitRef (progEmit prog) l'; do
