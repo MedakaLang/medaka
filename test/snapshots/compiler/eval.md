@@ -1,5 +1,5 @@
 # META
-source_lines=5517
+source_lines=5522
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -1442,8 +1442,11 @@ applyValues v (x :: rest) = applyValues (apply v x) rest
 -- carrying the impl's own requires dicts and its supers recursively (Phase 83/84
 -- #5); RDict/RDictFwd forward the enclosing dict param in full; RProj reads a
 -- super (or, past the supers, a `requires` dictionary) out of the dictionary its
--- inner route denotes.  RNone is no dictionary: the checker rejects every
--- accepted-program hole (T-UNROUTED-DISPATCH), so none reaches here (#3715).
+-- inner route denotes.  RNone is no dictionary.  The completeness judgment
+-- rejects such a slot in every program it reads (T-UNROUTED-DISPATCH, #3715), but
+-- it does not read every tree this engine runs: a module's doctest-injected tree
+-- is never judged (`prepareMulti`, tools/test_cmd.mdk), so an ill-typed doctest
+-- example reaches here, and the slot stops evaluation rather than standing in.
 export
 dictOfRoute : EvalEnv (Value e) -> Route -> <e> Value e
 dictOfRoute env (RKey key reqs sups) =
@@ -1457,7 +1460,7 @@ dictOfRoute env (RDictFwd d) = match lookupEnv env d
 dictOfRoute env (RProj r path) = projectDict (dictOfRoute env r) path
 dictOfRoute _ RNone =
   panic
-    "unreachable: an unrouted dictionary slot is rejected at check (T-UNROUTED-DISPATCH, #3715)"
+    "an unrouted dictionary slot reached evaluation: the program is ill-typed, and check rejects it (T-UNROUTED-DISPATCH, #3715)"
 -- S-1: an RLocal route's OWN dicts (the shadowing standalone's `=>` constraints) are
 -- applied by evalMethodAt's RLocal arm via applyDicts — they are the call's leading
 -- dict ARGS, not a dict witness FOR this route.  So as a *witness* RLocal is still the
@@ -1486,9 +1489,10 @@ methodAtNarrow : EvalEnv (Value e) ->
   Value e ->
   Route ->
   <e> (Value e, List (Value e))
--- RNone is a method occurrence with no interface word, a standalone: the value is
--- left for arg-tag dispatch.  An occurrence that names its interface never has it
--- (`requireMethodRoute`).
+-- RNone on an occurrence with no interface word leaves the value for arg-tag
+-- dispatch.  That occurrence is a standalone, or an ambiguous re-exported method
+-- whose return type is a variable, which the completeness judgment passes today
+-- (#4131).  An occurrence that names its interface stops at `requireMethodRoute`.
 methodAtNarrow _ _ v RNone = (v, [])
 methodAtNarrow env method v (RKey key _ _) = (narrowMethod env method v key, [])
 -- ARGSTAMP-UNIFY Phase 2+3 / genuine #21: under eval dict-threading an arg-position
@@ -1521,7 +1525,8 @@ methodAtNarrow _ _ _ (RScalar _) =
   panic "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"
 
 -- The route an interface-naming method occurrence carries is an instance or a
--- given.  `RNone` there is a hole the checker rejects (T-UNROUTED-DISPATCH, #3715),
+-- given.  `RNone` there is a hole the checker rejects (T-UNROUTED-DISPATCH, #3715);
+-- it reaches evaluation only through a tree no verdict reads (see `dictOfRoute`),
 -- and the engine must not fill it by narrowing on the argument's tag.
 export
 requireMethodRoute : String -> String -> Route -> Route
@@ -1530,7 +1535,7 @@ requireMethodRoute name iface RNone =
     RNone
   else
     panic
-      "unreachable: method `\{name}` of `\{iface}` has no route; check rejects it (T-UNROUTED-DISPATCH, #3715)"
+      "method `\{name}` of `\{iface}` reached evaluation with no route: the program is ill-typed, and check rejects it (T-UNROUTED-DISPATCH, #3715)"
 requireMethodRoute _ _ route = route
 
 oneOrMultiV : List (Value e) -> List (Value e) -> Value e
@@ -6037,7 +6042,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "dictOfRoute" ((PVar "env") (PCon "RDict" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") (PVar "reqs") (PVar "sups")) () (EApp (EApp (EApp (EVar "VDict") (EVar "key")) (EVar "reqs")) (EVar "sups"))) (arm PWild () (EApp (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)) (EListLit)))))
 (DFunDef false "dictOfRoute" ((PVar "env") (PCon "RDictFwd" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") (PVar "reqs") (PVar "sups")) () (EApp (EApp (EApp (EVar "VDict") (EVar "key")) (EVar "reqs")) (EVar "sups"))) (arm PWild () (EApp (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)) (EListLit)))))
 (DFunDef false "dictOfRoute" ((PVar "env") (PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EVar "projectDict") (EApp (EApp (EVar "dictOfRoute") (EVar "env")) (EVar "r"))) (EVar "path")))
-(DFunDef false "dictOfRoute" (PWild (PCon "RNone")) (EApp (EVar "panic") (ELit (LString "unreachable: an unrouted dictionary slot is rejected at check (T-UNROUTED-DISPATCH, #3715)"))))
+(DFunDef false "dictOfRoute" (PWild (PCon "RNone")) (EApp (EVar "panic") (ELit (LString "an unrouted dictionary slot reached evaluation: the program is ill-typed, and check rejects it (T-UNROUTED-DISPATCH, #3715)"))))
 (DFunDef false "dictOfRoute" (PWild (PCon "RLocal" PWild PWild)) (EApp (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)) (EListLit)))
 (DFunDef false "dictOfRoute" (PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"))))
 (DTypeSig false "projectDict" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "Value") (TyVar "e")))))
@@ -6053,7 +6058,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "methodAtNarrow" (PWild PWild (PVar "v") (PCon "RLocal" PWild PWild)) (ETuple (EVar "v") (EListLit)))
 (DFunDef false "methodAtNarrow" (PWild PWild PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"))))
 (DTypeSig true "requireMethodRoute" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyCon "Route")))))
-(DFunDef false "requireMethodRoute" ((PVar "name") (PVar "iface") (PCon "RNone")) (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EVar "RNone") (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "unreachable: method `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` of `"))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "` has no route; check rejects it (T-UNROUTED-DISPATCH, #3715)"))))))
+(DFunDef false "requireMethodRoute" ((PVar "name") (PVar "iface") (PCon "RNone")) (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EVar "RNone") (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` of `"))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "` reached evaluation with no route: the program is ill-typed, and check rejects it (T-UNROUTED-DISPATCH, #3715)"))))))
 (DFunDef false "requireMethodRoute" (PWild PWild (PVar "route")) (EVar "route"))
 (DTypeSig false "oneOrMultiV" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "oneOrMultiV" ((PList (PVar "v")) PWild) (EVar "v"))
@@ -7865,7 +7870,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "dictOfRoute" ((PVar "env") (PCon "RDict" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") (PVar "reqs") (PVar "sups")) () (EApp (EApp (EApp (EVar "VDict") (EVar "key")) (EVar "reqs")) (EVar "sups"))) (arm PWild () (EApp (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)) (EListLit)))))
 (DFunDef false "dictOfRoute" ((PVar "env") (PCon "RDictFwd" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") (PVar "reqs") (PVar "sups")) () (EApp (EApp (EApp (EVar "VDict") (EVar "key")) (EVar "reqs")) (EVar "sups"))) (arm PWild () (EApp (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)) (EListLit)))))
 (DFunDef false "dictOfRoute" ((PVar "env") (PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EVar "projectDict") (EApp (EApp (EVar "dictOfRoute") (EVar "env")) (EVar "r"))) (EVar "path")))
-(DFunDef false "dictOfRoute" (PWild (PCon "RNone")) (EApp (EVar "panic") (ELit (LString "unreachable: an unrouted dictionary slot is rejected at check (T-UNROUTED-DISPATCH, #3715)"))))
+(DFunDef false "dictOfRoute" (PWild (PCon "RNone")) (EApp (EVar "panic") (ELit (LString "an unrouted dictionary slot reached evaluation: the program is ill-typed, and check rejects it (T-UNROUTED-DISPATCH, #3715)"))))
 (DFunDef false "dictOfRoute" (PWild (PCon "RLocal" PWild PWild)) (EApp (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)) (EListLit)))
 (DFunDef false "dictOfRoute" (PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"))))
 (DTypeSig false "projectDict" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "Value") (TyVar "e")))))
@@ -7881,7 +7886,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "methodAtNarrow" (PWild PWild (PVar "v") (PCon "RLocal" PWild PWild)) (ETuple (EVar "v") (EListLit)))
 (DFunDef false "methodAtNarrow" (PWild PWild PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"))))
 (DTypeSig true "requireMethodRoute" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyCon "Route")))))
-(DFunDef false "requireMethodRoute" ((PVar "name") (PVar "iface") (PCon "RNone")) (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EVar "RNone") (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "unreachable: method `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` of `"))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "` has no route; check rejects it (T-UNROUTED-DISPATCH, #3715)"))))))
+(DFunDef false "requireMethodRoute" ((PVar "name") (PVar "iface") (PCon "RNone")) (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EVar "RNone") (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` of `"))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "` reached evaluation with no route: the program is ill-typed, and check rejects it (T-UNROUTED-DISPATCH, #3715)"))))))
 (DFunDef false "requireMethodRoute" (PWild PWild (PVar "route")) (EVar "route"))
 (DTypeSig false "oneOrMultiV" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "oneOrMultiV" ((PList (PVar "v")) PWild) (EVar "v"))

@@ -1,5 +1,5 @@
 # META
-source_lines=1329
+source_lines=1330
 stages=DESUGAR,MARK
 # SOURCE
 -- Checks a lowered program must pass before an emitter writes any of it.  Each
@@ -847,8 +847,9 @@ ifaceWordFaults "" (RProj _ _) = ["dispatches with no interface word"]
 ifaceWordFaults _ _ = []
 
 -- A method occurrence that names its interface is answered by an instance or a
--- given.  The interface-less `RNone` is a standalone, which dispatches by its
--- own name.
+-- given.  An interface-less `RNone` is a standalone, which dispatches by its own
+-- name, or an ambiguous re-exported method whose return type is a variable, which
+-- the completeness judgment passes today (#4131).
 methodNoRouteFault : String -> Route -> List String
 methodNoRouteFault "" _ = []
 methodNoRouteFault _ RNone = ["has no route"]

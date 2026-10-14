@@ -1632,7 +1632,7 @@ export interface Traversable t requires Mappable t, Foldable t where
 -- Some [1, 2, 3]
 -- > sequence [Some 1, None, Some 3]
 -- None
--- > sequence [Ok 1, Ok 2, Ok 3]
+-- > sequence ([Ok 1, Ok 2, Ok 3] : List (Result String Int))
 -- Ok [1, 2, 3]
 
 -- Each `traverse` impl is a single clause with an inner `match`, not separate
@@ -1873,7 +1873,7 @@ option dflt _ None = dflt
 
    > toResult "missing" (Some 1)
    Ok 1
-   > toResult "missing" None
+   > toResult "missing" (None : Option Int)
    Err "missing" -}
 export
 toResult : e -> Option a -> Result e a
@@ -1884,7 +1884,7 @@ toResult e None = Err e
 
    > fromResult (Ok 1)
    Some 1
-   > fromResult (Err "boom")
+   > fromResult (Err "boom" : Result String Int)
    None -}
 export
 fromResult : Result e a -> Option a
@@ -1923,7 +1923,7 @@ resultOr d (Err _) = d
    error says what happened. There is no form without `context`. `resultOr`
    recovers with a default instead.
 
-   > resultOrPanic "this name and value are literals" (Ok 42)
+   > resultOrPanic "this name and value are literals" (Ok 42 : Result String Int)
    42 -}
 export
 resultOrPanic : Display e => String -> Result e a -> a
@@ -1946,7 +1946,7 @@ result onErr _ (Err e) = onErr e
 
    `map` is the counterpart for the `Ok` side.
 
-   > mapErr (e => "failed: " ++ e) (Err "boom")
+   > mapErr (e => "failed: " ++ e) (Err "boom" : Result String Int)
    Err "failed: boom" -}
 export
 mapErr : (e -> f) -> Result e a -> Result f a

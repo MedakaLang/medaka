@@ -1,5 +1,5 @@
 # META
-source_lines=2617
+source_lines=2621
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -1127,13 +1127,17 @@ firstTyLocList [] = None
 firstTyLocList (t :: rest) = orElseLoc (firstTyLoc t) (firstTyLocList rest)
 
 -- a resolved typeclass-dispatch route (filled by the typed-pipeline typechecker).
--- RNone = unresolved / no dispatch (eval keeps the VMulti for arg-tag fallback);
--- RKey = a concrete impl head tag (or, for two same-head impls, the canonical impl
---   key — TYPECHECK-AUDIT C7) plus its own requires routes recursively (Phase
---   83/84 #5: the nested element-dict routes so dict_of_route builds a structured
---   VDict carrying every element dict the impl body needs), then one route per
---   DIRECT superinterface of the dictionary's interface, in declaration order, each
---   solved at the same goal (DICT-SEMANTICS §2: a dictionary carries its supers);
+-- RNone = no route.  On a method occurrence with no interface word it is a
+--   standalone, or an ambiguous re-exported method whose return type is a variable
+--   (#4131); eval leaves that value for arg-tag dispatch.  Anywhere else it is a hole
+--   the completeness judgment rejects (T-UNROUTED-DISPATCH);
+-- RKey = the selected instance's canonical impl key (`core::Ord|Float|`; a bare
+--   head tag names no instance and is a hole) plus its own requires routes
+--   recursively (Phase 83/84 #5: the nested element-dict routes so dict_of_route
+--   builds a structured VDict carrying every element dict the impl body needs),
+--   then one route per DIRECT superinterface of the dictionary's interface, in
+--   declaration order, each solved at the same goal (DICT-SEMANTICS §2: a
+--   dictionary carries its supers);
 -- RDict = read the named dict parameter at runtime (enclosing constraint);
 -- RDictFwd = like RDict but for return-position sites: also forward the structured
 --   dict's own requires into the selected impl body (Phase 83/84 #5).

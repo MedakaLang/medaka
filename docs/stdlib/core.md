@@ -1137,7 +1137,7 @@ The option as a result, with `e` as the error for `None`.
 ```medaka
 > toResult "missing" (Some 1)
 Ok 1
-> toResult "missing" None
+> toResult "missing" (None : Option Int)
 Err "missing"
 ```
 
@@ -1152,7 +1152,7 @@ The result as an option, discarding the error.
 ```medaka
 > fromResult (Ok 1)
 Some 1
-> fromResult (Err "boom")
+> fromResult (Err "boom" : Result String Int)
 None
 ```
 
@@ -1205,7 +1205,7 @@ error says what happened. There is no form without `context`. `resultOr`
 recovers with a default instead.
 
 ```medaka
-> resultOrPanic "this name and value are literals" (Ok 42)
+> resultOrPanic "this name and value are literals" (Ok 42 : Result String Int)
 42
 ```
 
@@ -1238,7 +1238,7 @@ Applies `f` to the error of an `Err`, leaving an `Ok` unchanged.
 `map` is the counterpart for the `Ok` side.
 
 ```medaka
-> mapErr (e => "failed: " ++ e) (Err "boom")
+> mapErr (e => "failed: " ++ e) (Err "boom" : Result String Int)
 Err "failed: boom"
 ```
 
