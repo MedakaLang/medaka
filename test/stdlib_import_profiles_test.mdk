@@ -1,0 +1,94 @@
+{- | Gate for the claim that importing a stdlib module costs a program nothing
+   it did not use: `import <m>` with `main = ()` checks clean on every wasm
+   profile, whatever the profile grants.
+
+   `IO` is the join of a profile's grants, so a module definition typed
+   `<IO>` that performs a label the profile lacks fails the whole import.
+   Each module is checked in its own `medaka check --target <profile>` child
+   over a generated one-line program; the children run `testJobs` at a time.
+
+   Runs under `medaka test --native`: it spawns subprocesses and writes
+   scratch files. -}
+
+import test_process.{medakaBin, underRoot, withScratchDir}
+import compiler_cli_test_support.{boundedVerbsSeconds}
+import test.{expectAtLeast, expectEqual}
+import list.{filterMap, sort, zipWith}
+import string.{contains, lines, stripSuffix}
+
+-- (profile, module, reason): a module whose own top-level definitions need a
+-- label the profile does not grant. A module listed here must still refuse,
+-- so the entry cannot outlive the need.
+expectedRefusals : List (String, String, String)
+expectedRefusals = []
+
+profiles : List String
+profiles =
+  ["wasmgc/node", "wasmgc/browser-worker", "wasmgc/edge", "wasmgc/wasi-p2"]
+
+-- The module names under stdlib/ and stdlib/crypto/, without `_test` siblings.
+stdlibModules : <IO> List String
+stdlibModules = sort (dirModules "" ++ dirModules "crypto")
+
+dirModules : String -> <IO> List String
+dirModules sub =
+  let dir = if sub == "" then underRoot "stdlib" else underRoot "stdlib/\{sub}"
+  let prefix = if sub == "" then "" else "\{sub}."
+  match listDir dir
+    Err _ => []
+    Ok names => filterMap (n => modName prefix n) names
+
+modName : String -> String -> Option String
+modName prefix file = match stripSuffix ".mdk" file
+  Some stem if not (contains "_test" file) => Some "\{prefix}\{stem}"
+  _ => None
+
+-- A dotted module name needs an alias to be imported by itself.
+importLine : String -> String
+importLine m = if contains "." m then "import \{m} as M" else "import \{m}"
+
+firstError : String -> String
+firstError out = match filter (contains "error") (lines out)
+  l :: _ => l
+  [] => "(no error line)"
+
+probeFile : String -> String -> String
+probeFile dir m = "\{dir}/probe_\{m}.mdk"
+
+writeProbes : String -> List String -> <FileWrite> List String
+writeProbes dir mods =
+  filterMap
+    (m => match writeFile (probeFile dir m) "\{importLine m}\nmain = ()\n"
+      Ok _ => None
+      Err e => Some "could not write the probe for \{m}: \{e}")
+    mods
+
+-- Refusals nobody listed, and listed refusals that no longer happen.
+sweep : String -> <Exec, IO, FileRead, FileWrite> List String
+sweep dir =
+  let mods = stdlibModules
+  let cells = flatMap (p => map (m => (p, m)) mods) profiles
+  let writeErrs = writeProbes dir mods
+  let results =
+    boundedVerbsSeconds
+      300
+      (map
+        ((p, m) => (medakaBin, ["check", "--target", p, probeFile dir m]))
+        cells)
+  writeErrs ++ flatMap (r => r) (zipWith verdict cells results)
+
+verdict : (String, String) -> Result String (Int, String, String) -> List String
+verdict (p, m) res =
+  let listed = any ((lp, lm, _) => lp == p && lm == m) expectedRefusals
+  match res
+    Err e => ["\{p} \{m}: could not spawn: \{e}"]
+    Ok (0, _, _) =>
+      if listed then ["\{p} \{m}: listed as refused but checks clean"] else []
+    Ok (_, out, err) =>
+      if listed then [] else ["\{p} \{m}: \{firstError (out ++ err)}"]
+
+test "stdlib_import_profiles: no unexpected refusal on any wasm profile" =
+  withScratchDir (dir => expectEqual [] (sweep dir))
+
+test "stdlib_import_profiles: the sweep finds stdlib modules to check" =
+  expectAtLeast 1 (length stdlibModules)

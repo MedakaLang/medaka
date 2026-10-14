@@ -607,7 +607,7 @@ The actual operand as the assertion rendered it.
 ### `runTests`
 
 ```
-runTests : List (String, Unit -> Expectation) -> <IO> Bool
+runTests : List (String, Unit -> Expectation) -> <Stdout> Bool
 runTests tests
 ```
 

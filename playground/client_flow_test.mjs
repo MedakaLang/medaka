@@ -6,7 +6,7 @@
 //   2. call compile(source, {wasm, stdlib}) → { ok, wat | diagnostics }
 //   3. assemble WAT → wasm bytes via wat2wasm.js
 //   4. WebAssembly.validate the result
-//   5. run via the worker.js host ABI → assert stdout
+//   5. run on the worker.js host profile (medaka_host.mjs) → assert stdout
 //
 // Cases:
 //   A. clean: `main = println (1+2)` → ok:true → validate → run → "3"
@@ -28,6 +28,7 @@ const __dirname  = dirname(__filename);
 
 // ── imports ───────────────────────────────────────────────────────────────────
 import { loadCompiler, compile } from './compile.mjs';
+import { createHost, runProgram } from './medaka_host.mjs';
 import initWat2Wasm, { wat2wasm } from './vendor/wat2wasm/wat2wasm.js';
 
 // ── asset paths ───────────────────────────────────────────────────────────────
@@ -36,46 +37,13 @@ const RUNTIME_MDK      = join(__dirname, 'dist', 'runtime.mdk');
 const CORE_MDK         = join(__dirname, 'dist', 'core.mdk');
 const WAT2WASM_BG_WASM = join(__dirname, 'vendor', 'wat2wasm', 'wat2wasm_bg.wasm');
 
-// ── runner host ABI (mirrors worker.js compute-only subset) ──────────────────
+// ── runner host (playground/medaka_host.mjs, the profile worker.js runs) ──────
 // Runs an assembled user wasm, returning its stdout string.
-function runWasm(bytes) {
-  const acc = [];
-  const enc = new TextEncoder();
-  const dec = new TextDecoder('utf-8');
-  class ExitSignal extends Error { constructor(c) { super(); this.code = c; } }
-
-  const imports = { env: {
-    mdk_write_byte: (b) => acc.push(b & 0xff),
-    mdk_write_err_byte: () => {},
-    mdk_float_fmt:       () => 0,
-    mdk_float_fmt_byte:  () => 0,
-    // #101 libm math host seam (JS Math.*) — see run.js.  Harmless if unused.
-    mdk_cbrt: Math.cbrt, mdk_exp: Math.exp, mdk_log: Math.log,
-    mdk_log2: Math.log2, mdk_log10: Math.log10,
-    mdk_sin: Math.sin, mdk_cos: Math.cos, mdk_tan: Math.tan,
-    mdk_asin: Math.asin, mdk_acos: Math.acos, mdk_atan: Math.atan,
-    mdk_sinh: Math.sinh, mdk_cosh: Math.cosh, mdk_tanh: Math.tanh,
-    mdk_pow: Math.pow, mdk_atan2: Math.atan2, mdk_hypot: Math.hypot,
-    mdk_str_to_float:    () => 0,
-    mdk_path_reset:      () => {},
-    mdk_path_push:       () => {},
-    mdk_read_file:       () => 0,
-    mdk_file_exists:     () => 0,
-    mdk_get_env:         () => 0,
-    mdk_args_count:      () => 0,
-    mdk_arg_len:         () => 0,
-    mdk_arg_byte:        () => 0,
-    mdk_result_len:      () => 0,
-    mdk_result_byte:     () => 0,
-    mdk_exit: (c) => { throw new ExitSignal(c); },
-  } };
-
-  return WebAssembly.instantiate(bytes, imports)
-    .then(({ instance }) => { instance.exports.mdk_main(); return dec.decode(new Uint8Array(acc)); })
-    .catch((e) => {
-      if (e instanceof ExitSignal) return dec.decode(new Uint8Array(acc));
-      throw e;
-    });
+async function runWasm(bytes) {
+  const host = createHost('wasmgc/browser-worker');
+  const r = await runProgram(bytes, host);
+  if (r.kind === 'error') throw r.error;
+  return host.sink.text('stdout');
 }
 
 // ── test harness ──────────────────────────────────────────────────────────────

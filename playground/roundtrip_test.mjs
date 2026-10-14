@@ -10,6 +10,7 @@ import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { loadCompiler, compile } from './compile.mjs';
+import { createHost, runProgram } from './medaka_host.mjs';
 
 const [wasmPath, runtimePath, corePath] = process.argv.slice(2);
 const wasm = await loadCompiler(wasmPath);
@@ -18,32 +19,18 @@ const stdlib = {
   core: fs.readFileSync(corePath, 'utf8'),
 };
 
-// Assemble + run an emitted user WAT, returning its stdout (using the same host
-// ABI shape; the user program is pure compute → only mdk_write_byte/mdk_exit).
-function runWat(wat) {
+// Assemble + run an emitted user WAT on the playground's runner profile
+// (playground/medaka_host.mjs, wasmgc/browser-worker), returning its stdout.
+async function runWat(wat) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mdk-wat-'));
   const watFile = path.join(tmp, 'p.wat');
   const wasmFile = path.join(tmp, 'p.wasm');
   fs.writeFileSync(watFile, wat);
   execFileSync('wasm-tools', ['parse', watFile, '-o', wasmFile]);
-  const bytes = fs.readFileSync(wasmFile);
-  const acc = [];
-  let out = '';
-  return WebAssembly.instantiate(bytes, { env: {
-    mdk_write_byte: (b) => acc.push(b & 0xff),
-    mdk_write_err_byte: () => {},
-    mdk_float_fmt: () => 0, mdk_float_fmt_byte: () => 0,
-    // #101 libm math host seam (JS Math.*) — see run.js.  Harmless if unused.
-    mdk_cbrt: Math.cbrt, mdk_exp: Math.exp, mdk_log: Math.log, mdk_log2: Math.log2, mdk_log10: Math.log10,
-    mdk_sin: Math.sin, mdk_cos: Math.cos, mdk_tan: Math.tan, mdk_asin: Math.asin, mdk_acos: Math.acos, mdk_atan: Math.atan,
-    mdk_sinh: Math.sinh, mdk_cosh: Math.cosh, mdk_tanh: Math.tanh, mdk_pow: Math.pow, mdk_atan2: Math.atan2, mdk_hypot: Math.hypot,
-    mdk_str_to_float: () => 0, mdk_path_reset: () => {}, mdk_path_push: () => {},
-    mdk_read_file: () => 0, mdk_file_exists: () => 0, mdk_get_env: () => 0,
-    mdk_args_count: () => 0, mdk_arg_len: () => 0, mdk_arg_byte: () => 0,
-    mdk_result_len: () => 0, mdk_result_byte: () => 0,
-    mdk_exit: (c) => { out = Buffer.from(acc).toString('utf8'); throw { __exit: c }; },
-  } }).then(({ instance }) => { instance.exports.mdk_main(); return Buffer.from(acc).toString('utf8'); })
-     .catch((e) => { if (e && '__exit' in e) return out || Buffer.from(acc).toString('utf8'); throw e; });
+  const host = createHost('wasmgc/browser-worker');
+  const r = await runProgram(fs.readFileSync(wasmFile), host);
+  if (r.kind === 'error') throw r.error;
+  return host.sink.text('stdout');
 }
 
 const cases = [

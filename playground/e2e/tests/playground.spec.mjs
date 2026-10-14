@@ -522,8 +522,8 @@ async function main() {
         rec.includes('stack overflow: recursion too deep for the browser; the native compiler has a larger stack')
           && !rec.includes('instantiate failed'), JSON.stringify(rec));
       const stdin = await runBattery(page, '34_stdin');
-      check('34 readLine: names the extern as unavailable in the browser',
-        stdin.includes('readLine is not available in the browser playground')
+      check('34 readLine: refused for the label the browser profile withholds, as check --target refuses it',
+        stdin.includes('`main` performs <Stdin>, and the target `wasmgc/browser-worker` does not grant Stdin')
           && !stdin.includes('compiler trap'), JSON.stringify(stdin));
       const asy = await runBattery(page, '64_async_defer');
       check('64 import async: the deferred program runs and prints 3',

@@ -54,17 +54,16 @@ fi
 
 # build_site.sh already verifies every asset main.js fetches; re-assert the
 # count here so a hand-edited site/ cannot be published half-populated. DERIVED
-# from main.js's own EXTRA_MODULES list rather than a hand-picked number: that
-# list moves independently of this script, and a hardcoded floor silently goes
-# stale (and falsely FAILS a correctly-built site/) the moment it does — a
-# hardcoded `22` here went stale the moment EXTRA_MODULES' own count last
-# moved (e.g. the mut_array->vector rename) and silently blocked every deploy
-# with a FAIL that had nothing to do with a half-populated site.
-mdk_expected=$(( 2 + $(sed -n '/^const EXTRA_MODULES = \[/,/\];/p' "$SCRIPT_DIR/main.js" \
-                    | grep -o "'[a-z_0-9]*'" | tr -d "'" | wc -l | tr -d ' ') ))
+# from the generated module list main.js fetches from (site/dist/stdlib_modules.json)
+# rather than a hand-picked number: that list moves independently of this
+# script, and a hardcoded floor silently goes stale (and falsely FAILS a
+# correctly-built site/) the moment it does — a hardcoded `22` here once
+# blocked every deploy with a FAIL that had nothing to do with a half-populated site.
+mdk_listed=$( { grep -o '"[a-z_0-9.]*"' "$SITE/dist/stdlib_modules.json" 2>/dev/null || true; } | wc -l | tr -d ' ')
+mdk_expected=$(( 2 + mdk_listed ))
 mdk_count=$(find "$SITE/dist" -name '*.mdk' | wc -l | tr -d ' ')
-if [ "$mdk_count" -lt "$mdk_expected" ]; then
-  echo "FAIL: site/dist has $mdk_count .mdk files, expected >=$mdk_expected (runtime.mdk + core.mdk + main.js's EXTRA_MODULES). Re-run build_site.sh." >&2
+if [ "$mdk_listed" -eq 0 ] || [ "$mdk_count" -lt "$mdk_expected" ]; then
+  echo "FAIL: site/dist has $mdk_count .mdk files, expected >=$mdk_expected (runtime.mdk + core.mdk + the $mdk_listed modules site/dist/stdlib_modules.json lists). Re-run build_site.sh." >&2
   exit 1
 fi
 

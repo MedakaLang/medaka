@@ -44,12 +44,12 @@ import test.{Expectation(..), expectAll}
    Files are located through this rather than through the working
    directory, which a test does not control. -}
 export
-medakaRoot : <IO> String
+medakaRoot : <Env "MEDAKA_ROOT"> String
 medakaRoot = getEnvOr "MEDAKA_ROOT" "."
 
 -- | The path `rel`, relative to the tree root, resolved under `medakaRoot`.
 export
-underRoot : String -> <IO> String
+underRoot : String -> <Env "MEDAKA_ROOT"> String
 underRoot rel = "\{medakaRoot}/\{rel}"
 
 {- | The Medaka binary to spawn: `MEDAKA`, or the binary named medaka in
@@ -58,7 +58,7 @@ underRoot rel = "\{medakaRoot}/\{rel}"
    The default is a path, so an unset `MEDAKA` never resolves to another
    build on `PATH`. -}
 export
-medakaBin : <IO> String
+medakaBin : <Env "MEDAKA_ROOT", Env "MEDAKA"> String
 medakaBin = getEnvOr "MEDAKA" "\{medakaRoot}/medaka"
 
 -- # Spawning
@@ -395,7 +395,9 @@ outputTail text = outputTailOf failureOutputTailChars text
    exits nonzero is an `Err`, never a smaller count. The `Err` for a
    failing run carries the tail of its output. -}
 export
-testAssertionCount : String -> List String -> <Exec, IO> Result String Int
+testAssertionCount : String ->
+  List String ->
+  <Exec, Env "MEDAKA_ROOT", Env "MEDAKA"> Result String Int
 testAssertionCount path extraArgs =
   let bin = medakaBin
   let args = assertionCountArgs path extraArgs
@@ -413,7 +415,7 @@ testAssertionCount path extraArgs =
    True -}
 export
 testAssertionCounts : List (String, List String) ->
-  <Exec, IO> List (Result String Int)
+  <Exec, Env "MEDAKA_ROOT", Env "MEDAKA", Env "MEDAKA_TEST_JOBS"> List (Result String Int)
 testAssertionCounts rows =
   let bin = medakaBin
   let argvs = map ((path, extraArgs) => assertionCountArgs path extraArgs) rows
@@ -435,7 +437,7 @@ testAssertionCounts rows =
    > testJobs > 0
    True -}
 export
-testJobs : <Exec, IO> Int
+testJobs : <Exec, Env "MEDAKA_TEST_JOBS"> Int
 testJobs = match getEnv "MEDAKA_TEST_JOBS" |> flatMap toInt
   Some n if n > 0 => n
   _ => onlineProcessors

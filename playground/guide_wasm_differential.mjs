@@ -21,9 +21,9 @@
 // Two deliberate, named deltas from a real browser tab, neither in the compiler:
 //   * assembly:  wasm-tools parse here, vendor/wat2wasm in the page. Both are
 //                WAT→wasm assemblers over the same emitter output.
-//   * host ABI:  test/wasm/run.js here, playground/worker.js in the page. Their
-//                numeric shims are byte-identical BY GATE
-//                (test/diff_compiler_wasm_shim_parity_test.mdk).
+//   * host ABI:  test/wasm/run.js here, playground/worker.js in the page. Both
+//                build their imports from playground/medaka_host.mjs, on the
+//                wasmgc/node and wasmgc/browser-worker profiles respectively.
 // The browser-driven sample in playground/e2e (SITE=1 bash playground/e2e/run.sh,
 // tests/playground.spec.mjs "guide example round-trip") closes both deltas
 // empirically for a few examples by running them in an actual Chrome.
@@ -66,6 +66,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { compile, loadCompiler } from './compile.mjs';
+import { withheldExterns, WASM_GAP_EXTERNS } from './medaka_host.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -93,12 +94,30 @@ const GUIDE_DIR = opts.guide
   : (existsSync(join(HERE, 'site', 'guide')) ? join(HERE, 'site', 'guide') : join(HERE, 'site-guide'));
 
 // ── the runnability rule, restated INDEPENDENTLY of render_docs.mjs ───────────
-// Deliberately a second copy rather than an import: this file's job is to catch
-// the render and the rule drifting apart, and a shared constant cannot disagree
-// with itself. Keep in sync with render_docs.mjs `classifyRunnable` /
-// UNSUPPORTED_CALL_RE and with playground/worker.js `capabilityStub`.
-const STUBBED_CAPABILITY_RE =
-  /\b(readFile|writeFile|readLine|readLines|getEnv|fileExists|args|exit)\b/;
+// The rule's conjuncts (fence label, grant in `main`, a top-level `main`, shipped
+// imports) are restated here rather than imported, so a change to one copy shows up
+// as a disagreement; keep them in sync with render_docs.mjs `classifyRunnable`. The
+// stubbed set is NOT independent: both copies derive it from the same
+// `withheldExterns('wasmgc/browser-worker')` plus WASM_GAP_EXTERNS in
+// playground/medaka_host.mjs.
+const STUBBED_CAPABILITY_RE = new RegExp(
+  `\\b(${[...withheldExterns('wasmgc/browser-worker'), ...WASM_GAP_EXTERNS].join('|')})\\b`);
+
+// A wasm build refuses a pattern file grant (`<FileRead "cfg/*">`) that a live call
+// writes (T-WASM-FILE-GRANT).  From the text: a top-level binding whose signature line
+// writes one, named on a line of `main`'s definition.
+function grantedFromMain(source) {
+  const names = [];
+  for (const m of source.matchAll(/^([a-z][A-Za-z0-9_']*)\s*:.*\bFile(?:Read|Write)\s+"[^"\n]*\*"/gm))
+    names.push(m[1]);
+  const lines = source.split('\n');
+  const start = lines.findIndex((l) => /^main\b/.test(l));
+  if (start < 0) return null;
+  let end = start + 1;
+  while (end < lines.length && (/^main\b/.test(lines[end]) || /^(\s|$)/.test(lines[end]))) end++;
+  const mainDef = lines.slice(start, end).join('\n');
+  return names.find((n) => new RegExp(`(^|[^A-Za-z0-9_'])${n}($|[^A-Za-z0-9_'])`).test(mainDef)) || null;
+}
 const KIND_MEDAKA_LABELS = new Set(['medaka', 'medaka-project', 'medaka-nocheck']);
 
 // Two further conditions decide whether the ▶ button does anything, and both are
@@ -121,7 +140,7 @@ const definesMain = (source) => /^main\b/m.test(source);
 //     fetches), never hardcoded here.
 function unshippedImports(source, shipped) {
   const out = [];
-  for (const m of source.matchAll(/^\s*(?:export\s+)?import\s+([a-z][a-z_0-9]*)/gm)) {
+  for (const m of source.matchAll(/^\s*(?:export\s+)?import\s+([a-z][a-z_0-9]*(?:\.[a-z][a-z_0-9]*)*)/gm)) {
     if (!shipped.has(m[1])) out.push(m[1]);
   }
   return out;
@@ -131,6 +150,8 @@ function ruleSaysRunnable(label, source, shipped) {
   if (label !== 'medaka') return { runnable: false, reason: `fence label \`${label}\`` };
   const m = source.match(STUBBED_CAPABILITY_RE);
   if (m) return { runnable: false, reason: `uses \`${m[1]}\` (playground stubs it)` };
+  const granted = grantedFromMain(source);
+  if (granted) return { runnable: false, reason: `\`${granted}\` writes a pattern file grant (wasm refuses it)` };
   if (!definesMain(source)) return { runnable: false, reason: 'defines no top-level `main`' };
   const missing = unshippedImports(source, shipped);
   if (missing.length) {
@@ -201,8 +222,9 @@ function preflight() {
   return { wasm, medaka, runjs };
 }
 
-// The browser feeds runtime.mdk + core.mdk directly and every EXTRA_MODULES
-// sibling through the loader's "./<id>.mdk" key (playground/main.js). Mirror that
+// The browser feeds runtime.mdk + core.mdk directly and every other stdlib module
+// (dist/stdlib_modules.json) through the loader's key for its id (playground/main.js,
+// compile.mjs `buildVfs`). Mirror that
 // exactly: read them from dist/, which build_playground_wasm.sh staged, so the
 // module set here is the module set the page ships and cannot drift from it.
 function loadStdlib() {
