@@ -411,6 +411,25 @@ function check(name, ok, detail) {
   try { v.appendFile('nowhere/x', new Uint8Array([1])); } catch (e) { err = e.message; }
   eq('append into a missing directory', err.startsWith('ENOENT'), true);
   v.unlink('made.txt');
+  v.mkdir('mk');
+  eq('mkdir adds a directory', v.stat('mk').isDir, true);
+  eq('mkdir mode', v.stat('mk').mode, 0o755);
+  v.mkdir('mk/inner');
+  eq('mkdir under a made directory', v.exists('mk/inner'), true);
+  err = '';
+  try { v.mkdir('mk'); } catch (e) { err = e.message; }
+  eq('mkdir of an existing directory', err.startsWith('EEXIST'), true);
+  err = '';
+  try { v.mkdir('e/x.txt'); } catch (e) { err = e.message; }
+  eq('mkdir over a file', err.startsWith('EEXIST'), true);
+  err = '';
+  try { v.mkdir('nowhere/sub'); } catch (e) { err = e.message; }
+  eq('mkdir under a missing parent', err.startsWith('ENOENT'), true);
+  err = '';
+  try { v.mkdir('e/x.txt/sub'); } catch (e) { err = e.message; }
+  eq('mkdir under a file', err.startsWith('ENOTDIR'), true);
+  v.rmdir('mk/inner');
+  v.rmdir('mk');
   eq('unlink removes a file', v.exists('made.txt'), false);
   err = '';
   try { v.unlink('e'); } catch (e) { err = e.message; }
@@ -439,7 +458,7 @@ function check(name, ok, detail) {
   v.writeFile('f.txt', new Uint8Array([2]), 0o600);
   eq('writeFileMode over an existing file sets its mode', v.stat('f.txt').mode, 0o600);
   eq('writeFileMode writes the contents', v.stat('f.txt').size, 1);
-  check('(m) MemoryVfs: stored modes (default 0o644), rename, readdir, stat, append, unlink, rmdir, fsync, fileMode', bad.length === 0, bad.join('; '));
+  check('(m) MemoryVfs: stored modes (default 0o644), rename, readdir, stat, append, unlink, mkdir, rmdir, fsync, fileMode', bad.length === 0, bad.join('; '));
 }
 
 // (n) rename takes two grants on one channel (-2 ends the first) and confines the source

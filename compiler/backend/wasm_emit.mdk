@@ -152,12 +152,10 @@
 --     remains; see ~line 1005 / 2143 / 2216.
 --   * The IO/WASI surface (readFile/args/getEnv/fileExists/exit) — CLOSED (W12): real
 --     host imports (the plan's host keys) and `ioHostRuntimeLines`.
---     Not everything file-shaped is closed, though: the write/dir side (writeFile/
---     listDir/makeDir/removeFile/removeDir/statFile) remains a real gap, and
---     `runCommand` (explicitly named in this bullet's original scope) has no wasm
---     equivalent at all (no wasm profile grants Exec). Their rows in
---     `backend.extern_catalog` are the source of truth, `WASM-GAP` and `PERMANENT`
---     respectively; don't infer "IO is done" from this comment.
+--     The file externs are all lowered since; `runCommand` (explicitly named in this
+--     bullet's original scope) has no wasm equivalent at all (no wasm profile grants
+--     Exec). Its row in `backend.extern_catalog` is the source of truth, `PERMANENT`;
+--     don't infer "IO is done" from this comment.
 --   * self-host-on-WasmGC — CLOSED (layers 12/16): `wasm_emit_modules_main` compiles
 --     Medaka programs to working WasmGC modules end-to-end; the in-browser playground
 --     (`playground/dist/playground.wasm`) is live. Detail: `WASM-SELFHOST-ROADMAP.md`.
@@ -1902,6 +1900,7 @@ externArityW name =
       "canonicalizePath",
       "listDir",
       "statFile",
+      "makeDir",
       "removeFile",
       "removeDir",
       "fsync",
@@ -7237,6 +7236,13 @@ emitLeafExternRef prog env d "statFile" [p, g] =
     ++ ["call $mdk_stat_file_io"]
 emitLeafExternRef prog env d "statFile" _ =
   gapLP prog "wasm: statFile takes exactly one argument and its grant"
+emitLeafExternRef prog env d "makeDir" [p, g] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_make_dir_io"]
+emitLeafExternRef prog env d "makeDir" _ =
+  gapLP prog "wasm: makeDir takes exactly one argument and its grant"
 emitLeafExternRef prog env d "removeFile" [p, g] =
   emitRefExpr prog env d p
     ++ ["ref.cast (ref $str)"]

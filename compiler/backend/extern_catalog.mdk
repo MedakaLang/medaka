@@ -313,6 +313,7 @@ wasmHelperKeyRows = [
       ++ ["mdk_write_file_reset", "mdk_write_file_push"],
   ),
   ("rename", fileOpKeys "mdk_rename"),
+  ("makeDir", fileOpKeys "mdk_make_dir"),
   ("removeFile", fileOpKeys "mdk_remove_file"),
   ("removeDir", fileOpKeys "mdk_remove_dir"),
   ("fsync", fileOpKeys "mdk_fsync"),
@@ -416,6 +417,7 @@ wasmUseRows = [
   ("writeFileMode", [UseStr, UseList]),
   ("writeFileBytes", [UseStr, UseList, UseArray, UseFileBytes]),
   ("rename", [UseStr, UseList]),
+  ("makeDir", [UseStr, UseList]),
   ("removeFile", [UseStr, UseList]),
   ("removeDir", [UseStr, UseList]),
   ("fsync", [UseStr, UseList]),
@@ -541,9 +543,6 @@ wasmNoSockets : String
 wasmNoSockets =
   "the `net` module is native-only: raw BSD sockets have no WasmGC equivalent — build for a native target instead"
 
-wasmNoHostFs : String
-wasmNoHostFs = "ported in llvm, not yet in wasm's host-fs seam"
-
 wasmNoStdin : String
 wasmNoStdin = "ported in llvm (the stdin family), not yet in wasm"
 
@@ -647,7 +646,7 @@ catalogRows = [
   ExternRow
     "makeDir"
     (CSymbol LlvmFile "mdk_make_dir")
-    (NotProvided GapUnported wasmNoHostFs)
+    (Inline WasmLeaf)
     Interpreted,
   ExternRow
     "removeFile"

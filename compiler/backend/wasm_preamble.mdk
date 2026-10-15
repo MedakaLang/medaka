@@ -1734,6 +1734,7 @@ hostImportSig "mdk_grant_push" = " (param i32)"
 hostImportSig "mdk_canonicalize_path" = " (result i32)"
 hostImportSig "mdk_write_file" = " (result i32)"
 hostImportSig "mdk_append_file" = " (result i32)"
+hostImportSig "mdk_make_dir" = " (result i32)"
 hostImportSig "mdk_remove_file" = " (result i32)"
 hostImportSig "mdk_remove_dir" = " (result i32)"
 hostImportSig "mdk_fsync" = " (result i32)"
@@ -2015,6 +2016,7 @@ ioHostRuntimeLines keys =
     ++ gatedOn "mdk_rename" keys ioRenameLines
     ++ gatedOn "mdk_list_dir" keys ioListDirLines
     ++ gatedOn "mdk_stat_file" keys ioStatFileLines
+    ++ gatedOn "mdk_make_dir" keys ioMakeDirLines
     ++ gatedOn "mdk_remove_file" keys ioRemoveFileLines
     ++ gatedOn "mdk_remove_dir" keys ioRemoveDirLines
     ++ gatedOn "mdk_fsync" keys ioFsyncLines
@@ -2274,6 +2276,17 @@ ioStatFileLines = [
   "          (ref.i31 (i32.trunc_f64_s (call $mdk_stat_field (i32.const 1))))",
   "          (ref.i31 (i32.trunc_f64_s (call $mdk_stat_field (i32.const 2))))",
   "          (struct.new $float (call $mdk_stat_field (i32.const 3))))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioMakeDirLines : List String
+ioMakeDirLines = [
+  "  ;; makeDir : $str path -> Result String Unit.  1=Ok () / 0=Err msg.",
+  "  (func $mdk_make_dir_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (result (ref eq)) (call $mdk_make_dir)",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
   "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
 ]
 

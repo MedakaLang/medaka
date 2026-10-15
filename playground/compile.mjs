@@ -212,9 +212,6 @@ function withGuestStderr(e, host) {
 // surface.  The externs the browser host serves (medaka_host.mjs SLICES) are absent.
 const NATIVE_ONLY_EXTERNS = new Set([
   'readLine', 'readLineOpt', 'readAll', 'readExactly',
-  'writeFile', 'writeFileMode', 'appendFile',
-  'fileMode', 'canonicalizePath', 'listDir', 'makeDir', 'removeFile',
-  'rename', 'fsync', 'removeDir', 'statFile',
   'executablePath', 'runCommand',
   'netResolve', 'netTcpConnect', 'netTcpListen', 'netListenPort', 'netTcpAccept',
   'netSend', 'netSendFrom', 'netRecv', 'netShutdown', 'netClose', 'netCloseListener',

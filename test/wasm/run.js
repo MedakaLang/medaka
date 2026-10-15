@@ -43,6 +43,7 @@ const vfs = {
   },
   readdir: (p) => fs.readdirSync(p),
   rename: (a, b) => fs.renameSync(a, b),
+  mkdir: (p) => fs.mkdirSync(p, 0o755),
   unlink: (p) => fs.unlinkSync(p),   // a link is removed itself, not its target
   rmdir: (p) => fs.rmdirSync(p),
   // a file or a directory: open it read-only, flush, close

@@ -51,12 +51,12 @@ export const SLICES = {
       'mdk_read_file', 'mdk_file_exists', 'mdk_canonicalize_path',
       'mdk_write_file_reset', 'mdk_write_file_push', 'mdk_write_file_commit',
       'mdk_write_file', 'mdk_append_file', 'mdk_rename', 'mdk_list_dir', 'mdk_stat_file', 'mdk_stat_field',
-      'mdk_remove_file', 'mdk_remove_dir', 'mdk_fsync', 'mdk_file_mode', 'mdk_write_file_mode',
+      'mdk_make_dir', 'mdk_remove_file', 'mdk_remove_dir', 'mdk_fsync', 'mdk_file_mode', 'mdk_write_file_mode',
       ...PATH_KEYS, ...RESULT_KEYS, ...GRANT_KEYS,
     ],
     externs: [
       'readFile', 'readFileBytes', 'fileExists', 'canonicalizePath', 'writeFile', 'writeFileBytes',
-      'appendFile', 'writeFileMode', 'rename', 'listDir', 'statFile', 'fileMode', 'removeFile', 'removeDir',
+      'appendFile', 'writeFileMode', 'rename', 'listDir', 'statFile', 'fileMode', 'makeDir', 'removeFile', 'removeDir',
       'fsync',
     ],
   },
@@ -136,7 +136,7 @@ export const KEY_EXTERN = {
   mdk_write_file_commit: 'writeFileBytes', mdk_write_file: 'writeFile', mdk_append_file: 'appendFile',
   mdk_rename: 'rename',
   mdk_list_dir: 'listDir', mdk_stat_file: 'statFile', mdk_stat_field: 'statFile', mdk_get_env: 'getEnv',
-  mdk_remove_file: 'removeFile', mdk_remove_dir: 'removeDir', mdk_fsync: 'fsync', mdk_file_mode: 'fileMode',
+  mdk_make_dir: 'makeDir', mdk_remove_file: 'removeFile', mdk_remove_dir: 'removeDir', mdk_fsync: 'fsync', mdk_file_mode: 'fileMode',
   mdk_write_file_mode: 'writeFileMode',
   mdk_args_count: 'args', mdk_arg_len: 'args', mdk_arg_byte: 'args', mdk_exit: 'exit',
   mdk_wall_time_sec: 'wallTimeSec', mdk_monotonic_sec: 'monotonicSec', mdk_sleep_ms: 'sleepMs',
@@ -422,6 +422,14 @@ export class MemoryVfs {
     const { key, error } = this.resolve(p);
     if (error) throw new Error(`${error}, fsync '${p}'`);
     if (!(this.dirs.has(key) || this.files.has(key))) throw new Error(`ENOENT: no such file or directory, fsync '${p}'`);
+  }
+  // mkdir(2) at mode 0o755: the parent must be a directory, and an existing entry of
+  // either kind is EEXIST.
+  mkdir(p) {
+    const { key, error } = this.resolve(p);
+    if (error) throw new Error(`${error}, mkdir '${p}'`);
+    if (this.dirs.has(key) || this.files.has(key)) throw new Error(`EEXIST: file already exists, mkdir '${p}'`);
+    this.dirs.add(key);
   }
   // rmdir(2): removes an empty directory; a file is ENOTDIR, the root EBUSY.
   rmdir(p) {
@@ -771,8 +779,15 @@ export function createHost(profile, opts = {}) {
       const st = host.stat;
       return [st.size, st.isDir ? 1 : 0, st.isFile ? 1 : 0, st.mtime, st.mode][i];
     },
-    // removeFile and removeDir: the path is confined in entry mode, so a symbolic link
-    // as the last component is the entry itself, and is removed, not its target.
+    // makeDir, removeFile and removeDir: the path is confined in entry mode, so a
+    // symbolic link as the last component is the entry itself (makeDir finds it
+    // present; the removals take it, not its target).
+    mdk_make_dir: () => {
+      const p = takePath();
+      const refused = refusal(p, true, 1);
+      if (refused !== null) return refuse(refused);
+      try { host.vfs.mkdir(p); return 1; } catch (e) { return fail(e); }
+    },
     mdk_remove_file: () => {
       const p = takePath();
       const refused = refusal(p, true, 1);

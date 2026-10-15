@@ -533,6 +533,19 @@ test "a wasm plan's host keys are its reached externs' imports, per group" = exp
           WasmBackend
           (call "appendFile" [ref "p", str "x", CList []]))),
     labelFail
+      "makeDir: the grant and path channels, the creation and the result channel"
+      (expectEqual
+        [
+          "mdk_grant_push",
+          "mdk_grant_reset",
+          "mdk_make_dir",
+          "mdk_path_push",
+          "mdk_path_reset",
+          "mdk_result_byte",
+          "mdk_result_len",
+        ]
+        (hostKeysOf WasmBackend (call "makeDir" [ref "p", CList []]))),
+    labelFail
       "removeFile: the grant and path channels, the removal and the result channel"
       (expectEqual
         [

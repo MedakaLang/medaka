@@ -54,10 +54,12 @@ check_one() {
 }
 
 # Expect `build --target wasm` to exit nonzero with a message containing $3.
+# An optional $4 is the source of a module `gaplib`, written beside the program.
 check_refused() {
-  name="$1"; src="$2"; want="$3"
+  name="$1"; src="$2"; want="$3"; lib="${4:-}"
   f="$WORK/$name.mdk"
   printf '%s\n' "$src" > "$f"
+  if [ -n "$lib" ]; then printf "%s\n" "$lib" > "$WORK/gaplib.mdk"; fi
   out="$(MEDAKA_WASM_EMITTER="$EMITBIN" "$MEDAKA" build --target wasm "$f" -o "$WORK/$name.out" 2>&1)"
   st=$?
   if [ "$st" -eq 0 ]; then
@@ -131,13 +133,16 @@ check_refused "wasm_gap_extern_owed" \
 'main = println (allocBytes ())' \
   "\`wasmgc/node\` grants its labels, so this is a lowering still owed (#3666)"
 
-# The same module the unreached case below imports, now reached: `mkdirAll`
-# creates each directory through `makeDir`.
+# A gap extern reached through an imported module is refused the same way: no stdlib
+# module reaches one now, so the module is a local one.
 check_refused "module_extern_reached_refused" \
-'import fs.{mkdirAll}
+'import gaplib.{reach}
 
-main = println (mkdirAll "x")' \
-  "$(printf "$RUNTIME_EXPECT" makeDir WASM-GAP)"
+main = println (reach ())' \
+  "$(printf "$RUNTIME_EXPECT" allocBytes WASM-GAP)" \
+'export reach : Unit -> <IO> Float
+reach () = allocBytes ()'
+rm -f "$WORK/gaplib.mdk"
 
 # ── File grants (EFFECTS-SEMANTICS §7) ──────────────────────────────────────
 # Every grant builds: the host confines each file operation against the grant

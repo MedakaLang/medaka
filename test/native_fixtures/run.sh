@@ -244,7 +244,7 @@ confine_untouched() {
 # runs there too, with the same expected output.  It needs the wasm emitter
 # (test/wasm/build_wasm_oracle.sh) and node; without them the arm is reported
 # NOT RUN, and with MEDAKA_REQUIRE_WASM=1 that is a failure.
-CONFINE_WASM=' alias_method cwd join exists_panic canonicalize_panic dependency_method/main redeclared_extern/main method_named_readfile/main bounded_recursion declared_bound_read fs_family append_file names remove_file remove_dir fsync file_mode write_file_mode shapes indexed_head user_file_labels pattern_binder grant_bound_joins declared_bound '
+CONFINE_WASM=' alias_method cwd join exists_panic canonicalize_panic dependency_method/main redeclared_extern/main method_named_readfile/main bounded_recursion declared_bound_read fs_family append_file names paths make_dir remove_file remove_dir fsync file_mode write_file_mode shapes indexed_head user_file_labels pattern_binder grant_bound_joins declared_bound '
 WASM_EMIT="${MEDAKA_WASM_EMITTER:-$ROOT/test/bin/wasm_emit_modules_main}"
 wasm_ok=1
 if [ ! -x "$WASM_EMIT" ] || ! command -v node >/dev/null 2>&1; then
@@ -379,6 +379,20 @@ dangling: Err cfg/dangling $outside [\"cfg/*\"]
 dir: Err (host)
 absent dir: Err (host)
 bound append: Err cfg/link/stolen.txt $outside [\"cfg/*\"]"
+# makeDir confines in entry mode: a link as the last component is the entry, which
+# exists already, so it is never made through.
+confine_case make_dir . "make new: Ok
+make inside new: Ok
+make new again: Err (host)
+make existing: Err (host)
+make file: Err (host)
+make up: Err cfg/../outdir/stolen.txt $outside [\"cfg/*\"]
+make link: Err (host)
+make link out: Err (host)
+make dangling: Err (host)
+make absent parent: Err (host)
+make through link: Err cfg/link/stolen.txt $outside [\"cfg/*\"]
+bound make: Err cfg/link/stolen.txt $outside [\"cfg/*\"]"
 # removeFile and removeDir confine in entry mode: a link as the last component is the
 # entry (removed, or ENOTDIR for rmdir), and a link before it is followed.
 confine_case remove_file . "remove a: Ok
@@ -475,7 +489,7 @@ rename src out: Err cfg/../secret.txt $outside [\"cfg/*\"]
 rename inside: Ok
 absolute in: Ok
 absolute out: Err /dev/../etc/passwd $outside [\"/dev/*\"]
-absent element in: Err No such file or directory
+absent element in: Err (host)
 absent element out: Err nowhere/../secret.txt $outside [\"nowhere/*\"]
 element symlink in: Ok
 element symlink out: Err link/../secret.txt $outside [\"link/*\"]

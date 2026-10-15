@@ -104,9 +104,13 @@ bash playground/build_site.sh                     # needs site/guide + dist/
 node playground/guide_wasm_differential.mjs       # add --list, --only <id>, --json <path>
 ```
 
-**Result at the time of writing (S-fs-grant-channel-b, measured): 56 matched / 1
-wasm divergence / 0 rule gap, of 57 runnable (15 not runnable).** Of the 56, all 56
+**Result at the time of writing (S-fs-family-c-makedir, measured): 57 matched / 1
+wasm divergence / 0 rule gap, of 58 runnable (14 not runnable).** Of the 57, all 57
 that carry a `medaka-expect` fence print exactly what the guide says they print.
+`--guide playground/site/advanced` runs the same differential over the advanced docs:
+37 matched / 1 oracle-build failure (`effects-1-rows#11`, the native emitter panics
+`CDict head 'main__count' is not a known top-level function`; not a wasm matter) of 38
+runnable (10 not runnable).
 
 The **wasm divergence** (`04-data-modeling#15`) is a compiler bug, not a guide bug:
 it works natively and fails only on the browser's path (the diagnostic's file path
