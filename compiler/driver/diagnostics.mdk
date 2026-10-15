@@ -2365,7 +2365,8 @@ cjDiagnostic _ src (Diag sev code msg loc help fix) =
       ])
 
 -- Build the per-file entry: { "file": path, "diagnostics": [...] }.
--- `src` is the file's source text (for whole-doc range fallback).
+-- `src` is the file's source text; the JSON range comes from each `Loc`, so it
+-- is unused by `cjRangeOfLoc`.
 -- `diags` is the List Diag from analyzeProject.
 export
 cjFileEntry : String -> String -> List Diag -> Json
@@ -2379,7 +2380,6 @@ cjTriple (path, src, diags) = cjFileEntry path src diags
 
 -- Serialize the analyzeProject result as the top-level JSON object:
 -- { "files": [ { "file": ..., "diagnostics": [...] }, ... ] }
--- Needs sources for whole-doc range fallback.
 export
 cjAllToJson : List (String, String, List Diag) -> String
 cjAllToJson triples = cjAllToJsonWith [] triples
@@ -2446,21 +2446,17 @@ flushRunEnvelope triples = match (triples, runEnvelopeFields ())
   ([], []) => ()
   (ts, extra) => ePutStrLn (cjAllToJsonWith extra ts)
 
--- Read each file's source for rendering and the range fallback.  A file with no
--- diagnostics renders nothing, so it costs no read; otherwise the loader's own
--- copy of the source is preferred (the bytes it parsed), and the disk is read
--- only when the loader's bounded table has evicted the entry.  On read error,
--- use "" so diagnostics still serialize (the error itself is in the diag list).
+-- Read each file's source for rendering.  A file with no diagnostics renders
+-- nothing, so it costs no read (its source is `""`; the JSON envelope ignores
+-- `src`, so a diagnostic folded in later by `cjFoldIntoFile` still serializes).
+-- Otherwise the loader's own copy of the source is preferred (the bytes it
+-- parsed), and the disk is read when the loader's bounded table has evicted the
+-- entry or never noted the path.  On read error, use "" so diagnostics still
+-- serialize (the error itself is in the diag list).
 export
 readDiagSrc : (String, List Diag) -> <IO> (String, String, List Diag)
 readDiagSrc (path, []) = (path, "", [])
-readDiagSrc (path, diags) = readDiagSrcAlways (path, diags)
-
--- `readDiagSrc` without the empty-list shortcut, for a file that may still
--- receive diagnostics after the read (`cjFoldIntoFile` onto the entry).
-export
-readDiagSrcAlways : (String, List Diag) -> <IO> (String, String, List Diag)
-readDiagSrcAlways (path, diags) = match loadedSourceOf path
+readDiagSrc (path, diags) = match loadedSourceOf path
   Some src => (path, src, diags)
   None => match readFile path
     Ok src => (path, src, diags)
@@ -3068,7 +3064,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
       let mainWarns = match (hasErr, lastDecls mods)
         (False, Some edecls) => mainShapeWarnings [] [] [] edecls
         _ => []
-      let triples = readDiagSrcsEntryLast results
+      let triples = map readDiagSrc results
       let root = dirOf stdlibDir
       let relTriples = map (relDiagTriple root) triples
       let entryKey = relDiagPath root target
@@ -3076,14 +3072,6 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
         CjParts entryKey (cjFoldIntoFile entryKey mainWarns relTriples),
         hasErr,
       )
-
--- `map readDiagSrc`, except the LAST file (the entry) always carries its source:
--- `cjFoldIntoFile` may add a diagnostic to it after this read.
-readDiagSrcsEntryLast : List (String, List Diag) ->
-  <IO> List (String, String, List Diag)
-readDiagSrcsEntryLast [] = []
-readDiagSrcsEntryLast [r] = [readDiagSrcAlways r]
-readDiagSrcsEntryLast (r :: rest) = readDiagSrc r :: readDiagSrcsEntryLast rest
 
 -- The entry of a loaded graph is its last module.
 lastDecls : List (String, List Decl) -> Option (List Decl)

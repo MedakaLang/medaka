@@ -1381,15 +1381,15 @@ fails:
 2. **Reserved-but-removed constructs** — `mut`, `function`, `with` have *no
    remaining valid grammar use at all* (unlike group 1's keywords, which are
    legal in their own declaration form — just not as a name elsewhere). A
-   dedicated pre-grammar scan in `parser.mdk` (`firstMutIdx`,
-   `firstFunctionIdx`, `firstWithIdx`) catches every occurrence of these three
+   dedicated pre-grammar scan in `parser.mdk` (`prescanWalk`, via
+   `prescanTokHit`) catches every occurrence of these three
    before the generic diagnostic ever fires, and reports the *removal*
    directly — e.g. a bare `mut = 5` fails as `` `let mut` has been removed —
    bindings are immutable… `` (verified on the current binary; diagnostic code
    `P-PARSE`, not `P-RESERVED-KEYWORD` — these are removal errors, not
    reserved-identifier errors).
    The removed `record` **declaration** is diagnosed the same way, but by
-   `firstRecordDeclIdx`, which keys on the construct's SHAPE rather than on the
+   `recordHeadIdx` (run from `prescanLineStart`), which keys on the construct's SHAPE rather than on the
    word — which is exactly what lets the word itself be a name. Because it is
    shape-keyed, its coverage is a defined set rather than "any `record`", and
    that set is worth knowing. It fires on a top-level line starting
@@ -1413,7 +1413,7 @@ fails:
    Since #935, the unambiguous case — one of the five at the start of a
    **top-level** line, immediately followed by `=` or `:` — gets the same clean
    located `P-RESERVED-KEYWORD` (and the same `append _` fix) as group 1, via
-   the `firstCtxKwDeclIdx` pre-scan:
+   the `phCtxKw` rule of `prescanLineStart`:
 
    ```
    $ echo 'let = 5' > t.mdk && medaka check t.mdk

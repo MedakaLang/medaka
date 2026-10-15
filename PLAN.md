@@ -237,7 +237,7 @@ after P0-5 (shares lexer/parser/desugar/eval).
 > `TRecord` in the fence above until #62 deleted that token outright: keeping the token costs the WORD, and
 > `record` is a noun users want as a value, field, type and module name. Where the removed construct has a
 > positional discriminator, key the pre-scan on the construct's SHAPE and free the token
-> (`firstRecordDeclIdx`, `compiler/frontend/parser.mdk`, carries the never-valid-Medaka proof such a scan
+> (`recordHeadIdx`, `compiler/frontend/parser.mdk`, carries the never-valid-Medaka proof such a scan
 > owes). Keep the token only when there is NO such shape — which is exactly why `mut`/`function` still have
 > one (`keywordOrIdent`, `compiler/frontend/lexer.mdk`, records that split).
 
@@ -262,7 +262,7 @@ The construct removals:
 - **REMOVE (0 dogfood uses, redundant, low newcomer+future value):** the **`function` keyword**
   ✅ DONE (`acd1f5b8`, −17 LOC net: `function`→located hint, `EFunction` deleted end-to-end grep=0,
   `TFunction` kept only as the hint sentinel; fixpoint YES); **backtick infix**
-  `` x `f` y `` ✅ DONE (`f6dabd5a`; `backtickOp`/production deleted, `firstBacktickIdx` hint, `TBacktickIdent`
+  `` x `f` y `` ✅ DONE (`f6dabd5a`; `backtickOp`/production deleted, `prescanTokHit` backtick hint, `TBacktickIdent`
   kept as sentinel); the **`let rec … with` mutual-group** — NEXT
   (keep single `let rec` for local recursive lambdas; drop only the `with` grouping); **`let-else`**.
   > **⚠️ TWO LESSONS from the backtick bite:** (1) **A construct-removal census MUST scan the always-loaded
@@ -295,7 +295,7 @@ The construct removals:
   `!=` is a **located beginner-hint** (`"unexpected '!='. (Did you mean '/='?)"`, `P-BAD-NEQ`, with a
   machine-applicable `--json` `fix`). The half-built machinery was FLIPPED, not written: `TSlashEq` is
   DELETED, `TNeq` is now the `/=` token (so the `binOp`/`sectionOpStr` wiring is unchanged), and the new
-  `TBangEq` sentinel feeds `firstBangEqIdx` (`compiler/frontend/parser.mdk` — cite by SYMBOL; the line
+  `TBangEq` sentinel feeds `prescanTokHit` (`compiler/frontend/parser.mdk` — cite by SYMBOL; the line
   numbers this bullet used to carry had drifted by ~900). The internal opcode string moved `"!="` → `"/="`
   across all 23 sites, so the printer needs no spelling map. **Migration was 2.7× the estimate:** the "54
   `!=` sites" premise was stale — the actual cut was **197 in compiler+stdlib** plus **138 more** across

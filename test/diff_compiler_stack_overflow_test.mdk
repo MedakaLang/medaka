@@ -32,7 +32,7 @@ import compiler_cli_test_support.{
   EngineDeath(..), RuntimeOutcome(..), fatalOutcomeSweep, rosterAgreement
 }
 import string.{contains, lines}
-import test.{Expectation, fail, pass}
+import test.{Expectation, expectSatisfies, fail}
 import test_process.{boundedVerbSeconds, medakaBin, medakaRoot}
 
 corpus : <IO> String
@@ -70,8 +70,10 @@ test "run and build+exec agree with every fixture's pinned outcome" =
 
 -- #3781: the interpreter arm of `medaka test` names the file in the
 -- diagnostic, as `medaka run` does, rather than printing a bare `:L:C:`.
-namesFile : String -> <Exec, IO> Expectation
-namesFile name =
+-- `at` is the `L:C` the diagnostic must carry, or "" to pin only the file; the
+-- located parse puts it where `medaka run` reports the same call.
+namesFile : String -> String -> <Exec, IO> Expectation
+namesFile name at =
   let fixture = "\{medakaRoot}/test/stack_overflow_test_fixtures/\{name}.mdk"
   match boundedVerbSeconds 60 medakaBin ["test", "--engines", "eval", fixture]
     Err e => fail "medaka test: \{e}"
@@ -83,10 +85,10 @@ namesFile name =
         (stackOverflowLines name out re))
         [] => fail "no E-STACK-OVERFLOW line in the test report"
         ls =>
-          if all (contains "\{name}.mdk:") ls then
-            pass
-          else
-            fail "diagnostic does not name the file: \{debug ls}"
+          expectSatisfies
+            "every diagnostic names \{name}.mdk:\{at}"
+            (all (contains "\{name}.mdk:\{at}"))
+            ls
 
 -- Properties run in the supervised interpreter worker, which returns its
 -- error row through stdout. Ordinary unit and doctest paths retain stderr.
@@ -95,8 +97,9 @@ stackOverflowLines "deep_in_prop" out _ = lines out
 stackOverflowLines _ _ err = lines err
 
 test "medaka test under the interpreter names the file at a stack overflow" =
-  namesFile "deep_in_test_block"
+  namesFile "deep_in_test_block" ""
 
-test "a doctest's stack overflow names the file" = namesFile "deep_in_doctest"
+test "a doctest's stack overflow names the file" =
+  namesFile "deep_in_doctest" "5:9"
 
-test "a prop's stack overflow names the file" = namesFile "deep_in_prop"
+test "a prop's stack overflow names the file" = namesFile "deep_in_prop" "3:9"

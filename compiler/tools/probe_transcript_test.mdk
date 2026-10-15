@@ -1,0 +1,31 @@
+-- `probeTokens` holds the tokens of the latest source only; an alternation of
+-- sources must still return each source's own tokens.
+
+import frontend.lexer.{Token, tokenizeWithOffsetPairs, tokenToString}
+import test.{expectAll, expectEqual}
+import tools.probe_transcript.{probeTokens}
+
+srcA : String
+srcA = "main = 1\n"
+
+srcB : String
+srcB = "f x = x + 1\nmain = f 2\n"
+
+shown : (List Token, List (Int, Int)) -> (List String, List (Int, Int))
+shown (toks, offs) = (map tokenToString toks, offs)
+
+test "probeTokens agrees with a direct tokenization across alternating sources" = expectAll
+  [
+    expectEqual
+      (shown (tokenizeWithOffsetPairs srcA))
+      (shown (probeTokens srcA)),
+    expectEqual
+      (shown (tokenizeWithOffsetPairs srcB))
+      (shown (probeTokens srcB)),
+    expectEqual
+      (shown (tokenizeWithOffsetPairs srcA))
+      (shown (probeTokens srcA)),
+    expectEqual
+      (shown (tokenizeWithOffsetPairs srcA))
+      (shown (probeTokens srcA)),
+  ]

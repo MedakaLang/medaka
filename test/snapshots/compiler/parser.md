@@ -1,5 +1,5 @@
 # META
-source_lines=6789
+source_lines=6783
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -2104,8 +2104,8 @@ recordPatFieldRest name nameLoc _ =
 -- so `many parsePatAtom` / the let-binder path MUST stay recoverable at them (a
 -- fatal here miscompiles the compiler's own guarded arms and every `let rec`).
 -- They are still RESERVED — you cannot bind one — so the diagnostic for the
--- unambiguous case is produced POSITIONALLY instead, by `firstCtxKwDeclIdx`
--- below (#935), which reuses `reservedKeywordMsg` so the same
+-- unambiguous case is produced POSITIONALLY instead, by the `phCtxKw` rule of
+-- `prescanLineStart` (#935), which reuses `reservedKeywordMsg` so the same
 -- `P-RESERVED-KEYWORD` code and `append _` fix reach the user.
 reservedIdentKeyword : Token -> Option String
 reservedIdentKeyword TWith = Some "with"
@@ -6058,21 +6058,12 @@ firstLexError toks i
     TLexError msg => Some (i, msg)
     _ => firstLexError toks (i + 1)
 
--- `!=` is no longer Medaka's not-equal (`/=` is, #1739 half B: once `!` means
--- Ref-dereference, nothing in the negation family should spell itself with `!`).
--- The lexer tags it as a distinct `TBangEq` so we can locate it precisely and
--- suggest the fix, rather than letting it split into `!` `=` and mislocate.
--- beta mutability model: `let mut` has been removed. `mut` (TMut) is a keyword
--- with no remaining valid use, so its presence is always the removed `let mut`.
--- A pre-grammar token scan surfaces a clean, located error (pointing at `mut`)
--- instead of the recursive-descent's swallowed-then-"expected dedent" fallback
--- (`stmtsLoop`'s `orElse … (deferPure [])` discards a failed statement's own error).
 -- `record` has been removed as a declaration keyword (records are now the
 -- `data X = { … }` short form), but — unlike `mut`/`function` above — the WORD
 -- is an ordinary identifier again (#62; `keywordOrIdent`, lexer.mdk, carries the
--- reasoning for the split).  So this scan can no longer key on the token: it
--- keys on the removed CONSTRUCT'S SHAPE, the same way `firstForeignKwIdx` keys
--- on `for`/`while`/`def` (also plain `TIdent`s).
+-- reasoning for the split).  So the rule cannot key on the token: `recordHeadIdx`
+-- (run at line starts by `prescanLineStart`) keys on the removed CONSTRUCT'S
+-- SHAPE, the same way the `for`/`while`/`def` rule keys (also plain `TIdent`s).
 --
 -- Shape: a TOP-LEVEL logical line that starts `record Upper` (after any
 -- `export`/`public` modifier) and then either
@@ -6216,11 +6207,6 @@ isBinderTok TEqual = True
 isBinderTok TColon = True
 isBinderTok _ = False
 
--- `function` has been removed as a keyword: a point-free one-arg match is
--- spelled `x => match x { … }`, or as a multi-clause definition.  `function`
--- (TFunction) is a reserved word with no remaining valid use, so its presence
--- is always the removed keyword.  A pre-grammar token scan surfaces a located
--- hint (pointing at `function`).
 -- Scan forward from token index `i` (depth=accumulated INDENT/DEDENT) looking
 -- for `TIn` at depth=0 before the enclosing block exits (a `TDedent` that would
 -- take depth below 0, or `TEof`).  Returns True if the inline `let` is
@@ -6328,9 +6314,9 @@ hsSigMsg = "`::` is the list cons operator; write `f : T` for a type signature"
 -- ── Stage-2 foreign-syntax pre-scans (PARSE-ERROR-LOCATION-DESIGN §3) ─────────
 -- Each mirrors the existing `/=`/`case…of`/`::` hints: a pure token scan that
 -- fires ONLY on shapes that are never valid Medaka, returning the offending token
--- index so the located `ParseError` dodges the `1:0` collapse.  Every scanner
--- carries a valid-input safety proof in its comment; the risk is a false positive
--- on VALID code (esp. records vs braces — see `firstBraceBlockIdx`).
+-- index so the located `ParseError` dodges the `1:0` collapse.  The risk is a
+-- false positive on VALID code (esp. records vs braces — see `braceBlockFrom`);
+-- each rule's safety argument sits beside its helper or its `prescanTokHit` arm.
 
 -- A bracket opener / closer (paren, bracket, brace) — used to track nesting so a
 -- scan only reasons about tokens at its own bracket level.
@@ -6570,6 +6556,14 @@ prescanLineStart toks i t depth h0 =
 -- Rules keyed on the token itself (or a short lookahead from it).  `sb` is the
 -- top-level declaration boundary for the Haskell-signature rule and `im` says a
 -- `match` opened earlier on this logical line.
+--
+-- Tokens that are always the removed construct, so presence alone is the hit:
+-- `TBangEq` (`!=`; once `!` means Ref-dereference nothing in the negation family
+-- is spelled with `!`, and the lexer tags it so it is located precisely rather
+-- than split into `!` `=`), `TMut` (`let mut`: `mut` has no remaining valid use,
+-- and the grammar's own fallback swallows the failed statement's error, so only
+-- a pre-grammar hit gives a located message), `TFunction` (a point-free match is
+-- `x => match x { … }`), `TBacktickIdent`.
 prescanTokHit : Array Token ->
   Array Int ->
   Int ->
@@ -6579,7 +6573,7 @@ prescanTokHit : Array Token ->
   Bool ->
   PrescanHits ->
   PrescanHits
--- lint-disable-next-line rule-match-on-param
+-- lint-disable-next-line rule-match-on-param -- the arms need all eight arguments; `t` is matched, not a parameter pattern
 prescanTokHit toks offs i t depth sb im h = match t
   TLexError _ => if h.phLex < 0 then { h | phLex = i } else h
   TBangEq => if h.phBangEq < 0 then { h | phBangEq = i } else h

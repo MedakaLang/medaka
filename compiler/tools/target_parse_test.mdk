@@ -1,0 +1,75 @@
+-- Behaviour of the process-global single-entry memos in `tools/target_parse.mdk`:
+-- a hit must return the decls of THAT source, and a switch of source must
+-- replace the entry rather than serve the previous one.
+
+import frontend.parser.{parseLocatedResult}
+import frontend.ast.{Decl}
+import test.{expectAll, expectEqual, expectSatisfies, expectTrue}
+import tools.doctest.{exampleInput, exampleExpected}
+import tools.target_parse.{
+  parseTargetResult, targetRaw, targetDesugared, targetExamples
+}
+
+srcA : String
+srcA = "a1 = 1\n"
+
+srcB : String
+srcB = "b1 = 1\nb2 = 2\nb3 = 3\n"
+
+badSrc : String
+badSrc = "f x = (\n"
+
+declCount : Result e (List Decl) -> Int
+declCount (Ok ds) = length ds
+declCount (Err _) = 0 - 1
+
+test "alternating sources A/B/A each return their own decls" = expectAll [
+  expectEqual 1 (length (targetRaw srcA)),
+  expectEqual 3 (length (targetRaw srcB)),
+  expectEqual 1 (length (targetRaw srcA)),
+  expectEqual 3 (length (targetDesugared srcB)),
+  expectEqual 1 (length (targetDesugared srcA)),
+  expectEqual 3 (length (targetDesugared srcB)),
+]
+
+test "parseTargetResult after targetDesugared of the same source is Ok" = expectAll
+  [
+    expectEqual 3 (length (targetDesugared srcB)),
+    expectEqual 3 (declCount (parseTargetResult srcB)),
+    expectEqual 1 (length (targetDesugared srcA)),
+    expectEqual 1 (declCount (parseTargetResult srcA)),
+  ]
+
+test "a parse-error source is Err through parseTargetResult, even after a hit" = expectAll
+  [
+    expectEqual 3 (length (targetRaw srcB)),
+    expectTrue (isErr (parseTargetResult badSrc)),
+    expectTrue (isErr (parseLocatedResult badSrc)),
+    expectTrue (isOk (parseTargetResult srcB)),
+    expectTrue (isErr (parseTargetResult badSrc)),
+  ]
+
+exSrcA : String
+exSrcA = "-- > 1 + 1\n-- 2\nx = 1\n"
+
+exSrcB : String
+exSrcB = "-- > 2 + 2\n-- 4\n-- > 3 + 3\n-- 6\ny = 1\n"
+
+test "targetExamples switches its key with the source" = expectAll [
+  expectEqual ["1 + 1"] (map exampleInput (targetExamples exSrcA)),
+  expectEqual ["2 + 2", "3 + 3"] (map exampleInput (targetExamples exSrcB)),
+  expectEqual ["1 + 1"] (map exampleInput (targetExamples exSrcA)),
+  expectEqual [Some "2"] (map exampleExpected (targetExamples exSrcA)),
+]
+
+test "the decl memo and the examples memo do not disturb each other" = expectAll
+  [
+    expectEqual 1 (length (targetRaw srcA)),
+    expectEqual ["2 + 2", "3 + 3"] (map exampleInput (targetExamples exSrcB)),
+    expectEqual 1 (length (targetRaw srcA)),
+    expectEqual 3 (length (targetRaw srcB)),
+    expectSatisfies
+      "still two examples"
+      (n => n == 2)
+      (length (targetExamples exSrcB)),
+  ]
