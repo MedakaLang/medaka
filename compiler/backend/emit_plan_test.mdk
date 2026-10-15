@@ -472,9 +472,11 @@ test "a wasm plan's host keys are its reached externs' imports, per group" = exp
       "exit only"
       (expectEqual ["mdk_exit"] (hostKeysOf WasmBackend (call "exit" [int 0]))),
     labelFail
-      "readFile: the path channel, the read and the result channel; no args, env or exit"
+      "readFile: the grant and path channels, the read and the result channel; no args, env or exit"
       (expectEqual
         [
+          "mdk_grant_push",
+          "mdk_grant_reset",
           "mdk_path_push",
           "mdk_path_reset",
           "mdk_read_file",
@@ -482,6 +484,35 @@ test "a wasm plan's host keys are its reached externs' imports, per group" = exp
           "mdk_result_len",
         ]
         (hostKeysOf WasmBackend (call "readFile" [ref "p", CList []]))),
+    labelFail
+      "canonicalizePath: the grant and path channels, the host answer and a refusal's panic"
+      (expectEqual
+        [
+          "mdk_canonicalize_path",
+          "mdk_grant_push",
+          "mdk_grant_reset",
+          "mdk_path_push",
+          "mdk_path_reset",
+          "mdk_result_byte",
+          "mdk_result_len",
+          "mdk_write_err_byte",
+        ]
+        (hostKeysOf WasmBackend (call "canonicalizePath" [ref "p", CList []]))),
+    labelFail
+      "a declared file bound: the grant channel and the bound frame"
+      (expectEqual
+        [
+          "mdk_file_bound_enter",
+          "mdk_file_bound_exit",
+          "mdk_grant_push",
+          "mdk_grant_reset",
+        ]
+        (hostKeysOf
+          WasmBackend
+          (call "$withFileReadBound" [
+            CList [str "cfg/*"],
+            CLam [PWild] unit,
+          ]))),
     labelFail
       "args: the argument channel only"
       (expectEqual

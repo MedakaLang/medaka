@@ -10,11 +10,11 @@
 // run.js, worker.js or compile.mjs, which is how a probe is shown red against an older
 // host.
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createHost, runProgram, CapabilityError, HostKeyError, SLICES, KEY_EXTERN } from './medaka_host.mjs';
+import { createHost, runProgram, confine, CapabilityError, HostKeyError, SLICES, KEY_EXTERN } from './medaka_host.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = dirname(here);
@@ -258,6 +258,73 @@ function check(name, ok, detail) {
         bad.push(`${name}: ${k} -> ${e}, not among the slice's externs`);
     }
   check('(j) KEY_EXTERN agrees with SLICES externs', bad.length === 0, bad.join('; '));
+}
+
+// (k) Confinement (mdk_confine's port) over a real tree, through the host's import
+// surface as a guest calls it: a symlink in the existing prefix, `..` after a
+// symlink, a dangling symlink, the whole domain `[]`, a bound frame, and a grant left
+// by a previous call, which the next call must not inherit.
+{
+  const t = realpathSync.native(mkdtempSync(join(os.tmpdir(), 'medaka-confine-')));
+  mkdirSync(join(t, 'cfg'));
+  mkdirSync(join(t, 'outdir'));
+  writeFileSync(join(t, 'secret.txt'), 'top secret');
+  writeFileSync(join(t, 'cfg', 'a.txt'), 'granted');
+  symlinkSync('../outdir', join(t, 'cfg', 'link'));
+  symlinkSync('../nowhere.txt', join(t, 'cfg', 'dangling'));
+  const vfs = {
+    readFile: (p) => readFileSync(p), exists: (p) => existsSync(p), writeFile: (p, b) => writeFileSync(p, b),
+    realpath: (p) => realpathSync.native(p),
+    lexists: (p) => { try { lstatSync(p); return true; } catch (e) { return false; } },
+  };
+  const cfg = [`${t}/cfg/*`];
+  const out = (p) => `${p} is outside the granted authority ["${t}/cfg/*"]`;
+  const cases = [
+    ['inside', `${t}/cfg/a.txt`, cfg, null],
+    ['a new file inside', `${t}/cfg/new.txt`, cfg, null],
+    ['a symlink in the prefix', `${t}/cfg/link/x.txt`, cfg, out(`${t}/cfg/link/x.txt`)],
+    ['`..` after a symlink', `${t}/cfg/link/../a.txt`, cfg, out(`${t}/cfg/link/../a.txt`)],
+    ['a dangling symlink', `${t}/cfg/dangling`, cfg, out(`${t}/cfg/dangling`)],
+    ['`..` out of the grant', `${t}/cfg/../secret.txt`, cfg, out(`${t}/cfg/../secret.txt`)],
+    ['the whole domain', `${t}/secret.txt`, [], null],
+  ];
+  const bad = cases.filter(([, p, g, want]) => confine(vfs, p, g, false) !== want)
+    .map(([name, p, g]) => `${name}: ${confine(vfs, p, g, false)}`);
+  check('(k) confine: canonical paths, as medaka_rt.c mdk_confine', bad.length === 0, bad.join('; '));
+
+  const host = createHost('wasmgc/node', { vfs });
+  const env = host.imports.env;
+  const bytes = (s) => new TextEncoder().encode(s);
+  const grant = (g) => { env.mdk_grant_reset(); for (const e of g) { for (const b of bytes(e)) env.mdk_grant_push(b); env.mdk_grant_push(-1); } };
+  const read = (p) => { env.mdk_path_reset(); for (const b of bytes(p)) env.mdk_path_push(b); return env.mdk_read_file(); };
+  const text = () => new TextDecoder().decode(host.resultBuf);
+  grant([]);
+  const first = read(`${t}/secret.txt`);
+  const stale = read(`${t}/secret.txt`);
+  check('(k) host: a grant serves one call; the next call without one is refused',
+    first === 1 && stale === 0 && text().includes('is outside the granted authority'),
+    JSON.stringify({ first, stale, text: text() }));
+  grant(cfg);
+  const pushed = env.mdk_file_bound_enter(0, 1);
+  grant([]);
+  const underRead = read(`${t}/secret.txt`);
+  grant(cfg);
+  const reentered = env.mdk_file_bound_enter(0, 0);
+  grant(cfg);
+  const writeBound = env.mdk_file_bound_enter(1, 0);
+  env.mdk_file_bound_exit();
+  env.mdk_file_bound_exit();
+  grant([]);
+  const left = read(`${t}/secret.txt`);
+  grant(cfg);
+  env.mdk_file_bound_enter(0, 1);
+  host.reset();
+  grant([]);
+  const afterReset = read(`${t}/secret.txt`);
+  check('(k) host: a bound frame confines its mode, re-entry adds none, reset clears it',
+    pushed === 1 && underRead === 0 && reentered === 0 && writeBound === 1 && left === 1 && afterReset === 1,
+    JSON.stringify({ pushed, underRead, reentered, writeBound, left, afterReset }));
+  rmSync(t, { recursive: true, force: true });
 }
 
 // Report only: slices no module built above imports a key of.

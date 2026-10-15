@@ -858,7 +858,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'pds/test/did_key_all_engines' 'pds/test/field_vectors' 'pds/test/mst_vectors' 'pds/test/repo_vectors' 'pds/test/scalar_vectors' 'pds/test/signing_parity' 'sqlite/test/index_write_oracle' 'diff_compiler_check_cli_modules' 'diff_compiler_engines_part3' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_llvm_modules' 'diff_compiler_rejection_parity' 'wasm_host_profile_agreement' 'diff_compiler_guide_render'"
+            pattern: "'pds/test/did_key_all_engines' 'pds/test/field_vectors' 'pds/test/mst_vectors' 'pds/test/repo_vectors' 'pds/test/scalar_vectors' 'pds/test/signing_parity' 'diff_compiler_check_cli_modules' 'diff_compiler_engines_part3' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_llvm_modules' 'diff_compiler_rejection_parity' 'wasm_host_profile_agreement' 'native_fixtures/run' 'diff_compiler_guide_render'"
             wasm_arm: "1"
           - name: gates_2
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
@@ -947,7 +947,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'build_cmd' 'pds/test/encodings_vectors' 'pds/test/hmac_vectors' 'pds/test/secp256k1_point_vectors' 'bootstrap_eval' 'bootstrap_typecheck' 'cross_project_deps' 'diff_compiler_ci_guard_failsafe' 'diff_compiler_dict_semantics_permute' 'diff_compiler_fmt_roundtrip' 'diff_compiler_fmt' 'diff_compiler_index' 'diff_compiler_let_refute' 'diff_compiler_lint_baseline' 'diff_compiler_prelude_obj' 'diff_compiler_references_tool' 'diff_compiler_run_check_agreement' 'diff_compiler_run_entry_subdir' 'diff_compiler_snapshot_wasm_input' 'diff_compiler_test_native' 'effect_param_domain' 'native_fixtures/run' 'diff_compiler_tier_drift' 'diff_compiler_partition_stability'"
+            pattern: "'build_cmd' 'pds/test/encodings_vectors' 'pds/test/hmac_vectors' 'pds/test/secp256k1_point_vectors' 'sqlite/test/index_write_oracle' 'bootstrap_eval' 'bootstrap_typecheck' 'cross_project_deps' 'diff_compiler_ci_guard_failsafe' 'diff_compiler_dict_semantics_permute' 'diff_compiler_fmt_roundtrip' 'diff_compiler_fmt' 'diff_compiler_index' 'diff_compiler_let_refute' 'diff_compiler_lint_baseline' 'diff_compiler_prelude_obj' 'diff_compiler_references_tool' 'diff_compiler_run_check_agreement' 'diff_compiler_run_entry_subdir' 'diff_compiler_snapshot_wasm_input' 'diff_compiler_test_native' 'diff_native_stack' 'effect_param_domain' 'diff_compiler_tier_drift' 'diff_compiler_partition_stability'"
           - name: gates_7
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
@@ -963,7 +963,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'gzip/test/deflate_oracle' 'pds/test/rfc6979_vectors' 'pds/test/signing_corpus' 'pds/test/store_persistence' 'build_construct_coverage' 'diff_compiler_capability_matrix' 'diff_compiler_dispatch_shape' 'diff_compiler_stdlib_conventions' 'diff_compiler_effect_polarity' 'diff_compiler_eval' 'diff_compiler_flat_vs_onemodule' 'diff_compiler_ir_scaling' 'diff_compiler_perf_scaling' 'diff_compiler_preflight_base' 'diff_compiler_prelude_shadow_census' 'diff_compiler_source_bytes' 'diff_compiler_stage_ir_scaling' 'diff_compiler_tmc_parity' 'diff_native_stack' 'pds/test/lib_boundary' 'dist_install_smoke'"
+            pattern: "'gzip/test/deflate_oracle' 'pds/test/rfc6979_vectors' 'pds/test/signing_corpus' 'pds/test/store_persistence' 'build_construct_coverage' 'diff_compiler_capability_matrix' 'diff_compiler_dispatch_shape' 'diff_compiler_stdlib_conventions' 'diff_compiler_effect_polarity' 'diff_compiler_eval' 'diff_compiler_flat_vs_onemodule' 'diff_compiler_ir_scaling' 'diff_compiler_perf_scaling' 'diff_compiler_preflight_base' 'diff_compiler_prelude_shadow_census' 'diff_compiler_source_bytes' 'diff_compiler_stage_ir_scaling' 'diff_compiler_tmc_parity' 'pds/test/lib_boundary' 'dist_install_smoke'"
           - name: gates_8
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and

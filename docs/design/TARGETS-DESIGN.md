@@ -29,8 +29,9 @@ That ruling stands. None of it is implemented. Measured on 2026-10-01:
 - **An extern wasm cannot lower fails after typechecking**, inside the emitter,
   as `unbound variable 'writeFile'` — an unlocated panic (#380, #2130, #2426).
   Only the 28 net names and user FFI externs get a worded refusal. The one
-  located, pre-lowering refusal is the file-grant check in
-  `compiler/backend/wasm_file_grants.mdk`.
+  located, pre-lowering refusal was the file-grant check in
+  `compiler/backend/wasm_file_grants.mdk`, deleted when the host began to
+  confine file operations (§6.5).
 - **Which backend lowers which extern is recorded in name lists.** A ladder of
   predicates in `compiler/backend/wasm_emit.mdk` (`isStrExternW`, `isLeafExternW`,
   `isArrayExternW`, `isByteBlockExternW`, `isNetExternW`, `isFfiExternW`), the
@@ -50,8 +51,10 @@ That ruling stands. None of it is implemented. Measured on 2026-10-01:
 - **User code cannot call JavaScript.** `extern f : … -> <FFI "lib"> …` binds a
   C symbol; `wasm_emit` refuses it (pinned by `test/wasm/diff_wasm_ffi_wall.sh`).
   No issue tracked a JavaScript binding, a WASI target, or an edge profile.
-- **Some divergences are not capability gaps.** `canonicalizePath` lowers to
-  identity on wasm; Unicode classification is ASCII-only on wasm; JavaScript
+- **Some divergences are not capability gaps.** `canonicalizePath` lowered to
+  identity on wasm until the host received the grant (§6.5); it now answers the
+  host's `realpath`, and `test/native_fixtures/confinement/canonicalize_dots.mdk`
+  pins native and `wasmgc/node` to one answer. Unicode classification is ASCII-only on wasm; JavaScript
   `Math.*` and libm differ sub-ULP; float formatting executes in the host. Under
   §3's law these are defects or ledgered deviations with a drain date, not
   properties of the target.

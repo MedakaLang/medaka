@@ -30,6 +30,7 @@
 // (compiler/backend/extern_catalog.mdk: osEntropyBytes is native-only, the stdin
 // family is unported).
 const PATH_KEYS = ['mdk_path_reset', 'mdk_path_push'];
+const GRANT_KEYS = ['mdk_grant_reset', 'mdk_grant_push'];
 const RESULT_KEYS = ['mdk_result_len', 'mdk_result_byte'];
 const MATH_KEYS = [
   'mdk_cbrt', 'mdk_exp', 'mdk_log', 'mdk_log2', 'mdk_log10',
@@ -47,12 +48,15 @@ export const SLICES = {
   fs: {
     needs: ['FileRead', 'FileWrite'],
     keys: [
-      'mdk_read_file', 'mdk_file_exists',
+      'mdk_read_file', 'mdk_file_exists', 'mdk_canonicalize_path',
       'mdk_write_file_reset', 'mdk_write_file_push', 'mdk_write_file_commit',
-      ...PATH_KEYS, ...RESULT_KEYS,
+      ...PATH_KEYS, ...RESULT_KEYS, ...GRANT_KEYS,
     ],
-    externs: ['readFile', 'readFileBytes', 'fileExists', 'writeFile', 'writeFileBytes'],
+    externs: ['readFile', 'readFileBytes', 'fileExists', 'canonicalizePath', 'writeFile', 'writeFileBytes'],
   },
+  // A declared file bound's frame (EFFECTS-SEMANTICS §7) is bookkeeping, not a
+  // capability: a bounded body that performs no file operation runs anywhere.
+  filebound: { needs: [], keys: ['mdk_file_bound_enter', 'mdk_file_bound_exit', ...GRANT_KEYS] },
   env: { needs: ['Env'], keys: ['mdk_get_env', ...PATH_KEYS, ...RESULT_KEYS], externs: ['getEnv'] },
   args: { needs: [], process: true, keys: ['mdk_args_count', 'mdk_arg_len', 'mdk_arg_byte'], externs: ['args'] },
   exit: { needs: [], process: true, keys: ['mdk_exit'], externs: ['exit'] },
@@ -85,7 +89,7 @@ export const PROFILES = {
 // argv, and an `env` that answers None.
 export const COMPILER_HOST = {
   name: 'the playground compiler host',
-  slices: ['stdout', 'stderr', 'floatfmt', 'math', 'strtod', 'fs', 'env', 'args', 'exit', 'clock'],
+  slices: ['stdout', 'stderr', 'floatfmt', 'math', 'strtod', 'fs', 'filebound', 'env', 'args', 'exit', 'clock'],
 };
 
 export function profileSlices(profile) {
@@ -121,7 +125,7 @@ export const WASM_GAP_EXTERNS = ['writeFile', 'osEntropyBytes'];
 // every key of a withholdable slice has a row naming one of that slice's `externs`.
 export const KEY_EXTERN = {
   mdk_write_byte: 'putStr', mdk_write_err_byte: 'ePutStr',
-  mdk_read_file: 'readFile', mdk_file_exists: 'fileExists',
+  mdk_read_file: 'readFile', mdk_file_exists: 'fileExists', mdk_canonicalize_path: 'canonicalizePath',
   mdk_write_file_reset: 'writeFileBytes', mdk_write_file_push: 'writeFileBytes',
   mdk_write_file_commit: 'writeFileBytes', mdk_get_env: 'getEnv',
   mdk_args_count: 'args', mdk_arg_len: 'args', mdk_arg_byte: 'args', mdk_exit: 'exit',
@@ -244,7 +248,9 @@ const dec = (a) => new TextDecoder('utf-8').decode(a instanceof Uint8Array ? a :
 
 // ── vfs ──────────────────────────────────────────────────────────────────────
 // The file source behind the `fs` slice: readFile(path) -> bytes (throws an Error
-// whose message is the guest's Err text), exists(path) -> bool, writeFile(path, bytes).
+// whose message is the guest's Err text), exists(path) -> bool, writeFile(path, bytes),
+// and for confinement realpath(path) -> the canonical path (throws when it has none)
+// and lexists(path) -> whether an entry is present, a dangling symlink included.
 // An in-memory vfs, with the path model of docs/spec/WASM-SEMANTICS.md §3: paths are
 // relative to its root (`.`, `/` and `` all name it), `.` and empty components are
 // dropped, `..` steps up (never above the root), and every component a `/` follows
@@ -299,6 +305,15 @@ export class MemoryVfs {
     const { key, error } = this.resolve(p);
     return !error && (this.dirs.has(key) || this.files.has(key));
   }
+  // The canonical absolute form of an existing path, the root being `/`; it has no
+  // symbolic links, so an entry is present exactly when it exists.
+  realpath(p) {
+    const { key, error } = this.resolve(p);
+    if (error || !(this.dirs.has(key) || this.files.has(key)))
+      throw new Error(`ENOENT: no such file or directory, realpath '${p}'`);
+    return '/' + key;
+  }
+  lexists(p) { return this.exists(p); }
   writeFile(p, bytes) {
     const { key, error } = this.resolve(p);
     if (error) throw new Error(`${error}, open '${p}'`);
@@ -306,6 +321,104 @@ export class MemoryVfs {
     this.files.set(key, bytes);
   }
 }
+
+// ── confinement (EFFECTS-SEMANTICS §7) ──────────────────────────────────────
+// The port of runtime/medaka_rt.c's mdk_canon_path, mdk_element_admits,
+// mdk_confine and mdk_confine_bounds, over a vfs's `realpath` (realpath(3): throws
+// when a path does not resolve) and `lexists` (lstat(2) succeeds).  Lengths are
+// counted in bytes against Linux's PATH_MAX, as the C buffers are.
+const PATH_MAX = 4096;
+const blen = (s) => enc(s).length;
+
+// The components of `p`, split on `/`, with empty and `.` components dropped.
+const pathComponents = (p) => p.split('/').filter((c) => c !== '' && c !== '.');
+
+// `/` or `.` followed by comps[0..k), joined by `/`; null past PATH_MAX.
+function pathJoin(absolute, comps, k) {
+  let out = absolute ? '/' : '.';
+  for (let i = 0; i < k; i++) {
+    if (blen(out) + 1 + blen(comps[i]) >= PATH_MAX) return null;
+    out += (absolute && out === '/' ? '' : '/') + comps[i];
+  }
+  return out;
+}
+
+// `dir` (canonical) followed by `/name`; null past PATH_MAX.
+function pathAppend(dir, name) {
+  const root = dir === '/';
+  if (blen(dir) + (root ? 0 : 1) + blen(name) >= PATH_MAX) return null;
+  return dir + (root ? '' : '/') + name;
+}
+
+function tryRealpath(vfs, p) {
+  try { return vfs.realpath(p); } catch (e) { return null; }
+}
+
+// The canonical form of `p`, or null when it has none: the realpath of the longest
+// prefix that resolves, followed by the remaining components, which may not include
+// `..` and whose first must be absent (an entry present that does not resolve is a
+// dangling or looping symlink).  In entry mode the last component is appended to
+// its directory's canonical form unresolved.
+export function canonPath(vfs, p, entry) {
+  if (p === '' || blen(p) >= PATH_MAX) return null;
+  const absolute = p[0] === '/';
+  const comps = pathComponents(p);
+  const n = comps.length;
+  if (entry && n > 0 && comps[n - 1] !== '..') {
+    const probe = pathJoin(absolute, comps, n - 1);
+    const dir = probe === null ? null : canonPath(vfs, probe, false);
+    return dir === null ? null : pathAppend(dir, comps[n - 1]);
+  }
+  let k = n;
+  let out = null;
+  for (; k >= 0; k--) {
+    const probe = pathJoin(absolute, comps, k);
+    if (probe === null) return null;
+    out = tryRealpath(vfs, probe);
+    if (out !== null) break;
+  }
+  if (k < 0) return null;
+  if (k === n) return out;
+  for (let i = k; i < n; i++) if (comps[i] === '..') return null;
+  const first = pathAppend(out, comps[k]);
+  if (first === null || vfs.lexists(first)) return null;
+  for (let i = k; i < n; i++) {
+    out = pathAppend(out, comps[i]);
+    if (out === null) return null;
+  }
+  return out;
+}
+
+// Whether one grant element admits the canonical path `canon`: an exact element by
+// canonical equality, a pattern `<dir>/<stem>*` by prefix of the canonical `<dir>`
+// followed by `/<stem>` (and `<dir>` itself for an empty stem), `*` alone always.
+function elementAdmits(vfs, elem, canon) {
+  if (blen(elem) >= PATH_MAX) return false;
+  if (elem.endsWith('*')) {
+    const e = elem.slice(0, -1);
+    if (e === '') return true;
+    const slash = e.lastIndexOf('/');
+    const dir = slash < 0 ? '.' : slash === 0 ? '/' : e.slice(0, slash);
+    const stem = slash < 0 ? e : e.slice(slash + 1);
+    const want = canonPath(vfs, dir, false);
+    if (want === null) return false;
+    if (stem === '' && canon === want) return true;
+    const prefix = pathAppend(want, stem);
+    return prefix !== null && canon.startsWith(prefix);
+  }
+  const c = canonPath(vfs, elem, false);
+  return c !== null && c === canon;
+}
+
+// null when `grant` (`[]` = the whole domain) admits `path`, else the refusal text.
+export function confine(vfs, path, grant, entry) {
+  if (grant.length === 0) return null;
+  const canon = canonPath(vfs, path, entry);
+  if (canon !== null && grant.some((g) => elementAdmits(vfs, g, canon))) return null;
+  return `${path} is outside the granted authority [${grant.map((g) => `"${g}"`).join(', ')}]`;
+}
+
+const sameGrant = (a, b) => a.length === b.length && a.every((g, i) => g === b[i]);
 
 // A sink that keeps every delivered byte; `text(stream)` decodes what it holds.
 export function bufferSink() {
@@ -349,11 +462,16 @@ export function createHost(profile, opts = {}) {
     pathBuf: [], resultBuf: new Uint8Array(0), writeBuf: [],
     floatFmtBuf: new Uint8Array(0), strToFloatOk: 0,
     argBytes: null, waitCell: null,
+    // The grant the guest pushed for the next file operation (null: none pushed, or
+    // already taken), the element it is pushing, and the declared bounds entered:
+    // { write, grant, active }, innermost last.
+    grant: null, grantElem: [], bounds: [],
   };
   host.reset = () => {
     host.stdoutBuf = []; host.stderrBuf = [];
     host.pathBuf = []; host.resultBuf = new Uint8Array(0); host.writeBuf = [];
     host.floatFmtBuf = new Uint8Array(0); host.strToFloatOk = 0; host.argBytes = null;
+    host.grant = null; host.grantElem = []; host.bounds = [];
   };
   host.deliver = (stream) => {
     const buf = stream === 'stdout' ? host.stdoutBuf : host.stderrBuf;
@@ -371,6 +489,22 @@ export function createHost(profile, opts = {}) {
   };
   const takePath = () => { const s = dec(host.pathBuf); host.pathBuf = []; return s; };
   const fail = (e) => { host.resultBuf = enc(String((e && e.message) || e)); return 0; };
+  // A grant is taken by the operation it was pushed for, so an operation that finds
+  // none refuses rather than inherit a previous call's.
+  const takeGrant = () => { const g = host.grant; host.grant = null; return g; };
+  // The refusal text for `path`, or null: the operation's grant, then each active
+  // bound of its mode, innermost first (mdk_confine_bounds).
+  const refusal = (path, entry, write) => {
+    const grant = takeGrant();
+    if (grant === null) return `${path} is outside the granted authority: no grant was given`;
+    let refused = confine(host.vfs, path, grant, entry);
+    for (let i = host.bounds.length - 1; refused === null && i >= 0; i--) {
+      const b = host.bounds[i];
+      if (b.active && b.write === write) refused = confine(host.vfs, path, b.grant, entry);
+    }
+    return refused;
+  };
+  const refuse = (msg) => { host.resultBuf = enc(msg); return 0; };
   const argBytes = (i) => {
     if (!host.argBytes) host.argBytes = host.args.map(enc);
     return host.argBytes[i];
@@ -408,10 +542,47 @@ export function createHost(profile, opts = {}) {
     mdk_path_push: (b) => { host.pathBuf.push(b & 0xff); },
     mdk_result_len: () => host.resultBuf.length,
     mdk_result_byte: (i) => host.resultBuf[i] & 0xff,
-    mdk_read_file: () => {
-      try { host.resultBuf = host.vfs.readFile(takePath()); return 1; } catch (e) { return fail(e); }
+    // The grant channel: each element's bytes, each ended by -1; reset starts a grant.
+    mdk_grant_reset: () => { host.grant = []; host.grantElem = []; },
+    mdk_grant_push: (b) => {
+      if (b < 0) { host.grant.push(dec(host.grantElem)); host.grantElem = []; } else host.grantElem.push(b & 0xff);
     },
-    mdk_file_exists: () => (host.vfs.exists(takePath()) ? 1 : 0),
+    // A declared bound (mdk_with_file_bound): `keep` 1 always records a frame, which
+    // exit pops; `keep` 0 (a tail position) records one only when it restricts, and
+    // the guest calls exit only when this returns 1.  The whole domain, or an equal
+    // bound of the same mode already active, adds no restriction.
+    mdk_file_bound_enter: (write, keep) => {
+      const grant = takeGrant() || [];
+      const active = grant.length > 0
+        && !host.bounds.some((b) => b.active && b.write === write && sameGrant(b.grant, grant));
+      if (active || keep) host.bounds.push({ write, grant, active });
+      return active ? 1 : 0;
+    },
+    mdk_file_bound_exit: () => { host.bounds.pop(); },
+    mdk_read_file: () => {
+      const p = takePath();
+      const refused = refusal(p, false, 0);
+      if (refused !== null) return refuse(refused);
+      try { host.resultBuf = host.vfs.readFile(p); return 1; } catch (e) { return fail(e); }
+    },
+    // fileExists and canonicalizePath return no Result: a refusal is 2 / 0 with its
+    // text on the result channel, and the guest panics with it.
+    mdk_file_exists: () => {
+      const p = takePath();
+      const refused = refusal(p, false, 0);
+      if (refused !== null) { refuse(refused); return 2; }
+      return host.vfs.exists(p) ? 1 : 0;
+    },
+    // realpath(3), or the path unchanged when it has none (mdk_canonicalize_path).
+    mdk_canonicalize_path: () => {
+      const p = takePath();
+      const refused = refusal(p, false, 0);
+      if (refused !== null) return refuse(refused);
+      let out = p;
+      try { out = host.vfs.realpath(p); } catch (e) { out = p; }
+      host.resultBuf = enc(out);
+      return 1;
+    },
     // writeFileBytes: the path arrives on the path channel, the bytes stream into
     // writeBuf, commit writes them.  Ok -> 1; an error caches its message -> 0.
     mdk_write_file_reset: () => { host.writeBuf = []; },
@@ -419,7 +590,10 @@ export function createHost(profile, opts = {}) {
     mdk_write_file_commit: () => {
       const bytes = new Uint8Array(host.writeBuf);
       host.writeBuf = [];
-      try { host.vfs.writeFile(takePath(), bytes); return 1; } catch (e) { return fail(e); }
+      const p = takePath();
+      const refused = refusal(p, false, 1);
+      if (refused !== null) return refuse(refused);
+      try { host.vfs.writeFile(p, bytes); return 1; } catch (e) { return fail(e); }
     },
     mdk_get_env: () => {
       const v = host.getEnv(takePath());

@@ -1,5 +1,5 @@
 # META
-source_lines=12062
+source_lines=12037
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -1956,80 +1956,37 @@ isStrExternFamilyW name = match externFamilyW name
   Some WasmStr => True
   _ => False
 
--- The file externs wasm ports, with the number of value arguments each takes
--- before its grant.  The wasm host import reads a path and nothing else, so it
--- cannot refuse a path outside a grant (`wasmGrantConfined`).
-export
-wasmFileGrantExterns : List (String, Int)
-wasmFileGrantExterns = [
-  ("readFile", 1),
-  ("fileExists", 1),
-  ("canonicalizePath", 1),
-  ("readFileBytes", 1),
-  ("writeFileBytes", 2),
-]
+-- A declared file bound's grant, thunk body and mode (1 for FileWrite): the type
+-- checker writes `$withFileReadBound grant (_ => body)` around the body of a
+-- binding whose row is closed and names a narrow file authority.  The body is
+-- emitted inline, in the enclosing function, between entering and leaving a host
+-- bound frame (`emitAppRef`, `emitAppTail`).
+fileBoundW : CExpr -> Option (CExpr, CExpr, Int)
+fileBoundW app = match flattenApp app []
+  (CVar "$withFileReadBound" _, [g, CLam [PWild] b]) => Some (g, b, 0)
+  (CVar "$withFileWriteBound" _, [g, CLam [PWild] b]) => Some (g, b, 1)
+  _ => None
 
-export
-wasmFileGrantArity : String -> Option Int
-wasmFileGrantArity name = lookupAssoc name wasmFileGrantExterns
-
--- Whether the concrete elements of a grant need no runtime check.  An authority
--- written only of exact paths (no `*`, not the empty element) admits exactly
--- those strings, which the type checker has already held every path to, and a
--- path admitted as a string equal to an element is admitted as a file, since
--- the runtime would compare a path with itself.  A file extern whose path is a
--- literal naming an exact element needs no check either.  A pattern, or the
--- empty authority a lost binder renders, needs the runtime the wasm host lacks.
-export
-wasmGrantConfined : Option String -> List String -> Bool
-wasmGrantConfined path es =
-  let exact = s => s /= "" && not (endsWith "*" s)
-  allList exact es
-    || (match path
-      Some p => exact p && contains p es
-      None => False)
-
-export
-wasmFileGrantMsg : String -> List String -> String
-wasmFileGrantMsg name es =
-  let grant = joinWith ", " (map (s => "\"\{s}\"") es)
-  "`\{name}` is given the file grant [\{grant}], but a wasm build cannot confine a file operation to a pattern: its host reads the path alone, so the operation could reach any file. Build for a native target, grant exact paths, or give this call the whole domain (a bare `FileRead` or `FileWrite` label)"
-
--- A file extern leaf's grant.  A literal grant is refused here unless its
--- elements need no check.  The whole domain, and a grant parameter of the
--- enclosing binding (alone or joined), are emitted: a parameter's value is a
--- concrete grant at some call site, which the build driver checks where it is
--- written (`wasm_emit_modules_main.refuseNarrowFileGrants`).
-confinedGrantW : Prog -> String -> CExpr -> CExpr -> List String
-confinedGrantW prog name p (CList (elems@(_ :: _))) = match stringLitsW elems []
-  Some es =>
-    let path = match p
-      CLit (LString s) => Some s
-      _ => None
-    if wasmGrantConfined path es then
-      []
-    else
-      let emit = progEmit prog
-      let msg = "wasm: \{wasmFileGrantMsg name es}"
-      match emit.gapMode
-        WGapRecord => let _ = noteGapW emit msg in []
-        WGapStrict => panic msg
-  None => []
-confinedGrantW _ _ _ _ = []
-
-confinedFileBoundW : Prog -> String -> CExpr -> List String
-confinedFileBoundW prog name bound =
-  let label =
-    if name == "$withFileReadBound" then
-      "declared FileRead bound"
-    else
-      "declared FileWrite bound"
-  confinedGrantW prog label (CVar "$fileBoundPath" AGlobal) bound
-
-stringLitsW : List CExpr -> List String -> Option (List String)
-stringLitsW [] acc = Some (reverseL acc)
-stringLitsW ((CLit (LString s)) :: rest) acc = stringLitsW rest (s :: acc)
-stringLitsW _ _ = None
+-- Entering a bound pushes its grant and asks the host for a frame.  Off a tail
+-- position the host always keeps a record, so leaving pops one unconditionally.
+-- In a tail position it pushes a frame only when no equal bound of the mode is
+-- active, as medaka_rt.c mdk_with_file_bound does, and says whether it did: a
+-- re-entered bound leaves the body's tail call a tail call.
+fileBoundEnterW : Prog ->
+  List String ->
+  Int ->
+  CExpr ->
+  Int ->
+  Bool ->
+  List String
+fileBoundEnterW prog env d g mode keep =
+  emitRefExpr prog env d g
+    ++ [
+      "call $mdk_push_grant",
+      "i32.const \{intToString mode}",
+      "i32.const \{if keep then "1" else "0"}",
+      "call $mdk_file_bound_enter",
+    ]
 
 -- ── W6: does the program use strings? ────────────────────────────────────────
 -- True if any body contains a String/Char literal, or applies an extern whose
@@ -6675,10 +6632,13 @@ emitAppRef prog env d app =
       -- arg, lower the sentinel (br to the clause label, or trap stub).  The bare-CVar
       -- form is handled by emitVarRef; this catches the applied form guard chains make.
       if f0 == "$withFileReadBound"
-        || f0 == "$withFileWriteBound" then match args
-        [bound, CLam [PWild] body] =>
-          confinedFileBoundW prog f0 bound ++ emitRefExpr prog env d body
-        _ => gapLP prog "wasm: a file bound requires a grant and a thunk"
+        || f0 == "$withFileWriteBound" then match fileBoundW app
+        Some (g, body, mode) =>
+          fileBoundEnterW prog env d g mode True
+            ++ ["drop"]
+            ++ emitRefExpr prog env d body
+            ++ ["call $mdk_file_bound_exit"]
+        None => gapLP prog "wasm: a file bound requires a grant and a thunk"
       else if isFtSentinel f0 then
         ftSentinelInstrs f0
       else if contains f0 env then
@@ -7132,24 +7092,27 @@ emitLeafExternRef prog env d "randomFloat" _ =
 -- (ref eq), fileExists a Bool i31, getEnv an Option (ref eq), args a List (ref eq),
 -- exit traps (mdk_exit + unreachable, stack-polymorphic like panic).
 -- A file extern whose path is an authority takes its grant last
--- (EFFECTS-SEMANTICS §8); the host import carries only the path, so only a
--- confined call may drop its grant (`confinedGrantW`).
+-- (EFFECTS-SEMANTICS §8), and its runtime body hands both to the host, which
+-- confines the path (`ioHostRuntimeLines`).
 emitLeafExternRef prog env d "readFile" [p, g] =
-  confinedGrantW prog "readFile" p g
-    ++ emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)", "call $mdk_read_file_io"]
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_read_file_io"]
 emitLeafExternRef prog env d "readFile" _ =
   gapLP prog "wasm W12: readFile takes exactly one argument and its grant"
--- canonicalizePath : String -> String — IDENTITY on the wasm host (no realpath in a
--- browser vfs).  Emit the $str argument and leave it on the stack as the result.
 emitLeafExternRef prog env d "canonicalizePath" [p, g] =
-  confinedGrantW prog "canonicalizePath" p g ++ emitRefExpr prog env d p
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_canonicalize_path_io"]
 emitLeafExternRef prog env d "canonicalizePath" _ =
   gapLP prog "wasm: canonicalizePath takes exactly one argument and its grant"
 emitLeafExternRef prog env d "fileExists" [p, g] =
-  confinedGrantW prog "fileExists" p g
-    ++ emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)", "call $mdk_file_exists_io"]
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_file_exists_io"]
 emitLeafExternRef prog env d "fileExists" _ =
   gapLP prog "wasm W12: fileExists takes exactly one argument and its grant"
 emitLeafExternRef prog env d "getEnv" [n] =
@@ -7205,19 +7168,21 @@ emitLeafExternRef prog env d "ioPoll" _ =
 -- writeFileBytes takes (path, Array Int) and returns Result String Unit.  Both route
 -- into the fileBytes host seam ($mdk_read_file_bytes_io / $mdk_write_file_bytes_io).
 emitLeafExternRef prog env d "readFileBytes" [p, g] =
-  confinedGrantW prog "readFileBytes" p g
-    ++ emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)", "call $mdk_read_file_bytes_io"]
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_read_file_bytes_io"]
 emitLeafExternRef prog env d "readFileBytes" _ =
   gapLP
     prog
     "wasm stage-D: readFileBytes takes exactly one argument and its grant"
 emitLeafExternRef prog env d "writeFileBytes" [p, arr, g] =
-  confinedGrantW prog "writeFileBytes" p g
-    ++ emitRefExpr prog env d p
+  emitRefExpr prog env d p
     ++ ["ref.cast (ref $str)"]
     ++ emitRefExpr prog env d arr
-    ++ ["ref.cast (ref $arr)", "call $mdk_write_file_bytes_io"]
+    ++ ["ref.cast (ref $arr)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_write_file_bytes_io"]
 emitLeafExternRef prog env d "writeFileBytes" _ =
   gapLP
     prog
@@ -8929,10 +8894,18 @@ emitAppTail prog env arity app =
       -- tail-position `__fallthrough__ ()` / `__ft__<label> ()`: lower the sentinel
       -- (a `br`, NOT a `return` — control leaves the clause, not the function).
       if f0 == "$withFileReadBound"
-        || f0 == "$withFileWriteBound" then match args
-        [bound, CLam [PWild] body] =>
-          confinedFileBoundW prog f0 bound ++ emitRefTail prog env arity body
-        _ => gapLP prog "wasm: a file bound requires a grant and a thunk"
+        || f0 == "$withFileWriteBound" then match fileBoundW app
+        Some (g, body, mode) =>
+          let pushed =
+            emitRefExpr prog env 0 body
+              ++ ["call $mdk_file_bound_exit", "return"]
+          fileBoundEnterW prog env 0 g mode False
+            ++ ["if"]
+            ++ indent pushed
+            ++ ["else"]
+            ++ indent (emitRefTail prog env arity body)
+            ++ ["end", "unreachable"]
+        None => gapLP prog "wasm: a file bound requires a grant and a thunk"
       else if isFtSentinel f0 then
         ftSentinelInstrs f0
       else
@@ -10977,8 +10950,9 @@ collectExprLocals (CBinPrim _ l r _ _) =
 collectExprLocals (CUnOp _ x) = collectExprLocals x
 collectExprLocals (CIf c t f) =
   collectExprLocals c ++ collectExprLocals t ++ collectExprLocals f
-collectExprLocals (CApp f args _) =
-  collectExprLocals f ++ flatMap collectExprLocals args
+collectExprLocals (app@(CApp f args _)) = match fileBoundW app
+  Some (g, body, _) => collectExprLocals g ++ collectExprLocals body
+  None => collectExprLocals f ++ flatMap collectExprLocals args
 collectExprLocals (CTuple items) = flatMap collectExprLocals items
 collectExprLocals (CList items) = flatMap collectExprLocals items
 collectExprLocals (CArray items) = flatMap collectExprLocals items
@@ -11789,8 +11763,9 @@ maxIndexAt (CBinPrim op a b _ _) d =
   let sub = maxI (maxIndexAt a d) (maxIndexAt b d)
   if op == "/" || op == "%" then maxI d sub else sub
 maxIndexAt (CUnOp _ a) d = maxIndexAt a d
-maxIndexAt (CApp f args _) d =
-  foldMaxI (maxIndexAt f d :: map (a => maxIndexAt a d) args)
+maxIndexAt (app@(CApp f args _)) d = match fileBoundW app
+  Some (g, body, _) => maxI (maxIndexAt g d) (maxIndexAt body d)
+  None => foldMaxI (maxIndexAt f d :: map (a => maxIndexAt a d) args)
 maxIndexAt (CBlock stmts) d = foldMaxI (map (s => maxIndexAtStmt s d) stmts)
 -- a let-group's BODY is emitted at this same depth `d` at the use site (its lifted
 -- members carry their own scratch in their own functions); descend into the body so
@@ -12356,23 +12331,10 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "isWasmEtaExtern" ((PVar "name")) (EApp (EVar "isSome") (EApp (EVar "externFamilyW") (EVar "name"))))
 (DTypeSig false "isStrExternFamilyW" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isStrExternFamilyW" ((PVar "name")) (EMatch (EApp (EVar "externFamilyW") (EVar "name")) (arm (PCon "Some" (PCon "WasmStr")) () (EVar "True")) (arm PWild () (EVar "False"))))
-(DTypeSig true "wasmFileGrantExterns" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))
-(DFunDef false "wasmFileGrantExterns" () (EListLit (ETuple (ELit (LString "readFile")) (ELit (LInt 1))) (ETuple (ELit (LString "fileExists")) (ELit (LInt 1))) (ETuple (ELit (LString "canonicalizePath")) (ELit (LInt 1))) (ETuple (ELit (LString "readFileBytes")) (ELit (LInt 1))) (ETuple (ELit (LString "writeFileBytes")) (ELit (LInt 2)))))
-(DTypeSig true "wasmFileGrantArity" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "wasmFileGrantArity" ((PVar "name")) (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "wasmFileGrantExterns")))
-(DTypeSig true "wasmGrantConfined" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
-(DFunDef false "wasmGrantConfined" ((PVar "path") (PVar "es")) (EBlock (DoLet false false (PVar "exact") (ELam ((PVar "s")) (EBinOp "&&" (EBinOp "/=" (EVar "s") (ELit (LString ""))) (EApp (EVar "not") (EApp (EApp (EVar "endsWith") (ELit (LString "*"))) (EVar "s")))))) (DoExpr (EBinOp "||" (EApp (EApp (EVar "allList") (EVar "exact")) (EVar "es")) (EMatch (EVar "path") (arm (PCon "Some" (PVar "p")) () (EBinOp "&&" (EApp (EVar "exact") (EVar "p")) (EApp (EApp (EVar "contains") (EVar "p")) (EVar "es")))) (arm (PCon "None") () (EVar "False")))))))
-(DTypeSig true "wasmFileGrantMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "wasmFileGrantMsg" ((PVar "name") (PVar "es")) (EBlock (DoLet false false (PVar "grant") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EApp (EVar "display") (EVar "s"))) (ELit (LString "\""))))) (EVar "es")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` is given the file grant ["))) (EApp (EVar "display") (EVar "grant"))) (ELit (LString "], but a wasm build cannot confine a file operation to a pattern: its host reads the path alone, so the operation could reach any file. Build for a native target, grant exact paths, or give this call the whole domain (a bare `FileRead` or `FileWrite` label)"))))))
-(DTypeSig false "confinedGrantW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "confinedGrantW" ((PVar "prog") (PVar "name") (PVar "p") (PCon "CList" (PAs "elems" (PCons PWild PWild)))) (EMatch (EApp (EApp (EVar "stringLitsW") (EVar "elems")) (EListLit)) (arm (PCon "Some" (PVar "es")) () (EBlock (DoLet false false (PVar "path") (EMatch (EVar "p") (arm (PCon "CLit" (PCon "LString" (PVar "s"))) () (EApp (EVar "Some") (EVar "s"))) (arm PWild () (EVar "None")))) (DoExpr (EIf (EApp (EApp (EVar "wasmGrantConfined") (EVar "path")) (EVar "es")) (EListLit) (EBlock (DoLet false false (PVar "emit") (EApp (EVar "progEmit") (EVar "prog"))) (DoLet false false (PVar "msg") (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: ")) (EApp (EVar "display") (EApp (EApp (EVar "wasmFileGrantMsg") (EVar "name")) (EVar "es")))) (ELit (LString "")))) (DoExpr (EMatch (EFieldAccess (EVar "emit") "gapMode") (arm (PCon "WGapRecord") () (ELet false PWild (EApp (EApp (EVar "noteGapW") (EVar "emit")) (EVar "msg")) (EListLit))) (arm (PCon "WGapStrict") () (EApp (EVar "panic") (EVar "msg")))))))))) (arm (PCon "None") () (EListLit))))
-(DFunDef false "confinedGrantW" (PWild PWild PWild PWild) (EListLit))
-(DTypeSig false "confinedFileBoundW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "confinedFileBoundW" ((PVar "prog") (PVar "name") (PVar "bound")) (EBlock (DoLet false false (PVar "label") (EIf (EBinOp "==" (EVar "name") (ELit (LString "$withFileReadBound"))) (ELit (LString "declared FileRead bound")) (ELit (LString "declared FileWrite bound")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "confinedGrantW") (EVar "prog")) (EVar "label")) (EApp (EApp (EVar "CVar") (ELit (LString "$fileBoundPath"))) (EVar "AGlobal"))) (EVar "bound")))))
-(DTypeSig false "stringLitsW" (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "stringLitsW" ((PList) (PVar "acc")) (EApp (EVar "Some") (EApp (EVar "reverseL") (EVar "acc"))))
-(DFunDef false "stringLitsW" ((PCons (PCon "CLit" (PCon "LString" (PVar "s"))) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "stringLitsW") (EVar "rest")) (EBinOp "::" (EVar "s") (EVar "acc"))))
-(DFunDef false "stringLitsW" (PWild PWild) (EVar "None"))
+(DTypeSig false "fileBoundW" (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyTuple (TyCon "CExpr") (TyCon "CExpr") (TyCon "Int")))))
+(DFunDef false "fileBoundW" ((PVar "app")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit)) (arm (PTuple (PCon "CVar" (PLit (LString "$withFileReadBound")) PWild) (PList (PVar "g") (PCon "CLam" (PList (PCon "PWild")) (PVar "b")))) () (EApp (EVar "Some") (ETuple (EVar "g") (EVar "b") (ELit (LInt 0))))) (arm (PTuple (PCon "CVar" (PLit (LString "$withFileWriteBound")) PWild) (PList (PVar "g") (PCon "CLam" (PList (PCon "PWild")) (PVar "b")))) () (EApp (EVar "Some") (ETuple (EVar "g") (EVar "b") (ELit (LInt 1))))) (arm PWild () (EVar "None"))))
+(DTypeSig false "fileBoundEnterW" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))))))))
+(DFunDef false "fileBoundEnterW" ((PVar "prog") (PVar "env") (PVar "d") (PVar "g") (PVar "mode") (PVar "keep")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g")) (EListLit (ELit (LString "call $mdk_push_grant")) (EBinOp "++" (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "mode")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "display") (EIf (EVar "keep") (ELit (LString "1")) (ELit (LString "0"))))) (ELit (LString ""))) (ELit (LString "call $mdk_file_bound_enter")))))
 (DTypeSig false "programUsesStr" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Bool")))
 (DFunDef false "programUsesStr" ((PVar "groups")) (EApp (EApp (EVar "anyBind") (EVar "bindUsesStr")) (EVar "groups")))
 (DTypeSig false "bindUsesStr" (TyFun (TyCon "CBind") (TyCon "Bool")))
@@ -13305,7 +13267,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "emitBlockRef" ((PVar "prog") (PVar "env") (PVar "d") (PList)) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EApp (EVar "CLit") (EVar "LUnit"))))
 (DFunDef false "emitBlockRef" ((PVar "prog") PWild PWild PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "ref-mode: unsupported block statement"))))
 (DTypeSig false "emitAppRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emitAppRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args") (PVar "mode")) (EApp (EVar "appParts") (EVar "app"))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "f0") PWild) () (EBlock (DoLet false false (PVar "f") (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "f0"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "f0") (ELit (LString "$withFileReadBound"))) (EBinOp "==" (EVar "f0") (ELit (LString "$withFileWriteBound")))) (EMatch (EVar "args") (arm (PList (PVar "bound") (PCon "CLam" (PList (PCon "PWild")) (PVar "body"))) () (EBinOp "++" (EApp (EApp (EApp (EVar "confinedFileBoundW") (EVar "prog")) (EVar "f0")) (EVar "bound")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "body")))) (arm PWild () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: a file bound requires a grant and a thunk"))))) (EIf (EApp (EVar "isFtSentinel") (EVar "f0")) (EApp (EVar "ftSentinelInstrs") (EVar "f0")) (EIf (EApp (EApp (EVar "contains") (EVar "f0")) (EVar "env")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")) (EVar "CallValueW")) (EIf (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "f")) (EApp (EApp (EApp (EApp (EApp (EVar "emitCtorApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args")) (EIf (EBinOp "==" (EVar "f") (ELit (LString "Ref"))) (EApp (EApp (EApp (EApp (EVar "emitRefBoxNew") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args")) (EIf (EBinOp "==" (EVar "f") (ELit (LString "setRef"))) (EApp (EApp (EApp (EApp (EVar "emitRefBoxSet") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args")) (EIf (EApp (EApp (EVar "isFfiExternW") (EVar "prog")) (EVar "f")) (EApp (EApp (EVar "ffiWallW") (EVar "prog")) (EVar "f")) (EMatch (EApp (EVar "externFamilyW") (EVar "f")) (arm (PCon "Some" (PCon "WasmStr")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitStrExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm (PCon "Some" (PCon "WasmLeaf")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm (PCon "Some" (PCon "WasmArray")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitArrayExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm (PCon "Some" (PCon "WasmByteBlock")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitByteBlockExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm PWild () (EIf (EBinOp "&&" (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "f")) (EApp (EVar "isExactCall") (EVar "mode"))) (EBlock (DoLet false false (PVar "argInstrs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args"))) (DoExpr (EBinOp "++" (EVar "argInstrs") (EListLit (EBinOp "++" (ELit (LString "call $")) (EApp (EVar "gname") (EVar "f"))))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")) (EVar "CallValueW"))))))))))))))) (arm (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")) (EVar "args")) (EVar "mode")) (EVar "CallValueW"))) (arm (PCon "CDict" (PVar "name") (PVar "routes")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDictRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "routes")) (EVar "args")) (EVar "mode")) (EVar "CallValueW"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")) (EVar "CallValueW")))))))
+(DFunDef false "emitAppRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args") (PVar "mode")) (EApp (EVar "appParts") (EVar "app"))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "f0") PWild) () (EBlock (DoLet false false (PVar "f") (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "f0"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "f0") (ELit (LString "$withFileReadBound"))) (EBinOp "==" (EVar "f0") (ELit (LString "$withFileWriteBound")))) (EMatch (EApp (EVar "fileBoundW") (EVar "app")) (arm (PCon "Some" (PTuple (PVar "g") (PVar "body") (PVar "mode"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileBoundEnterW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g")) (EVar "mode")) (EVar "True")) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "body"))) (EListLit (ELit (LString "call $mdk_file_bound_exit"))))) (arm (PCon "None") () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: a file bound requires a grant and a thunk"))))) (EIf (EApp (EVar "isFtSentinel") (EVar "f0")) (EApp (EVar "ftSentinelInstrs") (EVar "f0")) (EIf (EApp (EApp (EVar "contains") (EVar "f0")) (EVar "env")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")) (EVar "CallValueW")) (EIf (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "f")) (EApp (EApp (EApp (EApp (EApp (EVar "emitCtorApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args")) (EIf (EBinOp "==" (EVar "f") (ELit (LString "Ref"))) (EApp (EApp (EApp (EApp (EVar "emitRefBoxNew") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args")) (EIf (EBinOp "==" (EVar "f") (ELit (LString "setRef"))) (EApp (EApp (EApp (EApp (EVar "emitRefBoxSet") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args")) (EIf (EApp (EApp (EVar "isFfiExternW") (EVar "prog")) (EVar "f")) (EApp (EApp (EVar "ffiWallW") (EVar "prog")) (EVar "f")) (EMatch (EApp (EVar "externFamilyW") (EVar "f")) (arm (PCon "Some" (PCon "WasmStr")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitStrExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm (PCon "Some" (PCon "WasmLeaf")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm (PCon "Some" (PCon "WasmArray")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitArrayExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm (PCon "Some" (PCon "WasmByteBlock")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitByteBlockExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm PWild () (EIf (EBinOp "&&" (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "f")) (EApp (EVar "isExactCall") (EVar "mode"))) (EBlock (DoLet false false (PVar "argInstrs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args"))) (DoExpr (EBinOp "++" (EVar "argInstrs") (EListLit (EBinOp "++" (ELit (LString "call $")) (EApp (EVar "gname") (EVar "f"))))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")) (EVar "CallValueW"))))))))))))))) (arm (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")) (EVar "args")) (EVar "mode")) (EVar "CallValueW"))) (arm (PCon "CDict" (PVar "name") (PVar "routes")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDictRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "routes")) (EVar "args")) (EVar "mode")) (EVar "CallValueW"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")) (EVar "CallValueW")))))))
 (DTypeSig false "emitStrExternRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intToString")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "call $mdk_unbox_int")) (ELit (LString "call $mdk_int_to_str")))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intToString")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W6: intToString takes exactly one argument"))))
@@ -13420,11 +13382,11 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "hashFloat")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: hashFloat takes exactly one argument"))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "randomFloat")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (ELit (LString "call $mdk_random_float")))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "randomFloat")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: randomFloat takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readFile")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "confinedGrantW") (EVar "prog")) (ELit (LString "readFile"))) (EVar "p")) (EVar "g")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (ELit (LString "call $mdk_read_file_io")))))
+(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readFile")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (ELit (LString "call $mdk_read_file_io")))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: readFile takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "canonicalizePath")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "confinedGrantW") (EVar "prog")) (ELit (LString "canonicalizePath"))) (EVar "p")) (EVar "g")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p"))))
+(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "canonicalizePath")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (ELit (LString "call $mdk_canonicalize_path_io")))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "canonicalizePath")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: canonicalizePath takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "fileExists")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "confinedGrantW") (EVar "prog")) (ELit (LString "fileExists"))) (EVar "p")) (EVar "g")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (ELit (LString "call $mdk_file_exists_io")))))
+(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "fileExists")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (ELit (LString "call $mdk_file_exists_io")))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "fileExists")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: fileExists takes exactly one argument and its grant"))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "getEnv")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (ELit (LString "ref.cast (ref $str)")) (ELit (LString "call $mdk_get_env_io")))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "getEnv")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: getEnv takes exactly one argument"))))
@@ -13440,9 +13402,9 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "sleepMs")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: sleepMs takes exactly one argument"))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "ioPoll")) (PList (PVar "fds") (PVar "interests") (PVar "timeout"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "fds")) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "interests"))) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "timeout"))) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EVar "wasmTrap") (EApp (EVar "progEmit") (EVar "prog"))) (ELit (LString "E-WASM-NO-BINDING"))) (ELit (LString "ioPoll: descriptor readiness has no wasm binding (Net and Stdin bindings: #3666); build for a native target")))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "ioPoll")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: ioPoll takes exactly three arguments"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readFileBytes")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "confinedGrantW") (EVar "prog")) (ELit (LString "readFileBytes"))) (EVar "p")) (EVar "g")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (ELit (LString "call $mdk_read_file_bytes_io")))))
+(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readFileBytes")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (ELit (LString "call $mdk_read_file_bytes_io")))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readFileBytes")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-D: readFileBytes takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "writeFileBytes")) (PList (PVar "p") (PVar "arr") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "confinedGrantW") (EVar "prog")) (ELit (LString "writeFileBytes"))) (EVar "p")) (EVar "g")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p"))) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "arr"))) (EListLit (ELit (LString "ref.cast (ref $arr)")) (ELit (LString "call $mdk_write_file_bytes_io")))))
+(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "writeFileBytes")) (PList (PVar "p") (PVar "arr") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "arr"))) (EListLit (ELit (LString "ref.cast (ref $arr)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (ELit (LString "call $mdk_write_file_bytes_io")))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "writeFileBytes")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-D: writeFileBytes takes exactly two arguments and its grant"))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "panic")) (PList (PVar "msg"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "wasmTrapBytes") (EApp (EVar "progEmit") (EVar "prog"))) (ELit (LString "runtime error [E-PANIC]: "))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "msg"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (ELit (LString "call $mdk_eprint_str")))) (EApp (EVar "trapByteInstr") (ELit (LInt 10)))) (EListLit (ELit (LString "unreachable")))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "panic")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W10: panic takes exactly one argument"))))
@@ -13722,7 +13684,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "emitWDispBase" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "emitWDispBase" ((PVar "prog") (PVar "env") (PVar "root") (PVar "e")) (EBlock (DoLet false false (PVar "valInstrs") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "e"))) (DoLet false false (PVar "cellStruct") (ELit (LString "C_Cons"))) (DoLet false false (PVar "storeBranch") (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "global.get ")) (EApp (EVar "wDispDestL") (EVar "root"))) (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EVar "cellStruct")) (ELit (LString ")")))) (EVar "valInstrs")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "struct.set $")) (EVar "cellStruct")) (ELit (LString " 2")))))) (DoLet false false (PVar "seedBranch") (EBinOp "++" (EVar "valInstrs") (EListLit (EBinOp "++" (ELit (LString "global.set ")) (EApp (EVar "wDispHeadL") (EVar "root")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "global.get ")) (EApp (EVar "wDispFirstL") (EVar "root"))) (ELit (LString "if"))) (EApp (EVar "indent") (EVar "seedBranch"))) (EListLit (ELit (LString "else")))) (EApp (EVar "indent") (EVar "storeBranch"))) (EListLit (ELit (LString "end")))) (EListLit (EBinOp "++" (ELit (LString "global.get ")) (EApp (EVar "wDispHeadL") (EVar "root"))) (ELit (LString "ref.as_non_null")) (ELit (LString "return")))))))
 (DTypeSig false "emitAppTail" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emitAppTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args") PWild) (EApp (EVar "appParts") (EVar "app"))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "f0") PWild) () (EIf (EBinOp "||" (EBinOp "==" (EVar "f0") (ELit (LString "$withFileReadBound"))) (EBinOp "==" (EVar "f0") (ELit (LString "$withFileWriteBound")))) (EMatch (EVar "args") (arm (PList (PVar "bound") (PCon "CLam" (PList (PCon "PWild")) (PVar "body"))) () (EBinOp "++" (EApp (EApp (EApp (EVar "confinedFileBoundW") (EVar "prog")) (EVar "f0")) (EVar "bound")) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "body")))) (arm PWild () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: a file bound requires a grant and a thunk"))))) (EIf (EApp (EVar "isFtSentinel") (EVar "f0")) (EApp (EVar "ftSentinelInstrs") (EVar "f0")) (EApp (EApp (EApp (EVar "emitFlaggedAppW") (EVar "prog")) (EVar "env")) (EVar "app"))))) (arm PWild () (EApp (EApp (EApp (EVar "emitFlaggedAppW") (EVar "prog")) (EVar "env")) (EVar "app")))))))
+(DFunDef false "emitAppTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args") PWild) (EApp (EVar "appParts") (EVar "app"))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "f0") PWild) () (EIf (EBinOp "||" (EBinOp "==" (EVar "f0") (ELit (LString "$withFileReadBound"))) (EBinOp "==" (EVar "f0") (ELit (LString "$withFileWriteBound")))) (EMatch (EApp (EVar "fileBoundW") (EVar "app")) (arm (PCon "Some" (PTuple (PVar "g") (PVar "body") (PVar "mode"))) () (EBlock (DoLet false false (PVar "pushed") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "body")) (EListLit (ELit (LString "call $mdk_file_bound_exit")) (ELit (LString "return"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileBoundEnterW") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "g")) (EVar "mode")) (EVar "False")) (EListLit (ELit (LString "if")))) (EApp (EVar "indent") (EVar "pushed"))) (EListLit (ELit (LString "else")))) (EApp (EVar "indent") (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "body")))) (EListLit (ELit (LString "end")) (ELit (LString "unreachable"))))))) (arm (PCon "None") () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: a file bound requires a grant and a thunk"))))) (EIf (EApp (EVar "isFtSentinel") (EVar "f0")) (EApp (EVar "ftSentinelInstrs") (EVar "f0")) (EApp (EApp (EApp (EVar "emitFlaggedAppW") (EVar "prog")) (EVar "env")) (EVar "app"))))) (arm PWild () (EApp (EApp (EApp (EVar "emitFlaggedAppW") (EVar "prog")) (EVar "env")) (EVar "app")))))))
 (DTypeSig false "emitFlaggedAppW" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "emitFlaggedAppW" ((PVar "prog") (PVar "env") (PVar "app")) (EIf (EApp (EVar "isTailCall") (EVar "app")) (EApp (EApp (EApp (EVar "emitTailCallW") (EVar "prog")) (EVar "env")) (EVar "app")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitAppRef") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "app")) (EListLit (ELit (LString "return"))))))
 (DTypeSig false "emitTailCallW" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -13981,7 +13943,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "collectExprLocals" ((PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "l")) (EApp (EVar "collectExprLocals") (EVar "r"))))
 (DFunDef false "collectExprLocals" ((PCon "CUnOp" PWild (PVar "x"))) (EApp (EVar "collectExprLocals") (EVar "x")))
 (DFunDef false "collectExprLocals" ((PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "c")) (EApp (EVar "collectExprLocals") (EVar "t"))) (EApp (EVar "collectExprLocals") (EVar "f"))))
-(DFunDef false "collectExprLocals" ((PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "f")) (EApp (EApp (EVar "flatMap") (EVar "collectExprLocals")) (EVar "args"))))
+(DFunDef false "collectExprLocals" ((PAs "app" (PCon "CApp" (PVar "f") (PVar "args") PWild))) (EMatch (EApp (EVar "fileBoundW") (EVar "app")) (arm (PCon "Some" (PTuple (PVar "g") (PVar "body") PWild)) () (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "g")) (EApp (EVar "collectExprLocals") (EVar "body")))) (arm (PCon "None") () (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "f")) (EApp (EApp (EVar "flatMap") (EVar "collectExprLocals")) (EVar "args"))))))
 (DFunDef false "collectExprLocals" ((PCon "CTuple" (PVar "items"))) (EApp (EApp (EVar "flatMap") (EVar "collectExprLocals")) (EVar "items")))
 (DFunDef false "collectExprLocals" ((PCon "CList" (PVar "items"))) (EApp (EApp (EVar "flatMap") (EVar "collectExprLocals")) (EVar "items")))
 (DFunDef false "collectExprLocals" ((PCon "CArray" (PVar "items"))) (EApp (EApp (EVar "flatMap") (EVar "collectExprLocals")) (EVar "items")))
@@ -14263,7 +14225,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "maxIndexAt" ((PCon "CLet" PWild (PVar "pat") (PVar "a") (PVar "b")) (PVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EApp (EVar "letStashIndex") (EVar "pat")) (EVar "a")) (EVar "d"))) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "a")) (EVar "d"))) (EApp (EApp (EVar "maxIndexAt") (EVar "b")) (EVar "d")))))
 (DFunDef false "maxIndexAt" ((PCon "CBinPrim" (PVar "op") (PVar "a") (PVar "b") PWild PWild) (PVar "d")) (EBlock (DoLet false false (PVar "sub") (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "a")) (EVar "d"))) (EApp (EApp (EVar "maxIndexAt") (EVar "b")) (EVar "d")))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "/"))) (EBinOp "==" (EVar "op") (ELit (LString "%")))) (EApp (EApp (EVar "maxI") (EVar "d")) (EVar "sub")) (EVar "sub")))))
 (DFunDef false "maxIndexAt" ((PCon "CUnOp" PWild (PVar "a")) (PVar "d")) (EApp (EApp (EVar "maxIndexAt") (EVar "a")) (EVar "d")))
-(DFunDef false "maxIndexAt" ((PCon "CApp" (PVar "f") (PVar "args") PWild) (PVar "d")) (EApp (EVar "foldMaxI") (EBinOp "::" (EApp (EApp (EVar "maxIndexAt") (EVar "f")) (EVar "d")) (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EApp (EApp (EVar "maxIndexAt") (EVar "a")) (EVar "d")))) (EVar "args")))))
+(DFunDef false "maxIndexAt" ((PAs "app" (PCon "CApp" (PVar "f") (PVar "args") PWild)) (PVar "d")) (EMatch (EApp (EVar "fileBoundW") (EVar "app")) (arm (PCon "Some" (PTuple (PVar "g") (PVar "body") PWild)) () (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "g")) (EVar "d"))) (EApp (EApp (EVar "maxIndexAt") (EVar "body")) (EVar "d")))) (arm (PCon "None") () (EApp (EVar "foldMaxI") (EBinOp "::" (EApp (EApp (EVar "maxIndexAt") (EVar "f")) (EVar "d")) (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EApp (EApp (EVar "maxIndexAt") (EVar "a")) (EVar "d")))) (EVar "args")))))))
 (DFunDef false "maxIndexAt" ((PCon "CBlock" (PVar "stmts")) (PVar "d")) (EApp (EVar "foldMaxI") (EApp (EApp (EVar "map") (ELam ((PVar "s")) (EApp (EApp (EVar "maxIndexAtStmt") (EVar "s")) (EVar "d")))) (EVar "stmts"))))
 (DFunDef false "maxIndexAt" ((PCon "CLetGroup" (PVar "binds") (PVar "body")) (PVar "d")) (EApp (EVar "foldMaxI") (EBinOp "::" (EApp (EApp (EVar "maxIndexAt") (EVar "body")) (EVar "d")) (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EApp (EApp (EVar "maxIndexAtLgVal") (EVar "b")) (EVar "d")))) (EVar "binds")))))
 (DFunDef false "maxIndexAt" ((PCon "CTuple" (PVar "es")) (PVar "d")) (EApp (EVar "foldMaxI") (EApp (EApp (EVar "map") (ELam ((PVar "x")) (EApp (EApp (EVar "maxIndexAt") (EVar "x")) (EVar "d")))) (EVar "es"))))
@@ -14682,23 +14644,10 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "isWasmEtaExtern" ((PVar "name")) (EApp (EVar "isSome") (EApp (EVar "externFamilyW") (EVar "name"))))
 (DTypeSig false "isStrExternFamilyW" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isStrExternFamilyW" ((PVar "name")) (EMatch (EApp (EVar "externFamilyW") (EVar "name")) (arm (PCon "Some" (PCon "WasmStr")) () (EVar "True")) (arm PWild () (EVar "False"))))
-(DTypeSig true "wasmFileGrantExterns" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))
-(DFunDef false "wasmFileGrantExterns" () (EListLit (ETuple (ELit (LString "readFile")) (ELit (LInt 1))) (ETuple (ELit (LString "fileExists")) (ELit (LInt 1))) (ETuple (ELit (LString "canonicalizePath")) (ELit (LInt 1))) (ETuple (ELit (LString "readFileBytes")) (ELit (LInt 1))) (ETuple (ELit (LString "writeFileBytes")) (ELit (LInt 2)))))
-(DTypeSig true "wasmFileGrantArity" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "wasmFileGrantArity" ((PVar "name")) (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "wasmFileGrantExterns")))
-(DTypeSig true "wasmGrantConfined" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
-(DFunDef false "wasmGrantConfined" ((PVar "path") (PVar "es")) (EBlock (DoLet false false (PVar "exact") (ELam ((PVar "s")) (EBinOp "&&" (EBinOp "/=" (EVar "s") (ELit (LString ""))) (EApp (EVar "not") (EApp (EApp (EVar "endsWith") (ELit (LString "*"))) (EVar "s")))))) (DoExpr (EBinOp "||" (EApp (EApp (EVar "allList") (EVar "exact")) (EVar "es")) (EMatch (EVar "path") (arm (PCon "Some" (PVar "p")) () (EBinOp "&&" (EApp (EVar "exact") (EVar "p")) (EApp (EApp (EVar "contains") (EVar "p")) (EVar "es")))) (arm (PCon "None") () (EVar "False")))))))
-(DTypeSig true "wasmFileGrantMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "wasmFileGrantMsg" ((PVar "name") (PVar "es")) (EBlock (DoLet false false (PVar "grant") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString "\""))))) (EVar "es")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` is given the file grant ["))) (EApp (EMethodRef "display") (EVar "grant"))) (ELit (LString "], but a wasm build cannot confine a file operation to a pattern: its host reads the path alone, so the operation could reach any file. Build for a native target, grant exact paths, or give this call the whole domain (a bare `FileRead` or `FileWrite` label)"))))))
-(DTypeSig false "confinedGrantW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "confinedGrantW" ((PVar "prog") (PVar "name") (PVar "p") (PCon "CList" (PAs "elems" (PCons PWild PWild)))) (EMatch (EApp (EApp (EVar "stringLitsW") (EVar "elems")) (EListLit)) (arm (PCon "Some" (PVar "es")) () (EBlock (DoLet false false (PVar "path") (EMatch (EVar "p") (arm (PCon "CLit" (PCon "LString" (PVar "s"))) () (EApp (EVar "Some") (EVar "s"))) (arm PWild () (EVar "None")))) (DoExpr (EIf (EApp (EApp (EVar "wasmGrantConfined") (EVar "path")) (EVar "es")) (EListLit) (EBlock (DoLet false false (PVar "emit") (EApp (EVar "progEmit") (EVar "prog"))) (DoLet false false (PVar "msg") (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "wasmFileGrantMsg") (EVar "name")) (EVar "es")))) (ELit (LString "")))) (DoExpr (EMatch (EFieldAccess (EVar "emit") "gapMode") (arm (PCon "WGapRecord") () (ELet false PWild (EApp (EApp (EVar "noteGapW") (EVar "emit")) (EVar "msg")) (EListLit))) (arm (PCon "WGapStrict") () (EApp (EVar "panic") (EVar "msg")))))))))) (arm (PCon "None") () (EListLit))))
-(DFunDef false "confinedGrantW" (PWild PWild PWild PWild) (EListLit))
-(DTypeSig false "confinedFileBoundW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "confinedFileBoundW" ((PVar "prog") (PVar "name") (PVar "bound")) (EBlock (DoLet false false (PVar "label") (EIf (EBinOp "==" (EVar "name") (ELit (LString "$withFileReadBound"))) (ELit (LString "declared FileRead bound")) (ELit (LString "declared FileWrite bound")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "confinedGrantW") (EVar "prog")) (EVar "label")) (EApp (EApp (EVar "CVar") (ELit (LString "$fileBoundPath"))) (EVar "AGlobal"))) (EVar "bound")))))
-(DTypeSig false "stringLitsW" (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "stringLitsW" ((PList) (PVar "acc")) (EApp (EVar "Some") (EApp (EVar "reverseL") (EVar "acc"))))
-(DFunDef false "stringLitsW" ((PCons (PCon "CLit" (PCon "LString" (PVar "s"))) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "stringLitsW") (EVar "rest")) (EBinOp "::" (EVar "s") (EVar "acc"))))
-(DFunDef false "stringLitsW" (PWild PWild) (EVar "None"))
+(DTypeSig false "fileBoundW" (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyTuple (TyCon "CExpr") (TyCon "CExpr") (TyCon "Int")))))
+(DFunDef false "fileBoundW" ((PVar "app")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit)) (arm (PTuple (PCon "CVar" (PLit (LString "$withFileReadBound")) PWild) (PList (PVar "g") (PCon "CLam" (PList (PCon "PWild")) (PVar "b")))) () (EApp (EVar "Some") (ETuple (EVar "g") (EVar "b") (ELit (LInt 0))))) (arm (PTuple (PCon "CVar" (PLit (LString "$withFileWriteBound")) PWild) (PList (PVar "g") (PCon "CLam" (PList (PCon "PWild")) (PVar "b")))) () (EApp (EVar "Some") (ETuple (EVar "g") (EVar "b") (ELit (LInt 1))))) (arm PWild () (EVar "None"))))
+(DTypeSig false "fileBoundEnterW" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))))))))
+(DFunDef false "fileBoundEnterW" ((PVar "prog") (PVar "env") (PVar "d") (PVar "g") (PVar "mode") (PVar "keep")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g")) (EListLit (ELit (LString "call $mdk_push_grant")) (EBinOp "++" (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "mode")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EMethodRef "display") (EIf (EVar "keep") (ELit (LString "1")) (ELit (LString "0"))))) (ELit (LString ""))) (ELit (LString "call $mdk_file_bound_enter")))))
 (DTypeSig false "programUsesStr" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Bool")))
 (DFunDef false "programUsesStr" ((PVar "groups")) (EApp (EApp (EVar "anyBind") (EVar "bindUsesStr")) (EVar "groups")))
 (DTypeSig false "bindUsesStr" (TyFun (TyCon "CBind") (TyCon "Bool")))
@@ -15631,7 +15580,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "emitBlockRef" ((PVar "prog") (PVar "env") (PVar "d") (PList)) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EApp (EVar "CLit") (EVar "LUnit"))))
 (DFunDef false "emitBlockRef" ((PVar "prog") PWild PWild PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "ref-mode: unsupported block statement"))))
 (DTypeSig false "emitAppRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emitAppRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args") (PVar "mode")) (EApp (EVar "appParts") (EVar "app"))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "f0") PWild) () (EBlock (DoLet false false (PVar "f") (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "f0"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "f0") (ELit (LString "$withFileReadBound"))) (EBinOp "==" (EVar "f0") (ELit (LString "$withFileWriteBound")))) (EMatch (EVar "args") (arm (PList (PVar "bound") (PCon "CLam" (PList (PCon "PWild")) (PVar "body"))) () (EBinOp "++" (EApp (EApp (EApp (EVar "confinedFileBoundW") (EVar "prog")) (EVar "f0")) (EVar "bound")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "body")))) (arm PWild () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: a file bound requires a grant and a thunk"))))) (EIf (EApp (EVar "isFtSentinel") (EVar "f0")) (EApp (EVar "ftSentinelInstrs") (EVar "f0")) (EIf (EApp (EApp (EVar "contains") (EVar "f0")) (EVar "env")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")) (EVar "CallValueW")) (EIf (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "f")) (EApp (EApp (EApp (EApp (EApp (EVar "emitCtorApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args")) (EIf (EBinOp "==" (EVar "f") (ELit (LString "Ref"))) (EApp (EApp (EApp (EApp (EVar "emitRefBoxNew") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args")) (EIf (EBinOp "==" (EVar "f") (ELit (LString "setRef"))) (EApp (EApp (EApp (EApp (EVar "emitRefBoxSet") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args")) (EIf (EApp (EApp (EVar "isFfiExternW") (EVar "prog")) (EVar "f")) (EApp (EApp (EVar "ffiWallW") (EVar "prog")) (EVar "f")) (EMatch (EApp (EVar "externFamilyW") (EVar "f")) (arm (PCon "Some" (PCon "WasmStr")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitStrExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm (PCon "Some" (PCon "WasmLeaf")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm (PCon "Some" (PCon "WasmArray")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitArrayExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm (PCon "Some" (PCon "WasmByteBlock")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitByteBlockExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm PWild () (EIf (EBinOp "&&" (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "f")) (EApp (EVar "isExactCall") (EVar "mode"))) (EBlock (DoLet false false (PVar "argInstrs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args"))) (DoExpr (EBinOp "++" (EVar "argInstrs") (EListLit (EBinOp "++" (ELit (LString "call $")) (EApp (EVar "gname") (EVar "f"))))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")) (EVar "CallValueW"))))))))))))))) (arm (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")) (EVar "args")) (EVar "mode")) (EVar "CallValueW"))) (arm (PCon "CDict" (PVar "name") (PVar "routes")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDictRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "routes")) (EVar "args")) (EVar "mode")) (EVar "CallValueW"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")) (EVar "CallValueW")))))))
+(DFunDef false "emitAppRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args") (PVar "mode")) (EApp (EVar "appParts") (EVar "app"))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "f0") PWild) () (EBlock (DoLet false false (PVar "f") (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "f0"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "f0") (ELit (LString "$withFileReadBound"))) (EBinOp "==" (EVar "f0") (ELit (LString "$withFileWriteBound")))) (EMatch (EApp (EVar "fileBoundW") (EVar "app")) (arm (PCon "Some" (PTuple (PVar "g") (PVar "body") (PVar "mode"))) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileBoundEnterW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g")) (EVar "mode")) (EVar "True")) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "body"))) (EListLit (ELit (LString "call $mdk_file_bound_exit"))))) (arm (PCon "None") () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: a file bound requires a grant and a thunk"))))) (EIf (EApp (EVar "isFtSentinel") (EVar "f0")) (EApp (EVar "ftSentinelInstrs") (EVar "f0")) (EIf (EApp (EApp (EVar "contains") (EVar "f0")) (EVar "env")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")) (EVar "CallValueW")) (EIf (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "f")) (EApp (EApp (EApp (EApp (EApp (EVar "emitCtorApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args")) (EIf (EBinOp "==" (EVar "f") (ELit (LString "Ref"))) (EApp (EApp (EApp (EApp (EVar "emitRefBoxNew") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args")) (EIf (EBinOp "==" (EVar "f") (ELit (LString "setRef"))) (EApp (EApp (EApp (EApp (EVar "emitRefBoxSet") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args")) (EIf (EApp (EApp (EVar "isFfiExternW") (EVar "prog")) (EVar "f")) (EApp (EApp (EVar "ffiWallW") (EVar "prog")) (EVar "f")) (EMatch (EApp (EVar "externFamilyW") (EVar "f")) (arm (PCon "Some" (PCon "WasmStr")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitStrExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm (PCon "Some" (PCon "WasmLeaf")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm (PCon "Some" (PCon "WasmArray")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitArrayExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm (PCon "Some" (PCon "WasmByteBlock")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitByteBlockExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm PWild () (EIf (EBinOp "&&" (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "f")) (EApp (EVar "isExactCall") (EVar "mode"))) (EBlock (DoLet false false (PVar "argInstrs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args"))) (DoExpr (EBinOp "++" (EVar "argInstrs") (EListLit (EBinOp "++" (ELit (LString "call $")) (EApp (EVar "gname") (EVar "f"))))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")) (EVar "CallValueW"))))))))))))))) (arm (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")) (EVar "args")) (EVar "mode")) (EVar "CallValueW"))) (arm (PCon "CDict" (PVar "name") (PVar "routes")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDictRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "routes")) (EVar "args")) (EVar "mode")) (EVar "CallValueW"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")) (EVar "CallValueW")))))))
 (DTypeSig false "emitStrExternRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intToString")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "call $mdk_unbox_int")) (ELit (LString "call $mdk_int_to_str")))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intToString")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W6: intToString takes exactly one argument"))))
@@ -15746,11 +15695,11 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "hashFloat")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: hashFloat takes exactly one argument"))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "randomFloat")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (ELit (LString "call $mdk_random_float")))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "randomFloat")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: randomFloat takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readFile")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "confinedGrantW") (EVar "prog")) (ELit (LString "readFile"))) (EVar "p")) (EVar "g")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (ELit (LString "call $mdk_read_file_io")))))
+(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readFile")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (ELit (LString "call $mdk_read_file_io")))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: readFile takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "canonicalizePath")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "confinedGrantW") (EVar "prog")) (ELit (LString "canonicalizePath"))) (EVar "p")) (EVar "g")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p"))))
+(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "canonicalizePath")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (ELit (LString "call $mdk_canonicalize_path_io")))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "canonicalizePath")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: canonicalizePath takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "fileExists")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "confinedGrantW") (EVar "prog")) (ELit (LString "fileExists"))) (EVar "p")) (EVar "g")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (ELit (LString "call $mdk_file_exists_io")))))
+(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "fileExists")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (ELit (LString "call $mdk_file_exists_io")))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "fileExists")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: fileExists takes exactly one argument and its grant"))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "getEnv")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (ELit (LString "ref.cast (ref $str)")) (ELit (LString "call $mdk_get_env_io")))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "getEnv")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: getEnv takes exactly one argument"))))
@@ -15766,9 +15715,9 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "sleepMs")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: sleepMs takes exactly one argument"))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "ioPoll")) (PList (PVar "fds") (PVar "interests") (PVar "timeout"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "fds")) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "interests"))) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "timeout"))) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EVar "wasmTrap") (EApp (EVar "progEmit") (EVar "prog"))) (ELit (LString "E-WASM-NO-BINDING"))) (ELit (LString "ioPoll: descriptor readiness has no wasm binding (Net and Stdin bindings: #3666); build for a native target")))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "ioPoll")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: ioPoll takes exactly three arguments"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readFileBytes")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "confinedGrantW") (EVar "prog")) (ELit (LString "readFileBytes"))) (EVar "p")) (EVar "g")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (ELit (LString "call $mdk_read_file_bytes_io")))))
+(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readFileBytes")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (ELit (LString "call $mdk_read_file_bytes_io")))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readFileBytes")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-D: readFileBytes takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "writeFileBytes")) (PList (PVar "p") (PVar "arr") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "confinedGrantW") (EVar "prog")) (ELit (LString "writeFileBytes"))) (EVar "p")) (EVar "g")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p"))) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "arr"))) (EListLit (ELit (LString "ref.cast (ref $arr)")) (ELit (LString "call $mdk_write_file_bytes_io")))))
+(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "writeFileBytes")) (PList (PVar "p") (PVar "arr") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "arr"))) (EListLit (ELit (LString "ref.cast (ref $arr)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (ELit (LString "call $mdk_write_file_bytes_io")))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "writeFileBytes")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-D: writeFileBytes takes exactly two arguments and its grant"))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "panic")) (PList (PVar "msg"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "wasmTrapBytes") (EApp (EVar "progEmit") (EVar "prog"))) (ELit (LString "runtime error [E-PANIC]: "))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "msg"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (ELit (LString "call $mdk_eprint_str")))) (EApp (EVar "trapByteInstr") (ELit (LInt 10)))) (EListLit (ELit (LString "unreachable")))))
 (DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "panic")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W10: panic takes exactly one argument"))))
@@ -16048,7 +15997,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "emitWDispBase" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "emitWDispBase" ((PVar "prog") (PVar "env") (PVar "root") (PVar "e")) (EBlock (DoLet false false (PVar "valInstrs") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "e"))) (DoLet false false (PVar "cellStruct") (ELit (LString "C_Cons"))) (DoLet false false (PVar "storeBranch") (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "global.get ")) (EApp (EVar "wDispDestL") (EVar "root"))) (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EVar "cellStruct")) (ELit (LString ")")))) (EVar "valInstrs")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "struct.set $")) (EVar "cellStruct")) (ELit (LString " 2")))))) (DoLet false false (PVar "seedBranch") (EBinOp "++" (EVar "valInstrs") (EListLit (EBinOp "++" (ELit (LString "global.set ")) (EApp (EVar "wDispHeadL") (EVar "root")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "global.get ")) (EApp (EVar "wDispFirstL") (EVar "root"))) (ELit (LString "if"))) (EApp (EVar "indent") (EVar "seedBranch"))) (EListLit (ELit (LString "else")))) (EApp (EVar "indent") (EVar "storeBranch"))) (EListLit (ELit (LString "end")))) (EListLit (EBinOp "++" (ELit (LString "global.get ")) (EApp (EVar "wDispHeadL") (EVar "root"))) (ELit (LString "ref.as_non_null")) (ELit (LString "return")))))))
 (DTypeSig false "emitAppTail" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emitAppTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args") PWild) (EApp (EVar "appParts") (EVar "app"))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "f0") PWild) () (EIf (EBinOp "||" (EBinOp "==" (EVar "f0") (ELit (LString "$withFileReadBound"))) (EBinOp "==" (EVar "f0") (ELit (LString "$withFileWriteBound")))) (EMatch (EVar "args") (arm (PList (PVar "bound") (PCon "CLam" (PList (PCon "PWild")) (PVar "body"))) () (EBinOp "++" (EApp (EApp (EApp (EVar "confinedFileBoundW") (EVar "prog")) (EVar "f0")) (EVar "bound")) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "body")))) (arm PWild () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: a file bound requires a grant and a thunk"))))) (EIf (EApp (EVar "isFtSentinel") (EVar "f0")) (EApp (EVar "ftSentinelInstrs") (EVar "f0")) (EApp (EApp (EApp (EVar "emitFlaggedAppW") (EVar "prog")) (EVar "env")) (EVar "app"))))) (arm PWild () (EApp (EApp (EApp (EVar "emitFlaggedAppW") (EVar "prog")) (EVar "env")) (EVar "app")))))))
+(DFunDef false "emitAppTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args") PWild) (EApp (EVar "appParts") (EVar "app"))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "f0") PWild) () (EIf (EBinOp "||" (EBinOp "==" (EVar "f0") (ELit (LString "$withFileReadBound"))) (EBinOp "==" (EVar "f0") (ELit (LString "$withFileWriteBound")))) (EMatch (EApp (EVar "fileBoundW") (EVar "app")) (arm (PCon "Some" (PTuple (PVar "g") (PVar "body") (PVar "mode"))) () (EBlock (DoLet false false (PVar "pushed") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "body")) (EListLit (ELit (LString "call $mdk_file_bound_exit")) (ELit (LString "return"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileBoundEnterW") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "g")) (EVar "mode")) (EVar "False")) (EListLit (ELit (LString "if")))) (EApp (EVar "indent") (EVar "pushed"))) (EListLit (ELit (LString "else")))) (EApp (EVar "indent") (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "body")))) (EListLit (ELit (LString "end")) (ELit (LString "unreachable"))))))) (arm (PCon "None") () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: a file bound requires a grant and a thunk"))))) (EIf (EApp (EVar "isFtSentinel") (EVar "f0")) (EApp (EVar "ftSentinelInstrs") (EVar "f0")) (EApp (EApp (EApp (EVar "emitFlaggedAppW") (EVar "prog")) (EVar "env")) (EVar "app"))))) (arm PWild () (EApp (EApp (EApp (EVar "emitFlaggedAppW") (EVar "prog")) (EVar "env")) (EVar "app")))))))
 (DTypeSig false "emitFlaggedAppW" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "emitFlaggedAppW" ((PVar "prog") (PVar "env") (PVar "app")) (EIf (EApp (EVar "isTailCall") (EVar "app")) (EApp (EApp (EApp (EVar "emitTailCallW") (EVar "prog")) (EVar "env")) (EVar "app")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitAppRef") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "app")) (EListLit (ELit (LString "return"))))))
 (DTypeSig false "emitTailCallW" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -16307,7 +16256,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "collectExprLocals" ((PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "l")) (EApp (EVar "collectExprLocals") (EVar "r"))))
 (DFunDef false "collectExprLocals" ((PCon "CUnOp" PWild (PVar "x"))) (EApp (EVar "collectExprLocals") (EVar "x")))
 (DFunDef false "collectExprLocals" ((PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "c")) (EApp (EVar "collectExprLocals") (EVar "t"))) (EApp (EVar "collectExprLocals") (EVar "f"))))
-(DFunDef false "collectExprLocals" ((PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "f")) (EApp (EApp (EDictApp "flatMap") (EVar "collectExprLocals")) (EVar "args"))))
+(DFunDef false "collectExprLocals" ((PAs "app" (PCon "CApp" (PVar "f") (PVar "args") PWild))) (EMatch (EApp (EVar "fileBoundW") (EVar "app")) (arm (PCon "Some" (PTuple (PVar "g") (PVar "body") PWild)) () (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "g")) (EApp (EVar "collectExprLocals") (EVar "body")))) (arm (PCon "None") () (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "f")) (EApp (EApp (EDictApp "flatMap") (EVar "collectExprLocals")) (EVar "args"))))))
 (DFunDef false "collectExprLocals" ((PCon "CTuple" (PVar "items"))) (EApp (EApp (EDictApp "flatMap") (EVar "collectExprLocals")) (EVar "items")))
 (DFunDef false "collectExprLocals" ((PCon "CList" (PVar "items"))) (EApp (EApp (EDictApp "flatMap") (EVar "collectExprLocals")) (EVar "items")))
 (DFunDef false "collectExprLocals" ((PCon "CArray" (PVar "items"))) (EApp (EApp (EDictApp "flatMap") (EVar "collectExprLocals")) (EVar "items")))
@@ -16589,7 +16538,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "maxIndexAt" ((PCon "CLet" PWild (PVar "pat") (PVar "a") (PVar "b")) (PVar "d")) (EApp (EApp (EVar "maxI") (EApp (EApp (EApp (EVar "letStashIndex") (EVar "pat")) (EVar "a")) (EVar "d"))) (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "a")) (EVar "d"))) (EApp (EApp (EVar "maxIndexAt") (EVar "b")) (EVar "d")))))
 (DFunDef false "maxIndexAt" ((PCon "CBinPrim" (PVar "op") (PVar "a") (PVar "b") PWild PWild) (PVar "d")) (EBlock (DoLet false false (PVar "sub") (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "a")) (EVar "d"))) (EApp (EApp (EVar "maxIndexAt") (EVar "b")) (EVar "d")))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "/"))) (EBinOp "==" (EVar "op") (ELit (LString "%")))) (EApp (EApp (EVar "maxI") (EVar "d")) (EMethodRef "sub")) (EMethodRef "sub")))))
 (DFunDef false "maxIndexAt" ((PCon "CUnOp" PWild (PVar "a")) (PVar "d")) (EApp (EApp (EVar "maxIndexAt") (EVar "a")) (EVar "d")))
-(DFunDef false "maxIndexAt" ((PCon "CApp" (PVar "f") (PVar "args") PWild) (PVar "d")) (EApp (EVar "foldMaxI") (EBinOp "::" (EApp (EApp (EVar "maxIndexAt") (EVar "f")) (EVar "d")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EApp (EApp (EVar "maxIndexAt") (EVar "a")) (EVar "d")))) (EVar "args")))))
+(DFunDef false "maxIndexAt" ((PAs "app" (PCon "CApp" (PVar "f") (PVar "args") PWild)) (PVar "d")) (EMatch (EApp (EVar "fileBoundW") (EVar "app")) (arm (PCon "Some" (PTuple (PVar "g") (PVar "body") PWild)) () (EApp (EApp (EVar "maxI") (EApp (EApp (EVar "maxIndexAt") (EVar "g")) (EVar "d"))) (EApp (EApp (EVar "maxIndexAt") (EVar "body")) (EVar "d")))) (arm (PCon "None") () (EApp (EVar "foldMaxI") (EBinOp "::" (EApp (EApp (EVar "maxIndexAt") (EVar "f")) (EVar "d")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EApp (EApp (EVar "maxIndexAt") (EVar "a")) (EVar "d")))) (EVar "args")))))))
 (DFunDef false "maxIndexAt" ((PCon "CBlock" (PVar "stmts")) (PVar "d")) (EApp (EVar "foldMaxI") (EApp (EApp (EMethodRef "map") (ELam ((PVar "s")) (EApp (EApp (EVar "maxIndexAtStmt") (EVar "s")) (EVar "d")))) (EVar "stmts"))))
 (DFunDef false "maxIndexAt" ((PCon "CLetGroup" (PVar "binds") (PVar "body")) (PVar "d")) (EApp (EVar "foldMaxI") (EBinOp "::" (EApp (EApp (EVar "maxIndexAt") (EVar "body")) (EVar "d")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EApp (EApp (EVar "maxIndexAtLgVal") (EVar "b")) (EVar "d")))) (EVar "binds")))))
 (DFunDef false "maxIndexAt" ((PCon "CTuple" (PVar "es")) (PVar "d")) (EApp (EVar "foldMaxI") (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (EApp (EApp (EVar "maxIndexAt") (EVar "x")) (EVar "d")))) (EVar "es"))))

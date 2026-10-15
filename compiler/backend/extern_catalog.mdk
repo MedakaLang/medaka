@@ -282,21 +282,29 @@ wasmHelperKeyRows = [
   ("panic", ["mdk_write_err_byte"]),
   ("indexError", ["mdk_write_err_byte"]),
   ("panicAt", ["mdk_write_err_byte"]),
-  ("readFile", readChannelKeys),
-  ("readFileBytes", readChannelKeys),
+  ("readFile", grantChannelKeys ++ readChannelKeys),
+  ("readFileBytes", grantChannelKeys ++ readChannelKeys),
   (
     "writeFileBytes",
-    [
-      "mdk_path_reset",
-      "mdk_path_push",
-      "mdk_write_file_reset",
-      "mdk_write_file_push",
-      "mdk_write_file_commit",
-      "mdk_result_len",
-      "mdk_result_byte",
-    ],
+    grantChannelKeys
+      ++ [
+        "mdk_path_reset",
+        "mdk_path_push",
+        "mdk_write_file_reset",
+        "mdk_write_file_push",
+        "mdk_write_file_commit",
+        "mdk_result_len",
+        "mdk_result_byte",
+      ],
   ),
-  ("fileExists", ["mdk_path_reset", "mdk_path_push", "mdk_file_exists"]),
+  (
+    "fileExists",
+    grantChannelKeys ++ refusalPanicKeys ++ ["mdk_file_exists"],
+  ),
+  (
+    "canonicalizePath",
+    grantChannelKeys ++ refusalPanicKeys ++ ["mdk_canonicalize_path"],
+  ),
   (
     "getEnv",
     [
@@ -319,6 +327,30 @@ wasmHelperKeyRows = [
   ),
 ]
 
+-- A file extern's grant goes to the host element by element, ahead of its path.
+grantChannelKeys : List String
+grantChannelKeys = ["mdk_grant_reset", "mdk_grant_push"]
+
+-- the path channel in, and a refusal read from the result channel and written
+-- to stderr as a panic
+refusalPanicKeys : List String
+refusalPanicKeys = [
+  "mdk_path_reset",
+  "mdk_path_push",
+  "mdk_result_len",
+  "mdk_result_byte",
+  "mdk_write_err_byte",
+]
+
+-- A declared file bound (`$withFileReadBound`/`$withFileWriteBound`, which the
+-- type checker writes around the body of a binding with a closed narrow file
+-- row) is no extern, but its lowering pushes its grant and enters and leaves a
+-- host bound frame, so a module reaching one imports these.
+export
+fileBoundHostKeys : List String
+fileBoundHostKeys =
+  grantChannelKeys ++ ["mdk_file_bound_enter", "mdk_file_bound_exit"]
+
 -- the path channel in, the file read, the result channel out
 readChannelKeys : List String
 readChannelKeys = [
@@ -338,10 +370,11 @@ wasmUseRows : List (String, List WasmUse)
 wasmUseRows = [
   ("ePutStr", [UseEPut]),
   ("ePutStrLn", [UseEPut]),
-  ("readFile", [UseStr]),
-  ("readFileBytes", [UseStr, UseArray, UseFileBytes]),
-  ("writeFileBytes", [UseStr, UseArray, UseFileBytes]),
-  ("fileExists", [UseStr]),
+  ("readFile", [UseStr, UseList]),
+  ("readFileBytes", [UseStr, UseList, UseArray, UseFileBytes]),
+  ("writeFileBytes", [UseStr, UseList, UseArray, UseFileBytes]),
+  ("fileExists", [UseStr, UseList]),
+  ("canonicalizePath", [UseStr, UseList]),
   ("args", [UseStr, UseList, UseArgs]),
   ("getEnv", [UseStr]),
   ("panic", [UseStr, UseEPut]),

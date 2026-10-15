@@ -1,0 +1,59 @@
+-- The declared-bound cases written with the file externs every target lowers.
+-- run.sh installs cfg/link -> ../outdir/sub.
+read : String -> <FileRead "cfg/*"> Result String String
+read leaf = readFile ("cfg/link/" ++ leaf)
+
+helper leaf = readFile ("cfg/link/" ++ leaf)
+
+throughHelper : String -> <FileRead "cfg/*"> Result String String
+throughHelper leaf = helper leaf
+
+-- a bound inside a bound: each must admit the target
+inner : String -> <FileRead "cfg/link/*"> Result String String
+inner leaf = readFile ("cfg/link/" ++ leaf)
+
+outer : String -> <FileRead "cfg/*"> Result String String
+outer leaf = inner leaf
+
+delay : String -> Unit -> <FileRead "cfg/*"> Result String String
+delay leaf = _ => helper leaf
+
+packed : Option (String -> <FileRead "cfg/*"> Result String String)
+packed = Some throughHelper
+
+widePacked : Option (String -> <FileRead> Result String String)
+widePacked = packed
+
+-- a write bound does not confine a read, nor a read bound a write
+readUnderWrite : String -> <FileWrite "cfg/*", FileRead> Result String String
+readUnderWrite p = readFile p
+
+writeUnderWrite : String -> <FileWrite "cfg/*", FileRead> Result String Unit
+writeUnderWrite leaf = writeFileBytes ("cfg/link/" ++ leaf) (arrayFromList [119])
+
+writeUnderRead : String -> <FileRead "cfg/*", FileWrite> Result String Unit
+writeUnderRead p = writeFileBytes p (arrayFromList [119])
+
+-- a bound re-entered by its own recursion, consing as it returns
+collect : Int -> <FileRead "cfg/*"> List Bool
+collect n = if n == 0 then [] else fileExists "cfg/a.txt" :: collect (n - 1)
+
+report : String -> Result String a -> <Stdout> Unit
+report tag result = match result
+  Ok _ => println (tag ++ ": Ok")
+  Err message => println (tag ++ ": Err " ++ message)
+
+main =
+  report "read" (read "a.txt")
+  report "helper" (throughHelper "a.txt")
+  report "inner" (inner "a.txt")
+  report "outer" (outer "a.txt")
+  report "delay" (delay "a.txt" ())
+  let _ = match widePacked
+    Some f => report "packed" (f "a.txt")
+    None => println "unexpected empty container"
+  report "read under write" (readUnderWrite "secret.txt")
+  report "write under write" (writeUnderWrite "stolen.txt")
+  report "write under read" (writeUnderRead "data/w.bin")
+  println (length (collect 3))
+  report "restored" (helper "a.txt")

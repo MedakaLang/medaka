@@ -18,7 +18,12 @@ import ir.core_ir.{
   CTBranch(..),
   CTree(..),
 }
-import backend.extern_catalog.{WasmUse(..), wasmHostKeys, wasmUses}
+import backend.extern_catalog.{
+  WasmUse(..),
+  fileBoundHostKeys,
+  wasmHostKeys,
+  wasmUses,
+}
 import backend.core_validate.{Backend(..), backendName}
 import support.ordmap.{
   OrdMap,
@@ -361,8 +366,15 @@ noteRefBox acc = if acc.seenRefBox then acc else { acc | seenRefBox = True }
 -- an occurrence of a name: every demand and host key the catalog lists for it
 noteName : DemandAcc -> String -> DemandAcc
 noteName acc "Ref" = noteRefBox acc
+noteName acc "$withFileReadBound" = noteFileBound acc
+noteName acc "$withFileWriteBound" = noteFileBound acc
 noteName acc name =
   walkEach noteKey (walkEach noteUse acc (wasmUses name)) (wasmHostKeys name)
+
+-- a declared file bound pushes its grant, a cons list of $str elements
+noteFileBound : DemandAcc -> DemandAcc
+noteFileBound acc =
+  walkEach noteKey (noteUse (noteUse acc UseStr) UseList) fileBoundHostKeys
 
 noteTag : DemandAcc -> String -> DemandAcc
 noteTag acc "U64" = noteUse acc UseU64

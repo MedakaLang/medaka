@@ -1096,7 +1096,7 @@ link = "production"
 [[gate]]
 name = "sqlite/test/index_write_oracle"
 area = "engines"
-shard = "gates_1"
+shard = "gates_6"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -2930,7 +2930,7 @@ link = "differential"
 [[gate]]
 name = "diff_native_stack"
 area = "infra"
-shard = "gates_7"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3106,17 +3106,17 @@ link = "production"
 [[gate]]
 name = "native_fixtures/run"
 area = "infra"
-shard = "gates_6"
+shard = "gates_1"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
 kind = "exec"
 migration = "inverted-polarity"
 run = "test/native_fixtures/run.sh"
-oracles = []
-sources = ["test/native_fixtures/run.sh"]
+oracles = ["wasm_emit_modules_main"]
+sources = ["test/native_fixtures/run.sh", "playground/medaka_host.mjs", "test/wasm/run.js", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_preamble.mdk", "compiler/backend/extern_catalog.mdk", "runtime/medaka_rt.c"]
 corpus = ["test/native_fixtures"]
-toolchain = []
+toolchain = ["node>=24"]
 link = "production"
 
 [[gate]]

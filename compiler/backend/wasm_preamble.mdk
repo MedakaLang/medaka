@@ -1729,6 +1729,11 @@ hostImportSig "mdk_write_file_push" = " (param i32)"
 hostImportSig "mdk_write_file_commit" = " (result i32)"
 hostImportSig "mdk_str_to_float" = " (result f64)"
 hostImportSig "mdk_str_to_float_ok" = " (result i32)"
+hostImportSig "mdk_grant_reset" = ""
+hostImportSig "mdk_grant_push" = " (param i32)"
+hostImportSig "mdk_canonicalize_path" = " (result i32)"
+hostImportSig "mdk_file_bound_enter" = " (param i32) (param i32) (result i32)"
+hostImportSig "mdk_file_bound_exit" = ""
 hostImportSig key =
   panic
     "internal error: host key \{key} has no wasm import signature in wasm_preamble.mdk"
@@ -1940,7 +1945,16 @@ randomFloatRuntimeLines = [
 --   readFile  : push path, mdk_read_file() -> i32 (1=Ok, 0=Err); rebuild the result
 --     $str and wrap Ok (struct.new $C_Ok, ord 0) / Err (struct.new $C_Err, ord 1).
 --     Contents that are not UTF-8 are an Err naming the path ($mdk_str_not_utf8).
---   fileExists: push path, mdk_file_exists() -> i32 (1/0) -> Bool i31.
+--   fileExists: push path, mdk_file_exists() -> i32 (1/0) -> Bool i31; 2 is a
+--     refusal, whose message is on the result channel ($mdk_refused_panic).
+--   canonicalizePath: push path, mdk_canonicalize_path() -> i32 (1=the canonical
+--     path, or the path itself when it has none, on the result channel / 0=a refusal).
+--   A file extern whose path is an authority pushes its grant first
+--   ($mdk_push_grant): mdk_grant_reset(), then each element's bytes through
+--   mdk_grant_push(byte), each element ended by mdk_grant_push(-1).  `[]` pushes
+--   no element: the whole domain.  The host confines the path against that grant
+--   and every enclosing declared bound of the same mode, as medaka_rt.c
+--   mdk_confine_bounds does, and a refusal is an Err of the extern's result.
 --   getEnv    : push name, mdk_get_env() -> i32 (1=Some / 0=None); rebuild $str and
 --     wrap Some (struct.new $C_Some, ord 0) / None (i31 ord 1).
 --   args      : mdk_args_count(); per i build a $str from mdk_arg_len(i)/mdk_arg_byte(i,j),
@@ -1952,7 +1966,12 @@ randomFloatRuntimeLines = [
 -- so one element per character.
 notUtf8SuffixWat : String
 notUtf8SuffixWat =
-  let cs = stringToChars ": not valid UTF-8 (use readFileBytes for raw bytes)"
+  asciiU8arrWat ": not valid UTF-8 (use readFileBytes for raw bytes)"
+
+-- the WAT that builds an ASCII string's bytes as a $u8arr
+asciiU8arrWat : String -> String
+asciiU8arrWat s =
+  let cs = stringToChars s
   "(array.new_fixed $u8arr \{intToString (arrayLength cs)}\{asciiConstsW cs (arrayLength cs) 0})"
 
 asciiConstsW : Array Char -> Int -> Int -> String
@@ -1970,9 +1989,16 @@ export
 ioHostRuntimeLines : List String -> List String
 ioHostRuntimeLines keys =
   gatedOn "mdk_path_push" keys ioPushPathLines
+    ++ gatedOn "mdk_grant_push" keys ioPushGrantLines
     ++ gatedOn "mdk_result_len" keys ioResultLines
+    ++ (if contains "mdk_file_exists" keys
+      || contains "mdk_canonicalize_path" keys then
+      ioRefusedPanicLines
+    else
+      [])
     ++ gatedOn "mdk_read_file" keys ioReadFileLines
     ++ gatedOn "mdk_file_exists" keys ioFileExistsLines
+    ++ gatedOn "mdk_canonicalize_path" keys ioCanonicalizeLines
     ++ gatedOn "mdk_get_env" keys ioGetEnvLines
 
 gatedOn : String -> List String -> List String -> List String
@@ -1992,6 +2018,50 @@ ioPushPathLines = [
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
   "    )"
 ]
+
+-- A grant is the W7 cons list of $str elements; Nil is an i31.
+ioPushGrantLines : List String
+ioPushGrantLines = [
+  "  ;; push a grant (List String) to the host grant buffer (reset first).",
+  "  (func $mdk_push_grant (param $g (ref eq))",
+  "    (local $cell (ref $C_Cons)) (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
+  "    (call $mdk_grant_reset)", "    (block $done (loop $next",
+  "      (br_if $done (i32.eqz (ref.test (ref $C_Cons) (local.get $g))))",
+  "      (local.set $cell (ref.cast (ref $C_Cons) (local.get $g)))",
+  "      (local.set $b (struct.get $str $bytes (ref.cast (ref $str) (struct.get $C_Cons 1 (local.get $cell)))))",
+  "      (local.set $n (array.len (local.get $b)))",
+  "      (local.set $i (i32.const 0))", "      (block $d (loop $l",
+  "        (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "        (call $mdk_grant_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "        (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "      (call $mdk_grant_push (i32.const -1))",
+  "      (local.set $g (struct.get $C_Cons 2 (local.get $cell))) (br $next)))",
+  "    )"
+]
+
+-- A refusal from an extern that returns no Result panics, as medaka_rt.c
+-- mdk_panic prints it: the E-PANIC banner, the message, a newline.
+ioRefusedPanicLines : List String
+ioRefusedPanicLines = [
+  "  ;; the host's refusal message (result channel) as an E-PANIC line, then trap.",
+  "  (func $mdk_refused_panic",
+  "    (call $mdk_err_u8arr \{panicBannerWat})",
+  "    (call $mdk_err_u8arr (call $mdk_io_result_bytes))",
+  "    (call $mdk_write_err_byte (i32.const 10))",
+  "    (unreachable))",
+  "  (func $mdk_err_u8arr (param $b (ref $u8arr))",
+  "    (local $i i32) (local $n i32)",
+  "    (local.set $n (array.len (local.get $b)))",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (call $mdk_write_err_byte (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    )",
+]
+
+panicBannerWat : String
+panicBannerWat = asciiU8arrWat "runtime error [E-PANIC]: "
 
 ioResultLines : List String
 ioResultLines = [
@@ -2025,8 +2095,9 @@ ioReadFileLines = [
   "    (struct.new $str (i32.add (struct.get $str $cp_count (local.get $path)) (array.len (local.get $sfx))) (local.get $out)))",
   "  ;; readFile : $str path -> Result String String.  1=Ok contents / 0=Err message.",
   "  ;; Contents that are not UTF-8 are an Err naming the path (medaka_rt.c mdk_read_file).",
-  "  (func $mdk_read_file_io (param $path (ref $str)) (result (ref eq))",
+  "  (func $mdk_read_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
   "    (local $st i32) (local $buf (ref $u8arr)) (local $c i32)",
+  "    (call $mdk_push_grant (local.get $g))",
   "    (call $mdk_push_path (local.get $path))",
   "    (local.set $st (call $mdk_read_file))",
   "    (if (i32.eqz (local.get $st))",
@@ -2040,10 +2111,23 @@ ioReadFileLines = [
 
 ioFileExistsLines : List String
 ioFileExistsLines = [
-  "  ;; fileExists : $str path -> Bool (i31 ordinal: False=0 / True=1).",
-  "  (func $mdk_file_exists_io (param $path (ref $str)) (result (ref eq))",
+  "  ;; fileExists : $str path -> Bool (i31 ordinal: False=0 / True=1); 2 = refused.",
+  "  (func $mdk_file_exists_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (local $r i32)", "    (call $mdk_push_grant (local.get $g))",
   "    (call $mdk_push_path (local.get $path))",
-  "    (ref.i31 (call $mdk_file_exists)))"
+  "    (local.set $r (call $mdk_file_exists))",
+  "    (if (i32.eq (local.get $r) (i32.const 2)) (then (call $mdk_refused_panic)))",
+  "    (ref.i31 (local.get $r)))"
+]
+
+ioCanonicalizeLines : List String
+ioCanonicalizeLines = [
+  "  ;; canonicalizePath : $str path -> $str.  1=the host's answer / 0=refused.",
+  "  (func $mdk_canonicalize_path_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (i32.eqz (call $mdk_canonicalize_path)) (then (call $mdk_refused_panic)))",
+  "    (call $mdk_io_result_to_str))"
 ]
 
 ioGetEnvLines : List String
@@ -2115,8 +2199,9 @@ readFileBytesLines : List String
 readFileBytesLines = [
   "  ;; readFileBytes : $str path -> Result String (Array Int).  1=Ok bytes / 0=Err msg.",
   "  ;; Reuses the read byte-channel but rebuilds an $arr of i31 Int bytes (0..255).",
-  "  (func $mdk_read_file_bytes_io (param $path (ref $str)) (result (ref eq))",
+  "  (func $mdk_read_file_bytes_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
   "    (local $st i32) (local $n i32) (local $i i32) (local $out (ref $arr))",
+  "    (call $mdk_push_grant (local.get $g))",
   "    (call $mdk_push_path (local.get $path))",
   "    (local.set $st (call $mdk_read_file))",
   "    (if (result (ref eq)) (local.get $st)", "      (then",
@@ -2134,8 +2219,9 @@ writeFileBytesLines : List String
 writeFileBytesLines = [
   "  ;; writeFileBytes : $str path -> $arr bytes -> Result String Unit.  1=Ok () / 0=Err msg.",
   "  ;; Stream each i31 byte (masked to 0..255) to the host, then commit fs.writeFileSync.",
-  "  (func $mdk_write_file_bytes_io (param $path (ref $str)) (param $ba (ref $arr)) (result (ref eq))",
+  "  (func $mdk_write_file_bytes_io (param $path (ref $str)) (param $ba (ref $arr)) (param $g (ref eq)) (result (ref eq))",
   "    (local $st i32) (local $n i32) (local $i i32)",
+  "    (call $mdk_push_grant (local.get $g))",
   "    (call $mdk_push_path (local.get $path))",
   "    (call $mdk_write_file_reset)",
   "    (local.set $n (array.len (local.get $ba)))",

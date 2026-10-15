@@ -29,6 +29,9 @@ const vfs = {
   readFile: (p) => fs.readFileSync(p),   // -> Buffer; throws on missing/unreadable
   exists: (p) => fs.existsSync(p),
   writeFile: (p, buf) => fs.writeFileSync(p, buf),   // throws on unwritable path
+  // confinement's primitives: realpath(3) itself, and whether lstat(2) succeeds
+  realpath: (p) => fs.realpathSync.native(p),
+  lexists: (p) => { try { fs.lstatSync(p); return true; } catch (e) { return false; } },
 };
 const args = (process.env.MDK_ARGS ? process.env.MDK_ARGS.split(' ') : []);
 let wroteStderr = false;

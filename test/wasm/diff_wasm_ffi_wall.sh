@@ -13,13 +13,16 @@
 # started without a profile.
 #
 # No real C linkage needed: `build --target wasm` must refuse BEFORE attempting to
-# emit/validate/link anything, so these fixtures never reach wasm-tools or Node —
-# this gate needs only the wasm_emit_modules_main oracle binary (`sh
-# test/wasm/build_wasm_oracle.sh --modules-only`), not the full wasm toolchain.
+# emit/validate/link anything, so the wall fixtures never reach Node.  The
+# file-grant cases run under Node (test/wasm/run.js) and as native builds.
+# The wasm emitter is the wasm_emit_modules_main oracle binary (`sh
+# test/wasm/build_wasm_oracle.sh --modules-only`).
 #
-# The file-grant cases at the bottom are the same kind of wall: a file operation
-# the wasm host cannot confine is refused with a located message.  So are the
-# runtime-extern cases: a runtime extern the catalog gives wasm no lowering for.
+# The file-grant cases at the bottom are no wall: the wasm host confines a file
+# operation as the native runtime does, so each builds, and a case whose
+# operation leaves its grant or a declared bound is refused when it runs, with
+# the native build's output.  The runtime-extern cases are a wall: a runtime
+# extern the catalog gives wasm no lowering for.
 #
 # Exit: 0 if every shape walls (or builds) as expected; 1 on any divergence;
 # 2 if the oracle binary isn't built (toolchain-skip, mirroring the other wasm
@@ -140,33 +143,57 @@ check_refused "module_extern_reached_refused" \
 main = println (isFile "x")' \
   "$(printf "$RUNTIME_EXPECT" statFile WASM-GAP)"
 
-# ── The file-grant wall (EFFECTS-SEMANTICS §7) ──────────────────────────────
-# The wasm host reads a path with no granted authority beside it, so every grant
-# the program writes must need no check: the whole domain, or exact paths
-# (`wasmGrantConfined`, compiler/backend/wasm_emit.mdk).  A library wrapper that
-# forwards its caller's grant builds; a narrow grant is a located compile-time
-# error where the program writes it, never an unconfined read.
+# ── File grants (EFFECTS-SEMANTICS §7) ──────────────────────────────────────
+# Every grant builds: the host confines each file operation against the grant
+# its call was given and every enclosing declared bound of its mode
+# (playground/medaka_host.mjs).  `check_grant <name> <src> run-refused` also
+# runs the wasm build and a native build of the same program, each in a fresh
+# copy of one tree (a granted `cfg/`, `data.txt` beside it, and a symlink
+# `cfg/link` to `outdir/`), and requires the same stdout and exit status, with
+# the native run refusing a path.  The expected output is native's.
+grant_tree() {
+  rm -rf "$1"
+  mkdir -p "$1/cfg" "$1/outdir"
+  printf 'granted' > "$1/cfg/a.txt"
+  printf 'data' > "$1/data.txt"
+  printf 'outside' > "$1/outdir/a.txt"
+  ln -s ../outdir "$1/cfg/link"
+}
 check_grant() {
   name="$1"; src="$2"; want="$3"
   f="$WORK/$name.mdk"
   printf '%s\n' "$src" > "$f"
-  out="$(MEDAKA_WASM_EMITTER="$EMITBIN" "$MEDAKA" build --target wasm "$f" -o "$WORK/$name.out" 2>&1)"
+  out="$(MEDAKA_WASM_EMITTER="$EMITBIN" "$MEDAKA" build --target wasm "$f" -o "$WORK/$name.wasm" 2>&1)"
   st=$?
-  if [ -z "$want" ]; then
-    if [ "$st" -eq 0 ]; then echo "ok   $name"; else
-      echo "FAIL $name: expected a build, got exit $st:"
-      echo "$out" | sed 's/^/  /'
-      fail=1
-    fi
-  elif [ "$st" -ne 0 ] && printf '%s' "$out" | grep -qF "$want" &&
-       printf '%s' "$out" | grep -qE "$name\\.mdk:[0-9]+:[0-9]+:"; then
-    echo "ok   $name"
-  else
-    echo "FAIL $name: expected exit != 0 and a message containing:"
-    echo "  $want"
-    echo "  got exit $st:"
+  if [ "$st" -ne 0 ]; then
+    echo "FAIL $name: expected a build, got exit $st:"
     echo "$out" | sed 's/^/  /'
     fail=1
+    return
+  fi
+  if [ -z "$want" ]; then echo "ok   $name"; return; fi
+  if ! "$MEDAKA" build "$f" -o "$WORK/$name.bin" >"$WORK/$name.nlog" 2>&1; then
+    echo "FAIL $name: the native build failed:"
+    sed 's/^/  /' "$WORK/$name.nlog"
+    fail=1
+    return
+  fi
+  grant_tree "$WORK/tree"
+  n_out="$(cd "$WORK/tree" && "$WORK/$name.bin" 2>"$WORK/$name.nerr")"
+  n_st=$?
+  grant_tree "$WORK/tree"
+  w_out="$(cd "$WORK/tree" && node "$ROOT/test/wasm/run.js" "$WORK/$name.wasm" 2>"$WORK/$name.werr")"
+  w_st=$?
+  if ! printf '%s\n' "$n_out" | cat - "$WORK/$name.nerr" | grep -qF 'is outside the granted authority'; then
+    echo "FAIL $name: the native run refused no path:"
+    printf '%s\n' "$n_out" | sed 's/^/  /'
+    fail=1
+  elif [ "$n_out" != "$w_out" ] || [ "$n_st" -ne "$w_st" ]; then
+    echo "FAIL $name: native exit $n_st printed [$n_out], wasm exit $w_st printed [$w_out]"
+    sed 's/^/  wasm stderr: /' "$WORK/$name.werr"
+    fail=1
+  else
+    echo "ok   $name"
   fi
 }
 
@@ -175,7 +202,7 @@ check_grant "file_grant_pattern_refused" \
 readCfg name = readFile ("cfg/" ++ name)
 
 main = println (readCfg "../secret.txt")' \
-  "file_grant_pattern_refused.mdk:2:24: \`readFile\` is given the file grant [\"cfg/*\"], but a wasm build cannot confine a file operation to a pattern"
+  run-refused
 
 check_grant "file_grant_wrapper_narrow_caller_refused" \
 'import io.{readLines}
@@ -183,8 +210,8 @@ check_grant "file_grant_wrapper_narrow_caller_refused" \
 cfgLines : String -> <FileRead "cfg/*"> Result String (List String)
 cfgLines name = readLines ("cfg/" ++ name)
 
-main = println (cfgLines "a.txt")' \
-  "file_grant_wrapper_narrow_caller_refused.mdk:4:26: \`readLines\` is given the file grant [\"cfg/*\"], but a wasm build cannot confine a file operation to a pattern"
+main = println (cfgLines "../data.txt")' \
+  run-refused
 
 check_grant "file_grant_wrapper_whole_domain_built" \
 'import io.{readLines}
@@ -222,7 +249,7 @@ check_grant "file_declared_bound_exact_call_refused" \
 readCfg _ = readFile "cfg/link/a.txt"
 
 main = println (readCfg ())' \
-  '`declared FileRead bound` is given the file grant ["cfg/*"]'
+  run-refused
 
 check_grant "file_declared_bound_alias_refused" \
 'helper _ = readFile "cfg/link/a.txt"
@@ -231,7 +258,7 @@ readCfg : Unit -> <FileRead "cfg/*"> Result String String
 readCfg = helper
 
 main = println (readCfg ())' \
-  'but a wasm build cannot confine a file operation to a pattern'
+  run-refused
 
 check_grant "file_declared_bound_pure_built" \
 'quiet : Unit -> <FileRead "cfg/*"> Option Int
@@ -266,8 +293,8 @@ readData _ = readFile "data.txt"
 main = println (readData ())' \
   ""
 
-# A callback can share a spelling with a live pure global. Only the callback's
-# lexical binding determines whether the declared bound needs host confinement.
+# A callback can share a spelling with a live pure global: the declared bound
+# confines the file operation of the callback the program passes.
 check_grant "file_bound_callback_shadow_refused" \
 'cb : Unit -> <IO> Result String String
 cb _ = Ok "pure"
@@ -278,7 +305,7 @@ readCfg cb = cb ()
 main =
   let _ = cb ()
   println (readCfg (_ => readFile "data.txt"))' \
-  '`declared FileRead bound` is given the file grant ["cfg/*"]'
+  run-refused
 
 check_grant "file_bound_callback_helper_refused" \
 'cb : Unit -> <IO> Result String String
@@ -291,7 +318,7 @@ readCfg given = invoke given
 main =
   let _ = cb ()
   println (readCfg (_ => readFile "data.txt"))' \
-  'but a wasm build cannot confine a file operation to a pattern'
+  run-refused
 
 check_grant "file_bound_callback_let_refused" \
 'cb : Unit -> <IO> Result String String
@@ -306,7 +333,7 @@ readCfg given = invoke given
 main =
   let _ = cb ()
   println (readCfg (_ => readFile "data.txt"))' \
-  'but a wasm build cannot confine a file operation to a pattern'
+  run-refused
 
 check_grant "file_bound_callback_lambda_refused" \
 'cb : Unit -> <IO> Result String String
@@ -319,7 +346,7 @@ readCfg given = invoke given
 main =
   let _ = cb ()
   println (readCfg (_ => readFile "data.txt"))' \
-  'but a wasm build cannot confine a file operation to a pattern'
+  run-refused
 
 check_grant "file_bound_callback_match_refused" \
 'cb : Unit -> <IO> Result String String
@@ -334,7 +361,7 @@ readCfg given = invoke given
 main =
   let _ = cb ()
   println (readCfg (_ => readFile "data.txt"))' \
-  'but a wasm build cannot confine a file operation to a pattern'
+  run-refused
 
 check_grant "file_bound_callback_returned_refused" \
 'cb : Unit -> <IO> Result String String
@@ -347,7 +374,7 @@ readCfg given = (identity given) ()
 main =
   let _ = cb ()
   println (readCfg (_ => readFile "data.txt"))' \
-  'but a wasm build cannot confine a file operation to a pattern'
+  run-refused
 
 check_grant "file_bound_callback_returned_helper_refused" \
 'cb : Unit -> <IO> Result String String
@@ -361,7 +388,7 @@ readCfg given = invoke given
 main =
   let _ = cb ()
   println (readCfg (_ => readFile "data.txt"))' \
-  'but a wasm build cannot confine a file operation to a pattern'
+  run-refused
 
 check_grant "file_bound_callback_do_refused" \
 'cb : Unit -> <IO> Result String String
@@ -377,7 +404,7 @@ readCfg given = invoke given
 main =
   let _ = cb ()
   println (readCfg (_ => readFile "data.txt"))' \
-  'but a wasm build cannot confine a file operation to a pattern'
+  run-refused
 
 # A nested binder does not shadow an extern outside that binder's scope.
 check_grant "file_bound_out_of_scope_extern_built" \
@@ -403,7 +430,7 @@ readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result S
 readCfg given = (returnCb "tag" given) ()
 
 main = println (readCfg (_ => readFile "data.txt"))' \
-  'but a wasm build cannot confine a file operation to a pattern'
+  run-refused
 
 check_grant "file_bound_signed_returned_refused" \
 'returnCb : (Unit -> <IO> Result String String) -> Unit -> <IO> Result String String
@@ -412,7 +439,7 @@ readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result S
 readCfg given = (returnCb given) ()
 
 main = println (readCfg (_ => readFile "data.txt"))' \
-  'but a wasm build cannot confine a file operation to a pattern'
+  run-refused
 
 check_grant "file_bound_relay_returned_refused" \
 'returnCb cb = cb
@@ -421,7 +448,7 @@ readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result S
 readCfg given = (relay given) ()
 
 main = println (readCfg (_ => readFile "data.txt"))' \
-  'but a wasm build cannot confine a file operation to a pattern'
+  run-refused
 
 check_grant "file_bound_pointfree_method_built" \
 'readCfg : Unit -> <FileRead "cfg/*"> Int
@@ -450,7 +477,7 @@ readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result S
 readCfg given = runCallback given
 
 main = println (readCfg (_ => readFile "data.txt"))' \
-  'but a wasm build cannot confine a file operation to a pattern'
+  run-refused
 
 check_grant "file_read_bound_write_callback_built" \
 'callWrite : (Unit -> <FileWrite "out"> Result String Unit) -> <FileWrite "out"> Result String Unit
@@ -464,10 +491,13 @@ main = println (readCfg ())' \
 check_grant "file_read_bound_eager_callback_construction" \
 'callWrite : (Unit -> <FileWrite "out"> Result String Unit) -> <FileWrite "out"> Result String Unit
 callWrite cb = cb ()
-readCfg : Unit -> <FileRead "cfg/*", FileWrite "out"> Result String Unit
-readCfg _ = callWrite (let _ = readFile "cfg/link" in _ => writeFileBytes "out" (arrayFromList [120]))
+said : Result String String -> String
+said (Ok _) = "Ok"
+said (Err e) = "Err \{e}"
+readCfg : Unit -> <FileRead "cfg/*", FileWrite "out", Stdout> Result String Unit
+readCfg _ = callWrite (let _ = println (said (readFile "cfg/link")) in _ => writeFileBytes "out" (arrayFromList [120]))
 main = println (readCfg ())' \
-  'but a wasm build cannot confine a file operation to a pattern'
+  run-refused
 
 check_grant "file_bound_pure_local_function_built" \
 'readCfg : Unit -> <FileRead "cfg/*"> Int
@@ -484,7 +514,7 @@ readCfg given =
   let given = _ => Ok "pure"
   call ()
 main = println (readCfg (_ => readFile "data.txt"))' \
-  'but a wasm build cannot confine a file operation to a pattern'
+  run-refused
 
 check_grant "file_bound_local_returned_callback_refused" \
 'readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result String String
@@ -492,7 +522,7 @@ readCfg given =
   let identity cb = cb
   identity given ()
 main = println (readCfg (_ => readFile "data.txt"))' \
-  'but a wasm build cannot confine a file operation to a pattern'
+  run-refused
 
 check_grant "file_bound_method_returned_callback_refused" \
 'interface Return s where
@@ -503,7 +533,7 @@ impl Return Box where
 readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result String String
 readCfg given = returnCb Box given ()
 main = println (readCfg (_ => readFile "data.txt"))' \
-  'but a wasm build cannot confine a file operation to a pattern'
+  run-refused
 
 check_grant "file_bound_standalone_shadow_returned_callback_refused" \
 'data Box = Box
@@ -512,7 +542,7 @@ sub _ cb = cb
 readCfg : (Unit -> <IO> Result String String) -> <FileRead "cfg/*", IO> Result String String
 readCfg given = sub Box given ()
 main = println (readCfg (_ => readFile "data.txt"))' \
-  'but a wasm build cannot confine a file operation to a pattern'
+  run-refused
 
 # The runtime-extern wall refuses only a reference the program reaches: an
 # imported module whose externs go unreached builds, and so does a program
