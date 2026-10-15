@@ -426,6 +426,7 @@ jobs:
               test/diff_compiler_must_fail.sh|test/check_fingerprint_parity.sh) soundness_corpora=true ;;
               test/emitter_source_set.awk) soundness_corpora=true ;;
               test/typecheck_compiler_source.sh|test/registry_keying_ratchet.sh) soundness_corpora=true ;;
+              test/arch_ratchet.sh|test/arch_goldens/*) soundness_corpora=true ;;
               test/selfcompile_fixpoint.sh|test/build_oracles.sh) soundness_corpora=true ;;
             esac
           done < "$RUNNER_TEMP/changed.txt"
@@ -1638,6 +1639,13 @@ jobs:
       # timeout. History: dossier `ci.md`.
       - name: Compiler source is well-typed and emitter reproduces itself
         if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.soundness_corpora == 'true')) }}
+        # Event-payload SHAs for test/arch_ratchet.sh (read through `env:`, never
+        # interpolated into the script body).
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          MG_BASE: ${{ github.event.merge_group.base_sha }}
+          MG_HEAD: ${{ github.event.merge_group.head_sha }}
         run: |
           set +e
           JOBS=3 bash test/typecheck_compiler_source.sh > /tmp/tc.log 2>&1 &

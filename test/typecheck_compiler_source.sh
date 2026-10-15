@@ -1600,6 +1600,13 @@ if ! sh "$ROOT/test/registry_keying_ratchet.sh" "$ROOT"; then
   exit 1
 fi
 
+# ── #4200 architecture growth ratchet (typecheck.mdk size, arch pin goldens) ──
+# Compares git revisions of the PR range; trailers and base resolution are
+# documented in test/arch_ratchet.sh.
+if ! sh "$ROOT/test/arch_ratchet.sh" "$ROOT"; then
+  exit 1
+fi
+
 # ── Pass 3: the ELABORATE driver's view of the SAME closure (issue #1811) ───
 #
 # ⚠️ SCOPE, STATED UP FRONT: passes 1-2 cover the FULL compiler-source closure

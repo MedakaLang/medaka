@@ -79,6 +79,8 @@ gh pr merge --auto --merge           # enqueues into the merge queue
 ```
 🛠️ **[W-PR-HELPER]** Prefer `scripts/pr.sh` (`body`/`watch`/`enqueue`/`complete`), see
 `docs/ops/PR-HELPER.md`.
+- **[W-ARCH-TRAILERS]** Commit-message trailers (not PR-body lines) opt out of the architecture
+  ratchet: `Arch-Growth-Override:`, `Arch-Pin-Raise:`, `Hooks-Field:`. See `test/arch_ratchet.sh`.
 
 - **[W-REQUIRED-CHECKS]** Required checks live in a repo **ruleset**. The
   `…/branches/main/protection` endpoint 404s "Branch not protected", which is misleading.

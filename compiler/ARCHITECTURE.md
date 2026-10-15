@@ -164,7 +164,7 @@ versus dispatch, which cuts through the `infer` recursion and was rightly reject
 
 A module over 3,000 code lines carries a stated reason in its header comment. The
 compiler's largest file may not grow: `types/typecheck.mdk` shrinks on every PR that
-touches it, or the PR body says why not. The ceiling is rustc's (3,000 non-comment lines,
+touches it, or a commit in the PR carries `Arch-Growth-Override:`. The ceiling is rustc's (3,000 non-comment lines,
 explicit opt-out); the growth rule is the one mechanism in any of the three reference
 compilers that stops a hot file from becoming the compiler.
 

@@ -135,6 +135,10 @@ When a symbol dominates, **check its stack DEPTH, not just its count.**
 The three files where a mistake costs the most, because everything runs through them:
 **`frontend/resolve.mdk`**, **`types/typecheck.mdk`**, **`backend/llvm_emit.mdk`**.
 
+`types/typecheck.mdk` may not grow (D1, #4200): `test/arch_ratchet.sh` compares its code
+lines with the PR base, and a commit in the PR carrying `Arch-Growth-Override: <reason>`
+is the only opt-out.
+
 ```sh
 # 1. Does it still scale? (~2.0x per doubling = linear; ~4.0x = quadratic)
 sh test/diff_compiler_perf_scaling.sh
