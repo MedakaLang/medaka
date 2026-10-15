@@ -509,7 +509,7 @@ The waiting model is in `docs/design/WASM-ASYNC-DESIGN.md`.
 
 WASI preview 2 is a different host ABI — WIT imports — not a profile of `env`.
 In this design it is one more constructor of the disposition sum (§4.1) and one
-more row of the profile table, with nothing built. `compiler/WASMGC-DESIGN.md`
+more row of the profile table, with nothing built. `archive/design/WASMGC-DESIGN.md`
 already names it as the production-CLI path; that remains the plan of record,
 and a WIT `world` is what a profile would lower to there.
 

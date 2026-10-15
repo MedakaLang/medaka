@@ -12,7 +12,7 @@ on `main`.
 > parallels the LLVM backend (`compiler/backend/llvm_emit.mdk`). It does **not**
 > implement anything. §10 is the list of forks a human must rule on before any code.
 >
-> Cross-refs: `compiler/STAGE2-DESIGN.md` §2.4b/§2.4c (WasmGC ratified as the wedge
+> Cross-refs: `archive/design/STAGE2-DESIGN.md` §2.4b/§2.4c (WasmGC ratified as the wedge
 > backend), `compiler/RUNTIME-DESIGN.md` §6a/§7/§8.4/§8.5/**§8.6** (the binding
 > abstract-value contract) and §5 (the 71-extern table), `../docs/design/CAPABILITY-EFFECTS.md` +
 > `../docs/design/CAPABILITY-PLATFORM.md` (why this matters).

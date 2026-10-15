@@ -63,9 +63,9 @@ solving one diagnostic's bad span, plus this facet (decl ranges) which never got
 
 | Doc | Scope | Node it put a `Loc` on | Status |
 |---|---|---|---|
-| `compiler/PARSE-ERROR-LOCATION-DESIGN.md` | parse-error caret/column | (none — furthest-fail token index → `offsetToLineCol`) | PARTIAL/IMPLEMENTED |
-| `compiler/RESOLVER-DIAG-LOCATION-DESIGN.md` | 3 resolver `{0,0}` diags | `TyCon String (Option Loc)`, `DUse Bool UsePath Loc` | IMPLEMENTED |
-| `compiler/TYPE-ERROR-SPAN-DESIGN.md` | type-error squiggle width | (widened lexer string offset + `ELoc`/`currentLoc` reads) | IMPLEMENTED |
+| `archive/design/PARSE-ERROR-LOCATION-DESIGN.md` | parse-error caret/column | (none — furthest-fail token index → `offsetToLineCol`) | PARTIAL/IMPLEMENTED |
+| `archive/design/RESOLVER-DIAG-LOCATION-DESIGN.md` | 3 resolver `{0,0}` diags | `TyCon String (Option Loc)`, `DUse Bool UsePath Loc` | IMPLEMENTED |
+| `archive/design/TYPE-ERROR-SPAN-DESIGN.md` | type-error squiggle width | (widened lexer string offset + `ELoc`/`currentLoc` reads) | IMPLEMENTED |
 
 **Verdict: they are three independent point-fixes, but they CONVERGED — without ever saying so
 — on a single latent convention.** That convention, never written down as a spec, is:

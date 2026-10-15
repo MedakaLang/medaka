@@ -241,7 +241,7 @@ tag against every impl of the method** (`loadTag`, `:4040`; `icmp eq`, `:4159`).
 
 **And both of our own specs already say this representation is a placeholder:**
 
-- `compiler/STAGE2-DESIGN.md:117` — *"Runtime dict representation (flat `VDict String` tag) …
+- `archive/design/STAGE2-DESIGN.md:117` — *"Runtime dict representation (flat `VDict String` tag) …
   **LLVM wants a real dict struct / vtable pointer**. Routing reused, representation
   rewritten."* — **It was never rewritten.**
 - `docs/spec/DICT-SEMANTICS.md:128` — *"A flat, impl-key representation is **unsound for the

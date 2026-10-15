@@ -267,4 +267,4 @@ such a consumer, copy the decls it receives. (#2325)
 Open perf work: `gh issue list --label "ws:perf" --state open`.
 Measured log **including every dead end** (read the dead ends): `compiler/PERF-RESULTS.md`.
 Ranked hot paths, and which ones are **structural** and not fixable by tuning:
-`compiler/PERF-SCOPE.md`.
+`archive/design/PERF-SCOPE.md`.

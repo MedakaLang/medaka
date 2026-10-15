@@ -1908,7 +1908,7 @@ handleReferences runtimeSrc coreSrc idJson params docs =
 -- `defsOf` resolve through import origin + re-export chains + lexical scope
 -- (never spelling), so shadowing, `import m as A`, selective/`as`-renamed
 -- imports, and same-name-in-two-modules are each resolved correctly by
--- construction (compiler/REFERENCES-RENAME-DESIGN.md §5). `uri` is the
+-- construction (docs/design/REFERENCES-RENAME-DESIGN.md §5). `uri` is the
 -- Docs-table key for the CLICKED buffer (so unsaved edits there win, exactly
 -- like `projectEntryEnv`); every OTHER project file is read through the same
 -- `docs`-then-disk override the loader already uses elsewhere, so an unsaved

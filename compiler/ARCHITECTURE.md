@@ -187,8 +187,8 @@ run at every phase transition on every test, not in a separate gate.
 2. **The agreed backlog:** this file's playbook and GitHub issues. One `TODO.md` per
    directory may hold the small agreed cleanups that do not merit an issue.
 3. **The record:** a design document whose status becomes IMPLEMENTED moves to
-   `compiler/archive/` in the PR that lands it. The docs index is generated and keeps it
-   findable.
+   `archive/design/` in the PR that lands it (P0-D5, Val ruling 2026-10-15, Phase 0
+   planning). The docs index is generated and keeps it findable.
 
 Rationale that explains why code is the way it is lives beside the code, as it already
 does in this tree. A design document is a proposal; once landed it is history.
@@ -224,8 +224,8 @@ Six decisions sat under these laws when they were drafted. Val ruled all six on
   reviewed override; the tree-wide refusal in #2289 stands.
 - D2 the hooks record (A6) serves rendering, tooling and backend-fact lookups and is never
   read from inference: accepted.
-- D3 landed design docs move to `compiler/archive/`; each directory gets a map under 100
-  lines with no line numbers (A10): accepted.
+- D3 landed design docs move to `archive/design/` (P0-D5, Val ruling 2026-10-15, Phase 0
+  planning); each directory gets a map under 100 lines with no line numbers (A10): accepted.
 - D4 `build`'s emitter child runs the whole pipeline until the interface artifact exists,
   then receives the artifact from the parent (A7): accepted.
 - D5 a value `main`'s auto-print obligation is an ordinary wanted solved against the

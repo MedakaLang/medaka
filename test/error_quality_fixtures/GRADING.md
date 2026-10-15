@@ -671,7 +671,7 @@ captured `.out` golden, before scoring.
 
 ### What landed, confirmed on the binary
 
-1. **F3 resolver locations** (`compiler/RESOLVER-DIAG-LOCATION-DESIGN.md`
+1. **F3 resolver locations** (`archive/design/RESOLVER-DIAG-LOCATION-DESIGN.md`
    Chunk A/B): `R-UNKNOWN-TYPE`/`R-PRIVATE-NAME`/`R-MODULE-LOAD` now carry a
    real `file:L:C:` location instead of `<unknown location>`, both in CLI text
    and `check --json`'s `range`. `unbound_type_in_sig`'s previous **duplicate
@@ -1891,7 +1891,7 @@ so `GRADING.md`/`INVENTORY.md` reflect the real state of the compiler:
   interpreter, which already had located+coded traps) — a future session
   could add a `build/` runtime-trap fixture once traps are located.
 - **Parse errors now render located `file:L:C:` + caret everywhere** (Stage 1
-  of the parse-error work; see `compiler/PARSE-ERROR-LOCATION-DESIGN.md`),
+  of the parse-error work; see `archive/design/PARSE-ERROR-LOCATION-DESIGN.md`),
   plus beginner foreign-syntax hints for common non-Medaka habits — brace
   blocks (`{ }`), `for`/`while` loops, `def`, `/* */` block comments, and
   stray `;` statement terminators (Stage 2). This directly targets the

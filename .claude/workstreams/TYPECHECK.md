@@ -169,7 +169,7 @@ removing it:
 ## Why this workstream exists
 
 The HM core (levels + path-compressed union-find + value restriction) is excellent — do not
-"improve" it. The problem is the layers around it: at the 2026-06-14 `compiler/ARCH-REVIEW.md`
+"improve" it. The problem is the layers around it: at the 2026-06-14 `archive/design/ARCH-REVIEW.md`
 deep-dive the file was 6,916 lines / 49 module-level `Ref`s; at `db33eeab` (2026-07-15) it is
 13,717 lines / 97 `Ref`s. The growth is **parallel near-copies** — two orchestration bodies, five
 final-check tails, four fold-over-modules loops, six impl-resolution paths, four operator-obligation
@@ -177,7 +177,7 @@ seams, binop/unop twins — each pair kept in agreement by nothing but manual mi
 That is the repo's #1 recurring bug shape (P0-9, the 2026-06-14 imported-module bug, #59).
 
 The target shape is **already specified**: `docs/spec/DICT-SEMANTICS.md` (§3: entailment is ONE
-function; §7: the single-evaluator law) and `compiler/ARCH-REVIEW.md` (consolidate + unify; the
+function; §7: the single-evaluator law) and `archive/design/ARCH-REVIEW.md` (consolidate + unify; the
 HM-core/dispatch **file split was evaluated and rejected** — dispatch state is read at `infer`
 depth across a 25-arm walk; do not relitigate it). This workstream is convergence to those two
 documents, in gate-verified steps.
@@ -381,9 +381,9 @@ vanish (ARCH-REVIEW made exactly this sequencing mistake once).
 ## Reading list
 
 - `docs/spec/DICT-SEMANTICS.md` — the target semantics for #156/#157. §10 maps defect classes to clauses.
-- `compiler/ARCH-REVIEW.md` — PASS 2 is the prior deep-dive; its file-split rejection and
+- `archive/design/ARCH-REVIEW.md` — PASS 2 is the prior deep-dive; its file-split rejection and
   DispatchState design still govern #158.
-- `compiler/TYPECHECK-AUDIT.md` — the 2026-06-09 oracle-diff audit; its executive-summary root
+- `archive/design/TYPECHECK-AUDIT.md` — the 2026-06-09 oracle-diff audit; its executive-summary root
   pattern ("semantics keyed by incidental identity") is what #156 finally retires.
 - `docs/spec/SHADOW-SEMANTICS.md` + `docs/spec/EFFECTS-SEMANTICS.md` — the other two behavior
   contracts this file implements; their gates are part of the byte-identical bar.

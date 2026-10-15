@@ -17,7 +17,7 @@
 #      markdown-link semantics), except a leading "/" which is root-relative.
 #      http(s):// / mailto: / bare "#anchor" targets are ignored (nothing to
 #      resolve on disk). A trailing ":NNN" pseudo-anchor (this repo's
-#      informal "see file.mdk:1175" convention, e.g. compiler/STAGE2-DESIGN.md)
+#      informal "see file.mdk:1175" convention, e.g. archive/design/STAGE2-DESIGN.md)
 #      is stripped like a fragment before checking. Markdown-link syntax is
 #      only meaningful in markdown, so tier 1 runs over the .md corpus alone —
 #      a `](` span in a shell or Medaka source file is a regex or an
