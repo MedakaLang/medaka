@@ -10,18 +10,22 @@
    fails a rise unless a commit trailer names it. Run with `ARCH_PINS_WRITE=1`
    to rewrite them from the tree instead of comparing. -}
 import fs.{walkDir}
-import list.{dropWhile, dropWhileEnd, filterMap, nub, reverse, sort, takeWhile}
+import list.{
+  drop, dropWhile, dropWhileEnd, filterMap, nub, reverse, sort, takeWhile
+}
 import map as M
 import set as S
 import string.{
   capitalize, countOccurrences, endsWith, fromChars, split, toChars, isAlphaNum,
-  isSpace, join, lines, replace, startsWith, stripPrefix, trimLeft, words
+  isSpace, join, lines, replace, startsWith, stripPrefix, trimLeft, unlines,
+  words
 }
 import test.{Expectation, expectAtLeast, expectEqual, expectGolden, fail, pass}
 import test_process.{underRoot}
 
--- The only `types/` modules allowed to import `support.hooks`. Empty until a
--- hooks consumer lands inside inference is reviewed and named here.
+-- The only `types/` modules allowed to reach `support.hooks` through their
+-- import closure. Empty until a hooks consumer inside inference is reviewed
+-- and named here.
 hooksReaderAllowlist : List String
 hooksReaderAllowlist = []
 
@@ -47,16 +51,7 @@ loadModules =
   let root = underRoot "compiler"
   match walkDir root
     Err _ => []
-    Ok paths => sortPairs (filterMap (loadOne root) paths)
-
-sortPairs : List (String, List String) -> List (String, List String)
-sortPairs xs =
-  let ids = sort (map (p => fst p) xs)
-  filterMap (i => lookupId i xs) ids
-
-lookupId : String -> List (String, List String) -> Option (String, List String)
-lookupId _ [] = None
-lookupId i ((m, ls) :: rest) = if m == i then Some (m, ls) else lookupId i rest
+    Ok paths => M.entries (M.fromList (filterMap (loadOne root) paths))
 
 loadOne : String -> String -> <IO> Option (String, List String)
 loadOne root path =
@@ -158,21 +153,14 @@ cellName l =
   let w = match words l
     [] => ""
     x :: _ => x
-  let skipped = [
-    "import", "data", "type", "interface", "impl", "export", "public", "test",
-    "prop", "else", "then", "in"
-  ]
-  if not (isColZero l) || any (== w) skipped then
+  if not (isColZero l) || elem w declKeywordsAndLayout then
     None
   else
     let cs = toList (toChars l)
     match cs
       c :: _ if c >= 'a' && c <= 'z' =>
-        let name = takeWhile (x => isAlphaNum x || x == '_' || x == '\'') cs
-        let after =
-          dropWhile
-            isSpace
-            (dropWhile (x => isAlphaNum x || x == '_' || x == '\'') cs)
+        let name = takeWhile identChar cs
+        let after = dropWhile isSpace (dropWhile identChar cs)
         match after
           '=' :: more =>
             let val = fromChars (dropWhile isSpace more)
@@ -203,8 +191,9 @@ cellRows mods =
         if n > 0 then Some "\{m}\t\{n}" else None)
       mods)
 
--- Number of ` : ` field annotations in the `data Hooks` extent of
--- support/hooks.mdk, which is zero while the record is absent.
+-- Fields of the `data Hooks` extent of support/hooks.mdk: ` : ` annotations of
+-- a record, else the constructor arguments of a positional declaration. Zero
+-- while the type is absent.
 hooksFieldCount : List (String, List String) -> Int
 hooksFieldCount mods = match filter (p => fst p == "support.hooks") mods
   [] => 0
@@ -221,7 +210,30 @@ fieldsOf : List String -> Int
 fieldsOf [] = 0
 fieldsOf (first :: rest) =
   let extent = first :: takeWhile continuesData rest
-  sum (map (l => countColons l) extent)
+  let colons = sum (map countColons extent)
+  if colons > 0 then colons else positionalArgs (join " " extent)
+
+-- Constructor arguments across the `|` alternatives of a positional `data`.
+positionalArgs : String -> Int
+positionalArgs text =
+  let rhs = drop 1 (dropWhile (/= '=') (toList (toChars text)))
+  sum
+    (map
+      (alt => max 0 (topAtoms (toList (toChars alt)) 0 False 0 - 1))
+      (split " | " (fromChars rhs)))
+
+-- Whitespace-separated atoms at bracket depth 0, a bracketed group being one.
+topAtoms : List Char -> Int -> Bool -> Int -> Int
+topAtoms [] _ _ n = n
+topAtoms (c :: cs) d inTok n =
+  let opens = c == '(' || c == '['
+  let closes = c == ')' || c == ']'
+  if isSpace c then
+    topAtoms cs d (inTok && d > 0) n
+  else
+    let n2 = if d == 0 && not inTok then n + 1 else n
+    let d2 = if opens then d + 1 else if closes then d - 1 else d
+    topAtoms cs d2 True n2
 
 continuesData : String -> Bool
 continuesData l =
@@ -246,20 +258,14 @@ reach g (m :: rest) seen =
   else
     reach g (neighbors g m ++ rest) (S.insert m seen)
 
-render : List String -> String
-render rows = flatMapLines rows
-
-flatMapLines : List String -> String
-flatMapLines rows = join "" (map (r => "\{r}\n") rows)
-
 pin : String -> List String -> <IO> Expectation
 pin name rows =
   let path = underRoot "test/arch_goldens/\{name}"
   match getEnv "ARCH_PINS_WRITE"
-    Some "1" => match writeFile path (render rows)
+    Some "1" => match writeFile path (unlines rows)
       Ok _ => pass
       Err e => fail "could not write \{path}: \{e}"
-    _ => expectGolden path (render rows)
+    _ => expectGolden path (unlines rows)
 
 test "arch_boundaries: the tree walk finds the compiler modules" =
   expectAtLeast 100 (length loadModules)
@@ -273,19 +279,16 @@ test "arch_boundaries: module-level cells match cells.golden" =
 test "arch_boundaries: hook field count matches hooks.golden" =
   pin "hooks.golden" ["hooks.fields\t\{hooksFieldCount loadModules}"]
 
-test "arch_boundaries: no types/ module outside the allowlist imports support.hooks" =
-  let mods = loadModules
+test "arch_boundaries: no types/ module outside the allowlist reaches support.hooks" =
+  let g = buildGraph loadModules
   let offenders =
     sort
-      (filterMap
-        ((m, ls) =>
-          if startsWith "types." m
-            && not (any (a => a == m) hooksReaderAllowlist)
-            && any (i => i == "support.hooks") (importsOf ls) then
-            Some m
-          else
-            None)
-        mods)
+      (filter
+        (m =>
+          startsWith "types." m
+            && not (elem m hooksReaderAllowlist)
+            && elem "support.hooks" (closureOf g m))
+        (M.keys g))
   expectEqual [] offenders
 
 test "arch_boundaries: frontend.ast closure matches its golden" =
@@ -310,7 +313,7 @@ definedName l =
   let w = match words l
     [] => ""
     x :: _ => x
-  if not (isColZero l) || any (== w) declKeywordsAndLayout then
+  if not (isColZero l) || elem w declKeywordsAndLayout then
     None
   else
     nameAtStart l
@@ -422,7 +425,7 @@ startKind l =
             None
           else if w == "test" || w == "prop" then
             Some "<\{w}>"
-          else if any (== w) declKeywords then
+          else if elem w declKeywords then
             Some "\{w} \{second}"
           else
             nameAtStart l
@@ -503,10 +506,6 @@ definitionIndex mods =
     (M.fromList [])
     (filter (p => not (startsWith "entries." (fst p))) mods)
 
--- Names defined in two or more modules, exempt or not (information only).
-dupNameCount : M.Map String (List DefRow) -> Int
-dupNameCount idx = length (filter (rows => length rows >= 2) (M.values idx))
-
 -- Names whose most common body, among non-exempt definitions in two or more
 -- modules, occurs at least twice.
 identicalNames : M.Map String (List DefRow) -> List String
@@ -541,5 +540,8 @@ test "arch_boundaries: llvm/wasm twins match twins.golden" =
 
 test "arch_boundaries: identical-body names match dupbodies.golden" =
   let idx = definitionIndex loadModules
-  let _ = println "dup-names: \{dupNameCount idx}"
+  -- The count of names defined in two or more modules is information only and
+  -- not pinned; no passing-test channel surfaces it, so compute
+  -- `length (filter (rows => length rows >= 2) (M.values idx))` in a scratch
+  -- `println` when the number is wanted.
   pin "dupbodies.golden" (identicalNames idx)
