@@ -218,7 +218,7 @@ does in this tree. A design document is a proposal; once landed it is history.
 ## 4. The owner decisions beneath the laws
 
 Six decisions sat under these laws when they were drafted. Val ruled all six on
-2026-10-15; the rulings and their reasoning are in `ARCHITECTURE-PLAYBOOK.md` §9 and on
+2026-10-15, and a seventh (D7) later the same day; the rulings and their reasoning are in `ARCHITECTURE-PLAYBOOK.md` §9 and on
 #4206. In one line each:
 
 - D1 `types/typecheck.mdk` may not grow (A8): adopted, as a one-file growth stop with a
