@@ -1,7 +1,7 @@
 # From here to there: the architecture playbook
 
 **Status:** PROPOSED 2026-10-15, awaiting Val's ratification of
-[`ARCHITECTURE.md`](ARCHITECTURE.md) and the decisions in §9. This is the sequencing plan
+[`ARCHITECTURE.md`](ARCHITECTURE.md) and the decisions in §9. Tracking epic #4206. This is the sequencing plan
 that takes the compiler from its measured state (§1) to the laws in that file. It does
 not replace the typechecker epic (#1122), the emitter epic (#1398) or the run-once epic
 (#4141); it orders work across them and adds the one phase none of them has, the guards
@@ -159,7 +159,7 @@ This is #1398's REVISION block and runs beside Phases 0 to 4; it needs nothing f
 
 | Playbook | Existing owner | Relationship |
 |---|---|---|
-| Phase 0 | new epic (filed with this document) | adds the guards no existing plan has |
+| Phase 0 | epic #4206, milestone `Architecture: Phase 0 (the guards)`: G1 #4200, G2a #4201, G2b #4202, G3 #4203, G4 #4204, G5 #4205, G6 #4189 | adds the guards no existing plan has |
 | Phase 1 V1, V2, V3 | #2549 phase 2, M-PUBLISH, M-PIPELINE (#2874, #4160, #4151) | same work; this document adds consumer order and the agreement validator |
 | Phase 2 | #2547 unit 1, component X | same work; this document adds the cell-lifetime table and the exit grep |
 | Phase 3 | M-CACHE #2732, run-once O3 (#4160, #3902) and O5 (#4169 to #4172, #3903) | same work; prelude-first ordering and D6 |

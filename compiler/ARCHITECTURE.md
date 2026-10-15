@@ -1,6 +1,6 @@
 # The compiler's target architecture
 
-**Status:** PROPOSED 2026-10-15, awaiting Val's ratification. This is the compiler-wide
+**Status:** PROPOSED 2026-10-15, awaiting Val's ratification; tracking epic #4206. This is the compiler-wide
 destination: the laws every subsystem's design must satisfy and the shape the whole
 pipeline converges on. It does not replace the per-subsystem destinations, which it
 sits above: [`TYPECHECK-CONTRACTS.md`](TYPECHECK-CONTRACTS.md) for the typechecker and
@@ -208,7 +208,7 @@ does in this tree. A design document is a proposal; once landed it is history.
 | `eval/` | the interpreter as a consumer of `CheckedProgram`; the pure deterministic oracle | `RUNTIME-DESIGN.md`, [T-EVAL-LOCKSTEP] | #1122 |
 | `driver/` | the session: module graph, `ModuleInterface` cache, verb dispatch, no implementation | `TYPECHECK-CONTRACTS.md` §5, #4141 | #2732, #4141 |
 | `tools/` | one file per user-facing tool, all reading the same memoized entries | `docs/ops/CLI-CONFORMANCE.md` | #4141 |
-| `support/` | the compiler-private mini-stdlib and the one hooks record | this file, A6 | playbook G2 |
+| `support/` | the compiler-private mini-stdlib and the one hooks record | this file, A6 | #4201, #4202 |
 | `entries/` | thin probes, one stage each, for the differential gates | `.claude/skills/architecture/SKILL.md` | unchanged |
 
 ---
