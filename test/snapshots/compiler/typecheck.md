@@ -1,5 +1,5 @@
 # META
-source_lines=56995
+source_lines=56997
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -21994,12 +21994,14 @@ checkAdmittedOccObl env (name, mono, loc) =
 
 -- One admitted declaration's answer at an occurrence, or the whole admitted set's:
 -- the instance it selects (with the declaration and the parameter vector it was
--- selected at), no instance, or no answer.  A declaration whose declared type the
--- occurrence's type does not instantiate selects nothing: no instance of it can be
--- meant there.  A declaration has no answer when its receiver has no head (rigid, or
--- still ungrounded at quiescence) or it has no method row here; the set has none when
--- two or more declarations select or any one has no answer, since the declarations
--- have then not been shown to agree (SHADOW-SEMANTICS S2-DECL (d)).
+-- selected at), no instance, or no answer.  A declaration has no answer when the
+-- occurrence's type does not instantiate its own declared type (inference typed the
+-- occurrence against one declaration of the set, chosen by scope order, so a
+-- mismatch says which declaration came first, not which one is meant), when its
+-- receiver has no head (rigid, or still ungrounded at quiescence), or when it has no
+-- method row here; the set has none when two or more declarations select or any one
+-- has no answer, since the declarations have then not been shown to agree
+-- (SHADOW-SEMANTICS S2-DECL (d), (e)).
 data AdmittedAnswer =
   | Selects IfaceRef ImplRow (List Mono)
   | SelectsNothing
@@ -22050,7 +22052,7 @@ admittedDeclAnswer env visible mono ir =
             Some _ => match ieSelectRowByIface env iface goals
               Some row => Selects iface row goals
               None => SelectsNothing
-        None => SelectsNothing
+        None => Undecided
     [] => Undecided
 
 isUndecided : AdmittedAnswer -> Bool
@@ -60782,7 +60784,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "routableSelection" ((PVar "name") (PAs "answer" (PCon "Selects" (PVar "iface") PWild PWild))) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "methodSlotKey") (EVar "iface")) (EApp (EVar "originMethodName") (EVar "name")))) (DoExpr (EMatch (EApp (EApp (EVar "lookupMethodPredicateSlots") (EVar "key")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value")) (arm (PCon "Some" (PCons PWild PWild)) () (EVar "Undecided")) (arm PWild () (EVar "answer"))))))
 (DFunDef false "routableSelection" (PWild (PVar "answer")) (EVar "answer"))
 (DTypeSig false "admittedDeclAnswer" (TyFun (TyCon "ImplEnv") (TyFun (TyApp (TyCon "List") (TyCon "MethodRow")) (TyFun (TyCon "Mono") (TyFun (TyCon "IfaceRef") (TyCon "AdmittedAnswer"))))))
-(DFunDef false "admittedDeclAnswer" ((PVar "env") (PVar "visible") (PVar "mono") (PVar "ir")) (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EVar "ieRowIfaceMatches") (EApp (EVar "methodRowIface") (EVar "r"))) (EVar "ir")))) (EVar "visible")) (arm (PCons (PVar "r") PWild) () (EMatch (EFieldAccess (EVar "r") "mrEntry") (arm (PTuple (PVar "iface") (PVar "typarams") (PVar "mty") PWild) () (EMatch (EApp (EApp (EVar "matchTyMono") (EVar "mty")) (EVar "mono")) (arm (PCon "Some" (PVar "subst")) () (EBlock (DoLet false false (PVar "goals") (EApp (EApp (EVar "map") (EApp (EVar "paramMonoOf") (EVar "subst"))) (EVar "typarams"))) (DoExpr (EMatch (EApp (EVar "goalHeadCon") (EVar "goals")) (arm (PCon "None") () (EVar "Undecided")) (arm (PCon "Some" PWild) () (EMatch (EApp (EApp (EApp (EVar "ieSelectRowByIface") (EVar "env")) (EVar "iface")) (EVar "goals")) (arm (PCon "Some" (PVar "row")) () (EApp (EApp (EApp (EVar "Selects") (EVar "iface")) (EVar "row")) (EVar "goals"))) (arm (PCon "None") () (EVar "SelectsNothing")))))))) (arm (PCon "None") () (EVar "SelectsNothing")))))) (arm (PList) () (EVar "Undecided"))))
+(DFunDef false "admittedDeclAnswer" ((PVar "env") (PVar "visible") (PVar "mono") (PVar "ir")) (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EVar "ieRowIfaceMatches") (EApp (EVar "methodRowIface") (EVar "r"))) (EVar "ir")))) (EVar "visible")) (arm (PCons (PVar "r") PWild) () (EMatch (EFieldAccess (EVar "r") "mrEntry") (arm (PTuple (PVar "iface") (PVar "typarams") (PVar "mty") PWild) () (EMatch (EApp (EApp (EVar "matchTyMono") (EVar "mty")) (EVar "mono")) (arm (PCon "Some" (PVar "subst")) () (EBlock (DoLet false false (PVar "goals") (EApp (EApp (EVar "map") (EApp (EVar "paramMonoOf") (EVar "subst"))) (EVar "typarams"))) (DoExpr (EMatch (EApp (EVar "goalHeadCon") (EVar "goals")) (arm (PCon "None") () (EVar "Undecided")) (arm (PCon "Some" PWild) () (EMatch (EApp (EApp (EApp (EVar "ieSelectRowByIface") (EVar "env")) (EVar "iface")) (EVar "goals")) (arm (PCon "Some" (PVar "row")) () (EApp (EApp (EApp (EVar "Selects") (EVar "iface")) (EVar "row")) (EVar "goals"))) (arm (PCon "None") () (EVar "SelectsNothing")))))))) (arm (PCon "None") () (EVar "Undecided")))))) (arm (PList) () (EVar "Undecided"))))
 (DTypeSig false "isUndecided" (TyFun (TyCon "AdmittedAnswer") (TyCon "Bool")))
 (DFunDef false "isUndecided" ((PCon "Undecided")) (EVar "True"))
 (DFunDef false "isUndecided" (PWild) (EVar "False"))
@@ -70236,7 +70238,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "routableSelection" ((PVar "name") (PAs "answer" (PCon "Selects" (PVar "iface") PWild PWild))) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "methodSlotKey") (EVar "iface")) (EApp (EVar "originMethodName") (EVar "name")))) (DoExpr (EMatch (EApp (EApp (EVar "lookupMethodPredicateSlots") (EVar "key")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value")) (arm (PCon "Some" (PCons PWild PWild)) () (EVar "Undecided")) (arm PWild () (EVar "answer"))))))
 (DFunDef false "routableSelection" (PWild (PVar "answer")) (EVar "answer"))
 (DTypeSig false "admittedDeclAnswer" (TyFun (TyCon "ImplEnv") (TyFun (TyApp (TyCon "List") (TyCon "MethodRow")) (TyFun (TyCon "Mono") (TyFun (TyCon "IfaceRef") (TyCon "AdmittedAnswer"))))))
-(DFunDef false "admittedDeclAnswer" ((PVar "env") (PVar "visible") (PVar "mono") (PVar "ir")) (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EVar "ieRowIfaceMatches") (EApp (EVar "methodRowIface") (EVar "r"))) (EVar "ir")))) (EVar "visible")) (arm (PCons (PVar "r") PWild) () (EMatch (EFieldAccess (EVar "r") "mrEntry") (arm (PTuple (PVar "iface") (PVar "typarams") (PVar "mty") PWild) () (EMatch (EApp (EApp (EVar "matchTyMono") (EVar "mty")) (EVar "mono")) (arm (PCon "Some" (PVar "subst")) () (EBlock (DoLet false false (PVar "goals") (EApp (EApp (EMethodRef "map") (EApp (EVar "paramMonoOf") (EVar "subst"))) (EVar "typarams"))) (DoExpr (EMatch (EApp (EVar "goalHeadCon") (EVar "goals")) (arm (PCon "None") () (EVar "Undecided")) (arm (PCon "Some" PWild) () (EMatch (EApp (EApp (EApp (EVar "ieSelectRowByIface") (EVar "env")) (EVar "iface")) (EVar "goals")) (arm (PCon "Some" (PVar "row")) () (EApp (EApp (EApp (EVar "Selects") (EVar "iface")) (EVar "row")) (EVar "goals"))) (arm (PCon "None") () (EVar "SelectsNothing")))))))) (arm (PCon "None") () (EVar "SelectsNothing")))))) (arm (PList) () (EVar "Undecided"))))
+(DFunDef false "admittedDeclAnswer" ((PVar "env") (PVar "visible") (PVar "mono") (PVar "ir")) (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EVar "ieRowIfaceMatches") (EApp (EVar "methodRowIface") (EVar "r"))) (EVar "ir")))) (EVar "visible")) (arm (PCons (PVar "r") PWild) () (EMatch (EFieldAccess (EVar "r") "mrEntry") (arm (PTuple (PVar "iface") (PVar "typarams") (PVar "mty") PWild) () (EMatch (EApp (EApp (EVar "matchTyMono") (EVar "mty")) (EVar "mono")) (arm (PCon "Some" (PVar "subst")) () (EBlock (DoLet false false (PVar "goals") (EApp (EApp (EMethodRef "map") (EApp (EVar "paramMonoOf") (EVar "subst"))) (EVar "typarams"))) (DoExpr (EMatch (EApp (EVar "goalHeadCon") (EVar "goals")) (arm (PCon "None") () (EVar "Undecided")) (arm (PCon "Some" PWild) () (EMatch (EApp (EApp (EApp (EVar "ieSelectRowByIface") (EVar "env")) (EVar "iface")) (EVar "goals")) (arm (PCon "Some" (PVar "row")) () (EApp (EApp (EApp (EVar "Selects") (EVar "iface")) (EVar "row")) (EVar "goals"))) (arm (PCon "None") () (EVar "SelectsNothing")))))))) (arm (PCon "None") () (EVar "Undecided")))))) (arm (PList) () (EVar "Undecided"))))
 (DTypeSig false "isUndecided" (TyFun (TyCon "AdmittedAnswer") (TyCon "Bool")))
 (DFunDef false "isUndecided" ((PCon "Undecided")) (EVar "True"))
 (DFunDef false "isUndecided" (PWild) (EVar "False"))

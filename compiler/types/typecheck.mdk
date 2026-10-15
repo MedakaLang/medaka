@@ -21990,12 +21990,14 @@ checkAdmittedOccObl env (name, mono, loc) =
 
 -- One admitted declaration's answer at an occurrence, or the whole admitted set's:
 -- the instance it selects (with the declaration and the parameter vector it was
--- selected at), no instance, or no answer.  A declaration whose declared type the
--- occurrence's type does not instantiate selects nothing: no instance of it can be
--- meant there.  A declaration has no answer when its receiver has no head (rigid, or
--- still ungrounded at quiescence) or it has no method row here; the set has none when
--- two or more declarations select or any one has no answer, since the declarations
--- have then not been shown to agree (SHADOW-SEMANTICS S2-DECL (d)).
+-- selected at), no instance, or no answer.  A declaration has no answer when the
+-- occurrence's type does not instantiate its own declared type (inference typed the
+-- occurrence against one declaration of the set, chosen by scope order, so a
+-- mismatch says which declaration came first, not which one is meant), when its
+-- receiver has no head (rigid, or still ungrounded at quiescence), or when it has no
+-- method row here; the set has none when two or more declarations select or any one
+-- has no answer, since the declarations have then not been shown to agree
+-- (SHADOW-SEMANTICS S2-DECL (d), (e)).
 data AdmittedAnswer =
   | Selects IfaceRef ImplRow (List Mono)
   | SelectsNothing
@@ -22046,7 +22048,7 @@ admittedDeclAnswer env visible mono ir =
             Some _ => match ieSelectRowByIface env iface goals
               Some row => Selects iface row goals
               None => SelectsNothing
-        None => SelectsNothing
+        None => Undecided
     [] => Undecided
 
 isUndecided : AdmittedAnswer -> Bool
