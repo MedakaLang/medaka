@@ -203,3 +203,40 @@ unsetKnobRun dir (Some cores) =
       match runVerb "env" ["-u", "MEDAKA_TEST_JOBS", medakaBin, "test", dir]
         Ok (c, _, _) => expectEqual 0 c
         _ => fail "could not spawn medaka test"
+
+-- A check-accepted file whose doctest example is ill-typed: the example's own
+-- injected elaboration rejects it, so under the interpreter it is that example's
+-- error, and the file's other examples still run rather than every one dying on
+-- the evaluator's unrouted-dictionary panic.  One target imports nothing (the
+-- single-module arm), the other imports a sibling (the injected-graph arm).
+illTypedDoctestFiles : String -> <FileWrite> Result String Unit
+illTypedDoctestFiles dir = do
+  _ <- writeFile
+    "\{dir}/single.mdk"
+    "-- Doc.\n--\n-- > debug []\n-- []\n-- > zero + 1\n-- 1\nexport zero = 0\n"
+  _ <- writeFile "\{dir}/lib.mdk" "export one = 1\n"
+  writeFile
+    "\{dir}/imports.mdk"
+    "import lib.{one}\n\n-- Doc.\n--\n-- > debug []\n-- []\n-- > two + 1\n-- 3\nexport two = one + 1\n"
+
+evalDoctests : String -> <Exec, IO> Result String (Int, String, String)
+evalDoctests target = runVerb medakaBin ["test", "--engines", "eval", target]
+
+test "an ill-typed doctest example fails alone under the interpreter" = withScratchDir
+  (dir => match illTypedDoctestFiles dir
+    Err e => fail e
+    Ok () => match (
+      evalDoctests "\{dir}/single.mdk",
+      evalDoctests "\{dir}/imports.mdk",
+    )
+      (Ok (c1, o1, e1), Ok (c2, o2, e2)) => expectAll [
+        expectEqual 1 c1,
+        expectTrue (contains "ERROR \{dir}/single.mdk:3: debug []" o1),
+        expectTrue (contains "ok   \{dir}/single.mdk:5: zero + 1" o1),
+        expectFalse (contains "unrouted dictionary slot" e1),
+        expectEqual 1 c2,
+        expectTrue (contains "ERROR \{dir}/imports.mdk:5: debug []" o2),
+        expectTrue (contains "ok   \{dir}/imports.mdk:7: two + 1" o2),
+        expectFalse (contains "unrouted dictionary slot" e2),
+      ]
+      _ => fail "could not spawn medaka test")

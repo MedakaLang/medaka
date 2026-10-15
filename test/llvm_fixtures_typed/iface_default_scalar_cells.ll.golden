@@ -438,10 +438,47 @@ entry:
   ret i64 %arg0
 }
 
+; mdk-module impl:Float_lessThan
+define internal i64 @mdk_impl_Float_lessThan(i64 %arg0, i64 %arg1) {
+entry:
+  %t0 = inttoptr i64 %arg0 to ptr
+  %t1 = getelementptr i8, ptr %t0, i64 8
+  %t2 = load double, ptr %t1
+  %t3 = inttoptr i64 %arg1 to ptr
+  %t4 = getelementptr i8, ptr %t3, i64 8
+  %t5 = load double, ptr %t4
+  %t6 = fcmp olt double %t2, %t5
+  %t7 = zext i1 %t6 to i64
+  %t8 = shl i64 %t7, 1
+  %t9 = or i64 %t8, 1
+  ret i64 %t9
+}
+
+; mdk-module impl:String_lessThan
+define internal i64 @mdk_impl_String_lessThan(i64 %arg0, i64 %arg1) {
+entry:
+  %t0 = call i64 @mdk_string_compare_raw(i64 %arg0, i64 %arg1)
+  %t1 = icmp slt i64 %t0, 0
+  %t2 = zext i1 %t1 to i64
+  %t3 = shl i64 %t2, 1
+  %t4 = or i64 %t3, 1
+  ret i64 %t4
+}
+
+; mdk-module impl:Int_lessThan
+define internal i64 @mdk_impl_Int_lessThan(i64 %arg0, i64 %arg1) {
+entry:
+  %t0 = icmp slt i64 %arg0, %arg1
+  %t1 = zext i1 %t0 to i64
+  %t2 = shl i64 %t1, 1
+  %t3 = or i64 %t2, 1
+  ret i64 %t3
+}
+
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk_dc.program.0 = internal constant [1 x i64] [i64 210674569595]
+@mdk_dc.program.0 = internal constant [1 x i64] [i64 -3522064109247241529]
 ; mdk-module program
 @mdk_dc.program.1 = internal constant [2 x i64] [i64 1173816999876653108, i64 ptrtoint (ptr @mdk_dc.program.0 to i64)]
 ; mdk-module program
@@ -449,10 +486,10 @@ entry:
 ; mdk-module program
 @.strc.program.3 = private unnamed_addr constant { i64, i64, i64, [2 x i8] } { i64 1, i64 1, i64 1, [2 x i8] c"\62\00" }
 ; mdk-module program
-@mdk_dc.program.4 = internal constant [1 x i64] [i64 6952779160540]
+@mdk_dc.program.4 = internal constant [1 x i64] [i64 3675720891059119944]
 ; mdk-module program
 @mdk_dc.program.5 = internal constant [2 x i64] [i64 1842472865616454229, i64 ptrtoint (ptr @mdk_dc.program.4 to i64)]
 ; mdk-module program
-@mdk_dc.program.6 = internal constant [1 x i64] [i64 193460240]
+@mdk_dc.program.6 = internal constant [1 x i64] [i64 -54051695436414980]
 ; mdk-module program
 @mdk_dc.program.7 = internal constant [2 x i64] [i64 -3522267172021662167, i64 ptrtoint (ptr @mdk_dc.program.6 to i64)]

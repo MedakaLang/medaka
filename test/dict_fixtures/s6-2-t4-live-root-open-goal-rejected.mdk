@@ -1,0 +1,7 @@
+-- DICT-SEMANTICS §6.2 T4 / R-SC3: `e`'s `Debug` and `Mappable` goals sit on
+-- argument-position variables of a non-generalized member, which only a use could
+-- ground.  None does, so at quiescence each is open with two or more instances, and
+-- the binding is one `T-AMBIGUOUS-INSTANCE` on every verb, not an unrouted hole.
+e = map debug
+
+main = println "ok"

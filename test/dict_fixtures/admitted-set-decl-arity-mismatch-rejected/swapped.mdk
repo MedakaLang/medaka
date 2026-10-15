@@ -1,0 +1,6 @@
+-- `main.mdk` through `hubswap`, whose two `export import` lines are swapped: the
+-- same located `T-AMBIGUOUS-METHOD` at `mth`, beside the `Display` reject that
+-- typing `mth 5` against `IB`'s `a -> Bool -> Int` draws.
+import hubswap.{IA, IB, mth}
+
+main = println (mth 5)

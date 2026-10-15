@@ -1,0 +1,16 @@
+-- The data-receiver twin of `admitted-set-rigid-receiver-rejected`: `hub` re-exports
+-- two unrelated `mth : a -> a`, from `IA` (`T (n + 1)`) and `IB` (`T (n * 10)`), both
+-- with an impl at `T`.  Inside `wrap` the receiver is the rigid `x`, so no
+-- declaration's impl query can be asked and the two are not shown to agree.
+-- SHADOW-SEMANTICS.md S2-DECL (d) over the admitted set (ruled 2026-10-14): the
+-- located reject `T-AMBIGUOUS-METHOD` at `mth` in `wrap`, exit 1 on every verb, in
+-- either hub order (`swapped.mdk`).  Never 4 or 30 (the two hub orders' `run` values
+-- while the occurrence kept no route), nor a run-time `E-AMBIGUOUS-DISPATCH`.
+import hub.{IA, IB, mth}
+import t.{T(..)}
+
+wrap : x -> x
+wrap v = mth v
+
+main = match wrap (T 3)
+  T n => println n

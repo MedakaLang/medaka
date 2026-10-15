@@ -1,0 +1,5 @@
+import hub.{IA, IB, mth}
+
+double n = n + n
+
+export r = double >> mth

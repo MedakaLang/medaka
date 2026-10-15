@@ -1,0 +1,11 @@
+-- SHADOW-SEMANTICS S2-DECL (d), (e): `hub` re-exports `IA.mth : a -> Int` (impl
+-- `Int`) and `IB.mth : f a -> Int` (impl `List`).  Inference types each occurrence
+-- against the first `mth` in scope, here `IA`'s, so at `mth 3` the declared
+-- `f a -> Int` of `IB` does not instantiate to `Int -> Int`.  That mismatch says
+-- which declaration came first, not which one is meant, so `IB` has no answer, the
+-- set is undecided, and `mth 3` is the located `T-AMBIGUOUS-METHOD`.  Never
+-- `(100, 4)`, which this order printed while a mismatch selected nothing and the
+-- swapped order (`swapped.mdk`) rejected.
+import hub.{IA, IB, mth}
+
+main = println (mth [1, 2], mth 3)

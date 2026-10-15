@@ -496,6 +496,7 @@ receiverParam : List String -> List String
 recordCreateVals : String -> List String -> List (String, Value a) -> List (Value a)
 reexport : ModExports (Value a) -> List (String, ModExports (Value a)) -> Decl -> List (String, Ref (Value a))
 reportIfUndecidable : String -> List (Value a) -> Unit
+requireMethodRoute : String -> String -> Route -> Route
 resolveMembers : UsePath -> ModExports (Value a) -> List (String, Ref (Value a))
 resolvePath : String -> <FileRead | a> Option String
 resultToValue : Result String (Value a) -> Value a

@@ -1,0 +1,5 @@
+double n = n + n
+
+inc n = n + 1
+
+export e20 = double >> inc

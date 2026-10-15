@@ -108,6 +108,7 @@ import eval.eval.{
   buildCtorFieldOrders,
   ctorFieldOrdersRef,
   methodAtNarrow,
+  requireMethodRoute,
   applyValues,
   preludeShadowNames,
   globalFramesWith,
@@ -174,9 +175,10 @@ ceval env (CRangeArray lo hi incl) =
 -- tables from one decl list). See .claude/dossier/traps.md § "[T-EVAL-LOCKSTEP]
 -- evalModules / cevalModules lockstep".
 ceval env (CMethod name (MethodEvidence iface _ route implRoutes methRoutes)) =
+  let routed = requireMethodRoute name iface route
   let (narrowed, fwdReqs) =
-    methodAtNarrow env name (narrowToIface iface (lookupEnv env name)) route
-  applyMethodDicts env name route narrowed fwdReqs implRoutes methRoutes
+    methodAtNarrow env name (narrowToIface iface (lookupEnv env name)) routed
+  applyMethodDicts env name routed narrowed fwdReqs implRoutes methRoutes
 ceval env (CDict name routes) = applyDicts env (lookupEnv env name) routes
 ceval _ _ = panic "core_ir ceval: unsupported node"
 

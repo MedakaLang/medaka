@@ -1,0 +1,2 @@
+export import pa.{IA, mth}
+export import pb.{IB, mth}

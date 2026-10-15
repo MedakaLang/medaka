@@ -1,0 +1,2 @@
+export interface IP f where
+  mth : f a -> a

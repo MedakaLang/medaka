@@ -68,7 +68,7 @@ running doctests in stdlib/core.mdk
   ok   stdlib/core.mdk:1624: traverse (x => if x > 0 then Ok x else Err x) [1, -2, 3]
   ok   stdlib/core.mdk:1626: sequence [Some 1, Some 2, Some 3]
   ok   stdlib/core.mdk:1628: sequence [Some 1, None, Some 3]
-  ok   stdlib/core.mdk:1630: sequence [Ok 1, Ok 2, Ok 3]
+  ok   stdlib/core.mdk:1630: sequence ([Ok 1, Ok 2, Ok 3] : List (Result String Int))
   ok   stdlib/core.mdk:1665: any (x => x > 2) [1, 2, 3]
   ok   stdlib/core.mdk:1671: any (x => x > 10) [1, 2, 3]
   ok   stdlib/core.mdk:1678: all (x => x > 0) [1, 2, 3]
@@ -88,15 +88,15 @@ running doctests in stdlib/core.mdk
   ok   stdlib/core.mdk:1858: option 0 (x => x + 1) (Some 41)
   ok   stdlib/core.mdk:1860: option 0 (x => x + 1) None
   ok   stdlib/core.mdk:1869: toResult "missing" (Some 1)
-  ok   stdlib/core.mdk:1871: toResult "missing" None
+  ok   stdlib/core.mdk:1871: toResult "missing" (None : Option Int)
   ok   stdlib/core.mdk:1880: fromResult (Ok 1)
-  ok   stdlib/core.mdk:1882: fromResult (Err "boom")
+  ok   stdlib/core.mdk:1882: fromResult (Err "boom" : Result String Int)
   ok   stdlib/core.mdk:1905: resultOr 0 (Ok 42)
   ok   stdlib/core.mdk:1907: resultOr 0 (Err "boom")
-  ok   stdlib/core.mdk:1921: resultOrPanic "this name and value are literals" (Ok 42)
+  ok   stdlib/core.mdk:1921: resultOrPanic "this name and value are literals" (Ok 42 : Result String Int)
   ok   stdlib/core.mdk:1931: result (e => 0) (x => x + 1) (Ok 41)
   ok   stdlib/core.mdk:1933: result (e => e) (x => x + 1) (Err 7)
-  ok   stdlib/core.mdk:1944: mapErr (e => "failed: " ++ e) (Err "boom")
+  ok   stdlib/core.mdk:1944: mapErr (e => "failed: " ++ e) (Err "boom" : Result String Int)
   ok   stdlib/core.mdk:1960: fst (1, 2)
   ok   stdlib/core.mdk:1968: snd ("a", True)
   ok   stdlib/core.mdk:1976: map (const 0) [1, 2, 3]

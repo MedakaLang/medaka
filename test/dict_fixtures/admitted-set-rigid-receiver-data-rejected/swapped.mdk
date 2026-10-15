@@ -1,0 +1,10 @@
+-- `main.mdk` through `hubswap`, whose two `export import` lines are swapped: the same
+-- located reject (S2-DECL (e)).
+import hubswap.{IA, IB, mth}
+import t.{T(..)}
+
+wrap : x -> x
+wrap v = mth v
+
+main = match wrap (T 3)
+  T n => println n

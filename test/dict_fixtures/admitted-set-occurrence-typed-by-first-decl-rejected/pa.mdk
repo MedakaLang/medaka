@@ -1,0 +1,5 @@
+export interface IA a where
+  mth : a -> List b -> Int
+
+impl IA Int where
+  mth n _ = n + 100

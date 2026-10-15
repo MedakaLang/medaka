@@ -1,0 +1,4 @@
+import base.{Base(..), btag}
+
+export interface Deriv a requires Base a where
+  dtag : a -> Int

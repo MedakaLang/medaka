@@ -924,20 +924,75 @@ table = [
     codes = [],
   },
   Row {
-    entry = "constraint-only-variable-head-tag-accepted.mdk",
+    entry = "constraint-only-variable-head-tag-rejected.mdk",
     label =
-      "§3 + §5: a call of `f : K x y => x -> String` leaves the constraint-only `y` undetermined, so its dictionary route is the head tag; the one instance must still run on every engine (an RNone route panicked the build)",
+      "§3 + §5, narrowed by Val's ruling on #4121: a call of `f : K x y => x -> String` leaves the constraint-only `y` undetermined, so its dictionary route is the head tag `Box` and `k` in `f`'s body is RNone; a hole is a check verdict on every verb (T-UNROUTED-DISPATCH at 17:6 and 19:16), not a head the engines resolve",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "constraint-only-variable-return-head-tag-rejected.mdk",
+    label =
+      "§3 + §5 (return twin), narrowed by Val's ruling on #4121: a call of `f : K x y => Int -> x` leaves the constraint-only `y` undetermined, so its dictionary route is the head tag `Box`; a hole is a check verdict on every verb (T-UNROUTED-DISPATCH at 23:23)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "unrouted-single-impl-omitted-position-rejected.mdk",
+    label =
+      "#4121's narrowed shape (Val's ruling at the hole-is-a-verdict cut): `k x` in `f : K x y => x -> String` is RNone and the call passes the head tag `Box`; T-UNROUTED-DISPATCH at 15:6 and 16:16 on every verb",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "let-bound-method-value-reads-own-dict-accepted.mdk",
+    label =
+      "#4116, §3 `assum` before `inst`: the let-bound method value `let f = k` reads its own dictionary parameter in its body (the given's vector includes the omitted `b`), and the call passes `impl K (Box Int) Bool`",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
     mode = AllExact,
-    pinned = "BOX\n",
+    pinned = "INTBOOL\n",
     codes = [],
   },
   Row {
-    entry = "constraint-only-variable-return-head-tag-accepted.mdk",
+    entry = "row-join-method-routes-instance-accepted.mdk",
     label =
-      "§3 + §5 (return twin): a call of `f : K x y => Int -> x` leaves the constraint-only `y` undetermined, so its dictionary route is the head tag; the one instance must still run on every engine (an RNone route panicked the build)",
+      "#4117, §3 R-ARITY1: a row join `f (e | e2) b` in the method's declared type does not hide the vector `[Later]`, so the recursive `jmap` in `impl JMap Later` and the call in `main` route to the instance key",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "42\n",
+    codes = [],
+  },
+  Row {
+    entry = "rigid-lead-goal-selects-blanket-instance-accepted.mdk",
+    label =
+      "#4119, §6.1 points 2-3 + §3 W3-inst: `Sub x Int` over `g`'s rigid `x` is a closed goal with a constructed argument; `inst` reduces it by `impl Sub a b` (route `Sub|a b|`), whatever unrelated given `g` declares",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "sub\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-body-top-level-value-spelled-as-method-accepted.mdk",
+    label =
+      "SHADOW S2 in a tail body: an impl method body sees a top-level value `pure` as the binding groups do, so the occurrence is the standalone (`RLocal`), not an `Applicative` site at `Row`",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -1982,6 +2037,17 @@ table = [
     mode = NoValue,
     pinned = "",
     codes = [Present "T-MISSING-SUPER-IMPL"],
+  },
+  Row {
+    entry = "inner-hole-below-slot-rejected/main.mdk",
+    label =
+      "§3 evidence completeness BELOW a dictionary's children: `both (W T)` passes `Deriv (W T)`, whose `requires Deriv T` carries the super `Base T` that no impl covers, so the slot's route holds RNone two levels below its top. The judgment reads that depth from the summary the solver notes while it builds the route, not from a walk, so this is the row that goes red if a producer stops noting. HAND-DERIVED: REJECT on every verb, T-MISSING-SUPER-IMPL at `impl Deriv T` and T-UNROUTED-DISPATCH at the call",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-SUPER-IMPL", Present "T-UNROUTED-DISPATCH"],
   },
   Row {
     entry = "b1-xmod-same-spelled-iface-impl-selection/main.mdk",
@@ -3620,6 +3686,277 @@ table = [
     mode = NoValue,
     pinned = "",
     codes = [Present "T-AMBIGUOUS-SHADOW-DECL", Absent "T-TYPE-MISMATCH"],
+  },
+  Row {
+    entry = "admitted-set-wildcard-private-iface-accepted/main.mdk",
+    label =
+      "S2-DECL (d) for a method-only admitted set, ruled 2026-10-14 (#1302's program): `IB.mth` and the private `MSIP.mth` that `import mspriv.*` admits; only `impl IB Blob` answers at the receiver, so the occurrence commits to it and prints `helper 5`. Before the fix the evidence judgment rejected it with a head-tag route naming the result type `Int`, and before that `build` panicked on an occurrence with no interface word",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "6\n",
+    codes = [Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-reexport-merge-accepted/main.mdk",
+    label =
+      "S2-DECL (d) for a method-only admitted set, ruled 2026-10-14 (#1530's program): a re-export merge of `IG.mth` and `IP.mth`, with only `impl IG W`; exactly one declaration selects at the receiver, so the occurrence commits to `IG W` and prints 5 on every engine",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "5\n",
+    codes = [Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-result-elem-one-impl-accepted/main.mdk",
+    label =
+      "the same admitted set with `mth : f a -> a`: the result (`Int`) names neither instance, the receiver `W` does, and only `impl IG W` exists, so the occurrence commits to it and prints the first field",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n",
+    codes = [Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-receiver-decides-per-occurrence-accepted/main.mdk",
+    label =
+      "S2-DECL (d) decides each occurrence by its own receiver: `mth True` has only `IB Bool` and `mth 1` only `IA Int`, so the two occurrences commit to different interfaces and print 7 then 2",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n2\n",
+    codes = [Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-two-impls-disagree-rejected/main.mdk",
+    label =
+      "S2-DECL (d), two admitted declarations that disagree: `impl IG W` and `impl IP W` both select at the receiver, so the occurrence is the located `T-AMBIGUOUS-METHOD` on every verb; before the fix `run` printed 1 (a silent pick) and then the judgment named the result type as a head-tag route",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-rigid-receiver-rejected/main.mdk",
+    label =
+      "#4131: S2-DECL (d) with a rigid receiver (`wrap : x -> x`, `wrap v = mth v`) asks no declaration, so the two Int impls are not shown to agree and the occurrence is the located `T-AMBIGUOUS-METHOD`; before the fix check accepted it with an empty-word `RNone` route and `run` printed 4 or 30 by hub order",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-rigid-receiver-rejected/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the hub's two lines swapped, the same located reject",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-rigid-receiver-data-rejected/main.mdk",
+    label =
+      "#4131 with a data receiver: the same rigid `wrap` over two `T` impls is the located `T-AMBIGUOUS-METHOD`; before the fix `run` printed 4 or 30 by hub order and the built binary died with `E-AMBIGUOUS-DISPATCH`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-rigid-receiver-data-rejected/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the hub's two lines swapped, the same located reject",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry =
+      "admitted-set-receiver-grounded-at-quiescence-accepted/unused-local.mdk",
+    label =
+      "S2-DECL (d) decided at the graph-end drain (DICT-SEMANTICS §6.2 T5): an unused `r = double >> mth` leaves its receiver a live `Num` root, which quiescence defaults to `Int` before the admitted set is decided, so only `IA Int` selects; deciding at the module's end rejected it as ambiguous",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "ok\n",
+    codes = [Absent "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry =
+      "admitted-set-receiver-grounded-at-quiescence-accepted/unused-export.mdk",
+    label =
+      "the same live root exported from a library and never used: defaulted at the drain, `IA Int` selects",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "ok\n",
+    codes = [Absent "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-receiver-grounded-at-quiescence-accepted/main.mdk",
+    label =
+      "§6.2 T5: a later module's `r 4` grounds a library binding's admitted-set receiver; the set is decided at the drain, at `Int`, so `mth (4 + 4)` is 9",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "9\n",
+    codes = [Absent "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry =
+      "admitted-set-receiver-grounded-at-quiescence-accepted/export-used-at-bool.mdk",
+    label =
+      "§6.2 T5: `export r = identity mth` grounded to `Bool` by the importer selects `IB Bool` (7), the same answer as `same-module.mdk`, so module partitioning does not change it",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [Absent "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry =
+      "admitted-set-receiver-grounded-at-quiescence-accepted/same-module.mdk",
+    label =
+      "the control for the row above: the same binding and use in one module, `IB Bool` selects, 7",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [Absent "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry =
+      "admitted-set-receiver-grounded-at-quiescence-accepted/export-used-at-signature.mdk",
+    label =
+      "§6.2 T5: a signature in the importer grounds the library binding's receiver to `Int`, so `IA Int` selects and `k 4` is 5",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "5\n",
+    codes = [Absent "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry =
+      "admitted-set-receiver-grounded-at-quiescence-accepted/export-mapped.mdk",
+    label =
+      "§6.2 T5: `export r = map mth` applied to `[True, False]` in the importer selects `IB Bool` for the element, `[7, 8]`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[7, 8]\n",
+    codes = [Absent "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-decl-type-mismatch-rejected/main.mdk",
+    label =
+      "S2-DECL (d), (e): inference types `mth 3` against the first `mth` in scope (`IA`'s `a -> Int`), so `IB`'s declared `f a -> Int` does not instantiate to it; that mismatch records scope order, not meaning, so `IB` has no answer and `mth 3` is the located `T-AMBIGUOUS-METHOD`. While a mismatch selected nothing this order printed `(100, 4)` and the swapped order rejected",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-decl-type-mismatch-rejected/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above, the hub's two lines swapped: rejected too, but as a type error, because inference now types `mth 3` against `IB`'s `f a -> Int` before the admitted set is asked. The reject code still follows import order through that inference step; the verdict does not",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-TYPE-MISMATCH", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-decl-arity-mismatch-rejected/main.mdk",
+    label =
+      "S2-DECL (d), (e): `mth 5` is typed `Int -> Int` against `IA`, which `IB`'s `a -> Bool -> Int` does not instantiate to; the set is undecided and `mth 5` is the located `T-AMBIGUOUS-METHOD`. While a mismatch selected nothing this order printed 6 and the swapped order rejected",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-decl-arity-mismatch-rejected/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above, the hub's two lines swapped: the same located `T-AMBIGUOUS-METHOD`, beside the `Display` reject that typing `mth 5` against `IB` draws",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-occurrence-typed-by-first-decl-rejected/main.mdk",
+    label =
+      "S2-DECL (b), (d), (e): `IA.mth : a -> List b -> Int` and `IB.mth : a -> Option b -> Int` both select at the receiver `Int`, so they disagree and `mth (1 : Int) dflt` is the located `T-AMBIGUOUS-METHOD`. Inference fixes `dflt` by whichever declaration is first in scope; while the other declaration's mismatch selected nothing the two hub orders printed 101 and 201",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-occurrence-typed-by-first-decl-rejected/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the hub's two lines swapped, the same located reject at the same column",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-selected-decl-method-constraints-rejected/main.mdk",
+    label =
+      "S2-DECL (d): at `mth True 3` only `IB Bool` selects, but `IB.mth` has its own `Eq b` constraint and an occurrence of a spelling two interfaces declare records no method-level dictionaries, so the occurrence is the located `T-AMBIGUOUS-METHOD` naming the selected `IB.mth` and its constraints (`pushUnroutableAdmitted`), not a route an engine would run without its `Eq` dictionary. This table pins the code only; the message is not asserted here",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry =
+      "admitted-set-selected-decl-method-constraints-rejected/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the hub's two lines swapped, the same located reject",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
   },
   Row {
     entry = "alias-beside-bare-method/main.mdk",
@@ -5535,6 +5872,72 @@ table = [
     pinned = "bools\n",
     codes = [Absent "T-CONFLICTING-IMPL"],
   },
+  Row {
+    entry = "s6-3-live-root-composition-defaults-accepted.mdk",
+    label =
+      "§6.3 D1/D3 at quiescence (§6.2 T4): a value-restricted composition leaves its `Num` variable live, nothing grounds it, so the graph-end drain defaults it to `Int` and every dictionary routes `Num Int`; the head left the slots unrouted and rejected, and the base built binary panicked once the binding was referenced",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "ok\n",
+    codes = [],
+  },
+  Row {
+    entry = "s6-3-live-root-partial-application-defaults-accepted.mdk",
+    label =
+      "§6.3 D1/D3 at quiescence (§6.2 T4): the partial application `count 5` leaves the accumulator's `Num` variable live, and the graph-end drain defaults it to `Int`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "x\n",
+    codes = [],
+  },
+  Row {
+    entry = "s6-2-t4-live-root-open-goal-rejected.mdk",
+    label =
+      "§6.2 T4 / R-SC3 at quiescence: `e = map debug` leaves `Debug` and `Mappable` goals on argument-position variables of a non-generalized member, nothing grounds them, and each reaches two or more instances, so the binding is one located `T-AMBIGUOUS-INSTANCE` on every verb and no unrouted-dispatch hole",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "s6-2-t4-live-root-open-goal-export-rejected/main.mdk",
+    label =
+      "the row above as an unused library export beside a used one: the library binding is the located `T-AMBIGUOUS-INSTANCE` at quiescence",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "live-root-importer-error-reports-importer-only/main.mdk",
+    label =
+      "a library live root grounded only by the importer's erroneous use (`U8` without `import u8`): the drain's findings in the library rest on that error, so only the importer's type errors are reported and no unrouted-dispatch hole in the library",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-TYPE-MISMATCH", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "determined-headless-occurrence-top-level-accepted.mdk",
+    label =
+      "§3 Determination by the one unifying instance: an argument-position occurrence whose goal is committed to the headless `impl Pick a a a` dispatches through it, read through the representative after a later group unifies the committed variable",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "ok\n",
+    codes = [],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -5546,7 +5949,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 491
+tableRows = 527
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

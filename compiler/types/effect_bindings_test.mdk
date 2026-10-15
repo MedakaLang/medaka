@@ -3,7 +3,7 @@
 import test.{expectAll, expectEqual, expectNotEqual, expectTrue}
 import frontend.ast.{Loc(..)}
 import frontend.desugar.{desugar}
-import frontend.parser.{parseLocated}
+import frontend.parser.{parse, parseLocated}
 import types.typecheck.{
   checkOneDiags, checkOneSchemeFullK, checkModulesDiagsChain, ModDiags,
   TcDiag(..), tcCode, tcMsg
@@ -405,6 +405,21 @@ test "repeated top-prefix writes inside a continuation stay within a bare contra
 errorsFor : String -> List String
 errorsFor source =
   let (errors, _) = checkOneDiags [] [] (
+    "binding_effects",
+    desugar (parseLocated (effectPrelude ++ source)),
+  )
+  map tcCode errors
+
+-- A `Num` interface with `Int` and `Float` impls, the arithmetic every CLI verb
+-- checks against through the real prelude.
+numPrelude : String
+numPrelude =
+  "interface Num a where\n  add : a -> a -> a\n  sub : a -> a -> a\n  mul : a -> a -> a\n  div : a -> a -> a\n  negate : a -> a\n  abs : a -> a\n  signum : a -> a\n  fromInt : Int -> a\n  rem : a -> a -> a\nimpl Num Int where\n  add x _ = x\n  sub x _ = x\n  mul x _ = x\n  div x _ = x\n  negate x = x\n  abs x = x\n  signum x = x\n  fromInt n = n\n  rem x _ = x\nimpl Num Float where\n  add x _ = x\n  sub x _ = x\n  mul x _ = x\n  div x _ = x\n  negate x = x\n  abs x = x\n  signum x = x\n  fromInt _ = 0.0\n  rem x _ = x\n"
+
+-- `errorsFor` under `numPrelude`.
+numErrorsFor : String -> List String
+numErrorsFor source =
+  let (errors, _) = checkOneDiags [] (desugar (parse numPrelude)) (
     "binding_effects",
     desugar (parseLocated (effectPrelude ++ source)),
   )
@@ -1339,22 +1354,22 @@ test "a where function generalizes a Num-only type; a where value is shared" = e
   [
     expectEqual
       []
-      (errorsFor
+      (numErrorsFor
         "g : Unit -> (Int, Float)\ng _ = (go 7, go 2.5)\n  where\n    two _ = 2\n    go y = y / two ()\n"),
     expectEqual
       []
-      (errorsFor
+      (numErrorsFor
         "area : Float -> Float\narea w = full\n  where\n    margin = 2\n    full = w * w + margin\n"),
     expectEqual
       []
-      (errorsFor
+      (numErrorsFor
         "norm : Float -> Float\nnorm x = go x\n  where\n    scale = 100\n    go y = y / scale\n"),
     expectEqual
       []
-      (errorsFor "f : Int -> Int\nf x = x + k\n  where\n    k = 2\n"),
+      (numErrorsFor "f : Int -> Int\nf x = x + k\n  where\n    k = 2\n"),
     expectNotEqual
       []
-      (errorsFor
+      (numErrorsFor
         "bad : Unit -> Float\nbad _ = a\n  where\n    scale = 100\n    a = scale + 1.5\n    b = scale + (1 : Int)\n"),
   ]
 

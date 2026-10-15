@@ -1036,13 +1036,13 @@ public export data Stmt =
 --
 -- Every unsupported statement kind is named, not shrugged at:
 --
--- > parseStmt "DROP TABLE users"
+-- > map renderStmt (parseStmt "DROP TABLE users")
 -- Err "expected SELECT, INSERT, UPDATE, DELETE or CREATE TABLE at 0"
 --
--- > parseStmt "INSERT INTO t SELECT a FROM u"
+-- > map renderStmt (parseStmt "INSERT INTO t SELECT a FROM u")
 -- Err "expected keyword 'VALUES' at 14"
 --
--- > parseStmt "DELETE FROM t LIMIT 1"
+-- > map renderStmt (parseStmt "DELETE FROM t LIMIT 1")
 -- Err "unsupported SQL: 'LIMIT' at 20"
 export
 parseStmt : String -> Result String Stmt

@@ -1,0 +1,6 @@
+-- The live root of `s6-2-t4-live-root-open-goal-rejected.mdk` exported from a
+-- library and never used: nothing in the graph grounds it, so `lib`'s binding is
+-- the located `T-AMBIGUOUS-INSTANCE` at quiescence.
+import lib.{k}
+
+main = println k

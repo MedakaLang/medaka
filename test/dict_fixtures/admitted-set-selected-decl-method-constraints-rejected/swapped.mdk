@@ -1,0 +1,5 @@
+-- `main.mdk` through `hubswap`, whose two `export import` lines are swapped: the
+-- same located reject (S2-DECL (e)).
+import hubswap.{IA, IB, mth}
+
+main = println (mth True 3)

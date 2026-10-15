@@ -1,0 +1,6 @@
+-- `r 4` grounds `live_double`'s receiver in this later module (DICT-SEMANTICS §6.2
+-- T5); the admitted set is decided at the drain, at `Int`, where only `IA Int`
+-- selects: `mth (4 + 4)` is 9.
+import live_double.{r}
+
+main = println (r 4)
