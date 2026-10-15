@@ -353,27 +353,29 @@ import surface part of the semantics, with laws:
 
 ## 3. Host-import inventory (the wasm TCB surface)
 
-> One row per `env.*` import name the emitter can declare. "Emitted when":
-> imports are declared per **group** when the program's extern usage pulls the
-> group in, not per individual extern — a pure program declares only the core
-> quartet (`mdk_write_byte`, `mdk_write_err_byte`, `mdk_float_fmt`,
-> `mdk_float_fmt_byte`; probe-verified 2026-07-16).
+> One row per `env.*` import name the emitter can declare. "Emitted when": the
+> math, clock and `exit` imports are declared **per extern**, one per host key
+> of the program's emit plan (`EmitPlan.hostKeys`, read from
+> `extern_catalog.wasmHostKeys`); the other imports are still declared per
+> **group** when the program's extern usage pulls the group in — a pure program
+> declares only the core quartet (`mdk_write_byte`, `mdk_write_err_byte`,
+> `mdk_float_fmt`, `mdk_float_fmt_byte`; probe-verified 2026-07-16).
 
 | Import | Declared (`wasm_preamble.mdk`) | Emitted when | `run.js` | `worker.js` | `compile.mjs` | Contract | Law risk |
 |---|---|---|---|---|---|---|---|
 | `mdk_write_byte` | ~184 | unconditional | real (accumulate, decode at end) | real (accumulate, flush on `\n`) | real (accumulate, decode at end) | one stdout byte | — |
-| `mdk_write_err_byte` | ~319 | ePutStr/trap use | real (buffered; flushed on `mdk_exit` too, WH4) | real (streams + trap-copy) | real (accumulate) | one stderr byte | T1 |
+| `mdk_write_err_byte` | ~319 | ePutStr/panic use (its plan host key) or a coded trap emitted (`trapImportNeeded`), declared once at the late trap-import site | real (buffered; flushed on `mdk_exit` too, WH4) | real (streams + trap-copy) | real (accumulate) | one stderr byte | T1 |
 | `mdk_float_fmt` / `mdk_float_fmt_byte` | ~922 | any Float use | real (`fmt12g`, `medaka_host.mjs`) | same | same (the one copy; until #543 this host held a pre-#361 `%.12g` copy) | float → cached shortest-round-trip lexeme (≡ `mdk_float_lexeme`) | N9 — **verified equivalent by review + probe battery** (the #361 ask); comments still say `%.12g` |
-| 14 unary libm (`mdk_cbrt exp log log2 log10 sin cos tan asin acos atan sinh cosh tanh`) | ~939–952 | math-extern use | real (`Math.*`) | real | real (`Math.*`) | transcendental | N4-adjacent: JS `Math.*` vs C libm sub-ULP (ledgered class) |
-| `mdk_pow` / `mdk_atan2` / `mdk_hypot` | ~953–955 | math-extern use | real | real | real | binary libm | same |
+| 14 unary libm (`mdk_cbrt exp log log2 log10 sin cos tan asin acos atan sinh cosh tanh`) | `hostImportSig` | that extern's use (its plan host key) | real (`Math.*`) | real | real (`Math.*`) | transcendental | N4-adjacent: JS `Math.*` vs C libm sub-ULP (ledgered class) |
+| `mdk_pow` / `mdk_atan2` / `mdk_hypot` | `hostImportSig` | that extern's use (its plan host key) | real | real | real | binary libm | same |
 | `mdk_str_to_float` | ~968 | `stringToFloat` use | real — strtod acceptance set (`mdkStrToFloat`, `medaka_host.mjs`) | same | same (the one copy; was raw `Number()` before #543) | parse path-channel bytes; latch ok | **WH2 ✅ FIXED** (#370) |
 | `mdk_str_to_float_ok` | ~969 | `stringToFloat` use | real — ok flag of the last parse | same | same (**absent** until #543 → LinkError at instantiate) | did that parse succeed? | **WH2 ✅** (#370; `Some nan` needs a channel NaN cannot carry) |
 | `mdk_path_reset` / `mdk_path_push` | ~1106–1107 | IO group | real | real | real | guest→host byte channel | — |
 | `mdk_read_file` / `mdk_file_exists` / `mdk_get_env` | ~1108–1110 | IO group | real (Node fs/env) | `fs` real over a per-run in-memory vfs (empty at the start of each run; a missing path is `Err "ENOENT: no such file or directory, open '<path>'"`); `get_env` a capability error (`env` withheld) | **real vfs** (`read_file`/`file_exists` read the in-memory vfs — this seam FEEDS the compiler its sources); `get_env` → empty | 1/0 + cached result bytes | capability |
 | `mdk_args_count` / `mdk_arg_len` / `mdk_arg_byte` | ~1111–1113 | IO group | real (`MDK_ARGS`) | capability error (`args` withheld) | real (guest argv = the `compile`/`hover`/`complete` call) | argv marshaling | capability |
 | `mdk_result_len` / `mdk_result_byte` | ~1114–1115 | IO group | real | real (the `fs` slice's result channel) | real | read cached result | — |
-| `mdk_exit` | ~1116 | IO group | real (`ExitSignal` unwind, flush stdout then stderr, exit) | capability error (`exit` withheld; a clean `exit 0` reports an error — deliberate, UX-noteworthy) | real (`ExitSignal` unwind) | flush + exit | T1/WH4 ✅ (#376) |
-| `mdk_wall_time_sec` / `mdk_monotonic_sec` / `mdk_sleep_ms` | clock group in `wasm_preamble.mdk` (`clockHostImportLines`) | `wallTimeSec` / `monotonicSec` / `sleepMs` use | real (the host's wall clock, its monotonic clock, a blocking wait on a shared cell) | wall and monotonic reads real; sleep real only when the page is cross-origin isolated, else a named capability error | real (same keys; never sleeps, present to avoid a LinkError) | f64 seconds; f64 seconds; sleep `i64` ms, non-positive returns at once | — |
+| `mdk_exit` | `hostImportSig` | `exit` use (its plan host key) | real (`ExitSignal` unwind, flush stdout then stderr, exit) | capability error (`exit` withheld; a clean `exit 0` reports an error — deliberate, UX-noteworthy) | real (`ExitSignal` unwind) | flush + exit | T1/WH4 ✅ (#376) |
+| `mdk_wall_time_sec` / `mdk_monotonic_sec` / `mdk_sleep_ms` | `hostImportSig` | `wallTimeSec` / `monotonicSec` / `sleepMs` use, each its own plan host key | real (the host's wall clock, its monotonic clock, a blocking wait on a shared cell) | wall and monotonic reads real; sleep real only when the page is cross-origin isolated, else a named capability error | real (same keys; never sleeps, present to avoid a LinkError) | f64 seconds; f64 seconds; sleep `i64` ms, non-positive returns at once | — |
 | `mdk_write_file_reset` / `_push` / `_commit` | ~1223–1225 | `writeFileBytes` use | real | real over the per-run vfs (`fs` slice) | real over the source vfs (`fs` slice) | streamed file write | WH3 ✅ (#375) |
 | `mdk_write_int` / `mdk_write_bool` | ~53–54 | **never** (dead W2 scaffold; verified unreferenced) | absent | absent | n/a (never emitted in ref mode) | legacy | — |
 

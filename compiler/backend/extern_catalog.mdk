@@ -100,6 +100,9 @@ public export data WasmFamily =
 -- is one `WasmEmit.use*` flag of `wasm_emit.mdk`: the representation (`$str`,
 -- `$arr`, the cons list, `$u64`, `$i64`), runtime function group or host
 -- import block that an extern's lowering names, and so must be emitted.
+-- `UseMath` and `UseClock` gate no flag: the host imports they stand for are
+-- each extern's own `EnvImport` key, which the module declares from its plan's
+-- host keys (`wasmHostKeys`).
 public export data WasmUse =
   | UseStr
   | UseStrLeaf
@@ -233,11 +236,54 @@ wasmUses name = match omLookup name wasmUseIndex
   Some us => us
   None => []
 
+-- Every `env` host import the wasm lowering of an extern calls, or `[]` for a
+-- name with none, including a name that is not a runtime extern.  An
+-- `EnvImport` row's own key comes first, then the imports its WAT runtime
+-- helpers call (`wasmHelperKeyRows`).
+export
+wasmHostKeys : String -> List String
+wasmHostKeys name = match omLookup name wasmHostKeyIndex
+  Some ks => ks
+  None => []
+
 catalogIndex : OrdMap ExternRow
 catalogIndex = omFromPairs (map (r => (rowName r, r)) catalogRows) omEmpty
 
 wasmUseIndex : OrdMap (List WasmUse)
 wasmUseIndex = omFromPairs wasmUseRows omEmpty
+
+wasmHostKeyIndex : OrdMap (List String)
+wasmHostKeyIndex = omFromPairs (flatMap rowHostKeyPair catalogRows) omEmpty
+
+rowHostKeyPair : ExternRow -> List (String, List String)
+rowHostKeyPair r =
+  let helperKeys = match omLookup (rowName r) wasmHelperKeyIndex
+    Some ks => ks
+    None => []
+  match envImportKeys (rowWasm r) ++ helperKeys
+    [] => []
+    ks => [(rowName r, ks)]
+
+envImportKeys : Disposition WasmFamily -> List String
+envImportKeys (EnvImport _ key) = [key]
+envImportKeys _ = []
+
+wasmHelperKeyIndex : OrdMap (List String)
+wasmHelperKeyIndex = omFromPairs wasmHelperKeyRows omEmpty
+
+-- The `Inline` externs whose WAT runtime helpers call `env` host imports, with
+-- every import those helpers call, transitively: a helper's keys include the
+-- keys of each helper it calls.  An `EnvImport` row's own key is read from its
+-- disposition and is not repeated here.
+export
+wasmHelperKeyRows : List (String, List String)
+wasmHelperKeyRows = [
+  ("ePutStr", ["mdk_write_err_byte"]),
+  ("ePutStrLn", ["mdk_write_err_byte"]),
+  ("panic", ["mdk_write_err_byte"]),
+  ("indexError", ["mdk_write_err_byte"]),
+  ("panicAt", ["mdk_write_err_byte"]),
+]
 
 -- The externs whose wasm lowering demands anything, in catalog order.  Each
 -- list is complete: a demand one flag implies in another (`stringToFloat`'s

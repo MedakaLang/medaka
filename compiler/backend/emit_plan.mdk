@@ -2,15 +2,23 @@
 -- and neither recomputes.  Built once, right after lowering, from the program an
 -- emitter is about to receive.
 
-import frontend.ast.{Pat}
+import frontend.ast.{Lit(..), Pat(..)}
 import ir.core_ir.{
   CProgram(..),
+  CArm(..),
   CBind(..),
   CClause(..),
-  CExpr,
+  CExpr(..),
+  CField(..),
+  CGuard(..),
+  CHead(..),
   CImplEntry(..),
   CImplBody(..),
+  CStmt(..),
+  CTBranch(..),
+  CTree(..),
 }
+import backend.extern_catalog.{WasmUse(..), wasmHostKeys, wasmUses}
 import backend.core_validate.{Backend(..), backendName}
 import support.ordmap.{
   OrdMap,
@@ -27,6 +35,7 @@ import backend.wasm_reach.{wasmReachFilter}
 import backend.emit_support.{eagerReachMap, lazyGlobalNames}
 import backend.trmc_analysis.{
   SelfRef(..),
+  flattenApp,
   DispGroup,
   trmcEligible,
   detectDispatchGroups,
@@ -52,6 +61,10 @@ import backend.trmc_analysis.{
 -- `trmc` says which functions are tail-recursive modulo constructor (TRMC-DESIGN.md).
 -- `dispGroups` are the dispatch-graph TMC groups (WASMGC-TRMC-DESIGN.md §11): a
 -- group's members are emitted as one destination-passing loop rooted at its root.
+-- `wasmDemand` is what the program demands of a WasmGC module, and `hostKeys` the
+-- `env` host imports its externs' wasm lowerings call (`wasmHostKeys`), sorted
+-- and distinct; the wasm emitter declares exactly these imports.  Both are empty
+-- on an LLVM plan.
 public export data EmitPlan = EmitPlan {
   target : Backend,
   wasmOnlyReach : Option ReachUnits,
@@ -59,9 +72,25 @@ public export data EmitPlan = EmitPlan {
   eagerReach : OrdMap (List String),
   trmc : TrmcVerdicts,
   dispGroups : List DispGroup,
+  wasmDemand : WasmDemand,
+  hostKeys : List String,
 }
 
 public export data ReachUnits = ReachUnits { total : Int, kept : Int }
+
+-- One walk of every binding and impl body (`wasmDemandOf`).  `uses` holds, once
+-- each, the catalog demands (`wasmUses`) of every runtime extern the program
+-- names and the demands its literals, collection forms and `++`/`::` make.
+-- `refBox` is a `Ref` cell, `divGuard` a `/` or `%`, and `tupleArities` the
+-- distinct tuple arities, first seen first.  The walk keys on names alone: it
+-- does not track binders, so a local that shares an extern's name demands what
+-- the extern does.
+public export data WasmDemand = WasmDemand {
+  uses : List WasmUse,
+  refBox : Bool,
+  divGuard : Bool,
+  tupleArities : List Int,
+}
 
 -- The self-recursive TRMC verdict.  `eligibleFns` holds every top-level function, and
 -- `eligibleImpls` every impl group (one `(method, key)` pair, its clauses in program
@@ -113,6 +142,9 @@ planOver target reach (CProgram groups ctorArs _ impls _ _) =
   -- first entry wins on a repeated constructor name, as in both emitters' tables
   let ctors = omFromPairs (reverseL ctorArs) omEmpty
   let fns = filterList isTopFn groups
+  let (demand, keys) = match target
+    WasmBackend => wasmDemandOf groups impls
+    LlvmBackend => (noDemand, [])
   EmitPlan {
     target = target,
     wasmOnlyReach = reach,
@@ -126,6 +158,8 @@ planOver target reach (CProgram groups ctorArs _ impls _ _) =
       eligibleImpls = trmcImplKeys ctors impls,
     },
     dispGroups = planDispatchGroups ctors fns groups impls,
+    wasmDemand = demand,
+    hostKeys = keys,
   }
 
 -- does the TRMC verdict hold for top-level function [name]?
@@ -254,3 +288,188 @@ canonFnIn fns name =
     "core__" ++ name
   else
     name
+
+-- ── the wasm demand walk ────────────────────────────────────────────────────
+
+noDemand : WasmDemand
+noDemand = WasmDemand {
+  uses = [],
+  refBox = False,
+  divGuard = False,
+  tupleArities = [],
+}
+
+-- the walk's state: the demand so far, newest first, and the host keys seen
+data DemandAcc = DemandAcc {
+  seenUses : List WasmUse,
+  seenKeys : OrdMap Unit,
+  seenRefBox : Bool,
+  seenDivGuard : Bool,
+  seenArities : List Int,
+}
+
+wasmDemandOf : List CBind -> List CImplEntry -> (WasmDemand, List String)
+wasmDemandOf groups impls =
+  let start = DemandAcc {
+    seenUses = [],
+    seenKeys = omEmpty,
+    seenRefBox = False,
+    seenDivGuard = False,
+    seenArities = [],
+  }
+  let acc = walkEach dImpl (walkEach dBind start groups) impls
+  (
+    WasmDemand {
+      uses = reverseL acc.seenUses,
+      refBox = acc.seenRefBox,
+      divGuard = acc.seenDivGuard,
+      tupleArities = reverseL acc.seenArities,
+    },
+    omKeys acc.seenKeys,
+  )
+
+walkEach : (DemandAcc -> a -> DemandAcc) -> DemandAcc -> List a -> DemandAcc
+walkEach _ acc [] = acc
+walkEach f acc (x :: xs) = walkEach f (f acc x) xs
+
+-- `seenUses` holds at most one entry per `WasmUse` constructor, so the scan is
+-- bounded.
+noteUse : DemandAcc -> WasmUse -> DemandAcc
+noteUse acc u =
+  if any (== u) acc.seenUses then
+    acc
+  else
+    { acc | seenUses = u :: acc.seenUses }
+
+noteKey : DemandAcc -> String -> DemandAcc
+noteKey acc k =
+  if omHasKey k acc.seenKeys then
+    acc
+  else
+    { acc | seenKeys = omInsert k () acc.seenKeys }
+
+noteArity : DemandAcc -> Int -> DemandAcc
+noteArity acc n =
+  if any (== n) acc.seenArities then
+    acc
+  else
+    { acc | seenArities = n :: acc.seenArities }
+
+noteRefBox : DemandAcc -> DemandAcc
+noteRefBox acc = if acc.seenRefBox then acc else { acc | seenRefBox = True }
+
+-- an occurrence of a name: every demand and host key the catalog lists for it
+noteName : DemandAcc -> String -> DemandAcc
+noteName acc "Ref" = noteRefBox acc
+noteName acc name =
+  walkEach noteKey (walkEach noteUse acc (wasmUses name)) (wasmHostKeys name)
+
+noteTag : DemandAcc -> String -> DemandAcc
+noteTag acc "U64" = noteUse acc UseU64
+noteTag acc "I64" = noteUse acc UseI64
+noteTag acc _ = acc
+
+-- `++` is runtime-dispatched ($mdk_append): the $str leaf concat and the cons list.
+noteBinop : DemandAcc -> String -> DemandAcc
+noteBinop acc "++" = noteUse (noteUse (noteUse acc UseStrLeaf) UseStr) UseList
+noteBinop acc "::" = noteUse acc UseList
+noteBinop acc "/" = { acc | seenDivGuard = True }
+noteBinop acc "%" = { acc | seenDivGuard = True }
+noteBinop acc _ = acc
+
+dBind : DemandAcc -> CBind -> DemandAcc
+dBind acc (CBind _ clauses _ _) = walkEach dClause acc clauses
+
+-- a clause's parameter patterns, then its body
+dClause : DemandAcc -> CClause -> DemandAcc
+dClause acc (CClause pats body) = dExpr (walkEach dPat acc pats) body
+
+dImpl : DemandAcc -> CImplEntry -> DemandAcc
+dImpl acc (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ pats b)) =
+  dExpr (walkEach dPat acc pats) b
+dImpl acc (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ pats b)) =
+  dExpr (walkEach dPat acc pats) b
+
+dExpr : DemandAcc -> CExpr -> DemandAcc
+dExpr acc (CList es) = walkEach dExpr (noteUse acc UseList) es
+dExpr acc (CRangeList lo hi _) = dExpr (dExpr (noteUse acc UseList) lo) hi
+dExpr acc (CTuple es) = walkEach dExpr (noteArity acc (listLen es)) es
+dExpr acc (CArray es) = walkEach dExpr (noteUse acc UseArray) es
+dExpr acc (CRangeArray lo hi _) = dExpr (dExpr (noteUse acc UseArray) lo) hi
+dExpr acc (CIndex a i) = dExpr (dExpr (noteUse acc UseArray) a) i
+dExpr acc (CSlice a lo hi _) =
+  dExpr (dExpr (dExpr (noteUse acc UseArray) a) lo) hi
+dExpr acc (CRecord _ fields) = walkEach dField acc fields
+dExpr acc (CFieldAccess ex _ _ _) = dExpr acc ex
+dExpr acc (CRecordUpdate _ base fields) =
+  walkEach dField (dExpr acc base) fields
+dExpr acc (CVariantUpdate _ base fields) =
+  walkEach dField (dExpr acc base) fields
+dExpr acc (app@(CApp _ _ _)) =
+  let (hd, args) = flattenApp app []
+  walkEach dExpr (dAppHead acc hd) args
+dExpr acc (CVar x _) = noteName acc x
+dExpr acc (CLit (LFloat _)) = noteUse acc UseFloat
+dExpr acc (CLit (LU64 _ _)) = noteUse acc UseU64
+dExpr acc (CLit (LI64 _ _)) = noteUse acc UseI64
+dExpr acc (CLit (LString _)) = noteUse acc UseStr
+dExpr acc (CLit (LChar _)) = noteUse acc UseStr
+dExpr acc (CLam _ b) = dExpr acc b
+dExpr acc (CBinPrim op l r tag _) =
+  dExpr (dExpr (noteBinop (noteTag acc tag) op) l) r
+dExpr acc (CUnOp _ x) = dExpr acc x
+dExpr acc (CIf c t f) = dExpr (dExpr (dExpr acc c) t) f
+dExpr acc (CLet _ pat a b) = dExpr (dExpr (dPat acc pat) a) b
+dExpr acc (CBlock stmts) = walkEach dStmt acc stmts
+dExpr acc (CDecision scrut arms tree) =
+  dTree (walkEach dArm (dExpr acc scrut) arms) tree
+dExpr acc (CMatch scrut arms) = walkEach dArm (dExpr acc scrut) arms
+dExpr acc (CLetGroup binds b) = dExpr (walkEach dBind acc binds) b
+dExpr acc _ = acc
+
+dAppHead : DemandAcc -> CExpr -> DemandAcc
+dAppHead acc (CVar "setRef" _) = noteRefBox acc
+dAppHead acc (CVar f _) = noteName acc f
+dAppHead acc h = dExpr acc h
+
+dField : DemandAcc -> CField -> DemandAcc
+dField acc (CField _ _ e) = dExpr acc e
+
+dArm : DemandAcc -> CArm -> DemandAcc
+dArm acc (CArm pat guards body) =
+  dExpr (walkEach dGuard (dPat acc pat) guards) body
+
+dGuard : DemandAcc -> CGuard -> DemandAcc
+dGuard acc (CGBool g) = dExpr acc g
+dGuard acc (CGBind p e) = dExpr (dPat acc p) e
+
+dStmt : DemandAcc -> CStmt -> DemandAcc
+dStmt acc (CSExpr e) = dExpr acc e
+dStmt acc (CSLet _ pat e) = dExpr (dPat acc pat) e
+dStmt acc (CSAssign _ e) = dExpr acc e
+
+-- a pattern's collection heads: a cons or list pattern is a list, a tuple
+-- pattern its arity
+dPat : DemandAcc -> Pat -> DemandAcc
+dPat acc (PCons h t) = dPat (dPat (noteUse acc UseList) h) t
+dPat acc (PList ps) = walkEach dPat (noteUse acc UseList) ps
+dPat acc (PTuple ps) = walkEach dPat (noteArity acc (listLen ps)) ps
+dPat acc (PCon _ args) = walkEach dPat acc args
+dPat acc (PAs _ _ _ p) = dPat acc p
+dPat acc _ = acc
+
+-- a decision tree's switch heads, the lowered shape of list and tuple patterns
+dTree : DemandAcc -> CTree -> DemandAcc
+dTree acc (CTGuard _ fail) = dTree acc fail
+dTree acc (CTDrop sub) = dTree acc sub
+dTree acc (CTSwitch branches dft) = dTree (walkEach dBranch acc branches) dft
+dTree acc _ = acc
+
+dBranch : DemandAcc -> CTBranch -> DemandAcc
+dBranch acc (CTBranch h sub) = dTree (dSwitchHead acc h) sub
+
+dSwitchHead : DemandAcc -> CHead -> DemandAcc
+dSwitchHead acc HCons = noteUse acc UseList
+dSwitchHead acc HNil = noteUse acc UseList
+dSwitchHead acc (HTuple n) = noteArity acc n
+dSwitchHead acc _ = acc

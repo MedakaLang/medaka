@@ -231,7 +231,6 @@ import backend.extern_catalog.{
   WasmUse(..),
   isWasmExternFamily,
   wasmFamily,
-  wasmUses,
 }
 import backend.core_validate.{
   Backend(..),
@@ -323,6 +322,7 @@ import backend.private_mangle.{dictTag, hashName, injectiveIdent}
 import types.disposition.{ifaceSuperCount, installedDispositionsOpt}
 import backend.emit_plan.{
   EmitPlan(..),
+  WasmDemand(..),
   TrmcVerdicts,
   isTrmcFn,
   isTrmcImpl,
@@ -349,6 +349,7 @@ import backend.wasm_preamble.{
   ioRuntimeLines,
   ioStrRuntimeLines,
   stderrByteImportLines,
+  stderrByteKey,
   stderrRuntimeLines,
   trapIntRuntimeLines,
   intRuntimeLines,
@@ -371,7 +372,7 @@ import backend.wasm_preamble.{
   hashRuntimeLines,
   hashStringRuntimeLines,
   floatFmtImportLines,
-  mathHostImportLines,
+  hostImportLines,
   floatRemRuntimeLines,
   floatRuntimeLines,
   hashFloatRuntimeLines,
@@ -388,7 +389,6 @@ import backend.wasm_preamble.{
   charFromCodeRuntimeLines,
   charClassRuntimeLines,
   ioHostImportLines,
-  clockHostImportLines,
   ioHostRuntimeLines,
   ioArgsRuntimeLines,
   fileBytesHostImportLines,
@@ -468,14 +468,13 @@ data WasmEmit = WasmEmit {
   useStrCodec : Ref Bool,
   useByteBlock : Ref Bool,
   useValueCmp : Ref Bool,
-  useMath : Ref Bool,
   useCharFromCode : Ref Bool,
   useCharClass : Ref Bool,
   -- ── lifted from module-level ambient cells (X-W.H) ─────────────────────
-  -- PROGRAM-lifetime: the representation / runtime demand this emission's
-  -- pre-scan (scanProgW7 / scanImplsW7 / noteW8*) observed, plus the tuple
-  -- arities and the statically-Float top-level globals it seeded.  Each is
-  -- written during the scan and read by the type / import / runtime sections.
+  -- PROGRAM-lifetime: the representation / runtime demand the plan's
+  -- `wasmDemand` seeds (`seedDemandW`), plus the tuple arities and the
+  -- statically-Float top-level globals.  Body emission may turn more on; the
+  -- type / import / runtime sections read them.
   useStr : Ref Bool,
   useList : Ref Bool,
   useArray : Ref Bool,
@@ -492,7 +491,6 @@ data WasmEmit = WasmEmit {
   useValueMod : Ref Bool,
   useValueCmpNum : Ref Bool,
   useIO : Ref Bool,
-  useClock : Ref Bool,
   useStrToInt : Ref Bool,
   useStrReverse : Ref Bool,
   useStrJoin : Ref Bool,
@@ -540,7 +538,6 @@ freshWasmEmit mode = WasmEmit {
   useStrCodec = Ref False,
   useByteBlock = Ref False,
   useValueCmp = Ref False,
-  useMath = Ref False,
   useCharFromCode = Ref False,
   useCharClass = Ref False,
   useStr = Ref False,
@@ -559,7 +556,6 @@ freshWasmEmit mode = WasmEmit {
   useValueMod = Ref False,
   useValueCmpNum = Ref False,
   useIO = Ref False,
-  useClock = Ref False,
   useStrToInt = Ref False,
   useStrReverse = Ref False,
   useStrJoin = Ref False,
@@ -1263,14 +1259,6 @@ isFloatCtorField prog ctor idx = match progInput prog
       Some idxs => containsInt idx idxs
       None => False
 
--- the distinct tuple arities used anywhere in the program (construction or match).
-noteTupleArity : WasmEmit -> Int -> Unit
-noteTupleArity emit n =
-  if containsInt n !emit.tupleArities then
-    ()
-  else
-    setRef emit.tupleArities (n :: !emit.tupleArities)
-
 containsInt : Int -> List Int -> Bool
 -- Intentional cross-file duplicate of eval.mdk's private helper. The interpreter
 -- is the oracle this backend is differenced against and imports nothing from
@@ -1487,12 +1475,9 @@ emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _
   let _ = checkPlanBackend WasmBackend plan
   let _ = refuseUnprovidedExternsW emit input cp
   let _ = setRef emit.useStr (programUsesStr groups)
-  -- W7: scan the program for collection usage (gates type-section decls + forces
-  -- ref-mode — every collection is a boxed (ref eq) value).  The scan only ever
-  -- turns demand ON; `emit` is born with every cell off (freshWasmEmit), so the
-  -- ambient-cell era's explicit per-emission reset block is gone with the cells.
-  let _ = scanProgW7 emit groups
-  let _ = scanImplsW7 emit impls
+  -- the plan's demand only turns cells ON; `emit` is born with every cell off
+  -- (freshWasmEmit).
+  let _ = seedDemandW emit plan.wasmDemand
   -- W8b: any Float program needs the $str rep — a Float value-main auto-prints through
   -- floatToString (a $str), and $mdk_float_to_str builds a $str.  Force useStr so the
   -- $str type + the $str print runtime emit.
@@ -1533,7 +1518,7 @@ emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _
       || !emit.useStrSearch
       || !emit.useCharClass
       || !emit.useIO
-      || !emit.useClock
+      || isNonEmptyList plan.hostKeys
   let typeNames = distinctTypeNames ctorTypes
   let prog = Prog index typeNames valNames useClos impls input emit freshFnCtx
   if useRef then
@@ -1699,8 +1684,7 @@ emitProgramGaps input plan cp0 =
       input
       (CProgram groups ctorArs ctorTypes impls mctx facts)
   let _ = setRef emit.useStr (programUsesStr groups)
-  let _ = scanProgW7 emit groups
-  let _ = scanImplsW7 emit impls
+  let _ = seedDemandW emit plan.wasmDemand
   let _ = if !emit.useFloat then setRef emit.useStr True
   let fnNames = collectFnNames groups
   let valNames = collectValNames groups
@@ -2098,26 +2082,6 @@ headUsesStr : CExpr -> Bool
 headUsesStr (CVar fn _) = isStrExternFamilyW fn
 headUsesStr h = exprUsesStr h
 
--- ── W7: scan the program for collection usage (sets the type-section gating refs) ──
--- Sets useList/useArray/useRefBox and records every tuple arity seen, from
--- BOTH constructions (CList/CTuple/CArray/CRangeArray/CIndex/CSlice/CRangeList, Ref/
--- setRef) AND match heads (HCons/HNil → list, HTuple n → tuple).  Mirrors how
--- programUsesStr scans, but mutates the refs as it walks (peer to noteTupleArity).
-scanProgW7 : WasmEmit -> List CBind -> Unit
-scanProgW7 emit groups = forEachU (b => scanBindW7 emit b) groups
-
--- W9: scan impl method bodies + interface defaults for collection/extern use too
--- (e.g. `eq (x::xs) (y::ys)` forces lists; `display n = intToString n` forces $str).
-scanImplsW7 : WasmEmit -> List CImplEntry -> Unit
-scanImplsW7 emit impls = forEachU (entry => scanImplEntryW7 emit entry) impls
-
-scanImplEntryW7 : WasmEmit -> CImplEntry -> Unit
-scanImplEntryW7 emit (CImplEntry _ _ _ body) = match body
-  CImplTagged _ _ _ _ _ pats b =>
-    let _ = forEachU (p => scanPatW7 emit p) pats in scanExprW7 emit b
-  CImplDefault _ _ _ _ _ pats b =>
-    let _ = forEachU (p => scanPatW7 emit p) pats in scanExprW7 emit b
-
 forEachU : (a -> Unit) -> List a -> Unit
 -- Intentional cross-file duplicate of wasm_reach.mdk's copy. The two modules are
 -- independent passes with NO import edge in either direction — the entries
@@ -2127,109 +2091,13 @@ forEachU : (a -> Unit) -> List a -> Unit
 forEachU _ [] = ()
 forEachU f (x :: xs) = let _ = f x in forEachU f xs
 
-scanBindW7 : WasmEmit -> CBind -> Unit
-scanBindW7 emit (CBind _ clauses _ _) =
-  forEachU (clause => scanClauseW7 emit clause) clauses
-
--- W9: scan BOTH a clause's param patterns (a list/tuple clause head forces the
--- collection type sections even when the body has no collection literal — e.g.
--- core.mdk's debugListItems `(y::rest)` heads) AND its body.
-scanClauseW7 : WasmEmit -> CClause -> Unit
-scanClauseW7 emit (CClause pats body) =
-  let _ = forEachU (p => scanPatW7 emit p) pats
-  scanExprW7 emit body
-
-scanExprW7 : WasmEmit -> CExpr -> Unit
-scanExprW7 emit (CList es) =
-  let _ = setRef emit.useList True in forEachU (e => scanExprW7 emit e) es
-scanExprW7 emit (CRangeList lo hi _) =
-  let _ = setRef emit.useList True in
-    let _ = scanExprW7 emit lo in scanExprW7 emit hi
-scanExprW7 emit (CTuple es) =
-  let _ = noteTupleArity emit (listLen es) in
-    forEachU (e => scanExprW7 emit e) es
-scanExprW7 emit (CArray es) =
-  let _ = setRef emit.useArray True in forEachU (e => scanExprW7 emit e) es
-scanExprW7 emit (CRangeArray lo hi _) =
-  let _ = setRef emit.useArray True in
-    let _ = scanExprW7 emit lo in scanExprW7 emit hi
-scanExprW7 emit (CIndex a i) =
-  let _ = setRef emit.useArray True in
-    let _ = scanExprW7 emit a in scanExprW7 emit i
-scanExprW7 emit (CSlice a lo hi _) =
-  let _ = setRef emit.useArray True in
-    let _ = scanExprW7 emit a in
-      let _ = scanExprW7 emit lo in scanExprW7 emit hi
-scanExprW7 emit (CRecord _ fields) =
-  forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
-scanExprW7 emit (CFieldAccess ex _ _ _) = scanExprW7 emit ex
-scanExprW7 emit (CRecordUpdate _ base fields) =
-  let _ = scanExprW7 emit base in
-    forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
-scanExprW7 emit (CVariantUpdate _ base fields) =
-  let _ = scanExprW7 emit base in
-    forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
-scanExprW7 emit (app@(CApp _ _ _)) =
-  let (hd, args) = flattenApp app []
-  let _ = scanW7Head emit hd
-  forEachU (arg => scanExprW7 emit arg) args
-scanExprW7 emit (CVar x _) =
-  if x == "Ref" then setRef emit.useRefBox True else noteW8Extern emit x
--- W8b: a Float literal forces the Float rep + runtime.  (Bare `pi`/`e` are NOT keyed
--- here — scanExprW7 doesn't track binders, so a LOCAL named `e`/`pi`, e.g. `Err e`,
--- would false-positive; useFloat is instead forced by a Float literal, a Float
--- extern, OR a Float-kinded main, post-scan in emitProgram.)
-scanExprW7 emit (CLit (LFloat _)) = setRef emit.useFloat True
--- A `U64` value is born from a literal, a `U64` operator, or a `u64` kernel
--- extern (noteW8Extern), so those three demand the `$u64` type and runtime; an
--- `I64` the same way demands `$i64`.
-scanExprW7 emit (CLit (LU64 _ _)) = setRef emit.useU64 True
-scanExprW7 emit (CLit (LI64 _ _)) = setRef emit.useI64 True
--- A String/Char literal forces the $str rep.  `programUsesStr` already sees
--- literals in top-level bindings; this scan is the only one that walks impl
--- method bodies, so without this arm a prelude impl such as
--- `impl Monoid String where empty = ""` is emitted naming `$u8arr` while the
--- type section omits it.  A Unit `main` is the shape with no other string
--- demand (no output at all), so it was the shape that failed to assemble.
-scanExprW7 emit (CLit (LString _)) = setRef emit.useStr True
-scanExprW7 emit (CLit (LChar _)) = setRef emit.useStr True
-scanExprW7 emit (CLam _ b) = scanExprW7 emit b
-scanExprW7 emit (CBinPrim op l r tag _) =
-  let _ = if tag == "U64" then setRef emit.useU64 True
-  let _ = if tag == "I64" then setRef emit.useI64 True
-  let _ = noteW8Binop emit op
-  let _ = scanExprW7 emit l
-  scanExprW7 emit r
-scanExprW7 emit (CUnOp _ x) = scanExprW7 emit x
-scanExprW7 emit (CIf c t f) =
-  let _ = scanExprW7 emit c in let _ = scanExprW7 emit t in scanExprW7 emit f
-scanExprW7 emit (CLet _ pat a b) =
-  let _ = scanPatW7 emit pat in let _ = scanExprW7 emit a in scanExprW7 emit b
-scanExprW7 emit (CBlock stmts) = forEachU (stmt => scanStmtW7 emit stmt) stmts
-scanExprW7 emit (CDecision scrut arms tree) =
-  let _ = scanExprW7 emit scrut in
-    let _ = forEachU (arm => scanArmW7 emit arm) arms in scanTreeW7 emit tree
-scanExprW7 emit (CMatch scrut arms) =
-  let _ = scanExprW7 emit scrut in forEachU (arm => scanArmW7 emit arm) arms
--- W9: descend a CLetGroup so its lifted members' bodies (and their externs /
--- collection use, e.g. arbitraryList's `go` using `randomInt` + `::`) gate the
--- runtime/type sections.
-scanExprW7 emit (CLetGroup binds b) =
-  let _ = forEachU (bd => scanBindW7 emit bd) binds in scanExprW7 emit b
-scanExprW7 _ _ = ()
-
-scanW7Head : WasmEmit -> CExpr -> Unit
-scanW7Head emit (CVar "Ref" _) = setRef emit.useRefBox True
-scanW7Head emit (CVar "setRef" _) = setRef emit.useRefBox True
-scanW7Head emit (CVar f _) = noteW8Extern emit f
-scanW7Head emit h = scanExprW7 emit h
-
--- ── W8: note which runtime groups an extern occurrence reaches ───────────────
--- Sets the flag of every demand the catalog lists for the name (`wasmUses`).
--- Piggybacks on the W7 walk, which keys on the name alone: it does not track
--- binders, so a local that shares an extern's name demands what the extern does.
-noteW8Extern : WasmEmit -> String -> Unit
-noteW8Extern emit name = forEachU (u => noteWasmUse emit u) (wasmUses name)
+-- Seeds the demand cells from the plan's walk of the program (`wasmDemandOf`).
+seedDemandW : WasmEmit -> WasmDemand -> Unit
+seedDemandW emit d =
+  let _ = forEachU (u => noteWasmUse emit u) d.uses
+  let _ = if d.refBox then setRef emit.useRefBox True
+  let _ = if d.divGuard then setRef emit.useDivGuard True
+  setRef emit.tupleArities (reverseL d.tupleArities)
 
 -- The `WasmEmit` flag that carries one catalog demand.
 noteWasmUse : WasmEmit -> WasmUse -> Unit
@@ -2240,7 +2108,8 @@ noteWasmUse emit UseHash = setRef emit.useHash True
 noteWasmUse emit UseFloat = setRef emit.useFloat True
 noteWasmUse emit UseU64 = setRef emit.useU64 True
 noteWasmUse emit UseI64 = setRef emit.useI64 True
-noteWasmUse emit UseMath = setRef emit.useMath True
+-- the libm and clock imports are the extern's own host keys (`EmitPlan.hostKeys`)
+noteWasmUse _ UseMath = ()
 noteWasmUse emit UseFloatStr = setRef emit.useFloatStr True
 noteWasmUse emit UseFloatHash = setRef emit.useFloatHash True
 noteWasmUse emit UseFloatRng = setRef emit.useFloatRng True
@@ -2255,74 +2124,10 @@ noteWasmUse emit UseByteBlock = setRef emit.useByteBlock True
 noteWasmUse emit UseIO = setRef emit.useIO True
 noteWasmUse emit UseArgs = setRef emit.useArgs True
 noteWasmUse emit UseFileBytes = setRef emit.useFileBytes True
-noteWasmUse emit UseClock = setRef emit.useClock True
+noteWasmUse _ UseClock = ()
 noteWasmUse emit UseStrToInt = setRef emit.useStrToInt True
 noteWasmUse emit UseStrReverse = setRef emit.useStrReverse True
 noteWasmUse emit UseStrJoin = setRef emit.useStrJoin True
--- `++` is runtime-dispatched ($mdk_append): needs the $str leaf concat ($mdk_str_append)
--- AND the W7 cons list types ($C_Cons/$T_List) for the list-append branch.
-noteW8Binop : WasmEmit -> String -> Unit
-noteW8Binop emit "++" =
-  let _ = setRef emit.useStrLeaf True
-  let _ = setRef emit.useStr True
-  setRef emit.useList True
-noteW8Binop emit "::" = setRef emit.useList True
--- B5: a concrete-Int `/`/`%` needs the divisor-guard scratch local (the scalar fn+init
--- decls; ref mode declares `$__divr<d>` through w7Local).  Float `/` never traps on zero.
-noteW8Binop emit "/" = setRef emit.useDivGuard True
-noteW8Binop emit "%" = setRef emit.useDivGuard True
-noteW8Binop _ _ = ()
-
-scanArmW7 : WasmEmit -> CArm -> Unit
-scanArmW7 emit (CArm pat guards body) =
-  let _ = scanPatW7 emit pat
-  let _ = forEachU (guard => scanGuardW7 emit guard) guards
-  scanExprW7 emit body
-
-scanGuardW7 : WasmEmit -> CGuard -> Unit
-scanGuardW7 emit (CGBool g) = scanExprW7 emit g
-scanGuardW7 emit (CGBind p e) = let _ = scanPatW7 emit p in scanExprW7 emit e
-
-scanStmtW7 : WasmEmit -> CStmt -> Unit
-scanStmtW7 emit (CSExpr e) = scanExprW7 emit e
-scanStmtW7 emit (CSLet _ pat e) =
-  let _ = scanPatW7 emit pat in scanExprW7 emit e
-scanStmtW7 emit (CSAssign _ e) = scanExprW7 emit e
-
--- a pattern's collection heads: a cons/nil/list pattern → list; a tuple pattern → its arity.
-scanPatW7 : WasmEmit -> Pat -> Unit
-scanPatW7 emit (PCons h t) =
-  let _ = setRef emit.useList True in
-    let _ = scanPatW7 emit h in scanPatW7 emit t
-scanPatW7 emit (PList ps) =
-  let _ = setRef emit.useList True in forEachU (p => scanPatW7 emit p) ps
-scanPatW7 emit (PTuple ps) =
-  let _ = noteTupleArity emit (listLen ps) in
-    forEachU (p => scanPatW7 emit p) ps
-scanPatW7 emit (PCon _ args) = forEachU (p => scanPatW7 emit p) args
-scanPatW7 emit (PAs _ _ _ p) = scanPatW7 emit p
-scanPatW7 _ _ = ()
-
--- a decision tree's match heads (the lowered shape of list/tuple patterns).
-scanTreeW7 : WasmEmit -> CTree -> Unit
-scanTreeW7 _ (CTFail _) = ()
-scanTreeW7 _ (CTLeaf _) = ()
-scanTreeW7 emit (CTGuard _ fail) = scanTreeW7 emit fail
-scanTreeW7 emit (CTDrop sub) = scanTreeW7 emit sub
-scanTreeW7 emit (CTSwitch branches dft) =
-  let _ = forEachU (branch => scanBranchW7 emit branch) branches in
-    scanTreeW7 emit dft
-
-scanBranchW7 : WasmEmit -> CTBranch -> Unit
-scanBranchW7 emit (CTBranch h sub) =
-  let _ = scanHeadW7 emit h in scanTreeW7 emit sub
-
-scanHeadW7 : WasmEmit -> CHead -> Unit
-scanHeadW7 emit HCons = setRef emit.useList True
-scanHeadW7 emit HNil = setRef emit.useList True
-scanHeadW7 emit (HTuple n) = noteTupleArity emit n
-scanHeadW7 _ _ = ()
-
 cFieldExpr : CField -> CExpr
 cFieldExpr (CField _ _ e) = e
 
@@ -3138,14 +2943,12 @@ emitRefProgram prog plan groups =
       -- W8b: floatToString is a host import (the shortest-round-trip formatter, #57,
       -- lives JS-side).
       ++ (if (progEmit prog).useFloat.value then floatFmtImportLines else [])
-      -- #101: the libm transcendentals / pow / atan2 / hypot are JS Math.* host imports.
-      ++ (if (progEmit prog).useMath.value then mathHostImportLines else [])
+      -- the host imports the reached externs' lowerings call (`EmitPlan.hostKeys`).
+      ++ hostImportLines plan.hostKeys
       -- layer-6: stringToFloat is a host import (mdk_str_to_float = the host strtod parser).
       ++ (if (progEmit prog).useFloatStr.value then floatStrImportLines else [])
-      -- W12: the IO host surface (readFile/fileExists/args/getEnv/exit) host imports.
+      -- W12: the IO host surface (readFile/fileExists/args/getEnv) host imports.
       ++ (if (progEmit prog).useIO.value then ioHostImportLines else [])
-      -- the clock externs (wallTimeSec/monotonicSec/sleepMs) are three host imports.
-      ++ (if (progEmit prog).useClock.value then clockHostImportLines else [])
       -- stage-D: writeFileBytes's write host imports (reset/push/commit).
       ++ (if (progEmit prog).useFileBytes.value then
         fileBytesHostImportLines
@@ -3289,12 +3092,12 @@ emitRefProgram prog plan groups =
     if (progEmit prog).useStrJoin.value then strJoinRuntimeLines else []
   -- W11b: the UTF-8 codec ($mdk_str_to_chars / $mdk_chars_to_str) + charFromCode's
   -- range-check runtime ($mdk_char_from_code).  The codec needs the $str rep ($u8arr)
-  -- and the $arr rep (both forced via noteW8Extern).  charFromCode alone needs neither
+  -- and the $arr rep (both demanded with useStrCodec in the catalog).  charFromCode alone needs neither
   -- the codec nor strLeaf, so its runtime fn is gated independently.
   let strCodecRt =
     if (progEmit prog).useStrCodec.value then strCodecRuntimeLines else []
   -- the `ByteBlock` builtin's loop/copy helpers.  Needs $u8arr + $str (forced
-  -- via useStr) and $arr (useArray), both set with useByteBlock in noteW8Extern.
+  -- via useStr) and $arr (useArray), both demanded with useByteBlock in the catalog.
   let byteBlockRt =
     if (progEmit prog).useByteBlock.value then byteBlockRuntimeLines else []
   let charFromCodeRt =
@@ -3324,12 +3127,14 @@ emitRefProgram prog plan groups =
   let fileBytesRt =
     if (progEmit prog).useFileBytes.value then fileBytesRuntimeLines else []
   let dataSegs = emitDataSegs (progEmit prog)
-  -- B5: the stderr byte-write import — for ePutStr (`WasmEmit.useEPut`) OR a coded runtime trap
-  -- (trapImportNeeded, set during the body emit above). Emitted ONCE. This binding is
-  -- forced after all body-emit bindings (strict `let`), so trapImportNeeded is visible;
+  -- B5: the stderr byte-write import, emitted ONCE.  The plan's key is a lower
+  -- bound here: it covers the externs whose runtime writes stderr, but a coded
+  -- trap (a checked Int operator, a divisor guard, a failed match) is chosen
+  -- while lowering, so trapImportNeeded, set during the body emit above, adds the
+  -- rest.  This binding is forced after all body-emit bindings (strict `let`);
   -- `dataSegs` above already relies on that same after-body ordering.
   let trapImport =
-    if (progEmit prog).useEPut.value
+    if contains stderrByteKey plan.hostKeys
       || (progEmit prog).trapImportNeeded.value then
       stderrByteImportLines
     else
@@ -7445,8 +7250,8 @@ emitLeafExternRef prog env d "writeFileBytes" _ =
 -- W10/B5: `panic msg` → stream the coded line `runtime error [E-PANIC]: <msg>\n` to
 -- stderr, then `unreachable` (peer of native @mdk_panic / the interp's runtimePanic).
 -- The fixed prefix is unrolled to byte-writes; the user message (a $str (ref eq), any
--- expression) is streamed through $mdk_eprint_str (forced via `WasmEmit.useEPut` in noteW8Extern
--- for `panic`), then a trailing newline byte.  `unreachable` is stack-polymorphic, so it
+-- expression) is streamed through $mdk_eprint_str (forced via `WasmEmit.useEPut`, which the
+-- catalog demands for `panic`), then a trailing newline byte.  `unreachable` is stack-polymorphic, so it
 -- validates as any result type.
 emitLeafExternRef prog env d "panic" [msg] =
   wasmTrapBytes (progEmit prog) "runtime error [E-PANIC]: "
@@ -7459,7 +7264,7 @@ emitLeafExternRef prog env d "panic" _ =
 -- Index-16a: `indexError msg` streams the coded line `runtime error
 -- [E-INDEX-OOB]: <msg>` to stderr and traps, the same shape `panic` uses above
 -- and the same line native's @mdk_oob_msg and the interpreter both print.  The
--- $str rep and $mdk_eprint_str are forced for `indexError` in noteW8Extern.
+-- $str rep and $mdk_eprint_str are demanded for `indexError` in the catalog.
 emitLeafExternRef prog env d "indexError" [msg] =
   wasmTrapBytes (progEmit prog) "runtime error [E-INDEX-OOB]: "
     ++ emitRefExpr prog env d msg

@@ -426,3 +426,86 @@ test "an impl group recursing through its own instance word is TRMC-eligible" = 
     labelFail "self word" (expectTrue (implTrmc "K")),
     labelFail "another instance's word" (expectFalse (implTrmc "Other")),
   ]
+
+-- ── host keys ───────────────────────────────────────────────────────────────
+
+-- The keys follow from the catalog: an `EnvImport` extern's key is the one host
+-- import its lowering calls, so a program reaching only clock, math or `exit`
+-- externs has exactly their keys, sorted, and none of another group's.  The IO
+-- externs are `Inline` and carry no key of their own.
+hostKeysOf : Backend -> CExpr -> List String
+hostKeysOf target mainBody =
+  (buildEmitPlan target (program [val "main" mainBody])).hostKeys
+
+unit : CExpr
+unit = CLit LUnit
+
+float : Float -> CExpr
+float x = CLit (LFloat x)
+
+test "a wasm plan's host keys are its reached externs' imports, per group" = expectAll
+  [
+    labelFail
+      "clock: wallTimeSec only"
+      (expectEqual
+        ["mdk_wall_time_sec"]
+        (hostKeysOf WasmBackend (call "wallTimeSec" [unit]))),
+    labelFail
+      "clock: all three, sorted"
+      (expectEqual
+        ["mdk_monotonic_sec", "mdk_sleep_ms", "mdk_wall_time_sec"]
+        (hostKeysOf
+          WasmBackend
+          (CTuple [
+            call "monotonicSec" [unit],
+            call "sleepMs" [int 1],
+            call "wallTimeSec" [unit],
+          ]))),
+    labelFail
+      "math: sin and pow, a repeat counted once"
+      (expectEqual
+        ["mdk_pow", "mdk_sin"]
+        (hostKeysOf
+          WasmBackend
+          (call "pow" [call "sin" [float 1.0], call "sin" [float 2.0]]))),
+    labelFail
+      "exit only"
+      (expectEqual ["mdk_exit"] (hostKeysOf WasmBackend (call "exit" [int 0]))),
+    labelFail
+      "readFile imports no exit, clock or math key"
+      (expectEqual
+        []
+        (filter
+          (k => any (== k) ["mdk_exit", "mdk_sin", "mdk_wall_time_sec"])
+          (hostKeysOf WasmBackend (call "readFile" [ref "p", CList []])))),
+    labelFail
+      "a pure program has none"
+      (expectEqual [] (hostKeysOf WasmBackend (prim "+" (int 1) (int 2)))),
+    labelFail
+      "an llvm plan has none"
+      (expectEqual [] (hostKeysOf LlvmBackend (call "exit" [int 0]))),
+  ]
+
+-- The stderr writer's key is the static half of the module's stderr import: the
+-- externs whose runtime writes stderr (`$mdk_eprint_str`) carry it.  A coded trap
+-- adds the import while lowering, which no plan sees, so a trap-free program
+-- without those externs has no key.
+str : String -> CExpr
+str s = CLit (LString s)
+
+test "the stderr writer's key comes with each extern whose runtime writes stderr" = expectAll
+  [
+    labelFail
+      "ePutStrLn"
+      (expectEqual
+        ["mdk_write_err_byte"]
+        (hostKeysOf WasmBackend (call "ePutStrLn" [str "x"]))),
+    labelFail
+      "panic"
+      (expectEqual
+        ["mdk_write_err_byte"]
+        (hostKeysOf WasmBackend (call "panic" [str "x"]))),
+    labelFail
+      "putStrLn writes stdout only"
+      (expectEqual [] (hostKeysOf WasmBackend (call "putStrLn" [str "x"]))),
+  ]

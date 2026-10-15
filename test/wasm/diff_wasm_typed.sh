@@ -56,6 +56,12 @@ has_typed_pin() {
   grep -F -q -- "$1" "$TYPED_ENTRY" || printf '%s' "$TYPED_FLAT" | grep -F -q -- "$1" ||
     printf '%s' "$TYPED_NORM" | grep -F -q -- "$1"
 }
+# The emit plan walks the program for the wasm demand the emitter seeds from it.
+PLAN_SRC="$ROOT/compiler/backend/emit_plan.mdk"
+PLAN_FLAT="$(tr -s '[:space:]' ' ' < "$PLAN_SRC")"
+has_plan_pin() {
+  grep -F -q -- "$1" "$PLAN_SRC" || printf '%s' "$PLAN_FLAT" | grep -F -q -- "$1"
+}
 
 # X-W.H2a structural ratchet. Keep this before every toolchain/binary skip: the
 # private program index is source structure, not a capability of wasm-tools.
@@ -207,7 +213,7 @@ for required in \
   'wasmTrap : WasmEmit -> String -> String -> List String' \
   'setRef emit.trapImportNeeded True' \
   'let trapImport = if !emit.trapImportNeeded then stderrByteImportLines else []' \
-  'let trapImport = if (progEmit prog).useEPut.value || (progEmit prog).trapImportNeeded.value then stderrByteImportLines else []' \
+  'let trapImport = if contains stderrByteKey plan.hostKeys || (progEmit prog).trapImportNeeded.value then stderrByteImportLines else []' \
   'let _ = setRef (progEmit prog).trapImportNeeded True' \
   'emitDivZeroGuard : WasmEmit -> String -> String -> Int -> List String' \
   'emitDivZeroGuard emit op "$__sdivr"' \
@@ -237,7 +243,7 @@ for required in \
   'useEPut = Ref' \
   'setRef emit.useEPut True' \
   '(progEmit prog).useEPut.value' \
-  'let trapImport = if (progEmit prog).useEPut.value || (progEmit prog).trapImportNeeded.value then stderrByteImportLines else []'; do
+  'let trapImport = if contains stderrByteKey plan.hostKeys || (progEmit prog).trapImportNeeded.value then stderrByteImportLines else []'; do
   has_wasm_pin "$required" || {
     echo "FAIL H2B9-EPUT-AUTHORITY: missing $required"
     exit 1
@@ -284,26 +290,10 @@ done
 for required in \
   'useDivGuard : Ref Bool' \
   'useDivGuard = Ref' \
-  'scanProgW7 : WasmEmit -> List CBind -> Unit' \
-  'scanImplsW7 : WasmEmit -> List CImplEntry -> Unit' \
-  'scanImplEntryW7 : WasmEmit -> CImplEntry -> Unit' \
-  'scanBindW7 : WasmEmit -> CBind -> Unit' \
-  'scanClauseW7 : WasmEmit -> CClause -> Unit' \
-  'scanExprW7 : WasmEmit -> CExpr -> Unit' \
-  'scanW7Head : WasmEmit -> CExpr -> Unit' \
-  'noteW8Extern : WasmEmit -> String -> Unit' \
-  'noteW8Binop : WasmEmit -> String -> Unit' \
-  'scanArmW7 : WasmEmit -> CArm -> Unit' \
-  'scanGuardW7 : WasmEmit -> CGuard -> Unit' \
-  'scanStmtW7 : WasmEmit -> CStmt -> Unit' \
-  'scanPatW7 : WasmEmit -> Pat -> Unit' \
-  'scanTreeW7 : WasmEmit -> CTree -> Unit' \
-  'scanBranchW7 : WasmEmit -> CTBranch -> Unit' \
-  'scanHeadW7 : WasmEmit -> CHead -> Unit' \
+  'seedDemandW : WasmEmit -> WasmDemand -> Unit' \
+  'let _ = if d.divGuard then setRef emit.useDivGuard True' \
   'w7LocalDecls : OrdMap Unit -> Int -> List String' \
   'w7LocalsAtDepth : OrdMap Unit -> Int -> List String' \
-  'noteW8Binop emit "/" = setRef emit.useDivGuard True' \
-  'noteW8Binop emit "%" = setRef emit.useDivGuard True' \
   'let dv = if !emit.useDivGuard then ["    (local $__sdivr i64)"] else []' \
   'let dv = if !emit.useDivGuard then ["(local $__sdivr i64)"] else []'; do
   has_wasm_pin "$required" || {
@@ -311,13 +301,46 @@ for required in \
     exit 1
   }
 done
+# The demand walk is the emit plan's; its `/` and `%` arms are the divisor demand's
+# one authority, and the emitter's seed is each seeded flag's one writer.
+for required in \
+  'wasmDemandOf : List CBind -> List CImplEntry -> (WasmDemand, List String)' \
+  'dBind : DemandAcc -> CBind -> DemandAcc' \
+  'dClause : DemandAcc -> CClause -> DemandAcc' \
+  'dImpl : DemandAcc -> CImplEntry -> DemandAcc' \
+  'dExpr : DemandAcc -> CExpr -> DemandAcc' \
+  'dAppHead : DemandAcc -> CExpr -> DemandAcc' \
+  'noteName : DemandAcc -> String -> DemandAcc' \
+  'noteBinop : DemandAcc -> String -> DemandAcc' \
+  'dArm : DemandAcc -> CArm -> DemandAcc' \
+  'dGuard : DemandAcc -> CGuard -> DemandAcc' \
+  'dStmt : DemandAcc -> CStmt -> DemandAcc' \
+  'dPat : DemandAcc -> Pat -> DemandAcc' \
+  'dTree : DemandAcc -> CTree -> DemandAcc' \
+  'dBranch : DemandAcc -> CTBranch -> DemandAcc' \
+  'dSwitchHead : DemandAcc -> CHead -> DemandAcc' \
+  'noteBinop acc "/" = { acc | seenDivGuard = True }' \
+  'noteBinop acc "%" = { acc | seenDivGuard = True }'; do
+  has_plan_pin "$required" || {
+    echo "FAIL H2B9-DIV-AUTHORITY: missing $required in emit_plan.mdk"
+    exit 1
+  }
+done
+[ "$(printf '%s' "$PLAN_FLAT" | grep -o -F 'seenDivGuard = True' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useDivGuard True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useRefBox True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.tupleArities' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'noteWasmUse emit u' | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+  echo "FAIL H2B9-DIV-AUTHORITY: expected the plan's two divisor arms and one seed writer per seeded flag"
+  exit 1
+}
 [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'w7ScopeOpen (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 10 ] &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'w7ScopeClose (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 10 ] || {
   echo "FAIL H2B9-DIV-AUTHORITY: expected ten W7 scope brackets (one per function emitter)"
   exit 1
 }
-has_wasm_pin 'scanExprW7 emit (CFieldAccess ex _ _ _) = scanExprW7 emit ex' &&
-  ! grep -A 1 -F 'scanExprW7 emit (CRecord _ fields) =' "$WASM_SRC" | grep -F 'useRecUpdate' >/dev/null || {
+has_plan_pin 'dExpr acc (CFieldAccess ex _ _ _) = dExpr acc ex' &&
+  ! grep -A 1 -F 'dExpr acc (CRecord _ fields) =' "$PLAN_SRC" | grep -F 'useRecUpdate' >/dev/null || {
   echo "FAIL H2B9-RECUPDATE-NEAREST-MISS: plain record construction/access changed authority"
   exit 1
 }
@@ -326,7 +349,7 @@ for required in \
   'useRng = Ref' \
   'useHash : Ref Bool' \
   'useHash = Ref' \
-  'noteW8Extern emit name = forEachU (u => noteWasmUse emit u) (wasmUses name)' \
+  'let _ = forEachU (u => noteWasmUse emit u) d.uses' \
   'noteWasmUse emit UseRng = setRef emit.useRng True' \
   'noteWasmUse emit UseHash = setRef emit.useHash True' \
   '|| !emit.useRng || !emit.useHash || !emit.useFloat'; do
@@ -335,6 +358,10 @@ for required in \
     exit 1
   }
 done
+has_plan_pin 'noteName acc name = walkEach noteKey (walkEach noteUse acc (wasmUses name)) (wasmHostKeys name)' || {
+  echo "FAIL H2B9-RNG-HASH-AUTHORITY: the plan no longer reads an extern's demands from the catalog"
+  exit 1
+}
 # X-W.H: the fifteen module-level cells that used to be listed here are all lifted onto
 # WasmEmit, so the emitter's ambient authority set is EMPTY — the same count llvm_emit.mdk
 # has always had.  A new top-level `name : Ref …` in wasm_emit.mdk is a regression: it
@@ -626,36 +653,28 @@ if grep -E '^_?useMathRef[[:space:]]*[:=]|setRef (_?useMathRef)' "$WASM_SRC" >/d
   echo "FAIL H2B-LR-AUTHORITY-SET: retired Math ambient authority remains"
   exit 1
 fi
-for required in \
-  'useMath : Ref Bool' \
-  'useMath = Ref'; do
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F -- "$required" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
-    echo "FAIL H2B-LR-MATH-CARRIER: missing or duplicate $required"
-    exit 1
-  }
-done
 # The Math host-import name set (the 17 libm externs lowered to a JS Math.* import)
 # and its Float cofactor are catalog data, asserted in
-# compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
-MATH_IMPORT_LINE="$(grep -n -F 'mathHostImportLines else []' "$WASM_SRC" | cut -d: -f1)"
+# compiler/backend/extern_catalog_test.mdk (b).  Each libm import is its extern's
+# own host key, declared from the plan's keys, so the demand has no carrier flag.
+MATH_IMPORT_LINE="$(grep -n -F 'hostImportLines plan.hostKeys' "$WASM_SRC" | cut -d: -f1)"
 FLOAT_IMPORT_LINE="$(grep -n -F 'floatFmtImportLines else []' "$WASM_SRC" | cut -d: -f1)"
 FLOATSTR_IMPORT_LINE="$(grep -n -F 'floatStrImportLines else []' "$WASM_SRC" | cut -d: -f1)"
-has_wasm_pin 'noteWasmUse emit UseMath = setRef emit.useMath True' &&
+has_wasm_pin 'noteWasmUse _ UseMath = ()' &&
   has_wasm_pin 'noteWasmUse emit UseFloat = setRef emit.useFloat True' &&
   [ -n "$MATH_IMPORT_LINE" ] &&
   [ -n "$FLOAT_IMPORT_LINE" ] &&
   [ -n "$FLOATSTR_IMPORT_LINE" ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'mathHostImportLines else []' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'hostImportLines plan.hostKeys' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'floatFmtImportLines else []' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'floatStrImportLines else []' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$FLOAT_IMPORT_LINE" -lt "$MATH_IMPORT_LINE" ] &&
   [ "$MATH_IMPORT_LINE" -lt "$FLOATSTR_IMPORT_LINE" ] &&
-  ! grep -E 'setRef emit\.useMath False|setRef useMathRef False' "$WASM_SRC" >/dev/null || {
+  ! grep -E 'setRef emit\.useMath|setRef useMathRef False|useMath :' "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B-LR-MATH-ROUTES: cofactor, import order, or reset changed"
     exit 1
   }
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useMath True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useMath.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+[ "$(printf '%s' "$PLAN_FLAT" | grep -o -F 'hostKeys = keys,' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL H2B-LR-MATH-ROUTES: writer/reader cardinality or fresh route changed"

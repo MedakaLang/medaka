@@ -1,5 +1,5 @@
 # META
-source_lines=2537
+source_lines=2556
 stages=DESUGAR,MARK
 # SOURCE
 -- WasmGC module PREAMBLE — the fixed lines that head every emitted WAT module
@@ -991,7 +991,7 @@ strJoinRuntimeLines = [
 --   • a list (i31 Nil or $C_Cons) → rebuild the left spine onto `b` (list append).
 -- List append walks the left list into a fixed array, then conses back-to-front
 -- onto `b` so cell identity/order matches the W7 cons rep.  Gated by useStrLeafRef
--- && useListRef (both forced by `noteW8Binop "++"`), so $str + $C_Cons are in scope.
+-- && useListRef (both demanded by `++` in the plan's walk, `emit_plan.noteBinop`), so $str + $C_Cons are in scope.
 export
 appendRuntimeLines : List String
 appendRuntimeLines = [
@@ -1660,39 +1660,71 @@ floatFmtImportLines = [
   "  (import \"env\" \"mdk_float_fmt_byte\" (func $mdk_float_fmt_byte (param i32) (result i32)))"
 ]
 
--- #101: the libm transcendental (+ pow/atan2/hypot) math externs.  WasmGC has no libm,
--- so — like the floatToString formatter — each is a HOST IMPORT backed by JS
--- `Math.*` (byte-identical to C libm on the values these fixtures exercise; sub-ULP
--- transcendental divergences could still surface in a printed digit since the shortest-
--- round-trip formatter (unlike the old %.12g truncation) no longer masks them, and if
--- printed-divergent, are ledgered as native:libm-vs-jsmath-ulp — see
--- test/engine_divergence.txt).  IEEE-exact ops (sqrt/floor/ceil/trunc/round) and
--- floatRem lower to native f64 opcodes / $mdk_round / $mdk_float_rem — NOT host imports.
--- Every JS harness that instantiates a module (test/wasm/run.js + the playground
--- worker.js / compile.mjs / *_test.mjs) provides these $mdk_<name> functions.
--- Gated on WasmEmit.useMath (set by noteW8Extern when a host-math extern is referenced).
+-- One `env` import per host key of `EmitPlan.hostKeys`, in the plan's order.  A
+-- key is an import some reached extern's lowering calls, at its own call site or
+-- in a WAT runtime helper (`extern_catalog.wasmHostKeys`), so a module imports
+-- exactly what it calls.
+--
+-- #101: WasmGC has no libm, so the transcendentals and pow/atan2/hypot are host
+-- imports backed by JS `Math.*`: byte-identical to C libm on the values the
+-- fixtures exercise, with any printed sub-ULP divergence ledgered as
+-- native:libm-vs-jsmath-ulp (test/engine_divergence.txt).  The IEEE-exact ops
+-- (sqrt/floor/ceil/trunc/round) and floatRem lower to f64 opcodes, $mdk_round
+-- and $mdk_float_rem, not host imports.  The clock reads are seconds as f64 and
+-- the sleep milliseconds as i64 (design WA-1); a host binds a non-positive sleep
+-- to a no-op.  `mdk_exit` flushes and exits, so its call site is followed by
+-- `unreachable`.  `stderrByteKey` is skipped: the module declares it once, at
+-- the late trap-import site, where body emission can add the coded traps' need.
 export
-mathHostImportLines : List String
-mathHostImportLines = [
-  "  ;; -- #101 libm math host seam (JS Math.*, see run.js / worker.js) --",
-  "  (import \"env\" \"mdk_cbrt\" (func $mdk_cbrt (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_exp\" (func $mdk_exp (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_log\" (func $mdk_log (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_log2\" (func $mdk_log2 (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_log10\" (func $mdk_log10 (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_sin\" (func $mdk_sin (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_cos\" (func $mdk_cos (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_tan\" (func $mdk_tan (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_asin\" (func $mdk_asin (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_acos\" (func $mdk_acos (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_atan\" (func $mdk_atan (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_sinh\" (func $mdk_sinh (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_cosh\" (func $mdk_cosh (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_tanh\" (func $mdk_tanh (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_pow\" (func $mdk_pow (param f64) (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_atan2\" (func $mdk_atan2 (param f64) (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_hypot\" (func $mdk_hypot (param f64) (param f64) (result f64)))"
-]
+hostImportLines : List String -> List String
+hostImportLines [] = []
+hostImportLines (key :: rest) =
+  if key == stderrByteKey then
+    hostImportLines rest
+  else
+    hostImportLine key :: hostImportLines rest
+
+-- the stderr byte writer's host key (`stderrByteImportLines`)
+export
+stderrByteKey : String
+stderrByteKey = "mdk_write_err_byte"
+
+hostImportLine : String -> String
+hostImportLine key =
+  "  (import \"env\" \"\{key}\" (func $\{key}\{hostImportSig key}))"
+
+-- the signature each host binds a key with, written after the function's name
+hostImportSig : String -> String
+hostImportSig "mdk_exit" = " (param i32)"
+hostImportSig "mdk_wall_time_sec" = " (result f64)"
+hostImportSig "mdk_monotonic_sec" = " (result f64)"
+hostImportSig "mdk_sleep_ms" = " (param i64)"
+hostImportSig "mdk_cbrt" = unaryF64Sig
+hostImportSig "mdk_exp" = unaryF64Sig
+hostImportSig "mdk_log" = unaryF64Sig
+hostImportSig "mdk_log2" = unaryF64Sig
+hostImportSig "mdk_log10" = unaryF64Sig
+hostImportSig "mdk_sin" = unaryF64Sig
+hostImportSig "mdk_cos" = unaryF64Sig
+hostImportSig "mdk_tan" = unaryF64Sig
+hostImportSig "mdk_asin" = unaryF64Sig
+hostImportSig "mdk_acos" = unaryF64Sig
+hostImportSig "mdk_atan" = unaryF64Sig
+hostImportSig "mdk_sinh" = unaryF64Sig
+hostImportSig "mdk_cosh" = unaryF64Sig
+hostImportSig "mdk_tanh" = unaryF64Sig
+hostImportSig "mdk_pow" = binaryF64Sig
+hostImportSig "mdk_atan2" = binaryF64Sig
+hostImportSig "mdk_hypot" = binaryF64Sig
+hostImportSig key =
+  panic
+    "internal error: host key \{key} has no wasm import signature in wasm_preamble.mdk"
+
+unaryF64Sig : String
+unaryF64Sig = " (param f64) (result f64)"
+
+binaryF64Sig : String
+binaryF64Sig = " (param f64) (param f64) (result f64)"
 
 -- stringToFloat host seam: the guest pushes the string's bytes via the path channel
 -- (mdk_path_reset + mdk_path_push, shared with IO) then calls mdk_str_to_float, which
@@ -1703,7 +1735,7 @@ mathHostImportLines = [
 -- None and lost it.  The host parser (test/wasm/run.js + playground/worker.js, kept
 -- byte-identical per WH3) reproduces medaka_rt.c mdk_string_to_float: strtod + a full-
 -- consumption endptr check + an empty-string reject. Gated on per-emission
--- WasmEmit.useFloatStr demand (set by noteW8Extern when "stringToFloat" is referenced).
+-- WasmEmit.useFloatStr demand (the catalog demand of "stringToFloat").
 export
 floatStrImportLines : List String
 floatStrImportLines = [
@@ -1884,7 +1916,7 @@ randomFloatRuntimeLines = [
   "          (f64.const 2.0))", "        (f64.const 1.0))))"
 ]
 
--- ── W12 IO host surface (readFile / fileExists / args / getEnv / exit) ───────
+-- ── W12 IO host surface (readFile / fileExists / args / getEnv) ──────────────
 -- The LAST emitter-gap category: the IO externs.  GC refs ($str) cannot cross the
 -- wasm import boundary, so strings are marshaled through a byte-at-a-time channel —
 -- exactly the length+byte protocol the floatToString host seam uses (run.js fmt12g).
@@ -1905,8 +1937,7 @@ randomFloatRuntimeLines = [
 --     wrap Some (struct.new $C_Some, ord 0) / None (i31 ord 1).
 --   args      : mdk_args_count(); per i build a $str from mdk_arg_len(i)/mdk_arg_byte(i,j),
 --     fold a Cons chain right-to-left ending in Nil (i31 ord 1).
---   exit      : mdk_exit(i32) host import then `unreachable` (stack-polymorphic).
--- Gated on useIORef (set by noteW8Extern when any IO extern is referenced).
+-- Gated on WasmEmit.useIO (the catalog demand of every IO extern).
 export
 ioHostImportLines : List String
 ioHostImportLines = [
@@ -1920,19 +1951,7 @@ ioHostImportLines = [
   "  (import \"env\" \"mdk_arg_len\" (func $mdk_arg_len (param i32) (result i32)))",
   "  (import \"env\" \"mdk_arg_byte\" (func $mdk_arg_byte (param i32) (param i32) (result i32)))",
   "  (import \"env\" \"mdk_result_len\" (func $mdk_result_len (result i32)))",
-  "  (import \"env\" \"mdk_result_byte\" (func $mdk_result_byte (param i32) (result i32)))",
-  "  (import \"env\" \"mdk_exit\" (func $mdk_exit (param i32)))"
-]
-
--- The clock host surface (design WA-1): reads in seconds as f64, a sleep in
--- milliseconds as i64.  A host binds a non-positive sleep to a no-op.
-export
-clockHostImportLines : List String
-clockHostImportLines = [
-  "  ;; -- clock host surface (wallTimeSec / monotonicSec / sleepMs) --",
-  "  (import \"env\" \"mdk_wall_time_sec\" (func $mdk_wall_time_sec (result f64)))",
-  "  (import \"env\" \"mdk_monotonic_sec\" (func $mdk_monotonic_sec (result f64)))",
-  "  (import \"env\" \"mdk_sleep_ms\" (func $mdk_sleep_ms (param i64)))"
+  "  (import \"env\" \"mdk_result_byte\" (func $mdk_result_byte (param i32) (result i32)))"
 ]
 
 -- readFile's Err suffix for contents that are not UTF-8, the text of
@@ -2314,7 +2333,7 @@ utf8LossyRuntimeLines = [
 -- mdk_utf8_decode / mdk_utf8_encode).  A Char is an i31 codepoint; an `Array Char` is
 -- the §3.3 $arr = (array (mut (ref eq))) holding `cp_count` i31s.  Emitted when the
 -- program uses stringToChars/stringFromChars (`WasmEmit.useStrCodec`); needs the $str rep
--- ($u8arr) AND the $arr rep (both forced by noteW8Extern).
+-- ($u8arr) AND the $arr rep (both demanded with it in the catalog).
 --   $mdk_str_to_chars : decode each UTF-8 codepoint (lead byte <0x80 → 1B; <0xE0 → 2B
 --     & 0x1F; <0xF0 → 3B & 0x0F; else 4B & 0x07; each continuation byte & 0x3F, shift
 --     << 6 and OR), pushing `ref.i31 cp` into a fresh $arr of length cp_count.
@@ -2671,8 +2690,40 @@ charFromCodeRuntimeLines = [
 (DFunDef false "charClassRuntimeLines" () (EListLit (ELit (LString "  ;; ── W11b ASCII char classification + case mapping (byte-identical to medaka_rt.c) ──")) (ELit (LString "  (func $mdk_char_is_alpha (param $c i32) (result i32)")) (ELit (LString "    (i32.or")) (ELit (LString "      (i32.and (i32.ge_u (local.get $c) (i32.const 97)) (i32.le_u (local.get $c) (i32.const 122)))")) (ELit (LString "      (i32.and (i32.ge_u (local.get $c) (i32.const 65)) (i32.le_u (local.get $c) (i32.const 90)))))")) (ELit (LString "  (func $mdk_char_is_space (param $c i32) (result i32)")) (ELit (LString "    (i32.or")) (ELit (LString "      (i32.eq (local.get $c) (i32.const 32))")) (ELit (LString "      (i32.and (i32.ge_u (local.get $c) (i32.const 9)) (i32.le_u (local.get $c) (i32.const 13)))))")) (ELit (LString "  (func $mdk_char_is_upper (param $c i32) (result i32)")) (ELit (LString "    (i32.and (i32.ge_u (local.get $c) (i32.const 65)) (i32.le_u (local.get $c) (i32.const 90))))")) (ELit (LString "  (func $mdk_char_is_lower (param $c i32) (result i32)")) (ELit (LString "    (i32.and (i32.ge_u (local.get $c) (i32.const 97)) (i32.le_u (local.get $c) (i32.const 122))))")) (ELit (LString "  ;; charIsPunct: exact set from medaka_rt.c switch — Unicode Pc/Pd/Pe/Pf/Pi/Po/Ps ASCII.")) (ELit (LString "  ;; Included: ! \" # % & ' ( ) * , - . / : ; ? @ [ \\ ] _ { }")) (ELit (LString "  ;; Excluded ($+<=>^`|~): those are Unicode symbols (Sm/Sc/Sk), not punctuation.")) (ELit (LString "  ;; Right-associative OR chain over 23 chars = 22 i32.or nodes.")) (ELit (LString "  (func $mdk_char_is_punct (param $c i32) (result i32)")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 33))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 34))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 35))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 37))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 38))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 39))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 40))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 41))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 42))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 44))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 45))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 46))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 47))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 58))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 59))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 63))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 64))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 91))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 92))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 93))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 95))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 123))")) (ELit (LString "           (i32.eq (local.get $c) (i32.const 125))")) (ELit (LString "    )))))))))))))))))))))))")) (ELit (LString "  (func $mdk_char_to_upper (param $c i32) (result i32)")) (ELit (LString "    (if (result i32)")) (ELit (LString "      (i32.and (i32.ge_u (local.get $c) (i32.const 97)) (i32.le_u (local.get $c) (i32.const 122)))")) (ELit (LString "      (then (i32.sub (local.get $c) (i32.const 32)))")) (ELit (LString "      (else (local.get $c))))")) (ELit (LString "  (func $mdk_char_to_lower (param $c i32) (result i32)")) (ELit (LString "    (if (result i32)")) (ELit (LString "      (i32.and (i32.ge_u (local.get $c) (i32.const 65)) (i32.le_u (local.get $c) (i32.const 90)))")) (ELit (LString "      (then (i32.add (local.get $c) (i32.const 32)))")) (ELit (LString "      (else (local.get $c))))"))))
 (DTypeSig true "floatFmtImportLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "floatFmtImportLines" () (EListLit (ELit (LString "  ;; -- W8b floatToString host seam (shortest-round-trip since #57 — reproduced JS-side, see run.js) --")) (ELit (LString "  (import \"env\" \"mdk_float_fmt\" (func $mdk_float_fmt (param f64) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_float_fmt_byte\" (func $mdk_float_fmt_byte (param i32) (result i32)))"))))
-(DTypeSig true "mathHostImportLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "mathHostImportLines" () (EListLit (ELit (LString "  ;; -- #101 libm math host seam (JS Math.*, see run.js / worker.js) --")) (ELit (LString "  (import \"env\" \"mdk_cbrt\" (func $mdk_cbrt (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_exp\" (func $mdk_exp (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_log\" (func $mdk_log (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_log2\" (func $mdk_log2 (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_log10\" (func $mdk_log10 (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_sin\" (func $mdk_sin (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_cos\" (func $mdk_cos (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_tan\" (func $mdk_tan (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_asin\" (func $mdk_asin (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_acos\" (func $mdk_acos (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_atan\" (func $mdk_atan (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_sinh\" (func $mdk_sinh (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_cosh\" (func $mdk_cosh (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_tanh\" (func $mdk_tanh (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_pow\" (func $mdk_pow (param f64) (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_atan2\" (func $mdk_atan2 (param f64) (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_hypot\" (func $mdk_hypot (param f64) (param f64) (result f64)))"))))
+(DTypeSig true "hostImportLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "hostImportLines" ((PList)) (EListLit))
+(DFunDef false "hostImportLines" ((PCons (PVar "key") (PVar "rest"))) (EIf (EBinOp "==" (EVar "key") (EVar "stderrByteKey")) (EApp (EVar "hostImportLines") (EVar "rest")) (EBinOp "::" (EApp (EVar "hostImportLine") (EVar "key")) (EApp (EVar "hostImportLines") (EVar "rest")))))
+(DTypeSig true "stderrByteKey" (TyCon "String"))
+(DFunDef false "stderrByteKey" () (ELit (LString "mdk_write_err_byte")))
+(DTypeSig false "hostImportLine" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "hostImportLine" ((PVar "key")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (import \"env\" \"")) (EApp (EVar "display") (EVar "key"))) (ELit (LString "\" (func $"))) (EApp (EVar "display") (EVar "key"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "hostImportSig") (EVar "key")))) (ELit (LString "))"))))
+(DTypeSig false "hostImportSig" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_exit"))) (ELit (LString " (param i32)")))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_wall_time_sec"))) (ELit (LString " (result f64)")))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_monotonic_sec"))) (ELit (LString " (result f64)")))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_sleep_ms"))) (ELit (LString " (param i64)")))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_cbrt"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_exp"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_log"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_log2"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_log10"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_sin"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_cos"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_tan"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_asin"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_acos"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_atan"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_sinh"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_cosh"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_tanh"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_pow"))) (EVar "binaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_atan2"))) (EVar "binaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_hypot"))) (EVar "binaryF64Sig"))
+(DFunDef false "hostImportSig" ((PVar "key")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: host key ")) (EApp (EVar "display") (EVar "key"))) (ELit (LString " has no wasm import signature in wasm_preamble.mdk")))))
+(DTypeSig false "unaryF64Sig" (TyCon "String"))
+(DFunDef false "unaryF64Sig" () (ELit (LString " (param f64) (result f64)")))
+(DTypeSig false "binaryF64Sig" (TyCon "String"))
+(DFunDef false "binaryF64Sig" () (ELit (LString " (param f64) (param f64) (result f64)")))
 (DTypeSig true "floatStrImportLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "floatStrImportLines" () (EListLit (ELit (LString "  ;; -- stringToFloat host seam (strtod acceptance set JS-side, see run.js) --")) (ELit (LString "  (import \"env\" \"mdk_str_to_float\" (func $mdk_str_to_float (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_str_to_float_ok\" (func $mdk_str_to_float_ok (result i32)))"))))
 (DTypeSig true "floatStrRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -2686,9 +2737,7 @@ charFromCodeRuntimeLines = [
 (DTypeSig true "randomFloatRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "randomFloatRuntimeLines" () (EListLit (ELit (LString "  ;; randomFloat : SplitMix64 -> f64 in [-1,1) (NOTE the -1 offset — see medaka_rt.c).")) (ELit (LString "  (func $mdk_random_float (result (ref $float))")) (ELit (LString "    (struct.new $float")) (ELit (LString "      (f64.sub")) (ELit (LString "        (f64.mul")) (ELit (LString "          (f64.mul (f64.convert_i64_u (i64.shr_u (call $mdk_next_u64) (i64.const 11)))")) (ELit (LString "                   (f64.const 1.1102230246251565e-16))")) (ELit (LString "          (f64.const 2.0))")) (ELit (LString "        (f64.const 1.0))))"))))
 (DTypeSig true "ioHostImportLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "ioHostImportLines" () (EListLit (ELit (LString "  ;; -- W12 IO host surface (byte-channel marshaling, see run.js) --")) (ELit (LString "  (import \"env\" \"mdk_path_reset\" (func $mdk_path_reset))")) (ELit (LString "  (import \"env\" \"mdk_path_push\" (func $mdk_path_push (param i32)))")) (ELit (LString "  (import \"env\" \"mdk_read_file\" (func $mdk_read_file (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_file_exists\" (func $mdk_file_exists (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_get_env\" (func $mdk_get_env (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_args_count\" (func $mdk_args_count (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_arg_len\" (func $mdk_arg_len (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_arg_byte\" (func $mdk_arg_byte (param i32) (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_result_len\" (func $mdk_result_len (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_result_byte\" (func $mdk_result_byte (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_exit\" (func $mdk_exit (param i32)))"))))
-(DTypeSig true "clockHostImportLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "clockHostImportLines" () (EListLit (ELit (LString "  ;; -- clock host surface (wallTimeSec / monotonicSec / sleepMs) --")) (ELit (LString "  (import \"env\" \"mdk_wall_time_sec\" (func $mdk_wall_time_sec (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_monotonic_sec\" (func $mdk_monotonic_sec (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_sleep_ms\" (func $mdk_sleep_ms (param i64)))"))))
+(DFunDef false "ioHostImportLines" () (EListLit (ELit (LString "  ;; -- W12 IO host surface (byte-channel marshaling, see run.js) --")) (ELit (LString "  (import \"env\" \"mdk_path_reset\" (func $mdk_path_reset))")) (ELit (LString "  (import \"env\" \"mdk_path_push\" (func $mdk_path_push (param i32)))")) (ELit (LString "  (import \"env\" \"mdk_read_file\" (func $mdk_read_file (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_file_exists\" (func $mdk_file_exists (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_get_env\" (func $mdk_get_env (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_args_count\" (func $mdk_args_count (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_arg_len\" (func $mdk_arg_len (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_arg_byte\" (func $mdk_arg_byte (param i32) (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_result_len\" (func $mdk_result_len (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_result_byte\" (func $mdk_result_byte (param i32) (result i32)))"))))
 (DTypeSig false "notUtf8SuffixWat" (TyCon "String"))
 (DFunDef false "notUtf8SuffixWat" () (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (ELit (LString ": not valid UTF-8 (use readFileBytes for raw bytes)")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(array.new_fixed $u8arr ")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "arrayLength") (EVar "cs"))))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "asciiConstsW") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))) (ELit (LString ")"))))))
 (DTypeSig false "asciiConstsW" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
@@ -2843,8 +2892,40 @@ charFromCodeRuntimeLines = [
 (DFunDef false "charClassRuntimeLines" () (EListLit (ELit (LString "  ;; ── W11b ASCII char classification + case mapping (byte-identical to medaka_rt.c) ──")) (ELit (LString "  (func $mdk_char_is_alpha (param $c i32) (result i32)")) (ELit (LString "    (i32.or")) (ELit (LString "      (i32.and (i32.ge_u (local.get $c) (i32.const 97)) (i32.le_u (local.get $c) (i32.const 122)))")) (ELit (LString "      (i32.and (i32.ge_u (local.get $c) (i32.const 65)) (i32.le_u (local.get $c) (i32.const 90)))))")) (ELit (LString "  (func $mdk_char_is_space (param $c i32) (result i32)")) (ELit (LString "    (i32.or")) (ELit (LString "      (i32.eq (local.get $c) (i32.const 32))")) (ELit (LString "      (i32.and (i32.ge_u (local.get $c) (i32.const 9)) (i32.le_u (local.get $c) (i32.const 13)))))")) (ELit (LString "  (func $mdk_char_is_upper (param $c i32) (result i32)")) (ELit (LString "    (i32.and (i32.ge_u (local.get $c) (i32.const 65)) (i32.le_u (local.get $c) (i32.const 90))))")) (ELit (LString "  (func $mdk_char_is_lower (param $c i32) (result i32)")) (ELit (LString "    (i32.and (i32.ge_u (local.get $c) (i32.const 97)) (i32.le_u (local.get $c) (i32.const 122))))")) (ELit (LString "  ;; charIsPunct: exact set from medaka_rt.c switch — Unicode Pc/Pd/Pe/Pf/Pi/Po/Ps ASCII.")) (ELit (LString "  ;; Included: ! \" # % & ' ( ) * , - . / : ; ? @ [ \\ ] _ { }")) (ELit (LString "  ;; Excluded ($+<=>^`|~): those are Unicode symbols (Sm/Sc/Sk), not punctuation.")) (ELit (LString "  ;; Right-associative OR chain over 23 chars = 22 i32.or nodes.")) (ELit (LString "  (func $mdk_char_is_punct (param $c i32) (result i32)")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 33))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 34))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 35))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 37))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 38))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 39))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 40))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 41))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 42))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 44))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 45))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 46))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 47))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 58))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 59))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 63))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 64))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 91))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 92))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 93))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 95))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 123))")) (ELit (LString "           (i32.eq (local.get $c) (i32.const 125))")) (ELit (LString "    )))))))))))))))))))))))")) (ELit (LString "  (func $mdk_char_to_upper (param $c i32) (result i32)")) (ELit (LString "    (if (result i32)")) (ELit (LString "      (i32.and (i32.ge_u (local.get $c) (i32.const 97)) (i32.le_u (local.get $c) (i32.const 122)))")) (ELit (LString "      (then (i32.sub (local.get $c) (i32.const 32)))")) (ELit (LString "      (else (local.get $c))))")) (ELit (LString "  (func $mdk_char_to_lower (param $c i32) (result i32)")) (ELit (LString "    (if (result i32)")) (ELit (LString "      (i32.and (i32.ge_u (local.get $c) (i32.const 65)) (i32.le_u (local.get $c) (i32.const 90)))")) (ELit (LString "      (then (i32.add (local.get $c) (i32.const 32)))")) (ELit (LString "      (else (local.get $c))))"))))
 (DTypeSig true "floatFmtImportLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "floatFmtImportLines" () (EListLit (ELit (LString "  ;; -- W8b floatToString host seam (shortest-round-trip since #57 — reproduced JS-side, see run.js) --")) (ELit (LString "  (import \"env\" \"mdk_float_fmt\" (func $mdk_float_fmt (param f64) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_float_fmt_byte\" (func $mdk_float_fmt_byte (param i32) (result i32)))"))))
-(DTypeSig true "mathHostImportLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "mathHostImportLines" () (EListLit (ELit (LString "  ;; -- #101 libm math host seam (JS Math.*, see run.js / worker.js) --")) (ELit (LString "  (import \"env\" \"mdk_cbrt\" (func $mdk_cbrt (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_exp\" (func $mdk_exp (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_log\" (func $mdk_log (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_log2\" (func $mdk_log2 (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_log10\" (func $mdk_log10 (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_sin\" (func $mdk_sin (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_cos\" (func $mdk_cos (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_tan\" (func $mdk_tan (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_asin\" (func $mdk_asin (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_acos\" (func $mdk_acos (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_atan\" (func $mdk_atan (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_sinh\" (func $mdk_sinh (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_cosh\" (func $mdk_cosh (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_tanh\" (func $mdk_tanh (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_pow\" (func $mdk_pow (param f64) (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_atan2\" (func $mdk_atan2 (param f64) (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_hypot\" (func $mdk_hypot (param f64) (param f64) (result f64)))"))))
+(DTypeSig true "hostImportLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "hostImportLines" ((PList)) (EListLit))
+(DFunDef false "hostImportLines" ((PCons (PVar "key") (PVar "rest"))) (EIf (EBinOp "==" (EVar "key") (EVar "stderrByteKey")) (EApp (EVar "hostImportLines") (EVar "rest")) (EBinOp "::" (EApp (EVar "hostImportLine") (EVar "key")) (EApp (EVar "hostImportLines") (EVar "rest")))))
+(DTypeSig true "stderrByteKey" (TyCon "String"))
+(DFunDef false "stderrByteKey" () (ELit (LString "mdk_write_err_byte")))
+(DTypeSig false "hostImportLine" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "hostImportLine" ((PVar "key")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (import \"env\" \"")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString "\" (func $"))) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "hostImportSig") (EVar "key")))) (ELit (LString "))"))))
+(DTypeSig false "hostImportSig" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_exit"))) (ELit (LString " (param i32)")))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_wall_time_sec"))) (ELit (LString " (result f64)")))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_monotonic_sec"))) (ELit (LString " (result f64)")))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_sleep_ms"))) (ELit (LString " (param i64)")))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_cbrt"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_exp"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_log"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_log2"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_log10"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_sin"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_cos"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_tan"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_asin"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_acos"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_atan"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_sinh"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_cosh"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_tanh"))) (EVar "unaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_pow"))) (EVar "binaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_atan2"))) (EVar "binaryF64Sig"))
+(DFunDef false "hostImportSig" ((PLit (LString "mdk_hypot"))) (EVar "binaryF64Sig"))
+(DFunDef false "hostImportSig" ((PVar "key")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: host key ")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString " has no wasm import signature in wasm_preamble.mdk")))))
+(DTypeSig false "unaryF64Sig" (TyCon "String"))
+(DFunDef false "unaryF64Sig" () (ELit (LString " (param f64) (result f64)")))
+(DTypeSig false "binaryF64Sig" (TyCon "String"))
+(DFunDef false "binaryF64Sig" () (ELit (LString " (param f64) (param f64) (result f64)")))
 (DTypeSig true "floatStrImportLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "floatStrImportLines" () (EListLit (ELit (LString "  ;; -- stringToFloat host seam (strtod acceptance set JS-side, see run.js) --")) (ELit (LString "  (import \"env\" \"mdk_str_to_float\" (func $mdk_str_to_float (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_str_to_float_ok\" (func $mdk_str_to_float_ok (result i32)))"))))
 (DTypeSig true "floatStrRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -2858,9 +2939,7 @@ charFromCodeRuntimeLines = [
 (DTypeSig true "randomFloatRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "randomFloatRuntimeLines" () (EListLit (ELit (LString "  ;; randomFloat : SplitMix64 -> f64 in [-1,1) (NOTE the -1 offset — see medaka_rt.c).")) (ELit (LString "  (func $mdk_random_float (result (ref $float))")) (ELit (LString "    (struct.new $float")) (ELit (LString "      (f64.sub")) (ELit (LString "        (f64.mul")) (ELit (LString "          (f64.mul (f64.convert_i64_u (i64.shr_u (call $mdk_next_u64) (i64.const 11)))")) (ELit (LString "                   (f64.const 1.1102230246251565e-16))")) (ELit (LString "          (f64.const 2.0))")) (ELit (LString "        (f64.const 1.0))))"))))
 (DTypeSig true "ioHostImportLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "ioHostImportLines" () (EListLit (ELit (LString "  ;; -- W12 IO host surface (byte-channel marshaling, see run.js) --")) (ELit (LString "  (import \"env\" \"mdk_path_reset\" (func $mdk_path_reset))")) (ELit (LString "  (import \"env\" \"mdk_path_push\" (func $mdk_path_push (param i32)))")) (ELit (LString "  (import \"env\" \"mdk_read_file\" (func $mdk_read_file (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_file_exists\" (func $mdk_file_exists (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_get_env\" (func $mdk_get_env (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_args_count\" (func $mdk_args_count (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_arg_len\" (func $mdk_arg_len (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_arg_byte\" (func $mdk_arg_byte (param i32) (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_result_len\" (func $mdk_result_len (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_result_byte\" (func $mdk_result_byte (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_exit\" (func $mdk_exit (param i32)))"))))
-(DTypeSig true "clockHostImportLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "clockHostImportLines" () (EListLit (ELit (LString "  ;; -- clock host surface (wallTimeSec / monotonicSec / sleepMs) --")) (ELit (LString "  (import \"env\" \"mdk_wall_time_sec\" (func $mdk_wall_time_sec (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_monotonic_sec\" (func $mdk_monotonic_sec (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_sleep_ms\" (func $mdk_sleep_ms (param i64)))"))))
+(DFunDef false "ioHostImportLines" () (EListLit (ELit (LString "  ;; -- W12 IO host surface (byte-channel marshaling, see run.js) --")) (ELit (LString "  (import \"env\" \"mdk_path_reset\" (func $mdk_path_reset))")) (ELit (LString "  (import \"env\" \"mdk_path_push\" (func $mdk_path_push (param i32)))")) (ELit (LString "  (import \"env\" \"mdk_read_file\" (func $mdk_read_file (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_file_exists\" (func $mdk_file_exists (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_get_env\" (func $mdk_get_env (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_args_count\" (func $mdk_args_count (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_arg_len\" (func $mdk_arg_len (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_arg_byte\" (func $mdk_arg_byte (param i32) (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_result_len\" (func $mdk_result_len (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_result_byte\" (func $mdk_result_byte (param i32) (result i32)))"))))
 (DTypeSig false "notUtf8SuffixWat" (TyCon "String"))
 (DFunDef false "notUtf8SuffixWat" () (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (ELit (LString ": not valid UTF-8 (use readFileBytes for raw bytes)")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(array.new_fixed $u8arr ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "arrayLength") (EVar "cs"))))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "asciiConstsW") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))) (ELit (LString ")"))))))
 (DTypeSig false "asciiConstsW" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
