@@ -1,7 +1,7 @@
 #!/bin/sh
 # test/arch_ratchet.sh -- architecture growth ratchet (#4200, tracking #4211).
 #
-# shell-because: compares git revisions of the PR range; a trust anchor that must not depend on the binary under test
+# shell-because: trust-anchor — compares git revisions of the PR range; must not depend on the binary under test
 #
 # Not a standalone gate: test/typecheck_compiler_source.sh calls it, so it runs in
 # the required `compiler-soundness` CI job.
@@ -17,7 +17,11 @@
 #   `Arch-Pin-Raise: <basename>: <reason>`, one per golden that rose.
 #
 # Trailers are read from commit messages of the range, never a PR body: a
-# merge_group run has no PR body.
+# merge_group run has no PR body. A trailer is a column-0 line whose reason is
+# non-empty and not the `<reason>` placeholder. The range is trusted only once no
+# commit reachable from BASE or HEAD is a shallow boundary (CI checks out at depth 1);
+# otherwise the script unshallows, and FAILs if it cannot.
+# A golden pinned at BASE and absent at HEAD needs `Arch-Pin-Raise: <basename>: <reason>`.
 #
 # BASE/HEAD/RANGE, first rule that applies:
 #   1. ARCH_RATCHET_BASE set (test hook / escape hatch): BASE=$ARCH_RATCHET_BASE,
@@ -40,12 +44,43 @@ trap 'rm -rf "$TMP"' EXIT
 
 fail() { echo "arch-ratchet: FAIL: $*" >&2; exit 1; }
 
-# Make commit $1 present, fetching it (and then more history) if needed.
+# Make commit $1 present, fetching it if needed.
 have() { git cat-file -e "$1^{commit}" 2>/dev/null; }
 ensure() {
   have "$1" && return 0
-  git fetch --no-tags --depth=200 origin "$1" >/dev/null 2>&1 || true
+  git fetch --no-tags --depth=1 origin "$1" >/dev/null 2>&1 || true
   have "$1"
+}
+
+# Event SHAs come from the environment (test hook) or else the event payload file;
+# a step-level env: block would change the gate's derived tier (diff_compiler_tier_drift).
+payload_sha() {
+  [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -r "$GITHUB_EVENT_PATH" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  jq -r "$1 // empty" "$GITHUB_EVENT_PATH" 2>/dev/null
+}
+
+# A trailer is a line at column 0: `Key:` + whitespace + a reason that is non-empty and
+# does not start with `<` (the placeholder the FAIL messages print).
+trailer_reason() { # $1 = key regex (after "^"), $2 = prefix regex to strip
+  grep -E "^$1[[:space:]]+[^[:space:]<]" "$TMP/msgs" | head -1 | sed -E "s/^$2[[:space:]]+//"
+}
+
+# History completeness. Under a shallow clone a commit's parents can be unknown, so
+# `BASE..HEAD` may include old commits (and their trailers) or miss PR commits. The
+# range is trusted only when no commit reachable from the tips is a shallow boundary.
+shallow_file="$(git rev-parse --git-path shallow)"
+complete() { # $@ = tips
+  [ -s "$shallow_file" ] || return 0
+  git rev-list "$@" > "$TMP/reach" 2>/dev/null || return 1
+  ! grep -qxFf "$shallow_file" "$TMP/reach"
+}
+make_complete() { # $@ = tips
+  complete "$@" && return 0
+  git fetch --no-tags --unshallow --filter=tree:0 origin "$@" >/dev/null 2>&1 ||
+    git fetch --no-tags --unshallow origin "$@" >/dev/null 2>&1 || true
+  complete "$@" ||
+    fail "history of $* is shallow and could not be completed; refusing to trust a partial range"
 }
 
 event="${GITHUB_EVENT_NAME:-}"
@@ -54,27 +89,23 @@ if [ -n "${ARCH_RATCHET_BASE:-}" ]; then
   HEAD="${ARCH_RATCHET_HEAD:-HEAD}"
   ensure "$BASE" || fail "base $BASE is not available"
   ensure "$HEAD" || fail "head $HEAD is not available"
+  make_complete "$BASE" "$HEAD"
 elif [ "$event" = pull_request ] || [ "$event" = merge_group ]; then
   if [ "$event" = pull_request ]; then
-    pb="${PR_BASE:-}"; HEAD="${PR_HEAD:-}"
+    pb="${PR_BASE:-$(payload_sha .pull_request.base.sha)}"; HEAD="${PR_HEAD:-$(payload_sha .pull_request.head.sha)}"
   else
-    pb="${MG_BASE:-}"; HEAD="${MG_HEAD:-}"
+    pb="${MG_BASE:-$(payload_sha .merge_group.base_sha)}"; HEAD="${MG_HEAD:-$(payload_sha .merge_group.head_sha)}"
   fi
   [ -n "$pb" ] && [ -n "$HEAD" ] ||
     fail "event $event but its payload SHAs are empty (base='$pb' head='$HEAD'); refusing to pass silently"
   ensure "$pb" || fail "event base $pb is not available after fetch"
   ensure "$HEAD" || fail "event head $HEAD is not available after fetch"
+  make_complete "$pb" "$HEAD"
   if [ "$event" = merge_group ]; then
     BASE="$pb"
   else
     BASE="$(git merge-base "$pb" "$HEAD" 2>/dev/null)"
-    n=0
-    while [ -z "$BASE" ] && [ "$n" -lt 6 ]; do
-      git fetch --no-tags --deepen=500 origin "$pb" "$HEAD" >/dev/null 2>&1 || true
-      BASE="$(git merge-base "$pb" "$HEAD" 2>/dev/null)"
-      n=$((n + 1))
-    done
-    [ -n "$BASE" ] || fail "no merge-base of $pb and $HEAD after deepening"
+    [ -n "$BASE" ] || fail "no merge-base of $pb and $HEAD"
   fi
 else
   if ! git rev-parse --verify -q origin/main >/dev/null; then
@@ -82,25 +113,28 @@ else
     exit 0
   fi
   HEAD=HEAD
+  make_complete HEAD origin/main
   BASE="$(git merge-base HEAD origin/main)" || fail "no merge-base of HEAD and origin/main"
 fi
+git merge-base --is-ancestor "$BASE" "$HEAD" 2>/dev/null ||
+  fail "base $BASE is not an ancestor of head $HEAD"
 RANGE="$BASE..$HEAD"
 
-# The range's commit messages must be walkable; a shallow boundary would hide a trailer.
-git log --pretty=%H "$RANGE" >/dev/null 2>&1 || fail "cannot walk $RANGE"
-git log --pretty=%B "$RANGE" > "$TMP/msgs" 2>/dev/null
+git log --pretty=%B "$RANGE" > "$TMP/msgs" 2>/dev/null || fail "cannot walk $RANGE"
 echo "arch-ratchet: base $BASE head $HEAD"
 
 status=0
 
 # ── Check A ────────────────────────────────────────────────────────────────
+git cat-file -e "$BASE:$TC" 2>/dev/null || fail "$TC is missing at base $BASE"
+git cat-file -e "$HEAD:$TC" 2>/dev/null || fail "$TC is missing at head $HEAD (moved or deleted?); the ratchet would measure 0"
 cl() {
   git show "$1:$TC" | awk '!/^[[:space:]]*$/ && !/^[[:space:]]*--/' | wc -l | tr -d ' '
 }
 cl_base="$(cl "$BASE")"
 cl_head="$(cl "$HEAD")"
 if [ "$cl_head" -gt "$cl_base" ]; then
-  reason="$(grep -E '^Arch-Growth-Override: .+' "$TMP/msgs" | head -1 | sed 's/^Arch-Growth-Override: //')"
+  reason="$(trailer_reason 'Arch-Growth-Override:' 'Arch-Growth-Override:')"
   if [ -n "$reason" ]; then
     echo "arch-ratchet: typecheck.mdk +$((cl_head - cl_base)) code lines, override: $reason"
   else
@@ -111,6 +145,11 @@ if [ "$cl_head" -gt "$cl_base" ]; then
 else
   echo "arch-ratchet: typecheck.mdk code lines: $cl_base -> $cl_head"
 fi
+
+pin_reason() { # $1 = golden basename
+  pat="$(printf '%s' "$1" | sed 's/[][\.*^$/]/\\&/g')"
+  trailer_reason "Arch-Pin-Raise:[[:space:]]+$pat:" "Arch-Pin-Raise:[[:space:]]+$pat:"
+}
 
 # ── Check B ────────────────────────────────────────────────────────────────
 git ls-tree --name-only "$HEAD" "$GOLD/" 2>/dev/null | grep '\.golden$' > "$TMP/goldens"
@@ -144,11 +183,10 @@ while IFS= read -r g; do
   grep "^fall$TAB" "$TMP/diff" | sed "s/^fall$TAB/arch-ratchet: $b fell: /"
   if grep -q "^rise$TAB" "$TMP/diff"; then
     if [ "$b" = hooks.golden ]; then
-      reason="$(grep -E '^Hooks-Field: .+' "$TMP/msgs" | head -1 | sed 's/^Hooks-Field: //')"
+      reason="$(trailer_reason 'Hooks-Field:' 'Hooks-Field:')"
       need="Hooks-Field: <reason>"
     else
-      pat="$(printf '%s' "$b" | sed 's/[][\.*^$/]/\\&/g')"
-      reason="$(grep -E "^Arch-Pin-Raise: $pat: .+" "$TMP/msgs" | head -1 | sed 's/^Arch-Pin-Raise: [^:]*: //')"
+      reason="$(pin_reason "$b")"
       need="Arch-Pin-Raise: $b: <reason>"
     fi
     if [ -n "$reason" ]; then
@@ -162,5 +200,20 @@ while IFS= read -r g; do
     echo "arch-ratchet: $b: no rise"
   fi
 done < "$TMP/goldens"
+
+# A golden pinned at BASE and gone at HEAD is a change to review, not a fall.
+git ls-tree --name-only "$BASE" "$GOLD/" 2>/dev/null | grep '\.golden$' > "$TMP/base_goldens"
+while IFS= read -r g; do
+  [ -n "$g" ] || continue
+  git cat-file -e "$HEAD:$g" 2>/dev/null && continue
+  b="$(basename "$g")"
+  reason="$(pin_reason "$b")"
+  if [ -n "$reason" ]; then
+    echo "arch-ratchet: $b removed, trailer reason: $reason"
+  else
+    echo "arch-ratchet: FAIL: $g is pinned at base and absent at head (deleted or renamed); needs a commit-message trailer (Arch-Pin-Raise: $b: <reason>)" >&2
+    status=1
+  fi
+done < "$TMP/base_goldens"
 
 exit "$status"
