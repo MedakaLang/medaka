@@ -1,5 +1,5 @@
 # META
-source_lines=358
+source_lines=360
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/probe_transcript.mdk — the sentinel-delimited stdout format
@@ -111,11 +111,13 @@ runtimeDependencyName nonce =
 export
 mintNonce : Unit -> <IO> String
 mintNonce _ = nonceBytes (osEntropyBytes 16) 0
+
 tokensRef : Ref (Option (String, (List Token, List (Int, Int))))
 tokensRef = Ref None
 
 -- `tokenizeWithOffsetPairs src`, held for the latest source: one probe build
 -- asks `freshProbeNonce` and `renameUserMain` about the same target text.
+export
 probeTokens : String -> (List Token, List (Int, Int))
 probeTokens src = match !tokensRef
   Some (key, toks) if key == src => toks
@@ -379,7 +381,7 @@ renameHeads n (h :: hs) (l :: ls)
 (DFunDef false "mintNonce" (PWild) (EApp (EApp (EVar "nonceBytes") (EApp (EVar "osEntropyBytes") (ELit (LInt 16)))) (ELit (LInt 0))))
 (DTypeSig false "tokensRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))))))
 (DFunDef false "tokensRef" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig false "probeTokens" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))))
+(DTypeSig true "probeTokens" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "probeTokens" ((PVar "src")) (EMatch (EUnOp "!" (EVar "tokensRef")) (arm (PCon "Some" (PTuple (PVar "key") (PVar "toks"))) ((GBool (EBinOp "==" (EVar "key") (EVar "src")))) (EVar "toks")) (arm PWild () (EBlock (DoLet false false (PVar "toks") (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tokensRef")) (EApp (EVar "Some") (ETuple (EVar "src") (EVar "toks"))))) (DoExpr (EVar "toks"))))))
 (DTypeSig false "nonceBytes" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "nonceBytes" ((PVar "bytes") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "bytes"))) (ELit (LString "")) (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "index") (EVar "bytes")) (EVar "i"))) (DoLet false false (PVar "padding") (EIf (EBinOp "<" (EVar "byte") (ELit (LInt 10))) (ELit (LString "00")) (EIf (EBinOp "<" (EVar "byte") (ELit (LInt 100))) (ELit (LString "0")) (ELit (LString ""))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "padding") (EApp (EVar "intToString") (EVar "byte"))) (EApp (EApp (EVar "nonceBytes") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))
@@ -469,7 +471,7 @@ renameHeads n (h :: hs) (l :: ls)
 (DFunDef false "mintNonce" (PWild) (EApp (EApp (EVar "nonceBytes") (EApp (EVar "osEntropyBytes") (ELit (LInt 16)))) (ELit (LInt 0))))
 (DTypeSig false "tokensRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))))))
 (DFunDef false "tokensRef" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig false "probeTokens" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))))
+(DTypeSig true "probeTokens" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "probeTokens" ((PVar "src")) (EMatch (EUnOp "!" (EVar "tokensRef")) (arm (PCon "Some" (PTuple (PVar "key") (PVar "toks"))) ((GBool (EBinOp "==" (EVar "key") (EVar "src")))) (EVar "toks")) (arm PWild () (EBlock (DoLet false false (PVar "toks") (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tokensRef")) (EApp (EVar "Some") (ETuple (EVar "src") (EVar "toks"))))) (DoExpr (EVar "toks"))))))
 (DTypeSig false "nonceBytes" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "nonceBytes" ((PVar "bytes") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "bytes"))) (ELit (LString "")) (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EMethodRef "index") (EVar "bytes")) (EVar "i"))) (DoLet false false (PVar "padding") (EIf (EBinOp "<" (EVar "byte") (ELit (LInt 10))) (ELit (LString "00")) (EIf (EBinOp "<" (EVar "byte") (ELit (LInt 100))) (ELit (LString "0")) (ELit (LString ""))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "padding") (EApp (EVar "intToString") (EVar "byte"))) (EApp (EApp (EVar "nonceBytes") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))

@@ -282,9 +282,9 @@ runTest engines runtimeP coreP target roots cases filterOpt =
           False
         -- A FILE-LEVEL parse error in the target must surface as the SAME located
         -- `file:L:C:` diagnostic `medaka check` prints — not the unlocated
-        -- `panic "parse error"` the bare `desugar (parse tsrc)` below would raise
-        -- (issue #892).  Route through the non-panicking `parseResult` first (the
-        -- exact gate `check` uses) and, on failure, render the structured
+        -- `panic "parse error"` the memoized `targetDesugared`/`targetRaw` below
+        -- would raise (issue #892).  Gate on the non-panicking `parseTargetResult`
+        -- first (the same parse `check` uses) and, on failure, render the structured
         -- `ParseError` through the shared `parseErrDiag`/`ppDiagCliSrc` machinery,
         -- returning False so the caller exits nonzero — accumulate-and-report, not
         -- panic.  (Issue #55 fixed parse errors in an individual doctest EXAMPLE;
@@ -1429,7 +1429,7 @@ reportDoctests target result =
 
 -- #2293/#2295 (a): raw-parse line lookup for `prop "…"` decls — same
 -- rationale as `testLineTests` below (the elaborated body loses its ELoc, so
--- recover each prop's line from a POSITION-preserving reparse). Matched by
+-- recover each prop's line from the located raw parse). Matched by
 -- name (not position, unlike (b)'s `test "…"` fix): props are scoped to a name
 -- match, not to (b)'s duplicate-name repair — a duplicate prop name is not
 -- this slice's problem.
@@ -1683,7 +1683,7 @@ testRowsForPins ((engine, name, line, result) :: rest) =
   (engineName engine, name, line, result) :: testRowsForPins rest
 
 -- The `test "…"` decls to evaluate: the elaborated root module's, with each
--- body's source line recovered from a position-preserving reparse.
+-- body's source line recovered from the located parse.
 rootTestsOf : Option String ->
   String ->
   List (String, List Decl) ->
@@ -1706,8 +1706,8 @@ rootTestsOf filterOpt tsrc modsM userDecls =
 nativeRawTests : String -> List (String, Int, Expr)
 nativeRawTests tsrc = collectTests (targetRaw tsrc)
 
--- Line map keyed by test name, from a POSITION-populating reparse of the source
--- (the bare `parse` used elsewhere leaves placeholder line-1 locs).
+-- Line map keyed by test name, from the located parse of the source held by
+-- `targetDesugared` (an unlocated `parse` would leave placeholder line-1 locs).
 testLineTests : String -> List (String, Int, Expr)
 testLineTests tsrc = collectTests (targetDesugared tsrc)
 

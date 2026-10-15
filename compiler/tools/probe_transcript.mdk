@@ -107,11 +107,13 @@ runtimeDependencyName nonce =
 export
 mintNonce : Unit -> <IO> String
 mintNonce _ = nonceBytes (osEntropyBytes 16) 0
+
 tokensRef : Ref (Option (String, (List Token, List (Int, Int))))
 tokensRef = Ref None
 
 -- `tokenizeWithOffsetPairs src`, held for the latest source: one probe build
 -- asks `freshProbeNonce` and `renameUserMain` about the same target text.
+export
 probeTokens : String -> (List Token, List (Int, Int))
 probeTokens src = match !tokensRef
   Some (key, toks) if key == src => toks
