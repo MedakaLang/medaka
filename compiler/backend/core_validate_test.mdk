@@ -1273,6 +1273,20 @@ test "(v) a dispatch node's evidence denotes dictionaries its callee binds" = ex
         ]
         (validateDispatchEvidence (evidenceProg (CDict "g" [RNone]))),
     ),
+    (
+      "a method occurrence naming its interface with no route is refused",
+      expectEqual
+        ["dispatch evidence: method show has no route [in main]"]
+        (validateDispatchEvidence
+          (evidenceProg (CMethod "show" (MethodEvidence "Show" 1 RNone [] [])))),
+    ),
+    (
+      "a standalone method occurrence with no interface word is not a hole",
+      expectEqual
+        []
+        (validateDispatchEvidence
+          (evidenceProg (CMethod "show" (MethodEvidence "" 1 RNone [] [])))),
+    ),
   ]
 
 -- [prog] with the prerequisite routes of every dictionary built in the method

@@ -1,5 +1,5 @@
 # META
-source_lines=5503
+source_lines=5523
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -1442,7 +1442,12 @@ applyValues v (x :: rest) = applyValues (apply v x) rest
 -- carrying the impl's own requires dicts and its supers recursively (Phase 83/84
 -- #5); RDict/RDictFwd forward the enclosing dict param in full; RProj reads a
 -- super (or, past the supers, a `requires` dictionary) out of the dictionary its
--- inner route denotes; RNone is a no-op dict.
+-- inner route denotes.  RNone is no dictionary.  The completeness judgment
+-- rejects such a slot in every program it reads (T-UNROUTED-DISPATCH, #3715), and
+-- a doctest example its injected elaboration rejects is reported without being
+-- forced (`renderOneExample`, tools/test_cmd.mdk).  A tree no judgment read (a
+-- check-rejected file's `test` blocks and props, which run untyped) can still
+-- reach here, and the slot stops evaluation rather than standing in.
 export
 dictOfRoute : EvalEnv (Value e) -> Route -> <e> Value e
 dictOfRoute env (RKey key reqs sups) =
@@ -1454,7 +1459,9 @@ dictOfRoute env (RDictFwd d) = match lookupEnv env d
   VDict key reqs sups => VDict key reqs sups
   _ => VDict "" [] []
 dictOfRoute env (RProj r path) = projectDict (dictOfRoute env r) path
-dictOfRoute _ RNone = VDict "" [] []
+dictOfRoute _ RNone =
+  panic
+    "an unrouted dictionary slot reached evaluation: the program does not type-check (T-UNROUTED-DISPATCH, #3715)"
 -- S-1: an RLocal route's OWN dicts (the shadowing standalone's `=>` constraints) are
 -- applied by evalMethodAt's RLocal arm via applyDicts — they are the call's leading
 -- dict ARGS, not a dict witness FOR this route.  So as a *witness* RLocal is still the
@@ -1483,9 +1490,10 @@ methodAtNarrow : EvalEnv (Value e) ->
   Value e ->
   Route ->
   <e> (Value e, List (Value e))
--- RNone is "typecheck could not key this occurrence": the value is left for arg-tag
--- fallback.  (A sibling call inside an interface default is routed to the body's
--- receiver, never RNone — see `inheritedDefaultEntries`.)
+-- RNone on an occurrence with no interface word leaves the value for arg-tag
+-- dispatch: that occurrence denotes a standalone.  An admitted-set occurrence check
+-- accepts carries its selecting declaration's word.  An occurrence that names its
+-- interface stops at `requireMethodRoute`.
 methodAtNarrow _ _ v RNone = (v, [])
 methodAtNarrow env method v (RKey key _ _) = (narrowMethod env method v key, [])
 -- ARGSTAMP-UNIFY Phase 2+3 / genuine #21: under eval dict-threading an arg-position
@@ -1517,18 +1525,29 @@ methodAtNarrow _ _ v (RLocal _ _) = (v, [])
 methodAtNarrow _ _ _ (RScalar _) =
   panic "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"
 
+-- The route an interface-naming method occurrence carries is an instance or a
+-- given.  `RNone` there is a hole the checker rejects (T-UNROUTED-DISPATCH, #3715);
+-- it reaches evaluation only through a tree no verdict reads (see `dictOfRoute`),
+-- and the engine must not fill it by narrowing on the argument's tag.
+export
+requireMethodRoute : String -> String -> Route -> Route
+requireMethodRoute name iface RNone =
+  if iface == "" then
+    RNone
+  else
+    panic
+      "method `\{name}` of `\{iface}` reached evaluation with no route: the program is ill-typed, and check rejects it (T-UNROUTED-DISPATCH, #3715)"
+requireMethodRoute _ _ route = route
+
 oneOrMultiV : List (Value e) -> List (Value e) -> Value e
 oneOrMultiV [v] _ = v
 oneOrMultiV [] original = VMulti original
 oneOrMultiV many _ = VMulti many
 
--- TYPECHECK-AUDIT C7: a candidate matches a route string when the string equals
--- EITHER its head tycon (field 1, the args-free RHeadKey-analog route) OR its
--- canonical impl key (field 2, the ground route the typechecker stamps).  The two
--- string spaces are disjoint — a bare head tycon ("Pair") never contains "|",
--- while a canonical key always does — so this can't cross-match.  This is what
--- lets two same-head non-overlapping impls (Pair Int Bool vs Pair Bool Int)
--- narrow to the one the checker picked instead of first-impl-wins.
+-- A candidate matches a route string only when the string is its canonical impl
+-- key, the ground route the typechecker stamps.  A bare head tycon names no
+-- instance, so it matches nothing.  That keeps two same-head non-overlapping impls
+-- (Pair Int Bool vs Pair Bool Int) distinct.
 export
 hasKey : String -> Value e -> Bool
 hasKey key (VTypedImpl _ k _ _ _) = k == key
@@ -1801,8 +1820,9 @@ evalMethodAt env name _ (RLocal sym dicts) _ _ =
   applyDicts env (lookupEnv env (if sym == "" then name else sym)) dicts
 evalMethodAt env name iface route implRoutes methodRoutes =
   let lm = narrowToIface iface (lookupMethod env name)
-  let (narrowed, fwdReqs0) = methodAtNarrow env name lm route
-  applyMethodDicts env name route narrowed fwdReqs0 implRoutes methodRoutes
+  let routed = requireMethodRoute name iface route
+  let (narrowed, fwdReqs0) = methodAtNarrow env name lm routed
+  applyMethodDicts env name routed narrowed fwdReqs0 implRoutes methodRoutes
 
 -- The candidates of the interface an occurrence resolved to.  Every interface whose
 -- method is spelled [name] installs under that one name, so the coalesced `VMulti`
@@ -6023,7 +6043,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "dictOfRoute" ((PVar "env") (PCon "RDict" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") (PVar "reqs") (PVar "sups")) () (EApp (EApp (EApp (EVar "VDict") (EVar "key")) (EVar "reqs")) (EVar "sups"))) (arm PWild () (EApp (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)) (EListLit)))))
 (DFunDef false "dictOfRoute" ((PVar "env") (PCon "RDictFwd" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") (PVar "reqs") (PVar "sups")) () (EApp (EApp (EApp (EVar "VDict") (EVar "key")) (EVar "reqs")) (EVar "sups"))) (arm PWild () (EApp (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)) (EListLit)))))
 (DFunDef false "dictOfRoute" ((PVar "env") (PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EVar "projectDict") (EApp (EApp (EVar "dictOfRoute") (EVar "env")) (EVar "r"))) (EVar "path")))
-(DFunDef false "dictOfRoute" (PWild (PCon "RNone")) (EApp (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)) (EListLit)))
+(DFunDef false "dictOfRoute" (PWild (PCon "RNone")) (EApp (EVar "panic") (ELit (LString "an unrouted dictionary slot reached evaluation: the program does not type-check (T-UNROUTED-DISPATCH, #3715)"))))
 (DFunDef false "dictOfRoute" (PWild (PCon "RLocal" PWild PWild)) (EApp (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)) (EListLit)))
 (DFunDef false "dictOfRoute" (PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"))))
 (DTypeSig false "projectDict" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "Value") (TyVar "e")))))
@@ -6038,6 +6058,9 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "methodAtNarrow" ((PVar "env") (PVar "method") (PVar "v") (PCon "RProj" (PVar "r") (PVar "path"))) (EMatch (EApp (EApp (EVar "dictOfRoute") (EVar "env")) (EApp (EApp (EVar "RProj") (EVar "r")) (EVar "path"))) (arm (PCon "VDict" (PVar "key") (PVar "reqs") PWild) () (ETuple (EApp (EApp (EApp (EApp (EVar "narrowMethod") (EVar "env")) (EVar "method")) (EVar "v")) (EVar "key")) (EVar "reqs"))) (arm PWild () (ETuple (EVar "v") (EListLit)))))
 (DFunDef false "methodAtNarrow" (PWild PWild (PVar "v") (PCon "RLocal" PWild PWild)) (ETuple (EVar "v") (EListLit)))
 (DFunDef false "methodAtNarrow" (PWild PWild PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"))))
+(DTypeSig true "requireMethodRoute" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyCon "Route")))))
+(DFunDef false "requireMethodRoute" ((PVar "name") (PVar "iface") (PCon "RNone")) (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EVar "RNone") (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` of `"))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "` reached evaluation with no route: the program is ill-typed, and check rejects it (T-UNROUTED-DISPATCH, #3715)"))))))
+(DFunDef false "requireMethodRoute" (PWild PWild (PVar "route")) (EVar "route"))
 (DTypeSig false "oneOrMultiV" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "oneOrMultiV" ((PList (PVar "v")) PWild) (EVar "v"))
 (DFunDef false "oneOrMultiV" ((PList) (PVar "original")) (EApp (EVar "VMulti") (EVar "original")))
@@ -6146,7 +6169,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "evalMethodAtEv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "evalMethodAtEv" ((PVar "env") (PVar "name") (PTuple (PVar "iface") PWild (PVar "route") (PVar "implRoutes") (PVar "methodRoutes"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "evalMethodAt") (EVar "env")) (EVar "name")) (EVar "iface")) (EVar "route")) (EVar "implRoutes")) (EVar "methodRoutes")))
 (DFunDef false "evalMethodAt" ((PVar "env") (PVar "name") PWild (PCon "RLocal" (PVar "sym") (PVar "dicts")) PWild PWild) (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "name") (EVar "sym")))) (EVar "dicts")))
-(DFunDef false "evalMethodAt" ((PVar "env") (PVar "name") (PVar "iface") (PVar "route") (PVar "implRoutes") (PVar "methodRoutes")) (EBlock (DoLet false false (PVar "lm") (EApp (EApp (EVar "narrowToIface") (EVar "iface")) (EApp (EApp (EVar "lookupMethod") (EVar "env")) (EVar "name")))) (DoLet false false (PTuple (PVar "narrowed") (PVar "fwdReqs0")) (EApp (EApp (EApp (EApp (EVar "methodAtNarrow") (EVar "env")) (EVar "name")) (EVar "lm")) (EVar "route"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyMethodDicts") (EVar "env")) (EVar "name")) (EVar "route")) (EVar "narrowed")) (EVar "fwdReqs0")) (EVar "implRoutes")) (EVar "methodRoutes")))))
+(DFunDef false "evalMethodAt" ((PVar "env") (PVar "name") (PVar "iface") (PVar "route") (PVar "implRoutes") (PVar "methodRoutes")) (EBlock (DoLet false false (PVar "lm") (EApp (EApp (EVar "narrowToIface") (EVar "iface")) (EApp (EApp (EVar "lookupMethod") (EVar "env")) (EVar "name")))) (DoLet false false (PVar "routed") (EApp (EApp (EApp (EVar "requireMethodRoute") (EVar "name")) (EVar "iface")) (EVar "route"))) (DoLet false false (PTuple (PVar "narrowed") (PVar "fwdReqs0")) (EApp (EApp (EApp (EApp (EVar "methodAtNarrow") (EVar "env")) (EVar "name")) (EVar "lm")) (EVar "routed"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyMethodDicts") (EVar "env")) (EVar "name")) (EVar "routed")) (EVar "narrowed")) (EVar "fwdReqs0")) (EVar "implRoutes")) (EVar "methodRoutes")))))
 (DTypeSig true "narrowToIface" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "narrowToIface" ((PLit (LString "")) (PVar "v")) (EVar "v"))
 (DFunDef false "narrowToIface" ((PVar "iface") (PCon "VMulti" (PVar "vs"))) (EApp (EApp (EVar "oneOrMultiV") (EApp (EApp (EVar "filterList") (ELam ((PVar "v")) (EApp (EApp (EVar "candOfIface") (EVar "iface")) (EVar "v")))) (EVar "vs"))) (EListLit)))
@@ -7848,7 +7871,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "dictOfRoute" ((PVar "env") (PCon "RDict" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") (PVar "reqs") (PVar "sups")) () (EApp (EApp (EApp (EVar "VDict") (EVar "key")) (EVar "reqs")) (EVar "sups"))) (arm PWild () (EApp (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)) (EListLit)))))
 (DFunDef false "dictOfRoute" ((PVar "env") (PCon "RDictFwd" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") (PVar "reqs") (PVar "sups")) () (EApp (EApp (EApp (EVar "VDict") (EVar "key")) (EVar "reqs")) (EVar "sups"))) (arm PWild () (EApp (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)) (EListLit)))))
 (DFunDef false "dictOfRoute" ((PVar "env") (PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EVar "projectDict") (EApp (EApp (EVar "dictOfRoute") (EVar "env")) (EVar "r"))) (EVar "path")))
-(DFunDef false "dictOfRoute" (PWild (PCon "RNone")) (EApp (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)) (EListLit)))
+(DFunDef false "dictOfRoute" (PWild (PCon "RNone")) (EApp (EVar "panic") (ELit (LString "an unrouted dictionary slot reached evaluation: the program does not type-check (T-UNROUTED-DISPATCH, #3715)"))))
 (DFunDef false "dictOfRoute" (PWild (PCon "RLocal" PWild PWild)) (EApp (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)) (EListLit)))
 (DFunDef false "dictOfRoute" (PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"))))
 (DTypeSig false "projectDict" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "Value") (TyVar "e")))))
@@ -7863,6 +7886,9 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "methodAtNarrow" ((PVar "env") (PVar "method") (PVar "v") (PCon "RProj" (PVar "r") (PVar "path"))) (EMatch (EApp (EApp (EVar "dictOfRoute") (EVar "env")) (EApp (EApp (EVar "RProj") (EVar "r")) (EVar "path"))) (arm (PCon "VDict" (PVar "key") (PVar "reqs") PWild) () (ETuple (EApp (EApp (EApp (EApp (EVar "narrowMethod") (EVar "env")) (EVar "method")) (EVar "v")) (EVar "key")) (EVar "reqs"))) (arm PWild () (ETuple (EVar "v") (EListLit)))))
 (DFunDef false "methodAtNarrow" (PWild PWild (PVar "v") (PCon "RLocal" PWild PWild)) (ETuple (EVar "v") (EListLit)))
 (DFunDef false "methodAtNarrow" (PWild PWild PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is a scalar-type binop tag, not a dispatch route"))))
+(DTypeSig true "requireMethodRoute" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyCon "Route")))))
+(DFunDef false "requireMethodRoute" ((PVar "name") (PVar "iface") (PCon "RNone")) (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EVar "RNone") (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "method `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` of `"))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "` reached evaluation with no route: the program is ill-typed, and check rejects it (T-UNROUTED-DISPATCH, #3715)"))))))
+(DFunDef false "requireMethodRoute" (PWild PWild (PVar "route")) (EVar "route"))
 (DTypeSig false "oneOrMultiV" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "oneOrMultiV" ((PList (PVar "v")) PWild) (EVar "v"))
 (DFunDef false "oneOrMultiV" ((PList) (PVar "original")) (EApp (EVar "VMulti") (EVar "original")))
@@ -7971,7 +7997,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "evalMethodAtEv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "evalMethodAtEv" ((PVar "env") (PVar "name") (PTuple (PVar "iface") PWild (PVar "route") (PVar "implRoutes") (PVar "methodRoutes"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "evalMethodAt") (EVar "env")) (EVar "name")) (EVar "iface")) (EVar "route")) (EVar "implRoutes")) (EVar "methodRoutes")))
 (DFunDef false "evalMethodAt" ((PVar "env") (PVar "name") PWild (PCon "RLocal" (PVar "sym") (PVar "dicts")) PWild PWild) (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "name") (EVar "sym")))) (EVar "dicts")))
-(DFunDef false "evalMethodAt" ((PVar "env") (PVar "name") (PVar "iface") (PVar "route") (PVar "implRoutes") (PVar "methodRoutes")) (EBlock (DoLet false false (PVar "lm") (EApp (EApp (EVar "narrowToIface") (EVar "iface")) (EApp (EApp (EVar "lookupMethod") (EVar "env")) (EVar "name")))) (DoLet false false (PTuple (PVar "narrowed") (PVar "fwdReqs0")) (EApp (EApp (EApp (EApp (EVar "methodAtNarrow") (EVar "env")) (EVar "name")) (EVar "lm")) (EVar "route"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyMethodDicts") (EVar "env")) (EVar "name")) (EVar "route")) (EVar "narrowed")) (EVar "fwdReqs0")) (EVar "implRoutes")) (EVar "methodRoutes")))))
+(DFunDef false "evalMethodAt" ((PVar "env") (PVar "name") (PVar "iface") (PVar "route") (PVar "implRoutes") (PVar "methodRoutes")) (EBlock (DoLet false false (PVar "lm") (EApp (EApp (EVar "narrowToIface") (EVar "iface")) (EApp (EApp (EVar "lookupMethod") (EVar "env")) (EVar "name")))) (DoLet false false (PVar "routed") (EApp (EApp (EApp (EVar "requireMethodRoute") (EVar "name")) (EVar "iface")) (EVar "route"))) (DoLet false false (PTuple (PVar "narrowed") (PVar "fwdReqs0")) (EApp (EApp (EApp (EApp (EVar "methodAtNarrow") (EVar "env")) (EVar "name")) (EVar "lm")) (EVar "routed"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyMethodDicts") (EVar "env")) (EVar "name")) (EVar "routed")) (EVar "narrowed")) (EVar "fwdReqs0")) (EVar "implRoutes")) (EVar "methodRoutes")))))
 (DTypeSig true "narrowToIface" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "narrowToIface" ((PLit (LString "")) (PVar "v")) (EVar "v"))
 (DFunDef false "narrowToIface" ((PVar "iface") (PCon "VMulti" (PVar "vs"))) (EApp (EApp (EVar "oneOrMultiV") (EApp (EApp (EVar "filterList") (ELam ((PVar "v")) (EApp (EApp (EVar "candOfIface") (EVar "iface")) (EVar "v")))) (EVar "vs"))) (EListLit)))

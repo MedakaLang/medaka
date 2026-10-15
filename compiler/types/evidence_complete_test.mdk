@@ -1,0 +1,219 @@
+-- Sibling tests for the evidence completeness judgment.  Each row is hand-built
+-- in the shape the graph-end drain hands over, so a case states the final
+-- evidence it judges.
+
+import test.{expectEqual}
+import frontend.ast.{Route(..)}
+import types.evidence_complete.{
+  EvidenceRow(..),
+  HoleKind(..),
+  Inner(..),
+  holeKindsOf,
+  holeKindsWith,
+  innerNone,
+  rowHole,
+}
+
+instanceKey : Route
+instanceKey = RKey "m::K|m.Box|" [] []
+
+test "a method occurrence routed RNone is an unrouted method" =
+  expectEqual
+    [UnroutedMethod]
+    (holeKindsOf (OccurrenceRow "k" "m::K" RNone [] []))
+
+test "a route naming a type head, at any depth, is a head-tag route" =
+  expectEqual
+    [[HeadTagRoute], [HeadTagRoute], [HeadTagRoute], [HeadTagRoute]]
+    [
+      holeKindsOf (OccurrenceRow "jmap" "m::JMap" (RKey "m.Later" [] []) [] []),
+      holeKindsOf (OccurrenceRow "mth" "" (RKey "Int" [] []) [] []),
+      holeKindsOf (DictAppRow "f" ["K"] [RKey "m.Box" [] []]),
+      holeKindsOf
+        (OccurrenceRow "k" "m::K" instanceKey [RProj (RKey "m.T" [] []) [0]] []),
+    ]
+
+test "an RNone among an occurrence's dictionaries is an unrouted prerequisite" =
+  expectEqual
+    [[UnroutedPrerequisite], [UnroutedPrerequisite], [UnroutedPrerequisite]]
+    [
+      holeKindsOf (OccurrenceRow "k" "m::K" instanceKey [RNone] []),
+      holeKindsOf
+        (OccurrenceRow "k" "m::K" (RKey "m::K|m.Box|" [RNone] []) [] []),
+      holeKindsOf (SiteRow (RKey "m::Eq|m.Box|" [RNone] [])),
+    ]
+
+test "a dictionary application with an RNone slot is an unrouted dict slot" =
+  expectEqual
+    [UnroutedDictSlot]
+    (holeKindsOf (DictAppRow "useSub" ["Sub"] [RDict "$dict_g_0", RNone]))
+
+test "complete evidence and the legitimate RNone shapes are not holes" =
+  expectEqual
+    []
+    (flatMap holeKindsOf [
+      SiteRow RNone,
+      SiteRow (RScalar "Int"),
+      DictAppRow "pick" [] [],
+      OccurrenceRow "add" "" (RLocal "m__add" []) [] [],
+      OccurrenceRow "add" "" RNone [] [],
+      OccurrenceRow "k" "m::K" (RDict "$dict_f_0") [] [],
+      OccurrenceRow "k" "m::K" (RDictFwd "$dict_f_0") [] [],
+      OccurrenceRow "k" "m::K" (RProj (RDict "$dict_f_0") [0]) [] [],
+      OccurrenceRow
+        "k"
+        "m::K"
+        (RKey "m::K|(m.Box a)|" [RDict "$dict_f_0"] [])
+        []
+        [],
+      DictAppRow "useSub" ["Sub"] [instanceKey],
+    ])
+
+test "one diagnostic per row, naming the interface, the use and the type head" =
+  expectEqual
+    [
+      Some (
+        UnroutedMethod,
+        "no impl of `K` is selected for this use of `k`; annotate the type it is used at",
+      ),
+      Some (
+        HeadTagRoute,
+        "no impl of `JMap` is selected for this use of `jmap`: its dispatch names a type, not an impl",
+      ),
+      Some (
+        UnroutedDictSlot,
+        "this call is missing the dictionary for its `Sub` constraint: no impl or given was selected for it",
+      ),
+      None,
+    ]
+    [
+      rowHole (OccurrenceRow "k" "m::K" RNone [] []),
+      rowHole (OccurrenceRow "jmap" "m::JMap" (RKey "m.Later" [] []) [] []),
+      rowHole (DictAppRow "" ["Sub"] [RNone]),
+      rowHole (OccurrenceRow "k" "m::K" instanceKey [] []),
+    ]
+
+test "every row shape names its hole in its own words" =
+  expectEqual
+    [
+      Some (
+        UnroutedMethod,
+        "no impl of `K` is selected for this use of `k`; annotate the type it is used at",
+      ),
+      Some (
+        HeadTagRoute,
+        "no impl of `JMap` is selected for this use of `jmap`: its dispatch names a type, not an impl",
+      ),
+      Some (
+        UnroutedPrerequisite,
+        "the impl selected for this use of `k` needs a dictionary that no impl or given supplies",
+      ),
+      Some (
+        HeadTagRoute,
+        "this call to `f` passes the type `Box` where its `K` constraint needs an impl",
+      ),
+      Some (
+        UnroutedDictSlot,
+        "this call to `useSub` is missing the dictionary for its a constraint: no impl or given was selected for it",
+      ),
+      Some (
+        UnroutedPrerequisite,
+        "the impl passed for the `Show` constraint of this call to `f` needs a dictionary that no impl or given supplies",
+      ),
+      Some (
+        HeadTagRoute,
+        "this operator's dispatch names the type `Box`, not an impl",
+      ),
+      Some (
+        UnroutedPrerequisite,
+        "the impl selected for this operator needs a dictionary that no impl or given supplies",
+      ),
+    ]
+    [
+      rowHole (OccurrenceRow "k" "m::K" RNone [] []),
+      rowHole (OccurrenceRow "jmap" "m::JMap" (RKey "m.Later" [] []) [] []),
+      rowHole (OccurrenceRow "k" "m::K" instanceKey [RNone] []),
+      rowHole (DictAppRow "f" ["K"] [RKey "m.Box" [] []]),
+      rowHole (DictAppRow "useSub" ["Sub"] [RDict "$dict_g_0", RNone]),
+      rowHole
+        (DictAppRow
+          "f"
+          ["Ord", "Show"]
+          [instanceKey, RKey "m::Show|m.Box|" [RNone] []]),
+      rowHole (SiteRow (RKey "m.Box" [] [])),
+      rowHole (SiteRow (RKey "m::Eq|m.Box|" [RNone] [])),
+    ]
+
+-- A solver row with nothing noted below: the judgment still reads every child's own
+-- word, whichever list it sits in (a numeric return site's `requires` routes are
+-- its tag's children).
+test "every child's own word is judged without a summary" =
+  expectEqual
+    [
+      [HeadTagRoute],
+      [UnroutedPrerequisite],
+      [HeadTagRoute],
+      [UnroutedPrerequisite],
+    ]
+    [
+      holeKindsWith
+        innerNone
+        (OccurrenceRow
+          "fromInt"
+          "m::Num"
+          (RKey "m::Num|m.Box|" [RKey "m.Elem" [] []] [])
+          []
+          []),
+      holeKindsWith
+        innerNone
+        (OccurrenceRow
+          "fromInt"
+          "m::Num"
+          (RKey "m::Num|m.Box|" [RNone] [])
+          []
+          []),
+      holeKindsWith
+        innerNone
+        (DictAppRow "f" ["K"] [RKey "m::K|m.Box|" [] [RKey "Int" [] []]]),
+      holeKindsWith innerNone (SiteRow (RLocal "m__eq" [RNone])),
+    ]
+
+test "what lies below the children comes from the summary" =
+  expectEqual
+    [[UnroutedPrerequisite], [HeadTagRoute], [UnroutedPrerequisite], []]
+    [
+      holeKindsWith (Inner True False) (DictAppRow "f" ["K"] [instanceKey]),
+      holeKindsWith (Inner False True) (SiteRow instanceKey),
+      holeKindsWith
+        (Inner True False)
+        (OccurrenceRow "k" "m::K" instanceKey [] []),
+      holeKindsWith
+        innerNone
+        (OccurrenceRow
+          "k"
+          "m::K"
+          (RKey "m::K|m.Box|" [RKey "m::K|m.Box|" [RNone] []] [])
+          []
+          []),
+    ]
+
+test "the walk finds an RNone at any depth" =
+  expectEqual
+    [[UnroutedPrerequisite], [HeadTagRoute]]
+    [
+      holeKindsOf
+        (OccurrenceRow
+          "k"
+          "m::K"
+          (RKey
+            "m::K|m.Box|"
+            [RKey "m::K|m.Box|" [RKey "m::K|m.Box|" [RNone] []] []]
+            [])
+          []
+          []),
+      holeKindsOf
+        (DictAppRow
+          "f"
+          ["K"]
+          [RKey "m::K|m.Box|" [RKey "m::K|m.Box|" [] [RKey "m.T" [] []]] []]),
+    ]

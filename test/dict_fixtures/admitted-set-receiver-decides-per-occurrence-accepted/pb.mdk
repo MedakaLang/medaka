@@ -1,0 +1,5 @@
+export interface IB a where
+  mth : a -> Int
+
+impl IB Bool where
+  mth b = if b then 7 else 8

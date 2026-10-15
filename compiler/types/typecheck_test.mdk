@@ -78,6 +78,7 @@ import types.typecheck.{
   beginAssumptionTrace,
   beginEvidenceObservation,
   beginMethodReturnTrace,
+  cellGoalInnerAliasing,
   beginNumericPredicateTrace,
   checkModulesDiagsChain,
   checkModulesEntryReport,
@@ -90,6 +91,7 @@ import types.typecheck.{
   finishEvidenceObservation,
   finishMethodReturnTrace,
   finishNumericPredicateTrace,
+  isLiveSpan,
   methodReturnResolutionMutationProbe,
   methodReturnMemoCurrentViews,
   methodReturnMemoFenceMutationProbe,
@@ -100,17 +102,19 @@ import types.typecheck.{
   scopeFrameStats,
   setStdlibOwnership,
   scopeTraceContext,
+  spanKeys,
   stickyTypeErrorDiags,
   tcCode,
   tcMsg,
   walkGoalSameProbe,
 }
 import types.target_profile.{selectProfile, selectedProfile}
+import support.ordmap.{omEmpty, omFromNames}
 import support.util.{
   contains, endsWith, isEmptyL, joinNl, joinWith, listLen, lookupAssoc, splitNl,
   splitOnChar, startsWith
 }
-import list.{last}
+import list.{last, nub, sort}
 
 data NumericTraceView = NumericTraceView {
   ntvStage : NumericPredicateTraceStage,
@@ -783,6 +787,11 @@ test "declared and inferred arithmetic retain one Num slot at finalized queries"
       "arithmeticErrorCodes' bindings for the cold query",
       expectEqual
         [
+          ("binding:inferredRem", "binding:inferredRem", 0),
+          ("binding:inferredDiv", "binding:inferredDiv", 0),
+          ("binding:inferredMul", "binding:inferredMul", 0),
+          ("binding:inferredSub", "binding:inferredSub", 0),
+          ("binding:inferredAdd", "binding:inferredAdd", 0),
           ("binding:signedRem", "binding:signedRem", 0),
           ("binding:signedDiv", "binding:signedDiv", 0),
           ("binding:signedMul", "binding:signedMul", 0),
@@ -4162,6 +4171,55 @@ test "an undetermined goal's prerequisites are judged in work linear in depth" =
     expectLessThan (first * 3.0 + 65536.0) second,
   ]
 
+-- An argument stamp, a return site and a method's own dictionaries each write a
+-- method cell, and the stamper's notes about what it built below the top must land
+-- in that cell's summary, which is all `judgeCells` reads for depth two and below.
+-- A producer that captured a fresh summary instead hides a nested hole in an
+-- accepted program, and no natural program has one to show it.
+cellInnerSource : String
+cellInnerSource = joinNl [
+  "interface Sh a where",
+  "  sh : a -> Int",
+  "interface Mk a where",
+  "  mk : Int -> a",
+  "interface Wr a where",
+  "  wr : Sh b => a -> b -> Int",
+  "impl Sh Int where",
+  "  sh n = n",
+  "impl Mk Int where",
+  "  mk n = n",
+  "impl Wr Int where",
+  "  wr a b = sh b",
+  "useAll : Int",
+  "useAll = wr (mk 1 : Int) (sh (mk 2 : Int))",
+]
+
+test "every goal that writes a method cell notes into that cell's summary" =
+  let _ = elaborateOne [] (desugar (parse numericPreludeSource)) (
+    "cell_inner",
+    desugar (parseLocated cellInnerSource),
+  )
+  let observed = cellGoalInnerAliasing ()
+  expectAll [
+    expectEqual [] (filter (o => not (snd o)) observed),
+    expectEqual
+      ["GKArgStamp", "GKMethodDict", "GKReturnSite"]
+      (sort (nub (map fst observed))),
+  ]
+
+-- A drain finding is live when its span is a live goal's.  Goals built after a
+-- drain (`pushArithGoal` and its siblings) carry no location, so an unlocated live
+-- goal must not make every unlocated finding live.
+test "an unlocated drain finding is never live, even beside an unlocated live goal" =
+  let at = Some (Loc "m.mdk" 3 4 3 9)
+  let live = omFromNames (spanKeys [None, at]) omEmpty
+  expectAll [
+    expectEqual ["m.mdk:3:4"] (spanKeys [None, at, None]),
+    expectFalse (isLiveSpan live None),
+    expectTrue (isLiveSpan live at),
+    expectFalse (isLiveSpan live (Some (Loc "m.mdk" 3 5 3 9))),
+  ]
+
 -- `monoVecSameGiven` equates two arrows that differ only in their effect rows; the
 -- solving walks' memo must not, in either order.
 test "the solving-walk memo keeps goals that differ only in an effect row apart" =
@@ -5562,7 +5620,7 @@ test "a closed return goal with no instance keeps no route" = expectEach [
   ),
 ]
 
-test "a closed numeric or operator goal with no instance keeps no route" = expectEach
+test "a closed numeric, nested or operator goal with no instance keeps no route" = expectEach
   [
     (
       "a literal at a type with no Num instance",
@@ -5570,6 +5628,20 @@ test "a closed numeric or operator goal with no instance keeps no route" = expec
         (("T-TYPE-MISMATCH", 3, 4), False)
         (closedGoalOutcome numericPreludeSource [
           "data Nat = Z | S Nat", "n : Nat", "n = 3"
+        ]),
+    ),
+    (
+      "a constrained call at a type with no instance",
+      expectEqual
+        (("T-NO-IMPL", 7, 7), False)
+        (closedGoalOutcome numericPreludeSource [
+          "interface Sz a where",
+          "  sz : a -> Int",
+          "impl Sz Int where",
+          "  sz n = n",
+          "useSz : Sz a => a -> Int",
+          "useSz x = sz x",
+          "main = useSz True",
         ]),
     ),
     (

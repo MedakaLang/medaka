@@ -1,0 +1,3 @@
+import hub.{IA, IB, mth}
+
+export r = map mth

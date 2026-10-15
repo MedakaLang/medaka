@@ -1,0 +1,16 @@
+-- #4121's narrowed shape (Val's ruling at the sprint cut): `f : K x y => x ->
+-- String` omits `y` from its type, so `k x` in its body poses `K x ?y` with `x`
+-- rigid and is left `RNone`, and the call `f (Box 2)` passes the type head `Box`
+-- as its dictionary.  A route through a head or `RNone` commits no instance.
+-- Hand-derived: REJECT on every verb, T-UNROUTED-DISPATCH at 15:6 (the `k` in
+-- `f`'s body) and 16:16 (the call to `f`).
+interface K a b where
+  k : a -> String
+  mk : b -> a
+data Box a = Box a
+impl K (Box Int) Bool where
+  k _ = "BOX"
+  mk _ = Box 2
+f : K x y => x -> String
+f x = k x
+main = println (f (Box (2 : Int)))

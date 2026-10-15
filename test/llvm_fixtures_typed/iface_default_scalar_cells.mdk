@@ -39,3 +39,19 @@ main =
     + 8 * bit (ordered "b" "a")
     + 16 * bit (ordered 1 2)
     + 32 * bit (ordered 2 1)
+
+-- The typed-IR driver runs this file without a prelude, so `requires Ord a` names
+-- this interface; one impl per scalar gives each `Keyed` dictionary a selected
+-- `Ord` super.  Under the prelude this `Ord` is a redefinition, so the shipping
+-- form of the program is test/engine_fixtures/iface_default_scalar_cells.mdk.
+interface Ord a where
+  lessThan : a -> a -> Bool
+
+impl Ord Float where
+  lessThan x y = x < y
+
+impl Ord String where
+  lessThan x y = x < y
+
+impl Ord Int where
+  lessThan x y = x < y

@@ -1,0 +1,8 @@
+export interface Dflt a where
+  dflt : a
+
+impl Dflt (List b) where
+  dflt = []
+
+impl Dflt (Option b) where
+  dflt = None

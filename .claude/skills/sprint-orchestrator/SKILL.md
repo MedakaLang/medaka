@@ -163,8 +163,11 @@ by serialization.
       finds must be attributed by `git log`/bisect rather than by the slice
       that owned it.
 
-   c. **Dispatch ONE `sprint-reviewer`** (opus) with the resynced head SHA,
-      the merge-base with main, the contract path, and NOTES.md. If the
+   c. **Dispatch ONE `sprint-reviewer`** (opus, `isolation: "worktree"`) with the
+      resynced head SHA, the merge-base with main, the contract path, and NOTES.md.
+      Every reviewer and style brief says "work only in your own worktree; never run
+      `git checkout` elsewhere": a style pass that checked a SHA out in the
+      orchestrator's worktree detached its HEAD and broke the fix-round build. If the
       contract's §7 named domain property classes, name them in the brief. It reviews the WHOLE
    sprint diff at once — adversarial programs plus spec conformance — and
    reports ranked findings. For a large sprint, two reviewers with different
@@ -214,7 +217,11 @@ by serialization.
    runs the full gate suite — it is the correctness authority, not your
    local runs. Verify by state, never exit code: poll
    `isInMergeQueue`/`state` until `MERGED` — auto-merge arming can lapse
-   silently, so recheck until terminal.
+   silently, so recheck until terminal. A PR whose own PR-checks are still running is
+   `OPEN` with `isInMergeQueue` false until they pass: that is waiting, not a lapse.
+   Count "left the queue" only after you have seen it queued; then read the
+   `merge_group` run's failing gate (`gh run list --event merge_group`) before retrying,
+   and check `known-red` / open flake issues first.
 5. **Wrap.** Close/update the tracking issue (what landed, what was filed,
    SHAs). Dispatch `sprint-retro` (lightweight — half a page, deletion bias).
    Update STATUS.md to terminal states. Reap worktrees and background

@@ -1,5 +1,5 @@
--- #62 BYSTANDER fixture.  The new `firstRecordDeclIdx` / `firstCtxKwDeclIdx`
--- pre-scans run before the grammar on EVERY file, so their failure mode is
+-- #62 BYSTANDER fixture.  The `phRecord` / `phCtxKw` prescan
+-- rules run before the grammar on EVERY file, so their failure mode is
 -- preempting somebody else's diagnostic.  This file is full of the tokens they
 -- look at — a binding named `record`, an uppercase name right after it, braces,
 -- and a top-level `if`/`then`/`else` expression — but the ONLY thing asserted

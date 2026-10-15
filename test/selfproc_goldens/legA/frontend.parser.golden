@@ -187,24 +187,9 @@ findWhereIdx : Array Token -> Int -> Int -> Option Int
 finishBracketIndex : Expr -> Expr -> ParserE <> Expr
 finishSingletonArray : Expr -> ParserE <> Expr
 finishSingletonList : Expr -> ParserE <> Expr
-firstBacktickIdx : Array Token -> Int -> Int
-firstBangEqIdx : Array Token -> Int -> Int
-firstBlockCommentIdx : Array Token -> Int -> Int
-firstBraceBlockIdx : Array Token -> Int -> Int
 firstContentAt : Array Token -> Int -> Int -> Int
-firstCtxKwDeclIdx : Array Token -> Int -> Int -> Bool -> Int
-firstForLoopIdx : Array Token -> Int -> Bool -> Int
-firstForeignKwIdx : Array Token -> Int -> Bool -> Int
-firstFunctionIdx : Array Token -> Int -> Int
-firstHsCaseOfIdx : Array Token -> Int -> Int
-firstHsSigIdx : Array Token -> Int -> Int -> Bool -> Int
 firstIndentIdx : Array Token -> Int -> Int -> Int
-firstInlineLetMissingIn : Array Token -> Int -> Int
 firstLexError : Array Token -> Int -> Option (Int, String)
-firstMutIdx : Array Token -> Int -> Int
-firstRecordDeclIdx : Array Token -> Int -> Int -> Bool -> Int
-firstStarStarIdx : Array Token -> Array Int -> Int -> Int
-firstWithIdx : Array Token -> Int -> Bool -> Bool -> Int
 flattenFieldPath : Expr -> Option (String, List String)
 forLoopHeadTail : Array Token -> Int -> Bool -> Bool
 forLoopMsg : String
@@ -279,7 +264,6 @@ interpOpenStr : ParserE <> String
 interpRest : ParserE <> (List InterpPart)
 interpRestFor : Expr -> Token -> ParserE <> (List InterpPart)
 interpolatedNameMsg : String -> String
-isBangEqTok : Token -> Bool
 isBinderTok : Token -> Bool
 isBracketCloseTok : Token -> Bool
 isBracketOpenTok : Token -> Bool
@@ -300,8 +284,6 @@ isEqualTok : Token -> Bool
 isExportTok : Token -> Bool
 isForPatTok : Token -> Bool
 isForeignKwTok : Token -> Bool
-isFunctionTok : Token -> Bool
-isIfTok : Token -> Bool
 isImplTok : Token -> Bool
 isInTok : Token -> Bool
 isIndentTok : Token -> Bool
@@ -311,24 +293,19 @@ isLayoutTok : Token -> Bool
 isLeadingModifierTok : Token -> Bool
 isLetTok : Token -> Bool
 isLineEndTok : Token -> Bool
-isMatchTok : Token -> Bool
-isMutTok : Token -> Bool
 isNewlineTok : Token -> Bool
 isNoiseTok : Token -> Bool
 isOfTok : Token -> Bool
 isOpenDelim : Token -> Bool
 isPipeTok : Token -> Bool
-isPlainIdentTok : Token -> Bool
 isPublicTok : Token -> Bool
 isRBraceTok : Token -> Bool
 isRequiresTok : Token -> Bool
-isSlashTok : Token -> Bool
 isStarTok : Token -> Bool
 isTStringTok : Token -> Bool
 isTUpperTok : Token -> Bool
 isThenTok : Token -> Bool
 isWhereTok : Token -> Bool
-isWithTok : Token -> Bool
 kindArrowRest : KindAnn -> Token -> ParserE <> KindAnn
 kindAtomEmit : KindAnn -> ParserE <> KindAnn
 kindAtomFor : Token -> ParserE <> KindAnn
@@ -595,6 +572,13 @@ postfixTail : Expr -> ParserE <> Expr
 postfixTailR : Expr -> Array Token -> Int -> PR Expr
 prescanError : String -> Array Token -> Array Int -> Option ParseError
 prescanErrorPairs : String -> List Token -> List (Int, Int) -> Option ParseError
+prescanIdentHit : Array Token -> Int -> String -> Int -> Bool -> PrescanHits -> PrescanHits
+prescanInlineLet : Array Token -> Int -> PrescanHits -> PrescanHits
+prescanLexError : Array Token -> Int -> Option (Int, String)
+prescanLineStart : Array Token -> Int -> Token -> Int -> PrescanHits -> PrescanHits
+prescanNoHits : PrescanHits
+prescanTokHit : Array Token -> Array Int -> Int -> Token -> Int -> Bool -> Bool -> PrescanHits -> PrescanHits
+prescanWalk : Array Token -> Array Int -> Int -> Int -> Int -> Bool -> Bool -> Bool -> PrescanHits -> PrescanHits
 primeGuardPos : String -> Array Int -> Unit
 productAxes : Bool -> ParserE <> (List (String, EffParamTy))
 productAxesMore : Bool -> ParserE <> (List (String, EffParamTy))

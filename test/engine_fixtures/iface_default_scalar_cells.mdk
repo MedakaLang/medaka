@@ -1,0 +1,41 @@
+-- An interface default body is ONE shared body that every impl not overriding it
+-- reaches with its own dictionary as the receiver.  Its `<` is therefore typed at
+-- the interface's parameter, not at any one impl's type, so no impl's grounding can
+-- decide codegen for the others: a single `impl Keyed Int` must not turn the Float
+-- and String comparisons into an `icmp` over BOXED pointers (the #2356 shape:
+-- silently wrong, no error).
+--
+-- The three impls are the three scalar dispositions the emitter distinguishes:
+-- Float, String and Int.  Each must answer its own comparison.
+--
+--   b0 ordered 1.5 2.5 = True  -> 1     b3 ordered "b" "a" = False -> 0
+--   b1 ordered 2.5 1.5 = False -> 0     b4 ordered 1   2   = True  -> 16
+--   b2 ordered "a" "b" = True  -> 4     b5 ordered 2   1   = False -> 0
+--
+-- main = 1 + 4 + 16 = 21.  A poisoned Float or String comparison moves the low bits.
+
+interface Keyed a requires Ord a where
+  keyOf : a -> a
+  ordered : a -> a -> Bool
+  ordered x y = keyOf x < keyOf y
+
+impl Keyed Float where
+  keyOf f = f
+
+impl Keyed String where
+  keyOf s = s
+
+impl Keyed Int where
+  keyOf x = x
+
+bit : Bool -> Int
+bit b = if b then 1 else 0
+
+main : Int
+main =
+  bit (ordered 1.5 2.5)
+    + 2 * bit (ordered 2.5 1.5)
+    + 4 * bit (ordered "a" "b")
+    + 8 * bit (ordered "b" "a")
+    + 16 * bit (ordered 1 2)
+    + 32 * bit (ordered 2 1)

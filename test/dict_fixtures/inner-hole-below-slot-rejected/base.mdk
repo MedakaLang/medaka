@@ -1,0 +1,2 @@
+export interface Base a where
+  btag : a -> Int

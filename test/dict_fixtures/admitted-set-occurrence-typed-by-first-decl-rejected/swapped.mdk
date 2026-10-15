@@ -1,0 +1,6 @@
+-- `main.mdk` through `hubswap`, whose two `export import` lines are swapped: the
+-- same located `T-AMBIGUOUS-METHOD` at `mth` (S2-DECL (e)).
+import hubswap.{IA, IB, mth}
+import dflt.{Dflt, dflt}
+
+main = println (mth (1 : Int) dflt)

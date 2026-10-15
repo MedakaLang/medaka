@@ -295,6 +295,12 @@ inlang-driver-build-cmd-test:
 inlang-tools-test-cmd-test:
 	./medaka test compiler/tools/test_cmd_test.mdk
 
+inlang-tools-target-parse-test:
+	./medaka test compiler/tools/target_parse_test.mdk
+
+inlang-tools-probe-transcript-test:
+	./medaka test compiler/tools/probe_transcript_test.mdk
+
 inlang-tools-native-props-acceptance-test:
 	./medaka test compiler/tools/native_props_acceptance_test.mdk
 

@@ -1,0 +1,17 @@
+-- The completeness judgment reads a dictionary below its children from the
+-- summary the solver notes while it builds the route (`Inner`,
+-- compiler/types/evidence_complete.mdk), not from a walk.
+--
+-- HAND-DERIVED: `both (W T)` passes `Deriv (W T)`, whose `requires Deriv T` has
+-- the super `Base T`, which no impl covers.  So the slot's route holds `RNone` two
+-- levels below its top, as the super of the `Deriv T` requirement.
+-- REJECT: `T-MISSING-SUPER-IMPL` at `impl Deriv T` (t.mdk) and
+-- `T-UNROUTED-DISPATCH` at the call (this module has no error of its own).
+import base.{Base(..), btag}
+import deriv.{Deriv(..), dtag}
+import t.{T(..), W(..)}
+
+both : Deriv a => a -> Int
+both x = dtag x * 100 + btag x
+
+main = println (both (W T))

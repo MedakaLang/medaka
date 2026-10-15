@@ -20,11 +20,12 @@
 
 import frontend.lexer.{Comment, collectComments, commentLine, commentText}
 import frontend.ast.{Decl(..)}
-import frontend.parser.{parseResult, parseErrorMessage}
+import frontend.parser.{parseLocatedResult, parseErrorMessage}
 import frontend.desugar.{desugar, moduleAliases, qualifyAliasRefsWith}
 import support.util.{listLen, reverseL, joinNl, startsWith, stringTrim, splitNl}
 import json.{Json(..)}
 import regex.{Regex, mustCompile, isMatch, find}
+import string.{repeat}
 
 -- ── Data ──────────────────────────────────────────────────────────────────
 
@@ -336,6 +337,10 @@ synthSrcNamed name ex =
 -- located `Errored` result (see `oneResult` below) instead of zeroing the
 -- whole file's coverage.
 --
+-- Each example is parsed located, on its own doctest line (the source is padded to
+-- it), so a diagnostic the typechecker raises on the example's binding names the
+-- example (`test_cmd`'s `exampleDiagLines`).
+--
 -- `targetDecls` is the tested file's own decls (`userDecls` at the call
 -- site) — each example is parsed and desugared as its own tiny standalone
 -- program (`__dt_i__ = <expr>`, no `import … as A` decl of its own), so a
@@ -360,9 +365,11 @@ buildSynthResultsGo aliases i (ex :: rest) =
   synthOne aliases i ex :: buildSynthResultsGo aliases (i + 1) rest
 
 synthOne : List String -> Int -> Example -> Result String (List Decl)
-synthOne aliases i ex = match parseResult (synthSrc i ex)
-  Ok ds => Ok (desugar (qualifyAliasRefsWith aliases ds))
-  Err e => Err (parseErrorMessage e)
+synthOne aliases i ex =
+  let pad = repeat (exampleLine ex - 1) "\n"
+  match parseLocatedResult (pad ++ synthSrc i ex)
+    Ok ds => Ok (desugar (qualifyAliasRefsWith aliases ds))
+    Err e => Err (parseErrorMessage e)
 
 -- The decls to actually elaborate/run: every example that parsed, concatenated
 -- in order.  A failed example contributes NO decl (and so no `__dt_i__`

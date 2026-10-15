@@ -35,12 +35,15 @@ it):
 ```sh
 git -C <worktree> fetch origin sprint/<stage>
 git -C <worktree> rev-parse FETCH_HEAD              # must equal §1's base SHA
-git -C <worktree> checkout -B slice-work <base SHA> # licensed by this packet
+git -C <worktree> checkout -B slice-<slice-id> <base SHA> # licensed by this packet
 make -C <worktree> medaka                           # cold bootstrap, ~31 s
 ```
 
-(`slice-work` is a throwaway LOCAL branch, never pushed under that name — you
-still push by ref to the sprint branch. It exists so the checkout does not
+(`slice-<slice-id>` is a throwaway LOCAL branch, never pushed under that name — you
+still push by ref to the sprint branch. The name must be unique per slice AND per
+re-dispatch (suffix `-2` on a retry): worktrees share one `.git`, and a fixed name
+like `slice-work` collides with any other session's worktree that holds it, which
+BLOCKED the first dispatch of a sprint. It exists so the checkout does not
 leave you on a detached HEAD, where a later commit lands on a dangling line
 and strands: `.claude/ORCHESTRATING.md` records two verified phases lost that
 way, recoverable only via `git reflog`.)
