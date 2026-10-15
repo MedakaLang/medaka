@@ -239,7 +239,7 @@ function check(name, ok, detail) {
     .catch((e) => ({ threw: String(e && e.message) }));
   const text = JSON.stringify(r);
   check('(i) compile.mjs: the HostKeyError names the compiler host',
-    text.includes('env.mdk_fake_key') && text.includes('no slice of the playground compiler host provides'),
+    text.includes('env.mdk_fake_key') && text.includes('no slice of the playground compiler host lists'),
     text.slice(0, 400));
 }
 

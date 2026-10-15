@@ -401,25 +401,22 @@ done
 # Which externs demand FileBytes, and what it implies, is catalog data, asserted in
 # compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
 has_wasm_pin 'noteWasmUse emit UseFileBytes = setRef emit.useFileBytes True' &&
-  has_wasm_pin '++ (if (progEmit prog).useFileBytes.value then fileBytesHostImportLines else [])' &&
-  has_wasm_pin 'let fileBytesRt = if (progEmit prog).useFileBytes.value then fileBytesRuntimeLines else []' &&
+  has_wasm_pin 'let fileBytesRt = fileBytesRuntimeLines (progEmit prog).useFileBytes.value plan.hostKeys' &&
   ! grep -E 'setRef emit\.useFileBytes False|setRef useFileBytesRef False' "$WASM_SRC" >/dev/null || {
     echo "FAIL A4-FILEBYTES-ROUTES: producer, cofactors, drains, or reset changed"
     exit 1
   }
 [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useFileBytes True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useFileBytes.value' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useFileBytes.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL A4-FILEBYTES-ROUTES: writer/read cardinality or fresh routes changed"
     exit 1
   }
-A4_IO_IMPORT_LINE="$(grep -n -F 'if (progEmit prog).useIO.value then ioHostImportLines else []' "$WASM_SRC" | cut -d: -f1)"
-A4_FILEBYTES_IMPORT_LINE="$(grep -n -E '\(progEmit prog\)\.useFileBytes\.value then$' "$WASM_SRC" | cut -d: -f1)"
-[ -n "$A4_IO_IMPORT_LINE" ] && [ -n "$A4_FILEBYTES_IMPORT_LINE" ] &&
-  [ "$A4_IO_IMPORT_LINE" -lt "$A4_FILEBYTES_IMPORT_LINE" ] &&
-  has_wasm_pin '++ strCodecRt ++ byteBlockRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt' || {
-    echo "FAIL A4-FILEBYTES-ORDER: import/runtime order changed"
+# The IO and file-bytes host imports are plan keys, declared by the one
+# `hostImportLines plan.hostKeys` call (H2B-LR-MATH-ROUTES); only the runtime order is pinned.
+has_wasm_pin '++ strCodecRt ++ byteBlockRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt' || {
+    echo "FAIL A4-FILEBYTES-ORDER: runtime order changed"
     exit 1
   }
 for required in \
@@ -445,27 +442,19 @@ if grep -E '^_?useArgsRef[[:space:]]*[:=]|setRef (_?useArgsRef)' "$WASM_SRC" >/d
   echo "FAIL A3-ARGS-AUTHORITY: retired ambient authority remains"
   exit 1
 fi
-for required in \
-  'useArgs : Ref Bool' \
-  'useArgs = Ref False' \
-  'setRef emit.useArgs True' \
-  '(progEmit prog).useArgs.value'; do
-  has_wasm_pin "$required" || {
-    echo "FAIL A3-ARGS-CARRIER: missing $required"
-    exit 1
-  }
-done
+# `args` has no carrier flag: its runtime is gated on its `mdk_args_count` host key.
+if grep -F 'useArgs' "$WASM_SRC" >/dev/null; then
+  echo "FAIL A3-ARGS-CARRIER: a useArgs flag remains"
+  exit 1
+fi
 # Which externs demand Args, and what it implies, is catalog data, asserted in
 # compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
-has_wasm_pin 'noteWasmUse emit UseArgs = setRef emit.useArgs True' &&
-  has_wasm_pin 'let ioArgsRt = if (progEmit prog).useArgs.value then ioArgsRuntimeLines else []' &&
-  ! grep -E 'setRef emit\.useArgs False|setRef useArgsRef False' "$WASM_SRC" >/dev/null || {
+has_wasm_pin 'noteWasmUse _ UseArgs = ()' &&
+  has_wasm_pin 'let ioArgsRt = ioArgsRuntimeLines plan.hostKeys' || {
     echo "FAIL A3-ARGS-ROUTES: writer, drain, or reset changed"
     exit 1
   }
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useArgs True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useArgs.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
+has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL A3-ARGS-ROUTES: writer/read cardinality or fresh routes changed"
     exit 1
@@ -490,38 +479,25 @@ if grep -E '^_?useFloatStrRef[[:space:]]*[:=]|setRef (_?useFloatStrRef)' "$WASM_
   echo "FAIL A2-FLOATSTR-AUTHORITY: retired ambient authority remains"
   exit 1
 fi
-for required in \
-  'useFloatStr : Ref Bool' \
-  'useFloatStr = Ref False' \
-  'setRef emit.useFloatStr True' \
-  '(progEmit prog).useFloatStr.value'; do
-  has_wasm_pin "$required" || {
-    echo "FAIL A2-FLOATSTR-CARRIER: missing $required"
-    exit 1
-  }
-done
+# `stringToFloat` has no carrier flag: its runtime is gated on its `mdk_str_to_float` host key.
+if grep -F 'useFloatStr' "$WASM_SRC" >/dev/null; then
+  echo "FAIL A2-FLOATSTR-CARRIER: a useFloatStr flag remains"
+  exit 1
+fi
 # Which externs demand FloatStr, and what it implies, is catalog data, asserted in
 # compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
-has_wasm_pin 'noteWasmUse emit UseFloatStr = setRef emit.useFloatStr True' &&
-  has_wasm_pin '++ (if (progEmit prog).useFloatStr.value then floatStrImportLines else [])' &&
-  has_wasm_pin 'let floatStrRt = if (progEmit prog).useFloatStr.value then floatStrRuntimeLines else []' &&
-  ! grep -E 'setRef emit\.useFloatStr False|setRef useFloatStrRef False' "$WASM_SRC" >/dev/null || {
+has_wasm_pin 'noteWasmUse _ UseFloatStr = ()' &&
+  has_wasm_pin 'let floatStrRt = floatStrRuntimeLines plan.hostKeys' || {
     echo "FAIL A2-FLOATSTR-ROUTES: writer, cofactors, drains, or reset changed"
     exit 1
   }
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useFloatStr True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useFloatStr.value' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
+has_wasm_pin 'emitProgram input plan cp = emitProgramWith (freshWasmEmit WGapStrict) input plan cp' &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL A2-FLOATSTR-ROUTES: writer/read cardinality or fresh routes changed"
     exit 1
   }
-A2_FLOATSTR_IMPORT_LINE="$(grep -n -F '(progEmit prog).useFloatStr.value then floatStrImportLines' "$WASM_SRC" | cut -d: -f1)"
-A2_IO_IMPORT_LINE="$(grep -n -F 'if (progEmit prog).useIO.value then ioHostImportLines else []' "$WASM_SRC" | cut -d: -f1)"
-[ -n "$A2_FLOATSTR_IMPORT_LINE" ] && [ -n "$A2_IO_IMPORT_LINE" ] &&
-  [ "$A2_FLOATSTR_IMPORT_LINE" -lt "$A2_IO_IMPORT_LINE" ] &&
-  has_wasm_pin '++ strCodecRt ++ byteBlockRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt' || {
-    echo "FAIL A2-FLOATSTR-ORDER: import/runtime order changed"
+has_wasm_pin '++ strCodecRt ++ byteBlockRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt' || {
+    echo "FAIL A2-FLOATSTR-ORDER: runtime order changed"
     exit 1
   }
 for required in \
@@ -555,7 +531,7 @@ done
 # Which externs demand CharClass, and what it implies, is catalog data, asserted in
 # compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
 has_wasm_pin 'noteWasmUse emit UseCharClass = setRef emit.useCharClass True' &&
-  has_wasm_pin '|| !emit.useCharClass || !emit.useIO' &&
+  has_wasm_pin '|| !emit.useCharClass || isNonEmptyList plan.hostKeys' &&
   has_wasm_pin 'let charClassRt = if (progEmit prog).useCharClass.value then charClassRuntimeLines else []' &&
   ! grep -E 'setRef emit\.useCharClass False|setRef useCharClassRef False' "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B-LR-CHARCLASS-ROUTES: writer, operational read, or reset changed"
@@ -659,17 +635,13 @@ fi
 # own host key, declared from the plan's keys, so the demand has no carrier flag.
 MATH_IMPORT_LINE="$(grep -n -F 'hostImportLines plan.hostKeys' "$WASM_SRC" | cut -d: -f1)"
 FLOAT_IMPORT_LINE="$(grep -n -F 'floatFmtImportLines else []' "$WASM_SRC" | cut -d: -f1)"
-FLOATSTR_IMPORT_LINE="$(grep -n -F 'floatStrImportLines else []' "$WASM_SRC" | cut -d: -f1)"
 has_wasm_pin 'noteWasmUse _ UseMath = ()' &&
   has_wasm_pin 'noteWasmUse emit UseFloat = setRef emit.useFloat True' &&
   [ -n "$MATH_IMPORT_LINE" ] &&
   [ -n "$FLOAT_IMPORT_LINE" ] &&
-  [ -n "$FLOATSTR_IMPORT_LINE" ] &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'hostImportLines plan.hostKeys' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'floatFmtImportLines else []' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'floatStrImportLines else []' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$FLOAT_IMPORT_LINE" -lt "$MATH_IMPORT_LINE" ] &&
-  [ "$MATH_IMPORT_LINE" -lt "$FLOATSTR_IMPORT_LINE" ] &&
   ! grep -E 'setRef emit\.useMath|setRef useMathRef False|useMath :' "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B-LR-MATH-ROUTES: cofactor, import order, or reset changed"
     exit 1
@@ -1356,12 +1328,22 @@ for leaf_wat in p1 p2; do
       echo "FAIL LR-ARGS-P-PRESENCE: runtime/direct call in $leaf_wat"
       exit 1
     }
+  # Each leaf carries exactly the helpers and imports its extern reaches: the read leaf
+  # has the read body and no write import, the write leaf the three write imports.
   for leaf_filebytes_field in FILEBYTES_READ FILEBYTES_WRITE; do
-    [ "$(grep -F '(import "env" "mdk_write_file_reset"' "$INPUT_WORK/leaf-${leaf_filebytes_field}-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-      [ "$(grep -F '(import "env" "mdk_write_file_push"' "$INPUT_WORK/leaf-${leaf_filebytes_field}-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-      [ "$(grep -F '(import "env" "mdk_write_file_commit"' "$INPUT_WORK/leaf-${leaf_filebytes_field}-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-      [ "$(grep -F '(func $mdk_read_file_bytes_io' "$INPUT_WORK/leaf-${leaf_filebytes_field}-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-      [ "$(grep -F '(func $mdk_write_file_bytes_io' "$INPUT_WORK/leaf-${leaf_filebytes_field}-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+    leaf_file="$INPUT_WORK/leaf-${leaf_filebytes_field}-${leaf_wat}.wat"
+    if [ "$leaf_filebytes_field" = FILEBYTES_READ ]; then
+      leaf_read_want=1
+      leaf_write_want=0
+    else
+      leaf_read_want=0
+      leaf_write_want=1
+    fi
+    [ "$(grep -F '(import "env" "mdk_write_file_reset"' "$leaf_file" | wc -l | tr -d '[:space:]')" -eq "$leaf_write_want" ] &&
+      [ "$(grep -F '(import "env" "mdk_write_file_push"' "$leaf_file" | wc -l | tr -d '[:space:]')" -eq "$leaf_write_want" ] &&
+      [ "$(grep -F '(import "env" "mdk_write_file_commit"' "$leaf_file" | wc -l | tr -d '[:space:]')" -eq "$leaf_write_want" ] &&
+      [ "$(grep -F '(func $mdk_read_file_bytes_io' "$leaf_file" | wc -l | tr -d '[:space:]')" -eq "$leaf_read_want" ] &&
+      [ "$(grep -F '(func $mdk_write_file_bytes_io' "$leaf_file" | wc -l | tr -d '[:space:]')" -eq "$leaf_write_want" ] || {
         echo "FAIL LR-${leaf_filebytes_field}-P-HELPERS: imports/runtime in $leaf_wat"
         exit 1
       }

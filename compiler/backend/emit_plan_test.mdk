@@ -472,12 +472,42 @@ test "a wasm plan's host keys are its reached externs' imports, per group" = exp
       "exit only"
       (expectEqual ["mdk_exit"] (hostKeysOf WasmBackend (call "exit" [int 0]))),
     labelFail
-      "readFile imports no exit, clock or math key"
+      "readFile: the path channel, the read and the result channel; no args, env or exit"
       (expectEqual
-        []
-        (filter
-          (k => any (== k) ["mdk_exit", "mdk_sin", "mdk_wall_time_sec"])
-          (hostKeysOf WasmBackend (call "readFile" [ref "p", CList []])))),
+        [
+          "mdk_path_push",
+          "mdk_path_reset",
+          "mdk_read_file",
+          "mdk_result_byte",
+          "mdk_result_len",
+        ]
+        (hostKeysOf WasmBackend (call "readFile" [ref "p", CList []]))),
+    labelFail
+      "args: the argument channel only"
+      (expectEqual
+        ["mdk_arg_byte", "mdk_arg_len", "mdk_args_count"]
+        (hostKeysOf WasmBackend (call "args" [unit]))),
+    labelFail
+      "getEnv: the path channel, the lookup and the result channel"
+      (expectEqual
+        [
+          "mdk_get_env",
+          "mdk_path_push",
+          "mdk_path_reset",
+          "mdk_result_byte",
+          "mdk_result_len",
+        ]
+        (hostKeysOf WasmBackend (call "getEnv" [ref "p"]))),
+    labelFail
+      "stringToFloat: the path channel and the host parse"
+      (expectEqual
+        [
+          "mdk_path_push",
+          "mdk_path_reset",
+          "mdk_str_to_float",
+          "mdk_str_to_float_ok",
+        ]
+        (hostKeysOf WasmBackend (call "stringToFloat" [ref "p"]))),
     labelFail
       "a pure program has none"
       (expectEqual [] (hostKeysOf WasmBackend (prim "+" (int 1) (int 2)))),

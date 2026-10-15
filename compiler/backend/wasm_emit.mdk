@@ -151,7 +151,7 @@
 --     host's strtod), not a trap stub — no deferred-Float trap path
 --     remains; see ~line 1005 / 2143 / 2216.
 --   * The IO/WASI surface (readFile/args/getEnv/fileExists/exit) — CLOSED (W12): real
---     host imports (`ioHostImportLines`/`ioHostRuntimeLines`), ~line 1029/1443.
+--     host imports (the plan's host keys) and `ioHostRuntimeLines`.
 --     Not everything file-shaped is closed, though: the write/dir side (writeFile/
 --     listDir/makeDir/removeFile/removeDir/statFile) remains a real gap, and
 --     `runCommand` (explicitly named in this bullet's original scope) has no wasm
@@ -377,7 +377,6 @@ import backend.wasm_preamble.{
   floatRuntimeLines,
   hashFloatRuntimeLines,
   randomFloatRuntimeLines,
-  floatStrImportLines,
   floatStrRuntimeLines,
   strSearchRuntimeLines,
   strToIntRuntimeLines,
@@ -388,10 +387,8 @@ import backend.wasm_preamble.{
   byteBlockRuntimeLines,
   charFromCodeRuntimeLines,
   charClassRuntimeLines,
-  ioHostImportLines,
   ioHostRuntimeLines,
   ioArgsRuntimeLines,
-  fileBytesHostImportLines,
   fileBytesRuntimeLines,
 }
 
@@ -461,9 +458,7 @@ data WasmEmit = WasmEmit {
   useRng : Ref Bool,
   useHash : Ref Bool,
   useFloatHash : Ref Bool,
-  useFloatStr : Ref Bool,
   useFloatRng : Ref Bool,
-  useArgs : Ref Bool,
   useFileBytes : Ref Bool,
   useStrCodec : Ref Bool,
   useByteBlock : Ref Bool,
@@ -490,7 +485,6 @@ data WasmEmit = WasmEmit {
   useValueDiv : Ref Bool,
   useValueMod : Ref Bool,
   useValueCmpNum : Ref Bool,
-  useIO : Ref Bool,
   useStrToInt : Ref Bool,
   useStrReverse : Ref Bool,
   useStrJoin : Ref Bool,
@@ -531,9 +525,7 @@ freshWasmEmit mode = WasmEmit {
   useRng = Ref False,
   useHash = Ref False,
   useFloatHash = Ref False,
-  useFloatStr = Ref False,
   useFloatRng = Ref False,
-  useArgs = Ref False,
   useFileBytes = Ref False,
   useStrCodec = Ref False,
   useByteBlock = Ref False,
@@ -555,7 +547,6 @@ freshWasmEmit mode = WasmEmit {
   useValueDiv = Ref False,
   useValueMod = Ref False,
   useValueCmpNum = Ref False,
-  useIO = Ref False,
   useStrToInt = Ref False,
   useStrReverse = Ref False,
   useStrJoin = Ref False,
@@ -1201,10 +1192,6 @@ isLazyGlobalW prog x = omHasKey x (indexLazyGlobalsW (progIndex prog))
 -- Forces ref-mode (a Float is a boxed (ref eq) $float struct) + gates the Float runtime
 -- (floatRuntimeLines + the floatToString host import).  WasmEmit.useFloatHash / useFloatRng
 -- gate the hashFloat / randomFloat runtimes (which need the shared mix64 / next_u64).
--- WasmEmit.useFloatStr records per-emission stringToFloat host-seam demand. It takes
--- a $str, pushes its bytes via the IO path channel (mdk_path_reset/mdk_path_push), and
--- calls mdk_str_to_float to parse the f64 JS-side. Its scalar Float/String/IO
--- prerequisites remain on their existing carriers.
 
 -- W8b: the program uses stringIndexOf / stringCompare (the strSearchRuntime).
 -- WasmEmit.useValueCmp records layer-9 per-emission demand from a ref-mode
@@ -1517,7 +1504,6 @@ emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _
       || !emit.useI64
       || !emit.useStrSearch
       || !emit.useCharClass
-      || !emit.useIO
       || isNonEmptyList plan.hostKeys
   let typeNames = distinctTypeNames ctorTypes
   let prog = Prog index typeNames valNames useClos impls input emit freshFnCtx
@@ -2110,7 +2096,7 @@ noteWasmUse emit UseU64 = setRef emit.useU64 True
 noteWasmUse emit UseI64 = setRef emit.useI64 True
 -- the libm and clock imports are the extern's own host keys (`EmitPlan.hostKeys`)
 noteWasmUse _ UseMath = ()
-noteWasmUse emit UseFloatStr = setRef emit.useFloatStr True
+noteWasmUse _ UseFloatStr = ()
 noteWasmUse emit UseFloatHash = setRef emit.useFloatHash True
 noteWasmUse emit UseFloatRng = setRef emit.useFloatRng True
 noteWasmUse emit UseStrSearch = setRef emit.useStrSearch True
@@ -2121,8 +2107,7 @@ noteWasmUse emit UseCharFromCode = setRef emit.useCharFromCode True
 noteWasmUse emit UseCharClass = setRef emit.useCharClass True
 noteWasmUse emit UseEPut = setRef emit.useEPut True
 noteWasmUse emit UseByteBlock = setRef emit.useByteBlock True
-noteWasmUse emit UseIO = setRef emit.useIO True
-noteWasmUse emit UseArgs = setRef emit.useArgs True
+noteWasmUse _ UseArgs = ()
 noteWasmUse emit UseFileBytes = setRef emit.useFileBytes True
 noteWasmUse _ UseClock = ()
 noteWasmUse emit UseStrToInt = setRef emit.useStrToInt True
@@ -2945,15 +2930,6 @@ emitRefProgram prog plan groups =
       ++ (if (progEmit prog).useFloat.value then floatFmtImportLines else [])
       -- the host imports the reached externs' lowerings call (`EmitPlan.hostKeys`).
       ++ hostImportLines plan.hostKeys
-      -- layer-6: stringToFloat is a host import (mdk_str_to_float = the host strtod parser).
-      ++ (if (progEmit prog).useFloatStr.value then floatStrImportLines else [])
-      -- W12: the IO host surface (readFile/fileExists/args/getEnv) host imports.
-      ++ (if (progEmit prog).useIO.value then ioHostImportLines else [])
-      -- stage-D: writeFileBytes's write host imports (reset/push/commit).
-      ++ (if (progEmit prog).useFileBytes.value then
-        fileBytesHostImportLines
-      else
-        [])
   let valNames = progValNames prog
   -- Stage-2/3 (b′) WASMGC-TRMC: the plan's dispatch-graph TMC groups (the lexer's
   -- `scan` token spine, the offside-rule `layout` family, `intersperse`), installed
@@ -3075,11 +3051,8 @@ emitRefProgram prog plan groups =
     if (progEmit prog).useFloatHash.value then hashFloatRuntimeLines else []
   let randomFloatRt =
     if (progEmit prog).useFloatRng.value then randomFloatRuntimeLines else []
-  -- layer-6: stringToFloat runtime ($mdk_string_to_float).  Needs ioHostRt for the
-  -- path channel ($mdk_path_reset/$mdk_path_push), but emitted AFTER ioHostRt since
-  -- those functions are defined there (wasm forward refs are fine, but order is clear).
-  let floatStrRt =
-    if (progEmit prog).useFloatStr.value then floatStrRuntimeLines else []
+  -- layer-6: stringToFloat runtime ($mdk_string_to_float), gated on its host key.
+  let floatStrRt = floatStrRuntimeLines plan.hostKeys
   let strSearchRt =
     if (progEmit prog).useStrSearch.value then strSearchRuntimeLines else []
   -- W8d: stringToInt / stringReverse / stringJoin, each behind its own demand.
@@ -3108,24 +3081,22 @@ emitRefProgram prog plan groups =
   -- W11b: char classification + case-mapping helpers (ASCII-only pure WAT).
   let charClassRt =
     if (progEmit prog).useCharClass.value then charClassRuntimeLines else []
-  -- W12: the IO host-surface marshaling runtime (byte-channel + the five extern bodies).
-  -- The `args` body lives in a separate block (it builds a $C_Cons list, needing the
-  -- list types) gated on this emission's useArgs observation.
-  let ioHostRt = if (progEmit prog).useIO.value then ioHostRuntimeLines else []
-  let ioArgsRt =
-    if (progEmit prog).useArgs.value then ioArgsRuntimeLines else []
+  -- W12: the IO host-surface marshaling runtime, each helper gated on the host key
+  -- it calls.  The `args` body is its own block: it builds a $C_Cons list.
+  let ioHostRt = ioHostRuntimeLines plan.hostKeys
+  let ioArgsRt = ioArgsRuntimeLines plan.hostKeys
   -- the UTF-8 validation every producer of outside bytes reads a $str through,
   -- emitted exactly when one of the blocks that call it is: the byte codec,
   -- byteBlockToString, and the IO host surface.
   let utf8LossyRt =
-    if isEmptyList (strCodecRt ++ byteBlockRt ++ ioHostRt) then
+    if isEmptyList (strCodecRt ++ byteBlockRt ++ ioHostRt ++ ioArgsRt) then
       []
     else
       utf8LossyRuntimeLines
   -- stage-D: the byte-clean file I/O bodies ($mdk_read_file_bytes_io / _write_).  Needs
   -- ioHostRt in scope ($mdk_push_path / $mdk_io_result_to_str) + the $arr rep.
   let fileBytesRt =
-    if (progEmit prog).useFileBytes.value then fileBytesRuntimeLines else []
+    fileBytesRuntimeLines (progEmit prog).useFileBytes.value plan.hostKeys
   let dataSegs = emitDataSegs (progEmit prog)
   -- B5: the stderr byte-write import, emitted ONCE.  The plan's key is a lower
   -- bound here: it covers the externs whose runtime writes stderr, but a coded

@@ -100,9 +100,9 @@ public export data WasmFamily =
 -- is one `WasmEmit.use*` flag of `wasm_emit.mdk`: the representation (`$str`,
 -- `$arr`, the cons list, `$u64`, `$i64`), runtime function group or host
 -- import block that an extern's lowering names, and so must be emitted.
--- `UseMath` and `UseClock` gate no flag: the host imports they stand for are
--- each extern's own `EnvImport` key, which the module declares from its plan's
--- host keys (`wasmHostKeys`).
+-- `UseMath`, `UseClock`, `UseFloatStr` and `UseArgs` gate no flag: the host
+-- imports they stand for are the extern's own host keys, which the module
+-- declares and gates its runtime helpers on (`wasmHostKeys`).
 public export data WasmUse =
   | UseStr
   | UseStrLeaf
@@ -123,7 +123,6 @@ public export data WasmUse =
   | UseCharClass
   | UseEPut
   | UseByteBlock
-  | UseIO
   | UseArgs
   | UseFileBytes
   | UseClock
@@ -283,25 +282,68 @@ wasmHelperKeyRows = [
   ("panic", ["mdk_write_err_byte"]),
   ("indexError", ["mdk_write_err_byte"]),
   ("panicAt", ["mdk_write_err_byte"]),
+  ("readFile", readChannelKeys),
+  ("readFileBytes", readChannelKeys),
+  (
+    "writeFileBytes",
+    [
+      "mdk_path_reset",
+      "mdk_path_push",
+      "mdk_write_file_reset",
+      "mdk_write_file_push",
+      "mdk_write_file_commit",
+      "mdk_result_len",
+      "mdk_result_byte",
+    ],
+  ),
+  ("fileExists", ["mdk_path_reset", "mdk_path_push", "mdk_file_exists"]),
+  (
+    "getEnv",
+    [
+      "mdk_path_reset",
+      "mdk_path_push",
+      "mdk_get_env",
+      "mdk_result_len",
+      "mdk_result_byte",
+    ],
+  ),
+  ("args", ["mdk_args_count", "mdk_arg_len", "mdk_arg_byte"]),
+  (
+    "stringToFloat",
+    [
+      "mdk_path_reset",
+      "mdk_path_push",
+      "mdk_str_to_float",
+      "mdk_str_to_float_ok",
+    ],
+  ),
+]
+
+-- the path channel in, the file read, the result channel out
+readChannelKeys : List String
+readChannelKeys = [
+  "mdk_path_reset",
+  "mdk_path_push",
+  "mdk_read_file",
+  "mdk_result_len",
+  "mdk_result_byte",
 ]
 
 -- The externs whose wasm lowering demands anything, in catalog order.  Each
--- list is complete: a demand one flag implies in another (`stringToFloat`'s
--- host parse reads the IO path channel, so `UseFloatStr` comes with `UseIO`)
--- is written out, never derived.  An extern absent here demands nothing
+-- list is complete: a demand one flag implies in another (`readFileBytes`'s
+-- `UseFileBytes` comes with `UseArray`) is written out, never derived.  An extern absent here demands nothing
 -- beyond what its call site already brings.
 export
 wasmUseRows : List (String, List WasmUse)
 wasmUseRows = [
   ("ePutStr", [UseEPut]),
   ("ePutStrLn", [UseEPut]),
-  ("readFile", [UseStr, UseIO]),
-  ("readFileBytes", [UseStr, UseArray, UseIO, UseFileBytes]),
-  ("writeFileBytes", [UseStr, UseArray, UseIO, UseFileBytes]),
-  ("fileExists", [UseStr, UseIO]),
-  ("args", [UseStr, UseList, UseIO, UseArgs]),
-  ("getEnv", [UseStr, UseIO]),
-  ("exit", [UseIO]),
+  ("readFile", [UseStr]),
+  ("readFileBytes", [UseStr, UseArray, UseFileBytes]),
+  ("writeFileBytes", [UseStr, UseArray, UseFileBytes]),
+  ("fileExists", [UseStr]),
+  ("args", [UseStr, UseList, UseArgs]),
+  ("getEnv", [UseStr]),
   ("panic", [UseStr, UseEPut]),
   ("indexError", [UseStr, UseEPut]),
   ("panicAt", [UseStr, UseEPut]),
@@ -398,7 +440,7 @@ wasmUseRows = [
   ("stringReverse", [UseStr, UseStrReverse]),
   ("stringJoin", [UseStr, UseList, UseStrJoin]),
   ("stringCompare", [UseStr, UseStrLeaf, UseStrSearch]),
-  ("stringToFloat", [UseStr, UseFloat, UseFloatStr, UseIO]),
+  ("stringToFloat", [UseStr, UseFloat, UseFloatStr]),
   ("charIsAlpha", [UseCharClass]),
   ("charIsSpace", [UseCharClass]),
   ("charIsUpper", [UseCharClass]),

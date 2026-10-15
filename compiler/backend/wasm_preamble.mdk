@@ -37,6 +37,8 @@
 -- section, function defs, `(start)`, and the trailing `)`), so this preamble
 -- deliberately leaves the `(module` paren OPEN.
 
+import support.util.{contains}
+
 export
 preambleHeadLines : List String
 preambleHeadLines = [
@@ -1712,6 +1714,21 @@ hostImportSig "mdk_tanh" = unaryF64Sig
 hostImportSig "mdk_pow" = binaryF64Sig
 hostImportSig "mdk_atan2" = binaryF64Sig
 hostImportSig "mdk_hypot" = binaryF64Sig
+hostImportSig "mdk_path_reset" = ""
+hostImportSig "mdk_path_push" = " (param i32)"
+hostImportSig "mdk_read_file" = " (result i32)"
+hostImportSig "mdk_file_exists" = " (result i32)"
+hostImportSig "mdk_get_env" = " (result i32)"
+hostImportSig "mdk_args_count" = " (result i32)"
+hostImportSig "mdk_arg_len" = " (param i32) (result i32)"
+hostImportSig "mdk_arg_byte" = " (param i32) (param i32) (result i32)"
+hostImportSig "mdk_result_len" = " (result i32)"
+hostImportSig "mdk_result_byte" = " (param i32) (result i32)"
+hostImportSig "mdk_write_file_reset" = ""
+hostImportSig "mdk_write_file_push" = " (param i32)"
+hostImportSig "mdk_write_file_commit" = " (result i32)"
+hostImportSig "mdk_str_to_float" = " (result f64)"
+hostImportSig "mdk_str_to_float_ok" = " (result i32)"
 hostImportSig key =
   panic
     "internal error: host key \{key} has no wasm import signature in wasm_preamble.mdk"
@@ -1730,16 +1747,8 @@ binaryF64Sig = " (param f64) (param f64) (result f64)"
 -- NaN cannot double as the failure signal — the old single-f64 seam mapped every NaN to
 -- None and lost it.  The host parser (test/wasm/run.js + playground/worker.js, kept
 -- byte-identical per WH3) reproduces medaka_rt.c mdk_string_to_float: strtod + a full-
--- consumption endptr check + an empty-string reject. Gated on per-emission
--- WasmEmit.useFloatStr demand (the catalog demand of "stringToFloat").
-export
-floatStrImportLines : List String
-floatStrImportLines = [
-  "  ;; -- stringToFloat host seam (strtod acceptance set JS-side, see run.js) --",
-  "  (import \"env\" \"mdk_str_to_float\" (func $mdk_str_to_float (result f64)))",
-  "  (import \"env\" \"mdk_str_to_float_ok\" (func $mdk_str_to_float_ok (result i32)))"
-]
-
+-- consumption endptr check + an empty-string reject. Gated on
+-- the plan's `mdk_str_to_float` host key.
 -- $mdk_string_to_float : (ref $str) -> (ref eq)  (= Option Float = Some(boxed $float) | None)
 -- Protocol: reset the path buffer, push each UTF-8 byte of the string, call
 -- mdk_str_to_float (which parses the pathBuf bytes and LATCHES an ok flag), then
@@ -1749,8 +1758,11 @@ floatStrImportLines = [
 -- — strtod("nan") SUCCEEDS with a NaN value, while strtod("") and strtod("1.5 ") fail.
 -- Testing the f64 for NaN can distinguish neither.
 export
-floatStrRuntimeLines : List String
-floatStrRuntimeLines = [
+floatStrRuntimeLines : List String -> List String
+floatStrRuntimeLines keys = gatedOn "mdk_str_to_float" keys floatStrLines
+
+floatStrLines : List String
+floatStrLines = [
   "  ;; stringToFloat : $str -> Option Float (ref eq).",
   "  (func $mdk_string_to_float (param $s (ref $str)) (result (ref eq))",
   "    (local $b (ref $u8arr)) (local $i i32) (local $n i32) (local $d f64)",
@@ -1933,23 +1945,8 @@ randomFloatRuntimeLines = [
 --     wrap Some (struct.new $C_Some, ord 0) / None (i31 ord 1).
 --   args      : mdk_args_count(); per i build a $str from mdk_arg_len(i)/mdk_arg_byte(i,j),
 --     fold a Cons chain right-to-left ending in Nil (i31 ord 1).
--- Gated on WasmEmit.useIO (the catalog demand of every IO extern).
-export
-ioHostImportLines : List String
-ioHostImportLines = [
-  "  ;; -- W12 IO host surface (byte-channel marshaling, see run.js) --",
-  "  (import \"env\" \"mdk_path_reset\" (func $mdk_path_reset))",
-  "  (import \"env\" \"mdk_path_push\" (func $mdk_path_push (param i32)))",
-  "  (import \"env\" \"mdk_read_file\" (func $mdk_read_file (result i32)))",
-  "  (import \"env\" \"mdk_file_exists\" (func $mdk_file_exists (result i32)))",
-  "  (import \"env\" \"mdk_get_env\" (func $mdk_get_env (result i32)))",
-  "  (import \"env\" \"mdk_args_count\" (func $mdk_args_count (result i32)))",
-  "  (import \"env\" \"mdk_arg_len\" (func $mdk_arg_len (param i32) (result i32)))",
-  "  (import \"env\" \"mdk_arg_byte\" (func $mdk_arg_byte (param i32) (param i32) (result i32)))",
-  "  (import \"env\" \"mdk_result_len\" (func $mdk_result_len (result i32)))",
-  "  (import \"env\" \"mdk_result_byte\" (func $mdk_result_byte (param i32) (result i32)))"
-]
-
+-- Each import is a host key of the reached externs (`EmitPlan.hostKeys`), and
+-- each runtime helper below is gated on the key it calls.
 -- readFile's Err suffix for contents that are not UTF-8, the text of
 -- medaka_rt.c mdk_read_file's, as the WAT that builds it as a $u8arr.  ASCII,
 -- so one element per character.
@@ -1970,35 +1967,51 @@ asciiConstsW cs n i =
 -- $str-dependent (every path/result is a $str) and $C_Ok/$C_Err/$C_Some/$T_List are
 -- always declared in ref-mode, so these are always in scope when emitted.
 export
-ioHostRuntimeLines : List String
-ioHostRuntimeLines = [
-  "  ;; -- W12 IO host-surface runtime --",
+ioHostRuntimeLines : List String -> List String
+ioHostRuntimeLines keys =
+  gatedOn "mdk_path_push" keys ioPushPathLines
+    ++ gatedOn "mdk_result_len" keys ioResultLines
+    ++ gatedOn "mdk_read_file" keys ioReadFileLines
+    ++ gatedOn "mdk_file_exists" keys ioFileExistsLines
+    ++ gatedOn "mdk_get_env" keys ioGetEnvLines
+
+gatedOn : String -> List String -> List String -> List String
+gatedOn key keys block = if contains key keys then block else []
+
+ioPushPathLines : List String
+ioPushPathLines = [
   "  ;; push a $str's bytes to the host path buffer (reset first).",
   "  (func $mdk_push_path (param $s (ref $str))",
   "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
   "    (call $mdk_path_reset)",
   "    (local.set $b (struct.get $str $bytes (local.get $s)))",
   "    (local.set $n (array.len (local.get $b)))",
-  "    (local.set $i (i32.const 0))",
-  "    (block $d (loop $l",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
   "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
-  "    )",
+  "    )"
+]
+
+ioResultLines : List String
+ioResultLines = [
   "  ;; copy the host result buffer (length + byte-at-index) into a fresh $u8arr.",
   "  (func $mdk_io_result_bytes (result (ref $u8arr))",
   "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))",
   "    (local.set $n (call $mdk_result_len))",
   "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
-  "    (local.set $i (i32.const 0))",
-  "    (block $d (loop $l",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
   "      (array.set $u8arr (local.get $buf) (local.get $i) (call $mdk_result_byte (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
   "    (local.get $buf))",
   "  ;; the host result buffer as a $str, read as UTF-8 by $mdk_u8_to_str_lossy.",
   "  (func $mdk_io_result_to_str (result (ref $str))",
-  "    (call $mdk_u8_to_str_lossy (call $mdk_io_result_bytes)))",
+  "    (call $mdk_u8_to_str_lossy (call $mdk_io_result_bytes)))"
+]
+
+ioReadFileLines : List String
+ioReadFileLines = [
   "  ;; readFile's Err for contents that are not UTF-8: the path, then a fixed ASCII",
   "  ;; suffix, byte-identical to medaka_rt.c mdk_read_file.",
   "  (func $mdk_str_not_utf8 (param $path (ref $str)) (result (ref $str))",
@@ -2023,27 +2036,37 @@ ioHostRuntimeLines = [
   "    (if (result (ref eq)) (i32.ge_s (local.get $c) (i32.const 0))",
   "      (then (struct.new $C_Ok (i32.const 0) (struct.new $str (local.get $c) (local.get $buf))))",
   "      (else (struct.new $C_Err (i32.const 1) (call $mdk_str_not_utf8 (local.get $path))))))",
+]
+
+ioFileExistsLines : List String
+ioFileExistsLines = [
   "  ;; fileExists : $str path -> Bool (i31 ordinal: False=0 / True=1).",
   "  (func $mdk_file_exists_io (param $path (ref $str)) (result (ref eq))",
   "    (call $mdk_push_path (local.get $path))",
-  "    (ref.i31 (call $mdk_file_exists)))",
+  "    (ref.i31 (call $mdk_file_exists)))"
+]
+
+ioGetEnvLines : List String
+ioGetEnvLines = [
   "  ;; getEnv : $str name -> Option String.  1=Some value / 0=None.",
   "  (func $mdk_get_env_io (param $name (ref $str)) (result (ref eq))",
-  "    (local $st i32)",
-  "    (call $mdk_push_path (local.get $name))",
+  "    (local $st i32)", "    (call $mdk_push_path (local.get $name))",
   "    (local.set $st (call $mdk_get_env))",
   "    (if (result (ref eq)) (local.get $st)",
   "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))",
-  "      (else (ref.i31 (i32.const 1)))))",
+  "      (else (ref.i31 (i32.const 1)))))"
 ]
 
 -- the `args` extern body — split out from ioHostRuntimeLines because it references
 -- the cons-list types ($C_Cons / Nil), which are only declared when the program uses
--- a list. Gated on the fresh emission's WasmEmit.useArgs demand (set when `args` is
--- referenced, which also forces useListRef so $C_Cons is in scope).
+-- a list. Gated on the `mdk_args_count` host key; the `args` extern's catalog
+-- demand brings the list types with it.
 export
-ioArgsRuntimeLines : List String
-ioArgsRuntimeLines = [
+ioArgsRuntimeLines : List String -> List String
+ioArgsRuntimeLines keys = gatedOn "mdk_args_count" keys ioArgsLines
+
+ioArgsLines : List String
+ioArgsLines = [
   "  ;; build a $str from the i-th host arg (mdk_arg_len(i) + mdk_arg_byte(i,j)).",
   "  (func $mdk_arg_to_str (param $idx i32) (result (ref $str))",
   "    (local $n i32) (local $j i32) (local $buf (ref $u8arr))",
@@ -2076,22 +2099,20 @@ ioArgsRuntimeLines = [
 -- direction: three new host imports stream the path (reuse $mdk_push_path) + the byte
 -- array OUT to a JS write buffer, then commit a Node `fs.writeFileSync`.  Both return
 -- a Result String (…) byte-identical to the native runtime (medaka_rt.c
--- mdk_read_file_bytes / mdk_write_file_bytes).  Gated on per-emission
--- WasmEmit.useFileBytes demand; IO, Array, and String cofactors keep $mdk_push_path /
--- $mdk_io_result_to_str in scope, declare $arr, and provide the Err/path $str.
+-- mdk_read_file_bytes / mdk_write_file_bytes).  The write body is gated on the
+-- `mdk_write_file_commit` key.  The read body shares its keys with readFile, so
+-- it also needs `readsBytes` (the extern's `useFileBytes` demand, which brings $arr).
 export
-fileBytesHostImportLines : List String
-fileBytesHostImportLines = [
-  "  ;; -- stage-D writeFileBytes host imports (path via mdk_path_push; bytes streamed) --",
-  "  (import \"env\" \"mdk_write_file_reset\" (func $mdk_write_file_reset))",
-  "  (import \"env\" \"mdk_write_file_push\" (func $mdk_write_file_push (param i32)))",
-  "  (import \"env\" \"mdk_write_file_commit\" (func $mdk_write_file_commit (result i32)))",
-]
+fileBytesRuntimeLines : Bool -> List String -> List String
+fileBytesRuntimeLines readsBytes keys =
+  gatedOn "mdk_write_file_commit" keys writeFileBytesLines
+    ++ (if readsBytes then
+      gatedOn "mdk_read_file" keys readFileBytesLines
+    else
+      [])
 
-export
-fileBytesRuntimeLines : List String
-fileBytesRuntimeLines = [
-  "  ;; -- stage-D byte-clean file I/O runtime --",
+readFileBytesLines : List String
+readFileBytesLines = [
   "  ;; readFileBytes : $str path -> Result String (Array Int).  1=Ok bytes / 0=Err msg.",
   "  ;; Reuses the read byte-channel but rebuilds an $arr of i31 Int bytes (0..255).",
   "  (func $mdk_read_file_bytes_io (param $path (ref $str)) (result (ref eq))",
@@ -2106,7 +2127,11 @@ fileBytesRuntimeLines = [
   "          (array.set $arr (local.get $out) (local.get $i) (ref.i31 (call $mdk_result_byte (local.get $i))))",
   "          (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
   "        (struct.new $C_Ok (i32.const 0) (local.get $out)))",
-  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+writeFileBytesLines : List String
+writeFileBytesLines = [
   "  ;; writeFileBytes : $str path -> $arr bytes -> Result String Unit.  1=Ok () / 0=Err msg.",
   "  ;; Stream each i31 byte (masked to 0..255) to the host, then commit fs.writeFileSync.",
   "  (func $mdk_write_file_bytes_io (param $path (ref $str)) (param $ba (ref $arr)) (result (ref eq))",

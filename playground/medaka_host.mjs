@@ -142,8 +142,8 @@ export class CapabilityError extends Error {
 // with `main` inside its start function: instantiating it runs the program, and
 // calling `mdk_main` would run it again.  It is refused before instantiation.
 export class OldEntryShape extends Error {}
-// A module imports an `env` key that no slice of the host's profile lists: the compiler
-// emitted a key the host cannot even withhold, so the profile and the slice set have drifted.
+// A module imports an `env` key no slice lists: the compiler emitted a key the host cannot
+// even withhold, so the profile and the slice set have drifted.
 export class HostKeyError extends Error {
   constructor(message, keys) {
     super(message);
@@ -337,6 +337,8 @@ export function createHost(profile, opts = {}) {
   const withheldHint = opts.withheldHint || '';
   const host = {
     profile: config.name,
+    withheldError: (slice, k) => new CapabilityError(slice,
+      `${KEY_EXTERN[k] || k} is not available${where}: the \`${slice}\` capability is withheld on ${config.name}${withheldHint}`),
     vfs: opts.vfs || new MemoryVfs(),
     args: opts.args || [],
     getEnv: opts.getEnv || (() => undefined),
@@ -452,31 +454,35 @@ export function createHost(profile, opts = {}) {
   // a LinkError on a module the compiler legally emitted).
   const env = {};
   const installed = new Set(installedKeys(config));
+  host.installed = installed;
   for (const [slice, { keys }] of Object.entries(SLICES))
     for (const k of keys) {
       if (k in env) continue;
       if (installed.has(k)) { env[k] = real[k]; continue; }
-      const what = KEY_EXTERN[k] || k;
-      env[k] = () => {
-        throw new CapabilityError(slice,
-          `${what} is not available${where}: the \`${slice}\` capability is withheld on ${config.name}${withheldHint}`);
-      };
+      env[k] = () => { throw host.withheldError(slice, k); };
     }
   host.imports = { env };
   return host;
 }
 
-// Every `env` import key of `module` must be a key some slice lists: the host holds a
-// callable for each of those (real, or the CapabilityError one).  A key in no slice
-// would otherwise surface as a LinkError, or worse, a silently absent adapter.
+// Every `env` import key of `module` must be a key the host installs for real
+// (`installedKeys`): a module imports only the keys its reached externs call, so an
+// import the host withholds is a program the profile cannot run, refused before
+// instantiation instead of left to a stub that throws mid-run.  `host.installed`
+// is the set `installedKeys` gives the host's profile or configuration.
 export function checkImportKeys(module, host) {
-  const known = new Set(Object.values(SLICES).flatMap((s) => s.keys));
   const missing = [...new Set(WebAssembly.Module.imports(module)
-    .filter((i) => i.module === 'env' && !known.has(i.name))
+    .filter((i) => i.module === 'env' && !host.installed.has(i.name))
     .map((i) => i.name))];
+  // A key some slice owns is that slice withheld: the program needs a capability the
+  // profile does not grant, so the refusal names it, as the stub would have at the call.
+  for (const k of missing) {
+    const slice = Object.keys(SLICES).find((s) => SLICES[s].keys.includes(k));
+    if (slice) throw host.withheldError(slice, k);
+  }
   if (missing.length > 0)
     throw new HostKeyError(
-      `module imports ${missing.map((k) => 'env.' + k).join(', ')}, which no slice of ${host.profile} provides`,
+      `module imports ${missing.map((k) => 'env.' + k).join(', ')}, which no slice of ${host.profile} lists`,
       missing);
 }
 
