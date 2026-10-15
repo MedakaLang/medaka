@@ -302,7 +302,21 @@ wasmHelperKeyRows = [
     fileOpKeys "mdk_write_file"
       ++ ["mdk_write_file_reset", "mdk_write_file_push"],
   ),
+  (
+    "appendFile",
+    fileOpKeys "mdk_append_file"
+      ++ ["mdk_write_file_reset", "mdk_write_file_push"],
+  ),
+  (
+    "writeFileMode",
+    fileOpKeys "mdk_write_file_mode"
+      ++ ["mdk_write_file_reset", "mdk_write_file_push"],
+  ),
   ("rename", fileOpKeys "mdk_rename"),
+  ("removeFile", fileOpKeys "mdk_remove_file"),
+  ("removeDir", fileOpKeys "mdk_remove_dir"),
+  ("fsync", fileOpKeys "mdk_fsync"),
+  ("fileMode", fileOpKeys "mdk_file_mode" ++ ["mdk_stat_field"]),
   ("listDir", fileOpKeys "mdk_list_dir"),
   ("statFile", fileOpKeys "mdk_stat_file" ++ ["mdk_stat_field"]),
   (
@@ -398,8 +412,14 @@ wasmUseRows = [
   ("readFile", [UseStr, UseList]),
   ("readFileBytes", [UseStr, UseList, UseArray, UseFileBytes]),
   ("writeFile", [UseStr, UseList]),
+  ("appendFile", [UseStr, UseList]),
+  ("writeFileMode", [UseStr, UseList]),
   ("writeFileBytes", [UseStr, UseList, UseArray, UseFileBytes]),
   ("rename", [UseStr, UseList]),
+  ("removeFile", [UseStr, UseList]),
+  ("removeDir", [UseStr, UseList]),
+  ("fsync", [UseStr, UseList]),
+  ("fileMode", [UseStr, UseList]),
   ("listDir", [UseStr, UseList]),
   ("statFile", [UseStr, UseList, UseFloat]),
   ("fileExists", [UseStr, UseList]),
@@ -597,14 +617,12 @@ catalogRows = [
   ExternRow
     "writeFileMode"
     (CSymbol LlvmFile "mdk_write_file_mode")
-    (NotProvided
-      GapUnported
-      "ported in llvm, not yet in wasm's host-fs seam; the browser playground has no POSIX file mode to set")
+    (Inline WasmLeaf)
     Interpreted,
   ExternRow
     "appendFile"
     (CSymbol LlvmFile "mdk_append_file")
-    (NotProvided GapUnported wasmNoHostFs)
+    (Inline WasmLeaf)
     Interpreted,
   ExternRow
     "fileExists"
@@ -614,9 +632,7 @@ catalogRows = [
   ExternRow
     "fileMode"
     (CSymbol LlvmFile "mdk_file_mode")
-    (NotProvided
-      GapUnported
-      "ported in llvm, not yet in wasm's host-fs seam; the browser playground has no POSIX file mode to report")
+    (Inline WasmLeaf)
     Interpreted,
   ExternRow
     "canonicalizePath"
@@ -636,7 +652,7 @@ catalogRows = [
   ExternRow
     "removeFile"
     (CSymbol LlvmFile "mdk_remove_file")
-    (NotProvided GapUnported wasmNoHostFs)
+    (Inline WasmLeaf)
     Interpreted,
   ExternRow
     "rename"
@@ -646,12 +662,12 @@ catalogRows = [
   ExternRow
     "fsync"
     (CSymbol LlvmFile "mdk_fsync")
-    (NotProvided GapUnported wasmNoHostFs)
+    (Inline WasmLeaf)
     Interpreted,
   ExternRow
     "removeDir"
     (CSymbol LlvmFile "mdk_remove_dir")
-    (NotProvided GapUnported wasmNoHostFs)
+    (Inline WasmLeaf)
     Interpreted,
   ExternRow
     "statFile"

@@ -28,7 +28,14 @@ const hostUrl = pathToFileURL(nodePath.join(__dirname, '..', '..', 'playground',
 const vfs = {
   readFile: (p) => fs.readFileSync(p),   // -> Buffer; throws on missing/unreadable
   exists: (p) => fs.existsSync(p),
-  writeFile: (p, buf) => fs.writeFileSync(p, buf),   // throws on unwritable path
+  // throws on unwritable path.  A given mode is set on the open file before the first
+  // byte, so neither the umask nor an existing file's mode can widen it.
+  writeFile: (p, buf, mode) => {
+    if (mode === undefined) { fs.writeFileSync(p, buf); return; }
+    const fd = fs.openSync(p, 'w', mode);
+    try { fs.fchmodSync(fd, mode); fs.writeFileSync(fd, buf); } finally { fs.closeSync(fd); }
+  },
+  appendFile: (p, buf) => fs.appendFileSync(p, buf), // creates the file when absent
   // stat(2) following links; the time is whole seconds, as st_mtime
   stat: (p) => {
     const st = fs.statSync(p);
@@ -36,6 +43,10 @@ const vfs = {
   },
   readdir: (p) => fs.readdirSync(p),
   rename: (a, b) => fs.renameSync(a, b),
+  unlink: (p) => fs.unlinkSync(p),   // a link is removed itself, not its target
+  rmdir: (p) => fs.rmdirSync(p),
+  // a file or a directory: open it read-only, flush, close
+  fsync: (p) => { const fd = fs.openSync(p, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } },
   // confinement's primitives: realpath(3) itself, and whether lstat(2) succeeds
   realpath: (p) => fs.realpathSync.native(p),
   lexists: (p) => { try { fs.lstatSync(p); return true; } catch (e) { return false; } },

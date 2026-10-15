@@ -402,7 +402,44 @@ function check(name, ok, detail) {
   err = '';
   try { v.stat('nowhere'); } catch (e) { err = e.message; }
   eq('stat of a missing path', err.startsWith('ENOENT'), true);
-  check('(m) MemoryVfs: stored modes (default 0o644), rename, readdir, stat', bad.length === 0, bad.join('; '));
+  v.appendFile('e/moved.txt', new Uint8Array([9]));
+  eq('append keeps the mode', v.stat('e/moved.txt').mode, 0o600);
+  eq('append grows the file', v.stat('e/moved.txt').size, 2);
+  v.appendFile('made.txt', new Uint8Array([4]));
+  eq('append creates at the default mode', v.stat('made.txt').mode, 0o644);
+  err = '';
+  try { v.appendFile('nowhere/x', new Uint8Array([1])); } catch (e) { err = e.message; }
+  eq('append into a missing directory', err.startsWith('ENOENT'), true);
+  v.unlink('made.txt');
+  eq('unlink removes a file', v.exists('made.txt'), false);
+  err = '';
+  try { v.unlink('e'); } catch (e) { err = e.message; }
+  eq('unlink of a directory', err.startsWith('EISDIR'), true);
+  err = '';
+  try { v.rmdir('e'); } catch (e) { err = e.message; }
+  eq('rmdir of a non-empty directory', err.startsWith('ENOTEMPTY'), true);
+  err = '';
+  try { v.rmdir('e/moved.txt'); } catch (e) { err = e.message; }
+  eq('rmdir of a file', err.startsWith('ENOTDIR'), true);
+  v.unlink('e/moved.txt');
+  v.unlink('e/x.txt');
+  v.rmdir('e');
+  eq('rmdir removes an empty directory', v.exists('e'), false);
+  err = '';
+  try { v.rmdir('e'); } catch (e) { err = e.message; }
+  eq('rmdir of a missing directory', err.startsWith('ENOENT'), true);
+  v.writeFile('f.txt', new Uint8Array([1]));
+  let flushed = true;
+  try { v.fsync('f.txt'); v.fsync('.'); } catch (e) { flushed = false; }
+  eq('fsync of a file and of the root', flushed, true);
+  err = '';
+  try { v.fsync('missing.txt'); } catch (e) { err = e.message; }
+  eq('fsync of a missing path', err.startsWith('ENOENT'), true);
+  eq('fileMode reads the stored mode', v.stat('f.txt').mode, 0o644);
+  v.writeFile('f.txt', new Uint8Array([2]), 0o600);
+  eq('writeFileMode over an existing file sets its mode', v.stat('f.txt').mode, 0o600);
+  eq('writeFileMode writes the contents', v.stat('f.txt').size, 1);
+  check('(m) MemoryVfs: stored modes (default 0o644), rename, readdir, stat, append, unlink, rmdir, fsync, fileMode', bad.length === 0, bad.join('; '));
 }
 
 // (n) rename takes two grants on one channel (-2 ends the first) and confines the source

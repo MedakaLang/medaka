@@ -1,0 +1,37 @@
+-- fsync refuses a path whose canonical form its grant does not admit, in the mode
+-- medaka_rt.c confines it in: writeFile's, which follows the last component, so a
+-- symbolic link there is refused by its target.  It flushes a regular file and a
+-- directory alike.  The last section calls it under a declared bound that a wider
+-- grant cannot lift.  An OS error prints as `Err (host)`: each engine words it its
+-- own way.  run.sh builds the tree and installs cfg/link -> ../outdir/sub.
+import string.{contains}
+
+said : Result String a -> String
+said (Ok _) = "Ok"
+said (Err e) =
+  if contains "is outside the granted authority" e then
+    "Err \{e}"
+  else
+    "Err (host)"
+
+flushCfg : String -> <FileWrite "cfg/*"> Result String Unit
+flushCfg name = fsync ("cfg/" ++ name)
+
+-- the same flush under a narrow bound, called through a wide row
+flushBound : String -> <FileWrite "cfg/*"> Result String Unit
+flushBound leaf = fsync ("cfg/link/" ++ leaf)
+
+widePackedFlush : Option (String -> <FileWrite> Result String Unit)
+widePackedFlush = Some flushBound
+
+main =
+  println "flush file: \{said (flushCfg "a.txt")}"
+  println "flush dir: \{said (flushCfg "sub")}"
+  println "flush up: \{said (flushCfg "../secret.txt")}"
+  println "flush link out: \{said (flushCfg "out")}"
+  println "flush dangling: \{said (flushCfg "dangling")}"
+  println "flush absent: \{said (flushCfg "nowhere")}"
+  println "flush through link: \{said (flushCfg "link/a.txt")}"
+  let _ = match widePackedFlush
+    Some f => println "bound flush: \{said (f "stolen.txt")}"
+    None => println "unexpected empty container"

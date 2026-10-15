@@ -1902,6 +1902,10 @@ externArityW name =
       "canonicalizePath",
       "listDir",
       "statFile",
+      "removeFile",
+      "removeDir",
+      "fsync",
+      "fileMode",
     ] then
     -- a file extern whose path is an authority: its path and its grant
 
@@ -1924,13 +1928,15 @@ externArityW name =
       "byteBlockSetUnsafe",
       "writeFileBytes",
       "writeFile",
+      "appendFile",
       "ioPoll",
       siteSentinelName,
     ] then
-    -- writeFileBytes, writeFile: its path, its contents and the path's grant
+    -- writeFileBytes, writeFile, appendFile: its path, its contents and the path's grant
     3
-  else if name == "rename" then
-    -- rename: its two paths and the grant of each
+  else if contains name ["rename", "writeFileMode"] then
+    -- rename: its two paths and the grant of each; writeFileMode: its path, its mode,
+    -- its contents and the path's grant
     4
   else if contains name ["arrayBlit", "byteBlockBlit"] then
     -- stage-A: arrayBlit src srcOff dst dstOff len (5 args); byteBlockBlit is
@@ -7198,6 +7204,15 @@ emitLeafExternRef prog env d "writeFile" [p, s, g] =
     ++ ["call $mdk_write_file_io"]
 emitLeafExternRef prog env d "writeFile" _ =
   gapLP prog "wasm: writeFile takes exactly two arguments and its grant"
+emitLeafExternRef prog env d "appendFile" [p, s, g] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d s
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_append_file_io"]
+emitLeafExternRef prog env d "appendFile" _ =
+  gapLP prog "wasm: appendFile takes exactly two arguments and its grant"
 emitLeafExternRef prog env d "rename" [src, dst, gs, gd] =
   emitRefExpr prog env d src
     ++ ["ref.cast (ref $str)"]
@@ -7222,6 +7237,44 @@ emitLeafExternRef prog env d "statFile" [p, g] =
     ++ ["call $mdk_stat_file_io"]
 emitLeafExternRef prog env d "statFile" _ =
   gapLP prog "wasm: statFile takes exactly one argument and its grant"
+emitLeafExternRef prog env d "removeFile" [p, g] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_remove_file_io"]
+emitLeafExternRef prog env d "removeFile" _ =
+  gapLP prog "wasm: removeFile takes exactly one argument and its grant"
+emitLeafExternRef prog env d "removeDir" [p, g] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_remove_dir_io"]
+emitLeafExternRef prog env d "removeDir" _ =
+  gapLP prog "wasm: removeDir takes exactly one argument and its grant"
+emitLeafExternRef prog env d "fsync" [p, g] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_fsync_io"]
+emitLeafExternRef prog env d "fsync" _ =
+  gapLP prog "wasm: fsync takes exactly one argument and its grant"
+emitLeafExternRef prog env d "fileMode" [p, g] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_file_mode_io"]
+emitLeafExternRef prog env d "fileMode" _ =
+  gapLP prog "wasm: fileMode takes exactly one argument and its grant"
+emitLeafExternRef prog env d "writeFileMode" [p, m, s, g] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d m
+    ++ emitRefExpr prog env d s
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_write_file_mode_io"]
+emitLeafExternRef prog env d "writeFileMode" _ =
+  gapLP prog "wasm: writeFileMode takes three arguments and its grant"
 -- W10/B5: `panic msg` → stream the coded line `runtime error [E-PANIC]: <msg>\n` to
 -- stderr, then `unreachable` (peer of native @mdk_panic / the interp's runtimePanic).
 -- The fixed prefix is unrolled to byte-writes; the user message (a $str (ref eq), any

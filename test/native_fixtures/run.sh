@@ -244,7 +244,7 @@ confine_untouched() {
 # runs there too, with the same expected output.  It needs the wasm emitter
 # (test/wasm/build_wasm_oracle.sh) and node; without them the arm is reported
 # NOT RUN, and with MEDAKA_REQUIRE_WASM=1 that is a failure.
-CONFINE_WASM=' alias_method cwd join exists_panic canonicalize_panic dependency_method/main redeclared_extern/main method_named_readfile/main bounded_recursion declared_bound_read fs_family shapes indexed_head user_file_labels pattern_binder grant_bound_joins declared_bound '
+CONFINE_WASM=' alias_method cwd join exists_panic canonicalize_panic dependency_method/main redeclared_extern/main method_named_readfile/main bounded_recursion declared_bound_read fs_family append_file names remove_file remove_dir fsync file_mode write_file_mode shapes indexed_head user_file_labels pattern_binder grant_bound_joins declared_bound '
 WASM_EMIT="${MEDAKA_WASM_EMITTER:-$ROOT/test/bin/wasm_emit_modules_main}"
 wasm_ok=1
 if [ ! -x "$WASM_EMIT" ] || ! command -v node >/dev/null 2>&1; then
@@ -367,6 +367,70 @@ bound move: Err cfg/link/a.txt $outside [\"cfg/*\"]
 bound write: Err cfg/link/stolen.txt $outside [\"cfg/*\"]
 bound list: Err cfg/link/ $outside [\"cfg/*\"]
 bound stat: Err cfg/link/a.txt $outside [\"cfg/*\"]"
+# appendFile: the write mode of writeFile, the bound through a wide row, and an OS error.
+confine_case append_file . "inside: Ok
+inside read: Ok granted+x
+new: Ok
+new read: Ok +x
+sub: Ok
+up: Err cfg/../outdir/stolen.txt $outside [\"cfg/*\"]
+link out: Err cfg/out $outside [\"cfg/*\"]
+dangling: Err cfg/dangling $outside [\"cfg/*\"]
+dir: Err (host)
+absent dir: Err (host)
+bound append: Err cfg/link/stolen.txt $outside [\"cfg/*\"]"
+# removeFile and removeDir confine in entry mode: a link as the last component is the
+# entry (removed, or ENOTDIR for rmdir), and a link before it is followed.
+confine_case remove_file . "remove a: Ok
+remove a again: Err (host)
+remove up: Err cfg/../secret.txt $outside [\"cfg/*\"]
+remove link: Ok
+remove dangling: Ok
+remove dir: Err (host)
+remove absent dir: Err (host)
+remove through link: Err cfg/link/a.txt $outside [\"cfg/*\"]
+bound remove: Err cfg/link/stolen.txt $outside [\"cfg/*\"]"
+confine_case remove_dir . "remove sub: Ok
+remove sub again: Err (host)
+remove file: Err (host)
+remove link: Err (host)
+remove up: Err cfg/../outdir $outside [\"cfg/*\"]
+remove absent: Err (host)
+remove through link: Err cfg/link/sub $outside [\"cfg/*\"]
+bound remove: Err cfg/link/sub $outside [\"cfg/*\"]"
+# fsync follows its last component, as writeFile does, and flushes a directory too.
+confine_case fsync . "flush file: Ok
+flush dir: Ok
+flush up: Err cfg/../secret.txt $outside [\"cfg/*\"]
+flush link out: Err cfg/out $outside [\"cfg/*\"]
+flush dangling: Err cfg/dangling $outside [\"cfg/*\"]
+flush absent: Err (host)
+flush through link: Err cfg/link/a.txt $outside [\"cfg/*\"]
+bound flush: Err cfg/link/stolen.txt $outside [\"cfg/*\"]"
+# fileMode follows its last component, as statFile does; the bits themselves are the
+# umask's, so a success prints only that they lie in 0 to 4095.
+confine_case file_mode . "mode file: Ok in range
+mode dir: Ok in range
+mode inside link: Ok in range
+mode up: Err cfg/../secret.txt $outside [\"cfg/*\"]
+mode link out: Err cfg/out $outside [\"cfg/*\"]
+mode dangling: Err cfg/dangling $outside [\"cfg/*\"]
+mode absent: Err (host)
+mode through link: Err cfg/link/a.txt $outside [\"cfg/*\"]
+bound mode: Err cfg/link/stolen.txt $outside [\"cfg/*\"]"
+# writeFileMode writes as writeFile does, and leaves the file at exactly the mode given.
+confine_case write_file_mode . "new: Ok
+new mode: Ok 384
+overwrite: Ok
+overwrite mode: Ok 420
+inside sub: Ok
+up: Err cfg/../new2.txt $outside [\"cfg/*\"]
+link out: Err cfg/out $outside [\"cfg/*\"]
+dangling: Err cfg/dangling $outside [\"cfg/*\"]
+dir: Err (host)
+absent dir: Err (host)
+through link: Err cfg/link/a.txt $outside [\"cfg/*\"]
+bound write: Err cfg/link/stolen.txt $outside [\"cfg/*\"]"
 confine_case user_file_labels . "Ok granted
 Ok ()"
 confine_case grant_bound_joins . "Ok ()

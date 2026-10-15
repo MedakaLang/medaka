@@ -516,6 +516,93 @@ test "a wasm plan's host keys are its reached externs' imports, per group" = exp
           WasmBackend
           (call "writeFile" [ref "p", str "x", CList []]))),
     labelFail
+      "appendFile: the grant and path channels, the append, the write channel and the result channel"
+      (expectEqual
+        [
+          "mdk_append_file",
+          "mdk_grant_push",
+          "mdk_grant_reset",
+          "mdk_path_push",
+          "mdk_path_reset",
+          "mdk_result_byte",
+          "mdk_result_len",
+          "mdk_write_file_push",
+          "mdk_write_file_reset",
+        ]
+        (hostKeysOf
+          WasmBackend
+          (call "appendFile" [ref "p", str "x", CList []]))),
+    labelFail
+      "removeFile: the grant and path channels, the removal and the result channel"
+      (expectEqual
+        [
+          "mdk_grant_push",
+          "mdk_grant_reset",
+          "mdk_path_push",
+          "mdk_path_reset",
+          "mdk_remove_file",
+          "mdk_result_byte",
+          "mdk_result_len",
+        ]
+        (hostKeysOf WasmBackend (call "removeFile" [ref "p", CList []]))),
+    labelFail
+      "removeDir: the grant and path channels, the removal and the result channel"
+      (expectEqual
+        [
+          "mdk_grant_push",
+          "mdk_grant_reset",
+          "mdk_path_push",
+          "mdk_path_reset",
+          "mdk_remove_dir",
+          "mdk_result_byte",
+          "mdk_result_len",
+        ]
+        (hostKeysOf WasmBackend (call "removeDir" [ref "p", CList []]))),
+    labelFail
+      "fsync: the grant and path channels, the flush and the result channel"
+      (expectEqual
+        [
+          "mdk_fsync",
+          "mdk_grant_push",
+          "mdk_grant_reset",
+          "mdk_path_push",
+          "mdk_path_reset",
+          "mdk_result_byte",
+          "mdk_result_len",
+        ]
+        (hostKeysOf WasmBackend (call "fsync" [ref "p", CList []]))),
+    labelFail
+      "fileMode: the grant and path channels, the stat and its mode field, not statFile's own key"
+      (expectEqual
+        [
+          "mdk_file_mode",
+          "mdk_grant_push",
+          "mdk_grant_reset",
+          "mdk_path_push",
+          "mdk_path_reset",
+          "mdk_result_byte",
+          "mdk_result_len",
+          "mdk_stat_field",
+        ]
+        (hostKeysOf WasmBackend (call "fileMode" [ref "p", CList []]))),
+    labelFail
+      "writeFileMode: the grant and path channels, the write channel, the commit with its mode and the result channel"
+      (expectEqual
+        [
+          "mdk_grant_push",
+          "mdk_grant_reset",
+          "mdk_path_push",
+          "mdk_path_reset",
+          "mdk_result_byte",
+          "mdk_result_len",
+          "mdk_write_file_mode",
+          "mdk_write_file_push",
+          "mdk_write_file_reset",
+        ]
+        (hostKeysOf
+          WasmBackend
+          (call "writeFileMode" [ref "p", int 420, str "x", CList []]))),
+    labelFail
       "rename: the grant and path channels, the move and the result channel"
       (expectEqual
         [

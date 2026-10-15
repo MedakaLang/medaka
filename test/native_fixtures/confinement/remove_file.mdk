@@ -1,0 +1,38 @@
+-- removeFile refuses a path whose canonical form its grant does not admit, in entry
+-- mode: the last component is not followed, so a symbolic link there is the entry
+-- itself and is removed, not its target.  Each element before it is followed.  The
+-- last section calls it under a declared bound that a wider grant cannot lift.  An
+-- OS error prints as `Err (host)`: each engine words it its own way.  run.sh builds
+-- the tree and installs cfg/link -> ../outdir/sub.
+import string.{contains}
+
+said : Result String a -> String
+said (Ok _) = "Ok"
+said (Err e) =
+  if contains "is outside the granted authority" e then
+    "Err \{e}"
+  else
+    "Err (host)"
+
+removeCfg : String -> <FileWrite "cfg/*"> Result String Unit
+removeCfg name = removeFile ("cfg/" ++ name)
+
+-- the same removal under a narrow bound, called through a wide row
+removeBound : String -> <FileWrite "cfg/*"> Result String Unit
+removeBound leaf = removeFile ("cfg/link/" ++ leaf)
+
+widePackedRemove : Option (String -> <FileWrite> Result String Unit)
+widePackedRemove = Some removeBound
+
+main =
+  println "remove a: \{said (removeCfg "a.txt")}"
+  println "remove a again: \{said (removeCfg "a.txt")}"
+  println "remove up: \{said (removeCfg "../secret.txt")}"
+  println "remove link: \{said (removeCfg "out")}"
+  println "remove dangling: \{said (removeCfg "dangling")}"
+  println "remove dir: \{said (removeCfg "sub")}"
+  println "remove absent dir: \{said (removeCfg "nodir/x.txt")}"
+  println "remove through link: \{said (removeCfg "link/a.txt")}"
+  let _ = match widePackedRemove
+    Some f => println "bound remove: \{said (f "stolen.txt")}"
+    None => println "unexpected empty container"

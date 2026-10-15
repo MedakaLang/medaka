@@ -1733,6 +1733,12 @@ hostImportSig "mdk_grant_reset" = ""
 hostImportSig "mdk_grant_push" = " (param i32)"
 hostImportSig "mdk_canonicalize_path" = " (result i32)"
 hostImportSig "mdk_write_file" = " (result i32)"
+hostImportSig "mdk_append_file" = " (result i32)"
+hostImportSig "mdk_remove_file" = " (result i32)"
+hostImportSig "mdk_remove_dir" = " (result i32)"
+hostImportSig "mdk_fsync" = " (result i32)"
+hostImportSig "mdk_file_mode" = " (result i32)"
+hostImportSig "mdk_write_file_mode" = " (param i32) (result i32)"
 hostImportSig "mdk_rename" = " (param i32) (result i32)"
 hostImportSig "mdk_list_dir" = " (result i32)"
 hostImportSig "mdk_stat_file" = " (result i32)"
@@ -2005,9 +2011,15 @@ ioHostRuntimeLines keys =
     ++ gatedOn "mdk_file_exists" keys ioFileExistsLines
     ++ gatedOn "mdk_canonicalize_path" keys ioCanonicalizeLines
     ++ gatedOn "mdk_write_file" keys ioWriteFileLines
+    ++ gatedOn "mdk_append_file" keys ioAppendFileLines
     ++ gatedOn "mdk_rename" keys ioRenameLines
     ++ gatedOn "mdk_list_dir" keys ioListDirLines
     ++ gatedOn "mdk_stat_file" keys ioStatFileLines
+    ++ gatedOn "mdk_remove_file" keys ioRemoveFileLines
+    ++ gatedOn "mdk_remove_dir" keys ioRemoveDirLines
+    ++ gatedOn "mdk_fsync" keys ioFsyncLines
+    ++ gatedOn "mdk_file_mode" keys ioFileModeLines
+    ++ gatedOn "mdk_write_file_mode" keys ioWriteFileModeLines
     ++ gatedOn "mdk_get_env" keys ioGetEnvLines
 
 gatedOn : String -> List String -> List String -> List String
@@ -2164,6 +2176,47 @@ ioWriteFileLines = [
   "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
 ]
 
+ioWriteFileModeLines : List String
+ioWriteFileModeLines = [
+  "  ;; writeFileMode : $str path -> Int mode -> $str contents -> Result String Unit.",
+  "  ;; 1=Ok () / 0=Err msg.  The contents stream to the host's write buffer; the host sets",
+  "  ;; the file's mode before the first byte is written.",
+  "  (func $mdk_write_file_mode_io (param $path (ref $str)) (param $mode (ref eq)) (param $s (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (call $mdk_write_file_reset)",
+  "    (local.set $b (struct.get $str $bytes (local.get $s)))",
+  "    (local.set $n (array.len (local.get $b)))",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (call $mdk_write_file_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (if (result (ref eq)) (call $mdk_write_file_mode (i32.wrap_i64 (call $mdk_unbox_int (local.get $mode))))",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioAppendFileLines : List String
+ioAppendFileLines = [
+  "  ;; appendFile : $str path -> $str contents -> Result String Unit.  1=Ok () / 0=Err msg.",
+  "  ;; The contents' bytes stream to the host's write buffer; the host appends them.",
+  "  (func $mdk_append_file_io (param $path (ref $str)) (param $s (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (call $mdk_write_file_reset)",
+  "    (local.set $b (struct.get $str $bytes (local.get $s)))",
+  "    (local.set $n (array.len (local.get $b)))",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (call $mdk_write_file_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (if (result (ref eq)) (call $mdk_append_file)",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
 ioRenameLines : List String
 ioRenameLines = [
   "  ;; rename : $str src -> $str dst -> src grant -> dst grant -> Result String Unit.",
@@ -2221,6 +2274,52 @@ ioStatFileLines = [
   "          (ref.i31 (i32.trunc_f64_s (call $mdk_stat_field (i32.const 1))))",
   "          (ref.i31 (i32.trunc_f64_s (call $mdk_stat_field (i32.const 2))))",
   "          (struct.new $float (call $mdk_stat_field (i32.const 3))))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioRemoveFileLines : List String
+ioRemoveFileLines = [
+  "  ;; removeFile : $str path -> Result String Unit.  1=Ok () / 0=Err msg.",
+  "  (func $mdk_remove_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (result (ref eq)) (call $mdk_remove_file)",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioRemoveDirLines : List String
+ioRemoveDirLines = [
+  "  ;; removeDir : $str path -> Result String Unit.  1=Ok () / 0=Err msg.",
+  "  (func $mdk_remove_dir_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (result (ref eq)) (call $mdk_remove_dir)",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioFsyncLines : List String
+ioFsyncLines = [
+  "  ;; fsync : $str path -> Result String Unit.  1=Ok () / 0=Err msg.",
+  "  (func $mdk_fsync_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (result (ref eq)) (call $mdk_fsync)",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioFileModeLines : List String
+ioFileModeLines = [
+  "  ;; fileMode : $str path -> Result String Int: the permission bits, 0 to 4095.  The host",
+  "  ;; takes the stat that statFile takes and answers its mode field, field 4.",
+  "  (func $mdk_file_mode_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (result (ref eq)) (call $mdk_file_mode)",
+  "      (then (struct.new $C_Ok (i32.const 0)",
+  "        (call $mdk_box_int (i64.trunc_f64_s (call $mdk_stat_field (i32.const 4))))))",
   "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
 ]
 

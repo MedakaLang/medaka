@@ -50,12 +50,14 @@ export const SLICES = {
     keys: [
       'mdk_read_file', 'mdk_file_exists', 'mdk_canonicalize_path',
       'mdk_write_file_reset', 'mdk_write_file_push', 'mdk_write_file_commit',
-      'mdk_write_file', 'mdk_rename', 'mdk_list_dir', 'mdk_stat_file', 'mdk_stat_field',
+      'mdk_write_file', 'mdk_append_file', 'mdk_rename', 'mdk_list_dir', 'mdk_stat_file', 'mdk_stat_field',
+      'mdk_remove_file', 'mdk_remove_dir', 'mdk_fsync', 'mdk_file_mode', 'mdk_write_file_mode',
       ...PATH_KEYS, ...RESULT_KEYS, ...GRANT_KEYS,
     ],
     externs: [
       'readFile', 'readFileBytes', 'fileExists', 'canonicalizePath', 'writeFile', 'writeFileBytes',
-      'rename', 'listDir', 'statFile',
+      'appendFile', 'writeFileMode', 'rename', 'listDir', 'statFile', 'fileMode', 'removeFile', 'removeDir',
+      'fsync',
     ],
   },
   // A declared file bound's frame (EFFECTS-SEMANTICS §7) is bookkeeping, not a
@@ -131,8 +133,11 @@ export const KEY_EXTERN = {
   mdk_write_byte: 'putStr', mdk_write_err_byte: 'ePutStr',
   mdk_read_file: 'readFile', mdk_file_exists: 'fileExists', mdk_canonicalize_path: 'canonicalizePath',
   mdk_write_file_reset: 'writeFileBytes', mdk_write_file_push: 'writeFileBytes',
-  mdk_write_file_commit: 'writeFileBytes', mdk_write_file: 'writeFile', mdk_rename: 'rename',
+  mdk_write_file_commit: 'writeFileBytes', mdk_write_file: 'writeFile', mdk_append_file: 'appendFile',
+  mdk_rename: 'rename',
   mdk_list_dir: 'listDir', mdk_stat_file: 'statFile', mdk_stat_field: 'statFile', mdk_get_env: 'getEnv',
+  mdk_remove_file: 'removeFile', mdk_remove_dir: 'removeDir', mdk_fsync: 'fsync', mdk_file_mode: 'fileMode',
+  mdk_write_file_mode: 'writeFileMode',
   mdk_args_count: 'args', mdk_arg_len: 'args', mdk_arg_byte: 'args', mdk_exit: 'exit',
   mdk_wall_time_sec: 'wallTimeSec', mdk_monotonic_sec: 'monotonicSec', mdk_sleep_ms: 'sleepMs',
   mdk_result_len: 'readFile/getEnv result', mdk_result_byte: 'readFile/getEnv result',
@@ -337,6 +342,19 @@ export class MemoryVfs {
     if (mode !== undefined) this.modes.set(key, mode & 0o7777);
     this.mtimes.set(key, Math.floor(Date.now() / 1000));
   }
+  // appendFile: the bytes go to the end of the file, which is created (at the default
+  // mode) when absent; an existing file keeps its mode.
+  appendFile(p, bytes) {
+    const { key, error } = this.resolve(p);
+    if (error) throw new Error(`${error}, open '${p}'`);
+    if (this.dirs.has(key)) throw new Error(`EISDIR: illegal operation on a directory, open '${p}'`);
+    const old = this.files.get(key) || new Uint8Array(0);
+    const out = new Uint8Array(old.length + bytes.length);
+    out.set(old, 0);
+    out.set(bytes, old.length);
+    this.files.set(key, out);
+    this.mtimes.set(key, Math.floor(Date.now() / 1000));
+  }
   stat(p) {
     const { key, error } = this.resolve(p);
     const isDir = !error && this.dirs.has(key);
@@ -387,6 +405,33 @@ export class MemoryVfs {
     if (srcDir)
       for (const k of [...this.dirs])
         if (k === sk || k.startsWith(sk + '/')) { this.dirs.delete(k); this.dirs.add(move(k)); }
+  }
+  // unlink(2): removes a file; a directory is EISDIR, a missing path ENOENT.
+  unlink(p) {
+    const { key, error } = this.resolve(p);
+    if (error) throw new Error(`${error}, unlink '${p}'`);
+    if (this.dirs.has(key)) throw new Error(`EISDIR: illegal operation on a directory, unlink '${p}'`);
+    if (!this.files.has(key)) throw new Error(`ENOENT: no such file or directory, unlink '${p}'`);
+    this.files.delete(key);
+    this.modes.delete(key);
+    this.mtimes.delete(key);
+  }
+  // fsync(2) on a file or a directory: nothing to flush in memory, so only the path's
+  // existence is answered.
+  fsync(p) {
+    const { key, error } = this.resolve(p);
+    if (error) throw new Error(`${error}, fsync '${p}'`);
+    if (!(this.dirs.has(key) || this.files.has(key))) throw new Error(`ENOENT: no such file or directory, fsync '${p}'`);
+  }
+  // rmdir(2): removes an empty directory; a file is ENOTDIR, the root EBUSY.
+  rmdir(p) {
+    const { key, error } = this.resolve(p);
+    if (error) throw new Error(`${error}, rmdir '${p}'`);
+    if (this.files.has(key)) throw new Error(`ENOTDIR: not a directory, rmdir '${p}'`);
+    if (!this.dirs.has(key)) throw new Error(`ENOENT: no such file or directory, rmdir '${p}'`);
+    if (key === '') throw new Error(`EBUSY: resource busy or locked, rmdir '${p}'`);
+    if (this.readdir(key).length > 0) throw new Error(`ENOTEMPTY: directory not empty, rmdir '${p}'`);
+    this.dirs.delete(key);
   }
 }
 
@@ -581,13 +626,25 @@ export function createHost(profile, opts = {}) {
   const refusal = (path, entry, write) => refusalUnder(takeGrant(), path, entry, write);
   const refuse = (msg) => { host.resultBuf = enc(msg); return 0; };
   // The write channel's bytes to the path on the path channel, in write mode.
-  const commitWrite = () => {
+  // `mode`, when given, is the permission bits the file is left at (writeFileMode).
+  const commitWrite = (append, mode) => {
     const bytes = new Uint8Array(host.writeBuf);
     host.writeBuf = [];
     const p = takePath();
     const refused = refusal(p, false, 1);
     if (refused !== null) return refuse(refused);
-    try { host.vfs.writeFile(p, bytes); return 1; } catch (e) { return fail(e); }
+    try {
+      if (append) host.vfs.appendFile(p, bytes); else host.vfs.writeFile(p, bytes, mode);
+      return 1;
+    } catch (e) { return fail(e); }
+  };
+  // statFile and fileMode: confine the path as a read that follows its last component,
+  // then take its stat for mdk_stat_field.
+  const takeStat = () => {
+    const p = takePath();
+    const refused = refusal(p, false, 0);
+    if (refused !== null) return refuse(refused);
+    try { host.stat = host.vfs.stat(p); return 1; } catch (e) { return fail(e); }
   };
   const argBytes = (i) => {
     if (!host.argBytes) host.argBytes = host.args.map(enc);
@@ -674,9 +731,13 @@ export function createHost(profile, opts = {}) {
     // writeBuf, commit writes them.  Ok -> 1; an error caches its message -> 0.
     mdk_write_file_reset: () => { host.writeBuf = []; },
     mdk_write_file_push: (b) => { host.writeBuf.push(b & 0xff); },
-    mdk_write_file_commit: () => commitWrite(),
+    mdk_write_file_commit: () => commitWrite(false),
     // writeFile: the contents stream into writeBuf as writeFileBytes' do.
-    mdk_write_file: () => commitWrite(),
+    mdk_write_file: () => commitWrite(false),
+    // appendFile: the same stream, appended to the file (created when absent).
+    mdk_append_file: () => commitWrite(true),
+    // writeFileMode: the same stream, the file left at the mode (path, mode, contents).
+    mdk_write_file_mode: (m) => commitWrite(false, m & 0o7777),
     // rename: both paths arrive on the path channel, the source's bytes first, `srcLen`
     // of them; each is confined in entry mode under its own grant, source first.
     mdk_rename: (srcLen) => {
@@ -703,15 +764,34 @@ export function createHost(profile, opts = {}) {
     },
     // statFile: take the stat, then read its fields as f64s by index: size, isDir,
     // isFile, mtime in seconds, permission bits.
-    mdk_stat_file: () => {
-      const p = takePath();
-      const refused = refusal(p, false, 0);
-      if (refused !== null) return refuse(refused);
-      try { host.stat = host.vfs.stat(p); return 1; } catch (e) { return fail(e); }
-    },
+    // fileMode takes the same stat (its field 4 is the mode), so both share takeStat.
+    mdk_stat_file: takeStat,
+    mdk_file_mode: takeStat,
     mdk_stat_field: (i) => {
       const st = host.stat;
       return [st.size, st.isDir ? 1 : 0, st.isFile ? 1 : 0, st.mtime, st.mode][i];
+    },
+    // removeFile and removeDir: the path is confined in entry mode, so a symbolic link
+    // as the last component is the entry itself, and is removed, not its target.
+    mdk_remove_file: () => {
+      const p = takePath();
+      const refused = refusal(p, true, 1);
+      if (refused !== null) return refuse(refused);
+      try { host.vfs.unlink(p); return 1; } catch (e) { return fail(e); }
+    },
+    mdk_remove_dir: () => {
+      const p = takePath();
+      const refused = refusal(p, true, 1);
+      if (refused !== null) return refuse(refused);
+      try { host.vfs.rmdir(p); return 1; } catch (e) { return fail(e); }
+    },
+    // fsync: a regular file or a directory, confined as a write that follows its last
+    // component.
+    mdk_fsync: () => {
+      const p = takePath();
+      const refused = refusal(p, false, 1);
+      if (refused !== null) return refuse(refused);
+      try { host.vfs.fsync(p); return 1; } catch (e) { return fail(e); }
     },
     mdk_get_env: () => {
       const v = host.getEnv(takePath());

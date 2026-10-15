@@ -1,0 +1,47 @@
+-- appendFile refuses a path whose canonical form its grant does not admit, in the
+-- mode medaka_rt.c confines it in: writeFile's, which follows the last component.
+-- It creates a file that is absent.  The last section calls it under a declared
+-- bound that a wider grant cannot lift.  An OS error prints as `Err (host)`: each
+-- engine words it its own way.  run.sh builds the tree and installs cfg/link ->
+-- ../outdir/sub.
+import string.{contains}
+
+said : Result String a -> String
+said (Ok _) = "Ok"
+said (Err e) =
+  if contains "is outside the granted authority" e then
+    "Err \{e}"
+  else
+    "Err (host)"
+
+appendCfg : String -> <FileWrite "cfg/*"> Result String Unit
+appendCfg name = appendFile ("cfg/" ++ name) "+x"
+
+readCfg : String -> <FileRead "cfg/*"> Result String String
+readCfg name = readFile ("cfg/" ++ name)
+
+readText : Result String String -> String
+readText (Ok s) = "Ok \{s}"
+readText (Err e) = said (Err e)
+
+-- the same append under a narrow bound, called through a wide row
+appendBound : String -> <FileWrite "cfg/*"> Result String Unit
+appendBound leaf = appendFile ("cfg/link/" ++ leaf) "x"
+
+widePackedAppend : Option (String -> <FileWrite> Result String Unit)
+widePackedAppend = Some appendBound
+
+main =
+  println "inside: \{said (appendCfg "a.txt")}"
+  println "inside read: \{readText (readCfg "a.txt")}"
+  println "new: \{said (appendCfg "new.txt")}"
+  println "new read: \{readText (readCfg "new.txt")}"
+  println "sub: \{said (appendCfg "sub/b.txt")}"
+  println "up: \{said (appendCfg "../outdir/stolen.txt")}"
+  println "link out: \{said (appendCfg "out")}"
+  println "dangling: \{said (appendCfg "dangling")}"
+  println "dir: \{said (appendCfg "sub")}"
+  println "absent dir: \{said (appendCfg "nodir/x.txt")}"
+  let _ = match widePackedAppend
+    Some f => println "bound append: \{said (f "stolen.txt")}"
+    None => println "unexpected empty container"
