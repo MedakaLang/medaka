@@ -8,7 +8,9 @@ tree was added by an agent doing perfectly reasonable *feature* work who never t
 about performance at all — and none of them were caught by a gate, because the gates were
 looking the wrong way.
 
-Root router: [`../AGENTS.md`](../AGENTS.md). Deep-dive when you are *hunting* a perf bug:
+Root router: [`../AGENTS.md`](../AGENTS.md). Where the compiler is going, and the laws a
+placement or a sprint contract must satisfy: [`ARCHITECTURE.md`](ARCHITECTURE.md); the
+sequencing plan: [`ARCHITECTURE-PLAYBOOK.md`](ARCHITECTURE-PLAYBOOK.md). Deep-dive when you are *hunting* a perf bug:
 [`../.claude/workstreams/PERF.md`](../.claude/workstreams/PERF.md) and the `perf-hunt`
 skill. **This file is the part you need when you are NOT thinking about performance.**
 

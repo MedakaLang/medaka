@@ -194,6 +194,8 @@ What's in the standard library, what's planned, module-by-module status.
 |-----|------------|--------|
 | [`AGENTS.md`](../compiler/AGENTS.md) | compiler/AGENTS.md — how not to make the compiler slow | LIVE |
 | [`ARCH-REVIEW.md`](../compiler/ARCH-REVIEW.md) | Medaka Architecture Review | PARTIAL |
+| [`ARCHITECTURE-PLAYBOOK.md`](../compiler/ARCHITECTURE-PLAYBOOK.md) | From here to there: the architecture playbook | PROPOSED 2026-10-15, awaiting Val's ratification of |
+| [`ARCHITECTURE.md`](../compiler/ARCHITECTURE.md) | The compiler's target architecture | PROPOSED 2026-10-15, awaiting Val's ratification |
 | [`ARGSTAMP-UNIFY-PLAN.md`](../compiler/ARGSTAMP-UNIFY-PLAN.md) | ARGSTAMP-UNIFY-PLAN.md — retire the `emitArgStampPasses` eval-vs-emit dispatch fork | IMPLEMENTED |
 | [`BOOTSTRAP.md`](../compiler/BOOTSTRAP.md) | BOOTSTRAP.md — Native self-compile slices | IMPLEMENTED |
 | [`COMPOSITE-MAIN-AUTOPRINT-DESIGN.md`](../compiler/COMPOSITE-MAIN-AUTOPRINT-DESIGN.md) | Composite-`main` Auto-Print — Design (Option A: uniform auto-print) | IMPLEMENTED on every verb |

@@ -9,8 +9,12 @@ This skill is the **single source of placement ground truth**, shared by
 `sprint-plan` (which must state placement in the contract, before code exists),
 `style-review` (which checks it in a diff), and any agent about to add a file.
 
-It answers *where does this belong* and *what must not be relitigated*. It does
-**not** duplicate two things that already have owners:
+It answers *where does this belong* and *what must not be relitigated*. The
+compiler-wide destination (layers, output-as-value, state lifetime, one fact one
+producer, the hooks record, the growth rule) is `compiler/ARCHITECTURE.md`; the plan
+that gets there is `compiler/ARCHITECTURE-PLAYBOOK.md`. A placement that conflicts
+with a law there needs a stated reason in the contract. This skill does **not**
+duplicate two things that already have owners:
 
 - **Which stage lives in which file, and in what order they run** — `AGENTS.md`
   § "Pipeline — where each stage lives". That table is current; the Layout
