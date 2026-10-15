@@ -213,19 +213,25 @@ does in this tree. A design document is a proposal; once landed it is history.
 
 ---
 
-## 4. What this document does not decide
+## 4. The owner decisions beneath the laws
 
-These are owner decisions the playbook routes to Val, listed here so a reader does not
-mistake the laws for rulings already taken:
+Six decisions sat under these laws when they were drafted. Val ruled all six on
+2026-10-15; the rulings and their reasoning are in `ARCHITECTURE-PLAYBOOK.md` §9 and on
+#4206. In one line each:
 
-- D1 the growth ratchet on `types/typecheck.mdk` (A8), given the declined tree-wide size
-  ratchet (#2289).
-- D2 the admissibility rule for the hooks record (A6).
-- D3 where the archive lives and the shape of the per-directory maps (A10).
-- D4 who owns `build`'s front end (#4160) and D5 how a value `main` is checked (#4151),
-  both prerequisites of A7's second half.
-- D6 whether the prelude's `ModuleInterface` is a cache file or is baked into the binary
-  at build time.
+- D1 `types/typecheck.mdk` may not grow (A8): adopted, as a one-file growth stop with a
+  reviewed override; the tree-wide refusal in #2289 stands.
+- D2 the hooks record (A6) serves rendering, tooling and backend-fact lookups and is never
+  read from inference: accepted.
+- D3 landed design docs move to `compiler/archive/`; each directory gets a map under 100
+  lines with no line numbers (A10): accepted.
+- D4 `build`'s emitter child runs the whole pipeline until the interface artifact exists,
+  then receives the artifact from the parent (A7): accepted.
+- D5 a value `main`'s auto-print obligation is an ordinary wanted solved against the
+  unmodified prelude (A7): accepted.
+- D6 the prelude's and the stdlib's interfaces ship as files beside the sources, produced
+  by `make medaka` and loaded lazily, as OCaml's `.cmi`, GHC's `.hi` and rustc's `.rmeta`
+  are (A7): accepted; not baked into the binary.
 
 ---
 
@@ -238,7 +244,8 @@ mistake the laws for rulings already taken:
   (ruling 8, #2586).
 - `RNone` stays a pinned refining optimisation until its owning evidence work replaces it.
 - The interpreter stays a pure deterministic oracle.
-- No tree-wide size gate (#2289). A8's growth rule is a different instrument and is D1.
+- No tree-wide size gate (#2289). A8's growth rule is a different instrument, ruled
+  separately as D1.
 
 ---
 
