@@ -78,6 +78,7 @@ import types.typecheck.{
   beginAssumptionTrace,
   beginEvidenceObservation,
   beginMethodReturnTrace,
+  cellGoalInnerAliasing,
   beginNumericPredicateTrace,
   checkModulesDiagsChain,
   checkModulesEntryReport,
@@ -110,7 +111,7 @@ import support.util.{
   contains, endsWith, isEmptyL, joinNl, joinWith, listLen, lookupAssoc, splitNl,
   splitOnChar, startsWith
 }
-import list.{last}
+import list.{last, nub, sort}
 
 data NumericTraceView = NumericTraceView {
   ntvStage : NumericPredicateTraceStage,
@@ -4165,6 +4166,42 @@ test "an undetermined goal's prerequisites are judged in work linear in depth" =
       errors,
     expectGreaterThan 0.0 first,
     expectLessThan (first * 3.0 + 65536.0) second,
+  ]
+
+-- An argument stamp, a return site and a method's own dictionaries each write a
+-- method cell, and the stamper's notes about what it built below the top must land
+-- in that cell's summary, which is all `judgeCells` reads for depth two and below.
+-- A producer that captured a fresh summary instead hides a nested hole in an
+-- accepted program, and no natural program has one to show it.
+cellInnerSource : String
+cellInnerSource = joinNl [
+  "interface Sh a where",
+  "  sh : a -> Int",
+  "interface Mk a where",
+  "  mk : Int -> a",
+  "interface Wr a where",
+  "  wr : Sh b => a -> b -> Int",
+  "impl Sh Int where",
+  "  sh n = n",
+  "impl Mk Int where",
+  "  mk n = n",
+  "impl Wr Int where",
+  "  wr a b = sh b",
+  "useAll : Int",
+  "useAll = wr (mk 1 : Int) (sh (mk 2 : Int))",
+]
+
+test "every goal that writes a method cell notes into that cell's summary" =
+  let _ = elaborateOne [] (desugar (parse numericPreludeSource)) (
+    "cell_inner",
+    desugar (parseLocated cellInnerSource),
+  )
+  let observed = cellGoalInnerAliasing ()
+  expectAll [
+    expectEqual [] (filter (o => not (snd o)) observed),
+    expectEqual
+      ["GKArgStamp", "GKMethodDict", "GKReturnSite"]
+      (sort (nub (map fst observed))),
   ]
 
 -- `monoVecSameGiven` equates two arrows that differ only in their effect rows; the
