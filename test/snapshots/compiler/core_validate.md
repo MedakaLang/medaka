@@ -1,5 +1,5 @@
 # META
-source_lines=1330
+source_lines=1331
 stages=DESUGAR,MARK
 # SOURCE
 -- Checks a lowered program must pass before an emitter writes any of it.  Each
@@ -848,8 +848,9 @@ ifaceWordFaults _ _ = []
 
 -- A method occurrence that names its interface is answered by an instance or a
 -- given.  An interface-less `RNone` is a standalone, which dispatches by its own
--- name, or an ambiguous re-exported method whose return type is a variable, which
--- the completeness judgment passes today (#4131).
+-- name: an admitted-set occurrence check accepts carries its selecting
+-- declaration's word, and one no declaration decides is a T-AMBIGUOUS-METHOD
+-- reject.
 methodNoRouteFault : String -> Route -> List String
 methodNoRouteFault "" _ = []
 methodNoRouteFault _ RNone = ["has no route"]

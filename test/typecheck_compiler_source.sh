@@ -1097,9 +1097,6 @@ numeric_predicate_required='  ClassPredicate(..),
   | SKNumReturn ClassPredicate Mono
   | OpNumLit Mono
   | EKNumReturn ClassPredicate Mono Bool (Option Loc)
-    _ => tagRef := numericReturnRoute route routes
-      let split = binopRouteSplit route
-recordMethodDictsFromSlots anchor.msrMethodSlots (Ref []) (snd inst)
 public export data NumericPredicateTraceEntry = NumericPredicateTraceEntry {
 beginNumericPredicateTrace : Unit -> Unit
 finishNumericPredicateTrace : Unit -> List NumericPredicateTraceEntry'
@@ -1110,6 +1107,26 @@ printf '%s\n' "$numeric_predicate_required" | while IFS= read -r required; do
     exit 1
   fi
 done || exit 1
+
+# Expression pins are compared whitespace-flattened, so fmt's line wrapping is not
+# part of the contract.
+predicate_slot_flat="$(tr '\n' ' ' < "$predicate_slot_src" | tr -s ' ')"
+numeric_predicate_expr_required='_ => tagRef := numericReturnRoute route routes
+let split = binopRouteSplit route'
+printf '%s\n' "$numeric_predicate_expr_required" | while IFS= read -r required; do
+  if ! printf '%s\n' "$predicate_slot_flat" | grep -Fq "$required"; then
+    echo "FAIL: numeric return predicate migration is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+# The literal's anchor records its method-level dictionaries from the anchor row's
+# slots under the instantiation's substitution; arguments between the slots and the
+# substitution (the destination refs) are not part of the contract.
+numlit_method_flat="$(sed -n '/^inferNumLitMethod :/,/^inferNumLitBare :/p' "$predicate_slot_src" | tr '\n' ' ' | tr -s ' ')"
+if ! printf '%s\n' "$numlit_method_flat" | grep -Eq 'recordMethodDictsFromSlots anchor\.msrMethodSlots( \([^()]*\))* \(snd inst\)'; then
+  echo "FAIL: inferNumLitMethod no longer records the anchor's method dictionaries: recordMethodDictsFromSlots anchor.msrMethodSlots ... (snd inst)"
+  exit 1
+fi
 
 # Ordinary and numeric returns share the matcher, so a match in the ordinary arm
 # cannot establish that the numeric arm still consumes its exact predicate.
@@ -1485,7 +1502,7 @@ if printf '%s\n' "$lexical_dict_block" | grep -Fq 'activeDictVarOf m'; then
 fi
 
 operator_owner_required='stampOpRouteVal : Bool -> String -> ScopeId -> String -> Mono -> String -> Route
-argImplDictRoutesForEncl encl useScope dictName tag subject goals,
+argImplDictRoutesForEncl encl useScope dictName tag subject goals
 entailInst name m encl useScope tag (EKOp isBinop _) =
 (stampOpRouteVal isBinop encl useScope name m tag, [])'
 printf '%s\n' "$operator_owner_required" | while IFS= read -r required; do

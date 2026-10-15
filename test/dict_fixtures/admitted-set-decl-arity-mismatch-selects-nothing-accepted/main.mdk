@@ -1,0 +1,6 @@
+-- SHADOW-SEMANTICS S2-DECL (d): `mth 5` is `Int -> Int`, which IB's declared
+-- `a -> Bool -> Int` does not instantiate to, so IB selects nothing and only
+-- `IA Int` answers.  Spec answer: 6.
+import hub.{IA, IB, mth}
+
+main = println (mth 5)

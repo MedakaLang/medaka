@@ -1,0 +1,6 @@
+-- `lib`'s live root is grounded only by this module's erroneous use (`U8` without
+-- `import u8`), so whatever the drain finds in `lib` rests on that error: only
+-- this module's errors are reported, never `lib`'s unrouted dictionaries.
+import lib.{e20}
+
+main = println (e20 (200 : U8))

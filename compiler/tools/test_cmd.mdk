@@ -67,9 +67,7 @@ import driver.loader.{
   readSource,
 }
 import driver.build_cmd.{readPreludeFile, envOr, defaultMedakaRoot}
-import types.typecheck.{
-  elaborateOne, elaborateModules, TcDiag(..), tcDiagGoalKey
-}
+import types.typecheck.{elaborateModules, TcDiag(..), tcDiagGoalKey}
 import types.route_key.{withEvidencePreserved}
 import backend.private_mangle.{mangleCtorCollisionsPair}
 import frontend.marker.{declRefs}
@@ -802,9 +800,39 @@ elaborateFor rsrc csrc target roots mods exempt True synthDecls = (
 -- is still the last writer of the typechecker's whole-graph state — the position
 -- a phase elaboration has always held.
 forcePrepared : String -> String -> Prepared -> <IO> TestPair
-forcePrepared _ _ (PreparedPair pair) = pair
+forcePrepared _ _ (PreparedPair pair) =
+  injectedExampleDiags := omEmpty
+  pair
 forcePrepared rsrc csrc (PreparedInject mods synthDecls) =
   perfRow "test-elab" "injected" (_ => forceInjected rsrc csrc mods synthDecls)
+
+-- The doctest-injected elaboration's own errors on the examples, by doctest line
+-- (`exampleDiagLines`), written by the elaboration that built the trees the
+-- interpreter arm runs.  The gate never reads that tree (`prepareMulti`), so an
+-- example the typechecker could not complete evidence for is otherwise unknown
+-- until the evaluator meets its unrouted dictionary, whose panic no example can
+-- catch: `renderOneExample` reports it as that example's failure instead.
+injectedExampleDiags : Ref (OrdMap String)
+injectedExampleDiags = Ref omEmpty
+
+-- Each error of [perMod]'s last module (the one the examples are injected into)
+-- under its line.  An example's binding is parsed on its own doctest line
+-- (`tools.doctest`'s `synthOne`), a comment line no declaration of the module
+-- starts on.
+exampleDiagLines : List (String, (List TcDiag, List TcDiag)) -> OrdMap String
+exampleDiagLines perMod = match reverseL perMod
+  (_, (errs, _)) :: _ =>
+    fold
+      (acc d => match d
+        TcDiag _ _ (Some (Loc _ line _ _ _)) msg _ _ =>
+          if omHasKey (intToString line) acc then
+            acc
+          else
+            omInsert (intToString line) msg acc
+        _ => acc)
+      omEmpty
+      errs
+  [] => omEmpty
 
 forceInjected : String ->
   String ->
@@ -817,7 +845,8 @@ forceInjected rsrc csrc mods synthDecls =
     (desugaredPrelude rsrc)
     (desugaredPrelude csrc)
     injected)
-    (coreE, modulesE, _, _, _, _) =>
+    (coreE, modulesE, perModule, _, _, _) =>
+      injectedExampleDiags := exampleDiagLines perModule
       uncurryPair
         (desugaredPrelude rsrc)
         (desugaredPrelude csrc)
@@ -1236,9 +1265,10 @@ runChosenOn EngNative _trees target tsrc userDecls examples synthResults =
 -- test stdlib/core.mdk`) it already declares everything the prelude provides,
 -- so prepending it would duplicate every top-level decl (two `Bounded Char`
 -- impls, etc.) and corrupt return-position dispatch — hence `programIsCore`.
--- `elaborateOne` is the 1-module wrapper over `elaborateModules` returning the
--- FLAT shape `evalOneRootEnvWith` consumes, and its root frame carries the
--- synthesized `__dt_i__` bindings the same way the pair arm's does.
+-- Its one-module elaboration is flattened to the shape `evalOneRootEnvWith`
+-- consumes (`elaborateOne`'s), keeping the module's diagnostics for the examples,
+-- and its root frame carries the synthesized `__dt_i__` bindings the same way the
+-- pair arm's does.
 runChosen : DoctestTrees ->
   List Example ->
   List (Result String (List Decl)) ->
@@ -1254,7 +1284,7 @@ runChosen (DtPair (TestPair _runtimeM _rawCoreM coreM _rawM modsM)) examples syn
   -- either way, so this changes nothing about what `force` below returns.
   let env = evalModulesRootEnvWith (testCapableExterns ()) coreM modsM
   buildDetailsFrom
-    (Ok (renderExamples env synthResults examples))
+    (Ok (renderExamples env injectedExampleDiags.value synthResults examples))
     synthResults
     examples
 runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synthResults =
@@ -1266,11 +1296,13 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
       dropShadowedExp (funNamesOf allUser) coreDecls
   let rootId = singleRootId roots target
   modulePathMap := [("__main__", target)]
-  let elaborated = elaborateOne runtimeDecls livePrelude (rootId, allUser)
+  let (coreE, modulesE, perModule, _, _, _) =
+    elaborateModules runtimeDecls livePrelude [(rootId, allUser)]
+  let elaborated = coreE ++ flatMap snd modulesE
   let env =
     evalOneRootEnvWith (testCapableExterns ()) [] ("__main__", elaborated)
   buildDetailsFrom
-    (Ok (renderExamples env synthResults examples))
+    (Ok (renderExamples env (exampleDiagLines perModule) synthResults examples))
     synthResults
     examples
 
@@ -1280,22 +1312,26 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
 -- for each example i, look up its synthesized `__dt_i__` binding in the post-
 -- run env and render it, exactly as the pre-Stage-1 `oneResult` did inline.
 renderExamples : List (String, Value e) ->
+  OrdMap String ->
   List (Result String (List Decl)) ->
   List Example ->
   <e> List (Result String String)
-renderExamples env synthResults examples =
-  renderExamplesGo env synthResults 0 examples
+renderExamples env diags synthResults examples =
+  renderExamplesGo env diags synthResults 0 examples
 
 renderExamplesGo : List (String, Value e) ->
+  OrdMap String ->
   List (Result String (List Decl)) ->
   Int ->
   List Example ->
   <e> List (Result String String)
-renderExamplesGo _ _ _ [] = []
-renderExamplesGo env (sr :: srRest) i (ex :: rest) =
-  renderOneExample env sr i ex :: renderExamplesGo env srRest (i + 1) rest
-renderExamplesGo env [] i (ex :: rest) =
-  renderOneExample env (Err "") i ex :: renderExamplesGo env [] (i + 1) rest
+renderExamplesGo _ _ _ _ [] = []
+renderExamplesGo env diags (sr :: srRest) i (ex :: rest) =
+  renderOneExample env diags sr i ex
+    :: renderExamplesGo env diags srRest (i + 1) rest
+renderExamplesGo env diags [] i (ex :: rest) =
+  renderOneExample env diags (Err "") i ex
+    :: renderExamplesGo env diags [] (i + 1) rest
 
 -- No binding for __dt_i__ means that example's synth never ran (its own
 -- decl was dropped, or the file errored before reaching it) — reported the
@@ -1310,17 +1346,24 @@ renderExamplesGo env [] i (ex :: rest) =
 -- this example against `env` — BEFORE forcing — catches exactly that failure
 -- as a normal per-example `Errored`, the same shape #55 already uses for a
 -- synth decl that failed to parse.
+--
+-- An example the typechecker reported an error on ([diags], `exampleDiagLines`) is
+-- that error, never forced: its binding may carry an unrouted dictionary.
 renderOneExample : List (String, Value e) ->
+  OrdMap String ->
   Result String (List Decl) ->
   Int ->
   Example ->
   <e> Result String String
-renderOneExample env sr i ex = match lookupBinding (synthName i) env
-  None => Err ("could not evaluate: " ++ exampleInput ex)
-  Some v => match firstUnresolvedDottedRef env sr
-    Some name =>
-      Err "could not evaluate: \{exampleInput ex} (unresolved: \{name})"
-    None => Ok (ppValue (force v))
+renderOneExample env diags sr i ex =
+  match omLookup (intToString (exampleLine ex)) diags
+    Some msg => Err "could not evaluate: \{exampleInput ex}: \{msg}"
+    None => match lookupBinding (synthName i) env
+      None => Err ("could not evaluate: " ++ exampleInput ex)
+      Some v => match firstUnresolvedDottedRef env sr
+        Some name =>
+          Err "could not evaluate: \{exampleInput ex} (unresolved: \{name})"
+        None => Ok (ppValue (force v))
 
 firstUnresolvedDottedRef : List (String, Value e) ->
   Result String (List Decl) ->

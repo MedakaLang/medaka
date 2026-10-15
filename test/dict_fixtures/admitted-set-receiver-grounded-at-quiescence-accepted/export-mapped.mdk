@@ -1,0 +1,5 @@
+-- `r [True, False]` grounds `live_map`'s receiver to `Bool`: only `IB Bool` selects,
+-- so the list maps to `[7, 8]`.
+import live_map.{r}
+
+main = println (r [True, False])

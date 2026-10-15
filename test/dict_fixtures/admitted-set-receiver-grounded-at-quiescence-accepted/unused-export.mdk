@@ -1,0 +1,5 @@
+-- `live_double`'s `r` is never used: its live `Num` receiver defaults to `Int` at
+-- the graph-end drain, where only `IA Int` selects.  Spec answer: prints `ok`.
+import live_double.{r}
+
+main = println "ok"

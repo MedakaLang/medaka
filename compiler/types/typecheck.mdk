@@ -401,7 +401,7 @@ import support.ordmap.{
   omSize,
   omDelete,
 }
-import list.{replicate, drop, take, elemIndex, indexed, sortOn}
+import list.{replicate, drop, take, elemIndex, indexed, sortOn, findMap}
 import support.util.{
   splitOnChar,
   u64HalvesHex,
@@ -512,7 +512,7 @@ import types.target_profile.{
   TargetProfile, hostLabels, ioJoinGrants, profileName, selectedProfile
 }
 import types.evidence_complete.{
-  EvidenceRow(..), Inner, innerNone, innerOfRoute, innerOr, rowHoleWith
+  EvidenceRow(..), Inner(..), innerNone, innerOfRoute, innerOr, rowHoleWith
 }
 import types.runtime_types.{
   BinderRow(..),
@@ -11102,6 +11102,70 @@ goalKindName GKDictApp = "GKDictApp"
 goalKindName GKMethodDict = "GKMethodDict"
 goalKindName GKRecDictApp = "GKRecDictApp"
 
+-- Test visibility (`typecheck_test.mdk`): each goal of the graph that writes a
+-- method cell's route or dictionaries, by kind, with whether its `oInner` is that
+-- cell's `ecInner`, so the stampers' notes reach the judgment (`judgeCells`).  Read
+-- by writing a marker through the goal's refs and looking for it in the cells, then
+-- restoring both.  A goal whose destination is no cell's (a throwaway) is skipped.
+export
+cellGoalInnerAliasing : Unit -> List (String, Bool)
+cellGoalInnerAliasing _ =
+  let g = graphRun.value
+  let cells = cellsFrom g.evCells.value 0 []
+  filterMap
+    (o =>
+      map (c => (goalKindName o.oKind, innerAliases o c)) (cellOfGoal cells o))
+    g.goals.value
+
+cellsFrom : Array (Option EvCell) -> Int -> List EvCell -> List EvCell
+cellsFrom arr i acc
+  | i >= arrayLength arr = reverseL acc
+  | otherwise = match arrayGetUnsafe i arr
+    Some c => cellsFrom arr (i + 1) (c :: acc)
+    None => cellsFrom arr (i + 1) acc
+
+cellOfGoal : List EvCell -> Obligation -> Option EvCell
+cellOfGoal cells o = match o.oDest
+  EvRoute r =>
+    let saved = r.value
+    r := RLocal aliasMarker []
+    let hit = filterList (c => isAliasMarker c.ecTag.value) cells
+    r := saved
+    onlyCell hit
+  EvRoutes rs =>
+    let saved = rs.value
+    rs := [RLocal aliasMarker []]
+    let hit =
+      filterList
+        (c => anyList isAliasMarker (c.ecImpl.value ++ c.ecMeth.value))
+        cells
+    rs := saved
+    onlyCell hit
+
+onlyCell : List EvCell -> Option EvCell
+onlyCell [c] = Some c
+onlyCell _ = None
+
+aliasMarker : String
+aliasMarker = "<inner-alias-probe>"
+
+isAliasMarker : Route -> Bool
+isAliasMarker (RLocal sym _) = sym == aliasMarker
+isAliasMarker _ = False
+
+innerAliases : Obligation -> EvCell -> Bool
+innerAliases o c =
+  let savedGoal = o.oInner.value
+  let savedCell = c.ecInner.value
+  c.ecInner := innerNone
+  o.oInner := Inner True True
+  let hit = match c.ecInner.value
+    Inner True True => True
+    _ => False
+  o.oInner := savedGoal
+  c.ecInner := savedCell
+  hit
+
 -- Every route a goal carries, in slot order — one for a site, one per slot for
 -- a dictionary application.
 obligationRoutes : Obligation -> List Route
@@ -11549,6 +11613,9 @@ data GraphRun = GraphRun {
   liveRoots : Ref (List Mono),
   liveNumRoots : Ref (List Mono),
   liveNumGoals : Ref (List UObligation),
+  -- The goals boundaries held on those variables without judging them, for the
+  -- drain's verdict (`judgeLiveGoals`).  Every drain empties it.
+  liveGoals : Ref (List LiveGoal),
 }
 
 -- One binder awaiting the drain: its id, source name, type cell, for a
@@ -11584,6 +11651,7 @@ freshGraphRun _ = GraphRun {
   liveRoots = Ref [],
   liveNumRoots = Ref [],
   liveNumGoals = Ref [],
+  liveGoals = Ref [],
 }
 
 -- #2705: mint the cells for one `EMethodAt` node and return the id the node
@@ -11784,6 +11852,7 @@ copyGraphRun g = GraphRun {
   liveRoots = Ref g.liveRoots.value,
   liveNumRoots = Ref g.liveNumRoots.value,
   liveNumGoals = Ref g.liveNumGoals.value,
+  liveGoals = Ref g.liveGoals.value,
 }
 
 -- Memo snapshots are taken only after `checkGraphFinish` drained the prefix.  At
@@ -12113,6 +12182,7 @@ data PerRun = PerRun {
   deferrableVarIds : Ref (Map Int Unit),  -- #838 I2: QUANTIFIED (forwarded) var ids of every generalized scheme — `undeterminedGoalExempt` defers a goal on these into the scheme
   liveMemberMonosRef : Ref (List Mono),  -- the types of the module's closed top-level members that generalization left a variable open in: a later group can still ground it (DICT-SEMANTICS §6.2 T2), so no boundary judges a goal on it (`liveMemberIds`)
   quiescentGoalsRef : Ref (List (OrdMap Unit, GoalWindow, UObligation)),  -- the goals on such a variable, newest first, each with its boundary's rigid variables and window (`judgeQuiescentGoals`)
+  heldLiveGoalsRef : Ref (List (OrdMap Unit, GoalWindow, UObligation)),  -- the goals a boundary held without a verdict because it owns none of their variables and one is such a variable, newest first, with the same boundary data (`recordLiveRoots`)
   determinedRowsRef : Ref (Map Int (List (ImplRow, List Mono))),  -- the instance each determination commit chose, with the committed goal's arguments, filed under the variable heading the goal (`fileDeterminedRow`)
   declaredSigVarIds : Ref (OrdMap Unit),  -- every variable a closed binder declares, which `matchEqPairs` and determination hold rigid: a top-level signature's and a generalized local's quantified variables (an annotated local's included); `declareRigidVars` adds them. A method signature's and an expression annotation's variables are held only at their own close (`checkSigVarGoals`)
   tupleCallCandidates : Ref (List (Mono, String, Option (Loc, String))),
@@ -12228,6 +12298,7 @@ freshPerRun _ = PerRun {
   deferrableVarIds = Ref Tip,
   liveMemberMonosRef = Ref [],
   quiescentGoalsRef = Ref [],
+  heldLiveGoalsRef = Ref [],
   determinedRowsRef = Ref Tip,
   declaredSigVarIds = Ref omEmpty,
   tupleCallCandidates = Ref [],
@@ -21881,12 +21952,13 @@ recordImplObligation x mono omitted
 -- always returns its argument), so the check path's return value is byte-identical.
 -- #2705 / S2-DECL (d) for OBLIGATIONS.  An occurrence whose bare spelling has two or
 -- more admitted declarations records no single-interface obligation
--- (`recordImplObligation`); it is decided here, at the module's end, by
--- `admittedSelection`, the function its route commits through at the drain
--- (`resolveAdmittedSite`).  Exactly one declaration selecting an instance is the
--- accept; none is the no-impl reject; two or more, or a declaration whose receiver
--- cannot be asked, is the located ambiguity reject, so no accepted occurrence is
--- left without a committed route.
+-- (`recordImplObligation`); it is decided at the graph-end drain, after every module
+-- has grounded what it can and live `Num` roots are defaulted (DICT-SEMANTICS §6.2
+-- T5), by `admittedSelection`, the function its route commits through in the same
+-- drain (`resolveAdmittedSite`).  Exactly one declaration selecting an instance is
+-- the accept; none is the no-impl reject; two or more, or a declaration whose
+-- receiver cannot be asked, is the located ambiguity reject, so no accepted
+-- occurrence is left without a committed route.
 pushAdmittedOccObl : String -> Mono -> Unit
 pushAdmittedOccObl name mono =
   perRun.value.admittedOccObls :=
@@ -21918,10 +21990,12 @@ checkAdmittedOccObl env (name, mono, loc) =
 
 -- One admitted declaration's answer at an occurrence, or the whole admitted set's:
 -- the instance it selects (with the declaration and the parameter vector it was
--- selected at), no instance, or no answer.  A declaration has no answer when the
--- occurrence's type does not instantiate its own declared type or its receiver has
--- no head yet; the set has none when two or more declarations select or any one has
--- no answer, since the declarations have then not been shown to agree.
+-- selected at), no instance, or no answer.  A declaration whose declared type the
+-- occurrence's type does not instantiate selects nothing: no instance of it can be
+-- meant there.  A declaration has no answer when its receiver has no head (rigid, or
+-- still ungrounded at quiescence) or it has no method row here; the set has none when
+-- two or more declarations select or any one has no answer, since the declarations
+-- have then not been shown to agree (SHADOW-SEMANTICS S2-DECL (d)).
 data AdmittedAnswer =
   | Selects IfaceRef ImplRow (List Mono)
   | SelectsNothing
@@ -21939,8 +22013,22 @@ admittedSelection env name mono =
     Undecided
   else match filterList isSelection answers
     [] => SelectsNothing
-    [one] => one
+    [one] => routableSelection name one
     _ => Undecided
+
+-- A selected declaration with its own method-level constraints has no answer: an
+-- admitted-set occurrence records no method dictionaries (`recordMethodDicts` reads
+-- the one declaration `methodIfaceHere` names, and an admitted spelling names none),
+-- so committing to it would leave those constraints unrouted for every engine.
+routableSelection : String -> AdmittedAnswer -> AdmittedAnswer
+routableSelection name (answer@(Selects iface _ _)) =
+  let key = methodSlotKey iface (originMethodName name)
+  match (lookupMethodPredicateSlots
+    key
+    perRun.value.methodPredicateSlotsRef.value)
+    Some (_ :: _) => Undecided
+    _ => answer
+routableSelection _ answer = answer
 
 admittedDeclAnswer : ImplEnv ->
   List MethodRow ->
@@ -21958,7 +22046,7 @@ admittedDeclAnswer env visible mono ir =
             Some _ => match ieSelectRowByIface env iface goals
               Some row => Selects iface row goals
               None => SelectsNothing
-        None => Undecided
+        None => SelectsNothing
     [] => Undecided
 
 isUndecided : AdmittedAnswer -> Bool
@@ -28582,10 +28670,10 @@ resolveSite rpNames name tagRef implRef resultMono fullMono encl origin scope =
   implRef := routes
 
 -- An admitted-set occurrence's route, committed by `admittedSelection`, the function
--- that decided its verdict at the module's end: the selected instance's canonical
--- key and prerequisites, and the selecting declaration's interface word on the
--- occurrence, which carried none while its spelling named two or more.  Any other
--- answer was rejected there, and the site keeps no route.
+-- that decides its verdict in the same drain (`runStampCtx`): the selected instance's
+-- canonical key and prerequisites, and the selecting declaration's interface word on
+-- the occurrence, which carried none while its spelling named two or more.  Any
+-- other answer is rejected there, and the site keeps no route.
 resolveAdmittedSite : String ->
   Ref String ->
   Ref Route ->
@@ -36996,7 +37084,6 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
       checkDeferredMatches (reverseL perRun.value.matchChecksDeferred.value)
     let _ = checkFixedWidthLiterals perRun.value.numlitRanges.value
     let _ = checkWideLiterals perRun.value.wideLitRanges.value
-    let _ = checkAdmittedOccObls ()
     ()
   perRun.value.localSchemesOut :=
     mapLocalSchemes perRun.value.localBindRefs.value
@@ -38874,6 +38961,9 @@ rejectUndeterminedVectors rigidIds liveIds implObls callObls =
 
 -- [window] is the boundary's goal window.  A goal on a live variable waits for
 -- quiescence (`judgeQuiescentGoals`) with the boundary's [rigidIds] and [window].
+-- So does one whose only open variables the boundary holds, when one of them is live
+-- (an argument position of a non-generalized member): no group of the module owns it,
+-- and only the graph can still ground it (`judgeLiveGoals`).
 undeterminedVectorVerdict : OrdMap Unit ->
   OrdMap Unit ->
   GoalWindow ->
@@ -38882,15 +38972,20 @@ undeterminedVectorVerdict : OrdMap Unit ->
 undeterminedVectorVerdict rigidIds liveIds window o =
   let args = map normalize (uOblArgs o)
   let ids = flatMap monoUnboundIds args
-  if not (undeterminedGoalExempt o.pred.iface args o.uoScope)
-    && anyList (i => boundaryOwnsOpen rigidIds i) ids then
-    if anyList (i => omHasKey (intToString i) liveIds) ids then
+  let isLive = i => omHasKey (intToString i) liveIds
+  if undeterminedGoalExempt o.pred.iface args o.uoScope then
+    ()
+  else if anyList (i => boundaryOwnsOpen rigidIds i) ids then
+    if anyList isLive ids then
       perRun.value.quiescentGoalsRef :=
         (rigidIds, window, o) :: perRun.value.quiescentGoalsRef.value
     else if isEmptyL (sigCellsOf rigidIds (flatMap monoVarCells args)) then
       reportUndeterminedGoal rigidIds window o.pred.iface args o.loc
     else
       reportMixedGoalAmbiguity rigidIds window o.pred.iface args o.loc
+  else if anyList isLive ids then
+    perRun.value.heldLiveGoalsRef :=
+      (rigidIds, window, o) :: perRun.value.heldLiveGoalsRef.value
 
 -- Records, at the module's end, the variables its non-generalized members still
 -- leave open, for the graph-end drain (`GraphRun.liveRoots`).
@@ -38910,6 +39005,7 @@ recordLiveRoots _ =
     let g = graphRun.value
     g.liveRoots :=
       filterMap (findTvarInMonos members) liveIds ++ g.liveRoots.value
+    g.liveGoals := reverseL (liveGoalsOf members) ++ g.liveGoals.value
     if isNonEmptyL numRoots then
       g.liveNumRoots := numRoots ++ g.liveNumRoots.value
       g.liveNumGoals :=
@@ -38917,6 +39013,101 @@ recordLiveRoots _ =
             (o => anyIn (flatMap monoUnboundIds (uOblArgs o)) numIds)
             goals
           ++ g.liveNumGoals.value
+
+-- A goal a boundary held for a live root (`undeterminedVectorVerdict`), kept for the
+-- drain: its module, the binding its verdict is reported for, its boundary's rigid
+-- variables less the live ones, and its boundary's window.
+data LiveGoal = LiveGoal {
+  lgModule : String,
+  lgBinding : Int,
+  lgRigidIds : OrdMap Unit,
+  lgWindow : GoalWindow,
+  lgGoal : UObligation,
+}
+
+-- The module's held goals that a live root still leaves open, in the order they
+-- were held, each under the first of [members] whose type mentions one of its live
+-- variables.  A goal a later group grounded is the module's obligation check's.
+liveGoalsOf : List Mono -> List LiveGoal
+liveGoalsOf members =
+  let mid = driverState.value.currentModuleRef.value
+  let owners = memberOfIds members
+  filterMap
+    ((rigidIds, window, o) =>
+      let ids = flatMap monoUnboundIds (uOblArgs o)
+      map
+        (k => LiveGoal {
+          lgModule = mid,
+          lgBinding = k,
+          lgRigidIds =
+            fold
+              (acc i =>
+                if IdMap.has i owners then
+                  omDelete (intToString i) acc
+                else
+                  acc)
+              rigidIds
+              ids,
+          lgWindow = window,
+          lgGoal = o,
+        })
+        (findMap (i => IdMap.get i owners) ids))
+    (reverseL perRun.value.heldLiveGoalsRef.value)
+
+-- Each live variable of [members] under the index of the first member whose type
+-- mentions it.
+memberOfIds : List Mono -> Map Int Int
+memberOfIds members =
+  fst
+    (fold
+      ((owners, k) m => (
+        fold
+          (acc i => if IdMap.has i acc then acc else IdMap.set i k acc)
+          owners
+          (liveVarIdsOf m),
+        k + 1,
+      ))
+      (Tip, 0)
+      members)
+
+-- The verdict on the goals boundaries held for live roots, at the drain, after the
+-- live `Num` roots are defaulted: every module has closed, so nothing is left to
+-- ground them, and each is judged as its boundary would have judged it had it owned
+-- the live variables (DICT-SEMANTICS §6.2 T4, R-SC3), in its own module's context.
+-- A binding gets one verdict: the first of its goals that draws one.
+judgeLiveGoals : List StampCtx -> List DrainFinding
+judgeLiveGoals ctxs =
+  let g = graphRun.value
+  let goals = reverseL g.liveGoals.value
+  g.liveGoals := []
+  if isEmptyL goals then
+    []
+  else
+    let byModule = omFromPairs (map (c => (c.scModule, c)) ctxs) omEmpty
+    reverseL (fst (fold (judgeLiveGoal byModule) ([], omEmpty) goals))
+
+judgeLiveGoal : OrdMap StampCtx ->
+  (List DrainFinding, OrdMap Unit) ->
+  LiveGoal ->
+  (List DrainFinding, OrdMap Unit)
+judgeLiveGoal byModule (found, judged) lg =
+  let binding = "\{lg.lgModule}\t\{intToString lg.lgBinding}"
+  match (omHasKey binding judged, omLookup lg.lgModule byModule)
+    (False, Some ctx) =>
+      let _ = enterStampCtx ctx
+      let rigidIds = lg.lgRigidIds
+      let diags = captureTypeErrors (_ =>
+        fold
+          (_ o => undeterminedVectorVerdict rigidIds omEmpty lg.lgWindow o)
+          ()
+          (lg.lgGoal :: nestedRequireGoals rigidIds omEmpty [lg.lgGoal]))
+      match diags
+        [] => (found, judged)
+        _ => (
+          reverseL (map (verdictFinding lg.lgModule True) diags) ++ found,
+          omInsert binding () judged,
+        )
+    _ => (found, judged)
 
 findTvarInMonos : List Mono -> Int -> Option Mono
 findTvarInMonos [] _ = None
@@ -52939,7 +53130,7 @@ checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
     -- The prelude has no diagnostics list for a hole to land in.
     let _ = match checkGraphFinish ()
       [] => ()
-      (_, d) :: _ => panic "evidence hole in the prelude: \{tcMsg d}"
+      f :: _ => panic "evidence hole in the prelude: \{tcMsg f.dfDiag}"
     -- #673: snapshot core's OWN obligations NOW — perRun.schemeObligationsRef still holds core's
     -- bindings (the next module's resetState has not run yet).  This is the source-exact store a
     -- plain-EVar use of a PRELUDE constrained fn (`println`) reads in instantiateVarTracked, so
@@ -53889,8 +54080,8 @@ checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0
     }
   -- #2705: the graph-end drain for what the steps did not already drain (the entry
   -- module, and any module after the last recorded step) — see `chainGo`.
-  let holes = checkGraphFinish ()
-  attachCoherenceConflict (attachEvidenceHoles holes (reverseL finalResults))
+  let findings = checkGraphFinish ()
+  attachCoherenceConflict (attachDrainFindings findings (reverseL finalResults))
 
 -- The fold itself, iterative, recording a step after each non-entry module while
 -- keys are available.  Mirrors `driveGraphK GOutDiags`'s `foldModules` exactly:
@@ -53947,7 +54138,7 @@ chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) 
       -- snapshotting its solution here — and it is a second resolution schedule
       -- beside the graph-end one; folding the two back into one is #2719's.
       -- The drain's holes join the results the step records, so a hit replays them.
-      let results3 = attachEvidenceHoles (checkGraphFinish ()) results2
+      let results3 = attachDrainFindings (checkGraphFinish ()) results2
       let step = ChainStep {
         csKey = k,
         csDepEnv = depEnv2,
@@ -54171,7 +54362,7 @@ driveGraphK sel preludeKey runtimeDecls coreDecls0 modulesIn =
   -- #2548: quiescence.  Every module (core first) has been inferred and has queued
   -- its stamping context; drain them all now, in module order, before any tree goes
   -- to `dictPassModulesIfEnabled`.
-  let holes = drainStampQueue ()
+  let findings = drainStampQueue ()
   -- D3 / WS-2 part-2: attach any cross-module coherence conflict to the ENTRY
   -- module's diagnostics (last in dependency-first order), so LSP/analyzeProject
   -- surfaces it too.  User modules only (prelude excluded).
@@ -54182,7 +54373,7 @@ driveGraphK sel preludeKey runtimeDecls coreDecls0 modulesIn =
   -- what excludes the prelude, replacing "walk the user `modules` list".
   -- It reads `deImpls` only, which nothing between here and the tree arm's return
   -- writes, so attaching once here serves both selections.
-  let perMod = attachCoherenceConflict (attachEvidenceHoles holes perModRaw)
+  let perMod = attachCoherenceConflict (attachDrainFindings findings perModRaw)
   -- #1112 A-3: the whole-graph IE/CE `buildDeclEnvs` filled in the preamble
   -- above is already complete at this point — installed here, once per
   -- elaboration, on both arms alike (mirroring `installEvidence`'s own
@@ -56014,6 +56205,9 @@ data StampCtx = StampCtx {
   scRpNames : List String,
   scGoals : List Obligation,
   scNumlits : List (Mono, Ref (Option Float), Int, Ref Route),
+  -- the spans (`locKey`) of the goals and admitted-set occurrences whose types
+  -- mention a live root's variable when the module closed (`liveLocsOf`)
+  scLiveLocs : List String,
 }
 
 stampCtxOf : String ->
@@ -56029,7 +56223,44 @@ stampCtxOf mid implDecls goals numlits = StampCtx {
   scRpNames = returnPosMethodNames implDecls,
   scGoals = goals,
   scNumlits = numlits,
+  scLiveLocs = liveLocsOf goals,
 }
+
+-- The spans of [goals] and of the module's admitted-set occurrences whose types
+-- mention a variable of a live root (`GraphRun.liveRoots`): their evidence and
+-- verdicts rest on what quiescence leaves that variable.
+liveLocsOf : List Obligation -> List String
+liveLocsOf goals =
+  let ids = flatMap monoUnboundIds graphRun.value.liveRoots.value
+  if isEmptyL ids then
+    []
+  else
+    let live = fold (acc i => IdMap.set i () acc) Tip ids
+    let mentions =
+      ms => anyList (m => anyList (i => IdMap.has i live) (monoUnboundIds m)) ms
+    map (o => locKey o.oLoc) (filterList (o => mentions (goalMonos o)) goals)
+      ++ filterMap
+        ((_, m, loc) => if mentions [m] then Some (locKey loc) else None)
+        perRun.value.admittedOccObls.value
+
+-- The types a goal is posed at.
+goalMonos : Obligation -> List Mono
+goalMonos o = match o.oPayload
+  GPSite _ m site => m :: siteKindMonos site
+  GPArith m => [m]
+  GPDictApp app => app.pdaMonos ++ flatMap identity app.pdaArgVecs
+  GPMethodDict _ => []
+  GPRecDictApp (RecDictApp _ _ _ m _ _) => [m]
+
+siteKindMonos : SiteKind -> List Mono
+siteKindMonos (SKReturn _ m) = [m]
+siteKindMonos (SKAdmittedReturn _ _ m) = [m]
+siteKindMonos (SKExactReturn _ request) = [request.mrrOccurrence]
+siteKindMonos (SKNumReturn _ m) = [m]
+siteKindMonos (SKArg _ m omitted) = m :: map snd omitted
+siteKindMonos (SKOp _) = []
+siteKindMonos (SKPredicateOp _ _) = []
+siteKindMonos (SKRLocal _ _ ms _ vecs) = ms ++ flatMap identity vecs
 
 isInterfaceDecl : Decl -> Bool
 isInterfaceDecl (DAttrib _ d) = isInterfaceDecl d
@@ -56103,7 +56334,7 @@ stampNoting stamp o =
 -- an accepted program.  The drain's evidence holes are returned, not recorded: a
 -- per-module diagnostics list is closed before any drain, so the caller attaches
 -- them to it (`attachEvidenceHoles`).
-checkGraphFinish : Unit -> List (String, TcDiag)
+checkGraphFinish : Unit -> List DrainFinding
 checkGraphFinish _ =
   let savedSticky = !typeErrorsSticky
   let savedStickyDiags = typeErrorsStickyDiags.value
@@ -56112,9 +56343,49 @@ checkGraphFinish _ =
   typeErrorsStickyDiags := savedStickyDiags
   holes
 
+-- A finding of the graph-end drain, under the module it belongs to: a verdict the
+-- drain decides (an error in its own right) or an evidence hole (`judgeEvidence`).
+-- A live one rests on what quiescence left a live root's variable
+-- (`GraphRun.liveRoots`), which an importer's own error can leave unground or ground
+-- wrongly.
+data DrainFinding = DrainFinding {
+  dfModule : String,
+  dfDiag : TcDiag,
+  dfVerdict : Bool,
+  dfLive : Bool,
+}
+
+verdictFinding : String -> Bool -> TcDiag -> DrainFinding
+verdictFinding mid live d = DrainFinding {
+  dfModule = mid,
+  dfDiag = d,
+  dfVerdict = True,
+  dfLive = live,
+}
+
+-- What [act] records in the current module's type-error channel, taken back out of
+-- it and out of the sticky one: a drain runs after every module's diagnostics list
+-- closed, so its caller attaches them (`attachDrainFindings`).  The dedup state [act]
+-- reads and writes stays, so a verdict the module already reported is not repeated.
+captureTypeErrors : (Unit -> Unit) -> List TcDiag
+captureTypeErrors act =
+  let w = perRun.value.typeErrors
+  let items = w.items.value
+  let mark = wMark w
+  let sticky = !typeErrorsSticky
+  let stickyDiags = typeErrorsStickyDiags.value
+  let _ = act ()
+  let added = wWindow w mark
+  w.items := items
+  w.n := mark
+  typeErrorsSticky := sticky
+  typeErrorsStickyDiags := stickyDiags
+  reverseL added
+
 -- Runs every queued stamping context, then judges the evidence they finished.
--- Returns one `T-UNROUTED-DISPATCH` per hole, under the module it belongs to.
-drainStampQueue : Unit -> List (String, TcDiag)
+-- Returns the verdicts the drain decides (held live-root goals, admitted-set
+-- occurrences) and one `T-UNROUTED-DISPATCH` per hole, each under its module.
+drainStampQueue : Unit -> List DrainFinding
 drainStampQueue _ =
   let ctxs = reverseL graphRun.value.stampCtxs.value
   let savedPerRun = perRun.value
@@ -56122,15 +56393,25 @@ drainStampQueue _ =
   let savedModule = driverState.value.currentModuleRef.value
   let savedSupers = driverState.value.superDeclsRef.value
   let _ = defaultLiveNumRoots ()
-  let _ = runStampCtxs ctxs
-  let holes = judgeEvidence ctxs
+  let held = judgeLiveGoals ctxs
+  let verdicts = runStampCtxs ctxs
+  let liveLocs = omFromNames (flatMap (c => c.scLiveLocs) ctxs) omEmpty
+  let holes =
+    map
+      ((mid, d) => DrainFinding {
+        dfModule = mid,
+        dfDiag = d,
+        dfVerdict = False,
+        dfLive = omHasKey (locKey (tcLoc d)) liveLocs,
+      })
+      (judgeEvidence ctxs)
   let _ = materializeBinderTypes ()
   graphRun.value.stampCtxs := []
   perRun := savedPerRun
   toggles := savedToggles
   driverState.value.currentModuleRef := savedModule
   driverState.value.superDeclsRef := savedSupers
-  holes
+  held ++ verdicts ++ holes
 
 -- The completeness judgment (`types/evidence_complete.mdk`) over the evidence this
 -- drain finished: every method cell minted since the last drain, and the goals of
@@ -56209,28 +56490,36 @@ holeDiags mid loc inner row = match rowHoleWith inner row
   None => []
   Some (_, msg) => [(mid, TcDiag "T-UNROUTED-DISPATCH" 1 loc msg None None)]
 
--- Each hole joins the errors of the module it belongs to, unless that module
--- already has errors: a hole beside a type error is usually its consequence.  A
--- hole in no module of [perMod] is a module the drive has no list for, which only
--- the prelude is.
-attachEvidenceHoles : List (String, TcDiag) -> List ModDiags -> List ModDiags
-attachEvidenceHoles [] perMod = perMod
-attachEvidenceHoles holes perMod =
-  let _ =
-    match filterList (h => not (anyList (pm => fst pm == fst h) perMod)) holes
-      [] => ()
-      (m, d) :: _ =>
-        panic
-          "evidence hole in module `\{m}`, which has no diagnostics list: \{tcMsg d}"
-  map (pm => holesOnto holes pm) perMod
+-- Each drain verdict joins the errors of the module it belongs to, and each hole
+-- does unless that module then has errors: a hole beside a type error is usually its
+-- consequence.  A live finding is dropped when any module of [perMod] has errors,
+-- since the live root it rests on may be one an erroneous importer grounded or left
+-- open.  A finding in no module of [perMod] is a module the drive has no list for,
+-- which only the prelude is.
+attachDrainFindings : List DrainFinding -> List ModDiags -> List ModDiags
+attachDrainFindings [] perMod = perMod
+attachDrainFindings findings perMod =
+  let orphans =
+    filterList (f => not (anyList (pm => fst pm == f.dfModule) perMod)) findings
+  let _ = match orphans
+    [] => ()
+    f :: _ =>
+      panic
+        "evidence hole in module `\{f.dfModule}`, which has no diagnostics list: \{tcMsg f.dfDiag}"
+  let erred = anyList (pm => isNonEmptyL (modDiagErrs pm)) perMod
+  let kept = if erred then filterList (f => not f.dfLive) findings else findings
+  map (pm => findingsOnto kept pm) perMod
 
-holesOnto : List (String, TcDiag) -> ModDiags -> ModDiags
-holesOnto holes (mid, (schemes, errs, warns)) = match errs
-  [] => (
-    mid,
-    (schemes, map snd (filterList (h => fst h == mid) holes), warns),
-  )
-  _ => (mid, (schemes, errs, warns))
+modDiagErrs : ModDiags -> List TcDiag
+modDiagErrs (_, (_, errs, _)) = errs
+
+findingsOnto : List DrainFinding -> ModDiags -> ModDiags
+findingsOnto findings (mid, (schemes, errs, warns)) =
+  let mine = filterList (f => f.dfModule == mid) findings
+  let verdicts = map (f => f.dfDiag) (filterList (f => f.dfVerdict) mine)
+  match errs ++ verdicts
+    [] => (mid, (schemes, map (f => f.dfDiag) mine, warns))
+    all => (mid, (schemes, all, warns))
 
 -- Read every queued binder's type cell into the graph's runtime-type table, now
 -- that the stampers have run and nothing left in the graph can refine a drained
@@ -56285,9 +56574,26 @@ cellHeadKey n OriginBuiltin = "builtin|\{n}"
 cellHeadKey n OriginUnresolved = "unresolved|\{n}"
 cellHeadKey n (OriginModule m) = "module \{m}|\{n}"
 
-runStampCtxs : List StampCtx -> Unit
-runStampCtxs [] = ()
-runStampCtxs (ctx :: rest) =
+-- Stamps each context in turn and decides its admitted-set occurrences
+-- (`checkAdmittedOccObls`), with the selector their routes commit through, against
+-- the same final solution.
+runStampCtxs : List StampCtx -> List DrainFinding
+runStampCtxs ctxs =
+  reverseL (fold (acc ctx => reverseL (runStampCtx ctx) ++ acc) [] ctxs)
+
+runStampCtx : StampCtx -> List DrainFinding
+runStampCtx ctx =
+  let _ = enterStampCtx ctx
+  let _ = refileDeterminedRows ()
+  let _ = runStampSteps ctx moduleStampOrder
+  let _ = recordEvidence ctx.scGoals
+  let live = omFromNames ctx.scLiveLocs omEmpty
+  map
+    (d => verdictFinding ctx.scModule (omHasKey (locKey (tcLoc d)) live) d)
+    (captureTypeErrors (_ => checkAdmittedOccObls ()))
+
+enterStampCtx : StampCtx -> Unit
+enterStampCtx ctx =
   perRun := ctx.scPerRun
   toggles := ctx.scToggles
   -- Deferred goals select their `gGiven` bucket from their captured scope frames;
@@ -56297,10 +56603,6 @@ runStampCtxs (ctx :: rest) =
   -- (`elabModuleStamp` for the core pass, which is the only module still on it).
   driverState.value.currentModuleRef := ctx.scModule
   driverState.value.superDeclsRef := ctx.scSuperDecls
-  let _ = refileDeterminedRows ()
-  let _ = runStampSteps ctx moduleStampOrder
-  let _ = recordEvidence ctx.scGoals
-  runStampCtxs rest
 
 -- #2549 M2: publish this module's solved evidence, AFTER its stampers have run and
 -- READ BACK OUT OF THE CELLS THEY WROTE.  Deriving the table any other way would make

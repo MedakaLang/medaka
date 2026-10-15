@@ -1,0 +1,6 @@
+-- SHADOW-SEMANTICS S2-DECL (d): at `mth 3` IB's declared `f a -> Int` does not
+-- instantiate to `Int -> Int`, so IB selects nothing and only `IA Int` answers (4);
+-- at `mth [1, 2]` only `IB List` answers (100).  Spec answer: `(100, 4)`.
+import hub.{IA, IB, mth}
+
+main = println (mth [1, 2], mth 3)
