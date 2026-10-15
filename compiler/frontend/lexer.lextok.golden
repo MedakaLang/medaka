@@ -2,6 +2,14 @@ NEWLINE
 IMPORT
 IDENT "support"
 DOT
+IDENT "stage_count"
+DOT_LBRACE
+IDENT "stageBump"
+RBRACE
+NEWLINE
+IMPORT
+IDENT "support"
+DOT
 IDENT "char"
 DOT_LBRACE
 IDENT "isSp"
@@ -14987,6 +14995,12 @@ IDENT "src"
 IDENT "len"
 EQUAL
 INDENT
+LET
+UNDERSCORE
+EQUAL
+IDENT "stageBump"
+STRING "lex.offsets"
+NEWLINE
 IDENT "elseFilter"
 LPAREN
 IDENT "layout"
@@ -16755,6 +16769,12 @@ IDENT "src"
 IDENT "len"
 EQUAL
 INDENT
+LET
+UNDERSCORE
+EQUAL
+IDENT "stageBump"
+STRING "lex.pairs"
+NEWLINE
 IDENT "elseFilterPairs"
 LPAREN
 IDENT "layoutPairs"
@@ -16793,6 +16813,12 @@ IDENT "tokenize"
 IDENT "s"
 EQUAL
 INDENT
+LET
+UNDERSCORE
+EQUAL
+IDENT "stageBump"
+STRING "lex.tokenize"
+NEWLINE
 LET
 IDENT "src"
 EQUAL
@@ -19055,6 +19081,12 @@ IDENT "collectComments"
 IDENT "s"
 EQUAL
 INDENT
+LET
+UNDERSCORE
+EQUAL
+IDENT "stageBump"
+STRING "lint.comments"
+NEWLINE
 LET
 IDENT "src"
 EQUAL
