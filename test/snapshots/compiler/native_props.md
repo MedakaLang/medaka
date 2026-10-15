@@ -1,5 +1,5 @@
 # META
-source_lines=2137
+source_lines=2136
 stages=DESUGAR,MARK
 # SOURCE
 -- Native property runner.  It deliberately compiles one probe per target, then
@@ -10,8 +10,7 @@ import frontend.ast.{
   Decl(..), Expr, PropParam(..), Ty(..), TyConOrigin(..), Variant(..),
   Field(..), ConPayload(..), Pat(..), mapTyFull
 }
-import frontend.parser.{parse}
-import frontend.desugar.{desugar}
+import tools.target_parse.{targetDesugared}
 import driver.build_cmd.{
   ppBuildReport, makeTempDir, scratchProbeManifest, cleanupTempDir,
   runBuildNativeRoots, BuildProfile(..), envOr, defaultMedakaRoot
@@ -306,7 +305,7 @@ nativeProtocolError duplicate r =
     (propRequestCases r)
 
 desugarProps : String -> List Decl
-desugarProps src = desugar (parse src)
+desugarProps src = targetDesugared src
 
 nativeFailureKind : NativeFailure -> PropFailureKind
 nativeFailureKind (NativeBuildFailure _) = PropBuildError
@@ -2141,8 +2140,7 @@ paramName : PropParam -> String
 paramName (PropParam n _ _) = n
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "PropParam" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true) (mem "Pat" true) (mem "mapTyFull" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
-(DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
+(DUse false (UseGroup ("tools" "target_parse") ((mem "targetDesugared" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "ppBuildReport" false) (mem "makeTempDir" false) (mem "scratchProbeManifest" false) (mem "cleanupTempDir" false) (mem "runBuildNativeRoots" false) (mem "BuildProfile" true) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))
@@ -2229,7 +2227,7 @@ paramName (PropParam n _ _) = n
 (DTypeSig false "nativeProtocolError" (TyFun (TyCon "String") (TyFun (TyCon "PropRequest") (TyCon "PropResult"))))
 (DFunDef false "nativeProtocolError" ((PVar "duplicate") (PVar "r")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (ELit (LString "native"))) (EApp (EVar "propRequestName") (EVar "r"))) (EVar "PropErroredResult")) (EApp (EVar "Some") (EVar "PropProtocolError"))) (EBinOp "++" (EBinOp "++" (ELit (LString "native property runner: ")) (EApp (EVar "display") (EVar "duplicate"))) (ELit (LString "")))) (EApp (EVar "propRequestSeed") (EVar "r"))) (EApp (EVar "propRequestCases") (EVar "r"))))
 (DTypeSig false "desugarProps" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))
-(DFunDef false "desugarProps" ((PVar "src")) (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "src"))))
+(DFunDef false "desugarProps" ((PVar "src")) (EApp (EVar "targetDesugared") (EVar "src")))
 (DTypeSig false "nativeFailureKind" (TyFun (TyCon "NativeFailure") (TyCon "PropFailureKind")))
 (DFunDef false "nativeFailureKind" ((PCon "NativeBuildFailure" PWild)) (EVar "PropBuildError"))
 (DFunDef false "nativeFailureKind" ((PCon "NativeRuntimeFailure" PWild)) (EVar "PropRuntimeError"))
@@ -2734,8 +2732,7 @@ paramName (PropParam n _ _) = n
 (DFunDef false "paramName" ((PCon "PropParam" (PVar "n") PWild PWild)) (EVar "n"))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "PropParam" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true) (mem "Pat" true) (mem "mapTyFull" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
-(DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
+(DUse false (UseGroup ("tools" "target_parse") ((mem "targetDesugared" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "ppBuildReport" false) (mem "makeTempDir" false) (mem "scratchProbeManifest" false) (mem "cleanupTempDir" false) (mem "runBuildNativeRoots" false) (mem "BuildProfile" true) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))
@@ -2822,7 +2819,7 @@ paramName (PropParam n _ _) = n
 (DTypeSig false "nativeProtocolError" (TyFun (TyCon "String") (TyFun (TyCon "PropRequest") (TyCon "PropResult"))))
 (DFunDef false "nativeProtocolError" ((PVar "duplicate") (PVar "r")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (ELit (LString "native"))) (EApp (EVar "propRequestName") (EVar "r"))) (EVar "PropErroredResult")) (EApp (EVar "Some") (EVar "PropProtocolError"))) (EBinOp "++" (EBinOp "++" (ELit (LString "native property runner: ")) (EApp (EMethodRef "display") (EVar "duplicate"))) (ELit (LString "")))) (EApp (EVar "propRequestSeed") (EVar "r"))) (EApp (EVar "propRequestCases") (EVar "r"))))
 (DTypeSig false "desugarProps" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))
-(DFunDef false "desugarProps" ((PVar "src")) (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "src"))))
+(DFunDef false "desugarProps" ((PVar "src")) (EApp (EVar "targetDesugared") (EVar "src")))
 (DTypeSig false "nativeFailureKind" (TyFun (TyCon "NativeFailure") (TyCon "PropFailureKind")))
 (DFunDef false "nativeFailureKind" ((PCon "NativeBuildFailure" PWild)) (EVar "PropBuildError"))
 (DFunDef false "nativeFailureKind" ((PCon "NativeRuntimeFailure" PWild)) (EVar "PropRuntimeError"))

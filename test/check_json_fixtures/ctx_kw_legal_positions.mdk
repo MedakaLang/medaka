@@ -1,7 +1,7 @@
 -- #935 BYSTANDER fixture: every one of the five contextual keywords in a
 -- position where it is LEGAL, including the two that forced them out of
 -- `reservedIdentKeyword` in the first place — a match-arm `if` guard and
--- `let rec`.  `firstCtxKwDeclIdx` only fires at depth 0 with `=`/`:` next, so
+-- `let rec`.  The `phCtxKw` prescan only fires at depth 0 with `=`/`:` next, so
 -- none of these may be touched.  Expected: ZERO diagnostics.
 classify : Int -> String
 classify n = match n

@@ -1,5 +1,5 @@
 # META
-source_lines=1541
+source_lines=1542
 stages=DESUGAR,MARK
 # SOURCE
 -- Parse a root .mdk file's transitive imports and return
@@ -664,8 +664,9 @@ parsedModule parseFn owningRoot path src =
 -- path -> the EXACT source the loader parsed for it most recently.  Read by the
 -- typechecker's module-chain memo (driver/diagnostics.mdk `moduleStepKeys`),
 -- which keys a module's memoized check on the content the loader actually
--- parsed — re-reading the file after the load could race an edit and key the
--- wrong content.  Bounded MRU so a long session does not grow it.
+-- parsed, and by `readDiagSrc`, which renders from it — re-reading the file
+-- after the load could race an edit and key or render the wrong content.
+-- Bounded MRU so a long session does not grow it.
 loadedSourcesLimit : Int
 loadedSourcesLimit = 64
 

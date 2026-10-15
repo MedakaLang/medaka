@@ -54,6 +54,8 @@ import tools.lsp.{
   uriOfPath,
 }
 import frontend.ast.{Decl}
+import frontend.desugar.{desugar}
+import frontend.parser as P
 import frontend.parser.{
   Positions,
   parseResult,
@@ -1699,6 +1701,7 @@ runTestTool runtimeSrc coreSrc stdlibDir args = match fieldStr "file" args
             coreSrc
             path
             tsrc
+            (desugar (P.parse tsrc))
             stdlibDir
             100
             None
