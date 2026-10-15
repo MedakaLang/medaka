@@ -1,0 +1,73 @@
+-- One parse, one desugar and one comment scan of a `medaka test` target per process.
+--
+-- The test verb reads the target's declarations from many sites that each
+-- hold only the source text (`tsrc`): the pre-parse, the `test "…"` and `prop`
+-- discovery, the native prop planner and `test --json`.  Threading decls
+-- through every one of them would re-sign the whole report/driver surface, so
+-- the located parse and its desugaring are memoized here, keyed on the source
+-- string, with a single entry (a test run has one target; an `mcp` session
+-- replaces the entry when the source changes).  The doctest examples are a
+-- pure function of the same source string and are held in a second
+-- single-entry slot with the same key discipline.
+--
+-- Always the LOCATED parse: `parseLocated` primes the loc side-channel from the
+-- source it parses, so the result is a pure function of the source string.  The
+-- unlocated `parse` is not, which is why this cache can hold user code while
+-- `frontend/parse_cache.mdk` is confined to the prelude.
+
+import frontend.ast.{Decl}
+import frontend.parser.{parse, parseLocatedResult, ParseError}
+import frontend.desugar.{desugar}
+import frontend.lexer.{collectComments}
+import tools.doctest.{Example, extractExamples}
+
+targetRef : Ref (Option (String, List Decl, Option (List Decl)))
+targetRef = Ref None
+
+cachedFor : String -> Option (List Decl, Option (List Decl))
+cachedFor src = match !targetRef
+  Some (key, decls, ds) => if key == src then Some (decls, ds) else None
+  None => None
+
+-- The located parse of `src`, non-panicking; a success is memoized.
+export
+parseTargetResult : String -> Result ParseError (List Decl)
+parseTargetResult src = match cachedFor src
+  Some (decls, _) => Ok decls
+  None => match parseLocatedResult src
+    Err e => Err e
+    Ok decls =>
+      targetRef := Some (src, decls, None)
+      Ok decls
+
+-- The located decls, panicking on a parse error exactly as `parse` does.
+export
+targetRaw : String -> List Decl
+targetRaw src = match parseTargetResult src
+  Ok decls => decls
+  Err _ => parse src
+
+-- `desugar (targetRaw src)`, computed once.
+export
+targetDesugared : String -> List Decl
+targetDesugared src =
+  let raw = targetRaw src
+  match cachedFor src
+    Some (_, Some ds) => ds
+    _ =>
+      let ds = desugar raw
+      targetRef := Some (src, raw, Some ds)
+      ds
+
+examplesRef : Ref (Option (String, List Example))
+examplesRef = Ref None
+
+-- `extractExamples (collectComments src)`, computed once.
+export
+targetExamples : String -> List Example
+targetExamples src = match !examplesRef
+  Some (key, exs) if key == src => exs
+  _ =>
+    let exs = extractExamples (collectComments src)
+    examplesRef := Some (src, exs)
+    exs

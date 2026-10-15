@@ -1,5 +1,5 @@
 # META
-source_lines=3118
+source_lines=3126
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -2369,7 +2369,8 @@ cjDiagnostic _ src (Diag sev code msg loc help fix) =
       ])
 
 -- Build the per-file entry: { "file": path, "diagnostics": [...] }.
--- `src` is the file's source text (for whole-doc range fallback).
+-- `src` is the file's source text; the JSON range comes from each `Loc`, so it
+-- is unused by `cjRangeOfLoc`.
 -- `diags` is the List Diag from analyzeProject.
 export
 cjFileEntry : String -> String -> List Diag -> Json
@@ -2383,7 +2384,6 @@ cjTriple (path, src, diags) = cjFileEntry path src diags
 
 -- Serialize the analyzeProject result as the top-level JSON object:
 -- { "files": [ { "file": ..., "diagnostics": [...] }, ... ] }
--- Needs sources for whole-doc range fallback.
 export
 cjAllToJson : List (String, String, List Diag) -> String
 cjAllToJson triples = cjAllToJsonWith [] triples
@@ -2450,13 +2450,21 @@ flushRunEnvelope triples = match (triples, runEnvelopeFields ())
   ([], []) => ()
   (ts, extra) => ePutStrLn (cjAllToJsonWith extra ts)
 
--- Read each file's source for the range fallback.  On read error, use "" so
--- diagnostics still serialize (the error itself is in the diag list).
+-- Read each file's source for rendering.  A file with no diagnostics renders
+-- nothing, so it costs no read (its source is `""`; the JSON envelope ignores
+-- `src`, so a diagnostic folded in later by `cjFoldIntoFile` still serializes).
+-- Otherwise the loader's own copy of the source is preferred (the bytes it
+-- parsed), and the disk is read when the loader's bounded table has evicted the
+-- entry or never noted the path.  On read error, use "" so diagnostics still
+-- serialize (the error itself is in the diag list).
 export
 readDiagSrc : (String, List Diag) -> <IO> (String, String, List Diag)
-readDiagSrc (path, diags) = match readFile path
-  Ok src => (path, src, diags)
-  Err _ => (path, "", diags)
+readDiagSrc (path, []) = (path, "", [])
+readDiagSrc (path, diags) = match loadedSourceOf path
+  Some src => (path, src, diags)
+  None => match readFile path
+    Ok src => (path, src, diags)
+    Err _ => (path, "", diags)
 
 export
 cohWarnsOfTriple : (String, String, List Diag) -> (String, String, List Diag)
@@ -3437,7 +3445,8 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig true "flushRunEnvelope" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("Stderr") (Some "e") (TyCon "Unit"))))
 (DFunDef false "flushRunEnvelope" ((PVar "triples")) (EMatch (ETuple (EVar "triples") (EApp (EVar "runEnvelopeFields") (ELit LUnit))) (arm (PTuple (PList) (PList)) () (ELit LUnit)) (arm (PTuple (PVar "ts") (PVar "extra")) () (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "cjAllToJsonWith") (EVar "extra")) (EVar "ts"))))))
 (DTypeSig true "readDiagSrc" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
-(DFunDef false "readDiagSrc" ((PTuple (PVar "path") (PVar "diags"))) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Ok" (PVar "src")) () (ETuple (EVar "path") (EVar "src") (EVar "diags"))) (arm (PCon "Err" PWild) () (ETuple (EVar "path") (ELit (LString "")) (EVar "diags")))))
+(DFunDef false "readDiagSrc" ((PTuple (PVar "path") (PList))) (ETuple (EVar "path") (ELit (LString "")) (EListLit)))
+(DFunDef false "readDiagSrc" ((PTuple (PVar "path") (PVar "diags"))) (EMatch (EApp (EVar "loadedSourceOf") (EVar "path")) (arm (PCon "Some" (PVar "src")) () (ETuple (EVar "path") (EVar "src") (EVar "diags"))) (arm (PCon "None") () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Ok" (PVar "src")) () (ETuple (EVar "path") (EVar "src") (EVar "diags"))) (arm (PCon "Err" PWild) () (ETuple (EVar "path") (ELit (LString "")) (EVar "diags")))))))
 (DTypeSig true "cohWarnsOfTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
 (DFunDef false "cohWarnsOfTriple" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (ETuple (EVar "path") (EVar "src") (EApp (EApp (EVar "filter") (EVar "isCoherenceWarn")) (EVar "diags"))))
 (DTypeSig true "joinedOrNone" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))
@@ -3862,7 +3871,8 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig true "flushRunEnvelope" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("Stderr") (Some "e") (TyCon "Unit"))))
 (DFunDef false "flushRunEnvelope" ((PVar "triples")) (EMatch (ETuple (EVar "triples") (EApp (EVar "runEnvelopeFields") (ELit LUnit))) (arm (PTuple (PList) (PList)) () (ELit LUnit)) (arm (PTuple (PVar "ts") (PVar "extra")) () (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "cjAllToJsonWith") (EVar "extra")) (EVar "ts"))))))
 (DTypeSig true "readDiagSrc" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
-(DFunDef false "readDiagSrc" ((PTuple (PVar "path") (PVar "diags"))) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Ok" (PVar "src")) () (ETuple (EVar "path") (EVar "src") (EVar "diags"))) (arm (PCon "Err" PWild) () (ETuple (EVar "path") (ELit (LString "")) (EVar "diags")))))
+(DFunDef false "readDiagSrc" ((PTuple (PVar "path") (PList))) (ETuple (EVar "path") (ELit (LString "")) (EListLit)))
+(DFunDef false "readDiagSrc" ((PTuple (PVar "path") (PVar "diags"))) (EMatch (EApp (EVar "loadedSourceOf") (EVar "path")) (arm (PCon "Some" (PVar "src")) () (ETuple (EVar "path") (EVar "src") (EVar "diags"))) (arm (PCon "None") () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Ok" (PVar "src")) () (ETuple (EVar "path") (EVar "src") (EVar "diags"))) (arm (PCon "Err" PWild) () (ETuple (EVar "path") (ELit (LString "")) (EVar "diags")))))))
 (DTypeSig true "cohWarnsOfTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
 (DFunDef false "cohWarnsOfTriple" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (ETuple (EVar "path") (EVar "src") (EApp (EApp (EMethodRef "filter") (EVar "isCoherenceWarn")) (EVar "diags"))))
 (DTypeSig true "joinedOrNone" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))
