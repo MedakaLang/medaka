@@ -1,0 +1,5 @@
+import m7.{base}
+
+export
+level6 : Int
+level6 = base + 6
