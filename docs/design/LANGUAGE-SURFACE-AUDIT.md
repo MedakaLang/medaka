@@ -83,7 +83,7 @@ routed to DISCUSS because each trips a newcomer-value or coherence concern.
   - Desugar: `desugar.mdk:96` (`mapKids`), `:199` (`rewriteSugar`) — this is where it dies; because
     it desugars *before* resolve/typecheck, every downstream `EFunction` arm is defensive/dead.
   - Exhaustive arms in ~13 `.mdk` files: `resolve`, `marker`, `types/typecheck`, `types/annotate`,
-    `frontend/exhaust`, `ir/core_ir_lower`, `ir/sexp` (`:158`), `backend/private_mangle`,
+    `frontend/exhaust`, `ir/core_ir_lower`, `ir/sexp` (`:158`), `types/private_mangle`,
     `tools/lint`, `tools/check_policy`, `frontend/parser`, `frontend/desugar`, `frontend/ast`.
     **Exhaustiveness-self-guiding:** delete the constructor and the self-hosted compiler flags every
     orphaned arm — mechanical, not logic-threading.

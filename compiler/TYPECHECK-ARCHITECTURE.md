@@ -696,7 +696,7 @@ best-*cited* layer in §4 — the deficit is structural form, not absence.
   *bindings* and *dictionary discipline*; I1 is about the count/order/predicates of
   dictionary parameters. Kind registries and type/alias/record name tables are neither.
   **No clause in any spec grants type, alias or record names module-qualified identity** —
-  and `compiler/backend/private_mangle.mdk` never qualifies them either. That is a missing
+  and `compiler/types/private_mangle.mdk` never qualifies them either. That is a missing
   rule, not an unenforced one.
 
   **Interface names are the partial exception.** I2 requires *"qualified instance
@@ -715,7 +715,7 @@ functions / 167 lines) touch **zero** state cells — coherence only looks state
 miscount its `coh*` helper signatures as cells (§0 trap 4).
 
 But purity is necessary, not sufficient: this file imports `mangledName` from
-`compiler/backend/private_mangle.mdk`, so a "pure ⇒ extractable" argument must clear the
+`compiler/types/private_mangle.mdk`, so a "pure ⇒ extractable" argument must clear the
 seam list (§7.7) as well as the state graph. ~~The
 ~1,200 lines of error-path machinery (Layer 8) are a stronger candidate: they fire only on
 failure, must not perturb inference, and have no inbound dependency from the inference core.~~
@@ -751,7 +751,7 @@ edges constrain refactors and none was named before:
 
 | Edge | Why it matters |
 |---|---|
-| → `backend/private_mangle.mdk` (`mangledName`) | typecheck depends on the **backend**; bears on §7.4 and on §7.3 (it is what does *not* qualify type names) |
+| → `types/private_mangle.mdk` (`mangledName`) | typecheck depends on the **backend**; bears on §7.4 and on §7.3 (it is what does *not* qualify type names) |
 | → `support/scc.mdk` (`tarjanSCCs`) | Tarjan is not in this file (§2) |
 | → `frontend/marker.mdk` (`localBoundNames`) | `localBoundNames` only. The mark pass is **not** on any production verb, so **no `EMethodRef` reaches this file**: `run`/`build` mark dicts in this file's own `prePassDict`/`prePassDictArg`, which mint `EMethodAt`/`EDictAt`, and `check` sees the unmarked tree |
 | ← `tools/lsp.mdk` (`currentLocalSchemes`, `currentSeedSchemes`) | the LSP reads `PerRun` state **after** a run completes, so `localSchemesOut`/`seedSchemesOut` are a **live external contract on reset timing** |

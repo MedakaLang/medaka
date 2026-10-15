@@ -1252,7 +1252,7 @@ else
   fail=$((fail+1)); printf 'FAIL A-2.10/nested-project-run (exit %d, got [%s], want 42)\n' "$nest_run_code" "$nest_run"
 fi
 # build AGREEMENT.  Not decoration: the canonical modId is also the per-module MANGLING
-# PREFIX (`<mid>__<name>`, compiler/backend/private_mangle.mdk), so a canonicalization
+# PREFIX (`<mid>__<name>`, compiler/types/private_mangle.mdk), so a canonicalization
 # that check accepts and the emitter disagrees with is a run≠build miscompile rather
 # than a diagnostic.  The binary must print 42 too.
 if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/nest/src/main.mdk" -o "$TMP/nest.bin" >/dev/null 2>&1 && [ -x "$TMP/nest.bin" ]; then

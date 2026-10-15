@@ -133,7 +133,7 @@ import support.ordmap.{
   omHasKey,
   omLookup,
 }
-import backend.private_mangle.{dictTag, hashName}
+import types.private_mangle.{dictTag, hashName}
 import support.util.{dedupBy, isNonEmptyL, joinWith, listLen, reverseL}
 
 public export data Backend = LlvmBackend | WasmBackend
@@ -384,7 +384,7 @@ checkImplSymbolsInjective ((m, tag, key) :: rest) seen =
 -- entry's method name is the grouping key of its dispatch chain.  A supplied impl and
 -- an inherited default of one method share that chain, so their words collide as
 -- surely as two supplied impls' do.  Both hashes are imported
--- from `backend.private_mangle`, the SAME `hashName` the LLVM emitter stamps and the
+-- from `types.private_mangle`, the SAME `hashName` the LLVM emitter stamps and the
 -- SAME `dictTag` the wasm emitter stamps, because a guard with its own copy of the
 -- hash certifies a property of the copy.
 --
@@ -1343,7 +1343,7 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "withheldLabels" false) (mem "profileName" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "Disposition" true) (mem "GapKind" true) (mem "catalogRow" false) (mem "gapKindName" false) (mem "rowLlvm" false) (mem "rowWasm" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "dictTag" false) (mem "hashName" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "hashName" false))))
 (DUse false (UseGroup ("support" "util") ((mem "dedupBy" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "reverseL" false))))
 (DData Public "Backend" () ((variant "LlvmBackend" (ConPos)) (variant "WasmBackend" (ConPos))) ())
 (DTypeSig true "backendName" (TyFun (TyCon "Backend") (TyCon "String")))
@@ -1751,7 +1751,7 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "withheldLabels" false) (mem "profileName" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "Disposition" true) (mem "GapKind" true) (mem "catalogRow" false) (mem "gapKindName" false) (mem "rowLlvm" false) (mem "rowWasm" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "dictTag" false) (mem "hashName" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "hashName" false))))
 (DUse false (UseGroup ("support" "util") ((mem "dedupBy" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "reverseL" false))))
 (DData Public "Backend" () ((variant "LlvmBackend" (ConPos)) (variant "WasmBackend" (ConPos))) ())
 (DTypeSig true "backendName" (TyFun (TyCon "Backend") (TyCon "String")))

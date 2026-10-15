@@ -235,7 +235,7 @@ Three existing modules establish the useful boundary:
 |---|---|---|
 | `backend/trmc_analysis.mdk` | TRMC eligibility and dispatch groups | LLVM destination/GEP lowering versus Wasm mutable struct/`return_call` lowering |
 | `backend/emit_support.mdk` | eager reachability, lazy-global classification, fallthrough labels | force-cell layouts, blocks, calls, and text |
-| `backend/private_mangle.mdk` | pre-flatten module disambiguation | final LLVM/WAT symbol legality and collision domains |
+| `types/private_mangle.mdk` | pre-flatten module disambiguation | final LLVM/WAT symbol legality and collision domains |
 
 The #553/#561 global-init arc is both precedent and warning. Sharing the
 analysis fixed two backends together, but the earlier shared walk omitted

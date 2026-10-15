@@ -73,7 +73,7 @@ import driver.loader.{
 import driver.build_cmd.{readPreludeFile, envOr, defaultMedakaRoot}
 import types.typecheck.{elaborateModules, TcDiag(..), tcDiagGoalKey}
 import types.route_key.{withEvidencePreserved}
-import backend.private_mangle.{mangleCtorCollisionsPair}
+import types.private_mangle.{mangleCtorCollisionsPair}
 import frontend.marker.{declRefs}
 import eval.eval.{
   Value,

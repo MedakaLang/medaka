@@ -1092,7 +1092,7 @@ pinTypeGo acc (t :: ts) = pinTypeGo (TyApp acc t) ts
 -- variable `A` — so lower it here, before resolve, to a plain `EVar "A.name"`.
 -- Resolve/typecheck/eval then bind it exactly like any other imported name (the import
 -- machinery enters m's exports under precisely these dotted local names), and
--- `backend/private_mangle.mdk` maps it back to m's real symbol.  A dot cannot occur in
+-- `types/private_mangle.mdk` maps it back to m's real symbol.  A dot cannot occur in
 -- a surface identifier, so the flat name is collision-free by construction.
 --
 -- The rewrite is scoped to the aliases THIS file declares, and the parser forces a

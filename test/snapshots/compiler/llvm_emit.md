@@ -314,7 +314,7 @@ import backend.trmc_analysis.{
   clauseArityOf,
   lastStmtExpr,
 }
-import backend.private_mangle.{hashName, injectiveIdent}
+import types.private_mangle.{hashName, injectiveIdent}
 import types.disposition.{ifaceSuperCount, installedDispositionsOpt}
 import types.route_key.{numIntWord}
 import backend.emit_plan.{
@@ -10187,7 +10187,7 @@ dedupS xs = reverseL (dedup (reverseL xs))
 -- the immediate-int low-bit-1 encoding, exactly as the Float box is).  Allocation
 -- reuses the slice-1 `@mdk_alloc` (malloc-and-leak; no GC this slice).
 
--- `hashName` (djb2, seed 5381) lives in `backend.private_mangle`, shared with the
+-- `hashName` (djb2, seed 5381) lives in `types.private_mangle`, shared with the
 -- WasmGC emitter so the dict-witness tag agrees across backends.  STILL used here
 -- for the NON-ctor sentinel headers ("$tuple"/"$ref"/"$closure") and dict witness
 -- words; constructor cell tags use `cellTag` (ordinals) instead.
@@ -15297,7 +15297,7 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "ExternFinding" false) (mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "renderRecordRefusal" false) (mem "renderCallRefusal" false) (mem "renderTailRefusal" false) (mem "renderBinderRefusal" false) (mem "validateBinderStamps" false) (mem "validateImplSymbolInjectivity" false) (mem "validateDictTags" false) (mem "validateCalls" false) (mem "validateImplSymbols" false) (mem "validateMethodContexts" false) (mem "validateDispatchEvidence" false) (mem "validateTails" false) (mem "validateRecords" false) (mem "unrefusedExternMessage" false) (mem "validateExterns" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omSize" false) (mem "omEmpty" false) (mem "omKeys" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "flattenApp" false) (mem "lengthS" false) (mem "freeVars" false) (mem "bindName" false) (mem "bindNames" false) (mem "patVars" false) (mem "patVarsList" false) (mem "patVarNames" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "splitLastF" false) (mem "selfFree" false) (mem "mentionsSelfMethod" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispSpineParts" false) (mem "dropFirstN" false) (mem "clauseArityOf" false) (mem "lastStmtExpr" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "hashName" false) (mem "injectiveIdent" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "hashName" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "ifaceSuperCount" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "numIntWord" false))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "TrmcVerdicts" false) (mem "isTrmcFn" false) (mem "isTrmcImpl" false) (mem "checkPlanBackend" false))))
@@ -18076,7 +18076,7 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "ExternFinding" false) (mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "renderRecordRefusal" false) (mem "renderCallRefusal" false) (mem "renderTailRefusal" false) (mem "renderBinderRefusal" false) (mem "validateBinderStamps" false) (mem "validateImplSymbolInjectivity" false) (mem "validateDictTags" false) (mem "validateCalls" false) (mem "validateImplSymbols" false) (mem "validateMethodContexts" false) (mem "validateDispatchEvidence" false) (mem "validateTails" false) (mem "validateRecords" false) (mem "unrefusedExternMessage" false) (mem "validateExterns" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omSize" false) (mem "omEmpty" false) (mem "omKeys" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "flattenApp" false) (mem "lengthS" false) (mem "freeVars" false) (mem "bindName" false) (mem "bindNames" false) (mem "patVars" false) (mem "patVarsList" false) (mem "patVarNames" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "splitLastF" false) (mem "selfFree" false) (mem "mentionsSelfMethod" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispSpineParts" false) (mem "dropFirstN" false) (mem "clauseArityOf" false) (mem "lastStmtExpr" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "hashName" false) (mem "injectiveIdent" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "hashName" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "ifaceSuperCount" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "numIntWord" false))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "TrmcVerdicts" false) (mem "isTrmcFn" false) (mem "isTrmcImpl" false) (mem "checkPlanBackend" false))))

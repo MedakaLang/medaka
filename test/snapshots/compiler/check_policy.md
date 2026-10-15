@@ -49,7 +49,7 @@ import driver.main_autoprint.{shouldAutoPrintMain}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.repr.{Scheme(..), Mono(..), normalize}
-import backend.private_mangle.{mangleCtorCollisionsPair}
+import types.private_mangle.{mangleCtorCollisionsPair}
 import types.typecheck.{
   ElabResult,
   elaborateModulesWithSchemes,
@@ -637,7 +637,7 @@ joinSemiTok xs = joinWith ";" xs
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "normalize" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "ElabResult" false) (mem "elaborateModulesWithSchemes" false) (mem "lastInvocationOps" false) (mem "decodeSetParam" false) (mem "bindingGrantArity" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnvWith" false) (mem "buildStampExterns" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "filterList" false) (mem "listLen" false) (mem "escOneHex2" false) (mem "anyList" false))))
@@ -774,7 +774,7 @@ joinSemiTok xs = joinWith ";" xs
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "normalize" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "ElabResult" false) (mem "elaborateModulesWithSchemes" false) (mem "lastInvocationOps" false) (mem "decodeSetParam" false) (mem "bindingGrantArity" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnvWith" false) (mem "buildStampExterns" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "filterList" false) (mem "listLen" false) (mem "escOneHex2" false) (mem "anyList" false))))

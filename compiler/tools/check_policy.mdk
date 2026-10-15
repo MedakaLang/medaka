@@ -45,7 +45,7 @@ import driver.main_autoprint.{shouldAutoPrintMain}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.repr.{Scheme(..), Mono(..), normalize}
-import backend.private_mangle.{mangleCtorCollisionsPair}
+import types.private_mangle.{mangleCtorCollisionsPair}
 import types.typecheck.{
   ElabResult,
   elaborateModulesWithSchemes,

@@ -118,7 +118,7 @@ import support.ordmap.{
   omFromNames,
   omKeys,
 }
-import backend.private_mangle.{injectiveIdent}
+import types.private_mangle.{injectiveIdent}
 import support.util.{
   contains,
   listLen,

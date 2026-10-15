@@ -1,0 +1,547 @@
+{- | Architecture boundary pins: layering, module-level cells, the hooks record,
+   and the import closures of the leaf modules (law A6, G3 of the architecture
+   playbook).
+
+   Scope is every `compiler/**/*.mdk` except `*_test.mdk`; a module id is the
+   path under `compiler/` without `.mdk`, `/` read as `.`. Only column-0 import
+   lines count, so a multi-line `{...}` continuation is ignored.
+
+   The goldens in `test/arch_goldens/` may only fall: `test/arch_ratchet.sh`
+   fails a rise unless a commit trailer names it. Run with `ARCH_PINS_WRITE=1`
+   to rewrite them from the tree instead of comparing. -}
+import fs.{walkDir}
+import list.{
+  drop, dropWhile, dropWhileEnd, filterMap, nub, reverse, sort, takeWhile
+}
+import map as M
+import set as S
+import string.{
+  capitalize, countOccurrences, endsWith, fromChars, split, toChars, isAlphaNum,
+  isSpace, join, lines, replace, startsWith, stripPrefix, trimLeft, unlines,
+  words
+}
+import test.{Expectation, expectAtLeast, expectEqual, expectGolden, fail, pass}
+import test_process.{underRoot}
+
+-- The only `types/` modules allowed to reach `support.hooks` through their
+-- import closure. Empty until a hooks consumer inside inference is reviewed
+-- and named here.
+hooksReaderAllowlist : List String
+hooksReaderAllowlist = []
+
+layerRank : String -> Option Int
+layerRank "support" = Some 0
+layerRank "frontend" = Some 1
+layerRank "types" = Some 2
+layerRank "ir" = Some 3
+layerRank "backend" = Some 4
+layerRank _ = None
+
+isTop : String -> Bool
+isTop d = d == "driver" || d == "tools" || d == "entries"
+
+firstComponent : String -> String
+firstComponent m = match split "." m
+  [] => m
+  d :: _ => d
+
+-- (module id, file lines) for every non-test compiler module, sorted by id.
+loadModules : <IO> List (String, List String)
+loadModules =
+  let root = underRoot "compiler"
+  match walkDir root
+    Err _ => []
+    Ok paths => M.entries (M.fromList (filterMap (loadOne root) paths))
+
+loadOne : String -> String -> <IO> Option (String, List String)
+loadOne root path =
+  if endsWith ".mdk" path
+    && not (endsWith "_test.mdk" path) then match readFile path
+    Ok text => Some (modId root path, lines text)
+    Err _ => None
+  else
+    None
+
+modId : String -> String -> String
+modId root path =
+  let rel = match stripPrefix "\{root}/" path
+    Some r => r
+    None => path
+  replace "/" "." (replace ".mdk" "" rel)
+
+-- A column-0 line that is neither blank, indented, nor a `--` comment.
+isColZero : String -> Bool
+isColZero l =
+  l /= ""
+    && not (startsWith " " l)
+    && not (startsWith "\t" l)
+    && not (startsWith "--" l)
+
+-- `^(?:export\s+)?import\s+IDENT(.IDENT)*`, first dotted path only.
+importOf : String -> Option String
+importOf l =
+  if not (isColZero l) then
+    None
+  else
+    let body = dropExport l
+    match stripPrefix "import" body
+      None => None
+      Some rest => match toList (toChars rest)
+        c :: _ if isSpace c => Some (dottedPath (trimLeft rest))
+        _ => None
+
+dropExport : String -> String
+dropExport l = match stripPrefix "export" l
+  Some rest => match toList (toChars rest)
+    c :: _ if isSpace c => trimLeft rest
+    _ => l
+  None => l
+
+dottedPath : String -> String
+dottedPath s =
+  let raw =
+    takeWhile (c => isAlphaNum c || c == '_' || c == '.') (toList (toChars s))
+  fromChars (dropWhileEnd (== '.') raw)
+
+importsOf : List String -> List String
+importsOf ls = nub (filterMap importOf ls)
+
+-- module id -> imported compiler module ids
+type Graph = M.Map String (List String)
+
+buildGraph : List (String, List String) -> Graph
+buildGraph mods =
+  let ids = S.fromList (map (p => fst p) mods)
+  M.fromList
+    (map
+      ((m, ls) =>
+        (m, sort (filter (i => S.has i ids && i /= m) (importsOf ls))))
+      mods)
+
+neighbors : Graph -> String -> List String
+neighbors g m = match M.get m g
+  Some xs => xs
+  None => []
+
+violation : String -> String -> Bool
+violation src dst =
+  let a = firstComponent src
+  let b = firstComponent dst
+  if isTop a then
+    False
+  else if isTop b then
+    True
+  else if a == "eval" then
+    b == "ir" || b == "backend"
+  else if b == "eval" then
+    True
+  else match (layerRank a, layerRank b)
+    (Some x, Some y) => y > x
+    _ => False
+
+violations : Graph -> List String
+violations g =
+  sort
+    (flatMap
+      ((src, dsts) => map (d => "\{src} -> \{d}") (filter (violation src) dsts))
+      (M.entries g))
+
+-- `^([a-z][A-Za-z0-9_']*)\s*=\s*(Ref|newRef)\b` on a column-0 line whose first
+-- word is not a keyword.
+cellName : String -> Option String
+cellName l =
+  let w = match words l
+    [] => ""
+    x :: _ => x
+  if not (isColZero l) || elem w declKeywordsAndLayout then
+    None
+  else
+    let cs = toList (toChars l)
+    match cs
+      c :: _ if c >= 'a' && c <= 'z' =>
+        let name = takeWhile identChar cs
+        let after = dropWhile isSpace (dropWhile identChar cs)
+        match after
+          '=' :: more =>
+            let val = fromChars (dropWhile isSpace more)
+            if refHead "Ref" val || refHead "newRef" val then
+              Some (fromChars name)
+            else
+              None
+          _ => None
+      _ => None
+
+-- `kw\b`: the word, then a non-word character or the end.
+refHead : String -> String -> Bool
+refHead kw s = match stripPrefix kw s
+  None => False
+  Some rest => match toList (toChars rest)
+    [] => True
+    c :: _ => not (isAlphaNum c || c == '_')
+
+cellCount : List String -> Int
+cellCount ls = length (filterMap cellName ls)
+
+cellRows : List (String, List String) -> List String
+cellRows mods =
+  sort
+    (filterMap
+      ((m, ls) =>
+        let n = cellCount ls
+        if n > 0 then Some "\{m}\t\{n}" else None)
+      mods)
+
+-- Fields of the `data Hooks` extent of support/hooks.mdk: ` : ` annotations of
+-- a record, else the constructor arguments of a positional declaration. Zero
+-- while the type is absent.
+hooksFieldCount : List (String, List String) -> Int
+hooksFieldCount mods = match filter (p => fst p == "support.hooks") mods
+  [] => 0
+  (_, ls) :: _ => fieldsOf (dropWhile (l => not (isHooksData l)) ls)
+
+isHooksData : String -> Bool
+isHooksData l =
+  let body = dropExport (match stripPrefix "public" l
+    Some r => trimLeft r
+    None => l)
+  startsWith "data Hooks" body
+
+fieldsOf : List String -> Int
+fieldsOf [] = 0
+fieldsOf (first :: rest) =
+  let extent = first :: takeWhile continuesData rest
+  let colons = sum (map countColons extent)
+  if colons > 0 then colons else positionalArgs (join " " extent)
+
+-- Constructor arguments across the `|` alternatives of a positional `data`.
+positionalArgs : String -> Int
+positionalArgs text =
+  let rhs = drop 1 (dropWhile (/= '=') (toList (toChars text)))
+  sum
+    (map
+      (alt => max 0 (topAtoms (toList (toChars alt)) 0 False 0 - 1))
+      (split " | " (fromChars rhs)))
+
+-- Whitespace-separated atoms at bracket depth 0, a bracketed group being one.
+topAtoms : List Char -> Int -> Bool -> Int -> Int
+topAtoms [] _ _ n = n
+topAtoms (c :: cs) d inTok n =
+  let opens = c == '(' || c == '['
+  let closes = c == ')' || c == ']'
+  if isSpace c then
+    topAtoms cs d (inTok && d > 0) n
+  else
+    let n2 = if d == 0 && not inTok then n + 1 else n
+    let d2 = if opens then d + 1 else if closes then d - 1 else d
+    topAtoms cs d2 True n2
+
+continuesData : String -> Bool
+continuesData l =
+  l == ""
+    || startsWith " " l
+    || startsWith "}" l
+    || startsWith "|" l
+    || startsWith "," l
+
+countColons : String -> Int
+countColons l = countOccurrences " : " l
+
+-- Transitive import closure of `root`, excluding `root`, ascending.
+closureOf : Graph -> String -> List String
+closureOf g root = filter (/= root) (toList (reach g [root] (S.fromList [])))
+
+reach : Graph -> List String -> S.Set String -> S.Set String
+reach _ [] seen = seen
+reach g (m :: rest) seen =
+  if S.has m seen then
+    reach g rest seen
+  else
+    reach g (neighbors g m ++ rest) (S.insert m seen)
+
+pin : String -> List String -> <IO> Expectation
+pin name rows =
+  let path = underRoot "test/arch_goldens/\{name}"
+  match getEnv "ARCH_PINS_WRITE"
+    Some "1" => match writeFile path (unlines rows)
+      Ok _ => pass
+      Err e => fail "could not write \{path}: \{e}"
+    _ => expectGolden path (unlines rows)
+
+test "arch_boundaries: the tree walk finds the compiler modules" =
+  expectAtLeast 100 (length loadModules)
+
+test "arch_boundaries: layering violations match layering.golden" =
+  pin "layering.golden" (violations (buildGraph loadModules))
+
+test "arch_boundaries: module-level cells match cells.golden" =
+  pin "cells.golden" (cellRows loadModules)
+
+test "arch_boundaries: hook field count matches hooks.golden" =
+  pin "hooks.golden" ["hooks.fields\t\{hooksFieldCount loadModules}"]
+
+test "arch_boundaries: no types/ module outside the allowlist reaches support.hooks" =
+  let g = buildGraph loadModules
+  let offenders =
+    sort
+      (filter
+        (m =>
+          startsWith "types." m
+            && not (elem m hooksReaderAllowlist)
+            && elem "support.hooks" (closureOf g m))
+        (M.keys g))
+  expectEqual [] offenders
+
+test "arch_boundaries: frontend.ast closure matches its golden" =
+  pin
+    "closure.frontend.ast.golden"
+    (closureOf (buildGraph loadModules) "frontend.ast")
+
+test "arch_boundaries: types.repr closure matches its golden" =
+  pin
+    "closure.types.repr.golden"
+    (closureOf (buildGraph loadModules) "types.repr")
+
+test "arch_boundaries: ir.core_ir closure matches its golden" =
+  pin
+    "closure.ir.core_ir.golden"
+    (closureOf (buildGraph loadModules) "ir.core_ir")
+
+-- Defined names (column-0, first word not a declaration keyword): an
+-- identifier `[a-z_][A-Za-z0-9_']*` or a parenthesised operator.
+definedName : String -> Option String
+definedName l =
+  let w = match words l
+    [] => ""
+    x :: _ => x
+  if not (isColZero l) || elem w declKeywordsAndLayout then
+    None
+  else
+    nameAtStart l
+
+declKeywordsAndLayout : List String
+declKeywordsAndLayout = declKeywords ++ ["else", "then", "in"]
+
+declKeywords : List String
+declKeywords = [
+  "import", "data", "type", "interface", "impl", "export", "public", "test",
+  "prop"
+]
+
+nameAtStart : String -> Option String
+nameAtStart l = match toList (toChars l)
+  c :: _ if c >= 'a' && c <= 'z' || c == '_' =>
+    Some (fromChars (takeWhile identChar (toList (toChars l))))
+  '(' :: more =>
+    let op = takeWhile (x => x /= ')' && not (isSpace x)) more
+    match dropWhile (x => x /= ')' && not (isSpace x)) more
+      ')' :: _ if length op > 0 => Some (fromChars op)
+      _ => None
+  _ => None
+
+identChar : Char -> Bool
+identChar c = isAlphaNum c || c == '_' || c == '\''
+
+namesOf : List (String, List String) -> String -> S.Set String
+namesOf mods m = match filter (p => fst p == m) mods
+  [] => S.fromList []
+  (_, ls) :: _ => S.fromList (filterMap definedName ls)
+
+-- The `llvm_emit` names with a `wasm_emit` twin under any of four conventions:
+-- same name, `n+"W"` when `n` is not in wasm, `n+"Ref"`, `"wasm"+Capitalized(n)`.
+twinNames : List (String, List String) -> List String
+twinNames mods =
+  let ll = namesOf mods "backend.llvm_emit"
+  let ww = namesOf mods "backend.wasm_emit"
+  sort
+    (filter
+      (n =>
+        S.has n ww
+          || S.has (n ++ "W") ww
+          || S.has (n ++ "Ref") ww
+          || S.has ("wasm" ++ capitalize n) ww)
+      (toList ll))
+
+startsWithSpace : String -> Bool
+startsWithSpace s = match toList (toChars s)
+  c :: _ => isSpace c
+  [] => False
+
+-- Drop the words of `ws` in order, each followed by whitespace.
+dropWords : List String -> String -> Option String
+dropWords [] s = Some s
+dropWords (w :: ws) s = match stripPrefix w s
+  Some r if startsWithSpace r => dropWords ws (trimLeft r)
+  _ => None
+
+-- `KW X` with `X` an upper-case word, after one of the optional prefixes.
+kindWord : String -> List (List String) -> String -> Option String
+kindWord kw prefixes l = firstSome (map (p => kindAfter kw p l) prefixes)
+
+firstSome : List (Option a) -> Option a
+firstSome [] = None
+firstSome ((Some x) :: _) = Some x
+firstSome (None :: rest) = firstSome rest
+
+kindAfter : String -> List String -> String -> Option String
+kindAfter kw prefix l = match dropWords prefix l
+  None => None
+  Some r => match stripPrefix kw r
+    Some rest if startsWithSpace rest => match toList (toChars (trimLeft rest))
+      c :: more if c >= 'A' && c <= 'Z' =>
+        Some "\{kw} \{fromChars (c :: takeWhile identChar more)}"
+      _ => None
+    _ => None
+
+dataOrTypeName : String -> Option String
+dataOrTypeName l =
+  match kindWord "data" [["public", "export"], ["export"], []] l
+    Some k => Some k
+    None => kindWord "type" [["export"], []] l
+
+-- Declaration kind of a column-0 line: `Some kind` opens an extent.
+startKind : String -> Option String
+startKind l =
+  if not (isColZero l) then
+    None
+  else
+    let ws = words l
+    let w = match ws
+      [] => ""
+      x :: _ => x
+    let second = match ws
+      _ :: y :: _ => y
+      _ => ""
+    if ws == ["}"] || ws == ["]"] || ws == [")"] then
+      None
+    else if any (c => startsWith c l) ["}", "]", ")", "|", ","]
+      || ws == ["export"] then
+      None
+    else match dataOrTypeName l
+      Some k => Some k
+      None => match importOf l
+        Some _ => Some "<import>"
+        None =>
+          if w == "else" || w == "then" || w == "in" then
+            None
+          else if w == "test" || w == "prop" then
+            Some "<\{w}>"
+          else if elem w declKeywords then
+            Some "\{w} \{second}"
+          else
+            nameAtStart l
+
+-- One declaration extent: name, whether a `rule-duplicate-body` directive sits
+-- directly above its first line, and its lines in reverse.
+type Seg = (String, Bool, List String)
+
+segmentLines : List String -> List Seg
+segmentLines ls = segFinish (segGo ls "" [] None)
+
+segGo : List String ->
+  String ->
+  List Seg ->
+  Option Seg ->
+  (List Seg, Option Seg)
+segGo [] _ done cur = (done, cur)
+segGo (l :: rest) prev done cur = match startKind l
+  None => match cur
+    None => segGo rest l done None
+    Some (n, d, acc) => segGo rest l done (Some (n, d, l :: acc))
+  Some n =>
+    let flag = startsWith "-- lint-disable-next-line rule-duplicate-body" prev
+    match cur
+      Some (cn, cd, acc) if cn == n && not (startsWith "<" n) =>
+        segGo rest l done (Some (cn, cd || flag, l :: acc))
+      Some c => segGo rest l (c :: done) (Some (n, flag, [l]))
+      None => segGo rest l done (Some (n, flag, [l]))
+
+segFinish : (List Seg, Option Seg) -> List Seg
+segFinish (done, cur) = match cur
+  None => reverse done
+  Some c => reverse (c :: done)
+
+isCommentLine : String -> Bool
+isCommentLine l = startsWith "--" (trimLeft l)
+
+-- Whitespace- and comment-normalized body of an extent; trailing blank and
+-- comment lines are not part of it.
+segBody : List String -> String
+segBody revLines =
+  let kept =
+    reverse (dropWhile (l => trimLeft l == "" || isCommentLine l) revLines)
+  join " " (flatMap words (filter (l => not (isCommentLine l)) kept))
+
+-- name -> (body, exempt); several extents of one name are joined with a newline.
+moduleBodies : List String -> M.Map String (String, Bool)
+moduleBodies ls =
+  let fileExempt =
+    any (startsWith "-- lint-disable-file rule-duplicate-body") ls
+  fold
+    (acc (n, d, rev) =>
+      let b = segBody rev
+      match M.get n acc
+        None => M.set n (b, d || fileExempt) acc
+        Some (ob, od) => M.set n ("\{ob}\n\{b}", od || d || fileExempt) acc)
+    (M.fromList [])
+    (segmentLines ls)
+
+type DefRow = (String, String, Bool)
+
+-- name -> (module, body, exempt) over non-test, non-`entries/` modules.
+definitionIndex : List (String, List String) -> M.Map String (List DefRow)
+definitionIndex mods =
+  fold
+    (acc (m, ls) =>
+      fold
+        (a (n, (b, d)) =>
+          if startsWith "<" n
+            || startsWith "data " n
+            || startsWith "type " n then
+            a
+          else match M.get n a
+            None => M.set n [(m, b, d)] a
+            Some rows => M.set n ((m, b, d) :: rows) a)
+        acc
+        (M.entries (moduleBodies ls)))
+    (M.fromList [])
+    (filter (p => not (startsWith "entries." (fst p))) mods)
+
+-- Names whose most common body, among non-exempt definitions in two or more
+-- modules, occurs at least twice.
+identicalNames : M.Map String (List DefRow) -> List String
+identicalNames idx =
+  sort
+    (filterMap
+      ((n, rows) =>
+        let live = filter (r => not (rowExempt r)) rows
+        if length live >= 2 && topCount (map rowBody live) >= 2 then
+          Some n
+        else
+          None)
+      (M.entries idx))
+
+rowExempt : DefRow -> Bool
+rowExempt (_, _, e) = e
+
+rowBody : DefRow -> String
+rowBody (_, b, _) = b
+
+topCount : List String -> Int
+topCount bodies =
+  let counts =
+    fold
+      (acc b => M.set b (M.findWithDefault 0 b acc + 1) acc)
+      (M.fromList [])
+      bodies
+  fold max 0 (M.values counts)
+
+test "arch_boundaries: llvm/wasm twins match twins.golden" =
+  pin "twins.golden" (twinNames loadModules)
+
+test "arch_boundaries: identical-body names match dupbodies.golden" =
+  let idx = definitionIndex loadModules
+  -- The count of names defined in two or more modules is information only and
+  -- not pinned; no passing-test channel surfaces it, so compute
+  -- `length (filter (rows => length rows >= 2) (M.values idx))` in a scratch
+  -- `println` when the number is wanted.
+  pin "dupbodies.golden" (identicalNames idx)

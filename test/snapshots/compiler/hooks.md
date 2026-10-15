@@ -1,0 +1,37 @@
+# META
+source_lines=27
+stages=DESUGAR,MARK
+# SOURCE
+{- | The late-bound hooks seam (law A6, decision D2).
+
+   A hook is a lookup that a module below `types/` inference cannot make by
+   importing its owner: rendering, tooling and backend-fact queries. A lower
+   module the driver wires reads it; inference never does. The driver installs
+   the real functions once.
+
+   The first consumer adds, in this module:
+   - `data Hooks`, a record whose fields are function-typed lookups;
+   - one `Ref (Option Hooks)`, installed whole (never field by field) by
+     `driver/medaka_cli.mdk` main and by `entries/entry_support.mdk` for the
+     probe mains.
+
+   Adding a field to `Hooks` needs a `Hooks-Field: <name>` trailer on the
+   commit; `test/arch_ratchet.sh` fails a rise in `test/arch_goldens/hooks.golden`
+   without it. `test/arch_boundaries_test.mdk` fails any `types/` module outside
+   its allowlist that reaches this one through its import closure.
+
+   Until a consumer lands there is no record, because an empty record does not
+   parse. -}
+
+{- | The body of an unset hook: stops with a message naming the hook, for a
+   process whose driver did not install the hooks. -}
+export
+hookUnset : String -> a
+hookUnset field =
+  panic "hook `\{field}` is unset: the driver did not install hooks"
+# DESUGAR
+(DTypeSig true "hookUnset" (TyFun (TyCon "String") (TyVar "a")))
+(DFunDef false "hookUnset" ((PVar "field")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "hook `")) (EApp (EVar "display") (EVar "field"))) (ELit (LString "` is unset: the driver did not install hooks")))))
+# MARK
+(DTypeSig true "hookUnset" (TyFun (TyCon "String") (TyVar "a")))
+(DFunDef false "hookUnset" ((PVar "field")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "hook `")) (EApp (EMethodRef "display") (EVar "field"))) (ELit (LString "` is unset: the driver did not install hooks")))))

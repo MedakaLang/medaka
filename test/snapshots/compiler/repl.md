@@ -41,7 +41,7 @@ import types.typecheck.{
   elaborateModules,
   tcMsg,
 }
-import backend.private_mangle.{mangleCtorCollisionsPair}
+import types.private_mangle.{mangleCtorCollisionsPair}
 import eval.eval.{
   Value(..),
   evalOneRootEnvWith,
@@ -475,7 +475,7 @@ stringSplitOn sep s start cur len
 (DUse false (UseGroup ("frontend" "resolve") ((mem "resolveProgram" false) (mem "ppResError" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "ppScheme" false) (mem "Scheme" true))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiags" false) (mem "checkOneScheme" false) (mem "elaborateModules" false) (mem "tcMsg" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalOneRootEnvWith" false) (mem "testCapableExterns" false) (mem "funNamesOf" false) (mem "dropShadowedExp" false) (mem "ppValue" false) (mem "lookupBinding" false) (mem "force" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "startsWith" false) (mem "stringTrim" false))))
 (DTypeSig false "accumulatedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl"))))
@@ -618,7 +618,7 @@ stringSplitOn sep s start cur len
 (DUse false (UseGroup ("frontend" "resolve") ((mem "resolveProgram" false) (mem "ppResError" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "ppScheme" false) (mem "Scheme" true))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiags" false) (mem "checkOneScheme" false) (mem "elaborateModules" false) (mem "tcMsg" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalOneRootEnvWith" false) (mem "testCapableExterns" false) (mem "funNamesOf" false) (mem "dropShadowedExp" false) (mem "ppValue" false) (mem "lookupBinding" false) (mem "force" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "startsWith" false) (mem "stringTrim" false))))
 (DTypeSig false "accumulatedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl"))))

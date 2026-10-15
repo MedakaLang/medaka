@@ -1021,7 +1021,7 @@ both landed — see item 9. #2549 is landed for its first half only — see item
 19. **The record-head stamp carries its owner, 2026-09-09** (#2839). The `Ref String`
    typecheck writes into `EFieldAccess`/`ERecordUpdate` is the head both emitters use to
    pick a field's slot by `(record head, label)`. It carried the record's registry KEY —
-   the record's decl name, bare unless `backend/private_mangle.mdk` renamed it first — so
+   the record's decl name, bare unless `types/private_mangle.mdk` renamed it first — so
    two modules declaring same-named records at opposite field orders were distinguishable
    at the emitter only because `medaka build`'s child mangles before it elaborates. L2 was
    being supplied by the mangler's ORDER, not by the stamp. It is now derived from the
