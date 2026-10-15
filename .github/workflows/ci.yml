@@ -1639,13 +1639,6 @@ jobs:
       # timeout. History: dossier `ci.md`.
       - name: Compiler source is well-typed and emitter reproduces itself
         if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.soundness_corpora == 'true')) }}
-        # Event-payload SHAs for test/arch_ratchet.sh (read through `env:`, never
-        # interpolated into the script body).
-        env:
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
-          MG_BASE: ${{ github.event.merge_group.base_sha }}
-          MG_HEAD: ${{ github.event.merge_group.head_sha }}
         run: |
           set +e
           JOBS=3 bash test/typecheck_compiler_source.sh > /tmp/tc.log 2>&1 &
