@@ -1,5 +1,5 @@
 # META
-source_lines=3150
+source_lines=3152
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka lexer.
@@ -2769,6 +2769,7 @@ layoutWithOffsetPairs src len =
 export
 tokenize : String -> List Token
 tokenize s =
+  let _ = stageBump "lex.tokenize"
   let src = stringToChars s
   let len = arrayLength src
   elseFilterToks
@@ -3148,6 +3149,7 @@ rawToCommentsGo src (_ :: rest) p line lineStart =
 export
 collectComments : String -> List Comment
 collectComments s =
+  -- Valid only while lint is the single caller; a second caller must move this bump.
   let _ = stageBump "lint.comments"
   let src = stringToChars s
   let len = arrayLength src
@@ -3957,7 +3959,7 @@ collectComments s =
 (DTypeSig false "layoutWithOffsetPairs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "layoutWithOffsetPairs" ((PVar "src") (PVar "len")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "lex.pairs")))) (DoExpr (EApp (EVar "elseFilterPairs") (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "None")) (EVar "False"))))))
 (DTypeSig true "tokenize" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Token"))))
-(DFunDef false "tokenize" ((PVar "s")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EVar "elseFilterToks") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "TNewline")) (EVar "False"))))))
+(DFunDef false "tokenize" ((PVar "s")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "lex.tokenize")))) (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EVar "elseFilterToks") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "TNewline")) (EVar "False"))))))
 (DTypeSig false "elseFilterToks" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Token"))))
 (DFunDef false "elseFilterToks" ((PCons (PCon "TNewline") (PCons (PCon "TElse") (PVar "rest")))) (EBinOp "::" (EVar "TElse") (EApp (EVar "elseFilterToks") (EVar "rest"))))
 (DFunDef false "elseFilterToks" ((PCons (PCon "TNewline") (PCons (PCon "TThen") (PVar "rest")))) (EBinOp "::" (EVar "TThen") (EApp (EVar "elseFilterToks") (EVar "rest"))))
@@ -4852,7 +4854,7 @@ collectComments s =
 (DTypeSig false "layoutWithOffsetPairs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "layoutWithOffsetPairs" ((PVar "src") (PVar "len")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "lex.pairs")))) (DoExpr (EApp (EVar "elseFilterPairs") (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "None")) (EVar "False"))))))
 (DTypeSig true "tokenize" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Token"))))
-(DFunDef false "tokenize" ((PVar "s")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EVar "elseFilterToks") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "TNewline")) (EVar "False"))))))
+(DFunDef false "tokenize" ((PVar "s")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "lex.tokenize")))) (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EVar "elseFilterToks") (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "TNewline")) (EVar "False"))))))
 (DTypeSig false "elseFilterToks" (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Token"))))
 (DFunDef false "elseFilterToks" ((PCons (PCon "TNewline") (PCons (PCon "TElse") (PVar "rest")))) (EBinOp "::" (EVar "TElse") (EApp (EVar "elseFilterToks") (EVar "rest"))))
 (DFunDef false "elseFilterToks" ((PCons (PCon "TNewline") (PCons (PCon "TThen") (PVar "rest")))) (EBinOp "::" (EVar "TThen") (EApp (EVar "elseFilterToks") (EVar "rest"))))
