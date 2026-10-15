@@ -1,0 +1,6 @@
+-- `export-used-at-bool.mdk` in one module: `IB Bool` selects, prints 7.
+import hub.{IA, IB, mth}
+
+r = identity mth
+
+main = println (r True)

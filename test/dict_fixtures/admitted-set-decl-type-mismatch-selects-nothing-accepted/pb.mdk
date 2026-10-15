@@ -1,0 +1,5 @@
+export interface IB f where
+  mth : f a -> Int
+
+impl IB List where
+  mth xs = 100

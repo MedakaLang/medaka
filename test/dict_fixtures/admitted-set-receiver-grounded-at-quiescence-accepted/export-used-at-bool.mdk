@@ -1,0 +1,6 @@
+-- `r True` grounds `live_identity`'s receiver to `Bool` in this later module; only
+-- `IB Bool` selects there, so `r True` is 7.  The same binding in one module is
+-- `same-module.mdk`: module partitioning does not change the answer (§6.2 T5).
+import live_identity.{r}
+
+main = println (r True)

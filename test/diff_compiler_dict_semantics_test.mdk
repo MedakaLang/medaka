@@ -3787,6 +3787,113 @@ table = [
     codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
   },
   Row {
+    entry =
+      "admitted-set-receiver-grounded-at-quiescence-accepted/unused-local.mdk",
+    label =
+      "S2-DECL (d) decided at the graph-end drain (DICT-SEMANTICS §6.2 T5): an unused `r = double >> mth` leaves its receiver a live `Num` root, which quiescence defaults to `Int` before the admitted set is decided, so only `IA Int` selects; deciding at the module's end rejected it as ambiguous",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "ok\n",
+    codes = [Absent "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry =
+      "admitted-set-receiver-grounded-at-quiescence-accepted/unused-export.mdk",
+    label =
+      "the same live root exported from a library and never used: defaulted at the drain, `IA Int` selects",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "ok\n",
+    codes = [Absent "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry =
+      "admitted-set-receiver-grounded-at-quiescence-accepted/main.mdk",
+    label =
+      "§6.2 T5: a later module's `r 4` grounds a library binding's admitted-set receiver; the set is decided at the drain, at `Int`, so `mth (4 + 4)` is 9",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "9\n",
+    codes = [Absent "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry =
+      "admitted-set-receiver-grounded-at-quiescence-accepted/export-used-at-bool.mdk",
+    label =
+      "§6.2 T5: `export r = identity mth` grounded to `Bool` by the importer selects `IB Bool` (7), the same answer as `same-module.mdk`, so module partitioning does not change it",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [Absent "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry =
+      "admitted-set-receiver-grounded-at-quiescence-accepted/same-module.mdk",
+    label =
+      "the control for the row above: the same binding and use in one module, `IB Bool` selects, 7",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [Absent "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry =
+      "admitted-set-receiver-grounded-at-quiescence-accepted/export-used-at-signature.mdk",
+    label =
+      "§6.2 T5: a signature in the importer grounds the library binding's receiver to `Int`, so `IA Int` selects and `k 4` is 5",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "5\n",
+    codes = [Absent "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry =
+      "admitted-set-receiver-grounded-at-quiescence-accepted/export-mapped.mdk",
+    label =
+      "§6.2 T5: `export r = map mth` applied to `[True, False]` in the importer selects `IB Bool` for the element, `[7, 8]`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[7, 8]\n",
+    codes = [Absent "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-decl-type-mismatch-selects-nothing-accepted/main.mdk",
+    label =
+      "S2-DECL (d): a declaration whose declared type the occurrence does not instantiate (`IB`'s `f a -> Int` at `mth 3 : Int -> Int`) selects nothing rather than leaving the set undecided, so `mth 3` is `IA Int`'s 4 and `mth [1, 2]` is `IB List`'s 100",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "(100, 4)\n",
+    codes = [Absent "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry =
+      "admitted-set-decl-arity-mismatch-selects-nothing-accepted/main.mdk",
+    label =
+      "S2-DECL (d): `IB`'s `a -> Bool -> Int` does not instantiate to `mth 5 : Int -> Int`, so only `IA Int` selects, 6",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "6\n",
+    codes = [Absent "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
     entry = "alias-beside-bare-method/main.mdk",
     label =
       "SYNTAX.md \"Import aliasing\": `import ma as A` binds `ma`'s methods as `A.sh` only, so beside `import mb.{Sh, sh}` the bare `sh` is `mb.sh` alone (`mb`'s `Sh Int` adds 2000). 2007, hand-derived from the declarations; never `ma`'s 1007 by import order and never an emitter panic",
@@ -5723,6 +5830,39 @@ table = [
     codes = [],
   },
   Row {
+    entry = "s6-2-t4-live-root-open-goal-rejected.mdk",
+    label =
+      "§6.2 T4 / R-SC3 at quiescence: `e = map debug` leaves `Debug` and `Mappable` goals on argument-position variables of a non-generalized member, nothing grounds them, and each reaches two or more instances, so the binding is one located `T-AMBIGUOUS-INSTANCE` on every verb and no unrouted-dispatch hole",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "s6-2-t4-live-root-open-goal-export-rejected/main.mdk",
+    label =
+      "the row above as an unused library export beside a used one: the library binding is the located `T-AMBIGUOUS-INSTANCE` at quiescence",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "live-root-importer-error-reports-importer-only/main.mdk",
+    label =
+      "a library live root grounded only by the importer's erroneous use (`U8` without `import u8`): the drain's findings in the library rest on that error, so only the importer's type errors are reported and no unrouted-dispatch hole in the library",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-TYPE-MISMATCH", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
     entry = "determined-headless-occurrence-top-level-accepted.mdk",
     label =
       "§3 Determination by the one unifying instance: an argument-position occurrence whose goal is committed to the headless `impl Pick a a a` dispatches through it, read through the representative after a later group unifies the committed variable",
@@ -5744,7 +5884,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 509
+tableRows = 521
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

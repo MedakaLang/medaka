@@ -1,0 +1,10 @@
+-- `r`'s receiver is a live `Num` root no module grounds, so quiescence defaults it to
+-- `Int` (DICT-SEMANTICS §6.3 D1) before the admitted set is decided (§6.2 T5);
+-- at `Int` only `IA` selects.  Spec answer: accepted, prints `ok`.
+import hub.{IA, IB, mth}
+
+double n = n + n
+
+r = double >> mth
+
+main = println "ok"

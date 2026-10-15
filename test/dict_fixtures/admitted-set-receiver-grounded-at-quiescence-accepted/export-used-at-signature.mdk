@@ -1,0 +1,8 @@
+-- A signature in this later module grounds `live_identity`'s receiver to `Int`:
+-- only `IA Int` selects, so `k 4` is 5.
+import live_identity.{r}
+
+k : Int -> Int
+k = r
+
+main = println (k 4)
