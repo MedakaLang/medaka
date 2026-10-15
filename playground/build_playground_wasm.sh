@@ -84,7 +84,19 @@ echo "  STRIP_OK"
 # Optional: without binaryen the unoptimised module is still correct.
 if command -v wasm-opt >/dev/null 2>&1; then
   wasm-opt --all-features -Os "$WASM" -o "$WASM.opt"
+  # -Os leaves dead `ref.test/ref.cast (ref none)` + `i31.get_u` branches that the spec
+  # accepts and JavaScriptCore (so every iOS browser) rejects at compile time:
+  # "i31.get_u ref to type (ref none) expected I31ref". A second cleanup round folds them.
+  wasm-opt --all-features --dce --optimize-instructions --precompute-propagate \
+    --vacuum --remove-unused-brs "$WASM.opt" -o "$WASM.opt2"
+  mv "$WASM.opt2" "$WASM.opt"
   wasm-tools validate --features=all "$WASM.opt"
+  # wasm-tools accepts the leftover, so look for it directly. Any survivor fails the build.
+  none_casts=$(wasm-tools print "$WASM.opt" | grep -c 'ref\.\(cast\|test\) (ref \(null \)\?none)' || true)
+  if [ "$none_casts" -ne 0 ]; then
+    echo "FAIL: $none_casts ref.cast/ref.test to (ref none) survive wasm-opt; WebKit would reject the module (i31.get_u on a none-typed operand)" >&2
+    exit 1
+  fi
   mv "$WASM.opt" "$WASM"
   echo "  WASMOPT_OK"
 else
