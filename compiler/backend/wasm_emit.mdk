@@ -1793,6 +1793,10 @@ externArityW name =
       "stringToUtf8Bytes",
       "stringFromUtf8Bytes",
       "getEnv",
+      "readLine",
+      "readLineOpt",
+      "readAll",
+      "readExactly",
       "exit",
       "args",
       "wallTimeSec",
@@ -7126,6 +7130,25 @@ emitLeafExternRef prog env d "getEnv" [n] =
   emitRefExpr prog env d n ++ ["ref.cast (ref $str)", "call $mdk_get_env_io"]
 emitLeafExternRef prog env d "getEnv" _ =
   gapLP prog "wasm W12: getEnv takes exactly one argument"
+-- The stdin readers share one host-side buffer: a Unit argument is dropped, and
+-- readExactly's Int is unboxed to the i64 the import takes.
+emitLeafExternRef prog env d "readLine" [u] =
+  emitRefExpr prog env d u ++ ["drop", "call $mdk_read_line_io"]
+emitLeafExternRef prog env d "readLine" _ =
+  gapLP prog "wasm: readLine takes exactly one (Unit) argument"
+emitLeafExternRef prog env d "readLineOpt" [u] =
+  emitRefExpr prog env d u ++ ["drop", "call $mdk_read_line_opt_io"]
+emitLeafExternRef prog env d "readLineOpt" _ =
+  gapLP prog "wasm: readLineOpt takes exactly one (Unit) argument"
+emitLeafExternRef prog env d "readAll" [u] =
+  emitRefExpr prog env d u ++ ["drop", "call $mdk_read_all_io"]
+emitLeafExternRef prog env d "readAll" _ =
+  gapLP prog "wasm: readAll takes exactly one (Unit) argument"
+emitLeafExternRef prog env d "readExactly" [n] =
+  emitRefExpr prog env d n
+    ++ ["call $mdk_unbox_int", "call $mdk_read_exactly_io"]
+emitLeafExternRef prog env d "readExactly" _ =
+  gapLP prog "wasm: readExactly takes exactly one argument"
 emitLeafExternRef prog env d "args" [u] =
   emitRefExpr prog env d u ++ ["drop", "call $mdk_args_io"]
 emitLeafExternRef prog env d "args" args =

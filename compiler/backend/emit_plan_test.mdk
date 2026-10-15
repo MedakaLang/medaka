@@ -689,6 +689,21 @@ test "a wasm plan's host keys are its reached externs' imports, per group" = exp
         ]
         (hostKeysOf WasmBackend (call "getEnv" [ref "p"]))),
     labelFail
+      "readLine and readLineOpt: the one line key and the result channel"
+      (expectEqual
+        ["mdk_read_line", "mdk_result_byte", "mdk_result_len"]
+        (hostKeysOf WasmBackend (call "readLineOpt" [unit]))),
+    labelFail
+      "readAll: the drain key and the result channel"
+      (expectEqual
+        ["mdk_read_all", "mdk_result_byte", "mdk_result_len"]
+        (hostKeysOf WasmBackend (call "readAll" [unit]))),
+    labelFail
+      "readExactly: the count key and the result channel"
+      (expectEqual
+        ["mdk_read_exactly", "mdk_result_byte", "mdk_result_len"]
+        (hostKeysOf WasmBackend (call "readExactly" [ref "n"]))),
+    labelFail
       "stringToFloat: the path channel and the host parse"
       (expectEqual
         [

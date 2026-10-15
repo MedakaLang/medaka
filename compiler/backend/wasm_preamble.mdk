@@ -1719,6 +1719,9 @@ hostImportSig "mdk_path_push" = " (param i32)"
 hostImportSig "mdk_read_file" = " (result i32)"
 hostImportSig "mdk_file_exists" = " (result i32)"
 hostImportSig "mdk_get_env" = " (result i32)"
+hostImportSig "mdk_read_line" = " (result i32)"
+hostImportSig "mdk_read_all" = ""
+hostImportSig "mdk_read_exactly" = " (param i64) (result i32)"
 hostImportSig "mdk_args_count" = " (result i32)"
 hostImportSig "mdk_arg_len" = " (param i32) (result i32)"
 hostImportSig "mdk_arg_byte" = " (param i32) (param i32) (result i32)"
@@ -2023,6 +2026,9 @@ ioHostRuntimeLines keys =
     ++ gatedOn "mdk_file_mode" keys ioFileModeLines
     ++ gatedOn "mdk_write_file_mode" keys ioWriteFileModeLines
     ++ gatedOn "mdk_get_env" keys ioGetEnvLines
+    ++ gatedOn "mdk_read_line" keys ioReadLineLines
+    ++ gatedOn "mdk_read_all" keys ioReadAllLines
+    ++ gatedOn "mdk_read_exactly" keys ioReadExactlyLines
 
 gatedOn : String -> List String -> List String -> List String
 gatedOn key keys block = if contains key keys then block else []
@@ -2343,6 +2349,36 @@ ioGetEnvLines = [
   "    (local $st i32)", "    (call $mdk_push_path (local.get $name))",
   "    (local.set $st (call $mdk_get_env))",
   "    (if (result (ref eq)) (local.get $st)",
+  "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))",
+  "      (else (ref.i31 (i32.const 1)))))"
+]
+
+ioReadLineLines : List String
+ioReadLineLines = [
+  "  ;; readLine : Unit -> String.  The host answers 1 with a line (its newline",
+  "  ;; stripped) on the result channel, or 0 at end of input, where the channel is empty.",
+  "  (func $mdk_read_line_io (result (ref eq))",
+  "    (drop (call $mdk_read_line))", "    (call $mdk_io_result_to_str))",
+  "  ;; readLineOpt : Unit -> Option String.  0 is None.",
+  "  (func $mdk_read_line_opt_io (result (ref eq))",
+  "    (if (result (ref eq)) (call $mdk_read_line)",
+  "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))",
+  "      (else (ref.i31 (i32.const 1)))))"
+]
+
+ioReadAllLines : List String
+ioReadAllLines = [
+  "  ;; readAll : Unit -> String.  The rest of the host's stdin buffer.",
+  "  (func $mdk_read_all_io (result (ref eq))", "    (call $mdk_read_all)",
+  "    (call $mdk_io_result_to_str))"
+]
+
+ioReadExactlyLines : List String
+ioReadExactlyLines = [
+  "  ;; readExactly : Int -> Option String.  1=Some the n bytes / 0=None (end of input",
+  "  ;; or a short read, whose bytes the host has consumed).",
+  "  (func $mdk_read_exactly_io (param $n i64) (result (ref eq))",
+  "    (if (result (ref eq)) (call $mdk_read_exactly (local.get $n))",
   "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))",
   "      (else (ref.i31 (i32.const 1)))))"
 ]

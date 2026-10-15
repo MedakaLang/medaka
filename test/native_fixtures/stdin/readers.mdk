@@ -1,0 +1,39 @@
+-- The four stdin readers over one shared buffer: line terminators, the end of
+-- input for each reader, a short readExactly, and the readers interleaved.
+-- Every read is printed as it happens.
+
+checksum : String -> Int
+checksum s =
+  fold (acc c => (acc * 31 + charCode c) % 1000003) 0 (stringToChars s)
+
+desc : String -> String
+desc s =
+  let shape = "\{stringLength s}/\{stringByteLength s}/\{checksum s}"
+  if stringByteLength s <= 24 then shape ++ " " ++ debug s else shape
+
+descOpt : Option String -> String
+descOpt None = "None"
+descOpt (Some s) = "Some " ++ desc s
+
+main =
+  let a = readLine ()
+  let _ = println ("readLine " ++ desc a)
+  let b = readLineOpt ()
+  let _ = println ("readLineOpt " ++ descOpt b)
+  let c = readExactly 3
+  let _ = println ("readExactly 3 " ++ descOpt c)
+  let d = readLineOpt ()
+  let _ = println ("readLineOpt " ++ descOpt d)
+  let e = readAll ()
+  let _ = println ("readAll " ++ desc e)
+  let f = readExactly 2
+  let _ = println ("readExactly 2 " ++ descOpt f)
+  let g = readLine ()
+  let _ = println ("readLine " ++ desc g)
+  let h = readLineOpt ()
+  let _ = println ("readLineOpt " ++ descOpt h)
+  let i = readExactly 0
+  let _ = println ("readExactly 0 " ++ descOpt i)
+  readAll ()
+    |> desc
+    |> (s => println ("readAll " ++ s))

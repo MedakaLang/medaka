@@ -339,6 +339,10 @@ wasmHelperKeyRows = [
     ],
   ),
   ("args", ["mdk_args_count", "mdk_arg_len", "mdk_arg_byte"]),
+  ("readLine", stdinKeys "mdk_read_line"),
+  ("readLineOpt", stdinKeys "mdk_read_line"),
+  ("readAll", stdinKeys "mdk_read_all"),
+  ("readExactly", stdinKeys "mdk_read_exactly"),
   (
     "stringToFloat",
     [
@@ -384,6 +388,10 @@ fileBoundHostKeys : List String
 fileBoundHostKeys =
   grantChannelKeys ++ ["mdk_file_bound_enter", "mdk_file_bound_exit"]
 
+-- a stdin read: the host call, then the result channel out
+stdinKeys : String -> List String
+stdinKeys key = [key, "mdk_result_len", "mdk_result_byte"]
+
 -- the path channel in, the file read, the result channel out
 readChannelKeys : List String
 readChannelKeys = [
@@ -428,6 +436,10 @@ wasmUseRows = [
   ("canonicalizePath", [UseStr, UseList]),
   ("args", [UseStr, UseList, UseArgs]),
   ("getEnv", [UseStr]),
+  ("readLine", [UseStr]),
+  ("readLineOpt", [UseStr]),
+  ("readAll", [UseStr]),
+  ("readExactly", [UseStr]),
   ("panic", [UseStr, UseEPut]),
   ("indexError", [UseStr, UseEPut]),
   ("panicAt", [UseStr, UseEPut]),
@@ -543,9 +555,6 @@ wasmNoSockets : String
 wasmNoSockets =
   "the `net` module is native-only: raw BSD sockets have no WasmGC equivalent — build for a native target instead"
 
-wasmNoStdin : String
-wasmNoStdin = "ported in llvm (the stdin family), not yet in wasm"
-
 -- In `stdlib/runtime.mdk` declaration order.
 export
 catalogRows : List ExternRow
@@ -574,22 +583,22 @@ catalogRows = [
   ExternRow
     "readLine"
     (CSymbol LlvmFile "mdk_read_line")
-    (NotProvided GapUnported wasmNoStdin)
+    (Inline WasmLeaf)
     Interpreted,
   ExternRow
     "readLineOpt"
     (CSymbol LlvmFile "mdk_read_line_opt")
-    (NotProvided GapUnported wasmNoStdin)
+    (Inline WasmLeaf)
     Interpreted,
   ExternRow
     "readAll"
     (CSymbol LlvmFile "mdk_read_all")
-    (NotProvided GapUnported wasmNoStdin)
+    (Inline WasmLeaf)
     Interpreted,
   ExternRow
     "readExactly"
     (CSymbol LlvmFile "mdk_read_exactly")
-    (NotProvided GapUnported wasmNoStdin)
+    (Inline WasmLeaf)
     Interpreted,
   ExternRow "Ref" (Inline LlvmRefCell) (Inline WasmRefCell) Interpreted,
   ExternRow "setRef" (Inline LlvmRefCell) (Inline WasmRefCell) Interpreted,

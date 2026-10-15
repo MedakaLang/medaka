@@ -52,6 +52,19 @@ const vfs = {
   realpath: (p) => fs.realpathSync.native(p),
   lexists: (p) => { try { fs.lstatSync(p); return true; } catch (e) { return false; } },
 };
+// fd 0, blocking: a read that would block (EAGAIN on a non-blocking pipe) is retried,
+// and zero bytes is end of input.
+const stdin = () => {
+  const b = Buffer.alloc(65536);
+  for (;;) {
+    try { return b.subarray(0, fs.readSync(0, b, 0, b.length, null)); }
+    catch (e) {
+      if (e.code === 'EOF') return new Uint8Array(0);
+      if (e.code !== 'EAGAIN') throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2);
+    }
+  }
+};
 const args = (process.env.MDK_ARGS ? process.env.MDK_ARGS.split(' ') : []);
 let wroteStderr = false;
 const sink = {
@@ -62,7 +75,7 @@ const sink = {
 };
 
 import(hostUrl).then(async ({ createHost, runProgram, OldEntryShape }) => {
-  const host = createHost('wasmgc/node', { vfs, args, getEnv: (n) => process.env[n], sink });
+  const host = createHost('wasmgc/node', { vfs, args, getEnv: (n) => process.env[n], stdin, sink });
   const r = await runProgram(bytes, host);
   if (r.kind === 'exit') { process.exitCode = r.code; return; }
   if (r.kind === 'error') {

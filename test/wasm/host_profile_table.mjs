@@ -15,7 +15,7 @@ const own = (slice) => SLICES[slice].keys.find((k) =>
   Object.entries(SLICES).every(([n, s]) => n === slice || !s.keys.includes(k)));
 
 const observe = (profile, slice) => {
-  const f = createHost(profile).imports.env[own(slice)];
+  const f = createHost(profile, { stdin: () => new Uint8Array(0) }).imports.env[own(slice)];
   try { f(0); } catch (e) { if (e instanceof CapabilityError) return 'withheld'; }
   return 'real';
 };

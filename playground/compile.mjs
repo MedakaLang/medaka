@@ -211,7 +211,6 @@ function withGuestStderr(e, host) {
 // message naming it, in place of the compiler trap the toolchain would otherwise
 // surface.  The externs the browser host serves (medaka_host.mjs SLICES) are absent.
 const NATIVE_ONLY_EXTERNS = new Set([
-  'readLine', 'readLineOpt', 'readAll', 'readExactly',
   'executablePath', 'runCommand',
   'netResolve', 'netTcpConnect', 'netTcpListen', 'netListenPort', 'netTcpAccept',
   'netSend', 'netSendFrom', 'netRecv', 'netShutdown', 'netClose', 'netCloseListener',

@@ -628,6 +628,51 @@ deep_case() {
 deep_case "Err (cfg/a.txt $outside [\"cfg/*\"])
 Err (cfg/../secret.txt $outside [\"cfg/*\"])"
 
+# ── stdin ────────────────────────────────────────────────────────────────────
+# The four readers share one buffer on native and on wasmgc/node, so the same
+# stdin bytes give the same trace on both.  `readers` prints each read as it
+# happens; an input is given to printf as a format, so `\r`, `\303` and the
+# like are bytes.  The first input's trace is also pinned here from the readers'
+# semantics (a line ends at \n only, readExactly 3 starts where the line reader
+# stopped, a short readExactly is None and consumes the rest).
+stdin_case() {
+  bin="${TMPDIR:-/tmp}/medaka_stdin_$$"
+  (cd "$FIX" && perl -e 'alarm 180; exec @ARGV' -- "$M" build "$FIX/stdin/readers.mdk" -o "$bin" >/dev/null 2>&1)
+  engines=build
+  if [ "$wasm_ok" -eq 1 ]; then
+    wasm_build "$FIX/stdin/readers.mdk" "$bin.wasm"
+    engines="build wasm"
+  fi
+  detail=""
+  for input in 'abc\ndef\nghijkl\nmn\nop\nqr\n' '' 'x' 'a\r\nb\r\nc' 'h\303\251llo\n\342\202\254uro\nxyz\n\377\n' 'BIG'; do
+    printf "${input}" > "$bin.in"
+    # 100 KB over 1 line, then 3000 more of 33 bytes: the host refills many times
+    [ "$input" = BIG ] && perl -e 'print "q" x 100000, "\n"; print "line $_ " . "z" x 24 . "\n" for 1 .. 3000; print "tail"' > "$bin.in"
+    native_out="$("$bin" < "$bin.in" 2>&1)"
+    for engine in $engines; do
+      [ "$engine" = build ] && continue
+      wasm_out="$(perl -e 'alarm 60; exec @ARGV' -- node "$ROOT/test/wasm/run.js" "$bin.wasm" < "$bin.in" 2>&1)"
+      [ "$wasm_out" = "$native_out" ] || detail="$detail wasm differs on [$input]: [$wasm_out] vs native [$native_out];"
+    done
+    if [ "$input" = 'abc\ndef\nghijkl\nmn\nop\nqr\n' ]; then
+      want='readLine 3/3/96354 "abc"
+readLineOpt Some 3/3/99333 "def"
+readExactly 3 Some 3/3/102312 "ghi"
+readLineOpt Some 3/3/105291 "jkl"
+readAll 9/9/340112 "mn\nop\nqr\n"
+readExactly 2 None
+readLine 0/0/0 ""
+readLineOpt None
+readExactly 0 Some 0/0/0 ""
+readAll 0/0/0 ""'
+      [ "$native_out" = "$want" ] || detail="$detail native on [$input] printed [$native_out];"
+    fi
+  done
+  rm -rf "$bin" "$bin.ll" "$bin.wasm" "$bin.in"
+  if [ -z "$detail" ]; then ok stdin_readers; else bad stdin_readers "$detail"; fi
+}
+stdin_case
+
 echo
 
 # ── The ledger bites in BOTH directions ───────────────────────────────────────

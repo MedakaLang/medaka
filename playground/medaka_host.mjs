@@ -18,7 +18,7 @@
 //   runProgram(wasm, host, opts) -> { kind: 'done' } | { kind: 'exit', code }
 //                                 | { kind: 'error', error, inProgram }
 //   profile = a name in PROFILES, or a host configuration such as COMPILER_HOST.
-//   opts = { vfs, args, getEnv, sink, streaming, isolated, hostLabel, withheldHint }
+//   opts = { vfs, args, getEnv, stdin, sink, streaming, isolated, hostLabel, withheldHint }
 
 // ── capability slices ────────────────────────────────────────────────────────
 // Each slice lists the import keys it implements.  A key may sit in several slices
@@ -72,7 +72,11 @@ export const SLICES = {
     externs: ['wallTimeSec', 'monotonicSec', 'sleepMs'],
   },
   entropy: { needs: ['Rand'], keys: [], externs: ['osEntropyBytes'] },
-  stdin: { needs: ['Stdin'], keys: [], externs: ['readLine', 'readLineOpt', 'readAll', 'readExactly'] },
+  stdin: {
+    needs: ['Stdin'],
+    keys: ['mdk_read_line', 'mdk_read_all', 'mdk_read_exactly', ...RESULT_KEYS],
+    externs: ['readLine', 'readLineOpt', 'readAll', 'readExactly'],
+  },
 };
 
 // The wasmgc rows of compiler/types/target_profile.mdk `profileRows`: the labels
@@ -138,6 +142,7 @@ export const KEY_EXTERN = {
   mdk_list_dir: 'listDir', mdk_stat_file: 'statFile', mdk_stat_field: 'statFile', mdk_get_env: 'getEnv',
   mdk_make_dir: 'makeDir', mdk_remove_file: 'removeFile', mdk_remove_dir: 'removeDir', mdk_fsync: 'fsync', mdk_file_mode: 'fileMode',
   mdk_write_file_mode: 'writeFileMode',
+  mdk_read_line: 'readLine', mdk_read_all: 'readAll', mdk_read_exactly: 'readExactly',
   mdk_args_count: 'args', mdk_arg_len: 'args', mdk_arg_byte: 'args', mdk_exit: 'exit',
   mdk_wall_time_sec: 'wallTimeSec', mdk_monotonic_sec: 'monotonicSec', mdk_sleep_ms: 'sleepMs',
   mdk_result_len: 'readFile/getEnv result', mdk_result_byte: 'readFile/getEnv result',
@@ -582,6 +587,9 @@ export function createHost(profile, opts = {}) {
     vfs: opts.vfs || new MemoryVfs(),
     args: opts.args || [],
     getEnv: opts.getEnv || (() => undefined),
+    // A blocking read of standard input: the next bytes, or none (zero length) at end.
+    stdin: opts.stdin || (() => new Uint8Array(0)),
+    stdinBuf: new Uint8Array(0), stdinPos: 0, stdinEof: false,
     sink: opts.sink || bufferSink(),
     streaming: !!opts.streaming,
     isolated: opts.isolated,
@@ -598,6 +606,7 @@ export function createHost(profile, opts = {}) {
   host.reset = () => {
     host.stdoutBuf = []; host.stderrBuf = [];
     host.pathBuf = []; host.resultBuf = new Uint8Array(0); host.writeBuf = [];
+    host.stdinBuf = new Uint8Array(0); host.stdinPos = 0; host.stdinEof = false;
     host.floatFmtBuf = new Uint8Array(0); host.strToFloatOk = 0; host.argBytes = null;
     host.grant = null; host.grantElem = []; host.grantFirst = null; host.stat = null; host.bounds = [];
   };
@@ -614,6 +623,18 @@ export function createHost(profile, opts = {}) {
   host.flush = () => {
     host.deliverAll();
     if (host.sink.sync) host.sink.sync();
+  };
+  // Append the source's next bytes to the buffer, dropping what was consumed; false
+  // once the source answers with none.
+  const stdinMore = () => {
+    if (host.stdinEof) return false;
+    const c = host.stdin();
+    if (!c || c.length === 0) { host.stdinEof = true; return false; }
+    const rest = host.stdinBuf.subarray(host.stdinPos);
+    const nb = new Uint8Array(rest.length + c.length);
+    nb.set(rest); nb.set(c, rest.length);
+    host.stdinBuf = nb; host.stdinPos = 0;
+    return true;
   };
   const takePath = () => { const s = dec(host.pathBuf); host.pathBuf = []; return s; };
   const fail = (e) => { host.resultBuf = enc(String((e && e.message) || e)); return 0; };
@@ -812,6 +833,40 @@ export function createHost(profile, opts = {}) {
       const v = host.getEnv(takePath());
       if (v === undefined) { host.resultBuf = new Uint8Array(0); return 0; }
       host.resultBuf = enc(v); return 1;
+    },
+    // Standard input: one buffer behind all four readers, as the C `stdin` stream is.
+    // End of input is sticky once the source has answered with no bytes.
+    // readLine/readLineOpt: 1 with the line (newline stripped, any CR kept) on the
+    // result channel; 0 at end of input with nothing read.
+    mdk_read_line: () => {
+      let from = host.stdinPos;
+      for (;;) {
+        const i = host.stdinBuf.indexOf(10, from);
+        if (i >= 0) { host.resultBuf = host.stdinBuf.slice(host.stdinPos, i); host.stdinPos = i + 1; return 1; }
+        const scanned = host.stdinBuf.length - host.stdinPos;
+        if (!stdinMore()) {
+          host.resultBuf = host.stdinBuf.slice(host.stdinPos);
+          host.stdinPos = host.stdinBuf.length;
+          return host.resultBuf.length > 0 ? 1 : 0;
+        }
+        from = scanned;
+      }
+    },
+    mdk_read_all: () => {
+      while (stdinMore()) { /* drain */ }
+      host.resultBuf = host.stdinBuf.slice(host.stdinPos);
+      host.stdinPos = host.stdinBuf.length;
+    },
+    // readExactly: 1 with the n bytes; 0 at end of input or on a short read, which
+    // still consumes what was there.  A count of zero or less is an empty Some.
+    mdk_read_exactly: (n) => {
+      n = Number(n);
+      if (n <= 0) { host.resultBuf = new Uint8Array(0); return 1; }
+      while (host.stdinBuf.length - host.stdinPos < n && stdinMore()) { /* fill */ }
+      const have = Math.min(n, host.stdinBuf.length - host.stdinPos);
+      host.resultBuf = host.stdinBuf.slice(host.stdinPos, host.stdinPos + have);
+      host.stdinPos += have;
+      return have === n ? 1 : 0;
     },
     mdk_args_count: () => host.args.length,
     mdk_arg_len: (i) => argBytes(i).length,
