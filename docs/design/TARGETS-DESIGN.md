@@ -29,9 +29,8 @@ That ruling stands. None of it is implemented. Measured on 2026-10-01:
 - **An extern wasm cannot lower fails after typechecking**, inside the emitter,
   as `unbound variable 'writeFile'` — an unlocated panic (#380, #2130, #2426).
   Only the 28 net names and user FFI externs get a worded refusal. The one
-  located, pre-lowering refusal was the file-grant check in
-  `compiler/backend/wasm_file_grants.mdk`, deleted when the host began to
-  confine file operations (§6.5).
+  located, pre-lowering refusal was the emitter's file-grant check, deleted
+  when the host began to confine file operations (§6.5).
 - **Which backend lowers which extern is recorded in name lists.** A ladder of
   predicates in `compiler/backend/wasm_emit.mdk` (`isStrExternW`, `isLeafExternW`,
   `isArrayExternW`, `isByteBlockExternW`, `isNetExternW`, `isFfiExternW`), the
@@ -372,8 +371,8 @@ elaboration its `compile` emits from. The runnability rule's withheld calls
 
 Native and `medaka run` confine a file operation to the authority granted at the
 call (`docs/spec/EFFECTS-SEMANTICS.md` §2.3, §8). A wasm host import receives the
-path alone, so `compiler/backend/wasm_file_grants.mdk` refuses pattern grants at
-build and lets exact and whole-domain grants run unchecked (#3590). With one host
+path alone, so the emitter's file-grant check refused pattern grants at
+build, and exact and whole-domain grants ran unchecked (#3590). With one host
 module the fix is a channel: the emitter passes the hidden grant argument the file
 externs already carry ahead of the path, through the existing byte channel; the
 `fs` slice canonicalizes and checks the way `runtime/medaka_rt.c` does, against
@@ -536,7 +535,7 @@ and a WIT `world` is what a profile would lower to there.
 | `wasm:emitter-gap` rows in `test/engine_divergence.txt` quoting `unbound variable` | drained; the program is refused at `check` (T2) |
 | the shim-parity gate byte-diffs marked blocks | retired; `compiler/types/target_profile_host_test.mdk` (`wasm_host_profile_agreement`) derives the import key set ⊆ profile slices (T3) |
 | `playground/main.js` hand list of shipped stdlib modules | generated from the catalog (T3) |
-| `compiler/backend/wasm_file_grants.mdk` refuses pattern grants | deleted; the host enforces the grant (T3) |
+| the emitter's file-grant check refuses pattern grants | deleted; the host enforces the grant (T3) |
 | `test/wasm/diff_wasm_ffi_wall.sh`, one direction | both directions, check-time (T4) |
 | no edge runner | a Node-simulated edge gate over the admitted corpus (T5) |
 

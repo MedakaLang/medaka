@@ -104,13 +104,14 @@ bash playground/build_site.sh                     # needs site/guide + dist/
 node playground/guide_wasm_differential.mjs       # add --list, --only <id>, --json <path>
 ```
 
-**Result at the time of writing: 56 matched / 3 wasm divergence / 6 rule gap, of
-65.** Of the 56, all 55 that carry a `medaka-expect` fence print exactly what the
-guide says they print.
+**Result at the time of writing (S-fs-grant-channel-b, measured): 56 matched / 1
+wasm divergence / 0 rule gap, of 57 runnable (15 not runnable).** Of the 56, all 56
+that carry a `medaka-expect` fence print exactly what the guide says they print.
 
-The three **wasm divergences** are compiler bugs, not guide bugs — each works
-natively and fails only on the browser's path. Minimal repros are in the
-S-prove-the-promise sprint report; none is fixed here.
+The **wasm divergence** (`04-data-modeling#15`) is a compiler bug, not a guide bug:
+it works natively and fails only on the browser's path (the diagnostic's file path
+differs, `/var/tmp/.../main.mdk` natively and `./main.mdk` on wasm). It is not fixed
+here.
 
 The six **rule gaps** are a different animal: on those, native and browser AGREE
 that the program cannot run, so the runnable partition should never have offered
