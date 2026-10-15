@@ -553,7 +553,10 @@ binding. Within T2, #3666 (label-grain ratchet) can run alongside #3664 and
 
 This work lands in the seam #2616 names — the plan record carrying extern
 requirements and the target — and does not wait on the emitter rearchitecture's
-other stages. It is unrelated to the typechecker rearchitecture's package 2.
+other stages. Since #4032 (target-relative `IO`) the selected profile's IO join is
+an input to inference, so it is part of every typecheck cache key and of every
+module interface the architecture playbook ships (`compiler/ARCHITECTURE-PLAYBOOK.md`
+D7); §8 of that playbook maps the rest of this epic onto its phases.
 
 ## 12. Rulings (Val, 2026-10-01)
 

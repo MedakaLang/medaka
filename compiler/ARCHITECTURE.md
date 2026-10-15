@@ -145,8 +145,9 @@ becomes a layering violation or a withdrawn extraction.
 Within a process, each expensive derivation (parse, desugar, resolve, typecheck, lower)
 has one memoized entry per key, and every verb, the REPL and the LSP go through it.
 Across processes, a module's typechecked export surface is a serialized
-`ModuleInterface` keyed by source fingerprint, compiler fingerprint and the instance
-environment it depends on; the prelude ships pre-checked. Cache validity is a contract
+`ModuleInterface` keyed by source fingerprint, compiler fingerprint, the instance
+environment it depends on and the selected target profile's IO join (D7); the prelude
+ships pre-checked. Cache validity is a contract
 (`TYPECHECK-CONTRACTS.md` §5), not a prefix hash.
 
 - *Today:* the prelude is re-typechecked in every process (about 90% of a hello-world
@@ -217,7 +218,7 @@ does in this tree. A design document is a proposal; once landed it is history.
 ## 4. The owner decisions beneath the laws
 
 Six decisions sat under these laws when they were drafted. Val ruled all six on
-2026-10-15; the rulings and their reasoning are in `ARCHITECTURE-PLAYBOOK.md` §9 and on
+2026-10-15, and a seventh (D7) later the same day; the rulings and their reasoning are in `ARCHITECTURE-PLAYBOOK.md` §9 and on
 #4206. In one line each:
 
 - D1 `types/typecheck.mdk` may not grow (A8): adopted, as a one-file growth stop with a
@@ -233,6 +234,10 @@ Six decisions sat under these laws when they were drafted. Val ruled all six on
 - D6 the prelude's and the stdlib's interfaces ship as files beside the sources, produced
   by `make medaka` and loaded lazily, as OCaml's `.cmi`, GHC's `.hi` and rustc's `.rmeta`
   are (A7): accepted; not baked into the binary.
+- D7 the target profile's IO join is read inside inference, so a published type may
+  depend on it; every interface key includes the join, and interfaces are stored
+  content-addressed so identical ones share a file (A7): accepted, ruled later the same
+  day.
 
 ---
 
