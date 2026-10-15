@@ -10,12 +10,12 @@
    fails a rise unless a commit trailer names it. Run with `ARCH_PINS_WRITE=1`
    to rewrite them from the tree instead of comparing. -}
 import fs.{walkDir}
-import list.{dropWhile, dropWhileEnd, filterMap, nub, sort, takeWhile}
+import list.{dropWhile, dropWhileEnd, filterMap, nub, reverse, sort, takeWhile}
 import map as M
 import set as S
 import string.{
-  countOccurrences, endsWith, fromChars, split, toChars, isAlphaNum, isSpace,
-  join, lines, replace, startsWith, stripPrefix, trimLeft, words
+  capitalize, countOccurrences, endsWith, fromChars, split, toChars, isAlphaNum,
+  isSpace, join, lines, replace, startsWith, stripPrefix, trimLeft, words
 }
 import test.{Expectation, expectAtLeast, expectEqual, expectGolden, fail, pass}
 import test_process.{underRoot}
@@ -302,3 +302,244 @@ test "arch_boundaries: ir.core_ir closure matches its golden" =
   pin
     "closure.ir.core_ir.golden"
     (closureOf (buildGraph loadModules) "ir.core_ir")
+
+-- Defined names (column-0, first word not a declaration keyword): an
+-- identifier `[a-z_][A-Za-z0-9_']*` or a parenthesised operator.
+definedName : String -> Option String
+definedName l =
+  let w = match words l
+    [] => ""
+    x :: _ => x
+  if not (isColZero l) || any (== w) declKeywordsAndLayout then
+    None
+  else
+    nameAtStart l
+
+declKeywordsAndLayout : List String
+declKeywordsAndLayout = declKeywords ++ ["else", "then", "in"]
+
+declKeywords : List String
+declKeywords = [
+  "import", "data", "type", "interface", "impl", "export", "public", "test",
+  "prop"
+]
+
+nameAtStart : String -> Option String
+nameAtStart l = match toList (toChars l)
+  c :: _ if c >= 'a' && c <= 'z' || c == '_' =>
+    Some (fromChars (takeWhile identChar (toList (toChars l))))
+  '(' :: more =>
+    let op = takeWhile (x => x /= ')' && not (isSpace x)) more
+    match dropWhile (x => x /= ')' && not (isSpace x)) more
+      ')' :: _ if length op > 0 => Some (fromChars op)
+      _ => None
+  _ => None
+
+identChar : Char -> Bool
+identChar c = isAlphaNum c || c == '_' || c == '\''
+
+namesOf : List (String, List String) -> String -> S.Set String
+namesOf mods m = match filter (p => fst p == m) mods
+  [] => S.fromList []
+  (_, ls) :: _ => S.fromList (filterMap definedName ls)
+
+-- The `llvm_emit` names with a `wasm_emit` twin under any of four conventions:
+-- same name, `n+"W"` when `n` is not in wasm, `n+"Ref"`, `"wasm"+Capitalized(n)`.
+twinNames : List (String, List String) -> List String
+twinNames mods =
+  let ll = namesOf mods "backend.llvm_emit"
+  let ww = namesOf mods "backend.wasm_emit"
+  sort
+    (filter
+      (n =>
+        S.has n ww
+          || S.has (n ++ "W") ww
+          || S.has (n ++ "Ref") ww
+          || S.has ("wasm" ++ capitalize n) ww)
+      (toList ll))
+
+startsWithSpace : String -> Bool
+startsWithSpace s = match toList (toChars s)
+  c :: _ => isSpace c
+  [] => False
+
+-- Drop the words of `ws` in order, each followed by whitespace.
+dropWords : List String -> String -> Option String
+dropWords [] s = Some s
+dropWords (w :: ws) s = match stripPrefix w s
+  Some r if startsWithSpace r => dropWords ws (trimLeft r)
+  _ => None
+
+-- `KW X` with `X` an upper-case word, after one of the optional prefixes.
+kindWord : String -> List (List String) -> String -> Option String
+kindWord kw prefixes l = firstSome (map (p => kindAfter kw p l) prefixes)
+
+firstSome : List (Option a) -> Option a
+firstSome [] = None
+firstSome ((Some x) :: _) = Some x
+firstSome (None :: rest) = firstSome rest
+
+kindAfter : String -> List String -> String -> Option String
+kindAfter kw prefix l = match dropWords prefix l
+  None => None
+  Some r => match stripPrefix kw r
+    Some rest if startsWithSpace rest => match toList (toChars (trimLeft rest))
+      c :: more if c >= 'A' && c <= 'Z' =>
+        Some "\{kw} \{fromChars (c :: takeWhile identChar more)}"
+      _ => None
+    _ => None
+
+dataOrTypeName : String -> Option String
+dataOrTypeName l =
+  match kindWord "data" [["public", "export"], ["export"], []] l
+    Some k => Some k
+    None => kindWord "type" [["export"], []] l
+
+-- Declaration kind of a column-0 line: `Some kind` opens an extent.
+startKind : String -> Option String
+startKind l =
+  if not (isColZero l) then
+    None
+  else
+    let ws = words l
+    let w = match ws
+      [] => ""
+      x :: _ => x
+    let second = match ws
+      _ :: y :: _ => y
+      _ => ""
+    if ws == ["}"] || ws == ["]"] || ws == [")"] then
+      None
+    else if any (c => startsWith c l) ["}", "]", ")", "|", ","]
+      || ws == ["export"] then
+      None
+    else match dataOrTypeName l
+      Some k => Some k
+      None => match importOf l
+        Some _ => Some "<import>"
+        None =>
+          if w == "else" || w == "then" || w == "in" then
+            None
+          else if w == "test" || w == "prop" then
+            Some "<\{w}>"
+          else if any (== w) declKeywords then
+            Some "\{w} \{second}"
+          else
+            nameAtStart l
+
+-- One declaration extent: name, whether a `rule-duplicate-body` directive sits
+-- directly above its first line, and its lines in reverse.
+type Seg = (String, Bool, List String)
+
+segmentLines : List String -> List Seg
+segmentLines ls = segFinish (segGo ls "" [] None)
+
+segGo : List String ->
+  String ->
+  List Seg ->
+  Option Seg ->
+  (List Seg, Option Seg)
+segGo [] _ done cur = (done, cur)
+segGo (l :: rest) prev done cur = match startKind l
+  None => match cur
+    None => segGo rest l done None
+    Some (n, d, acc) => segGo rest l done (Some (n, d, l :: acc))
+  Some n =>
+    let flag = startsWith "-- lint-disable-next-line rule-duplicate-body" prev
+    match cur
+      Some (cn, cd, acc) if cn == n && not (startsWith "<" n) =>
+        segGo rest l done (Some (cn, cd || flag, l :: acc))
+      Some c => segGo rest l (c :: done) (Some (n, flag, [l]))
+      None => segGo rest l done (Some (n, flag, [l]))
+
+segFinish : (List Seg, Option Seg) -> List Seg
+segFinish (done, cur) = match cur
+  None => reverse done
+  Some c => reverse (c :: done)
+
+isCommentLine : String -> Bool
+isCommentLine l = startsWith "--" (trimLeft l)
+
+-- Whitespace- and comment-normalized body of an extent; trailing blank and
+-- comment lines are not part of it.
+segBody : List String -> String
+segBody revLines =
+  let kept =
+    reverse (dropWhile (l => trimLeft l == "" || isCommentLine l) revLines)
+  join " " (flatMap words (filter (l => not (isCommentLine l)) kept))
+
+-- name -> (body, exempt); several extents of one name are joined with a newline.
+moduleBodies : List String -> M.Map String (String, Bool)
+moduleBodies ls =
+  let fileExempt =
+    any (startsWith "-- lint-disable-file rule-duplicate-body") ls
+  fold
+    (acc (n, d, rev) =>
+      let b = segBody rev
+      match M.get n acc
+        None => M.set n (b, d || fileExempt) acc
+        Some (ob, od) => M.set n ("\{ob}\n\{b}", od || d || fileExempt) acc)
+    (M.fromList [])
+    (segmentLines ls)
+
+type DefRow = (String, String, Bool)
+
+-- name -> (module, body, exempt) over non-test, non-`entries/` modules.
+definitionIndex : List (String, List String) -> M.Map String (List DefRow)
+definitionIndex mods =
+  fold
+    (acc (m, ls) =>
+      fold
+        (a (n, (b, d)) =>
+          if startsWith "<" n
+            || startsWith "data " n
+            || startsWith "type " n then
+            a
+          else match M.get n a
+            None => M.set n [(m, b, d)] a
+            Some rows => M.set n ((m, b, d) :: rows) a)
+        acc
+        (M.entries (moduleBodies ls)))
+    (M.fromList [])
+    (filter (p => not (startsWith "entries." (fst p))) mods)
+
+-- Names defined in two or more modules, exempt or not (information only).
+dupNameCount : M.Map String (List DefRow) -> Int
+dupNameCount idx = length (filter (rows => length rows >= 2) (M.values idx))
+
+-- Names whose most common body, among non-exempt definitions in two or more
+-- modules, occurs at least twice.
+identicalNames : M.Map String (List DefRow) -> List String
+identicalNames idx =
+  sort
+    (filterMap
+      ((n, rows) =>
+        let live = filter (r => not (rowExempt r)) rows
+        if length live >= 2 && topCount (map rowBody live) >= 2 then
+          Some n
+        else
+          None)
+      (M.entries idx))
+
+rowExempt : DefRow -> Bool
+rowExempt (_, _, e) = e
+
+rowBody : DefRow -> String
+rowBody (_, b, _) = b
+
+topCount : List String -> Int
+topCount bodies =
+  let counts =
+    fold
+      (acc b => M.set b (M.findWithDefault 0 b acc + 1) acc)
+      (M.fromList [])
+      bodies
+  fold max 0 (M.values counts)
+
+test "arch_boundaries: llvm/wasm twins match twins.golden" =
+  pin "twins.golden" (twinNames loadModules)
+
+test "arch_boundaries: identical-body names match dupbodies.golden" =
+  let idx = definitionIndex loadModules
+  let _ = println "dup-names: \{dupNameCount idx}"
+  pin "dupbodies.golden" (identicalNames idx)
