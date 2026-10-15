@@ -498,6 +498,7 @@ checkOneCallObligation : Bool -> ImplUniverse -> IfaceRef -> List Mono -> Option
 checkOneCallObligationNoImpl : IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
 checkOneDiags : List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
 checkOneDiagsK : Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
+checkOneDiagsLinesK : Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List String, List TcDiag, List TcDiag)
 checkOneDiagsSynthetic : List Decl -> List Decl -> List (String, List Decl) -> (List TcDiag, List TcDiag)
 checkOneEffectParam : String -> Param -> EffParamTy -> Unit
 checkOneErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
@@ -2942,7 +2943,7 @@ rowSlotArgMono : SigVars -> List (String, Mono) -> Ty -> Mono
 rowTailId : EffRow -> List Int
 rowTailIsJoin : EffRow -> Bool
 rowText : String -> String
-runFinalChecks : List Decl -> List Decl -> ClassEnv -> ClassEnv -> ImplEnv -> ImplEnv -> Int -> Unit
+runFinalChecks : List Decl -> ClassEnv -> ClassEnv -> ImplEnv -> ImplEnv -> Int -> Unit
 runStampCtx : StampCtx -> List DrainFinding
 runStampCtxs : List StampCtx -> List DrainFinding
 runStampStep : StampCtx -> StampStep -> Unit
