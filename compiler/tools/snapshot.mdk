@@ -189,7 +189,7 @@ import types.typecheck.{
   hadMatchWarnings,
   resetTypeErrorsSticky,
 }
-import backend.private_mangle.{mangleUnitsEv}
+import types.private_mangle.{mangleUnitsEv}
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp, noMainMsg}
 import backend.emit_plan.{buildEmitPlan}
 import backend.core_validate.{Backend(..)}

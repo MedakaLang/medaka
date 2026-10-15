@@ -1066,7 +1066,7 @@ Rules, each a real error rather than a silent no-op:
 
 A qualified VALUE reference `A.name` is lowered by `frontend/desugar.mdk` to the flat name
 `A.name` (a dot cannot occur in an identifier, so it cannot collide), and
-`backend/private_mangle.mdk` maps it back to the origin module's real symbol — no dotted
+`types/private_mangle.mdk` maps it back to the origin module's real symbol — no dotted
 name reaches the emitted code.
 
 A qualified TYPE `A.Name` takes the other route, and the difference is forced by what a

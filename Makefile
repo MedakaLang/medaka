@@ -201,8 +201,8 @@ inlang-backend-trmc-analysis-test:
 
 ## #3306: private_mangle.mdk's ctor-export table (incl. the #1359 re-export
 ## definer) is private; its sibling drives the exported mangleUnits.
-inlang-backend-private-mangle-test:
-	./medaka test compiler/backend/private_mangle_test.mdk
+inlang-types-private-mangle-test:
+	./medaka test compiler/types/private_mangle_test.mdk
 
 ## Both emitters and core_validate import the extern catalog, but no entry
 ## imports its sibling, which checks every row against runtime.mdk, the wasm

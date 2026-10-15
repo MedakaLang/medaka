@@ -23,7 +23,7 @@
 -- correct `5`.  So this was a live eval-vs-native DIVERGENCE, not a shared gap —
 -- and `medaka check` exited 0 on it, because A-2.6 had already fixed the
 -- typecheck-side half of exactly this question.  The emitter has had the missing
--- index since #674 (`backend/private_mangle.ctorMemberEntry`), which is why the
+-- index since #674 (`types/private_mangle.ctorMemberEntry`), which is why the
 -- native arm was right the whole time.
 --
 -- ⚠️ THE ARITY IS LOAD-BEARING, and that is why the existing corpus missed this.

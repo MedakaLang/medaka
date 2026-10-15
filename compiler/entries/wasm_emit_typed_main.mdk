@@ -38,7 +38,7 @@ import frontend.ast.{
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.typecheck.{elaborateModules}
-import backend.private_mangle.{mangleUnitsEv}
+import types.private_mangle.{mangleUnitsEv}
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir.{
   CProgram(..),

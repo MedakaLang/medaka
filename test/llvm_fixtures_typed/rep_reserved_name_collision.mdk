@@ -1,6 +1,6 @@
 -- #2848 REGRESSION PIN: the reserved constructor spellings (Cons/Nil/Some/None/
 -- Ok/Err/Lt/Eq/Gt/True/False) are exempt from module mangling
--- (compiler/backend/private_mangle.mdk), so a USER type that declares one reaches
+-- (compiler/types/private_mangle.mdk), so a USER type that declares one reaches
 -- the emitter under the bare name and shares that name's reserved tag.
 -- compiler/tools/printer.mdk's own `Doc` type does exactly this with `Nil`.
 -- A representation classifier that resolved `Nil` through the RESERVED roster

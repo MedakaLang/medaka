@@ -310,7 +310,7 @@ import backend.trmc_analysis.{
   clauseArityOf,
   lastStmtExpr,
 }
-import backend.private_mangle.{hashName, injectiveIdent}
+import types.private_mangle.{hashName, injectiveIdent}
 import types.disposition.{ifaceSuperCount, installedDispositionsOpt}
 import types.route_key.{numIntWord}
 import backend.emit_plan.{
@@ -10183,7 +10183,7 @@ dedupS xs = reverseL (dedup (reverseL xs))
 -- the immediate-int low-bit-1 encoding, exactly as the Float box is).  Allocation
 -- reuses the slice-1 `@mdk_alloc` (malloc-and-leak; no GC this slice).
 
--- `hashName` (djb2, seed 5381) lives in `backend.private_mangle`, shared with the
+-- `hashName` (djb2, seed 5381) lives in `types.private_mangle`, shared with the
 -- WasmGC emitter so the dict-witness tag agrees across backends.  STILL used here
 -- for the NON-ctor sentinel headers ("$tuple"/"$ref"/"$closure") and dict witness
 -- words; constructor cell tags use `cellTag` (ordinals) instead.

@@ -6,7 +6,7 @@
 -- `frontend/resolve.expandMemberNames` binds the member name and then the named
 -- type's constructors:
 --     Some ctors => (name, useMemberLocal m, loc) :: map (c => (c, c, loc)) ctors
--- `backend/private_mangle.ctorMemberEntry` bound only the second half, so `Vee` — a
+-- `types/private_mangle.ctorMemberEntry` bound only the second half, so `Vee` — a
 -- constructor of `SA`, which the front end DID put in scope — never entered the
 -- rename map.
 --
@@ -15,7 +15,7 @@
 -- expanding the type `Vee`, so `unVee (Wye 2)` = `2`.  So `7` then `2`.
 --
 -- ⚠️ COUNTERFACTUAL, measured rather than asserted.  With
--- `compiler/backend/private_mangle.mdk` restored to bfee53b4 and the binary rebuilt,
+-- `compiler/types/private_mangle.mdk` restored to bfee53b4 and the binary rebuilt,
 -- this fixture is RED on the native arm:
 --     $ medaka build entry.mdk -o e
 --     error: emitter failed compiling entry.mdk

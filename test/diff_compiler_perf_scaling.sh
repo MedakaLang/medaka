@@ -4879,7 +4879,7 @@ grade_emittables_stage emit
 # different gate and on a different instrument — #2099's headline ("the mangle stage
 # is now graded by nothing") is TRUE OF THIS FILE and FALSE OF THE TREE, and the tree
 # wins. `test/diff_compiler_stage_ir_scaling.sh` grades
-# `mangle=mdk_backend_private_mangle__mangleUnits` as a first-class row in STAGE_SYMS
+# `mangle=mdk_types_private_mangle__mangleUnits` as a first-class row in STAGE_SYMS
 # (added by sprint backend-breadth, slice S-build-ir-arm, 7d644eff). Re-derived on
 # this box 2026-08-28 by running that gate whole — it grades mangle on EVERY
 # single-module shape, with real net Ir, not a SKIP under its netting guard:

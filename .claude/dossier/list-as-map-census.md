@@ -159,7 +159,7 @@ name-pattern heuristic; see Methodology.
 | compiler/ir/core_ir_lower.mdk | 0 | 0 | 12 | 0 |
 | compiler/eval/eval.mdk | 0 | 0 | 12 | 0 |
 | compiler/backend/trmc_analysis.mdk | 0 | 0 | 12 | 0 |
-| compiler/backend/private_mangle.mdk | 0 | 0 | 12 | 0 |
+| compiler/types/private_mangle.mdk | 0 | 0 | 12 | 0 |
 | compiler/tools/gate_cmd.mdk | 0 | 0 | 11 | 0 |
 | compiler/driver/medaka_cli.mdk | 0 | 0 | 10 | 0 |
 | compiler/support/util.mdk | 0 | 0 | 8 | 0 |
@@ -963,18 +963,18 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/backend/llvm_emit.mdk:13466 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/backend/llvm_emit.mdk:13467 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/backend/llvm_emit.mdk:13474 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/backend/private_mangle.mdk:120 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/backend/private_mangle.mdk:126 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/backend/private_mangle.mdk:127 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/backend/private_mangle.mdk:159 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/backend/private_mangle.mdk:248 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/backend/private_mangle.mdk:381 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/backend/private_mangle.mdk:390 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/backend/private_mangle.mdk:438 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/backend/private_mangle.mdk:478 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/backend/private_mangle.mdk:575 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/backend/private_mangle.mdk:708 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
-| compiler/backend/private_mangle.mdk:769 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
+| compiler/types/private_mangle.mdk:120 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
+| compiler/types/private_mangle.mdk:126 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
+| compiler/types/private_mangle.mdk:127 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
+| compiler/types/private_mangle.mdk:159 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
+| compiler/types/private_mangle.mdk:248 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
+| compiler/types/private_mangle.mdk:381 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
+| compiler/types/private_mangle.mdk:390 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
+| compiler/types/private_mangle.mdk:438 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
+| compiler/types/private_mangle.mdk:478 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
+| compiler/types/private_mangle.mdk:575 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
+| compiler/types/private_mangle.mdk:708 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
+| compiler/types/private_mangle.mdk:769 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:259 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:276 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |
 | compiler/types/typecheck.mdk:277 | contains/elem/dedup | (unclassified, see note) | per-decl (default) | persistent value | n/a | heuristic default, not individually verified |

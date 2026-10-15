@@ -55,21 +55,6 @@ class = "shout"
 count = 19
 
 [[entry]]
-file = "compiler/backend/private_mangle.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/backend/private_mangle.mdk"
-class = "emoji"
-count = 11
-
-[[entry]]
-file = "compiler/backend/private_mangle.mdk"
-class = "shout"
-count = 13
-
-[[entry]]
 file = "compiler/backend/trmc_analysis.mdk"
 class = "history"
 count = 1
@@ -272,7 +257,7 @@ count = 1
 [[entry]]
 file = "compiler/eval/eval.mdk"
 class = "emoji"
-count = 20
+count = 19
 
 [[entry]]
 file = "compiler/eval/eval.mdk"
@@ -585,6 +570,21 @@ class = "emoji"
 count = 1
 
 [[entry]]
+file = "compiler/types/private_mangle.mdk"
+class = "history"
+count = 1
+
+[[entry]]
+file = "compiler/types/private_mangle.mdk"
+class = "emoji"
+count = 11
+
+[[entry]]
+file = "compiler/types/private_mangle.mdk"
+class = "shout"
+count = 13
+
+[[entry]]
 file = "compiler/types/registry.mdk"
 class = "emoji"
 count = 39
@@ -627,7 +627,7 @@ count = 9
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "history"
-count = 130
+count = 128
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
