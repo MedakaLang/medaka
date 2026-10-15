@@ -204,6 +204,11 @@ inlang-backend-trmc-analysis-test:
 inlang-types-private-mangle-test:
 	./medaka test compiler/types/private_mangle_test.mdk
 
+## support/hooks.mdk has no importer until the first hooks consumer lands, so
+## no entry's closure reaches it.
+inlang-support-hooks-check:
+	./medaka check compiler/support/hooks.mdk
+
 ## Both emitters and core_validate import the extern catalog, but no entry
 ## imports its sibling, which checks every row against runtime.mdk, the wasm
 ## emitter's output and the interpreter.  The registry gate
