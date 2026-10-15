@@ -1,0 +1,4 @@
+import alpha.{alphaSum}
+import beta.{betaSize}
+
+main = println (alphaSum [1, 2, 3] + betaSize)

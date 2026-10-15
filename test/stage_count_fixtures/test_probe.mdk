@@ -1,0 +1,16 @@
+import test.{expectEqual}
+
+double : Int -> Int
+double x = x * 2
+
+test "double zero" =
+  expectEqual (double 0) 0
+
+test "double one" =
+  expectEqual (double 1) 2
+
+test "double three" =
+  expectEqual (double 3) 6
+
+prop "double is even" (n : Int) =
+  double n % 2 == 0

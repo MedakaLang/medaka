@@ -10,6 +10,7 @@ frontend.parser	8
 frontend.resolve	3
 support.opcount	2
 support.scc	6
+support.stage_count	2
 support.timer	3
 tools.lsp	2
 tools.lsp_harness	1
