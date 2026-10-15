@@ -1,7 +1,7 @@
 # From here to there: the architecture playbook
 
-**Status:** PROPOSED 2026-10-15, awaiting Val's ratification of
-[`ARCHITECTURE.md`](ARCHITECTURE.md) and the decisions in §9. Tracking epic #4206. This is the sequencing plan
+**Status:** ADOPTED 2026-10-15 as the plan of record; Val ratified
+[`ARCHITECTURE.md`](ARCHITECTURE.md) and ruled the six decisions in §9. Tracking epic #4206. This is the sequencing plan
 that takes the compiler from its measured state (§1) to the laws in that file. It does
 not replace the typechecker epic (#1122), the emitter epic (#1398) or the run-once epic
 (#4141); it orders work across them and adds the one phase none of them has, the guards
@@ -22,7 +22,10 @@ commands before citing them.
 
 ## 1. Where we are (measured 2026-10-14 at `48e36f797`)
 
-Re-derive with `make arch-census` and the census scripts recorded on the owner epic.
+Re-derive with `make arch-census` and the census scripts archived with the evaluation at
+`archive/findings/architecture-evaluation-2026-10-15/census/` (run as
+`python3 -I census/census.py <repo-root> <section>`; `census-medaka.md` beside them
+records the method and the full tables).
 
 | Measure | Value |
 |---|---|
@@ -178,7 +181,7 @@ later sprint executes them and does not re-ask.
 |---|---|---|---|
 | **D1** | A may-only-fall code-line ratchet on `types/typecheck.mdk` alone, with a PR-body override. #2289 declined a tree-wide size gate because "a size ratchet teaches avoidance, not architecture"; this is a growth stop on one file, with an explicit reviewed opt-out, which is the rustc form. | G1 | **Adopted.** The soft census had not moved the curve in two months. #2289's tree-wide refusal stands; this is one file. |
 | **D2** | The hooks record's admissibility rule: rendering, tooling and backend-fact lookups only, never read from inference. | G2b | **Accepted** as written in A6. |
-| **D3** | Archive location (`compiler/archive/` beside `archive/PLAN-ARCHIVE.md` at the root) and the per-directory `ARCHITECTURE.md` shape (under 100 lines, no line numbers). | G4 | **Accepted:** `compiler/archive/`; the per-directory maps replace `ARCH-REVIEW.md`; `TYPECHECK-ARCHITECTURE.md` stays until Phase 4 re-derives it per module. |
+| **D3** | Archive location (`compiler/archive/` beside `archive/PLAN-ARCHIVE.md` at the root) and the per-directory `ARCHITECTURE.md` shape (under 100 lines, no line numbers). | G4 | **Accepted:** `compiler/archive/`; the per-directory maps replace `ARCH-REVIEW.md`; `TYPECHECK-ARCHITECTURE.md` stays until Phase 4 re-derives it per module. *Open detail for G4:* the root `archive/design/` tier already exists for exactly this class of doc ("status banner says IMPLEMENTED or SUPERSEDED", `archive/README.md`) and `test/gen_docs_index.sh` already indexes it, so G4 may propose using it instead of a new `compiler/archive/`; that amendment is Val's to take when G4 is cut. |
 | **D4** | Who owns `build`'s front end (#4160): the child runs resolve, or the parent hands the artifact across. | V3, C3 | **Accepted** in two steps: until C1 exists, the emitter child runs the whole pipeline including resolve and the parent stops doing front-end work; once C1 exists, the parent hands the artifact across. This also closes #2874's residual. |
 | **D5** | How a value `main` is checked (#4151) without a modified prelude defeating the memo. | V3 | **Accepted:** the auto-print obligation becomes an ordinary wanted on `main`'s type, solved in the same drive against the unmodified prelude. The implementing slice first confirms, by reading `autoPrintPinCore` and `COMPOSITE-MAIN-AUTOPRINT-DESIGN.md`, that the obligation is one predicate. |
 | **D6** | How the prelude's interface is delivered. | C2 | **Accepted: shipped interface files, OCaml's form.** `make medaka` produces one interface file per stdlib module beside the sources (`core.mdk` first), keyed by the source fingerprint the binary already bakes; the loader prefers the interface when the fingerprint matches, resolving it from `exeDir` as it already resolves `stdlib/`. Not baked into the binary: OCaml (`stdlib/*.cmi`), GHC (`base`'s `.hi` in the package db) and rustc (`std`'s `.rmeta` in the sysroot) all ship installed interface files beside the compiler and load them lazily, and one loader then serves the prelude, the stdlib and (C3) user modules. The playground fetches the interface the way it fetches `dist/*.mdk`. |

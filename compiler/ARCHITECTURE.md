@@ -1,8 +1,9 @@
 # The compiler's target architecture
 
-**Status:** PROPOSED 2026-10-15, awaiting Val's ratification; tracking epic #4206. This is the compiler-wide
-destination: the laws every subsystem's design must satisfy and the shape the whole
-pipeline converges on. It does not replace the per-subsystem destinations, which it
+**Status:** ADOPTED 2026-10-15 (Val ratified the direction and ruled the six decisions
+beneath it in one session; tracking epic #4206). This is the compiler-wide destination:
+the laws every subsystem's design must satisfy and the shape the whole pipeline converges
+on. A law is amended only by a PR Val ratifies. It does not replace the per-subsystem destinations, which it
 sits above: [`TYPECHECK-CONTRACTS.md`](TYPECHECK-CONTRACTS.md) for the typechecker and
 [`EMITTER-TARGET-ARCHITECTURE.md`](EMITTER-TARGET-ARCHITECTURE.md) (REVISION block)
 for lowering and the backends. The route from the current tree to this one is
@@ -251,8 +252,11 @@ Six decisions sat under these laws when they were drafted. Val ruled all six on
 
 ## 6. Precedents
 
-The three reference compilers were measured on 2026-10-14 (reports and clones are in the
-evaluation session's scratchpad; the numbers below are the ones the laws rest on).
+The three reference compilers were measured on 2026-10-14 from fresh clones. The full
+evaluation, the three studies, the census of this tree and the re-runnable census
+scripts are the closed record at
+[`archive/findings/architecture-evaluation-2026-10-15/FINDINGS.md`](../archive/findings/architecture-evaluation-2026-10-15/FINDINGS.md).
+The numbers below are the ones the laws rest on.
 
 | | Medaka | OCaml | GHC | rustc |
 |---|---|---|---|---|

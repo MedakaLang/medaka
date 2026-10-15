@@ -17,7 +17,11 @@ provenance. Open work is tracked in [`PLAN.md`](../PLAN.md) (see its
   they describe shipped — their links ARE kept live/correct, unlike the flat
   files below.
 - **`findings/`** — point-in-time QA/investigation sweeps, e.g.
-  [`findings/qa-beta-2026-07-07/`](findings/qa-beta-2026-07-07/FINDINGS.md).
+  [`findings/qa-beta-2026-07-07/`](findings/qa-beta-2026-07-07/FINDINGS.md) and the
+  2026-10-15 architecture evaluation against OCaml, GHC and rustc that
+  `compiler/ARCHITECTURE.md` rests on,
+  [`findings/architecture-evaluation-2026-10-15/`](findings/architecture-evaluation-2026-10-15/FINDINGS.md)
+  (three reference-compiler studies, the census of this tree, and the census scripts).
 - **`linux-spike/`** — the historical D0 Linux native-build Docker spike
   (scripts and Dockerfile); not maintained.
 - **`PLAN-ARCHIVE.md`** — the completed-Phase archive (moved from the repo

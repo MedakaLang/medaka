@@ -194,8 +194,8 @@ What's in the standard library, what's planned, module-by-module status.
 |-----|------------|--------|
 | [`AGENTS.md`](../compiler/AGENTS.md) | compiler/AGENTS.md — how not to make the compiler slow | LIVE |
 | [`ARCH-REVIEW.md`](../compiler/ARCH-REVIEW.md) | Medaka Architecture Review | PARTIAL |
-| [`ARCHITECTURE-PLAYBOOK.md`](../compiler/ARCHITECTURE-PLAYBOOK.md) | From here to there: the architecture playbook | PROPOSED 2026-10-15, awaiting Val's ratification of |
-| [`ARCHITECTURE.md`](../compiler/ARCHITECTURE.md) | The compiler's target architecture | PROPOSED 2026-10-15, awaiting Val's ratification; tracking epic #4206 |
+| [`ARCHITECTURE-PLAYBOOK.md`](../compiler/ARCHITECTURE-PLAYBOOK.md) | From here to there: the architecture playbook | ADOPTED 2026-10-15 as the plan of record; Val ratified |
+| [`ARCHITECTURE.md`](../compiler/ARCHITECTURE.md) | The compiler's target architecture | ADOPTED 2026-10-15 |
 | [`ARGSTAMP-UNIFY-PLAN.md`](../compiler/ARGSTAMP-UNIFY-PLAN.md) | ARGSTAMP-UNIFY-PLAN.md — retire the `emitArgStampPasses` eval-vs-emit dispatch fork | IMPLEMENTED |
 | [`BOOTSTRAP.md`](../compiler/BOOTSTRAP.md) | BOOTSTRAP.md — Native self-compile slices | IMPLEMENTED |
 | [`COMPOSITE-MAIN-AUTOPRINT-DESIGN.md`](../compiler/COMPOSITE-MAIN-AUTOPRINT-DESIGN.md) | Composite-`main` Auto-Print — Design (Option A: uniform auto-print) | IMPLEMENTED on every verb |
@@ -297,6 +297,11 @@ IMPLEMENTED or SUPERSEDED work, kept for provenance. Links inside these docs are
 
 | Doc | What it is | Status |
 |-----|------------|--------|
+| [`FINDINGS.md`](../archive/findings/architecture-evaluation-2026-10-15/FINDINGS.md) | Medaka compiler architecture: evaluation against OCaml, GHC and rustc | CLOSED RECORD |
+| [`census-medaka.md`](../archive/findings/architecture-evaluation-2026-10-15/census-medaka.md) | Medaka compiler structural census | CLOSED RECORD |
+| [`report-ghc.md`](../archive/findings/architecture-evaluation-2026-10-15/report-ghc.md) | GHC architecture vs Medaka: a sourced comparison | CLOSED RECORD |
+| [`report-ocaml.md`](../archive/findings/architecture-evaluation-2026-10-15/report-ocaml.md) | The OCaml compiler as an architectural reference for Medaka | CLOSED RECORD |
+| [`report-rustc.md`](../archive/findings/architecture-evaluation-2026-10-15/report-rustc.md) | rustc architecture vs Medaka: a sourced comparison | CLOSED RECORD |
 | [`FINDINGS.md`](../archive/findings/qa-beta-2026-07-07/FINDINGS.md) | Beta-hardening QA findings — 2026-07-07 | CLOSED RECORD |
 | [`FIXTURES.md`](../archive/findings/qa-beta-2026-07-07/FIXTURES.md) | Regression fixtures to add — beta hardening, 2026-07-07 | CLOSED RECORD |
 | [`P0-18-BUILD-PATH-DESIGN.md`](../archive/findings/qa-beta-2026-07-07/P0-18-BUILD-PATH-DESIGN.md) | P0-18 build-path soundness hole — design & scoping | CLOSED RECORD |
