@@ -3944,3 +3944,19 @@ sources = ["test/lib/pcg_partition.sh", "test/build_native_medaka.sh", "test/dif
 corpus = []
 toolchain = []
 link = "production"
+
+[[gate]]
+name = "arch_boundaries"
+area = "types"
+shard = "gates_1"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "native"
+migration = "done"
+run = "test/arch_boundaries_test.mdk"
+oracles = []
+sources = ["compiler/*", "test/arch_boundaries_test.mdk"]
+corpus = ["test/arch_goldens"]
+toolchain = []
+link = "production"

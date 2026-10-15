@@ -137,8 +137,9 @@ convention (18 hooks in its typechecker) and rustc's `Providers` record, and it 
 Medaka has never had: today an inversion can only be expressed as an import, so it
 becomes a layering violation or a withdrawn extraction.
 
-- *Check:* the hooks record's field count, pinned; a lint arm that refuses a hook read
-  from `types/` inference modules (Phase 0, G2).
+- *Check:* the hooks record's field count, pinned; a boundary check in
+  `test/arch_boundaries_test.mdk` that refuses any `types/` module outside its
+  allowlist importing `support.hooks` (Phase 0, G2).
 
 ### A7. Compute once is structural, not a discipline
 
