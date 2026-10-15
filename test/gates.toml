@@ -2393,17 +2393,17 @@ link = "production"
 [[gate]]
 name = "diff_compiler_os_entropy"
 area = "infra"
-shard = "gates_2"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
 kind = "native"
 migration = "done"
 run = "test/diff_compiler_os_entropy_test.mdk"
-oracles = []
-sources = ["stdlib/runtime.mdk", "compiler/eval/eval.mdk", "runtime/medaka_rt.c"]
+oracles = ["wasm_emit_modules_main"]
+sources = ["stdlib/runtime.mdk", "compiler/eval/eval.mdk", "runtime/medaka_rt.c", "playground/medaka_host.mjs", "test/wasm/run.js", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_preamble.mdk", "compiler/backend/extern_catalog.mdk"]
 corpus = ["test/os_entropy_fixtures"]
-toolchain = ["clang"]
+toolchain = ["clang", "node>=24"]
 link = "production"
 
 [[gate]]
@@ -3074,7 +3074,7 @@ link = "production"
 [[gate]]
 name = "manifest_emit"
 area = "infra"
-shard = "gates_3"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
