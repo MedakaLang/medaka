@@ -2,7 +2,7 @@
 # diff_compiler_llvm_symbol_collision.sh — the emitted-symbol INJECTIVITY gate
 # (X-L.H / #348 / #748; the regression home of the drained #1677 and #1950 pins).
 #
-# WHAT IT ASSERTS. `compiler/backend/private_mangle.mangledName` is
+# WHAT IT ASSERTS. `compiler/types/private_mangle.mangledName` is
 # `"<sanitizeId mid>__<name>"`, and `sanitizeId` maps `.`, `/` and `-` all to `_`.
 # That encoding is MANY-TO-ONE: a flat module `lib_plain.mdk` (id `lib_plain`) and
 # a nested `lib/plain.mdk` (dotted id `lib.plain`) both sanitize to `lib_plain`, so

@@ -51,7 +51,7 @@ import driver.loader.{
   stdlibOwnership,
   unknownModuleIdOf,
 }
-import backend.private_mangle.{mangleUnitsEv}
+import types.private_mangle.{mangleUnitsEv}
 import ir.core_ir_lower.{externDeclNamesOf}
 import driver.main_autoprint.{
   shouldAutoPrintMain,

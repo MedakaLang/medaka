@@ -59,7 +59,7 @@ import ir.core_ir_lower.{
 import types.disposition.{DispositionTable, installedDispositionsOpt}
 import support.util.{isEmptyL, dedup, contains, filterList}
 import support.ordmap.{OrdMap}
-import backend.private_mangle.{mangleCtorCollisions}
+import types.private_mangle.{mangleCtorCollisions}
 import eval.eval.{
   Value(..),
   EvalEnv(..),
@@ -805,7 +805,7 @@ cevalModulesOutput preludeDecls modules =
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "dedup" false) (mem "contains" false) (mem "filterList" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisions" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisions" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "lookupEnv" false) (mem "extendEnv" false) (mem "pushFrame" false) (mem "findCell" false) (mem "matchPat" false) (mem "force" false) (mem "startsWithAt" false) (mem "evalArithAt" false) (mem "evalUnop" false) (mem "consVal" false) (mem "appendVal" false) (mem "makeCtor" false) (mem "boolSeeds" false) (mem "externBindings" false) (mem "ctorToTypeRef" false) (mem "installConsts" false) (mem "cellResult" false) (mem "lookupBinding" false) (mem "isNullary" false) (mem "ppValue" false) (mem "outputRef" false) (mem "evalIndex" false) (mem "evalSlice" false) (mem "evalRange" false) (mem "rangeListMk" false) (mem "rangeArrayMk" false) (mem "evalRecordUpdate" false) (mem "evalValueField" false) (mem "evalField" false) (mem "routeTag" false) (mem "applyDicts" false) (mem "applyMethodDicts" false) (mem "coalesceImpls" false) (mem "buildCtorToType" false) (mem "collectCtors" false) (mem "installDispatchTables" false) (mem "implMethodNames" false) (mem "methodCellsOf" false) (mem "publicExternCells" false) (mem "runtimeCellsOf" false) (mem "importFrameOf" false) (mem "narrowToIface" false) (mem "pubReexports" false) (mem "ModExports" true) (mem "ctorsByTypeOf" false) (mem "evalVariantUpdate" false) (mem "buildCtorFieldOrders" false) (mem "ctorFieldOrdersRef" false) (mem "methodAtNarrow" false) (mem "requireMethodRoute" false) (mem "applyValues" false) (mem "preludeShadowNames" false) (mem "globalFramesWith" false) (mem "coreImportExports" false) (mem "ffiExternNamesRef" false) (mem "externDeclNamesOfDecls" false))))
 (DTypeSig true "ceval" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "CExpr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "ceval" (PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "litValue") (EVar "l")))
@@ -1006,7 +1006,7 @@ cevalModulesOutput preludeDecls modules =
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "dedup" false) (mem "contains" false) (mem "filterList" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisions" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisions" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "lookupEnv" false) (mem "extendEnv" false) (mem "pushFrame" false) (mem "findCell" false) (mem "matchPat" false) (mem "force" false) (mem "startsWithAt" false) (mem "evalArithAt" false) (mem "evalUnop" false) (mem "consVal" false) (mem "appendVal" false) (mem "makeCtor" false) (mem "boolSeeds" false) (mem "externBindings" false) (mem "ctorToTypeRef" false) (mem "installConsts" false) (mem "cellResult" false) (mem "lookupBinding" false) (mem "isNullary" false) (mem "ppValue" false) (mem "outputRef" false) (mem "evalIndex" false) (mem "evalSlice" false) (mem "evalRange" false) (mem "rangeListMk" false) (mem "rangeArrayMk" false) (mem "evalRecordUpdate" false) (mem "evalValueField" false) (mem "evalField" false) (mem "routeTag" false) (mem "applyDicts" false) (mem "applyMethodDicts" false) (mem "coalesceImpls" false) (mem "buildCtorToType" false) (mem "collectCtors" false) (mem "installDispatchTables" false) (mem "implMethodNames" false) (mem "methodCellsOf" false) (mem "publicExternCells" false) (mem "runtimeCellsOf" false) (mem "importFrameOf" false) (mem "narrowToIface" false) (mem "pubReexports" false) (mem "ModExports" true) (mem "ctorsByTypeOf" false) (mem "evalVariantUpdate" false) (mem "buildCtorFieldOrders" false) (mem "ctorFieldOrdersRef" false) (mem "methodAtNarrow" false) (mem "requireMethodRoute" false) (mem "applyValues" false) (mem "preludeShadowNames" false) (mem "globalFramesWith" false) (mem "coreImportExports" false) (mem "ffiExternNamesRef" false) (mem "externDeclNamesOfDecls" false))))
 (DTypeSig true "ceval" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "CExpr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "ceval" (PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "litValue") (EVar "l")))

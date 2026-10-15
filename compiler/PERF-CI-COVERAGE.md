@@ -89,7 +89,7 @@ That is genuinely strong. The holes are specific.
 4. **`mangleUnits` is not exercised by either profiler at all.** (#882 — ✅ CLOSED) `profile_main`
    now has a `mangle` stage: it runs `mangleUnits` standalone over `(core, [("target", target)])`
    and DISCARDS the result (additive — `lower`/`emit` stay byte-unchanged). Reads LINEAR on every
-   shape. `compiler/backend/private_mangle.mdk`.
+   shape. `compiler/types/private_mangle.mdk`.
 
 5. **The multi-module path has no backend coverage.** (#881) `profile_modules_main` stops at
    typecheck — no `lower`/`emit`/`wasm-emit`. An O(modules²) in lowering or cross-module dict

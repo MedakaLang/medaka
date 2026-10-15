@@ -54,7 +54,7 @@
 # Both of the risks the shape was flagged with are answered by measurement, not by
 # argument:
 #   * The mangled symbol scheme (`mdk_<module_path>__<name>`,
-#     compiler/backend/private_mangle.mdk) is stable and readable from `nm`; and a
+#     compiler/types/private_mangle.mdk) is stable and readable from `nm`; and a
 #     symbol that STOPS resolving is a HARD FAIL here (see `stage_ir`), never a
 #     silent green — that is the whole reason a missing reading is not treated as 0.
 #   * Collection survives the 256 MB GC worker pthread the runtime runs the whole
@@ -470,7 +470,7 @@ typecheck=mdk_types_typecheck__checkOneToLinesWithRuntime \
 lower=mdk_ir_core_ir_lower__lowerProgramEmit \
 emit=mdk_backend_llvm_emit__emitProgram \
 plan=mdk_backend_emit_plan__buildEmitPlan \
-mangle=mdk_backend_private_mangle__mangleUnits \
+mangle=mdk_types_private_mangle__mangleUnits \
 dce=mdk_ir_dce__dceFilter \
 trmc=mdk_backend_trmc_analysis__detectDispatchGroups \
 fmt=mdk_tools_fmt__formatSource \

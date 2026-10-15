@@ -327,7 +327,7 @@ of these runs once per CLI invocation.
 per-compile or per-request path and the hand code is the right shape today:
 `compiler/types/typecheck.mdk` `ctorHeadShaped`, `compiler/frontend/exhaust.mdk`
 `tupleArityOfName`, `compiler/eval/eval.mdk` `stripModPrefix`,
-`compiler/backend/private_mangle.mdk` (injectivity-critical, fixpoint-bearing),
+`compiler/types/private_mangle.mdk` (injectivity-critical, fixpoint-bearing),
 `compiler/backend/wasm_emit.mdk` line validators, `compiler/support/path.mdk`,
 and the whole request-parsing loop of `stdlib/http.mdk`
 (`parseRequestLine`, `parseHeaderLine`, `validTarget`, the chunk-size

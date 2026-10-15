@@ -920,7 +920,7 @@ link = "production"
 [[gate]]
 name = "pds/test/scalar_vectors"
 area = "engines"
-shard = "gates_1"
+shard = "gates_3"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -2029,7 +2029,7 @@ kind = "native"
 migration = "done"
 run = "test/diff_compiler_fmt_test.mdk"
 oracles = ["check_main", "diagnostics_project_main", "fmt_main", "lex_main", "lint_fix_main", "lint_main", "llvm_emit_modules_main", "new_main", "refindex_main", "repl_main", "test_main", "typecheck_main"]
-sources = ["compiler/backend/private_mangle.mdk", "compiler/driver/*", "compiler/entries/entry_support.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/exhaust.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/parser.mdk", "compiler/ir/*", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/fmt.mdk", "compiler/tools/lint*.mdk", "compiler/tools/new_cmd.mdk", "compiler/tools/printer.mdk", "compiler/tools/prop_runner.mdk", "compiler/tools/repl.mdk", "compiler/types/*", "test/compiler_cli_test_support.mdk", "test/diff_compiler_fmt_test.mdk", "test/probe_runner.mdk"]
+sources = ["compiler/types/private_mangle.mdk", "compiler/driver/*", "compiler/entries/entry_support.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/exhaust.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/parser.mdk", "compiler/ir/*", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/fmt.mdk", "compiler/tools/lint*.mdk", "compiler/tools/new_cmd.mdk", "compiler/tools/printer.mdk", "compiler/tools/prop_runner.mdk", "compiler/tools/repl.mdk", "compiler/types/*", "test/compiler_cli_test_support.mdk", "test/diff_compiler_fmt_test.mdk", "test/probe_runner.mdk"]
 corpus = ["test/analyze_project_fixtures", "test/compiler_test_fixtures", "test/diff_fixtures", "test/fmt_fixtures", "test/lint_fix_fixtures", "test/lint_fixtures", "test/new_golden", "test/parse_fixtures", "test/references_fixtures", "test/repl_fixtures", "test/typecheck_error_fixtures"]
 toolchain = []
 link = "production"
@@ -2197,7 +2197,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_lint_multi"
 area = "tools"
-shard = "gates_3"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3010,7 +3010,7 @@ link = "production"
 [[gate]]
 name = "effect_product_domain"
 area = "infra"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3164,6 +3164,22 @@ run = "test/registry_keying_ratchet.sh"
 oracles = []
 sources = []
 corpus = ["test/check_module_fixtures", "test/shadow_fixtures"]
+toolchain = []
+link = "production"
+
+[[gate]]
+name = "arch_ratchet"
+area = "soundness"
+shard = "other-job"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "shell:trust-anchor"
+run = "test/arch_ratchet.sh"
+oracles = []
+sources = ["test/arch_ratchet.sh"]
+corpus = ["test/arch_goldens"]
 toolchain = []
 link = "production"
 
@@ -3926,5 +3942,21 @@ run = "test/diff_compiler_partition_stability.sh"
 oracles = []
 sources = ["test/lib/pcg_partition.sh", "test/build_native_medaka.sh", "test/diff_compiler_partition_stability.sh"]
 corpus = []
+toolchain = []
+link = "production"
+
+[[gate]]
+name = "arch_boundaries"
+area = "types"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "native"
+migration = "done"
+run = "test/arch_boundaries_test.mdk"
+oracles = []
+sources = ["compiler/*", "test/arch_boundaries_test.mdk"]
+corpus = ["test/arch_goldens"]
 toolchain = []
 link = "production"

@@ -137,16 +137,18 @@ convention (18 hooks in its typechecker) and rustc's `Providers` record, and it 
 Medaka has never had: today an inversion can only be expressed as an import, so it
 becomes a layering violation or a withdrawn extraction.
 
-- *Check:* the hooks record's field count, pinned; a lint arm that refuses a hook read
-  from `types/` inference modules (Phase 0, G2).
+- *Check:* the hooks record's field count, pinned; a boundary check in
+  `test/arch_boundaries_test.mdk` that refuses any `types/` module outside its
+  allowlist importing `support.hooks` (Phase 0, G2).
 
 ### A7. Compute once is structural, not a discipline
 
 Within a process, each expensive derivation (parse, desugar, resolve, typecheck, lower)
 has one memoized entry per key, and every verb, the REPL and the LSP go through it.
 Across processes, a module's typechecked export surface is a serialized
-`ModuleInterface` keyed by source fingerprint, compiler fingerprint and the instance
-environment it depends on; the prelude ships pre-checked. Cache validity is a contract
+`ModuleInterface` keyed by source fingerprint, compiler fingerprint, the instance
+environment it depends on and the selected target profile's IO join (D7); the prelude
+ships pre-checked. Cache validity is a contract
 (`TYPECHECK-CONTRACTS.md` §5), not a prefix hash.
 
 - *Today:* the prelude is re-typechecked in every process (about 90% of a hello-world
@@ -163,8 +165,8 @@ inference per language layer, solving, global checks, diagnostics, drivers. Not 
 versus dispatch, which cuts through the `infer` recursion and was rightly rejected.
 
 A module over 3,000 code lines carries a stated reason in its header comment. The
-compiler's largest file may not grow: `types/typecheck.mdk` shrinks on every PR that
-touches it, or the PR body says why not. The ceiling is rustc's (3,000 non-comment lines,
+compiler's largest file may not grow: `types/typecheck.mdk` does not grow in any PR
+(measured against the PR base), unless a commit in the PR carries `Arch-Growth-Override:`. The ceiling is rustc's (3,000 non-comment lines,
 explicit opt-out); the growth rule is the one mechanism in any of the three reference
 compilers that stops a hot file from becoming the compiler.
 
@@ -217,7 +219,7 @@ does in this tree. A design document is a proposal; once landed it is history.
 ## 4. The owner decisions beneath the laws
 
 Six decisions sat under these laws when they were drafted. Val ruled all six on
-2026-10-15; the rulings and their reasoning are in `ARCHITECTURE-PLAYBOOK.md` §9 and on
+2026-10-15, and a seventh (D7) later the same day; the rulings and their reasoning are in `ARCHITECTURE-PLAYBOOK.md` §9 and on
 #4206. In one line each:
 
 - D1 `types/typecheck.mdk` may not grow (A8): adopted, as a one-file growth stop with a
@@ -233,6 +235,10 @@ Six decisions sat under these laws when they were drafted. Val ruled all six on
 - D6 the prelude's and the stdlib's interfaces ship as files beside the sources, produced
   by `make medaka` and loaded lazily, as OCaml's `.cmi`, GHC's `.hi` and rustc's `.rmeta`
   are (A7): accepted; not baked into the binary.
+- D7 the target profile's IO join is read inside inference, so a published type may
+  depend on it; every interface key includes the join, and interfaces are stored
+  content-addressed so identical ones share a file (A7): accepted, ruled later the same
+  day.
 
 ---
 

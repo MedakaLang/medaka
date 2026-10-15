@@ -1,0 +1,3 @@
+eval.eval -> driver.diagnostics
+ir.core_ir_eval -> eval.eval
+ir.core_ir_lower -> eval.eval

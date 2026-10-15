@@ -320,7 +320,7 @@ import backend.trmc_analysis.{
   armBody,
   lastStmtExpr,
 }
-import backend.private_mangle.{dictTag, hashName, injectiveIdent}
+import types.private_mangle.{dictTag, hashName, injectiveIdent}
 import types.disposition.{ifaceSuperCount, installedDispositionsOpt}
 import backend.emit_plan.{
   EmitPlan(..),
@@ -5273,12 +5273,12 @@ findByKeyArityW prog method tag siteArity (entry :: rest) =
   else
     findByKeyArityW prog method tag siteArity rest
 
--- `hashName` (djb2, seed 5381) lives in `backend.private_mangle`, shared verbatim
+-- `hashName` (djb2, seed 5381) lives in `types.private_mangle`, shared verbatim
 -- with the LLVM emitter so the dict-witness tag matches across backends + the
 -- route-key dispatch agrees.
 
 -- `dictTag` (the i31-safe 30-bit mask of `hashName`) and its `posMod` helper moved
--- to `backend.private_mangle`, beside `hashName`, in #377/#348: the emit-time
+-- to `types.private_mangle`, beside `hashName`, in #377/#348: the emit-time
 -- collision guard (`core_validate.validateDictTags`) has to check THIS tag space
 -- with the SAME expression this emitter mints, and a second copy of the mask is a
 -- copy that can drift.  Imported at the top of this file; the emitted `i32.const`s
@@ -12183,7 +12183,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "isPartialMode" false) (mem "definedArityOf" false) (mem "programArities" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "freeGivens" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dropFirstN" false) (mem "flattenApp" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "ifaceSuperCount" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "WasmDemand" true) (mem "TrmcVerdicts" false) (mem "isTrmcFn" false) (mem "isTrmcImpl" false) (mem "checkPlanBackend" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false))))
@@ -14530,7 +14530,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "isPartialMode" false) (mem "definedArityOf" false) (mem "programArities" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "freeGivens" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dropFirstN" false) (mem "flattenApp" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "ifaceSuperCount" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "WasmDemand" true) (mem "TrmcVerdicts" false) (mem "isTrmcFn" false) (mem "isTrmcImpl" false) (mem "checkPlanBackend" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false))))

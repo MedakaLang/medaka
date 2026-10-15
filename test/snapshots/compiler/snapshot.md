@@ -193,7 +193,7 @@ import types.typecheck.{
   hadMatchWarnings,
   resetTypeErrorsSticky,
 }
-import backend.private_mangle.{mangleUnitsEv}
+import types.private_mangle.{mangleUnitsEv}
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp, noMainMsg}
 import backend.emit_plan.{buildEmitPlan}
 import backend.core_validate.{Backend(..)}
@@ -1491,7 +1491,7 @@ mapUnit f (x :: rest) =
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "cprogramToSexp" false))))
 (DUse false (UseGroup ("types" "annotate") ((mem "annotateProgram" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkOneToLinesWithRuntime" false) (mem "setCoherenceUserDecls" false) (mem "elaborateOne" false) (mem "elaborateModules" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsFloat" false) (mem "hadTypeErrors" false) (mem "hadMatchWarnings" false) (mem "resetTypeErrorsSticky" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleUnitsEv" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "mangleUnitsEv" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "evalOneOutput" false) (mem "funNamesOf" false) (mem "dropShadowedExp" false) (mem "noMainMsg" false))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "buildEmitPlan" false))))
 (DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true))))
@@ -1820,7 +1820,7 @@ mapUnit f (x :: rest) =
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "cprogramToSexp" false))))
 (DUse false (UseGroup ("types" "annotate") ((mem "annotateProgram" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkOneToLinesWithRuntime" false) (mem "setCoherenceUserDecls" false) (mem "elaborateOne" false) (mem "elaborateModules" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsFloat" false) (mem "hadTypeErrors" false) (mem "hadMatchWarnings" false) (mem "resetTypeErrorsSticky" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleUnitsEv" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "mangleUnitsEv" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "evalOneOutput" false) (mem "funNamesOf" false) (mem "dropShadowedExp" false) (mem "noMainMsg" false))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "buildEmitPlan" false))))
 (DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true))))

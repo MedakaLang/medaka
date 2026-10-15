@@ -2,7 +2,7 @@
 --
 -- `(..)` is a SUFFIX on an import member, not a separate syntactic form, so it is
 -- legal after any member — including one that names a constructor, where it simply
--- has nothing to expand.  `backend/private_mangle.ctorMemberEntry` read it as a
+-- has nothing to expand.  `types/private_mangle.ctorMemberEntry` read it as a
 -- separate form: its wild branch looked `Jjw` up in a TYPE-keyed table, missed, and
 -- returned `[]`, so `Jjw` never entered the unit's constructor-rename map while
 -- qmodw's definition was renamed `qmodw__Jjw` as usual.
@@ -12,7 +12,7 @@
 -- `Kkw` is pmodw's arity-2 one, so `unPW (Kkw 1 2)` = `1 + 2` = `3`.  So `5` then `3`.
 --
 -- ⚠️ COUNTERFACTUAL, measured rather than asserted.  With
--- `compiler/backend/private_mangle.mdk` restored to bfee53b4 and the binary rebuilt,
+-- `compiler/types/private_mangle.mdk` restored to bfee53b4 and the binary rebuilt,
 -- this fixture is RED on the native arm:
 --     $ medaka build entry.mdk -o e
 --     error: emitter failed compiling entry.mdk

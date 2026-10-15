@@ -7,7 +7,7 @@ import test.{expectAll, expectEqual, expectFalse, expectTrue}
 import frontend.ast.{Decl(..), Expr(..), Pat(..), Variant(..)}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import backend.private_mangle.{
+import types.private_mangle.{
   isReservedCtor,
   mangleCtorCollisions,
   mangleUnits,

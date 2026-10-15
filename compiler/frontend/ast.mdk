@@ -1672,7 +1672,7 @@ public export data Expr =
 -- occur in a surface identifier, so `A.f` can never collide with a user name, and it
 -- reads correctly in a diagnostic ("Unbound variable: A.f").  It is only ever a SCOPE
 -- KEY — `frontend/desugar.mdk` rewrites the qualified reference `A.f` (parsed as an
--- `EFieldAccess` on the alias) to a plain `EVar "A.f"`, and `backend/private_mangle.mdk`
+-- `EFieldAccess` on the alias) to a plain `EVar "A.f"`, and `types/private_mangle.mdk`
 -- maps it back to the origin module's real symbol, so no dotted name ever reaches the
 -- emitted code.
 public export data UseMember = UseMember String Bool Loc (Option String)

@@ -95,10 +95,10 @@ import eval.u64_halves as H
 import u64 as U64
 import support.opcount.{opBump}
 -- #1292: the ctor-collision rename the module drivers apply before seeding the
--- program-global `ctorToTypeRef`.  `backend/private_mangle.mdk` imports only
+-- program-global `ctorToTypeRef`.  `types/private_mangle.mdk` imports only
 -- `frontend.ast` / `support.util` / `support.ordmap` and nothing in that closure
 -- imports eval.mdk (no cycle) — verified by grep before adding this import.
-import backend.private_mangle.{mangleCtorCollisions}
+import types.private_mangle.{mangleCtorCollisions}
 -- Reused JSON diagnostic shaping for `medaka run --json`. diagnostics.mdk sits
 -- above frontend/types in the pipeline and does not import eval.mdk (no
 -- cycle) — verified by grep before adding this import.
@@ -4931,7 +4931,7 @@ modExportCells (ModExports cells _) = cells
 -- divergence is provably one-directional and a second index would be new code at
 -- the end of a review round.  Split it the day the prelude grows a private type.
 --
--- ⚠️ `backend/private_mangle.unitCtorExportEntry` is the SYMBOL-layer peer.  It has
+-- `types/private_mangle.unitCtorExportEntry` is the SYMBOL-layer peer.  It has
 -- since CONVERGED on this shape (2026-08-07): its `DNewtype` arm is gone and it now
 -- gates on `dataVis = VisPublic`, so the two indexes agree on visibility and on
 -- newtypes and differ only in that the mangler additionally filters reserved-ness
@@ -5049,7 +5049,7 @@ resolveMembers (UseAlias _ a) (ModExports exports _) =
 -- `T(..)` names a TYPE, so it binds every constructor of `T` under the
 -- constructor's OWN name — one alias cannot rename N constructors, which is the
 -- rule `frontend/resolve.expandMemberNames` states and applies at the scope layer,
--- and `backend/private_mangle.ctorMemberEntry` applies at the symbol layer.  This
+-- and `types/private_mangle.ctorMemberEntry` applies at the symbol layer.  This
 -- is the third realization of that one rule, one per engine family; the three are
 -- diffed by `test/diff_compiler_engines.sh`.
 --
@@ -5535,7 +5535,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseAlias ("eval" "u64_halves") "H"))
 (DUse false (UseAlias ("u64") "U64"))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisions" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisions" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJsonWith" false) (mem "flushRunEnvelope" false) (mem "runEnvelopeFields" false))))
 (DData Public "Value" ("e") ((variant "VInt" (ConPos (TyCon "Int"))) (variant "VFloat" (ConPos (TyCon "Float"))) (variant "VString" (ConPos (TyCon "String"))) (variant "VChar" (ConPos (TyCon "String"))) (variant "VBool" (ConPos (TyCon "Bool"))) (variant "VUnit" (ConPos)) (variant "VTuple" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VList" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VArray" (ConPos (TyApp (TyCon "Array") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VByteBlock" (ConPos (TyApp (TyCon "Array") (TyCon "Int")))) (variant "VU64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "VI64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "VCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VRef" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VClosure" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))) (variant "VClosureF" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VPrim" (ConPos (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VMulti" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VThunk" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VFallthrough" (ConPos)) (variant "VTypedImpl" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))) (variant "VDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))) ())
 (DData Public "EvalEnv" ("v") ((variant "EvalEnv" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v")))))))) ())
@@ -7363,7 +7363,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseAlias ("eval" "u64_halves") "H"))
 (DUse false (UseAlias ("u64") "U64"))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisions" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisions" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJsonWith" false) (mem "flushRunEnvelope" false) (mem "runEnvelopeFields" false))))
 (DData Public "Value" ("e") ((variant "VInt" (ConPos (TyCon "Int"))) (variant "VFloat" (ConPos (TyCon "Float"))) (variant "VString" (ConPos (TyCon "String"))) (variant "VChar" (ConPos (TyCon "String"))) (variant "VBool" (ConPos (TyCon "Bool"))) (variant "VUnit" (ConPos)) (variant "VTuple" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VList" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VArray" (ConPos (TyApp (TyCon "Array") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VByteBlock" (ConPos (TyApp (TyCon "Array") (TyCon "Int")))) (variant "VU64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "VI64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "VCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VRef" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VClosure" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))) (variant "VClosureF" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VPrim" (ConPos (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VMulti" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VThunk" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VFallthrough" (ConPos)) (variant "VTypedImpl" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))) (variant "VDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))) ())
 (DData Public "EvalEnv" ("v") ((variant "EvalEnv" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v")))))))) ())

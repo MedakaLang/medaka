@@ -327,7 +327,7 @@ emitter; **new** files only for the WasmGC text production.
 | Core IR (source of truth) | `compiler/ir/core_ir.mdk` | **reuse unchanged** |
 | Lowering AST→Core IR | `compiler/ir/core_ir_lower.mdk` (`lowerProgramEmit`) | **reuse unchanged** |
 | DCE | `compiler/ir/dce.mdk` (`dceFilter`) | **reuse unchanged** |
-| Name mangling | `compiler/backend/private_mangle.mdk` (`mangleUnits`) | **reuse unchanged** |
+| Name mangling | `compiler/types/private_mangle.mdk` (`mangleUnits`) | **reuse unchanged** |
 | Emitter | `compiler/backend/llvm_emit.mdk` (`emitProgram : CProgram -> <Mut> String`) | **NEW** `compiler/backend/wasm_emit.mdk` (`emitWasmProgram : CProgram -> <Mut> String`) |
 | Fixed preamble | `compiler/backend/llvm_preamble.mdk` | **NEW** `compiler/backend/wasm_preamble.mdk` (the fixed rec-group type section + host-import declarations + pure-WAT leaf/RNG functions) |
 | Entry | `compiler/entries/llvm_emit_modules_main.mdk` | **NEW** `compiler/entries/wasm_emit_modules_main.mdk` (same `run` shape: read runtime/core/entry+roots → desugar → load → elaborate → mangle → DCE → lower → `emitWasmProgram` → stdout) |

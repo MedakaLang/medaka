@@ -1,7 +1,7 @@
 -- #2848 REGRESSION PIN (EXHAUSTIVENESS, sibling of rep_reserved_name_collision,
 -- which pins the REPRESENTATION question on the same collision).
 -- The reserved constructor spellings are exempt from module mangling
--- (compiler/backend/private_mangle.mdk), so a USER type declaring `Nil`/`Cons`
+-- (compiler/types/private_mangle.mdk), so a USER type declaring `Nil`/`Cons`
 -- reaches the emitter under the bare names.  A roster lookup that answered the
 -- RESERVED table first would read `partial`'s covered set ["Nil","Cons"] as the
 -- complete two-constructor LIST roster, call the switch exhaustive, and drop the

@@ -386,7 +386,7 @@ import frontend.exhaust.{
   oGetCtors,
 }
 import support.char.{isUpper}
-import backend.private_mangle.{isReservedCtor, mangledName}
+import types.private_mangle.{isReservedCtor, mangledName}
 import support.scc.{tarjanSCCs}
 import support.ordmap.{
   OrdMap,
@@ -14021,7 +14021,7 @@ isNonexpansive _ _ = False
 -- fails on a character read instead of an `OrdMap` probe.  It can only ever
 -- narrow, never widen.  It DID narrow on the emit path (#2089's census): the
 -- emitter's tree carries constructors mangled to `<mid>__<Ctor>`
--- (`backend/private_mangle.mdk`), so a first-character-uppercase test judged every
+-- (`types/private_mangle.mdk`), so a first-character-uppercase test judged every
 -- constructor CAF (`regEmpty = Registry omEmpty`) expansive there, narrowed it at
 -- first use, and every later use at another element type was a type mismatch —
 -- discarded, because nothing read them.  The fast path now accepts both spellings.
@@ -19230,7 +19230,7 @@ inferFieldAccess env e fname r
 -- declaring same-named records with their fields in opposite orders are
 -- distinguishable at the emitter only if this stamp distinguishes them.  The
 -- registry key alone does not: it is the record's DECL name, which is bare
--- unless `backend/private_mangle.mdk` renamed it first.  Deriving the
+-- unless `types/private_mangle.mdk` renamed it first.  Deriving the
 -- qualification from the record's OWN declaring module makes the stamp's
 -- cross-module identity a property of the declaration instead of a side effect
 -- of the mangler having run before elaboration
@@ -19241,7 +19241,7 @@ inferFieldAccess env e fname r
 -- constructor is never renamed, every other one is qualified with its owner.
 --
 -- THE QUALIFICATION HAPPENS EXACTLY ONCE, AND HERE IS WHERE.  This is the only
--- writer of the head a downstream reader sees: `backend/private_mangle.mdk`'s
+-- writer of the head a downstream reader sees: `types/private_mangle.mdk`'s
 -- `renameScoped` deliberately leaves the `EFieldAccess`/`ERecordUpdate` cells
 -- alone (see its note there).  A second application would have to guess whether
 -- the first had already run, and a prefix test is not that fact: a record whose
@@ -50822,7 +50822,7 @@ selfBinding n = (n, n)
 
 -- resolve one imported bare member name to its actual key in a dependency's public
 -- schemes.  The golden path keys schemes by the bare name; the EMIT path runs after
--- universal mangling (backend.private_mangle), which rewrites a definition `member`
+-- universal mangling (types.private_mangle), which rewrites a definition `member`
 -- to `<dep>__member` but leaves the importer's `DUse` member name BARE — so the key
 -- is the SUFFIX-matching scheme `…__member` (uniquely identified within THIS dep's
 -- own schemes; distinct members never share an `__<name>` suffix).  Try the bare
@@ -50842,7 +50842,7 @@ endsWithStr suf s =
 --
 -- On the MANGLED emit path the bare origin is absent (the dep's keys are `<dep>__name`)
 -- AND the reference in this module's body has itself been mangled to `<dep>__name` by
--- backend/private_mangle — so the suffix-matched entries are passed through under their
+-- types/private_mangle — so the suffix-matched entries are passed through under their
 -- MANGLED keys, which is exactly the key the mangled reference will look up.  (A member
 -- alias is erased by the same mangling, so it needs no rebinding there.)
 -- PAYLOAD-GENERIC on purpose (RUN-XMOD-062).  This is the member-resolution half of the
@@ -50889,7 +50889,7 @@ importFormRows path depRows = match importedBindings path
 -- the importer spelled.  A key reached through `export import` is mangled for its
 -- DEFINER, not for the re-exporter `m` that the importer named — so a spelled-mid-only
 -- prefix test answered False for it and re-bound `lib_plain__g` as `A.lib_plain__g`,
--- while backend/private_mangle (which chases re-exports to the definer) had already
+-- while types/private_mangle (which chases re-exports to the definer) had already
 -- rewritten the body's reference to the bare `lib_plain__g`.  The lookup then missed:
 -- for a constrained callee that reaches inferDictAt's panic and `build` fails outright
 -- (#1427); for an unconstrained one the enclosing prelude call's dict route resolves to
@@ -51759,7 +51759,7 @@ graphAliasEntry a qual (localName, (defMid, origin)) =
 --
 -- ⚠️ THE MECHANISM IS THE EXACT-KEY ARM, NOT THE `__<name>` SUFFIX FALLBACK, and the
 -- distinction decides where the check can live.  #1675's body cites the suffix `filter`
--- ("cited, not instrumented", per its own pin's claim) — but `backend/private_mangle`
+-- ("cited, not instrumented", per its own pin's claim) — but `types/private_mangle`
 -- runs ONLY in the emit drivers, so on `check`/`run` the hub's rows are keyed by the
 -- BARE name, `lookupAssoc origin` HITS, and the fallback is never reached.  A guard
 -- written on "the filter returned more than one candidate" is green on the whole repro.
@@ -55887,7 +55887,7 @@ withAliasMethodNames rows set =
 -- That is the whole 22-name FAIL_BUILD class in `test/prelude_shadow_census.ledger`: a
 -- prelude standalone reaches this arm only when ANOTHER prelude decl references it, which
 -- is the very split `frontend/marker.mdk`'s `droppablePreludeFns` names (`clamp` yes,
--- `count`/`find` no) — and it is why the fix `backend/private_mangle.mdk` landed for the
+-- `count`/`find` no) — and it is why the fix `types/private_mangle.mdk` landed for the
 -- module's OWN occurrences could not reach these: the surviving occurrence is core's.
 --
 -- The rule applied is S1's own: an interface method declared in a USER module is not
@@ -55919,7 +55919,7 @@ coreShadowMapFor coreProg shadowMap
 -- The two filters above answer S1's INTERFACE operand (`nameable in M`) and nothing
 -- else.  That is sufficient on the un-mangled check/run path, where an occurrence
 -- carries the spelling the author wrote — but NOT on the emit path, where
--- `backend/private_mangle.mdk` has already collapsed BOTH spellings of an imported
+-- `types/private_mangle.mdk` has already collapsed BOTH spellings of an imported
 -- standalone onto ONE symbol:
 --
 --   import amod.{shrink}  → `shrink`    ⎫

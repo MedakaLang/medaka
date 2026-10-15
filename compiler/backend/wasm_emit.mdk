@@ -316,7 +316,7 @@ import backend.trmc_analysis.{
   armBody,
   lastStmtExpr,
 }
-import backend.private_mangle.{dictTag, hashName, injectiveIdent}
+import types.private_mangle.{dictTag, hashName, injectiveIdent}
 import types.disposition.{ifaceSuperCount, installedDispositionsOpt}
 import backend.emit_plan.{
   EmitPlan(..),
@@ -5269,12 +5269,12 @@ findByKeyArityW prog method tag siteArity (entry :: rest) =
   else
     findByKeyArityW prog method tag siteArity rest
 
--- `hashName` (djb2, seed 5381) lives in `backend.private_mangle`, shared verbatim
+-- `hashName` (djb2, seed 5381) lives in `types.private_mangle`, shared verbatim
 -- with the LLVM emitter so the dict-witness tag matches across backends + the
 -- route-key dispatch agrees.
 
 -- `dictTag` (the i31-safe 30-bit mask of `hashName`) and its `posMod` helper moved
--- to `backend.private_mangle`, beside `hashName`, in #377/#348: the emit-time
+-- to `types.private_mangle`, beside `hashName`, in #377/#348: the emit-time
 -- collision guard (`core_validate.validateDictTags`) has to check THIS tag space
 -- with the SAME expression this emitter mints, and a second copy of the mask is a
 -- copy that can drift.  Imported at the top of this file; the emitted `i32.const`s

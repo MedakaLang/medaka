@@ -1,6 +1,6 @@
 -- THE CTOR-EXPORT INDEX MUST NOT OFFER A MODULE-PRIVATE CONSTRUCTOR.
 --
--- `backend/private_mangle.ctorExportEntries` answers "may an IMPORTER name this
+-- `types/private_mangle.ctorExportEntries` answers "may an IMPORTER name this
 -- constructor?".  It used to answer from an UNGATED table — every `DData` the unit
 -- declares, private ones included — and its own comment defended that as harmless:
 -- *"the import side only resolves what the importing unit actually brings into
@@ -20,7 +20,7 @@
 -- CORRECT on bfee53b4 and was broken by an INTERMEDIATE commit on this same branch
 -- (6f63c710, the #1300 fix), which taught the wild branch to ask the bare-ctor
 -- question that the ungated table then answered wrongly.  Measured with only
--- `compiler/backend/private_mangle.mdk` restored to 6f63c710 and the binary rebuilt:
+-- `compiler/types/private_mangle.mdk` restored to 6f63c710 and the binary rebuilt:
 --     $ medaka run entry.mdk        → 7 / 5, exit 0
 --     $ medaka build entry.mdk -o e → exit 0
 --     $ ./e                         → runtime error [E-NONEXHAUSTIVE-MATCH], exit 1

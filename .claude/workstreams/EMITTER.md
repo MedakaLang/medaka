@@ -4,7 +4,7 @@
 consolidation arc for `compiler/backend/llvm_emit.mdk` — numeric-semantics defects, the
 type-recovery unification, emission-state discipline, and the backend's scaling liabilities.
 **Touches:** `compiler/backend/llvm_emit.mdk` (almost exclusively), `runtime/medaka_rt.c`,
-`compiler/backend/{emit_support,private_mangle,trmc_analysis}.mdk`, `compiler/ir/core_ir*.mdk`.
+`compiler/backend/{emit_support,trmc_analysis}.mdk`, `compiler/types/private_mangle.mdk`, `compiler/ir/core_ir*.mdk`.
 
 ```sh
 gh issue list --label "ws:emitter" --state open   # the backlog. #362 is the tracking issue + DAG.

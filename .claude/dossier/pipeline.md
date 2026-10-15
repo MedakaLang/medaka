@@ -160,7 +160,7 @@ Support files:
 | `compiler/ir/core_ir.mdk` + siblings | Core IR types; lowering `core_ir_lower.mdk`, S-expr `core_ir_sexp.mdk`, DCE `dce.mdk`, interpreter `core_ir_eval.mdk` |
 | `compiler/backend/llvm_emit.mdk` | LLVM text IR emitter |
 | `compiler/backend/wasm_emit.mdk` | WasmGC text IR emitter (2nd backend) |
-| `compiler/backend/private_mangle.mdk` | Universal constructor mangling |
+| `compiler/types/private_mangle.mdk` | Universal constructor mangling |
 | `compiler/backend/trmc_analysis.mdk` | Tail-recursion-modulo-cons analysis |
 | `compiler/types/annotate.mdk` | Type annotation helpers |
 | `compiler/types/repr.mdk` | The type representation (`Mono`/`Tyvar`/`EffRow`/`Scheme`/`IfaceRef`), `normalize`, the row-atom algebra and every renderer (`ppMono`/`ppScheme`/`ppTy`) — reads no typechecker state; the first extraction under #2586 |

@@ -213,9 +213,9 @@ authoritative stage table.
 ```
 compiler/
   frontend/   lexer, parser, ast, desugar, resolve, marker, exhaust
-  types/      typecheck, annotate, repr
+  types/      typecheck, annotate, repr, private_mangle
   ir/         core_ir, core_ir_lower, core_ir_sexp, dce
-  backend/    llvm_emit, wasm_emit, private_mangle, trmc_analysis
+  backend/    llvm_emit, wasm_emit, trmc_analysis
   eval/       eval (tree-walking interpreter, dict-passing dispatch)
   driver/     loader, diagnostics, build_cmd, medaka_cli
   tools/      printer, fmt, lsp, doc, doctest, test_cmd, repl, new_cmd, check

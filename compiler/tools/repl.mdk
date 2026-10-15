@@ -37,7 +37,7 @@ import types.typecheck.{
   elaborateModules,
   tcMsg,
 }
-import backend.private_mangle.{mangleCtorCollisionsPair}
+import types.private_mangle.{mangleCtorCollisionsPair}
 import eval.eval.{
   Value(..),
   evalOneRootEnvWith,
