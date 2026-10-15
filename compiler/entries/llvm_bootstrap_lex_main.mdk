@@ -45,7 +45,7 @@ import ir.core_ir_lower.{
 import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
 import backend.emit_plan.{buildEmitPlan}
 import backend.core_validate.{Backend(..)}
-import backend.private_mangle.{mangleUnitsEv}
+import types.private_mangle.{mangleUnitsEv}
 import entries.entry_support.{driveModules}
 
 export

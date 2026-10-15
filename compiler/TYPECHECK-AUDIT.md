@@ -263,7 +263,7 @@ green; no S1↔eval interaction (eval untouched). Original finding below.
   per-module importer-scoped arity (`dictPassModulesScoped`/`scopeArities`,
   `typecheck.mdk:5746-5802`), but the keying within a scope was still bare-name.
 - **Verdict: MOOTED by universal per-module mangling (`332ef41`).** `mangleUnits`
-  (`compiler/backend/private_mangle.mdk`) runs in `runEmit`
+  (`compiler/types/private_mangle.mdk`) runs in `runEmit`
   (`llvm_emit_modules_main.mdk:74`) **BEFORE** `elaborateModules`
   (`:75`), renaming EVERY top-level `DFunDef` — public AND private — to a unique
   `<mid>__<name>` symbol, with all references rewritten import-aware. So by the time

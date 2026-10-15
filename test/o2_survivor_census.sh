@@ -10,7 +10,7 @@
 #                   helper (`runtime/medaka_rt.c`) that -O2 did not inline
 #                   away. Excludes calls to module-qualified user functions
 #                   (mangled `@mdk_<module>__<name>` — double underscore,
-#                   per compiler/backend/private_mangle.mdk; runtime helper
+#                   per compiler/types/private_mangle.mdk; runtime helper
 #                   names never contain `__`) — a surviving user-fn call is
 #                   not counted here.
 #   ALLOCATION    — a `call` to an allocator (`@GC_malloc`/`@mdk_*alloc*`).

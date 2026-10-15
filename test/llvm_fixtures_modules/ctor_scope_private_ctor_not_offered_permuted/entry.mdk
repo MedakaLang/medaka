@@ -10,7 +10,7 @@
 -- program compiles correctly on a compiler that miscompiles the identical program
 -- written the other way round.
 --
--- Measured with only `compiler/backend/private_mangle.mdk` restored to 6f63c710
+-- Measured with only `compiler/types/private_mangle.mdk` restored to 6f63c710
 -- (the intermediate commit on this branch that introduced the widening) and the
 -- binary rebuilt:
 --     this file            → build exit 0, binary prints `7` / `5`, exit 0   (GREEN)

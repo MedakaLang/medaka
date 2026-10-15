@@ -55,7 +55,7 @@ import ir.core_ir_lower.{
 import types.disposition.{DispositionTable, installedDispositionsOpt}
 import support.util.{isEmptyL, dedup, contains, filterList}
 import support.ordmap.{OrdMap}
-import backend.private_mangle.{mangleCtorCollisions}
+import types.private_mangle.{mangleCtorCollisions}
 import eval.eval.{
   Value(..),
   EvalEnv(..),

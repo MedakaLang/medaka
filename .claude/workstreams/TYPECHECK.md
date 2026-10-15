@@ -104,7 +104,7 @@ removing it:
   **Updated 2026-09-10 (#2809):** the emit order itself is now the other way round.
   `runEmitWith` / `emitModulesWith` (`compiler/entries/entry_support.mdk`) run
   `elaborateModules` on the graph the user wrote, then the #2089 residual gate, then
-  `mangleUnitsEv` (`compiler/backend/private_mangle.mdk`) over the
+  `mangleUnitsEv` (`compiler/types/private_mangle.mdk`) over the
   elaborated, dict-passed trees and the installed evidence table — so the emitter child's
   verdict equals `check`'s by construction rather than by a table-by-table audit, and no
   diagnostic it renders can carry a mangled spelling. Read every "the mangler ran first"

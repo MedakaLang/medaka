@@ -715,7 +715,7 @@ recompute hotspots can use a plain-List memo safely; only hash *containers* insi
 
 ## Entry 15 — private-name collision detection O(n²) → O(n log n) (2026-06-11)
 
-**Change (`compiler/backend/private_mangle.mdk`):** `collidingNames` found cross-unit name
+**Change (`compiler/types/private_mangle.mdk`):** `collidingNames` found cross-unit name
 collisions with `collidingGo`, calling `countOccPM n allNames` (a full O(n) scan)
 per name → O(n²) over all top-level names (~2 800). Replaced with a local merge
 sort (`msortPM`/`mergePM`/`splitAltPM`, using the `stringCompare` extern — no new

@@ -42,7 +42,7 @@ import ir.core_ir_sexp.{cprogramToSexp}
 import ir.core_ir_sexp_parse.{parseCProgram}
 import ir.dce.{dceFilter}
 import backend.core_validate.{validateBinderStamps}
-import backend.private_mangle.{mangleUnitsEv}
+import types.private_mangle.{mangleUnitsEv}
 import driver.loader.{
   dropPathTriple,
   loadErrorMessage,

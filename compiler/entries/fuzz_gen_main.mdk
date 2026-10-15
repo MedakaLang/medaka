@@ -35,7 +35,7 @@
 --   (frontend/ast.mdk) in the emitter's bare-name-keyed ctor table (arity/tag), so the
 --   nullary ctor inherited the payload arity → boxed cell instead of immediate → NULL
 --   field deref.  The interpreter is immune (structural VCon, no arity table).
---   FIX: constructors are now universally per-module mangled (backend/private_mangle.mdk),
+--   FIX: constructors are now universally per-module mangled (types/private_mangle.mdk),
 --   so two modules may reuse a ctor name (matching the interpreter/oracle).  The former
 --   projector-helper + named-recursion workaround has been removed; the direct mixed
 --   nullary/payload Gty match below is correct, and TIER=1 native fuzzing is restored
@@ -256,7 +256,7 @@ genLeafElems ctx ts = map (genLeaf ctx) ts
 -- (2026-06-13): the fault was a cross-module ctor-name collision — this module's
 -- nullary `Gty.GBool` collided with the imported payload `Guard.GBool` (ast.mdk) in
 -- the emitter's bare-name-keyed ctor table, so `GBool` inherited the wrong arity.
--- Constructors are now universally per-module mangled (backend/private_mangle.mdk),
+-- Constructors are now universally per-module mangled (types/private_mangle.mdk),
 -- so the direct mixed match below lowers correctly.  The former projector-helper
 -- workaround (gtyTupElems/gtyDataName peel) has been removed.
 genScalar : Ctx -> Gty -> Int -> <Rand> Expr

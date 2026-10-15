@@ -214,7 +214,7 @@ are copies of a cluster canonical.
 | `tools/{fmt,prop_runner,check,repl,printer,doctest,lsp,lsp_harness}.mdk` | 2–10 | many | Settled tools. `utf8Len`/`utf8CharWidth` dedup across lsp/lsp_harness; trim-family dedup. |
 | `frontend/{resolve,desugar,exhaust,marker}.mdk` | 4–10 | several | `joinDot`, `initList`, `findDups`, `concatLists` (O(n²)). |
 | `ir/core_ir_lower.mdk` | 5 | 3 | `lengthL`, `isEmptyList`, `nullL`. |
-| `backend/private_mangle.mdk` | ~15 | ~13 | Heavy duplication (`*PM` suffix family) but isolated module — the `PM` suffix makes renames mechanical. |
+| `types/private_mangle.mdk` | ~15 | ~13 | Heavy duplication (`*PM` suffix family) but isolated module — the `PM` suffix makes renames mechanical. |
 | `backend/llvm_emit.mdk` | 2 generic (`nthName`, `containsStr`) | 1 | Mostly backend-domain; only `containsStr` is a real dup of `contains`. |
 | `eval/eval.mdk` | ~23 | many | DRIFTED `joinWith`/`concatList`/`joinDots`/`nub`. Mid-risk (eval ordering sensitivity) — do after tools/drivers. |
 | **`types/typecheck.mdk`** | ~45 | ~25 | **LAST.** ~744 top-level defs, the most divergent names (`lengthL`/`revLL`/`concatMapL`/`lookupAssocS`/`containsName`/`isEmptyL`+`isEmptyList` self-dup), AND the highest call-site counts (`concatMapL`=86, `lookupAssocS`=46, `containsName`=38). **PROMOTE its OrdMap `dedupS` UP to support before deleting the naive copies elsewhere** — it is the fast canonical. Sheer churn + the eval-driver sensitivity make this the riskiest file. |

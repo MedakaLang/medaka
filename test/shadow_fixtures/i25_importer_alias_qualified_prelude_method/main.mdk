@@ -13,7 +13,7 @@
 --
 -- MEASURED BEFORE THE FIX (#1684, S0): `check` clean at exit 0, `run` 0 printing 6, and
 -- the BUILT BINARY 0 printing `[0, 2]` — run and the binary disagreeing about one
--- occurrence, with no diagnostic on any channel. `backend/private_mangle.mdk` collapses
+-- occurrence, with no diagnostic on any channel. `types/private_mangle.mdk` collapses
 -- BOTH spellings of the import (`shrink` and `A.shrink`) onto the one symbol
 -- `amod__shrink`, `computeMangledShadowMap` recovered `amod__shrink ↦ shrink` from
 -- amod's funDefs, and `rewriteArgScoped`'s shadow-map arm then rewrote the

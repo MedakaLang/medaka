@@ -77,7 +77,7 @@ import driver.loader.{
 import driver.build_cmd.{readPreludeFile, envOr, defaultMedakaRoot}
 import types.typecheck.{elaborateModules, TcDiag(..), tcDiagGoalKey}
 import types.route_key.{withEvidencePreserved}
-import backend.private_mangle.{mangleCtorCollisionsPair}
+import types.private_mangle.{mangleCtorCollisionsPair}
 import frontend.marker.{declRefs}
 import eval.eval.{
   Value,
@@ -4235,7 +4235,7 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeFile" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModules" false) (mem "TcDiag" true) (mem "tcDiagGoalKey" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "withEvidencePreserved" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" false) (mem "EvalEnv" false) (mem "evalOneRootEnvWith" false) (mem "evalModulesRootEvalEnvWith" false) (mem "evalModulesRootEnvWith" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "testCapableExterns" false) (mem "funNamesOf" false) (mem "dropShadowedExp" false) (mem "lookupBinding" false) (mem "force" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "RunResult" true) (mem "Engine" true) (mem "engineName" false) (mem "buildSynthResults" false) (mem "buildSynthDecls" false) (mem "buildDetailsFrom" false) (mem "doctestFailSuffix" false) (mem "hasUseDecls" false) (mem "printDoctestDetails" false) (mem "runDetails" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "synthName" false) (mem "exResultJsonFields" false))))
@@ -4852,7 +4852,7 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeFile" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModules" false) (mem "TcDiag" true) (mem "tcDiagGoalKey" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "withEvidencePreserved" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" false) (mem "EvalEnv" false) (mem "evalOneRootEnvWith" false) (mem "evalModulesRootEvalEnvWith" false) (mem "evalModulesRootEnvWith" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "testCapableExterns" false) (mem "funNamesOf" false) (mem "dropShadowedExp" false) (mem "lookupBinding" false) (mem "force" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "RunResult" true) (mem "Engine" true) (mem "engineName" false) (mem "buildSynthResults" false) (mem "buildSynthDecls" false) (mem "buildDetailsFrom" false) (mem "doctestFailSuffix" false) (mem "hasUseDecls" false) (mem "printDoctestDetails" false) (mem "runDetails" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "synthName" false) (mem "exResultJsonFields" false))))
