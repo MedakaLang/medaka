@@ -38,7 +38,7 @@ bindsNonCtorExport : ModuleExports -> String -> Bool
 bitsAtMost : Int -> Int -> Bool
 buildEnv : List Decl -> List Decl -> List Decl -> List String -> Env
 buildEnvMM : PreludeScope -> Map String ModuleExports -> List Decl -> List String -> (Env, List ResError)
-buildErrors : List Decl -> List Decl -> List ResError
+buildErrors : List Decl -> ModuleExports -> List Decl -> List ResError
 buildExports : ModuleExports -> Map String ModuleExports -> String -> List Decl -> Env -> ModuleExports
 buildExportsWith : ModuleExports -> Map String ModuleExports -> String -> List Decl -> List String -> ModuleExports
 buildFieldOwnerIndex : List (String, String) -> Map String (List String)
@@ -111,7 +111,7 @@ coreAliasNames : List String -> UsePath -> List String
 coreAliasableValues : List Decl -> List String
 coreExports : List Decl -> ModuleExports
 coreRenamedMember : List String -> UseMember -> List String
-coreUseErrors : List Decl -> List Decl -> List ResError
+coreUseErrors : ModuleExports -> List Decl -> List ResError
 coreUseErrorsOf : ModuleExports -> Decl -> List ResError
 coreUsePaths : List Decl -> List UsePath
 ctorAmbigMods : Env -> String -> List String
@@ -124,7 +124,6 @@ ctorNamesByDeclarer : List (String, String, List String) -> Map String (Map Stri
 ctorOccurrenceContested : Env -> String -> Bool
 ctorOwnedBy : (String, List String) -> List (String, String)
 ctorOwnerKey : String -> String
-ctorTypeLookup : String -> List (String, List String) -> Option String
 dataRecordNames : List Decl -> List String
 dbName : ResError -> String
 declBindNames : Decl -> List String
@@ -229,6 +228,7 @@ importedNamesMM : UsePath -> ModuleExports -> (List String, List ResError)
 importedTyOrigin : (String, String) -> (String, TyConOrigin)
 importedTypeOrigins : Map String (List (String, String)) -> UsePath -> List (String, String)
 importedTypeOriginsFrom : UsePath -> List (String, String) -> List (String, String)
+indexExports : ModuleExports -> ModuleExports
 indexOwners : List (String, String) -> Map String (List String) -> Map String (List String)
 insertParams : List Pat -> Map String Int -> Map String Int
 insertZero : List String -> Map String Int -> Map String Int

@@ -148,6 +148,63 @@ public export data Finding = Finding {
   loc : Option Loc,
 }
 
+-- A write-once cell holding a derived value, forced on first demand.  Rules run
+-- under a pure `check`, and the cell is private to one file's `FileFacts`, so
+-- two rules asking for the same derived value share one computation without any
+-- table keyed by source text.
+data Memo a = Memo (Ref (Option a)) (Unit -> a)
+
+memoNew : (Unit -> a) -> Memo a
+memoNew f = Memo (Ref None) f
+
+memoGet : Memo a -> a
+memoGet (Memo cell f) = match !cell
+  Some v => v
+  None =>
+    let v = f ()
+    cell := Some v
+    v
+
+-- What every rule may ask of the one file being linted, each derived at most
+-- once per file and only if some active rule asks: the source text, its comment
+-- side channel, the constructor `Oracle`, and the per-clause duplicate-body keys
+-- shared by the same-file rule and the cross-file occurrence list.
+export data FileFacts = FileFacts {
+  ffSrc : String,
+  ffComments : Memo (List Comment),
+  ffOracle : Memo Oracle,
+  ffDupClauses : Memo (List DupClause),
+}
+
+export
+mkFileFacts : String -> List Decl -> Positions -> FileFacts
+mkFileFacts src prog pos = FileFacts {
+  ffSrc = src,
+  ffComments = memoNew (_ => collectComments src),
+  ffOracle = memoNew (_ => buildOracle prog),
+  ffDupClauses = memoNew (_ => flatMap dupClauseOfDecl (declLocList pos prog)),
+}
+
+factComments : FileFacts -> List Comment
+factComments ff = memoGet ff.ffComments
+
+factOracle : FileFacts -> Oracle
+factOracle ff = memoGet ff.ffOracle
+
+factDupClauses : FileFacts -> List DupClause
+factDupClauses ff = memoGet ff.ffDupClauses
+
+-- The file's inline-suppression directives, off the shared comment channel.
+export
+factDirectives : FileFacts -> List Directive
+factDirectives ff = collectDirectives (factComments ff)
+
+-- The file's cross-file duplicate-body occurrences (what `--cache` persists),
+-- off the clause keys the same-file rule also reads.
+export
+factDupOccs : String -> FileFacts -> List (String, Int, String, String)
+factDupOccs path ff = dupOccsOfClauses path (factDupClauses ff)
+
 -- A registered rule.  `check` is the whole pass for that rule: the STDLIB INDEX
 -- (`StdlibIndex`, below — every exported stdlib name with its declared
 -- signature, so a rule can ask what the stdlib actually provides instead of
@@ -166,7 +223,7 @@ public export data Rule = Rule {
   descr : String,
   severity : Severity,
   enabled : Bool,
-  check : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding,
+  check : StdlibIndex -> String -> FileFacts -> Positions -> List Decl -> List Finding,
   fix : Option (Oracle -> Decl -> Option (List Decl)),
 }
 
@@ -710,17 +767,48 @@ lintProgram : StdlibIndex ->
   List Decl ->
   List Finding
 lintProgram idx rules path src pos prog =
-  flatMap (runRuleOn idx path src pos prog) rules
+  lintProgramFacts idx rules path (mkFileFacts src prog pos) pos prog
+
+-- `lintProgram` over facts the caller already holds, so the caller's own
+-- comment/directive/key needs share the rules' derivations.
+export
+lintProgramFacts : StdlibIndex ->
+  List Rule ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+lintProgramFacts idx rules path facts pos prog =
+  flatMap (runRuleOn idx path facts pos prog) rules
+
+-- The registry narrowed to the rules `--only`/`--disable` leave active, for runs
+-- whose findings are filtered in this same process.  Findings are still filtered
+-- by name afterwards; this only stops the excluded rules from computing.
+export
+selectRules : List String -> List String -> List Rule
+selectRules only disable = filterList (ruleSelected only disable) allRules
+
+ruleSelected : List String -> List String -> Rule -> Bool
+ruleSelected only disable r =
+  (isEmptyL only || contains r.name only) && not (contains r.name disable)
+
+-- Does `--only`/`--disable` leave the cross-file duplicate-body rule active?
+export
+crossFileSelected : List String -> List String -> Bool
+crossFileSelected only disable =
+  anyList (crossRuleActive only disable) allCrossFileRules
 
 runRuleOn : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   Rule ->
   List Finding
-runRuleOn idx path src pos prog r
-  | r.enabled = map (restampSeverity r.severity) (r.check idx path src pos prog)
+runRuleOn idx path facts pos prog r
+  | r.enabled =
+    map (restampSeverity r.severity) (r.check idx path facts pos prog)
   | otherwise = []
 
 restampSeverity : Severity -> Finding -> Finding
@@ -1408,8 +1496,11 @@ lintFileDiagTripleParsed : StdlibIndex ->
 lintFileDiagTripleParsed idx disable only deny path =
   let src = readFileSafe path
   let (decls, pos) = parseWithPositionsLocated src
+  let facts = mkFileFacts src decls pos
   let allFindings =
-    applySuppressions src (lintProgram idx allRules path src pos decls)
+    applySuppressionsDirs
+      (factDirectives facts)
+      (lintProgramFacts idx (selectRules only disable) path facts pos decls)
   let findings = applyFindingFilters disable only deny allFindings
   (path, src, map findingToDiag findings, pos, decls)
 
@@ -1493,7 +1584,7 @@ public export data Directive = Directive DirScope (List String)
 export
 applySuppressions : String -> List Finding -> List Finding
 applySuppressions src findings =
-  applySuppressionsDirs (collectDirectives src) findings
+  applySuppressionsDirs (directivesOfSource src) findings
 
 -- The same filter, but taking the file's ALREADY-PARSED directives instead of
 -- re-deriving them from source.  `--cache` (#395) stores a file's directives in
@@ -1528,7 +1619,7 @@ applySuppressionsMultiDirs dirTable findings =
   filterList (f => not (findingSuppressedMulti dirTable f)) findings
 
 fileDirectivesOf : (String, String) -> (String, List Directive)
-fileDirectivesOf (path, src) = (path, collectDirectives src)
+fileDirectivesOf (path, src) = (path, directivesOfSource src)
 
 findingSuppressedMulti : List (String, List Directive) -> Finding -> Bool
 findingSuppressedMulti dirTable f = match lookupDirs (findingFileOf f) dirTable
@@ -1545,10 +1636,12 @@ lookupDirs _ [] = None
 lookupDirs path ((p, ds) :: rest) =
   if p == path then Some ds else lookupDirs path rest
 
+directivesOfSource : String -> List Directive
+directivesOfSource src = collectDirectives (collectComments src)
+
 export
-collectDirectives : String -> List Directive
-collectDirectives src =
-  flatMap (c => dirToList (parseDirective c)) (collectComments src)
+collectDirectives : List Comment -> List Directive
+collectDirectives cmts = flatMap (c => dirToList (parseDirective c)) cmts
 
 dirToList : Option Directive -> List Directive
 dirToList None = []
@@ -1684,7 +1777,7 @@ declPosToLoc p = let l = declPosLine p in Loc "" l 1 l 1
 -- matches are skipped (STYLE's "when not to convert").
 ruleMatchOnParam : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -1875,12 +1968,12 @@ wholeWordPattern name =
 -- code (they could turn a total match into a partial function clause).
 ruleDestructureInParam : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
-ruleDestructureInParam _ _ _ pos prog =
-  let orc = buildOracle prog
+ruleDestructureInParam _ _ facts pos prog =
+  let orc = factOracle facts
   flatMap (destructureDeclL orc) (declLocList pos prog)
 
 destructureDeclL : Oracle -> (Decl, Option Loc) -> List Finding
@@ -2011,14 +2104,14 @@ derivableIfaces = ["Eq", "Ord", "Debug"]
 -- returns `Some`) — a primitive has none, so `impl Eq for Int` is never flagged.
 ruleDerivable : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
-ruleDerivable _ path _ pos prog
+ruleDerivable _ path facts pos prog
   | isStdlibPath path = []
   | otherwise =
-    let orc = buildOracle prog
+    let orc = factOracle facts
     flatMap (derivableDeclL orc) (declLocList pos prog)
 
 derivableDeclL : Oracle -> (Decl, Option Loc) -> List Finding
@@ -2133,7 +2226,7 @@ tyHeadName _ = None
 -- candidate is ever skipped.
 ruleStdlibReimpl : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -2598,7 +2691,7 @@ indexInGo x (y :: ys) i
 -- name (entry-point boilerplate).  Multi-clause defs dedupe to one finding.
 ruleMissingSignature : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -2659,7 +2752,7 @@ missingSigFinding (name, loc) = Finding {
 -- is spared.  Purely syntactic, no false-fire risk beyond genuinely-looping code.
 ruleSelfShadowExtern : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -2808,12 +2901,12 @@ splitTail2 stmts = match reverseL stmts
 -- ── check ────────────────────────────────────────────────────────────────────
 ruleBindThenDestructure : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
-ruleBindThenDestructure _ _ _ pos prog =
-  let orc = buildOracle prog
+ruleBindThenDestructure _ _ facts pos prog =
+  let orc = factOracle facts
   flatMap (bindDestructureDeclL orc) (declLocList pos prog)
 
 bindDestructureDeclL : Oracle -> (Decl, Option Loc) -> List Finding
@@ -3164,7 +3257,7 @@ lamSection2 _ _ _ = None
 -- ── check ─────────────────────────────────────────────────────────────────────
 ruleLambdaSection : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -3404,7 +3497,7 @@ ifMaxMinOf cond t el = match unwrapLoc cond
 -- ── check ─────────────────────────────────────────────────────────────────────
 ruleIfMaxMin : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -3660,7 +3753,7 @@ andThenPureMapBody _ _ _ = None
 -- ── check ─────────────────────────────────────────────────────────────────────
 ruleAndThenPureMap : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -4237,7 +4330,7 @@ collectConcatHits e = match concatChainOf e
 
 ruleConcatToInterp : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -4307,7 +4400,7 @@ notEqOf e = match notArgOf e
 
 ruleNotEq : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -4362,7 +4455,7 @@ boolEqResult op v constIsTrue = if op == "==" == constIsTrue then v else mkNot v
 
 ruleBoolSimplify : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -4413,7 +4506,7 @@ parityFn op = if op == "==" then "isEven" else "isOdd"
 
 ruleRemParity : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -4442,7 +4535,7 @@ doubleReverseOf _ = None
 
 ruleDoubleReverse : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -4541,7 +4634,7 @@ isAssignWrite _ = False
 
 ruleForPreferAssign : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -4597,7 +4690,7 @@ whenUnlessOf _ = None
 
 ruleWhenUnless : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -4668,7 +4761,7 @@ complementPredOf e = do
 
 ruleComplementPredicate : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -4791,7 +4884,7 @@ matchToMapOf _ = None
 
 ruleMatchToMap : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -4942,7 +5035,7 @@ clauseMapFnOf name prog = match clausesOf name prog
 
 ruleClauseMap : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -5099,7 +5192,7 @@ bindChainImplHeads (ImplMethod _ _ body) = bindChainHeads body
 
 ruleBindChainToDo : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -5225,7 +5318,7 @@ orElseImplHeads (ImplMethod _ _ body) = orElseHeads body
 
 ruleOrElseStaircase : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -5325,7 +5418,7 @@ cloneTyHeadList t = match tyHeadName t
 
 ruleCloneType : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -5385,13 +5478,13 @@ cloneTypeFinding loc n shape = Finding {
 -- practice of recording inertness.
 rulePromissoryReader : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
-rulePromissoryReader _ path src _ _ =
-  let ls = splitNl src
-  let comments = collectComments src
+rulePromissoryReader _ path facts _ _ =
+  let ls = splitNl facts.ffSrc
+  let comments = factComments facts
   let codeLines = arrayFromList (codePortions ls comments 1)
   flatMap
     (promissoryFinding path codeLines)
@@ -5713,12 +5806,12 @@ assignFollows cs n i
 -- "dead").  `fix = None` (suggest-only — deletion is by hand).
 ruleDeadCode : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
-ruleDeadCode _ _ src pos prog =
-  let reach = reachableNames src prog
+ruleDeadCode _ _ facts pos prog =
+  let reach = reachableNames facts prog
   map deadFinding (filterList (deadPair reach) (privateDefLocs pos prog))
 
 deadPair : HashMap String Unit -> (String, Option Loc) -> Bool
@@ -5791,12 +5884,13 @@ isOrdinaryIdent s
 -- the BFS tested membership with `contains` over a `visited` LIST.  Now: O(1)-
 -- average membership + O(1) graph lookup -> ~O(names + edges).  Consumed only by
 -- `deadPair`'s membership test, so order and duplicates are irrelevant.
-reachableNames : String -> List Decl -> HashMap String Unit
-reachableNames src prog =
+reachableNames : FileFacts -> List Decl -> HashMap String Unit
+reachableNames facts prog =
   let refMap = mergeRefs (flatMap defRefPair prog)
   let seed =
     exportedNames prog
-      ++ ("main" :: flatMap nonDefRefL prog ++ doctestIdents src)
+      ++ ("main"
+        :: flatMap nonDefRefL prog ++ doctestIdents (factComments facts))
   let visited = new ()
   let _ = bfsReach refMap visited seed
   visited
@@ -5931,8 +6025,8 @@ identEnd cs n i
 -- Identifiers on `>` input lines of doctests (both `-- > expr` line-comment and
 -- `{- … > expr … -}` block-comment forms).  `collectComments` is the lexer's
 -- string-aware comment scanner, so `>`/`--` inside string literals never leak in.
-doctestIdents : String -> List String
-doctestIdents src = flatMap commentDocIdents (collectComments src)
+doctestIdents : List Comment -> List String
+doctestIdents cmts = flatMap commentDocIdents cmts
 
 commentDocIdents : Comment -> List String
 commentDocIdents c =
@@ -6190,11 +6284,6 @@ isUpperFirst s =
 dupSameFileComplexityThreshold : Int
 dupSameFileComplexityThreshold = 20
 
-dupEligibleSameFile : Expr -> Bool
-dupEligibleSameFile body =
-  bodyComplexity body >= dupSameFileComplexityThreshold
-    && not (isPureDataExpr body)
-
 ruleDuplicateBody : List (String, Positions, List Decl) -> List Finding
 ruleDuplicateBody files = dupJoin (flatMap fileDupOccs files)
 
@@ -6372,9 +6461,13 @@ export
 fileDupOccs : (String, Positions, List Decl) ->
   List (String, Int, String, String)
 fileDupOccs (path, pos, decls) =
-  flatMap
-    (dupOccsOfGroup path)
-    (dupClauseGroups (flatMap dupClauseOfDecl (declLocList pos decls)))
+  dupOccsOfClauses path (flatMap dupClauseOfDecl (declLocList pos decls))
+
+dupOccsOfClauses : String ->
+  List DupClause ->
+  List (String, Int, String, String)
+dupOccsOfClauses path clauses =
+  flatMap (dupOccsOfGroup path) (dupClauseGroups clauses)
 
 dupClauseOfDecl : (Decl, Option Loc) -> List DupClause
 dupClauseOfDecl (d, loc) = match d
@@ -6535,7 +6628,7 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 -- so two byte-identical top-level bodies in the SAME file (e.g. parser.mdk's
 -- `parseBracketBlock`/`indentedBody`) were structurally invisible to it.  This
 -- is the in-file counterpart: same structural key (`structuralKey`), its own
--- higher floor (`dupEligibleSameFile` — size threshold + not-pure-data), but
+-- higher floor (`dupSameFileComplexityThreshold` + not-pure-data), but
 -- grouped within ONE file's own decls instead of across the whole project.
 -- Registered under the SAME rule name (`ruleNameDuplicateBody`) so
 -- `--disable`/`--only`/`-- lint-disable-*` address both halves with one name.
@@ -6546,24 +6639,21 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 -- once PER CLAUSE rather than once.  Both are left as they are deliberately —
 -- the same-file collision space is O(bindings²) (see the floor note above), so
 -- widening this half needs an over-fire budget of its own.
-sameFileOccOfDecl : (Decl, Option Loc) -> List (String, Int, String)
-sameFileOccOfDecl (d, loc) = match d
-  DFunDef _ name pats body _ _ =>
-    if dupEligibleSameFile body then
-      [(name, locLineOf loc, structuralKey pats body)]
-    else
-      []
-  DAttrib _ inner => sameFileOccOfDecl (inner, loc)
-  _ => []
+sameFileOccOfClause : DupClause -> List (String, Int, String)
+sameFileOccOfClause c =
+  if c.dcCost >= dupSameFileComplexityThreshold && not c.dcPure then
+    [(c.dcName, c.dcLine, c.dcKey)]
+  else
+    []
 
 ruleDuplicateBodySameFile : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
-ruleDuplicateBodySameFile _ _ _ pos decls =
-  let occs = flatMap sameFileOccOfDecl (declLocList pos decls)
+ruleDuplicateBodySameFile _ _ facts _ _ =
+  let occs = flatMap sameFileOccOfClause (factDupClauses facts)
   let groups = sameFileGroupByKey occs
   let live =
     filterList
@@ -6693,13 +6783,13 @@ duplicateBodySameFileRule = Rule {
 -- either, so `-- see #1234` does not count as a reason.
 ruleDirectiveReason : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
-ruleDirectiveReason _ _ src pos prog =
-  let comments = collectComments src
-  let ls = splitNl src
+ruleDirectiveReason _ _ facts pos prog =
+  let comments = factComments facts
+  let ls = splitNl facts.ffSrc
   let codeLines = arrayFromList (codePortions ls comments 1)
   let blocks = commentBlocks comments codeLines
   let declZips = zipDeclPos prog (positionsDecls pos)
@@ -6924,7 +7014,7 @@ regexLocalNamesInPath _ _ = []
 
 ruleRegexLiteral : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -7013,7 +7103,7 @@ testBoolLitEqSwap a b
 
 ruleTestBoolLiteralEqual : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -7070,7 +7160,7 @@ testEqCall nm a b = EApp (EApp (EVar nm) a) b
 
 ruleTestEqualInTrue : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding
@@ -7111,7 +7201,7 @@ preludeShadowedNames = ["isOk", "isErr", "isSome", "isNone"]
 
 ruleTestPreludeShadow : StdlibIndex ->
   String ->
-  String ->
+  FileFacts ->
   Positions ->
   List Decl ->
   List Finding

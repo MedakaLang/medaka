@@ -8,8 +8,8 @@
 // unchanged body, so a header-rule change for this file only takes effect when its
 // bytes change too.
 //
-// It instantiates playground.wasm with the host IO ABI (a port of test/wasm/run.js)
-// over an IN-MEMORY vfs (stdlib runtime.mdk/core.mdk + the user source), runs the
+// It instantiates playground.wasm through playground/medaka_host.mjs (the one host,
+// as its COMPILER_HOST configuration) over an IN-MEMORY vfs (stdlib runtime.mdk/core.mdk + the user source), runs the
 // guest — on ONE instance kept alive across calls, re-entered through the
 // module's `mdk_main` export (see "persistent guest session" below) — and
 // demuxes the guest's stdout by its first-line marker:
@@ -31,8 +31,8 @@
 //     (diagnostics is present on an ok:true result only when there were WARNINGS —
 //     e.g. W-NONEXHAUSTIVE. Warnings never block emit, matching native `medaka check`.)
 //
-// The vfs/host-ABI is deliberately self-contained so the browser worker can import
-// this module unchanged (pass wasm bytes + stdlib text; no node:fs needed there).
+// Neither this module nor medaka_host.mjs needs a `node:` module, so the browser
+// workers import it unchanged (pass wasm bytes + stdlib text).
 
 // Guest arg paths (also the vfs keys).  The guest requests these literal strings.
 // The user entry + its sibling imports go through the loader, which resolves a
@@ -46,91 +46,10 @@ const USER_ROOT = '.';
 const USER_PATH = './main.mdk';
 const USER_MODID = 'main';
 
-// ── host ABI (ported from test/wasm/run.js / dev_compile_node.mjs) ──────────────
-// --- BEGIN SHARED SHIM fmt12g --- (byte-identical in test/wasm/run.js,
-// playground/worker.js and playground/compile.mjs — WASM-SEMANTICS WH3; enforced by
-// test/diff_compiler_wasm_shim_parity_test.mdk)
-function fmt12g(d) {
-  if (Number.isNaN(d)) return 'nan';
-  if (d === Infinity) return 'inf';
-  if (d === -Infinity) return '-inf';
-  if (d === 0) return (1 / d === -Infinity) ? '-0.0' : '0.0';
-  const neg = d < 0, ad = Math.abs(d);
-  const m = ad.toExponential().match(/^(\d)(?:\.(\d+))?e([+-]\d+)$/);
-  let digits = m[1] + (m[2] || '');     // shortest significant digits
-  const exp = parseInt(m[3], 10);
-  digits = digits.replace(/0+$/, '');   // trim (defensive)
-  if (digits === '') digits = '0';
-  const nd = digits.length;
-  let out;
-  if (exp < -4 || exp >= 12) {
-    const mant = (nd === 1) ? digits : (digits[0] + '.' + digits.slice(1));
-    const ea = Math.abs(exp).toString().padStart(2, '0');
-    out = mant + 'e' + (exp < 0 ? '-' : '+') + ea;
-  } else {
-    const pointPos = exp + 1;
-    if (pointPos <= 0) out = '0.' + '0'.repeat(-pointPos) + digits;
-    else if (pointPos >= nd) out = digits + '0'.repeat(pointPos - nd);
-    else out = digits.slice(0, pointPos) + '.' + digits.slice(pointPos);
-  }
-  if (neg) out = '-' + out;
-  if (!/[.eEni]/.test(out)) out = out + '.0';   // the `.0` append rule
-  return out;
-}
-// --- END SHARED SHIM fmt12g ---
-
-// --- BEGIN SHARED SHIM mdkStrToFloat --- (byte-identical in test/wasm/run.js,
-// playground/worker.js and playground/compile.mjs — WASM-SEMANTICS WH2/WH3; enforced
-// by test/diff_compiler_wasm_shim_parity_test.mdk)
-// #370 stringToFloat host seam. The C runtime is the oracle (WH2): medaka_rt.c
-// mdk_string_to_float is `strtod` + an endptr FULL-CONSUMPTION check + an empty-string
-// reject. JS Number() is NOT strtod: Number("") === 0, Number("1.5 ") trims,
-// Number("nan"/"inf") is NaN, and Number rejects C99 hex floats ("0x1p3" -> NaN).
-// strtod skips LEADING whitespace only, accepts inf/infinity and nan/nan(chars)
-// case-insensitively, and accepts hex floats. Because native requires full
-// consumption, longest-match is unnecessary — the whole post-whitespace string must
-// match the grammar, or the endptr check would reject it anyway.
-// Returns { ok, value }; ok === 0 means None. Verified case-for-case against the
-// native C oracle over a 621-case battery (test/llvm_fixtures/str_to_float_frontier.mdk).
-function mdkStrToFloat(s) {
-  if (s.length === 0) return { ok: 0, value: 0 };   // medaka_rt.c: bl == 0 -> None
-  const b = s.replace(/^[ \t\n\v\f\r]+/, '');       // strtod skips leading isspace
-  let m;
-  if ((m = /^([+-]?)(?:inf|infinity)$/i.exec(b)))
-    return { ok: 1, value: m[1] === '-' ? -Infinity : Infinity };
-  if ((m = /^([+-]?)nan(?:\([0-9A-Za-z_]*\))?$/i.exec(b)))
-    // strtod propagates the SIGN onto the NaN, and the sign bit is OBSERVABLE
-    // through floatToBytes64 (native "-nan" -> byte0 0xff, not 0x7f). JS unary
-    // minus is an IEEE negate, so it sets the bit; the f64 crosses the import
-    // boundary uncanonicalised.
-    return { ok: 1, value: m[1] === '-' ? -NaN : NaN };
-  if ((m = /^([+-]?)0[xX](?:([0-9A-Fa-f]+)(?:\.([0-9A-Fa-f]*))?|\.([0-9A-Fa-f]+))(?:[pP]([+-]?[0-9]+))?$/.exec(b))) {
-    const ip = m[2] !== undefined ? m[2] : '';
-    const fp = m[2] !== undefined ? (m[3] || '') : m[4];
-    const v = mdkHexFloat(ip, fp, m[5] ? parseInt(m[5], 10) : 0);
-    return { ok: 1, value: m[1] === '-' ? -v : v };
-  }
-  if (/^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/.test(b))
-    return { ok: 1, value: Number(b) };             // decimal: Number() is correctly rounded
-  return { ok: 0, value: 0 };
-}
-// C99 hex float -> double, correctly rounded like strtod. The value is M * 2^e for an
-// exact BigInt M, so rendering it as an EXACT decimal string (2^-k = 5^k / 10^k) and
-// handing that to Number() gets round-to-nearest-even for free.
-function mdkHexFloat(ip, fp, pexp) {
-  const M = BigInt('0x' + (ip + fp || '0'));
-  if (M === 0n) return 0;
-  const e = pexp - 4 * fp.length, bits = M.toString(2).length;
-  if (bits + e > 1100) return Infinity;             // clamp keeps the BigInt bounded
-  if (bits + e < -1100) return 0;
-  if (e >= 0) return Number((M << BigInt(e)).toString());
-  const k = -e, num = (M * 5n ** BigInt(k)).toString().padStart(k + 1, '0');
-  return Number(num.slice(0, num.length - k) + '.' + num.slice(num.length - k));
-}
-// --- END SHARED SHIM mdkStrToFloat ---
+// ── host ABI: playground/medaka_host.mjs ─────────────────────────────────────
+import { createHost, COMPILER_HOST, MemoryVfs, bufferSink, ExitSignal, checkImportKeys } from './medaka_host.mjs';
 
 const enc = (s) => new TextEncoder().encode(s);
-const dec = (a) => new TextDecoder('utf8').decode(new Uint8Array(a));
 
 // Compile the wasm bytes to a WebAssembly.Module ONCE and reuse it across every
 // guest run.  Passing raw BYTES to instantiate recompiles with V8's baseline
@@ -162,14 +81,19 @@ function compiledModuleFor(wasmModuleOrBytes) {
 // every mode (compile / analyze / hover / complete) so they cannot drift.
 function buildVfs(source, stdlib) {
   const vfsMap = new Map();
-  vfsMap.set(RUNTIME_PATH, enc(stdlib.runtime));
+  const runtimeBytes = enc(stdlib.runtime);
+  vfsMap.set(RUNTIME_PATH, runtimeBytes);
+  // `import runtime` resolves through the loader, as natively; `core` is the
+  // implicit prelude and is never loaded as a module.
+  vfsMap.set(USER_ROOT + '/' + RUNTIME_PATH, runtimeBytes);
   vfsMap.set(CORE_PATH, enc(stdlib.core));
   vfsMap.set(USER_PATH, enc(source));
   // A prelude-only program resolves no sibling imports.  Extra stdlib modules
   // (list/map/...) a program imports go in opts.stdlib.extra as { '<id>': text }
-  // (e.g. { 'list': '...' }), registered under the loader's "./<id>.mdk" key.
+  // (e.g. { 'list': '...' }), registered under the loader's key for the id:
+  // "./<id>.mdk", a dotted id's segments as directories ("./crypto/sha256.mdk").
   if (stdlib.extra) for (const [id, text] of Object.entries(stdlib.extra)) {
-    vfsMap.set(USER_ROOT + '/' + id + '.mdk', enc(text));
+    vfsMap.set(USER_ROOT + '/' + id.replace(/\./g, '/') + '.mdk', enc(text));
   }
   return vfsMap;
 }
@@ -204,78 +128,20 @@ function shippedModulesArg(stdlib) {
 let _session = null;   // { instance, host } for the one cached module
 
 function makeHost() {
-  const host = {
-    argv: [],
-    vfsMap: new Map(),
-    acc: [], eacc: [],
-    floatFmtBuf: [], pathBuf: [], resultBuf: new Uint8Array(0),
-    strToFloatOk: 0,   // #370: latched by mdk_str_to_float, read by mdk_str_to_float_ok
-    waitCell: null,    // Atomics.wait cell for mdk_sleep_ms, made on first sleep
-    exited: false,
-    resolve: null,
-    imports: null,
-  };
+  const mh = createHost(COMPILER_HOST, { getEnv: () => undefined });
+  const host = { mh, imports: mh.imports, exited: false, resolve: null };
   host.reset = (vfsMap, argv, resolve) => {
-    host.argv = argv; host.vfsMap = vfsMap; host.resolve = resolve;
-    host.acc = []; host.eacc = [];
-    host.floatFmtBuf = []; host.pathBuf = []; host.resultBuf = new Uint8Array(0);
-    host.strToFloatOk = 0; host.exited = false;
+    mh.vfs = new MemoryVfs(vfsMap); mh.args = argv; mh.sink = bufferSink(); mh.reset();
+    host.resolve = resolve; host.exited = false;
   };
   host.finish = (code) => {
     if (host.exited) return;
     host.exited = true;
+    mh.flush();
     const resolve = host.resolve;
     host.resolve = null;
-    resolve({ out: dec(host.acc), err: dec(host.eacc), exit: code | 0 });
+    resolve({ out: mh.sink.text('stdout'), err: mh.sink.text('stderr'), exit: code | 0 });
   };
-  const takePath = () => { const s = dec(host.pathBuf); host.pathBuf = []; return s; };
-  host.imports = { env: {
-    mdk_write_byte: (b) => { host.acc.push(b & 0xff); },
-    mdk_write_err_byte: (b) => { host.eacc.push(b & 0xff); },
-    mdk_float_fmt: (d) => { host.floatFmtBuf = Array.from(enc(fmt12g(d))); return host.floatFmtBuf.length; },
-    mdk_float_fmt_byte: (i) => host.floatFmtBuf[i] & 0xff,
-    // #101 libm math host seam (JS Math.*) — see run.js.  Harmless if unused (imports
-    // are resolved by name); provided so a math-using program run through this path works.
-    mdk_cbrt: Math.cbrt, mdk_exp: Math.exp, mdk_log: Math.log,
-    mdk_log2: Math.log2, mdk_log10: Math.log10,
-    mdk_sin: Math.sin, mdk_cos: Math.cos, mdk_tan: Math.tan,
-    mdk_asin: Math.asin, mdk_acos: Math.acos, mdk_atan: Math.atan,
-    mdk_sinh: Math.sinh, mdk_cosh: Math.cosh, mdk_tanh: Math.tanh,
-    mdk_pow: Math.pow, mdk_atan2: Math.atan2, mdk_hypot: Math.hypot,
-    // layer-6 stringToFloat (#370): the guest calls mdk_path_reset+mdk_path_push to
-    // populate pathBuf, then mdk_str_to_float (which parses AND latches the ok flag),
-    // then mdk_str_to_float_ok. Two channels because Some(nan) is a LEGAL strtod
-    // result, so NaN cannot double as the failure signal (that collapse was #370).
-    mdk_str_to_float: () => { const r = mdkStrToFloat(takePath()); host.strToFloatOk = r.ok; return r.value; },
-    mdk_str_to_float_ok: () => host.strToFloatOk,
-    mdk_path_reset: () => { host.pathBuf = []; },
-    mdk_path_push: (b) => { host.pathBuf.push(b & 0xff); },
-    mdk_read_file: () => {
-      const p = takePath();
-      if (host.vfsMap.has(p)) { host.resultBuf = host.vfsMap.get(p); return 1; }
-      host.resultBuf = enc('ENOENT: ' + p); return 0;
-    },
-    mdk_file_exists: () => (host.vfsMap.has(takePath()) ? 1 : 0),
-    mdk_get_env: () => { takePath(); host.resultBuf = new Uint8Array(0); return 0; },
-    mdk_args_count: () => host.argv.length,
-    mdk_arg_len: (i) => enc(host.argv[i]).length,
-    mdk_arg_byte: (i, j) => enc(host.argv[i])[j] & 0xff,
-    mdk_result_len: () => host.resultBuf.length,
-    mdk_result_byte: (i) => host.resultBuf[i] & 0xff,
-    // Clock host surface (design WA-1): reads in seconds, sleep in milliseconds.  A
-    // non-positive sleep returns at once, as medaka_rt.c's mdk_sleep_ms does.  The wait
-    // cell is made on first sleep so a page without SharedArrayBuffer still loads.
-    mdk_wall_time_sec: () => Date.now() / 1000,
-    mdk_monotonic_sec: () => performance.now() / 1000,
-    mdk_sleep_ms: (ms) => {
-      ms = Number(ms);
-      if (ms > 0) {
-        host.waitCell = host.waitCell || new Int32Array(new SharedArrayBuffer(4));
-        Atomics.wait(host.waitCell, 0, 0, ms);
-      }
-    },
-    mdk_exit: (code) => { host.finish(code); throw new ExitSignal(); },
-  } };
   return host;
 }
 
@@ -295,7 +161,7 @@ function runGuest(wasmModuleOrBytes, vfsMap, argv) {
         instance.exports.mdk_main();
         host.finish(0);
       } catch (e) {
-        if (e instanceof ExitSignal || host.exited) { host.finish(0); return; }
+        if (e instanceof ExitSignal || host.exited) { host.finish(e instanceof ExitSignal ? e.code : 0); return; }
         _session = null;
         reject(withGuestStderr(e, host));
       }
@@ -310,6 +176,7 @@ function runGuest(wasmModuleOrBytes, vfsMap, argv) {
         const names = WebAssembly.Module.exports(module).map((e) => e.name);
         if (names.includes('mdk_main') && !names.includes('mdk_entry_split'))
           throw new Error('playground.wasm was built by an older compiler: its start function runs main itself; rebuild it / reload the page');
+        checkImportKeys(module, host.mh);
         return WebAssembly.instantiate(module, host.imports);
       })
       .then((instance) => {
@@ -318,7 +185,7 @@ function runGuest(wasmModuleOrBytes, vfsMap, argv) {
         host.finish(0);
       })
       .catch((e) => {
-        if (e instanceof ExitSignal || host.exited) { host.finish(0); return; }
+        if (e instanceof ExitSignal || host.exited) { host.finish(e instanceof ExitSignal ? e.code : 0); return; }
         _session = null;
         reject(withGuestStderr(e, host));
       });
@@ -332,48 +199,33 @@ function runGuest(wasmModuleOrBytes, vfsMap, argv) {
 // trapDiagnostic() surface it; without this the browser reported a bare
 // "compiler trap: unreachable" for a refusal the CLI states by name.
 function withGuestStderr(e, host) {
-  try { if (e && typeof e === 'object') e.guestStderr = dec(host.eacc); } catch (_) { /* leave e as-is */ }
+  try {
+    host.mh.flush();
+    if (e && typeof e === 'object') e.guestStderr = host.mh.sink.text('stderr');
+  } catch (_) { /* leave e as-is */ }
   return e;
 }
 
-// Externs and modules that exist only in the native build.  A program reaching one
-// gets a message naming it, in place of the compiler trap or `unknown module` the
-// toolchain would otherwise surface.  Families follow stdlib/runtime.mdk.
+// Externs the wasm backend does not lower (their wasm row in
+// compiler/backend/extern_catalog.mdk is NotProvided).  A program reaching one gets a
+// message naming it, in place of the compiler trap the toolchain would otherwise
+// surface.  The externs the browser host serves (medaka_host.mjs SLICES) are absent.
 const NATIVE_ONLY_EXTERNS = new Set([
   'readLine', 'readLineOpt', 'readAll', 'readExactly',
-  'readFile', 'readFileBytes', 'writeFile', 'writeFileBytes', 'writeFileMode', 'appendFile',
-  'fileExists', 'fileMode', 'canonicalizePath', 'listDir', 'makeDir', 'removeFile',
+  'writeFile', 'writeFileMode', 'appendFile',
+  'fileMode', 'canonicalizePath', 'listDir', 'makeDir', 'removeFile',
   'rename', 'fsync', 'removeDir', 'statFile',
-  'args', 'getEnv', 'executablePath', 'runCommand',
+  'executablePath', 'runCommand',
   'netResolve', 'netTcpConnect', 'netTcpListen', 'netListenPort', 'netTcpAccept',
   'netSend', 'netSendFrom', 'netRecv', 'netShutdown', 'netClose', 'netCloseListener',
   'netSetTimeout', 'netSetNonblock', 'netTryAccept', 'netTryRecv', 'netTrySend',
 ]);
-const NATIVE_ONLY_MODULES = new Set(['fs', 'net', 'io']);
 
 function nativeOnlyMessage(text) {
   const ext = /runtime extern '([A-Za-z0-9_]+)' is not available on the wasm backend/.exec(text);
   if (ext && NATIVE_ONLY_EXTERNS.has(ext[1]))
     return ext[1] + ' is not available in the browser playground';
   return null;
-}
-
-// Rewrites an `unknown module: X` diagnostic for a native-only module X.
-function nativeOnlyModuleMessage(message) {
-  const m = /^unknown module: ([A-Za-z0-9_.]+)$/.exec(message);
-  if (m && NATIVE_ONLY_MODULES.has(m[1]))
-    return 'module `' + m[1] + '` is native-only and not available in the browser playground';
-  return null;
-}
-
-function friendlyDiagnostics(diag) {
-  if (diag && Array.isArray(diag.files))
-    for (const f of diag.files)
-      for (const d of f.diagnostics || []) {
-        const msg = nativeOnlyModuleMessage(d.message);
-        if (msg) d.message = msg;
-      }
-  return diag;
 }
 
 function trapDiagnostic(e) {
@@ -411,9 +263,6 @@ async function runGuestRetry(wasm, vfsMap, argv, attempts = 5) {
   }
   throw last;
 }
-
-// Thrown from mdk_exit to unwind the guest after a clean exit (mirrors run.js).
-class ExitSignal extends Error {}
 
 // loadCompiler: normalize the wasm to bytes.  In Node, accepts a path or bytes;
 // in the browser pass bytes (or a Response via arrayBuffer first).
@@ -479,7 +328,7 @@ export async function compile(source, opts = {}) {
   }
   if (marker === '__MEDAKA_DIAGNOSTICS__') {
     try {
-      return { ok: false, diagnostics: friendlyDiagnostics(JSON.parse(payload.trim())) };
+      return { ok: false, diagnostics: JSON.parse(payload.trim()) };
     } catch (e) {
       return { ok: false, diagnostics: synthErr('bad diagnostics JSON: ' + payload.slice(0, 200)) };
     }
@@ -523,7 +372,7 @@ export async function analyze(source, opts = {}) {
 
   if (marker === '__MEDAKA_ANALYZE__' || marker === '__MEDAKA_DIAGNOSTICS__') {
     try {
-      return { ok: marker === '__MEDAKA_ANALYZE__', diagnostics: friendlyDiagnostics(JSON.parse(payload.trim())) };
+      return { ok: marker === '__MEDAKA_ANALYZE__', diagnostics: JSON.parse(payload.trim()) };
     } catch (e) {
       return { ok: false, diagnostics: synthErr('bad diagnostics JSON: ' + payload.slice(0, 200)) };
     }

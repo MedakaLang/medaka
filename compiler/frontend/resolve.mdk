@@ -2284,8 +2284,8 @@ whenL False _ = []
 --   - a name flagged by dupSignatureErrors is excluded from contiguityErrors'
 --     findings — the accurate "already defined at line NNN" message replaces
 --     the "must be contiguous" one for that name.
-buildErrors : List Decl -> List Decl -> List ResError
-buildErrors preludeDecls prog =
+buildErrors : List Decl -> ModuleExports -> List Decl -> List ResError
+buildErrors preludeDecls coreExp prog =
   let dupValErrs = dupValueBindingErrors prog
   let nullaryDupNames = map dvbName dupValErrs
   let sigDups =
@@ -2294,7 +2294,7 @@ buildErrors preludeDecls prog =
   let contigErrs = filterOutNamesIn sigDupNames dbName (contiguityErrors prog)
   externWithBodyErrors (externNames prog) prog
     ++ duplicateErrors preludeDecls prog
-    ++ coreUseErrors preludeDecls prog
+    ++ coreUseErrors coreExp prog
     ++ sigDups
     ++ orphanSignatureErrors prog
     ++ contigErrs
@@ -2314,9 +2314,10 @@ buildErrors preludeDecls prog =
 --
 -- Non-core paths are NOT validated here — they need the loader's `known` exports, which
 -- buildErrors does not have; the multi-module path validates them in `oneImport`.
-coreUseErrors : List Decl -> List Decl -> List ResError
-coreUseErrors preludeDecls prog =
-  flatMap (coreUseErrorsOf (coreExports preludeDecls)) prog
+-- `coreExp` is the caller's `coreExports` (the memoised `psCoreExports` on the
+-- module path), so the prelude's export surface is built once, not per module.
+coreUseErrors : ModuleExports -> List Decl -> List ResError
+coreUseErrors coreExp prog = flatMap (coreUseErrorsOf coreExp) prog
 
 coreUseErrorsOf : ModuleExports -> Decl -> List ResError
 coreUseErrorsOf coreExp (DAttrib _ d) = coreUseErrorsOf coreExp d
@@ -2897,7 +2898,9 @@ export
 resolveProgram : List Decl -> List Decl -> List Decl -> List ResError
 resolveProgram runtimeDecls preludeDecls prog =
   let env = buildEnv runtimeDecls preludeDecls prog []
-  dedupResErrors (buildErrors preludeDecls prog ++ flatMap (checkDecl env) prog)
+  dedupResErrors
+    (buildErrors preludeDecls (coreExports preludeDecls) prog
+      ++ flatMap (checkDecl env) prog)
 
 -- Like resolveProgram but flags references to internal-only externs listed in
 -- `internalGuard` (empty ⇒ unrestricted).  The single-file `medaka check` error
@@ -2910,7 +2913,9 @@ resolveProgramG2 : List String ->
   List ResError
 resolveProgramG2 internalGuard runtimeDecls preludeDecls prog =
   let env = buildEnv runtimeDecls preludeDecls prog internalGuard
-  dedupResErrors (buildErrors preludeDecls prog ++ flatMap (checkDecl env) prog)
+  dedupResErrors
+    (buildErrors preludeDecls (coreExports preludeDecls) prog
+      ++ flatMap (checkDecl env) prog)
 
 -- `` `import m.{n}` `` for each module exporting `n`, joined as alternatives:
 -- "`import a.{n}`, `import b.{n}` or `import c.{n}`".
@@ -3198,6 +3203,12 @@ public export data ModuleExports = ModuleExports {
   -- refuse a bare `import m.{Ctor}` with a diagnostic that says the ctor is
   -- withheld; it crosses no `export import` hop.
   expAbstractCtors : List (String, String),
+  -- Derived indexes, not export namespaces: `nameSet` is every name the five
+  -- membership lists above hold (what `isPubExp` asks), `ctorTypes` maps each
+  -- exported constructor to its type (first type wins, as `expTypeCtors` is
+  -- scanned).  Only `indexExports` fills them, and both constructors go through it.
+  nameSet : OrdMap Unit,
+  ctorTypes : OrdMap String,
 }
 -- public type → its exported ctors
 -- (field, owner type/ctor)
@@ -3252,17 +3263,35 @@ findExports : String -> OrdMap ModuleExports -> Option ModuleExports
 findExports mid known = omLookup mid known
 
 -- exported under any value/type/ctor/interface/effect category (lib's
--- imported_names is_pub).  `expEffects` belongs in this disjunction because
--- `importedEffects` installs every label `m` exports on ANY import of `m`: drop
--- it and a selective member list naming a label refuses a name the very same
--- import statement puts in scope, with a message that denies the export (#3293).
+-- imported_names is_pub); `nameSet` is that union.
 isPubExp : ModuleExports -> String -> Bool
-isPubExp exp n =
-  contains n exp.expValues
-    || contains n exp.expTypes
-    || contains n exp.expCtors
-    || contains n exp.expInterfaces
-    || contains n exp.expEffects
+isPubExp exp n = omHasKey n exp.nameSet
+
+-- Fill the derived indexes from the export lists.  Every ModuleExports is built
+-- through here (`coreExports`, `buildExportsWith`), so a consumer never sees an
+-- empty index.  `expEffects` belongs in `nameSet` because `importedEffects`
+-- installs every label `m` exports on ANY import of `m`: drop it and a
+-- selective member list naming a label refuses a name the very same import
+-- statement puts in scope, with a message that denies the export (#3293).
+-- `ctorTypes` is built from the reversed pairs so the FIRST (type, ctor) pair
+-- wins a duplicate constructor name, as a front-to-back scan of `expTypeCtors`
+-- would.
+indexExports : ModuleExports -> ModuleExports
+indexExports exp = { exp |
+  nameSet =
+    omFromNames
+      (exp.expValues
+        ++ exp.expTypes
+        ++ exp.expCtors
+        ++ exp.expInterfaces
+        ++ exp.expEffects)
+      omEmpty,
+  ctorTypes =
+    omFromPairs
+      (reverseL
+        (flatMap ((ty, ctors) => map (c => (c, ty)) ctors) exp.expTypeCtors))
+      omEmpty,
+}
 
 typeCtorsOf : String -> ModuleExports -> Option (List String)
 typeCtorsOf name exp = lookupAssoc name exp.expTypeCtors
@@ -3272,12 +3301,7 @@ typeCtorsOf name exp = lookupAssoc name exp.expTypeCtors
 -- `import m.{Ctor}` member (#3314) — the message needs the owning type's name
 -- for the `T(..)` remedy it offers.
 typeOfCtor : String -> ModuleExports -> Option String
-typeOfCtor name exp = ctorTypeLookup name exp.expTypeCtors
-
-ctorTypeLookup : String -> List (String, List String) -> Option String
-ctorTypeLookup _ [] = None
-ctorTypeLookup name ((ty, ctors) :: rest) =
-  if contains name ctors then Some ty else ctorTypeLookup name rest
+typeOfCtor name exp = omLookup name exp.ctorTypes
 
 -- newtype's type name, if `name` is that newtype's exported ctor (#1311).
 newtypeTypeOfCtor : String -> ModuleExports -> Option String
@@ -4464,28 +4488,31 @@ oneImportedModuleValues known path =
 -- ignores visibility markers — every core name is in scope in every module — so
 -- its export surface is all of it.
 coreExports : List Decl -> ModuleExports
-coreExports preludeDecls = ModuleExports {
-  modId = "core",
-  expValues = preludeValueNames preludeDecls,
-  expTypes = dataRecordNames preludeDecls,
-  -- the prelude ignores visibility markers, so none of its types withholds
-  -- constructors
-  expAbstractData = [],
-  expCtors = ctorNames preludeDecls,
-  expTypeCtors = typeCtorsAllOf preludeDecls,
-  expFieldOwners = fieldOwnersOf preludeDecls,
-  expInterfaces = map fst (interfaceList preludeDecls),
-  expIfaceMethods = interfaceList preludeDecls,
-  expIfaceOrigins = map (i => (fst i, "core")) (interfaceList preludeDecls),
-  expTypeOrigins = map (n => (n, "core")) (dataRecordNames preludeDecls),
-  expCtorOrigins = map (n => (n, "core")) (ctorNames preludeDecls),
-  expValueOrigins =
-    map (n => (n, ("core", n))) (preludeValueNames preludeDecls),
-  expEffects = effectNames preludeDecls,
-  expEffectOrigins = map (n => (n, "core")) (effectNames preludeDecls),
-  expAbstractCtors = [],
-  expNewtypeCtors = [],  -- the prelude declares no `newtype` today; nothing to refuse
-}
+coreExports preludeDecls = indexExports
+  ModuleExports {
+    modId = "core",
+    expValues = preludeValueNames preludeDecls,
+    expTypes = dataRecordNames preludeDecls,
+    -- the prelude ignores visibility markers, so none of its types withholds
+    -- constructors
+    expAbstractData = [],
+    expCtors = ctorNames preludeDecls,
+    expTypeCtors = typeCtorsAllOf preludeDecls,
+    expFieldOwners = fieldOwnersOf preludeDecls,
+    expInterfaces = map fst (interfaceList preludeDecls),
+    expIfaceMethods = interfaceList preludeDecls,
+    expIfaceOrigins = map (i => (fst i, "core")) (interfaceList preludeDecls),
+    expTypeOrigins = map (n => (n, "core")) (dataRecordNames preludeDecls),
+    expCtorOrigins = map (n => (n, "core")) (ctorNames preludeDecls),
+    expValueOrigins =
+      map (n => (n, ("core", n))) (preludeValueNames preludeDecls),
+    expEffects = effectNames preludeDecls,
+    expEffectOrigins = map (n => (n, "core")) (effectNames preludeDecls),
+    expAbstractCtors = [],
+    expNewtypeCtors = [],  -- the prelude declares no `newtype` today; nothing to refuse
+    nameSet = omEmpty,
+    ctorTypes = omEmpty,
+  }
 
 -- type → its ctors, ignoring visibility (`nsTypeCtors`' vis-filtered direct rule
 -- is for a real module's public surface; the prelude has no private names).  Feeds
@@ -4849,44 +4876,49 @@ buildExportsWith : ModuleExports ->
   List Decl ->
   List String ->
   ModuleExports
-buildExportsWith coreExp known modId prog ifaceVals = ModuleExports {
-  modId = modId,
-  expValues =
-    directIn nsValues prog
-      ++ ifaceVals
-      ++ carriedIn nsValues coreExp known prog,
-  expTypes = directIn nsTypes prog ++ carriedIn nsTypes coreExp known prog,
-  expAbstractData =
-    directIn nsAbstractData prog ++ carriedIn nsAbstractData coreExp known prog,
-  expCtors = directIn nsCtors prog ++ carriedIn nsCtors coreExp known prog,
-  expTypeCtors =
-    directIn nsTypeCtors prog ++ carriedIn nsTypeCtors coreExp known prog,
-  expFieldOwners =
-    directIn nsFieldOwners prog ++ carriedIn nsFieldOwners coreExp known prog,
-  expInterfaces =
-    directIn nsInterfaces prog ++ carriedIn nsInterfaces coreExp known prog,
-  expIfaceMethods =
-    directIn nsIfaceMethods prog ++ carriedIn nsIfaceMethods coreExp known prog,
-  expIfaceOrigins =
-    map (n => (n, modId)) (directIn nsInterfaces prog)
-      ++ carriedIn nsIfaceOrigins coreExp known prog,
-  expTypeOrigins =
-    map (n => (n, modId)) (directIn nsTypes prog)
-      ++ carriedIn nsTypeOrigins coreExp known prog,
-  expCtorOrigins =
-    map (n => (n, modId)) (directIn nsCtors prog)
-      ++ carriedIn nsCtorOrigins coreExp known prog,
-  expValueOrigins =
-    map (n => (n, (modId, n))) (directIn nsValues prog ++ ifaceVals)
-      ++ carriedIn nsValueOrigins coreExp known prog,
-  expEffects =
-    directIn nsEffects prog ++ carriedIn nsEffects coreExp known prog,
-  expEffectOrigins =
-    map (n => (n, modId)) (directIn nsEffects prog)
-      ++ carriedIn nsEffectOrigins coreExp known prog,
-  expNewtypeCtors = directIn nsNewtypeCtors prog,
-  expAbstractCtors = directIn nsAbstractCtors prog,
-}
+buildExportsWith coreExp known modId prog ifaceVals = indexExports
+  ModuleExports {
+    modId = modId,
+    expValues =
+      directIn nsValues prog
+        ++ ifaceVals
+        ++ carriedIn nsValues coreExp known prog,
+    expTypes = directIn nsTypes prog ++ carriedIn nsTypes coreExp known prog,
+    expAbstractData =
+      directIn nsAbstractData prog
+        ++ carriedIn nsAbstractData coreExp known prog,
+    expCtors = directIn nsCtors prog ++ carriedIn nsCtors coreExp known prog,
+    expTypeCtors =
+      directIn nsTypeCtors prog ++ carriedIn nsTypeCtors coreExp known prog,
+    expFieldOwners =
+      directIn nsFieldOwners prog ++ carriedIn nsFieldOwners coreExp known prog,
+    expInterfaces =
+      directIn nsInterfaces prog ++ carriedIn nsInterfaces coreExp known prog,
+    expIfaceMethods =
+      directIn nsIfaceMethods prog
+        ++ carriedIn nsIfaceMethods coreExp known prog,
+    expIfaceOrigins =
+      map (n => (n, modId)) (directIn nsInterfaces prog)
+        ++ carriedIn nsIfaceOrigins coreExp known prog,
+    expTypeOrigins =
+      map (n => (n, modId)) (directIn nsTypes prog)
+        ++ carriedIn nsTypeOrigins coreExp known prog,
+    expCtorOrigins =
+      map (n => (n, modId)) (directIn nsCtors prog)
+        ++ carriedIn nsCtorOrigins coreExp known prog,
+    expValueOrigins =
+      map (n => (n, (modId, n))) (directIn nsValues prog ++ ifaceVals)
+        ++ carriedIn nsValueOrigins coreExp known prog,
+    expEffects =
+      directIn nsEffects prog ++ carriedIn nsEffects coreExp known prog,
+    expEffectOrigins =
+      map (n => (n, modId)) (directIn nsEffects prog)
+        ++ carriedIn nsEffectOrigins coreExp known prog,
+    expNewtypeCtors = directIn nsNewtypeCtors prog,
+    expAbstractCtors = directIn nsAbstractCtors prog,
+    nameSet = omEmpty,
+    ctorTypes = omEmpty,
+  }
 
 -- methods of PUBLIC interfaces that are bound as values (lib's final iter loop)
 publicIfaceMethodVals : List Decl -> Env -> List String
@@ -5074,7 +5106,7 @@ resolveModuleG internalGuard preludeKey runtimeDecls preludeDecls known modId pr
   let (env, importErrs) = buildEnvMM ps known prog internalGuard
   let errs =
     dedupResErrors
-      (buildErrors preludeDecls prog
+      (buildErrors preludeDecls ps.psCoreExports prog
         ++ importErrs
         ++ flatMap (checkDecl env) prog)
   let exp = buildExports ps.psCoreExports known modId prog env

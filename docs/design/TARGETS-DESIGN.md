@@ -355,6 +355,16 @@ label diagnostic (`T-TARGET-CAPABILITY`, naming the label and the via-chain),
 the same one a native `--target` check gives. This amends the mechanism, not
 the ruling: the generated list feeds `build_site.sh`'s asset check only.
 
+As built (#3669): `playground/build_playground_wasm.sh` generates
+`playground/dist/stdlib_modules.json`, naming every module under `stdlib/` and
+`stdlib/crypto/` (no `_test` siblings), and stages each as `dist/<id>.mdk`.
+`playground/main.js` fetches the modules it names into the vfs, and
+`build_site.sh` checks the site against it. `compiler/entries/playground_main.mdk`
+selects `wasmgc/browser-worker` and refuses through `targetRefusal`, over the one
+elaboration its `compile` emits from. The runnability rule's withheld calls
+(`render_docs.mjs`, `guide_wasm_differential.mjs`) come from
+`withheldExterns('wasmgc/browser-worker')` in `playground/medaka_host.mjs`.
+
 ### 6.5 The host receives the grant
 
 Native and `medaka run` confine a file operation to the authority granted at the
@@ -521,7 +531,7 @@ and a WIT `world` is what a profile would lower to there.
 | `test/CAPABILITY-EXCEPTIONS.txt`, hand-kept | derived from the catalog's `NotProvided` rows, or retired (T1) |
 | `test/diff_compiler_capability_matrix.sh` scrapes emitter source | reads the catalog table (T1) |
 | `wasm:emitter-gap` rows in `test/engine_divergence.txt` quoting `unbound variable` | drained; the program is refused at `check` (T2) |
-| `test/diff_compiler_wasm_shim_parity_test.mdk` byte-diffs marked blocks | retired; import key set ⊆ profile slices, derived (T3) |
+| the shim-parity gate byte-diffs marked blocks | retired; `compiler/types/target_profile_host_test.mdk` (`wasm_host_profile_agreement`) derives the import key set ⊆ profile slices (T3) |
 | `playground/main.js` hand list of shipped stdlib modules | generated from the catalog (T3) |
 | `compiler/backend/wasm_file_grants.mdk` refuses pattern grants | deleted; the host enforces the grant (T3) |
 | `test/wasm/diff_wasm_ffi_wall.sh`, one direction | both directions, check-time (T4) |

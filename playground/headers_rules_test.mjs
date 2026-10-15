@@ -26,7 +26,7 @@ const walk = (rel) => {
   for (const m of src.matchAll(/^\s*import\s[^'"]*['"](\.{1,2}\/[^'"]+)['"]/gm))
     walk(posix.normalize(posix.join(posix.dirname(rel), m[1])));
 };
-for (const w of ['compiler-worker.js', 'language-worker.js']) walk(w);
+for (const w of ['worker.js', 'compiler-worker.js', 'language-worker.js']) walk(w);
 check('the module workers import something', seen.size > 2);
 for (const rel of seen)
   check(`/${rel} gets COEP (module-worker import)`, get('/' + rel, 'Cross-Origin-Embedder-Policy').join() === 'require-corp');

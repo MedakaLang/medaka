@@ -61,7 +61,8 @@ import frontend.parser.{
   parseErrorCol,
   parseErrorMessage,
 }
-import tools.fmt.{formatSource}
+import frontend.lexer.{tokenizeWithOffsetPairs}
+import tools.fmt.{formatSourceChecked}
 import tools.lint.{
   Finding,
   lintFileDiagTripleParsed,
@@ -1141,38 +1142,34 @@ fieldBoolOr key dflt j = match get key j
   Some (JBool b) => b
   _ => dflt
 
--- Format (or format-check) already-resolved source text.  `formatSource`
--- PANICS on unparseable input (`parseWithPositions`'s documented
--- panic-on-unparseable contract, compiler/frontend/parser.mdk) — a panic here
--- would crash the whole MCP server process, so parseability is checked FIRST,
--- mirroring `formattingEdits`'s `Err _ => []` short-circuit
--- (compiler/tools/lsp.mdk:236-237). Unlike that LSP path — which has a client
--- buffer to silently leave alone — an MCP caller gets an explicit isError
--- result carrying the located parse diagnostic, never a silent no-op.
+-- Format (or format-check) already-resolved source text.  The source is lexed
+-- once and `formatSourceChecked` both checks it and formats it, so an
+-- unparseable source returns the located parse diagnostic as an explicit isError
+-- result (never a silent no-op, and never the panicking `formatSource` path).
 fmtResult : Bool -> String -> Json
-fmtResult check src = match parseResult src
-  Err e =>
-    let loc = stringConcat [
-      "line ",
-      intToString (parseErrorLine e),
-      ", col ",
-      intToString (parseErrorCol e),
-    ]
-    toolArgError
-      (stringConcat [
-        "medaka_fmt: source does not parse (",
-        loc,
-        "): ",
-        parseErrorMessage e,
-      ])
-  Ok _ =>
-    let formatted = formatSource src
-    if check then
-      toolTextResult
-        (stringify (jObject [("clean", JBool (formatted == src))]))
-        False
-    else
-      toolTextResult formatted False
+fmtResult check src = match tokenizeWithOffsetPairs src
+  (toks, pairs) => match formatSourceChecked src toks pairs
+    Err e =>
+      let loc = stringConcat [
+        "line ",
+        intToString (parseErrorLine e),
+        ", col ",
+        intToString (parseErrorCol e),
+      ]
+      toolArgError
+        (stringConcat [
+          "medaka_fmt: source does not parse (",
+          loc,
+          "): ",
+          parseErrorMessage e,
+        ])
+    Ok formatted =>
+      if check then
+        toolTextResult
+          (stringify (jObject [("clean", JBool (formatted == src))]))
+          False
+      else
+        toolTextResult formatted False
 
 -- medaka_fmt handler: format `file` XOR `source` and return either the
 -- formatted text (default) or a `{"clean": bool}` verdict (`check: true`).

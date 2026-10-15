@@ -63,6 +63,8 @@ When a key appears more than once, the later pair wins. The
 [1, 2, 3]
 > findWithDefault 0 1 (fromList [(1, 10), (1, 20)])
 20
+> size (fromList [(0.0 / 0.0, 1), (1.0, 2), (0.0 / 0.0, 3)])
+2
 ```
 
 ## Query
@@ -129,7 +131,7 @@ False
 
 ```
 findWithDefault : Ord k => v -> k -> Map k v -> v
-findWithDefault d k m
+findWithDefault d k _
 ```
 
 The value at `k`, or `d` when the key is absent.

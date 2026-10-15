@@ -5,8 +5,8 @@
 contract: (1) the **WasmGC physical encoding** of the abstract value contract
 (`compiler/RUNTIME-DESIGN.md` §8.6, ratified 2026-06-07), stated as laws; and
 (2) the **host-boundary contract** — the part of wasm's semantics that lives in
-JS host imports (`test/wasm/run.js`, `playground/worker.js`, `playground/compile.mjs`),
-which is wasm's
+JS host imports (`playground/medaka_host.mjs`, consumed by `test/wasm/run.js`,
+`playground/worker.js` and `playground/compile.mjs`), which is wasm's
 biggest specification hole. §4 is the wasm arm of EMITTER-SEMANTICS §9: every
 shared law → wasm status → issue.
 
@@ -261,17 +261,21 @@ above Core IR; these laws are the wasm peers of EMITTER-SEMANTICS §2 (V1–V6).
 
 ## 2. The host-boundary contract (WH-laws)
 
-Native's TCB below the emitted IR is `runtime/medaka_rt.c`. Wasm's is **three
-JS files** — `test/wasm/run.js` (Node runner: gates, CLI users),
-`playground/worker.js` (runs the USER's compiled program — the 0.1.0 front door)
-and `playground/compile.mjs` (runs the COMPILER itself, i.e. `playground.wasm`;
-imported by `compiler-worker.js`, `language-worker.js` and the node drivers) —
-plus the engine. ⚠️ This said **two** until 2026-07-16 and the omitted third is
-where #543 landed: believing the TCB was two files is precisely what let #370's
-fix update two copies and leave the third on raw `Number()`, LinkError-ing the
-playground dead. **Derive the set, never trust the count:**
-`grep -rlE '^// --- BEGIN SHARED SHIM' test/ playground/` — which is what
-`test/diff_compiler_wasm_shim_parity_test.mdk` now does, so a fourth host enrols itself. Parts of the
+Native's TCB below the emitted IR is `runtime/medaka_rt.c`. Wasm's is **one JS
+module**, `playground/medaka_host.mjs`, plus the engine. It builds the `env`
+import object from capability slices (`stdout stderr floatfmt math strtod fs env
+args exit clock entropy stdin`), installs the slices a profile grants
+(`wasmgc/node`, `wasmgc/browser-worker`, `wasmgc/edge`, `wasmgc/wasi-p2`, the
+labels of `compiler/types/target_profile.mdk`), and owns the shims and the flush
+discipline. Three hosts consume it and add only their side of the boundary:
+`test/wasm/run.js` (Node runner: gates, CLI users; `wasmgc/node` over the real
+filesystem), `playground/worker.js` (runs the USER's compiled program;
+`wasmgc/browser-worker` over a per-run in-memory vfs) and `playground/compile.mjs`
+(runs the COMPILER itself, i.e. `playground.wasm`, on the module's
+`COMPILER_HOST` configuration, which is not a profile). Each used to carry its own
+copy of the shims; #543 landed where a fix reached two copies of three. The
+copies are gone, and `checkImportKeys` in `playground/medaka_host.mjs` refuses a module whose `env`
+imports name a key no slice lists, and `compiler/types/target_profile_host_test.mdk` checks the host's grants against `target_profile.mdk`. Parts of the
 observable semantics (float formatting, string→float parsing, process exit,
 the entire IO surface) execute **in JS, not in the module**. That makes the
 import surface part of the semantics, with laws:
@@ -279,9 +283,8 @@ import surface part of the semantics, with laws:
 - **WH1 — The import surface is closed and enumerated.** Every `env.*` import
   the emitter can declare is listed in §3 with a pinned contract. A new host
   import is a spec change: it lands with (a) a §3 row, (b) implementations or
-  explicit capability stubs in **every** shim — the set is the one
-  `test/diff_compiler_wasm_shim_parity_test.mdk` DERIVES, not a remembered pair; #543
-  shipped because "both" was believed of a set of three — and (c) a
+  a slice in `playground/medaka_host.mjs` (every host gets it from there, and
+  a profile that withholds the slice gets the named capability error) — and (c) a
   `NotProvided` row in `compiler/backend/extern_catalog.mdk` if any engine withholds it.
   The entry is closed the same way: an emitted module's `(start $__init)` runs
   only the eager value-global initializers, and the program runs when the host
@@ -301,9 +304,9 @@ import surface part of the semantics, with laws:
 - **WH2 — The C runtime is the behavioral oracle.** Where a host import
   reimplements something `medaka_rt.c` implements natively, the JS copy must
   be **byte-identical on the observable surface**: `mdk_float_fmt` ≡
-  `mdk_float_lexeme` (N9's "one formatter" law quantifies over FOUR copies:
-  the C one and the THREE `fmt12g`s — it read "the two `fmt12g`s" until #543,
-  and the uncounted third had silently stayed on the pre-#361 `%.12g` formatter), `mdk_str_to_float` ≡ the `strtod`
+  `mdk_float_lexeme` (N9's "one formatter" law quantifies over two copies: the
+  C one and the one `fmt12g` in `playground/medaka_host.mjs`; when each host held
+  its own, an uncounted third stayed on the pre-#361 `%.12g` formatter until #543), `mdk_str_to_float` ≡ the `strtod`
   acceptance set (spelling set for inf/nan, empty-string rejection, trailing
   garbage, C99 hex floats), `mdk_exit` ≡ flush-then-exit. "Close enough for the
   fixtures" is how the `stringToFloat` divergence shipped (#370 — `Number("")` is
@@ -313,17 +316,27 @@ import surface part of the semantics, with laws:
   — hence the separate `mdk_str_to_float_ok` channel. A JS shim behavior with no C-oracle
   equivalent (worker sandbox stubs) must be a **loud, named** capability
   error, never a value.
-- **WH3 — Shim parity, LinkError ban.** Both shims provide the **same `env`
-  key set**. A capability the playground sandbox withholds must still be a
-  *callable* that raises the friendly `CapabilityError` at call time —
-  instantiation must never fail with a raw `LinkError` on a module the
-  compiler legally emitted. (Status: ✗ CONFIRMED — `worker.js` is missing the
-  `mdk_write_file_reset/push/commit` trio; §4 R3 row.)
+- **WH3 — One key set, LinkError ban.** Every host gets its `env` object from
+  `createHost` in `playground/medaka_host.mjs`, which installs a callable for
+  every key of every slice: the real one when the profile grants the slice, and
+  otherwise one that throws `CapabilityError` naming the slice (its `capability`
+  field) at call time. Instantiation never fails with a raw `LinkError` on a
+  module the compiler legally emitted. (Status: ✅ — #375's missing
+  `mdk_write_file_*` trio is the `fs` slice, which `worker.js` now installs over
+  its vfs; pinned by `playground/medaka_host_test.mjs` probe (b).)
 - **WH4 — Flush discipline.** On normal completion, `exit`, and trap alike:
   buffered stdout bytes, then buffered stderr bytes, are delivered before the
-  process/worker stops (R1's observation triple includes stderr-on-trap).
-  (Status: ✗ CONFIRMED — `run.js` `mdk_exit` drops accumulated stderr; §4 T1
-  row.)
+  process/worker stops (R1's observation triple includes stderr-on-trap). The
+  one implementation is the host's `deliverAll`, called by `runProgram` on every
+  way out (completion, `exit`, trap, `CapabilityError`, old entry shape); a
+  streaming host (`worker.js`) also calls it at each newline either stream
+  writes, so a partial stdout line is not overtaken by a later stderr line.
+  `mdk_exit` throws an `ExitSignal` that unwinds the guest, and the host exits
+  after the flush. Delivered means written out, not queued: `run.js` ends by
+  setting `process.exitCode` and returning, because a write to a pipe past its
+  buffer is still queued when the flush returns and `process.exit` would drop it.
+  (Status: ✅ — #376 fixed; pinned by `playground/medaka_host_test.mjs` probes
+  (a) and (d), and (h) for both streams through pipes on `exit` and on a trap.)
 - **WH5 — GC refs never cross the boundary.** Strings and buffers marshal
   through the byte-channel protocol only: guest pushes path/name bytes
   (`mdk_path_reset`/`mdk_path_push`), host caches result bytes exposed as
@@ -349,20 +362,35 @@ import surface part of the semantics, with laws:
 | Import | Declared (`wasm_preamble.mdk`) | Emitted when | `run.js` | `worker.js` | `compile.mjs` | Contract | Law risk |
 |---|---|---|---|---|---|---|---|
 | `mdk_write_byte` | ~184 | unconditional | real (accumulate, decode at end) | real (accumulate, flush on `\n`) | real (accumulate, decode at end) | one stdout byte | — |
-| `mdk_write_err_byte` | ~319 | ePutStr/trap use | real (buffered; **lost on `mdk_exit`** — WH4 ✗) | real (streams + trap-copy) | real (accumulate; **lost on `mdk_exit`** — same WH4 ✗ as run.js) | one stderr byte | T1 |
-| `mdk_float_fmt` / `mdk_float_fmt_byte` | ~922 | any Float use | real (`fmt12g`) | real (byte-identical copy) | real (shared `fmt12g` block — byte-identical since #543; was the pre-#361 `%.12g` before it) | float → cached shortest-round-trip lexeme (≡ `mdk_float_lexeme`) | N9 — **verified equivalent by review + probe battery** (the #361 ask); comments still say `%.12g` |
+| `mdk_write_err_byte` | ~319 | ePutStr/trap use | real (buffered; flushed on `mdk_exit` too, WH4) | real (streams + trap-copy) | real (accumulate) | one stderr byte | T1 |
+| `mdk_float_fmt` / `mdk_float_fmt_byte` | ~922 | any Float use | real (`fmt12g`, `medaka_host.mjs`) | same | same (the one copy; until #543 this host held a pre-#361 `%.12g` copy) | float → cached shortest-round-trip lexeme (≡ `mdk_float_lexeme`) | N9 — **verified equivalent by review + probe battery** (the #361 ask); comments still say `%.12g` |
 | 14 unary libm (`mdk_cbrt exp log log2 log10 sin cos tan asin acos atan sinh cosh tanh`) | ~939–952 | math-extern use | real (`Math.*`) | real | real (`Math.*`) | transcendental | N4-adjacent: JS `Math.*` vs C libm sub-ULP (ledgered class) |
 | `mdk_pow` / `mdk_atan2` / `mdk_hypot` | ~953–955 | math-extern use | real | real | real | binary libm | same |
-| `mdk_str_to_float` | ~968 | `stringToFloat` use | real — strtod acceptance set | same | same (shared `mdkStrToFloat` block — since #543; was raw `Number()` before it) | parse path-channel bytes; latch ok | **WH2 ✅ FIXED** (#370) |
+| `mdk_str_to_float` | ~968 | `stringToFloat` use | real — strtod acceptance set (`mdkStrToFloat`, `medaka_host.mjs`) | same | same (the one copy; was raw `Number()` before #543) | parse path-channel bytes; latch ok | **WH2 ✅ FIXED** (#370) |
 | `mdk_str_to_float_ok` | ~969 | `stringToFloat` use | real — ok flag of the last parse | same | same (**absent** until #543 → LinkError at instantiate) | did that parse succeed? | **WH2 ✅** (#370; `Some nan` needs a channel NaN cannot carry) |
 | `mdk_path_reset` / `mdk_path_push` | ~1106–1107 | IO group | real | real | real | guest→host byte channel | — |
-| `mdk_read_file` / `mdk_file_exists` / `mdk_get_env` | ~1108–1110 | IO group | real (Node fs/env) | capability stub | **real vfs** (`read_file`/`file_exists` read the in-memory vfs — this seam FEEDS the compiler its sources); `get_env` → empty | 1/0 + cached result bytes | capability |
-| `mdk_args_count` / `mdk_arg_len` / `mdk_arg_byte` | ~1111–1113 | IO group | real (`MDK_ARGS`) | capability stub | real (guest argv = the `compile`/`hover`/`complete` call) | argv marshaling | capability |
-| `mdk_result_len` / `mdk_result_byte` | ~1114–1115 | IO group | real | capability stub | real | read cached result | — |
-| `mdk_exit` | ~1116 | IO group | real, **drops buffered stderr** | capability stub (clean `exit 0` reports an error — deliberate, UX-noteworthy) | real (`ExitSignal` unwind) | flush + exit | T1/WH4 ✗ |
+| `mdk_read_file` / `mdk_file_exists` / `mdk_get_env` | ~1108–1110 | IO group | real (Node fs/env) | `fs` real over a per-run in-memory vfs (empty at the start of each run; a missing path is `Err "ENOENT: no such file or directory, open '<path>'"`); `get_env` a capability error (`env` withheld) | **real vfs** (`read_file`/`file_exists` read the in-memory vfs — this seam FEEDS the compiler its sources); `get_env` → empty | 1/0 + cached result bytes | capability |
+| `mdk_args_count` / `mdk_arg_len` / `mdk_arg_byte` | ~1111–1113 | IO group | real (`MDK_ARGS`) | capability error (`args` withheld) | real (guest argv = the `compile`/`hover`/`complete` call) | argv marshaling | capability |
+| `mdk_result_len` / `mdk_result_byte` | ~1114–1115 | IO group | real | real (the `fs` slice's result channel) | real | read cached result | — |
+| `mdk_exit` | ~1116 | IO group | real (`ExitSignal` unwind, flush stdout then stderr, exit) | capability error (`exit` withheld; a clean `exit 0` reports an error — deliberate, UX-noteworthy) | real (`ExitSignal` unwind) | flush + exit | T1/WH4 ✅ (#376) |
 | `mdk_wall_time_sec` / `mdk_monotonic_sec` / `mdk_sleep_ms` | clock group in `wasm_preamble.mdk` (`clockHostImportLines`) | `wallTimeSec` / `monotonicSec` / `sleepMs` use | real (the host's wall clock, its monotonic clock, a blocking wait on a shared cell) | wall and monotonic reads real; sleep real only when the page is cross-origin isolated, else a named capability error | real (same keys; never sleeps, present to avoid a LinkError) | f64 seconds; f64 seconds; sleep `i64` ms, non-positive returns at once | — |
-| `mdk_write_file_reset` / `_push` / `_commit` | ~1223–1225 | `writeFileBytes` use | real | **MISSING → LinkError** | **missing** — same #375 hole as worker.js | streamed file write | **WH3 ✗ CONFIRMED** |
+| `mdk_write_file_reset` / `_push` / `_commit` | ~1223–1225 | `writeFileBytes` use | real | real over the per-run vfs (`fs` slice) | real over the source vfs (`fs` slice) | streamed file write | WH3 ✅ (#375) |
 | `mdk_write_int` / `mdk_write_bool` | ~53–54 | **never** (dead W2 scaffold; verified unreferenced) | absent | absent | n/a (never emitted in ref mode) | legacy | — |
+
+**The in-memory vfs (`MemoryVfs`, `playground/medaka_host.mjs`).** The worker's
+per-run vfs and the compiler's source vfs share one path model. A path is
+relative to the vfs root, which `.`, `/` and the empty path all name. Empty and
+`.` components are dropped and `..` steps up a level, never above the root, so
+`./a.txt`, `.//a.txt` and `a.txt` are one file. Every component that a `/`
+follows must be an existing directory. The root always exists. Another directory
+exists only when an entry the vfs was built with lies under it, since no call a
+program can make creates one. So `fileExists "."` is `True`, and `readFile "."`,
+a write into a directory that does not exist, and a write to a directory are each
+an `Err`. The error texts are Node's, as on `run.js`: `ENOENT: no such file or
+directory, open '<path>'`, `EISDIR: illegal operation on a directory, read`, and
+`ENOTDIR: not a directory, open '<path>'`. Native prints the C library's text,
+for example `No such file or directory`. Pinned by `playground/medaka_host_test.mjs`
+probes (e) and (g).
 
 **Not an import: `ioPoll`.** No host binds descriptor readiness, and `ioPoll`
 declares no `env.*` import. The emitter lowers it inline (`emitLeafExternRef`
@@ -432,8 +460,8 @@ ledgered as the wasm `ioPoll` `TrapStub` row of `compiler/backend/extern_catalog
 landed, #370 reached only TWO of the three — `playground/compile.mjs` was left on raw
 `Number()` AND missing the new `mdk_str_to_float_ok` import, LinkError-ing the playground
 dead until #543 completed it and made the gate derive its host set) (leading-ws-only, full consumption, inf/nan spellings, C99 hex floats), derived from the C oracle over a 621-case battery and pinned on all three engines by `test/llvm_fixtures/str_to_float_frontier.mdk`; `mdk_float_fmt` ✅ verified (N9 row) |
-| WH3 — shim parity, LinkError ban | ✗ CONFIRMED (env-key half) | `worker.js` missing `mdk_write_file_reset/push/commit` → raw LinkError on `writeFileBytes` programs (node simulation with worker's exact env set) — **#375**, still open. The SHARED-BLOCK half is now mechanised: `test/diff_compiler_wasm_shim_parity_test.mdk` (a required `gates` matrix row) byte-diffs every `--- SHARED SHIM ---` region across all **three** hosts (`run.js`, `worker.js`, `compile.mjs`). ⚠️ It covered only the first TWO until 2026-07-16: `compile.mjs` (the seam that runs the COMPILER) holds its own copy of both blocks, and the gate's blindness to it is precisely how #543 shipped — #370's fix updated the two gated copies, leaving `compile.mjs` on raw `Number()` and missing the new `mdk_str_to_float_ok` import (LinkError → playground dead), while its `fmt12g` sat on the pre-#361 `%.12g` formatter. Fixed in #543. It found `fmt12g` had ALREADY drifted (comments/whitespace only — behaviour unaffected) under the "copied verbatim" comment that was the only prior enforcement. The env-KEY-SET half (#375) is still unchecked by any gate |
-| WH4 — flush discipline | ✗ CONFIRMED | `run.js` `mdk_exit` writes stdout, **drops buffered stderr** — **#376**; trap path flushes both ✅ (probe: pre-trap stdout delivered) |
+| WH3 — one key set, LinkError ban | ✅ | one host module (`playground/medaka_host.mjs`) installs every slice key on every host, withheld ones as named CapabilityError callables; `worker.js`'s missing `mdk_write_file_*` trio (#375) is the `fs` slice over its per-run vfs. The shim copies once byte-diffed across `run.js`, `worker.js` and `compile.mjs` (#543 shipped through an uncounted third copy) are gone; the import-key check (checkImportKeys) refuses an import key no slice lists, and `compiler/types/target_profile_host_test.mdk` pins the host's grants to the compiler's rows. Probes: `playground/medaka_host_test.mjs` (b), (c) |
+| WH4 — flush discipline | ✅ | one implementation (`deliverAll` in `playground/medaka_host.mjs`, called by `runProgram` on every way out); `run.js` `mdk_exit` now delivers stderr too (#376), and its exit leaves queued pipe writes to drain. Probes: `playground/medaka_host_test.mjs` (a), (d), (h) |
 | WP10 — eager value-global init ordered by dependency; dispatch-reaching/cyclic globals are lazy | ✅ **RESOLVED — STRUCTURE+CALLS FIXED (#553 A+B); dispatch+cycle deviation CLOSED (#561 PR-A native + PR-B wasm, both SHIPPED)** | Pre-fix, `topoSortValBinds`'s edges came from `eagerVars`, a DIRECT free-var scan that did not follow calls, so a global read reached through a call yielded NO edge and source order decided → `ref.null` + *"dereferencing a null pointer"* at instantiate. **#553 Stage B adds `eagerReachMap` (SCC-condensed eager-reachability closure over `CVar`+`CDict` call heads), closing the call-hidden arm on both backends; the remaining `CMethod` dispatch + genuine-cycle residual was closed by #561, which emits those globals LAZILY (per-global 3-state force function on both backends) instead of extending the sort — see `compiler/EAGER-INIT-DESIGN.md` §10.** Exploited by **#543** (`crossRun` → `freshCrossRun` → `initialEnv`, ordered 97 lines early, playground dead). ⚠️ **NOT wasm-only and NOT playground-only**: `llvm_emit`'s `orderedValBinds` uses the SAME shared `eagerVars`. A **12-line user program** (§1 WP10) measured across the three SHIPPING engines gives **eval `7` / native SIGSEGV (exit 139) / wasm `dereferencing a null pointer`** — only eval is right, so native is **EXPLOITABLE from user code**, not merely exposed. In the COMPILER's own graph native escapes only by luck: `resetCrossModuleState ()` overwrites the poisoned bundle before any reader dereferences it (pre-fix IR receipt: `crossRun` stored at prologue line 1693 vs `initialEnv` at 1768; `global i64 0` loaded inside `freshCrossRun`). **Native fails as a segfault/silent zero, wasm as a named trap** — the asymmetry is why only the playground surfaced it — so #553 must fix BOTH arms; a wasm-only fix leaves the silent one live. #543 restored the edge at the one known site (`freshCrossRun` takes the env as an arg) — a point fix, not the law. **GATED, and DRAINED by #553 Stage B**: `test/llvm_fixtures/eager_global_call_hidden.mdk` pinned the SILENT arm under `emitter:shared-eager-init`; when Stage B landed it went `eval==native==wasm` all `42`, its ledger row was removed and its golden re-blessed to `42` (the self-drain fired as designed). The build-path lock is `test/build_diff_fixtures/eager_call_hidden.mdk`. Its control peer `eager_global_call_ordered.mdk` is green on all 3 engines. The boxed/SIGSEGV arm is NOT pinnable (`diff_compiler_llvm.sh` has no ledger and a segfault has no golden). #543's own symptom is still ungated — only the nightly, non-required playground build compiles the whole compiler to wasm |
 | WH5 — byte-channel only | ✅ | no GC ref crosses an import signature (inventory) |
 | WH6 — engine baseline | ⚠ | node 24 + wasm-tools pinned in CI — **one composite-action pin** (`wasm-tools-version`/`wasm-node-version` inputs, defaulted in `.github/actions/setup-medaka/action.yml`), shared by the two jobs that install the toolchain (`wasm:` and the `engines` gate shard, #597), so the two cannot drift; playground WasmGC feature-detect still open (**#75**). The "wasm job is not a required check" caveat is **retired** — it is required (R1 row) |
@@ -459,8 +487,10 @@ dead until #543 completed it and made the gate derive its host set) (leading-ws-
 - **Wrong answer only via a HOF / only when type-lost** → the `$mdk_value_*`
   runtime helpers (WP9): the reflective surface re-implements the operation;
   check its shape arms against N4/N5/N6.
-- **Works in run.js, breaks in the playground** → WH3 shim-parity; diff the
-  two `env` objects before diffing the module.
+- **Works in run.js, breaks in the playground** → the two hosts run different
+  profiles (`wasmgc/node` vs `wasmgc/browser-worker`): compare
+  `installedKeys` in `playground/medaka_host.mjs` for the two before diffing
+  the module.
 
 ## 6. Perf-profiling stage divergence — llvm vs. wasm
 

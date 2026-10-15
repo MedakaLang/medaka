@@ -17,7 +17,7 @@
 --   • search:   elements in the left subtree < node element < the right
 --   • balance:  neither subtree is more than `delta` (= 3) times the other
 --
--- maintained by the smart constructor `balance`.  Most operations carry an
+-- maintained by the smart constructors `balance`, `balanceL` and `balanceR`.  Most operations carry an
 -- `Ord a` constraint while the pure walks (`size`, `toList`, the folds) do
 -- not.
 --
@@ -40,7 +40,7 @@ import core.{
   Option,
   FromEntries,
 }
-import list.{intersperse}
+import list.{intersperse, sort, sortBy}
 
 {- | The set type.
 
@@ -64,6 +64,24 @@ balance x l r
   | size r > 3 * size l = rotateL x l r
   | size l > 3 * size r = rotateR x l r
   | otherwise = bin x l r
+
+-- `balanceL` repairs a node whose left subtree may have grown (an insert into
+-- `l`) or whose right subtree may have shrunk (a delete from `r`); only the
+-- left-heavy check can fire. `balanceR` is the mirror image. Both match each
+-- child once and read the cached sizes directly.
+balanceL : a -> Set a -> Set a -> Set a
+balanceL x Tip r = Bin (size r + 1) x Tip r
+balanceL x (l@(Bin sl _ _ _)) Tip =
+  if sl <= 1 then Bin (sl + 1) x l Tip else rotateR x l Tip
+balanceL x (l@(Bin sl _ _ _)) (r@(Bin sr _ _ _)) =
+  if sl > 3 * sr && sl + sr > 1 then rotateR x l r else Bin (sl + sr + 1) x l r
+
+balanceR : a -> Set a -> Set a -> Set a
+balanceR x l Tip = Bin (size l + 1) x l Tip
+balanceR x Tip (r@(Bin sr _ _ _)) =
+  if sr <= 1 then Bin (sr + 1) x Tip r else rotateL x Tip r
+balanceR x (l@(Bin sl _ _ _)) (r@(Bin sr _ _ _)) =
+  if sr > 3 * sl && sl + sr > 1 then rotateL x l r else Bin (sl + sr + 1) x l r
 
 rotateL : a -> Set a -> Set a -> Set a
 rotateL x l (r@(Bin _ _ rl rr)) =
@@ -111,10 +129,57 @@ singleton x = Bin 1 x Tip Tip
    The `Set { x, ... }` literal is the same operation.
 
    > toList (fromList [3, 1, 2, 3, 1])
-   [1, 2, 3] -}
+   [1, 2, 3]
+   > size (fromList [0.0 / 0.0, 1.0, 0.0 / 0.0])
+   2 -}
 export
 fromList : Ord a => List a -> Set a
-fromList xs = fold (s x => insert x s) Tip xs
+fromList xs =
+  let n = ascendingRunLength xs
+  if n == length xs then fst (buildAscending n xs) else fromUnsorted xs
+
+-- Length of the longest prefix whose elements are strictly ascending.
+ascendingRunLength : Ord a => List a -> Int
+ascendingRunLength [] = 0
+ascendingRunLength (x :: rest) = ascendingRunFrom x 1 rest
+
+ascendingRunFrom : Ord a => a -> Int -> List a -> Int
+ascendingRunFrom _ n [] = n
+ascendingRunFrom prev n (x :: rest) =
+  if lt prev x then ascendingRunFrom x (n + 1) rest else n
+
+-- Builds a perfectly balanced tree from the first `n` elements and returns it
+-- with the elements that follow. The first `n` must be strictly ascending.
+buildAscending : Int -> List a -> (Set a, List a)
+buildAscending n xs
+  | n <= 0 = (Tip, xs)
+  | otherwise = buildNode n xs
+
+buildNode : Int -> List a -> (Set a, List a)
+buildNode n xs =
+  let nl = (n - 1) / 2
+  let nr = n - 1 - nl
+  let (l, rest) = buildAscending nl xs
+  match rest
+    x :: rest2 =>
+      let (r, rest3) = buildAscending nr rest2
+      (Bin n x l r, rest3)
+    [] => panic "Set.buildNode: fewer elements than the run length"
+
+-- Stable-sorts, keeps the last of each run of elements that `compare` calls
+-- equal (the later one wins, as with `insert`), and builds the tree in one
+-- linear pass.
+fromUnsorted : Ord a => List a -> Set a
+fromUnsorted xs =
+  let ys = dedupeLast (sortBy compare xs)
+  fst (buildAscending (length ys) ys)
+
+dedupeLast : Ord a => List a -> List a
+dedupeLast [] = []
+dedupeLast [x] = [x]
+dedupeLast (x :: rest@(y :: _)) = match compare x y
+  Eq => dedupeLast rest
+  _ => x :: dedupeLast rest
 
 -- > size (Set { 1, 2, 3, 2, 1 })
 -- 3
@@ -158,8 +223,8 @@ export
 insert : Ord a => a -> Set a -> Set a
 insert x Tip = singleton x
 insert x (Bin s y l r) = match compare x y
-  Lt => balance y (insert x l) r
-  Gt => balance y l (insert x r)
+  Lt => balanceL y (insert x l) r
+  Gt => balanceR y l (insert x r)
   Eq => Bin s x l r
 
 -- > size (insert 2 (fromList [1, 2, 3]))
@@ -175,8 +240,8 @@ export
 delete : Ord a => a -> Set a -> Set a
 delete x Tip = Tip
 delete x (Bin _ y l r) = match compare x y
-  Lt => balance y (delete x l) r
-  Gt => balance y l (delete x r)
+  Lt => balanceR y (delete x l) r
+  Gt => balanceL y l (delete x r)
   Eq => glue l r
 
 -- > toList (delete 9 (fromList [1, 2, 3]))
@@ -197,12 +262,12 @@ glue l r
 glueMax : Set a -> Set a -> Set a
 glueMax l r = match maxView l
   None => r
-  Some (x, l') => balance x l' r
+  Some (x, l') => balanceR x l' r
 
 glueMin : Set a -> Set a -> Set a
 glueMin l r = match minView r
   None => l
-  Some (x, r') => balance x l r'
+  Some (x, r') => balanceL x l r'
 
 -- # Minimum and maximum
 
@@ -216,7 +281,7 @@ minView : Set a -> Option (a, Set a)
 minView Tip = None
 minView (Bin _ x l r) = match minView l
   None => Some (x, r)
-  Some (xm, l') => Some (xm, balance x l' r)
+  Some (xm, l') => Some (xm, balanceR x l' r)
 
 -- > minView (Set { } : Set Int)
 -- None
@@ -231,7 +296,7 @@ maxView : Set a -> Option (a, Set a)
 maxView Tip = None
 maxView (Bin _ x l r) = match maxView r
   None => Some (x, l)
-  Some (xm, r') => Some (xm, balance x l r')
+  Some (xm, r') => Some (xm, balanceL x l r')
 
 -- > maxView (Set { } : Set Int)
 -- None
@@ -278,6 +343,10 @@ deleteMax s = match maxView s
 
 -- ── Folds (ascending element order) ─────────────────────────────────────
 
+elementsOnto : Set a -> List a -> List a
+elementsOnto Tip acc = acc
+elementsOnto (Bin _ x l r) acc = elementsOnto l (x :: elementsOnto r acc)
+
 foldrSet : (a -> b -> <e> b) -> b -> Set a -> <e> b
 foldrSet f z Tip = z
 foldrSet f z (Bin _ x l r) = foldrSet f (f x (foldrSet f z r)) l
@@ -303,11 +372,11 @@ foldlSet f z (Bin _ x l r) = foldlSet f (f (foldlSet f z l) x) r
 
 insertMin : a -> Set a -> Set a
 insertMin x Tip = singleton x
-insertMin x (Bin _ y l r) = balance y (insertMin x l) r
+insertMin x (Bin _ y l r) = balanceL y (insertMin x l) r
 
 insertMax : a -> Set a -> Set a
 insertMax x Tip = singleton x
-insertMax x (Bin _ y l r) = balance y l (insertMax x r)
+insertMax x (Bin _ y l r) = balanceR y l (insertMax x r)
 
 -- Join `l < x < r` for arbitrarily unbalanced `l`/`r`: descend the heavy side
 -- until the weights are within `delta`, rebalancing on the way out.
@@ -453,7 +522,7 @@ subsetGo (Bin _ x l r) b =
 export impl Foldable Set where
   fold f z s = foldlSet f z s
   foldRight f z s = foldrSet f z s
-  toList s = foldrSet (::) [] s
+  toList s = elementsOnto s []
   isEmpty Tip = True
   isEmpty _ = False
   length s = size s
@@ -552,6 +621,22 @@ ascending (x :: y :: rest) = lt x y && ascending (y :: rest)
 
 prop "fromList builds a well-formed tree" (xs : List Int) =
   wellFormed (fromList xs)
+
+prop "fromList agrees with naive fold-insert" (xs : List Int) =
+  let naive = fold (s x => insert x s) Tip xs
+  eq (toList (fromList xs)) (toList naive)
+
+prop "fromList agrees with naive on a sorted prefix then an unsorted tail" (xs : List Int) =
+  let ys = sort xs ++ xs
+  eq (toList (fromList ys)) (toList (fold (s x => insert x s) Tip ys))
+    && wellFormed (fromList ys)
+
+prop "minView and maxView keep the set well-formed at every step" (xs : List Int) =
+  let s = fromList xs
+  match (minView s, maxView s)
+    (Some (_, a), Some (_, b)) => wellFormed a && wellFormed b
+    (None, None) => True
+    _ => False
 
 prop "elements come out strictly ascending (sorted, deduped)" (xs : List Int) =
   ascending (toList (fromList xs))

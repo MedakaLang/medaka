@@ -2,10 +2,10 @@
 -- Type-alias expansion now works end-to-end (see
 -- `compiler/TYPE-ALIAS-EXPANSION-DESIGN.md` §10 AS-BUILT), so the old
 -- `data OrdMap a = OEmpty | OMap (Map String a)` wrapper is no longer needed.
--- The `om*` helpers below are thin String-keyed wrappers kept for the existing
--- call sites in types/typecheck.mdk, backend/llvm_emit.mdk, and support/util.mdk.
+-- The `om*` helpers below are String-keyed (`omLookup` and `omHasKey` descend
+-- the tree with a direct String compare) and are kept for the existing call sites in types/typecheck.mdk, backend/llvm_emit.mdk, and support/util.mdk.
 
-import map.{Map(..), set, get, has, size, delete, keys, mapWithKey}
+import map.{Map(..), set, size, delete, keys, mapWithKey}
 
 export type OrdMap a = Map String a
 
@@ -21,13 +21,20 @@ export
 omInsert : String -> a -> OrdMap a -> OrdMap a
 omInsert k v m = set k v m
 
+-- Monomorphic String descent: `k < k2` and `k > k2` are the emitter's raw string
+-- ordering, so no dictionary-dispatched `compare` and no Ordering value per level.
+-- Same visit order and same answer as `get`/`has` on `Map String`.
 export
 omLookup : String -> OrdMap a -> Option a
-omLookup k m = get k m
+omLookup k Tip = None
+omLookup k (Bin _ k2 v l r) =
+  if k < k2 then omLookup k l else if k > k2 then omLookup k r else Some v
 
 export
 omHasKey : String -> OrdMap a -> Bool
-omHasKey k m = has k m
+omHasKey k Tip = False
+omHasKey k (Bin _ k2 _ l r) =
+  if k < k2 then omHasKey k l else if k > k2 then omHasKey k r else True
 
 export
 omDelete : String -> OrdMap a -> OrdMap a

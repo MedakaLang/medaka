@@ -1,5 +1,5 @@
 # META
-source_lines=3021
+source_lines=3118
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -69,7 +69,7 @@ import frontend.marker.{
 }
 import types.repr.{Scheme}
 import types.typecheck.{
-  checkOneDiagsK, checkModulesDiagsChain, chainFullKey, checkModulesK,
+  checkOneDiagsK, checkOneDiagsLinesK, checkModulesDiagsChain, chainFullKey, checkModulesK,
   entryOwnSchemes, dropModSchemes, ModDiags, setCoherenceUserDecls,
   setStdlibOwnership, TcDiag(..), tcMsg,
   -- #2738: the importer peer of `preludeStandaloneShadows`.  It lives in the
@@ -86,7 +86,9 @@ import driver.loader.{
   loadProgramFilesLocatedCached,
   loadProgramFilesLocatedCachedE,
   loadedSourceOf,
-  loadProgramE,
+  parseCachedLocated,
+  loadProgramFilesLocatedE,
+  dropPathTriple,
   projectTrustedMods,
   stdlibOwnership,
   entrySearchRoots,
@@ -895,11 +897,8 @@ public export data SurfaceAnalysis = SurfaceAnalysis {
 -- `W-PRELUDE-METHOD-SHADOW`).  "" = the caller has no module id in hand (the
 -- LSP live buffer, the playground, an inline `source`), and the text falls back
 -- to "this module" — the flat path analyses exactly one module either way.
--- S-3/#164: exported so `checkRoute`'s single-module clean arm
--- (`compiler/driver/medaka_cli.mdk`) can call this directly with the loader's
--- already-parsed, real-span `decls` instead of going through `analyzeLocatedG`
--- (which would re-parse `tsrc` via `parseLocated` — the loader already ran the
--- structurally-identical `parseLocatedResult` over the same source).
+-- Exported so callers that already hold the real-span `decls` (the loader's
+-- located parse) skip `analyzeLocatedG`'s re-parse of the source.
 export
 analyzeFrom : (List String -> <e> List (String, List String)) ->
   String ->
@@ -909,17 +908,62 @@ analyzeFrom : (List String -> <e> List (String, List String)) ->
   List String ->
   <e> List Diag
 analyzeFrom exportsFor modName runtimeSrc coreSrc raw internalGuard =
+  fst
+    (analyzeFromBy
+      (preludeKey rt core up =>
+        let (tcErrs, tcWarns) = checkOneDiagsK preludeKey rt core up
+        ([], tcErrs, tcWarns))
+      exportsFor
+      modName
+      runtimeSrc
+      coreSrc
+      raw
+      internalGuard)
+
+-- `analyzeFrom` plus the entry's rendered `name : scheme` lines from the SAME
+-- typecheck drive, for the one caller that prints them (`checkRoute`'s
+-- single-file arm).  The lines are rendered inside that drive, before the
+-- auto-print obligation drive or a target check can run: a scheme rendered
+-- after another elaboration can name its type variables differently (#4053).
+-- Every other caller uses `analyzeFrom`, which does not render them.
+export
+analyzeFromDump : (List String -> <e> List (String, List String)) ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  List String ->
+  <e> (List Diag, List String)
+analyzeFromDump exportsFor modName runtimeSrc coreSrc raw internalGuard =
+  analyzeFromBy
+    checkOneDiagsLinesK
+    exportsFor
+    modName
+    runtimeSrc
+    coreSrc
+    raw
+    internalGuard
+
+analyzeFromBy : (Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List String, List TcDiag, List TcDiag)) ->
+  (List String -> <e> List (String, List String)) ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  List String ->
+  <e> (List Diag, List String)
+analyzeFromBy tc exportsFor modName runtimeSrc coreSrc raw internalGuard =
   let s = analyzeSurface exportsFor modName runtimeSrc coreSrc raw internalGuard
-  let tcDiags = match s.resolveClean
+  let (lines, tcDiags) = match s.resolveClean
     True =>
-      let (tcErrs, tcWarns) = checkOneDiagsK
+      let (ls, tcErrs, tcWarns) = tc
         s.surfacePreludeKey
         s.surfaceRuntimeP
         s.surfaceCoreP
         ("__user__", s.surfaceDesugared)
-      map diagOfTypeError tcErrs ++ map diagOfTypeWarning tcWarns
-    False => []
-  analyzeFinish s tcDiags
+      (ls, map diagOfTypeError tcErrs ++ map diagOfTypeWarning tcWarns)
+    False => ([], [])
+  (analyzeFinish s tcDiags, lines)
 
 -- Everything `analyzeFrom` runs except the typecheck: parse-independent,
 -- AST-level, and safe to run before a caller decides WHICH typecheck produces
@@ -1288,12 +1332,13 @@ cacheRemove f ((k, v) :: rest)
 -- errors (file → Diag) to append after the graph analysis.
 wrappedRead : Ref (List (String, String)) ->
   Ref (List (String, Diag)) ->
+  Ref (List (String, List Decl)) ->
   (String -> Option String) ->
   String ->
   Option String
-wrappedRead cacheRef staleRef read path = match read path
+wrappedRead cacheRef staleRef parseCacheRef read path = match read path
   None => None
-  Some src => match parseResult src
+  Some src => match parseCachedLocated parseCacheRef src
     Ok _ =>
       cacheRef := cachePut path src !cacheRef
       Some src
@@ -1405,7 +1450,7 @@ analyzeProjectFull : (List String -> <e> List (String, List String)) ->
   <IO | e> (List ModDiags, List (String, List Diag))
 analyzeProjectFull exportsFor allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let staleRef = newStale ()
-  let wread = p => wrappedRead cacheRef staleRef read p
+  let wread = p => wrappedRead cacheRef staleRef parseCacheRef read p
   match loadProgramFilesLocatedCachedE parseCacheRef wread entry roots
     -- #100: a parse/lex error in a dependency is attributed to THAT module's file
     -- with its own located `P-*`/`L-*` diag — this is the LSP's most common input
@@ -1473,6 +1518,28 @@ analyzeLoadedFull exportsFor allowInternal trustedMods entry roots runtimeSrc co
     mods
     modPairs
 
+-- `analyzeLoadedFull` for a caller that has ALREADY resolved this exact graph
+-- clean (`check`'s front pass, same guard and same desugared trees): resolve is
+-- not run again, its buckets are the empty per-file buckets.  `ResError` has no
+-- warning variant, so a clean resolve contributes no diagnostic to any bucket.
+export
+analyzeLoadedResolvedClean : String ->
+  List String ->
+  String ->
+  String ->
+  List (String, String, List Decl) ->
+  List (String, List Decl) ->
+  (List ModDiags, List (String, List Diag))
+analyzeLoadedResolvedClean entry roots runtimeSrc coreSrc mods modPairs =
+  typecheckPassFull
+    (preludeDesugared runtimeSrc)
+    (preludeDesugared coreSrc)
+    (Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc))
+    (chainKeyOf entry roots)
+    mods
+    modPairs
+    (seedAll (map midPath mods) [])
+
 -- `analyzeProject` minus the load: resolve, then typecheck, then bucket — over a
 -- graph the caller has already loaded.  `medaka test` loads once and calls this,
 -- rather than handing `analyzeProject` an entry it would load a second time.
@@ -1514,8 +1581,14 @@ projectDiagsLoadedFull : (List String -> <e> List (String, List String)) ->
   List (String, List Decl) ->
   <e> (List ModDiags, List (String, List Diag))
 projectDiagsLoadedFull exportsFor allowInternal trustedMods runtimeP coreP preludeKey chainKey mods modPairs =
-  let buckets =
-    resolvedBuckets
+  typecheckPassFull
+    runtimeP
+    coreP
+    preludeKey
+    chainKey
+    mods
+    modPairs
+    (resolvedBuckets
       exportsFor
       allowInternal
       trustedMods
@@ -1524,8 +1597,7 @@ projectDiagsLoadedFull exportsFor allowInternal trustedMods runtimeP coreP prelu
       runtimeP
       coreP
       mods
-      modPairs
-  typecheckPassFull runtimeP coreP preludeKey chainKey mods modPairs buckets
+      modPairs)
 -- A load error (cycle / unknown module / unreadable file) is attributed to the
 -- entry file (the compiler loader returns a single Err string without a per-file
 -- split, unlike the OCaml attribute_load_error; entry is the conservative
@@ -1549,7 +1621,7 @@ projectEntrySchemes : Ref (List (String, String)) ->
   <IO> Option (List (String, Scheme))
 projectEntrySchemes cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let staleRef = newStale ()
-  let wread = p => wrappedRead cacheRef staleRef read p
+  let wread = p => wrappedRead cacheRef staleRef parseCacheRef read p
   let runtimeP = preludeDesugared runtimeSrc
   let coreP = preludeDesugared coreSrc
   -- #2719 (a1): the SAME prelude key `analyzeProject` mints, so hover/completion
@@ -1622,8 +1694,8 @@ foldStale ((path, d) :: rest) buckets =
 -- entry's source changed, so the unchanged prefix's verdicts are replayed instead
 -- of recomputed, and only the modules from the first changed one onward resolve.
 --
--- WHAT A STEP CARRIES: `ModuleExports` is fields of strings and string lists
--- and `Diag` is a severity, two strings and three `Option`s -- no `Decl`, no
+-- WHAT A STEP CARRIES: `ModuleExports` is fields of strings, string lists and
+-- String-keyed maps of strings, and `Diag` is a severity, two strings and three `Option`s -- no `Decl`, no
 -- `Ref`, no `Scheme`, no union-find cell.  So this memo is OUTSIDE the
 -- mint-after-restore law the module-chain memo lives under: it restores no
 -- `GraphRun` because resolve mints nothing to restore.
@@ -1866,8 +1938,8 @@ multiModuleAutoPrintDiags runtimeP coreP modPairs =
 -- Resolve a graph the caller has already loaded, bucketing each module's errors
 -- by its file.  The shared prefix of `projectDiagsLoaded` and
 -- `projectDiagsFromTc`, which differ only in where the typecheck half comes
--- from — the two must resolve identically or their verdicts diverge on a
--- channel that has nothing to do with typing.
+-- from.  They resolve identically so their verdicts agree on a channel that has
+-- nothing to do with typing.
 resolvedBuckets : (List String -> <e> List (String, List String)) ->
   Bool ->
   List String ->
@@ -2875,13 +2947,41 @@ checkJsonSingleParts exportsFor modName allowInternal rsrc csrc target src =
           []
         else
           let entryRaw = parseLocated src
-          mainShapeWarnings [] [] [(target, desugar entryRaw)] entryRaw
+          mainShapeWarnings [] [] [] entryRaw
       (CjParts target [(target, src, diags ++ mainWarns)], hasErr)
 
--- File check → JSON.  Reads `target`, then routes exactly like runCheckJsonCmd:
--- parse error → single diag; load error (bad import) → R-MODULE-LOAD diag with the
--- import span + available-modules hint; single module → checkJsonSingle (honouring
--- the owning-root trust signal); multi-module → analyzeProject.  `stdlibDir` is the
+-- `checkJsonSingleParts` for a caller that already holds the entry's real-span
+-- `decls` from the located loader: analysis and the main-shape warning both read
+-- them, so the entry is parsed once.  The parse-error rejection the other
+-- function opens with is the loader's job here.
+checkJsonSingleFromDecls : (List String -> <e> List (String, List String)) ->
+  String ->
+  Bool ->
+  String ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  <e> (CheckJson, Bool)
+checkJsonSingleFromDecls exportsFor modName allowInternal rsrc csrc target src decls =
+  let diags =
+    analyzeFrom
+      exportsFor
+      modName
+      rsrc
+      csrc
+      decls
+      (internalGuardFor allowInternal)
+  let hasErr = anyList diagIsError diags
+  -- Only on a clean program, as in `checkJsonSingleParts`.
+  let mainWarns = if hasErr then [] else mainShapeWarnings [] [] [] decls
+  (CjParts target [(target, src, diags ++ mainWarns)], hasErr)
+
+-- File check → JSON.  Reads `target`, loads its graph once, then routes exactly
+-- like runCheckJsonCmd: load failure → the entry's parse error if it has one, else
+-- the loader's diag (bad import → R-MODULE-LOAD with the import span +
+-- available-modules hint); single module → checkJsonSingleFromDecls (honouring the
+-- owning-root trust signal); multi-module → analyzeLoadedFull.  `stdlibDir` is the
 -- <root>/stdlib dir; roots are derived from the target's directory + stdlibDir.
 export
 checkJsonFile : Bool ->
@@ -2908,121 +3008,118 @@ checkJsonFileParts : Bool ->
 checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
   let src = readFileSafe target
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
-  match parseResult src
-    Err e => (CjRendered (cjParseErrJson target src e), True)
-    Ok _ => match loadProgramE target roots
-      -- #100: a parse/lex error in an IMPORTED module serializes exactly like one
-      -- in the entry — same `P-*`/`L-*` code, same real range — only attributed to
-      -- the MODULE's file and rendered against the module's OWN source.
-      Err (LoadParseFailed mpath msrc pe) =>
-        (CjRendered (cjParseErrJson mpath msrc pe), True)
-      Err (LoadCycle cmsg cpath csite) => match csite
-        Some (csrc, cloc) => (
-          CjParts target [
-            (
-              cpath,
-              csrc,
-              [Diag SevError "R-MODULE-LOAD" cmsg (Some cloc) None None],
-            ),
-          ],
-          True,
-        )
-        None => (
-          CjParts target [
-            (target, src, [Diag SevError "R-MODULE-LOAD" cmsg None None None]),
-          ],
-          True,
-        )
-      Err (LoadMsg lmsg) =>
-        let mloc = match unknownModuleIdOf lmsg
-          None => None
-          Some mid => findImportLoc mid (parseLocated src)
-        let mhelp = match unknownModuleIdOf lmsg
-          None => None
-          Some _ => match availableModulesText stdlibDir
-            "" => None
-            txt => Some txt
-        let jmsg =
-          lmsg
-            ++ (match unknownModuleIdOf lmsg
-              None => ""
-              Some _ => availableModulesHint stdlibDir)
-        (
-          CjParts target [
-            (target, src, [Diag SevError "R-MODULE-LOAD" jmsg mloc mhelp None]),
-          ],
-          True,
-        )
-      Ok mods => match mods
-        [(mid, _)] =>
-          let trusted = projectTrustedMods target roots stdlibDir mods
-          -- #2072: the FFI-stamp discriminator (stdlib-root ownership, NO
-          -- `allow-internal` opt-out) — see `stdlibOwnedMods` in loader.mdk for
-          -- why it is not `trusted` above.
-          let (flatStdlib, ownedStdlib) =
-            stdlibOwnership target roots stdlibDir mods
-          let _ = setStdlibOwnership flatStdlib ownedStdlib
-          checkJsonSingleParts
-            (stdlibExportsReader stdlibDir)
-            mid
-            (allowInternal || contains mid trusted)
-            rsrc
-            csrc
-            target
-            src
-        _ =>
-          -- #1362: the single-module arm above computes `trusted` and threads
-          -- `allowInternal || contains mid trusted` through to its guarded
-          -- analyzer — this arm previously computed no trust set at all and
-          -- passed none through, so the internal-extern guard was always
-          -- empty (silent accept). Same trust computation, hoisted one level.
-          let trusted = projectTrustedMods target roots stdlibDir mods
-          -- #2072: same discriminator as the single-module arm above.
-          let (flatStdlib, ownedStdlib) =
-            stdlibOwnership target roots stdlibDir mods
-          let _ = setStdlibOwnership flatStdlib ownedStdlib
-          let cacheRef = Ref []
-          let parseCacheRef = Ref []
-          let results =
-            analyzeProject
-              (stdlibExportsReader stdlibDir)
-              allowInternal
-              trusted
-              cacheRef
-              parseCacheRef
-              (_ => None)
-              target
-              roots
-              rsrc
-              csrc
-          let hasErr = anyList cjHasErrD results
-          -- #1236: same main-shape fold as the single-module arm above, only on
-          -- a clean project.  `analyzeProject` already parsed+cached the entry
-          -- module's LOCATED decls in `parseCacheRef` (keyed by source text, see
-          -- `parseCachedLocated`) — reuse that instead of re-parsing, so the
-          -- `Loc` this warning carries matches the one every other diagnostic on
-          -- this file would.
-          let mainWarns =
-            if hasErr then
-              []
-            else
-              let entryRaw = match lookupAssoc src !parseCacheRef
-                Some decls => decls
-                None => parseLocated src
-              -- #2246/S-1 (F-converge): `mainShapeWarnings` ignores its first THREE
-              -- parameters unconditionally (see its definition above), so the
-              -- whole-graph desugar this used to compute was dead work on every
-              -- clean multi-module `check --json`.  Pass `[]`, matching the
-              -- single-module arm's `[] [] []`.
-              mainShapeWarnings [] [] [] entryRaw
-          let triples = map readDiagSrc results
-          let root = dirOf stdlibDir
-          let relTriples = map (relDiagTriple root) triples
-          let entryKey = relDiagPath root target
-          (
-            CjParts entryKey (cjFoldIntoFile entryKey mainWarns relTriples),
-            hasErr,
-          )
+  match loadProgramFilesLocatedE (_ => None) target roots
+    -- An unparsable entry is reported against the spelling the caller gave, not
+    -- the path the loader minted, so the entry's own parse is checked first.
+    Err le => match parseResult src
+      Err e => (CjRendered (cjParseErrJson target src e), True)
+      Ok _ => checkJsonLoadErr target src stdlibDir le
+    Ok [(mid, _, decls)] =>
+      let mods = [(mid, decls)]
+      let trusted = projectTrustedMods target roots stdlibDir mods
+      -- #2072: the FFI-stamp discriminator (stdlib-root ownership, NO
+      -- `allow-internal` opt-out) — see `stdlibOwnedMods` in loader.mdk for
+      -- why it is not `trusted` above.
+      let (flatStdlib, ownedStdlib) =
+        stdlibOwnership target roots stdlibDir mods
+      let _ = setStdlibOwnership flatStdlib ownedStdlib
+      checkJsonSingleFromDecls
+        (stdlibExportsReader stdlibDir)
+        mid
+        (allowInternal || contains mid trusted)
+        rsrc
+        csrc
+        target
+        src
+        decls
+    Ok modsWithPath =>
+      let mods = map dropPathTriple modsWithPath
+      -- #1362: the single-module arm above computes `trusted` and threads
+      -- `allowInternal || contains mid trusted` through to its guarded
+      -- analyzer; this arm needs the same trust set for the same guard.
+      let trusted = projectTrustedMods target roots stdlibDir mods
+      -- #2072: same discriminator as the single-module arm above.
+      let (flatStdlib, ownedStdlib) =
+        stdlibOwnership target roots stdlibDir mods
+      let _ = setStdlibOwnership flatStdlib ownedStdlib
+      let (_, results) =
+        analyzeLoadedFull
+          (stdlibExportsReader stdlibDir)
+          allowInternal
+          trusted
+          target
+          roots
+          rsrc
+          csrc
+          modsWithPath
+          (desugaredModPairs modsWithPath)
+      let hasErr = anyList cjHasErrD results
+      -- #1236: same main-shape fold as the single-module arm, only on a clean
+      -- project.  The entry is the last loaded module; its located decls give
+      -- the warning the same `Loc` every other diagnostic on this file carries.
+      let mainWarns = match (hasErr, lastDecls mods)
+        (False, Some edecls) => mainShapeWarnings [] [] [] edecls
+        _ => []
+      let triples = map readDiagSrc results
+      let root = dirOf stdlibDir
+      let relTriples = map (relDiagTriple root) triples
+      let entryKey = relDiagPath root target
+      (
+        CjParts entryKey (cjFoldIntoFile entryKey mainWarns relTriples),
+        hasErr,
+      )
+
+-- The entry of a loaded graph is its last module.
+lastDecls : List (String, List Decl) -> Option (List Decl)
+lastDecls [] = None
+lastDecls [(_, ds)] = Some ds
+lastDecls (_ :: rest) = lastDecls rest
+
+-- The loader's `Err` rendered as a `check --json` envelope, for an entry whose
+-- own parse was already found clean.  #100: a parse/lex error in an IMPORTED
+-- module serializes exactly like one in the entry — same `P-*`/`L-*` code, same
+-- real range — only attributed to the MODULE's file and rendered against the
+-- module's OWN source.
+checkJsonLoadErr : String ->
+  String ->
+  String ->
+  LoadError ->
+  <IO> (CheckJson, Bool)
+checkJsonLoadErr _ _ _ (LoadParseFailed mpath msrc pe) =
+  (CjRendered (cjParseErrJson mpath msrc pe), True)
+checkJsonLoadErr target src _ (LoadCycle cmsg cpath csite) = match csite
+  Some (csrc, cloc) => (
+    CjParts target [
+      (cpath, csrc, [Diag SevError "R-MODULE-LOAD" cmsg (Some cloc) None None]),
+    ],
+    True,
+  )
+  None => (
+    CjParts target [
+      (target, src, [Diag SevError "R-MODULE-LOAD" cmsg None None None]),
+    ],
+    True,
+  )
+checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
+  let mloc = match unknownModuleIdOf lmsg
+    None => None
+    Some mid => findImportLoc mid (parseLocated src)
+  let mhelp = match unknownModuleIdOf lmsg
+    None => None
+    Some _ => match availableModulesText stdlibDir
+      "" => None
+      txt => Some txt
+  let jmsg =
+    lmsg
+      ++ (match unknownModuleIdOf lmsg
+        None => ""
+        Some _ => availableModulesHint stdlibDir)
+  (
+    CjParts target [
+      (target, src, [Diag SevError "R-MODULE-LOAD" jmsg mloc mhelp None]),
+    ],
+    True,
+  )
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "Ty" false) (mem "intMinLiteralMsg" false) (mem "intMinLiteralHelp" false) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
@@ -3035,9 +3132,9 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkModulesDiagsChain" false) (mem "chainFullKey" false) (mem "checkModulesK" false) (mem "entryOwnSchemes" false) (mem "dropModSchemes" false) (mem "ModDiags" false) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "importedStandaloneShadows" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkOneDiagsLinesK" false) (mem "checkModulesDiagsChain" false) (mem "chainFullKey" false) (mem "checkModulesK" false) (mem "entryOwnSchemes" false) (mem "dropModSchemes" false) (mem "ModDiags" false) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "importedStandaloneShadows" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
-(DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "loadProgramE" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false) (mem "availableModuleIds" false) (mem "fileOfModuleId" false) (mem "importModId" false))))
+(DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "parseCachedLocated" false) (mem "loadProgramFilesLocatedE" false) (mem "dropPathTriple" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false) (mem "availableModuleIds" false) (mem "fileOfModuleId" false) (mem "importModId" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAutoPrintMain" false) (mem "autoPrintWrapModules" false) (mem "autoPrintPinCore" false) (mem "underivedMainDiags" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "dropAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false) (mem "joinDot" false))))
@@ -3143,7 +3240,11 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DFunDef false "analyzeLocatedG" ((PVar "exportsFor") (PVar "modName") (PVar "allowInternal") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "progSrc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "exportsFor")) (EVar "modName")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "parseLocated") (EVar "progSrc"))) (EApp (EVar "internalGuardFor") (EVar "allowInternal"))))
 (DData Public "SurfaceAnalysis" () ((variant "SurfaceAnalysis" (ConNamed (field "surfaceDiags" (TyApp (TyCon "List") (TyCon "Diag"))) (field "resolveClean" (TyCon "Bool")) (field "surfaceDesugared" (TyApp (TyCon "List") (TyCon "Decl"))) (field "surfaceRuntimeP" (TyApp (TyCon "List") (TyCon "Decl"))) (field "surfaceCoreP" (TyApp (TyCon "List") (TyCon "Decl"))) (field "surfacePreludeKey" (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))))))) ())
 (DTypeSig true "analyzeFrom" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyCon "Diag"))))))))))
-(DFunDef false "analyzeFrom" ((PVar "exportsFor") (PVar "modName") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "raw") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeSurface") (EVar "exportsFor")) (EVar "modName")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "raw")) (EVar "internalGuard"))) (DoLet false false (PVar "tcDiags") (EMatch (EFieldAccess (EVar "s") "resolveClean") (arm (PCon "True") () (EBlock (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EApp (EApp (EVar "checkOneDiagsK") (EFieldAccess (EVar "s") "surfacePreludeKey")) (EFieldAccess (EVar "s") "surfaceRuntimeP")) (EFieldAccess (EVar "s") "surfaceCoreP")) (ETuple (ELit (LString "__user__")) (EFieldAccess (EVar "s") "surfaceDesugared")))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "map") (EVar "diagOfTypeError")) (EVar "tcErrs")) (EApp (EApp (EVar "map") (EVar "diagOfTypeWarning")) (EVar "tcWarns")))))) (arm (PCon "False") () (EListLit)))) (DoExpr (EApp (EApp (EVar "analyzeFinish") (EVar "s")) (EVar "tcDiags")))))
+(DFunDef false "analyzeFrom" ((PVar "exportsFor") (PVar "modName") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "raw") (PVar "internalGuard")) (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFromBy") (ELam ((PVar "preludeKey") (PVar "rt") (PVar "core") (PVar "up")) (EBlock (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EApp (EApp (EVar "checkOneDiagsK") (EVar "preludeKey")) (EVar "rt")) (EVar "core")) (EVar "up"))) (DoExpr (ETuple (EListLit) (EVar "tcErrs") (EVar "tcWarns")))))) (EVar "exportsFor")) (EVar "modName")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "raw")) (EVar "internalGuard"))))
+(DTypeSig true "analyzeFromDump" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "Diag")) (TyApp (TyCon "List") (TyCon "String")))))))))))
+(DFunDef false "analyzeFromDump" ((PVar "exportsFor") (PVar "modName") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "raw") (PVar "internalGuard")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFromBy") (EVar "checkOneDiagsLinesK")) (EVar "exportsFor")) (EVar "modName")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "raw")) (EVar "internalGuard")))
+(DTypeSig false "analyzeFromBy" (TyFun (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))) (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "Diag")) (TyApp (TyCon "List") (TyCon "String"))))))))))))
+(DFunDef false "analyzeFromBy" ((PVar "tc") (PVar "exportsFor") (PVar "modName") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "raw") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeSurface") (EVar "exportsFor")) (EVar "modName")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "raw")) (EVar "internalGuard"))) (DoLet false false (PTuple (PVar "lines") (PVar "tcDiags")) (EMatch (EFieldAccess (EVar "s") "resolveClean") (arm (PCon "True") () (EBlock (DoLet false false (PTuple (PVar "ls") (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EApp (EApp (EVar "tc") (EFieldAccess (EVar "s") "surfacePreludeKey")) (EFieldAccess (EVar "s") "surfaceRuntimeP")) (EFieldAccess (EVar "s") "surfaceCoreP")) (ETuple (ELit (LString "__user__")) (EFieldAccess (EVar "s") "surfaceDesugared")))) (DoExpr (ETuple (EVar "ls") (EBinOp "++" (EApp (EApp (EVar "map") (EVar "diagOfTypeError")) (EVar "tcErrs")) (EApp (EApp (EVar "map") (EVar "diagOfTypeWarning")) (EVar "tcWarns"))))))) (arm (PCon "False") () (ETuple (EListLit) (EListLit))))) (DoExpr (ETuple (EApp (EApp (EVar "analyzeFinish") (EVar "s")) (EVar "tcDiags")) (EVar "lines")))))
 (DTypeSig true "analyzeSurface" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyCon "SurfaceAnalysis")))))))))
 (DFunDef false "analyzeSurface" ((PVar "exportsFor") (PVar "modName") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "raw") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "desugared") (EApp (EVar "desugar") (EVar "raw"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "runtimeSrc")) (EApp (EVar "desugaredPreludeKey") (EVar "coreSrc"))))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EBinOp "++" (EBinOp "++" (EVar "raw") (EVar "runtimeP")) (EVar "coreP"))) (EVar "raw"))) (DoLet false false (PVar "shadowWarns") (EApp (EApp (EVar "preludeStandaloneShadows") (EBinOp "++" (EVar "runtimeP") (EVar "coreP"))) (EVar "desugared"))) (DoLet false false (PVar "importShadowWarns") (EApp (EApp (EVar "importedStandaloneShadows") (EListLit)) (EVar "desugared"))) (DoLet false false (PVar "deriveDiags") (EApp (EApp (EVar "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "raw")))) (DoLet false false (PVar "resErrs") (EApp (EApp (EVar "hintResErrors") (EVar "exportsFor")) (EApp (EApp (EApp (EApp (EVar "resolveProgramG2") (EVar "internalGuard")) (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared")))) (DoLet false false (PVar "resDiags") (EApp (EApp (EVar "map") (EVar "diagOfResError")) (EVar "resErrs"))) (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "desugared"))) (DoLet false false (PVar "guardDiags") (EApp (EApp (EVar "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (DoLet false false (PVar "shadowDiags") (EApp (EApp (EVar "map") (EApp (EVar "preludeShadowWarnToDiag") (EVar "modName"))) (EVar "shadowWarns"))) (DoLet false false (PVar "importShadowDiags") (EApp (EApp (EVar "map") (EApp (EVar "importShadowWarnToDiag") (EVar "modName"))) (EVar "importShadowWarns"))) (DoLet false false (PVar "clean") (EMatch (EVar "resErrs") (arm (PList) () (EVar "True")) (arm PWild () (EVar "False")))) (DoExpr (ERecordCreate "SurfaceAnalysis" ((fa "surfaceDiags" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "deriveDiags") (EVar "guardDiags")) (EVar "shadowDiags")) (EVar "importShadowDiags")) (EVar "resDiags"))) (fa "resolveClean" (EVar "clean")) (fa "surfaceDesugared" (EVar "desugared")) (fa "surfaceRuntimeP" (EVar "runtimeP")) (fa "surfaceCoreP" (EVar "coreP")) (fa "surfacePreludeKey" (EVar "preludeKey")))))))
 (DTypeSig true "analyzeFinish" (TyFun (TyCon "SurfaceAnalysis") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyApp (TyCon "List") (TyCon "Diag")))))
@@ -3198,8 +3299,8 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DTypeSig false "cacheRemove" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "cacheRemove" (PWild (PList)) (EListLit))
 (DFunDef false "cacheRemove" ((PVar "f") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "f")) (EApp (EApp (EVar "cacheRemove") (EVar "f")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EApp (EApp (EVar "cacheRemove") (EVar "f")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "wrappedRead" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "wrappedRead" ((PVar "cacheRef") (PVar "staleRef") (PVar "read") (PVar "path")) (EMatch (EApp (EVar "read") (EVar "path")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "src")) () (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Ok" PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "cacheRef")) (EApp (EApp (EApp (EVar "cachePut") (EVar "path")) (EVar "src")) (EUnOp "!" (EVar "cacheRef"))))) (DoExpr (EApp (EVar "Some") (EVar "src"))))) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "staleRef")) (EBinOp "::" (ETuple (EVar "path") (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "e"))) (EUnOp "!" (EVar "staleRef"))))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "path")) (EUnOp "!" (EVar "cacheRef"))) (arm (PCon "Some" (PVar "good")) () (EApp (EVar "Some") (EVar "good"))) (arm (PCon "None") () (EApp (EVar "Some") (EVar "src")))))))))))
+(DTypeSig false "wrappedRead" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))))
+(DFunDef false "wrappedRead" ((PVar "cacheRef") (PVar "staleRef") (PVar "parseCacheRef") (PVar "read") (PVar "path")) (EMatch (EApp (EVar "read") (EVar "path")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "src")) () (EMatch (EApp (EApp (EVar "parseCachedLocated") (EVar "parseCacheRef")) (EVar "src")) (arm (PCon "Ok" PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "cacheRef")) (EApp (EApp (EApp (EVar "cachePut") (EVar "path")) (EVar "src")) (EUnOp "!" (EVar "cacheRef"))))) (DoExpr (EApp (EVar "Some") (EVar "src"))))) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "staleRef")) (EBinOp "::" (ETuple (EVar "path") (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "e"))) (EUnOp "!" (EVar "staleRef"))))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "path")) (EUnOp "!" (EVar "cacheRef"))) (arm (PCon "Some" (PVar "good")) () (EApp (EVar "Some") (EVar "good"))) (arm (PCon "None") () (EApp (EVar "Some") (EVar "src")))))))))))
 (DTypeSig false "parseErrLoc" (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyCon "Loc"))))
 (DFunDef false "parseErrLoc" ((PVar "path") (PVar "e")) (EBlock (DoLet false false (PVar "ln") (EApp (EVar "parseErrorLine") (EVar "e"))) (DoLet false false (PVar "c") (EApp (EVar "parseErrorCol") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "ln")) (EVar "c")) (EVar "ln")) (EBinOp "+" (EVar "c") (ELit (LInt 1)))))))
 (DTypeSig true "parseErrDiag" (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyCon "Diag"))))
@@ -3209,15 +3310,17 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "analyzeProject" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))
 (DFunDef false "analyzeProject" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PTuple PWild (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProjectFull") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "cacheRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EVar "results"))))
 (DTypeSig true "analyzeProjectFull" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))))))
-(DFunDef false "analyzeProjectFull" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EVar "cacheRef")) (EVar "staleRef")) (EVar "read")) (EVar "p")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCachedE") (EVar "parseCacheRef")) (EVar "wread")) (EVar "entry")) (EVar "roots")) (arm (PCon "Err" (PCon "LoadParseFailed" (PVar "mpath") PWild (PVar "pe"))) () (ETuple (EListLit) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "mpath") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "mpath")) (EVar "pe")))))))) (arm (PCon "Err" (PCon "LoadMsg" (PVar "e"))) () (ETuple (EListLit) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "entry") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None")))))))) (arm (PCon "Err" (PCon "LoadCycle" (PVar "e") (PVar "cpath") (PVar "csite"))) () (EMatch (EVar "csite") (arm (PCon "Some" (PTuple PWild (PVar "loc"))) () (ETuple (EListLit) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "cpath") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EApp (EVar "Some") (EVar "loc"))))))))) (arm (PCon "None") () (ETuple (EListLit) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "entry") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None")))))))))) (arm (PCon "Ok" (PVar "mods")) () (EBlock (DoLet false false (PTuple (PVar "full") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeLoadedFull") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "mods")) (EApp (EVar "desugaredModPairs") (EVar "mods")))) (DoExpr (ETuple (EVar "full") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EVar "results"))))))))))
+(DFunDef false "analyzeProjectFull" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EVar "cacheRef")) (EVar "staleRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "p")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCachedE") (EVar "parseCacheRef")) (EVar "wread")) (EVar "entry")) (EVar "roots")) (arm (PCon "Err" (PCon "LoadParseFailed" (PVar "mpath") PWild (PVar "pe"))) () (ETuple (EListLit) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "mpath") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "mpath")) (EVar "pe")))))))) (arm (PCon "Err" (PCon "LoadMsg" (PVar "e"))) () (ETuple (EListLit) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "entry") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None")))))))) (arm (PCon "Err" (PCon "LoadCycle" (PVar "e") (PVar "cpath") (PVar "csite"))) () (EMatch (EVar "csite") (arm (PCon "Some" (PTuple PWild (PVar "loc"))) () (ETuple (EListLit) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "cpath") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EApp (EVar "Some") (EVar "loc"))))))))) (arm (PCon "None") () (ETuple (EListLit) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "entry") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None")))))))))) (arm (PCon "Ok" (PVar "mods")) () (EBlock (DoLet false false (PTuple (PVar "full") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeLoadedFull") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "mods")) (EApp (EVar "desugaredModPairs") (EVar "mods")))) (DoExpr (ETuple (EVar "full") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EVar "results"))))))))))
 (DTypeSig true "analyzeLoadedFull" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))
 (DFunDef false "analyzeLoadedFull" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "mods") (PVar "modPairs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectDiagsLoadedFull") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EApp (EVar "preludeDesugared") (EVar "runtimeSrc"))) (EApp (EVar "preludeDesugared") (EVar "coreSrc"))) (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "runtimeSrc")) (EApp (EVar "desugaredPreludeKey") (EVar "coreSrc"))))) (EApp (EApp (EVar "chainKeyOf") (EVar "entry")) (EVar "roots"))) (EVar "mods")) (EVar "modPairs")))
+(DTypeSig true "analyzeLoadedResolvedClean" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))
+(DFunDef false "analyzeLoadedResolvedClean" ((PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "mods") (PVar "modPairs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassFull") (EApp (EVar "preludeDesugared") (EVar "runtimeSrc"))) (EApp (EVar "preludeDesugared") (EVar "coreSrc"))) (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "runtimeSrc")) (EApp (EVar "desugaredPreludeKey") (EVar "coreSrc"))))) (EApp (EApp (EVar "chainKeyOf") (EVar "entry")) (EVar "roots"))) (EVar "mods")) (EVar "modPairs")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EVar "map") (EVar "midPath")) (EVar "mods"))) (EListLit))))
 (DTypeSig true "projectDiagsLoaded" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))
 (DFunDef false "projectDiagsLoaded" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods")) (EApp (EVar "snd") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectDiagsLoadedFull") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "runtimeP")) (EVar "coreP")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EApp (EVar "desugaredModPairs") (EVar "mods")))))
 (DTypeSig false "projectDiagsLoadedFull" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))
-(DFunDef false "projectDiagsLoadedFull" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods") (PVar "modPairs")) (EBlock (DoLet false false (PVar "buckets") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassFull") (EVar "runtimeP")) (EVar "coreP")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EVar "modPairs")) (EVar "buckets")))))
+(DFunDef false "projectDiagsLoadedFull" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods") (PVar "modPairs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassFull") (EVar "runtimeP")) (EVar "coreP")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EVar "modPairs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs"))))
 (DTypeSig true "projectEntrySchemes" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))))))
-(DFunDef false "projectEntrySchemes" ((PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EVar "cacheRef")) (EVar "staleRef")) (EVar "read")) (EVar "p")))) (DoLet false false (PVar "runtimeP") (EApp (EVar "preludeDesugared") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "preludeDesugared") (EVar "coreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "runtimeSrc")) (EApp (EVar "desugaredPreludeKey") (EVar "coreSrc"))))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCached") (EVar "parseCacheRef")) (EVar "wread")) (EVar "entry")) (EVar "roots")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "mods")) () (EApp (EVar "Some") (EApp (EVar "entryOwnSchemes") (EApp (EApp (EApp (EApp (EVar "checkModulesK") (EVar "preludeKey")) (EVar "runtimeP")) (EVar "coreP")) (EApp (EApp (EVar "map") (EVar "midToDesugaredPair")) (EVar "mods"))))))))))
+(DFunDef false "projectEntrySchemes" ((PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EVar "cacheRef")) (EVar "staleRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "p")))) (DoLet false false (PVar "runtimeP") (EApp (EVar "preludeDesugared") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "preludeDesugared") (EVar "coreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "runtimeSrc")) (EApp (EVar "desugaredPreludeKey") (EVar "coreSrc"))))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCached") (EVar "parseCacheRef")) (EVar "wread")) (EVar "entry")) (EVar "roots")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "mods")) () (EApp (EVar "Some") (EApp (EVar "entryOwnSchemes") (EApp (EApp (EApp (EApp (EVar "checkModulesK") (EVar "preludeKey")) (EVar "runtimeP")) (EVar "coreP")) (EApp (EApp (EVar "map") (EVar "midToDesugaredPair")) (EVar "mods"))))))))))
 (DTypeSig false "newStale" (TyFun (TyCon "Unit") (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag"))))))
 (DFunDef false "newStale" (PWild) (EApp (EVar "Ref") (EListLit)))
 (DTypeSig true "midPath" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyCon "String")))
@@ -3427,11 +3530,21 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "checkJsonSingle" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect () (Some "e") (TyTuple (TyCon "String") (TyCon "Bool")))))))))))
 (DFunDef false "checkJsonSingle" ((PVar "exportsFor") (PVar "modName") (PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "src")) (EBlock (DoLet false false (PTuple (PVar "cj") (PVar "hasErr")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonSingleParts") (EVar "exportsFor")) (EVar "modName")) (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "src"))) (DoExpr (ETuple (EApp (EVar "ppCheckJson") (EVar "cj")) (EVar "hasErr")))))
 (DTypeSig true "checkJsonSingleParts" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect () (Some "e") (TyTuple (TyCon "CheckJson") (TyCon "Bool")))))))))))
-(DFunDef false "checkJsonSingleParts" ((PVar "exportsFor") (PVar "modName") (PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "target")) (EVar "src")) (EVar "e"))) (EVar "True"))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeLocatedG") (EVar "exportsFor")) (EVar "modName")) (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "src"))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "diagIsError")) (EVar "diags"))) (DoLet false false (PVar "mainWarns") (EIf (EVar "hasErr") (EListLit) (EBlock (DoLet false false (PVar "entryRaw") (EApp (EVar "parseLocated") (EVar "src"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit (ETuple (EVar "target") (EApp (EVar "desugar") (EVar "entryRaw"))))) (EVar "entryRaw")))))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EBinOp "++" (EVar "diags") (EVar "mainWarns"))))) (EVar "hasErr")))))))
+(DFunDef false "checkJsonSingleParts" ((PVar "exportsFor") (PVar "modName") (PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "target")) (EVar "src")) (EVar "e"))) (EVar "True"))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeLocatedG") (EVar "exportsFor")) (EVar "modName")) (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "src"))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "diagIsError")) (EVar "diags"))) (DoLet false false (PVar "mainWarns") (EIf (EVar "hasErr") (EListLit) (EBlock (DoLet false false (PVar "entryRaw") (EApp (EVar "parseLocated") (EVar "src"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "entryRaw")))))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EBinOp "++" (EVar "diags") (EVar "mainWarns"))))) (EVar "hasErr")))))))
+(DTypeSig false "checkJsonSingleFromDecls" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect () (Some "e") (TyTuple (TyCon "CheckJson") (TyCon "Bool"))))))))))))
+(DFunDef false "checkJsonSingleFromDecls" ((PVar "exportsFor") (PVar "modName") (PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "src") (PVar "decls")) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "exportsFor")) (EVar "modName")) (EVar "rsrc")) (EVar "csrc")) (EVar "decls")) (EApp (EVar "internalGuardFor") (EVar "allowInternal")))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "diagIsError")) (EVar "diags"))) (DoLet false false (PVar "mainWarns") (EIf (EVar "hasErr") (EListLit) (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "decls")))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EBinOp "++" (EVar "diags") (EVar "mainWarns"))))) (EVar "hasErr")))))
 (DTypeSig true "checkJsonFile" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "Bool")))))))))
 (DFunDef false "checkJsonFile" ((PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "stdlibDir")) (EBlock (DoLet false false (PTuple (PVar "cj") (PVar "hasErr")) (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonFileParts") (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "stdlibDir"))) (DoExpr (ETuple (EApp (EVar "ppCheckJson") (EVar "cj")) (EVar "hasErr")))))
 (DTypeSig true "checkJsonFileParts" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "CheckJson") (TyCon "Bool")))))))))
-(DFunDef false "checkJsonFileParts" ((PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "stdlibDir")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "target"))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "target")) (EVar "src")) (EVar "e"))) (EVar "True"))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "loadProgramE") (EVar "target")) (EVar "roots")) (arm (PCon "Err" (PCon "LoadParseFailed" (PVar "mpath") (PVar "msrc") (PVar "pe"))) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "mpath")) (EVar "msrc")) (EVar "pe"))) (EVar "True"))) (arm (PCon "Err" (PCon "LoadCycle" (PVar "cmsg") (PVar "cpath") (PVar "csite"))) () (EMatch (EVar "csite") (arm (PCon "Some" (PTuple (PVar "csrc") (PVar "cloc"))) () (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "cpath") (EVar "csrc") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "cmsg")) (EApp (EVar "Some") (EVar "cloc"))) (EVar "None")) (EVar "None")))))) (EVar "True"))) (arm (PCon "None") () (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "cmsg")) (EVar "None")) (EVar "None")) (EVar "None")))))) (EVar "True"))))) (arm (PCon "Err" (PCon "LoadMsg" (PVar "lmsg"))) () (EBlock (DoLet false false (PVar "mloc") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "mid")) () (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EApp (EVar "parseLocated") (EVar "src")))))) (DoLet false false (PVar "mhelp") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "availableModulesText") (EVar "stdlibDir")) (arm (PLit (LString "")) () (EVar "None")) (arm (PVar "txt") () (EApp (EVar "Some") (EVar "txt"))))))) (DoLet false false (PVar "jmsg") (EBinOp "++" (EVar "lmsg") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" PWild) () (EApp (EVar "availableModulesHint") (EVar "stdlibDir")))))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "jmsg")) (EVar "mloc")) (EVar "mhelp")) (EVar "None")))))) (EVar "True"))))) (arm (PCon "Ok" (PVar "mods")) () (EMatch (EVar "mods") (arm (PList (PTuple (PVar "mid") PWild)) () (EBlock (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonSingleParts") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "mid")) (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "src"))))) (arm PWild () (EBlock (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoLet false false (PVar "cacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parseCacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProject") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "allowInternal")) (EVar "trusted")) (EVar "cacheRef")) (EVar "parseCacheRef")) (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc"))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "cjHasErrD")) (EVar "results"))) (DoLet false false (PVar "mainWarns") (EIf (EVar "hasErr") (EListLit) (EBlock (DoLet false false (PVar "entryRaw") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "parseCacheRef"))) (arm (PCon "Some" (PVar "decls")) () (EVar "decls")) (arm (PCon "None") () (EApp (EVar "parseLocated") (EVar "src"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "entryRaw")))))) (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (EVar "readDiagSrc")) (EVar "results"))) (DoLet false false (PVar "root") (EApp (EVar "dirOf") (EVar "stdlibDir"))) (DoLet false false (PVar "relTriples") (EApp (EApp (EVar "map") (EApp (EVar "relDiagTriple") (EVar "root"))) (EVar "triples"))) (DoLet false false (PVar "entryKey") (EApp (EApp (EVar "relDiagPath") (EVar "root")) (EVar "target"))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "entryKey")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "entryKey")) (EVar "mainWarns")) (EVar "relTriples"))) (EVar "hasErr")))))))))))))
+(DFunDef false "checkJsonFileParts" ((PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "stdlibDir")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "target"))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (arm (PCon "Err" (PVar "le")) () (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "target")) (EVar "src")) (EVar "e"))) (EVar "True"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EVar "checkJsonLoadErr") (EVar "target")) (EVar "src")) (EVar "stdlibDir")) (EVar "le"))))) (arm (PCon "Ok" (PList (PTuple (PVar "mid") PWild (PVar "decls")))) () (EBlock (DoLet false false (PVar "mods") (EListLit (ETuple (EVar "mid") (EVar "decls")))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonSingleFromDecls") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "mid")) (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "src")) (EVar "decls"))))) (arm (PCon "Ok" (PVar "modsWithPath")) () (EBlock (DoLet false false (PVar "mods") (EApp (EApp (EVar "map") (EVar "dropPathTriple")) (EVar "modsWithPath"))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoLet false false (PTuple PWild (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeLoadedFull") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "allowInternal")) (EVar "trusted")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "modsWithPath")) (EApp (EVar "desugaredModPairs") (EVar "modsWithPath")))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "cjHasErrD")) (EVar "results"))) (DoLet false false (PVar "mainWarns") (EMatch (ETuple (EVar "hasErr") (EApp (EVar "lastDecls") (EVar "mods"))) (arm (PTuple (PCon "False") (PCon "Some" (PVar "edecls"))) () (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "edecls"))) (arm PWild () (EListLit)))) (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (EVar "readDiagSrc")) (EVar "results"))) (DoLet false false (PVar "root") (EApp (EVar "dirOf") (EVar "stdlibDir"))) (DoLet false false (PVar "relTriples") (EApp (EApp (EVar "map") (EApp (EVar "relDiagTriple") (EVar "root"))) (EVar "triples"))) (DoLet false false (PVar "entryKey") (EApp (EApp (EVar "relDiagPath") (EVar "root")) (EVar "target"))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "entryKey")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "entryKey")) (EVar "mainWarns")) (EVar "relTriples"))) (EVar "hasErr")))))))))
+(DTypeSig false "lastDecls" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "lastDecls" ((PList)) (EVar "None"))
+(DFunDef false "lastDecls" ((PList (PTuple PWild (PVar "ds")))) (EApp (EVar "Some") (EVar "ds")))
+(DFunDef false "lastDecls" ((PCons PWild (PVar "rest"))) (EApp (EVar "lastDecls") (EVar "rest")))
+(DTypeSig false "checkJsonLoadErr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LoadError") (TyEffect ("IO") None (TyTuple (TyCon "CheckJson") (TyCon "Bool"))))))))
+(DFunDef false "checkJsonLoadErr" (PWild PWild PWild (PCon "LoadParseFailed" (PVar "mpath") (PVar "msrc") (PVar "pe"))) (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "mpath")) (EVar "msrc")) (EVar "pe"))) (EVar "True")))
+(DFunDef false "checkJsonLoadErr" ((PVar "target") (PVar "src") PWild (PCon "LoadCycle" (PVar "cmsg") (PVar "cpath") (PVar "csite"))) (EMatch (EVar "csite") (arm (PCon "Some" (PTuple (PVar "csrc") (PVar "cloc"))) () (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "cpath") (EVar "csrc") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "cmsg")) (EApp (EVar "Some") (EVar "cloc"))) (EVar "None")) (EVar "None")))))) (EVar "True"))) (arm (PCon "None") () (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "cmsg")) (EVar "None")) (EVar "None")) (EVar "None")))))) (EVar "True")))))
+(DFunDef false "checkJsonLoadErr" ((PVar "target") (PVar "src") (PVar "stdlibDir") (PCon "LoadMsg" (PVar "lmsg"))) (EBlock (DoLet false false (PVar "mloc") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "mid")) () (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EApp (EVar "parseLocated") (EVar "src")))))) (DoLet false false (PVar "mhelp") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "availableModulesText") (EVar "stdlibDir")) (arm (PLit (LString "")) () (EVar "None")) (arm (PVar "txt") () (EApp (EVar "Some") (EVar "txt"))))))) (DoLet false false (PVar "jmsg") (EBinOp "++" (EVar "lmsg") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" PWild) () (EApp (EVar "availableModulesHint") (EVar "stdlibDir")))))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "jmsg")) (EVar "mloc")) (EVar "mhelp")) (EVar "None")))))) (EVar "True")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "Ty" false) (mem "intMinLiteralMsg" false) (mem "intMinLiteralHelp" false) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
@@ -3444,9 +3557,9 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkModulesDiagsChain" false) (mem "chainFullKey" false) (mem "checkModulesK" false) (mem "entryOwnSchemes" false) (mem "dropModSchemes" false) (mem "ModDiags" false) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "importedStandaloneShadows" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkOneDiagsLinesK" false) (mem "checkModulesDiagsChain" false) (mem "chainFullKey" false) (mem "checkModulesK" false) (mem "entryOwnSchemes" false) (mem "dropModSchemes" false) (mem "ModDiags" false) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "importedStandaloneShadows" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
-(DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "loadProgramE" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false) (mem "availableModuleIds" false) (mem "fileOfModuleId" false) (mem "importModId" false))))
+(DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "parseCachedLocated" false) (mem "loadProgramFilesLocatedE" false) (mem "dropPathTriple" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false) (mem "availableModuleIds" false) (mem "fileOfModuleId" false) (mem "importModId" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAutoPrintMain" false) (mem "autoPrintWrapModules" false) (mem "autoPrintPinCore" false) (mem "underivedMainDiags" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "dropAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false) (mem "joinDot" false))))
@@ -3552,7 +3665,11 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DFunDef false "analyzeLocatedG" ((PVar "exportsFor") (PVar "modName") (PVar "allowInternal") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "progSrc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "exportsFor")) (EVar "modName")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "parseLocated") (EVar "progSrc"))) (EApp (EVar "internalGuardFor") (EVar "allowInternal"))))
 (DData Public "SurfaceAnalysis" () ((variant "SurfaceAnalysis" (ConNamed (field "surfaceDiags" (TyApp (TyCon "List") (TyCon "Diag"))) (field "resolveClean" (TyCon "Bool")) (field "surfaceDesugared" (TyApp (TyCon "List") (TyCon "Decl"))) (field "surfaceRuntimeP" (TyApp (TyCon "List") (TyCon "Decl"))) (field "surfaceCoreP" (TyApp (TyCon "List") (TyCon "Decl"))) (field "surfacePreludeKey" (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))))))) ())
 (DTypeSig true "analyzeFrom" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyCon "Diag"))))))))))
-(DFunDef false "analyzeFrom" ((PVar "exportsFor") (PVar "modName") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "raw") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeSurface") (EVar "exportsFor")) (EVar "modName")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "raw")) (EVar "internalGuard"))) (DoLet false false (PVar "tcDiags") (EMatch (EFieldAccess (EVar "s") "resolveClean") (arm (PCon "True") () (EBlock (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EApp (EApp (EVar "checkOneDiagsK") (EFieldAccess (EVar "s") "surfacePreludeKey")) (EFieldAccess (EVar "s") "surfaceRuntimeP")) (EFieldAccess (EVar "s") "surfaceCoreP")) (ETuple (ELit (LString "__user__")) (EFieldAccess (EVar "s") "surfaceDesugared")))) (DoExpr (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeError")) (EVar "tcErrs")) (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeWarning")) (EVar "tcWarns")))))) (arm (PCon "False") () (EListLit)))) (DoExpr (EApp (EApp (EVar "analyzeFinish") (EVar "s")) (EVar "tcDiags")))))
+(DFunDef false "analyzeFrom" ((PVar "exportsFor") (PVar "modName") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "raw") (PVar "internalGuard")) (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFromBy") (ELam ((PVar "preludeKey") (PVar "rt") (PVar "core") (PVar "up")) (EBlock (DoLet false false (PTuple (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EApp (EApp (EVar "checkOneDiagsK") (EVar "preludeKey")) (EVar "rt")) (EVar "core")) (EVar "up"))) (DoExpr (ETuple (EListLit) (EVar "tcErrs") (EVar "tcWarns")))))) (EVar "exportsFor")) (EVar "modName")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "raw")) (EVar "internalGuard"))))
+(DTypeSig true "analyzeFromDump" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "Diag")) (TyApp (TyCon "List") (TyCon "String")))))))))))
+(DFunDef false "analyzeFromDump" ((PVar "exportsFor") (PVar "modName") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "raw") (PVar "internalGuard")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFromBy") (EVar "checkOneDiagsLinesK")) (EVar "exportsFor")) (EVar "modName")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "raw")) (EVar "internalGuard")))
+(DTypeSig false "analyzeFromBy" (TyFun (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))) (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "Diag")) (TyApp (TyCon "List") (TyCon "String"))))))))))))
+(DFunDef false "analyzeFromBy" ((PVar "tc") (PVar "exportsFor") (PVar "modName") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "raw") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeSurface") (EVar "exportsFor")) (EVar "modName")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "raw")) (EVar "internalGuard"))) (DoLet false false (PTuple (PVar "lines") (PVar "tcDiags")) (EMatch (EFieldAccess (EVar "s") "resolveClean") (arm (PCon "True") () (EBlock (DoLet false false (PTuple (PVar "ls") (PVar "tcErrs") (PVar "tcWarns")) (EApp (EApp (EApp (EApp (EVar "tc") (EFieldAccess (EVar "s") "surfacePreludeKey")) (EFieldAccess (EVar "s") "surfaceRuntimeP")) (EFieldAccess (EVar "s") "surfaceCoreP")) (ETuple (ELit (LString "__user__")) (EFieldAccess (EVar "s") "surfaceDesugared")))) (DoExpr (ETuple (EVar "ls") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeError")) (EVar "tcErrs")) (EApp (EApp (EMethodRef "map") (EVar "diagOfTypeWarning")) (EVar "tcWarns"))))))) (arm (PCon "False") () (ETuple (EListLit) (EListLit))))) (DoExpr (ETuple (EApp (EApp (EVar "analyzeFinish") (EVar "s")) (EVar "tcDiags")) (EVar "lines")))))
 (DTypeSig true "analyzeSurface" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyCon "SurfaceAnalysis")))))))))
 (DFunDef false "analyzeSurface" ((PVar "exportsFor") (PVar "modName") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "raw") (PVar "internalGuard")) (EBlock (DoLet false false (PVar "desugared") (EApp (EVar "desugar") (EVar "raw"))) (DoLet false false (PVar "runtimeP") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "runtimeSrc")) (EApp (EVar "desugaredPreludeKey") (EVar "coreSrc"))))) (DoLet false false (PVar "guardWarns") (EApp (EApp (EVar "checkGuardExhaustivenessWith") (EBinOp "++" (EBinOp "++" (EVar "raw") (EVar "runtimeP")) (EVar "coreP"))) (EVar "raw"))) (DoLet false false (PVar "shadowWarns") (EApp (EApp (EVar "preludeStandaloneShadows") (EBinOp "++" (EVar "runtimeP") (EVar "coreP"))) (EVar "desugared"))) (DoLet false false (PVar "importShadowWarns") (EApp (EApp (EVar "importedStandaloneShadows") (EListLit)) (EVar "desugared"))) (DoLet false false (PVar "deriveDiags") (EApp (EApp (EMethodRef "map") (EVar "deriveErrToDiag")) (EApp (EVar "checkDerives") (EVar "raw")))) (DoLet false false (PVar "resErrs") (EApp (EApp (EVar "hintResErrors") (EVar "exportsFor")) (EApp (EApp (EApp (EApp (EVar "resolveProgramG2") (EVar "internalGuard")) (EVar "runtimeP")) (EVar "coreP")) (EVar "desugared")))) (DoLet false false (PVar "resDiags") (EApp (EApp (EMethodRef "map") (EVar "diagOfResError")) (EVar "resErrs"))) (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "desugared"))) (DoLet false false (PVar "guardDiags") (EApp (EApp (EMethodRef "map") (EVar "guardWarnToDiag")) (EVar "guardWarns"))) (DoLet false false (PVar "shadowDiags") (EApp (EApp (EMethodRef "map") (EApp (EVar "preludeShadowWarnToDiag") (EVar "modName"))) (EVar "shadowWarns"))) (DoLet false false (PVar "importShadowDiags") (EApp (EApp (EMethodRef "map") (EApp (EVar "importShadowWarnToDiag") (EVar "modName"))) (EVar "importShadowWarns"))) (DoLet false false (PVar "clean") (EMatch (EVar "resErrs") (arm (PList) () (EVar "True")) (arm PWild () (EVar "False")))) (DoExpr (ERecordCreate "SurfaceAnalysis" ((fa "surfaceDiags" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "deriveDiags") (EVar "guardDiags")) (EVar "shadowDiags")) (EVar "importShadowDiags")) (EVar "resDiags"))) (fa "resolveClean" (EVar "clean")) (fa "surfaceDesugared" (EVar "desugared")) (fa "surfaceRuntimeP" (EVar "runtimeP")) (fa "surfaceCoreP" (EVar "coreP")) (fa "surfacePreludeKey" (EVar "preludeKey")))))))
 (DTypeSig true "analyzeFinish" (TyFun (TyCon "SurfaceAnalysis") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyApp (TyCon "List") (TyCon "Diag")))))
@@ -3607,8 +3724,8 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DTypeSig false "cacheRemove" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "cacheRemove" (PWild (PList)) (EListLit))
 (DFunDef false "cacheRemove" ((PVar "f") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "f")) (EApp (EApp (EVar "cacheRemove") (EVar "f")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EApp (EApp (EVar "cacheRemove") (EVar "f")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "wrappedRead" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag")))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "wrappedRead" ((PVar "cacheRef") (PVar "staleRef") (PVar "read") (PVar "path")) (EMatch (EApp (EVar "read") (EVar "path")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "src")) () (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Ok" PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "cacheRef")) (EApp (EApp (EApp (EVar "cachePut") (EVar "path")) (EVar "src")) (EUnOp "!" (EVar "cacheRef"))))) (DoExpr (EApp (EVar "Some") (EVar "src"))))) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "staleRef")) (EBinOp "::" (ETuple (EVar "path") (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "e"))) (EUnOp "!" (EVar "staleRef"))))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "path")) (EUnOp "!" (EVar "cacheRef"))) (arm (PCon "Some" (PVar "good")) () (EApp (EVar "Some") (EVar "good"))) (arm (PCon "None") () (EApp (EVar "Some") (EVar "src")))))))))))
+(DTypeSig false "wrappedRead" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))))
+(DFunDef false "wrappedRead" ((PVar "cacheRef") (PVar "staleRef") (PVar "parseCacheRef") (PVar "read") (PVar "path")) (EMatch (EApp (EVar "read") (EVar "path")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "src")) () (EMatch (EApp (EApp (EVar "parseCachedLocated") (EVar "parseCacheRef")) (EVar "src")) (arm (PCon "Ok" PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "cacheRef")) (EApp (EApp (EApp (EVar "cachePut") (EVar "path")) (EVar "src")) (EUnOp "!" (EVar "cacheRef"))))) (DoExpr (EApp (EVar "Some") (EVar "src"))))) (arm (PCon "Err" (PVar "e")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "staleRef")) (EBinOp "::" (ETuple (EVar "path") (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "e"))) (EUnOp "!" (EVar "staleRef"))))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "path")) (EUnOp "!" (EVar "cacheRef"))) (arm (PCon "Some" (PVar "good")) () (EApp (EVar "Some") (EVar "good"))) (arm (PCon "None") () (EApp (EVar "Some") (EVar "src")))))))))))
 (DTypeSig false "parseErrLoc" (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyCon "Loc"))))
 (DFunDef false "parseErrLoc" ((PVar "path") (PVar "e")) (EBlock (DoLet false false (PVar "ln") (EApp (EVar "parseErrorLine") (EVar "e"))) (DoLet false false (PVar "c") (EApp (EVar "parseErrorCol") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "ln")) (EVar "c")) (EVar "ln")) (EBinOp "+" (EVar "c") (ELit (LInt 1)))))))
 (DTypeSig true "parseErrDiag" (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyCon "Diag"))))
@@ -3618,15 +3735,17 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "analyzeProject" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))
 (DFunDef false "analyzeProject" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PTuple PWild (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProjectFull") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "cacheRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc"))) (DoExpr (EVar "results"))))
 (DTypeSig true "analyzeProjectFull" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))))))
-(DFunDef false "analyzeProjectFull" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EVar "cacheRef")) (EVar "staleRef")) (EVar "read")) (EVar "p")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCachedE") (EVar "parseCacheRef")) (EVar "wread")) (EVar "entry")) (EVar "roots")) (arm (PCon "Err" (PCon "LoadParseFailed" (PVar "mpath") PWild (PVar "pe"))) () (ETuple (EListLit) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "mpath") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "mpath")) (EVar "pe")))))))) (arm (PCon "Err" (PCon "LoadMsg" (PVar "e"))) () (ETuple (EListLit) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "entry") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None")))))))) (arm (PCon "Err" (PCon "LoadCycle" (PVar "e") (PVar "cpath") (PVar "csite"))) () (EMatch (EVar "csite") (arm (PCon "Some" (PTuple PWild (PVar "loc"))) () (ETuple (EListLit) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "cpath") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EApp (EVar "Some") (EVar "loc"))))))))) (arm (PCon "None") () (ETuple (EListLit) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "entry") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None")))))))))) (arm (PCon "Ok" (PVar "mods")) () (EBlock (DoLet false false (PTuple (PVar "full") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeLoadedFull") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "mods")) (EApp (EVar "desugaredModPairs") (EVar "mods")))) (DoExpr (ETuple (EVar "full") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EVar "results"))))))))))
+(DFunDef false "analyzeProjectFull" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EVar "cacheRef")) (EVar "staleRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "p")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCachedE") (EVar "parseCacheRef")) (EVar "wread")) (EVar "entry")) (EVar "roots")) (arm (PCon "Err" (PCon "LoadParseFailed" (PVar "mpath") PWild (PVar "pe"))) () (ETuple (EListLit) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "mpath") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "mpath")) (EVar "pe")))))))) (arm (PCon "Err" (PCon "LoadMsg" (PVar "e"))) () (ETuple (EListLit) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "entry") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None")))))))) (arm (PCon "Err" (PCon "LoadCycle" (PVar "e") (PVar "cpath") (PVar "csite"))) () (EMatch (EVar "csite") (arm (PCon "Some" (PTuple PWild (PVar "loc"))) () (ETuple (EListLit) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "cpath") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EApp (EVar "Some") (EVar "loc"))))))))) (arm (PCon "None") () (ETuple (EListLit) (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EListLit (ETuple (EVar "entry") (EListLit (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "e")) (EVar "None")))))))))) (arm (PCon "Ok" (PVar "mods")) () (EBlock (DoLet false false (PTuple (PVar "full") (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeLoadedFull") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "entry")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "mods")) (EApp (EVar "desugaredModPairs") (EVar "mods")))) (DoExpr (ETuple (EVar "full") (EApp (EApp (EVar "appendStale") (EVar "staleRef")) (EVar "results"))))))))))
 (DTypeSig true "analyzeLoadedFull" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))
 (DFunDef false "analyzeLoadedFull" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "mods") (PVar "modPairs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectDiagsLoadedFull") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EApp (EVar "preludeDesugared") (EVar "runtimeSrc"))) (EApp (EVar "preludeDesugared") (EVar "coreSrc"))) (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "runtimeSrc")) (EApp (EVar "desugaredPreludeKey") (EVar "coreSrc"))))) (EApp (EApp (EVar "chainKeyOf") (EVar "entry")) (EVar "roots"))) (EVar "mods")) (EVar "modPairs")))
+(DTypeSig true "analyzeLoadedResolvedClean" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))
+(DFunDef false "analyzeLoadedResolvedClean" ((PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc") (PVar "mods") (PVar "modPairs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassFull") (EApp (EVar "preludeDesugared") (EVar "runtimeSrc"))) (EApp (EVar "preludeDesugared") (EVar "coreSrc"))) (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "runtimeSrc")) (EApp (EVar "desugaredPreludeKey") (EVar "coreSrc"))))) (EApp (EApp (EVar "chainKeyOf") (EVar "entry")) (EVar "roots"))) (EVar "mods")) (EVar "modPairs")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EMethodRef "map") (EVar "midPath")) (EVar "mods"))) (EListLit))))
 (DTypeSig true "projectDiagsLoaded" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))
 (DFunDef false "projectDiagsLoaded" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods")) (EApp (EVar "snd") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectDiagsLoadedFull") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "runtimeP")) (EVar "coreP")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EApp (EVar "desugaredModPairs") (EVar "mods")))))
 (DTypeSig false "projectDiagsLoadedFull" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))))))))
-(DFunDef false "projectDiagsLoadedFull" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods") (PVar "modPairs")) (EBlock (DoLet false false (PVar "buckets") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassFull") (EVar "runtimeP")) (EVar "coreP")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EVar "modPairs")) (EVar "buckets")))))
+(DFunDef false "projectDiagsLoadedFull" ((PVar "exportsFor") (PVar "allowInternal") (PVar "trustedMods") (PVar "runtimeP") (PVar "coreP") (PVar "preludeKey") (PVar "chainKey") (PVar "mods") (PVar "modPairs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckPassFull") (EVar "runtimeP")) (EVar "coreP")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "mods")) (EVar "modPairs")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolvedBuckets") (EVar "exportsFor")) (EVar "allowInternal")) (EVar "trustedMods")) (EVar "preludeKey")) (EVar "chainKey")) (EVar "runtimeP")) (EVar "coreP")) (EVar "mods")) (EVar "modPairs"))))
 (DTypeSig true "projectEntrySchemes" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))))))
-(DFunDef false "projectEntrySchemes" ((PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EVar "cacheRef")) (EVar "staleRef")) (EVar "read")) (EVar "p")))) (DoLet false false (PVar "runtimeP") (EApp (EVar "preludeDesugared") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "preludeDesugared") (EVar "coreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "runtimeSrc")) (EApp (EVar "desugaredPreludeKey") (EVar "coreSrc"))))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCached") (EVar "parseCacheRef")) (EVar "wread")) (EVar "entry")) (EVar "roots")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "mods")) () (EApp (EVar "Some") (EApp (EVar "entryOwnSchemes") (EApp (EApp (EApp (EApp (EVar "checkModulesK") (EVar "preludeKey")) (EVar "runtimeP")) (EVar "coreP")) (EApp (EApp (EMethodRef "map") (EVar "midToDesugaredPair")) (EVar "mods"))))))))))
+(DFunDef false "projectEntrySchemes" ((PVar "cacheRef") (PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots") (PVar "runtimeSrc") (PVar "coreSrc")) (EBlock (DoLet false false (PVar "staleRef") (EApp (EVar "newStale") (ELit LUnit))) (DoLet false false (PVar "wread") (ELam ((PVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "wrappedRead") (EVar "cacheRef")) (EVar "staleRef")) (EVar "parseCacheRef")) (EVar "read")) (EVar "p")))) (DoLet false false (PVar "runtimeP") (EApp (EVar "preludeDesugared") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreP") (EApp (EVar "preludeDesugared") (EVar "coreSrc"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "runtimeSrc")) (EApp (EVar "desugaredPreludeKey") (EVar "coreSrc"))))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "loadProgramFilesLocatedCached") (EVar "parseCacheRef")) (EVar "wread")) (EVar "entry")) (EVar "roots")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "mods")) () (EApp (EVar "Some") (EApp (EVar "entryOwnSchemes") (EApp (EApp (EApp (EApp (EVar "checkModulesK") (EVar "preludeKey")) (EVar "runtimeP")) (EVar "coreP")) (EApp (EApp (EMethodRef "map") (EVar "midToDesugaredPair")) (EVar "mods"))))))))))
 (DTypeSig false "newStale" (TyFun (TyCon "Unit") (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Diag"))))))
 (DFunDef false "newStale" (PWild) (EApp (EVar "Ref") (EListLit)))
 (DTypeSig true "midPath" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyCon "String")))
@@ -3836,8 +3955,18 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "checkJsonSingle" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect () (Some "e") (TyTuple (TyCon "String") (TyCon "Bool")))))))))))
 (DFunDef false "checkJsonSingle" ((PVar "exportsFor") (PVar "modName") (PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "src")) (EBlock (DoLet false false (PTuple (PVar "cj") (PVar "hasErr")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonSingleParts") (EVar "exportsFor")) (EVar "modName")) (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "src"))) (DoExpr (ETuple (EApp (EVar "ppCheckJson") (EVar "cj")) (EVar "hasErr")))))
 (DTypeSig true "checkJsonSingleParts" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect () (Some "e") (TyTuple (TyCon "CheckJson") (TyCon "Bool")))))))))))
-(DFunDef false "checkJsonSingleParts" ((PVar "exportsFor") (PVar "modName") (PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "target")) (EVar "src")) (EVar "e"))) (EVar "True"))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeLocatedG") (EVar "exportsFor")) (EVar "modName")) (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "src"))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "diagIsError")) (EVar "diags"))) (DoLet false false (PVar "mainWarns") (EIf (EVar "hasErr") (EListLit) (EBlock (DoLet false false (PVar "entryRaw") (EApp (EVar "parseLocated") (EVar "src"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit (ETuple (EVar "target") (EApp (EVar "desugar") (EVar "entryRaw"))))) (EVar "entryRaw")))))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EBinOp "++" (EVar "diags") (EVar "mainWarns"))))) (EVar "hasErr")))))))
+(DFunDef false "checkJsonSingleParts" ((PVar "exportsFor") (PVar "modName") (PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "src")) (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "target")) (EVar "src")) (EVar "e"))) (EVar "True"))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeLocatedG") (EVar "exportsFor")) (EVar "modName")) (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "src"))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "diagIsError")) (EVar "diags"))) (DoLet false false (PVar "mainWarns") (EIf (EVar "hasErr") (EListLit) (EBlock (DoLet false false (PVar "entryRaw") (EApp (EVar "parseLocated") (EVar "src"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "entryRaw")))))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EBinOp "++" (EVar "diags") (EVar "mainWarns"))))) (EVar "hasErr")))))))
+(DTypeSig false "checkJsonSingleFromDecls" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect () (Some "e") (TyTuple (TyCon "CheckJson") (TyCon "Bool"))))))))))))
+(DFunDef false "checkJsonSingleFromDecls" ((PVar "exportsFor") (PVar "modName") (PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "src") (PVar "decls")) (EBlock (DoLet false false (PVar "diags") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "exportsFor")) (EVar "modName")) (EVar "rsrc")) (EVar "csrc")) (EVar "decls")) (EApp (EVar "internalGuardFor") (EVar "allowInternal")))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "diagIsError")) (EVar "diags"))) (DoLet false false (PVar "mainWarns") (EIf (EVar "hasErr") (EListLit) (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "decls")))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EBinOp "++" (EVar "diags") (EVar "mainWarns"))))) (EVar "hasErr")))))
 (DTypeSig true "checkJsonFile" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "Bool")))))))))
 (DFunDef false "checkJsonFile" ((PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "stdlibDir")) (EBlock (DoLet false false (PTuple (PVar "cj") (PVar "hasErr")) (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonFileParts") (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "stdlibDir"))) (DoExpr (ETuple (EApp (EVar "ppCheckJson") (EVar "cj")) (EVar "hasErr")))))
 (DTypeSig true "checkJsonFileParts" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "CheckJson") (TyCon "Bool")))))))))
-(DFunDef false "checkJsonFileParts" ((PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "stdlibDir")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "target"))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "target")) (EVar "src")) (EVar "e"))) (EVar "True"))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "loadProgramE") (EVar "target")) (EVar "roots")) (arm (PCon "Err" (PCon "LoadParseFailed" (PVar "mpath") (PVar "msrc") (PVar "pe"))) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "mpath")) (EVar "msrc")) (EVar "pe"))) (EVar "True"))) (arm (PCon "Err" (PCon "LoadCycle" (PVar "cmsg") (PVar "cpath") (PVar "csite"))) () (EMatch (EVar "csite") (arm (PCon "Some" (PTuple (PVar "csrc") (PVar "cloc"))) () (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "cpath") (EVar "csrc") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "cmsg")) (EApp (EVar "Some") (EVar "cloc"))) (EVar "None")) (EVar "None")))))) (EVar "True"))) (arm (PCon "None") () (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "cmsg")) (EVar "None")) (EVar "None")) (EVar "None")))))) (EVar "True"))))) (arm (PCon "Err" (PCon "LoadMsg" (PVar "lmsg"))) () (EBlock (DoLet false false (PVar "mloc") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "mid")) () (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EApp (EVar "parseLocated") (EVar "src")))))) (DoLet false false (PVar "mhelp") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "availableModulesText") (EVar "stdlibDir")) (arm (PLit (LString "")) () (EVar "None")) (arm (PVar "txt") () (EApp (EVar "Some") (EVar "txt"))))))) (DoLet false false (PVar "jmsg") (EBinOp "++" (EVar "lmsg") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" PWild) () (EApp (EVar "availableModulesHint") (EVar "stdlibDir")))))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "jmsg")) (EVar "mloc")) (EVar "mhelp")) (EVar "None")))))) (EVar "True"))))) (arm (PCon "Ok" (PVar "mods")) () (EMatch (EVar "mods") (arm (PList (PTuple (PVar "mid") PWild)) () (EBlock (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonSingleParts") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "mid")) (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "src"))))) (arm PWild () (EBlock (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoLet false false (PVar "cacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parseCacheRef") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeProject") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "allowInternal")) (EVar "trusted")) (EVar "cacheRef")) (EVar "parseCacheRef")) (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc"))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "cjHasErrD")) (EVar "results"))) (DoLet false false (PVar "mainWarns") (EIf (EVar "hasErr") (EListLit) (EBlock (DoLet false false (PVar "entryRaw") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "parseCacheRef"))) (arm (PCon "Some" (PVar "decls")) () (EVar "decls")) (arm (PCon "None") () (EApp (EVar "parseLocated") (EVar "src"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "entryRaw")))))) (DoLet false false (PVar "triples") (EApp (EApp (EMethodRef "map") (EVar "readDiagSrc")) (EVar "results"))) (DoLet false false (PVar "root") (EApp (EVar "dirOf") (EVar "stdlibDir"))) (DoLet false false (PVar "relTriples") (EApp (EApp (EMethodRef "map") (EApp (EVar "relDiagTriple") (EVar "root"))) (EVar "triples"))) (DoLet false false (PVar "entryKey") (EApp (EApp (EVar "relDiagPath") (EVar "root")) (EVar "target"))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "entryKey")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "entryKey")) (EVar "mainWarns")) (EVar "relTriples"))) (EVar "hasErr")))))))))))))
+(DFunDef false "checkJsonFileParts" ((PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "stdlibDir")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "target"))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (arm (PCon "Err" (PVar "le")) () (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "target")) (EVar "src")) (EVar "e"))) (EVar "True"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EVar "checkJsonLoadErr") (EVar "target")) (EVar "src")) (EVar "stdlibDir")) (EVar "le"))))) (arm (PCon "Ok" (PList (PTuple (PVar "mid") PWild (PVar "decls")))) () (EBlock (DoLet false false (PVar "mods") (EListLit (ETuple (EVar "mid") (EVar "decls")))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonSingleFromDecls") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "mid")) (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "src")) (EVar "decls"))))) (arm (PCon "Ok" (PVar "modsWithPath")) () (EBlock (DoLet false false (PVar "mods") (EApp (EApp (EMethodRef "map") (EVar "dropPathTriple")) (EVar "modsWithPath"))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoLet false false (PTuple PWild (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeLoadedFull") (EApp (EVar "stdlibExportsReader") (EVar "stdlibDir"))) (EVar "allowInternal")) (EVar "trusted")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "modsWithPath")) (EApp (EVar "desugaredModPairs") (EVar "modsWithPath")))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "cjHasErrD")) (EVar "results"))) (DoLet false false (PVar "mainWarns") (EMatch (ETuple (EVar "hasErr") (EApp (EVar "lastDecls") (EVar "mods"))) (arm (PTuple (PCon "False") (PCon "Some" (PVar "edecls"))) () (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "edecls"))) (arm PWild () (EListLit)))) (DoLet false false (PVar "triples") (EApp (EApp (EMethodRef "map") (EVar "readDiagSrc")) (EVar "results"))) (DoLet false false (PVar "root") (EApp (EVar "dirOf") (EVar "stdlibDir"))) (DoLet false false (PVar "relTriples") (EApp (EApp (EMethodRef "map") (EApp (EVar "relDiagTriple") (EVar "root"))) (EVar "triples"))) (DoLet false false (PVar "entryKey") (EApp (EApp (EVar "relDiagPath") (EVar "root")) (EVar "target"))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "entryKey")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "entryKey")) (EVar "mainWarns")) (EVar "relTriples"))) (EVar "hasErr")))))))))
+(DTypeSig false "lastDecls" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "lastDecls" ((PList)) (EVar "None"))
+(DFunDef false "lastDecls" ((PList (PTuple PWild (PVar "ds")))) (EApp (EVar "Some") (EVar "ds")))
+(DFunDef false "lastDecls" ((PCons PWild (PVar "rest"))) (EApp (EVar "lastDecls") (EVar "rest")))
+(DTypeSig false "checkJsonLoadErr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LoadError") (TyEffect ("IO") None (TyTuple (TyCon "CheckJson") (TyCon "Bool"))))))))
+(DFunDef false "checkJsonLoadErr" (PWild PWild PWild (PCon "LoadParseFailed" (PVar "mpath") (PVar "msrc") (PVar "pe"))) (ETuple (EApp (EVar "CjRendered") (EApp (EApp (EApp (EVar "cjParseErrJson") (EVar "mpath")) (EVar "msrc")) (EVar "pe"))) (EVar "True")))
+(DFunDef false "checkJsonLoadErr" ((PVar "target") (PVar "src") PWild (PCon "LoadCycle" (PVar "cmsg") (PVar "cpath") (PVar "csite"))) (EMatch (EVar "csite") (arm (PCon "Some" (PTuple (PVar "csrc") (PVar "cloc"))) () (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "cpath") (EVar "csrc") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "cmsg")) (EApp (EVar "Some") (EVar "cloc"))) (EVar "None")) (EVar "None")))))) (EVar "True"))) (arm (PCon "None") () (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "cmsg")) (EVar "None")) (EVar "None")) (EVar "None")))))) (EVar "True")))))
+(DFunDef false "checkJsonLoadErr" ((PVar "target") (PVar "src") (PVar "stdlibDir") (PCon "LoadMsg" (PVar "lmsg"))) (EBlock (DoLet false false (PVar "mloc") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "mid")) () (EApp (EApp (EVar "findImportLoc") (EVar "mid")) (EApp (EVar "parseLocated") (EVar "src")))))) (DoLet false false (PVar "mhelp") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "availableModulesText") (EVar "stdlibDir")) (arm (PLit (LString "")) () (EVar "None")) (arm (PVar "txt") () (EApp (EVar "Some") (EVar "txt"))))))) (DoLet false false (PVar "jmsg") (EBinOp "++" (EVar "lmsg") (EMatch (EApp (EVar "unknownModuleIdOf") (EVar "lmsg")) (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" PWild) () (EApp (EVar "availableModulesHint") (EVar "stdlibDir")))))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "target")) (EListLit (ETuple (EVar "target") (EVar "src") (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-MODULE-LOAD"))) (EVar "jmsg")) (EVar "mloc")) (EVar "mhelp")) (EVar "None")))))) (EVar "True")))))

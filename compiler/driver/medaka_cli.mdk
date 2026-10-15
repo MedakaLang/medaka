@@ -17,7 +17,6 @@
 
 import tools.check.{
   runCheck,
-  runCheckFromDecls,
   checkHasErrors,
   checkModulesReport,
   entryExhaust,
@@ -141,11 +140,12 @@ import driver.loader.{
   availableModulesText,
 }
 import driver.diagnostics.{
-  analyzeLoadedFull,
+  analyzeLoadedResolvedClean,
   desugaredModPairs,
   analyzeLocated,
   analyzeLocatedG,
   analyzeFrom,
+  analyzeFromDump,
   analyzeSurface,
   analyzeFinish,
   tcHalfOfPerModule,
@@ -766,47 +766,47 @@ runCheckCmd argv =
               runCheckJsonCmd allowInternal rsrc csrc target stdlibDir
             else match readSource target
               Err msg => dieMsg msg
-              Ok tsrc => match parseResult tsrc
-                Err e => dieMsg (ppParseError tsrc target e)
-                -- Load with parseLocated (real ELoc spans), mirroring `run`
-                -- (line ~678): plain loadProgram uses placeholder-loc `parse`,
-                -- which collapses every span to 1:0, so an import-bearing
-                -- file's Unbound-variable diagnostic pointed at the import
-                -- line instead of the actual use site.
-                Ok _ => match loadProgramFilesLocatedE (_ => None) target roots
-                  Err lerr =>
+              -- Load with parseLocated (real ELoc spans), mirroring `run`
+              -- (line ~678): plain loadProgram uses placeholder-loc `parse`,
+              -- which collapses every span to 1:0, so an import-bearing
+              -- file's Unbound-variable diagnostic pointed at the import
+              -- line instead of the actual use site.
+              Ok tsrc => match loadProgramFilesLocatedE (_ => None) target roots
+                Err lerr => match parseResult tsrc
+                  Err e => dieMsg (ppParseError tsrc target e)
+                  Ok _ =>
                     let _ = emitAbortTotal ()
                     let _ =
                       ePutStrLn (moduleLoadErrText tsrc target stdlibDir lerr)
                     exit 1
-                  Ok modsWithPath =>
-                    let mods = map dropPathTriple modsWithPath
-                    let pathMap = map modIdToPath modsWithPath
-                    let trusted = projectTrustedMods target roots stdlibDir mods
-                    -- #2072: the FFI-stamp discriminator, published to typecheck alongside the
-                    -- #1713 reference-trust set above.  DIFFERENT predicate, deliberately: this
-                    -- one is stdlib-root ownership with NO `allow-internal` opt-out.
-                    let (flatStdlib, ownedStdlib) =
-                      stdlibOwnership target roots stdlibDir mods
-                    let _ = setStdlibOwnership flatStdlib ownedStdlib
-                    let perfTLoad = now ()
-                    let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
-                    let _ =
-                      checkRoute
-                        typesMode
-                        allowInternal
-                        trusted
-                        pathMap
-                        roots
-                        rsrc
-                        csrc
-                        tsrc
-                        target
-                        modsWithPath
-                    let perfTCheck = now ()
-                    let _ =
-                      emitPhase perfOn "check" (perfTCheck - perfTLoad) target
-                    emitTotal perfOn (perfTCheck - perfT0)
+                Ok modsWithPath =>
+                  let mods = map dropPathTriple modsWithPath
+                  let pathMap = map modIdToPath modsWithPath
+                  let trusted = projectTrustedMods target roots stdlibDir mods
+                  -- #2072: the FFI-stamp discriminator, published to typecheck alongside the
+                  -- #1713 reference-trust set above.  DIFFERENT predicate, deliberately: this
+                  -- one is stdlib-root ownership with NO `allow-internal` opt-out.
+                  let (flatStdlib, ownedStdlib) =
+                    stdlibOwnership target roots stdlibDir mods
+                  let _ = setStdlibOwnership flatStdlib ownedStdlib
+                  let perfTLoad = now ()
+                  let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
+                  let _ =
+                    checkRoute
+                      typesMode
+                      allowInternal
+                      trusted
+                      pathMap
+                      roots
+                      rsrc
+                      csrc
+                      tsrc
+                      target
+                      modsWithPath
+                  let perfTCheck = now ()
+                  let _ =
+                    emitPhase perfOn "check" (perfTCheck - perfTLoad) target
+                  emitTotal perfOn (perfTCheck - perfT0)
     _ =>
       let _ =
         ePutStrLn
@@ -821,8 +821,8 @@ runCheckCmd argv =
 
 -- F3 Chunk B (R-MODULE-LOAD): the loader's `Err "unknown module: X"` carries no
 -- location (see loader.mdk's entry-scan doc comment).  `tsrc` is already known
--- to parse (the caller's `parseResult` succeeded), so re-parse it with
--- `parseLocated` (real ELoc/DUse spans) and look up the failing modId's own
+-- to parse (the caller re-checks `parseResult` in its loader-failure arm), so
+-- re-parse it with `parseLocated` (real ELoc/DUse spans) and look up the failing modId's own
 -- `import` statement; render through the shared carat formatter when found,
 -- else fall back to the bare message (unchanged behaviour).
 -- F: an `unknown module` message additionally carries an "available modules:
@@ -906,37 +906,25 @@ moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) =
 -- diagnostics" note instead of silently reading as clean; `run`/`build` (the
 -- other two callers) ignore it, so their narrow-to-coherence behaviour and
 -- its measured perf/noise rationale (see `isCoherenceWarn`) are untouched.
--- #1362: `allowInternal`/`trusted` gate the internal-extern guard on the
--- resolve half of this pass, exactly like the `resolveModulesErrorsByFile`
--- gate every caller here already runs BEFORE this one — this call is
--- redundant-but-consistent (a resolve error this pass could newly find would
--- already have been caught upstream), not a second independent gate.
+-- #1362: the internal-extern guard (`allowInternal`/`trusted`) is applied by the
+-- `resolveModulesErrorsByFile` gate `checkRoute` runs BEFORE this one, and this
+-- pass does not resolve again: it is entered only on a clean front pass, so its
+-- resolve buckets are the empty per-file buckets.
 -- The fourth component is the per-module `(schemes, errs, warns)` this ONE pass
 -- produced.  `check`'s multi-module arm renders its ENTRY REPORT from it
 -- (`checkModulesReport`) rather than typechecking the graph a second time
 -- through the entry-only driver, which differed from this one in its collector
 -- alone.
-locatedProjectDiags : Bool ->
-  List String ->
-  String ->
+locatedProjectDiags : String ->
   List String ->
   String ->
   String ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
   <IO> (Option String, List (String, String, List Diag), Int, List ModDiags)
-locatedProjectDiags allowInternal trusted target roots rsrc csrc modsWithPath modPairs =
+locatedProjectDiags target roots rsrc csrc modsWithPath modPairs =
   let (perMod, results) =
-    analyzeLoadedFull
-      cliStdlibExports
-      allowInternal
-      trusted
-      target
-      roots
-      rsrc
-      csrc
-      modsWithPath
-      modPairs
+    analyzeLoadedResolvedClean target roots rsrc csrc modsWithPath modPairs
   let triples = map readDiagSrc results
   (
     joinedOrNone (flatMap renderTripleErrors triples),
@@ -1153,8 +1141,8 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _, d
   -- `parseLocated tsrc` would redundantly repeat) — call `analyzeFrom`
   -- directly with `decls` instead of going through `analyzeLocatedG`, to skip
   -- that re-parse.  Every OTHER `analyzeLocatedG` caller is untouched.
-  let diags =
-    analyzeFrom
+  let (diags, dumpLines) =
+    analyzeFromDump
       cliStdlibExports
       mid
       rsrc
@@ -1166,16 +1154,14 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _, d
     [] =>
       -- Clean (no errors): the scheme dump goes to STDOUT loc-free, but any
       -- non-exhaustive-match WARNING is re-rendered LOCATED (file:L:C: + caret)
-      -- to STDERR, byte-consistent with how errors render (line ~277).  runCheck
+      -- to STDERR, byte-consistent with how errors render (line ~277).  The dump
       -- bundles the warning loc-free into stdout, so we strip its "Warning: …"
       -- lines and re-emit them from `diags` (which carries the real Loc the
       -- --json path already reports).  See ERROR-QUALITY.md (Located dimension).
       let warns = filter diagIsWarn diags
-      -- S-3/#164: same rationale as `analyzeFrom` above — `decls` is already
-      -- the real-span parse of `tsrc` from the loader, so skip `runCheck`'s
-      -- internal placeholder-loc `parse tsrc` and feed `decls` straight into
-      -- the extracted decls-accepting body.
-      let dump = stripWarningLines (runCheckFromDecls rsrc csrc decls)
+      -- The dump comes from the typecheck drive `analyzeFromDump` already ran,
+      -- so no second front end or elaboration is needed to print it.
+      let dump = stripWarningLines (joinNl dumpLines)
       let filtered = userSchemeLines decls dump
       let report = if typesMode then dump else filtered
       -- The target check elaborates the program again, so it runs once the
@@ -1212,15 +1198,7 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
   match resDiags
     "" =>
       let projDiags =
-        locatedProjectDiags
-          allowInternal
-          trusted
-          target
-          roots
-          rsrc
-          csrc
-          modsWithPath
-          modPairs
+        locatedProjectDiags target roots rsrc csrc modsWithPath modPairs
       match projDiags
         -- BUGFIX (imported-module diagnostics): when there ARE type errors, render
         -- the accumulated per-module diagnostics LOCATED (`file:L:C: msg` + caret),
@@ -1574,12 +1552,13 @@ requireArgs sp argv = match parseArgs sp argv
 --   position:     character, line
 
 -- Run check --json: mirrors OCaml's check --json (analyze_project → JSON).
--- Routes by module count (mirrors checkRoute) because the compiler analyzeProject
--- multi-module path has a known limitation for single-file type errors:
---   single module (no non-core imports) → analyzeLocated (single-file path)
---   multi-module → analyzeProject (loader path)
--- The ENTRY's parse errors are detected FIRST via parseResult; an IMPORTED
--- module's are reported by the loader itself (#100), attributed to that module.
+-- Loads the graph once with the located loader and routes by module count
+-- (mirrors checkRoute):
+--   single module (no non-core imports) → analyzeFrom over the loaded decls
+--   multi-module → analyzeLoadedFull over the loaded graph
+-- When the load fails, the ENTRY's parse errors are detected FIRST via
+-- parseResult; an IMPORTED module's are reported by the loader itself (#100),
+-- attributed to that module.
 -- Output: {"files":[{"file":<path>,"diagnostics":[...]}]}
 -- Exits 1 if any error diagnostic; 0 otherwise.
 -- The whole routing (parse-error / load-error / single / multi module) now lives
@@ -1759,7 +1738,7 @@ cjUnlocatedJson target code msg =
     jObject [("file", JString target), ("diagnostics", jArray [diagJson])]
   stringify (jObject [("files", jArray [filesJson])])
 
--- Drop the loc-free "Warning: …" lines runCheck bundles into its scheme dump, so
+-- Drop the loc-free "Warning: …" lines the scheme dump carries, so
 -- the located re-render (emitLocatedWarnings) is the single warning surface —
 -- otherwise the CLI would print each warning twice (loc-free + located).  Scheme
 -- lines are "name : type", never "Warning: …", so this only removes warnings.
@@ -1767,7 +1746,7 @@ stripWarningLines : String -> String
 stripWarningLines s =
   joinNl (filter (l => not (startsWith "Warning: " l)) (splitNl s))
 
--- 0.1.0 preview UX (audit #6): filter `runCheck`'s "name : scheme" dump down to
+-- 0.1.0 preview UX (audit #6): filter the "name : scheme" dump down to
 -- just the lines naming one of THIS file's own top-level bindings, dropping the
 -- prelude's ~120 always-present schemes (eq/append/map/println/…). Each kept
 -- line's name is matched by exact "\{name} : " prefix (scheme lines are never
@@ -2713,49 +2692,50 @@ typecheckGate allowInternal root input =
     tsrc <- readSource input
     -- PARSE-ERROR-LOCATION Stage 1: a located parse diagnostic for the ENTRY.
     -- An IMPORTED module's parse error is located by the loader itself (#100)
-    -- and rendered by moduleLoadErrText.  Neither this arm nor the loader arm
-    -- below is a passthrough bind — each RE-RENDERS its error against the entry
-    -- source — so they stay explicit `match`es rather than joining the chain.
-    match parseResult tsrc
-      Err e => Err (ppParseError tsrc input e)
-      -- #186/#1360: load with `loadProgramFilesLocatedE`, exactly as
-      -- `runCheckCmd` and `runRunCmd` already do.  Plain `loadProgramE`
-      -- gave this gate BOTH halves of the misattribution at once: it parses
-      -- with placeholder-loc `parse` (every span collapses to 1:0) AND carries
-      -- no per-module path, so an imported module's resolve error printed as
-      -- `<entry>:1:0:` — wrong file AND wrong position.  The located loader
-      -- carries real spans and the modId → path map `pathMap` threads below.
-      Ok _ => match loadProgramFilesLocatedE (_ => None) input roots
-        Err lerr => Err (moduleLoadErrText tsrc input stdlibDir lerr)
-        Ok modsWithPath =>
-          let mods = map dropPathTriple modsWithPath
-          let pathMap = map modIdToPath modsWithPath
-          let trusted = projectTrustedMods input roots stdlibDir mods
-          -- #2072: the FFI-stamp discriminator, published to typecheck alongside the
-          -- #1713 reference-trust set above.  DIFFERENT predicate, deliberately: this
-          -- one is stdlib-root ownership with NO `allow-internal` opt-out.
-          let (flatStdlib, ownedStdlib) =
-            stdlibOwnership input roots stdlibDir mods
-          let _ = setStdlibOwnership flatStdlib ownedStdlib
-          match (typecheckGateRoute
-            allowInternal
-            trusted
-            pathMap
-            roots
-            rsrc
-            csrc
-            tsrc
-            input
-            modsWithPath)
-            Err e => Err e
-            -- A program `build` cannot start is refused here, as `run`
-            -- refuses it, rather than reaching the backend's own `main`
-            -- lookup (`mainEntryError`).
-            Ok _ => match lastModPair mods
-              Some (_, edecls) => match mainEntryError edecls
-                Some d => Err (ppMainEntryError tsrc input d)
-                None => Ok ()
+    -- and rendered by moduleLoadErrText.  The entry is parsed again only when
+    -- the loader fails, so a valid entry is parsed once; both error arms
+    -- RE-RENDER against the entry source, so they stay explicit `match`es
+    -- rather than joining the chain.
+    -- #186/#1360: load with `loadProgramFilesLocatedE`, exactly as
+    -- `runCheckCmd` and `runRunCmd` already do.  Plain `loadProgramE`
+    -- gave this gate BOTH halves of the misattribution at once: it parses
+    -- with placeholder-loc `parse` (every span collapses to 1:0) AND carries
+    -- no per-module path, so an imported module's resolve error printed as
+    -- `<entry>:1:0:` — wrong file AND wrong position.  The located loader
+    -- carries real spans and the modId → path map `pathMap` threads below.
+    match loadProgramFilesLocatedE (_ => None) input roots
+      Err lerr => match parseResult tsrc
+        Err e => Err (ppParseError tsrc input e)
+        Ok _ => Err (moduleLoadErrText tsrc input stdlibDir lerr)
+      Ok modsWithPath =>
+        let mods = map dropPathTriple modsWithPath
+        let pathMap = map modIdToPath modsWithPath
+        let trusted = projectTrustedMods input roots stdlibDir mods
+        -- #2072: the FFI-stamp discriminator, published to typecheck alongside the
+        -- #1713 reference-trust set above.  DIFFERENT predicate, deliberately: this
+        -- one is stdlib-root ownership with NO `allow-internal` opt-out.
+        let (flatStdlib, ownedStdlib) =
+          stdlibOwnership input roots stdlibDir mods
+        let _ = setStdlibOwnership flatStdlib ownedStdlib
+        match (typecheckGateRoute
+          allowInternal
+          trusted
+          pathMap
+          roots
+          rsrc
+          csrc
+          tsrc
+          input
+          modsWithPath)
+          Err e => Err e
+          -- A program `build` cannot start is refused here, as `run`
+          -- refuses it, rather than reaching the backend's own `main`
+          -- lookup (`mainEntryError`).
+          Ok _ => match lastModPair mods
+            Some (_, edecls) => match mainEntryError edecls
+              Some d => Err (ppMainEntryError tsrc input d)
               None => Ok ()
+            None => Ok ()
 
 -- Route by module count.  Both arms run the RAW-TREE passes only and hand the
 -- program to the `medaka_emitter` child, which owns the type verdict for a build
@@ -3109,10 +3089,9 @@ runRunCmd argv =
       -- PARSE-ERROR-LOCATION Stage 1: surface a located parse error on the
       -- ENTRY file.  An IMPORTED module's parse error is located by the loader
       -- itself (#100) and rendered by moduleLoadErrText, so neither one is a
-      -- bare `parse error` panic any more.  Error-path only; valid input is
-      -- unaffected.
+      -- bare `parse error` panic any more.  The entry is re-parsed only in the
+      -- loader's failure arm below, so valid input pays no second parse.
       let tsrc = readFileSafe target
-      let _ = orExit (mapErr (ppParseError tsrc target) (parseResult tsrc))
       -- #186/#1360: keep the loader's per-module PATHS instead of dropping
       -- them at the load site.  They were already being carried here and
       -- discarded one line later, which is why every imported module's
@@ -3122,9 +3101,8 @@ runRunCmd argv =
       -- a pure error-rendering function).
       let modsWithPath = match loadProgramFilesLocatedE (_ => None) target roots
         Err lerr =>
-          let _ =
-            runAbort
-              (moduleLoadErrText (readFileSafe target) target stdlibDir lerr)
+          let _ = orExit (mapErr (ppParseError tsrc target) (parseResult tsrc))
+          let _ = runAbort (moduleLoadErrText tsrc target stdlibDir lerr)
           panic "unreachable"
         Ok mp => mp
       let mods = map dropPathTriple modsWithPath
@@ -3962,12 +3940,12 @@ analyzeTarget target =
   let rsrc = orExit (readPreludeFile (stdlibDir ++ "/runtime.mdk"))
   let csrc = orExit (readPreludeFile (stdlibDir ++ "/core.mdk"))
   let tsrc = orExit (readSource target)
-  match parseResult tsrc
-    Err e => Err (ppParseError tsrc target e)
-    Ok _ => match loadProgramFilesLocatedE (_ => None) target roots
-      Err lerr => Err (moduleLoadErrText tsrc target stdlibDir lerr)
-      Ok modsWithPath =>
-        analyzeLoaded rsrc csrc target roots stdlibDir modsWithPath
+  match loadProgramFilesLocatedE (_ => None) target roots
+    Err lerr => match parseResult tsrc
+      Err e => Err (ppParseError tsrc target e)
+      Ok _ => Err (moduleLoadErrText tsrc target stdlibDir lerr)
+    Ok modsWithPath =>
+      analyzeLoaded rsrc csrc target roots stdlibDir modsWithPath
 
 -- Split out of `analyzeTarget` so the resolve gate and the typecheck gate each
 -- read as one thing.  The typecheck gate is `run`'s: the per-module
@@ -4200,8 +4178,8 @@ runLintCmd argv0 =
   -- CLI-flag filters below regardless of what index it saw) — but ONLY on the
   -- uncached path, where that discarding happens in this same process, on this
   -- same `idx`.  `--cache` persists `lintFileFresh`'s full-roster findings past
-  -- this process's flag choices (`lintFileFresh` calls `lintProgram idx
-  -- allRules ...`, unfiltered), so a populate run under `--disable
+  -- this process's flag choices (under `--cache` `lintFileFresh` runs
+  -- `allRules`, unfiltered), so a populate run under `--disable
   -- rule-stdlib-reimpl --cache` (or `--only <anything else> --cache`) must
   -- still build the real index — an `emptyStdlibIndex`-computed entry would
   -- silently omit that rule's findings for every later `--cache` read, even a
@@ -4233,10 +4211,10 @@ runLintCmd argv0 =
       _ => False
     let cacheCtx = lintCacheCtx (flag "--cache" a) fixMode
     -- `parsed` carries each readable target's (path, src, Positions, decls) out of
-    -- the per-file pass so the cross-file tier reuses them instead of re-reading
-    -- and re-parsing every file (#394).  It is EMPTY under --cache, where a hit
-    -- has no parse to hand on — that path reaches the cross-file tier through the
-    -- entries' cached occurrences instead (see runCrossFileReportCached).
+    -- the per-file pass, for the parse-based cross-file tier (runCrossFileReport).
+    -- It is EMPTY whenever `crossFileCacheSound` holds, with or without --cache:
+    -- the tier is then reached through the entries' occurrences instead (see
+    -- runCrossFileReportCached).
     let (perFileErr, entries, parsed) =
       lintFilesGo
         stdlibIdx
@@ -4257,7 +4235,11 @@ runLintCmd argv0 =
       else match cacheCtx
         Some _ =>
           runCrossFileReportCached disableNames onlyNames denyNames entries
-        None => runCrossFileReport disableNames onlyNames denyNames parsed
+        None =>
+          if crossFileCacheSound then
+            runCrossFileReportCached disableNames onlyNames denyNames entries
+          else
+            runCrossFileReport disableNames onlyNames denyNames parsed
     -- Persist AFTER reporting: the cache is an optimisation, so a failure to
     -- write one must never change what a run says or whether it exits 0.
     let _ = match cacheCtx

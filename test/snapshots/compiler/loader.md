@@ -1,5 +1,5 @@
 # META
-source_lines=1540
+source_lines=1541
 stages=DESUGAR,MARK
 # SOURCE
 -- Parse a root .mdk file's transitive imports and return
@@ -1481,6 +1481,7 @@ parseCacheLimit = 24
 -- caching it would widen the session-lived cache's type to a Result, which every
 -- LSP caller's `Ref (List (String, List Decl))` signature would have to follow for
 -- no gain.
+export
 parseCachedLocated : Ref (List (String, List Decl)) ->
   String ->
   Result ParseError (List Decl)
@@ -1767,7 +1768,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "loadProgramFilesLocatedE" ((PVar "read") (PVar "entry") (PVar "roots")) (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "parentDir") (EVar "entry"))))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PTuple PWild (PVar "acc"))) (EVar "acc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (EVar "parseLocatedResult")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EListLit)) (EListLit)) (EListLit)) (ELit (LString ""))) (EVar "entry")) (EApp (EApp (EVar "moduleIdOfPath") (EVar "roots")) (EVar "entry")))))))
 (DTypeSig false "parseCacheLimit" (TyCon "Int"))
 (DFunDef false "parseCacheLimit" () (ELit (LInt 24)))
-(DTypeSig false "parseCachedLocated" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DTypeSig true "parseCachedLocated" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "parseCachedLocated" ((PVar "cacheRef") (PVar "src")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "cacheRef"))) (arm (PCon "Some" (PVar "decls")) () (EApp (EVar "Ok") (EVar "decls"))) (arm (PCon "None") () (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "decls")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "cacheRef")) (EApp (EApp (EVar "takeFirst") (EVar "parseCacheLimit")) (EBinOp "::" (ETuple (EVar "src") (EVar "decls")) (EApp (EApp (EVar "dropKey") (EVar "src")) (EUnOp "!" (EVar "cacheRef"))))))) (DoExpr (EApp (EVar "Ok") (EVar "decls")))))))))
 (DTypeSig false "dropKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "dropKey" (PWild (PList)) (EListLit))
@@ -2004,7 +2005,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "loadProgramFilesLocatedE" ((PVar "read") (PVar "entry") (PVar "roots")) (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "parentDir") (EVar "entry"))))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PTuple PWild (PVar "acc"))) (EVar "acc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (EVar "parseLocatedResult")) (EVar "read")) (EVar "deps")) (EVar "roots")) (EListLit)) (EListLit)) (EListLit)) (ELit (LString ""))) (EVar "entry")) (EApp (EApp (EVar "moduleIdOfPath") (EVar "roots")) (EVar "entry")))))))
 (DTypeSig false "parseCacheLimit" (TyCon "Int"))
 (DFunDef false "parseCacheLimit" () (ELit (LInt 24)))
-(DTypeSig false "parseCachedLocated" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DTypeSig true "parseCachedLocated" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "parseCachedLocated" ((PVar "cacheRef") (PVar "src")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "cacheRef"))) (arm (PCon "Some" (PVar "decls")) () (EApp (EVar "Ok") (EVar "decls"))) (arm (PCon "None") () (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "decls")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "cacheRef")) (EApp (EApp (EVar "takeFirst") (EVar "parseCacheLimit")) (EBinOp "::" (ETuple (EVar "src") (EVar "decls")) (EApp (EApp (EVar "dropKey") (EVar "src")) (EUnOp "!" (EVar "cacheRef"))))))) (DoExpr (EApp (EVar "Ok") (EVar "decls")))))))))
 (DTypeSig false "dropKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "dropKey" (PWild (PList)) (EListLit))

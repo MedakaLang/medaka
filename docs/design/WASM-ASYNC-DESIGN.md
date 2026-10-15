@@ -92,9 +92,9 @@ Two more things stand between a visitor and a running async program, both on
 the host side (**read**):
 
 - `stdlib/time.mdk` is not in the playground's virtual filesystem. The shipped
-  list is the hand-kept `EXTRA_MODULES` in `playground/main.js` and
-  `playground/build_playground_wasm.sh` (identical lists; `time`, `math`,
-  `fs`, `net`, `io`, `test` excluded). `async.mdk` imports `time`, so the
+  list was hand-kept in `playground/main.js` and `playground/build_playground_wasm.sh`
+  (`time`, `math`, `fs`, `net`, `io`, `test` excluded); it is now derived from
+  `stdlib/` and `stdlib/crypto/` into `dist/stdlib_modules.json`. `async.mdk` imports `time`, so the
   playground compiler reports `unknown module: time`, which
   `playground/compile.mjs` `nativeOnlyModuleMessage` rewrites into the message
   quoted at the top. `time.mdk` in turn imports `math.{floorDiv}` and
@@ -395,8 +395,8 @@ to stay green with a passing ledgered row, **read**:
 ### 6.2 WH1 and WH3
 
 Each new import lands with a `docs/spec/WASM-SEMANTICS.md` §3 row and an
-implementation in **every** host the shim-parity gate derives
-(`test/diff_compiler_wasm_shim_parity_test.mdk`; today `run.js`, `worker.js`,
+implementation in **every** host the shim-parity gate derived
+(retired; `playground/medaka_host.mjs` is now the one host; formerly `run.js`, `worker.js`,
 `compile.mjs`), or, after T3 (#3668), as a `clock` slice of the one host
 module. Until T3 the three copies drift by construction; the parity gate
 covers only the marked blocks (#449), so the import-key-set half is checked by
@@ -496,8 +496,8 @@ cannot be cached; after the change that caveat disappears.
 
 ## 8. The playground
 
-- `playground/main.js` and `playground/build_playground_wasm.sh`
-  `EXTRA_MODULES` gain `time`, `math`, `regex`. The exclusion comments that
+- The playground's shipped module list gains `time`, `math`, `regex` (derived
+  now: `build_playground_wasm.sh` stages every module under `stdlib/`). The exclusion comments that
   name `math` ("libm") and `time` ("`<Clock>`") are deleted: the libm host
   imports are real in every host (**read**, `docs/spec/WASM-SEMANTICS.md` §3
   rows for the 14 unary libm imports and `mdk_pow`/`mdk_atan2`/`mdk_hypot`),
@@ -507,9 +507,7 @@ cannot be cached; after the change that caveat disappears.
   two false statements `TARGETS-DESIGN.md` §4.3 already schedules for
   deletion (**read**); WA-3 deletes it, since a visitor who opens the `math`
   reference from the playground reads it. `playground/build_site.sh` and
-  `test/wasm/diff_playground_input.sh` read `EXTRA_MODULES` out of `main.js`
-  by regex (**read**), so they follow; the shell list in
-  `build_playground_wasm.sh` is the second copy that must be edited by hand.
+  `test/wasm/diff_playground_input.sh` follow the one derived list.
   T3's §6.4 replaces both with one list derived from the catalog; until then
   `build_site.sh`'s fail-closed asset check is what catches a dist that lacks
   a listed module (**read**, `AGENTS.md` [WEB-SITE-FILE-LIST]).
