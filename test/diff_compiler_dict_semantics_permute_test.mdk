@@ -12,16 +12,29 @@
    An asymmetric outcome (one ordering accepts, the other rejects; one runs, the
    other does not) fails the row. Exit 126/127 is a launch failure, never a pass.
 
+   Import order (SHADOW-SEMANTICS S2-DECL (e)): for every entry of every
+   `admitted-set-*` directory fixture, the directory is copied to scratch with
+   the top-level `import` / `export import` lines of each of its files that has
+   two or more reversed in place (a re-export hub's two lines, an entry's own
+   imports), and the copied entry is graded against the original the same way,
+   except that two rejects need not share a code. Inference types an admitted
+   occurrence against the first declaration in scope, so the code of a reject
+   can follow import order (`admitted-set-decl-type-mismatch-rejected`); the
+   verdict and every accepted value may not. The dict_semantics table pins each
+   order's codes where they matter.
+
    PROVES: declaration order decides neither acceptance, the reject code, the
-   runtime stdout, nor the built binary's stdout, over the corpus.
+   runtime stdout, nor the built binary's stdout, over the corpus; import order
+   over the admitted-set fixtures decides neither acceptance nor any stdout.
    DOES NOT PROVE: order-freedom on any axis this permuter does not move -- in
    particular the predicate order inside a signature or `requires` clause
-   (#1177), which is not permuted. Nor that any answer is the right one (Section
-   1 pins values).
+   (#1177), which is not permuted, and import order outside the admitted-set
+   directories. Nor that any answer is the right one (Section 1 pins values).
 
-   Floor: the derived set keeps at least 135 (fixture, interface) rows. Fewer
-   means the derivation (enumeration or qualifying-interface scan) broke; the
-   floor catches that, not a change in which rows exist. Rows are graded in
+   Floor: the derived set keeps at least 135 (fixture, interface) rows and 24
+   import-order entries. Fewer means the derivation (enumeration or
+   qualifying-interface scan) broke; the floor catches that, not a change in
+   which rows exist. Rows are graded in
    groups of `testJobs`: each group's spawns run as one batch, and each row
    works in a scratch directory of its own, removed once its group is graded.
    Under MEDAKA_TEST_JOBS=1 a group is one row, so its spawns run in the order
@@ -37,7 +50,9 @@ import fs.{fixtureFiles}
 import io.{runVerb}
 import list.{chunks, dropWhile, nub, somes, takeWhile}
 import string.{contains, endsWith, lines, replaceAll, split, startsWith, trim}
-import test.{Expectation, expectAll, expectAtLeast, expectEach, fail, pass}
+import test.{
+  Expectation, expectAll, expectAtLeast, expectEach, expectEqual, fail, pass
+}
 import test_process.{medakaBin, spawnTimeoutSeconds, testJobs, underRoot}
 
 -- ── Permuter (pure; ports the script's perl PERMPL) ──────────────────────────
@@ -65,9 +80,13 @@ implName _ = ""
 
 -- (interface, lines) per top-level chunk; "" interface for non-impl chunks.
 topChunks : List String -> List (String, List String)
-topChunks [] = []
-topChunks (l :: rest) =
-  (implIface l, l :: takeWhile isBody rest) :: topChunks (dropWhile isBody rest)
+topChunks ls = topChunksBy implIface ls
+
+-- (tag, lines) per top-level chunk, tagged by [tag] of its first line.
+topChunksBy : (String -> String) -> List String -> List (String, List String)
+topChunksBy _ [] = []
+topChunksBy tag (l :: rest) =
+  (tag l, l :: takeWhile isBody rest) :: topChunksBy tag (dropWhile isBody rest)
 
 bodiesOf : String -> List (String, List String) -> List (List String)
 bodiesOf _ [] = []
@@ -122,6 +141,23 @@ permuteChunks : String -> List (String, List String) -> String
 permuteChunks iface cs =
   endEach "\n" (flatten (placeAll iface (revList (bodiesOf iface cs)) cs))
 
+-- A top-level `import` or `export import` line, tagged so its chunk is moved
+-- as one.
+importTag : String -> String
+importTag l =
+  if topLevel l
+    && (startsWith "import " l || startsWith "export import " l) then
+    "import"
+  else
+    ""
+
+importCount : String -> Int
+importCount text = length (filter (l => importTag l == "import") (lines text))
+
+permuteImports : String -> String
+permuteImports text =
+  permuteChunks "import" (topChunksBy importTag (lines text))
+
 -- Interfaces with >= 2 `impl` headers in one fixture (the script's PAIRS grep).
 qualifying : String -> List String
 qualifying text = qualifyingIn (lines text)
@@ -132,16 +168,68 @@ qualifyingIn ls =
     (n => length (filter (l => implIface l == n) ls) >= 2)
     (nub (filter (/= "") (map implIface ls)))
 
-pairsIn : String ->
-  List String ->
-  <FileRead> Result String (List (String, String))
+pairsIn : String -> List String -> <FileRead> Result String (List Pair)
 pairsIn _ [] = Ok []
 pairsIn dir (f :: rest) = match readFile "\{dir}/\{f}"
   Err e => Err "could not read \{f}: \{e}"
   Ok t => map (withPairs f t) (pairsIn dir rest)
 
-withPairs : String -> String -> List (String, String) -> List (String, String)
-withPairs f t more = map (i => (f, i)) (qualifying t) ++ more
+withPairs : String -> String -> List Pair -> List Pair
+withPairs f t more = map (i => DeclPair f i) (qualifying t) ++ more
+
+-- The `.mdk` files one level inside an `admitted-set-*` directory, relative to
+-- the corpus.
+admittedRels : String -> List String -> List String
+admittedRels fixDir names =
+  filter
+    (r =>
+      startsWith "admitted-set-" r
+        && endsWith ".mdk" r
+        && length (split "/" r) == 2)
+    (map (p => replaceAll "\{fixDir}/" "" p) names)
+
+-- One pair per entry (a file with a top-level `main`) of each directory.
+importPairsIn : String -> List String -> <FileRead> Result String (List Pair)
+importPairsIn fixDir rels =
+  map
+    (texts => flatMap (dirPairs texts) (nub (map dirPart rels)))
+    (readAll fixDir rels)
+
+readAll : String ->
+  List String ->
+  <FileRead> Result String (List (String, String))
+readAll _ [] = Ok []
+-- The section the rule suggests, `((r, t) ::)`, does not parse.
+-- lint-disable-next-line rule-lambda-section
+readAll fixDir (r :: rest) = match readFile "\{fixDir}/\{r}"
+  Err e => Err "could not read \{r}: \{e}"
+  Ok t => map (more => (r, t) :: more) (readAll fixDir rest)
+
+dirPart : String -> String
+dirPart r = match split "/" r
+  d :: _ => d
+  [] => r
+
+filePart : String -> String
+filePart r = match split "/" r
+  [_, f] => f
+  _ => r
+
+dirPairs : List (String, String) -> String -> List Pair
+dirPairs texts d =
+  let files = somes (map (inDir d) texts)
+  let reordered = somes (map reorderedFile files)
+  map (f => ImportPair d f reordered) (somes (map entryName files))
+
+inDir : String -> (String, String) -> Option (String, String)
+inDir d (r, t) = if dirPart r == d then Some (filePart r, t) else None
+
+reorderedFile : (String, String) -> Option (String, String)
+reorderedFile (f, t) =
+  if importCount t >= 2 then Some (f, permuteImports t) else None
+
+entryName : (String, String) -> Option String
+entryName (f, t) = if any (startsWith "main =") (lines t) then Some f else None
 
 -- ── Verdicts (pure) ──────────────────────────────────────────────────────────
 
@@ -169,8 +257,9 @@ rejectReasons a b =
   if a == b then [] else ["reject code changed under permutation: \{a} -> \{b}"]
 
 -- (verdict label, reasons) from the two `check --json` results.
-checkVerdict : Int -> String -> Int -> String -> (String, List String)
-checkVerdict oc ocode pc pcode =
+-- [codes]: whether two rejects must share their first diagnostic code.
+checkVerdict : Bool -> Int -> String -> Int -> String -> (String, List String)
+checkVerdict codes oc ocode pc pcode =
   if launchFail oc || launchFail pc then
     (
       "LAUNCH",
@@ -179,7 +268,10 @@ checkVerdict oc ocode pc pcode =
   else if oc == 0 && pc == 0 then
     ("ACCEPT/ACCEPT", [])
   else if oc /= 0 && pc /= 0 then
-    ("REJECT/REJECT", rejectReasons (codeOf ocode) (codeOf pcode))
+    (
+      "REJECT/REJECT",
+      if codes then rejectReasons (codeOf ocode) (codeOf pcode) else [],
+    )
   else
     ("DIVERGED", ["check verdict itself flipped under permutation"])
 
@@ -225,7 +317,12 @@ boolText b = if b then "1" else "0"
 
 -- Per-row state, carried from stage to stage. Each record holds what the
 -- stages before it observed, so every message is graded from its own spawn.
-data Row = Row { rowDir : String, rowOrig : String, rowPerm : String }
+data Row = Row {
+  rowDir : String,
+  rowOrig : String,
+  rowPerm : String,
+  rowCodes : Bool,
+}
 
 data RunRec = RunRec {
   runRow : Row,
@@ -277,7 +374,9 @@ gradeCheck r [oR, pR] = match oR
             (fail
               "check could not launch on \{r.rowPerm}: exit \{intToString pCode}")
         else
-          verdictGate r (checkVerdict oCode (oo ++ oe) pCode (po ++ pe))
+          verdictGate
+            r
+            (checkVerdict r.rowCodes oCode (oo ++ oe) pCode (po ++ pe))
 gradeCheck _ _ =
   Err (fail "internal: a row was not answered by its two check spawns")
 
@@ -452,30 +551,63 @@ runGroup bin rows =
   let s5 = stageRun (spawnEach spawnTimeoutSeconds binSpawns) fail gradeBins s4
   map finalOf s5
 
-rowLabel : (String, String) -> String
-rowLabel (f, iface) = "\{f} [\{iface}]"
+-- One graded pair: a fixture file with one interface's impl blocks reversed,
+-- or an admitted-set directory entry with its imports reversed (the directory
+-- and the entry in it, and the reordered text of each file that changes).
+data Pair =
+  | DeclPair String String
+  | ImportPair String String (List (String, String))
+
+rowLabel : Pair -> String
+rowLabel (DeclPair f iface) = "\{f} [\{iface}]"
+rowLabel (ImportPair d e _) = "\{d}/\{e} [import order]"
 
 prepRow : String ->
-  (String, String) ->
+  Pair ->
   Result String String ->
   <Exec, IO, FileRead, FileWrite> Result Expectation Row
-prepRow fixDir (f, iface) (Err e) =
-  Err (fail "could not make a scratch directory: \{e}")
-prepRow fixDir (f, iface) (Ok dir) =
+prepRow _ _ (Err e) = Err (fail "could not make a scratch directory: \{e}")
+prepRow _ (ImportPair d _ []) (Ok _) =
+  Err (fail "\{d}: no file has two or more imports to reorder")
+prepRow fixDir (ImportPair d e texts) (Ok dir) =
+  match runVerb "cp" ["-R", "\{fixDir}/\{d}/.", dir]
+    Err err => Err (fail "could not copy \{d}: \{err}")
+    Ok (0, _, _) => match writeAll dir texts
+      Err err => Err (fail err)
+      Ok _ => Ok Row {
+        rowDir = dir,
+        rowOrig = "\{fixDir}/\{d}/\{e}",
+        rowPerm = "\{dir}/\{e}",
+        rowCodes = False,
+      }
+    Ok (code, _, err) =>
+      Err (fail "cp -R \{d} exited \{intToString code}: \{err}")
+prepRow fixDir (DeclPair f iface) (Ok dir) =
   let origPath = "\{fixDir}/\{f}"
   let permPath = "\{dir}/\{f}__\{iface}_perm.mdk"
   match readFile origPath
     Err e => Err (fail "could not read \{origPath}: \{e}")
     Ok text => match writeFile permPath (permuteText iface text)
       Err e => Err (fail "could not write \{permPath}: \{e}")
-      Ok _ => Ok Row { rowDir = dir, rowOrig = origPath, rowPerm = permPath }
+      Ok _ => Ok Row {
+        rowDir = dir,
+        rowOrig = origPath,
+        rowPerm = permPath,
+        rowCodes = True,
+      }
+
+writeAll : String -> List (String, String) -> <FileWrite> Result String Unit
+writeAll _ [] = Ok ()
+writeAll dir ((f, t) :: rest) = match writeFile "\{dir}/\{f}" t
+  Err e => Err "could not write \{dir}/\{f}: \{e}"
+  Ok _ => writeAll dir rest
 
 -- One `testJobs`-wide group of pairs: every row prepared, every stage run over
 -- the group, then the group's scratch directories removed. Under
 -- MEDAKA_TEST_JOBS=1 this is one row at a time, spawning in serial order.
 groupRows : String ->
   String ->
-  List (String, String) ->
+  List Pair ->
   <Exec, IO, FileRead, FileWrite> List (String, Expectation)
 groupRows bin fixDir pairs =
   let dirs = map freshDirFor pairs
@@ -486,7 +618,7 @@ groupRows bin fixDir pairs =
 
 groupedRows : String ->
   String ->
-  List (String, String) ->
+  List Pair ->
   <Exec, IO, FileRead, FileWrite> List (String, Expectation)
 groupedRows bin fixDir pairs =
   flatMap (groupRows bin fixDir) (chunks testJobs pairs)
@@ -495,7 +627,7 @@ groupedRows bin fixDir pairs =
 -- no directory, or a directory with no pair, is a failure row rather than a
 -- row that is silently dropped.
 prepAll : String ->
-  List (String, String) ->
+  List Pair ->
   List (Result String String) ->
   <Exec, IO, FileRead, FileWrite> List (Result Expectation Row)
 prepAll _ [] [] = []
@@ -524,10 +656,28 @@ checkIn bin fixDir = match fixtureFiles fixDir
   Err e => fail "could not enumerate test/dict_fixtures: \{e}"
   Ok names => match pairsIn fixDir (directLeaves fixDir names)
     Err e => fail e
-    Ok ps => expectAll [
-      expectAtLeast 135 (length ps),
-      expectEach (groupedRows bin fixDir ps),
-    ]
+    Ok ps => match importPairsIn fixDir (admittedRels fixDir names)
+      Err e => fail e
+      Ok ips => expectAll [
+        expectAtLeast 135 (length ps),
+        expectAtLeast 24 (length ips),
+        expectEach (groupedRows bin fixDir (ps ++ ips)),
+      ]
 
 test "DICT-SEMANTICS section 4: declaration-order permutation keeps verdict, run and build" =
   check
+
+-- A file's trailing blank line travels with its last chunk, so a reordered file
+-- can gain a blank line between imports; only the order of lines is asserted.
+test "the import permuter reverses a hub's lines and moves nothing else" =
+  let hub = "-- hub\nexport import pa.{IA, mth}\nexport import pb.{IB, mth}\n"
+  let entry = "import hub.{mth}\nimport dflt.{dflt}\n\nmain = mth dflt\n"
+  expectAll [
+    expectEqual
+      ["-- hub", "export import pb.{IB, mth}", "export import pa.{IA, mth}"]
+      (filter (/= "") (lines (permuteImports hub))),
+    expectEqual
+      ["import dflt.{dflt}", "import hub.{mth}", "main = mth dflt"]
+      (filter (/= "") (lines (permuteImports entry))),
+    expectEqual 2 (importCount entry),
+  ]

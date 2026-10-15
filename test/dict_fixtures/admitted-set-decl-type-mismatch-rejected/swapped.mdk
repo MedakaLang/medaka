@@ -1,0 +1,6 @@
+-- `main.mdk` through `hubswap`, whose two `export import` lines are swapped: the
+-- occurrences are now typed against `IB.mth : f a -> Int`, so `mth 3` is a type
+-- error before the admitted set is asked.  Rejected in both orders.
+import hubswap.{IA, IB, mth}
+
+main = println (mth [1, 2], mth 3)

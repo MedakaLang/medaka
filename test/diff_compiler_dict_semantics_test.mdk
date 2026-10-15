@@ -3811,8 +3811,7 @@ table = [
     codes = [Absent "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
   },
   Row {
-    entry =
-      "admitted-set-receiver-grounded-at-quiescence-accepted/main.mdk",
+    entry = "admitted-set-receiver-grounded-at-quiescence-accepted/main.mdk",
     label =
       "§6.2 T5: a later module's `r 4` grounds a library binding's admitted-set receiver; the set is decided at the drain, at `Int`, so `mth (4 + 4)` is 9",
     expCheck = "ACCEPT",
@@ -3871,27 +3870,93 @@ table = [
     codes = [Absent "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
   },
   Row {
-    entry = "admitted-set-decl-type-mismatch-selects-nothing-accepted/main.mdk",
+    entry = "admitted-set-decl-type-mismatch-rejected/main.mdk",
     label =
-      "S2-DECL (d): a declaration whose declared type the occurrence does not instantiate (`IB`'s `f a -> Int` at `mth 3 : Int -> Int`) selects nothing rather than leaving the set undecided, so `mth 3` is `IA Int`'s 4 and `mth [1, 2]` is `IB List`'s 100",
-    expCheck = "ACCEPT",
-    expRun = "ACCEPT",
-    expBuild = "ACCEPT",
-    mode = AllExact,
-    pinned = "(100, 4)\n",
-    codes = [Absent "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+      "S2-DECL (d), (e): inference types `mth 3` against the first `mth` in scope (`IA`'s `a -> Int`), so `IB`'s declared `f a -> Int` does not instantiate to it; that mismatch records scope order, not meaning, so `IB` has no answer and `mth 3` is the located `T-AMBIGUOUS-METHOD`. While a mismatch selected nothing this order printed `(100, 4)` and the swapped order rejected",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-decl-type-mismatch-rejected/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above, the hub's two lines swapped: rejected too, but as a type error, because inference now types `mth 3` against `IB`'s `f a -> Int` before the admitted set is asked. The reject code still follows import order through that inference step; the verdict does not",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-TYPE-MISMATCH", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-decl-arity-mismatch-rejected/main.mdk",
+    label =
+      "S2-DECL (d), (e): `mth 5` is typed `Int -> Int` against `IA`, which `IB`'s `a -> Bool -> Int` does not instantiate to; the set is undecided and `mth 5` is the located `T-AMBIGUOUS-METHOD`. While a mismatch selected nothing this order printed 6 and the swapped order rejected",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-decl-arity-mismatch-rejected/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above, the hub's two lines swapped: the same located `T-AMBIGUOUS-METHOD`, beside the `Display` reject that typing `mth 5` against `IB` draws",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-occurrence-typed-by-first-decl-rejected/main.mdk",
+    label =
+      "S2-DECL (b), (d), (e): `IA.mth : a -> List b -> Int` and `IB.mth : a -> Option b -> Int` both select at the receiver `Int`, so they disagree and `mth (1 : Int) dflt` is the located `T-AMBIGUOUS-METHOD`. Inference fixes `dflt` by whichever declaration is first in scope; while the other declaration's mismatch selected nothing the two hub orders printed 101 and 201",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-occurrence-typed-by-first-decl-rejected/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the hub's two lines swapped, the same located reject at the same column",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry = "admitted-set-selected-decl-method-constraints-rejected/main.mdk",
+    label =
+      "S2-DECL (d): at `mth True 3` only `IB Bool` selects, but `IB.mth` has its own `Eq b` constraint and an occurrence of a spelling two interfaces declare records no method-level dictionaries, so the occurrence is the located `T-AMBIGUOUS-METHOD` naming the selected `IB.mth` and its constraints (`pushUnroutableAdmitted`), not a route an engine would run without its `Eq` dictionary. This table pins the code only; the message is not asserted here",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
   },
   Row {
     entry =
-      "admitted-set-decl-arity-mismatch-selects-nothing-accepted/main.mdk",
+      "admitted-set-selected-decl-method-constraints-rejected/swapped.mdk",
     label =
-      "S2-DECL (d): `IB`'s `a -> Bool -> Int` does not instantiate to `mth 5 : Int -> Int`, so only `IA Int` selects, 6",
-    expCheck = "ACCEPT",
-    expRun = "ACCEPT",
-    expBuild = "ACCEPT",
-    mode = AllExact,
-    pinned = "6\n",
-    codes = [Absent "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+      "the S2-DECL (e) half of the row above: the hub's two lines swapped, the same located reject",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
   },
   Row {
     entry = "alias-beside-bare-method/main.mdk",
@@ -5884,7 +5949,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 521
+tableRows = 527
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

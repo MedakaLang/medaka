@@ -1,0 +1,11 @@
+-- SHADOW-SEMANTICS S2-DECL (d): `hub` re-exports `IA.mth : Debug b => a -> b ->
+-- String` (impl `Int`) and `IB.mth : Eq b => a -> b -> String` (impl `Bool`).  At
+-- `mth True 3` both declared types match and only `IB Bool` selects, but `IB.mth`
+-- has its own `Eq b` constraint, and an occurrence of a spelling two interfaces
+-- declare records no method-level dictionaries.  So the located
+-- `T-AMBIGUOUS-METHOD` names the selected declaration and its constraints, in
+-- either hub order (`swapped.mdk`), rather than an engine running `mth` without
+-- its `Eq` dictionary.
+import hub.{IA, IB, mth}
+
+main = println (mth True 3)

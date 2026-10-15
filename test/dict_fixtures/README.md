@@ -15,7 +15,7 @@ scattered across this tree. Where each lives now:
 | 1 | verdict + value + diagnostic code, and the coverage self-audit | `test/diff_compiler_dict_semantics_test.mdk` |
 | 2 | the `medaka check` scheme line | `test/diff_compiler_dict_semantics_test.mdk` |
 | 3 | emitted LLVM IR (`build --keep-ir`) | `test/diff_compiler_dict_semantics_ir_test.mdk` |
-| 4 | declaration-order permutation | `test/diff_compiler_dict_semantics_permute_test.mdk` |
+| 4 | declaration-order permutation, and import-order permutation of the `admitted-set-*` directories | `test/diff_compiler_dict_semantics_permute_test.mdk` |
 | 5 | the per-verb warning surface | `test/diff_compiler_dict_semantics_test.mdk` |
 | 6 | diagnostic spans | `test/diff_compiler_dict_semantics_test.mdk` |
 

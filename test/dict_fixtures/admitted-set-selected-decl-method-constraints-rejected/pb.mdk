@@ -1,0 +1,5 @@
+export interface IB a where
+  mth : Eq b => a -> b -> String
+
+impl IB Bool where
+  mth x b = if b == b then "ib" else "no"

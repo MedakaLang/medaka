@@ -1,0 +1,5 @@
+export interface IA a where
+  mth : Debug b => a -> b -> String
+
+impl IA Int where
+  mth n b = "ia:" ++ debug b
