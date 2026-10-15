@@ -69,6 +69,13 @@ deeper than this measured ~75% rework.
    (`[T-SNAPSHOT-SELF]`) and usually a LEG A golden re-capture
    (`[T-LEGA-GOLDEN]`) on top of the move.** `make arch-census` gives the
    current largest-files table if the slice might grow one of them.
+   The placement must also satisfy the laws in `compiler/ARCHITECTURE.md`
+   (layers, output as a value, state lifetime, one fact one producer); a
+   contract that conflicts with a law says why in the row. A slice that
+   touches `compiler/types/typecheck.mdk` leaves it no larger than it found
+   it or carries the `Arch-Growth-Override:` reason (D1, #4200). Record
+   `make arch-census` at cut; wrap-up diffs against it
+   (`compiler/ARCHITECTURE-PLAYBOOK.md` §10).
 4. **Acceptance shape** — how we'll know it worked ("a `test` case in
    `<module>_test.mdk`", "a `kind = "native"` gate-test row", "IR
    byte-identical"), not exact commands. Pick the vehicle with the

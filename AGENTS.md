@@ -18,6 +18,8 @@ here? Add the rule and the command; put the story in the dossier.**
 `/root/.claude/projects/-root-medaka/memory/MEMORY.md` (consult when relevant).
 
 > ### ⚡ Editing `compiler/`? Read [`compiler/AGENTS.md`](compiler/AGENTS.md) first.
+> The laws a placement or contract must satisfy: [`compiler/ARCHITECTURE.md`](compiler/ARCHITECTURE.md);
+> the plan: [`compiler/ARCHITECTURE-PLAYBOOK.md`](compiler/ARCHITECTURE-PLAYBOOK.md). `types/typecheck.mdk` may not grow (D1, #4200).
 > Thirteen quadratics so far, all one shape: a `List` used as a set or a map.
 > `check` is **GC-bound**; `build`/CI is **clang-bound** — don't conflate them.
 

@@ -9,8 +9,12 @@ This skill is the **single source of placement ground truth**, shared by
 `sprint-plan` (which must state placement in the contract, before code exists),
 `style-review` (which checks it in a diff), and any agent about to add a file.
 
-It answers *where does this belong* and *what must not be relitigated*. It does
-**not** duplicate two things that already have owners:
+It answers *where does this belong* and *what must not be relitigated*. The
+compiler-wide destination (layers, output-as-value, state lifetime, one fact one
+producer, the hooks record, the growth rule) is `compiler/ARCHITECTURE.md`; the plan
+that gets there is `compiler/ARCHITECTURE-PLAYBOOK.md`. A placement that conflicts
+with a law there needs a stated reason in the contract. This skill does **not**
+duplicate two things that already have owners:
 
 - **Which stage lives in which file, and in what order they run** — `AGENTS.md`
   § "Pipeline — where each stage lives". That table is current; the Layout
@@ -92,7 +96,7 @@ why it is not reopened here.
 |---|---|---|
 | Split `typecheck.mdk` along its six fenced seams — **SEQUENCED, do not schedule** | #2586 (superseded the closed #2284) | Sequenced behind the rearchitecture epic by that epic's own register. It is not "not worth doing"; it is *not next*. |
 | De-grab-bag `driver/` and `tools/` (extract the gate scheduler, move inline subcommands and command-local ADTs, thin the entries) | #2282 (open) | This is the OWNER of driver/tools placement debt. Findings about `medaka_cli.mdk`'s size are **noted on #2282**, not acted on inline — `docs/ops/CLI-CONFORMANCE.md` says the same in its own §7. |
-| Hard size ratchets (a gate that reds on a file exceeding N lines) — **DECLINED** | #2289, leg 4 of crusade #2276 | The chosen detector is **soft**: `make arch-census` (`test/arch_census.sh`) reports and ranks, encodes no threshold, asserts nothing, always exits 0. A size ratchet teaches avoidance, not architecture. #2619 (lint count baseline) does not change this: it pins per-file FINDING counts for a lint rule, not line counts, and `arch-census` deliberately pins nothing. |
+| Hard size ratchets (a gate that reds on a file exceeding N lines) — **DECLINED tree-wide** | #2289, leg 4 of crusade #2276 | The chosen detector is **soft**: `make arch-census` (`test/arch_census.sh`) reports and ranks, encodes no threshold, asserts nothing, always exits 0. A size ratchet teaches avoidance, not architecture. #2619 (lint count baseline) does not change this: it pins per-file FINDING counts for a lint rule, not line counts, and `arch-census` deliberately pins nothing. **Amended 2026-10-15 (Val, playbook D1, #4206):** one file is the exception. `compiler/types/typecheck.mdk` gets a may-only-fall code-line growth ratchet with a reviewed `Arch-Growth-Override:` PR-body opt-out (#4200). The tree-wide refusal stands; do not generalise the ratchet to other files without a ruling. |
 | New lint rules as a placement/style enforcement mechanism — **DECLINED for now** | crusade #2276 | Not because a rule with findings has nowhere to land: `[H-LINT]`'s max ratchet (`GATED_LINT_RULES`, for a rule the tree is already clean of) is now joined by a per-(file, rule) count baseline (`BASELINED_LINT_RULES` + `test/lint_baseline.toml`, #2619 (lint count baseline)), which admits a rule the tree is NOT clean of and lets each file's count only fall. What stays declined is *authoring* one as a review outcome: a repeated, syntactically-detectable finding becomes a **filed lint-rule issue**, not an implemented rule. |
 | A comment **length** ratchet — **DECLINED on record** | #2281 | A length ratchet teaches agents to write short bad comments. The register norms are prose (`[T-COMMENT-REGISTER]` in `AGENTS.md`) plus a census (`make comment-census`), not a gate. |
 | Mirroring `.claude/skills/` into `.agents/` and `.opencode/` — **DELETED** 2026-09-04 | #2313 (Val ruling) | `.agents/` and `.opencode/` removed as unreferenced, diverged mirror trees — `.agents/skills` was a stale copy of `.claude/skills`, `.opencode/` an independent, unused roster. No gate referenced either tree. |

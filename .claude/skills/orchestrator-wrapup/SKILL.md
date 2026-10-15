@@ -36,6 +36,11 @@ Sweep three sources, because each hides a different class of loose end:
    confident `verified`).
 3. **In-tree markers.** `grep -rnE 'TODO|FIXME|WORKAROUND|XXX|HACK' <files-you-or-agents-touched>`
    — a workaround tagged in code that nobody filed becomes permanent architecture.
+4. **Architectural footprint.** Run `make arch-census` and diff it against the cut-time
+   run; the diff goes in the sprint report. A file in the largest-files table that grew
+   without a stated reason, or `compiler/types/typecheck.mdk` growing at all without an
+   `Arch-Growth-Override:` reason, is a finding (`compiler/ARCHITECTURE.md` A8,
+   `compiler/ARCHITECTURE-PLAYBOOK.md` §10).
 
 Then confirm nothing you *think* you filed silently no-op'd:
 
