@@ -31,7 +31,7 @@
    (#1177), which is not permuted, and import order outside the admitted-set
    directories. Nor that any answer is the right one (Section 1 pins values).
 
-   Floor: the derived set keeps at least 135 (fixture, interface) rows and 22
+   Floor: the derived set keeps at least 135 (fixture, interface) rows and 24
    import-order entries. Fewer means the derivation (enumeration or
    qualifying-interface scan) broke; the floor catches that, not a change in
    which rows exist. Rows are graded in
@@ -660,7 +660,7 @@ checkIn bin fixDir = match fixtureFiles fixDir
       Err e => fail e
       Ok ips => expectAll [
         expectAtLeast 135 (length ps),
-        expectAtLeast 22 (length ips),
+        expectAtLeast 24 (length ips),
         expectEach (groupedRows bin fixDir (ps ++ ips)),
       ]
 

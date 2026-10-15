@@ -1832,6 +1832,7 @@ isGrantOnlyEv : EvId -> Bool
 isInterfaceDecl : Decl -> Bool
 isLegacyPredicateAnswer : Option AssumAnswer -> Bool
 isLetrecGroup : List String -> Bool
+isLiveSpan : Map String Unit -> Option Loc -> Bool
 isLocalAbsName : String -> Bool
 isMangledExportOfAny : List (String, List (String, a)) -> String -> Bool
 isMangledFor : String -> String -> Bool
@@ -2572,6 +2573,7 @@ pushTypeErrorOnceAt : String -> Option Loc -> String -> Unit
 pushTypeErrorOncePerSite : String -> Option Loc -> String -> Unit
 pushUnknownField : String -> String -> Unit
 pushUnknownFieldMaybeSuggest : String -> String -> List String -> Unit
+pushUnroutableAdmitted : String -> List IfaceRef -> IfaceRef -> Option Loc -> Unit
 qualConstraintDecl : String -> Option CDeclared
 qualConstraintFor : String -> Option (List CSlot)
 qualConstraintIds : String -> Option (List Int)
@@ -3084,6 +3086,7 @@ sortIfaceRefs : List IfaceRef -> List IfaceRef
 sortIfaceRefsGo : List IfaceRef -> List IfaceRef -> List IfaceRef
 sortInsertIfaceRef : IfaceRef -> List IfaceRef -> List IfaceRef
 sourceBindingArity : Expr -> Int
+spanKeys : List (Option Loc) -> List String
 spellCtxOf : List Decl -> SpellCtx
 spineHead : Mono -> Mono
 spineHeadEv : Expr -> Option EvId

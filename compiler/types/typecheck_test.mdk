@@ -91,6 +91,7 @@ import types.typecheck.{
   finishEvidenceObservation,
   finishMethodReturnTrace,
   finishNumericPredicateTrace,
+  isLiveSpan,
   methodReturnResolutionMutationProbe,
   methodReturnMemoCurrentViews,
   methodReturnMemoFenceMutationProbe,
@@ -101,12 +102,14 @@ import types.typecheck.{
   scopeFrameStats,
   setStdlibOwnership,
   scopeTraceContext,
+  spanKeys,
   stickyTypeErrorDiags,
   tcCode,
   tcMsg,
   walkGoalSameProbe,
 }
 import types.target_profile.{selectProfile, selectedProfile}
+import support.ordmap.{omEmpty, omFromNames}
 import support.util.{
   contains, endsWith, isEmptyL, joinNl, joinWith, listLen, lookupAssoc, splitNl,
   splitOnChar, startsWith
@@ -4202,6 +4205,19 @@ test "every goal that writes a method cell notes into that cell's summary" =
     expectEqual
       ["GKArgStamp", "GKMethodDict", "GKReturnSite"]
       (sort (nub (map fst observed))),
+  ]
+
+-- A drain finding is live when its span is a live goal's.  Goals built after a
+-- drain (`pushArithGoal` and its siblings) carry no location, so an unlocated live
+-- goal must not make every unlocated finding live.
+test "an unlocated drain finding is never live, even beside an unlocated live goal" =
+  let at = Some (Loc "m.mdk" 3 4 3 9)
+  let live = omFromNames (spanKeys [None, at]) omEmpty
+  expectAll [
+    expectEqual ["m.mdk:3:4"] (spanKeys [None, at, None]),
+    expectFalse (isLiveSpan live None),
+    expectTrue (isLiveSpan live at),
+    expectFalse (isLiveSpan live (Some (Loc "m.mdk" 3 5 3 9))),
   ]
 
 -- `monoVecSameGiven` equates two arrows that differ only in their effect rows; the

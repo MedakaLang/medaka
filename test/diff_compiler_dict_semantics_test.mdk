@@ -3936,6 +3936,29 @@ table = [
     codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
   },
   Row {
+    entry = "admitted-set-selected-decl-method-constraints-rejected/main.mdk",
+    label =
+      "S2-DECL (d): at `mth True 3` only `IB Bool` selects, but `IB.mth` has its own `Eq b` constraint and an occurrence of a spelling two interfaces declare records no method-level dictionaries, so the occurrence is the located `T-AMBIGUOUS-METHOD` naming the selected `IB.mth` and its constraints (`pushUnroutableAdmitted`), not a route an engine would run without its `Eq` dictionary. This table pins the code only; the message is not asserted here",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
+    entry =
+      "admitted-set-selected-decl-method-constraints-rejected/swapped.mdk",
+    label =
+      "the S2-DECL (e) half of the row above: the hub's two lines swapped, the same located reject",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-METHOD", Absent "T-UNROUTED-DISPATCH"],
+  },
+  Row {
     entry = "alias-beside-bare-method/main.mdk",
     label =
       "SYNTAX.md \"Import aliasing\": `import ma as A` binds `ma`'s methods as `A.sh` only, so beside `import mb.{Sh, sh}` the bare `sh` is `mb.sh` alone (`mb`'s `Sh Int` adds 2000). 2007, hand-derived from the declarations; never `ma`'s 1007 by import order and never an emitter panic",
@@ -5926,7 +5949,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 525
+tableRows = 527
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

@@ -21979,6 +21979,7 @@ checkAdmittedOccObl env (name, mono, loc) =
   match admittedSelection env name mono
     Selects _ _ _ => ()
     Undecided => pushAmbiguousMethod name ifs loc
+    Unroutable sel => pushUnroutableAdmitted name ifs sel loc
     SelectsNothing =>
       let recv = match admittedReceiverMono name ifs mono
         Some at => ppMono at
@@ -21997,11 +21998,13 @@ checkAdmittedOccObl env (name, mono, loc) =
 -- receiver has no head (rigid, or still ungrounded at quiescence), or when it has no
 -- method row here; the set has none when two or more declarations select or any one
 -- has no answer, since the declarations have then not been shown to agree
--- (SHADOW-SEMANTICS S2-DECL (d), (e)).
+-- (SHADOW-SEMANTICS S2-DECL (d), (e)).  A set whose one selecting declaration
+-- cannot be routed at the occurrence is unroutable (`routableSelection`).
 data AdmittedAnswer =
   | Selects IfaceRef ImplRow (List Mono)
   | SelectsNothing
   | Undecided
+  | Unroutable IfaceRef
 
 -- S2-DECL (d) at the occurrence of [name] whose instantiated method type is [mono]:
 -- each admitted declaration asked through its own parameter vector, read off its own
@@ -22018,7 +22021,7 @@ admittedSelection env name mono =
     [one] => routableSelection name one
     _ => Undecided
 
--- A selected declaration with its own method-level constraints has no answer: an
+-- A selected declaration with its own method-level constraints is unroutable: an
 -- admitted-set occurrence records no method dictionaries (`recordMethodDicts` reads
 -- the one declaration `methodIfaceHere` names, and an admitted spelling names none),
 -- so committing to it would leave those constraints unrouted for every engine.
@@ -22028,7 +22031,7 @@ routableSelection name (answer@(Selects iface _ _)) =
   match (lookupMethodPredicateSlots
     key
     perRun.value.methodPredicateSlotsRef.value)
-    Some (_ :: _) => Undecided
+    Some (_ :: _) => Unroutable iface
     _ => answer
 routableSelection _ answer = answer
 
@@ -29150,6 +29153,23 @@ pushAmbiguousMethod name ifs loc =
     "T-AMBIGUOUS-METHOD"
     loc
     "`\{name}` is ambiguous here: \{joinWith " and " (map shadowIfaceLabel ifs)} each declare a method `\{name}`, and this use does not decide which one it means; bring only one of those interfaces into scope"
+    ambiguousShadowHelp
+    None
+
+-- The admitted set's one selecting declaration [sel] has method-level constraints,
+-- which an admitted-set occurrence records no dictionaries for (`routableSelection`).
+-- Same code and help as `pushAmbiguousMethod`: the ambiguity of the spelling is
+-- what withholds those dictionaries.
+pushUnroutableAdmitted : String ->
+  List IfaceRef ->
+  IfaceRef ->
+  Option Loc ->
+  Unit
+pushUnroutableAdmitted name ifs sel loc =
+  pushTypeErrorHelpFixAt
+    "T-AMBIGUOUS-METHOD"
+    loc
+    "`\{name}` names a method of more than one interface here (\{joinWith " and " (map shadowIfaceLabel ifs)}); the one this use selects, `\{sel.irName}.\{name}`, has method-level constraints, and a use of a name that more than one interface declares cannot supply their dictionaries; bring only one of those interfaces into scope"
     ambiguousShadowHelp
     None
 
@@ -56242,10 +56262,25 @@ liveLocsOf goals =
     let live = fold (acc i => IdMap.set i () acc) Tip ids
     let mentions =
       ms => anyList (m => anyList (i => IdMap.has i live) (monoUnboundIds m)) ms
-    map (o => locKey o.oLoc) (filterList (o => mentions (goalMonos o)) goals)
-      ++ filterMap
-        ((_, m, loc) => if mentions [m] then Some (locKey loc) else None)
-        perRun.value.admittedOccObls.value
+    spanKeys
+      (map (o => o.oLoc) (filterList (o => mentions (goalMonos o)) goals)
+        ++ filterMap
+          ((_, m, loc) => if mentions [m] then Some loc else None)
+          perRun.value.admittedOccObls.value)
+
+-- The span keys (`locKey`) of the located [locs].  An unlocated goal or occurrence
+-- names no span, so no unlocated finding is joined to it (`isLiveSpan`).
+export
+spanKeys : List (Option Loc) -> List String
+spanKeys [] = []
+spanKeys (None :: rest) = spanKeys rest
+spanKeys (loc :: rest) = locKey loc :: spanKeys rest
+
+-- Whether a finding at [loc] is live: it is located, at one of [live]'s spans.
+export
+isLiveSpan : OrdMap Unit -> Option Loc -> Bool
+isLiveSpan _ None = False
+isLiveSpan live loc = omHasKey (locKey loc) live
 
 -- The types a goal is posed at.
 goalMonos : Obligation -> List Mono
@@ -56406,7 +56441,7 @@ drainStampQueue _ =
         dfModule = mid,
         dfDiag = d,
         dfVerdict = False,
-        dfLive = omHasKey (locKey (tcLoc d)) liveLocs,
+        dfLive = isLiveSpan liveLocs (tcLoc d),
       })
       (judgeEvidence ctxs)
   let _ = materializeBinderTypes ()
@@ -56593,7 +56628,7 @@ runStampCtx ctx =
   let _ = recordEvidence ctx.scGoals
   let live = omFromNames ctx.scLiveLocs omEmpty
   map
-    (d => verdictFinding ctx.scModule (omHasKey (locKey (tcLoc d)) live) d)
+    (d => verdictFinding ctx.scModule (isLiveSpan live (tcLoc d)) d)
     (captureTypeErrors (_ => checkAdmittedOccObls ()))
 
 enterStampCtx : StampCtx -> Unit
