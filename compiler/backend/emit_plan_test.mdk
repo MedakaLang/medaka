@@ -499,6 +499,65 @@ test "a wasm plan's host keys are its reached externs' imports, per group" = exp
         ]
         (hostKeysOf WasmBackend (call "canonicalizePath" [ref "p", CList []]))),
     labelFail
+      "writeFile: the grant and path channels, the write channel, the commit and the result channel"
+      (expectEqual
+        [
+          "mdk_grant_push",
+          "mdk_grant_reset",
+          "mdk_path_push",
+          "mdk_path_reset",
+          "mdk_result_byte",
+          "mdk_result_len",
+          "mdk_write_file",
+          "mdk_write_file_push",
+          "mdk_write_file_reset",
+        ]
+        (hostKeysOf
+          WasmBackend
+          (call "writeFile" [ref "p", str "x", CList []]))),
+    labelFail
+      "rename: the grant and path channels, the move and the result channel"
+      (expectEqual
+        [
+          "mdk_grant_push",
+          "mdk_grant_reset",
+          "mdk_path_push",
+          "mdk_path_reset",
+          "mdk_rename",
+          "mdk_result_byte",
+          "mdk_result_len",
+        ]
+        (hostKeysOf
+          WasmBackend
+          (call "rename" [ref "a", ref "b", CList [], CList []]))),
+    labelFail
+      "listDir: the grant and path channels, the listing and the result channel"
+      (expectEqual
+        [
+          "mdk_grant_push",
+          "mdk_grant_reset",
+          "mdk_list_dir",
+          "mdk_path_push",
+          "mdk_path_reset",
+          "mdk_result_byte",
+          "mdk_result_len",
+        ]
+        (hostKeysOf WasmBackend (call "listDir" [ref "p", CList []]))),
+    labelFail
+      "statFile: the grant and path channels, the stat and its fields"
+      (expectEqual
+        [
+          "mdk_grant_push",
+          "mdk_grant_reset",
+          "mdk_path_push",
+          "mdk_path_reset",
+          "mdk_result_byte",
+          "mdk_result_len",
+          "mdk_stat_field",
+          "mdk_stat_file",
+        ]
+        (hostKeysOf WasmBackend (call "statFile" [ref "p", CList []]))),
+    labelFail
       "a declared file bound: the grant channel and the bound frame"
       (expectEqual
         [
@@ -545,6 +604,30 @@ test "a wasm plan's host keys are its reached externs' imports, per group" = exp
     labelFail
       "an llvm plan has none"
       (expectEqual [] (hostKeysOf LlvmBackend (call "exit" [int 0]))),
+  ]
+
+-- statFile's lowering builds a 4-tuple the program may never write, so the plan
+-- declares that arity itself; a program without the extern does not.
+test "statFile demands the 4-tuple type; a pure program demands none" = expectAll
+  [
+    labelFail
+      "statFile"
+      (expectEqual
+        [4]
+        (buildEmitPlan
+          WasmBackend
+          (program [
+            val "main" (call "statFile" [ref "p", CList []]),
+          ])).wasmDemand.tupleArities),
+    labelFail
+      "pure"
+      (expectEqual
+        []
+        (buildEmitPlan
+          WasmBackend
+          (program [
+            val "main" (prim "+" (int 1) (int 2)),
+          ])).wasmDemand.tupleArities),
   ]
 
 -- The stderr writer's key is the static half of the module's stderr import: the

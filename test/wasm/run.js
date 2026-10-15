@@ -29,6 +29,13 @@ const vfs = {
   readFile: (p) => fs.readFileSync(p),   // -> Buffer; throws on missing/unreadable
   exists: (p) => fs.existsSync(p),
   writeFile: (p, buf) => fs.writeFileSync(p, buf),   // throws on unwritable path
+  // stat(2) following links; the time is whole seconds, as st_mtime
+  stat: (p) => {
+    const st = fs.statSync(p);
+    return { size: st.size, isDir: st.isDirectory(), isFile: st.isFile(), mtime: Math.floor(st.mtimeMs / 1000), mode: st.mode & 0o7777 };
+  },
+  readdir: (p) => fs.readdirSync(p),
+  rename: (a, b) => fs.renameSync(a, b),
   // confinement's primitives: realpath(3) itself, and whether lstat(2) succeeds
   realpath: (p) => fs.realpathSync.native(p),
   lexists: (p) => { try { fs.lstatSync(p); return true; } catch (e) { return false; } },

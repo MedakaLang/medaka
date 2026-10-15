@@ -50,9 +50,13 @@ export const SLICES = {
     keys: [
       'mdk_read_file', 'mdk_file_exists', 'mdk_canonicalize_path',
       'mdk_write_file_reset', 'mdk_write_file_push', 'mdk_write_file_commit',
+      'mdk_write_file', 'mdk_rename', 'mdk_list_dir', 'mdk_stat_file', 'mdk_stat_field',
       ...PATH_KEYS, ...RESULT_KEYS, ...GRANT_KEYS,
     ],
-    externs: ['readFile', 'readFileBytes', 'fileExists', 'canonicalizePath', 'writeFile', 'writeFileBytes'],
+    externs: [
+      'readFile', 'readFileBytes', 'fileExists', 'canonicalizePath', 'writeFile', 'writeFileBytes',
+      'rename', 'listDir', 'statFile',
+    ],
   },
   // A declared file bound's frame (EFFECTS-SEMANTICS §7) is bookkeeping, not a
   // capability: a bounded body that performs no file operation runs anywhere.
@@ -119,7 +123,7 @@ export function withheldExterns(profile) {
 // Externs of a slice a profile can install that no wasm build lowers (their wasm row in
 // compiler/backend/extern_catalog.mdk is NotProvided): a call to one does not compile
 // for any wasmgc profile, so the runnability rule reads them beside withheldExterns.
-export const WASM_GAP_EXTERNS = ['writeFile', 'osEntropyBytes'];
+export const WASM_GAP_EXTERNS = ['osEntropyBytes'];
 
 // The extern a key serves, for a withheld slice's message.  medaka_host_test.mjs asserts
 // every key of a withholdable slice has a row naming one of that slice's `externs`.
@@ -127,7 +131,8 @@ export const KEY_EXTERN = {
   mdk_write_byte: 'putStr', mdk_write_err_byte: 'ePutStr',
   mdk_read_file: 'readFile', mdk_file_exists: 'fileExists', mdk_canonicalize_path: 'canonicalizePath',
   mdk_write_file_reset: 'writeFileBytes', mdk_write_file_push: 'writeFileBytes',
-  mdk_write_file_commit: 'writeFileBytes', mdk_get_env: 'getEnv',
+  mdk_write_file_commit: 'writeFileBytes', mdk_write_file: 'writeFile', mdk_rename: 'rename',
+  mdk_list_dir: 'listDir', mdk_stat_file: 'statFile', mdk_stat_field: 'statFile', mdk_get_env: 'getEnv',
   mdk_args_count: 'args', mdk_arg_len: 'args', mdk_arg_byte: 'args', mdk_exit: 'exit',
   mdk_wall_time_sec: 'wallTimeSec', mdk_monotonic_sec: 'monotonicSec', mdk_sleep_ms: 'sleepMs',
   mdk_result_len: 'readFile/getEnv result', mdk_result_byte: 'readFile/getEnv result',
@@ -251,6 +256,11 @@ const dec = (a) => new TextDecoder('utf-8').decode(a instanceof Uint8Array ? a :
 // whose message is the guest's Err text), exists(path) -> bool, writeFile(path, bytes),
 // and for confinement realpath(path) -> the canonical path (throws when it has none)
 // and lexists(path) -> whether an entry is present, a dangling symlink included.
+// Four more primitives serve the directory and metadata externs: stat(path) -> { size,
+// isDir, isFile, mtime (seconds), mode (permission bits) } (follows links, throws when
+// the path is absent), readdir(path) -> the entry names (throws on a missing path or a
+// non-directory) and rename(src, dst).  writeFile(path, bytes, mode?) sets the file's
+// permission bits to `mode` when one is given.
 // An in-memory vfs, with the path model of docs/spec/WASM-SEMANTICS.md §3: paths are
 // relative to its root (`.`, `/` and `` all name it), `.` and empty components are
 // dropped, `..` steps up (never above the root), and every component a `/` follows
@@ -262,6 +272,11 @@ export class MemoryVfs {
   constructor(entries) {
     this.files = new Map();
     this.dirs = new Set(['']);
+    // A file's permission bits and modification time (seconds), by key.  A file made
+    // without a mode reads 0o644, as a file created under the usual umask does, and a
+    // directory 0o755.
+    this.modes = new Map();
+    this.mtimes = new Map();
     for (const [p, bytes] of entries || []) {
       const parts = MemoryVfs.split(p);
       for (let i = 1; i < parts.length; i++) this.dirs.add(parts.slice(0, i).join('/'));
@@ -314,11 +329,64 @@ export class MemoryVfs {
     return '/' + key;
   }
   lexists(p) { return this.exists(p); }
-  writeFile(p, bytes) {
+  writeFile(p, bytes, mode) {
     const { key, error } = this.resolve(p);
     if (error) throw new Error(`${error}, open '${p}'`);
     if (this.dirs.has(key)) throw new Error(`EISDIR: illegal operation on a directory, open '${p}'`);
     this.files.set(key, bytes);
+    if (mode !== undefined) this.modes.set(key, mode & 0o7777);
+    this.mtimes.set(key, Math.floor(Date.now() / 1000));
+  }
+  stat(p) {
+    const { key, error } = this.resolve(p);
+    const isDir = !error && this.dirs.has(key);
+    if (error || !(isDir || this.files.has(key)))
+      throw new Error(`ENOENT: no such file or directory, stat '${p}'`);
+    if (isDir) return { size: 0, isDir: true, isFile: false, mtime: 0, mode: 0o755 };
+    return {
+      size: this.files.get(key).length, isDir: false, isFile: true,
+      mtime: this.mtimes.get(key) || 0, mode: this.modes.has(key) ? this.modes.get(key) : 0o644,
+    };
+  }
+  readdir(p) {
+    const { key, error } = this.resolve(p);
+    if (error) throw new Error(`${error}, scandir '${p}'`);
+    if (!this.dirs.has(key)) {
+      if (this.files.has(key)) throw new Error(`ENOTDIR: not a directory, scandir '${p}'`);
+      throw new Error(`ENOENT: no such file or directory, scandir '${p}'`);
+    }
+    const prefix = key === '' ? '' : key + '/';
+    const names = new Set();
+    for (const k of [...this.files.keys(), ...this.dirs])
+      if (k !== '' && k.startsWith(prefix) && k.length > prefix.length) names.add(k.slice(prefix.length).split('/')[0]);
+    return [...names];
+  }
+  // rename(2) over files and directories: a file replaces a file, a directory moves
+  // with everything under it and replaces only an empty directory.
+  rename(a, b) {
+    const src = this.resolve(a), dst = this.resolve(b);
+    const fail = (e) => { throw new Error(`${e}, rename '${a}' -> '${b}'`); };
+    if (src.error) fail(src.error);
+    if (dst.error) fail(dst.error);
+    const sk = src.key, dk = dst.key;
+    const srcDir = this.dirs.has(sk);
+    if (!srcDir && !this.files.has(sk)) fail('ENOENT: no such file or directory');
+    if (sk === dk) return;
+    if (srcDir && (dk === '' || dk.startsWith(sk + '/'))) fail('EINVAL: invalid argument');
+    if (sk === '') fail('EBUSY: resource busy or locked');
+    if (!srcDir && this.dirs.has(dk)) fail('EISDIR: illegal operation on a directory');
+    if (srcDir && this.files.has(dk)) fail('ENOTDIR: not a directory');
+    if (srcDir && this.dirs.has(dk) && this.readdir(dk).length > 0) fail('ENOTEMPTY: directory not empty');
+    const move = (k) => dk + k.slice(sk.length);
+    for (const [k, bytes] of [...this.files])
+      if (k === sk || k.startsWith(sk + '/')) {
+        this.files.delete(k); this.files.set(move(k), bytes);
+        for (const m of [this.modes, this.mtimes])
+          if (m.has(k)) { m.set(move(k), m.get(k)); m.delete(k); }
+      }
+    if (srcDir)
+      for (const k of [...this.dirs])
+        if (k === sk || k.startsWith(sk + '/')) { this.dirs.delete(k); this.dirs.add(move(k)); }
   }
 }
 
@@ -418,6 +486,12 @@ export function confine(vfs, path, grant, entry) {
   return `${path} is outside the granted authority [${grant.map((g) => `"${g}"`).join(', ')}]`;
 }
 
+// Byte order of two encoded names.
+const compareBytes = (a, b) => {
+  for (let i = 0; i < a.length && i < b.length; i++) if (a[i] !== b[i]) return a[i] - b[i];
+  return a.length - b.length;
+};
+
 const sameGrant = (a, b) => a.length === b.length && a.every((g, i) => g === b[i]);
 
 // A sink that keeps every delivered byte; `text(stream)` decodes what it holds.
@@ -463,15 +537,16 @@ export function createHost(profile, opts = {}) {
     floatFmtBuf: new Uint8Array(0), strToFloatOk: 0,
     argBytes: null, waitCell: null,
     // The grant the guest pushed for the next file operation (null: none pushed, or
-    // already taken), the element it is pushing, and the declared bounds entered:
-    // { write, grant, active }, innermost last.
-    grant: null, grantElem: [], bounds: [],
+    // already taken), the element it is pushing, the grant that ended with a -2 push
+    // (a two-path operation's first), the stat the last mdk_stat_file took, and the
+    // declared bounds entered: { write, grant, active }, innermost last.
+    grant: null, grantElem: [], grantFirst: null, stat: null, bounds: [],
   };
   host.reset = () => {
     host.stdoutBuf = []; host.stderrBuf = [];
     host.pathBuf = []; host.resultBuf = new Uint8Array(0); host.writeBuf = [];
     host.floatFmtBuf = new Uint8Array(0); host.strToFloatOk = 0; host.argBytes = null;
-    host.grant = null; host.grantElem = []; host.bounds = [];
+    host.grant = null; host.grantElem = []; host.grantFirst = null; host.stat = null; host.bounds = [];
   };
   host.deliver = (stream) => {
     const buf = stream === 'stdout' ? host.stdoutBuf : host.stderrBuf;
@@ -491,11 +566,10 @@ export function createHost(profile, opts = {}) {
   const fail = (e) => { host.resultBuf = enc(String((e && e.message) || e)); return 0; };
   // A grant is taken by the operation it was pushed for, so an operation that finds
   // none refuses rather than inherit a previous call's.
-  const takeGrant = () => { const g = host.grant; host.grant = null; return g; };
-  // The refusal text for `path`, or null: the operation's grant, then each active
-  // bound of its mode, innermost first (mdk_confine_bounds).
-  const refusal = (path, entry, write) => {
-    const grant = takeGrant();
+  const takeGrant = () => { const g = host.grant; host.grant = null; host.grantFirst = null; return g; };
+  // The refusal text for `path` under `grant`, or null: the grant, then each active
+  // bound of the operation's mode, innermost first (mdk_confine_bounds).
+  const refusalUnder = (grant, path, entry, write) => {
     if (grant === null) return `${path} is outside the granted authority: no grant was given`;
     let refused = confine(host.vfs, path, grant, entry);
     for (let i = host.bounds.length - 1; refused === null && i >= 0; i--) {
@@ -504,7 +578,17 @@ export function createHost(profile, opts = {}) {
     }
     return refused;
   };
+  const refusal = (path, entry, write) => refusalUnder(takeGrant(), path, entry, write);
   const refuse = (msg) => { host.resultBuf = enc(msg); return 0; };
+  // The write channel's bytes to the path on the path channel, in write mode.
+  const commitWrite = () => {
+    const bytes = new Uint8Array(host.writeBuf);
+    host.writeBuf = [];
+    const p = takePath();
+    const refused = refusal(p, false, 1);
+    if (refused !== null) return refuse(refused);
+    try { host.vfs.writeFile(p, bytes); return 1; } catch (e) { return fail(e); }
+  };
   const argBytes = (i) => {
     if (!host.argBytes) host.argBytes = host.args.map(enc);
     return host.argBytes[i];
@@ -543,9 +627,12 @@ export function createHost(profile, opts = {}) {
     mdk_result_len: () => host.resultBuf.length,
     mdk_result_byte: (i) => host.resultBuf[i] & 0xff,
     // The grant channel: each element's bytes, each ended by -1; reset starts a grant.
-    mdk_grant_reset: () => { host.grant = []; host.grantElem = []; },
+    // A -2 ends the grant pushed so far and starts the next (rename's second).
+    mdk_grant_reset: () => { host.grant = []; host.grantElem = []; host.grantFirst = null; },
     mdk_grant_push: (b) => {
-      if (b < 0) { host.grant.push(dec(host.grantElem)); host.grantElem = []; } else host.grantElem.push(b & 0xff);
+      if (b === -2) { host.grantFirst = host.grant; host.grant = []; host.grantElem = []; }
+      else if (b < 0) { host.grant.push(dec(host.grantElem)); host.grantElem = []; }
+      else host.grantElem.push(b & 0xff);
     },
     // A declared bound (mdk_with_file_bound): `keep` 1 always records a frame, which
     // exit pops; `keep` 0 (a tail position) records one only when it restricts, and
@@ -587,13 +674,44 @@ export function createHost(profile, opts = {}) {
     // writeBuf, commit writes them.  Ok -> 1; an error caches its message -> 0.
     mdk_write_file_reset: () => { host.writeBuf = []; },
     mdk_write_file_push: (b) => { host.writeBuf.push(b & 0xff); },
-    mdk_write_file_commit: () => {
-      const bytes = new Uint8Array(host.writeBuf);
-      host.writeBuf = [];
-      const p = takePath();
-      const refused = refusal(p, false, 1);
+    mdk_write_file_commit: () => commitWrite(),
+    // writeFile: the contents stream into writeBuf as writeFileBytes' do.
+    mdk_write_file: () => commitWrite(),
+    // rename: both paths arrive on the path channel, the source's bytes first, `srcLen`
+    // of them; each is confined in entry mode under its own grant, source first.
+    mdk_rename: (srcLen) => {
+      const bytes = host.pathBuf; host.pathBuf = [];
+      const src = dec(bytes.slice(0, srcLen)), dst = dec(bytes.slice(srcLen));
+      const gs = host.grantFirst, gd = takeGrant();
+      const refused = refusalUnder(gs, src, true, 1) ?? refusalUnder(gd, dst, true, 1);
       if (refused !== null) return refuse(refused);
-      try { host.vfs.writeFile(p, bytes); return 1; } catch (e) { return fail(e); }
+      try { host.vfs.rename(src, dst); return 1; } catch (e) { return fail(e); }
+    },
+    // listDir: the entry names, sorted by their UTF-8 bytes, each followed by a NUL.
+    mdk_list_dir: () => {
+      const p = takePath();
+      const refused = refusal(p, false, 0);
+      if (refused !== null) return refuse(refused);
+      let names;
+      try { names = host.vfs.readdir(p).filter((n) => n !== '.' && n !== '..'); } catch (e) { return fail(e); }
+      const parts = names.map(enc).sort(compareBytes);
+      const out = new Uint8Array(parts.reduce((n, a) => n + a.length + 1, 0));
+      let at = 0;
+      for (const a of parts) { out.set(a, at); at += a.length + 1; }
+      host.resultBuf = out;
+      return 1;
+    },
+    // statFile: take the stat, then read its fields as f64s by index: size, isDir,
+    // isFile, mtime in seconds, permission bits.
+    mdk_stat_file: () => {
+      const p = takePath();
+      const refused = refusal(p, false, 0);
+      if (refused !== null) return refuse(refused);
+      try { host.stat = host.vfs.stat(p); return 1; } catch (e) { return fail(e); }
+    },
+    mdk_stat_field: (i) => {
+      const st = host.stat;
+      return [st.size, st.isDir ? 1 : 0, st.isFile ? 1 : 0, st.mtime, st.mode][i];
     },
     mdk_get_env: () => {
       const v = host.getEnv(takePath());

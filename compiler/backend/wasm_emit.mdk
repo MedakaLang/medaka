@@ -1900,6 +1900,8 @@ externArityW name =
       "fileExists",
       "readFileBytes",
       "canonicalizePath",
+      "listDir",
+      "statFile",
     ] then
     -- a file extern whose path is an authority: its path and its grant
 
@@ -1921,11 +1923,15 @@ externArityW name =
       "arraySetUnsafe",
       "byteBlockSetUnsafe",
       "writeFileBytes",
+      "writeFile",
       "ioPoll",
       siteSentinelName,
     ] then
-    -- writeFileBytes: its path, its bytes and the path's grant
+    -- writeFileBytes, writeFile: its path, its contents and the path's grant
     3
+  else if name == "rename" then
+    -- rename: its two paths and the grant of each
+    4
   else if contains name ["arrayBlit", "byteBlockBlit"] then
     -- stage-A: arrayBlit src srcOff dst dstOff len (5 args); byteBlockBlit is
     -- its byte-block peer, same argument order.
@@ -7183,6 +7189,39 @@ emitLeafExternRef prog env d "writeFileBytes" _ =
   gapLP
     prog
     "wasm stage-D: writeFileBytes takes exactly two arguments and its grant"
+emitLeafExternRef prog env d "writeFile" [p, s, g] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d s
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_write_file_io"]
+emitLeafExternRef prog env d "writeFile" _ =
+  gapLP prog "wasm: writeFile takes exactly two arguments and its grant"
+emitLeafExternRef prog env d "rename" [src, dst, gs, gd] =
+  emitRefExpr prog env d src
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d dst
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d gs
+    ++ emitRefExpr prog env d gd
+    ++ ["call $mdk_rename_io"]
+emitLeafExternRef prog env d "rename" _ =
+  gapLP prog "wasm: rename takes exactly two arguments and the grant of each"
+emitLeafExternRef prog env d "listDir" [p, g] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_list_dir_io"]
+emitLeafExternRef prog env d "listDir" _ =
+  gapLP prog "wasm: listDir takes exactly one argument and its grant"
+emitLeafExternRef prog env d "statFile" [p, g] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_stat_file_io"]
+emitLeafExternRef prog env d "statFile" _ =
+  gapLP prog "wasm: statFile takes exactly one argument and its grant"
 -- W10/B5: `panic msg` → stream the coded line `runtime error [E-PANIC]: <msg>\n` to
 -- stderr, then `unreachable` (peer of native @mdk_panic / the interp's runtimePanic).
 -- The fixed prefix is unrolled to byte-writes; the user message (a $str (ref eq), any

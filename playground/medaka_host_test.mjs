@@ -14,7 +14,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import os from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createHost, runProgram, confine, CapabilityError, HostKeyError, SLICES, KEY_EXTERN } from './medaka_host.mjs';
+import { createHost, runProgram, confine, CapabilityError, HostKeyError, MemoryVfs, SLICES, KEY_EXTERN } from './medaka_host.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = dirname(here);
@@ -69,6 +69,37 @@ main =
   let _ = putStrLn "exists nodir_zz/a.txt: \{debug (fileExists "nodir_zz/a.txt")}"
   let _ = putStrLn "exists .: \{debug (fileExists ".")}"
   putStrLn "read .: \{okErr (readFile ".")}"
+`,
+  fsfam: String.raw`import list.{sort}
+
+okErr : Result String a -> String
+okErr r = match r
+  Ok _ => "Ok"
+  Err _ => "Err"
+
+names : Result String (List String) -> String
+names (Ok xs) = "Ok \{sort xs}"
+names (Err _) = "Err"
+
+shape : Result String (Int, Bool, Bool, Float) -> String
+shape (Ok (size, isDir, isFile, _)) =
+  "Ok \{if isFile then intToString size else "-"} \{isDir} \{isFile}"
+shape (Err _) = "Err"
+
+main =
+  println "write a: \{okErr (writeFile "a.txt" "héllo")}"
+  println "write b: \{okErr (writeFile "b.txt" "x")}"
+  println "list: \{names (listDir ".")}"
+  println "stat a: \{shape (statFile "a.txt")}"
+  println "stat root: \{shape (statFile ".")}"
+  println "stat missing: \{shape (statFile "zz.txt")}"
+  println "rename: \{okErr (rename "a.txt" "c.txt")}"
+  println "old name: \{debug (fileExists "a.txt")}"
+  println "list: \{names (listDir ".")}"
+  println "rename missing: \{okErr (rename "a.txt" "d.txt")}"
+  println "write into nodir: \{okErr (writeFile "nodir_zz/a.txt" "x")}"
+  println "list nodir: \{names (listDir "nodir_zz")}"
+  println "list a file: \{names (listDir "b.txt")}"
 `,
   bigexit: BIG_LOOP + 'main =\n  let _ = loop 1\n  exit 3\n',
   bigtrap: BIG_LOOP + 'main =\n  let _ = loop 1\n  let z = length [1] - 1\n  println (10 / z)\n',
@@ -325,6 +356,89 @@ function check(name, ok, detail) {
     pushed === 1 && underRead === 0 && reentered === 0 && writeBound === 1 && left === 1 && afterReset === 1,
     JSON.stringify({ pushed, underRead, reentered, writeBound, left, afterReset }));
   rmSync(t, { recursive: true, force: true });
+}
+
+// (l) The directory and metadata externs over the worker's vfs, with the text the
+// native build of the same program prints (a listing is sorted by the program, and a
+// directory's size, which each host chooses, is not printed).
+{
+  const msgs = await runInWorker(build('fsfam', 'wasmgc/browser-worker'));
+  const native = 'write a: Ok\nwrite b: Ok\nlist: Ok [a.txt, b.txt]\nstat a: Ok 6 False True\n'
+    + 'stat root: Ok - True False\nstat missing: Err\nrename: Ok\nold name: False\n'
+    + 'list: Ok [b.txt, c.txt]\nrename missing: Err\nwrite into nodir: Err\nlist nodir: Err\nlist a file: Err\n';
+  check('(l) worker: writeFile, listDir, statFile and rename over the vfs',
+    last(msgs).type === 'done' && streamText(msgs, 'stdout') === native,
+    JSON.stringify(msgs));
+}
+
+// (m) The vfs mode model: a file made without a mode reads 0o644, a mode given at
+// write sticks and survives the file being overwritten without one, and a rename
+// carries it; a directory reads 0o755.  rename replaces a file and moves a directory
+// with what is under it.
+{
+  const v = new MemoryVfs([['d/x.txt', new Uint8Array([1])]]);
+  const bad = [];
+  const eq = (name, got, want) => { if (JSON.stringify(got) !== JSON.stringify(want)) bad.push(`${name}: ${JSON.stringify(got)} != ${JSON.stringify(want)}`); };
+  eq('default file mode', v.stat('d/x.txt').mode, 0o644);
+  eq('directory mode', v.stat('d').mode, 0o755);
+  v.writeFile('new.txt', new Uint8Array([1, 2]), 0o600);
+  eq('mode given', v.stat('new.txt').mode, 0o600);
+  v.writeFile('new.txt', new Uint8Array([3]));
+  eq('overwrite keeps the mode', v.stat('new.txt').mode, 0o600);
+  eq('size', v.stat('new.txt').size, 1);
+  v.rename('new.txt', 'd/moved.txt');
+  eq('rename carries the mode', v.stat('d/moved.txt').mode, 0o600);
+  eq('rename removes the source', v.exists('new.txt'), false);
+  v.rename('d', 'e');
+  eq('directory moves with its entries', v.readdir('e').sort(), ['moved.txt', 'x.txt']);
+  eq('old directory gone', v.exists('d/x.txt'), false);
+  eq('mode moved with the directory', v.stat('e/moved.txt').mode, 0o600);
+  let err = '';
+  try { v.rename('e', 'e/inside'); } catch (e) { err = e.message; }
+  eq('a directory into itself', err.startsWith('EINVAL'), true);
+  err = '';
+  try { v.readdir('e/x.txt'); } catch (e) { err = e.message; }
+  eq('readdir of a file', err.startsWith('ENOTDIR'), true);
+  err = '';
+  try { v.stat('nowhere'); } catch (e) { err = e.message; }
+  eq('stat of a missing path', err.startsWith('ENOENT'), true);
+  check('(m) MemoryVfs: stored modes (default 0o644), rename, readdir, stat', bad.length === 0, bad.join('; '));
+}
+
+// (n) rename takes two grants on one channel (-2 ends the first) and confines the source
+// under the first and the destination under the second, in entry mode, source first; a
+// missing second grant refuses.
+{
+  const v = new MemoryVfs([['a/x.txt', new Uint8Array([1])], ['b/y.txt', new Uint8Array([2])]]);
+  const host = createHost('wasmgc/node', { vfs: v });
+  const env = host.imports.env;
+  const bytes = (s) => new TextEncoder().encode(s);
+  const pushGrant = (g) => { for (const e of g) { for (const b of bytes(e)) env.mdk_grant_push(b); env.mdk_grant_push(-1); } };
+  const move = (src, dst, gs, gd) => {
+    env.mdk_grant_reset(); pushGrant(gs);
+    if (gd) { env.mdk_grant_push(-2); pushGrant(gd); }
+    env.mdk_path_reset();
+    for (const b of [...bytes(src), ...bytes(dst)]) env.mdk_path_push(b);
+    const st = env.mdk_rename(bytes(src).length);
+    return st === 1 ? 'Ok' : new TextDecoder().decode(host.resultBuf);
+  };
+  const out = (p, g) => `${p} is outside the granted authority [${g.map((x) => `"${x}"`).join(', ')}]`;
+  const got = [
+    move('a/x.txt', 'b/z.txt', ['a/*'], ['b/*']),
+    move('b/z.txt', 'a/w.txt', ['a/*'], ['b/*']),
+    move('b/z.txt', 'a/w.txt', ['b/*'], ['a/*']),
+    move('a/w.txt', 'a/w2.txt', ['a/*'], ['b/*']),
+    move('a/w.txt', 'b/q.txt', ['a/*'], null),
+  ];
+  const want = [
+    'Ok',
+    out('b/z.txt', ['a/*']),
+    'Ok',
+    out('a/w2.txt', ['b/*']),
+    'a/w.txt is outside the granted authority: no grant was given',
+  ];
+  const bad = got.map((g, i) => (g === want[i] ? null : `${i}: ${g} != ${want[i]}`)).filter(Boolean);
+  check('(n) host: rename confines each path under its own grant, source first', bad.length === 0, bad.join('; '));
 }
 
 // Report only: slices no module built above imports a key of.

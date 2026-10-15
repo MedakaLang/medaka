@@ -370,16 +370,20 @@ import surface part of the semantics, with laws:
 | `mdk_pow` / `mdk_atan2` / `mdk_hypot` | `hostImportSig` | that extern's use (its plan host key) | real | real | real | binary libm | same |
 | `mdk_str_to_float` | ~968 | `stringToFloat` reached | real — strtod acceptance set (`mdkStrToFloat`, `medaka_host.mjs`) | same | same (the one copy; was raw `Number()` before #543) | parse path-channel bytes; latch ok | **WH2 ✅ FIXED** (#370) |
 | `mdk_str_to_float_ok` | ~969 | `stringToFloat` reached | real — ok flag of the last parse | same | same (**absent** until #543 → LinkError at instantiate) | did that parse succeed? | **WH2 ✅** (#370; `Some nan` needs a channel NaN cannot carry) |
-| `mdk_path_reset` / `mdk_path_push` | ~1106–1107 | `readFile`, `readFileBytes`, `writeFileBytes`, `fileExists`, `canonicalizePath`, `getEnv`, `stringToFloat` reached | real | real | real | guest→host byte channel | — |
-| `mdk_grant_reset` / `mdk_grant_push` | `hostImportSig` | a file extern whose path is an authority (`readFile`, `readFileBytes`, `writeFileBytes`, `fileExists`, `canonicalizePath`), or a declared file bound, reached | real | real | real | guest→host grant channel: reset, then each element's bytes, each element ended by `push(-1)`; no element is the whole domain. The next file operation or bound entry takes the grant; an operation that finds none is refused | confinement |
+| `mdk_path_reset` / `mdk_path_push` | ~1106–1107 | `readFile`, `readFileBytes`, `writeFile`, `writeFileBytes`, `rename`, `listDir`, `statFile`, `fileExists`, `canonicalizePath`, `getEnv`, `stringToFloat` reached | real | real | real | guest→host byte channel (`rename` pushes its source and then its destination, without a reset between) | — |
+| `mdk_grant_reset` / `mdk_grant_push` | `hostImportSig` | a file extern whose path is an authority (`readFile`, `readFileBytes`, `writeFile`, `writeFileBytes`, `rename`, `listDir`, `statFile`, `fileExists`, `canonicalizePath`), or a declared file bound, reached | real | real | real | guest→host grant channel: reset, then each element's bytes, each element ended by `push(-1)`; no element is the whole domain. `push(-2)` ends the grant pushed so far and starts the next, which is how `rename` passes the grant of each path. The next file operation or bound entry takes the grant (`rename` both); an operation that finds none is refused | confinement |
 | `mdk_read_file` / `mdk_file_exists` / `mdk_get_env` | ~1108–1110 | `readFile` and `readFileBytes` / `fileExists` / `getEnv` reached, each its own key | real (Node fs/env) | `fs` real over a per-run in-memory vfs (empty at the start of each run; a missing path is `Err "ENOENT: no such file or directory, open '<path>'"`); `get_env` a capability error (`env` withheld) | **real vfs** (`read_file`/`file_exists` read the in-memory vfs — this seam FEEDS the compiler its sources); `get_env` → empty | 1/0 + cached result bytes; the file reads confine the path first (a refusal is 0 with its text as the result), and `mdk_file_exists` answers 2 for a refusal, which the guest panics with | capability, confinement |
 | `mdk_canonicalize_path` | `hostImportSig` | `canonicalizePath` reached | real (`realpath(3)`) | real over the vfs (`/` + the vfs key) | real over the source vfs | confine, then 1 + the canonical path, or the path unchanged when it has none, as the result; 0 + the refusal text, which the guest panics with | confinement |
 | `mdk_file_bound_enter` / `mdk_file_bound_exit` | `hostImportSig` | a declared file bound (`$withFileReadBound`/`$withFileWriteBound`) reached | real | real | real | `enter(write, keep)` takes the pushed grant as a bound of its mode; an empty grant, or an equal active bound of the mode, adds no restriction. `keep` 1 (off a tail position) always records a frame that `exit` pops; `keep` 0 (a tail position) records one only when it restricts and answers whether it did, so a re-entered bound keeps its body's tail call (`mdk_with_file_bound`) | confinement |
 | `mdk_args_count` / `mdk_arg_len` / `mdk_arg_byte` | ~1111–1113 | `args` reached | real (`MDK_ARGS`) | capability error (`args` withheld) | real (guest argv = the `compile`/`hover`/`complete` call) | argv marshaling | capability |
-| `mdk_result_len` / `mdk_result_byte` | ~1114–1115 | `readFile`, `readFileBytes`, `writeFileBytes`, `fileExists`, `canonicalizePath`, `getEnv` reached | real | real (the `fs` slice's result channel) | real | read cached result | — |
+| `mdk_result_len` / `mdk_result_byte` | ~1114–1115 | `readFile`, `readFileBytes`, `writeFile`, `writeFileBytes`, `rename`, `listDir`, `statFile`, `fileExists`, `canonicalizePath`, `getEnv` reached | real | real (the `fs` slice's result channel) | real | read cached result | — |
 | `mdk_exit` | `hostImportSig` | `exit` use (its plan host key) | real (`ExitSignal` unwind, flush stdout then stderr, exit) | capability error (`exit` withheld; a clean `exit 0` reports an error — deliberate, UX-noteworthy) | real (`ExitSignal` unwind) | flush + exit | T1/WH4 ✅ (#376) |
 | `mdk_wall_time_sec` / `mdk_monotonic_sec` / `mdk_sleep_ms` | `hostImportSig` | `wallTimeSec` / `monotonicSec` / `sleepMs` use, each its own plan host key | real (the host's wall clock, its monotonic clock, a blocking wait on a shared cell) | wall and monotonic reads real; sleep real only when the page is cross-origin isolated, else a named capability error | real (same keys; never sleeps, present to avoid a LinkError) | f64 seconds; f64 seconds; sleep `i64` ms, non-positive returns at once | — |
-| `mdk_write_file_reset` / `_push` / `_commit` | ~1223–1225 | `writeFileBytes` reached | real | real over the per-run vfs (`fs` slice) | real over the source vfs (`fs` slice) | streamed file write; the commit confines the path in write mode first | WH3 ✅ (#375) |
+| `mdk_write_file_reset` / `_push` / `_commit` | ~1223–1225 | `writeFileBytes` reached (`writeFile` reaches `_reset` and `_push` too) | real | real over the per-run vfs (`fs` slice) | real over the source vfs (`fs` slice) | streamed file write; the commit confines the path in write mode first | WH3 ✅ (#375) |
+| `mdk_write_file` | `hostImportSig` | `writeFile` reached | real (Node fs) | real over the per-run vfs | real over the source vfs | `writeFile`'s commit: the bytes streamed with `mdk_write_file_push` go to the path on the path channel, confined `(entry 0, write 1)`; 1, or 0 + the error text as the result. A file the write creates reads `0o644` on `MemoryVfs` | confinement |
+| `mdk_rename` | `hostImportSig` | `rename` reached | real (`fs.renameSync`) | real over the per-run vfs (a file replaces a file; a directory moves with its entries) | real over the source vfs | `rename(srcLen)`: the path channel holds the source's `srcLen` bytes and then the destination's; the source is confined under the first grant and the destination under the second, each `(entry 1, write 1)`, source first; 1, or 0 + the refusal or error text | confinement |
+| `mdk_list_dir` | `hostImportSig` | `listDir` reached | real (`fs.readdirSync`) | real over the per-run vfs | real over the source vfs | confined `(0, 0)`; 1 + the entry names as the result, each followed by a NUL byte and in byte order of their UTF-8 (native's order is the directory's, reversed), or 0 + the error text | confinement |
+| `mdk_stat_file` / `mdk_stat_field` | `hostImportSig` | `statFile` reached | real (`fs.statSync`) | real over the per-run vfs (a directory reads size 0, mtime 0, mode `0o755`; a file the vfs holds its stored mode, default `0o644`) | real over the source vfs | `mdk_stat_file` confines `(0, 0)` and takes the stat, answering 1 or 0 + the error text; `mdk_stat_field(i)` reads its field `i` as an f64: 0 size, 1 is-directory, 2 is-file, 3 mtime in whole seconds, 4 permission bits | confinement |
 | `mdk_write_int` / `mdk_write_bool` | ~53–54 | **never** (dead W2 scaffold; verified unreferenced) | absent | absent | n/a (never emitted in ref mode) | legacy | — |
 
 **The in-memory vfs (`MemoryVfs`, `playground/medaka_host.mjs`).** The worker's
@@ -394,8 +398,10 @@ a write into a directory that does not exist, and a write to a directory are eac
 an `Err`. The error texts are Node's, as on `run.js`: `ENOENT: no such file or
 directory, open '<path>'`, `EISDIR: illegal operation on a directory, read`, and
 `ENOTDIR: not a directory, open '<path>'`. Native prints the C library's text,
-for example `No such file or directory`. Pinned by `playground/medaka_host_test.mjs`
-probes (e) and (g).
+for example `No such file or directory`. A file's permission bits are stored per file:
+a file made without a mode reads `0o644`, a mode given at write sticks, an overwrite
+without one keeps it, and a rename carries it; a directory reads `0o755`. Pinned by
+`playground/medaka_host_test.mjs` probes (e), (g), (l) and (m).
 
 **Confinement (EFFECTS-SEMANTICS §7).** The host confines every file operation
 the way `runtime/medaka_rt.c` does: `confine` in `playground/medaka_host.mjs`
@@ -407,7 +413,11 @@ active bound of its mode must admit the path. A refusal is the native text,
 `<path> is outside the granted authority ["e1", "e2"]`: an `Err` from a
 `Result` extern, a panic from `fileExists` and `canonicalizePath`. The vfs
 supplies `realpath` and `lexists` (`run.js`: `fs.realpathSync.native`, `lstat`;
-`MemoryVfs`: no symbolic links). Grant and bound state belong to one run:
+`MemoryVfs`: no symbolic links). The modes follow `runtime/medaka_rt.c`
+(`MDK_CONFINE(path, grant, entry, write)`): `readFile`, `readFileBytes`, `fileMode`,
+`fileExists`, `canonicalizePath`, `listDir` and `statFile` are `(0, 0)`; `writeFile`,
+`appendFile`, `writeFileBytes`, `writeFileMode` and `fsync` are `(0, 1)`; `makeDir`,
+`removeFile` and `removeDir` are `(1, 1)`; `rename` is `(1, 1)` on both paths. Grant and bound state belong to one run:
 `reset()` clears them, and a trap ends the run, so a frame a trap unwinds
 through is never seen by a later run. Pinned by the wasm arm of
 `confine_case` in `test/native_fixtures/run.sh` and `playground/medaka_host_test.mjs`

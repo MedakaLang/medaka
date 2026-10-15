@@ -1,0 +1,30 @@
+-- writeFile and rename: Result String Unit.  A write is read back, a rename moves it
+-- and replaces a file in its way, and a write or rename that cannot happen is an Err
+-- (only the Ok/Err tag is compared: each engine words an OS error its own way).
+tag : Result String a -> String
+tag (Ok _) = "Ok"
+tag (Err _) = "Err"
+
+got : Result String String -> String
+got (Ok s) = "[\{s}]"
+got (Err _) = "<missing>"
+
+main =
+  println
+    "write: \{tag (writeFile "/tmp/medaka_engine_fs_unit_a.txt" "héllo ✓\n")}"
+  println "read: \{got (readFile "/tmp/medaka_engine_fs_unit_a.txt")}"
+  println "overwrite: \{tag (writeFile "/tmp/medaka_engine_fs_unit_a.txt" "")}"
+  println "read: \{got (readFile "/tmp/medaka_engine_fs_unit_a.txt")}"
+  println
+    "no directory: \{tag (writeFile "/tmp/medaka_engine_fs_no_such_dir/x.txt" "x")}"
+  println
+    "rename: \{tag (rename "/tmp/medaka_engine_fs_unit_a.txt" "/tmp/medaka_engine_fs_unit_b.txt")}"
+  println "old name: \{fileExists "/tmp/medaka_engine_fs_unit_a.txt"}"
+  println "new name: \{got (readFile "/tmp/medaka_engine_fs_unit_b.txt")}"
+  println
+    "rename missing: \{tag (rename "/tmp/medaka_engine_fs_unit_a.txt" "/tmp/medaka_engine_fs_unit_c.txt")}"
+  println
+    "seed: \{tag (writeFile "/tmp/medaka_engine_fs_unit_c.txt" "replaced")}"
+  println
+    "replace: \{tag (rename "/tmp/medaka_engine_fs_unit_c.txt" "/tmp/medaka_engine_fs_unit_b.txt")}"
+  println "replaced: \{got (readFile "/tmp/medaka_engine_fs_unit_b.txt")}"

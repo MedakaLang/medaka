@@ -358,7 +358,7 @@ for required in \
     exit 1
   }
 done
-has_plan_pin 'noteName acc name = walkEach noteKey (walkEach noteUse acc (wasmUses name)) (wasmHostKeys name)' || {
+has_plan_pin 'noteName acc name = walkEach noteArity (walkEach noteKey (walkEach noteUse acc (wasmUses name)) (wasmHostKeys name)) (wasmTupleArities name)' || {
   echo "FAIL H2B9-RNG-HASH-AUTHORITY: the plan no longer reads an extern's demands from the catalog"
   exit 1
 }

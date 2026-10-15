@@ -1,0 +1,14 @@
+-- statFile's whole tuple: (size, isDir, isFile, mtime).  A directory's size is the
+-- host's to choose and an mtime moves, so the size prints for a file only and the
+-- mtime as a comparison with a time known to be past.
+check : Result String (Int, Bool, Bool, Float) -> String
+check (Ok (size, isDir, isFile, mtime)) =
+  "Ok size=\{if isFile then intToString size else "-"} isDir=\{isDir} isFile=\{isFile} recent=\{mtime > 1000000000.0}"
+check (Err _) = "Err"
+
+main =
+  println "seed: \{writeFile "/tmp/medaka_engine_fs_stat.txt" "abc"}"
+  println "file: \{check (statFile "/tmp/medaka_engine_fs_stat.txt")}"
+  println "dir: \{check (statFile "/tmp")}"
+  println
+    "missing: \{check (statFile "/tmp/medaka_engine_fs_no_such_file.txt")}"

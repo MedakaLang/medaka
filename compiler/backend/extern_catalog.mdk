@@ -298,6 +298,14 @@ wasmHelperKeyRows = [
       ],
   ),
   (
+    "writeFile",
+    fileOpKeys "mdk_write_file"
+      ++ ["mdk_write_file_reset", "mdk_write_file_push"],
+  ),
+  ("rename", fileOpKeys "mdk_rename"),
+  ("listDir", fileOpKeys "mdk_list_dir"),
+  ("statFile", fileOpKeys "mdk_stat_file" ++ ["mdk_stat_field"]),
+  (
     "fileExists",
     grantChannelKeys ++ refusalPanicKeys ++ ["mdk_file_exists"],
   ),
@@ -331,6 +339,16 @@ wasmHelperKeyRows = [
 grantChannelKeys : List String
 grantChannelKeys = ["mdk_grant_reset", "mdk_grant_push"]
 
+-- A file operation that answers through the result channel: the grant and the
+-- path in, the operation's own key, the result channel out.
+fileOpKeys : String -> List String
+fileOpKeys key =
+  grantChannelKeys
+    ++ [
+      "mdk_path_reset", "mdk_path_push", key, "mdk_result_len",
+      "mdk_result_byte"
+    ]
+
 -- the path channel in, and a refusal read from the result channel and written
 -- to stderr as a panic
 refusalPanicKeys : List String
@@ -361,6 +379,13 @@ readChannelKeys = [
   "mdk_result_byte",
 ]
 
+-- The tuple arities an extern's wasm lowering builds, which the module must
+-- declare although the program never writes a tuple of that arity.
+export
+wasmTupleArities : String -> List Int
+wasmTupleArities "statFile" = [4]
+wasmTupleArities _ = []
+
 -- The externs whose wasm lowering demands anything, in catalog order.  Each
 -- list is complete: a demand one flag implies in another (`readFileBytes`'s
 -- `UseFileBytes` comes with `UseArray`) is written out, never derived.  An extern absent here demands nothing
@@ -372,7 +397,11 @@ wasmUseRows = [
   ("ePutStrLn", [UseEPut]),
   ("readFile", [UseStr, UseList]),
   ("readFileBytes", [UseStr, UseList, UseArray, UseFileBytes]),
+  ("writeFile", [UseStr, UseList]),
   ("writeFileBytes", [UseStr, UseList, UseArray, UseFileBytes]),
+  ("rename", [UseStr, UseList]),
+  ("listDir", [UseStr, UseList]),
+  ("statFile", [UseStr, UseList, UseFloat]),
   ("fileExists", [UseStr, UseList]),
   ("canonicalizePath", [UseStr, UseList]),
   ("args", [UseStr, UseList, UseArgs]),
@@ -558,9 +587,7 @@ catalogRows = [
   ExternRow
     "writeFile"
     (CSymbol LlvmFile "mdk_write_file")
-    (NotProvided
-      GapUnported
-      "ported in llvm; wasm has writeFileBytes but not the text-mode writeFile")
+    (Inline WasmLeaf)
     Interpreted,
   ExternRow
     "writeFileBytes"
@@ -599,7 +626,7 @@ catalogRows = [
   ExternRow
     "listDir"
     (CSymbol LlvmFile "mdk_list_dir")
-    (NotProvided GapUnported wasmNoHostFs)
+    (Inline WasmLeaf)
     Interpreted,
   ExternRow
     "makeDir"
@@ -614,7 +641,7 @@ catalogRows = [
   ExternRow
     "rename"
     (CSymbol LlvmFile "mdk_rename")
-    (NotProvided GapUnported wasmNoHostFs)
+    (Inline WasmLeaf)
     Interpreted,
   ExternRow
     "fsync"
@@ -629,7 +656,7 @@ catalogRows = [
   ExternRow
     "statFile"
     (CSymbol LlvmFile "mdk_stat_file")
-    (NotProvided GapUnported wasmNoHostFs)
+    (Inline WasmLeaf)
     Interpreted,
   ExternRow "args" (CSymbol LlvmEnv "mdk_args") (Inline WasmLeaf) Interpreted,
   ExternRow

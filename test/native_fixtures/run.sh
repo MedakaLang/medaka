@@ -244,7 +244,7 @@ confine_untouched() {
 # runs there too, with the same expected output.  It needs the wasm emitter
 # (test/wasm/build_wasm_oracle.sh) and node; without them the arm is reported
 # NOT RUN, and with MEDAKA_REQUIRE_WASM=1 that is a failure.
-CONFINE_WASM=' alias_method cwd join exists_panic canonicalize_panic dependency_method/main redeclared_extern/main method_named_readfile/main bounded_recursion declared_bound_read '
+CONFINE_WASM=' alias_method cwd join exists_panic canonicalize_panic dependency_method/main redeclared_extern/main method_named_readfile/main bounded_recursion declared_bound_read fs_family shapes indexed_head user_file_labels pattern_binder grant_bound_joins declared_bound '
 WASM_EMIT="${MEDAKA_WASM_EMITTER:-$ROOT/test/bin/wasm_emit_modules_main}"
 wasm_ok=1
 if [ ! -x "$WASM_EMIT" ] || ! command -v node >/dev/null 2>&1; then
@@ -331,6 +331,42 @@ explicit link: Ok
 restored: Ok"
 # The wasm engine runs it too: a non-tail call at this depth overflows its stack.
 confine_case bounded_recursion . "True" native
+# writeFile, rename, listDir and statFile: each refuses an escape in the mode native
+# confines it in (rename both paths, the source first), and a bound a wide row cannot lift.
+confine_case fs_family . "list cfg: Ok [a.txt, dangling, link, out, sub]
+list sub: Ok []
+list up: Err cfg/../outdir $outside [\"cfg/*\"]
+list link: Err cfg/link $outside [\"cfg/*\"]
+list absent: Err (host)
+list file: Err (host)
+stat file: Ok size=7 isDir=False isFile=True
+stat dir: Ok size=- isDir=True isFile=False
+stat inside link: Ok size=7 isDir=False isFile=True
+stat up: Err cfg/../secret.txt $outside [\"cfg/*\"]
+stat link out: Err cfg/out $outside [\"cfg/*\"]
+stat absent: Err (host)
+write new: Ok
+write inside: Ok
+write up: Err cfg/../new.txt $outside [\"cfg/*\"]
+write link out: Err cfg/out $outside [\"cfg/*\"]
+write dangling: Err cfg/dangling $outside [\"cfg/*\"]
+write dir: Err (host)
+move: Ok
+move back: Ok
+move over: Ok
+move absent: Err (host)
+move dst out: Err cfg/../outdir/stolen.txt $outside [\"cfg/*\"]
+move src out: Err cfg/../secret.txt $outside [\"cfg/*\"]
+move both out: Err cfg/../secret.txt $outside [\"cfg/*\"]
+move symlink: Ok
+move across: Ok
+move across back: Ok
+move across wrong way: Err outdir/../secret.txt $outside [\"outdir/*\"]
+after: Ok [b.txt, out]
+bound move: Err cfg/link/a.txt $outside [\"cfg/*\"]
+bound write: Err cfg/link/stolen.txt $outside [\"cfg/*\"]
+bound list: Err cfg/link/ $outside [\"cfg/*\"]
+bound stat: Err cfg/link/a.txt $outside [\"cfg/*\"]"
 confine_case user_file_labels . "Ok granted
 Ok ()"
 confine_case grant_bound_joins . "Ok ()

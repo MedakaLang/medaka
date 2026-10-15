@@ -800,17 +800,17 @@ isUngated _ = False
 -- change.
 -- A passing run reports the owed rows as the actual value (`medaka test
 -- --json` carries it), so the list #3666 owes is visible while the ceiling holds.
-test "profiles: the owed ratchet rows are at most 64" = match runtimeText
+test "profiles: the owed ratchet rows are at most 56" = match runtimeText
   Err e => expectEqual "read runtime.mdk" "failed: \{e}"
   Ok src =>
     let owed =
       owedRatchetRows allProfiles (externLabels (parse src)) catalogRows
     let n = length owed
     let listing = "\{n} owed (KIND name (profile): reason)\n" ++ unlines owed
-    if n <= 64 then
-      Pass "at most 64" listing
+    if n <= 56 then
+      Pass "at most 56" listing
     else
       Fail
-        "\{n} owed ratchet rows exceed the ceiling of 64"
-        "at most 64"
+        "\{n} owed ratchet rows exceed the ceiling of 56"
+        "at most 56"
         listing

@@ -1,0 +1,20 @@
+-- listDir: Result String (List String).  The order of the entries is each host's, so
+-- the program sorts them.  The listing holds each name once (a directory as a name,
+-- a dot file, a name that is not ASCII), without "." and "..", and a path that is no
+-- directory is an Err.
+import list.{sort}
+
+names : Result String (List String) -> String
+names (Ok xs) = "Ok \{sort xs}"
+names (Err _) = "Err"
+
+main =
+  println "dir: \{names (listDir "test/engine_fixtures/fs_family_list_dir.d")}"
+  println
+    "nested: \{names (listDir "test/engine_fixtures/fs_family_list_dir.d/sub")}"
+  println
+    "trailing slash: \{names (listDir "test/engine_fixtures/fs_family_list_dir.d/sub/")}"
+  println
+    "a file: \{names (listDir "test/engine_fixtures/fs_family_list_dir.d/a.txt")}"
+  println
+    "missing: \{names (listDir "test/engine_fixtures/fs_family_list_dir.d/nowhere")}"

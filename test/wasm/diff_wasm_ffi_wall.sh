@@ -122,26 +122,22 @@ main = match resolve "localhost"
   "\`main\` performs <Net \"localhost\">, and the target \`wasmgc/node\` does not grant Net"
 
 check_refused "wasm_gap_extern_refused" \
-'main = match writeFile "out.txt" "x"
-  Ok _ => println "written"
-  Err e => println e' \
-  "$(printf "$RUNTIME_EXPECT" writeFile WASM-GAP)"
+'main = println (allocBytes ())' \
+  "$(printf "$RUNTIME_EXPECT" allocBytes WASM-GAP)"
 
 # The same refusal under the profile `build` checked: `wasmgc/node` grants
 # `FileWrite`, so the program passed the check and the lowering is owed.
 check_refused "wasm_gap_extern_owed" \
-'main = match writeFile "out.txt" "x"
-  Ok _ => println "written"
-  Err e => println e' \
+'main = println (allocBytes ())' \
   "\`wasmgc/node\` grants its labels, so this is a lowering still owed (#3666)"
 
-# The same module the unreached case below imports, now reached: `isFile`
-# reads through `statFile`.
+# The same module the unreached case below imports, now reached: `mkdirAll`
+# creates each directory through `makeDir`.
 check_refused "module_extern_reached_refused" \
-'import fs.{isFile}
+'import fs.{mkdirAll}
 
-main = println (isFile "x")' \
-  "$(printf "$RUNTIME_EXPECT" statFile WASM-GAP)"
+main = println (mkdirAll "x")' \
+  "$(printf "$RUNTIME_EXPECT" makeDir WASM-GAP)"
 
 # ── File grants (EFFECTS-SEMANTICS §7) ──────────────────────────────────────
 # Every grant builds: the host confines each file operation against the grant

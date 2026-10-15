@@ -1,5 +1,5 @@
 # META
-source_lines=487
+source_lines=494
 stages=DESUGAR,MARK
 # SOURCE
 -- The per-emission plan: facts about the lowered program that both backends read
@@ -26,6 +26,7 @@ import backend.extern_catalog.{
   WasmUse(..),
   fileBoundHostKeys,
   wasmHostKeys,
+  wasmTupleArities,
   wasmUses,
 }
 import backend.core_validate.{Backend(..), backendName}
@@ -373,7 +374,13 @@ noteName acc "Ref" = noteRefBox acc
 noteName acc "$withFileReadBound" = noteFileBound acc
 noteName acc "$withFileWriteBound" = noteFileBound acc
 noteName acc name =
-  walkEach noteKey (walkEach noteUse acc (wasmUses name)) (wasmHostKeys name)
+  walkEach
+    noteArity
+    (walkEach
+      noteKey
+      (walkEach noteUse acc (wasmUses name))
+      (wasmHostKeys name))
+    (wasmTupleArities name)
 
 -- a declared file bound pushes its grant, a cons list of $str elements
 noteFileBound : DemandAcc -> DemandAcc
@@ -492,7 +499,7 @@ dSwitchHead acc _ = acc
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CArm" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CTBranch" true) (mem "CTree" true))))
-(DUse false (UseGroup ("backend" "extern_catalog") ((mem "WasmUse" true) (mem "fileBoundHostKeys" false) (mem "wasmHostKeys" false) (mem "wasmUses" false))))
+(DUse false (UseGroup ("backend" "extern_catalog") ((mem "WasmUse" true) (mem "fileBoundHostKeys" false) (mem "wasmHostKeys" false) (mem "wasmTupleArities" false) (mem "wasmUses" false))))
 (DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "backendName" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "reverseL" false) (mem "filterList" false) (mem "listLen" false))))
@@ -570,7 +577,7 @@ dSwitchHead acc _ = acc
 (DFunDef false "noteName" ((PVar "acc") (PLit (LString "Ref"))) (EApp (EVar "noteRefBox") (EVar "acc")))
 (DFunDef false "noteName" ((PVar "acc") (PLit (LString "$withFileReadBound"))) (EApp (EVar "noteFileBound") (EVar "acc")))
 (DFunDef false "noteName" ((PVar "acc") (PLit (LString "$withFileWriteBound"))) (EApp (EVar "noteFileBound") (EVar "acc")))
-(DFunDef false "noteName" ((PVar "acc") (PVar "name")) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteKey")) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteUse")) (EVar "acc")) (EApp (EVar "wasmUses") (EVar "name")))) (EApp (EVar "wasmHostKeys") (EVar "name"))))
+(DFunDef false "noteName" ((PVar "acc") (PVar "name")) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteArity")) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteKey")) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteUse")) (EVar "acc")) (EApp (EVar "wasmUses") (EVar "name")))) (EApp (EVar "wasmHostKeys") (EVar "name")))) (EApp (EVar "wasmTupleArities") (EVar "name"))))
 (DTypeSig false "noteFileBound" (TyFun (TyCon "DemandAcc") (TyCon "DemandAcc")))
 (DFunDef false "noteFileBound" ((PVar "acc")) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteKey")) (EApp (EApp (EVar "noteUse") (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStr"))) (EVar "UseList"))) (EVar "fileBoundHostKeys")))
 (DTypeSig false "noteTag" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc"))))
@@ -656,7 +663,7 @@ dSwitchHead acc _ = acc
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CArm" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CStmt" true) (mem "CTBranch" true) (mem "CTree" true))))
-(DUse false (UseGroup ("backend" "extern_catalog") ((mem "WasmUse" true) (mem "fileBoundHostKeys" false) (mem "wasmHostKeys" false) (mem "wasmUses" false))))
+(DUse false (UseGroup ("backend" "extern_catalog") ((mem "WasmUse" true) (mem "fileBoundHostKeys" false) (mem "wasmHostKeys" false) (mem "wasmTupleArities" false) (mem "wasmUses" false))))
 (DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "backendName" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "reverseL" false) (mem "filterList" false) (mem "listLen" false))))
@@ -734,7 +741,7 @@ dSwitchHead acc _ = acc
 (DFunDef false "noteName" ((PVar "acc") (PLit (LString "Ref"))) (EApp (EVar "noteRefBox") (EVar "acc")))
 (DFunDef false "noteName" ((PVar "acc") (PLit (LString "$withFileReadBound"))) (EApp (EVar "noteFileBound") (EVar "acc")))
 (DFunDef false "noteName" ((PVar "acc") (PLit (LString "$withFileWriteBound"))) (EApp (EVar "noteFileBound") (EVar "acc")))
-(DFunDef false "noteName" ((PVar "acc") (PVar "name")) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteKey")) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteUse")) (EVar "acc")) (EApp (EVar "wasmUses") (EVar "name")))) (EApp (EVar "wasmHostKeys") (EVar "name"))))
+(DFunDef false "noteName" ((PVar "acc") (PVar "name")) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteArity")) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteKey")) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteUse")) (EVar "acc")) (EApp (EVar "wasmUses") (EVar "name")))) (EApp (EVar "wasmHostKeys") (EVar "name")))) (EApp (EVar "wasmTupleArities") (EVar "name"))))
 (DTypeSig false "noteFileBound" (TyFun (TyCon "DemandAcc") (TyCon "DemandAcc")))
 (DFunDef false "noteFileBound" ((PVar "acc")) (EApp (EApp (EApp (EVar "walkEach") (EVar "noteKey")) (EApp (EApp (EVar "noteUse") (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStr"))) (EVar "UseList"))) (EVar "fileBoundHostKeys")))
 (DTypeSig false "noteTag" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc"))))

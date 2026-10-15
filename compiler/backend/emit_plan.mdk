@@ -22,6 +22,7 @@ import backend.extern_catalog.{
   WasmUse(..),
   fileBoundHostKeys,
   wasmHostKeys,
+  wasmTupleArities,
   wasmUses,
 }
 import backend.core_validate.{Backend(..), backendName}
@@ -369,7 +370,13 @@ noteName acc "Ref" = noteRefBox acc
 noteName acc "$withFileReadBound" = noteFileBound acc
 noteName acc "$withFileWriteBound" = noteFileBound acc
 noteName acc name =
-  walkEach noteKey (walkEach noteUse acc (wasmUses name)) (wasmHostKeys name)
+  walkEach
+    noteArity
+    (walkEach
+      noteKey
+      (walkEach noteUse acc (wasmUses name))
+      (wasmHostKeys name))
+    (wasmTupleArities name)
 
 -- a declared file bound pushes its grant, a cons list of $str elements
 noteFileBound : DemandAcc -> DemandAcc
