@@ -23,6 +23,7 @@
 -- reference rejects that too ("Unterminated string literal"), so it isn't valid
 -- Medaka; there is nothing to mirror.
 
+import support.stage_count.{stageBump}
 import support.char.{
   isSp,
   isTab,
@@ -2527,6 +2528,7 @@ elseFilter [] = []
 -- `RNewline`; `afterNl` suppresses the newline before a comment line).
 layoutWithOffsets : Array Char -> Int -> List (Token, Int)
 layoutWithOffsets src len =
+  let _ = stageBump "lex.offsets"
   elseFilter
     (layout (dedentTripleInterp (scan src len 0 0 0)) [0] [] None False)
 
@@ -2756,6 +2758,7 @@ elseFilterPairs [] = []
 
 layoutWithOffsetPairs : Array Char -> Int -> List (Token, Int, Int)
 layoutWithOffsetPairs src len =
+  let _ = stageBump "lex.pairs"
   elseFilterPairs
     (layoutPairs (dedentTripleInterp (scan src len 0 0 0)) [0] [] None False)
 
@@ -3141,6 +3144,7 @@ rawToCommentsGo src (_ :: rest) p line lineStart =
 export
 collectComments : String -> List Comment
 collectComments s =
+  let _ = stageBump "lint.comments"
   let src = stringToChars s
   let len = arrayLength src
   rawToComments src (scan src len 0 0 0)

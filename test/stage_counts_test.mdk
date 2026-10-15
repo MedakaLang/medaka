@@ -1,0 +1,91 @@
+{- | Per-verb stage-call pins: how many times each pipeline stage runs for one
+   run of `check`, `check --json`, `run`, `build`, `test` and `lint`.
+
+   Each probe spawns the built `medaka` with MEDAKA_STAGE_COUNTS=1 and reads
+   the `[stage]` lines `stageDump` (compiler/support/stage_count.mdk) writes to
+   stderr. A row is `<probe>.<key>` and its count. A stage that runs a second
+   time raises its count and fails the golden, and a count may fall only by
+   rewriting `test/arch_goldens/stage_counts.golden` with `ARCH_PINS_WRITE=1`.
+
+   `build` pins the parent process only; its clang child is not `medaka`.
+
+   `typecheck.module` is one more than the number of user modules, because
+   the prelude (core) is typechecked as a module too. Counts above 1 for
+   `desugar`, `parse.prescan` and `exhaust.oracle`, and 50 parses for `lint`,
+   are today's values, not a claim that they are the minimum. -}
+import list.{filterMap}
+import string.{contains, lines, split, unlines}
+import test.{Expectation, expectAll, expectFalse, expectGolden, fail, pass}
+import test_process.{
+  boundedVerbSeconds, medakaBin, spawnTimeoutSeconds, underRoot, withScratchDir
+}
+
+fixture : String -> <Env "MEDAKA_ROOT"> String
+fixture rel = underRoot "test/stage_count_fixtures/\{rel}"
+
+-- Spawns `medaka <args>` with counting on: (exit code, stdout, stderr), or the
+-- spawn error as exit -1.
+spawnCounted : List String ->
+  <Exec, Env "MEDAKA_ROOT", Env "MEDAKA"> (Int, String, String)
+spawnCounted args =
+  let spawned =
+    boundedVerbSeconds
+      (spawnTimeoutSeconds * 3)
+      "env"
+      (["MEDAKA_STAGE_COUNTS=1", medakaBin] ++ args)
+  match spawned
+    Ok r => r
+    Err e => (-1, "", e)
+
+-- The `<key>\t<n>` pairs of every `[stage]` line on stderr.
+stageLines : String -> List (String, String)
+stageLines err =
+  filterMap
+    (l => match split "\t" l
+      ["[stage]", k, n] => Some (k, n)
+      _ => None)
+    (lines err)
+
+-- Rows `<probe>.<key>\t<n>` for one spawn, plus its exit code and whether
+-- stdout stayed free of `[stage]` lines.
+probeRows : String ->
+  List String ->
+  <Exec, Env "MEDAKA_ROOT", Env "MEDAKA"> (List String, Expectation)
+probeRows name args =
+  let (code, out, err) = spawnCounted args
+  let rows =
+    ["\{name}.exit\t\{code}"]
+      ++ map ((k, n) => "\{name}.\{k}\t\{n}") (stageLines err)
+  let clean = expectAll [
+    expectFalse (contains "[stage]" out),
+    if code == 0 then pass else fail "\{name} exited \{code}: \{err}",
+  ]
+  (rows, clean)
+
+test "stage_counts: per-verb stage counts match stage_counts.golden" = withScratchDir
+  (dir =>
+    let probes = [
+      probeRows "check_hello" ["check", fixture "hello.mdk"],
+      probeRows "check_three_mod" ["check", fixture "three_mod/main.mdk"],
+      probeRows "check_json_three_mod" [
+        "check",
+        "--json",
+        fixture "three_mod/main.mdk",
+      ],
+      probeRows "run_hello" ["run", fixture "hello.mdk"],
+      probeRows "build_hello" ["build", fixture "hello.mdk", "-o", "\{dir}/h"],
+      probeRows "test_probe" ["test", fixture "test_probe.mdk"],
+      probeRows "lint_probe" ["lint", fixture "lint_probe.mdk"],
+    ]
+    let rows = flatMap fst probes
+    let golden = underRoot "test/arch_goldens/stage_counts.golden"
+    expectAll (map snd probes ++ [pinRows golden rows]))
+
+pinRows : String ->
+  List String ->
+  <FileRead, FileWrite, Env "ARCH_PINS_WRITE"> Expectation
+pinRows path rows = match getEnv "ARCH_PINS_WRITE"
+  Some "1" => match writeFile path (unlines rows)
+    Ok _ => pass
+    Err e => fail "could not write \{path}: \{e}"
+  _ => expectGolden path (unlines rows)

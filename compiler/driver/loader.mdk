@@ -10,6 +10,7 @@
 --   * No LSP buffer-override `read`, no multi-root AmbiguousModule check.
 --   * Cycles ARE detected (an in-progress stack) and reported as an Err.
 
+import support.stage_count.{stageBump}
 import frontend.ast.{
   Decl(..),
   UsePath(..),
@@ -125,9 +126,11 @@ moduleIdOfPath roots path =
 -- wording, and `--json` its own code.
 export
 readSourceE : String -> <FileRead> Result (Option String) String
-readSourceE path = match readFile path
-  Ok src => Ok src
-  Err e => if endsWith readFileNotUtf8Suffix e then Err None else Err (Some e)
+readSourceE path =
+  let _ = stageBump "read.source"
+  match readFile path
+    Ok src => Ok src
+    Err e => if endsWith readFileNotUtf8Suffix e then Err None else Err (Some e)
 
 -- What `readFile` puts after the path when it refuses a file that is not
 -- valid UTF-8: `mdk_read_file` in runtime/medaka_rt.c, and `$mdk_str_not_utf8`
@@ -1411,6 +1414,7 @@ loadProgramFilesE : (String -> Option String) ->
   List String ->
   <IO> Result LoadError (List (String, String, List Decl))
 loadProgramFilesE read entry roots =
+  let _ = stageBump "load.plain"
   let deps = readDeps (findProjectRootOrSelf (parentDir entry))
   map
     ((_, acc) => acc)
@@ -1436,6 +1440,7 @@ loadProgramFilesLocatedE : (String -> Option String) ->
   List String ->
   <IO> Result LoadError (List (String, String, List Decl))
 loadProgramFilesLocatedE read entry roots =
+  let _ = stageBump "load.located"
   let deps = readDeps (findProjectRootOrSelf (parentDir entry))
   map
     ((_, acc) => acc)
@@ -1526,6 +1531,7 @@ loadProgramFilesLocatedCachedE : Ref (List (String, List Decl)) ->
   List String ->
   <IO> Result LoadError (List (String, String, List Decl))
 loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
+  let _ = stageBump "load.cached"
   let deps = readDeps (findProjectRootOrSelf (parentDir entry))
   map
     ((_, acc) => acc)

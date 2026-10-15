@@ -11,6 +11,7 @@
 -- match/clause exhaustiveness (`check_match`) is type-aware and lives in
 -- typecheck, so it is out of scope here.
 
+import support.stage_count.{stageBump}
 import frontend.ast.{
   Lit(..),
   Loc,
@@ -168,35 +169,37 @@ public export data Oracle = Oracle {
 
 export
 buildOracle : List Decl -> Oracle
-buildOracle prog = Oracle {
-  -- No `reverseL`/`oracleMap` here: `lookupTab` is FIRST-match-wins, so the
-  -- natural order (user data ahead of the builtins, an earlier `data` decl
-  -- ahead of a later one) IS the shadowing convention directly, rather than
-  -- emulated through a reversed last-write-wins fold.
-  -- The `data` and `newtype` contributions are composed per decl rather than
-  -- appended as two whole passes, and the difference is load-bearing: `prog` on
-  -- the Module arm is this module's own decls first, then imported/accumulated
-  -- ones (`checkModuleFullDiags`' P0-9 order), and these tables are
-  -- first-match-wins.  Two appended passes would put every imported `data` row
-  -- ahead of this module's own `newtype` row, so an imported constructor
-  -- sharing the newtype's constructor name would win the bare-name arity/type
-  -- lookup — the wrong-arity false warning P0-9 records.
-  typeCtors =
-    flatMap (d => dataTypeCtors d ++ newtypeTypeCtors d) prog
-      ++ builtinTypeCtors,
-  ctorArity =
-    oracleMap
-      (flatMap (d => dataArity d ++ newtypeArity d) prog ++ builtinArity),
-  ctorType =
-    oracleMap
-      (flatMap (d => dataCtorType d ++ newtypeCtorType d) prog
-        ++ builtinCtorType),
-  ctorFields = oracleMap (flatMap dataCtorFields prog),
-  ctorSiblings =
-    oracleMap
-      (flatMap (d => dataSiblings d ++ newtypeSiblings d) prog
-        ++ flatMap rowSiblings builtinTypeCtors),
-}
+buildOracle prog =
+  let _ = stageBump "exhaust.oracle"
+  Oracle {
+    -- No `reverseL`/`oracleMap` here: `lookupTab` is FIRST-match-wins, so the
+    -- natural order (user data ahead of the builtins, an earlier `data` decl
+    -- ahead of a later one) IS the shadowing convention directly, rather than
+    -- emulated through a reversed last-write-wins fold.
+    -- The `data` and `newtype` contributions are composed per decl rather than
+    -- appended as two whole passes, and the difference is load-bearing: `prog` on
+    -- the Module arm is this module's own decls first, then imported/accumulated
+    -- ones (`checkModuleFullDiags`' P0-9 order), and these tables are
+    -- first-match-wins.  Two appended passes would put every imported `data` row
+    -- ahead of this module's own `newtype` row, so an imported constructor
+    -- sharing the newtype's constructor name would win the bare-name arity/type
+    -- lookup — the wrong-arity false warning P0-9 records.
+    typeCtors =
+      flatMap (d => dataTypeCtors d ++ newtypeTypeCtors d) prog
+        ++ builtinTypeCtors,
+    ctorArity =
+      oracleMap
+        (flatMap (d => dataArity d ++ newtypeArity d) prog ++ builtinArity),
+    ctorType =
+      oracleMap
+        (flatMap (d => dataCtorType d ++ newtypeCtorType d) prog
+          ++ builtinCtorType),
+    ctorFields = oracleMap (flatMap dataCtorFields prog),
+    ctorSiblings =
+      oracleMap
+        (flatMap (d => dataSiblings d ++ newtypeSiblings d) prog
+          ++ flatMap rowSiblings builtinTypeCtors),
+  }
 
 -- PERF: plain association LISTS for the oracle's four tables make every
 -- ctor→arity / type→ctors lookup an O(#ctors) scan.  `usefulCovered` does one
@@ -1122,6 +1125,7 @@ checkGuardExhaustivenessWith : List Decl ->
   List Decl ->
   List (String, Option Loc)
 checkGuardExhaustivenessWith oracleDecls checkDecls =
+  let _ = stageBump "exhaust.guards"
   let oracle = buildOracle (checkDecls ++ oracleDecls)
   flatMap (checkNamedGroup oracle) (groupByName (topFunDefClauses checkDecls))
     ++ flatMap (declBodyWarnings oracle) checkDecls

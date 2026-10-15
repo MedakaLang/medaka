@@ -1,5 +1,5 @@
 # META
-source_lines=1297
+source_lines=1299
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -12,6 +12,7 @@ stages=DESUGAR,MARK
 -- traversal engine (mirror of `map_expr`/`map_decl`): a rewrite `f` is applied
 -- post-order (children first, then the node).
 
+import support.stage_count.{stageBump}
 import frontend.ast.{
   noBinderId,
   BinderId(..),
@@ -1162,6 +1163,7 @@ desugar prog = desugarIn "" prog
 export
 desugarIn : String -> List Decl -> List Decl
 desugarIn mid prog =
+  let _ = stageBump "desugar"
   qualifyAliasRefs prog
     |> mergeIfaceDefaults
     |> concatMapDecl expandDecl
@@ -1300,6 +1302,7 @@ stampRecField mid (RecPatField l loc _ None) =
 stampRecField mid (RecPatField l loc _ (Some p)) =
   RecPatField l loc noBinderId (Some (stampPat mid p))
 # DESUGAR
+(DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
@@ -1718,7 +1721,7 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DTypeSig true "desugar" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "desugar" ((PVar "prog")) (EApp (EApp (EVar "desugarIn") (ELit (LString ""))) (EVar "prog")))
 (DTypeSig true "desugarIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "desugarIn" ((PVar "mid") (PVar "prog")) (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "qualifyAliasRefs") (EVar "prog")) (EVar "mergeIfaceDefaults")) (EApp (EVar "concatMapDecl") (EVar "expandDecl"))) (EVar "desugarRecordPuns")) (EVar "lowerContainerLiterals")) (EApp (EVar "mapProg") (EVar "rewriteDo"))) (EApp (EVar "mapProg") (EVar "rewriteAssignIndex"))) (EApp (EVar "mapProg") (EVar "rewriteSugar"))) (EApp (EVar "stampBinderIds") (EVar "mid"))))
+(DFunDef false "desugarIn" ((PVar "mid") (PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "desugar")))) (DoExpr (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "qualifyAliasRefs") (EVar "prog")) (EVar "mergeIfaceDefaults")) (EApp (EVar "concatMapDecl") (EVar "expandDecl"))) (EVar "desugarRecordPuns")) (EVar "lowerContainerLiterals")) (EApp (EVar "mapProg") (EVar "rewriteDo"))) (EApp (EVar "mapProg") (EVar "rewriteAssignIndex"))) (EApp (EVar "mapProg") (EVar "rewriteSugar"))) (EApp (EVar "stampBinderIds") (EVar "mid"))))))
 (DTypeSig false "binderOrdinalRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "binderOrdinalRef" () (EApp (EVar "Ref") (ELit (LInt 0))))
 (DTypeSig true "freshBinderId" (TyFun (TyCon "String") (TyCon "BinderId")))
@@ -1778,6 +1781,7 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DFunDef false "stampRecField" ((PVar "mid") (PCon "RecPatField" (PVar "l") (PVar "loc") PWild (PCon "None"))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "l")) (EVar "loc")) (EApp (EVar "freshBinderId") (EVar "mid"))) (EVar "None")))
 (DFunDef false "stampRecField" ((PVar "mid") (PCon "RecPatField" (PVar "l") (PVar "loc") PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "l")) (EVar "loc")) (EVar "noBinderId")) (EApp (EVar "Some") (EApp (EApp (EVar "stampPat") (EVar "mid")) (EVar "p")))))
 # MARK
+(DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
@@ -2196,7 +2200,7 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DTypeSig true "desugar" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "desugar" ((PVar "prog")) (EApp (EApp (EVar "desugarIn") (ELit (LString ""))) (EVar "prog")))
 (DTypeSig true "desugarIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "desugarIn" ((PVar "mid") (PVar "prog")) (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "qualifyAliasRefs") (EVar "prog")) (EVar "mergeIfaceDefaults")) (EApp (EVar "concatMapDecl") (EVar "expandDecl"))) (EVar "desugarRecordPuns")) (EVar "lowerContainerLiterals")) (EApp (EVar "mapProg") (EVar "rewriteDo"))) (EApp (EVar "mapProg") (EVar "rewriteAssignIndex"))) (EApp (EVar "mapProg") (EVar "rewriteSugar"))) (EApp (EVar "stampBinderIds") (EVar "mid"))))
+(DFunDef false "desugarIn" ((PVar "mid") (PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "desugar")))) (DoExpr (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "qualifyAliasRefs") (EVar "prog")) (EVar "mergeIfaceDefaults")) (EApp (EVar "concatMapDecl") (EVar "expandDecl"))) (EVar "desugarRecordPuns")) (EVar "lowerContainerLiterals")) (EApp (EVar "mapProg") (EVar "rewriteDo"))) (EApp (EVar "mapProg") (EVar "rewriteAssignIndex"))) (EApp (EVar "mapProg") (EVar "rewriteSugar"))) (EApp (EVar "stampBinderIds") (EVar "mid"))))))
 (DTypeSig false "binderOrdinalRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "binderOrdinalRef" () (EApp (EVar "Ref") (ELit (LInt 0))))
 (DTypeSig true "freshBinderId" (TyFun (TyCon "String") (TyCon "BinderId")))

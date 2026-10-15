@@ -12,6 +12,7 @@
 -- exports, privacy, aliases) is `resolveModulesToLines` and is NOT needed
 -- here: single-file mode stubs imports into scope.
 
+import support.stage_count.{stageBump}
 import frontend.ast.{
   Loc(..),
   declNameLoc,
@@ -5102,6 +5103,7 @@ resolveModuleG : List String ->
   List Decl ->
   (ModuleExports, List ResError)
 resolveModuleG internalGuard preludeKey runtimeDecls preludeDecls known modId prog =
+  let _ = stageBump "resolve"
   let ps = preludeScopeFor preludeKey runtimeDecls preludeDecls
   let (env, importErrs) = buildEnvMM ps known prog internalGuard
   let errs =
@@ -5525,6 +5527,7 @@ stampBindingIds decls =
 export
 stampTopScope : List Decl -> (OrdMap Int, List (String, Int))
 stampTopScope decls =
+  let _ = stageBump "typecheck.module"
   let top = numberFrom 1 (dedup (topBinderNames decls))
   (omFromPairs top omEmpty, top)
 

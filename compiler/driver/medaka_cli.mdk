@@ -57,6 +57,7 @@ import support.util.{
   stringTrim,
   lookupAssoc,
 }
+import support.stage_count.{stageCountInit, stageDump}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omFromNames}
 import support.path.{baseOf, chopExt, joinPath}
 import support.timer.{
@@ -519,6 +520,7 @@ dieMsg : String -> <IO> Unit
 dieMsg msg =
   let _ = emitAbortTotal ()
   let _ = ePutStrLn msg
+  let _ = stageDump ()
   exit 1
 
 runAbort : String -> <IO> Unit
@@ -542,8 +544,10 @@ orExit (Err msg) =
 
 main : <IO> Unit
 main =
+  let _ = stageCountInit ()
   let _ = checkSourceStaleness (args ())
-  runCli ()
+  let _ = runCli ()
+  stageDump ()
 
 runCli : Unit -> <IO> Unit
 runCli _ = match args ()
