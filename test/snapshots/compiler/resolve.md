@@ -1,5 +1,5 @@
 # META
-source_lines=7078
+source_lines=7079
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -5531,6 +5531,7 @@ stampBindingIds decls =
 export
 stampTopScope : List Decl -> (OrdMap Int, List (String, Int))
 stampTopScope decls =
+  -- Counted as the typechecker's per-module entry: valid only while checkBodyImpl is the sole caller, once per module (user modules + prelude); a second caller must not bump.
   let _ = stageBump "typecheck.module"
   let top = numberFrom 1 (dedup (topBinderNames decls))
   (omFromPairs top omEmpty, top)

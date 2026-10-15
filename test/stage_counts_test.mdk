@@ -7,7 +7,13 @@
    time raises its count and fails the golden, and a count may fall only by
    rewriting `test/arch_goldens/stage_counts.golden` with `ARCH_PINS_WRITE=1`.
 
-   `build` pins the parent process only; its clang child is not `medaka`.
+   `build` runs its front end and typecheck in the `medaka_emitter` child
+   (compiler/entries/llvm_emit_modules_main.mdk), which counts and dumps its own
+   stages; the parent forwards that stderr, and the `build_*` rows are the SUM
+   by key of both processes' `[stage]` lines.
+
+   Only probes that exit 0 are pinned: error and non-zero exits mostly skip
+   `stageDump`, so they print no counts.
 
    The `lsp.` rows each feed one `medaka lsp` process a framed transcript
    ending `shutdown` then `exit`. Their frames are built here because
@@ -17,11 +23,13 @@
 
    `typecheck.module` is one more than the number of user modules, because
    the prelude (core) is typechecked as a module too. Counts above 1 for
-   `desugar`, `parse.prescan` and `exhaust.oracle`, and 50 parses for `lint`,
-   are today's values, not a claim that they are the minimum. -}
+   `desugar`, `parse.prescan` and `exhaust.oracle` are today's values, not a
+   claim that they are the minimum. `lint`'s 50 parses are 49 stdlib-index
+   parses plus 1 per file: a constant that moves when the stdlib module set
+   changes, not a duplicate. -}
 import json.{Json(..), jArray, jObject, stringify}
-import list.{filterMap}
-import string.{byteLength, contains, lines, split, unlines}
+import list.{filterMap, nub, sort}
+import string.{byteLength, contains, lines, split, toInt, unlines}
 import test.{Expectation, expectAll, expectFalse, expectGolden, fail, pass}
 import test_process.{
   boundedVerbSeconds, medakaBin, spawnTimeoutSeconds, underRoot, withScratchDir
@@ -40,9 +48,12 @@ spawnCounted args =
       (spawnTimeoutSeconds * 3)
       "env"
       (["MEDAKA_STAGE_COUNTS=1", medakaBin] ++ args)
-  match spawned
-    Ok r => r
-    Err e => (-1, "", e)
+  spawnResult spawned
+
+-- A spawn error becomes exit -1 with the error as stderr.
+spawnResult : Result String (Int, String, String) -> (Int, String, String)
+spawnResult (Ok r) = r
+spawnResult (Err e) = (-1, "", e)
 
 -- The `<key>\t<n>` pairs of every `[stage]` line on stderr.
 stageLines : String -> List (String, String)
@@ -53,6 +64,22 @@ stageLines err =
       _ => None)
     (lines err)
 
+-- `<prefix>.exit` plus one `<prefix>.<key>\t<n>` row per `[stage]` line of `err`,
+-- summing repeated keys (the parent and the emitter child both dump).
+rowsOf : String -> Int -> String -> List String
+rowsOf prefix code err =
+  ["\{prefix}.exit\t\{code}"]
+    ++ map ((k, n) => "\{prefix}.\{k}\t\{n}") (sumByKey (stageLines err))
+
+sumByKey : List (String, String) -> List (String, String)
+sumByKey pairs =
+  map
+    (k => (k, debug (sum (filterMap (p => countFor k p) pairs))))
+    (sort (nub (map fst pairs)))
+
+countFor : String -> (String, String) -> Option Int
+countFor k (k2, n) = if k == k2 then toInt n else None
+
 -- Rows `<probe>.<key>\t<n>` for one spawn, plus its exit code and whether
 -- stdout stayed free of `[stage]` lines.
 probeRows : String ->
@@ -60,9 +87,7 @@ probeRows : String ->
   <Exec, Env "MEDAKA_ROOT", Env "MEDAKA"> (List String, Expectation)
 probeRows name args =
   let (code, out, err) = spawnCounted args
-  let rows =
-    ["\{name}.exit\t\{code}"]
-      ++ map ((k, n) => "\{name}.\{k}\t\{n}") (stageLines err)
+  let rows = rowsOf name code err
   let clean = expectAll [
     expectFalse (contains "[stage]" out),
     if code == 0 then pass else fail "\{name} exited \{code}: \{err}",
@@ -151,12 +176,8 @@ lspRows dir name want msgs =
     "-c",
     "MEDAKA_STAGE_COUNTS=1 \{medakaBin} lsp < \{req}",
   ]
-  let (code, out, err) = match spawned
-    Ok r => r
-    Err e => (-1, "", e)
-  let rows =
-    ["lsp.\{name}.exit\t\{code}"]
-      ++ map ((k, n) => "lsp.\{name}.\{k}\t\{n}") (stageLines err)
+  let (code, out, err) = spawnResult spawned
+  let rows = rowsOf "lsp.\{name}" code err
   let clean = expectAll [
     expectFalse (contains "[stage]" out),
     if contains want out then

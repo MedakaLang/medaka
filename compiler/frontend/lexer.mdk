@@ -2765,6 +2765,7 @@ layoutWithOffsetPairs src len =
 export
 tokenize : String -> List Token
 tokenize s =
+  let _ = stageBump "lex.tokenize"
   let src = stringToChars s
   let len = arrayLength src
   elseFilterToks
@@ -3144,6 +3145,7 @@ rawToCommentsGo src (_ :: rest) p line lineStart =
 export
 collectComments : String -> List Comment
 collectComments s =
+  -- Valid only while lint is the single caller; a second caller must move this bump.
   let _ = stageBump "lint.comments"
   let src = stringToChars s
   let len = arrayLength src
