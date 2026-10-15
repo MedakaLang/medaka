@@ -339,10 +339,12 @@ wasmHelperKeyRows = [
     ],
   ),
   ("args", ["mdk_args_count", "mdk_arg_len", "mdk_arg_byte"]),
-  ("readLine", stdinKeys "mdk_read_line"),
-  ("readLineOpt", stdinKeys "mdk_read_line"),
-  ("readAll", stdinKeys "mdk_read_all"),
-  ("readExactly", stdinKeys "mdk_read_exactly"),
+  ("readLine", hostResultKeys "mdk_read_line"),
+  ("readLineOpt", hostResultKeys "mdk_read_line"),
+  ("readAll", hostResultKeys "mdk_read_all"),
+  ("readExactly", hostResultKeys "mdk_read_exactly"),
+  ("osEntropyBytes", hostResultKeys "mdk_os_entropy"),
+  ("executablePath", hostResultKeys "mdk_executable_path"),
   (
     "stringToFloat",
     [
@@ -388,9 +390,9 @@ fileBoundHostKeys : List String
 fileBoundHostKeys =
   grantChannelKeys ++ ["mdk_file_bound_enter", "mdk_file_bound_exit"]
 
--- a stdin read: the host call, then the result channel out
-stdinKeys : String -> List String
-stdinKeys key = [key, "mdk_result_len", "mdk_result_byte"]
+-- a host call that answers through the result channel: the call, then the channel out
+hostResultKeys : String -> List String
+hostResultKeys key = [key, "mdk_result_len", "mdk_result_byte"]
 
 -- the path channel in, the file read, the result channel out
 readChannelKeys : List String
@@ -440,6 +442,8 @@ wasmUseRows = [
   ("readLineOpt", [UseStr]),
   ("readAll", [UseStr]),
   ("readExactly", [UseStr]),
+  ("osEntropyBytes", [UseStr, UseList, UseArray]),
+  ("executablePath", [UseStr]),
   ("panic", [UseStr, UseEPut]),
   ("indexError", [UseStr, UseEPut]),
   ("panicAt", [UseStr, UseEPut]),
@@ -691,7 +695,7 @@ catalogRows = [
   ExternRow
     "executablePath"
     (CSymbol LlvmFile "mdk_executable_path")
-    (NotProvided GapUnported "ported in llvm, not yet in wasm")
+    (Inline WasmLeaf)
     Interpreted,
   ExternRow
     "buildFingerprint"
@@ -1007,9 +1011,7 @@ catalogRows = [
   ExternRow
     "osEntropyBytes"
     (CSymbol LlvmRng "mdk_os_entropy_bytes")
-    (NotProvided
-      GapUnported
-      "OS/browser entropy host import is not wired; native/eval only (#1726)")
+    (Inline WasmLeaf)
     Interpreted,
   ExternRow
     "hashInt"

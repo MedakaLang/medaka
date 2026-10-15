@@ -1722,6 +1722,8 @@ hostImportSig "mdk_get_env" = " (result i32)"
 hostImportSig "mdk_read_line" = " (result i32)"
 hostImportSig "mdk_read_all" = ""
 hostImportSig "mdk_read_exactly" = " (param i64) (result i32)"
+hostImportSig "mdk_os_entropy" = " (param i64) (result i32)"
+hostImportSig "mdk_executable_path" = " (result i32)"
 hostImportSig "mdk_args_count" = " (result i32)"
 hostImportSig "mdk_arg_len" = " (param i32) (result i32)"
 hostImportSig "mdk_arg_byte" = " (param i32) (param i32) (result i32)"
@@ -1972,6 +1974,9 @@ randomFloatRuntimeLines = [
 --   mdk_confine_bounds does, and a refusal is an Err of the extern's result.
 --   getEnv    : push name, mdk_get_env() -> i32 (1=Some / 0=None); rebuild $str and
 --     wrap Some (struct.new $C_Some, ord 0) / None (i31 ord 1).
+--   executablePath : mdk_executable_path() -> i32 (always 1); the path on the result channel.
+--   osEntropyBytes : mdk_os_entropy(n) -> i32 (1 = n bytes on the result channel; 0 = a
+--     refusal, its panic text on the channel, which the guest panics with).
 --   args      : mdk_args_count(); per i build a $str from mdk_arg_len(i)/mdk_arg_byte(i,j),
 --     fold a Cons chain right-to-left ending in Nil (i31 ord 1).
 -- Each import is a host key of the reached externs (`EmitPlan.hostKeys`), and
@@ -2007,7 +2012,8 @@ ioHostRuntimeLines keys =
     ++ gatedOn "mdk_grant_push" keys ioPushGrantLines
     ++ gatedOn "mdk_result_len" keys ioResultLines
     ++ (if contains "mdk_file_exists" keys
-      || contains "mdk_canonicalize_path" keys then
+      || contains "mdk_canonicalize_path" keys
+      || contains "mdk_os_entropy" keys then
       ioRefusedPanicLines
     else
       [])
@@ -2029,6 +2035,7 @@ ioHostRuntimeLines keys =
     ++ gatedOn "mdk_read_line" keys ioReadLineLines
     ++ gatedOn "mdk_read_all" keys ioReadAllLines
     ++ gatedOn "mdk_read_exactly" keys ioReadExactlyLines
+    ++ gatedOn "mdk_executable_path" keys ioExecutablePathLines
 
 gatedOn : String -> List String -> List String -> List String
 gatedOn key keys block = if contains key keys then block else []
@@ -2383,6 +2390,13 @@ ioReadExactlyLines = [
   "      (else (ref.i31 (i32.const 1)))))"
 ]
 
+-- executablePath : Unit -> String.  The host's path (always 1) on the result channel.
+ioExecutablePathLines : List String
+ioExecutablePathLines = [
+  "  (func $mdk_executable_path_io (result (ref eq))",
+  "    (drop (call $mdk_executable_path))", "    (call $mdk_io_result_to_str))"
+]
+
 -- the `args` extern body — split out from ioHostRuntimeLines because it references
 -- the cons-list types ($C_Cons / Nil), which are only declared when the program uses
 -- a list. Gated on the `mdk_args_count` host key; the `args` extern's catalog
@@ -2432,6 +2446,7 @@ export
 fileBytesRuntimeLines : Bool -> List String -> List String
 fileBytesRuntimeLines readsBytes keys =
   gatedOn "mdk_write_file_commit" keys writeFileBytesLines
+    ++ gatedOn "mdk_os_entropy" keys osEntropyLines
     ++ (if readsBytes then
       gatedOn "mdk_read_file" keys readFileBytesLines
     else
@@ -2455,6 +2470,24 @@ readFileBytesLines = [
   "          (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
   "        (struct.new $C_Ok (i32.const 0) (local.get $out)))",
   "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+-- osEntropyBytes : Int -> Array Int.  The host fills the result channel with n random
+-- bytes, or refuses a negative or oversized count with its panic text on the channel,
+-- which $mdk_refused_panic writes as the E-PANIC line.  Built like readFileBytes's array.
+osEntropyLines : List String
+osEntropyLines = [
+  "  ;; osEntropyBytes : Int -> Array Int.  1=n random bytes / 0=a refusal (its text on the channel).",
+  "  (func $mdk_os_entropy_io (param $n i64) (result (ref eq))",
+  "    (local $len i32) (local $i i32) (local $out (ref $arr))",
+  "    (if (i32.eqz (call $mdk_os_entropy (local.get $n))) (then (call $mdk_refused_panic)))",
+  "    (local.set $len (call $mdk_result_len))",
+  "    (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $len)))",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $len)))",
+  "      (array.set $arr (local.get $out) (local.get $i) (ref.i31 (call $mdk_result_byte (local.get $i))))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (local.get $out))"
 ]
 
 writeFileBytesLines : List String

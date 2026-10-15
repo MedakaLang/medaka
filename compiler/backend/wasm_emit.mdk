@@ -1797,6 +1797,8 @@ externArityW name =
       "readLineOpt",
       "readAll",
       "readExactly",
+      "osEntropyBytes",
+      "executablePath",
       "exit",
       "args",
       "wallTimeSec",
@@ -7149,6 +7151,16 @@ emitLeafExternRef prog env d "readExactly" [n] =
     ++ ["call $mdk_unbox_int", "call $mdk_read_exactly_io"]
 emitLeafExternRef prog env d "readExactly" _ =
   gapLP prog "wasm: readExactly takes exactly one argument"
+-- osEntropyBytes unboxes its Int to the i64 the import takes and builds an Array Int;
+-- executablePath takes a Unit (dropped) and answers its String through the result channel.
+emitLeafExternRef prog env d "osEntropyBytes" [n] =
+  emitRefExpr prog env d n ++ ["call $mdk_unbox_int", "call $mdk_os_entropy_io"]
+emitLeafExternRef prog env d "osEntropyBytes" _ =
+  gapLP prog "wasm: osEntropyBytes takes exactly one argument"
+emitLeafExternRef prog env d "executablePath" [u] =
+  emitRefExpr prog env d u ++ ["drop", "call $mdk_executable_path_io"]
+emitLeafExternRef prog env d "executablePath" _ =
+  gapLP prog "wasm: executablePath takes exactly one (Unit) argument"
 emitLeafExternRef prog env d "args" [u] =
   emitRefExpr prog env d u ++ ["drop", "call $mdk_args_io"]
 emitLeafExternRef prog env d "args" args =

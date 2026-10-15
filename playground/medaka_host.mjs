@@ -18,17 +18,14 @@
 //   runProgram(wasm, host, opts) -> { kind: 'done' } | { kind: 'exit', code }
 //                                 | { kind: 'error', error, inProgram }
 //   profile = a name in PROFILES, or a host configuration such as COMPILER_HOST.
-//   opts = { vfs, args, getEnv, stdin, sink, streaming, isolated, hostLabel, withheldHint }
+//   opts = { vfs, args, getEnv, executablePath, stdin, sink, streaming, isolated, hostLabel, withheldHint }
 
 // ── capability slices ────────────────────────────────────────────────────────
 // Each slice lists the import keys it implements.  A key may sit in several slices
 // when they share it (the path and result byte channels, WH5); it is real when any
 // installed slice lists it.  `needs` is the effect labels a profile must grant for
 // the slice to be installed; `process` marks the slices only a process host has
-// (`args` and `exit` carry no effect label in stdlib/runtime.mdk).  `entropy` and
-// `stdin` have no keys: the emitter declares no import for either yet
-// (compiler/backend/extern_catalog.mdk: osEntropyBytes is native-only, the stdin
-// family is unported).
+// (`args` and `exit` carry no effect label in stdlib/runtime.mdk).
 const PATH_KEYS = ['mdk_path_reset', 'mdk_path_push'];
 const GRANT_KEYS = ['mdk_grant_reset', 'mdk_grant_push'];
 const RESULT_KEYS = ['mdk_result_len', 'mdk_result_byte'];
@@ -63,7 +60,11 @@ export const SLICES = {
   // A declared file bound's frame (EFFECTS-SEMANTICS §7) is bookkeeping, not a
   // capability: a bounded body that performs no file operation runs anywhere.
   filebound: { needs: [], keys: ['mdk_file_bound_enter', 'mdk_file_bound_exit', ...GRANT_KEYS] },
-  env: { needs: ['Env'], keys: ['mdk_get_env', ...PATH_KEYS, ...RESULT_KEYS], externs: ['getEnv'] },
+  env: {
+    needs: ['Env'],
+    keys: ['mdk_get_env', 'mdk_executable_path', ...PATH_KEYS, ...RESULT_KEYS],
+    externs: ['getEnv', 'executablePath'],
+  },
   args: { needs: [], process: true, keys: ['mdk_args_count', 'mdk_arg_len', 'mdk_arg_byte'], externs: ['args'] },
   exit: { needs: [], process: true, keys: ['mdk_exit'], externs: ['exit'] },
   clock: {
@@ -71,7 +72,7 @@ export const SLICES = {
     keys: ['mdk_wall_time_sec', 'mdk_monotonic_sec', 'mdk_sleep_ms'],
     externs: ['wallTimeSec', 'monotonicSec', 'sleepMs'],
   },
-  entropy: { needs: ['Rand'], keys: [], externs: ['osEntropyBytes'] },
+  entropy: { needs: ['Rand'], keys: ['mdk_os_entropy', ...RESULT_KEYS], externs: ['osEntropyBytes'] },
   stdin: {
     needs: ['Stdin'],
     keys: ['mdk_read_line', 'mdk_read_all', 'mdk_read_exactly', ...RESULT_KEYS],
@@ -129,7 +130,8 @@ export function withheldExterns(profile) {
 // Externs of a slice a profile can install that no wasm build lowers (their wasm row in
 // compiler/backend/extern_catalog.mdk is NotProvided): a call to one does not compile
 // for any wasmgc profile, so the runnability rule reads them beside withheldExterns.
-export const WASM_GAP_EXTERNS = ['osEntropyBytes'];
+// None now: every extern a granted slice serves has a wasm lowering.
+export const WASM_GAP_EXTERNS = [];
 
 // The extern a key serves, for a withheld slice's message.  medaka_host_test.mjs asserts
 // every key of a withholdable slice has a row naming one of that slice's `externs`.
@@ -143,6 +145,7 @@ export const KEY_EXTERN = {
   mdk_make_dir: 'makeDir', mdk_remove_file: 'removeFile', mdk_remove_dir: 'removeDir', mdk_fsync: 'fsync', mdk_file_mode: 'fileMode',
   mdk_write_file_mode: 'writeFileMode',
   mdk_read_line: 'readLine', mdk_read_all: 'readAll', mdk_read_exactly: 'readExactly',
+  mdk_os_entropy: 'osEntropyBytes', mdk_executable_path: 'executablePath',
   mdk_args_count: 'args', mdk_arg_len: 'args', mdk_arg_byte: 'args', mdk_exit: 'exit',
   mdk_wall_time_sec: 'wallTimeSec', mdk_monotonic_sec: 'monotonicSec', mdk_sleep_ms: 'sleepMs',
   mdk_result_len: 'readFile/getEnv result', mdk_result_byte: 'readFile/getEnv result',
@@ -587,6 +590,9 @@ export function createHost(profile, opts = {}) {
     vfs: opts.vfs || new MemoryVfs(),
     args: opts.args || [],
     getEnv: opts.getEnv || (() => undefined),
+    // The path the guest's `executablePath` answers: the wasm module's own file, where
+    // the host knows it (test/wasm/run.js); "" otherwise.
+    executablePath: opts.executablePath ?? '',
     // A blocking read of standard input: the next bytes, or none (zero length) at end.
     stdin: opts.stdin || (() => new Uint8Array(0)),
     stdinBuf: new Uint8Array(0), stdinPos: 0, stdinEof: false,
@@ -868,6 +874,20 @@ export function createHost(profile, opts = {}) {
       host.stdinPos += have;
       return have === n ? 1 : 0;
     },
+    // osEntropyBytes: n bytes from the platform's CSPRNG, in chunks of at most 65,536
+    // (the Web Crypto limit).  A negative or oversized count is refused with native's
+    // panic text (runtime/medaka_rt.c mdk_os_entropy_bytes) and no bytes.
+    mdk_os_entropy: (n) => {
+      n = BigInt(n);
+      if (n < 0n) { host.resultBuf = enc('osEntropyBytes: length must be non-negative'); return 0; }
+      if (n > (2n ** 63n - 1n) / 8n - 1n) { host.resultBuf = enc('osEntropyBytes: requested length is too large'); return 0; }
+      const out = new Uint8Array(Number(n));
+      for (let off = 0; off < out.length; off += 65536)
+        crypto.getRandomValues(out.subarray(off, Math.min(off + 65536, out.length)));
+      host.resultBuf = out;
+      return 1;
+    },
+    mdk_executable_path: () => { host.resultBuf = enc(host.executablePath); return 1; },
     mdk_args_count: () => host.args.length,
     mdk_arg_len: (i) => argBytes(i).length,
     mdk_arg_byte: (i, j) => argBytes(i)[j] & 0xff,

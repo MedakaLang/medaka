@@ -50,6 +50,10 @@ const PROGRAMS = {
     + '  match readFile "probe.bin"\n    Ok s => putStr "read back: \\{s}"\n    Err e => putStrLn "read err: \\{e}"\n',
   read: 'main = match readFile "probe.bin"\n  Ok s => putStr "present: \\{s}"\n  Err e => putStrLn "missing: \\{e}"\n',
   env: 'main = match getEnv "HOME"\n  Some _ => putStrLn "home set"\n  None => putStrLn "home unset"\n',
+  entropy: 'main =\n  let a = osEntropyBytes 70000\n  let b = osEntropyBytes 0\n'
+    + '  putStrLn "lengths \\{arrayLength a} \\{arrayLength b}"\n'
+    + '  putStrLn "negative \\{arrayLength (osEntropyBytes (0 - 1))}"\n',
+  exe: 'main = putStrLn "exe \\{executablePath ()}"\n',
   trap: 'main =\n  let _ = putStr "out-partial"\n  let _ = ePutStr "err-partial"\n'
     + '  let z = length [1] - 1\n  println (10 / z)\n',
   hello: 'main = putStrLn "hello"\n',
@@ -495,6 +499,21 @@ function check(name, ok, detail) {
   ];
   const bad = got.map((g, i) => (g === want[i] ? null : `${i}: ${g} != ${want[i]}`)).filter(Boolean);
   check('(n) host: rename confines each path under its own grant, source first', bad.length === 0, bad.join('; '));
+}
+
+// (o) osEntropyBytes and executablePath on wasmgc/node: the requested lengths, a negative
+// count refused with native's text, and the path the host was given.
+{
+  const host = createHost('wasmgc/node', { executablePath: '/abs/x.wasm' });
+  const r = await runProgram(readFileSync(build('entropy', 'wasmgc/node')), host);
+  check('(o) host: osEntropyBytes gives the requested lengths, then refuses a negative count',
+    r.kind === 'error' && host.sink.text('stdout') === 'lengths 70000 0\n'
+      && host.sink.text('stderr').includes('osEntropyBytes: length must be non-negative'),
+    JSON.stringify({ kind: r.kind, out: host.sink.text('stdout'), err: host.sink.text('stderr') }));
+  const h2 = createHost('wasmgc/node', { executablePath: '/abs/x.wasm' });
+  await runProgram(readFileSync(build('exe', 'wasmgc/node')), h2);
+  check('(o) host: executablePath is the path the host was given',
+    h2.sink.text('stdout') === 'exe /abs/x.wasm\n', JSON.stringify(h2.sink.text('stdout')));
 }
 
 // Report only: slices no module built above imports a key of.

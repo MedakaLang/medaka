@@ -7,13 +7,13 @@
    of each engine — independence must hold across real processes, since a
    fixture that sampled twice inside one process could pass by calling the
    same in-process RNG state twice without ever exercising a fresh OS call.
-   `negative.mdk`/`too_large.mdk` must be rejected, by name, on both
-   engines. Five structural checks below protect the security contract that
-   the executable checks alone cannot see: the exact effect annotation, that
-   the extern never leaks into a deterministic dispatch table, and that the C
-   helper never falls back to the runtime's seeded SplitMix generator. That
-   the WASM gap is a declared decision rather than a silent omission is a
-   catalog row, pinned in `compiler/backend/extern_catalog_gate_test.mdk`.
+   `negative.mdk`/`too_large.mdk` must be rejected, by name, on every
+   engine (native, and wasmgc/node under test/wasm/run.js). Five structural
+   checks below protect the security contract that the executable checks alone
+   cannot see: the exact effect annotation, that the extern never leaks into a
+   deterministic dispatch table, and that the C helper never falls back to the
+   runtime's seeded SplitMix generator. The wasm lowering is pinned as an
+   Inline row in `compiler/backend/extern_catalog_gate_test.mdk`.
 
    Runs under `medaka test --native`: it spawns subprocesses and reads
    source files, neither of which the interpreter binds. -}
@@ -154,6 +154,49 @@ buildRejected scratch name fixture wantSubstring =
       else
         pass
 
+-- The wasm arm: `fixture` built for `wasm` into `scratch` as `name.wasm`, which is
+-- run under node by test/wasm/run.js (the wasmgc/node profile, which grants Rand).
+wasmBuild : String -> String -> String -> <Exec, IO> Result String String
+wasmBuild scratch name fixture =
+  let binPath = "\{scratch}/\{name}.wasm"
+  match strictSpawn 60 ["build", "--target", "wasm", fixture, "-o", binPath]
+    Err e => Err "medaka build --target wasm \{name}: \{e}"
+    Ok (code, bo, be) =>
+      if code /= 0 then
+        Err
+          "medaka build --target wasm \{name} failed: exit=\{intToString code} \{debug (bo ++ be)}"
+      else
+        Ok binPath
+
+wasmRun : String -> <Exec, IO> Result String (Int, String, String)
+wasmRun binPath =
+  boundedVerbSeconds 60 "node" ["\{medakaRoot}/test/wasm/run.js", binPath]
+
+wasmIndependence : String -> String -> String -> <Exec, IO> Expectation
+wasmIndependence scratch name fixture = match wasmBuild scratch name fixture
+  Err e => fail e
+  Ok binPath => match wasmRun binPath
+    Err e => fail "\{name} (wasm): first run: \{e}"
+    Ok a => match wasmRun binPath
+      Err e => fail "\{name} (wasm): second run: \{e}"
+      Ok b => freshSpawnsIndependent "\{name} (wasm)" a b
+
+wasmRejected : String -> String -> String -> String -> <Exec, IO> Expectation
+wasmRejected scratch name fixture wantSubstring =
+  match wasmBuild scratch name fixture
+    Err e => fail e
+    Ok binPath => match wasmRun binPath
+      Err e => fail "\{name} (wasm): run: \{e}"
+      Ok (nc, no, ne) =>
+        if nc == 0 then
+          fail
+            "\{name} (wasm): built binary unexpectedly succeeded: stdout=\{debug no}"
+        else if not (contains wantSubstring ne) then
+          fail
+            "\{name} (wasm): expected stderr containing \{debug wantSubstring}, got \{debug ne}"
+        else
+          pass
+
 test "os_entropy: build+exec — positive is independent, negative and too-large are rejected" =
   inFreshDirOf
     (scratch => expectAll [
@@ -164,6 +207,17 @@ test "os_entropy: build+exec — positive is independent, negative and too-large
         negativeFixture
         "osEntropyBytes: length must be non-negative",
       buildRejected
+        scratch
+        "too_large"
+        tooLargeFixture
+        "osEntropyBytes: requested length is too large",
+      wasmIndependence scratch "positive" positiveFixture,
+      wasmRejected
+        scratch
+        "negative"
+        negativeFixture
+        "osEntropyBytes: length must be non-negative",
+      wasmRejected
         scratch
         "too_large"
         tooLargeFixture

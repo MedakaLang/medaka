@@ -704,6 +704,16 @@ test "a wasm plan's host keys are its reached externs' imports, per group" = exp
         ["mdk_read_exactly", "mdk_result_byte", "mdk_result_len"]
         (hostKeysOf WasmBackend (call "readExactly" [ref "n"]))),
     labelFail
+      "osEntropyBytes: the entropy key and the result channel"
+      (expectEqual
+        ["mdk_os_entropy", "mdk_result_byte", "mdk_result_len"]
+        (hostKeysOf WasmBackend (call "osEntropyBytes" [ref "n"]))),
+    labelFail
+      "executablePath: the path key and the result channel"
+      (expectEqual
+        ["mdk_executable_path", "mdk_result_byte", "mdk_result_len"]
+        (hostKeysOf WasmBackend (call "executablePath" [unit]))),
+    labelFail
       "stringToFloat: the path channel and the host parse"
       (expectEqual
         [

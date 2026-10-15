@@ -75,7 +75,7 @@ const sink = {
 };
 
 import(hostUrl).then(async ({ createHost, runProgram, OldEntryShape }) => {
-  const host = createHost('wasmgc/node', { vfs, args, getEnv: (n) => process.env[n], stdin, sink });
+  const host = createHost('wasmgc/node', { vfs, args, getEnv: (n) => process.env[n], executablePath: nodePath.resolve(path), stdin, sink });
   const r = await runProgram(bytes, host);
   if (r.kind === 'exit') { process.exitCode = r.code; return; }
   if (r.kind === 'error') {
