@@ -2986,6 +2986,7 @@ scopedCtorEntry : List Decl -> String -> List (Ident, String, Scheme) -> Option 
 scopedMemberBinding : ScopedMember -> (String, EnvBinding)
 scopedRecordEntry : List Decl -> String -> List (Ident, String, RecordInfo) -> Option RecordInfo
 sealMethodReturnGoals : List EvEntry -> List Obligation -> (List Obligation, List MethodReturnMemoView)
+sealMethodReturnGoalsFrom : List EvEntry -> List Obligation -> (List Obligation, List MethodReturnMemoView) -> (List Obligation, List MethodReturnMemoView)
 second3 : (a, b, c) -> b
 sectionEVars : Section -> List String
 seedAbstractRecordTypes : List Decl -> List (String, List Decl) -> Unit

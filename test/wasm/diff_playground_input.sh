@@ -321,5 +321,23 @@ main =
   println "done"
 EOF2
 check_target_refusal net-via 'T-TARGET-CAPABILITY main.mdk 5:0 `main` performs <Net> via `main → fetchIt`, and the target `wasmgc/browser-worker` does not grant Net' "$WORK/target-net-via/netmod.mdk"
+# The compiler wasm's first run in a browser is baseline-tier (Liftoff), whose frames are
+# several times larger than optimized ones, and a browser worker gives ~1 MB of stack. A
+# program that imports `async` once overflowed it (types.typecheck.sealMethodReturnGoals
+# recursed once per goal). --liftoff-only pins that tier so the retry in compile.mjs cannot
+# tier up and hide a regression; 400 KB is 4x what the compiler needs today and half what
+# it needed before the fix.
+check_liftoff_stack() {
+  label="$1"; prog="$2"; want="$3"; need="$4"; checks=$((checks + 1))
+  node --liftoff-only --stack-size=400 "$WORK/pg_compile_extra.mjs" "$ROOT" "$prog" >"$WORK/stack-$label.out" 2>"$WORK/stack-$label.err"
+  rc=$?
+  if grep -qi 'call stack' "$WORK/stack-$label.out" "$WORK/stack-$label.err"; then bad "$label overflowed the 400 KB baseline-tier stack"; return; fi
+  [ "$rc" -eq "$want" ] || { bad "$label exited $rc, expected $want"; head -c 400 "$WORK/stack-$label.out"; return; }
+  [ -z "$need" ] || grep -q "$need" "$WORK/stack-$label.out" || bad "$label lost its diagnostic $need"
+}
+check_liftoff_stack async-overlap "$ROOT/test/async_fixtures/overlap_sleeps.mdk" 0 ""
+check_liftoff_stack async-defer "$ROOT/test/visitor_battery/64_async_defer.mdk" 0 ""
+check_liftoff_stack async-do "$ROOT/test/visitor_battery/49_async.mdk" 1 T-DO-NOT-MONAD
+check_liftoff_stack async-do-panic "$ROOT/test/visitor_battery/65_async_do_panic.mdk" 1 T-NO-IMPL
 printf '%d checks, %d failing\n' "$checks" "$fail"
 [ "$checks" -gt 0 ] && [ "$fail" -eq 0 ]

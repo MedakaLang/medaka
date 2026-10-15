@@ -1,5 +1,5 @@
 # META
-source_lines=57032
+source_lines=57044
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -11876,12 +11876,24 @@ copyGraphRunForMemo g =
 sealMethodReturnGoals : EvTable ->
   List Obligation ->
   (List Obligation, List MethodReturnMemoView)
-sealMethodReturnGoals _ [] = ([], [])
-sealMethodReturnGoals evidence (goal :: rest) =
-  let (goals, views) = sealMethodReturnGoals evidence rest
+sealMethodReturnGoals evidence goals =
+  sealMethodReturnGoalsFrom evidence (reverseL goals) ([], [])
+
+-- Walks the goals last to first so each result list is built in input order, with
+-- no recursion before the cons: the goal list of a program that imports `async` is
+-- long enough to overflow the baseline-tier wasm stack in a browser worker.
+sealMethodReturnGoalsFrom : EvTable ->
+  List Obligation ->
+  (List Obligation, List MethodReturnMemoView) ->
+  (List Obligation, List MethodReturnMemoView)
+sealMethodReturnGoalsFrom _ [] acc = acc
+sealMethodReturnGoalsFrom evidence (goal :: rest) (goals, views) =
   match exactReturnRequestOfGoal goal
-    Some request => (goals, methodReturnMemoView evidence goal request :: views)
-    None => (goal :: goals, views)
+    Some request => sealMethodReturnGoalsFrom evidence rest (
+      goals,
+      methodReturnMemoView evidence goal request :: views,
+    )
+    None => sealMethodReturnGoalsFrom evidence rest (goal :: goals, views)
 
 exactReturnRequestOfGoal : Obligation -> Option MethodReturnRequest
 exactReturnRequestOfGoal goal = match goal.oPayload
@@ -58872,8 +58884,10 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "copyGraphRunForMemo" (TyFun (TyCon "GraphRun") (TyCon "GraphRun")))
 (DFunDef false "copyGraphRunForMemo" ((PVar "g")) (EBlock (DoLet false false (PTuple (PVar "goals") (PVar "views")) (EApp (EApp (EVar "sealMethodReturnGoals") (EFieldAccess (EFieldAccess (EVar "g") "evTable") "value")) (EFieldAccess (EFieldAccess (EVar "g") "goals") "value"))) (DoLet false false (PVar "copied") (EApp (EVar "copyGraphRun") (EVar "g"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "copied") "goals")) (EVar "goals"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "copied") "goalsN")) (EApp (EVar "listLen") (EVar "goals")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "copied") "memoMethodReturns")) (EBinOp "++" (EVar "views") (EFieldAccess (EFieldAccess (EVar "g") "memoMethodReturns") "value")))) (DoExpr (EVar "copied"))))
 (DTypeSig false "sealMethodReturnGoals" (TyFun (TyCon "EvTable") (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyTuple (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "MethodReturnMemoView"))))))
-(DFunDef false "sealMethodReturnGoals" (PWild (PList)) (ETuple (EListLit) (EListLit)))
-(DFunDef false "sealMethodReturnGoals" ((PVar "evidence") (PCons (PVar "goal") (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "goals") (PVar "views")) (EApp (EApp (EVar "sealMethodReturnGoals") (EVar "evidence")) (EVar "rest"))) (DoExpr (EMatch (EApp (EVar "exactReturnRequestOfGoal") (EVar "goal")) (arm (PCon "Some" (PVar "request")) () (ETuple (EVar "goals") (EBinOp "::" (EApp (EApp (EApp (EVar "methodReturnMemoView") (EVar "evidence")) (EVar "goal")) (EVar "request")) (EVar "views")))) (arm (PCon "None") () (ETuple (EBinOp "::" (EVar "goal") (EVar "goals")) (EVar "views")))))))
+(DFunDef false "sealMethodReturnGoals" ((PVar "evidence") (PVar "goals")) (EApp (EApp (EApp (EVar "sealMethodReturnGoalsFrom") (EVar "evidence")) (EApp (EVar "reverseL") (EVar "goals"))) (ETuple (EListLit) (EListLit))))
+(DTypeSig false "sealMethodReturnGoalsFrom" (TyFun (TyCon "EvTable") (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "MethodReturnMemoView"))) (TyTuple (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "MethodReturnMemoView")))))))
+(DFunDef false "sealMethodReturnGoalsFrom" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "sealMethodReturnGoalsFrom" ((PVar "evidence") (PCons (PVar "goal") (PVar "rest")) (PTuple (PVar "goals") (PVar "views"))) (EMatch (EApp (EVar "exactReturnRequestOfGoal") (EVar "goal")) (arm (PCon "Some" (PVar "request")) () (EApp (EApp (EApp (EVar "sealMethodReturnGoalsFrom") (EVar "evidence")) (EVar "rest")) (ETuple (EVar "goals") (EBinOp "::" (EApp (EApp (EApp (EVar "methodReturnMemoView") (EVar "evidence")) (EVar "goal")) (EVar "request")) (EVar "views"))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "sealMethodReturnGoalsFrom") (EVar "evidence")) (EVar "rest")) (ETuple (EBinOp "::" (EVar "goal") (EVar "goals")) (EVar "views"))))))
 (DTypeSig false "exactReturnRequestOfGoal" (TyFun (TyCon "Obligation") (TyApp (TyCon "Option") (TyCon "MethodReturnRequest"))))
 (DFunDef false "exactReturnRequestOfGoal" ((PVar "goal")) (EMatch (EFieldAccess (EVar "goal") "oPayload") (arm (PCon "GPSite" PWild PWild (PCon "SKExactReturn" PWild (PVar "request"))) () (EApp (EVar "Some") (EVar "request"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "methodReturnMemoView" (TyFun (TyCon "EvTable") (TyFun (TyCon "Obligation") (TyFun (TyCon "MethodReturnRequest") (TyCon "MethodReturnMemoView")))))
@@ -68335,8 +68349,10 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "copyGraphRunForMemo" (TyFun (TyCon "GraphRun") (TyCon "GraphRun")))
 (DFunDef false "copyGraphRunForMemo" ((PVar "g")) (EBlock (DoLet false false (PTuple (PVar "goals") (PVar "views")) (EApp (EApp (EVar "sealMethodReturnGoals") (EFieldAccess (EFieldAccess (EVar "g") "evTable") "value")) (EFieldAccess (EFieldAccess (EVar "g") "goals") "value"))) (DoLet false false (PVar "copied") (EApp (EVar "copyGraphRun") (EVar "g"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "copied") "goals")) (EVar "goals"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "copied") "goalsN")) (EApp (EVar "listLen") (EVar "goals")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "copied") "memoMethodReturns")) (EBinOp "++" (EVar "views") (EFieldAccess (EFieldAccess (EVar "g") "memoMethodReturns") "value")))) (DoExpr (EVar "copied"))))
 (DTypeSig false "sealMethodReturnGoals" (TyFun (TyCon "EvTable") (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyTuple (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "MethodReturnMemoView"))))))
-(DFunDef false "sealMethodReturnGoals" (PWild (PList)) (ETuple (EListLit) (EListLit)))
-(DFunDef false "sealMethodReturnGoals" ((PVar "evidence") (PCons (PVar "goal") (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "goals") (PVar "views")) (EApp (EApp (EVar "sealMethodReturnGoals") (EVar "evidence")) (EVar "rest"))) (DoExpr (EMatch (EApp (EVar "exactReturnRequestOfGoal") (EVar "goal")) (arm (PCon "Some" (PVar "request")) () (ETuple (EVar "goals") (EBinOp "::" (EApp (EApp (EApp (EVar "methodReturnMemoView") (EVar "evidence")) (EVar "goal")) (EVar "request")) (EVar "views")))) (arm (PCon "None") () (ETuple (EBinOp "::" (EVar "goal") (EVar "goals")) (EVar "views")))))))
+(DFunDef false "sealMethodReturnGoals" ((PVar "evidence") (PVar "goals")) (EApp (EApp (EApp (EVar "sealMethodReturnGoalsFrom") (EVar "evidence")) (EApp (EVar "reverseL") (EVar "goals"))) (ETuple (EListLit) (EListLit))))
+(DTypeSig false "sealMethodReturnGoalsFrom" (TyFun (TyCon "EvTable") (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "MethodReturnMemoView"))) (TyTuple (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "MethodReturnMemoView")))))))
+(DFunDef false "sealMethodReturnGoalsFrom" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "sealMethodReturnGoalsFrom" ((PVar "evidence") (PCons (PVar "goal") (PVar "rest")) (PTuple (PVar "goals") (PVar "views"))) (EMatch (EApp (EVar "exactReturnRequestOfGoal") (EVar "goal")) (arm (PCon "Some" (PVar "request")) () (EApp (EApp (EApp (EVar "sealMethodReturnGoalsFrom") (EVar "evidence")) (EVar "rest")) (ETuple (EVar "goals") (EBinOp "::" (EApp (EApp (EApp (EVar "methodReturnMemoView") (EVar "evidence")) (EVar "goal")) (EVar "request")) (EVar "views"))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "sealMethodReturnGoalsFrom") (EVar "evidence")) (EVar "rest")) (ETuple (EBinOp "::" (EVar "goal") (EVar "goals")) (EVar "views"))))))
 (DTypeSig false "exactReturnRequestOfGoal" (TyFun (TyCon "Obligation") (TyApp (TyCon "Option") (TyCon "MethodReturnRequest"))))
 (DFunDef false "exactReturnRequestOfGoal" ((PVar "goal")) (EMatch (EFieldAccess (EVar "goal") "oPayload") (arm (PCon "GPSite" PWild PWild (PCon "SKExactReturn" PWild (PVar "request"))) () (EApp (EVar "Some") (EVar "request"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "methodReturnMemoView" (TyFun (TyCon "EvTable") (TyFun (TyCon "Obligation") (TyFun (TyCon "MethodReturnRequest") (TyCon "MethodReturnMemoView")))))
