@@ -11755,12 +11755,24 @@ copyGraphRunForMemo g =
 sealMethodReturnGoals : EvTable ->
   List Obligation ->
   (List Obligation, List MethodReturnMemoView)
-sealMethodReturnGoals _ [] = ([], [])
-sealMethodReturnGoals evidence (goal :: rest) =
-  let (goals, views) = sealMethodReturnGoals evidence rest
+sealMethodReturnGoals evidence goals =
+  sealMethodReturnGoalsFrom evidence (reverseL goals) ([], [])
+
+-- Walks the goals last to first so each result list is built in input order, with
+-- no recursion before the cons: the goal list of a program that imports `async` is
+-- long enough to overflow the baseline-tier wasm stack in a browser worker.
+sealMethodReturnGoalsFrom : EvTable ->
+  List Obligation ->
+  (List Obligation, List MethodReturnMemoView) ->
+  (List Obligation, List MethodReturnMemoView)
+sealMethodReturnGoalsFrom _ [] acc = acc
+sealMethodReturnGoalsFrom evidence (goal :: rest) (goals, views) =
   match exactReturnRequestOfGoal goal
-    Some request => (goals, methodReturnMemoView evidence goal request :: views)
-    None => (goal :: goals, views)
+    Some request => sealMethodReturnGoalsFrom evidence rest (
+      goals,
+      methodReturnMemoView evidence goal request :: views,
+    )
+    None => sealMethodReturnGoalsFrom evidence rest (goal :: goals, views)
 
 exactReturnRequestOfGoal : Obligation -> Option MethodReturnRequest
 exactReturnRequestOfGoal goal = match goal.oPayload
