@@ -1,5 +1,5 @@
 # META
-source_lines=4183
+source_lines=4226
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -71,9 +71,7 @@ import driver.loader.{
   readSource,
 }
 import driver.build_cmd.{readPreludeFile, envOr, defaultMedakaRoot}
-import types.typecheck.{
-  elaborateOne, elaborateModules, TcDiag(..), tcDiagGoalKey
-}
+import types.typecheck.{elaborateModules, TcDiag(..), tcDiagGoalKey}
 import types.route_key.{withEvidencePreserved}
 import backend.private_mangle.{mangleCtorCollisionsPair}
 import frontend.marker.{declRefs}
@@ -806,9 +804,39 @@ elaborateFor rsrc csrc target roots mods exempt True synthDecls = (
 -- is still the last writer of the typechecker's whole-graph state — the position
 -- a phase elaboration has always held.
 forcePrepared : String -> String -> Prepared -> <IO> TestPair
-forcePrepared _ _ (PreparedPair pair) = pair
+forcePrepared _ _ (PreparedPair pair) =
+  injectedExampleDiags := omEmpty
+  pair
 forcePrepared rsrc csrc (PreparedInject mods synthDecls) =
   perfRow "test-elab" "injected" (_ => forceInjected rsrc csrc mods synthDecls)
+
+-- The doctest-injected elaboration's own errors on the examples, by doctest line
+-- (`exampleDiagLines`), written by the elaboration that built the trees the
+-- interpreter arm runs.  The gate never reads that tree (`prepareMulti`), so an
+-- example the typechecker could not complete evidence for is otherwise unknown
+-- until the evaluator meets its unrouted dictionary, whose panic no example can
+-- catch: `renderOneExample` reports it as that example's failure instead.
+injectedExampleDiags : Ref (OrdMap String)
+injectedExampleDiags = Ref omEmpty
+
+-- Each error of [perMod]'s last module (the one the examples are injected into)
+-- under its line.  An example's binding is parsed on its own doctest line
+-- (`tools.doctest`'s `synthOne`), a comment line no declaration of the module
+-- starts on.
+exampleDiagLines : List (String, (List TcDiag, List TcDiag)) -> OrdMap String
+exampleDiagLines perMod = match reverseL perMod
+  (_, (errs, _)) :: _ =>
+    fold
+      (acc d => match d
+        TcDiag _ _ (Some (Loc _ line _ _ _)) msg _ _ =>
+          if omHasKey (intToString line) acc then
+            acc
+          else
+            omInsert (intToString line) msg acc
+        _ => acc)
+      omEmpty
+      errs
+  [] => omEmpty
 
 forceInjected : String ->
   String ->
@@ -821,7 +849,8 @@ forceInjected rsrc csrc mods synthDecls =
     (desugaredPrelude rsrc)
     (desugaredPrelude csrc)
     injected)
-    (coreE, modulesE, _, _, _, _) =>
+    (coreE, modulesE, perModule, _, _, _) =>
+      injectedExampleDiags := exampleDiagLines perModule
       uncurryPair
         (desugaredPrelude rsrc)
         (desugaredPrelude csrc)
@@ -1240,9 +1269,10 @@ runChosenOn EngNative _trees target tsrc userDecls examples synthResults =
 -- test stdlib/core.mdk`) it already declares everything the prelude provides,
 -- so prepending it would duplicate every top-level decl (two `Bounded Char`
 -- impls, etc.) and corrupt return-position dispatch — hence `programIsCore`.
--- `elaborateOne` is the 1-module wrapper over `elaborateModules` returning the
--- FLAT shape `evalOneRootEnvWith` consumes, and its root frame carries the
--- synthesized `__dt_i__` bindings the same way the pair arm's does.
+-- Its one-module elaboration is flattened to the shape `evalOneRootEnvWith`
+-- consumes (`elaborateOne`'s), keeping the module's diagnostics for the examples,
+-- and its root frame carries the synthesized `__dt_i__` bindings the same way the
+-- pair arm's does.
 runChosen : DoctestTrees ->
   List Example ->
   List (Result String (List Decl)) ->
@@ -1258,7 +1288,7 @@ runChosen (DtPair (TestPair _runtimeM _rawCoreM coreM _rawM modsM)) examples syn
   -- either way, so this changes nothing about what `force` below returns.
   let env = evalModulesRootEnvWith (testCapableExterns ()) coreM modsM
   buildDetailsFrom
-    (Ok (renderExamples env synthResults examples))
+    (Ok (renderExamples env injectedExampleDiags.value synthResults examples))
     synthResults
     examples
 runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synthResults =
@@ -1270,11 +1300,13 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
       dropShadowedExp (funNamesOf allUser) coreDecls
   let rootId = singleRootId roots target
   modulePathMap := [("__main__", target)]
-  let elaborated = elaborateOne runtimeDecls livePrelude (rootId, allUser)
+  let (coreE, modulesE, perModule, _, _, _) =
+    elaborateModules runtimeDecls livePrelude [(rootId, allUser)]
+  let elaborated = coreE ++ flatMap snd modulesE
   let env =
     evalOneRootEnvWith (testCapableExterns ()) [] ("__main__", elaborated)
   buildDetailsFrom
-    (Ok (renderExamples env synthResults examples))
+    (Ok (renderExamples env (exampleDiagLines perModule) synthResults examples))
     synthResults
     examples
 
@@ -1284,22 +1316,26 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
 -- for each example i, look up its synthesized `__dt_i__` binding in the post-
 -- run env and render it, exactly as the pre-Stage-1 `oneResult` did inline.
 renderExamples : List (String, Value e) ->
+  OrdMap String ->
   List (Result String (List Decl)) ->
   List Example ->
   <e> List (Result String String)
-renderExamples env synthResults examples =
-  renderExamplesGo env synthResults 0 examples
+renderExamples env diags synthResults examples =
+  renderExamplesGo env diags synthResults 0 examples
 
 renderExamplesGo : List (String, Value e) ->
+  OrdMap String ->
   List (Result String (List Decl)) ->
   Int ->
   List Example ->
   <e> List (Result String String)
-renderExamplesGo _ _ _ [] = []
-renderExamplesGo env (sr :: srRest) i (ex :: rest) =
-  renderOneExample env sr i ex :: renderExamplesGo env srRest (i + 1) rest
-renderExamplesGo env [] i (ex :: rest) =
-  renderOneExample env (Err "") i ex :: renderExamplesGo env [] (i + 1) rest
+renderExamplesGo _ _ _ _ [] = []
+renderExamplesGo env diags (sr :: srRest) i (ex :: rest) =
+  renderOneExample env diags sr i ex
+    :: renderExamplesGo env diags srRest (i + 1) rest
+renderExamplesGo env diags [] i (ex :: rest) =
+  renderOneExample env diags (Err "") i ex
+    :: renderExamplesGo env diags [] (i + 1) rest
 
 -- No binding for __dt_i__ means that example's synth never ran (its own
 -- decl was dropped, or the file errored before reaching it) — reported the
@@ -1314,17 +1350,24 @@ renderExamplesGo env [] i (ex :: rest) =
 -- this example against `env` — BEFORE forcing — catches exactly that failure
 -- as a normal per-example `Errored`, the same shape #55 already uses for a
 -- synth decl that failed to parse.
+--
+-- An example the typechecker reported an error on ([diags], `exampleDiagLines`) is
+-- that error, never forced: its binding may carry an unrouted dictionary.
 renderOneExample : List (String, Value e) ->
+  OrdMap String ->
   Result String (List Decl) ->
   Int ->
   Example ->
   <e> Result String String
-renderOneExample env sr i ex = match lookupBinding (synthName i) env
-  None => Err ("could not evaluate: " ++ exampleInput ex)
-  Some v => match firstUnresolvedDottedRef env sr
-    Some name =>
-      Err "could not evaluate: \{exampleInput ex} (unresolved: \{name})"
-    None => Ok (ppValue (force v))
+renderOneExample env diags sr i ex =
+  match omLookup (intToString (exampleLine ex)) diags
+    Some msg => Err "could not evaluate: \{exampleInput ex}: \{msg}"
+    None => match lookupBinding (synthName i) env
+      None => Err ("could not evaluate: " ++ exampleInput ex)
+      Some v => match firstUnresolvedDottedRef env sr
+        Some name =>
+          Err "could not evaluate: \{exampleInput ex} (unresolved: \{name})"
+        None => Ok (ppValue (force v))
 
 firstUnresolvedDottedRef : List (String, Value e) ->
   Result String (List Decl) ->
@@ -4192,7 +4235,7 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedE" false) (mem "modIdToPath" false) (mem "loadErrorMessage" false) (mem "LoadError" true) (mem "entrySearchRoots" false) (mem "canonicalPathId" false) (mem "readDeps" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "readSource" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeFile" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "elaborateOne" false) (mem "elaborateModules" false) (mem "TcDiag" true) (mem "tcDiagGoalKey" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModules" false) (mem "TcDiag" true) (mem "tcDiagGoalKey" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "withEvidencePreserved" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false))))
@@ -4276,10 +4319,14 @@ testFilesReport _ _ acc = acc
 (DFunDef false "elaborateFor" ((PVar "rsrc") (PVar "csrc") (PVar "_target") (PVar "_roots") (PVar "mods") (PVar "exempt") (PCon "False") PWild) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "rawModules") (EApp (EVar "desugaredModPairs") (EVar "mods"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "elaborateModules") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rawModules")) (arm (PTuple (PVar "coreE") (PVar "modulesE") (PVar "perModule") PWild PWild PWild) () (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "gateOfPerModule") (EVar "exempt")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "mods")) (EVar "perModule")) (EApp (EVar "PreparedPair") (EApp (EApp (EApp (EApp (EVar "uncurryPair") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rawModules")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE")))))))))))
 (DFunDef false "elaborateFor" ((PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "roots") (PVar "mods") (PVar "exempt") (PCon "True") (PVar "synthDecls")) (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "gateOfCheck") (EVar "exempt")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "roots")) (EVar "mods")) (EApp (EApp (EVar "PreparedInject") (EVar "mods")) (EVar "synthDecls"))))
 (DTypeSig false "forcePrepared" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Prepared") (TyEffect ("IO") None (TyCon "TestPair"))))))
-(DFunDef false "forcePrepared" (PWild PWild (PCon "PreparedPair" (PVar "pair"))) (EVar "pair"))
+(DFunDef false "forcePrepared" (PWild PWild (PCon "PreparedPair" (PVar "pair"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "injectedExampleDiags")) (EVar "omEmpty"))) (DoExpr (EVar "pair"))))
 (DFunDef false "forcePrepared" ((PVar "rsrc") (PVar "csrc") (PCon "PreparedInject" (PVar "mods") (PVar "synthDecls"))) (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-elab"))) (ELit (LString "injected"))) (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "forceInjected") (EVar "rsrc")) (EVar "csrc")) (EVar "mods")) (EVar "synthDecls")))))
+(DTypeSig false "injectedExampleDiags" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "String"))))
+(DFunDef false "injectedExampleDiags" () (EApp (EVar "Ref") (EVar "omEmpty")))
+(DTypeSig false "exampleDiagLines" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "OrdMap") (TyCon "String"))))
+(DFunDef false "exampleDiagLines" ((PVar "perMod")) (EMatch (EApp (EVar "reverseL") (EVar "perMod")) (arm (PCons (PTuple PWild (PTuple (PVar "errs") PWild)) PWild) () (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "d")) (EMatch (EVar "d") (arm (PCon "TcDiag" PWild PWild (PCon "Some" (PCon "Loc" PWild (PVar "line") PWild PWild PWild)) (PVar "msg") PWild PWild) () (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EVar "line"))) (EVar "acc")) (EVar "acc") (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EVar "line"))) (EVar "msg")) (EVar "acc")))) (arm PWild () (EVar "acc"))))) (EVar "omEmpty")) (EVar "errs"))) (arm (PList) () (EVar "omEmpty"))))
 (DTypeSig false "forceInjected" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "TestPair")))))))
-(DFunDef false "forceInjected" ((PVar "rsrc") (PVar "csrc") (PVar "mods") (PVar "synthDecls")) (EBlock (DoLet false false (PVar "injected") (EApp (EApp (EVar "injectIntoLast") (EVar "synthDecls")) (EApp (EVar "desugaredModPairs") (EVar "mods")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "elaborateModules") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "injected")) (arm (PTuple (PVar "coreE") (PVar "modulesE") PWild PWild PWild PWild) () (EApp (EApp (EApp (EApp (EVar "uncurryPair") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "injected")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE")))))))))
+(DFunDef false "forceInjected" ((PVar "rsrc") (PVar "csrc") (PVar "mods") (PVar "synthDecls")) (EBlock (DoLet false false (PVar "injected") (EApp (EApp (EVar "injectIntoLast") (EVar "synthDecls")) (EApp (EVar "desugaredModPairs") (EVar "mods")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "elaborateModules") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "injected")) (arm (PTuple (PVar "coreE") (PVar "modulesE") (PVar "perModule") PWild PWild PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "injectedExampleDiags")) (EApp (EVar "exampleDiagLines") (EVar "perModule")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "uncurryPair") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "injected")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE")))))))))))
 (DTypeSig false "gateOfCheck" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
 (DFunDef false "gateOfCheck" ((PCon "True") PWild PWild PWild PWild PWild) (EVar "None"))
 (DFunDef false "gateOfCheck" ((PCon "False") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "roots") (PVar "mods")) (EApp (EVar "renderGate") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectDiagsLoaded") (EVar "noStdlibExports")) (EVar "True")) (EListLit)) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))) (EApp (EApp (EVar "chainKeyOf") (EVar "target")) (EVar "roots"))) (EVar "mods"))))
@@ -4325,16 +4372,16 @@ testFilesReport _ _ acc = acc
 (DFunDef false "runChosenOn" ((PCon "EngNative") (PVar "_trees") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "examples") (PVar "synthResults")) (EApp (EApp (EApp (EApp (EApp (EVar "runNativeDoctests") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "examples")) (EVar "synthResults")))
 (DTypeSig false "runChosen" (TyFun (TyCon "DoctestTrees") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "RunResult"))))))
 (DFunDef false "runChosen" ((PCon "DtPair" (PCon "TestPairErr" (PVar "e"))) (PVar "examples") (PVar "synthResults")) (EApp (EApp (EApp (EVar "buildDetailsFrom") (EApp (EVar "Err") (EVar "e"))) (EVar "synthResults")) (EVar "examples")))
-(DFunDef false "runChosen" ((PCon "DtPair" (PCon "TestPair" (PVar "_runtimeM") (PVar "_rawCoreM") (PVar "coreM") (PVar "_rawM") (PVar "modsM"))) (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (DoExpr (EApp (EApp (EApp (EVar "buildDetailsFrom") (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "renderExamples") (EVar "env")) (EVar "synthResults")) (EVar "examples")))) (EVar "synthResults")) (EVar "examples")))))
-(DFunDef false "runChosen" ((PCon "DtSingle" (PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PVar "allUser") (EBinOp "++" (EVar "userDecls") (EApp (EVar "buildSynthDecls") (EVar "synthResults")))) (DoLet false false (PVar "livePrelude") (EIf (EApp (EVar "programIsCore") (EVar "userDecls")) (EListLit) (EApp (EApp (EVar "dropShadowedExp") (EApp (EVar "funNamesOf") (EVar "allUser"))) (EVar "coreDecls")))) (DoLet false false (PVar "rootId") (EApp (EApp (EVar "singleRootId") (EVar "roots")) (EVar "target"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EListLit (ETuple (ELit (LString "__main__")) (EVar "target"))))) (DoLet false false (PVar "elaborated") (EApp (EApp (EApp (EVar "elaborateOne") (EVar "runtimeDecls")) (EVar "livePrelude")) (ETuple (EVar "rootId") (EVar "allUser")))) (DoLet false false (PVar "env") (EApp (EApp (EApp (EVar "evalOneRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EListLit)) (ETuple (ELit (LString "__main__")) (EVar "elaborated")))) (DoExpr (EApp (EApp (EApp (EVar "buildDetailsFrom") (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "renderExamples") (EVar "env")) (EVar "synthResults")) (EVar "examples")))) (EVar "synthResults")) (EVar "examples")))))
-(DTypeSig false "renderExamples" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))))
-(DFunDef false "renderExamples" ((PVar "env") (PVar "synthResults") (PVar "examples")) (EApp (EApp (EApp (EApp (EVar "renderExamplesGo") (EVar "env")) (EVar "synthResults")) (ELit (LInt 0))) (EVar "examples")))
-(DTypeSig false "renderExamplesGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))))
-(DFunDef false "renderExamplesGo" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "renderExamplesGo" ((PVar "env") (PCons (PVar "sr") (PVar "srRest")) (PVar "i") (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "renderOneExample") (EVar "env")) (EVar "sr")) (EVar "i")) (EVar "ex")) (EApp (EApp (EApp (EApp (EVar "renderExamplesGo") (EVar "env")) (EVar "srRest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
-(DFunDef false "renderExamplesGo" ((PVar "env") (PList) (PVar "i") (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "renderOneExample") (EVar "env")) (EApp (EVar "Err") (ELit (LString "")))) (EVar "i")) (EVar "ex")) (EApp (EApp (EApp (EApp (EVar "renderExamplesGo") (EVar "env")) (EListLit)) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
-(DTypeSig false "renderOneExample" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))))
-(DFunDef false "renderOneExample" ((PVar "env") (PVar "sr") (PVar "i") (PVar "ex")) (EMatch (EApp (EApp (EVar "lookupBinding") (EApp (EVar "synthName") (EVar "i"))) (EVar "env")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EVar "exampleInput") (EVar "ex"))))) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EApp (EVar "firstUnresolvedDottedRef") (EVar "env")) (EVar "sr")) (arm (PCon "Some" (PVar "name")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString " (unresolved: "))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ")"))))) (arm (PCon "None") () (EApp (EVar "Ok") (EApp (EVar "ppValue") (EApp (EVar "force") (EVar "v")))))))))
+(DFunDef false "runChosen" ((PCon "DtPair" (PCon "TestPair" (PVar "_runtimeM") (PVar "_rawCoreM") (PVar "coreM") (PVar "_rawM") (PVar "modsM"))) (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (DoExpr (EApp (EApp (EApp (EVar "buildDetailsFrom") (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EVar "renderExamples") (EVar "env")) (EFieldAccess (EVar "injectedExampleDiags") "value")) (EVar "synthResults")) (EVar "examples")))) (EVar "synthResults")) (EVar "examples")))))
+(DFunDef false "runChosen" ((PCon "DtSingle" (PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PVar "allUser") (EBinOp "++" (EVar "userDecls") (EApp (EVar "buildSynthDecls") (EVar "synthResults")))) (DoLet false false (PVar "livePrelude") (EIf (EApp (EVar "programIsCore") (EVar "userDecls")) (EListLit) (EApp (EApp (EVar "dropShadowedExp") (EApp (EVar "funNamesOf") (EVar "allUser"))) (EVar "coreDecls")))) (DoLet false false (PVar "rootId") (EApp (EApp (EVar "singleRootId") (EVar "roots")) (EVar "target"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EListLit (ETuple (ELit (LString "__main__")) (EVar "target"))))) (DoLet false false (PTuple (PVar "coreE") (PVar "modulesE") (PVar "perModule") PWild PWild PWild) (EApp (EApp (EApp (EVar "elaborateModules") (EVar "runtimeDecls")) (EVar "livePrelude")) (EListLit (ETuple (EVar "rootId") (EVar "allUser"))))) (DoLet false false (PVar "elaborated") (EBinOp "++" (EVar "coreE") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modulesE")))) (DoLet false false (PVar "env") (EApp (EApp (EApp (EVar "evalOneRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EListLit)) (ETuple (ELit (LString "__main__")) (EVar "elaborated")))) (DoExpr (EApp (EApp (EApp (EVar "buildDetailsFrom") (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EVar "renderExamples") (EVar "env")) (EApp (EVar "exampleDiagLines") (EVar "perModule"))) (EVar "synthResults")) (EVar "examples")))) (EVar "synthResults")) (EVar "examples")))))
+(DTypeSig false "renderExamples" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))))
+(DFunDef false "renderExamples" ((PVar "env") (PVar "diags") (PVar "synthResults") (PVar "examples")) (EApp (EApp (EApp (EApp (EApp (EVar "renderExamplesGo") (EVar "env")) (EVar "diags")) (EVar "synthResults")) (ELit (LInt 0))) (EVar "examples")))
+(DTypeSig false "renderExamplesGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))))))
+(DFunDef false "renderExamplesGo" (PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "renderExamplesGo" ((PVar "env") (PVar "diags") (PCons (PVar "sr") (PVar "srRest")) (PVar "i") (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "renderOneExample") (EVar "env")) (EVar "diags")) (EVar "sr")) (EVar "i")) (EVar "ex")) (EApp (EApp (EApp (EApp (EApp (EVar "renderExamplesGo") (EVar "env")) (EVar "diags")) (EVar "srRest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DFunDef false "renderExamplesGo" ((PVar "env") (PVar "diags") (PList) (PVar "i") (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "renderOneExample") (EVar "env")) (EVar "diags")) (EApp (EVar "Err") (ELit (LString "")))) (EVar "i")) (EVar "ex")) (EApp (EApp (EApp (EApp (EApp (EVar "renderExamplesGo") (EVar "env")) (EVar "diags")) (EListLit)) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DTypeSig false "renderOneExample" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))))
+(DFunDef false "renderOneExample" ((PVar "env") (PVar "diags") (PVar "sr") (PVar "i") (PVar "ex")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "intToString") (EApp (EVar "exampleLine") (EVar "ex")))) (EVar "diags")) (arm (PCon "Some" (PVar "msg")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupBinding") (EApp (EVar "synthName") (EVar "i"))) (EVar "env")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EVar "exampleInput") (EVar "ex"))))) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EApp (EVar "firstUnresolvedDottedRef") (EVar "env")) (EVar "sr")) (arm (PCon "Some" (PVar "name")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString " (unresolved: "))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ")"))))) (arm (PCon "None") () (EApp (EVar "Ok") (EApp (EVar "ppValue") (EApp (EVar "force") (EVar "v")))))))))))
 (DTypeSig false "firstUnresolvedDottedRef" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "firstUnresolvedDottedRef" (PWild (PCon "Err" PWild)) (EVar "None"))
 (DFunDef false "firstUnresolvedDottedRef" ((PVar "env") (PCon "Ok" (PVar "ds"))) (EApp (EApp (EVar "firstUnresolvedName") (EVar "env")) (EApp (EApp (EVar "flatMap") (EVar "declRefs")) (EVar "ds"))))
@@ -4807,7 +4854,7 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedE" false) (mem "modIdToPath" false) (mem "loadErrorMessage" false) (mem "LoadError" true) (mem "entrySearchRoots" false) (mem "canonicalPathId" false) (mem "readDeps" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "readSource" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "readPreludeFile" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "elaborateOne" false) (mem "elaborateModules" false) (mem "TcDiag" true) (mem "tcDiagGoalKey" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModules" false) (mem "TcDiag" true) (mem "tcDiagGoalKey" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "withEvidencePreserved" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false))))
@@ -4891,10 +4938,14 @@ testFilesReport _ _ acc = acc
 (DFunDef false "elaborateFor" ((PVar "rsrc") (PVar "csrc") (PVar "_target") (PVar "_roots") (PVar "mods") (PVar "exempt") (PCon "False") PWild) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "rawModules") (EApp (EVar "desugaredModPairs") (EVar "mods"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "elaborateModules") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rawModules")) (arm (PTuple (PVar "coreE") (PVar "modulesE") (PVar "perModule") PWild PWild PWild) () (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "gateOfPerModule") (EVar "exempt")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "mods")) (EVar "perModule")) (EApp (EVar "PreparedPair") (EApp (EApp (EApp (EApp (EVar "uncurryPair") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rawModules")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE")))))))))))
 (DFunDef false "elaborateFor" ((PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "roots") (PVar "mods") (PVar "exempt") (PCon "True") (PVar "synthDecls")) (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "gateOfCheck") (EVar "exempt")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "roots")) (EVar "mods")) (EApp (EApp (EVar "PreparedInject") (EVar "mods")) (EVar "synthDecls"))))
 (DTypeSig false "forcePrepared" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Prepared") (TyEffect ("IO") None (TyCon "TestPair"))))))
-(DFunDef false "forcePrepared" (PWild PWild (PCon "PreparedPair" (PVar "pair"))) (EVar "pair"))
+(DFunDef false "forcePrepared" (PWild PWild (PCon "PreparedPair" (PVar "pair"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "injectedExampleDiags")) (EVar "omEmpty"))) (DoExpr (EVar "pair"))))
 (DFunDef false "forcePrepared" ((PVar "rsrc") (PVar "csrc") (PCon "PreparedInject" (PVar "mods") (PVar "synthDecls"))) (EApp (EApp (EApp (EVar "perfRow") (ELit (LString "test-elab"))) (ELit (LString "injected"))) (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "forceInjected") (EVar "rsrc")) (EVar "csrc")) (EVar "mods")) (EVar "synthDecls")))))
+(DTypeSig false "injectedExampleDiags" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "String"))))
+(DFunDef false "injectedExampleDiags" () (EApp (EVar "Ref") (EVar "omEmpty")))
+(DTypeSig false "exampleDiagLines" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "OrdMap") (TyCon "String"))))
+(DFunDef false "exampleDiagLines" ((PVar "perMod")) (EMatch (EApp (EVar "reverseL") (EVar "perMod")) (arm (PCons (PTuple PWild (PTuple (PVar "errs") PWild)) PWild) () (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "d")) (EMatch (EVar "d") (arm (PCon "TcDiag" PWild PWild (PCon "Some" (PCon "Loc" PWild (PVar "line") PWild PWild PWild)) (PVar "msg") PWild PWild) () (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EVar "line"))) (EVar "acc")) (EVar "acc") (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EVar "line"))) (EVar "msg")) (EVar "acc")))) (arm PWild () (EVar "acc"))))) (EVar "omEmpty")) (EVar "errs"))) (arm (PList) () (EVar "omEmpty"))))
 (DTypeSig false "forceInjected" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "TestPair")))))))
-(DFunDef false "forceInjected" ((PVar "rsrc") (PVar "csrc") (PVar "mods") (PVar "synthDecls")) (EBlock (DoLet false false (PVar "injected") (EApp (EApp (EVar "injectIntoLast") (EVar "synthDecls")) (EApp (EVar "desugaredModPairs") (EVar "mods")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "elaborateModules") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "injected")) (arm (PTuple (PVar "coreE") (PVar "modulesE") PWild PWild PWild PWild) () (EApp (EApp (EApp (EApp (EVar "uncurryPair") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "injected")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE")))))))))
+(DFunDef false "forceInjected" ((PVar "rsrc") (PVar "csrc") (PVar "mods") (PVar "synthDecls")) (EBlock (DoLet false false (PVar "injected") (EApp (EApp (EVar "injectIntoLast") (EVar "synthDecls")) (EApp (EVar "desugaredModPairs") (EVar "mods")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "elaborateModules") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "injected")) (arm (PTuple (PVar "coreE") (PVar "modulesE") (PVar "perModule") PWild PWild PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "injectedExampleDiags")) (EApp (EVar "exampleDiagLines") (EVar "perModule")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "uncurryPair") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EVar "injected")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE")))))))))))
 (DTypeSig false "gateOfCheck" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
 (DFunDef false "gateOfCheck" ((PCon "True") PWild PWild PWild PWild PWild) (EVar "None"))
 (DFunDef false "gateOfCheck" ((PCon "False") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "roots") (PVar "mods")) (EApp (EVar "renderGate") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectDiagsLoaded") (EVar "noStdlibExports")) (EVar "True")) (EListLit)) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))) (EApp (EApp (EVar "chainKeyOf") (EVar "target")) (EVar "roots"))) (EVar "mods"))))
@@ -4940,16 +4991,16 @@ testFilesReport _ _ acc = acc
 (DFunDef false "runChosenOn" ((PCon "EngNative") (PVar "_trees") (PVar "target") (PVar "tsrc") (PVar "userDecls") (PVar "examples") (PVar "synthResults")) (EApp (EApp (EApp (EApp (EApp (EVar "runNativeDoctests") (EVar "target")) (EVar "tsrc")) (EVar "userDecls")) (EVar "examples")) (EVar "synthResults")))
 (DTypeSig false "runChosen" (TyFun (TyCon "DoctestTrees") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "RunResult"))))))
 (DFunDef false "runChosen" ((PCon "DtPair" (PCon "TestPairErr" (PVar "e"))) (PVar "examples") (PVar "synthResults")) (EApp (EApp (EApp (EVar "buildDetailsFrom") (EApp (EVar "Err") (EVar "e"))) (EVar "synthResults")) (EVar "examples")))
-(DFunDef false "runChosen" ((PCon "DtPair" (PCon "TestPair" (PVar "_runtimeM") (PVar "_rawCoreM") (PVar "coreM") (PVar "_rawM") (PVar "modsM"))) (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (DoExpr (EApp (EApp (EApp (EVar "buildDetailsFrom") (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "renderExamples") (EVar "env")) (EVar "synthResults")) (EVar "examples")))) (EVar "synthResults")) (EVar "examples")))))
-(DFunDef false "runChosen" ((PCon "DtSingle" (PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PVar "allUser") (EBinOp "++" (EVar "userDecls") (EApp (EVar "buildSynthDecls") (EVar "synthResults")))) (DoLet false false (PVar "livePrelude") (EIf (EApp (EVar "programIsCore") (EVar "userDecls")) (EListLit) (EApp (EApp (EVar "dropShadowedExp") (EApp (EVar "funNamesOf") (EVar "allUser"))) (EVar "coreDecls")))) (DoLet false false (PVar "rootId") (EApp (EApp (EVar "singleRootId") (EVar "roots")) (EVar "target"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EListLit (ETuple (ELit (LString "__main__")) (EVar "target"))))) (DoLet false false (PVar "elaborated") (EApp (EApp (EApp (EVar "elaborateOne") (EVar "runtimeDecls")) (EVar "livePrelude")) (ETuple (EVar "rootId") (EVar "allUser")))) (DoLet false false (PVar "env") (EApp (EApp (EApp (EVar "evalOneRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EListLit)) (ETuple (ELit (LString "__main__")) (EVar "elaborated")))) (DoExpr (EApp (EApp (EApp (EVar "buildDetailsFrom") (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "renderExamples") (EVar "env")) (EVar "synthResults")) (EVar "examples")))) (EVar "synthResults")) (EVar "examples")))))
-(DTypeSig false "renderExamples" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))))
-(DFunDef false "renderExamples" ((PVar "env") (PVar "synthResults") (PVar "examples")) (EApp (EApp (EApp (EApp (EVar "renderExamplesGo") (EVar "env")) (EVar "synthResults")) (ELit (LInt 0))) (EVar "examples")))
-(DTypeSig false "renderExamplesGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))))
-(DFunDef false "renderExamplesGo" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "renderExamplesGo" ((PVar "env") (PCons (PVar "sr") (PVar "srRest")) (PVar "i") (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "renderOneExample") (EVar "env")) (EVar "sr")) (EVar "i")) (EVar "ex")) (EApp (EApp (EApp (EApp (EVar "renderExamplesGo") (EVar "env")) (EVar "srRest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
-(DFunDef false "renderExamplesGo" ((PVar "env") (PList) (PVar "i") (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "renderOneExample") (EVar "env")) (EApp (EVar "Err") (ELit (LString "")))) (EVar "i")) (EVar "ex")) (EApp (EApp (EApp (EApp (EVar "renderExamplesGo") (EVar "env")) (EListLit)) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
-(DTypeSig false "renderOneExample" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))))
-(DFunDef false "renderOneExample" ((PVar "env") (PVar "sr") (PVar "i") (PVar "ex")) (EMatch (EApp (EApp (EVar "lookupBinding") (EApp (EVar "synthName") (EVar "i"))) (EVar "env")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EVar "exampleInput") (EVar "ex"))))) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EApp (EVar "firstUnresolvedDottedRef") (EVar "env")) (EVar "sr")) (arm (PCon "Some" (PVar "name")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString " (unresolved: "))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ")"))))) (arm (PCon "None") () (EApp (EVar "Ok") (EApp (EVar "ppValue") (EApp (EVar "force") (EVar "v")))))))))
+(DFunDef false "runChosen" ((PCon "DtPair" (PCon "TestPair" (PVar "_runtimeM") (PVar "_rawCoreM") (PVar "coreM") (PVar "_rawM") (PVar "modsM"))) (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (EVar "modsM"))) (DoExpr (EApp (EApp (EApp (EVar "buildDetailsFrom") (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EVar "renderExamples") (EVar "env")) (EFieldAccess (EVar "injectedExampleDiags") "value")) (EVar "synthResults")) (EVar "examples")))) (EVar "synthResults")) (EVar "examples")))))
+(DFunDef false "runChosen" ((PCon "DtSingle" (PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "roots") (PVar "userDecls")) (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PVar "allUser") (EBinOp "++" (EVar "userDecls") (EApp (EVar "buildSynthDecls") (EVar "synthResults")))) (DoLet false false (PVar "livePrelude") (EIf (EApp (EVar "programIsCore") (EVar "userDecls")) (EListLit) (EApp (EApp (EVar "dropShadowedExp") (EApp (EVar "funNamesOf") (EVar "allUser"))) (EVar "coreDecls")))) (DoLet false false (PVar "rootId") (EApp (EApp (EVar "singleRootId") (EVar "roots")) (EVar "target"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "modulePathMap")) (EListLit (ETuple (ELit (LString "__main__")) (EVar "target"))))) (DoLet false false (PTuple (PVar "coreE") (PVar "modulesE") (PVar "perModule") PWild PWild PWild) (EApp (EApp (EApp (EVar "elaborateModules") (EVar "runtimeDecls")) (EVar "livePrelude")) (EListLit (ETuple (EVar "rootId") (EVar "allUser"))))) (DoLet false false (PVar "elaborated") (EBinOp "++" (EVar "coreE") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modulesE")))) (DoLet false false (PVar "env") (EApp (EApp (EApp (EVar "evalOneRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EListLit)) (ETuple (ELit (LString "__main__")) (EVar "elaborated")))) (DoExpr (EApp (EApp (EApp (EVar "buildDetailsFrom") (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EVar "renderExamples") (EVar "env")) (EApp (EVar "exampleDiagLines") (EVar "perModule"))) (EVar "synthResults")) (EVar "examples")))) (EVar "synthResults")) (EVar "examples")))))
+(DTypeSig false "renderExamples" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))))
+(DFunDef false "renderExamples" ((PVar "env") (PVar "diags") (PVar "synthResults") (PVar "examples")) (EApp (EApp (EApp (EApp (EApp (EVar "renderExamplesGo") (EVar "env")) (EVar "diags")) (EVar "synthResults")) (ELit (LInt 0))) (EVar "examples")))
+(DTypeSig false "renderExamplesGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))))))
+(DFunDef false "renderExamplesGo" (PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "renderExamplesGo" ((PVar "env") (PVar "diags") (PCons (PVar "sr") (PVar "srRest")) (PVar "i") (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "renderOneExample") (EVar "env")) (EVar "diags")) (EVar "sr")) (EVar "i")) (EVar "ex")) (EApp (EApp (EApp (EApp (EApp (EVar "renderExamplesGo") (EVar "env")) (EVar "diags")) (EVar "srRest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DFunDef false "renderExamplesGo" ((PVar "env") (PVar "diags") (PList) (PVar "i") (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "renderOneExample") (EVar "env")) (EVar "diags")) (EApp (EVar "Err") (ELit (LString "")))) (EVar "i")) (EVar "ex")) (EApp (EApp (EApp (EApp (EApp (EVar "renderExamplesGo") (EVar "env")) (EVar "diags")) (EListLit)) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DTypeSig false "renderOneExample" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))))
+(DFunDef false "renderOneExample" ((PVar "env") (PVar "diags") (PVar "sr") (PVar "i") (PVar "ex")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "intToString") (EApp (EVar "exampleLine") (EVar "ex")))) (EVar "diags")) (arm (PCon "Some" (PVar "msg")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupBinding") (EApp (EVar "synthName") (EVar "i"))) (EVar "env")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EVar "exampleInput") (EVar "ex"))))) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EApp (EVar "firstUnresolvedDottedRef") (EVar "env")) (EVar "sr")) (arm (PCon "Some" (PVar "name")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString " (unresolved: "))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ")"))))) (arm (PCon "None") () (EApp (EVar "Ok") (EApp (EVar "ppValue") (EApp (EVar "force") (EVar "v")))))))))))
 (DTypeSig false "firstUnresolvedDottedRef" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "firstUnresolvedDottedRef" (PWild (PCon "Err" PWild)) (EVar "None"))
 (DFunDef false "firstUnresolvedDottedRef" ((PVar "env") (PCon "Ok" (PVar "ds"))) (EApp (EApp (EVar "firstUnresolvedName") (EVar "env")) (EApp (EApp (EDictApp "flatMap") (EVar "declRefs")) (EVar "ds"))))
