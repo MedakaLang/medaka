@@ -110,7 +110,7 @@ import ir.core_ir_lower.{
 }
 import ir.core_ir_sexp.{callModeSexp}
 import frontend.ast.{
-  Pat(..), Route(..), Decl(..), Ty(..), Lit(..), BinderId(..)
+  Pat(..), Route(..), Decl(..), ExternDecl(..), Ty(..), Lit(..), BinderId(..)
 }
 import types.target_profile.{TargetProfile, withheldLabels, profileName}
 import backend.extern_catalog.{
@@ -570,7 +570,7 @@ checkedTarget = Ref None
 export
 externLabels : List Decl -> List (String, List String)
 externLabels [] = []
-externLabels ((DExtern _ n ty) :: rest) =
+externLabels ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest) =
   (n, resultLabels ty) :: externLabels rest
 externLabels ((DAttrib _ d) :: rest) = externLabels (d :: rest)
 externLabels (_ :: rest) = externLabels rest

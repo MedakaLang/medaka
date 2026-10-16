@@ -77,6 +77,7 @@ import frontend.ast.{
   ConPayload(..),
   Variant(..),
   Decl(..),
+  ExternDecl(..),
   Attr(..),
   Route(..),
 }
@@ -3139,11 +3140,20 @@ parseExternFor pub TData = defer
   d <- externDataEnd pub name ps t
   deferPure (setDeclNameLoc nameLoc d)
 parseExternFor pub _ = defer
+  s <- getPos
   name <- externName
   expectTok TColon
   ty <- parseTy
+  e <- getPos
   skipNewlines
-  deferPure (DExtern pub name ty)
+  deferPure
+    (DExtern ExternDecl {
+      edPub = pub,
+      edName = name,
+      edTy = ty,
+      edLoc = locOfSpan s e,
+      edBinds = [],
+    })
 
 -- An extern type has no body: its values come from externs, so a
 -- constructor list or a derived instance has nothing to describe.
@@ -5217,7 +5227,7 @@ declNameTokIdxAt toks (DAttrib _ inner) i =
   declNameTokIdx toks inner i3
 declNameTokIdxAt toks (DTypeSig _ _ _ _) i = tokIdxOrNone toks i
 declNameTokIdxAt toks (DFunDef _ _ _ _ _ _) i = tokIdxOrNone toks i
-declNameTokIdxAt toks (DExtern _ _ _) i =
+declNameTokIdxAt toks (DExtern _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
 declNameTokIdxAt toks (DData { dataOrigin = _ }) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))

@@ -105,7 +105,8 @@ import args.{
   withStrictDash,
 }
 import frontend.ast.{
-  letBindName, Decl(..), Expr(..), Loc(..), Pat, LetBind(..), EvTable
+  letBindName, Decl(..), ExternDecl(..), Expr(..), Loc(..), Pat, LetBind(..),
+  EvTable
 }
 import frontend.parser.{
   parseLocated,
@@ -1792,7 +1793,8 @@ topLevelNames [] = []
 topLevelNames ((DAttrib _ d) :: rest) = topLevelNames [d] ++ topLevelNames rest
 topLevelNames ((DFunDef _ n _ _ _ _) :: rest) = n :: topLevelNames rest
 topLevelNames ((DTypeSig _ n _ _) :: rest) = n :: topLevelNames rest
-topLevelNames ((DExtern _ n _) :: rest) = n :: topLevelNames rest
+topLevelNames ((DExtern (ExternDecl { edName = n, ... })) :: rest) =
+  n :: topLevelNames rest
 topLevelNames ((DLetGroup _ binds) :: rest) =
   map letBindName binds ++ topLevelNames rest
 topLevelNames (_ :: rest) = topLevelNames rest

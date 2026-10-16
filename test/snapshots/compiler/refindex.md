@@ -1,5 +1,5 @@
 # META
-source_lines=1892
+source_lines=1894
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/refindex.mdk — cross-file reference index (#254 Stage 0).
@@ -88,6 +88,7 @@ import frontend.ast.{
   ConPayload(..),
   Variant(..),
   Decl(..),
+  ExternDecl(..),
 }
 import frontend.parser.{
   parseWithPositionsOpt,
@@ -814,7 +815,7 @@ collectExpValGo ctx s ((DTypeSig True n _ _) :: rest) =
 collectExpValGo ctx s ((DFunDef True n _ _ _ _) :: rest) =
   let _ = hmSetC ctx s n ()
   collectExpValGo ctx s rest
-collectExpValGo ctx s ((DExtern True n _) :: rest) =
+collectExpValGo ctx s ((DExtern (ExternDecl { edPub = True, edName = n, ... })) :: rest) =
   let _ = hmSetC ctx s n ()
   collectExpValGo ctx s rest
 collectExpValGo ctx s ((DLetGroup True binds) :: rest) =
@@ -860,7 +861,7 @@ defsOfDecl ctx expSet mid uri (DFunDef pub n _ _ _ _) loc _ = [
     uri
     (DefEntry nsVal n (mkKey mid nsVal n) loc (valuePub ctx expSet pub n)),
 ]
-defsOfDecl ctx expSet mid uri (DExtern pub n _) loc _ = [
+defsOfDecl ctx expSet mid uri (DExtern (ExternDecl { edPub = pub, edName = n, ... })) loc _ = [
   emitDef
     ctx
     uri
@@ -1103,7 +1104,7 @@ walkDeclBody w (DFunDef _ _ pats body _ _) loc =
   let frame = mkNamedFrame w (flatMap (patBinders loc) pats)
   walkExpr w [frame] loc body
 walkDeclBody w (DTypeSig _ _ ty _) loc = walkTy w loc ty
-walkDeclBody w (DExtern _ _ ty) loc = walkTy w loc ty
+walkDeclBody w (DExtern (ExternDecl { edTy = ty, ... })) loc = walkTy w loc ty
 walkDeclBody w (DData { dataCtors = variants }) loc =
   walkVariants w loc variants
 walkDeclBody w (DNewtype { newtypeFieldTy = fieldTy }) loc =
@@ -1398,7 +1399,8 @@ preludeDefsOfDecl : HashMap String Unit ->
   Decl ->
   List (String, String, String)
 preludeDefsOfDecl expSet mid (DFunDef pub n _ _ _ _) = valEntry expSet mid pub n
-preludeDefsOfDecl expSet mid (DExtern pub n _) = valEntry expSet mid pub n
+preludeDefsOfDecl expSet mid (DExtern (ExternDecl { edPub = pub, edName = n, ... })) =
+  valEntry expSet mid pub n
 preludeDefsOfDecl _ mid (DData { dataVis = vis, dataName = n, dataCtors = variants }) =
   consIf
     (dataIsPub vis)
@@ -1895,7 +1897,7 @@ splitLastL [] = None
 splitLastL [x] = Some ([], x)
 splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "variantName" false) (mem "Loc" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "variantName" false) (mem "Loc" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "Positions" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedCached" false) (mem "moduleIdOfPath" false) (mem "importModId" false))))
 (DUse false (UseGroup ("support" "util") ((mem "zipL" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitOnChar" false))))
@@ -2118,7 +2120,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "collectExpValGo" (PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "collectExpValGo" ((PVar "ctx") (PVar "s") (PCons (PCon "DTypeSig" (PCon "True") (PVar "n") PWild PWild) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "hmSetC") (EVar "ctx")) (EVar "s")) (EVar "n")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "collectExpValGo") (EVar "ctx")) (EVar "s")) (EVar "rest")))))
 (DFunDef false "collectExpValGo" ((PVar "ctx") (PVar "s") (PCons (PCon "DFunDef" (PCon "True") (PVar "n") PWild PWild PWild PWild) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "hmSetC") (EVar "ctx")) (EVar "s")) (EVar "n")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "collectExpValGo") (EVar "ctx")) (EVar "s")) (EVar "rest")))))
-(DFunDef false "collectExpValGo" ((PVar "ctx") (PVar "s") (PCons (PCon "DExtern" (PCon "True") (PVar "n") PWild) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "hmSetC") (EVar "ctx")) (EVar "s")) (EVar "n")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "collectExpValGo") (EVar "ctx")) (EVar "s")) (EVar "rest")))))
+(DFunDef false "collectExpValGo" ((PVar "ctx") (PVar "s") (PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PCon "True")) (rf "edName" (PVar "n"))) true)) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "hmSetC") (EVar "ctx")) (EVar "s")) (EVar "n")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "collectExpValGo") (EVar "ctx")) (EVar "s")) (EVar "rest")))))
 (DFunDef false "collectExpValGo" ((PVar "ctx") (PVar "s") (PCons (PCon "DLetGroup" (PCon "True") (PVar "binds")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "collectLetNames") (EVar "ctx")) (EVar "s")) (EVar "binds"))) (DoExpr (EApp (EApp (EApp (EVar "collectExpValGo") (EVar "ctx")) (EVar "s")) (EVar "rest")))))
 (DFunDef false "collectExpValGo" ((PVar "ctx") (PVar "s") (PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EApp (EApp (EApp (EVar "collectExpValGo") (EVar "ctx")) (EVar "s")) (EBinOp "::" (EVar "inner") (EVar "rest"))))
 (DFunDef false "collectExpValGo" ((PVar "ctx") (PVar "s") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "collectExpValGo") (EVar "ctx")) (EVar "s")) (EVar "rest")))
@@ -2129,7 +2131,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "nameLocOf" ((PVar "uri") (PVar "p")) (EMatch (EApp (EVar "declPosNameLoc") (EVar "p")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "withUri") (EVar "uri")) (EVar "l"))) (arm (PCon "None") () (EApp (EVar "dummyLoc") (EVar "uri")))))
 (DTypeSig false "defsOfDecl" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyFun (TyCon "Loc") (TyFun (TyCon "DeclPos") (TyApp (TyCon "List") (TyCon "DefEntry"))))))))))
 (DFunDef false "defsOfDecl" ((PVar "ctx") (PVar "expSet") (PVar "mid") (PVar "uri") (PCon "DFunDef" (PVar "pub") (PVar "n") PWild PWild PWild PWild) (PVar "loc") PWild) (EListLit (EApp (EApp (EApp (EVar "emitDef") (EVar "ctx")) (EVar "uri")) (EApp (EApp (EApp (EApp (EApp (EVar "DefEntry") (EVar "nsVal")) (EVar "n")) (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsVal")) (EVar "n"))) (EVar "loc")) (EApp (EApp (EApp (EApp (EVar "valuePub") (EVar "ctx")) (EVar "expSet")) (EVar "pub")) (EVar "n"))))))
-(DFunDef false "defsOfDecl" ((PVar "ctx") (PVar "expSet") (PVar "mid") (PVar "uri") (PCon "DExtern" (PVar "pub") (PVar "n") PWild) (PVar "loc") PWild) (EListLit (EApp (EApp (EApp (EVar "emitDef") (EVar "ctx")) (EVar "uri")) (EApp (EApp (EApp (EApp (EApp (EVar "DefEntry") (EVar "nsVal")) (EVar "n")) (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsVal")) (EVar "n"))) (EVar "loc")) (EApp (EApp (EApp (EApp (EVar "valuePub") (EVar "ctx")) (EVar "expSet")) (EVar "pub")) (EVar "n"))))))
+(DFunDef false "defsOfDecl" ((PVar "ctx") (PVar "expSet") (PVar "mid") (PVar "uri") (PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PVar "pub")) (rf "edName" (PVar "n"))) true)) (PVar "loc") PWild) (EListLit (EApp (EApp (EApp (EVar "emitDef") (EVar "ctx")) (EVar "uri")) (EApp (EApp (EApp (EApp (EApp (EVar "DefEntry") (EVar "nsVal")) (EVar "n")) (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsVal")) (EVar "n"))) (EVar "loc")) (EApp (EApp (EApp (EApp (EVar "valuePub") (EVar "ctx")) (EVar "expSet")) (EVar "pub")) (EVar "n"))))))
 (DFunDef false "defsOfDecl" (PWild PWild PWild PWild (PCon "DTypeSig" PWild PWild PWild PWild) PWild PWild) (EListLit))
 (DFunDef false "defsOfDecl" ((PVar "ctx") (PVar "expSet") (PVar "mid") (PVar "uri") (PCon "DLetGroup" (PVar "pub") (PVar "binds")) (PVar "loc") PWild) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "letGroupDef") (EVar "ctx")) (EVar "expSet")) (EVar "mid")) (EVar "uri")) (EVar "loc")) (EVar "pub"))) (EVar "binds")))
 (DFunDef false "defsOfDecl" ((PVar "ctx") PWild (PVar "mid") (PVar "uri") (PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataCtors" (PVar "variants"))) false) (PVar "loc") PWild) (EBlock (DoLet false false (PVar "tyDef") (EApp (EApp (EApp (EVar "emitDef") (EVar "ctx")) (EVar "uri")) (EApp (EApp (EApp (EApp (EApp (EVar "DefEntry") (EVar "nsTy")) (EVar "n")) (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsTy")) (EVar "n"))) (EVar "loc")) (EApp (EVar "dataIsPub") (EVar "vis"))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "hmSetC") (EVar "ctx")) (EFieldAccess (EVar "ctx") "tyCtors")) (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsTy")) (EVar "n"))) (EApp (EApp (EVar "map") (EVar "variantName")) (EVar "variants")))) (DoExpr (EBinOp "::" (EVar "tyDef") (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EApp (EVar "variantDefs") (EVar "ctx")) (EVar "mid")) (EVar "uri")) (EVar "loc")) (EApp (EVar "ctorsPub") (EVar "vis")))) (EVar "variants"))))))
@@ -2195,7 +2197,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DTypeSig false "walkDeclBody" (TyFun (TyCon "W") (TyFun (TyCon "Decl") (TyFun (TyCon "Loc") (TyCon "Unit")))))
 (DFunDef false "walkDeclBody" ((PVar "w") (PCon "DFunDef" PWild PWild (PVar "pats") (PVar "body") PWild PWild) (PVar "loc")) (EBlock (DoLet false false (PVar "frame") (EApp (EApp (EVar "mkNamedFrame") (EVar "w")) (EApp (EApp (EVar "flatMap") (EApp (EVar "patBinders") (EVar "loc"))) (EVar "pats")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EListLit (EVar "frame"))) (EVar "loc")) (EVar "body")))))
 (DFunDef false "walkDeclBody" ((PVar "w") (PCon "DTypeSig" PWild PWild (PVar "ty") PWild) (PVar "loc")) (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "ty")))
-(DFunDef false "walkDeclBody" ((PVar "w") (PCon "DExtern" PWild PWild (PVar "ty")) (PVar "loc")) (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "ty")))
+(DFunDef false "walkDeclBody" ((PVar "w") (PCon "DExtern" (PRec "ExternDecl" ((rf "edTy" (PVar "ty"))) true)) (PVar "loc")) (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "ty")))
 (DFunDef false "walkDeclBody" ((PVar "w") (PRec "DData" ((rf "dataCtors" (PVar "variants"))) false) (PVar "loc")) (EApp (EApp (EApp (EVar "walkVariants") (EVar "w")) (EVar "loc")) (EVar "variants")))
 (DFunDef false "walkDeclBody" ((PVar "w") (PRec "DNewtype" ((rf "newtypeFieldTy" (PVar "fieldTy"))) false) (PVar "loc")) (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "fieldTy")))
 (DFunDef false "walkDeclBody" ((PVar "w") (PRec "DTypeAlias" ((rf "tyAliasRhs" (PVar "rhs"))) false) (PVar "loc")) (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "rhs")))
@@ -2308,7 +2310,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "preludeDefEntries" ((PVar "expSet") (PVar "mid") (PCons (PVar "d") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "preludeDefsOfDecl") (EVar "expSet")) (EVar "mid")) (EVar "d")) (EApp (EApp (EApp (EVar "preludeDefEntries") (EVar "expSet")) (EVar "mid")) (EVar "rest"))))
 (DTypeSig false "preludeDefsOfDecl" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))))
 (DFunDef false "preludeDefsOfDecl" ((PVar "expSet") (PVar "mid") (PCon "DFunDef" (PVar "pub") (PVar "n") PWild PWild PWild PWild)) (EApp (EApp (EApp (EApp (EVar "valEntry") (EVar "expSet")) (EVar "mid")) (EVar "pub")) (EVar "n")))
-(DFunDef false "preludeDefsOfDecl" ((PVar "expSet") (PVar "mid") (PCon "DExtern" (PVar "pub") (PVar "n") PWild)) (EApp (EApp (EApp (EApp (EVar "valEntry") (EVar "expSet")) (EVar "mid")) (EVar "pub")) (EVar "n")))
+(DFunDef false "preludeDefsOfDecl" ((PVar "expSet") (PVar "mid") (PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PVar "pub")) (rf "edName" (PVar "n"))) true))) (EApp (EApp (EApp (EApp (EVar "valEntry") (EVar "expSet")) (EVar "mid")) (EVar "pub")) (EVar "n")))
 (DFunDef false "preludeDefsOfDecl" (PWild (PVar "mid") (PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EApp (EVar "consIf") (EApp (EVar "dataIsPub") (EVar "vis"))) (ETuple (EVar "nsTy") (EVar "n") (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsTy")) (EVar "n")))) (EApp (EApp (EVar "flatMap") (EApp (EVar "preludeVariant") (EVar "mid"))) (EVar "variants"))))
 (DFunDef false "preludeDefsOfDecl" (PWild (PVar "mid") (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n")) (rf "newtypeCtor" (PVar "con"))) false)) (EListLit (ETuple (EVar "nsTy") (EVar "n") (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsTy")) (EVar "n"))) (ETuple (EVar "nsCtor") (EVar "con") (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsCtor")) (EVar "con")))))
 (DFunDef false "preludeDefsOfDecl" (PWild (PVar "mid") (PRec "DTypeAlias" ((rf "tyAliasPub" (PCon "True")) (rf "tyAliasName" (PVar "n"))) false)) (EListLit (ETuple (EVar "nsTy") (EVar "n") (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsTy")) (EVar "n")))))
@@ -2427,7 +2429,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "splitLastL" ((PList (PVar "x"))) (EApp (EVar "Some") (ETuple (EListLit) (EVar "x"))))
 (DFunDef false "splitLastL" ((PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "pre") (PVar "last"))) (ETuple (EBinOp "::" (EVar "x") (EVar "pre")) (EVar "last")))) (EApp (EVar "splitLastL") (EVar "rest"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "variantName" false) (mem "Loc" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "variantName" false) (mem "Loc" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "Positions" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedCached" false) (mem "moduleIdOfPath" false) (mem "importModId" false))))
 (DUse false (UseGroup ("support" "util") ((mem "zipL" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitOnChar" false))))
@@ -2650,7 +2652,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "collectExpValGo" (PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "collectExpValGo" ((PVar "ctx") (PVar "s") (PCons (PCon "DTypeSig" (PCon "True") (PVar "n") PWild PWild) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "hmSetC") (EVar "ctx")) (EVar "s")) (EVar "n")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "collectExpValGo") (EVar "ctx")) (EVar "s")) (EVar "rest")))))
 (DFunDef false "collectExpValGo" ((PVar "ctx") (PVar "s") (PCons (PCon "DFunDef" (PCon "True") (PVar "n") PWild PWild PWild PWild) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "hmSetC") (EVar "ctx")) (EVar "s")) (EVar "n")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "collectExpValGo") (EVar "ctx")) (EVar "s")) (EVar "rest")))))
-(DFunDef false "collectExpValGo" ((PVar "ctx") (PVar "s") (PCons (PCon "DExtern" (PCon "True") (PVar "n") PWild) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "hmSetC") (EVar "ctx")) (EVar "s")) (EVar "n")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "collectExpValGo") (EVar "ctx")) (EVar "s")) (EVar "rest")))))
+(DFunDef false "collectExpValGo" ((PVar "ctx") (PVar "s") (PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PCon "True")) (rf "edName" (PVar "n"))) true)) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "hmSetC") (EVar "ctx")) (EVar "s")) (EVar "n")) (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "collectExpValGo") (EVar "ctx")) (EVar "s")) (EVar "rest")))))
 (DFunDef false "collectExpValGo" ((PVar "ctx") (PVar "s") (PCons (PCon "DLetGroup" (PCon "True") (PVar "binds")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "collectLetNames") (EVar "ctx")) (EVar "s")) (EVar "binds"))) (DoExpr (EApp (EApp (EApp (EVar "collectExpValGo") (EVar "ctx")) (EVar "s")) (EVar "rest")))))
 (DFunDef false "collectExpValGo" ((PVar "ctx") (PVar "s") (PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EApp (EApp (EApp (EVar "collectExpValGo") (EVar "ctx")) (EVar "s")) (EBinOp "::" (EVar "inner") (EVar "rest"))))
 (DFunDef false "collectExpValGo" ((PVar "ctx") (PVar "s") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "collectExpValGo") (EVar "ctx")) (EVar "s")) (EVar "rest")))
@@ -2661,7 +2663,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "nameLocOf" ((PVar "uri") (PVar "p")) (EMatch (EApp (EVar "declPosNameLoc") (EVar "p")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "withUri") (EVar "uri")) (EVar "l"))) (arm (PCon "None") () (EApp (EVar "dummyLoc") (EVar "uri")))))
 (DTypeSig false "defsOfDecl" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyFun (TyCon "Loc") (TyFun (TyCon "DeclPos") (TyApp (TyCon "List") (TyCon "DefEntry"))))))))))
 (DFunDef false "defsOfDecl" ((PVar "ctx") (PVar "expSet") (PVar "mid") (PVar "uri") (PCon "DFunDef" (PVar "pub") (PVar "n") PWild PWild PWild PWild) (PVar "loc") PWild) (EListLit (EApp (EApp (EApp (EVar "emitDef") (EVar "ctx")) (EVar "uri")) (EApp (EApp (EApp (EApp (EApp (EVar "DefEntry") (EVar "nsVal")) (EVar "n")) (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsVal")) (EVar "n"))) (EVar "loc")) (EApp (EApp (EApp (EApp (EVar "valuePub") (EVar "ctx")) (EVar "expSet")) (EVar "pub")) (EVar "n"))))))
-(DFunDef false "defsOfDecl" ((PVar "ctx") (PVar "expSet") (PVar "mid") (PVar "uri") (PCon "DExtern" (PVar "pub") (PVar "n") PWild) (PVar "loc") PWild) (EListLit (EApp (EApp (EApp (EVar "emitDef") (EVar "ctx")) (EVar "uri")) (EApp (EApp (EApp (EApp (EApp (EVar "DefEntry") (EVar "nsVal")) (EVar "n")) (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsVal")) (EVar "n"))) (EVar "loc")) (EApp (EApp (EApp (EApp (EVar "valuePub") (EVar "ctx")) (EVar "expSet")) (EVar "pub")) (EVar "n"))))))
+(DFunDef false "defsOfDecl" ((PVar "ctx") (PVar "expSet") (PVar "mid") (PVar "uri") (PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PVar "pub")) (rf "edName" (PVar "n"))) true)) (PVar "loc") PWild) (EListLit (EApp (EApp (EApp (EVar "emitDef") (EVar "ctx")) (EVar "uri")) (EApp (EApp (EApp (EApp (EApp (EVar "DefEntry") (EVar "nsVal")) (EVar "n")) (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsVal")) (EVar "n"))) (EVar "loc")) (EApp (EApp (EApp (EApp (EVar "valuePub") (EVar "ctx")) (EVar "expSet")) (EVar "pub")) (EVar "n"))))))
 (DFunDef false "defsOfDecl" (PWild PWild PWild PWild (PCon "DTypeSig" PWild PWild PWild PWild) PWild PWild) (EListLit))
 (DFunDef false "defsOfDecl" ((PVar "ctx") (PVar "expSet") (PVar "mid") (PVar "uri") (PCon "DLetGroup" (PVar "pub") (PVar "binds")) (PVar "loc") PWild) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "letGroupDef") (EVar "ctx")) (EVar "expSet")) (EVar "mid")) (EVar "uri")) (EVar "loc")) (EVar "pub"))) (EVar "binds")))
 (DFunDef false "defsOfDecl" ((PVar "ctx") PWild (PVar "mid") (PVar "uri") (PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataCtors" (PVar "variants"))) false) (PVar "loc") PWild) (EBlock (DoLet false false (PVar "tyDef") (EApp (EApp (EApp (EVar "emitDef") (EVar "ctx")) (EVar "uri")) (EApp (EApp (EApp (EApp (EApp (EVar "DefEntry") (EVar "nsTy")) (EVar "n")) (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsTy")) (EVar "n"))) (EVar "loc")) (EApp (EVar "dataIsPub") (EVar "vis"))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "hmSetC") (EVar "ctx")) (EFieldAccess (EVar "ctx") "tyCtors")) (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsTy")) (EVar "n"))) (EApp (EApp (EMethodRef "map") (EVar "variantName")) (EVar "variants")))) (DoExpr (EBinOp "::" (EVar "tyDef") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EApp (EVar "variantDefs") (EVar "ctx")) (EVar "mid")) (EVar "uri")) (EVar "loc")) (EApp (EVar "ctorsPub") (EVar "vis")))) (EVar "variants"))))))
@@ -2727,7 +2729,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DTypeSig false "walkDeclBody" (TyFun (TyCon "W") (TyFun (TyCon "Decl") (TyFun (TyCon "Loc") (TyCon "Unit")))))
 (DFunDef false "walkDeclBody" ((PVar "w") (PCon "DFunDef" PWild PWild (PVar "pats") (PVar "body") PWild PWild) (PVar "loc")) (EBlock (DoLet false false (PVar "frame") (EApp (EApp (EVar "mkNamedFrame") (EVar "w")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "patBinders") (EVar "loc"))) (EVar "pats")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EListLit (EVar "frame"))) (EVar "loc")) (EVar "body")))))
 (DFunDef false "walkDeclBody" ((PVar "w") (PCon "DTypeSig" PWild PWild (PVar "ty") PWild) (PVar "loc")) (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "ty")))
-(DFunDef false "walkDeclBody" ((PVar "w") (PCon "DExtern" PWild PWild (PVar "ty")) (PVar "loc")) (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "ty")))
+(DFunDef false "walkDeclBody" ((PVar "w") (PCon "DExtern" (PRec "ExternDecl" ((rf "edTy" (PVar "ty"))) true)) (PVar "loc")) (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "ty")))
 (DFunDef false "walkDeclBody" ((PVar "w") (PRec "DData" ((rf "dataCtors" (PVar "variants"))) false) (PVar "loc")) (EApp (EApp (EApp (EVar "walkVariants") (EVar "w")) (EVar "loc")) (EVar "variants")))
 (DFunDef false "walkDeclBody" ((PVar "w") (PRec "DNewtype" ((rf "newtypeFieldTy" (PVar "fieldTy"))) false) (PVar "loc")) (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "fieldTy")))
 (DFunDef false "walkDeclBody" ((PVar "w") (PRec "DTypeAlias" ((rf "tyAliasRhs" (PVar "rhs"))) false) (PVar "loc")) (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "rhs")))
@@ -2840,7 +2842,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "preludeDefEntries" ((PVar "expSet") (PVar "mid") (PCons (PVar "d") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "preludeDefsOfDecl") (EVar "expSet")) (EVar "mid")) (EVar "d")) (EApp (EApp (EApp (EVar "preludeDefEntries") (EVar "expSet")) (EVar "mid")) (EVar "rest"))))
 (DTypeSig false "preludeDefsOfDecl" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))))
 (DFunDef false "preludeDefsOfDecl" ((PVar "expSet") (PVar "mid") (PCon "DFunDef" (PVar "pub") (PVar "n") PWild PWild PWild PWild)) (EApp (EApp (EApp (EApp (EVar "valEntry") (EVar "expSet")) (EVar "mid")) (EVar "pub")) (EVar "n")))
-(DFunDef false "preludeDefsOfDecl" ((PVar "expSet") (PVar "mid") (PCon "DExtern" (PVar "pub") (PVar "n") PWild)) (EApp (EApp (EApp (EApp (EVar "valEntry") (EVar "expSet")) (EVar "mid")) (EVar "pub")) (EVar "n")))
+(DFunDef false "preludeDefsOfDecl" ((PVar "expSet") (PVar "mid") (PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PVar "pub")) (rf "edName" (PVar "n"))) true))) (EApp (EApp (EApp (EApp (EVar "valEntry") (EVar "expSet")) (EVar "mid")) (EVar "pub")) (EVar "n")))
 (DFunDef false "preludeDefsOfDecl" (PWild (PVar "mid") (PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EApp (EVar "consIf") (EApp (EVar "dataIsPub") (EVar "vis"))) (ETuple (EVar "nsTy") (EVar "n") (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsTy")) (EVar "n")))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "preludeVariant") (EVar "mid"))) (EVar "variants"))))
 (DFunDef false "preludeDefsOfDecl" (PWild (PVar "mid") (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n")) (rf "newtypeCtor" (PVar "con"))) false)) (EListLit (ETuple (EVar "nsTy") (EVar "n") (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsTy")) (EVar "n"))) (ETuple (EVar "nsCtor") (EVar "con") (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsCtor")) (EVar "con")))))
 (DFunDef false "preludeDefsOfDecl" (PWild (PVar "mid") (PRec "DTypeAlias" ((rf "tyAliasPub" (PCon "True")) (rf "tyAliasName" (PVar "n"))) false)) (EListLit (ETuple (EVar "nsTy") (EVar "n") (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsTy")) (EVar "n")))))

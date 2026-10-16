@@ -125,6 +125,7 @@ import frontend.ast.{
   ImplMethod(..),
   DataVis(..),
   Decl(..),
+  ExternDecl(..),
   PropParam(..),
   Section(..),
   InterpPart(..),
@@ -1871,7 +1872,8 @@ checkEffectParams (d :: rest) =
 
 checkEffectParamsDecl : Decl -> Unit
 checkEffectParamsDecl (DTypeSig _ _ t _) = checkEffectParamsTy t
-checkEffectParamsDecl (DExtern _ _ t) = checkEffectParamsTy t
+checkEffectParamsDecl (DExtern (ExternDecl { edTy = t, ... })) =
+  checkEffectParamsTy t
 checkEffectParamsDecl (DAttrib _ d) = checkEffectParamsDecl d
 checkEffectParamsDecl (DData { dataCtors = ctors }) =
   fold
@@ -42995,7 +42997,7 @@ externSigsToMap : List Decl ->
   OrdMap (Ty, List (String, Int)) ->
   OrdMap (Ty, List (String, Int))
 externSigsToMap [] m = m
-externSigsToMap ((DExtern _ n ty) :: rest) m =
+externSigsToMap ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest) m =
   externSigsToMap rest (omInsert n (ty, namedArgOrder ty) m)
 externSigsToMap (_ :: rest) m = externSigsToMap rest m
 
@@ -43362,7 +43364,7 @@ ffiCheckExternsCrossable True ds = ffiCheckExternsGo (externDecls ds)
 
 ffiCheckExternsGo : List Decl -> Unit
 ffiCheckExternsGo [] = ()
-ffiCheckExternsGo ((DExtern _ n ty) :: rest) =
+ffiCheckExternsGo ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest) =
   let _ =
     if ffiIsBuiltinExternName n then
       ()
@@ -43464,7 +43466,7 @@ ffiCheckExternsShadow True ds = ffiCheckShadowGo (externDecls ds)
 
 ffiCheckShadowGo : List Decl -> Unit
 ffiCheckShadowGo [] = ()
-ffiCheckShadowGo ((DExtern _ n ty) :: rest) =
+ffiCheckShadowGo ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest) =
   let _ = match omLookup n driverState.value.builtinExternNamesRef.value
     Some (cat, _) => match ffiSigInstance cat ty
       Some _ => ()
@@ -43787,7 +43789,7 @@ ffiCheckExternsCatalogRow True ds = ffiCheckCatalogRowGo (externDecls ds)
 
 ffiCheckCatalogRowGo : List Decl -> Unit
 ffiCheckCatalogRowGo [] = ()
-ffiCheckCatalogRowGo ((DExtern _ n ty) :: rest) =
+ffiCheckCatalogRowGo ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest) =
   let _ = match omLookup n driverState.value.builtinExternNamesRef.value
     Some (cat, catNames) => match ffiSigInstance cat ty
       Some sub =>
@@ -44007,7 +44009,7 @@ ffiCheckExternsReserved True ds = ffiCheckReservedGo (externDecls ds)
 
 ffiCheckReservedGo : List Decl -> Unit
 ffiCheckReservedGo [] = ()
-ffiCheckReservedGo ((DExtern _ n ty) :: rest) =
+ffiCheckReservedGo ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest) =
   let _ =
     if startsWith "mdk_" n then
       pushTypeErrorAt "T-FFI-RESERVED-NAME" (firstTyLoc ty) (ffiReservedMsg n)
@@ -44116,7 +44118,7 @@ ffiExternTypeRowsWith : List (TabKey, (List String, Ty)) ->
   List Decl ->
   List (String, (List String, String))
 ffiExternTypeRowsWith _ [] = []
-ffiExternTypeRowsWith aliases ((DExtern _ n ty) :: rest)
+ffiExternTypeRowsWith aliases ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest)
   | ffiIsBuiltinExternName n = ffiExternTypeRowsWith aliases rest
   | otherwise =
     (n, (ffiSigArgHeadsWith aliases ty, ffiSigRetHeadWith aliases ty))
@@ -44135,7 +44137,7 @@ ffiExternTypeRowsWith aliases (_ :: rest) = ffiExternTypeRowsWith aliases rest
 -- real, not theoretical: a bare `TyVar` has `firstTyLoc = None` (`ast.mdk`), so
 -- `extern wrapL : a -> List a` reported its `a` parameter at `:1:0` — a caret on
 -- line 1 of a file whose defect is on line 7, which ERROR-QUALITY §2.1 rules out.
--- `DExtern` carries no `Loc` of its own (`DExtern Bool String Ty`), so the
+-- `DExtern` has a `Loc` this diagnostic does not use (`edLoc`), so the
 -- signature's own first `TyCon` is the nearest true anchor available.
 ffiCheckExternSig : String -> Option Loc -> Ty -> Unit
 ffiCheckExternSig n fb ty = match expandAliasHeadTy ty
@@ -44190,7 +44192,7 @@ ffiCheckExternsLabelled True ds = ffiCheckLabelsGo (externDecls ds)
 
 ffiCheckLabelsGo : List Decl -> Unit
 ffiCheckLabelsGo [] = ()
-ffiCheckLabelsGo ((DExtern _ n ty) :: rest) =
+ffiCheckLabelsGo ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest) =
   let _ =
     if ffiIsBuiltinExternName n then
       ()
@@ -44199,7 +44201,7 @@ ffiCheckLabelsGo ((DExtern _ n ty) :: rest) =
   ffiCheckLabelsGo rest
 ffiCheckLabelsGo (_ :: rest) = ffiCheckLabelsGo rest
 
--- `DExtern` carries no `Loc` of its own (`DExtern Bool String Ty`), and the row
+-- `DExtern` has a `Loc` this diagnostic does not use (`edLoc`), and the row
 -- the error is ABOUT may not exist at all (`extern f : Int -> Int`), so the
 -- anchor is the signature's own first located head — the same fallback
 -- `ffiCheckExternSig` computes, and for the same ERROR-QUALITY §2.1 reason: a
@@ -44255,7 +44257,7 @@ ffiUnlabelledMsg n =
 -- match IS the predicate.
 externDecls : List Decl -> List Decl
 externDecls [] = []
-externDecls ((d@(DExtern _ _ _)) :: rest) = d :: externDecls rest
+externDecls ((d@(DExtern _)) :: rest) = d :: externDecls rest
 externDecls (_ :: rest) = externDecls rest
 
 -- The pre-#1280 body, unchanged, over the ORIGIN-STAMPED list.  It is split out
@@ -44274,7 +44276,8 @@ externSchemesGo decls =
 
 directExternSigs : List Decl -> List (String, Ty)
 directExternSigs [] = []
-directExternSigs ((DExtern _ n ty) :: rest) = (n, ty) :: directExternSigs rest
+directExternSigs ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest) =
+  (n, ty) :: directExternSigs rest
 directExternSigs (_ :: rest) = directExternSigs rest
 
 -- Interface method rows: each method's declaration identity, bare scheme, and
@@ -49495,7 +49498,8 @@ publicValNames ((DAttrib _ d) :: rest) =
   publicValNames [d] ++ publicValNames rest
 publicValNames ((DFunDef True n _ _ _ _) :: rest) = n :: publicValNames rest
 publicValNames ((DTypeSig True n _ _) :: rest) = n :: publicValNames rest
-publicValNames ((DExtern True n _) :: rest) = n :: publicValNames rest
+publicValNames ((DExtern (ExternDecl { edPub = True, edName = n, ... })) :: rest) =
+  n :: publicValNames rest
 publicValNames ((DInterface { pub = True, methods, ... }) :: rest) =
   ifaceMethodNames methods ++ publicValNames rest
 publicValNames (_ :: rest) = publicValNames rest

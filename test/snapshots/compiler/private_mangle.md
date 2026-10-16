@@ -1,5 +1,5 @@
 # META
-source_lines=1931
+source_lines=1933
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -105,6 +105,7 @@ stages=DESUGAR,MARK
 import frontend.ast.{
   letBindName,
   Decl(..),
+  ExternDecl(..),
   Expr(..),
   Pat(..),
   Arm(..),
@@ -1025,7 +1026,7 @@ buildExternExports exports ((mid, decls) :: rest) =
 
 externDeclEntries : Bool -> List Decl -> List (String, String)
 externDeclEntries _ [] = []
-externDeclEntries publicOnly ((DExtern pub name _) :: rest) =
+externDeclEntries publicOnly ((DExtern (ExternDecl { edPub = pub, edName = name, ... })) :: rest) =
   if pub || not publicOnly then
     (name, name) :: externDeclEntries publicOnly rest
   else
@@ -1354,7 +1355,8 @@ declDefNames _ = []
 pubSigNames : List Decl -> List String
 pubSigNames [] = []
 pubSigNames ((DTypeSig True n _ _) :: rest) = n :: pubSigNames rest
-pubSigNames ((DExtern True n _) :: rest) = n :: pubSigNames rest
+pubSigNames ((DExtern (ExternDecl { edPub = True, edName = n, ... })) :: rest) =
+  n :: pubSigNames rest
 pubSigNames ((DAttrib _ d) :: rest) = pubSigNames [d] ++ pubSigNames rest
 pubSigNames (_ :: rest) = pubSigNames rest
 
@@ -1589,7 +1591,7 @@ renameDecl rm (DAttrib attrs d) = DAttrib attrs (renameDecl rm d)
 --   * `DTypeAlias` names a TYPE.  `renameDecl`'s `DData` arm renames `dataCtors` and
 --     leaves `dataName` alone for the same reason — an alias arm here would rename half
 --     of that split.
-renameDecl _ (d@(DExtern _ _ _)) = d
+renameDecl _ (d@(DExtern _)) = d
 renameDecl _ (d@(DUse _ _ _)) = d
 renameDecl _ (d@(DEffect _ _ _ _ _ _)) = d
 renameDecl _ (d@(DTypeAlias { tyAliasName = _, ... })) = d
@@ -1934,7 +1936,7 @@ recPatFieldVarsPM : RecPatField -> List String
 recPatFieldVarsPM (RecPatField label _ _ None) = [label]
 recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true) (mem "Route" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvId" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true) (mem "Route" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvId" true))))
 (DUse false (UseGroup ("types" "route_key") ((mem "remapEvidence" false))))
 (DUse false (UseAlias ("u64") "U64"))
 (DUse false (UseGroup ("list") ((mem "last" false))))
@@ -2098,7 +2100,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "buildExternExports" ((PVar "exports") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EBlock (DoLet false false (PVar "entries") (EBinOp "++" (EApp (EApp (EVar "externDeclEntries") (EVar "True")) (EVar "decls")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "externImportEntries") (EVar "exports")) (EVar "True"))) (EVar "decls")))) (DoExpr (EApp (EApp (EVar "buildExternExports") (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "entries"))) (EVar "omEmpty"))) (EVar "exports"))) (EVar "rest")))))
 (DTypeSig false "externDeclEntries" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "externDeclEntries" (PWild (PList)) (EListLit))
-(DFunDef false "externDeclEntries" ((PVar "publicOnly") (PCons (PCon "DExtern" (PVar "pub") (PVar "name") PWild) (PVar "rest"))) (EIf (EBinOp "||" (EVar "pub") (EApp (EVar "not") (EVar "publicOnly"))) (EBinOp "::" (ETuple (EVar "name") (EVar "name")) (EApp (EApp (EVar "externDeclEntries") (EVar "publicOnly")) (EVar "rest"))) (EApp (EApp (EVar "externDeclEntries") (EVar "publicOnly")) (EVar "rest"))))
+(DFunDef false "externDeclEntries" ((PVar "publicOnly") (PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PVar "pub")) (rf "edName" (PVar "name"))) true)) (PVar "rest"))) (EIf (EBinOp "||" (EVar "pub") (EApp (EVar "not") (EVar "publicOnly"))) (EBinOp "::" (ETuple (EVar "name") (EVar "name")) (EApp (EApp (EVar "externDeclEntries") (EVar "publicOnly")) (EVar "rest"))) (EApp (EApp (EVar "externDeclEntries") (EVar "publicOnly")) (EVar "rest"))))
 (DFunDef false "externDeclEntries" ((PVar "publicOnly") (PCons (PCon "DAttrib" PWild (PVar "decl")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "externDeclEntries") (EVar "publicOnly")) (EListLit (EVar "decl"))) (EApp (EApp (EVar "externDeclEntries") (EVar "publicOnly")) (EVar "rest"))))
 (DFunDef false "externDeclEntries" ((PVar "publicOnly") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "externDeclEntries") (EVar "publicOnly")) (EVar "rest")))
 (DTypeSig false "externImportEntries" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String"))) (TyFun (TyCon "Bool") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
@@ -2187,7 +2189,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DTypeSig false "pubSigNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "pubSigNames" ((PList)) (EListLit))
 (DFunDef false "pubSigNames" ((PCons (PCon "DTypeSig" (PCon "True") (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "pubSigNames") (EVar "rest"))))
-(DFunDef false "pubSigNames" ((PCons (PCon "DExtern" (PCon "True") (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "pubSigNames") (EVar "rest"))))
+(DFunDef false "pubSigNames" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PCon "True")) (rf "edName" (PVar "n"))) true)) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "pubSigNames") (EVar "rest"))))
 (DFunDef false "pubSigNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "pubSigNames") (EListLit (EVar "d"))) (EApp (EVar "pubSigNames") (EVar "rest"))))
 (DFunDef false "pubSigNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "pubSigNames") (EVar "rest")))
 (DTypeSig true "mangledName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -2233,7 +2235,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameDecl" ((PVar "rm") (PAs "d" (PRec "DData" ((rf "dataCtors" (PVar "variants"))) false))) (EVariantUpdate "DData" (EVar "d") ((fa "dataCtors" (EApp (EApp (EVar "map") (EApp (EVar "renameVariant") (EVar "rm"))) (EVar "variants"))))))
 (DFunDef false "renameDecl" ((PVar "rm") (PAs "d" (PRec "DNewtype" ((rf "newtypeCtor" (PVar "con"))) false))) (EVariantUpdate "DNewtype" (EVar "d") ((fa "newtypeCtor" (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "con"))))))
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "renameDecl") (EVar "rm")) (EVar "d"))))
-(DFunDef false "renameDecl" (PWild (PAs "d" (PCon "DExtern" PWild PWild PWild))) (EVar "d"))
+(DFunDef false "renameDecl" (PWild (PAs "d" (PCon "DExtern" PWild))) (EVar "d"))
 (DFunDef false "renameDecl" (PWild (PAs "d" (PCon "DUse" PWild PWild PWild))) (EVar "d"))
 (DFunDef false "renameDecl" (PWild (PAs "d" (PCon "DEffect" PWild PWild PWild PWild PWild PWild))) (EVar "d"))
 (DFunDef false "renameDecl" (PWild (PAs "d" (PRec "DTypeAlias" ((rf "tyAliasName" PWild)) true))) (EVar "d"))
@@ -2361,7 +2363,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "recPatFieldVarsPM" ((PCon "RecPatField" (PVar "label") PWild PWild (PCon "None"))) (EListLit (EVar "label")))
 (DFunDef false "recPatFieldVarsPM" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patVarsPM") (EVar "p")))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true) (mem "Route" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvId" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true) (mem "Route" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvId" true))))
 (DUse false (UseGroup ("types" "route_key") ((mem "remapEvidence" false))))
 (DUse false (UseAlias ("u64") "U64"))
 (DUse false (UseGroup ("list") ((mem "last" false))))
@@ -2525,7 +2527,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "buildExternExports" ((PVar "exports") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EBlock (DoLet false false (PVar "entries") (EBinOp "++" (EApp (EApp (EVar "externDeclEntries") (EVar "True")) (EVar "decls")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "externImportEntries") (EVar "exports")) (EVar "True"))) (EVar "decls")))) (DoExpr (EApp (EApp (EVar "buildExternExports") (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "entries"))) (EVar "omEmpty"))) (EVar "exports"))) (EVar "rest")))))
 (DTypeSig false "externDeclEntries" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "externDeclEntries" (PWild (PList)) (EListLit))
-(DFunDef false "externDeclEntries" ((PVar "publicOnly") (PCons (PCon "DExtern" (PVar "pub") (PVar "name") PWild) (PVar "rest"))) (EIf (EBinOp "||" (EVar "pub") (EApp (EVar "not") (EVar "publicOnly"))) (EBinOp "::" (ETuple (EVar "name") (EVar "name")) (EApp (EApp (EVar "externDeclEntries") (EVar "publicOnly")) (EVar "rest"))) (EApp (EApp (EVar "externDeclEntries") (EVar "publicOnly")) (EVar "rest"))))
+(DFunDef false "externDeclEntries" ((PVar "publicOnly") (PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PVar "pub")) (rf "edName" (PVar "name"))) true)) (PVar "rest"))) (EIf (EBinOp "||" (EVar "pub") (EApp (EVar "not") (EVar "publicOnly"))) (EBinOp "::" (ETuple (EVar "name") (EVar "name")) (EApp (EApp (EVar "externDeclEntries") (EVar "publicOnly")) (EVar "rest"))) (EApp (EApp (EVar "externDeclEntries") (EVar "publicOnly")) (EVar "rest"))))
 (DFunDef false "externDeclEntries" ((PVar "publicOnly") (PCons (PCon "DAttrib" PWild (PVar "decl")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "externDeclEntries") (EVar "publicOnly")) (EListLit (EVar "decl"))) (EApp (EApp (EVar "externDeclEntries") (EVar "publicOnly")) (EVar "rest"))))
 (DFunDef false "externDeclEntries" ((PVar "publicOnly") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "externDeclEntries") (EVar "publicOnly")) (EVar "rest")))
 (DTypeSig false "externImportEntries" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "String"))) (TyFun (TyCon "Bool") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
@@ -2614,7 +2616,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DTypeSig false "pubSigNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "pubSigNames" ((PList)) (EListLit))
 (DFunDef false "pubSigNames" ((PCons (PCon "DTypeSig" (PCon "True") (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "pubSigNames") (EVar "rest"))))
-(DFunDef false "pubSigNames" ((PCons (PCon "DExtern" (PCon "True") (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "pubSigNames") (EVar "rest"))))
+(DFunDef false "pubSigNames" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PCon "True")) (rf "edName" (PVar "n"))) true)) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "pubSigNames") (EVar "rest"))))
 (DFunDef false "pubSigNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "pubSigNames") (EListLit (EVar "d"))) (EApp (EVar "pubSigNames") (EVar "rest"))))
 (DFunDef false "pubSigNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "pubSigNames") (EVar "rest")))
 (DTypeSig true "mangledName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -2660,7 +2662,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameDecl" ((PVar "rm") (PAs "d" (PRec "DData" ((rf "dataCtors" (PVar "variants"))) false))) (EVariantUpdate "DData" (EVar "d") ((fa "dataCtors" (EApp (EApp (EMethodRef "map") (EApp (EVar "renameVariant") (EVar "rm"))) (EVar "variants"))))))
 (DFunDef false "renameDecl" ((PVar "rm") (PAs "d" (PRec "DNewtype" ((rf "newtypeCtor" (PVar "con"))) false))) (EVariantUpdate "DNewtype" (EVar "d") ((fa "newtypeCtor" (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "con"))))))
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "renameDecl") (EVar "rm")) (EVar "d"))))
-(DFunDef false "renameDecl" (PWild (PAs "d" (PCon "DExtern" PWild PWild PWild))) (EVar "d"))
+(DFunDef false "renameDecl" (PWild (PAs "d" (PCon "DExtern" PWild))) (EVar "d"))
 (DFunDef false "renameDecl" (PWild (PAs "d" (PCon "DUse" PWild PWild PWild))) (EVar "d"))
 (DFunDef false "renameDecl" (PWild (PAs "d" (PCon "DEffect" PWild PWild PWild PWild PWild PWild))) (EVar "d"))
 (DFunDef false "renameDecl" (PWild (PAs "d" (PRec "DTypeAlias" ((rf "tyAliasName" PWild)) true))) (EVar "d"))

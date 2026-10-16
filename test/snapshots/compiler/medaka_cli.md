@@ -1,5 +1,5 @@
 # META
-source_lines=4762
+source_lines=4764
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -109,7 +109,8 @@ import args.{
   withStrictDash,
 }
 import frontend.ast.{
-  letBindName, Decl(..), Expr(..), Loc(..), Pat, LetBind(..), EvTable
+  letBindName, Decl(..), ExternDecl(..), Expr(..), Loc(..), Pat, LetBind(..),
+  EvTable
 }
 import frontend.parser.{
   parseLocated,
@@ -1796,7 +1797,8 @@ topLevelNames [] = []
 topLevelNames ((DAttrib _ d) :: rest) = topLevelNames [d] ++ topLevelNames rest
 topLevelNames ((DFunDef _ n _ _ _ _) :: rest) = n :: topLevelNames rest
 topLevelNames ((DTypeSig _ n _ _) :: rest) = n :: topLevelNames rest
-topLevelNames ((DExtern _ n _) :: rest) = n :: topLevelNames rest
+topLevelNames ((DExtern (ExternDecl { edName = n, ... })) :: rest) =
+  n :: topLevelNames rest
 topLevelNames ((DLetGroup _ binds) :: rest) =
   map letBindName binds ++ topLevelNames rest
 topLevelNames (_ :: rest) = topLevelNames rest
@@ -4783,7 +4785,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("tools" "target_check") ((mem "targetRefusal" false))))
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "internal" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "lastValue" false) (mem "flagValues" false) (mem "unknownFlagMessage" false) (mem "usageExitCode" false) (mem "withStrictDash" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "LetBind" true) (mem "EvTable" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "LetBind" true) (mem "EvTable" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseLocated" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "Positions" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
@@ -4955,7 +4957,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "topLevelNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "topLevelNames") (EListLit (EVar "d"))) (EApp (EVar "topLevelNames") (EVar "rest"))))
 (DFunDef false "topLevelNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "topLevelNames") (EVar "rest"))))
 (DFunDef false "topLevelNames" ((PCons (PCon "DTypeSig" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "topLevelNames") (EVar "rest"))))
-(DFunDef false "topLevelNames" ((PCons (PCon "DExtern" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "topLevelNames") (EVar "rest"))))
+(DFunDef false "topLevelNames" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n"))) true)) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "topLevelNames") (EVar "rest"))))
 (DFunDef false "topLevelNames" ((PCons (PCon "DLetGroup" PWild (PVar "binds")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds")) (EApp (EVar "topLevelNames") (EVar "rest"))))
 (DFunDef false "topLevelNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "topLevelNames") (EVar "rest")))
 (DTypeSig false "emitLocatedWarnings" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyEffect ("IO") None (TyCon "Unit"))))))
@@ -5293,7 +5295,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("tools" "target_check") ((mem "targetRefusal" false))))
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "internal" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "lastValue" false) (mem "flagValues" false) (mem "unknownFlagMessage" false) (mem "usageExitCode" false) (mem "withStrictDash" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "LetBind" true) (mem "EvTable" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "LetBind" true) (mem "EvTable" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseLocated" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "Positions" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
@@ -5465,7 +5467,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "topLevelNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "topLevelNames") (EListLit (EVar "d"))) (EApp (EVar "topLevelNames") (EVar "rest"))))
 (DFunDef false "topLevelNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "topLevelNames") (EVar "rest"))))
 (DFunDef false "topLevelNames" ((PCons (PCon "DTypeSig" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "topLevelNames") (EVar "rest"))))
-(DFunDef false "topLevelNames" ((PCons (PCon "DExtern" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "topLevelNames") (EVar "rest"))))
+(DFunDef false "topLevelNames" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n"))) true)) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "topLevelNames") (EVar "rest"))))
 (DFunDef false "topLevelNames" ((PCons (PCon "DLetGroup" PWild (PVar "binds")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds")) (EApp (EVar "topLevelNames") (EVar "rest"))))
 (DFunDef false "topLevelNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "topLevelNames") (EVar "rest")))
 (DTypeSig false "emitLocatedWarnings" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyEffect ("IO") None (TyCon "Unit"))))))

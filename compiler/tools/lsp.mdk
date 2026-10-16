@@ -81,6 +81,7 @@ import frontend.ast.{
   implMethodName,
   letBindName,
   Decl(..),
+  ExternDecl(..),
   Ty(..),
   Loc(..),
   Variant,
@@ -438,7 +439,7 @@ symbolPartsOfDecl : Decl ->
   Option (String, Int, Bool, List Json)
 symbolPartsOfDecl d range childLocs = match innerDecl d
   DTypeSig _ name _ _ => Some (name, 13, True, [])
-  DExtern _ name _ => Some (name, 12, False, [])
+  DExtern (ExternDecl { edName = name, ... }) => Some (name, 12, False, [])
   DFunDef _ name _ _ _ _ => Some (name, 12, True, [])
   DLetGroup _ binds => match binds
     [] => None
@@ -569,7 +570,7 @@ renderSymbol (SymRow name kind sl el _ kids nameLoc) =
 declOwnNameMatches : Decl -> String -> Bool
 declOwnNameMatches d name = match innerDecl d
   DTypeSig _ n _ _ => n == name
-  DExtern _ n _ => n == name
+  DExtern (ExternDecl { edName = n, ... }) => n == name
   DFunDef _ n _ _ _ _ => n == name
   DLetGroup _ binds => anyName (map letBindName binds) name
   DData { dataName = n } => n == name

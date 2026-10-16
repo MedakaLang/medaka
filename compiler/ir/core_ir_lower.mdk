@@ -29,6 +29,7 @@ import frontend.ast.{
   FunClause(..),
   Addr(..),
   Decl(..),
+  ExternDecl(..),
   Attr(..),
   Variant(..),
   ConPayload(..),
@@ -3782,7 +3783,8 @@ externArities : List Decl -> List (String, Int)
 externArities decls = flatMap externArityEntries decls
 
 externArityEntries : Decl -> List (String, Int)
-externArityEntries (DExtern _ name ty) = [(name, listLen (methodArgTys ty))]
+externArityEntries (DExtern (ExternDecl { edName = name, edTy = ty, ... })) =
+  [(name, listLen (methodArgTys ty))]
 externArityEntries (DAttrib _ inner) = externArityEntries inner
 externArityEntries _ = []
 
@@ -3881,7 +3883,8 @@ ffiRowShapeKey (args, ret) = "\{joinWith "," args} -> \{ret}"
 export
 externDeclNamesOf : List Decl -> List String
 externDeclNamesOf [] = []
-externDeclNamesOf ((DExtern _ n _) :: rest) = n :: externDeclNamesOf rest
+externDeclNamesOf ((DExtern (ExternDecl { edName = n, ... })) :: rest) =
+  n :: externDeclNamesOf rest
 externDeclNamesOf ((DAttrib _ inner) :: rest) =
   externDeclNamesOf [inner] ++ externDeclNamesOf rest
 externDeclNamesOf (_ :: rest) = externDeclNamesOf rest
@@ -3893,7 +3896,7 @@ externDeclNamesOf (_ :: rest) = externDeclNamesOf rest
 -- so `Array` in this table always means `Array Int`.
 ffiExternRows : List String -> List Decl -> List (String, (List String, String))
 ffiExternRows _ [] = []
-ffiExternRows builtins ((DExtern _ n ty) :: rest)
+ffiExternRows builtins ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest)
   | contains n builtins = ffiExternRows builtins rest
   | otherwise =
     (n, (map tyHeadName (methodArgTys ty), tyHeadName (methodRetTy ty)))

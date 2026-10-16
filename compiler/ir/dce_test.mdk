@@ -9,6 +9,7 @@ import frontend.ast.{
   noBinderId,
   Attr(..),
   Decl(..),
+  ExternDecl(..),
   Expr(..),
   FunClause(..),
   IfaceMethod(..),
@@ -142,10 +143,19 @@ test "DCE retains a reachable cycle and removes a disconnected cycle" =
 test "DCE agrees with the independent oracle on every three-node call graph" =
   expectTrue (allThreeNodeGraphsSatisfy 0)
 
+mkExtern : Bool -> String -> Ty -> Decl
+mkExtern pub n ty = DExtern ExternDecl {
+  edPub = pub,
+  edName = n,
+  edTy = ty,
+  edLoc = Loc "<test>" 1 1 1 1,
+  edBinds = [],
+}
+
 test "DCE preserves unrelated declarations but does not root prop or test bodies" =
   let decls = [
     DTypeSig False "declared" (TyVar "a") (Loc "<dce-test>" 1 1 1 1),
-    DExtern False "foreign" (TyVar "a"),
+    mkExtern False "foreign" (TyVar "a"),
     funDecl "main" [],
     funDecl "propOnly" [],
     funDecl "testOnly" [],
