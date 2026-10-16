@@ -30,6 +30,7 @@ import frontend.ast.{
   Addr(..),
   Decl(..),
   ExternDecl(..),
+  externRowCons,
   Attr(..),
   Variant(..),
   ConPayload(..),
@@ -3817,7 +3818,7 @@ externArityEntries _ = []
 export
 ffiExternTypeNames : List Decl ->
   List Decl ->
-  List (String, (List String, String))
+  List (String, (String, (List String, String)))
 ffiExternTypeNames runtimeDecls userDecls =
   validateFfiExternTypeNames
     (ffiExternRows (externDeclNamesOf runtimeDecls) userDecls)
@@ -3828,8 +3829,8 @@ ffiExternTypeNames runtimeDecls userDecls =
 -- the untyped snapshot fallback share the existing one-symbol/one-signature
 -- refusal without asking typecheck to import lowering (which would be a cycle).
 export
-validateFfiExternTypeNames : List (String, (List String, String)) ->
-  List (String, (List String, String))
+validateFfiExternTypeNames : List (String, (String, (List String, String))) ->
+  List (String, (String, (List String, String)))
 validateFfiExternTypeNames rows =
   -- 🚨 THE INDEX IS BARE-NAME KEYED ACROSS THE WHOLE PROGRAM, so a name declared
   -- twice with two different signatures is a contradiction the index cannot hold
@@ -3860,18 +3861,18 @@ validateFfiExternTypeNames rows =
 -- `core_validate.checkImplSymbolsInjective`: they are CONTENT-derived, so a
 -- `stdout-line` pin can match them with `grep -qxF` without false-draining on a
 -- rewording of the prose.
-ffiCheckExternRowsDistinct : OrdMap String ->
-  List (String, (List String, String)) ->
+ffiCheckExternRowsDistinct : OrdMap (String, String) ->
+  List (String, (String, (List String, String))) ->
   Unit
 ffiCheckExternRowsDistinct _ [] = ()
-ffiCheckExternRowsDistinct seen ((n, sh) :: rest) =
+ffiCheckExternRowsDistinct seen ((n, (sym, sh)) :: rest) =
   let k = ffiRowShapeKey sh
-  match omLookup n seen
-    None => ffiCheckExternRowsDistinct (omInsert n k seen) rest
-    Some prev if prev == k => ffiCheckExternRowsDistinct seen rest
-    Some prev =>
+  match omLookup sym seen
+    None => ffiCheckExternRowsDistinct (omInsert sym (n, k) seen) rest
+    Some (_, prev) if prev == k => ffiCheckExternRowsDistinct seen rest
+    Some (prevName, prev) =>
       panic
-        "foreign declaration collision: the C symbol `\{n}` is declared twice with different signatures.\ncolliding symbol: \{n}\ndeclaration 1: \{prev}\ndeclaration 2: \{k}\nA foreign declaration's name IS the C symbol it links to, so both declarations name ONE C function and only one of these two signatures can describe it. The other module's calls would be marshalled through the wrong signature -- a wrong value at exit 0, or a memory fault. Give the two declarations the same signature, or declare the differing one against a differently-named C symbol."
+        "foreign declaration collision: the C symbol `\{sym}` is declared twice with different signatures.\ncolliding symbol: \{sym}\nMedaka names: \{prevName}, \{n}\ndeclaration 1: \{prev}\ndeclaration 2: \{k}\nTwo foreign declarations bind ONE C symbol (by name or by a `bind c` clause), so they name ONE C function and only one of these two signatures can describe it. The other declaration's calls would be marshalled through the wrong signature -- a wrong value at exit 0, or a memory fault. Give the two declarations the same signature, or bind the differing one to a differently-named C symbol."
 
 -- The rendered `(argument heads, return head)` row, for the collision message and
 -- the comparison behind it.  Same projection the index itself stores, so the guard
@@ -3894,13 +3895,16 @@ externDeclNamesOf (_ :: rest) = externDeclNamesOf rest
 -- `ffiCrossableTy` guard rejects every non-crossable type — `Array` of anything
 -- but `Int` included — before a user extern's signature can reach the emitter,
 -- so `Array` in this table always means `Array Int`.
-ffiExternRows : List String -> List Decl -> List (String, (List String, String))
+ffiExternRows : List String ->
+  List Decl ->
+  List (String, (String, (List String, String)))
 ffiExternRows _ [] = []
-ffiExternRows builtins ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest)
-  | contains n builtins = ffiExternRows builtins rest
-  | otherwise =
-    (n, (map tyHeadName (methodArgTys ty), tyHeadName (methodRetTy ty)))
-      :: ffiExternRows builtins rest
+ffiExternRows builtins ((DExtern d) :: rest) =
+  externRowCons
+    (contains d.edName builtins)
+    d
+    (map tyHeadName (methodArgTys d.edTy), tyHeadName (methodRetTy d.edTy))
+    (ffiExternRows builtins rest)
 ffiExternRows builtins ((DAttrib _ inner) :: rest) =
   ffiExternRows builtins (inner :: rest)
 ffiExternRows builtins (_ :: rest) = ffiExternRows builtins rest

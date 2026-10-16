@@ -599,14 +599,18 @@ makeWasmEmitInputFull : List (String, (String, String, Int)) ->
   Bool ->
   Bool ->
   List (String, List String) ->
-  List (String, (List String, String)) ->
+  List (String, (String, (List String, String))) ->
   WasmEmitInput
-makeWasmEmitInputFull _ ctorFieldTypes mainIsFloat mainIsUnit recordFieldOrders ffiExternTypes =
+ffiRowSig : (String, (String, (List String, String))) ->
+  (String, (List String, String))
+ffiRowSig (n, (_, sg)) = (n, sg)
+
+makeWasmEmitInputFull _ ctorFieldTypes mainIsFloat mainIsUnit recordFieldOrders ffiExternRows =
   WasmEmitInputData
     ctorFieldTypes
     (omFromPairs (reverseL (map ctorToFloatIdxs ctorFieldTypes)) omEmpty)
     mainIsFloat
-    (omFromPairs (reverseL ffiExternTypes) omEmpty)
+    (omFromPairs (reverseL (map ffiRowSig ffiExternRows)) omEmpty)
     mainIsUnit
     []
 

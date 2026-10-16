@@ -366,7 +366,7 @@ test "(y) under a checked target, a withheld label names what check admits and a
 -- every profile, and wasm cannot lower even the name.
 ffiValueSrc : String
 ffiValueSrc =
-  "extern ffiAddInts : Int -> Int -> <FFI> Int\n\nfns = [ffiAddInts]\n\nmain = 0"
+  "extern ffiAddInts : Int -> Int -> <FFI \"c\"> Int\n\nfns = [ffiAddInts]\n\nmain = 0"
 
 -- The wasm record-mode events of `ffiValueSrc` with `checked` published as
 -- the target `build` checked it against.  An emitter gap names no binding, so
@@ -374,7 +374,7 @@ ffiValueSrc =
 ffiWallEvents : Option CheckedTarget -> <IO> List String
 ffiWallEvents checked =
   let decls = grantWholeDomain (desugar (parse ffiValueSrc))
-  let ffiTypes = [("ffiAddInts", (["Int", "Int"], "Int"))]
+  let ffiTypes = [("ffiAddInts", ("ffiAddInts", (["Int", "Int"], "Int")))]
   let input =
     makeWasmEmitInputFull
       []

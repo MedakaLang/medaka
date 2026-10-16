@@ -5,6 +5,7 @@
 import frontend.ast.{
   EffAtomTy(..),
   EffParamTy(..),
+  ExternBind(..),
   DeriveRef(..),
   deriveRefName,
   patternMark,
@@ -278,10 +279,20 @@ payloadSexp (ConNamed fs _) = node "ConNamed" (map fieldSexp fs)
 variantSexp : Variant -> String
 variantSexp (Variant n pl) = node "variant" [escStr n, payloadSexp pl]
 
+-- A `bind` clause list renders as one trailing group, and only when non-empty,
+-- so a declaration without clauses keeps its pre-clause rendering.
+externBindParts : List ExternBind -> List String
+externBindParts [] = []
+externBindParts bs =
+  [slist (map (b => node "bind" [escStr b.ebHost, escStr b.ebSymbol]) bs)]
+
 declSexp : Decl -> String
 declSexp (DTypeSig p n t _) = node "DTypeSig" [boolStr p, escStr n, tySexp t]
 declSexp (DExtern d) =
-  node "DExtern" [boolStr d.edPub, escStr d.edName, tySexp d.edTy]
+  node
+    "DExtern"
+    ([boolStr d.edPub, escStr d.edName, tySexp d.edTy]
+      ++ externBindParts d.edBinds)
 declSexp (DFunDef p n ps b _ _) =
   node "DFunDef" [boolStr p, escStr n, slist (map patSexp ps), exprSexp b]
 declSexp (DData { dataVis = vis, dataName = n, dataParams = ps, dataExtern = True }) =

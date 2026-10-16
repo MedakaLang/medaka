@@ -126,6 +126,7 @@ import frontend.ast.{
   DataVis(..),
   Decl(..),
   ExternDecl(..),
+  externRowCons,
   PropParam(..),
   Section(..),
   InterpPart(..),
@@ -43942,14 +43943,15 @@ ffiTyHeadNameWith aliases ty = match expandAliasHeadTyWith aliases ty
 -- The raw-AST `ir.core_ir_lower.ffiExternTypeNames` remains only for the snapshot
 -- tool's intentionally untyped emitter stage.
 export
-checkedFfiExternTypeNames : List Decl -> List (String, (List String, String))
+checkedFfiExternTypeNames : List Decl ->
+  List (String, (String, (List String, String)))
 checkedFfiExternTypeNames decls =
   let denv = dataEnvFromDeclsGo 0 decls emptyDataEnv
   ffiExternTypeRowsWith (aliasOwnAt 0 denv.deAliases) decls
 
 export
 checkedFfiExternTypeNamesModules : List (String, List Decl) ->
-  List (String, (List String, String))
+  List (String, (String, (List String, String)))
 checkedFfiExternTypeNamesModules modules =
   flatMap
     (checkedFfiExternTypeNamesModule driverState.value.declEnvsRef.value)
@@ -43957,7 +43959,7 @@ checkedFfiExternTypeNamesModules modules =
 
 checkedFfiExternTypeNamesModule : DeclEnvs ->
   (String, List Decl) ->
-  List (String, (List String, String))
+  List (String, (String, (List String, String)))
 checkedFfiExternTypeNamesModule envs (mid, decls) =
   let cur = declEnvsOrdOf mid envs
   let aliases =
@@ -43977,13 +43979,14 @@ aliasOwnAt cur ((key, ad) :: rest)
 
 ffiExternTypeRowsWith : List (TabKey, (List String, Ty)) ->
   List Decl ->
-  List (String, (List String, String))
+  List (String, (String, (List String, String)))
 ffiExternTypeRowsWith _ [] = []
-ffiExternTypeRowsWith aliases ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest)
-  | ffiIsBuiltinExternName n = ffiExternTypeRowsWith aliases rest
-  | otherwise =
-    (n, (ffiSigArgHeadsWith aliases ty, ffiSigRetHeadWith aliases ty))
-      :: ffiExternTypeRowsWith aliases rest
+ffiExternTypeRowsWith aliases ((DExtern d) :: rest) =
+  externRowCons
+    (ffiIsBuiltinExternName d.edName)
+    d
+    (ffiSigArgHeadsWith aliases d.edTy, ffiSigRetHeadWith aliases d.edTy)
+    (ffiExternTypeRowsWith aliases rest)
 ffiExternTypeRowsWith aliases ((DAttrib _ inner) :: rest) =
   ffiExternTypeRowsWith aliases (inner :: rest)
 ffiExternTypeRowsWith aliases (_ :: rest) = ffiExternTypeRowsWith aliases rest

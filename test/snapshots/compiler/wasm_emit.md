@@ -1,5 +1,5 @@
 # META
-source_lines=12157
+source_lines=12161
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -603,14 +603,18 @@ makeWasmEmitInputFull : List (String, (String, String, Int)) ->
   Bool ->
   Bool ->
   List (String, List String) ->
-  List (String, (List String, String)) ->
+  List (String, (String, (List String, String))) ->
   WasmEmitInput
-makeWasmEmitInputFull _ ctorFieldTypes mainIsFloat mainIsUnit recordFieldOrders ffiExternTypes =
+ffiRowSig : (String, (String, (List String, String))) ->
+  (String, (List String, String))
+ffiRowSig (n, (_, sg)) = (n, sg)
+
+makeWasmEmitInputFull _ ctorFieldTypes mainIsFloat mainIsUnit recordFieldOrders ffiExternRows =
   WasmEmitInputData
     ctorFieldTypes
     (omFromPairs (reverseL (map ctorToFloatIdxs ctorFieldTypes)) omEmpty)
     mainIsFloat
-    (omFromPairs (reverseL ffiExternTypes) omEmpty)
+    (omFromPairs (reverseL (map ffiRowSig ffiExternRows)) omEmpty)
     mainIsUnit
     []
 
@@ -12186,8 +12190,10 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeAlias true "WasmEmitInput" () (TyCon "WasmEmitInputData"))
 (DTypeSig true "makeWasmEmitInput" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "WasmEmitInput"))))))
 (DFunDef false "makeWasmEmitInput" ((PVar "methodIfaces") (PVar "ctorFieldTypes") (PVar "mainIsFloat") (PVar "recordFieldOrders")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmEmitInputFull") (EVar "methodIfaces")) (EVar "ctorFieldTypes")) (EVar "mainIsFloat")) (EVar "False")) (EVar "recordFieldOrders")) (EListLit)))
-(DTypeSig true "makeWasmEmitInputFull" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) (TyCon "WasmEmitInput"))))))))
-(DFunDef false "makeWasmEmitInputFull" (PWild (PVar "ctorFieldTypes") (PVar "mainIsFloat") (PVar "mainIsUnit") (PVar "recordFieldOrders") (PVar "ffiExternTypes")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "WasmEmitInputData") (EVar "ctorFieldTypes")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "map") (EVar "ctorToFloatIdxs")) (EVar "ctorFieldTypes")))) (EVar "omEmpty"))) (EVar "mainIsFloat")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ffiExternTypes"))) (EVar "omEmpty"))) (EVar "mainIsUnit")) (EListLit)))
+(DTypeSig true "makeWasmEmitInputFull" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))) (TyCon "WasmEmitInput"))))))))
+(DTypeSig false "ffiRowSig" (TyFun (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "ffiRowSig" ((PTuple (PVar "n") (PTuple PWild (PVar "sg")))) (ETuple (EVar "n") (EVar "sg")))
+(DFunDef false "makeWasmEmitInputFull" (PWild (PVar "ctorFieldTypes") (PVar "mainIsFloat") (PVar "mainIsUnit") (PVar "recordFieldOrders") (PVar "ffiExternRows")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "WasmEmitInputData") (EVar "ctorFieldTypes")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "map") (EVar "ctorToFloatIdxs")) (EVar "ctorFieldTypes")))) (EVar "omEmpty"))) (EVar "mainIsFloat")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "map") (EVar "ffiRowSig")) (EVar "ffiExternRows")))) (EVar "omEmpty"))) (EVar "mainIsUnit")) (EListLit)))
 (DTypeSig true "withRuntimeExternsW" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "WasmEmitInput") (TyCon "WasmEmitInput"))))
 (DFunDef false "withRuntimeExternsW" ((PVar "names") (PCon "WasmEmitInputData" (PVar "c") (PVar "d") (PVar "e") (PVar "f") (PVar "g") PWild)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "WasmEmitInputData") (EVar "c")) (EVar "d")) (EVar "e")) (EVar "f")) (EVar "g")) (EVar "names")))
 (DTypeSig false "inputRuntimeExternsW" (TyFun (TyCon "WasmEmitInput") (TyApp (TyCon "List") (TyCon "String"))))
@@ -14525,8 +14531,10 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeAlias true "WasmEmitInput" () (TyCon "WasmEmitInputData"))
 (DTypeSig true "makeWasmEmitInput" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "WasmEmitInput"))))))
 (DFunDef false "makeWasmEmitInput" ((PVar "methodIfaces") (PVar "ctorFieldTypes") (PVar "mainIsFloat") (PVar "recordFieldOrders")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmEmitInputFull") (EVar "methodIfaces")) (EVar "ctorFieldTypes")) (EVar "mainIsFloat")) (EVar "False")) (EVar "recordFieldOrders")) (EListLit)))
-(DTypeSig true "makeWasmEmitInputFull" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) (TyCon "WasmEmitInput"))))))))
-(DFunDef false "makeWasmEmitInputFull" (PWild (PVar "ctorFieldTypes") (PVar "mainIsFloat") (PVar "mainIsUnit") (PVar "recordFieldOrders") (PVar "ffiExternTypes")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "WasmEmitInputData") (EVar "ctorFieldTypes")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EMethodRef "map") (EVar "ctorToFloatIdxs")) (EVar "ctorFieldTypes")))) (EVar "omEmpty"))) (EVar "mainIsFloat")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "ffiExternTypes"))) (EVar "omEmpty"))) (EVar "mainIsUnit")) (EListLit)))
+(DTypeSig true "makeWasmEmitInputFull" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))) (TyCon "WasmEmitInput"))))))))
+(DTypeSig false "ffiRowSig" (TyFun (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "ffiRowSig" ((PTuple (PVar "n") (PTuple PWild (PVar "sg")))) (ETuple (EVar "n") (EVar "sg")))
+(DFunDef false "makeWasmEmitInputFull" (PWild (PVar "ctorFieldTypes") (PVar "mainIsFloat") (PVar "mainIsUnit") (PVar "recordFieldOrders") (PVar "ffiExternRows")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "WasmEmitInputData") (EVar "ctorFieldTypes")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EMethodRef "map") (EVar "ctorToFloatIdxs")) (EVar "ctorFieldTypes")))) (EVar "omEmpty"))) (EVar "mainIsFloat")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EMethodRef "map") (EVar "ffiRowSig")) (EVar "ffiExternRows")))) (EVar "omEmpty"))) (EVar "mainIsUnit")) (EListLit)))
 (DTypeSig true "withRuntimeExternsW" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "WasmEmitInput") (TyCon "WasmEmitInput"))))
 (DFunDef false "withRuntimeExternsW" ((PVar "names") (PCon "WasmEmitInputData" (PVar "c") (PVar "d") (PVar "e") (PVar "f") (PVar "g") PWild)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "WasmEmitInputData") (EVar "c")) (EVar "d")) (EVar "e")) (EVar "f")) (EVar "g")) (EVar "names")))
 (DTypeSig false "inputRuntimeExternsW" (TyFun (TyCon "WasmEmitInput") (TyApp (TyCon "List") (TyCon "String"))))

@@ -1117,6 +1117,35 @@ C host and `"c/libcurl"` is a library on it. An extern's own row writes `"HOST"`
 parameter as text: `"c*"` admits both `"c"` and `"c/libcurl"`, `"c"` admits only
 `"c"`, and `"c/*"` does not admit `"c"`.
 
+### Host bindings: the `bind` clause
+
+By default an extern is a C function whose symbol is its own name. Indented
+`bind` clauses under the signature say otherwise, one per host:
+
+```text
+extern fetchText : (url : String) -> <FFI "c/libfetch", FFI "js/fetch"> String
+  bind c "fetch_text"
+  bind js "fetchText"
+```
+
+`bind c "sym"` names the C symbol the native target links the call to; the
+Medaka name is only the name the program uses. `bind js "name"` names the
+JavaScript function for a JavaScript host. With no clause at all the declaration
+is bound to `c` under its own name; a `js` binding is never implied, and a
+declaration with only a `js` clause has no C binding, so the native target emits
+no `declare` or call for it. Two Medaka names may bind one C symbol when their
+signatures agree; when they disagree, the build is refused naming the symbol and
+both Medaka names.
+
+Each `FFI` atom in the extern's own row must have a binding for its host
+(`T-FFI-UNBOUND-HOST`); a host bound twice is `T-FFI-DUPLICATE-HOST`; a host
+other than `c` or `js` is `T-FFI-UNKNOWN-HOST`. A C symbol is
+`[A-Za-z_][A-Za-z0-9_]*` (`T-FFI-C-SYMBOL`), a JavaScript name
+`[A-Za-z_$][A-Za-z0-9_$]*` (`T-FFI-JS-NAME`). A `bind` clause on a redeclared
+`stdlib/runtime.mdk` catalog name is `T-FFI-BUILTIN-BIND`, since the built-in
+always runs. A bound written `<FFI "c*", FFI "js*">` on a non-extern signature is
+unchanged.
+
 Rules, each a located error when broken:
 
 - The row must name `FFI`, joined with whatever else it names
@@ -1127,13 +1156,14 @@ Rules, each a located error when broken:
 - A **nullary** `extern k : Int` is refused (`T-FFI-NULLARY`) — an effect row lives
   on an arrow's result, so a signature with no arrow has nowhere to write `FFI`.
   Write `extern k : Unit -> <FFI "c"> Int` and call it as `k ()`.
-- Names beginning `mdk_` are reserved for the runtime's own C symbols
-  (`T-FFI-RESERVED-NAME`).
+- C symbols beginning `mdk_` are reserved for the runtime's own symbols
+  (`T-FFI-RESERVED-NAME`); the rule judges the bound symbol, so an extern named
+  `mdk_shim` may bind `shim_word`, and one named `nilWord` may not bind `mdk_nil`.
 - Redeclaring a `stdlib/runtime.mdk` catalog name may not **narrow** its effect
   row (`T-FFI-CATALOG-NARROW`). The declared row must cover the catalog's own;
   wider is fine, equal is fine, missing an atom the catalog names is not.
-- One C symbol has one signature program-wide; two modules declaring the same name
-  with different shapes is refused.
+- One C symbol has one signature program-wide; two declarations binding the same
+  symbol (by name or by a `bind c` clause) with different shapes is refused.
 
 `<FFI "c*">` is **not** an `<IO>` alias member, deliberately: an `<IO>` bound does not
 admit `<FFI "c*">`, so a boundary has to say `FFI` literally to let a foreign call

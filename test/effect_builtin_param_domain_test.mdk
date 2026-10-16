@@ -471,6 +471,16 @@ test "a built-in redeclaration takes no bind clause" =
     "T-FFI-BUILTIN-BIND"
     "redeclares a built-in, which always runs the built-in's own implementation"
 
+test "a c row on a declaration bound only to js is refused" =
+  expectFfiRefusal
+    "ffi_bind_c_unbound_reject.mdk"
+    3
+    "T-FFI-UNBOUND-HOST"
+    "names the `c` host in its result row but has no `c` binding"
+
+test "a declaration bound to both hosts may name only c in its row" =
+  expectCheckAccept (fixture "ffi_bind_dual_row_c_only_accept.mdk")
+
 test "a return-position alias row names the FFI host (#3638)" =
   expectCheckAccept (fixture "ffi_alias_row_accept.mdk")
 
