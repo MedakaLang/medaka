@@ -1,0 +1,5 @@
+extern cA : Int -> <FFI "c"> Int
+extern cB : Int -> <FFI "c"> Int
+
+main : <Stdout, FFI "c*"> Unit
+main = println (cA 1 + cB 2)

@@ -1,0 +1,6 @@
+exit=0
+--- stdout
+dualAdd : Int -> Int -> <FFI "c"> Int
+main : <FFI "c", Stdout> Unit
+-- <fixtures>/ffi_dual.mdk: ok (2 declaration(s) checked, 0 errors)
+--- stderr

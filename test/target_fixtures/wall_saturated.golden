@@ -1,0 +1,7 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/ffi_wall_saturated.mdk:1:7: the extern `cNegate` is reached via `main → cNegate`, and has no binding for the host `js`, which the target `wasmgc/node` calls foreign code through (it binds `c`); add a `bind js` clause or build for a target whose host it binds
+  |
+1 | extern cNegate : Int -> <FFI "c/x"> Int
+  |        ^

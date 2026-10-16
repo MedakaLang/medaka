@@ -1,0 +1,7 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/ffi_impl.mdk:3:7: the extern `cNeg` is reached from an impl method, interface default or top-level let group, and has no binding for the host `js`, which the target `wasmgc/node` calls foreign code through (it binds `c`); add a `bind js` clause or build for a target whose host it binds
+  |
+3 | extern cNeg : Int -> <FFI "c"> Int
+  |        ^

@@ -1,0 +1,7 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/ffi_js_only.mdk:3:7: the extern `jsAdd` is reached via `main → jsAdd`, and the target `eval/run ∩ wasmgc/node` calls foreign code through no host (it binds `js`); build for a target whose host it binds
+  |
+3 | extern jsAdd : Int -> Int -> <FFI "js"> Int
+  |        ^

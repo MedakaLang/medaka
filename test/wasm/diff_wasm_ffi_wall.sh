@@ -5,12 +5,11 @@
 # HOF / returned point-free), or a bare top-level reference never applied — instead
 # of a generic "unbound variable" panic for the value-position/bare-reference shapes.
 #
-# `build` checks the program against the selected profile (`wasmgc/node` for
-# `--target wasm`) before anything is lowered, and each extern here is bound for
-# `c` alone, so every shape is refused by that check (`T-TARGET-NO-BINDING`,
-# located at the extern, with the via-chain to it).  The emitter's own FFI arms
-# (`ffiWallW`, compiler/backend/wasm_emit.mdk) are reached by a `js`-bound
-# extern, or by a child started without a profile.
+# The binding refusal for a c-only extern (`T-TARGET-NO-BINDING`: saturated call,
+# value-position reference, bare reference) is pinned by test/target_fixtures_test.mdk
+# (`wall_*` rows).  The emitter's own FFI arms (`ffiWallW`,
+# compiler/backend/wasm_emit.mdk) are reached by a `js`-bound extern, or by a
+# child started without a profile.
 #
 # No real C linkage needed: `build --target wasm` must refuse BEFORE attempting to
 # emit/validate/link anything, so the wall fixtures never reach Node.  The
@@ -45,13 +44,7 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-EXPECT="→ %s\`, and has no binding for the host \`js\`, which the target \`wasmgc/node\`"
-
 fail=0
-
-check_one() {
-  check_refused "$1" "$2" "$(printf "$EXPECT" "$3")"
-}
 
 # Expect `build --target wasm` to exit nonzero with a message containing $3.
 # An optional $4 is the source of a module `gaplib`, written beside the program.
@@ -75,37 +68,6 @@ check_refused() {
     echo "ok   $name"
   fi
 }
-
-# regression floor: the saturated-call shape was already correct pre-#2129.
-check_one "saturated" \
-'extern cNegate : Int -> <FFI "c/x"> Int
-
-main : <FFI "c*"> Int
-main = cNegate 5' \
-  "cNegate"
-
-# #2129 b6_hof: an FFI extern referenced in value position (passed to a HOF).
-check_one "value_position_hof" \
-'extern cNegate : Int -> <FFI "c/x"> Int
-
-main : <FFI "c*"> List Int
-main = map cNegate [1, 2, 3]' \
-  "cNegate"
-
-# #2129 b1_nullary: an FFI extern referenced by bare name, never applied. A
-# genuinely-nullary `extern k : Int` is itself rejected by typecheck (T-FFI-NULLARY,
-# compiler/FFI-ABI.md), so this fixture mirrors the *reference* shape instead: the
-# extern's own type has an arrow, but the reference to it (`gNullary`, inside
-# `useIt`) is a bare name that is never called.
-check_one "bare_toplevel_reference" \
-'extern gNullary : Unit -> <FFI "c/x"> Int
-
-useIt : Unit -> Unit -> <FFI "c/x"> Int
-useIt _ = gNullary
-
-main : <FFI "c*"> Int
-main = (useIt ()) ()' \
-  "gNullary"
 
 # ── The runtime-extern wall (compiler/backend/core_validate.mdk) ────────────
 # A program reaching a runtime extern whose catalog row gives wasm no lowering
@@ -562,7 +524,7 @@ main = println (netSend 1)' \
   ""
 
 if [ "$fail" -eq 0 ]; then
-  echo "43 ok, 0 failing"
+  echo "40 ok, 0 failing"
   exit 0
 else
   echo "diff_wasm_ffi_wall: FAILURES ABOVE"

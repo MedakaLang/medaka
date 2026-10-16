@@ -1,0 +1,7 @@
+-- A c-only extern reached only through a top-level let group.
+extern cNeg : Int -> <FFI "c"> Int
+
+let rec k x = cNeg x
+
+main : <Stdout> Unit
+main = println "ok"

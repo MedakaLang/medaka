@@ -305,6 +305,67 @@ test "target_fixtures: a reached extern needs a binding for the target's host" =
       "check"
       ["--json", "--target", "wasm"]
       "ffi_imported/main.mdk",
+    targetCase
+      "node_refuses_ffi_impl"
+      "check"
+      ["--target", "wasmgc/node"]
+      "ffi_impl.mdk",
+    targetCase
+      "node_refuses_ffi_default"
+      "check"
+      ["--target", "wasmgc/node"]
+      "ffi_default.mdk",
+    targetCase
+      "node_refuses_ffi_letgroup"
+      "check"
+      ["--target", "wasmgc/node"]
+      "ffi_letgroup.mdk",
+    targetCase
+      "node_refuses_ffi_two"
+      "check"
+      ["--target", "wasmgc/node"]
+      "ffi_two.mdk",
+    targetCase
+      "run_accepts_catalog_redecl"
+      "run"
+      ["--allow-internal"]
+      "ffi_catalog_redecl.mdk",
+    targetCase
+      "node_accepts_catalog_redecl"
+      "check"
+      ["--allow-internal", "--target", "wasmgc/node"]
+      "ffi_catalog_redecl.mdk",
+    targetCase
+      "browser_accepts_ffi_dual"
+      "check"
+      ["--target", "wasmgc/browser-worker"]
+      "ffi_dual.mdk",
+    targetCase
+      "edge_accepts_ffi_dual"
+      "check"
+      ["--target", "wasmgc/edge"]
+      "ffi_dual.mdk",
+    targetCase
+      "run_node_refuses_ffi_js_only"
+      "run"
+      ["--target", "wasmgc/node"]
+      "ffi_js_only.mdk",
+    emitterCase "seam_refuses_ffi_c_only" "wasmgc/node" "ffi_entry.mdk",
+    targetCase
+      "wall_saturated"
+      "check"
+      ["--target", "wasm"]
+      "ffi_wall_saturated.mdk",
+    targetCase
+      "wall_value_position_hof"
+      "check"
+      ["--target", "wasm"]
+      "ffi_wall_hof.mdk",
+    targetCase
+      "wall_bare_toplevel_reference"
+      "check"
+      ["--target", "wasm"]
+      "ffi_wall_bare.mdk",
   ]
 
 test "target_fixtures: a module label spelled FFI does not label a foreign call" = expectEach
