@@ -1,0 +1,73 @@
+# tools/ — one module per user-facing tool: check, fmt, lint, test, doc, lsp, mcp, gate
+
+**Status:** CURRENT — re-derived from source at `ffd3bdb65897da35db70d06dbb5df3df35d884d7` on 2026-10-16. When it drifts, re-derive; do not patch.
+
+## What this directory is
+The verbs and services built on the pipeline (`ARCHITECTURE.md` section 1), at the top of A1 beside
+`driver/`: `driver/medaka_cli.mdk` dispatches to them, and nothing below imports them. Each tool
+parses, desugars and checks its own input; the destination is that all of them read one memoized
+set of entries (#4141).
+
+## Parts
+| Module | Owns | Entry points |
+|---|---|---|
+| `check.mdk` | The composed front-end pass parse, desugar, resolve, exhaust, typecheck | `runCheck`, `runCheckFromDecls` |
+| `check_policy.mdk` | `medaka check-policy`: does an entry's effect summary fit an allow list | `analyzeProgram`, `runCheckPolicy` |
+| `target_check.mdk` | Does an entry fit a target profile; a refusal is one located diagnostic | target-capability check |
+| `target_parse.mdk` | One parse, desugar and comment scan of a `medaka test` target per process | per-process memo |
+| `printer.mdk` | The comment-free Wadler/Leijen document printer over the AST | AST to source |
+| `fmt.mdk` | The comment-preserving formatter over `printer.mdk` | `formatProgram` |
+| `lint.mdk` | The lint framework, rule registry and seed rules on the raw AST | `Rule` registry |
+| `lint_cmd.mdk` | The `medaka lint` engine: targets, cached pass, cross-file tier, JSON | lint engine |
+| `lint_cache.mdk` | The on-disk per-file cache behind `lint --cache` | content-keyed shards |
+| `lint_baseline.mdk` | The per-file, per-rule finding-count baseline | `--baseline` reader |
+| `codemod.mdk` | Named source-preserving AST transforms and their registry | codemod registry |
+| `doc.mdk` | `medaka doc`: doc-comment extraction and Markdown rendering, single file or library | `runDoc`, `renderModulePage` |
+| `lsp.mdk` | The language server: hover, completion, references, rename | LSP server |
+| `lsp_harness.mdk` | A native harness driving the `medaka lsp` binary over JSON-RPC | test harness |
+| `mcp.mdk` | `medaka mcp`: the MCP server over stdio and its tool registry | tool registry |
+| `refindex.mdk` | The whole-project binder-keyed reference index under references and rename | reference index |
+| `repl.mdk` | The self-hosted REPL | REPL loop |
+| `new_cmd.mdk` | `medaka new`: project scaffolding | `newProject` |
+| `snapshot.mdk` | `medaka snapshot`: the in-process snapshot runner | snapshot verb |
+| `test_cmd.mdk` | `medaka test`: doctests, properties and `test` blocks, shared by CLI and probe | `runTest` |
+| `test_runner.mdk` | The `test "…"` declaration runner returning an `Expectation` value | test rows |
+| `doctest.mdk` | Doctest extraction and running | `ExResult` |
+| `native_doctest.mdk` | The native doctest engine: compile the module plus examples, run, report | native engine |
+| `native_test_decls.mdk` | The native engine for `test "…"` declarations (`medaka test --native`); named to avoid the `_test.mdk` sibling suffix | `runNativeTests` |
+| `native_props.mdk` | The native property runner: one probe per target | native engine |
+| `probe_transcript.mdk` | The sentinel-delimited stdout format both native engines read back | transcript format |
+| `prop_plan.mdk` | Engine-neutral property planning: parameter types, constructors, shrink order | plan layer |
+| `prop_helpers.mdk` | Typed bridge bindings for custom `Arbitrary` parameters | bridge bindings |
+| `prop_runner.mdk` | The interpreted property runner: generate, check, shrink | `PropResult` |
+| `eval_props.mdk` | Nonce-framed rows between `test_cmd` and the isolated property worker | worker protocol |
+| `test_pins.mdk` | The typed known-red ledger schema and parser | `medaka-test-pins.toml` |
+| `test_pins_io.mdk` | The filesystem context for that ledger | project pin lookup |
+| `test_pins_report.mdk` | Verdict grading of raw runner outcomes against the ledger | pin verdicts |
+| `gate_cmd.mdk` | `medaka gate`: list, run, verify and the other registry commands | gate verbs |
+| `gate_registry.mdk` | The `test/gates.toml` schema, reader, selector language and renderers | registry reader |
+| `gate_cost.mdk` | The reader for `test/gate_cost_baseline.json` | cost baseline |
+| `gate_pack.mdk` | The gate scheduler: bin packing and the budget governor | `balance`, `budget` |
+
+## Laws that bind it
+- **A1** — `tools` may import any lower layer; only `driver` and `entries` import `tools`.
+- **A3** — `printer.mdk`, `repl.mdk`, `prop_runner.mdk`, `lsp.mdk`, `refindex.mdk` and `target_parse.mdk` hold module-level cells; `cells.golden` counts them.
+- **A5** — `check.mdk` and the lint tier report diagnostics as data.
+- **A7** — `target_parse.mdk` is the compute-once memo for `medaka test`.
+
+## Boundaries and checks
+- `test/arch_boundaries_test.mdk`, `test/arch_goldens/layering.golden`, `cells.golden`.
+- The pre-commit hook (`.githooks/pre-commit`): format, lint rules and snapshot check over staged `.mdk`.
+- `test/gates.toml` and `medaka gate verify`: the registry these modules read.
+- Module tests are `*_test.mdk` siblings.
+
+## Where the design lives
+- `docs/ops/CLI-CONFORMANCE.md`, `docs/ops/MCP.md`, `docs/design/TYPE-AWARE-LINT-DESIGN.md`.
+- `ARCHITECTURE.md` section 3: one file per tool over memoized entries (#4141).
+
+## Traps
+- `[P-TEST-SIBLING]` — a compiler-internal test is a `foo_test.mdk` sibling.
+- `[W-MODULE-BLIND]` — a module outside every entry's import closure is invisible to `make medaka`; name it in the Makefile `test:` target.
+- `[H-FMT]`, `[H-LINT]` — the hook runs fmt and lint over staged `.mdk`.
+- `[T-PERRUN-COMMENTS]` — diff `fmt --write` output on comment-bearing record decls.
+- `[W-SHARD-DERIVED]` — `shard` in `test/gates.toml` comes from `medaka gate balance`.

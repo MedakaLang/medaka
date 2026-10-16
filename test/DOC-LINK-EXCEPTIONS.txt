@@ -180,33 +180,21 @@ REF	compiler/backend/private_mangle.mdk	legitimate history: closed qa-beta-2026-
 
 # ── REF: TODO(docs-cleanup) — real stale paths in living docs ───────────────
 REF	compiler/ast.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/frontend/ast.mdk
-REF	compiler/check.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/tools/check.mdk
-REF	compiler/desugar.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/frontend/desugar.mdk
 REF	compiler/eval.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/eval/eval.mdk
-REF	compiler/exhaust.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/frontend/exhaust.mdk
 # (compiler/llvm_emit.mdk's REF exception lived here. The ORCHESTRATING.md terseness
 #  pass fixed that doc's stale path to compiler/backend/llvm_emit.mdk — the last LIVING
 #  citation — so the ORPHAN REF half of the ratchet correctly demanded this line's
 #  deletion. The TODO(docs-cleanup) it named is DONE.)
-REF	compiler/loader.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/driver/loader.mdk
-REF	compiler/marker.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/frontend/marker.mdk
-REF	compiler/resolve.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/frontend/resolve.mdk
 REF	compiler/typecheck.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/types/typecheck.mdk
-REF	compiler/sexp.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/ir/sexp.mdk
 REF	compiler/bytecode.mdk	TODO(docs-cleanup): the bytecode pipeline stage was retired entirely (not renamed) — no successor file exists; the citing doc should say so or drop the reference
 REF	compiler/entries/llvm_emit_gaps_main.mdk	TODO(docs-cleanup): entry point renamed/removed during the compiler/entries/ reorg; no llvm_emit_gaps_main.mdk exists (see wasm_emit_gaps_main.mdk for the wasm-side survivor)
-REF	compiler/entries/mark_main.mdk	TODO(docs-cleanup): entry point renamed/removed during the compiler/entries/ reorg; no mark_main.mdk exists in compiler/entries/
-REF	compiler/entries/perf_main.mdk	TODO(docs-cleanup): entry point renamed during the compiler/entries/ reorg; now compiler/entries/profile_main.mdk (or profile_modules_main.mdk)
 REF	test/diff_compiler_bytecode_eval_dict.sh	TODO(docs-cleanup): gate for the retired bytecode pipeline stage; no successor script exists
 REF	test/diff_compiler_bytecode_selfproc.sh	TODO(docs-cleanup): gate for the retired bytecode pipeline stage; no successor script exists
 REF	test/diff_compiler_engines.sh	TODO(docs-cleanup): renamed to test/lib_engines_differential.sh, run as test/diff_compiler_engines_part{1,2,3}.sh (#3946); the citations left are in compiler/eval/eval.mdk (repointing it moves test/snapshots/compiler/eval.md), compiler/entries/eval_autoprint_main.mdk and one test/llvm_fixtures_modules entry comment
-REF	test/diff_compiler_eval_bytecode.sh	TODO(docs-cleanup): gate for the retired bytecode pipeline stage; no successor script exists
-REF	test/diff_compiler_eval_bytecode_modules.sh	TODO(docs-cleanup): gate for the retired bytecode pipeline stage; no successor script exists
 REF	compiler/entries/argstamp_parity_probe.mdk	deleted with #157 (single-mode elaboration) — the Phase-0 temp parity probe entry; ARGSTAMP-UNIFY-PLAN.md retains historical citations of it
 REF	test/argstamp_parity_probe.sh	deleted with #157 (single-mode elaboration) — the Phase-0 temp parity probe harness; ARGSTAMP-UNIFY-PLAN.md retains historical citations of it
 REF	test/diff_compiler_lexer.sh	migrated into the snapshot # TOKENS section in #280; archive/design/BROWSER-STACK-DIAGNOSIS.md records the gate as it existed when the layout stack was diagnosed — legitimate history
 REF	test/diff_compiler_eval_dict.sh	migrated into the snapshot # EVAL section in #81 R6 (diff_compiler_snapshot_eval.sh); the eval_dict_main probe + eval_dict_fixtures/*.eval.golden survive for the batch gate — compiler/README.md's as-built port-slice log and archive/design/D2-REKEY-DESIGN.md record the gate as it existed
-REF	test/diff_compiler_eval_typed.sh	migrated into the snapshot # EVAL section in #81 R6 (diff_compiler_snapshot_eval.sh); the eval_typed_main probe + eval_typed_fixtures/*.eval.golden survive for the batch gate — compiler/README.md's as-built port-slice log records the gate as it existed
 REF	test/effect_set_domain.sh	migrated to a `kind = "native"` gate module in #2591 (test/effect_set_domain_test.mdk); docs/design/EFFECTS-CONFORMANCE-ROADMAP.md's WS-3a landing note and docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot both record the gate as it existed as a script
 REF	test/diff_compiler_run_check_agreement.sh	migrated to a `kind = "native"` gate module in #2592 (test/diff_compiler_run_check_agreement_test.mdk, registry name unchanged); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot and archive/findings/qa-beta-2026-07-07/P0-18-{BUILD-PATH,STANDALONE-DISPATCH}-DESIGN.md's dated pass/fail measurements all record the gate as it existed as a script — legitimate history
 REF	test/diff_compiler_shadow_semantics.sh	migrated to a `kind = "native"` gate module in #2592 (test/diff_compiler_shadow_semantics_test.mdk, registry name unchanged); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot records the gate as it existed as a script — legitimate history

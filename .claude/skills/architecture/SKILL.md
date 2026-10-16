@@ -18,7 +18,7 @@ duplicate two things that already have owners:
 
 - **Which stage lives in which file, and in what order they run** — `AGENTS.md`
   § "Pipeline — where each stage lives". That table is current; the Layout
-  table in `compiler/README.md` predates the subfolder restructure and says so
+  table in the old `compiler/README.md` body (now `archive/design/COMPILER-PORT-LOG.md`) predates the subfolder restructure and says so
   in its own header.
 - **How not to make the compiler slow** — `compiler/AGENTS.md`. Placement never
   overrides its one rule (a `List` is not a set and not a map).
@@ -40,11 +40,11 @@ obligations — `[W-PROJECT-BY-MANIFEST]` in `AGENTS.md`, not this skill.
 | [`compiler/types/`](../../../compiler/types/ARCHITECTURE.md) | Type inference, interfaces, effects — `typecheck.mdk`, `annotate.mdk`. Exhaustiveness is *called from* here (`[P-EXHAUST-IN-TYPECHECK]`) but lives in `frontend/`. | Emit diagnostics by raising — errors accumulate (`[T-ERRORS-ACCUM]`). |
 | [`compiler/ir/`](../../../compiler/ir/ARCHITECTURE.md) | Core IR: the types, lowering, S-expr form, DCE, and the Core IR interpreter. The seam between front and back (`archive/design/STAGE2-DESIGN.md`). | Contain surface-AST knowledge, or backend target detail. |
 | [`compiler/backend/`](../../../compiler/backend/ARCHITECTURE.md) | Target emission — `llvm_emit.mdk`, `wasm_emit.mdk`, mangling, TRMC analysis. Consumes Core IR only. | Re-derive anything the frontend or typechecker already computed. |
-| `compiler/eval/` | The tree-walking interpreter and its dict-passing dispatch. Its module driver moves in lockstep with `compiler/ir/core_ir_eval.mdk`'s (`[T-EVAL-LOCKSTEP]`). | Drift from the Core IR interpreter's frame semantics. |
-| `compiler/driver/` | **Dispatch, never implementation.** Verb routing (`medaka_cli.mdk`), the dependency walk (`loader.mdk`), the accumulating diagnostics pipeline (`diagnostics.mdk`), the build pipeline (`build_cmd.mdk`). | Hold a subcommand's *logic* or its command-local ADTs. That is the de-grab-bag work, #2282. |
-| `compiler/tools/` | One file per user-facing tool: `fmt`, `lint`, `doc`, `doctest`, `test_cmd`, `lsp`, `mcp`, `repl`, `check`, `gate_cmd`, `printer`, `snapshot`. A new tool is a NEW FILE here. | Become a shared grab-bag; cross-tool helpers go to `support/`. |
-| `compiler/support/` | The compiler-private mini-stdlib: `util`, `char`, `path`, `ordmap`, `scc`, `timer`, `opcount`, `manifest`. Thin wrappers over `stdlib/` are fine and expected. | Grow a second copy of something `stdlib/` exports — see the duplication rule below. |
-| `compiler/entries/` | Per-stage probe entry points, one `main` each, **thin**: parse argv, call one pipeline function, print. They exist so gates and oracles can drive one stage. | Contain logic. If an entry needs a real algorithm, the algorithm belongs in the owning stage and the entry calls it. |
+| [`compiler/eval/`](../../../compiler/eval/ARCHITECTURE.md) | The tree-walking interpreter and its dict-passing dispatch. Its module driver moves in lockstep with `compiler/ir/core_ir_eval.mdk`'s (`[T-EVAL-LOCKSTEP]`). | Drift from the Core IR interpreter's frame semantics. |
+| [`compiler/driver/`](../../../compiler/driver/ARCHITECTURE.md) | **Dispatch, never implementation.** Verb routing (`medaka_cli.mdk`), the dependency walk (`loader.mdk`), the accumulating diagnostics pipeline (`diagnostics.mdk`), the build pipeline (`build_cmd.mdk`). | Hold a subcommand's *logic* or its command-local ADTs. That is the de-grab-bag work, #2282. |
+| [`compiler/tools/`](../../../compiler/tools/ARCHITECTURE.md) | One file per user-facing tool: `fmt`, `lint`, `doc`, `doctest`, `test_cmd`, `lsp`, `mcp`, `repl`, `check`, `gate_cmd`, `printer`, `snapshot`. A new tool is a NEW FILE here. | Become a shared grab-bag; cross-tool helpers go to `support/`. |
+| [`compiler/support/`](../../../compiler/support/ARCHITECTURE.md) | The compiler-private mini-stdlib: `util`, `char`, `path`, `ordmap`, `scc`, `timer`, `opcount`, `manifest`. Thin wrappers over `stdlib/` are fine and expected. | Grow a second copy of something `stdlib/` exports — see the duplication rule below. |
+| [`compiler/entries/`](../../../compiler/entries/ARCHITECTURE.md) | Per-stage probe entry points, one `main` each, **thin**: parse argv, call one pipeline function, print. They exist so gates and oracles can drive one stage. | Contain logic. If an entry needs a real algorithm, the algorithm belongs in the owning stage and the entry calls it. |
 | `compiler/seed/` | The checked-in LLVM IR seed for cold bootstrap. Machine-managed (`test/refresh_seed.sh`). | Be hand-edited, ever. |
 | `stdlib/` | The language's public library. `core.mdk` is the only auto-prelude. | — |
 
