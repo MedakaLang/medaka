@@ -67,6 +67,7 @@ import support.util.{
   startsWith
 }
 import support.path.{baseOf, chopExt}
+import support.stage_count.{stageExit}
 import driver.diagnostics.{projectEntrySchemes}
 import driver.loader.{moduleIdOfPath}
 import frontend.desugar.{dataDerivers, newtypeDerivers, typeKindedParams}
@@ -1851,6 +1852,6 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
       let _ =
         ePutStrLn
           "medaka doc: '\{filename}' has an unresolved import graph (missing or cyclic import) — signatures unavailable"
-      let _ = exit 1
+      let _ = stageExit 1
       []
     Some schemes => schemes

@@ -1,0 +1,8 @@
+import list.{reverse}
+
+-- Reverses twice.
+-- > twice [1, 2]
+-- [1, 2]
+export
+twice : List Int -> List Int
+twice xs = reverse (reverse xs)

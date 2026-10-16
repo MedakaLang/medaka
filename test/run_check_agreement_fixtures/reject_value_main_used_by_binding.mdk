@@ -1,0 +1,7 @@
+-- A value `main` is the auto-printed entry point, so another binding may not use
+-- it: the printing wrap retypes `main`, and a use typed against the declared
+-- `List Int` would disagree with the program run and build elaborate.
+-- Hand-derived: REJECT on all three verbs, at the use of `main` in `total`.
+main : List Int
+main = [1, 2]
+total = sum main

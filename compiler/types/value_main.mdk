@@ -1,0 +1,96 @@
+-- What the auto-print judgment of a value `main` (`autoPrintWanted`,
+-- types/typecheck.mdk) reads off the entry module's own declarations: where
+-- another binding uses `main`, and whether a diagnostic lies inside `main`'s
+-- binding.  Pure functions over the AST; no typechecker state.
+
+import frontend.ast.{Decl(..), Expr(..), Loc(..)}
+import frontend.desugar.{mapChildren}
+import frontend.marker.{declBodies, declRefs, localBoundNames}
+import support.util.{anyList}
+
+-- The first use of the top-level `main` by another binding of [decls], located
+-- at the innermost span around it, else at [fallback].  A binding that binds a
+-- local `main` anywhere (a parameter, a `let`, a pattern) is read as using that
+-- local, so none of its occurrences count.
+export
+mainUseSite : Loc -> List Decl -> Option Loc
+mainUseSite _ [] = None
+mainUseSite fallback (d :: rest) =
+  if usesTopMain d then
+    Some (optionOr fallback (firstVarSpan "main" (declBodies d)))
+  else
+    mainUseSite fallback rest
+
+export
+mainUsedMsg : String
+mainUsedMsg =
+  "`main` is the auto-printed entry point, so other bindings cannot use it; move the shared value into its own binding"
+
+usesTopMain : Decl -> Bool
+usesTopMain d =
+  not (definesMain d)
+    && anyList (== "main") (declRefs d)
+    && not (anyList (== "main") (localBoundNames [d]))
+
+definesMain : Decl -> Bool
+definesMain (DAttrib _ d) = definesMain d
+definesMain (DFunDef _ "main" _ _ _ _) = True
+definesMain _ = False
+
+-- The innermost span around the first occurrence of [name] in [bodies].
+firstVarSpan : String -> List Expr -> Option Loc
+firstVarSpan name bodies =
+  let found = Ref None
+  let _ = map (walkLocated (visitVar name found) None) bodies
+  !found
+
+visitVar : String -> Ref (Option Loc) -> Option Loc -> Expr -> Unit
+visitVar name found at (EVar x) = match !found
+  None => if x == name then found := at
+  Some _ => ()
+visitVar _ _ _ _ = ()
+
+-- Visit every subexpression of [e] top-down with the innermost `ELoc` span
+-- enclosing it.
+walkLocated : (Option Loc -> Expr -> Unit) -> Option Loc -> Expr -> Unit
+walkLocated visit at e =
+  let here = match e
+    ELoc l _ => Some l
+    _ => at
+  let _ = visit here e
+  let _ = mapChildren (c => keep c (walkLocated visit here c)) e
+  ()
+
+keep : Expr -> Unit -> Expr
+keep e _ = e
+
+-- True iff [loc] starts inside the binding of the zero-argument `main` in
+-- [decls]: from its name token to the end of the last span its body carries.
+export
+inMainBinding : List Decl -> Option Loc -> Bool
+inMainBinding _ None = False
+inMainBinding decls (Some (Loc f l c _ _)) = match mainBinding decls
+  Some (Loc mf sl sc el ec, body) =>
+    let (endL, endC) = bodyEnd (el, ec) body
+    f == mf && before (sl, sc) (l, c) && before (l, c) (endL, endC)
+  None => False
+
+mainBinding : List Decl -> Option (Loc, Expr)
+mainBinding [] = None
+mainBinding ((DAttrib _ d) :: rest) = mainBinding (d :: rest)
+mainBinding ((DFunDef _ "main" [] body site _) :: _) = Some (site, body)
+mainBinding (_ :: rest) = mainBinding rest
+
+bodyEnd : (Int, Int) -> Expr -> (Int, Int)
+bodyEnd start body =
+  let last = Ref start
+  let _ = walkLocated (visitEnd last) None body
+  !last
+
+visitEnd : Ref (Int, Int) -> Option Loc -> Expr -> Unit
+visitEnd last _ (ELoc (Loc _ _ _ el ec) _) =
+  if before !last (el, ec) then last := (el, ec)
+visitEnd _ _ _ = ()
+
+before : (Int, Int) -> (Int, Int) -> Bool
+before (l1, c1) (l2, c2) = l1 < l2 || l1 == l2 && c1 <= c2

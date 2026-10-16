@@ -71,7 +71,13 @@ import driver.loader.{
   readSource,
 }
 import driver.build_cmd.{readPreludeFile, envOr, defaultMedakaRoot}
-import types.typecheck.{elaborateModules, TcDiag(..), tcDiagGoalKey}
+import types.typecheck.{
+  elaborateModules,
+  elaborateModulesWithSchemes,
+  TcDiag(..),
+  tcDiagGoalKey,
+}
+import driver.main_autoprint.{valueMainCandidate}
 import types.route_key.{withEvidencePreserved}
 import types.private_mangle.{mangleCtorCollisionsPair}
 import frontend.marker.{declRefs}
@@ -227,6 +233,7 @@ import support.util.{
   anyList,
 }
 import support.path.{dirOf, baseOf, joinPath}
+import support.stage_count.{stageExit}
 import args.{
   ArgSpec, Args, spec, switch, value, internal, flag, flagValue, withStrictDash
 }
@@ -780,7 +787,13 @@ elaborateFor rsrc csrc _target _roots mods exempt False _ =
   let runtimeDecls = desugaredPrelude rsrc
   let coreDecls = desugaredPrelude csrc
   let rawModules = desugaredModPairs mods
-  match elaborateModules runtimeDecls coreDecls rawModules
+  let (elaborated, _, _) =
+    elaborateModulesWithSchemes
+      (valueMainCandidate coreDecls rawModules)
+      runtimeDecls
+      coreDecls
+      rawModules
+  match elaborated
     (coreE, modulesE, perModule, _, _, _) => (
       gateOfPerModule exempt runtimeDecls coreDecls mods perModule,
       PreparedPair
@@ -2533,7 +2546,7 @@ runEvalPropsWorker target requests =
 evalWorkerDie : String -> <IO> Unit
 evalWorkerDie message = do
   let _ = ePutStrLn "medaka test --props-worker: \{message}"
-  exit 1
+  stageExit 1
 
 runEvalPropsWorkerSource : String ->
   String ->
@@ -3713,7 +3726,7 @@ runTestOne engines cases filterOpt target =
   let stdlibDir = root ++ "/stdlib"
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
   let ok = runTest engines rtPath corePath target roots cases filterOpt
-  if ok then () else exit 1
+  if ok then () else stageExit 1
 
 export
 cliTestReportOk : Option String ->

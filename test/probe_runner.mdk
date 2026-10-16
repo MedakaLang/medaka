@@ -429,9 +429,10 @@ expectEmits probe args needle = match boundedVerb probe args
 goodSrc : String
 goodSrc = "main = println \"hi\"\n"
 
-{- | A bare underived-ADT `main`: reaches the emitter driver's
-   `underivedMainDiags` arm, which printed a real typecheck diagnostic and
-   then exited 0 with empty IR. -}
+{- | A bare underived-ADT `main`: reaches `emitFullGate`
+   (`compiler/entries/entry_support.mdk`) via `autoPrintWanted`, which must
+   report the missing `Display` as a typecheck diagnostic rather than exit 0
+   with empty IR. -}
 undispSrc : String
 undispSrc = "data Foo = Foo\n\nmain = Foo\n"
 

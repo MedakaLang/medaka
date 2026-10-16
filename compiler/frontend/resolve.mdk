@@ -6777,6 +6777,7 @@ stampGraphTyOrigins : List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl))
 stampGraphTyOrigins coreDecls modules =
+  let _ = stageBump "typecheck.drive"
   let coreTypes =
     map (typeDeclaredIn "core") (dataRecordNames coreDecls)
       ++ map (ifaceDeclaredIn "core") (interfaceNamesOf coreDecls)

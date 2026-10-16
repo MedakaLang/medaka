@@ -1,0 +1,2 @@
+<repl>: unbound variable `badname`
+<repl>: no impl of Num for String

@@ -1,0 +1,8 @@
+-- An unsigned value `main` whose type only another binding's use determines:
+-- `helper` would ground `main` at `List Int`, but that use is rejected, so no
+-- verb reaches the unrouted dictionary the wrapped program would leave.
+-- Hand-derived: REJECT on all three verbs, at the use of `main` in `helper`.
+idf : a -> a
+idf x = x
+main = idf []
+helper = 1 :: main

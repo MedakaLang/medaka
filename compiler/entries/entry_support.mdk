@@ -19,11 +19,13 @@ import types.typecheck.{
   ElabResult,
   elaborateOne,
   elaborateModules,
+  elaborateModulesWithSchemes,
   hadTypeErrors,
   resetTypeErrorsSticky,
   setStdlibOwnership,
 }
 import support.path.{dirOf, joinPath}
+import support.stage_count.{stageExit}
 import support.ordmap.{OrdMap, omFromPairs, omLookup, omEmpty}
 import driver.diagnostics.{
   Diag,
@@ -53,6 +55,7 @@ import types.private_mangle.{mangleUnitsEv}
 import ir.core_ir_lower.{externDeclNamesOf}
 import driver.main_autoprint.{
   shouldAutoPrintMain,
+  valueMainCandidate,
   autoPrintWrapModules,
   autoPrintPinCore,
   underivedMainDiags,
@@ -91,7 +94,7 @@ failWith : String -> <IO> Unit
 -- lint-disable-next-line rule-duplicate-body
 failWith msg =
   let _ = ePutStrLn msg
-  exit 1
+  stageExit 1
 
 -- ── file readers ───────────────────────────────────────────────────────────────
 
@@ -287,7 +290,7 @@ emitResidualGate : List (String, String) ->
 emitResidualGate pathMap target residual =
   if hadTypeErrors () then
     let _ = ePutStrLn (residualOrGeneric pathMap target residual)
-    exit emitDiagExitCode
+    stageExit emitDiagExitCode
 
 -- The whole diagnostic verdict for a build, rendered as `medaka check` renders
 -- it: this process is the only one that typechecks the graph, so the warnings go
@@ -316,7 +319,7 @@ emitFullGate modsWithPath runtimeDecls coreDecls modules perMod residual =
       emitResidualGate pathMap (entryPathOf modsWithPath) residual
     _ =>
       let _ = map ePutStrLn errLines
-      exit emitDiagExitCode
+      stageExit emitDiagExitCode
 
 -- The auto-print / async wrap re-checks the WRAPPED program, and its diagnostics
 -- are about the user's own `main`.  They go out through the same located face as
@@ -330,7 +333,7 @@ emitWrapDiags modsWithPath ds =
     map
       ePutStrLn
       (renderTcDiags (map modIdToPath modsWithPath) (map (d => (mid, d)) ds))
-  exit emitDiagExitCode
+  stageExit emitDiagExitCode
 
 -- The entry module's path, for the residual's fallback text.  The loader is
 -- dependency-first, so the entry is last.
@@ -365,7 +368,8 @@ selectTargetProfileOfEnv _ = match selectProfile (getEnv targetProfileEnv) None
 
 -- One elaboration either way.  With a profile it is `check-policy`'s analysis,
 -- the same drive `elaborateModules` runs with the entry's schemes and
--- invocation table kept, so the refusal costs no second drive.
+-- invocation table kept, so the refusal costs no second drive.  It is the
+-- build's checking drive, so it poses a value `main`'s auto-print obligation.
 elaborateForTarget : Option TargetProfile ->
   List (String, String, List Decl) ->
   List Decl ->
@@ -373,16 +377,27 @@ elaborateForTarget : Option TargetProfile ->
   List (String, List Decl) ->
   (ElabResult, List Diag)
 elaborateForTarget None _ runtimeDecls coreDecls modules =
-  (elaborateModules runtimeDecls coreDecls modules, [])
+  let (elaborated, _, _) =
+    elaborateModulesWithSchemes
+      (valueMainCandidate coreDecls modules)
+      runtimeDecls
+      coreDecls
+      modules
+  (elaborated, [])
 elaborateForTarget (Some p) modsWithPath runtimeDecls coreDecls modules =
-  let analysis = analyzeProgram runtimeDecls coreDecls modules
+  let analysis =
+    analyzeProgram
+      (valueMainCandidate coreDecls modules)
+      runtimeDecls
+      coreDecls
+      modules
   (
     analysis.eaElab,
     targetRefusal
       p
       (entryPathOf modsWithPath)
       (map modIdToPath modsWithPath)
-      analysis,
+      analysis.eaTarget,
   )
 
 -- The refusal `check --target` gives, located in the entry file, under the
@@ -402,7 +417,7 @@ emitTargetGate modsWithPath _ (Some _) ds =
     Ok text => text
     Err _ => ""
   let _ = ePutStrLn (joinNl (map (ppTargetDiag file src) ds))
-  exit emitDiagExitCode
+  stageExit emitDiagExitCode
 
 export
 runEmitWith : String ->
@@ -423,9 +438,9 @@ runEmitWith asyncDriver emitTail modsWithPath runtimeDecls coreDecls modules =
   -- once, after its own elaboration.
   -- The sticky flag is cleared before each elaboration, as every driver in
   -- `medaka_cli.mdk` clears it before its own: `runEmitWith` runs a SECOND
-  -- elaboration through `emitModulesWith` on the wrapped program, and the
-  -- `underivedMainDiags` re-check between them typechecks a synthetic program
-  -- whose errors must not be read as that second elaboration's residual.
+  -- elaboration through `emitModulesWith` on a wrapped program, and the async
+  -- branch's `underivedMainDiags` re-check between them typechecks a synthetic
+  -- program whose errors must not be read as that second elaboration's residual.
   let _ = resetTypeErrorsSticky ()
   let profile = selectTargetProfileOfEnv ()
   let (elaborated, refusal) =
@@ -439,12 +454,15 @@ runEmitWith asyncDriver emitTail modsWithPath runtimeDecls coreDecls modules =
   let _ = emitTargetGate modsWithPath runtimeDecls profile refusal
   if shouldAutoPrintMain coreDecls modules then
     -- the wrap's callee is a PRELUDE re-binding, so the core decl list has to
-    -- carry it — see main_autoprint.autoPrintPinCore (#2185 / F1 / F2).
-    let coreW = autoPrintPinCore coreDecls
-    let modulesW = autoPrintWrapModules modules
-    match underivedMainDiags runtimeDecls coreW modulesW
-      [] => emitModulesWith emitTail modsWithPath runtimeDecls coreW modulesW
-      ds => emitWrapDiags modsWithPath ds
+    -- carry it — see main_autoprint.autoPrintPinCore (#2185 / F1 / F2).  The
+    -- elaboration above already judged the wrap's `Display` obligation, and
+    -- `emitFullGate` stopped the build on it.
+    emitModulesWith
+      emitTail
+      modsWithPath
+      runtimeDecls
+      (autoPrintPinCore coreDecls)
+      (autoPrintWrapModules modules)
   else match asyncMainShapeError modules
     Some msg => failWith msg
     None =>

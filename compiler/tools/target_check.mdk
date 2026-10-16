@@ -30,7 +30,7 @@ import types.repr.{Scheme}
 import types.effect_rows.{
   Atom, atomLabel, atomLabelOf, effLabelOrigin, renderAtom
 }
-import tools.check_policy.{EntryAnalysis(..)}
+import tools.check_policy.{TargetInputs(..)}
 import driver.diagnostics.{
   Diag(..),
   Severity(..),
@@ -64,10 +64,10 @@ export
 targetRefusal : TargetProfile ->
   String ->
   List (String, String) ->
-  EntryAnalysis ->
+  TargetInputs ->
   List Diag
 targetRefusal profile file paths analysis =
-  match lookupAssoc "main" analysis.eaSchemes
+  match lookupAssoc "main" analysis.tiSchemes
     None => [missingEntryDiag profile file]
     Some sch => match bindingRefusals profile paths analysis
       [] => match capabilityRefusal profile analysis sch
@@ -113,12 +113,12 @@ foldTargetDiags entry entrySrc (d :: ds) triples =
 -- The entry's refusal, or `None` when `main` performs nothing the profile
 -- withholds.  The entry judged is the one the drivers run: a value `main` they
 -- print performs what the `println` applied to it performs.
-capabilityRefusal : TargetProfile -> EntryAnalysis -> Scheme -> Option Diag
+capabilityRefusal : TargetProfile -> TargetInputs -> Scheme -> Option Diag
 capabilityRefusal profile analysis sch =
-  let printed = match analysis.eaAutoPrintCall
-    Some call => invocationSummary analysis.eaOps call
+  let printed = match analysis.tiAutoPrintCall
+    Some call => invocationSummary analysis.tiOps call
     None => []
-  let summary = invocationSummary analysis.eaOps sch ++ printed
+  let summary = invocationSummary analysis.tiOps sch ++ printed
   let atoms = filter isGatedAtom summary
   let unjoined = filter (unjoinedIo profile) summary
   let ioLabels = match unjoined
@@ -139,29 +139,28 @@ capabilityRefusal profile analysis sch =
 
 -- ── the binding rule ────────────────────────────────────────────────────────
 -- Every user extern of every module that the program reaches (`dce`'s reach,
--- over the whole elaborated program, each reference resolved to the
+-- over the whole program the drive read, each reference resolved to the
 -- declaration it denotes) and that has no binding for the profile's host.  A
 -- catalog extern declared again runs the built-in, so it is not judged here.
 -- A program declaring no user extern skips the reach.
 bindingRefusals : TargetProfile ->
   List (String, String) ->
-  EntryAnalysis ->
+  TargetInputs ->
   List Diag
 bindingRefusals profile paths analysis =
-  let (coreE, modsE, _, _, _, _) = analysis.eaElab
   let userExterns =
     flatMap
       ((mid, decls) =>
         map
           (ed => (mid, ed))
           (filter
-            (ed => not (contains ed.edName analysis.eaCatalogExterns))
+            (ed => not (contains ed.edName analysis.tiCatalogExterns))
             (externDecls decls)))
-      modsE
+      analysis.tiModules
   match userExterns
     [] => []
     _ =>
-      let chains = reachedExternChains coreE modsE
+      let chains = reachedExternChains analysis.tiCore analysis.tiModules
       filterMap (unboundReached profile paths chains) userExterns
 
 externDecls : List Decl -> List ExternDecl
@@ -239,7 +238,7 @@ unjoinedIo profile a = match effLabelOrigin (atomLabelOf a)
   _ => atomLabel a == "IO" && not (reachesLabel profile "IO")
 
 refusalDiag : TargetProfile ->
-  EntryAnalysis ->
+  TargetInputs ->
   List Atom ->
   List String ->
   List String ->
@@ -247,8 +246,8 @@ refusalDiag : TargetProfile ->
 refusalDiag profile analysis atoms labels lines =
   let chain =
     viaChain
-      (buildCallGraph analysis.eaEntryDecls)
-      (fnEffectsTable analysis.eaSchemes)
+      (buildCallGraph analysis.tiEntryDecls)
+      (fnEffectsTable analysis.tiSchemes)
       "main"
       (firstOr "" labels)
   let refused = filter (a => contains (atomLabel a) labels) atoms
@@ -256,7 +255,7 @@ refusalDiag profile analysis atoms labels lines =
     _ :: _ :: _ => " via `\{joinWith " → " chain}`"
     _ => ""
   let notProven = stringConcat (map (l => "; " ++ trim l) lines)
-  let printed = match analysis.eaAutoPrintCall
+  let printed = match analysis.tiAutoPrintCall
     Some _ =>
       "; `main` is a value other than `Unit`, so it is printed with `println`"
     None => ""
@@ -264,7 +263,7 @@ refusalDiag profile analysis atoms labels lines =
     SevError
     targetCapabilityCode
     "`main` performs <\{joinWith ", " (map renderAtom refused)}>\{route}, and the target `\{profileName profile}` does not grant \{joinWith ", " (map withheldName labels)}\{notProven}\{printed}"
-    (entryLoc analysis.eaEntryDecls)
+    (entryLoc analysis.tiEntryDecls)
 
 -- `IO` is refused only when the profile grants no host label for it to join.
 withheldName : String -> String

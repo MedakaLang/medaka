@@ -1,0 +1,3 @@
+import helper.{three}
+
+main = three + 1
