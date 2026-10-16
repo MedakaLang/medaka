@@ -55,7 +55,7 @@ import types.typecheck.{
 }
 import eval.eval.{
   Value(..), evalModulesRootEnvWith, buildStampExterns, apply, outputRef,
-  ppValue
+  ppValue, externDeclNamesOfDecls
 }
 import support.util.{
   sortUniqS, joinWith, escStr, lookupAssoc, filterList, listLen, escOneHex2,
@@ -317,13 +317,16 @@ lookupValue k ((n, v) :: rest) = if k == n then Some v else lookupValue k rest
 -- `lastInvocationOps` describes whichever drive ran last, and so is
 -- `eaAutoPrintCall`: when the drivers that run the program print a value `main`
 -- (`shouldAutoPrintMain` reads the drive's `main` type), the scheme of the
--- prelude `println` the wrap applies to it.
+-- prelude `println` the wrap applies to it.  `eaCatalogExterns` names the
+-- externs `stdlib/runtime.mdk` declares: a module that declares one again
+-- runs the built-in, not a foreign call.
 public export data EntryAnalysis = EntryAnalysis {
   eaElab : ElabResult,
   eaSchemes : List (String, Scheme),
   eaOps : InvocationOps,
   eaEntryDecls : List Decl,
   eaAutoPrintCall : Option Scheme,
+  eaCatalogExterns : List String,
 }
 
 export
@@ -346,6 +349,7 @@ analyzeProgram rtD coreD modsD =
     eaOps = ops,
     eaEntryDecls = entryModuleDecls modsD,
     eaAutoPrintCall = autoPrintCall,
+    eaCatalogExterns = externDeclNamesOfDecls rtD,
   }
 
 -- The entry module's decls: the last of the loader's dependency-first list.

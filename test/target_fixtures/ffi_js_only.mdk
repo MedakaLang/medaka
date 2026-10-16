@@ -1,0 +1,7 @@
+-- An extern bound for `js` alone: a native target calls foreign code through
+-- `c`, so the reached declaration is refused there.
+extern jsAdd : Int -> Int -> <FFI "js"> Int
+  bind js "add"
+
+main : <Stdout, FFI "js"> Unit
+main = println (jsAdd 20 22)

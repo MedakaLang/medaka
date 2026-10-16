@@ -1,0 +1,9 @@
+-- An FFI extern named only as a value (#4057): `main` performs `Stdout`
+-- alone, yet the extern is reached, so a target whose host it does not bind
+-- refuses it at check, and `run` never starts the interpreter.
+extern ffiAddInts : Int -> Int -> <FFI "c"> Int
+
+fns : List (Int -> Int -> <FFI "c"> Int)
+fns = [ffiAddInts]
+
+main = println (length fns)

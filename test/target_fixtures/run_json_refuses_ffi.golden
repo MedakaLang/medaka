@@ -1,4 +1,4 @@
 exit=1
 --- stdout
 --- stderr
-{"files":[{"file":"<fixtures>/ffi_entry.mdk","diagnostics":[{"code":"T-TARGET-CAPABILITY","kind":"type","message":"`main` performs <FFI \"c*\"> via `main → ffiAddInts`, and the target `eval/run` does not grant FFI","range":{"end":{"character":4,"line":5},"start":{"character":0,"line":5}},"severity":1,"source":"medaka"}]}]}
+{"files":[{"file":"<fixtures>/ffi_entry.mdk","diagnostics":[{"code":"T-TARGET-NO-BINDING","kind":"type","message":"the extern `ffiAddInts` is reached via `main → ffiAddInts`, and the target `eval/run` calls foreign code through no host (it binds `c`); build for a target whose host it binds","range":{"end":{"character":47,"line":3},"start":{"character":7,"line":3}},"severity":1,"source":"medaka"}]}]}

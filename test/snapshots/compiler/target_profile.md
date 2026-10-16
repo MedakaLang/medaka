@@ -1,5 +1,5 @@
 # META
-source_lines=240
+source_lines=254
 stages=DESUGAR,MARK
 # SOURCE
 -- The one table of target profiles: a profile is a backend, the host ABI that
@@ -40,6 +40,16 @@ profileAbi (TargetProfile _ _ a _) = a
 export
 profileGrants : TargetProfile -> List (String, EffParamTy)
 profileGrants (TargetProfile _ _ _ g) = g
+
+-- The host a foreign call is bound to under the profile, as an extern's `bind`
+-- clause names it: `c` on llvm, `js` on wasmgc.  The interpreter binds foreign
+-- calls to no host.
+export
+profileBindingHost : TargetProfile -> Option String
+profileBindingHost p = match profileBackend p
+  BackendLlvm => Some "c"
+  BackendWasmgc => Some "js"
+  BackendEval => None
 
 -- Does the profile grant any part of this label's domain?
 export
@@ -100,7 +110,10 @@ ioJoinGrants (Some p) =
 
 -- `wasmgc/edge` does not grant `Net`: §8.1 routes it through a fetch binding,
 -- and no such binding exists until T3 (#3668).
--- `wasmgc/wasi-p2` is a seam with nothing built, so it grants nothing.
+-- `wasmgc/wasi-p2` is a seam with nothing built, so it grants no host label.
+-- Every profile with a host grants `FFI`, and `eval/run` does not: whether a
+-- foreign call can run is the extern's binding for the profile's host
+-- (`profileBindingHost`), judged by the target check.
 profileRows : List TargetProfile
 profileRows = [
   TargetProfile
@@ -122,20 +135,21 @@ profileRows = [
       "Rand",
       "FileRead",
       "FileWrite",
+      "FFI",
     ]),
   TargetProfile
     "wasmgc/browser-worker"
     BackendWasmgc
     "env"
     (wholeDomain [
-      "Stdout", "Stderr", "Clock", "Rand", "FileRead", "FileWrite"
+      "Stdout", "Stderr", "Clock", "Rand", "FileRead", "FileWrite", "FFI"
     ]),
   TargetProfile
     "wasmgc/edge"
     BackendWasmgc
     "env"
-    (wholeDomain ["Stdout", "Stderr", "Clock", "Rand"]),
-  TargetProfile "wasmgc/wasi-p2" BackendWasmgc "WIT" [],
+    (wholeDomain ["Stdout", "Stderr", "Clock", "Rand", "FFI"]),
+  TargetProfile "wasmgc/wasi-p2" BackendWasmgc "WIT" (wholeDomain ["FFI"]),
 ]
 
 evalRunProfile : TargetProfile
@@ -259,6 +273,8 @@ targetProfileEnv = "MEDAKA_TARGET_PROFILE"
 (DFunDef false "profileAbi" ((PCon "TargetProfile" PWild PWild (PVar "a") PWild)) (EVar "a"))
 (DTypeSig true "profileGrants" (TyFun (TyCon "TargetProfile") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))
 (DFunDef false "profileGrants" ((PCon "TargetProfile" PWild PWild PWild (PVar "g"))) (EVar "g"))
+(DTypeSig true "profileBindingHost" (TyFun (TyCon "TargetProfile") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "profileBindingHost" ((PVar "p")) (EMatch (EApp (EVar "profileBackend") (EVar "p")) (arm (PCon "BackendLlvm") () (EApp (EVar "Some") (ELit (LString "c")))) (arm (PCon "BackendWasmgc") () (EApp (EVar "Some") (ELit (LString "js")))) (arm (PCon "BackendEval") () (EVar "None"))))
 (DTypeSig true "grantsLabel" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "grantsLabel" ((PVar "p") (PVar "label")) (EApp (EApp (EVar "any") (ELam ((PVar "g")) (EBinOp "==" (EApp (EVar "fst") (EVar "g")) (EVar "label")))) (EApp (EVar "profileGrants") (EVar "p"))))
 (DTypeSig true "reachesLabel" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -278,7 +294,7 @@ targetProfileEnv = "MEDAKA_TARGET_PROFILE"
 (DFunDef false "ioJoinGrants" ((PCon "None")) (EApp (EVar "wholeDomain") (EVar "hostLabels")))
 (DFunDef false "ioJoinGrants" ((PCon "Some" (PVar "p"))) (EApp (EApp (EVar "filter") (ELam ((PVar "g")) (EApp (EApp (EVar "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EApp (EVar "fst") (EVar "g"))))) (EVar "hostLabels")))) (EApp (EVar "profileGrants") (EVar "p"))))
 (DTypeSig false "profileRows" (TyApp (TyCon "List") (TyCon "TargetProfile")))
-(DFunDef false "profileRows" () (EListLit (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "llvm/native-posix"))) (EVar "BackendLlvm")) (ELit (LString "C symbols"))) (EApp (EVar "wholeDomain") (EBinOp "++" (EVar "hostLabels") (EListLit (ELit (LString "FFI")))))) (EVar "evalRunProfile") (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/node"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Rand")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/browser-worker"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Clock")) (ELit (LString "Rand")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/edge"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Clock")) (ELit (LString "Rand"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/wasi-p2"))) (EVar "BackendWasmgc")) (ELit (LString "WIT"))) (EListLit))))
+(DFunDef false "profileRows" () (EListLit (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "llvm/native-posix"))) (EVar "BackendLlvm")) (ELit (LString "C symbols"))) (EApp (EVar "wholeDomain") (EBinOp "++" (EVar "hostLabels") (EListLit (ELit (LString "FFI")))))) (EVar "evalRunProfile") (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/node"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Rand")) (ELit (LString "FileRead")) (ELit (LString "FileWrite")) (ELit (LString "FFI"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/browser-worker"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Clock")) (ELit (LString "Rand")) (ELit (LString "FileRead")) (ELit (LString "FileWrite")) (ELit (LString "FFI"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/edge"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Clock")) (ELit (LString "Rand")) (ELit (LString "FFI"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/wasi-p2"))) (EVar "BackendWasmgc")) (ELit (LString "WIT"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "FFI")))))))
 (DTypeSig false "evalRunProfile" (TyCon "TargetProfile"))
 (DFunDef false "evalRunProfile" () (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "eval/run"))) (EVar "BackendEval")) (ELit (LString "ioExternBindings"))) (EApp (EVar "wholeDomain") (EVar "hostLabels"))))
 (DTypeSig false "aliasRows" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
@@ -329,6 +345,8 @@ targetProfileEnv = "MEDAKA_TARGET_PROFILE"
 (DFunDef false "profileAbi" ((PCon "TargetProfile" PWild PWild (PVar "a") PWild)) (EVar "a"))
 (DTypeSig true "profileGrants" (TyFun (TyCon "TargetProfile") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))
 (DFunDef false "profileGrants" ((PCon "TargetProfile" PWild PWild PWild (PVar "g"))) (EVar "g"))
+(DTypeSig true "profileBindingHost" (TyFun (TyCon "TargetProfile") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "profileBindingHost" ((PVar "p")) (EMatch (EApp (EVar "profileBackend") (EVar "p")) (arm (PCon "BackendLlvm") () (EApp (EVar "Some") (ELit (LString "c")))) (arm (PCon "BackendWasmgc") () (EApp (EVar "Some") (ELit (LString "js")))) (arm (PCon "BackendEval") () (EVar "None"))))
 (DTypeSig true "grantsLabel" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "grantsLabel" ((PVar "p") (PVar "label")) (EApp (EApp (EDictApp "any") (ELam ((PVar "g")) (EBinOp "==" (EApp (EVar "fst") (EVar "g")) (EVar "label")))) (EApp (EVar "profileGrants") (EVar "p"))))
 (DTypeSig true "reachesLabel" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -348,7 +366,7 @@ targetProfileEnv = "MEDAKA_TARGET_PROFILE"
 (DFunDef false "ioJoinGrants" ((PCon "None")) (EApp (EVar "wholeDomain") (EVar "hostLabels")))
 (DFunDef false "ioJoinGrants" ((PCon "Some" (PVar "p"))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "g")) (EApp (EApp (EDictApp "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EApp (EVar "fst") (EVar "g"))))) (EVar "hostLabels")))) (EApp (EVar "profileGrants") (EVar "p"))))
 (DTypeSig false "profileRows" (TyApp (TyCon "List") (TyCon "TargetProfile")))
-(DFunDef false "profileRows" () (EListLit (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "llvm/native-posix"))) (EVar "BackendLlvm")) (ELit (LString "C symbols"))) (EApp (EVar "wholeDomain") (EBinOp "++" (EVar "hostLabels") (EListLit (ELit (LString "FFI")))))) (EVar "evalRunProfile") (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/node"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Rand")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/browser-worker"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Clock")) (ELit (LString "Rand")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/edge"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Clock")) (ELit (LString "Rand"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/wasi-p2"))) (EVar "BackendWasmgc")) (ELit (LString "WIT"))) (EListLit))))
+(DFunDef false "profileRows" () (EListLit (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "llvm/native-posix"))) (EVar "BackendLlvm")) (ELit (LString "C symbols"))) (EApp (EVar "wholeDomain") (EBinOp "++" (EVar "hostLabels") (EListLit (ELit (LString "FFI")))))) (EVar "evalRunProfile") (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/node"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Rand")) (ELit (LString "FileRead")) (ELit (LString "FileWrite")) (ELit (LString "FFI"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/browser-worker"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Clock")) (ELit (LString "Rand")) (ELit (LString "FileRead")) (ELit (LString "FileWrite")) (ELit (LString "FFI"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/edge"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Clock")) (ELit (LString "Rand")) (ELit (LString "FFI"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/wasi-p2"))) (EVar "BackendWasmgc")) (ELit (LString "WIT"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "FFI")))))))
 (DTypeSig false "evalRunProfile" (TyCon "TargetProfile"))
 (DFunDef false "evalRunProfile" () (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "eval/run"))) (EVar "BackendEval")) (ELit (LString "ioExternBindings"))) (EApp (EVar "wholeDomain") (EVar "hostLabels"))))
 (DTypeSig false "aliasRows" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))

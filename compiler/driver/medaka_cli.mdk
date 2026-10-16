@@ -82,7 +82,7 @@ import types.target_profile.{
   selectProfile,
   selectedProfile,
 }
-import tools.target_check.{targetRefusal}
+import tools.target_check.{targetRefusal, ppTargetDiag, foldTargetDiags}
 import string.{toInt}
 -- S-cli-onto-args (#2355): the ONE argument parser.  Every verb's flag
 -- vocabulary below is an `ArgSpec` value, so its `(known: …)` roster, its
@@ -1173,7 +1173,7 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _, d
       let report = if typesMode then dump else filtered
       -- The target check elaborates the program again, so it runs once the
       -- report is rendered (see the multi-module arm below).
-      let _ = checkTargetGate rsrc csrc tsrc target [(mid, decls)]
+      let _ = checkTargetGate rsrc csrc tsrc target [] [(mid, decls)]
       let _ = putStrLn report
       -- #916: a clean single-file check gave no unambiguous success signal —
       -- "no error lines among the interface dump" was the only tell, and on a
@@ -1225,7 +1225,7 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
           -- After the report is rendered: the target check elaborates the graph
           -- again, and a report rendered after that drive can name a scheme's
           -- type variables differently (`Speak b => a -> String`), #4053.
-          let _ = checkTargetGate rsrc csrc tsrc target mods
+          let _ = checkTargetGate rsrc csrc tsrc target pathMap mods
           let _ = putStrLn report
           -- F-3d: an IMPORTED module's ⊑-incomparable pair, LOCATED against that
           -- module's own file.  The line above reaches the ENTRY's diagnostics only,
@@ -1305,28 +1305,32 @@ checkTargetGate : String ->
   String ->
   String ->
   String ->
+  List (String, String) ->
   List (String, List Decl) ->
   <IO> Unit
-checkTargetGate rsrc csrc tsrc target mods =
-  match checkTargetRefusal rsrc csrc target mods
-    None => ()
-    Some d =>
+checkTargetGate rsrc csrc tsrc target pathMap mods =
+  match checkTargetRefusal rsrc csrc target pathMap mods
+    [] => ()
+    ds =>
       let _ = emitAbortTotal ()
-      let _ = ePutStrLn (ppDiagCliLines (srcLinesArr tsrc) target d)
+      let _ = ePutStrLn (joinNl (map (ppTargetDiag target tsrc) ds))
       exit 1
 
--- The selected profile's refusal of a typechecked program, if any.
+-- The selected profile's refusals of a typechecked program.  `pathMap` names
+-- each module's file.
 checkTargetRefusal : String ->
   String ->
   String ->
+  List (String, String) ->
   List (String, List Decl) ->
-  <IO> Option Diag
-checkTargetRefusal rsrc csrc target mods = match !selectedProfile
-  None => None
+  <IO> List Diag
+checkTargetRefusal rsrc csrc target pathMap mods = match !selectedProfile
+  None => []
   Some profile =>
     targetRefusal
       profile
       target
+      pathMap
       (analyzeProgram
         (desugaredPrelude rsrc)
         (desugaredPrelude csrc)
@@ -1346,18 +1350,38 @@ checkTargetJson rsrc csrc target stdlibDir cj = match !selectedProfile
   Some _ =>
     let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
     let refusal = match loadProgramFilesLocatedE (_ => None) target roots
-      Ok mp => checkTargetRefusal rsrc csrc target (map dropPathTriple mp)
-      Err _ =>
-        Some
-          (mkDiag
-            SevError
-            "R-MODULE-LOAD"
-            "`\{target}` could not be loaded again to check it against the target"
-            None)
+      Ok mp =>
+        checkTargetRefusal
+          rsrc
+          csrc
+          target
+          (map ((mid, path, _) => (mid, reportKey stdlibDir cj path)) mp)
+          (map dropPathTriple mp)
+      Err _ => [
+        mkDiag
+          SevError
+          "R-MODULE-LOAD"
+          "`\{target}` could not be loaded again to check it against the target"
+          None,
+      ]
     match (refusal, cj)
-      (Some d, CjParts entry triples) =>
-        Some (CjParts entry (cjFoldIntoFile entry [d] triples))
+      ([], _) => None
+      (ds, CjParts entry triples) =>
+        Some
+          (CjParts
+            entry
+            (foldTargetDiags entry (readFileSafe entry) ds triples))
       _ => None
+
+-- A module's file as the report spells it: verbatim when the report has a row
+-- for it, else relative to the root a multi-module report strips.
+reportKey : String -> CheckJson -> String -> String
+reportKey stdlibDir (CjParts _ triples) path =
+  if any ((p, _, _) => p == path) triples then
+    path
+  else
+    relDiagPath (dirOf2 stdlibDir) path
+reportKey _ _ path = path
 
 -- `build --json`'s copy of `check --json`'s target refusal: the envelope is
 -- printed here, and the answer is whether it was.  The emitter child checks
@@ -1377,28 +1401,30 @@ printedTargetRefusal rsrc csrc target stdlibDir cj =
 
 -- `run`'s refusal, against `eval/run` and the selected profile together.  An
 -- entry `run` cannot start at all is left to `finishRunEval`'s own refusal.
+-- `rel` spells each `--json` file as the envelope does.
 runTargetGate : Bool ->
+  ((String, String, List Diag) -> (String, String, List Diag)) ->
   String ->
-  String ->
+  List (String, String) ->
   List (String, List Decl) ->
   EntryAnalysis ->
   <IO> Unit
-runTargetGate jsonMode fileKey target mods analysis =
+runTargetGate jsonMode rel target pathMap mods analysis =
   let startable = match lastModPair mods
     Some (_, edecls) => isNone (mainEntryError edecls)
     None => False
   let refusal =
     if startable then
-      targetRefusal (runProfile !selectedProfile) target analysis
+      targetRefusal (runProfile !selectedProfile) target pathMap analysis
     else
-      None
+      []
   match refusal
-    None => ()
-    Some d =>
+    [] => ()
+    ds =>
       let src = readFileSafe target
       match jsonMode
-        True => runAbortJson [(fileKey, src, [d])]
-        False => runAbort (ppDiagCliLines (srcLinesArr src) target d)
+        True => runAbortJson (map rel (foldTargetDiags target src ds []))
+        False => runAbort (joinNl (map (ppTargetDiag target src) ds))
 
 -- ── `run`'s argv filter — TrailingRaw semantics (S-5, #2355 residual B) ────
 -- S-cli-onto-args (#2355) migrated every other verb onto `stdlib/args.mdk`.
@@ -3208,7 +3234,14 @@ runRunCmd argv =
                     False =>
                       runAbort (residualOrGeneric pathMap target residual)
                   False =>
-                    let _ = runTargetGate jsonMode target target mods analysis
+                    let _ =
+                      runTargetGate
+                        jsonMode
+                        (t => t)
+                        target
+                        pathMap
+                        mods
+                        analysis
                     let perfTCheck = now ()
                     let _ =
                       emitPhase perfOn "check" (perfTCheck - perfTLoad) target
@@ -3305,8 +3338,9 @@ runRunCmd argv =
                     let _ =
                       runTargetGate
                         jsonMode
-                        (relDiagPath root target)
+                        (relDiagTriple root)
                         target
+                        pathMap
                         mods
                         analysis
                     let perfTCheck = now ()

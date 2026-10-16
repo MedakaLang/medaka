@@ -110,7 +110,6 @@ import driver.diagnostics.{
   codeKind,
   diagOfTypeError,
   missingMainDiag,
-  cjFoldIntoFile,
 }
 import driver.main_autoprint.{
   shouldAutoPrintMain,
@@ -124,7 +123,7 @@ import driver.main_autoprint.{
 }
 import types.target_profile.{selectedProfile, lookupProfile}
 import tools.check_policy.{EntryAnalysis(..), analyzeProgram}
-import tools.target_check.{targetRefusal}
+import tools.target_check.{targetRefusal, foldTargetDiags}
 import list.{last}
 import json.{
   Json(..),
@@ -642,43 +641,39 @@ finishClean : Bool ->
   <IO> Unit
 finishClean emit written paths warnTriples runtimeDecls coreDecls modules =
   let analysis = analyzeProgram runtimeDecls coreDecls modules
-  match targetRefusalOf written analysis
-    Some d => emitDiagnostics (cjAllToJson (withRefusal written d warnTriples))
-    None =>
+  match targetRefusalOf written paths analysis
+    [] =>
       if emit then
         runEmit paths warnTriples runtimeDecls analysis.eaElab
       else
         emitAnalyzeMarker warnTriples
+    ds =>
+      -- Folded into the warnings' report, as `check --json --target` folds
+      -- them; a file with no row of its own gets one.
+      emitDiagnostics
+        (cjAllToJson
+          (foldTargetDiags written.wePath written.weSource ds warnTriples))
 
--- The selected profile's refusal of the entry.  The analysis may be of the
--- wrapped program, so it is judged with the entry's own decls, and a printed
+-- The selected profile's refusals of the program.  The analysis may be of the
+-- wrapped program, so the entry is judged with its own decls, and a printed
 -- entry with the `println` the wrap applies: the refusal then names what
 -- `check --target` names for the same source, at the same place.
-targetRefusalOf : WrittenEntry -> EntryAnalysis -> <IO> Option Diag
-targetRefusalOf written analysis = match !selectedProfile
-  None => None
+targetRefusalOf : WrittenEntry ->
+  List (String, String) ->
+  EntryAnalysis ->
+  <IO> List Diag
+targetRefusalOf written paths analysis = match !selectedProfile
+  None => []
   Some profile =>
     let printedCall =
       if written.wePrinted then
         lookupAssoc autoPrintPinName analysis.eaSchemes
       else
         None
-    targetRefusal profile written.wePath { analysis |
+    targetRefusal profile written.wePath paths { analysis |
       eaEntryDecls = written.weDecls,
       eaAutoPrintCall = printedCall,
     }
-
--- The warnings' report with the refusal folded into the entry's file, as
--- `check --json --target` folds it; an entry with no row of its own gets one.
-withRefusal : WrittenEntry ->
-  Diag ->
-  List (String, String, List Diag) ->
-  List (String, String, List Diag)
-withRefusal written d triples =
-  if any ((p, _, _) => p == written.wePath) triples then
-    cjFoldIntoFile written.wePath [d] triples
-  else
-    triples ++ [(written.wePath, written.weSource, [d])]
 
 -- `analyze`'s terminal marker: ALWAYS a marker line plus a one-line JSON payload.
 -- The payload is byte-identical to the warnings JSON `emitWatMarker` writes when

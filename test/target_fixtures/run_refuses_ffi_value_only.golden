@@ -1,0 +1,7 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/ffi_value_only.mdk:4:7: the extern `ffiAddInts` is reached via `main → fns → ffiAddInts`, and the target `eval/run` calls foreign code through no host (it binds `c`); build for a target whose host it binds
+  |
+4 | extern ffiAddInts : Int -> Int -> <FFI "c"> Int
+  |        ^
