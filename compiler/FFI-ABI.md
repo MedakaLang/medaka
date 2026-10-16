@@ -39,8 +39,8 @@ this doc specifies is still NOT done, deliberately:
 
 🚨 **The `FFI` label is WRITTEN by the author, never added by the compiler**
 (F1, epic #2070, 2026-08-27). A user-declared `extern`'s terminal effect row
-must already name `FFI` — `<FFI>`, or `<FFI "libcurl">`, or joined with whatever
-else the row names (`<FFI, Net "a.com/*">`) — or the declaration is a located
+must already name `FFI` — `<FFI "c">`, or `<FFI "c/libcurl">`, or joined with whatever
+else the row names (`<FFI "c", Net "a.com/*">`) — or the declaration is a located
 type error (`T-FFI-UNLABELLED`). Its predecessor STAMPED the atom in when it was
 missing, and did so for *every* row shape, not only the empty one: a declared
 `<Net "a.com/*">` silently typed as `<FFI, Net "a.com/*">`, so the row in the
@@ -99,7 +99,7 @@ nowhere to write `FFI` — but the emitter lowered such a name as a foreign call
 anyway (`emitVar`'s `isFfiExtern` arm → `emitFfiEtaClosure`), handing back an eta
 closure pointer where the declared value was expected: garbage at exit 0, where
 before the #2074 lowering the same program died loudly with `unbound variable`.
-Write `extern k : Unit -> <FFI> T` and call it as `k ()`. **This CLOSES #2106**,
+Write `extern k : Unit -> <FFI "c"> T` and call it as `k ()`. **This CLOSES #2106**,
 which asked how a nullary extern *would* spell its label: it does not, and it
 need not. The `ffi-boundary-honesty` sprint measured the alias-wrapped spellings
 the rule was thought to miss — `type A = Int; extern k : A` and `type A a = Sh a
@@ -110,22 +110,26 @@ An effect row lives on an arrow's result, so a nullary foreign declaration is
 refused rather than labelled, and the arrow spelling is the whole answer.
 
 🚨 **The `mdk_` prefix is reserved** (`T-FFI-RESERVED-NAME`, same review round,
-S0-4). A foreign declaration's name is used verbatim as the C symbol, and `mdk_*`
-is the runtime's own C symbol namespace (`runtime/medaka_rt.c`), so `extern
-mdk_nil : Unit -> <FFI> Int` linked onto the runtime internal and printed its Nil
-constructor word at exit 0. Any user extern whose name starts with `mdk_` is
-refused, at any signature and with no catalog-name exemption — a *mismatched*
+S0-4). A foreign declaration's C symbol is its `bind c "sym"` clause, or its own
+name when it has none, and `mdk_*` is the runtime's own C symbol namespace
+(`runtime/medaka_rt.c`), so `extern mdk_nil : Unit -> <FFI "c"> Int` linked onto
+the runtime internal and printed its Nil constructor word at exit 0. Any user
+extern whose C symbol starts with `mdk_` is refused, at any signature and with no catalog-name exemption — a *mismatched*
 signature was already loud (clang rejects the conflicting `declare`); the silent
 half is the matching one.
 
-🚨 **One C symbol, one signature, program-wide.** Two modules that each declare a
-name with *different* type-head shapes is refused at Core IR lowering time (the
+🚨 **One C symbol, one signature, program-wide.** Two declarations (in one module
+or two) that bind the same C symbol, by name or by `bind c`, with *different*
+type-head shapes is refused at Core IR lowering time (the
 `foreign declaration collision` panic in `ffiExternTypeNames`,
-`compiler/ir/core_ir_lower.mdk`). The FFI index is bare-name keyed across the
-whole program, so before this the first declaration won and the other module's
-calls were marshalled through it — a wrong value at exit 0, or a segfault. Two
-modules declaring the *same* name with the *same* signature is legitimate sharing
-and stays legal.
+`compiler/ir/core_ir_lower.mdk`), naming the symbol and both Medaka names. The
+collision rule keys on the symbol, because the FFI index is Medaka-name keyed but
+every `declare` and call is emitted under the symbol; before this the first
+declaration won and the other declaration's calls were marshalled through it — a
+wrong value at exit 0, or a segfault. Two declarations binding the *same* symbol
+with the *same* signature is legitimate sharing (one `declare`) and stays legal.
+A declaration with no `c` binding (a `js`-only extern) reaches no native
+`declare` or call.
 
 This doc is scoped to **value crossing**. It does not restate #2071's
 effect-tracking ground (that a foreign call is `<FFI>`-effectful and how that
@@ -234,7 +238,7 @@ still: tagged as if valid, it printed replacement garbage at exit 0.
   in the language through which an invalid `Char` reaches `println` as malformed
   UTF-8 at exit 0. That is not hypothetical — it was the shipped behaviour until
   2026-08-28 (review finding S0-1): `long long cCharSurrogate(void){ return
-  0xD800; }` behind `extern cCharSurrogate : Unit -> <FFI> Char` produced an
+  0xD800; }` behind `extern cCharSurrogate : Unit -> <FFI "c"> Char` produced an
   invalid `Char` at exit 0.
 
   **Why this is not a violation of §4.** §4 says a foreign call cannot fail *into*

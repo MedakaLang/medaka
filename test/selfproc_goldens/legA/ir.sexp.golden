@@ -9,6 +9,7 @@ doStmtSexp : DoStmt -> String
 effAtomSexp : EffAtomTy -> String
 effParamSexp : EffParamTy -> String
 exprSexp : Expr -> String
+externBindParts : List ExternBind -> List String
 fieldAssignSexp : FieldAssign -> String
 fieldSexp : Field -> String
 funClauseSexp : FunClause -> String

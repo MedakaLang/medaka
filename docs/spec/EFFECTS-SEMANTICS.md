@@ -315,6 +315,13 @@ directory as the bare label. Every other `Prefix` label keeps the textual order
 above, the built-in ones without path confinement (`Net`, `Exec`, `FFI`) and
 every user label (`effect Store Prefix`): there `..` is two characters.
 
+The `FFI` parameter has a grammar of its own at a declaration: in an extern's
+own row it is `"HOST"` or `"HOST/LIBRARY"` with HOST `c` or `js` and a non-empty
+LIBRARY, and each atom must have a `bind` clause for its host. On any other
+signature, and in a policy, the parameter remains a `Prefix` element compared as
+text, so `"c*"` admits `"c"` and `"c/lib"`, `"c"` admits only `"c"`, and `"c/*"`
+does not admit `"c"`.
+
 The runtime confines each call against its own grant, the element the checker
 derived at the call site, and every enclosing closed declared file row. These
 are separate checks: both the call's grant and each declared bound must admit

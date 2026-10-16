@@ -248,7 +248,7 @@ An `extern` you declare yourself is a call into C, and the compiler makes you sa
 so. The row must name `FFI`:
 
 ```
-error: ffi.mdk:1:14: foreign declaration `cAbs` does not name the `FFI` effect in its result row; write `<FFI>` joined with whatever else the row names, such as `<FFI, Net "a.com/*">`
+error: ffi.mdk:1:14: foreign declaration `cAbs` does not name the `FFI` effect in its result row; write `<FFI "c">` joined with whatever else the row names, such as `<FFI "c", Net "a.com/*">`
   |
 1 | extern cAbs : Int -> Int
   |               ^
@@ -264,6 +264,22 @@ extern cSqrt : Float -> <FFI "c/libm"> Float
 root : Float -> <FFI "c/libm"> Float
 root x = cSqrt x
 ```
+
+The parameter is host-qualified: `"c"` or `"c/libm"` for C, `"js"` or
+`"js/fetch"` for JavaScript. A bare `<FFI>` is refused. A declaration that runs
+on both hosts names one atom per host and says which symbol each one calls, with
+an indented `bind` clause per host:
+
+```text
+extern fetchText : String -> <FFI "c/libfetch", FFI "js/fetch"> String
+  bind c "fetch_text"
+  bind js "fetchText"
+```
+
+`bind c` is the C symbol the native build links (the Medaka name is not the
+symbol once a clause says otherwise); with no clause the declaration is bound to
+`c` under its own name. Every host the row names needs a binding, and a `js`
+binding is never implied.
 
 `FFI` is not part of `IO`. A function declared `<IO>` cannot call a foreign
 function:

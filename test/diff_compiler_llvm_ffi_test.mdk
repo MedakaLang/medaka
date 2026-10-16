@@ -754,3 +754,125 @@ test "diff_compiler_llvm_ffi cells 15-16: int64 outside 63 bits traps, Array Int
     ("cell 15 ffi_inbound_int_range", cell15 w combined),
     ("cell 16 ffi_array_int_range", cell16 w combined),
   ]))
+
+-- # Cells 17-18: a `bind c "sym"` clause names the C symbol the call links to;
+-- the Medaka name is only the name the program uses.
+
+bindStubC : String
+bindStubC =
+  "#include <stdint.h>\nint64_t stub_add(int64_t a, int64_t b) { return a + b; }\n"
+
+-- `combined` plus a C object defining `stub_add`.
+buildBindStub : String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Result String String
+buildBindStub w combined = do
+  _ <- writeFile "\{w}/bind_stub.c" bindStubC
+  _ <- okOutput
+    "compile bind_stub.c"
+    (boundedVerb "clang" [
+      "-O2",
+      "-c",
+      "\{w}/bind_stub.c",
+      "-o",
+      "\{w}/bind_stub.o",
+    ])
+  _ <- okOutput
+    "ld -r bind stub"
+    (boundedVerb "ld" [
+      "-r",
+      combined,
+      "\{w}/bind_stub.o",
+      "-o",
+      "\{w}/bound.o",
+    ])
+  Ok "\{w}/bound.o"
+
+-- `medaka build --keep-ir`, then the emitted IR text on success.
+bindBuildIr : String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Result String String
+bindBuildIr dir name src obj = do
+  _ <- writeFile "\{dir}/\{name}.mdk" src
+  _ <- okOutput
+    "build \{name}"
+    (medakaEnv
+      ["MEDAKA_RT_OBJ=\{obj}"]
+      [
+        "build",
+        "--keep-ir",
+        "\{dir}/\{name}.mdk",
+        "-o",
+        "\{dir}/\{name}.bin",
+      ])
+  readFile "\{dir}/\{name}.bin.ll"
+
+bindCountLines : String -> String -> Int
+bindCountLines ir part = length (filter (l => contains part l) (lines ir))
+
+bindSrc : String
+bindSrc =
+  "extern cAdd : Int -> Int -> <FFI \"c\"> Int\n  bind c \"stub_add\"\n\nextern jsOnly : Int -> <FFI \"js\"> Int\n  bind js \"jsOnly\"\n\nmain : <IO, FFI \"c*\"> Unit\nmain = println (cAdd 40 2)\n"
+
+cell17 : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+cell17 w obj = graded (bindBuildIr
+  w
+  "ffi_bind_sym"
+  bindSrc
+  obj) (ir => graded (okOutput
+  "run ffi_bind_sym.bin"
+  (boundedVerb "\{w}/ffi_bind_sym.bin" [])) (got => expectAll [
+  expectEqualText "42" (trimRight got),
+  expectEqualText
+    "1"
+    (intToString (bindCountLines ir "declare i64 @stub_add(")),
+  expectEqualText "0" (intToString (bindCountLines ir "@cAdd")),
+  expectEqualText "0" (intToString (bindCountLines ir "jsOnly")),
+]))
+
+sharedSymSrc : String -> String -> String
+sharedSymSrc second call =
+  "extern cAdd : Int -> Int -> <FFI \"c\"> Int\n  bind c \"stub_add\"\n\nextern \{second}\n  bind c \"stub_add\"\n\nmain : <IO, FFI \"c*\"> Unit\nmain =\n  let _ = println (cAdd 40 2)\n  println (\{call})\n"
+
+cell18Same : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+cell18Same w obj = graded (bindBuildIr
+  w
+  "ffi_bind_same"
+  (sharedSymSrc "cSum : Int -> Int -> <FFI \"c\"> Int" "cSum 1 2")
+  obj) (ir => graded (okOutput
+  "run ffi_bind_same.bin"
+  (boundedVerb "\{w}/ffi_bind_same.bin" [])) (got => expectAll [
+  expectEqualText "42\n3" (trimRight got),
+  expectEqualText "1" (intToString (bindCountLines ir "declare i64 @stub_add(")),
+]))
+
+cell18Diff : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+cell18Diff w obj = graded (writeFile
+  "\{w}/ffi_bind_diff.mdk"
+  (sharedSymSrc "cSum : Int -> <FFI \"c\"> Int" "cSum 1")) (_ =>
+  bindCollisionExpect
+    (medakaEnv
+      ["MEDAKA_RT_OBJ=\{obj}"]
+      ["build", "\{w}/ffi_bind_diff.mdk", "-o", "\{w}/ffi_bind_diff.bin"]))
+
+bindCollisionExpect : Result String (Int, String, String) -> Expectation
+bindCollisionExpect (Err e) = fail "could not spawn build: \{e}"
+bindCollisionExpect (Ok (code, out, err)) =
+  if code == 0 then
+    fail "built despite two signatures bound to one C symbol"
+  else
+    expectAll [
+      ffiLineExpect (out ++ err) "colliding symbol: stub_add",
+      ffiLineExpect (out ++ err) "Medaka names: cAdd, cSum",
+    ]
+
+test "diff_compiler_llvm_ffi cells 17-18: a bind clause names the linked symbol, shared symbols agree" = withScratchDir
+  (w => graded (buildCombined w) (combined => graded (buildBindStub
+    w
+    combined) (obj => expectEach [
+    ("cell 17 ffi_bind_symbol", cell17 w obj),
+    ("cell 18 ffi_bind_same_symbol", cell18Same w obj),
+    ("cell 18 ffi_bind_symbol_collision", cell18Diff w obj),
+  ])))

@@ -800,7 +800,7 @@ data EmitInputData = EmitInputData {
   -- subtracted at the mint, `ir.core_ir_lower.ffiExternTypeNames`), keyed name →
   -- (declared param type-head names, declared return type-head name).  This is
   -- the ONLY table that answers "is this name a foreign call?".
-  ffiExternIndex : OrdMap (List String, String),
+  ffiExternIndex : OrdMap (String, (List String, String)),
   recordFieldOrders : List (String, List String),
   mainIsUnit : Bool,
   mainIsFloat : Bool,
@@ -841,7 +841,7 @@ makeEmitInput : List ((String, String), Bool) ->
   List (String, String, String) ->
   String ->
   List (String, List String) ->
-  List (String, (List String, String)) ->
+  List (String, (String, (List String, String))) ->
   EmitInput
 makeEmitInput returnsSelf selfFnParams methodIfaces ctorFieldTypes externArities mainIsUnit mainIsFloat emitHalf preludeBinds preludeImpls srcName recordFieldOrders ffiExternTypes = EmitInputData {
   returnsSelf = returnsSelf,
@@ -4739,7 +4739,13 @@ notAnExternFamily fname =
 -- the declared (param type-head names, return type-head name) of a USER extern,
 -- or None when `name` is not one.
 ffiSigOf : Emit -> String -> Option (List String, String)
-ffiSigOf e name = omLookup name e.input.ffiExternIndex
+ffiSigOf e name = map snd (omLookup name e.input.ffiExternIndex)
+
+-- the C symbol a user extern links to: its `bind c` symbol, else its own name.
+ffiSymOf : Emit -> String -> String
+ffiSymOf e name = match omLookup name e.input.ffiExternIndex
+  Some (sym, _) => sym
+  None => name
 
 isFfiExtern : Emit -> String -> Bool
 isFfiExtern e name = match ffiSigOf e name
@@ -4840,15 +4846,24 @@ emitFfiDeclares e = match omKeys e.input.ffiExternIndex
     emitFfiDeclareEach e names
 
 emitFfiDeclareEach : Emit -> List String -> Unit
-emitFfiDeclareEach _ [] = ()
-emitFfiDeclareEach e (n :: rest) =
-  let _ = match ffiSigOf e n
-    Some (ptys, rty) =>
-      emit
-        e
-        "declare \{ffiCRetTy rty} @\{n}(\{ffiJoinComma (map ffiCParamTy (ffiValueParams ptys))})"
-    None => ()
-  emitFfiDeclareEach e rest
+emitFfiDeclareEach e names = emitFfiDeclareSeen e omEmpty names
+
+-- Two Medaka names bound to one C symbol share one `declare`; the validator
+-- (`ffiCheckExternRowsDistinct`) already guarantees their signatures agree.
+emitFfiDeclareSeen : Emit -> OrdMap Unit -> List String -> Unit
+emitFfiDeclareSeen _ _ [] = ()
+emitFfiDeclareSeen e seen (n :: rest) =
+  let sym = ffiSymOf e n
+  match omLookup sym seen
+    Some _ => emitFfiDeclareSeen e seen rest
+    None =>
+      let _ = match ffiSigOf e n
+        Some (ptys, rty) =>
+          emit
+            e
+            "declare \{ffiCRetTy rty} @\{sym}(\{ffiJoinComma (map ffiCParamTy (ffiValueParams ptys))})"
+        None => ()
+      emitFfiDeclareSeen e (omInsert sym () seen) rest
 
 -- SATURATED foreign call.  Arguments emit left-to-right exactly as every other
 -- call shape does, then each is marshalled per its DECLARED type head — never per
@@ -4874,7 +4889,7 @@ emitFfiCall e env fname args = match ffiSigOf e fname
       -- The order is the whole point: a copy-back emitted before the call would
       -- restore the pre-call words over whatever C wrote.
       let (cargs, abufs) = ffiMarshalOut e ptys argOps
-      let r = ffiEmitCall e fname rty (ffiJoinComma cargs)
+      let r = ffiEmitCall e (ffiSymOf e fname) rty (ffiJoinComma cargs)
       let _ = ffiArrayCopyBack e abufs
       r
 
