@@ -1228,9 +1228,11 @@ does not resolve is a `B-FFI-LIB-NOT-FOUND` diagnostic naming the library, the
 manifest key, and the manifest path — not a raw linker wall. A project with no
 `[foreign-libraries]` section links exactly as before.
 
-FFI is **native-build only**. `medaka run` (the tree-walking interpreter) and
-`build --target wasm` both reject a program with a user FFI extern, with a
-capability message — neither can make a foreign C call.
+A foreign call runs through the binding of the host the target calls foreign
+code through: `c` for a native build, `js` for `--target wasm`. A reached extern
+with no binding for that host is refused by `check --target`
+(`T-TARGET-NO-BINDING`), and `medaka run` (the tree-walking interpreter), which
+calls foreign code through no host, refuses every reached user FFI extern.
 
 ⚠️ `<FFI "c*">` tracks **authority, not memory safety**. A foreign function shares the
 address space and the GC heap; nothing in the effect system detects or prevents a

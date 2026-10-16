@@ -281,8 +281,9 @@ side and nothing to free.
   side.
 
 `Array Int` stays the crossable sequence type; an array of a fixed-width type does
-not cross. The WasmGC backend refuses every user foreign declaration, these
-included. Gated by the fixed-width cells of `test/diff_compiler_llvm_ffi_test.mdk`,
+not cross. The WasmGC backend lowers a user declaration only through its `js`
+binding, and these types cross there as `docs/spec/WASM-SEMANTICS.md` §3.1 says.
+Gated by the fixed-width cells of `test/diff_compiler_llvm_ffi_test.mdk`,
 whose C half prints what it received at each type's edge values.
 
 ### 2.2 `Float`

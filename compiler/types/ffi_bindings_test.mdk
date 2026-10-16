@@ -66,6 +66,11 @@ test "a declaration row names a host, never a bound's pattern" = expectAll [
     (codes False (decl "f" []) (Some [hostAtom "cx"])),
 ]
 
+test "an unknown host clause is the one report, not also an unbound host" =
+  expectEqual
+    ["T-FFI-UNKNOWN-HOST"]
+    (codes False (decl "f" [("rust", "g")]) (Some [hostAtom "c"]))
+
 test "a user-declared FFI label is not host-checked" =
   expectEqual
     ["T-FFI-UNLABELLED"]
