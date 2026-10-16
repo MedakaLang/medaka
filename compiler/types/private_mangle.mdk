@@ -101,6 +101,7 @@
 import frontend.ast.{
   letBindName,
   Decl(..),
+  ExternDecl(..),
   Expr(..),
   Pat(..),
   Arm(..),
@@ -1021,7 +1022,7 @@ buildExternExports exports ((mid, decls) :: rest) =
 
 externDeclEntries : Bool -> List Decl -> List (String, String)
 externDeclEntries _ [] = []
-externDeclEntries publicOnly ((DExtern pub name _) :: rest) =
+externDeclEntries publicOnly ((DExtern (ExternDecl { edPub = pub, edName = name, ... })) :: rest) =
   if pub || not publicOnly then
     (name, name) :: externDeclEntries publicOnly rest
   else
@@ -1350,7 +1351,8 @@ declDefNames _ = []
 pubSigNames : List Decl -> List String
 pubSigNames [] = []
 pubSigNames ((DTypeSig True n _ _) :: rest) = n :: pubSigNames rest
-pubSigNames ((DExtern True n _) :: rest) = n :: pubSigNames rest
+pubSigNames ((DExtern (ExternDecl { edPub = True, edName = n, ... })) :: rest) =
+  n :: pubSigNames rest
 pubSigNames ((DAttrib _ d) :: rest) = pubSigNames [d] ++ pubSigNames rest
 pubSigNames (_ :: rest) = pubSigNames rest
 
@@ -1585,7 +1587,7 @@ renameDecl rm (DAttrib attrs d) = DAttrib attrs (renameDecl rm d)
 --   * `DTypeAlias` names a TYPE.  `renameDecl`'s `DData` arm renames `dataCtors` and
 --     leaves `dataName` alone for the same reason — an alias arm here would rename half
 --     of that split.
-renameDecl _ (d@(DExtern _ _ _)) = d
+renameDecl _ (d@(DExtern _)) = d
 renameDecl _ (d@(DUse _ _ _)) = d
 renameDecl _ (d@(DEffect _ _ _ _ _ _)) = d
 renameDecl _ (d@(DTypeAlias { tyAliasName = _, ... })) = d

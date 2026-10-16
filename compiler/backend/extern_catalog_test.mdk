@@ -28,7 +28,7 @@ import test.{
 }
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import frontend.ast.{Decl(..)}
+import frontend.ast.{Decl(..), ExternDecl(..)}
 import types.annotate.{annotateProgram}
 import types.typecheck.{grantWholeDomain}
 import ir.core_ir_lower.{
@@ -75,7 +75,8 @@ sameNames leftOnly rightOnly left right = expectAll [
 export
 externDeclNames : List Decl -> List String
 externDeclNames [] = []
-externDeclNames ((DExtern _ n _) :: rest) = n :: externDeclNames rest
+externDeclNames ((DExtern (ExternDecl { edName = n, ... })) :: rest) =
+  n :: externDeclNames rest
 externDeclNames ((DAttrib _ d) :: rest) = externDeclNames (d :: rest)
 externDeclNames (_ :: rest) = externDeclNames rest
 

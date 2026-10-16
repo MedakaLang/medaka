@@ -63,6 +63,7 @@ import frontend.ast.{
   ConPayload(..),
   Variant(..),
   Decl(..),
+  ExternDecl(..),
   authTermNames,
   effParamNames,
 }
@@ -1822,7 +1823,7 @@ checkDecl env (DLetGroup _ binds) =
   -- (mutual recursion).
   flatMap (checkLetBind None env (mkScope (map letBindName binds))) binds
 checkDecl env (DTypeSig _ _ t _) = checkType None env t
-checkDecl env (DExtern _ _ t) = checkType None env t
+checkDecl env (DExtern (ExternDecl { edTy = t, ... })) = checkType None env t
 checkDecl env (DData { dataParams = ps, dataParamKinds = ks, dataCtors = vs, dataCtorBinders = bs }) =
   checkKindLabels env ks
     ++ checkVariants env (authorityParams ps ks) vs (padBinders vs bs)
@@ -2014,7 +2015,8 @@ primitiveConstructors = ["True", "False"]
 -- ── Name extractors (over runtime / prelude / user decls) ─────────────────
 externNames : List Decl -> List String
 externNames [] = []
-externNames ((DExtern _ n _) :: rest) = n :: externNames rest
+externNames ((DExtern (ExternDecl { edName = n, ... })) :: rest) =
+  n :: externNames rest
 externNames (_ :: rest) = externNames rest
 
 dataRecordNames : List Decl -> List String
@@ -2071,7 +2073,8 @@ userValueNames : List Decl -> List String
 userValueNames [] = []
 userValueNames ((DFunDef _ n _ _ _ _) :: rest) = n :: userValueNames rest
 userValueNames ((DTypeSig _ n _ _) :: rest) = n :: userValueNames rest
-userValueNames ((DExtern _ n _) :: rest) = n :: userValueNames rest
+userValueNames ((DExtern (ExternDecl { edName = n, ... })) :: rest) =
+  n :: userValueNames rest
 userValueNames ((DLetGroup _ bs) :: rest) =
   map letBindName bs ++ userValueNames rest
 userValueNames ((DInterface { methods, ... }) :: rest) =
@@ -2376,7 +2379,7 @@ sigEntryOf d = match dupSigOf d
 
 valueBinderNames : Decl -> List String
 valueBinderNames (DAttrib _ d) = valueBinderNames d
-valueBinderNames (DExtern _ n _) = [n]
+valueBinderNames (DExtern (ExternDecl { edName = n, ... })) = [n]
 valueBinderNames d = declBindNames d
 
 orphanSigError : OrdMap Unit ->
@@ -4523,7 +4526,7 @@ nsValues = ExpNs {
   nsDirectOf =
     d => match d
       DTypeSig True n _ _ => [n]
-      DExtern True n _ => [n]
+      DExtern (ExternDecl { edPub = True, edName = n, ... }) => [n]
       DFunDef True n _ _ _ _ => [n]
       _ => [],
   nsCarry = path src => carriedValuesFrom src (reexportBindings path src),

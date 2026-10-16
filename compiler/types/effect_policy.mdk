@@ -7,6 +7,7 @@ import frontend.ast.{
   EffParamTy(..),
   TyConOrigin(..),
   Decl(..),
+  ExternDecl(..),
   Expr(..),
   Arm(..),
   Guard(..),
@@ -251,7 +252,7 @@ concatMapCP f (x :: xs) = f x ++ concatMapCP f xs
 -- A top-level name (DFunDef or DExtern), peeling DAttrib.
 topName : Decl -> Option String
 topName (DFunDef _ n _ _ _ _) = Some n
-topName (DExtern _ n _) = Some n
+topName (DExtern (ExternDecl { edName = n, ... })) = Some n
 topName (DAttrib _ d) = topName d
 topName _ = None
 

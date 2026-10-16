@@ -76,6 +76,7 @@ import frontend.ast.{
   ConPayload(..),
   Variant(..),
   Decl(..),
+  ExternDecl(..),
   Attr(..),
   authTermsSurface,
 }
@@ -2403,7 +2404,7 @@ export
 printDecl : Decl -> Doc
 printDecl (DTypeSig pub n t _) =
   Cat (valueExportPrefix pub) (Cat (text n) (Cat (text " : ") (sigTypeDoc t)))
-printDecl (DExtern pub n t) =
+printDecl (DExtern (ExternDecl { edPub = pub, edName = n, edTy = t, ... })) =
   Cat
     (valueExportPrefix pub)
     (Cat (text "extern ") (Cat (text n) (Cat (text " : ") (sigTypeDoc t))))

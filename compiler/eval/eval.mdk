@@ -44,6 +44,7 @@ import frontend.ast.{
   useMemberAlias,
   qualifiedLocal,
   Decl(..),
+  ExternDecl(..),
   DataVis(..),
   TyConOrigin,
   ifaceIdentity,
@@ -370,7 +371,7 @@ ffiExternNamesRef = Ref []
 export
 externDeclNamesOfDecls : List Decl -> List String
 externDeclNamesOfDecls [] = []
-externDeclNamesOfDecls ((DExtern _ n _) :: rest) =
+externDeclNamesOfDecls ((DExtern (ExternDecl { edName = n, ... })) :: rest) =
   n :: externDeclNamesOfDecls rest
 externDeclNamesOfDecls ((DAttrib _ inner) :: rest) =
   externDeclNamesOfDecls [inner] ++ externDeclNamesOfDecls rest
@@ -4622,7 +4623,7 @@ publicExternNames decls = reverseL (publicExternNamesRev decls [])
 
 publicExternNamesRev : List Decl -> List String -> List String
 publicExternNamesRev [] names = names
-publicExternNamesRev ((DExtern True n _) :: rest) names =
+publicExternNamesRev ((DExtern (ExternDecl { edPub = True, edName = n, ... })) :: rest) names =
   publicExternNamesRev rest (n :: names)
 publicExternNamesRev ((DAttrib _ decl) :: rest) names =
   publicExternNamesRev rest (publicExternNamesRev [decl] names)

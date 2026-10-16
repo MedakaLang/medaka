@@ -13,7 +13,9 @@
 -- prop_runner, results are printed AS each test is evaluated, so a body that
 -- aborts the run does not mask the tests that already passed.
 
-import frontend.ast.{Decl(..), Expr(..), Loc(..), noDeclLoc, noBinderId}
+import frontend.ast.{
+  Decl(..), ExternDecl(..), Expr(..), Loc(..), noDeclLoc, noBinderId
+}
 import frontend.marker.{declRefs, localBoundNames}
 import frontend.resolve.{firstExprLoc}
 import eval.eval.{Value(..), EvalEnv(..), eval, extendEnv, force, ppValue}
@@ -183,7 +185,7 @@ externScan : List Decl ->
 externScan [] _ _ = []
 externScan ((DAttrib _ d) :: rest) bound emitted =
   externScan (d :: rest) bound emitted
-externScan ((DExtern _ n _) :: rest) bound emitted
+externScan ((DExtern (ExternDecl { edName = n, ... })) :: rest) bound emitted
   | has n bound || has n emitted = externScan rest bound emitted
   | otherwise =
     let _ = setInPlace n () emitted

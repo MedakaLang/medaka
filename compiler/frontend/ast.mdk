@@ -1852,12 +1852,30 @@ export
 deriveRefName : DeriveRef -> String
 deriveRefName (DeriveRef n _) = n
 
+-- One `extern name : ty` declaration.  `edLoc` spans the name through the end of
+-- the type.  `edBinds` lists the per-host `bind` clauses; plain data, so a
+-- module interface can serialize it as a field.
+public export data ExternDecl = ExternDecl {
+  edPub : Bool,
+  edName : String,
+  edTy : Ty,
+  edLoc : Loc,
+  edBinds : List ExternBind,
+}
+
+-- One `bind <host> "<symbol>"` clause of an extern declaration.
+public export data ExternBind = ExternBind {
+  ebHost : String,
+  ebSymbol : String,
+  ebLoc : Loc,
+}
+
 public export data Decl =
   -- pub? name type site.  The site is the name token, where a signature with
   -- no binding or a second signature for one name is reported.  No printer or
   -- dump renders it.
   | DTypeSig Bool String Ty Loc
-  | DExtern Bool String Ty
+  | DExtern ExternDecl
   -- pub? name params body site id.  One clause; a multi-clause function is a run
   -- of same-named DFunDefs, each with its own `BinderId`.  The site is the clause's name token, so a call
   -- whose clauses and guards all fall through is reported at the function's
@@ -2310,9 +2328,9 @@ mapTyInDecl : (Ty -> (Ty, Bool)) -> Decl -> (Decl, Bool)
 mapTyInDecl f (DTypeSig pub n t site) =
   let (t2, c) = mapTyFull f t
   (DTypeSig pub n t2 site, c)
-mapTyInDecl f (DExtern pub n t) =
-  let (t2, c) = mapTyFull f t
-  (DExtern pub n t2, c)
+mapTyInDecl f (DExtern d) =
+  let (t2, c) = mapTyFull f d.edTy
+  (DExtern ({ d | edTy = t2 }), c)
 mapTyInDecl f (DFunDef pub n ps e site bid) =
   let (e2, c) = mapTyInExpr f e
   (DFunDef pub n ps e2 site bid, c)

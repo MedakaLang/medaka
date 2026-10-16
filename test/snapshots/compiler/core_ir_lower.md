@@ -1,5 +1,5 @@
 # META
-source_lines=3978
+source_lines=3981
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -33,6 +33,7 @@ import frontend.ast.{
   FunClause(..),
   Addr(..),
   Decl(..),
+  ExternDecl(..),
   Attr(..),
   Variant(..),
   ConPayload(..),
@@ -3786,7 +3787,8 @@ externArities : List Decl -> List (String, Int)
 externArities decls = flatMap externArityEntries decls
 
 externArityEntries : Decl -> List (String, Int)
-externArityEntries (DExtern _ name ty) = [(name, listLen (methodArgTys ty))]
+externArityEntries (DExtern (ExternDecl { edName = name, edTy = ty, ... })) =
+  [(name, listLen (methodArgTys ty))]
 externArityEntries (DAttrib _ inner) = externArityEntries inner
 externArityEntries _ = []
 
@@ -3885,7 +3887,8 @@ ffiRowShapeKey (args, ret) = "\{joinWith "," args} -> \{ret}"
 export
 externDeclNamesOf : List Decl -> List String
 externDeclNamesOf [] = []
-externDeclNamesOf ((DExtern _ n _) :: rest) = n :: externDeclNamesOf rest
+externDeclNamesOf ((DExtern (ExternDecl { edName = n, ... })) :: rest) =
+  n :: externDeclNamesOf rest
 externDeclNamesOf ((DAttrib _ inner) :: rest) =
   externDeclNamesOf [inner] ++ externDeclNamesOf rest
 externDeclNamesOf (_ :: rest) = externDeclNamesOf rest
@@ -3897,7 +3900,7 @@ externDeclNamesOf (_ :: rest) = externDeclNamesOf rest
 -- so `Array` in this table always means `Array Int`.
 ffiExternRows : List String -> List Decl -> List (String, (List String, String))
 ffiExternRows _ [] = []
-ffiExternRows builtins ((DExtern _ n ty) :: rest)
+ffiExternRows builtins ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest)
   | contains n builtins = ffiExternRows builtins rest
   | otherwise =
     (n, (map tyHeadName (methodArgTys ty), tyHeadName (methodRetTy ty)))
@@ -3981,7 +3984,7 @@ nodeTag (EMethodRef _) = "EMethodRef"
 nodeTag (EDictApp _) = "EDictApp"
 nodeTag _ = "?"
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "letBindName" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "letBindName" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "numIntWord" false) (mem "numFloatWord" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "DeclFacts" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "obviousRuntimeType" false) (mem "withBinderRows" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "freshBinderId" false))))
@@ -5231,7 +5234,7 @@ nodeTag _ = "?"
 (DTypeSig true "externArities" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "externArities" ((PVar "decls")) (EApp (EApp (EVar "flatMap") (EVar "externArityEntries")) (EVar "decls")))
 (DTypeSig false "externArityEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
-(DFunDef false "externArityEntries" ((PCon "DExtern" PWild (PVar "name") (PVar "ty"))) (EListLit (ETuple (EVar "name") (EApp (EVar "listLen") (EApp (EVar "methodArgTys") (EVar "ty"))))))
+(DFunDef false "externArityEntries" ((PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "name")) (rf "edTy" (PVar "ty"))) true))) (EListLit (ETuple (EVar "name") (EApp (EVar "listLen") (EApp (EVar "methodArgTys") (EVar "ty"))))))
 (DFunDef false "externArityEntries" ((PCon "DAttrib" PWild (PVar "inner"))) (EApp (EVar "externArityEntries") (EVar "inner")))
 (DFunDef false "externArityEntries" (PWild) (EListLit))
 (DTypeSig true "ffiExternTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))
@@ -5245,12 +5248,12 @@ nodeTag _ = "?"
 (DFunDef false "ffiRowShapeKey" ((PTuple (PVar "args") (PVar "ret"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "args")))) (ELit (LString " -> "))) (EApp (EVar "display") (EVar "ret"))) (ELit (LString ""))))
 (DTypeSig true "externDeclNamesOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "externDeclNamesOf" ((PList)) (EListLit))
-(DFunDef false "externDeclNamesOf" ((PCons (PCon "DExtern" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "externDeclNamesOf") (EVar "rest"))))
+(DFunDef false "externDeclNamesOf" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n"))) true)) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "externDeclNamesOf") (EVar "rest"))))
 (DFunDef false "externDeclNamesOf" ((PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "externDeclNamesOf") (EListLit (EVar "inner"))) (EApp (EVar "externDeclNamesOf") (EVar "rest"))))
 (DFunDef false "externDeclNamesOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "externDeclNamesOf") (EVar "rest")))
 (DTypeSig false "ffiExternRows" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))
 (DFunDef false "ffiExternRows" (PWild (PList)) (EListLit))
-(DFunDef false "ffiExternRows" ((PVar "builtins") (PCons (PCon "DExtern" PWild (PVar "n") (PVar "ty")) (PVar "rest"))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "builtins")) (EApp (EApp (EVar "ffiExternRows") (EVar "builtins")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "n") (ETuple (EApp (EApp (EVar "map") (EVar "tyHeadName")) (EApp (EVar "methodArgTys") (EVar "ty"))) (EApp (EVar "tyHeadName") (EApp (EVar "methodRetTy") (EVar "ty"))))) (EApp (EApp (EVar "ffiExternRows") (EVar "builtins")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ffiExternRows" ((PVar "builtins") (PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n")) (rf "edTy" (PVar "ty"))) true)) (PVar "rest"))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "builtins")) (EApp (EApp (EVar "ffiExternRows") (EVar "builtins")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "n") (ETuple (EApp (EApp (EVar "map") (EVar "tyHeadName")) (EApp (EVar "methodArgTys") (EVar "ty"))) (EApp (EVar "tyHeadName") (EApp (EVar "methodRetTy") (EVar "ty"))))) (EApp (EApp (EVar "ffiExternRows") (EVar "builtins")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "ffiExternRows" ((PVar "builtins") (PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EApp (EApp (EVar "ffiExternRows") (EVar "builtins")) (EBinOp "::" (EVar "inner") (EVar "rest"))))
 (DFunDef false "ffiExternRows" ((PVar "builtins") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "ffiExternRows") (EVar "builtins")) (EVar "rest")))
 (DTypeSig false "methodRetTy" (TyFun (TyCon "Ty") (TyCon "Ty")))
@@ -5302,7 +5305,7 @@ nodeTag _ = "?"
 (DFunDef false "nodeTag" ((PCon "EDictApp" PWild)) (ELit (LString "EDictApp")))
 (DFunDef false "nodeTag" (PWild) (ELit (LString "?")))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "letBindName" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "letBindName" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "numIntWord" false) (mem "numFloatWord" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "DeclFacts" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "obviousRuntimeType" false) (mem "withBinderRows" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "freshBinderId" false))))
@@ -6552,7 +6555,7 @@ nodeTag _ = "?"
 (DTypeSig true "externArities" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "externArities" ((PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EVar "externArityEntries")) (EVar "decls")))
 (DTypeSig false "externArityEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
-(DFunDef false "externArityEntries" ((PCon "DExtern" PWild (PVar "name") (PVar "ty"))) (EListLit (ETuple (EVar "name") (EApp (EVar "listLen") (EApp (EVar "methodArgTys") (EVar "ty"))))))
+(DFunDef false "externArityEntries" ((PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "name")) (rf "edTy" (PVar "ty"))) true))) (EListLit (ETuple (EVar "name") (EApp (EVar "listLen") (EApp (EVar "methodArgTys") (EVar "ty"))))))
 (DFunDef false "externArityEntries" ((PCon "DAttrib" PWild (PVar "inner"))) (EApp (EVar "externArityEntries") (EVar "inner")))
 (DFunDef false "externArityEntries" (PWild) (EListLit))
 (DTypeSig true "ffiExternTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))
@@ -6566,12 +6569,12 @@ nodeTag _ = "?"
 (DFunDef false "ffiRowShapeKey" ((PTuple (PVar "args") (PVar "ret"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "args")))) (ELit (LString " -> "))) (EApp (EMethodRef "display") (EVar "ret"))) (ELit (LString ""))))
 (DTypeSig true "externDeclNamesOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "externDeclNamesOf" ((PList)) (EListLit))
-(DFunDef false "externDeclNamesOf" ((PCons (PCon "DExtern" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "externDeclNamesOf") (EVar "rest"))))
+(DFunDef false "externDeclNamesOf" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n"))) true)) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "externDeclNamesOf") (EVar "rest"))))
 (DFunDef false "externDeclNamesOf" ((PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "externDeclNamesOf") (EListLit (EVar "inner"))) (EApp (EVar "externDeclNamesOf") (EVar "rest"))))
 (DFunDef false "externDeclNamesOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "externDeclNamesOf") (EVar "rest")))
 (DTypeSig false "ffiExternRows" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))
 (DFunDef false "ffiExternRows" (PWild (PList)) (EListLit))
-(DFunDef false "ffiExternRows" ((PVar "builtins") (PCons (PCon "DExtern" PWild (PVar "n") (PVar "ty")) (PVar "rest"))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "builtins")) (EApp (EApp (EVar "ffiExternRows") (EVar "builtins")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "n") (ETuple (EApp (EApp (EMethodRef "map") (EVar "tyHeadName")) (EApp (EVar "methodArgTys") (EVar "ty"))) (EApp (EVar "tyHeadName") (EApp (EVar "methodRetTy") (EVar "ty"))))) (EApp (EApp (EVar "ffiExternRows") (EVar "builtins")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ffiExternRows" ((PVar "builtins") (PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n")) (rf "edTy" (PVar "ty"))) true)) (PVar "rest"))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "builtins")) (EApp (EApp (EVar "ffiExternRows") (EVar "builtins")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "n") (ETuple (EApp (EApp (EMethodRef "map") (EVar "tyHeadName")) (EApp (EVar "methodArgTys") (EVar "ty"))) (EApp (EVar "tyHeadName") (EApp (EVar "methodRetTy") (EVar "ty"))))) (EApp (EApp (EVar "ffiExternRows") (EVar "builtins")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "ffiExternRows" ((PVar "builtins") (PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EApp (EApp (EVar "ffiExternRows") (EVar "builtins")) (EBinOp "::" (EVar "inner") (EVar "rest"))))
 (DFunDef false "ffiExternRows" ((PVar "builtins") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "ffiExternRows") (EVar "builtins")) (EVar "rest")))
 (DTypeSig false "methodRetTy" (TyFun (TyCon "Ty") (TyCon "Ty")))

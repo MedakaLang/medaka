@@ -34,6 +34,7 @@ import frontend.parser.{
 import frontend.ast.{
   KindAnn(..),
   Decl(..),
+  ExternDecl(..),
   Ty(..),
   EffAtomTy(..),
   qualifierSource,
@@ -436,7 +437,7 @@ renderSig _ (DTypeSig True name ty _) schemes =
   Some (name, valueSig name schemes (Some ty))
 renderSig _ (DFunDef True name _ _ _ _) schemes =
   Some (name, valueSig name schemes None)
-renderSig bare (DExtern pub name ty) schemes
+renderSig bare (DExtern (ExternDecl { edPub = pub, edName = name, edTy = ty, ... })) schemes
   | pub || bare = Some (name, valueSig name schemes (Some ty))
 renderSig _ (DLetGroup True bindings) schemes = match bindings
   (LetBind name _ _ _) :: _ => Some (name, valueSig name schemes None)
