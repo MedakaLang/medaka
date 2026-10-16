@@ -1,0 +1,6 @@
+-- Doubles.
+-- > double 2
+-- 4
+export
+double : Int -> Int
+double x = x * 2

@@ -22,8 +22,11 @@
    `lsp.d_hover.parse.positions` 1 and its extra `lex.offsets` are today's
    value of the open hover second parse (#4148), not a minimum.
 
-   `typecheck.module` is one more than the number of user modules, because
-   the prelude (core) is typechecked as a module too. Counts above 1 for
+   `typecheck.module` counts the typechecker's per-module entries, the prelude
+   (core) included, so it is not a count of user modules. `typecheck.drive`
+   counts whole-graph typecheck drives. Every count here is today's value; a
+   duplicate that a later slice removes falls in the golden, and the issue that
+   owns it is named beside its probe. Counts above 1 for
    `desugar`, `parse.prescan` and `exhaust.oracle` are today's values, not a
    claim that they are the minimum. `lint`'s 50 parses are 49 stdlib-index
    parses plus 1 per file: a constant that moves when the stdlib module set
@@ -251,6 +254,69 @@ lspProbes dir =
         ++ tail),
   ]
 
+-- `repl` fed `1 + 2` on stdin, counting on. Spawned through `sh` for the
+-- redirect, as `lspRows` does.
+replRows : String ->
+  <Exec, FileWrite, Env "MEDAKA_ROOT", Env "MEDAKA"> (List String, Expectation)
+replRows dir =
+  let inp = "\{dir}/repl_one_line.in"
+  let _ = writeFile inp "1 + 2\n"
+  let spawned = boundedVerbSeconds (spawnTimeoutSeconds * 3) "sh" [
+    "-c",
+    "MEDAKA_STAGE_COUNTS=1 \{medakaBin} repl < \{inp}",
+  ]
+  let (code, out, err) = spawnResult spawned
+  let rows = rowsOf "repl_one_line" code err
+  let clean = expectAll [
+    expectFalse (contains "[stage]" out),
+    if code == 0 then pass else fail "repl_one_line exited \{code}: \{err}",
+  ]
+  (rows, clean)
+
+-- Probes for the duplicate and extra drives that later slices remove. Each
+-- count is today's value; the issue named beside a probe owns the drive that a
+-- later slice removes, so its removal shows as a fall in the golden.
+driveProbes : String ->
+  <Exec, FileWrite, Env "MEDAKA_ROOT", Env "MEDAKA"> List (List String, Expectation)
+driveProbes dir = [
+  -- #4151 value-main extra drives
+  probeRows "check_vm" ["check", fixture "vm.mdk"],
+  probeRows "run_vm" ["run", fixture "vm.mdk"],
+  probeRows "build_vm" ["build", fixture "vm.mdk", "-o", "\{dir}/vm"],
+  probeRows "check_vmm" ["check", fixture "vmm/main.mdk"],
+  probeRows "run_vmm" ["run", fixture "vmm/main.mdk"],
+  probeRows "build_vmm" ["build", fixture "vmm/main.mdk", "-o", "\{dir}/vmm"],
+  -- #4154 check --target re-elaboration
+  probeRows
+    "check_target_three"
+    [
+      "check",
+      "--target",
+      "wasmgc/edge",
+      fixture "three_mod/main.mdk",
+    ],
+  -- #2874 build --json double check
+  probeRows
+    "build_json_hello"
+    [
+      "build",
+      "--json",
+      fixture "hello.mdk",
+      "-o",
+      "\{dir}/hj",
+    ],
+  -- #4152 REPL three drives
+  replRows dir,
+  -- P1-D15 test-engine drives
+  probeRows "test_doc_eval" ["test", "--engines", "eval", fixture "doc.mdk"],
+  probeRows "test_docimp_eval" [
+    "test",
+    "--engines",
+    "eval",
+    fixture "docimp.mdk",
+  ],
+]
+
 test "stage_counts: per-verb stage counts match stage_counts.golden" = withScratchDir
   (dir =>
     let probes = [
@@ -269,7 +335,7 @@ test "stage_counts: per-verb stage counts match stage_counts.golden" = withScrat
       probeRowsExit "run_bad" 1 ["run", fixture "bad.mdk"],
       probeRowsExit "build_bad" 1 ["build", fixture "bad.mdk", "-o", "\{dir}/b"],
     ]
-    let allProbes = probes ++ lspProbes dir
+    let allProbes = probes ++ driveProbes dir ++ lspProbes dir
     let rows = flatMap fst allProbes
     let golden = underRoot "test/arch_goldens/stage_counts.golden"
     expectAll (map snd allProbes ++ [pinRows golden rows]))
