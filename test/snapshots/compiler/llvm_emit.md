@@ -7267,7 +7267,7 @@ argDecls (x :: rest) = "i64 \{x}, \{argDecls rest}"
 -- route is STATICALLY resolved — the typechecker already pinned the concrete type
 -- head, so the impl is known at COMPILE time and the site lowers to a DIRECT call
 -- to that impl's lifted `@mdk_impl_<tag>_<method>`, with NO runtime tag inspection.
--- The self-host compiler dispatches return-position via RKey (compiler/README.md),
+-- The self-host compiler dispatches return-position via RKey (archive/design/COMPILER-PORT-LOG.md),
 -- so RKey alone covers the bootstrap.  RDict/RDictFwd read a named dict PARAMETER
 -- at run time, so they lower to an if-chain switching on the dict's head tag over
 -- the method's impls (corpus completeness — the dict-passing fixtures).  This

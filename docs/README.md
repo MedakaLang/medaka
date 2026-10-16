@@ -214,7 +214,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`FFI-ABI.md`](../compiler/FFI-ABI.md) | FFI ABI contract | DECISION, and now LOWERED |
 | [`PERF-BASELINE.md`](../compiler/PERF-BASELINE.md) | PERF-BASELINE.md — absolute CLI-verb latency baseline | the `## Table` section is GENERATED |
 | [`PERF-RESULTS.md`](../compiler/PERF-RESULTS.md) | PERF-RESULTS.md — native-backend performance log | PARTIAL |
-| [`README.md`](../compiler/README.md) | compiler — the Medaka-in-Medaka compiler | IMPLEMENTED / SUPERSEDED-FRAMING |
+| [`README.md`](../compiler/README.md) | compiler — the Medaka-in-Medaka compiler | CURRENT |
 | [`RUNTIME-DESIGN.md`](../compiler/RUNTIME-DESIGN.md) | Runtime & extern strategy for the native (Stage 2.4) backend | IMPLEMENTED, with 2 items still deferred |
 | [`TYPECHECK-ARCH-BUG-FIT.md`](../compiler/TYPECHECK-ARCH-BUG-FIT.md) | Typechecker target architecture — per-bug fit ledger | CURRENT |
 | [`TYPECHECK-ARCHITECTURE.md`](../compiler/TYPECHECK-ARCHITECTURE.md) | Typechecker Architecture — the derived map | CURRENT |
@@ -235,6 +235,7 @@ IMPLEMENTED or SUPERSEDED work, kept for provenance. Links inside these docs are
 | [`BROWSER-STACK-DIAGNOSIS.md`](../archive/design/BROWSER-STACK-DIAGNOSIS.md) | BROWSER-STACK-DIAGNOSIS.md — the playground `Maximum call stack size exceeded` overflow | IMPLEMENTED |
 | [`CAPABILITY-EFFECTS-RESEARCH.md`](../archive/design/CAPABILITY-EFFECTS-RESEARCH.md) | Capability-effects research findings | IMPLEMENTED |
 | [`CAPABILITY-EFFECTS-V2-DESIGN.md`](../archive/design/CAPABILITY-EFFECTS-V2-DESIGN.md) | Capability-Effects v2 — design doc (parameterized effects + IO decomposition) | IMPLEMENTED |
+| [`COMPILER-PORT-LOG.md`](../archive/design/COMPILER-PORT-LOG.md) | compiler — the Medaka-in-Medaka compiler | IMPLEMENTED / SUPERSEDED-FRAMING |
 | [`COMPOSITE-MAIN-AUTOPRINT-DESIGN.md`](../archive/design/COMPOSITE-MAIN-AUTOPRINT-DESIGN.md) | Composite-`main` Auto-Print — Design (Option A: uniform auto-print) | IMPLEMENTED on every verb |
 | [`D2-REKEY-DESIGN.md`](../archive/design/D2-REKEY-DESIGN.md) | D2 cross-module dict-identity — design (reproduced + root-caused) | IMPLEMENTED |
 | [`DIAGNOSTICS-SURFACING-PLAN.md`](../archive/design/DIAGNOSTICS-SURFACING-PLAN.md) | DIAGNOSTICS-SURFACING-PLAN.md — native `check` error positions + messages (WS-4 / F6) | IMPLEMENTED |
