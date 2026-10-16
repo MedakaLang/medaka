@@ -1,0 +1,12 @@
+-- A c-only extern reached only through an impl method: the reach is
+-- conservative, so the declaration is refused under a js-hosted target.
+extern cNeg : Int -> <FFI "c"> Int
+
+interface Negate a where
+  negate : a -> <FFI "c"> Int
+
+impl Negate Int where
+  negate x = cNeg x
+
+main : <Stdout> Unit
+main = println "ok"

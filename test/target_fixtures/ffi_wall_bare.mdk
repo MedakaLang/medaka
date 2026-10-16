@@ -1,0 +1,7 @@
+extern gNullary : Unit -> <FFI "c/x"> Int
+
+useIt : Unit -> Unit -> <FFI "c/x"> Int
+useIt _ = gNullary
+
+main : <FFI "c*"> Int
+main = useIt () ()

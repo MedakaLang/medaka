@@ -1,0 +1,5 @@
+-- A user redeclaration of a catalog name runs the built-in, so no binding is owed.
+extern stringLength : String -> Int
+
+main : Unit
+main = println (stringLength "abc")
