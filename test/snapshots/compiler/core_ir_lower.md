@@ -1,5 +1,5 @@
 # META
-source_lines=3986
+source_lines=3992
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -127,7 +127,7 @@ import support.ordmap.{
   omFromNames,
   omKeys,
 }
-import types.private_mangle.{injectiveIdent}
+import types.private_mangle.{externDeclaredName, injectiveIdent}
 import support.util.{
   contains,
   listLen,
@@ -3837,23 +3837,29 @@ export
 validateFfiExternTypeNames : List (String, (List (String, String), (List String, String))) ->
   List (String, (List (String, String), (List String, String)))
 validateFfiExternTypeNames rows =
-  -- 🚨 THE INDEX IS BARE-NAME KEYED ACROSS THE WHOLE PROGRAM, so a name declared
-  -- twice with two different signatures is a contradiction the index cannot hold
-  -- ([T-GLOBAL-TABLE]).  Guard it HERE, in the wrapper, and not inside
-  -- `ffiExternRows`: the property is about the FINISHED list, and `ffiExternRows`
-  -- is a self-recursive walk that would have to re-scan its own tail at every step
-  -- to ask it — the exact list-as-a-set shape `compiler/AGENTS.md` opens with.
-  let _ = ffiCheckExternRowsDistinct omEmpty (hostRows "c" rows)
+  -- Guard it HERE, in the wrapper, and not inside `ffiExternRows`: the property is
+  -- about the FINISHED list, and `ffiExternRows` is a self-recursive walk that would
+  -- have to re-scan its own tail at every step to ask it — the exact list-as-a-set
+  -- shape `compiler/AGENTS.md` opens with.
+  let declared =
+    map (r => (externDeclaredName (fst r) (fst (snd r)), snd r)) rows
+  let _ = ffiCheckExternRowsDistinct omEmpty (hostRows "c" declared)
   rows
 
--- Two modules may each declare `extern cDouble`, and the declared name IS the C
--- symbol (`compiler/FFI-ABI.md`), so both calls link to ONE C function.  If the two
--- declarations agree, that is legitimate sharing and this walk is silent.  If they
--- DISAGREE, `omFromPairs (reverseL …)` in `EmitInputData` keeps the first row and
--- marshals the other module's calls through it: `useY 4.0` against an
+-- One C symbol is one C function, so it has one signature, however many
+-- declarations bind it.  The rows are keyed by the extern's program-wide name
+-- (`types.private_mangle.externSymbolName`): a declaration with `bind` clauses is
+-- module-scoped, so two modules binding one Medaka name to two symbols get two
+-- rows; one without them is keyed by its spelling, which is the C symbol it
+-- binds.  So every declaration of a symbol has its own row, under its own name or
+-- a shared one, and two of them that agree share the C function legitimately and
+-- this walk is silent.  Two that DISAGREE would each marshal through its own row
+-- into a function only one of the signatures can describe: `useY 4.0` against an
 -- `Int -> Int` row printed 139888567046080 at exit 0, and the `Float -> Float`
--- variant of the same collision segfaulted.  Neither has any channel to reach the
--- author, so the contradiction is refused here rather than emitted.
+-- variant segfaulted.  Neither has any channel to reach the author, so the
+-- contradiction is refused here rather than emitted.  The key is the symbol, not
+-- the row's name: a shared name would also keep only one of two rows
+-- (`omFromPairs` in `EmitInputData`), and a shared name implies a shared symbol.
 --
 -- A PANIC, not a located diagnostic, and that is the stage's own limit rather than
 -- a choice: Core IR lowering runs post-typecheck, where [T-ERRORS-ACCUM]'s
@@ -4000,7 +4006,7 @@ nodeTag _ = "?"
 (DUse false (UseGroup ("eval" "eval") ((mem "buildCtorToType" false) (mem "installDispatchTables" false) (mem "tyvarsInArgs" false) (mem "headTyconHead" false) (mem "exprStartLoc" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false) (mem "range" false) (mem "sortBy" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omKeys" false))))
-(DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "externDeclaredName" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "allList" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "reverseL" false) (mem "startsWith" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "splitOnChar" false))))
 (DTypeSig false "composeVar" (TyCon "String"))
 (DFunDef false "composeVar" () (ELit (LString "$cf")))
@@ -5245,7 +5251,7 @@ nodeTag _ = "?"
 (DTypeSig true "ffiExternTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))))))
 (DFunDef false "ffiExternTypeNames" ((PVar "runtimeDecls") (PVar "userDecls")) (EApp (EVar "validateFfiExternTypeNames") (EApp (EApp (EVar "ffiExternRows") (EApp (EVar "externDeclNamesOf") (EVar "runtimeDecls"))) (EVar "userDecls"))))
 (DTypeSig true "validateFfiExternTypeNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))
-(DFunDef false "validateFfiExternTypeNames" ((PVar "rows")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternRowsDistinct") (EVar "omEmpty")) (EApp (EApp (EVar "hostRows") (ELit (LString "c"))) (EVar "rows")))) (DoExpr (EVar "rows"))))
+(DFunDef false "validateFfiExternTypeNames" ((PVar "rows")) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EVar "map") (ELam ((PVar "r")) (ETuple (EApp (EApp (EVar "externDeclaredName") (EApp (EVar "fst") (EVar "r"))) (EApp (EVar "fst") (EApp (EVar "snd") (EVar "r")))) (EApp (EVar "snd") (EVar "r"))))) (EVar "rows"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternRowsDistinct") (EVar "omEmpty")) (EApp (EApp (EVar "hostRows") (ELit (LString "c"))) (EVar "declared")))) (DoExpr (EVar "rows"))))
 (DTypeSig false "ffiCheckExternRowsDistinct" (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))) (TyCon "Unit"))))
 (DFunDef false "ffiCheckExternRowsDistinct" (PWild (PList)) (ELit LUnit))
 (DFunDef false "ffiCheckExternRowsDistinct" ((PVar "seen") (PCons (PTuple (PVar "n") (PTuple (PVar "sym") (PVar "sh"))) (PVar "rest"))) (EBlock (DoLet false false (PVar "k") (EApp (EVar "ffiRowShapeKey") (EVar "sh"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "sym")) (EVar "seen")) (arm (PCon "None") () (EApp (EApp (EVar "ffiCheckExternRowsDistinct") (EApp (EApp (EApp (EVar "omInsert") (EVar "sym")) (ETuple (EVar "n") (EVar "k"))) (EVar "seen"))) (EVar "rest"))) (arm (PCon "Some" (PTuple PWild (PVar "prev"))) ((GBool (EBinOp "==" (EVar "prev") (EVar "k")))) (EApp (EApp (EVar "ffiCheckExternRowsDistinct") (EVar "seen")) (EVar "rest"))) (arm (PCon "Some" (PTuple (PVar "prevName") (PVar "prev"))) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "foreign declaration collision: the C symbol `")) (EApp (EVar "display") (EVar "sym"))) (ELit (LString "` is declared twice with different signatures.\ncolliding symbol: "))) (EApp (EVar "display") (EVar "sym"))) (ELit (LString "\nMedaka names: "))) (EApp (EVar "display") (EVar "prevName"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "\ndeclaration 1: "))) (EApp (EVar "display") (EVar "prev"))) (ELit (LString "\ndeclaration 2: "))) (EApp (EVar "display") (EVar "k"))) (ELit (LString "\nTwo foreign declarations bind ONE C symbol (by name or by a `bind c` clause), so they name ONE C function and only one of these two signatures can describe it. The other declaration's calls would be marshalled through the wrong signature -- a wrong value at exit 0, or a memory fault. Give the two declarations the same signature, or bind the differing one to a differently-named C symbol.")))))))))
@@ -5321,7 +5327,7 @@ nodeTag _ = "?"
 (DUse false (UseGroup ("eval" "eval") ((mem "buildCtorToType" false) (mem "installDispatchTables" false) (mem "tyvarsInArgs" false) (mem "headTyconHead" false) (mem "exprStartLoc" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false) (mem "range" false) (mem "sortBy" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omKeys" false))))
-(DUse false (UseGroup ("types" "private_mangle") ((mem "injectiveIdent" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "externDeclaredName" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "allList" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "reverseL" false) (mem "startsWith" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "splitOnChar" false))))
 (DTypeSig false "composeVar" (TyCon "String"))
 (DFunDef false "composeVar" () (ELit (LString "$cf")))
@@ -6566,7 +6572,7 @@ nodeTag _ = "?"
 (DTypeSig true "ffiExternTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))))))
 (DFunDef false "ffiExternTypeNames" ((PVar "runtimeDecls") (PVar "userDecls")) (EApp (EVar "validateFfiExternTypeNames") (EApp (EApp (EVar "ffiExternRows") (EApp (EVar "externDeclNamesOf") (EVar "runtimeDecls"))) (EVar "userDecls"))))
 (DTypeSig true "validateFfiExternTypeNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))
-(DFunDef false "validateFfiExternTypeNames" ((PVar "rows")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternRowsDistinct") (EVar "omEmpty")) (EApp (EApp (EVar "hostRows") (ELit (LString "c"))) (EVar "rows")))) (DoExpr (EVar "rows"))))
+(DFunDef false "validateFfiExternTypeNames" ((PVar "rows")) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EMethodRef "map") (ELam ((PVar "r")) (ETuple (EApp (EApp (EVar "externDeclaredName") (EApp (EVar "fst") (EVar "r"))) (EApp (EVar "fst") (EApp (EVar "snd") (EVar "r")))) (EApp (EVar "snd") (EVar "r"))))) (EVar "rows"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternRowsDistinct") (EVar "omEmpty")) (EApp (EApp (EVar "hostRows") (ELit (LString "c"))) (EVar "declared")))) (DoExpr (EVar "rows"))))
 (DTypeSig false "ffiCheckExternRowsDistinct" (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))) (TyCon "Unit"))))
 (DFunDef false "ffiCheckExternRowsDistinct" (PWild (PList)) (ELit LUnit))
 (DFunDef false "ffiCheckExternRowsDistinct" ((PVar "seen") (PCons (PTuple (PVar "n") (PTuple (PVar "sym") (PVar "sh"))) (PVar "rest"))) (EBlock (DoLet false false (PVar "k") (EApp (EVar "ffiRowShapeKey") (EVar "sh"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "sym")) (EVar "seen")) (arm (PCon "None") () (EApp (EApp (EVar "ffiCheckExternRowsDistinct") (EApp (EApp (EApp (EVar "omInsert") (EVar "sym")) (ETuple (EVar "n") (EVar "k"))) (EVar "seen"))) (EVar "rest"))) (arm (PCon "Some" (PTuple PWild (PVar "prev"))) ((GBool (EBinOp "==" (EVar "prev") (EVar "k")))) (EApp (EApp (EVar "ffiCheckExternRowsDistinct") (EVar "seen")) (EVar "rest"))) (arm (PCon "Some" (PTuple (PVar "prevName") (PVar "prev"))) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "foreign declaration collision: the C symbol `")) (EApp (EMethodRef "display") (EVar "sym"))) (ELit (LString "` is declared twice with different signatures.\ncolliding symbol: "))) (EApp (EMethodRef "display") (EVar "sym"))) (ELit (LString "\nMedaka names: "))) (EApp (EMethodRef "display") (EVar "prevName"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "\ndeclaration 1: "))) (EApp (EMethodRef "display") (EVar "prev"))) (ELit (LString "\ndeclaration 2: "))) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString "\nTwo foreign declarations bind ONE C symbol (by name or by a `bind c` clause), so they name ONE C function and only one of these two signatures can describe it. The other declaration's calls would be marshalled through the wrong signature -- a wrong value at exit 0, or a memory fault. Give the two declarations the same signature, or bind the differing one to a differently-named C symbol.")))))))))

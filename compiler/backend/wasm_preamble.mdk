@@ -2173,7 +2173,19 @@ jsffiImportLines imps = map jsffiImportLine imps
 jsffiImportLine : JsImport -> String
 jsffiImportLine imp =
   let params = joinWith "" (map jsWireParam imp.params)
-  "  (import \"jsffi\" \"\{jsImportField imp}\" (func $jsffi_\{imp.medakaName}\{params}\{jsWireResult imp.result}))"
+  "  (import \"jsffi\" \"\{jsImportField imp}\" (func $\{jsffiImportId imp.medakaName}\{params}\{jsWireResult imp.result}))"
+
+-- The WAT identifiers of an extern's import and of its wrapper, without the
+-- `$`.  The two prefixes differ, so no import can share a wrapper's identifier
+-- whatever the names, and a Medaka name never holds a `.`, so no function the
+-- program defines under its own name can share either.
+export
+jsffiImportId : String -> String
+jsffiImportId name = "jsffi.import.\{name}"
+
+export
+jsffiWrapperId : String -> String
+jsffiWrapperId name = "jsffi.wrap.\{name}"
 
 -- `<jsName>:<P1>,...,<Pn>-><R>`, each head as declared.
 export
@@ -2212,7 +2224,7 @@ jsCrossableHead head = contains head [
   "I32", "U64", "I64"
 ]
 
--- The wrapper `$jsffi_w_<name>`: Medaka values in, the import called, a Medaka
+-- The wrapper (`jsffiWrapperId`): Medaka values in, the import called, a Medaka
 -- value out.  `intTrap` and `charTrap` stop the program for a result that is
 -- not an `Int` or not a `Char`, and `copyTrap` for an `Array` element written
 -- back outside `Int`'s range.  An `Array` result never reaches here: it is an
@@ -2235,12 +2247,12 @@ jsffiWrapperLines imp intTrap charTrap copyTrap =
     else
       []
   [
-      "  (func $jsffi_w_\{imp.medakaName}\{params} (result (ref eq))",
+      "  (func $\{jsffiWrapperId imp.medakaName}\{params} (result (ref eq))",
       "    (local $off i32)\{rLocal}",
     ]
     ++ push
     ++ flatMap jsWireArg ps
-    ++ ["    call $jsffi_\{imp.medakaName}"]
+    ++ ["    call $\{jsffiImportId imp.medakaName}"]
     ++ (if held then ["    local.set $r"] else [])
     ++ flatMap (jsCopyBack copyTrap) ps
     ++ jsUnwire imp.result intTrap charTrap

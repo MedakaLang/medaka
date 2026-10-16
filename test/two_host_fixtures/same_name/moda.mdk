@@ -1,0 +1,9 @@
+-- `helper` is declared here and in modb.mdk and modc.mdk, each module binding
+-- its own symbols; each module's calls go to its own declaration.
+extern helper : Int -> <FFI "c", FFI "js"> Int
+  bind c "stub_a_helper"
+  bind js "jsAHelper"
+
+export
+useA : Int -> <FFI "c", FFI "js"> Int
+useA x = helper x

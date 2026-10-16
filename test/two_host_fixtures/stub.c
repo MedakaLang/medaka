@@ -1,6 +1,6 @@
-/* The C half of two_host.mdk: plain C, no knowledge of Medaka's representation.
- * bindings.mjs is the JS half and must keep the same semantics, function by
- * function. */
+/* The C half of the programs in this directory: plain C, no knowledge of
+ * Medaka's representation.  bindings.mjs is the JS half and must keep the same
+ * semantics, function by function. */
 #include <string.h>
 
 long long stub_add(long long a, long long b) { return a + b; }
@@ -38,3 +38,9 @@ long long stub_notes_len(void) { return notes; }
 double stub_mix(long long i, double f, const char *s) {
   return (double)i + f + (double)strlen(s);
 }
+
+/* same_name/ and method_names.mdk */
+long long stub_a_helper(long long x) { return x + 100; }
+long long stub_b_helper(long long x) { return x + 200; }
+long long stub_mul_add(long long a, long long b) { return a * 100 + b; }
+long long stub_prime(long long x) { return x + 10; }

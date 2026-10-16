@@ -377,6 +377,7 @@ import backend.wasm_preamble.{
   jsffiImportLines,
   jsffiRuntimeLines,
   jsffiWrapperLines,
+  jsffiWrapperId,
   jsCrossableHead,
   floatRemRuntimeLines,
   floatRuntimeLines,
@@ -931,7 +932,7 @@ emitFfiEtaW prog name = match jsImportForW prog name
 jsffiWrapperW : Prog -> JsImport -> String
 jsffiWrapperW prog imp =
   let emit = progEmit prog
-  let name = "jsffi_w_" ++ imp.medakaName
+  let name = jsffiWrapperId imp.medakaName
   let call = "foreign call '\{imp.jsName}'"
   let intTrap =
     if imp.result == "Int" then

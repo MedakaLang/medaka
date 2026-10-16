@@ -56,7 +56,8 @@
 --   • externs / runtime C symbols (`@mdk_<externName>` → runtime/medaka_rt.c) —
 --     they are declared in runtime.mdk (NOT in core/modules), so they never appear
 --     as a definition here; a reference to one is excluded by rule 4 (not in any
---     unit's defined-fn set nor import scope).
+--     unit's defined-fn set nor import scope).  A module's OWN extern keeps its
+--     spelling too unless it has `bind` clauses (`externSymbolName`).
 --   • interface/impl method names, dict names — they have their own naming in the
 --     emitter (impl keys), and are not DFunDef/DData binders this pass touches.
 --   • RESERVED constructors (Cons/Nil/Some/None/Ok/Err/Lt/Eq/Gt/True/False) — the
@@ -994,7 +995,8 @@ buildUnitRenameMap : String ->
 buildUnitRenameMap entryMid mid exportsPerUnit externExports decls =
   let localFns = dedup (unitDefNames (mid, decls))
   let localEntries =
-    map (n => (n, mangledName mid n)) localFns ++ externDeclEntries False decls
+    map (n => (n, mangledName mid n)) localFns
+      ++ externDeclEntries mid False decls
   let importEntries = importRenameEntries mid exportsPerUnit decls
   let entries =
     localEntries
@@ -1014,22 +1016,51 @@ buildExternExports : OrdMap (OrdMap String) ->
 buildExternExports exports [] = exports
 buildExternExports exports ((mid, decls) :: rest) =
   let entries =
-    externDeclEntries True decls
+    externDeclEntries mid True decls
       ++ flatMap (externImportEntries exports True) decls
   buildExternExports
     (omInsert mid (omFromPairs (reverseL entries) omEmpty) exports)
     rest
 
-externDeclEntries : Bool -> List Decl -> List (String, String)
-externDeclEntries _ [] = []
-externDeclEntries publicOnly ((DExtern (ExternDecl { edPub = pub, edName = name, ... })) :: rest) =
-  if pub || not publicOnly then
-    (name, name) :: externDeclEntries publicOnly rest
+externDeclEntries : String -> Bool -> List Decl -> List (String, String)
+externDeclEntries _ _ [] = []
+externDeclEntries mid publicOnly ((DExtern ed) :: rest) =
+  if ed.edPub || not publicOnly then
+    (ed.edName, externSymbolName mid ed)
+      :: externDeclEntries mid publicOnly rest
   else
-    externDeclEntries publicOnly rest
-externDeclEntries publicOnly ((DAttrib _ decl) :: rest) =
-  externDeclEntries publicOnly [decl] ++ externDeclEntries publicOnly rest
-externDeclEntries publicOnly (_ :: rest) = externDeclEntries publicOnly rest
+    externDeclEntries mid publicOnly rest
+externDeclEntries mid publicOnly ((DAttrib _ decl) :: rest) =
+  externDeclEntries mid publicOnly [decl]
+    ++ externDeclEntries mid publicOnly rest
+externDeclEntries mid publicOnly (_ :: rest) =
+  externDeclEntries mid publicOnly rest
+
+-- The program-wide name of an extern declared in module `mid`.  One with `bind`
+-- clauses names whatever its clauses bind, which another module may bind
+-- differently under the same Medaka name, so like a function it takes the
+-- module-scoped name and both emitters key its foreign call by that.  One with
+-- none binds the C symbol it is spelled as (`frontend.ast.externBindings`), the
+-- one function every module spelling it shares; a `stdlib/runtime.mdk` catalog
+-- name is always of this kind (T-FFI-BUILTIN-BIND refuses its clauses) and the
+-- emitters dispatch it by that spelling, so it keeps it.
+externSymbolName : String -> ExternDecl -> String
+externSymbolName mid ed = match ed.edBinds
+  [] => ed.edName
+  _ => mangledName mid ed.edName
+
+-- The name an extern's declaration wrote, for a message, from its program-wide
+-- name and its (host, symbol) bindings.  A declaration without clauses has the
+-- implied C binding of its own spelling as its only one and was not renamed;
+-- any other was, so its module prefix comes off through the first `__`.  A
+-- module id whose sanitized form holds `__` keeps the rest of that prefix.
+export
+externDeclaredName : String -> List (String, String) -> String
+externDeclaredName n binds
+  | binds == [("c", n)] = n
+  | otherwise = match stringIndexOf "__" n
+    Some i => stringSlice (i + 2) (stringLength n) n
+    None => n
 
 externImportEntries : OrdMap (OrdMap String) ->
   Bool ->
@@ -1570,6 +1601,10 @@ renameDecl rm (d@(DData { dataCtors = variants })) =
 renameDecl rm (d@(DNewtype { newtypeCtor = con })) =
   DNewtype { d | newtypeCtor = renameDefName rm con }
 renameDecl rm (DAttrib attrs d) = DAttrib attrs (renameDecl rm d)
+-- An extern's declaration takes the name its references do (`externSymbolName`):
+-- the emitters read its foreign-call row from the declaration, under that name.
+renameDecl rm (DExtern ed) =
+  DExtern ({ ed | edName = renameDefName rm ed.edName })
 -- ── LEAVES, AS AN EXPLICIT LIST ───────────────────────────────────────────────
 -- Not a `_ => d` catch-all, for the reason `renameScoped`'s leaf list gives: a new
 -- name-carrying `Decl` constructor would be a SILENT leaf ([T-GLOBAL-TABLE]).  Listed,
@@ -1577,17 +1612,12 @@ renameDecl rm (DAttrib attrs d) = DAttrib attrs (renameDecl rm d)
 --   `grep -n '^  | D' compiler/frontend/ast.mdk` minus its five `Do*` rows (`DoStmt`,
 --   a different type) is the constructor total, and every one of them appears exactly
 --   once either above or here.
---   * `DExtern` names a RUNTIME symbol, not a Medaka top-level binding — the mangle
---     domain is `unitDefNames` ∪ `unitLocalCtorNames`, and `buildUnitRenameMap` never
---     enters an extern.  Renaming one would emit a call to a `@mdk_<mid>__…` the C
---     runtime does not define.
 --   * `DUse` is an import FORM; its module path and member names are resolved before
 --     this pass and the rename is import-aware through `rm` at the reference sites.
 --   * `DEffect` names an effect, which is neither a value nor a constructor.
 --   * `DTypeAlias` names a TYPE.  `renameDecl`'s `DData` arm renames `dataCtors` and
 --     leaves `dataName` alone for the same reason — an alias arm here would rename half
 --     of that split.
-renameDecl _ (d@(DExtern _)) = d
 renameDecl _ (d@(DUse _ _ _)) = d
 renameDecl _ (d@(DEffect _ _ _ _ _ _)) = d
 renameDecl _ (d@(DTypeAlias { tyAliasName = _, ... })) = d

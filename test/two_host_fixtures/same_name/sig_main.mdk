@@ -1,0 +1,10 @@
+-- Two modules' `helper`s at different signatures.
+--
+--   101    stub_a_helper 1 = 1 + 100
+--   6      the UTF-8 byte length of "héllo"
+import moda.{useA}
+import modc.{useC}
+
+main =
+  let _ = println (useA 1)
+  println (useC "héllo")
