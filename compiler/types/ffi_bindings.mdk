@@ -28,7 +28,7 @@ import types.effect_domain.{Param(..), canonParam, isSubTop}
 import types.effect_rows.{Atom, atomConst, atomLabel, atomsNorm, renderAtoms}
 import support.util.{anyList, contains, filterList, joinWith, startsWith}
 import support.char.{isAlnum, isApos, isDigit}
-import string.{stripSuffix}
+import string.{stripSuffix, toLower}
 
 -- One declaration diagnostic: its code, where it is reported, its message.
 public export data FfiDiag = FfiDiag String (Option Loc) String
@@ -52,7 +52,15 @@ ffiDeclarationDiags True d _ = match d.edBinds
     [FfiDiag "T-FFI-BUILTIN-BIND" (Some b.ebLoc) (ffiBuiltinBindMsg d.edName)]
   [] => []
 ffiDeclarationDiags False d row =
-  ffiLabelDiags d row ++ ffiRowHostDiags d row ++ ffiBindDiags d
+  let clauseDiags = ffiClauseDiags d.edName [] d.edBinds
+  -- A malformed clause list already explains why a host looks unbound.
+  let hostDiags = match clauseDiags
+    [] => ffiRowHostDiags d row
+    _ => filterList isNotUnbound (ffiRowHostDiags d row)
+  ffiLabelDiags d row ++ hostDiags ++ ffiBindDiags d
+
+isNotUnbound : FfiDiag -> Bool
+isNotUnbound (FfiDiag code _ _) = code /= "T-FFI-UNBOUND-HOST"
 
 -- The row must name the foreign-call `FFI`, and the signature must have an
 -- arrow to carry a row at all.  A nullary extern is refused, not passed: the
@@ -211,17 +219,35 @@ ffiUnlabelledMsg n =
 ffiNoHostMsg : String -> Option String -> String
 ffiNoHostMsg n written =
   let fix = match written
-    Some lib if not (contains (dropTrailingStar lib) ffiHosts) =>
-      "`<FFI \"c/\{lib}\">` for a C library"
-    _ => "`<FFI \"c\">` for a C function"
+    Some p => ffiNoHostFix p
+    None => "write `<FFI \"c\">` for a C function"
   let shown = match written
     Some lib => "`FFI \"\{lib}\"`"
     None => "`FFI`"
-  "foreign declaration `\{n}` names \{shown} with no host in its result row; the parameter is a host, `c` or `js`, optionally followed by `/` and a library: write \{fix}"
+  "foreign declaration `\{n}` names \{shown} with no host in its result row; the parameter is a host, `c` or `js`, optionally followed by `/` and a library: \{fix}"
+
+-- The repair for a written parameter that names no host.  A bound's spelling
+-- (`"js*"`) or a dangling slash (`"c/"`) is a host written wrongly, and a host
+-- in capitals is a case mistake; only a name that is no host reads as a C
+-- library.
+ffiNoHostFix : String -> String
+ffiNoHostFix p =
+  let base = dropTrailingSlash (dropTrailingStar p)
+  if contains base ffiHosts then
+    "write `<FFI \"\{base}\">` for the `\{base}` host"
+  else if contains (toLower base) ffiHosts then
+    "host names are lower-case: write `<FFI \"\{toLower base}\">`"
+  else
+    "write `<FFI \"c/\{p}\">` for a C library"
 
 -- A bound's spelling of a whole host, `"c*"`, written in a declaration row.
 dropTrailingStar : String -> String
 dropTrailingStar s = match stripSuffix "*" s
+  Some rest => rest
+  None => s
+
+dropTrailingSlash : String -> String
+dropTrailingSlash s = match stripSuffix "/" s
   Some rest => rest
   None => s
 

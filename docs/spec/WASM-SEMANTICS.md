@@ -465,7 +465,7 @@ A user `extern` with a `bind js "<name>"` clause, reached under a `wasmgc/*`
 target, is a function import from the module **`jsffi`**, never from `env`. A
 user name therefore cannot collide with a runtime `mdk_*` key, and
 `checkImportKeys` keeps judging `env` alone. The set of imports is one fact,
-`EmitPlan.jsImports` (`compiler/backend/emit_plan.mdk`), computed by the same
+the `jsImports` field of `EmitPlan` (`compiler/backend/emit_plan.mdk`), computed by the same
 walk that computes `hostKeys`: an extern named only in code the reach filter
 dropped imports nothing. The emitter transcribes the plan: one import per
 reached extern, in Medaka-name order.
@@ -489,11 +489,17 @@ before anything crosses, as on native.
 | `Float` | `f64` | `f64` | a `Number`. NaN, `-0` and the infinities cross unchanged; a NaN's payload is the engine's |
 | `Bool` | `i32` (0 or 1) | `i32` | a JS boolean. The host maps a result `true` to 1 and `false` to 0. The guest reads any non-zero `i32` as `True`, as native reads a C result |
 | `Char` | `i32` (the scalar value) | `i32` | a one-code-point string, so a character above the BMP is two UTF-16 units. The host returns `codePointAt(0)` of a one-code-point string. The guest refuses a result that is not a Unicode scalar value (above 1114111, or in `55296..57343`) with `runtime error [E-PANIC]: foreign call '<jsName>' returned a value that is not a valid Char …`, as native does |
-| `U8` `U16` `U32` `I32` | `i32` | `i32` | a `Number` (`U32` read unsigned). A result is read at its width (masked, or sign-extended for `I32`), so it is in range by construction |
+| `U8` `U16` `U32` `I32` | `i32` | `i32` | a `Number` (`U32` read unsigned). The host refuses a result that is not an integer `Number` in the type's range, with a `JsBindingError` such as ``js binding `f` returned the Number 300, not U8``; it never masks or wraps |
 | `U64` `I64` | `i64` | `i64` | a `BigInt` (`U64` read unsigned) |
 | `String` | `i32`: the byte length | none | a JS string. The guest resets the path channel once per call (`mdk_path_reset`), then appends each `String` and `Array` argument in parameter order (`$mdk_push_path_more`); the host splits the channel by the lengths in the parameters and decodes each `String` as UTF-8, which a Medaka `String` always is. A `String` result goes to the result channel (`mdk_result_len`/`mdk_result_byte`) after any copy-back words, encoded as UTF-8 |
 | `Array` | `i32`: the element count | refused | a `BigInt64Array` holding the elements, 8 bytes each, little-endian two's complement on the path channel. The binding may write to it. After the call the host writes every `Array` argument's elements back, in parameter order and at the same count, to the start of the result channel, and the guest copies them into the caller's array. The copy-back is unconditional, as native's is (FFI-ABI §2.4). Before it writes any element of an array, the guest checks that every element fits `Int`. If one does not, it stops with `runtime error [E-PANIC]: foreign call '<jsName>' wrote a value outside Int's range … into an Array Int argument`, as native does. An `Array Int` result is an emitter gap on wasm as it is on native: native has no length channel for it, and the two targets must not give one declaration two meanings |
 | `Unit` | none | none | nothing. A `Unit` argument is still evaluated, and the JS function receives no argument for it. The host ignores a `Unit` binding's return value |
+
+**A `String` argument is its bytes, NUL included.** A `String` containing U+0000
+reaches a `js` binding intact, because the host splits the path channel by the
+declared lengths. The same `String` reaches a `c` binding as a `const char*` and
+is truncated at the NUL (`compiler/FFI-ABI.md` §2.3), so the two hosts differ
+here by the design of the C ABI, not by a defect of either.
 
 **String results are strict.** A JS string is UTF-16 and can hold a lone
 surrogate, which has no UTF-8 encoding. The host refuses such a result (the

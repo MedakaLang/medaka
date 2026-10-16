@@ -1,5 +1,5 @@
 # META
-source_lines=315
+source_lines=341
 stages=DESUGAR,MARK
 # SOURCE
 -- The declaration rules for a user `extern`'s host bindings and declared row,
@@ -32,7 +32,7 @@ import types.effect_domain.{Param(..), canonParam, isSubTop}
 import types.effect_rows.{Atom, atomConst, atomLabel, atomsNorm, renderAtoms}
 import support.util.{anyList, contains, filterList, joinWith, startsWith}
 import support.char.{isAlnum, isApos, isDigit}
-import string.{stripSuffix}
+import string.{stripSuffix, toLower}
 
 -- One declaration diagnostic: its code, where it is reported, its message.
 public export data FfiDiag = FfiDiag String (Option Loc) String
@@ -56,7 +56,15 @@ ffiDeclarationDiags True d _ = match d.edBinds
     [FfiDiag "T-FFI-BUILTIN-BIND" (Some b.ebLoc) (ffiBuiltinBindMsg d.edName)]
   [] => []
 ffiDeclarationDiags False d row =
-  ffiLabelDiags d row ++ ffiRowHostDiags d row ++ ffiBindDiags d
+  let clauseDiags = ffiClauseDiags d.edName [] d.edBinds
+  -- A malformed clause list already explains why a host looks unbound.
+  let hostDiags = match clauseDiags
+    [] => ffiRowHostDiags d row
+    _ => filterList isNotUnbound (ffiRowHostDiags d row)
+  ffiLabelDiags d row ++ hostDiags ++ ffiBindDiags d
+
+isNotUnbound : FfiDiag -> Bool
+isNotUnbound (FfiDiag code _ _) = code /= "T-FFI-UNBOUND-HOST"
 
 -- The row must name the foreign-call `FFI`, and the signature must have an
 -- arrow to carry a row at all.  A nullary extern is refused, not passed: the
@@ -215,17 +223,35 @@ ffiUnlabelledMsg n =
 ffiNoHostMsg : String -> Option String -> String
 ffiNoHostMsg n written =
   let fix = match written
-    Some lib if not (contains (dropTrailingStar lib) ffiHosts) =>
-      "`<FFI \"c/\{lib}\">` for a C library"
-    _ => "`<FFI \"c\">` for a C function"
+    Some p => ffiNoHostFix p
+    None => "write `<FFI \"c\">` for a C function"
   let shown = match written
     Some lib => "`FFI \"\{lib}\"`"
     None => "`FFI`"
-  "foreign declaration `\{n}` names \{shown} with no host in its result row; the parameter is a host, `c` or `js`, optionally followed by `/` and a library: write \{fix}"
+  "foreign declaration `\{n}` names \{shown} with no host in its result row; the parameter is a host, `c` or `js`, optionally followed by `/` and a library: \{fix}"
+
+-- The repair for a written parameter that names no host.  A bound's spelling
+-- (`"js*"`) or a dangling slash (`"c/"`) is a host written wrongly, and a host
+-- in capitals is a case mistake; only a name that is no host reads as a C
+-- library.
+ffiNoHostFix : String -> String
+ffiNoHostFix p =
+  let base = dropTrailingSlash (dropTrailingStar p)
+  if contains base ffiHosts then
+    "write `<FFI \"\{base}\">` for the `\{base}` host"
+  else if contains (toLower base) ffiHosts then
+    "host names are lower-case: write `<FFI \"\{toLower base}\">`"
+  else
+    "write `<FFI \"c/\{p}\">` for a C library"
 
 -- A bound's spelling of a whole host, `"c*"`, written in a declaration row.
 dropTrailingStar : String -> String
 dropTrailingStar s = match stripSuffix "*" s
+  Some rest => rest
+  None => s
+
+dropTrailingSlash : String -> String
+dropTrailingSlash s = match stripSuffix "/" s
   Some rest => rest
   None => s
 
@@ -324,13 +350,15 @@ paramIsTopDomain _ = False
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" false) (mem "atomConst" false) (mem "atomLabel" false) (mem "atomsNorm" false) (mem "renderAtoms" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "joinWith" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false) (mem "isApos" false) (mem "isDigit" false))))
-(DUse false (UseGroup ("string") ((mem "stripSuffix" false))))
+(DUse false (UseGroup ("string") ((mem "stripSuffix" false) (mem "toLower" false))))
 (DData Public "FfiDiag" () ((variant "FfiDiag" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))) ())
 (DTypeSig false "ffiHosts" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "ffiHosts" () (EListLit (ELit (LString "c")) (ELit (LString "js"))))
 (DTypeSig true "ffiDeclarationDiags" (TyFun (TyCon "Bool") (TyFun (TyCon "ExternDecl") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "EffAtomTy"))) (TyApp (TyCon "List") (TyCon "FfiDiag"))))))
 (DFunDef false "ffiDeclarationDiags" ((PCon "True") (PVar "d") PWild) (EMatch (EFieldAccess (EVar "d") "edBinds") (arm (PCons (PVar "b") PWild) () (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-BUILTIN-BIND"))) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EVar "ffiBuiltinBindMsg") (EFieldAccess (EVar "d") "edName"))))) (arm (PList) () (EListLit))))
-(DFunDef false "ffiDeclarationDiags" ((PCon "False") (PVar "d") (PVar "row")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "ffiLabelDiags") (EVar "d")) (EVar "row")) (EApp (EApp (EVar "ffiRowHostDiags") (EVar "d")) (EVar "row"))) (EApp (EVar "ffiBindDiags") (EVar "d"))))
+(DFunDef false "ffiDeclarationDiags" ((PCon "False") (PVar "d") (PVar "row")) (EBlock (DoLet false false (PVar "clauseDiags") (EApp (EApp (EApp (EVar "ffiClauseDiags") (EFieldAccess (EVar "d") "edName")) (EListLit)) (EFieldAccess (EVar "d") "edBinds"))) (DoLet false false (PVar "hostDiags") (EMatch (EVar "clauseDiags") (arm (PList) () (EApp (EApp (EVar "ffiRowHostDiags") (EVar "d")) (EVar "row"))) (arm PWild () (EApp (EApp (EVar "filterList") (EVar "isNotUnbound")) (EApp (EApp (EVar "ffiRowHostDiags") (EVar "d")) (EVar "row")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "ffiLabelDiags") (EVar "d")) (EVar "row")) (EVar "hostDiags")) (EApp (EVar "ffiBindDiags") (EVar "d"))))))
+(DTypeSig false "isNotUnbound" (TyFun (TyCon "FfiDiag") (TyCon "Bool")))
+(DFunDef false "isNotUnbound" ((PCon "FfiDiag" (PVar "code") PWild PWild)) (EBinOp "/=" (EVar "code") (ELit (LString "T-FFI-UNBOUND-HOST"))))
 (DTypeSig false "ffiLabelDiags" (TyFun (TyCon "ExternDecl") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "EffAtomTy"))) (TyApp (TyCon "List") (TyCon "FfiDiag")))))
 (DFunDef false "ffiLabelDiags" ((PVar "d") (PVar "row")) (EBlock (DoLet false false (PVar "fb") (EApp (EVar "firstTyLoc") (EFieldAccess (EVar "d") "edTy"))) (DoExpr (EMatch (EVar "row") (arm (PCon "None") () (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-NULLARY"))) (EVar "fb")) (EApp (EVar "ffiNullaryMsg") (EFieldAccess (EVar "d") "edName"))))) (arm (PCon "Some" (PVar "atoms")) () (EIf (EApp (EApp (EVar "anyList") (EVar "isForeignCallAtom")) (EVar "atoms")) (EListLit) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "a")) (EBinOp "==" (EFieldAccess (EVar "a") "eatLabel") (ELit (LString "FFI"))))) (EVar "atoms")) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-UNLABELLED"))) (EVar "fb")) (EApp (EVar "ffiDeclaredLabelMsg") (EFieldAccess (EVar "d") "edName")))) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-UNLABELLED"))) (EVar "fb")) (EApp (EVar "ffiUnlabelledMsg") (EFieldAccess (EVar "d") "edName")))))))))))
 (DTypeSig false "isForeignCallAtom" (TyFun (TyCon "EffAtomTy") (TyCon "Bool")))
@@ -371,9 +399,13 @@ paramIsTopDomain _ = False
 (DTypeSig false "ffiUnlabelledMsg" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ffiUnlabelledMsg" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "foreign declaration `")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` does not name the `FFI` effect in its result row; write `<FFI \"c\">` joined with whatever else the row names, such as `<FFI \"c\", Net \"a.com/*\">`"))))
 (DTypeSig false "ffiNoHostMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "ffiNoHostMsg" ((PVar "n") (PVar "written")) (EBlock (DoLet false false (PVar "fix") (EMatch (EVar "written") (arm (PCon "Some" (PVar "lib")) ((GBool (EApp (EVar "not") (EApp (EApp (EVar "contains") (EApp (EVar "dropTrailingStar") (EVar "lib"))) (EVar "ffiHosts"))))) (EBinOp "++" (EBinOp "++" (ELit (LString "`<FFI \"c/")) (EApp (EVar "display") (EVar "lib"))) (ELit (LString "\">` for a C library")))) (arm PWild () (ELit (LString "`<FFI \"c\">` for a C function"))))) (DoLet false false (PVar "shown") (EMatch (EVar "written") (arm (PCon "Some" (PVar "lib")) () (EBinOp "++" (EBinOp "++" (ELit (LString "`FFI \"")) (EApp (EVar "display") (EVar "lib"))) (ELit (LString "\"`")))) (arm (PCon "None") () (ELit (LString "`FFI`"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "foreign declaration `")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` names "))) (EApp (EVar "display") (EVar "shown"))) (ELit (LString " with no host in its result row; the parameter is a host, `c` or `js`, optionally followed by `/` and a library: write "))) (EApp (EVar "display") (EVar "fix"))) (ELit (LString ""))))))
+(DFunDef false "ffiNoHostMsg" ((PVar "n") (PVar "written")) (EBlock (DoLet false false (PVar "fix") (EMatch (EVar "written") (arm (PCon "Some" (PVar "p")) () (EApp (EVar "ffiNoHostFix") (EVar "p"))) (arm (PCon "None") () (ELit (LString "write `<FFI \"c\">` for a C function"))))) (DoLet false false (PVar "shown") (EMatch (EVar "written") (arm (PCon "Some" (PVar "lib")) () (EBinOp "++" (EBinOp "++" (ELit (LString "`FFI \"")) (EApp (EVar "display") (EVar "lib"))) (ELit (LString "\"`")))) (arm (PCon "None") () (ELit (LString "`FFI`"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "foreign declaration `")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` names "))) (EApp (EVar "display") (EVar "shown"))) (ELit (LString " with no host in its result row; the parameter is a host, `c` or `js`, optionally followed by `/` and a library: "))) (EApp (EVar "display") (EVar "fix"))) (ELit (LString ""))))))
+(DTypeSig false "ffiNoHostFix" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "ffiNoHostFix" ((PVar "p")) (EBlock (DoLet false false (PVar "base") (EApp (EVar "dropTrailingSlash") (EApp (EVar "dropTrailingStar") (EVar "p")))) (DoExpr (EIf (EApp (EApp (EVar "contains") (EVar "base")) (EVar "ffiHosts")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "write `<FFI \"")) (EApp (EVar "display") (EVar "base"))) (ELit (LString "\">` for the `"))) (EApp (EVar "display") (EVar "base"))) (ELit (LString "` host"))) (EIf (EApp (EApp (EVar "contains") (EApp (EVar "toLower") (EVar "base"))) (EVar "ffiHosts")) (EBinOp "++" (EBinOp "++" (ELit (LString "host names are lower-case: write `<FFI \"")) (EApp (EVar "display") (EApp (EVar "toLower") (EVar "base")))) (ELit (LString "\">`"))) (EBinOp "++" (EBinOp "++" (ELit (LString "write `<FFI \"c/")) (EApp (EVar "display") (EVar "p"))) (ELit (LString "\">` for a C library"))))))))
 (DTypeSig false "dropTrailingStar" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "dropTrailingStar" ((PVar "s")) (EMatch (EApp (EApp (EVar "stripSuffix") (ELit (LString "*"))) (EVar "s")) (arm (PCon "Some" (PVar "rest")) () (EVar "rest")) (arm (PCon "None") () (EVar "s"))))
+(DTypeSig false "dropTrailingSlash" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "dropTrailingSlash" ((PVar "s")) (EMatch (EApp (EApp (EVar "stripSuffix") (ELit (LString "/"))) (EVar "s")) (arm (PCon "Some" (PVar "rest")) () (EVar "rest")) (arm (PCon "None") () (EVar "s"))))
 (DTypeSig false "ffiUnboundHostMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "ffiUnboundHostMsg" ((PVar "n") (PVar "h")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "foreign declaration `")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` names the `"))) (EApp (EVar "display") (EVar "h"))) (ELit (LString "` host in its result row but has no `"))) (EApp (EVar "display") (EVar "h"))) (ELit (LString "` binding; add an indented `bind "))) (EApp (EVar "display") (EVar "h"))) (ELit (LString " \"<name>\"` line under its signature"))))
 (DTypeSig false "ffiUnknownHostMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -413,13 +445,15 @@ paramIsTopDomain _ = False
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" false) (mem "atomConst" false) (mem "atomLabel" false) (mem "atomsNorm" false) (mem "renderAtoms" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "filterList" false) (mem "joinWith" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false) (mem "isApos" false) (mem "isDigit" false))))
-(DUse false (UseGroup ("string") ((mem "stripSuffix" false))))
+(DUse false (UseGroup ("string") ((mem "stripSuffix" false) (mem "toLower" false))))
 (DData Public "FfiDiag" () ((variant "FfiDiag" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))) ())
 (DTypeSig false "ffiHosts" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "ffiHosts" () (EListLit (ELit (LString "c")) (ELit (LString "js"))))
 (DTypeSig true "ffiDeclarationDiags" (TyFun (TyCon "Bool") (TyFun (TyCon "ExternDecl") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "EffAtomTy"))) (TyApp (TyCon "List") (TyCon "FfiDiag"))))))
 (DFunDef false "ffiDeclarationDiags" ((PCon "True") (PVar "d") PWild) (EMatch (EFieldAccess (EVar "d") "edBinds") (arm (PCons (PVar "b") PWild) () (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-BUILTIN-BIND"))) (EApp (EVar "Some") (EFieldAccess (EVar "b") "ebLoc"))) (EApp (EVar "ffiBuiltinBindMsg") (EFieldAccess (EVar "d") "edName"))))) (arm (PList) () (EListLit))))
-(DFunDef false "ffiDeclarationDiags" ((PCon "False") (PVar "d") (PVar "row")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "ffiLabelDiags") (EVar "d")) (EVar "row")) (EApp (EApp (EVar "ffiRowHostDiags") (EVar "d")) (EVar "row"))) (EApp (EVar "ffiBindDiags") (EVar "d"))))
+(DFunDef false "ffiDeclarationDiags" ((PCon "False") (PVar "d") (PVar "row")) (EBlock (DoLet false false (PVar "clauseDiags") (EApp (EApp (EApp (EVar "ffiClauseDiags") (EFieldAccess (EVar "d") "edName")) (EListLit)) (EFieldAccess (EVar "d") "edBinds"))) (DoLet false false (PVar "hostDiags") (EMatch (EVar "clauseDiags") (arm (PList) () (EApp (EApp (EVar "ffiRowHostDiags") (EVar "d")) (EVar "row"))) (arm PWild () (EApp (EApp (EVar "filterList") (EVar "isNotUnbound")) (EApp (EApp (EVar "ffiRowHostDiags") (EVar "d")) (EVar "row")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "ffiLabelDiags") (EVar "d")) (EVar "row")) (EVar "hostDiags")) (EApp (EVar "ffiBindDiags") (EVar "d"))))))
+(DTypeSig false "isNotUnbound" (TyFun (TyCon "FfiDiag") (TyCon "Bool")))
+(DFunDef false "isNotUnbound" ((PCon "FfiDiag" (PVar "code") PWild PWild)) (EBinOp "/=" (EVar "code") (ELit (LString "T-FFI-UNBOUND-HOST"))))
 (DTypeSig false "ffiLabelDiags" (TyFun (TyCon "ExternDecl") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "EffAtomTy"))) (TyApp (TyCon "List") (TyCon "FfiDiag")))))
 (DFunDef false "ffiLabelDiags" ((PVar "d") (PVar "row")) (EBlock (DoLet false false (PVar "fb") (EApp (EVar "firstTyLoc") (EFieldAccess (EVar "d") "edTy"))) (DoExpr (EMatch (EVar "row") (arm (PCon "None") () (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-NULLARY"))) (EVar "fb")) (EApp (EVar "ffiNullaryMsg") (EFieldAccess (EVar "d") "edName"))))) (arm (PCon "Some" (PVar "atoms")) () (EIf (EApp (EApp (EVar "anyList") (EVar "isForeignCallAtom")) (EVar "atoms")) (EListLit) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "a")) (EBinOp "==" (EFieldAccess (EVar "a") "eatLabel") (ELit (LString "FFI"))))) (EVar "atoms")) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-UNLABELLED"))) (EVar "fb")) (EApp (EVar "ffiDeclaredLabelMsg") (EFieldAccess (EVar "d") "edName")))) (EListLit (EApp (EApp (EApp (EVar "FfiDiag") (ELit (LString "T-FFI-UNLABELLED"))) (EVar "fb")) (EApp (EVar "ffiUnlabelledMsg") (EFieldAccess (EVar "d") "edName")))))))))))
 (DTypeSig false "isForeignCallAtom" (TyFun (TyCon "EffAtomTy") (TyCon "Bool")))
@@ -460,9 +494,13 @@ paramIsTopDomain _ = False
 (DTypeSig false "ffiUnlabelledMsg" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ffiUnlabelledMsg" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "foreign declaration `")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` does not name the `FFI` effect in its result row; write `<FFI \"c\">` joined with whatever else the row names, such as `<FFI \"c\", Net \"a.com/*\">`"))))
 (DTypeSig false "ffiNoHostMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "ffiNoHostMsg" ((PVar "n") (PVar "written")) (EBlock (DoLet false false (PVar "fix") (EMatch (EVar "written") (arm (PCon "Some" (PVar "lib")) ((GBool (EApp (EVar "not") (EApp (EApp (EVar "contains") (EApp (EVar "dropTrailingStar") (EVar "lib"))) (EVar "ffiHosts"))))) (EBinOp "++" (EBinOp "++" (ELit (LString "`<FFI \"c/")) (EApp (EMethodRef "display") (EVar "lib"))) (ELit (LString "\">` for a C library")))) (arm PWild () (ELit (LString "`<FFI \"c\">` for a C function"))))) (DoLet false false (PVar "shown") (EMatch (EVar "written") (arm (PCon "Some" (PVar "lib")) () (EBinOp "++" (EBinOp "++" (ELit (LString "`FFI \"")) (EApp (EMethodRef "display") (EVar "lib"))) (ELit (LString "\"`")))) (arm (PCon "None") () (ELit (LString "`FFI`"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "foreign declaration `")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` names "))) (EApp (EMethodRef "display") (EVar "shown"))) (ELit (LString " with no host in its result row; the parameter is a host, `c` or `js`, optionally followed by `/` and a library: write "))) (EApp (EMethodRef "display") (EVar "fix"))) (ELit (LString ""))))))
+(DFunDef false "ffiNoHostMsg" ((PVar "n") (PVar "written")) (EBlock (DoLet false false (PVar "fix") (EMatch (EVar "written") (arm (PCon "Some" (PVar "p")) () (EApp (EVar "ffiNoHostFix") (EVar "p"))) (arm (PCon "None") () (ELit (LString "write `<FFI \"c\">` for a C function"))))) (DoLet false false (PVar "shown") (EMatch (EVar "written") (arm (PCon "Some" (PVar "lib")) () (EBinOp "++" (EBinOp "++" (ELit (LString "`FFI \"")) (EApp (EMethodRef "display") (EVar "lib"))) (ELit (LString "\"`")))) (arm (PCon "None") () (ELit (LString "`FFI`"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "foreign declaration `")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` names "))) (EApp (EMethodRef "display") (EVar "shown"))) (ELit (LString " with no host in its result row; the parameter is a host, `c` or `js`, optionally followed by `/` and a library: "))) (EApp (EMethodRef "display") (EVar "fix"))) (ELit (LString ""))))))
+(DTypeSig false "ffiNoHostFix" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "ffiNoHostFix" ((PVar "p")) (EBlock (DoLet false false (PVar "base") (EApp (EVar "dropTrailingSlash") (EApp (EVar "dropTrailingStar") (EVar "p")))) (DoExpr (EIf (EApp (EApp (EVar "contains") (EVar "base")) (EVar "ffiHosts")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "write `<FFI \"")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString "\">` for the `"))) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString "` host"))) (EIf (EApp (EApp (EVar "contains") (EApp (EVar "toLower") (EVar "base"))) (EVar "ffiHosts")) (EBinOp "++" (EBinOp "++" (ELit (LString "host names are lower-case: write `<FFI \"")) (EApp (EMethodRef "display") (EApp (EVar "toLower") (EVar "base")))) (ELit (LString "\">`"))) (EBinOp "++" (EBinOp "++" (ELit (LString "write `<FFI \"c/")) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString "\">` for a C library"))))))))
 (DTypeSig false "dropTrailingStar" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "dropTrailingStar" ((PVar "s")) (EMatch (EApp (EApp (EVar "stripSuffix") (ELit (LString "*"))) (EVar "s")) (arm (PCon "Some" (PVar "rest")) () (EVar "rest")) (arm (PCon "None") () (EVar "s"))))
+(DTypeSig false "dropTrailingSlash" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "dropTrailingSlash" ((PVar "s")) (EMatch (EApp (EApp (EVar "stripSuffix") (ELit (LString "/"))) (EVar "s")) (arm (PCon "Some" (PVar "rest")) () (EVar "rest")) (arm (PCon "None") () (EVar "s"))))
 (DTypeSig false "ffiUnboundHostMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "ffiUnboundHostMsg" ((PVar "n") (PVar "h")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "foreign declaration `")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` names the `"))) (EApp (EMethodRef "display") (EVar "h"))) (ELit (LString "` host in its result row but has no `"))) (EApp (EMethodRef "display") (EVar "h"))) (ELit (LString "` binding; add an indented `bind "))) (EApp (EMethodRef "display") (EVar "h"))) (ELit (LString " \"<name>\"` line under its signature"))))
 (DTypeSig false "ffiUnknownHostMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))

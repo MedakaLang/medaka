@@ -590,16 +590,12 @@ makeWasmEmitInput methodIfaces ctorFieldTypes mainIsFloat recordFieldOrders =
     recordFieldOrders
     []
 
--- #2076: the same widening `makeEmitInput`/`ffiExternIndex` gets on the LLVM
--- side (llvm_emit.mdk) — an index of USER-declared FFI extern names (name ->
+-- The full input: an index of USER-declared FFI extern names (name ->
 -- (host bindings, (paramTypeHeads, retTypeHead))), every host's, so a reference
--- to one is lowered as a `js` binding (`EmitPlan.jsImports`) or, with no `js`
--- binding, is a gap that names it.  A NEW smart constructor rather than widening
--- `makeWasmEmitInput`'s own arity, so the ~25 existing single-file test-harness
--- callers (wasm_emit_typed_main.mdk and friends, which never declare a user FFI
--- extern) are untouched; only the real multi-module build entry
--- (wasm_emit_modules_main.mdk) needs to pass this.  The decl-free harnesses keep
--- the 5-argument `makeWasmEmitInput` above.
+-- to one is lowered as a `js` binding (the `jsImports` of the plan) or, with no
+-- `js` binding, is a gap that names it.  Kept apart from `makeWasmEmitInput`
+-- so the single-file harnesses that never declare a user FFI extern keep its
+-- shorter arity.
 export
 makeWasmEmitInputFull : List (String, (String, String, Int)) ->
   List (String, List String) ->

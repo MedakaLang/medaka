@@ -16,19 +16,12 @@
 
    Runs under `medaka test --native`: it spawns the compiler and node. -}
 
-import io.{getEnvOr}
-import compiler_cli_test_support.{inFreshDirOf}
+import compiler_cli_test_support.{inFreshDirOf, wasmBuildArgv}
 import test.{Expectation, expectAll, expectEqual, fail}
 import test_process.{boundedVerbSeconds, medakaBin, medakaRoot}
 
 corpus : <IO> String
 corpus = "\{medakaRoot}/test/wasm_jsffi_fixtures"
-
--- The wasm emitter binary the CLI's `--target wasm` path execs; the gate
--- shard builds it but never exports the variable.
-wasmEmitter : <IO> String
-wasmEmitter =
-  getEnvOr "MEDAKA_WASM_EMITTER" "\{medakaRoot}/test/bin/wasm_emit_modules_main"
 
 -- `name`.mdk built for wasm into `scratch`, then run by the stub host: the
 -- exit code, stdout and stderr.  A stale compiler fails the build loudly
@@ -36,17 +29,7 @@ wasmEmitter =
 stubRun : String -> String -> <Exec, IO> Result String (Int, String, String)
 stubRun scratch name =
   let wasm = "\{scratch}/\{name}.wasm"
-  match boundedVerbSeconds 60 "env" [
-    "MEDAKA_STRICT=1",
-    "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
-    medakaBin,
-    "build",
-    "--target",
-    "wasm",
-    "\{corpus}/\{name}.mdk",
-    "-o",
-    wasm,
-  ]
+  match boundedVerbSeconds 60 "env" (wasmBuildArgv "\{corpus}/\{name}.mdk" wasm)
     Err e => Err "medaka build --target wasm \{name}: \{e}"
     Ok (code, out, err) =>
       if code /= 0 then
@@ -179,28 +162,22 @@ nativeTwoHost scratch obj entry out = do
 -- The wasmgc/node build of the same program, run by run.js with the bindings
 -- module.
 wasmTwoHost : String -> String -> String -> <Exec, IO> Result String String
-wasmTwoHost scratch entry out = match (mustRun
-  "build wasm \{entry}"
-  (boundedVerbSeconds 120 "env" [
-    "MEDAKA_STRICT=1",
-    "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
-    medakaBin,
-    "build",
-    "--target",
-    "wasm",
-    "\{twoHostDir}/\{entry}.mdk",
-    "-o",
-    "\{scratch}/\{out}.wasm",
-  ]))
-  Err e => Err e
-  Ok _ =>
-    mustRun
-      "run wasm \{entry}"
-      (boundedVerbSeconds 60 "node" [
-        "\{medakaRoot}/test/wasm/run.js",
-        "\{scratch}/\{out}.wasm",
-        "\{twoHostDir}/bindings.mjs",
-      ])
+wasmTwoHost scratch entry out =
+  match (mustRun
+    "build wasm \{entry}"
+    (boundedVerbSeconds
+      120
+      "env"
+      (wasmBuildArgv "\{twoHostDir}/\{entry}.mdk" "\{scratch}/\{out}.wasm")))
+    Err e => Err e
+    Ok _ =>
+      mustRun
+        "run wasm \{entry}"
+        (boundedVerbSeconds 60 "node" [
+          "\{medakaRoot}/test/wasm/run.js",
+          "\{scratch}/\{out}.wasm",
+          "\{twoHostDir}/bindings.mjs",
+        ])
 
 -- `entry` prints `want` built native and built for wasmgc/node.
 printsOnBothHosts : String ->

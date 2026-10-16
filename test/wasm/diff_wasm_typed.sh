@@ -193,8 +193,9 @@ done
   echo "FAIL H2B7-ROUTES: expected four lambda-id routes"
   exit 1
 }
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'addLiftedNamed (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'noteFuncRef (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 7 ] || {
+# emitFfiEtaW lifts one named wrapper and notes one function reference: 3 and 8, up from 2 and 7.
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'addLiftedNamed (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 3 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'noteFuncRef (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 8 ] || {
   echo "FAIL H2B7-ROUTES: named lifts or function-reference routes changed"
   exit 1
 }
@@ -304,7 +305,7 @@ done
 # The demand walk is the emit plan's; its `/` and `%` arms are the divisor demand's
 # one authority, and the emitter's seed is each seeded flag's one writer.
 for required in \
-  'wasmDemandOf : List CBind -> List CImplEntry -> (WasmDemand, List String)' \
+  'wasmDemandOf : OrdMap (String, (List String, String)) -> List CBind -> List CImplEntry -> (WasmDemand, List String, List JsImport)' \
   'dBind : DemandScope -> DemandAcc -> CBind -> DemandAcc' \
   'dClause : DemandScope -> DemandAcc -> CClause -> DemandAcc' \
   'dImpl : DemandScope -> DemandAcc -> CImplEntry -> DemandAcc' \

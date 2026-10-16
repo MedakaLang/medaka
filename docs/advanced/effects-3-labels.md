@@ -266,11 +266,11 @@ root x = cSqrt x
 ```
 
 The parameter is host-qualified: `"c"` or `"c/libm"` for C, `"js"` or
-`"js/fetch"` for JavaScript. A bare `<FFI>` is refused. A declaration that runs
+`"js/fetch"` for JavaScript. A bare `<FFI>` is refused on an extern declaration row (a bound, and any row that is not an extern, is unaffected; `"c*"` is the bound spelling). A declaration that runs
 on both hosts names one atom per host and says which symbol each one calls, with
 an indented `bind` clause per host:
 
-```text
+```medaka-nocheck: needs a C library and a JS bindings module, so it is quoted rather than run
 extern fetchText : String -> <FFI "c/libfetch", FFI "js/fetch"> String
   bind c "fetch_text"
   bind js "fetchText"
@@ -294,7 +294,7 @@ type.
 function:
 
 ```
-error: ffi.mdk:4:17: performs <FFI "c*"> where only <IO> is allowed
+error: ffi.mdk:4:17: performs <FFI "c"> where only <IO> is allowed
   |
 4 | wrapped n = cAbs n
   |                  ^

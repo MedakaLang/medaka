@@ -116,7 +116,7 @@ check_ffi_wall() {
 }
 if [ -x "$MODULES" ]; then
   "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" >"$WORK/modules-ffi.out" 2>"$WORK/modules-ffi.err" && bad "modules emitter accepted an FFI extern"
-  check_ffi_wall modules-ffi "$WORK/modules-ffi.out" "$WORK/modules-ffi.err" "FFI extern 'cNegate' is native-only"
+  check_ffi_wall modules-ffi "$WORK/modules-ffi.out" "$WORK/modules-ffi.err" "the extern 'cNegate' has no \`js\` binding"
 else bad "modules emitter missing for the FFI-wall case"; fi
 if [ -f "$PLAYGROUND" ]; then
   node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground-ffi.out" 2>"$WORK/playground-ffi.err" && bad "playground compiler accepted an FFI extern"

@@ -1,5 +1,5 @@
 # META
-source_lines=3992
+source_lines=3994
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -3847,7 +3847,9 @@ validateFfiExternTypeNames rows =
   rows
 
 -- One C symbol is one C function, so it has one signature, however many
--- declarations bind it.  The rows are keyed by the extern's program-wide name
+-- declarations bind it.  The walk reads each row's `c` binding (`hostRows "c"`):
+-- a `js` binding names a function in the host's bindings, which the wasm emitter
+-- imports once per program-wide name.  The rows are keyed by the extern's program-wide name
 -- (`types.private_mangle.externSymbolName`): a declaration with `bind` clauses is
 -- module-scoped, so two modules binding one Medaka name to two symbols get two
 -- rows; one without them is keyed by its spelling, which is the C symbol it

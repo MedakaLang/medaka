@@ -50,7 +50,6 @@ emitVar
 emitVariantUpdate
 entrySuperCount
 externArity
-ffiSigOf
 foldImplsByMethod
 groupImplsByMethod
 headTagForKey

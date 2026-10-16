@@ -1249,21 +1249,21 @@ import lib.secp256k1.{
   publicPointForSecret,
 }
 
-extern ctTaintLoad : Int -> <FFI> Int
-extern ctSecretByte : Int -> <FFI> Int
-extern ctDeclassify : Int -> <FFI> Int
-extern ctVbits : Int -> <FFI> Int
-extern ctGcCount : Int -> <FFI> Int
-extern ctLoadAddress : Int -> <FFI> Int
+extern ctTaintLoad : Int -> <FFI "c"> Int
+extern ctSecretByte : Int -> <FFI "c"> Int
+extern ctDeclassify : Int -> <FFI "c"> Int
+extern ctVbits : Int -> <FFI "c"> Int
+extern ctGcCount : Int -> <FFI "c"> Int
+extern ctLoadAddress : Int -> <FFI "c"> Int
 
 digestBytes : Bytes
 digestBytes = fromArrayAssumeByteDomain (arrayMake 32 0)
 
-declassifyAll : Bytes -> <FFI> Array Int
+declassifyAll : Bytes -> <FFI "c*"> Array Int
 declassifyAll bytes =
   arrayMakeWith (length bytes) (i => ctDeclassify (U8.toInt bytes[i]))
 
-probeKey : Int -> <IO, FFI> Unit
+probeKey : Int -> <IO, FFI "c*"> Unit
 probeKey k =
   let _ = ctTaintLoad k
   let secretBytes = fromArrayAssumeByteDomain (arrayMakeWith 32 ctSecretByte)
@@ -1286,7 +1286,7 @@ probeKey k =
 -- The sum runs on U64, as secret arithmetic in the signing path does: an Int
 -- `+` would add an overflow branch on the two tainted bytes (#3377), which
 -- memcheck would rightly report here in the probe itself.
-tagProbe : Unit -> <IO, FFI> Unit
+tagProbe : Unit -> <IO, FFI "c*"> Unit
 tagProbe () =
   let _ = ctTaintLoad 1
   let heapBytes = arrayMakeWith 32 ctSecretByte
@@ -1294,7 +1294,7 @@ tagProbe () =
   println
     "tag \{ctVbits heapBytes[31]} \{ctVbits heapBytes[0]} \{ctVbits (U64.toIntTruncating sum)}"
 
-main : <IO, FFI> Unit
+main : <IO, FFI "c*"> Unit
 main =
   let gc0 = ctGcCount 0
   let () = println "load \{ctLoadAddress 0}"

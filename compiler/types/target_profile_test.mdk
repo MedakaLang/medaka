@@ -63,22 +63,23 @@ test "(a) the six grant sets are TARGETS-DESIGN 8.1" = expectEach [
         "Rand",
         "FileRead",
         "FileWrite",
+        "FFI",
       ])
       (grantedBy "wasmgc/node"),
   ),
   (
     "wasmgc/browser-worker",
     expectEqual
-      (Ok ["Stdout", "Stderr", "Clock", "Rand", "FileRead", "FileWrite"])
+      (Ok ["Stdout", "Stderr", "Clock", "Rand", "FileRead", "FileWrite", "FFI"])
       (grantedBy "wasmgc/browser-worker"),
   ),
   (
     "wasmgc/edge",
     expectEqual
-      (Ok ["Stdout", "Stderr", "Clock", "Rand"])
+      (Ok ["Stdout", "Stderr", "Clock", "Rand", "FFI"])
       (grantedBy "wasmgc/edge"),
   ),
-  ("wasmgc/wasi-p2", expectEqual (Ok []) (grantedBy "wasmgc/wasi-p2")),
+  ("wasmgc/wasi-p2", expectEqual (Ok ["FFI"]) (grantedBy "wasmgc/wasi-p2")),
 ]
 
 test "(a) every grant is a label's whole domain" =
