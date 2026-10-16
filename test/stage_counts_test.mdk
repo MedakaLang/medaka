@@ -436,12 +436,15 @@ test "stage_counts: build refuses a private import on every route" = withScratch
         ["MEDAKA_DIAG_JSON=\{dir}/stray.json"]
         ["build", entry, "-o", "\{dir}/s"]
     expectAll [
-      expectEqual 1 plainCode,
+      if plainCode == 1 then pass else fail "plain build exited \{plainCode}",
       expectTrue (contains "unknown module: support.path" plainErr),
       expectEqual "" plainOut,
-      expectEqual 1 jsonCode,
+      if jsonCode == 1 then pass else fail "build --json exited \{jsonCode}",
       expectTrue (contains "unknown module: support.path" jsonOut),
       expectEqual "" jsonErr,
-      expectEqual 1 strayCode,
+      if strayCode == 1 then
+        pass
+      else
+        fail "build with a stray MEDAKA_DIAG_JSON exited \{strayCode}",
       expectTrue (contains "unknown module: support.path" strayErr),
     ])
