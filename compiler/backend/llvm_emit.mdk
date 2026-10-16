@@ -240,6 +240,7 @@ import support.util.{
   dedupBy,
   lenKey,
   isNonEmptyL,
+  isEmptyL,
   u64HalvesHex,
 }
 import backend.llvm_preamble.{preambleLines}
@@ -333,6 +334,7 @@ import backend.emit_support.{
   isExactCall,
   isTailCall,
   implEntryDeclaredArity,
+  nthArm,
 }
 
 -- ── D4 emitter-completeness inventory (record-and-skip) ──────────────────────
@@ -9360,10 +9362,6 @@ chainNextLabel : Emit -> List (List Pat, CExpr) -> String -> String
 chainNextLabel _ [] outer = outer
 chainNextLabel e _ _ = "clause" ++ intToString (freshLocal e)
 
-isEmptyL : List a -> Bool
-isEmptyL [] = True
-isEmptyL _ = False
-
 -- the synthetic scrutinee components of a group: `[a0, a1, …]`.  Emitted through
 -- `emitArgs`, so each resolves to the param's operand word — `%argK` for an
 -- ordinary define, the loop-head reload register under TRMC.
@@ -11556,16 +11554,6 @@ takeS n xs
 tailS : List a -> List a
 tailS [] = []
 tailS (_ :: xs) = xs
-
-nthArm : List CArm -> Int -> Option CArm
--- Intentional cross-file duplicate of core_ir_eval.mdk's copy. The Core IR
--- interpreter is the oracle this backend is differenced against, so the two must
--- not share code: a defect in a shared helper would move both arms of the
--- differential together and the gate would report agreement.
--- lint-disable-next-line rule-duplicate-body
-nthArm (a :: _) 0 = Some a
-nthArm (_ :: rest) n = nthArm rest (n - 1)
-nthArm [] _ = None
 
 -- a readable tag for the unsupported-pattern panic.
 ptag : Pat -> String

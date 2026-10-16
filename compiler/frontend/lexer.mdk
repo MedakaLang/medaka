@@ -394,14 +394,17 @@ is3 src len pos a b c =
     && at src (pos + 2) == c
 
 -- Constructor matches, not derived `==` on Token (layout pass hot path).
+export
 isCommaTok : Token -> Bool
 isCommaTok TComma = True
 isCommaTok _ = False
 
+export
 isThenTok : Token -> Bool
 isThenTok TThen = True
 isThenTok _ = False
 
+export
 isElseTok : Token -> Bool
 isElseTok TElse = True
 isElseTok _ = False

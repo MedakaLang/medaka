@@ -241,7 +241,6 @@ isAmbiguous : Env -> String -> Bool
 isCtorAmbiguous : Env -> String -> Bool
 isCtorOwnerKey : String -> Bool
 isEffectKey : String -> Bool
-isEmptyL : List a -> Bool
 isHaskellAliasPair : String -> String -> Bool
 isIfaceAmbiguous : Env -> String -> Bool
 isImportedModuleName : Env -> String -> Bool
@@ -375,7 +374,6 @@ scopeExtend : List String -> Scope -> Scope
 scopeMem : String -> Scope -> Bool
 scopeNames : Scope -> List String
 scoreCand : SugQuery -> String -> Option (String, Int) -> Option (String, Int)
-selfBinding : String -> (String, String)
 setOriginTrace : Bool -> Unit
 sigEntryOf : Decl -> List (String, Option Loc)
 singleFileImportErrors : List Decl -> List ResError

@@ -1,5 +1,5 @@
 # META
-source_lines=15280
+source_lines=15268
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -244,6 +244,7 @@ import support.util.{
   dedupBy,
   lenKey,
   isNonEmptyL,
+  isEmptyL,
   u64HalvesHex,
 }
 import backend.llvm_preamble.{preambleLines}
@@ -337,6 +338,7 @@ import backend.emit_support.{
   isExactCall,
   isTailCall,
   implEntryDeclaredArity,
+  nthArm,
 }
 
 -- ── D4 emitter-completeness inventory (record-and-skip) ──────────────────────
@@ -9364,10 +9366,6 @@ chainNextLabel : Emit -> List (List Pat, CExpr) -> String -> String
 chainNextLabel _ [] outer = outer
 chainNextLabel e _ _ = "clause" ++ intToString (freshLocal e)
 
-isEmptyL : List a -> Bool
-isEmptyL [] = True
-isEmptyL _ = False
-
 -- the synthetic scrutinee components of a group: `[a0, a1, …]`.  Emitted through
 -- `emitArgs`, so each resolves to the param's operand word — `%argK` for an
 -- ordinary define, the loop-head reload register under TRMC.
@@ -11560,16 +11558,6 @@ takeS n xs
 tailS : List a -> List a
 tailS [] = []
 tailS (_ :: xs) = xs
-
-nthArm : List CArm -> Int -> Option CArm
--- Intentional cross-file duplicate of core_ir_eval.mdk's copy. The Core IR
--- interpreter is the oracle this backend is differenced against, so the two must
--- not share code: a defect in a shared helper would move both arms of the
--- differential together and the gate would report agreement.
--- lint-disable-next-line rule-duplicate-body
-nthArm (a :: _) 0 = Some a
-nthArm (_ :: rest) n = nthArm rest (n - 1)
-nthArm [] _ = None
 
 -- a readable tag for the unsupported-pattern panic.
 ptag : Pat -> String
@@ -15288,7 +15276,7 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "compileTree" false) (mem "canonPat" false) (mem "definedArityOf" false) (mem "ifaceWordOfKey" false) (mem "programArities" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false))))
 (DUse false (UseAlias ("map") "BM"))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "isNonEmptyL" false) (mem "u64HalvesHex" false))))
+(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "isNonEmptyL" false) (mem "isEmptyL" false) (mem "u64HalvesHex" false))))
 (DUse false (UseGroup ("backend" "llvm_preamble") ((mem "preambleLines" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "LlvmFamily" true) (mem "llvmFamily" false) (mem "isLlvmExternFamily" false))))
 (DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "ExternFinding" false) (mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "renderRecordRefusal" false) (mem "renderCallRefusal" false) (mem "renderTailRefusal" false) (mem "renderBinderRefusal" false) (mem "validateBinderStamps" false) (mem "validateImplSymbolInjectivity" false) (mem "validateDictTags" false) (mem "validateCalls" false) (mem "validateImplSymbols" false) (mem "validateMethodContexts" false) (mem "validateDispatchEvidence" false) (mem "validateTails" false) (mem "validateRecords" false) (mem "unrefusedExternMessage" false) (mem "validateExterns" false))))
@@ -15298,7 +15286,7 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DUse false (UseGroup ("types" "disposition") ((mem "ifaceSuperCount" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "numIntWord" false))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "TrmcVerdicts" false) (mem "isTrmcFn" false) (mem "isTrmcImpl" false) (mem "checkPlanBackend" false))))
-(DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false))))
+(DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "nthArm" false))))
 (DData Private "GapMode" () ((variant "Strict" (ConPos)) (variant "Record" (ConPos))) ())
 (DTypeSig false "isFallthroughVar" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isFallthroughVar" ((PVar "x")) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "fallthroughName")) (EApp (EApp (EVar "startsWith") (EVar "ftPrefix")) (EVar "x"))))
@@ -16980,9 +16968,6 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DTypeSig false "chainNextLabel" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "chainNextLabel" (PWild (PList) (PVar "outer")) (EVar "outer"))
 (DFunDef false "chainNextLabel" ((PVar "e") PWild PWild) (EBinOp "++" (ELit (LString "clause")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))))
-(DTypeSig false "isEmptyL" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
-(DFunDef false "isEmptyL" ((PList)) (EVar "True"))
-(DFunDef false "isEmptyL" (PWild) (EVar "False"))
 (DTypeSig false "implScrutVars" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "CExpr")))))
 (DFunDef false "implScrutVars" ((PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EVar "CVar") (EBinOp "++" (ELit (LString "a")) (EApp (EVar "intToString") (EVar "i")))) (EVar "AGlobal")) (EApp (EApp (EVar "implScrutVars") (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "clauseArm" (TyFun (TyCon "Int") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")) (TyCon "CArm"))))
@@ -17320,10 +17305,6 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DTypeSig false "tailS" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
 (DFunDef false "tailS" ((PList)) (EListLit))
 (DFunDef false "tailS" ((PCons PWild (PVar "xs"))) (EVar "xs"))
-(DTypeSig false "nthArm" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "CArm")))))
-(DFunDef false "nthArm" ((PCons (PVar "a") PWild) (PLit (LInt 0))) (EApp (EVar "Some") (EVar "a")))
-(DFunDef false "nthArm" ((PCons PWild (PVar "rest")) (PVar "n")) (EApp (EApp (EVar "nthArm") (EVar "rest")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))))
-(DFunDef false "nthArm" ((PList) PWild) (EVar "None"))
 (DTypeSig false "ptag" (TyFun (TyCon "Pat") (TyCon "String")))
 (DFunDef false "ptag" ((PCon "PTuple" PWild)) (ELit (LString "PTuple")))
 (DFunDef false "ptag" ((PCon "PCons" PWild PWild)) (ELit (LString "PCons")))
@@ -18064,7 +18045,7 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "compileTree" false) (mem "canonPat" false) (mem "definedArityOf" false) (mem "ifaceWordOfKey" false) (mem "programArities" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false))))
 (DUse false (UseAlias ("map") "BM"))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "isNonEmptyL" false) (mem "u64HalvesHex" false))))
+(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "isNonEmptyL" false) (mem "isEmptyL" false) (mem "u64HalvesHex" false))))
 (DUse false (UseGroup ("backend" "llvm_preamble") ((mem "preambleLines" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "LlvmFamily" true) (mem "llvmFamily" false) (mem "isLlvmExternFamily" false))))
 (DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "ExternFinding" false) (mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "renderRecordRefusal" false) (mem "renderCallRefusal" false) (mem "renderTailRefusal" false) (mem "renderBinderRefusal" false) (mem "validateBinderStamps" false) (mem "validateImplSymbolInjectivity" false) (mem "validateDictTags" false) (mem "validateCalls" false) (mem "validateImplSymbols" false) (mem "validateMethodContexts" false) (mem "validateDispatchEvidence" false) (mem "validateTails" false) (mem "validateRecords" false) (mem "unrefusedExternMessage" false) (mem "validateExterns" false))))
@@ -18074,7 +18055,7 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DUse false (UseGroup ("types" "disposition") ((mem "ifaceSuperCount" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "numIntWord" false))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "TrmcVerdicts" false) (mem "isTrmcFn" false) (mem "isTrmcImpl" false) (mem "checkPlanBackend" false))))
-(DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false))))
+(DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "nthArm" false))))
 (DData Private "GapMode" () ((variant "Strict" (ConPos)) (variant "Record" (ConPos))) ())
 (DTypeSig false "isFallthroughVar" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isFallthroughVar" ((PVar "x")) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "fallthroughName")) (EApp (EApp (EVar "startsWith") (EVar "ftPrefix")) (EVar "x"))))
@@ -19756,9 +19737,6 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DTypeSig false "chainNextLabel" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "chainNextLabel" (PWild (PList) (PVar "outer")) (EVar "outer"))
 (DFunDef false "chainNextLabel" ((PVar "e") PWild PWild) (EBinOp "++" (ELit (LString "clause")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))))
-(DTypeSig false "isEmptyL" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
-(DFunDef false "isEmptyL" ((PList)) (EVar "True"))
-(DFunDef false "isEmptyL" (PWild) (EVar "False"))
 (DTypeSig false "implScrutVars" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "CExpr")))))
 (DFunDef false "implScrutVars" ((PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EVar "CVar") (EBinOp "++" (ELit (LString "a")) (EApp (EVar "intToString") (EVar "i")))) (EVar "AGlobal")) (EApp (EApp (EVar "implScrutVars") (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "clauseArm" (TyFun (TyCon "Int") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")) (TyCon "CArm"))))
@@ -20096,10 +20074,6 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DTypeSig false "tailS" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
 (DFunDef false "tailS" ((PList)) (EListLit))
 (DFunDef false "tailS" ((PCons PWild (PVar "xs"))) (EVar "xs"))
-(DTypeSig false "nthArm" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "CArm")))))
-(DFunDef false "nthArm" ((PCons (PVar "a") PWild) (PLit (LInt 0))) (EApp (EVar "Some") (EVar "a")))
-(DFunDef false "nthArm" ((PCons PWild (PVar "rest")) (PVar "n")) (EApp (EApp (EVar "nthArm") (EVar "rest")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))))
-(DFunDef false "nthArm" ((PList) PWild) (EVar "None"))
 (DTypeSig false "ptag" (TyFun (TyCon "Pat") (TyCon "String")))
 (DFunDef false "ptag" ((PCon "PTuple" PWild)) (ELit (LString "PTuple")))
 (DFunDef false "ptag" ((PCon "PCons" PWild PWild)) (ELit (LString "PCons")))

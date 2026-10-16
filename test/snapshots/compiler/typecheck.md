@@ -1,5 +1,5 @@
 # META
-source_lines=57030
+source_lines=57023
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -301,6 +301,7 @@ import types.effect_rows.{
   linkRow,
   EffRow(..),
   Effvar(..),
+  pureRow,
 }
 import types.effect_infer.{
   recordEffect, captureEffects, alphaOf, typeAuthority, AlphaBinder(..)
@@ -439,6 +440,8 @@ import support.util.{
   startsWith,
   escStr,
   editDistance,
+  eqStr,
+  selfBinding,
 }
 -- Stage A-2 unit A-2.2 (#1111): the head-tycon projections below return a key
 -- that CAN carry identity.  `HeadKey`'s declaration half is A-2.3's `TabKey`
@@ -921,10 +924,6 @@ newEffvarId _ =
   let n = graphRun.value.effvarCounter.value
   graphRun.value.effvarCounter := n + 1
   n
-
--- the empty closed row — a pure arrow
-pureRow : EffRow
-pureRow = EffRow [] None
 
 freshEffvar : Unit -> Ref Effvar
 freshEffvar _ = Ref (EUnbound (newEffvarId ()) perRun.value.currentLevel.value)
@@ -33246,9 +33245,6 @@ tyStep (TyAuth _ _) _ = MOk
 tyStep (TyNamed _ t1 _) s = MKids [(t1, stripTyWrap s)]
 tyStep (TyQual t1 _ _) s = MKids [(t1, stripTyWrap s)]
 
-eqStr : String -> String -> Bool
-eqStr a b = a == b
-
 stripTyWrap : Ty -> Ty
 stripTyWrap (TyEffect _ _ t) = stripTyWrap t
 stripTyWrap (TyConstrained _ t) = stripTyWrap t
@@ -50807,9 +50803,6 @@ importedBindings (UseAlias _ _) = Some []
 memberBinding : UseMember -> (String, String)
 memberBinding m = (useMemberOrigin m, useMemberLocal m)
 
-selfBinding : String -> (String, String)
-selfBinding n = (n, n)
-
 -- resolve one imported bare member name to its actual key in a dependency's public
 -- schemes.  The golden path keys schemes by the bare name; the EMIT path runs after
 -- universal mangling (types.private_mangle), which rewrites a definition `member`
@@ -57038,7 +57031,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("types" "superclass") ((mem "SuperNode" true) (mem "lookupPos" false) (mem "mapAll" false) (mem "superClosure" false) (mem "superIfaceRef" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "subTopOf" false) (mem "lookupAxis" false) (mem "productPrimaryLift" false) (mem "productOver" false) (mem "productNorm" false) (mem "isSubTop" false) (mem "domainKey" false) (mem "setCardCap" false) (mem "writtenSetProblem" false) (mem "commonPrefixLen" false) (mem "drender" false) (mem "drenderN" false) (mem "quoteStr" false) (mem "renderProductLit" false) (mem "renderAxis" false) (mem "renderAxisVal" false) (mem "prefixConcrete" false) (mem "dsub" false) (mem "extendParam" false) (mem "Param" true))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authSplit" false) (mem "authvarId" false) (mem "authvarLevel" false) (mem "authvarDomain" false) (mem "authvarName" false) (mem "authConst" false) (mem "authIsTop" false) (mem "authJoin" false) (mem "authJoinAll" false) (mem "authSub" false) (mem "authVars" false) (mem "authNorm" false) (mem "authTop" false) (mem "authDomainTop" false) (mem "authHasVars" false) (mem "linkAuthvar" false) (mem "authvarIsPattern" false) (mem "markAuthvarPattern" false) (mem "authIsPattern" false) (mem "authPatternClose" false) (mem "isPatternParam" false) (mem "GrantShape" true) (mem "authGrantShape" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "EffLabel" true) (mem "Atom" true) (mem "effLabelName" false) (mem "labelKey" false) (mem "builtinLabel" false) (mem "atomLabel" false) (mem "atomLabelOf" false) (mem "atomKey" false) (mem "atomAuth" false) (mem "atomConst" false) (mem "atomBuiltin" false) (mem "atomWith" false) (mem "renderAtom" false) (mem "renderAtoms" false) (mem "atomInsert" false) (mem "atomsNorm" false) (mem "atomsUnion" false) (mem "atomsDiff" false) (mem "findAtom" false) (mem "collectRows" false) (mem "joinRows" false) (mem "effrowNorm" false) (mem "effrowLabels" false) (mem "effvarId" false) (mem "isJoinCell" false) (mem "rowFlat" false) (mem "rowHasSummary" false) (mem "rowFlatMembers" false) (mem "dedupCells" false) (mem "linkRow" false) (mem "EffRow" true) (mem "Effvar" true))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "EffLabel" true) (mem "Atom" true) (mem "effLabelName" false) (mem "labelKey" false) (mem "builtinLabel" false) (mem "atomLabel" false) (mem "atomLabelOf" false) (mem "atomKey" false) (mem "atomAuth" false) (mem "atomConst" false) (mem "atomBuiltin" false) (mem "atomWith" false) (mem "renderAtom" false) (mem "renderAtoms" false) (mem "atomInsert" false) (mem "atomsNorm" false) (mem "atomsUnion" false) (mem "atomsDiff" false) (mem "findAtom" false) (mem "collectRows" false) (mem "joinRows" false) (mem "effrowNorm" false) (mem "effrowLabels" false) (mem "effvarId" false) (mem "isJoinCell" false) (mem "rowFlat" false) (mem "rowHasSummary" false) (mem "rowFlatMembers" false) (mem "dedupCells" false) (mem "linkRow" false) (mem "EffRow" true) (mem "Effvar" true) (mem "pureRow" false))))
 (DUse false (UseGroup ("types" "effect_infer") ((mem "recordEffect" false) (mem "captureEffects" false) (mem "alphaOf" false) (mem "typeAuthority" false) (mem "AlphaBinder" true))))
 (DUse false (UseAlias ("types" "effect_solver") "EffectSolver"))
 (DUse false (UseGroup ("types" "effect_bindings") ((mem "BindingSummary" true) (mem "newBindingSummary" false) (mem "bodyArrows" false) (mem "bodyRowAt" false))))
@@ -57061,7 +57054,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omMapValues" false) (mem "omSize" false) (mem "omDelete" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "drop" false) (mem "take" false) (mem "elemIndex" false) (mem "indexed" false) (mem "sortOn" false) (mem "findMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false) (mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "int64Halves" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "maxI" false) (mem "isSome" false) (mem "orElseOpt" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false))))
+(DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false) (mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "int64Halves" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "maxI" false) (mem "isSome" false) (mem "orElseOpt" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false) (mem "eqStr" false) (mem "selfBinding" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "headKeyIdent" false) (mem "headKeyDecl" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SpellingPop" false) (mem "spEmpty" false) (mem "spFromFloor" false) (mem "spInsert" false) (mem "spRows" false) (mem "spFloor" false) (mem "spCollided" false) (mem "spCandsOf" false) (mem "spLookupIdent" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "installEvidence" false) (mem "evDictRoutes" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "InstId" true) (mem "MethodDisposition" true) (mem "DispositionTable" false) (mem "InstanceShape" true) (mem "buildDispositionTableWithShapes" false) (mem "installDispositions" false) (mem "installedDispositionsOpt" false) (mem "restoreDispositions" false) (mem "validateDispositionTable" false))))
@@ -57157,8 +57150,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "freshVar" (PWild) (EApp (EVar "TVar") (EApp (EVar "Ref") (EApp (EApp (EVar "Unbound") (EApp (EVar "newTyvarId") (ELit LUnit))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")))))
 (DTypeSig false "newEffvarId" (TyFun (TyCon "Unit") (TyCon "Int")))
 (DFunDef false "newEffvarId" (PWild) (EBlock (DoLet false false (PVar "n") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "effvarCounter") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "effvarCounter")) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (DoExpr (EVar "n"))))
-(DTypeSig false "pureRow" (TyCon "EffRow"))
-(DFunDef false "pureRow" () (EApp (EApp (EVar "EffRow") (EListLit)) (EVar "None")))
 (DTypeSig false "freshEffvar" (TyFun (TyCon "Unit") (TyApp (TyCon "Ref") (TyCon "Effvar"))))
 (DFunDef false "freshEffvar" (PWild) (EApp (EVar "Ref") (EApp (EApp (EVar "EUnbound") (EApp (EVar "newEffvarId") (ELit LUnit))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value"))))
 (DTypeSig false "freshEffvarAt" (TyFun (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar"))))
@@ -62883,8 +62874,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "tyStep" ((PCon "TyAuth" PWild PWild) PWild) (EVar "MOk"))
 (DFunDef false "tyStep" ((PCon "TyNamed" PWild (PVar "t1") PWild) (PVar "s")) (EApp (EVar "MKids") (EListLit (ETuple (EVar "t1") (EApp (EVar "stripTyWrap") (EVar "s"))))))
 (DFunDef false "tyStep" ((PCon "TyQual" (PVar "t1") PWild PWild) (PVar "s")) (EApp (EVar "MKids") (EListLit (ETuple (EVar "t1") (EApp (EVar "stripTyWrap") (EVar "s"))))))
-(DTypeSig false "eqStr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "eqStr" ((PVar "a") (PVar "b")) (EBinOp "==" (EVar "a") (EVar "b")))
 (DTypeSig false "stripTyWrap" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "stripTyWrap" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "stripTyWrap") (EVar "t")))
 (DFunDef false "stripTyWrap" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "stripTyWrap") (EVar "t")))
@@ -65654,8 +65643,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "importedBindings" ((PCon "UseAlias" PWild PWild)) (EApp (EVar "Some") (EListLit)))
 (DTypeSig false "memberBinding" (TyFun (TyCon "UseMember") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "memberBinding" ((PVar "m")) (ETuple (EApp (EVar "useMemberOrigin") (EVar "m")) (EApp (EVar "useMemberLocal") (EVar "m"))))
-(DTypeSig false "selfBinding" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))
-(DFunDef false "selfBinding" ((PVar "n")) (ETuple (EVar "n") (EVar "n")))
 (DTypeSig false "memberSuffix" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "memberSuffix" ((PVar "n")) (EBinOp "++" (ELit (LString "__")) (EVar "n")))
 (DTypeSig false "endsWithStr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -66493,7 +66480,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("types" "superclass") ((mem "SuperNode" true) (mem "lookupPos" false) (mem "mapAll" false) (mem "superClosure" false) (mem "superIfaceRef" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "canonParam" false) (mem "subTopOf" false) (mem "lookupAxis" false) (mem "productPrimaryLift" false) (mem "productOver" false) (mem "productNorm" false) (mem "isSubTop" false) (mem "domainKey" false) (mem "setCardCap" false) (mem "writtenSetProblem" false) (mem "commonPrefixLen" false) (mem "drender" false) (mem "drenderN" false) (mem "quoteStr" false) (mem "renderProductLit" false) (mem "renderAxis" false) (mem "renderAxisVal" false) (mem "prefixConcrete" false) (mem "dsub" false) (mem "extendParam" false) (mem "Param" true))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authSplit" false) (mem "authvarId" false) (mem "authvarLevel" false) (mem "authvarDomain" false) (mem "authvarName" false) (mem "authConst" false) (mem "authIsTop" false) (mem "authJoin" false) (mem "authJoinAll" false) (mem "authSub" false) (mem "authVars" false) (mem "authNorm" false) (mem "authTop" false) (mem "authDomainTop" false) (mem "authHasVars" false) (mem "linkAuthvar" false) (mem "authvarIsPattern" false) (mem "markAuthvarPattern" false) (mem "authIsPattern" false) (mem "authPatternClose" false) (mem "isPatternParam" false) (mem "GrantShape" true) (mem "authGrantShape" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "EffLabel" true) (mem "Atom" true) (mem "effLabelName" false) (mem "labelKey" false) (mem "builtinLabel" false) (mem "atomLabel" false) (mem "atomLabelOf" false) (mem "atomKey" false) (mem "atomAuth" false) (mem "atomConst" false) (mem "atomBuiltin" false) (mem "atomWith" false) (mem "renderAtom" false) (mem "renderAtoms" false) (mem "atomInsert" false) (mem "atomsNorm" false) (mem "atomsUnion" false) (mem "atomsDiff" false) (mem "findAtom" false) (mem "collectRows" false) (mem "joinRows" false) (mem "effrowNorm" false) (mem "effrowLabels" false) (mem "effvarId" false) (mem "isJoinCell" false) (mem "rowFlat" false) (mem "rowHasSummary" false) (mem "rowFlatMembers" false) (mem "dedupCells" false) (mem "linkRow" false) (mem "EffRow" true) (mem "Effvar" true))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "EffLabel" true) (mem "Atom" true) (mem "effLabelName" false) (mem "labelKey" false) (mem "builtinLabel" false) (mem "atomLabel" false) (mem "atomLabelOf" false) (mem "atomKey" false) (mem "atomAuth" false) (mem "atomConst" false) (mem "atomBuiltin" false) (mem "atomWith" false) (mem "renderAtom" false) (mem "renderAtoms" false) (mem "atomInsert" false) (mem "atomsNorm" false) (mem "atomsUnion" false) (mem "atomsDiff" false) (mem "findAtom" false) (mem "collectRows" false) (mem "joinRows" false) (mem "effrowNorm" false) (mem "effrowLabels" false) (mem "effvarId" false) (mem "isJoinCell" false) (mem "rowFlat" false) (mem "rowHasSummary" false) (mem "rowFlatMembers" false) (mem "dedupCells" false) (mem "linkRow" false) (mem "EffRow" true) (mem "Effvar" true) (mem "pureRow" false))))
 (DUse false (UseGroup ("types" "effect_infer") ((mem "recordEffect" false) (mem "captureEffects" false) (mem "alphaOf" false) (mem "typeAuthority" false) (mem "AlphaBinder" true))))
 (DUse false (UseAlias ("types" "effect_solver") "EffectSolver"))
 (DUse false (UseGroup ("types" "effect_bindings") ((mem "BindingSummary" true) (mem "newBindingSummary" false) (mem "bodyArrows" false) (mem "bodyRowAt" false))))
@@ -66516,7 +66503,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omMapValues" false) (mem "omSize" false) (mem "omDelete" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "drop" false) (mem "take" false) (mem "elemIndex" false) (mem "indexed" false) (mem "sortOn" false) (mem "findMap" false))))
-(DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false) (mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "int64Halves" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "maxI" false) (mem "isSome" false) (mem "orElseOpt" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false))))
+(DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false) (mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "int64Halves" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "maxI" false) (mem "isSome" false) (mem "orElseOpt" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false) (mem "eqStr" false) (mem "selfBinding" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "headKeyIdent" false) (mem "headKeyDecl" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SpellingPop" false) (mem "spEmpty" false) (mem "spFromFloor" false) (mem "spInsert" false) (mem "spRows" false) (mem "spFloor" false) (mem "spCollided" false) (mem "spCandsOf" false) (mem "spLookupIdent" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "installEvidence" false) (mem "evDictRoutes" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "InstId" true) (mem "MethodDisposition" true) (mem "DispositionTable" false) (mem "InstanceShape" true) (mem "buildDispositionTableWithShapes" false) (mem "installDispositions" false) (mem "installedDispositionsOpt" false) (mem "restoreDispositions" false) (mem "validateDispositionTable" false))))
@@ -66612,8 +66599,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "freshVar" (PWild) (EApp (EVar "TVar") (EApp (EVar "Ref") (EApp (EApp (EVar "Unbound") (EApp (EVar "newTyvarId") (ELit LUnit))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")))))
 (DTypeSig false "newEffvarId" (TyFun (TyCon "Unit") (TyCon "Int")))
 (DFunDef false "newEffvarId" (PWild) (EBlock (DoLet false false (PVar "n") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "effvarCounter") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "effvarCounter")) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (DoExpr (EVar "n"))))
-(DTypeSig false "pureRow" (TyCon "EffRow"))
-(DFunDef false "pureRow" () (EApp (EApp (EVar "EffRow") (EListLit)) (EVar "None")))
 (DTypeSig false "freshEffvar" (TyFun (TyCon "Unit") (TyApp (TyCon "Ref") (TyCon "Effvar"))))
 (DFunDef false "freshEffvar" (PWild) (EApp (EVar "Ref") (EApp (EApp (EVar "EUnbound") (EApp (EVar "newEffvarId") (ELit LUnit))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value"))))
 (DTypeSig false "freshEffvarAt" (TyFun (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar"))))
@@ -72338,8 +72323,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "tyStep" ((PCon "TyAuth" PWild PWild) PWild) (EVar "MOk"))
 (DFunDef false "tyStep" ((PCon "TyNamed" PWild (PVar "t1") PWild) (PVar "s")) (EApp (EVar "MKids") (EListLit (ETuple (EVar "t1") (EApp (EVar "stripTyWrap") (EVar "s"))))))
 (DFunDef false "tyStep" ((PCon "TyQual" (PVar "t1") PWild PWild) (PVar "s")) (EApp (EVar "MKids") (EListLit (ETuple (EVar "t1") (EApp (EVar "stripTyWrap") (EVar "s"))))))
-(DTypeSig false "eqStr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "eqStr" ((PVar "a") (PVar "b")) (EBinOp "==" (EVar "a") (EVar "b")))
 (DTypeSig false "stripTyWrap" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "stripTyWrap" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "stripTyWrap") (EVar "t")))
 (DFunDef false "stripTyWrap" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "stripTyWrap") (EVar "t")))
@@ -75109,8 +75092,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "importedBindings" ((PCon "UseAlias" PWild PWild)) (EApp (EVar "Some") (EListLit)))
 (DTypeSig false "memberBinding" (TyFun (TyCon "UseMember") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "memberBinding" ((PVar "m")) (ETuple (EApp (EVar "useMemberOrigin") (EVar "m")) (EApp (EVar "useMemberLocal") (EVar "m"))))
-(DTypeSig false "selfBinding" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))
-(DFunDef false "selfBinding" ((PVar "n")) (ETuple (EVar "n") (EVar "n")))
 (DTypeSig false "memberSuffix" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "memberSuffix" ((PVar "n")) (EBinOp "++" (ELit (LString "__")) (EVar "n")))
 (DTypeSig false "endsWithStr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))

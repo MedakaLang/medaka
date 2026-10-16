@@ -73,7 +73,6 @@ methodValueArity
 narrowImplsByArity
 noteGap
 noteGapAt
-nthArm
 orEmptyEntries
 paramEnv
 ptag

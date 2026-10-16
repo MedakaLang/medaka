@@ -351,6 +351,23 @@ bindNameMap : List CBind -> OrdMap CBind
 bindNameMap [] = omEmpty
 bindNameMap (b :: rest) = omInsert (bindName b) b (bindNameMap rest)
 
+-- Effectful left-to-right fold over a list, for its side effects only.
+export
+forEachU : (a -> Unit) -> List a -> Unit
+forEachU _ [] = ()
+forEachU f (x :: xs) = let _ = f x in forEachU f xs
+
+export
+nthArm : List CArm -> Int -> Option CArm
+-- Intentional cross-file duplicate of core_ir_eval.mdk's copy. The Core IR
+-- interpreter is the oracle this backend is differenced against, so the two must
+-- not share code: a defect in a shared helper would move both arms of the
+-- differential together and the gate would report agreement.
+-- lint-disable-next-line rule-duplicate-body
+nthArm (a :: _) 0 = Some a
+nthArm (_ :: rest) n = nthArm rest (n - 1)
+nthArm [] _ = None
+
 -- ── #561 PR-A: lazy-global classification (native fast-path predicate) ────────
 -- The topo sort (Stage B, above) makes eager init CORRECT wherever a static init
 -- order EXISTS.  Two residual cases have no static order, and the reference engine
