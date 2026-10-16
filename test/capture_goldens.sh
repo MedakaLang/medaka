@@ -1023,15 +1023,20 @@ if want repl; then
   REPL_BIN="$ROOT/test/bin/repl_main"
   REPL_IN="$ROOT/test/repl_fixtures/session.in"
   golden="$ROOT/test/repl_fixtures/session.golden"
+  err_golden="$ROOT/test/repl_fixtures/session.stderr.golden"
   out="$TMP/repl_out"
+  err_out="$TMP/repl_err_out"
   if [ -x "$REPL_BIN" ] && [ -f "$REPL_IN" ]; then
     perl -e 'alarm 120; exec @ARGV' -- "$REPL_BIN" "$RUNTIME" "$CORE" \
-      < "$REPL_IN" > "$out" 2>/dev/null || true
+      < "$REPL_IN" > "$out" 2> "$err_out" || true
     if [ "$CHECK" -eq 1 ]; then
       if [ -f "$golden" ] && cmp -s "$out" "$golden"; then :
       else mism=$((mism+1)); [ -f "$golden" ] && { echo "DRIFT $golden"; diff "$golden" "$out" | head -6 | sed 's/^/    /'; } || echo "MISSING $golden"; fi
+      if [ -f "$err_golden" ] && cmp -s "$err_out" "$err_golden"; then :
+      else mism=$((mism+1)); [ -f "$err_golden" ] && { echo "DRIFT $err_golden"; diff "$err_golden" "$err_out" | head -6 | sed 's/^/    /'; } || echo "MISSING $err_golden"; fi
     else
       wrote=$((wrote+1)); finish_write "$golden" "$out"
+      wrote=$((wrote+1)); finish_write "$err_golden" "$err_out"
     fi
   else
     mism=$((mism+1)); echo "SKIP repl golden — missing $REPL_BIN (run FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one $(basename "$REPL_BIN")) or $REPL_IN"

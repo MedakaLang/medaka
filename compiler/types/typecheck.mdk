@@ -356,6 +356,7 @@ import types.registry.{
 }
 import frontend.desugar.{mapProg, mapChildren, mapExpr}
 import frontend.marker.{localBoundNames}
+import types.value_main.{inMainBinding, mainUseSite, mainUsedMsg}
 import frontend.resolve.{
   firstExprLoc,
   programIsCore,
@@ -403,7 +404,7 @@ import support.ordmap.{
   omSize,
   omDelete,
 }
-import list.{replicate, drop, take, elemIndex, indexed, sortOn, findMap}
+import list.{replicate, drop, take, elemIndex, indexed, sortOn, findMap, last}
 import support.util.{
   splitOnChar,
   u64HalvesHex,
@@ -10700,7 +10701,8 @@ mainAsyncPayloadIsUnit _ = match driverState.value.mainSchemeRef.value
 -- `main` of type `a` for every `a` (`main = panic "boom"`) never produces a
 -- value, and printing one would need a `Display` impl that no type selects.  A
 -- CONSTRAINED variable (`main = empty`, `Monoid a => a`) is not Unit-shaped:
--- its ambiguity is a real error, reported when the auto-print wrap is checked.
+-- its ambiguity is a real error, reported by the auto-print obligation
+-- (`autoPrintWanted`).
 -- A `Scheme` carries no context, so the variable case reads the obligation
 -- side-channel `ppSchemeNamed` renders the `=>` from, keyed the same way; it
 -- answers for the module last checked, the entry module on the paths that ask
@@ -53023,6 +53025,14 @@ data CoreCheckMemo = CoreCheckMemo {
 coreCheckMemoRef : Ref (Option CoreCheckMemo)
 coreCheckMemoRef = Ref None
 
+-- The prelude's schemes from the core pass the last keyed diagnostics drive ran,
+-- for a caller that read them off a graph drive that returns only per-module rows.
+export
+lastCoreSchemes : Unit -> List (String, Scheme)
+lastCoreSchemes _ = match !coreCheckMemoRef
+  Some m => m.ccmCoreSchemes.mbSchemes
+  None => []
+
 coreCheckMemoHit : Option (Int, Int) -> Option CoreCheckMemo
 coreCheckMemoHit None = None
 coreCheckMemoHit (Some key) = match !coreCheckMemoRef
@@ -54031,9 +54041,36 @@ checkModulesDiagsChain : Option (Int, Int) ->
   List Decl ->
   List (String, List Decl) ->
   List ModDiags
-checkModulesDiagsChain None _ _ runtimeDecls coreDecls0 modules0 =
-  (driveGraphK GOutDiags None runtimeDecls coreDecls0 modules0).gdPerMod
-checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0 modules0 =
+checkModulesDiagsChain preludeKey chainKey stepKeys runtimeDecls coreDecls0 modules0 =
+  checkModulesDiagsChainFor
+    False
+    preludeKey
+    chainKey
+    stepKeys
+    runtimeDecls
+    coreDecls0
+    modules0
+
+-- `checkModulesDiagsChain` for a caller that passes its value-main candidate
+-- (`autoPrintWanted`).
+export
+checkModulesDiagsChainFor : Bool ->
+  Option (Int, Int) ->
+  String ->
+  List (Option String) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List ModDiags
+checkModulesDiagsChainFor valueMain None _ _ runtimeDecls coreDecls0 modules0 =
+  (driveGraphK
+    GOutDiags
+    valueMain
+    None
+    runtimeDecls
+    coreDecls0
+    modules0).gdPerMod
+checkModulesDiagsChainFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0 modules0 =
   -- The keyed arm mirrors `driveGraphK`'s prologue by hand, so it owes the same
   -- method-alias rewrite: without it this arm typechecks a graph in which
   -- `import m as A` binds none of `m`'s methods under their origin name, and a bare
@@ -54083,7 +54120,14 @@ checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0
   -- #2705: the graph-end drain for what the steps did not already drain (the entry
   -- module, and any module after the last recorded step) — see `chainGo`.
   let findings = checkGraphFinish ()
-  attachCoherenceConflict (attachDrainFindings findings (reverseL finalResults))
+  let wanted =
+    autoPrintWanted
+      valueMain
+      (driveErrs findings finalResults)
+      coreDecls
+      modules
+  attachCoherenceConflict
+    (attachDrainFindings (findings ++ wanted) (reverseL finalResults))
 
 -- The fold itself, iterative, recording a step after each non-entry module while
 -- keys are available.  Mirrors `driveGraphK GOutDiags`'s `foldModules` exactly:
@@ -54313,14 +54357,16 @@ data GraphDrive = GraphDrive {
 --
 -- `preludeKey` is the desugar-cache generation pair for the core-check memo (see
 -- `checkCoreMemoized`); the tree arm ignores it, because it needs core's marked
--- decls back and a memo may hold no `Decl`.
+-- decls back and a memo may hold no `Decl`.  `valueMain` is the caller's
+-- value-main candidate (`autoPrintWanted`).
 driveGraphK : GraphOut ->
+  Bool ->
   Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   GraphDrive
-driveGraphK sel preludeKey runtimeDecls coreDecls0 modulesIn =
+driveGraphK sel valueMain preludeKey runtimeDecls coreDecls0 modulesIn =
   let stickyBefore = typeErrorsStickyDiags.value
   -- IMPORT ALIASING of an interface/impl METHOD — a method is global-by-name, so an
   -- alias of one is a second SPELLING, not a second binding.  A member alias and a
@@ -54375,7 +54421,10 @@ driveGraphK sel preludeKey runtimeDecls coreDecls0 modulesIn =
   -- what excludes the prelude, replacing "walk the user `modules` list".
   -- It reads `deImpls` only, which nothing between here and the tree arm's return
   -- writes, so attaching once here serves both selections.
-  let perMod = attachCoherenceConflict (attachDrainFindings findings perModRaw)
+  let wanted =
+    autoPrintWanted valueMain (driveErrs findings perModRaw) coreDecls modules
+  let perMod =
+    attachCoherenceConflict (attachDrainFindings (findings ++ wanted) perModRaw)
   -- #1112 A-3: the whole-graph IE/CE `buildDeclEnvs` filled in the preamble
   -- above is already complete at this point — installed here, once per
   -- elaboration, on both arms alike (mirroring `installEvidence`'s own
@@ -54455,6 +54504,115 @@ attachEntryPayload _ [] = []
 attachEntryPayload f [(mid, p)] = [(mid, f p)]
 attachEntryPayload f (m :: rest) = m :: attachEntryPayload f rest
 
+-- The auto-print obligation of a value `main` (driver/main_autoprint.mdk), posed
+-- at graph end by the drive that checks the entry module.  [valueMain] is the
+-- caller's syntactic candidate (a parameterless `main` with `println` in scope);
+-- whether `main` is printed at all is decided here from its own scheme, so a
+-- Unit-shaped or `Async` main poses nothing.  The obligation is the `println`
+-- signature's own context at τ_main, `main`'s scheme as the entry module left it:
+-- the declared type under a signature, else the inferred one.  It joins the entry
+-- module's errors whether or not the drive already has some, except that an
+-- ambiguity verdict is dropped when one of [reported] lies in `main`'s binding:
+-- that error already explains the undetermined type.  It runs after the drain, which can still default a numeric `main`, and before anything later
+-- reads `main`'s variables, since the verdict can ground them.
+autoPrintWanted : Bool ->
+  List TcDiag ->
+  List Decl ->
+  List (String, List Decl) ->
+  List DrainFinding
+autoPrintWanted False _ _ _ = []
+autoPrintWanted True reported coreDecls modules =
+  let decls = coreDecls ++ flatMap snd modules
+  match (
+    driverState.value.mainSchemeRef.value,
+    last modules,
+    printlnIface decls,
+  )
+    (Some scheme, Some (mid, entry), Some iface) =>
+      if mainTypeIsUnit () || mainTypeIsAsync () then
+        []
+      else
+        -- A top-level `main` has no givens: the use is judged in a module scope
+        -- of its own.
+        let scope =
+          Scopes.freshScope (currentScopeStore ()) None 0 mid ModuleOwner
+        let _ = openScope scope
+        let savedLoc = !currentLoc
+        let loc = mainBodySpan entry
+        currentLoc := loc
+        let diags = captureTypeErrors (_ => judgeAutoPrintUse iface scheme loc)
+        currentLoc := savedLoc
+        let _ = closeScope ()
+        let kept =
+          if anyList (d => inMainBinding entry (tcLoc d)) reported then
+            filterList (d => tcCode d /= "T-AMBIGUOUS-INSTANCE") diags
+          else
+            diags
+        map (verdictFinding mid False) (mainUseDiags loc entry ++ kept)
+    _ => []
+
+-- Every error a drive has reported so far, the drain's included.
+driveErrs : List DrainFinding -> List ModDiags -> List TcDiag
+driveErrs findings perMod =
+  map (f => f.dfDiag) findings ++ flatMap modDiagErrs perMod
+
+-- Another binding's use of `main` is typed against the printing wrap's `main`
+-- where run, build and test elaborate the wrapped program, so it is rejected.
+mainUseDiags : Option Loc -> List Decl -> List TcDiag
+mainUseDiags None _ = []
+mainUseDiags (Some site) entry = match mainUseSite site entry
+  Some at => [TcDiag "T-MAIN-USED" 1 (Some at) mainUsedMsg None None]
+  None => []
+
+-- The printing use of `main` is a closed boundary, as a test body is (see
+-- `settleClosedBody`): it instantiates `main`'s scheme with its context, poses
+-- `iface` at the instance, and publishes no polymorphic result.  So a numeric
+-- variable defaults as at any such boundary, a variable nothing determines is
+-- ambiguous, and a closed goal gets the call channel's verdict, `requires`
+-- included.
+judgeAutoPrintUse : IfaceRef -> Scheme -> Option Loc -> Unit
+judgeAutoPrintUse iface scheme loc =
+  let _ = enterLevel ()
+  let oblMark = wMark perRun.value.implObls
+  let callMark = wMark perRun.value.obls
+  let dictMark = goalsMark ()
+  let (tau0, subst) = instantiateTracked scheme
+  -- A variable the value restriction left in `main`'s type is a live root, and
+  -- the drain that could bind it has run: at this use it is the boundary's own,
+  -- as a quantified one is.
+  let fresh = flatMap (p => monoUnboundIds (snd p)) subst
+  let held =
+    filterList (i => not (anyList (== i) fresh)) (dedupI (monoUnboundIds tau0))
+  let tau = substMono (map (i => (i, freshVar ())) held) [] [] tau0
+  let id = optionOr 0 (omLookup "main" perRun.value.schemeDefIdsRef.value)
+  let context =
+    lookupSchemeObls "main" id perRun.value.schemeObligationsRef.value
+  let _ = recordObl Predicate { iface = iface, args = [tau] } 0 PCallSlot loc
+  let _ = recordSchemeCallObligations id (optionOr [] context) subst
+  let _ = exitLevel ()
+  let _ = settleClosedBody (tconBuiltin "Unit") oblMark callMark dictMark
+  checkCallObligationsU
+    False
+    perRun.value.residualUnivRef.value
+    (callUOblsWindow callMark)
+
+-- The interface of `println`'s one-predicate context (`Display a => …`).
+printlnIface : List Decl -> Option IfaceRef
+printlnIface [] = None
+printlnIface ((DAttrib _ d) :: rest) = printlnIface (d :: rest)
+printlnIface ((DTypeSig _ "println" (TyConstrained [c] _) _) :: _) =
+  Some IfaceRef { irName = c.constraintHead, irOrigin = c.constraintOrigin }
+printlnIface (_ :: rest) = printlnIface rest
+
+-- The span of `main`'s body, or of the binding when the body carries none.
+mainBodySpan : List Decl -> Option Loc
+mainBodySpan [] = None
+mainBodySpan ((DAttrib _ d) :: rest) = mainBodySpan (d :: rest)
+mainBodySpan ((DFunDef _ "main" [] body site _) :: _) = match body
+  ELoc l _ => Some l
+  _ => Some site
+mainBodySpan (_ :: rest) = mainBodySpan rest
+
 -- the entry module is last in dependency-first order
 export
 entryOwnSchemes : List (String, List (String, Scheme)) -> List (String, Scheme)
@@ -54496,7 +54654,7 @@ checkModulesEntryFullK : Option (Int, Int) ->
   (List (String, Scheme), List TcDiag, List TcDiag)
 checkModulesEntryFullK preludeKey runtimeDecls coreDecls modules =
   let (_, schemes, errs, warns) =
-    checkModulesEntryFullSplitK preludeKey runtimeDecls coreDecls modules
+    checkModulesEntryFullSplitK False preludeKey runtimeDecls coreDecls modules
   (schemes, errs, warns)
 
 -- S-full-env-scheme-entry (#1116): the SAME driver, but ALSO returning the
@@ -54519,12 +54677,14 @@ checkModulesEntryFullK preludeKey runtimeDecls coreDecls modules =
 -- the module's own entry for the same bare name.
 -- `preludeKey`: the prelude key for the core-check memo (see `checkCoreMemoized`);
 -- `None` = unkeyed, no memo.
-checkModulesEntryFullSplitK : Option (Int, Int) ->
+export
+checkModulesEntryFullSplitK : Bool ->
+  Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   (List (String, Scheme), List (String, Scheme), List TcDiag, List TcDiag)
-checkModulesEntryFullSplitK preludeKey runtimeDecls coreDecls0 modules0 =
+checkModulesEntryFullSplitK valueMain preludeKey runtimeDecls coreDecls0 modules0 =
   -- The single-file front door loads stdlib/core.mdk twice: once as its prelude and
   -- once as the singleton `__user__` module.  Resolve already owns the syntactic
   -- self-test that prevents double-seeding core.  Apply that same authority before
@@ -54543,6 +54703,7 @@ checkModulesEntryFullSplitK preludeKey runtimeDecls coreDecls0 modules0 =
   let g =
     driveGraphK
       GOutDiags
+      valueMain
       effectivePreludeKey
       runtimeDecls
       effectiveCoreDecls0
@@ -54653,6 +54814,7 @@ checkOneSchemeFullK : Option (Int, Int) ->
   (List (String, Scheme), List (String, Scheme))
 checkOneSchemeFullK preludeKey runtimeDecls coreDecls (rootId, prog) =
   let (coreSchemes, schemes, _, _) = checkModulesEntryFullSplitK
+    False
     preludeKey
     runtimeDecls
     coreDecls
@@ -54668,33 +54830,25 @@ checkOneDiags : List Decl ->
   (String, List Decl) ->
   (List TcDiag, List TcDiag)
 checkOneDiags runtimeDecls coreDecls prog =
-  checkOneDiagsK None runtimeDecls coreDecls prog
+  checkOneDiagsK False None runtimeDecls coreDecls prog
 
 -- `checkOneDiags` with the prelude key for the core-check memo — same contract as
--- `checkOneSchemeFullK`.
+-- `checkOneSchemeFullK` — and the caller's value-main candidate (`autoPrintWanted`).
 export
-checkOneDiagsK : Option (Int, Int) ->
+checkOneDiagsK : Bool ->
+  Option (Int, Int) ->
   List Decl ->
   List Decl ->
   (String, List Decl) ->
   (List TcDiag, List TcDiag)
-checkOneDiagsK preludeKey runtimeDecls coreDecls (rootId, prog) =
-  let (_, errs, warns) =
-    checkModulesEntryFullK preludeKey runtimeDecls coreDecls [(rootId, prog)]
+checkOneDiagsK valueMain preludeKey runtimeDecls coreDecls (rootId, prog) =
+  let (_, _, errs, warns) = checkModulesEntryFullSplitK
+    valueMain
+    preludeKey
+    runtimeDecls
+    coreDecls
+    [(rootId, prog)]
   (errs, warns)
-
--- `checkOneDiagsK` plus the entry's rendered `name : scheme` lines from the SAME
--- drive.  The lines are rendered here, before any later drive can run.
-export
-checkOneDiagsLinesK : Option (Int, Int) ->
-  List Decl ->
-  List Decl ->
-  (String, List Decl) ->
-  (List String, List TcDiag, List TcDiag)
-checkOneDiagsLinesK preludeKey runtimeDecls coreDecls (rootId, prog) =
-  let (schemes, errs, warns) =
-    checkModulesEntryFullK preludeKey runtimeDecls coreDecls [(rootId, prog)]
-  (schemeLines schemes ++ map tcMsg warns, errs, warns)
 
 -- `checkModulesEntryFullK` for a SYNTHETIC program graph — one this driver derived
 -- from the user's rather than one the user wrote — with `mainSchemeRef` SAVED AND
@@ -54710,7 +54864,7 @@ checkOneDiagsLinesK preludeKey runtimeDecls coreDecls (rootId, prog) =
 -- sole input to `mainTypeIsUnit`/`mainTypeIsAsync`/`mainTypeIsFloat`.  That is right
 -- for a check of the user's OWN program and wrong for a check of a program this
 -- compiler invented: `underivedMainDiags` (driver/main_autoprint.mdk) re-checks the
--- auto-print WRAP (`main = 5` ⟶ `main = println 5`), whose `main` is `<IO> Unit` by
+-- async WRAP (`main = e` ⟶ `main = 0runasync e`), whose `main` is Unit by
 -- construction.  Letting that write through means every later reader of
 -- `mainTypeIsUnit ()` is told the user's non-Unit `main` is Unit — the exact predicate
 -- `mainNonUnitWarning` consults to decide whether to warn.
@@ -54898,19 +55052,21 @@ elaborateModules : List Decl ->
 -- the evidence table and dict-passes the marked trees, and that it returns the
 -- diagnostics the drive raised as its residual.
 elaborateModules runtimeDecls coreDecls0 modulesIn =
-  match elaborateModulesWithSchemes runtimeDecls coreDecls0 modulesIn
+  match elaborateModulesWithSchemes False runtimeDecls coreDecls0 modulesIn
     (result, _, _) => result
 
 -- `elaborateModules` together with the prelude's schemes and the entry module's own
 -- schemes, from the SAME drive: a verb that both reads types and evaluates the
--- elaborated program (`check-policy`) typechecks once.
+-- elaborated program (`check-policy`) typechecks once.  `valueMain` is the caller's
+-- value-main candidate (`autoPrintWanted`).
 export
-elaborateModulesWithSchemes : List Decl ->
+elaborateModulesWithSchemes : Bool ->
+  List Decl ->
   List Decl ->
   List (String, List Decl) ->
   (ElabResult, List (String, Scheme), List (String, Scheme))
-elaborateModulesWithSchemes runtimeDecls coreDecls0 modulesIn =
-  let g = driveGraphK GOutTrees None runtimeDecls coreDecls0 modulesIn
+elaborateModulesWithSchemes valueMain runtimeDecls coreDecls0 modulesIn =
+  let g = driveGraphK GOutTrees valueMain None runtimeDecls coreDecls0 modulesIn
   let (entrySchemes, _, _) = checkModulesEntryFromDiags g.gdPerMod
   (
     (
@@ -57018,6 +57174,7 @@ popMarkedClause grouped pending n =
     c :: cs => (c, omInsert n cs pending)
     [] => panic "rebuildGroupDecls: no marked clause left for \{n}"
 
+export
 schemeLines : List (String, Scheme) -> List String
 schemeLines [] = []
 schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest

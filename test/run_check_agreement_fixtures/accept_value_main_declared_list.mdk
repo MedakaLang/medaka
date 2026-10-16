@@ -1,0 +1,6 @@
+-- A value `main` under a signature is printed at the type it declares: the
+-- auto-print poses `Display (List Int)`, not the `Display (List ?a)` of the bare
+-- body (compare `reject_value_main_nil.mdk`).  Hand-derived: ACCEPT on all three
+-- verbs, printing the empty list `[]`.
+main : List Int
+main = []

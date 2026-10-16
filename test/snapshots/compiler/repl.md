@@ -1,5 +1,5 @@
 # META
-source_lines=465
+source_lines=454
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka REPL (Stage 4, Phase B.9)
@@ -36,9 +36,8 @@ import frontend.desugar.{desugar}
 import frontend.resolve.{resolveProgram, ppResError}
 import types.repr.{ppScheme, Scheme(..)}
 import types.typecheck.{
-  checkOneDiags,
   checkOneScheme,
-  elaborateModules,
+  elaborateModulesWithSchemes,
   tcMsg,
 }
 import types.private_mangle.{mangleCtorCollisionsPair}
@@ -232,24 +231,22 @@ runPipeline combined =
   match resErrs
     e :: _ => (map ppResError resErrs, [], [])
     [] =>
-      let (tcErrs, _) =
-        checkOneDiags runtimeDecls preludeDecls ("__user__", combined)
+      -- One drive yields the diagnostics, the entry's own schemes and the
+      -- elaborated trees; the session's shadowed prelude names are dropped
+      -- before it, so a redefinition is checked against what will run.
+      let ((coreE, modulesE, diagsE, _, _, _), _, allSchemes) = elaborateModulesWithSchemes
+        False
+        runtimeDecls
+        (dropShadowedExp (funNamesOf combined) preludeDecls)
+        [("__repl__", combined)]
+      let tcErrs = flatMap (d => fst (snd d)) diagsE
       match tcErrs
         e :: _ => (map tcMsg tcErrs, [], [])
         [] =>
-          let allSchemes =
-            checkOneScheme runtimeDecls preludeDecls ("__user__", combined)
-          -- Evaluate the ELABORATED program, as `run` and `test` do: an interface
-          -- default reaches an instance only through the elaboration's
-          -- disposition table, so elaboration is the last typecheck before eval.
-          let (coreE, modulesE) =
-            elaborateSession
-              runtimeDecls
-              (dropShadowedExp (funNamesOf combined) preludeDecls)
-              combined
-          let bindings = evalOneRootEnvWith (testCapableExterns ()) coreE (
+          let (coreM, modulesM) = mangleCtorCollisionsPair (coreE, modulesE)
+          let bindings = evalOneRootEnvWith (testCapableExterns ()) coreM (
             "__repl__",
-            flatMap snd modulesE,
+            flatMap snd modulesM,
           )
           ([], allSchemes, bindings)
 -- DRIVER-COLLAPSE Phase 3/4: eval via the 1-module wrapper (evalOneRootEnv
@@ -258,14 +255,6 @@ runPipeline combined =
 -- GLOBALLY and the session decls as the root module's LOCALS; the returned
 -- frame is local ∪ imports ∪ globals — the same by-name surface evalProgram
 -- exposed (so the `__repl__` lookup + `:browse`/`:env` are unchanged).
-
-elaborateSession : List Decl ->
-  List Decl ->
-  List Decl ->
-  (List Decl, List (String, List Decl))
-elaborateSession runtimeDecls preludeDecls combined =
-  match elaborateModules runtimeDecls preludeDecls [("__repl__", combined)]
-    (c, ms, _, _, _, _) => mangleCtorCollisionsPair (c, ms)
 
 combinedDecls : List Decl -> List Decl
 combinedDecls newDecls = !accumulatedRef ++ newDecls
@@ -474,7 +463,7 @@ stringSplitOn sep s start cur len
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "resolveProgram" false) (mem "ppResError" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "ppScheme" false) (mem "Scheme" true))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiags" false) (mem "checkOneScheme" false) (mem "elaborateModules" false) (mem "tcMsg" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneScheme" false) (mem "elaborateModulesWithSchemes" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalOneRootEnvWith" false) (mem "testCapableExterns" false) (mem "funNamesOf" false) (mem "dropShadowedExp" false) (mem "ppValue" false) (mem "lookupBinding" false) (mem "force" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "startsWith" false) (mem "stringTrim" false))))
@@ -558,9 +547,7 @@ stringSplitOn sep s start cur len
 (DFunDef false "lookupScheme" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupScheme" ((PVar "name") (PCons (PTuple (PVar "n") (PVar "s")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "name") (EVar "n")) (EApp (EVar "Some") (EVar "s")) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupScheme") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "runPipeline" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyRow ("IO") None))))))))
-(DFunDef false "runPipeline" ((PVar "combined")) (EBlock (DoLet false false (PVar "runtimeDecls") (EUnOp "!" (EVar "runtimeDeclsRef"))) (DoLet false false (PVar "preludeDecls") (EUnOp "!" (EVar "preludeDeclsRef"))) (DoLet false false (PVar "resErrs") (EApp (EApp (EApp (EVar "resolveProgram") (EVar "runtimeDecls")) (EVar "preludeDecls")) (EVar "combined"))) (DoExpr (EMatch (EVar "resErrs") (arm (PCons (PVar "e") PWild) () (ETuple (EApp (EApp (EVar "map") (EVar "ppResError")) (EVar "resErrs")) (EListLit) (EListLit))) (arm (PList) () (EBlock (DoLet false false (PTuple (PVar "tcErrs") PWild) (EApp (EApp (EApp (EVar "checkOneDiags") (EVar "runtimeDecls")) (EVar "preludeDecls")) (ETuple (ELit (LString "__user__")) (EVar "combined")))) (DoExpr (EMatch (EVar "tcErrs") (arm (PCons (PVar "e") PWild) () (ETuple (EApp (EApp (EVar "map") (EVar "tcMsg")) (EVar "tcErrs")) (EListLit) (EListLit))) (arm (PList) () (EBlock (DoLet false false (PVar "allSchemes") (EApp (EApp (EApp (EVar "checkOneScheme") (EVar "runtimeDecls")) (EVar "preludeDecls")) (ETuple (ELit (LString "__user__")) (EVar "combined")))) (DoLet false false (PTuple (PVar "coreE") (PVar "modulesE")) (EApp (EApp (EApp (EVar "elaborateSession") (EVar "runtimeDecls")) (EApp (EApp (EVar "dropShadowedExp") (EApp (EVar "funNamesOf") (EVar "combined"))) (EVar "preludeDecls"))) (EVar "combined"))) (DoLet false false (PVar "bindings") (EApp (EApp (EApp (EVar "evalOneRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreE")) (ETuple (ELit (LString "__repl__")) (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modulesE"))))) (DoExpr (ETuple (EListLit) (EVar "allSchemes") (EVar "bindings")))))))))))))
-(DTypeSig false "elaborateSession" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
-(DFunDef false "elaborateSession" ((PVar "runtimeDecls") (PVar "preludeDecls") (PVar "combined")) (EMatch (EApp (EApp (EApp (EVar "elaborateModules") (EVar "runtimeDecls")) (EVar "preludeDecls")) (EListLit (ETuple (ELit (LString "__repl__")) (EVar "combined")))) (arm (PTuple (PVar "c") (PVar "ms") PWild PWild PWild PWild) () (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "c") (EVar "ms"))))))
+(DFunDef false "runPipeline" ((PVar "combined")) (EBlock (DoLet false false (PVar "runtimeDecls") (EUnOp "!" (EVar "runtimeDeclsRef"))) (DoLet false false (PVar "preludeDecls") (EUnOp "!" (EVar "preludeDeclsRef"))) (DoLet false false (PVar "resErrs") (EApp (EApp (EApp (EVar "resolveProgram") (EVar "runtimeDecls")) (EVar "preludeDecls")) (EVar "combined"))) (DoExpr (EMatch (EVar "resErrs") (arm (PCons (PVar "e") PWild) () (ETuple (EApp (EApp (EVar "map") (EVar "ppResError")) (EVar "resErrs")) (EListLit) (EListLit))) (arm (PList) () (EBlock (DoLet false false (PTuple (PTuple (PVar "coreE") (PVar "modulesE") (PVar "diagsE") PWild PWild PWild) PWild (PVar "allSchemes")) (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithSchemes") (EVar "False")) (EVar "runtimeDecls")) (EApp (EApp (EVar "dropShadowedExp") (EApp (EVar "funNamesOf") (EVar "combined"))) (EVar "preludeDecls"))) (EListLit (ETuple (ELit (LString "__repl__")) (EVar "combined"))))) (DoLet false false (PVar "tcErrs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EApp (EVar "fst") (EApp (EVar "snd") (EVar "d"))))) (EVar "diagsE"))) (DoExpr (EMatch (EVar "tcErrs") (arm (PCons (PVar "e") PWild) () (ETuple (EApp (EApp (EVar "map") (EVar "tcMsg")) (EVar "tcErrs")) (EListLit) (EListLit))) (arm (PList) () (EBlock (DoLet false false (PTuple (PVar "coreM") (PVar "modulesM")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE")))) (DoLet false false (PVar "bindings") (EApp (EApp (EApp (EVar "evalOneRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (ETuple (ELit (LString "__repl__")) (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modulesM"))))) (DoExpr (ETuple (EListLit) (EVar "allSchemes") (EVar "bindings")))))))))))))
 (DTypeSig false "combinedDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "combinedDecls" ((PVar "newDecls")) (EBinOp "++" (EUnOp "!" (EVar "accumulatedRef")) (EVar "newDecls")))
 (DTypeSig false "printErr" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -617,7 +604,7 @@ stringSplitOn sep s start cur len
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "resolveProgram" false) (mem "ppResError" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "ppScheme" false) (mem "Scheme" true))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiags" false) (mem "checkOneScheme" false) (mem "elaborateModules" false) (mem "tcMsg" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneScheme" false) (mem "elaborateModulesWithSchemes" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalOneRootEnvWith" false) (mem "testCapableExterns" false) (mem "funNamesOf" false) (mem "dropShadowedExp" false) (mem "ppValue" false) (mem "lookupBinding" false) (mem "force" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "startsWith" false) (mem "stringTrim" false))))
@@ -701,9 +688,7 @@ stringSplitOn sep s start cur len
 (DFunDef false "lookupScheme" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupScheme" ((PVar "name") (PCons (PTuple (PVar "n") (PVar "s")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "name") (EVar "n")) (EApp (EVar "Some") (EVar "s")) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupScheme") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "runPipeline" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyRow ("IO") None))))))))
-(DFunDef false "runPipeline" ((PVar "combined")) (EBlock (DoLet false false (PVar "runtimeDecls") (EUnOp "!" (EVar "runtimeDeclsRef"))) (DoLet false false (PVar "preludeDecls") (EUnOp "!" (EVar "preludeDeclsRef"))) (DoLet false false (PVar "resErrs") (EApp (EApp (EApp (EVar "resolveProgram") (EVar "runtimeDecls")) (EVar "preludeDecls")) (EVar "combined"))) (DoExpr (EMatch (EVar "resErrs") (arm (PCons (PVar "e") PWild) () (ETuple (EApp (EApp (EMethodRef "map") (EVar "ppResError")) (EVar "resErrs")) (EListLit) (EListLit))) (arm (PList) () (EBlock (DoLet false false (PTuple (PVar "tcErrs") PWild) (EApp (EApp (EApp (EVar "checkOneDiags") (EVar "runtimeDecls")) (EVar "preludeDecls")) (ETuple (ELit (LString "__user__")) (EVar "combined")))) (DoExpr (EMatch (EVar "tcErrs") (arm (PCons (PVar "e") PWild) () (ETuple (EApp (EApp (EMethodRef "map") (EVar "tcMsg")) (EVar "tcErrs")) (EListLit) (EListLit))) (arm (PList) () (EBlock (DoLet false false (PVar "allSchemes") (EApp (EApp (EApp (EVar "checkOneScheme") (EVar "runtimeDecls")) (EVar "preludeDecls")) (ETuple (ELit (LString "__user__")) (EVar "combined")))) (DoLet false false (PTuple (PVar "coreE") (PVar "modulesE")) (EApp (EApp (EApp (EVar "elaborateSession") (EVar "runtimeDecls")) (EApp (EApp (EVar "dropShadowedExp") (EApp (EVar "funNamesOf") (EVar "combined"))) (EVar "preludeDecls"))) (EVar "combined"))) (DoLet false false (PVar "bindings") (EApp (EApp (EApp (EVar "evalOneRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreE")) (ETuple (ELit (LString "__repl__")) (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modulesE"))))) (DoExpr (ETuple (EListLit) (EVar "allSchemes") (EVar "bindings")))))))))))))
-(DTypeSig false "elaborateSession" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))
-(DFunDef false "elaborateSession" ((PVar "runtimeDecls") (PVar "preludeDecls") (PVar "combined")) (EMatch (EApp (EApp (EApp (EVar "elaborateModules") (EVar "runtimeDecls")) (EVar "preludeDecls")) (EListLit (ETuple (ELit (LString "__repl__")) (EVar "combined")))) (arm (PTuple (PVar "c") (PVar "ms") PWild PWild PWild PWild) () (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "c") (EVar "ms"))))))
+(DFunDef false "runPipeline" ((PVar "combined")) (EBlock (DoLet false false (PVar "runtimeDecls") (EUnOp "!" (EVar "runtimeDeclsRef"))) (DoLet false false (PVar "preludeDecls") (EUnOp "!" (EVar "preludeDeclsRef"))) (DoLet false false (PVar "resErrs") (EApp (EApp (EApp (EVar "resolveProgram") (EVar "runtimeDecls")) (EVar "preludeDecls")) (EVar "combined"))) (DoExpr (EMatch (EVar "resErrs") (arm (PCons (PVar "e") PWild) () (ETuple (EApp (EApp (EMethodRef "map") (EVar "ppResError")) (EVar "resErrs")) (EListLit) (EListLit))) (arm (PList) () (EBlock (DoLet false false (PTuple (PTuple (PVar "coreE") (PVar "modulesE") (PVar "diagsE") PWild PWild PWild) PWild (PVar "allSchemes")) (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithSchemes") (EVar "False")) (EVar "runtimeDecls")) (EApp (EApp (EVar "dropShadowedExp") (EApp (EVar "funNamesOf") (EVar "combined"))) (EVar "preludeDecls"))) (EListLit (ETuple (ELit (LString "__repl__")) (EVar "combined"))))) (DoLet false false (PVar "tcErrs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EApp (EVar "fst") (EApp (EVar "snd") (EVar "d"))))) (EVar "diagsE"))) (DoExpr (EMatch (EVar "tcErrs") (arm (PCons (PVar "e") PWild) () (ETuple (EApp (EApp (EMethodRef "map") (EVar "tcMsg")) (EVar "tcErrs")) (EListLit) (EListLit))) (arm (PList) () (EBlock (DoLet false false (PTuple (PVar "coreM") (PVar "modulesM")) (EApp (EVar "mangleCtorCollisionsPair") (ETuple (EVar "coreE") (EVar "modulesE")))) (DoLet false false (PVar "bindings") (EApp (EApp (EApp (EVar "evalOneRootEnvWith") (EApp (EVar "testCapableExterns") (ELit LUnit))) (EVar "coreM")) (ETuple (ELit (LString "__repl__")) (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modulesM"))))) (DoExpr (ETuple (EListLit) (EVar "allSchemes") (EVar "bindings")))))))))))))
 (DTypeSig false "combinedDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "combinedDecls" ((PVar "newDecls")) (EBinOp "++" (EUnOp "!" (EVar "accumulatedRef")) (EVar "newDecls")))
 (DTypeSig false "printErr" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))

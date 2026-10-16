@@ -1,0 +1,3 @@
+export
+three : Int
+three = 3

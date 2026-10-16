@@ -1,0 +1,6 @@
+-- A value `main` under a signature is printed at the type it declares: the
+-- auto-print poses `Display (Option Int)`, not the `Display (Option ?a)` of the
+-- bare body (compare `reject_value_main_none.mdk`).  Hand-derived: ACCEPT on all
+-- three verbs, printing `None`.
+main : Option Int
+main = None
