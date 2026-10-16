@@ -59,10 +59,6 @@ takeEvalPropBootstrap stdout = match splitNl stdout
 sentinelBase : String
 sentinelBase = "@@__mdk_eval_props__@@"
 
-export
-sentinelPrefix : String -> String
-sentinelPrefix nonce = noncedPrefix sentinelBase nonce
-
 rowTag : Int -> String
 rowTag i = "row-\{intToString i}"
 
@@ -73,13 +69,13 @@ export
 emitEvalPropRows : String -> List PropResult -> <IO> Unit
 emitEvalPropRows nonce rows = do
   let _ = emitRows nonce 0 rows
-  let _ = putStrLn (sentinelLine (sentinelPrefix nonce) endTag)
+  let _ = putStrLn (sentinelLine (noncedPrefix sentinelBase nonce) endTag)
   flushStdout ()
 
 emitRows : String -> Int -> List PropResult -> <IO> Unit
 emitRows _ _ [] = ()
 emitRows nonce i (row :: rest) = do
-  let _ = putStrLn (sentinelLine (sentinelPrefix nonce) (rowTag i))
+  let _ = putStrLn (sentinelLine (noncedPrefix sentinelBase nonce) (rowTag i))
   let _ = putStrLn (stringify (propResultJson row))
   let _ = flushStdout ()
   emitRows nonce (i + 1) rest
@@ -126,7 +122,7 @@ decodeEvalPropRows : String ->
   String ->
   Result String (List PropResult)
 decodeEvalPropRows nonce requests stdout =
-  let chunks = chunksOf (sentinelPrefix nonce) (splitNl stdout)
+  let chunks = chunksOf (noncedPrefix sentinelBase nonce) (splitNl stdout)
   if exactTags (expectedTags 0 requests) chunks then
     decodeRows requests chunks 0
   else

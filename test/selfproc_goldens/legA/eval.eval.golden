@@ -156,7 +156,6 @@ externDeclNamesOfDecls : List Decl -> List String
 fallthroughToNone : Value a -> Option (Value a)
 ffiExternNamesRef : Ref (List String)
 fieldListEq : List (String, Value a) -> List (String, Value a) -> Bool
-fieldName : Field -> String
 fieldOr : List (String, Value a) -> String -> Value a
 fileBounds : Ref (List (Bool, List String))
 filterByTag : List (Value a) -> Value a -> List (Value a)
@@ -196,13 +195,11 @@ headTyconHead : List Ty -> Option String
 i64Value : (Int, Int) -> Value a
 ifaceDispatchEntries : Decl -> List ((String, String, String), List Int)
 ifaceMethodEntry : String -> String -> List String -> IfaceMethod -> ((String, String, String), List Int)
-ifaceMethodName : IfaceMethod -> String
 ifaceMethodNmE : IfaceMethod -> String
 ifaceRivalSeen : (String, String) -> List (String, String) -> Bool
 implDeclNames : Decl -> List String
 implDictRoutes : Option Int -> List Route -> List Route -> List Route
 implMethodEntry : EvalEnv (Value a) -> List ((String, String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> (String, (Int, Value a))
-implMethodName : ImplMethod -> String
 implMethodNames : List Decl -> List String
 implMethodReqCountEntry : String -> ImplMethod -> ((String, String), Int)
 implMethodReqCounts : Option DispositionTable -> Decl -> List ((String, String), Int)
@@ -565,6 +562,5 @@ valueEq : Value a -> Value a -> Bool
 valueListEq : List (Value a) -> List (Value a) -> Bool
 valueTag : Value a -> Int
 variantFieldOrder : Variant -> List (String, List String)
-variantName : Variant -> String
 withCallFile : EvalEnv (Value a) -> (Unit -> <a> Value a) -> <a> Value a
 zipFieldOrder : List String -> List (Value a) -> List (String, Value a)

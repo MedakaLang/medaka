@@ -1042,7 +1042,6 @@ envVarType : TcEnv -> String -> Option Mono
 eqCompareOp : Mono -> Mono -> Mono
 eqInt : Int -> Int -> Bool
 eqIntList : List Int -> List Int -> Bool
-eqStr : String -> String -> Bool
 erredDuring : (Unit -> a) -> (Bool, a)
 evCell : EvDest -> Ref Route
 evEntriesOf : List Obligation -> List EvEntry
@@ -1578,7 +1577,6 @@ implMatchesU : ImplUniverse -> IfaceRef -> List Mono -> Bool
 implMatchesWithReqsU : ImplUniverse -> IfaceRef -> List Mono -> Bool
 implMethodDictArity : IfaceRef -> String -> Int
 implMethodEVars : ImplMethod -> List String
-implMethodName : ImplMethod -> String
 implMethodNameTc : ImplMethod -> String
 implReqDictVarOf : Option PredicateRequest -> Mono -> ScopeId -> Option AssumAnswer
 implRequiresRoot : String -> Int -> List (String, Mono) -> List Require -> Bool
@@ -1917,8 +1915,6 @@ legacyReturnReqRoutesForRow : String -> ScopeId -> Mono -> ImplRow -> List Route
 letBindDictSites : LetBind -> List (List Route)
 letBindEVars : LetBind -> List String
 letBindGeneralizes : TcEnv -> (LetBind, (String, BindingSummary)) -> (Bool, Mono)
-letBindName : LetBind -> String
-letBindNameTc : LetBind -> String
 letBindSites : LetBind -> List (Ref Route)
 letGroupComponents : List LetBind -> List (List LetBind)
 letGroupDefs : List LetBind -> List (String, (List Pat, Expr))
@@ -2525,7 +2521,6 @@ processTopGroups : TcEnv -> List (String, Ty) -> List (String, (List Pat, Expr))
 producedSlotCovariants : Mono -> List Bool
 productAxesProblems : List (String, Param) -> Param -> List String
 projectedGivenOf : EvidenceBinderId -> List Int -> Option GivenEntry
-propParamName : PropParam -> String
 propParamNamesTc : List PropParam -> List String
 propagatePoison : Ref Tyvar -> Mono -> Unit
 pubTopFnNames : List Decl -> List String
@@ -2540,7 +2535,6 @@ publishMethodPredGivens : List String -> Ty -> MethodBodyInstance -> ScopeId -> 
 publishMethodReturnTrace : List EvEntry -> MethodReturnTraceEntry -> MethodReturnTraceEntry
 publishProducedResults : BindingSummary -> List (Option Loc, Mono) -> Unit
 publishedPolarity : Polarity -> Polarity
-pureRow : EffRow
 pushAdmittedOccObl : String -> Mono -> Unit
 pushAmbiguityAt : Bool -> Option Loc -> String -> Unit
 pushAmbiguousImports : String -> Loc -> List (String, List String) -> Unit
@@ -3001,7 +2995,6 @@ selectReturnRow : ImplEnv -> String -> List Mono -> Option ImplRow
 selectedCallSupers : String -> Option ImplRow -> String -> ScopeId -> List Mono -> List Route
 selectedRequireGoals : Map String Unit -> Map String Unit -> (UObligation, ReqWalk) -> List (UObligation, ReqWalk)
 selectedRowReqMatch : List Mono -> ImplRow -> Option (List (String, Mono), List Require)
-selfBinding : String -> (String, String)
 selfDeclArities : String -> List Decl -> List ((String, String), a) -> List (String, a) -> List (String, a)
 selfNameRows : List Decl -> List (String, a) -> List (String, a)
 selfQualEntries : String -> Map String Unit -> List ((String, String), a) -> List (String, a)
@@ -3345,7 +3338,6 @@ varHeadHere : String -> Ty -> List Ty -> List (List Ty)
 varNameForId : List (String, Ty, List (String, Mono)) -> String -> Int -> String
 varianceOf : Polarity -> Variance
 variantIdentRow : String -> TyConOrigin -> Variant -> List (String, String, Ident)
-variantName : Variant -> String
 variantNamed : String -> List Variant -> Bool
 variantPayload : Variant -> ConPayload
 vecOblKey : VecObl -> String

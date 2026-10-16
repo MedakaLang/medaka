@@ -1,5 +1,5 @@
 # META
-source_lines=437
+source_lines=442
 stages=DESUGAR,MARK
 # SOURCE
 -- Effect atoms and rows. An atom is a resolved label refined by an authority
@@ -202,6 +202,11 @@ findAtom k (y :: ys) = if k == atomKey y then Some y else findAtom k ys
 -- ── rows ──────────────────────────────────────────────────────────────────
 
 public export data EffRow = EffRow (List Atom) (Option (Ref Effvar))
+
+-- the empty closed row — a pure arrow
+export
+pureRow : EffRow
+pureRow = EffRow [] None
 
 public export data Effvar =
   | EUnbound Int Int
@@ -524,6 +529,8 @@ dedupCellsGo (cell :: cells) seen acc =
 (DFunDef false "findAtom" (PWild (PList)) (EVar "None"))
 (DFunDef false "findAtom" ((PVar "k") (PCons (PVar "y") (PVar "ys"))) (EIf (EBinOp "==" (EVar "k") (EApp (EVar "atomKey") (EVar "y"))) (EApp (EVar "Some") (EVar "y")) (EApp (EApp (EVar "findAtom") (EVar "k")) (EVar "ys"))))
 (DData Public "EffRow" () ((variant "EffRow" (ConPos (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyCon "Effvar")))))) ())
+(DTypeSig true "pureRow" (TyCon "EffRow"))
+(DFunDef false "pureRow" () (EApp (EApp (EVar "EffRow") (EListLit)) (EVar "None")))
 (DData Public "Effvar" () ((variant "EUnbound" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "ELink" (ConPos (TyCon "Int") (TyCon "EffRow"))) (variant "EJoin" (ConPos (TyCon "Int") (TyCon "Int") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))))) (variant "ESummary" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
 (DTypeSig true "effrowNorm" (TyFun (TyCon "EffRow") (TyCon "EffRow")))
 (DFunDef false "effrowNorm" ((PAs "row" (PCon "EffRow" PWild (PCon "None")))) (EVar "row"))
@@ -681,6 +688,8 @@ dedupCellsGo (cell :: cells) seen acc =
 (DFunDef false "findAtom" (PWild (PList)) (EVar "None"))
 (DFunDef false "findAtom" ((PVar "k") (PCons (PVar "y") (PVar "ys"))) (EIf (EBinOp "==" (EVar "k") (EApp (EVar "atomKey") (EVar "y"))) (EApp (EVar "Some") (EVar "y")) (EApp (EApp (EVar "findAtom") (EVar "k")) (EVar "ys"))))
 (DData Public "EffRow" () ((variant "EffRow" (ConPos (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyCon "Effvar")))))) ())
+(DTypeSig true "pureRow" (TyCon "EffRow"))
+(DFunDef false "pureRow" () (EApp (EApp (EVar "EffRow") (EListLit)) (EVar "None")))
 (DData Public "Effvar" () ((variant "EUnbound" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "ELink" (ConPos (TyCon "Int") (TyCon "EffRow"))) (variant "EJoin" (ConPos (TyCon "Int") (TyCon "Int") (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))))) (variant "ESummary" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
 (DTypeSig true "effrowNorm" (TyFun (TyCon "EffRow") (TyCon "EffRow")))
 (DFunDef false "effrowNorm" ((PAs "row" (PCon "EffRow" PWild (PCon "None")))) (EVar "row"))

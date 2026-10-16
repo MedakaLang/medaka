@@ -186,10 +186,12 @@ crossFileJsonFindings disableNames onlyNames denyNames quads =
   let suppressed = applySuppressionsMulti (map quadToSrc quads) raw
   applyFindingDeny denyNames suppressed
 
+export
 quadToParseTriple : (String, String, List Diag, Positions, List Decl) ->
   (String, Positions, List Decl)
 quadToParseTriple (path, _, _, pos, decls) = (path, pos, decls)
 
+export
 quadToSrc : (String, String, List Diag, Positions, List Decl) ->
   (String, String)
 quadToSrc (path, src, _, _, _) = (path, src)

@@ -241,9 +241,7 @@ isAmbiguous : Env -> String -> Bool
 isCtorAmbiguous : Env -> String -> Bool
 isCtorOwnerKey : String -> Bool
 isEffectKey : String -> Bool
-isEmptyL : List a -> Bool
 isHaskellAliasPair : String -> String -> Bool
-isHint : String -> Bool
 isIfaceAmbiguous : Env -> String -> Bool
 isImportedModuleName : Env -> String -> Bool
 isModId : String -> (String, List String) -> Bool
@@ -259,7 +257,6 @@ keepBoundMethods : Env -> List String -> List String
 keepTypeOrigins : List (String, String) -> List (String, String) -> List (String, String)
 lastOf : List String -> String
 letBindDupErrors : Option Loc -> String -> List FunClause -> List ResError
-letBindName : LetBind -> String
 locKey : Option Loc -> String
 localBinding : Env -> Scope -> String -> Bool
 localOfExpanded : (String, String, Loc) -> String
@@ -321,7 +318,6 @@ ownersForTypes : Map String Unit -> List (String, String) -> List (String, Strin
 ownersOf : String -> Map String (List String) -> List String
 ownsAnyField : String -> List (String, String) -> Bool
 padBinders : List Variant -> List (List (String, KindAnn)) -> List (List (String, KindAnn))
-patBindings : Pat -> List String
 patGroupDupErrors : Option Loc -> String -> List Pat -> List ResError
 patsBindings : List Pat -> List String
 ppResError : ResError -> String
@@ -333,7 +329,6 @@ preludeValueNames : List Decl -> List String
 primitiveConstructors : List String
 primitiveTypes : List String
 programIsCore : List Decl -> Bool
-propParamName : PropParam -> String
 provMidsOf : String -> Map String (List String) -> List String
 provToPairs : Map String (List String) -> List (String, List String)
 pubErr : ModuleExports -> String -> List ResError
@@ -345,7 +340,6 @@ publicIfaceMethodVals : List Decl -> Env -> List String
 realImport : ModuleExports -> UsePath -> Loc -> ImportAdds
 recCreateField : Option Loc -> Env -> String -> FieldAssign -> List ResError
 recCreateHead : Option Loc -> Env -> String -> List FieldAssign -> List ResError
-recFieldBindings : RecPatField -> List String
 recFieldSub : Option Loc -> Env -> Option Pat -> List ResError
 recPatHead : Option Loc -> Env -> String -> List ResError
 recUpdateField : Option Loc -> Env -> Scope -> FieldAssign -> List ResError
@@ -380,7 +374,6 @@ scopeExtend : List String -> Scope -> Scope
 scopeMem : String -> Scope -> Bool
 scopeNames : Scope -> List String
 scoreCand : SugQuery -> String -> Option (String, Int) -> Option (String, Int)
-selfBinding : String -> (String, String)
 setOriginTrace : Bool -> Unit
 sigEntryOf : Decl -> List (String, Option Loc)
 singleFileImportErrors : List Decl -> List ResError
@@ -420,7 +413,6 @@ stampTopScope : List Decl -> (Map String Int, List (String, Int))
 stampTyHead : List String -> Map String TyConOrigin -> Ty -> (Ty, Bool)
 stampTyOrigins : Map String TyConOrigin -> List Decl -> List Decl
 startsUpper : String -> Bool
-startsWithAt : Array Char -> Bool
 stmtLoc : DoStmt -> Option Loc
 storeSugPool : Ref (Option (List SugCand)) -> List SugCand -> List SugCand
 strippedCtorAmbiguity : List String -> Map String ModuleExports -> List UsePath -> List (String, List String)
@@ -498,7 +490,6 @@ valueDeclsOf : ModuleExports -> Map String (String, String)
 valueProvenance : Map String ModuleExports -> List UsePath -> Map String (List String)
 variantFieldOwners : Variant -> List (String, String)
 variantFieldTys : Variant -> List Ty
-variantName : Variant -> String
 whenL : Bool -> List a -> List a
 withResErrorLoc : Loc -> ResError -> ResError
 withStdlibExports : List (String, List String) -> List ResError -> List ResError

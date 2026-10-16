@@ -1,5 +1,5 @@
 # META
-source_lines=7079
+source_lines=7042
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -18,6 +18,12 @@ stages=DESUGAR,MARK
 
 import support.stage_count.{stageBump}
 import frontend.ast.{
+  patBindings,
+  recFieldBindings,
+  isHint,
+  letBindName,
+  propParamName,
+  variantName,
   Loc(..),
   declNameLoc,
   orElseLoc,
@@ -99,6 +105,8 @@ import support.util.{
   splitOnChar,
   startsWith,
   sortUniqS,
+  isEmptyL,
+  selfBinding,
 }
 import test.{expectTrue}
 
@@ -453,27 +461,6 @@ ownersOf field idx =
     None => []
 
 -- ── pat_bindings ──────────────────────────────────────────────────────────
-patBindings : Pat -> List String
--- Intentional cross-file duplicate of annotate.mdk's copy. This one is on
--- resolve's own hot path and annotate.mdk imports nothing from the frontend
--- beyond the AST, deliberately: annotate runs after resolve and sharing this
--- would make the post-resolve pass depend on the pass that precedes it.
--- lint-disable-next-line rule-duplicate-body
-patBindings (PVar x _ _) = [x]
-patBindings PWild = []
-patBindings (PLit _) = []
-patBindings (PCon _ ps) = flatMap patBindings ps
-patBindings (PCons a b) = patBindings a ++ patBindings b
-patBindings (PTuple ps) = flatMap patBindings ps
-patBindings (PList ps) = flatMap patBindings ps
-patBindings (PAs x _ _ p) = x :: patBindings p
-patBindings (PRng _ _ _) = []
-patBindings (PRec _ fields _) = flatMap recFieldBindings fields
-
-recFieldBindings : RecPatField -> List String
-recFieldBindings (RecPatField fname _ _ None) = [fname]
-recFieldBindings (RecPatField _ _ _ (Some p)) = patBindings p
-
 patsBindings : List Pat -> List String
 patsBindings ps = flatMap patBindings ps
 
@@ -1194,14 +1181,6 @@ ifaceAmbigMods env n = match lookupAssoc n env.ifaceAmbiguous
   Some mods => mods
   None => []
 
-isHint : String -> Bool
-isHint n = startsWithAt (stringToChars n)
-
-startsWithAt : Array Char -> Bool
--- Intentional cross-file duplicate of the same helper in annotate.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
-startsWithAt cs = arrayLength cs > 0 && arrayGetUnsafe 0 cs == '@'
-
 lookupValue : Env -> Scope -> String -> Bool
 lookupValue env scope n =
   scopeMem n scope
@@ -1660,9 +1639,6 @@ checkLetGroup cur env scope binds body =
   let scope2 = scopeExtend (map letBindName binds) scope
   flatMap (checkLetBind cur env scope2) binds ++ checkExpr cur env scope2 body
 
-letBindName : LetBind -> String
-letBindName (LetBind n _ _ _) = n
-
 checkLetBind : Option Loc -> Env -> Scope -> LetBind -> List ResError
 checkLetBind cur env scope (LetBind n clauses _ _) =
   letBindDupErrors cur n clauses
@@ -1928,9 +1904,6 @@ checkProp env params body =
 checkPropParamTy : Env -> PropParam -> List ResError
 checkPropParamTy env (PropParam _ _ t) = checkType None env t
 
-propParamName : PropParam -> String
-propParamName (PropParam x _ _) = x
-
 checkInterfaceDecl : Env -> List Super -> List IfaceMethod -> List ResError
 checkInterfaceDecl env supers methods =
   flatMap (checkSuper env) supers ++ flatMap (checkIfaceMethod env) methods
@@ -2072,9 +2045,6 @@ ctorNames ((DData { dataCtors = vs }) :: rest) =
 ctorNames ((DNewtype { newtypeCtor = con }) :: rest) = con :: ctorNames rest
 ctorNames ((DAttrib _ d) :: rest) = ctorNames (d :: rest)
 ctorNames (_ :: rest) = ctorNames rest
-
-variantName : Variant -> String
-variantName (Variant n _) = n
 
 ifaceMethodNm : IfaceMethod -> String
 ifaceMethodNm (IfaceMethod n _ _ _) = n
@@ -2456,10 +2426,6 @@ dupValClause (DAttrib _ d) = dupValClause d
 dupValClause (DFunDef _ n ps body _ _) =
   Some (n, isEmptyL ps, firstExprLoc body)
 dupValClause _ = None
-
-isEmptyL : List a -> Bool
-isEmptyL [] = True
-isEmptyL _ = False
 
 -- Phase 148: the clauses of a top-level value binding must be contiguous.  Two
 -- same-named DFunDef/DLetGroup clause-runs separated by an intervening clause-body
@@ -4975,9 +4941,6 @@ reexportBindings (UseAlias _ _) _ = []
 dropLocOfExpanded : (String, String, Loc) -> (String, String)
 dropLocOfExpanded (origin, local, _) = (origin, local)
 
-selfBinding : String -> (String, String)
-selfBinding n = (n, n)
-
 -- the LOCAL names whose ORIGIN is one of `origins` (the source module's export list of
 -- the relevant kind).  This is the aliased form of `filterInSet`.
 localsExportedFrom : List String -> List (String, String) -> List String
@@ -7083,10 +7046,10 @@ addOriginsProvenance acc n base (m :: rest) =
     rest
 # DESUGAR
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "declNameLoc" false) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "authTermNames" false) (mem "effParamNames" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "patBindings" false) (mem "recFieldBindings" false) (mem "isHint" false) (mem "letBindName" false) (mem "propParamName" false) (mem "variantName" false) (mem "Loc" true) (mem "declNameLoc" false) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "authTermNames" false) (mem "effParamNames" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "editDistance" false) (mem "minI" false) (mem "maxI" false) (mem "listLen" false) (mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "initList" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "sortUniqS" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "editDistance" false) (mem "minI" false) (mem "maxI" false) (mem "listLen" false) (mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "initList" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "sortUniqS" false) (mem "isEmptyL" false) (mem "selfBinding" false))))
 (DUse false (UseGroup ("test") ((mem "expectTrue" false))))
 (DData Public "ResError" () ((variant "UnboundVariable" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "UnboundVariableExported" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnboundVariableIsModule" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnboundQualifiedElsewhere" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownConstructor" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "UnknownType" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "UnknownEffect" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownField" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "FieldNotInRecord" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateDefinition" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownInterface" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "MethodNotInInterface" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "ExternWithBody" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "PrivateNameAccess" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "NoExportedConstructors" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "NewtypeCtorNotExported" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "BareCtorImport" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AbstractCtorImport" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "EffectLabelNoMembers" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AbstractFieldAccess" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownModule" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "NonRecursiveValueLet" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateBinding" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateValueBinding" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateSignature" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "OrphanSignature" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "DuplicateBinder" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AsPatternMisplaced" (ConPos (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousOccurrence" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousConstructor" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousAliasCtor" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousType" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousInterface" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousEffect" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnboundAuthority" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "MisplacedAuthorityBinder" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "InternalExternAccess" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "ReassignImmutable" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateInterfaceMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "resErrorDidYouMean" (TyFun (TyCon "ResError") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))
@@ -7152,20 +7115,6 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "indexOwners" ((PCons (PTuple (PVar "f") (PVar "owner")) (PVar "rest")) (PVar "m")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "f")) (EVar "m")) (arm (PCon "Some" (PVar "os")) () (EApp (EApp (EVar "indexOwners") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "f")) (EBinOp "::" (EVar "owner") (EVar "os"))) (EVar "m")))) (arm (PCon "None") () (EApp (EApp (EVar "indexOwners") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "f")) (EListLit (EVar "owner"))) (EVar "m"))))))
 (DTypeSig false "ownersOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ownersOf" ((PVar "field") (PVar "idx")) (EBlock (DoLet false false PWild (EApp (EVar "opBump") (ELit LUnit))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "field")) (EVar "idx")) (arm (PCon "Some" (PVar "owners")) () (EVar "owners")) (arm (PCon "None") () (EListLit))))))
-(DTypeSig false "patBindings" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patBindings" ((PCon "PVar" (PVar "x") PWild PWild)) (EListLit (EVar "x")))
-(DFunDef false "patBindings" ((PCon "PWild")) (EListLit))
-(DFunDef false "patBindings" ((PCon "PLit" PWild)) (EListLit))
-(DFunDef false "patBindings" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patBindings") (EVar "a")) (EApp (EVar "patBindings") (EVar "b"))))
-(DFunDef false "patBindings" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBindings") (EVar "p"))))
-(DFunDef false "patBindings" ((PCon "PRng" PWild PWild PWild)) (EListLit))
-(DFunDef false "patBindings" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recFieldBindings")) (EVar "fields")))
-(DTypeSig false "recFieldBindings" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "recFieldBindings" ((PCon "RecPatField" (PVar "fname") PWild PWild (PCon "None"))) (EListLit (EVar "fname")))
-(DFunDef false "recFieldBindings" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBindings") (EVar "p")))
 (DTypeSig false "patsBindings" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "patsBindings" ((PVar "ps")) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
 (DTypeSig false "patGroupDupErrors" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "ResError"))))))
@@ -7350,10 +7299,6 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "isIfaceAmbiguous" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ifaceAmbiguous")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "ifaceAmbigMods" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ifaceAmbigMods" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ifaceAmbiguous")) (arm (PCon "Some" (PVar "mods")) () (EVar "mods")) (arm (PCon "None") () (EListLit))))
-(DTypeSig false "isHint" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isHint" ((PVar "n")) (EApp (EVar "startsWithAt") (EApp (EVar "stringToChars") (EVar "n"))))
-(DTypeSig false "startsWithAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "Bool")))
-(DFunDef false "startsWithAt" ((PVar "cs")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "arrayLength") (EVar "cs")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")) (ELit (LChar "@")))))
 (DTypeSig false "lookupValue" (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "lookupValue" ((PVar "env") (PVar "scope") (PVar "n")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "scopeMem") (EVar "n")) (EVar "scope")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "values"))) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "ctors"))) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "imported"))))
 (DTypeSig false "localBinding" (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "String") (TyCon "Bool")))))
@@ -7440,8 +7385,6 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "rewriteNonRec" (PWild (PVar "e")) (EVar "e"))
 (DTypeSig false "checkLetGroup" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "ResError"))))))))
 (DFunDef false "checkLetGroup" ((PVar "cur") (PVar "env") (PVar "scope") (PVar "binds") (PVar "body")) (EBlock (DoLet false false (PVar "scope2") (EApp (EApp (EVar "scopeExtend") (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds"))) (EVar "scope"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "checkLetBind") (EVar "cur")) (EVar "env")) (EVar "scope2"))) (EVar "binds")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope2")) (EVar "body"))))))
-(DTypeSig false "letBindName" (TyFun (TyCon "LetBind") (TyCon "String")))
-(DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "checkLetBind" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "ResError")))))))
 (DFunDef false "checkLetBind" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "LetBind" (PVar "n") (PVar "clauses") PWild PWild)) (EBinOp "++" (EApp (EApp (EApp (EVar "letBindDupErrors") (EVar "cur")) (EVar "n")) (EVar "clauses")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "checkFunClause") (EVar "cur")) (EVar "env")) (EVar "scope"))) (EVar "clauses"))))
 (DTypeSig false "letBindDupErrors" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyApp (TyCon "List") (TyCon "ResError"))))))
@@ -7536,8 +7479,6 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "checkProp" ((PVar "env") (PVar "params") (PVar "body")) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "checkPropParamTy") (EVar "env"))) (EVar "params")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EApp (EVar "map") (EVar "propParamName")) (EVar "params")))) (EVar "body"))))
 (DTypeSig false "checkPropParamTy" (TyFun (TyCon "Env") (TyFun (TyCon "PropParam") (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "checkPropParamTy" ((PVar "env") (PCon "PropParam" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
-(DTypeSig false "propParamName" (TyFun (TyCon "PropParam") (TyCon "String")))
-(DFunDef false "propParamName" ((PCon "PropParam" (PVar "x") PWild PWild)) (EVar "x"))
 (DTypeSig false "checkInterfaceDecl" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "Super")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkInterfaceDecl" ((PVar "env") (PVar "supers") (PVar "methods")) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "checkSuper") (EVar "env"))) (EVar "supers")) (EApp (EApp (EVar "flatMap") (EApp (EVar "checkIfaceMethod") (EVar "env"))) (EVar "methods"))))
 (DTypeSig false "checkSuper" (TyFun (TyCon "Env") (TyFun (TyCon "Super") (TyApp (TyCon "List") (TyCon "ResError")))))
@@ -7588,8 +7529,6 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "ctorNames" ((PCons (PRec "DNewtype" ((rf "newtypeCtor" (PVar "con"))) false) (PVar "rest"))) (EBinOp "::" (EVar "con") (EApp (EVar "ctorNames") (EVar "rest"))))
 (DFunDef false "ctorNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "ctorNames") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "ctorNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "ctorNames") (EVar "rest")))
-(DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
-(DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "ifaceMethodNm" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
 (DFunDef false "ifaceMethodNm" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "implMethodNm" (TyFun (TyCon "ImplMethod") (TyCon "String")))
@@ -7722,9 +7661,6 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "dupValClause" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "dupValClause") (EVar "d")))
 (DFunDef false "dupValClause" ((PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") PWild PWild)) (EApp (EVar "Some") (ETuple (EVar "n") (EApp (EVar "isEmptyL") (EVar "ps")) (EApp (EVar "firstExprLoc") (EVar "body")))))
 (DFunDef false "dupValClause" (PWild) (EVar "None"))
-(DTypeSig false "isEmptyL" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
-(DFunDef false "isEmptyL" ((PList)) (EVar "True"))
-(DFunDef false "isEmptyL" (PWild) (EVar "False"))
 (DTypeSig false "declBindNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "declBindNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declBindNames") (EVar "d")))
 (DFunDef false "declBindNames" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild)) (EListLit (EVar "n")))
@@ -8279,8 +8215,6 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "reexportBindings" ((PCon "UseAlias" PWild PWild) PWild) (EListLit))
 (DTypeSig false "dropLocOfExpanded" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "Loc")) (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "dropLocOfExpanded" ((PTuple (PVar "origin") (PVar "local") PWild)) (ETuple (EVar "origin") (EVar "local")))
-(DTypeSig false "selfBinding" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))
-(DFunDef false "selfBinding" ((PVar "n")) (ETuple (EVar "n") (EVar "n")))
 (DTypeSig false "localsExportedFrom" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "localsExportedFrom" ((PVar "origins") (PVar "bindings")) (EBlock (DoLet false false (PVar "dom") (EApp (EApp (EVar "omFromNames") (EVar "origins")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "b"))) (EVar "dom")))) (EVar "bindings"))))))
 (DTypeSig false "carriedValuesFrom" (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
@@ -8752,10 +8686,10 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "addOriginsProvenance" ((PVar "acc") (PVar "n") (PVar "base") (PCons (PVar "m") (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "addOriginsProvenance") (EApp (EApp (EApp (EVar "addDeclProvenance") (EVar "acc")) (EVar "m")) (EListLit (ETuple (EVar "n") (EApp (EVar "declKey") (ETuple (EVar "m") (EVar "base"))))))) (EVar "n")) (EVar "base")) (EVar "rest")))
 # MARK
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "declNameLoc" false) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "authTermNames" false) (mem "effParamNames" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "patBindings" false) (mem "recFieldBindings" false) (mem "isHint" false) (mem "letBindName" false) (mem "propParamName" false) (mem "variantName" false) (mem "Loc" true) (mem "declNameLoc" false) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "authTermNames" false) (mem "effParamNames" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "editDistance" false) (mem "minI" false) (mem "maxI" false) (mem "listLen" false) (mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "initList" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "sortUniqS" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "editDistance" false) (mem "minI" false) (mem "maxI" false) (mem "listLen" false) (mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "initList" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "sortUniqS" false) (mem "isEmptyL" false) (mem "selfBinding" false))))
 (DUse false (UseGroup ("test") ((mem "expectTrue" false))))
 (DData Public "ResError" () ((variant "UnboundVariable" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "UnboundVariableExported" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnboundVariableIsModule" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnboundQualifiedElsewhere" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownConstructor" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "UnknownType" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "UnknownEffect" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownField" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "FieldNotInRecord" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateDefinition" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownInterface" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "MethodNotInInterface" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "ExternWithBody" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "PrivateNameAccess" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "NoExportedConstructors" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "NewtypeCtorNotExported" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "BareCtorImport" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AbstractCtorImport" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "EffectLabelNoMembers" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AbstractFieldAccess" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownModule" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "NonRecursiveValueLet" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateBinding" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateValueBinding" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateSignature" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "OrphanSignature" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "DuplicateBinder" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AsPatternMisplaced" (ConPos (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousOccurrence" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousConstructor" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousAliasCtor" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousType" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousInterface" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousEffect" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnboundAuthority" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "MisplacedAuthorityBinder" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "InternalExternAccess" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "ReassignImmutable" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateInterfaceMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "resErrorDidYouMean" (TyFun (TyCon "ResError") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))
@@ -8821,20 +8755,6 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "indexOwners" ((PCons (PTuple (PVar "f") (PVar "owner")) (PVar "rest")) (PVar "m")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "f")) (EVar "m")) (arm (PCon "Some" (PVar "os")) () (EApp (EApp (EVar "indexOwners") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "f")) (EBinOp "::" (EVar "owner") (EVar "os"))) (EVar "m")))) (arm (PCon "None") () (EApp (EApp (EVar "indexOwners") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "f")) (EListLit (EVar "owner"))) (EVar "m"))))))
 (DTypeSig false "ownersOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ownersOf" ((PVar "field") (PVar "idx")) (EBlock (DoLet false false PWild (EApp (EVar "opBump") (ELit LUnit))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "field")) (EVar "idx")) (arm (PCon "Some" (PVar "owners")) () (EVar "owners")) (arm (PCon "None") () (EListLit))))))
-(DTypeSig false "patBindings" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patBindings" ((PCon "PVar" (PVar "x") PWild PWild)) (EListLit (EVar "x")))
-(DFunDef false "patBindings" ((PCon "PWild")) (EListLit))
-(DFunDef false "patBindings" ((PCon "PLit" PWild)) (EListLit))
-(DFunDef false "patBindings" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patBindings") (EVar "a")) (EApp (EVar "patBindings") (EVar "b"))))
-(DFunDef false "patBindings" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBindings") (EVar "p"))))
-(DFunDef false "patBindings" ((PCon "PRng" PWild PWild PWild)) (EListLit))
-(DFunDef false "patBindings" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recFieldBindings")) (EVar "fields")))
-(DTypeSig false "recFieldBindings" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "recFieldBindings" ((PCon "RecPatField" (PVar "fname") PWild PWild (PCon "None"))) (EListLit (EVar "fname")))
-(DFunDef false "recFieldBindings" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBindings") (EVar "p")))
 (DTypeSig false "patsBindings" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "patsBindings" ((PVar "ps")) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
 (DTypeSig false "patGroupDupErrors" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "ResError"))))))
@@ -9019,10 +8939,6 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "isIfaceAmbiguous" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ifaceAmbiguous")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "ifaceAmbigMods" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ifaceAmbigMods" ((PVar "env") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "env") "ifaceAmbiguous")) (arm (PCon "Some" (PVar "mods")) () (EVar "mods")) (arm (PCon "None") () (EListLit))))
-(DTypeSig false "isHint" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isHint" ((PVar "n")) (EApp (EVar "startsWithAt") (EApp (EVar "stringToChars") (EVar "n"))))
-(DTypeSig false "startsWithAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "Bool")))
-(DFunDef false "startsWithAt" ((PVar "cs")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "arrayLength") (EVar "cs")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")) (ELit (LChar "@")))))
 (DTypeSig false "lookupValue" (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "lookupValue" ((PVar "env") (PVar "scope") (PVar "n")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "scopeMem") (EVar "n")) (EVar "scope")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "values"))) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "ctors"))) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EVar "env") "imported"))))
 (DTypeSig false "localBinding" (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "String") (TyCon "Bool")))))
@@ -9109,8 +9025,6 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "rewriteNonRec" (PWild (PVar "e")) (EVar "e"))
 (DTypeSig false "checkLetGroup" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "ResError"))))))))
 (DFunDef false "checkLetGroup" ((PVar "cur") (PVar "env") (PVar "scope") (PVar "binds") (PVar "body")) (EBlock (DoLet false false (PVar "scope2") (EApp (EApp (EVar "scopeExtend") (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds"))) (EVar "scope"))) (DoExpr (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "checkLetBind") (EVar "cur")) (EVar "env")) (EVar "scope2"))) (EVar "binds")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope2")) (EVar "body"))))))
-(DTypeSig false "letBindName" (TyFun (TyCon "LetBind") (TyCon "String")))
-(DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "checkLetBind" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "ResError")))))))
 (DFunDef false "checkLetBind" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "LetBind" (PVar "n") (PVar "clauses") PWild PWild)) (EBinOp "++" (EApp (EApp (EApp (EVar "letBindDupErrors") (EVar "cur")) (EVar "n")) (EVar "clauses")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "checkFunClause") (EVar "cur")) (EVar "env")) (EVar "scope"))) (EVar "clauses"))))
 (DTypeSig false "letBindDupErrors" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyApp (TyCon "List") (TyCon "ResError"))))))
@@ -9205,8 +9119,6 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "checkProp" ((PVar "env") (PVar "params") (PVar "body")) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkPropParamTy") (EVar "env"))) (EVar "params")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EApp (EMethodRef "map") (EVar "propParamName")) (EVar "params")))) (EVar "body"))))
 (DTypeSig false "checkPropParamTy" (TyFun (TyCon "Env") (TyFun (TyCon "PropParam") (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "checkPropParamTy" ((PVar "env") (PCon "PropParam" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
-(DTypeSig false "propParamName" (TyFun (TyCon "PropParam") (TyCon "String")))
-(DFunDef false "propParamName" ((PCon "PropParam" (PVar "x") PWild PWild)) (EVar "x"))
 (DTypeSig false "checkInterfaceDecl" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "Super")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "checkInterfaceDecl" ((PVar "env") (PVar "supers") (PVar "methods")) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkSuper") (EVar "env"))) (EVar "supers")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkIfaceMethod") (EVar "env"))) (EVar "methods"))))
 (DTypeSig false "checkSuper" (TyFun (TyCon "Env") (TyFun (TyCon "Super") (TyApp (TyCon "List") (TyCon "ResError")))))
@@ -9257,8 +9169,6 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "ctorNames" ((PCons (PRec "DNewtype" ((rf "newtypeCtor" (PVar "con"))) false) (PVar "rest"))) (EBinOp "::" (EVar "con") (EApp (EVar "ctorNames") (EVar "rest"))))
 (DFunDef false "ctorNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "ctorNames") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "ctorNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "ctorNames") (EVar "rest")))
-(DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
-(DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "ifaceMethodNm" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
 (DFunDef false "ifaceMethodNm" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "implMethodNm" (TyFun (TyCon "ImplMethod") (TyCon "String")))
@@ -9391,9 +9301,6 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "dupValClause" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "dupValClause") (EVar "d")))
 (DFunDef false "dupValClause" ((PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") PWild PWild)) (EApp (EVar "Some") (ETuple (EVar "n") (EApp (EVar "isEmptyL") (EVar "ps")) (EApp (EVar "firstExprLoc") (EVar "body")))))
 (DFunDef false "dupValClause" (PWild) (EVar "None"))
-(DTypeSig false "isEmptyL" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
-(DFunDef false "isEmptyL" ((PList)) (EVar "True"))
-(DFunDef false "isEmptyL" (PWild) (EVar "False"))
 (DTypeSig false "declBindNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "declBindNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declBindNames") (EVar "d")))
 (DFunDef false "declBindNames" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild)) (EListLit (EVar "n")))
@@ -9948,8 +9855,6 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "reexportBindings" ((PCon "UseAlias" PWild PWild) PWild) (EListLit))
 (DTypeSig false "dropLocOfExpanded" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "Loc")) (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "dropLocOfExpanded" ((PTuple (PVar "origin") (PVar "local") PWild)) (ETuple (EVar "origin") (EVar "local")))
-(DTypeSig false "selfBinding" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))
-(DFunDef false "selfBinding" ((PVar "n")) (ETuple (EVar "n") (EVar "n")))
 (DTypeSig false "localsExportedFrom" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "localsExportedFrom" ((PVar "origins") (PVar "bindings")) (EBlock (DoLet false false (PVar "dom") (EApp (EApp (EVar "omFromNames") (EVar "origins")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "b"))) (EVar "dom")))) (EVar "bindings"))))))
 (DTypeSig false "carriedValuesFrom" (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))

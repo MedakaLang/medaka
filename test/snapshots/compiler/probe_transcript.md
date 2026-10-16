@@ -1,5 +1,5 @@
 # META
-source_lines=360
+source_lines=374
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/probe_transcript.mdk — the sentinel-delimited stdout format
@@ -86,11 +86,25 @@ sentinelLine : String -> String -> String
 sentinelLine prefix tag = prefix ++ tag
 
 -- Fold a per-run nonce into an engine's fixed prefix base. Both engines call
--- this identically; only the base differs between them (already true of
--- `sentinelPrefix` before the nonce existed).
+-- this identically; only the base differs between them.
 export
 noncedPrefix : String -> String -> String
 noncedPrefix base nonce = "\{base}\{nonce}@@ "
+
+-- The nonce as an identifier fragment, and the probe-local alias built from it.
+export
+probeNameNonce : String -> String
+probeNameNonce nonce = replaceAll "-" "_" nonce
+
+export
+runtimeAlias : String -> String
+runtimeAlias nonce = "NpRuntime_\{probeNameNonce nonce}"
+
+-- Tag of the start chunk for test index `i`.  It is printed BEFORE the body is
+-- forced, so a panicking body is named rather than blamed on its predecessor.
+export
+startTag : Int -> String
+startTag i = "\{intToString i}.start"
 
 -- A scratch probe imports the runtime catalog through this generated dependency
 -- name.  It is deliberately separate from the probe's aliases: dependency
@@ -373,6 +387,12 @@ renameHeads n (h :: hs) (l :: ls)
 (DFunDef false "sentinelLine" ((PVar "prefix") (PVar "tag")) (EBinOp "++" (EVar "prefix") (EVar "tag")))
 (DTypeSig true "noncedPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "noncedPrefix" ((PVar "base") (PVar "nonce")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "base"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "nonce"))) (ELit (LString "@@ "))))
+(DTypeSig true "probeNameNonce" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "probeNameNonce" ((PVar "nonce")) (EApp (EApp (EApp (EVar "replaceAll") (ELit (LString "-"))) (ELit (LString "_"))) (EVar "nonce")))
+(DTypeSig true "runtimeAlias" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "runtimeAlias" ((PVar "nonce")) (EBinOp "++" (EBinOp "++" (ELit (LString "NpRuntime_")) (EApp (EVar "display") (EApp (EVar "probeNameNonce") (EVar "nonce")))) (ELit (LString ""))))
+(DTypeSig true "startTag" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "startTag" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ".start"))))
 (DTypeSig true "runtimeDependencyPrefix" (TyCon "String"))
 (DFunDef false "runtimeDependencyPrefix" () (ELit (LString "np_runtime_dep_")))
 (DTypeSig true "runtimeDependencyName" (TyFun (TyCon "String") (TyCon "String")))
@@ -463,6 +483,12 @@ renameHeads n (h :: hs) (l :: ls)
 (DFunDef false "sentinelLine" ((PVar "prefix") (PVar "tag")) (EBinOp "++" (EVar "prefix") (EVar "tag")))
 (DTypeSig true "noncedPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "noncedPrefix" ((PVar "base") (PVar "nonce")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "nonce"))) (ELit (LString "@@ "))))
+(DTypeSig true "probeNameNonce" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "probeNameNonce" ((PVar "nonce")) (EApp (EApp (EApp (EVar "replaceAll") (ELit (LString "-"))) (ELit (LString "_"))) (EVar "nonce")))
+(DTypeSig true "runtimeAlias" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "runtimeAlias" ((PVar "nonce")) (EBinOp "++" (EBinOp "++" (ELit (LString "NpRuntime_")) (EApp (EMethodRef "display") (EApp (EVar "probeNameNonce") (EVar "nonce")))) (ELit (LString ""))))
+(DTypeSig true "startTag" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "startTag" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ".start"))))
 (DTypeSig true "runtimeDependencyPrefix" (TyCon "String"))
 (DFunDef false "runtimeDependencyPrefix" () (ELit (LString "np_runtime_dep_")))
 (DTypeSig true "runtimeDependencyName" (TyFun (TyCon "String") (TyCon "String")))

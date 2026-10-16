@@ -11,6 +11,8 @@
 -- is a clean diff, not a rewrite).
 
 import frontend.ast.{
+  isWildPat,
+  letBindName,
   noBinderId,
   BinderId(..),
   Lit(..),
@@ -555,10 +557,6 @@ canonPat (PRec _ _ _) = PWild
 -- ── matrix predicates / column analysis ────────────────────────────────────
 allWild : List Pat -> Bool
 allWild ps = allList isWildPat ps
-
-isWildPat : Pat -> Bool
-isWildPat PWild = True
-isWildPat _ = False
 
 rowHasCon : (List Pat, Int) -> Bool
 rowHasCon ((PCon _ _) :: _, _) = True
@@ -1962,9 +1960,6 @@ noteLocalFuns acc (e@(ELetGroup binds _)) =
   acc := map letBindName binds ++ !acc
   e
 noteLocalFuns _ e = e
-
-letBindName : LetBind -> String
-letBindName (LetBind n _ _ _) = n
 
 -- ── the ONE authority on a record's field order (#1513) ──────────────────────
 -- ctor name → [field label in declared order], from every DData named-field

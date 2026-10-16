@@ -1,5 +1,5 @@
 # META
-source_lines=1896
+source_lines=1892
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/refindex.mdk — cross-file reference index (#254 Stage 0).
@@ -59,6 +59,8 @@ stages=DESUGAR,MARK
 -- non-allocating scan-quadratic, so op-count is the discriminator).
 
 import frontend.ast.{
+  letBindName,
+  variantName,
   Loc(..),
   Ty(..),
   Pat(..),
@@ -764,9 +766,6 @@ uriOf (W _ _ uri _ _) = uri
 locWithUriOf : W -> Loc -> Loc
 locWithUriOf w l = withUri (uriOf w) l
 
-letBindName : LetBind -> String
-letBindName (LetBind n _ _ _) = n
-
 -- a prop param paired with its OWN name-token `Loc` (#913 Inc 2b): renaming a
 -- prop param must land on its token, not the prop's DProp decl loc.
 ppNameLoc : PropParam -> (String, Loc)
@@ -908,9 +907,6 @@ letGroupDef ctx expSet mid uri loc pub (LetBind n _ _ _) =
     ctx
     uri
     (DefEntry nsVal n (mkKey mid nsVal n) loc (valuePub ctx expSet pub n))
-
-variantName : Variant -> String
-variantName (Variant cn _) = cn
 
 variantDefs : Ctx -> String -> String -> Loc -> Bool -> Variant -> List DefEntry
 variantDefs ctx mid uri loc pub (Variant cn payload) =
@@ -1899,7 +1895,7 @@ splitLastL [] = None
 splitLastL [x] = Some ([], x)
 splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "variantName" false) (mem "Loc" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "Positions" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedCached" false) (mem "moduleIdOfPath" false) (mem "importModId" false))))
 (DUse false (UseGroup ("support" "util") ((mem "zipL" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitOnChar" false))))
@@ -2105,8 +2101,6 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "uriOf" ((PCon "W" PWild PWild (PVar "uri") PWild PWild)) (EVar "uri"))
 (DTypeSig false "locWithUriOf" (TyFun (TyCon "W") (TyFun (TyCon "Loc") (TyCon "Loc"))))
 (DFunDef false "locWithUriOf" ((PVar "w") (PVar "l")) (EApp (EApp (EVar "withUri") (EApp (EVar "uriOf") (EVar "w"))) (EVar "l")))
-(DTypeSig false "letBindName" (TyFun (TyCon "LetBind") (TyCon "String")))
-(DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "ppNameLoc" (TyFun (TyCon "PropParam") (TyTuple (TyCon "String") (TyCon "Loc"))))
 (DFunDef false "ppNameLoc" ((PCon "PropParam" (PVar "n") (PVar "l") PWild)) (ETuple (EVar "n") (EVar "l")))
 (DTypeSig false "ifName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
@@ -2147,8 +2141,6 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "defsOfDecl" (PWild PWild PWild PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "letGroupDef" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "Bool") (TyFun (TyCon "LetBind") (TyCon "DefEntry")))))))))
 (DFunDef false "letGroupDef" ((PVar "ctx") (PVar "expSet") (PVar "mid") (PVar "uri") (PVar "loc") (PVar "pub") (PCon "LetBind" (PVar "n") PWild PWild PWild)) (EApp (EApp (EApp (EVar "emitDef") (EVar "ctx")) (EVar "uri")) (EApp (EApp (EApp (EApp (EApp (EVar "DefEntry") (EVar "nsVal")) (EVar "n")) (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsVal")) (EVar "n"))) (EVar "loc")) (EApp (EApp (EApp (EApp (EVar "valuePub") (EVar "ctx")) (EVar "expSet")) (EVar "pub")) (EVar "n")))))
-(DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
-(DFunDef false "variantName" ((PCon "Variant" (PVar "cn") PWild)) (EVar "cn"))
 (DTypeSig false "variantDefs" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "Bool") (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "DefEntry")))))))))
 (DFunDef false "variantDefs" ((PVar "ctx") (PVar "mid") (PVar "uri") (PVar "loc") (PVar "pub") (PCon "Variant" (PVar "cn") (PVar "payload"))) (EBinOp "::" (EApp (EApp (EApp (EVar "emitDef") (EVar "ctx")) (EVar "uri")) (EApp (EApp (EApp (EApp (EApp (EVar "DefEntry") (EVar "nsCtor")) (EVar "cn")) (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsCtor")) (EVar "cn"))) (EVar "loc")) (EVar "pub"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldDefs") (EVar "ctx")) (EVar "mid")) (EVar "uri")) (EVar "loc")) (EVar "pub")) (EVar "payload"))))
 (DTypeSig false "fieldDefs" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "Bool") (TyFun (TyCon "ConPayload") (TyApp (TyCon "List") (TyCon "DefEntry")))))))))
@@ -2435,7 +2427,7 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "splitLastL" ((PList (PVar "x"))) (EApp (EVar "Some") (ETuple (EListLit) (EVar "x"))))
 (DFunDef false "splitLastL" ((PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "pre") (PVar "last"))) (ETuple (EBinOp "::" (EVar "x") (EVar "pre")) (EVar "last")))) (EApp (EVar "splitLastL") (EVar "rest"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "variantName" false) (mem "Loc" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "Positions" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedCached" false) (mem "moduleIdOfPath" false) (mem "importModId" false))))
 (DUse false (UseGroup ("support" "util") ((mem "zipL" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitOnChar" false))))
@@ -2641,8 +2633,6 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "uriOf" ((PCon "W" PWild PWild (PVar "uri") PWild PWild)) (EVar "uri"))
 (DTypeSig false "locWithUriOf" (TyFun (TyCon "W") (TyFun (TyCon "Loc") (TyCon "Loc"))))
 (DFunDef false "locWithUriOf" ((PVar "w") (PVar "l")) (EApp (EApp (EVar "withUri") (EApp (EVar "uriOf") (EVar "w"))) (EVar "l")))
-(DTypeSig false "letBindName" (TyFun (TyCon "LetBind") (TyCon "String")))
-(DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "ppNameLoc" (TyFun (TyCon "PropParam") (TyTuple (TyCon "String") (TyCon "Loc"))))
 (DFunDef false "ppNameLoc" ((PCon "PropParam" (PVar "n") (PVar "l") PWild)) (ETuple (EVar "n") (EVar "l")))
 (DTypeSig false "ifName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
@@ -2683,8 +2673,6 @@ splitLastL (x :: rest) = map ((pre, last) => (x :: pre, last)) (splitLastL rest)
 (DFunDef false "defsOfDecl" (PWild PWild PWild PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "letGroupDef" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "Bool") (TyFun (TyCon "LetBind") (TyCon "DefEntry")))))))))
 (DFunDef false "letGroupDef" ((PVar "ctx") (PVar "expSet") (PVar "mid") (PVar "uri") (PVar "loc") (PVar "pub") (PCon "LetBind" (PVar "n") PWild PWild PWild)) (EApp (EApp (EApp (EVar "emitDef") (EVar "ctx")) (EVar "uri")) (EApp (EApp (EApp (EApp (EApp (EVar "DefEntry") (EVar "nsVal")) (EVar "n")) (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsVal")) (EVar "n"))) (EVar "loc")) (EApp (EApp (EApp (EApp (EVar "valuePub") (EVar "ctx")) (EVar "expSet")) (EVar "pub")) (EVar "n")))))
-(DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
-(DFunDef false "variantName" ((PCon "Variant" (PVar "cn") PWild)) (EVar "cn"))
 (DTypeSig false "variantDefs" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "Bool") (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyCon "DefEntry")))))))))
 (DFunDef false "variantDefs" ((PVar "ctx") (PVar "mid") (PVar "uri") (PVar "loc") (PVar "pub") (PCon "Variant" (PVar "cn") (PVar "payload"))) (EBinOp "::" (EApp (EApp (EApp (EVar "emitDef") (EVar "ctx")) (EVar "uri")) (EApp (EApp (EApp (EApp (EApp (EVar "DefEntry") (EVar "nsCtor")) (EVar "cn")) (EApp (EApp (EApp (EVar "mkKey") (EVar "mid")) (EVar "nsCtor")) (EVar "cn"))) (EVar "loc")) (EVar "pub"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldDefs") (EVar "ctx")) (EVar "mid")) (EVar "uri")) (EVar "loc")) (EVar "pub")) (EVar "payload"))))
 (DTypeSig false "fieldDefs" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "Bool") (TyFun (TyCon "ConPayload") (TyApp (TyCon "List") (TyCon "DefEntry")))))))))

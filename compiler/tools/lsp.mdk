@@ -76,6 +76,10 @@ import tools.fmt.{formatSourceChecked}
 import tools.refindex.{RefIndex, buildRefIndexProject, binderAt, usesOf, defsOf}
 import list.{sortBy}
 import frontend.ast.{
+  fieldName,
+  ifaceMethodName,
+  implMethodName,
+  letBindName,
   Decl(..),
   Ty(..),
   Loc(..),
@@ -375,9 +379,6 @@ jChildLoc name kind fallback loc =
     None => fallback
   jSymbol name kind r r []
 
-fieldName : Field -> String
-fieldName (Field n _) = n
-
 -- Outline children for the variant list of a data decl, consuming child-name
 -- `Loc`s (#331, increment 2) from `locs` in outline order.  Mirrors the old
 -- `flatMap variantSymChildren`: a nameOmitted record variant (`data X = { … }`)
@@ -416,15 +417,6 @@ zipKids fb kind [] (nm :: nms) =
   jChildLoc nm kind fb None :: zipKids fb kind [] nms
 zipKids fb kind (l :: ls) (nm :: nms) =
   jChildLoc nm kind fb l :: zipKids fb kind ls nms
-
-ifaceMethodName : IfaceMethod -> String
-ifaceMethodName (IfaceMethod n _ _ _) = n
-
-implMethodName : ImplMethod -> String
-implMethodName (ImplMethod n _ _) = n
-
-letBindName : LetBind -> String
-letBindName (LetBind n _ _ _) = n
 
 -- The outline (name, kind, clauseLike, children) for a decl, given its
 -- precomputed decl-level `range` (used for the child symbols' spans), or None for
@@ -1284,6 +1276,7 @@ writeMessage j =
 -- live in `compiler/support/util.mdk` (imported above).
 
 -- A JSON-RPC response envelope: { jsonrpc, id, result }.
+export
 responseMsg : Json -> Json -> Json
 responseMsg idJson result =
   jObject [("jsonrpc", JString "2.0"), ("id", idJson), ("result", result)]
@@ -2036,11 +2029,13 @@ lastChangeText (JArray arr)
 lastChangeText _ = None
 
 -- json field accessors specialized to the shapes we read.
+export
 fieldOr : String -> Json -> Json
 fieldOr key j = match get key j
   Some v => v
   None => JNull
 
+export
 fieldStr : String -> Json -> Option String
 fieldStr key j = match get key j
   Some v => asString v
@@ -2051,6 +2046,7 @@ fieldStr key j = match get key j
 requestId : Json -> Json
 requestId msg = fieldOr "id" msg
 
+export
 methodOf : Json -> Option String
 methodOf msg = fieldStr "method" msg
 
@@ -2178,5 +2174,6 @@ runServer runtimeSrc coreSrc serverVersion =
   let _ = logLine "=== medaka-lsp session start ==="
   serve runtimeSrc coreSrc serverVersion emptyDocs
 
+export
 unit : Unit
 unit = ()

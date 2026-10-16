@@ -1,15 +1,12 @@
 # META
-source_lines=57
+source_lines=54
 stages=DESUGAR,MARK
 # SOURCE
 -- A binding owns the effects of evaluating its source body, not every arrow in
 -- the value it returns. The syntactic arity separates thunk initialization from
 -- invocation and prevents returned closures from donating their effect slots.
 import types.repr.{Mono(..), normalize}
-import types.effect_rows.{EffRow(..)}
-
-pureRow : EffRow
-pureRow = EffRow [] None
+import types.effect_rows.{EffRow(..), pureRow}
 
 public export data BindingSummary = BindingSummary {
   bsArity : Int,
@@ -61,9 +58,7 @@ bodyRowAt arity value = match normalize value
   _ => pureRow
 # DESUGAR
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "normalize" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "EffRow" true))))
-(DTypeSig false "pureRow" (TyCon "EffRow"))
-(DFunDef false "pureRow" () (EApp (EApp (EVar "EffRow") (EListLit)) (EVar "None")))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "EffRow" true) (mem "pureRow" false))))
 (DData Public "BindingSummary" () ((variant "BindingSummary" (ConNamed (field "bsArity" (TyCon "Int")) (field "bsValue" (TyCon "Mono")) (field "bsRecursiveValue" (TyCon "Mono")) (field "bsBody" (TyCon "EffRow")) (field "bsForce" (TyCon "EffRow"))))) ())
 (DTypeSig true "bodyArrows" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "EffRow") (TyFun (TyCon "Mono") (TyCon "Mono")))))
 (DFunDef false "bodyArrows" ((PList) PWild (PVar "result")) (EVar "result"))
@@ -77,9 +72,7 @@ bodyRowAt arity value = match normalize value
 (DFunDef false "bodyRowAt" ((PVar "arity") (PVar "value")) (EMatch (EApp (EVar "normalize") (EVar "value")) (arm (PCon "TFun" PWild (PVar "row") (PVar "result")) () (EIf (EBinOp "==" (EVar "arity") (ELit (LInt 1))) (EVar "row") (EApp (EApp (EVar "bodyRowAt") (EBinOp "-" (EVar "arity") (ELit (LInt 1)))) (EVar "result")))) (arm PWild () (EVar "pureRow"))))
 # MARK
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "normalize" false))))
-(DUse false (UseGroup ("types" "effect_rows") ((mem "EffRow" true))))
-(DTypeSig false "pureRow" (TyCon "EffRow"))
-(DFunDef false "pureRow" () (EApp (EApp (EVar "EffRow") (EListLit)) (EVar "None")))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "EffRow" true) (mem "pureRow" false))))
 (DData Public "BindingSummary" () ((variant "BindingSummary" (ConNamed (field "bsArity" (TyCon "Int")) (field "bsValue" (TyCon "Mono")) (field "bsRecursiveValue" (TyCon "Mono")) (field "bsBody" (TyCon "EffRow")) (field "bsForce" (TyCon "EffRow"))))) ())
 (DTypeSig true "bodyArrows" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "EffRow") (TyFun (TyCon "Mono") (TyCon "Mono")))))
 (DFunDef false "bodyArrows" ((PList) PWild (PVar "result")) (EVar "result"))

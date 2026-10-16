@@ -54,7 +54,6 @@ import driver.build_cmd.{
 import driver.loader.{entrySearchRoots}
 import support.path.{joinPath, baseOf, dirOf}
 import support.util.{joinNl, splitNl}
-import string.{replaceAll}
 import tools.doctest.{ExResult(..)}
 import tools.probe_transcript.{
   Chunk(..),
@@ -66,10 +65,13 @@ import tools.probe_transcript.{
   lookupChunk,
   mintNonce,
   noncedPrefix,
+  probeNameNonce,
   renameUserMain,
+  runtimeAlias,
   runtimeDependencyName,
   runtimeDependencyPrefix,
   sentinelLine,
+  startTag,
   tagsInOrder,
   valuePrintExprWith,
 }
@@ -81,24 +83,17 @@ import tools.printer.{declToString}
 -- engine.  What is per-engine is the PREFIX base (so neither engine can read
 -- the other's transcript) and the tag vocabulary below.
 --
--- `sentinelPrefix` takes the per-run nonce `mintNonce` draws in `nativeRendered`
--- — a target's spliced-in source is fixed before that draw happens, so it
--- cannot spell the resulting prefix. See `probe_transcript.mdk`'s "the nonce".
+-- The per-run nonce `mintNonce` draws in `nativeRendered` — a target's
+-- spliced-in source is fixed before that draw happens, so it cannot spell the
+-- resulting prefix. See `probe_transcript.mdk`'s "the nonce".
 sentinelBase : String
 sentinelBase = "@@__mdk_native_test__@@"
 
-sentinelPrefix : String -> String
-sentinelPrefix nonce = noncedPrefix sentinelBase nonce
-
-sentinelFor : String -> String -> String
-sentinelFor nonce tag = sentinelLine (sentinelPrefix nonce) tag
-
--- Chunk tags, per test index: `<i>.start` is printed BEFORE the body is forced,
--- so a body that panics leaves its own start chunk unterminated and is named
--- rather than blamed on its predecessor.  `<i>.tag`/`.msg`/`.exp`/`.act` carry
--- the `Expectation`'s constructor and its three rendered fields.
-startTag : Int -> String
-startTag i = "\{intToString i}.start"
+-- Chunk tags, per test index: `<i>.start` (see `startTag` in
+-- `probe_transcript.mdk`) is printed BEFORE the body is forced, so a body that
+-- panics leaves its own start chunk unterminated and is named rather than
+-- blamed on its predecessor.  `<i>.tag`/`.msg`/`.exp`/`.act` carry the
+-- `Expectation`'s constructor and its three rendered fields.
 
 fieldTag : Int -> String -> String
 fieldTag i f = "\{intToString i}.\{f}"
@@ -228,7 +223,7 @@ buildAndRun target entryPath outPath tmpDir tests nonce =
     ]
       Err e => Err "native test runner: could not run the compiled probe: \{e}"
       Ok (code, out, errOut) =>
-        let chunks = chunksOf (sentinelPrefix nonce) (splitNl out)
+        let chunks = chunksOf (noncedPrefix sentinelBase nonce) (splitNl out)
         if tagsInOrder (expectedTags 0 tests) chunks then
           Ok (renderAll chunks (abortNote code errOut) 0 tests)
         else
@@ -258,12 +253,6 @@ buildAndRun target entryPath outPath tmpDir tests nonce =
 expectationAlias : String -> String
 expectationAlias nonce = "NpTest_\{probeNameNonce nonce}"
 
-runtimeAlias : String -> String
-runtimeAlias nonce = "NpRuntime_\{probeNameNonce nonce}"
-
-probeNameNonce : String -> String
-probeNameNonce nonce = replaceAll "-" "_" nonce
-
 probeNamespacePrefixes : List String
 probeNamespacePrefixes = [
   "__ts_",
@@ -288,7 +277,7 @@ probeSource nonce tsrc tests =
       ++ ["main ="]
       ++ mainLines nonce 0 tests
       ++ [
-        "  \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce endTag}\"",
+        "  \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) endTag}\"",
         "",
       ])
 
@@ -345,13 +334,13 @@ accessor nonce f i = "\{expectationAlias nonce}.\{f} \{valueName nonce i}"
 
 emit : String -> Int -> String -> String -> List String
 emit nonce i f expr = [
-  "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (fieldTag i f)}\"",
+  "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) (fieldTag i f)}\"",
   "  let _ = \{valuePrintExprWith (runtimeAlias nonce ++ ".putStrLn") (runtimeAlias nonce ++ ".debugStringLit") expr}",
 ]
 
 lastEmit : String -> Int -> String -> String -> List String
 lastEmit nonce i f expr = [
-  "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (fieldTag i f)}\"",
+  "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) (fieldTag i f)}\"",
   "  \{valuePrintExprWith (runtimeAlias nonce ++ ".putStrLn") (runtimeAlias nonce ++ ".debugStringLit") expr}",
 ]
 
@@ -359,7 +348,7 @@ mainLines : String -> Int -> List (String, Int, Expr) -> List String
 mainLines _ _ [] = []
 mainLines nonce i (_ :: rest) =
   [
-      "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (startTag i)}\"",
+      "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) (startTag i)}\"",
       "  let _ = \{printerName nonce i} ()",
     ]
     ++ mainLines nonce (i + 1) rest

@@ -287,6 +287,8 @@ import support.util.{
   splitNl,
   stringTrimLeft,
   u64HalvesHex,
+  isEmptyL,
+  eqStr,
 }
 import ir.core_ir_lower.{
   ArityEnv,
@@ -339,6 +341,7 @@ import backend.emit_support.{
   isExactCall,
   isTailCall,
   implEntryDeclaredArity,
+  forEachU,
 }
 import backend.wasm_preamble.{
   preambleHeadLines,
@@ -1745,12 +1748,8 @@ emitValsGapsW prog (b :: rest) =
   let _ = emitRefValInit prog b
   emitValsGapsW prog rest
 
-isEmptyList : List a -> Bool
-isEmptyList [] = True
-isEmptyList _ = False
-
 isNonEmptyList : List a -> Bool
-isNonEmptyList xs = not (isEmptyList xs)
+isNonEmptyList xs = not (isEmptyL xs)
 
 -- a program uses CLOSURES if any body contains a CLam, any application head is a
 -- non-ctor / non-top-level-fn variable or a non-variable (an indirect/HOF call),
@@ -2117,15 +2116,6 @@ scanImplEntryW7 emit (CImplEntry _ _ _ body) = match body
     let _ = forEachU (p => scanPatW7 emit p) pats in scanExprW7 emit b
   CImplDefault _ _ _ _ _ pats b =>
     let _ = forEachU (p => scanPatW7 emit p) pats in scanExprW7 emit b
-
-forEachU : (a -> Unit) -> List a -> Unit
--- Intentional cross-file duplicate of wasm_reach.mdk's copy. The two modules are
--- independent passes with NO import edge in either direction — the entries
--- assemble them — so sharing a three-line effectful fold would be the only
--- coupling between them, and it would exist for a fold alone.
--- lint-disable-next-line rule-duplicate-body
-forEachU _ [] = ()
-forEachU f (x :: xs) = let _ = f x in forEachU f xs
 
 scanBindW7 : WasmEmit -> CBind -> Unit
 scanBindW7 emit (CBind _ clauses _ _) =
@@ -3315,7 +3305,7 @@ emitRefProgram prog plan groups =
   -- emitted exactly when one of the blocks that call it is: the byte codec,
   -- byteBlockToString, and the IO host surface.
   let utf8LossyRt =
-    if isEmptyList (strCodecRt ++ byteBlockRt ++ ioHostRt) then
+    if isEmptyL (strCodecRt ++ byteBlockRt ++ ioHostRt) then
       []
     else
       utf8LossyRuntimeLines
@@ -12219,9 +12209,6 @@ fst (x, _) = x
 
 sndPair : (String, String) -> String
 sndPair (_, y) = y
-
-eqStr : String -> String -> Bool
-eqStr a b = a == b
 
 isSome : Option a -> Bool
 isSome (Some _) = True

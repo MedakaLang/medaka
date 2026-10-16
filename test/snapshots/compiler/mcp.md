@@ -1,5 +1,5 @@
 # META
-source_lines=1860
+source_lines=1829
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/mcp.mdk — the `medaka mcp` MCP (Model Context Protocol) server.
@@ -21,12 +21,10 @@ stages=DESUGAR,MARK
 --   stdout write corrupts the stream.
 --
 -- The json layer (parse/stringify/ctors) IS imported — it is already exported
--- and drags no new type surface.  A few tiny helpers are instead COPIED from
--- lsp.mdk (responseMsg + the fieldOr/fieldStr accessors): lsp.mdk does not export
--- them, and copying keeps the cross-module surface small (no edit to lsp.mdk, no
--- new shared type/instance surface).  Each copy carries its own scoped
--- rule-duplicate-body disable.  `errorMsg` is ORIGINAL to this file — LSP never
--- emits a JSON-RPC error object over its transport, so there is nothing to copy.
+-- and drags no new type surface.  A few tiny helpers (responseMsg, the
+-- fieldOr/fieldStr/methodOf accessors, unit) are IMPORTED from lsp.mdk, which
+-- exports them.  `errorMsg` is ORIGINAL to this file — LSP never emits a
+-- JSON-RPC error object over its transport, so there is no lsp.mdk copy.
 
 import json.{
   Json(..),
@@ -56,7 +54,13 @@ import tools.lsp.{
   emptyDocs,
   docsPut,
   uriOfPath,
+  responseMsg,
+  fieldOr,
+  fieldStr,
+  methodOf,
+  unit,
 }
+import tools.lint_cmd.{quadToParseTriple, quadToSrc}
 import frontend.ast.{Decl}
 import frontend.desugar.{desugar}
 import frontend.parser as P
@@ -147,14 +151,7 @@ negotiateVersion msg =
     Some v => if elem v mcpSupportedVersions then v else mcpLatestVersion
     None => mcpLatestVersion
 
--- ── JSON-RPC envelopes (copied from lsp.mdk; see header) ─────────────────────
-
--- A JSON-RPC success envelope: { jsonrpc, id, result }.
-responseMsg : Json -> Json -> Json
--- Intentional cross-file duplicate of lsp.mdk's responseMsg; lsp.mdk doesn't export it and importing it here would widen the cross-module surface.
--- lint-disable-next-line rule-duplicate-body
-responseMsg idJson result =
-  jObject [("jsonrpc", JString "2.0"), ("id", idJson), ("result", result)]
+-- ── JSON-RPC envelopes (responseMsg: lsp.mdk) ────────────────────────────────
 
 -- A JSON-RPC error envelope: { jsonrpc, id, error: { code, message } }.
 errorMsg : Json -> Int -> String -> Json
@@ -164,24 +161,7 @@ errorMsg idJson code message = jObject [
   ("error", jObject [("code", JInt code), ("message", JString message)]),
 ]
 
--- ── field accessors (copied from lsp.mdk) ────────────────────────────────────
-
-fieldOr : String -> Json -> Json
--- Intentional cross-file duplicate of lsp.mdk's fieldOr; lsp.mdk doesn't export it and importing it here would widen the cross-module surface.
--- lint-disable-next-line rule-duplicate-body
-fieldOr key j = match get key j
-  Some v => v
-  None => JNull
-
-fieldStr : String -> Json -> Option String
--- Intentional cross-file duplicate of lsp.mdk's fieldStr; lsp.mdk doesn't export it and importing it here would widen the cross-module surface.
--- lint-disable-next-line rule-duplicate-body
-fieldStr key j = match get key j
-  Some v => asString v
-  None => None
-
-methodOf : Json -> Option String
-methodOf msg = fieldStr "method" msg
+-- ── field accessors (fieldOr, fieldStr, methodOf: lsp.mdk) ───────────────────
 
 -- Integer field accessor (for tool args like `line`/`col`).  None when absent or
 -- not a JInt — the caller reports the missing/invalid argument as an isError result.
@@ -1340,14 +1320,6 @@ crossFileMcpFindings disable only deny quads =
   let suppressed = applySuppressionsMulti (map quadToSrc quads) raw
   applyFindingDeny deny suppressed
 
-quadToParseTriple : (String, String, List Diag, Positions, List Decl) ->
-  (String, Positions, List Decl)
-quadToParseTriple (path, _, _, pos, decls) = (path, pos, decls)
-
-quadToSrc : (String, String, List Diag, Positions, List Decl) ->
-  (String, String)
-quadToSrc (path, src, _, _, _) = (path, src)
-
 dropQuadParse : (String, String, List Diag, Positions, List Decl) ->
   (String, String, List Diag)
 dropQuadParse (path, src, diags, _, _) = (path, src, diags)
@@ -1859,14 +1831,12 @@ runMcpServer : String ->
 runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
   let _ = logMcp "medaka mcp server start"
   serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion
-
-unit : Unit
-unit = ()
 # DESUGAR
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "stdlibExportsReader" false) (mem "checkJsonSingle" false) (mem "checkJsonFile" false) (mem "cjAllToJson" false) (mem "diagIsError" false) (mem "Diag" false))))
-(DUse false (UseGroup ("tools" "lsp") ((mem "typeAtPoint" false) (mem "documentSymbols" false) (mem "definitionResult" false) (mem "referencesResult" false) (mem "emptyDocs" false) (mem "docsPut" false) (mem "uriOfPath" false))))
+(DUse false (UseGroup ("tools" "lsp") ((mem "typeAtPoint" false) (mem "documentSymbols" false) (mem "definitionResult" false) (mem "referencesResult" false) (mem "emptyDocs" false) (mem "docsPut" false) (mem "uriOfPath" false) (mem "responseMsg" false) (mem "fieldOr" false) (mem "fieldStr" false) (mem "methodOf" false) (mem "unit" false))))
+(DUse false (UseGroup ("tools" "lint_cmd") ((mem "quadToParseTriple" false) (mem "quadToSrc" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseAlias ("frontend" "parser") "P"))
@@ -1887,16 +1857,8 @@ unit = ()
 (DFunDef false "mcpLatestVersion" () (ELit (LString "2025-11-25")))
 (DTypeSig false "negotiateVersion" (TyFun (TyCon "Json") (TyCon "String")))
 (DFunDef false "negotiateVersion" ((PVar "msg")) (EBlock (DoLet false false (PVar "params") (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (DoExpr (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "protocolVersion"))) (EVar "params")) (arm (PCon "Some" (PVar "v")) () (EIf (EApp (EApp (EVar "elem") (EVar "v")) (EVar "mcpSupportedVersions")) (EVar "v") (EVar "mcpLatestVersion"))) (arm (PCon "None") () (EVar "mcpLatestVersion"))))))
-(DTypeSig false "responseMsg" (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyCon "Json"))))
-(DFunDef false "responseMsg" ((PVar "idJson") (PVar "result")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jsonrpc")) (EApp (EVar "JString") (ELit (LString "2.0")))) (ETuple (ELit (LString "id")) (EVar "idJson")) (ETuple (ELit (LString "result")) (EVar "result")))))
 (DTypeSig false "errorMsg" (TyFun (TyCon "Json") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Json")))))
 (DFunDef false "errorMsg" ((PVar "idJson") (PVar "code") (PVar "message")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jsonrpc")) (EApp (EVar "JString") (ELit (LString "2.0")))) (ETuple (ELit (LString "id")) (EVar "idJson")) (ETuple (ELit (LString "error")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JInt") (EVar "code"))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "message")))))))))
-(DTypeSig false "fieldOr" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyCon "Json"))))
-(DFunDef false "fieldOr" ((PVar "key") (PVar "j")) (EMatch (EApp (EApp (EVar "get") (EVar "key")) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EVar "JNull"))))
-(DTypeSig false "fieldStr" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "fieldStr" ((PVar "key") (PVar "j")) (EMatch (EApp (EApp (EVar "get") (EVar "key")) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "asString") (EVar "v"))) (arm (PCon "None") () (EVar "None"))))
-(DTypeSig false "methodOf" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "methodOf" ((PVar "msg")) (EApp (EApp (EVar "fieldStr") (ELit (LString "method"))) (EVar "msg")))
 (DTypeSig false "fieldInt" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "fieldInt" ((PVar "key") (PVar "j")) (EMatch (EApp (EApp (EVar "get") (EVar "key")) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "asInt") (EVar "v"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "writeMessage" (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -2028,10 +1990,6 @@ unit = ()
 (DFunDef false "lintPathsToDiagQuads" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "paths")) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "lintFileDiagTripleParsed") (EVar "idx")) (EVar "disable")) (EVar "only")) (EVar "deny"))) (EVar "paths")))
 (DTypeSig true "crossFileMcpFindings" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "crossFileMcpFindings" ((PVar "disable") (PVar "only") (PVar "deny") (PVar "quads")) (EBlock (DoLet false false (PVar "parsedTriples") (EApp (EApp (EVar "map") (EVar "quadToParseTriple")) (EVar "quads"))) (DoLet false false (PVar "raw") (EApp (EApp (EApp (EVar "runCrossFileRules") (EVar "only")) (EVar "disable")) (EVar "parsedTriples"))) (DoLet false false (PVar "suppressed") (EApp (EApp (EVar "applySuppressionsMulti") (EApp (EApp (EVar "map") (EVar "quadToSrc")) (EVar "quads"))) (EVar "raw"))) (DoExpr (EApp (EApp (EVar "applyFindingDeny") (EVar "deny")) (EVar "suppressed")))))
-(DTypeSig false "quadToParseTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "quadToParseTriple" ((PTuple (PVar "path") PWild PWild (PVar "pos") (PVar "decls"))) (ETuple (EVar "path") (EVar "pos") (EVar "decls")))
-(DTypeSig false "quadToSrc" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String"))))
-(DFunDef false "quadToSrc" ((PTuple (PVar "path") (PVar "src") PWild PWild PWild)) (ETuple (EVar "path") (EVar "src")))
 (DTypeSig false "dropQuadParse" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
 (DFunDef false "dropQuadParse" ((PTuple (PVar "path") (PVar "src") (PVar "diags") PWild PWild)) (ETuple (EVar "path") (EVar "src") (EVar "diags")))
 (DTypeSig false "anyTripleHasErr" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "Bool")))
@@ -2113,13 +2071,12 @@ unit = ()
 (DFunDef false "serveLoop" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "stalenessCheck") (PVar "serverVersion")) (EMatch (EApp (EVar "readLineOpt") (ELit LUnit)) (arm (PCon "None") () (EVar "unit")) (arm (PCon "Some" (PVar "raw")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "handleLine") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "raw")) (EVar "stalenessCheck")) (EVar "serverVersion"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "serveLoop") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "stalenessCheck")) (EVar "serverVersion")))))))
 (DTypeSig true "runMcpServer" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "runMcpServer" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "stalenessCheck") (PVar "serverVersion")) (EBlock (DoLet false false PWild (EApp (EVar "logMcp") (ELit (LString "medaka mcp server start")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "serveLoop") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "stalenessCheck")) (EVar "serverVersion")))))
-(DTypeSig false "unit" (TyCon "Unit"))
-(DFunDef false "unit" () (ELit LUnit))
 # MARK
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "stdlibExportsReader" false) (mem "checkJsonSingle" false) (mem "checkJsonFile" false) (mem "cjAllToJson" false) (mem "diagIsError" false) (mem "Diag" false))))
-(DUse false (UseGroup ("tools" "lsp") ((mem "typeAtPoint" false) (mem "documentSymbols" false) (mem "definitionResult" false) (mem "referencesResult" false) (mem "emptyDocs" false) (mem "docsPut" false) (mem "uriOfPath" false))))
+(DUse false (UseGroup ("tools" "lsp") ((mem "typeAtPoint" false) (mem "documentSymbols" false) (mem "definitionResult" false) (mem "referencesResult" false) (mem "emptyDocs" false) (mem "docsPut" false) (mem "uriOfPath" false) (mem "responseMsg" false) (mem "fieldOr" false) (mem "fieldStr" false) (mem "methodOf" false) (mem "unit" false))))
+(DUse false (UseGroup ("tools" "lint_cmd") ((mem "quadToParseTriple" false) (mem "quadToSrc" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseAlias ("frontend" "parser") "P"))
@@ -2140,16 +2097,8 @@ unit = ()
 (DFunDef false "mcpLatestVersion" () (ELit (LString "2025-11-25")))
 (DTypeSig false "negotiateVersion" (TyFun (TyCon "Json") (TyCon "String")))
 (DFunDef false "negotiateVersion" ((PVar "msg")) (EBlock (DoLet false false (PVar "params") (EApp (EApp (EVar "fieldOr") (ELit (LString "params"))) (EVar "msg"))) (DoExpr (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "protocolVersion"))) (EVar "params")) (arm (PCon "Some" (PVar "v")) () (EIf (EApp (EApp (EDictApp "elem") (EVar "v")) (EVar "mcpSupportedVersions")) (EVar "v") (EVar "mcpLatestVersion"))) (arm (PCon "None") () (EVar "mcpLatestVersion"))))))
-(DTypeSig false "responseMsg" (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyCon "Json"))))
-(DFunDef false "responseMsg" ((PVar "idJson") (PVar "result")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jsonrpc")) (EApp (EVar "JString") (ELit (LString "2.0")))) (ETuple (ELit (LString "id")) (EVar "idJson")) (ETuple (ELit (LString "result")) (EVar "result")))))
 (DTypeSig false "errorMsg" (TyFun (TyCon "Json") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Json")))))
 (DFunDef false "errorMsg" ((PVar "idJson") (PVar "code") (PVar "message")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "jsonrpc")) (EApp (EVar "JString") (ELit (LString "2.0")))) (ETuple (ELit (LString "id")) (EVar "idJson")) (ETuple (ELit (LString "error")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JInt") (EVar "code"))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "message")))))))))
-(DTypeSig false "fieldOr" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyCon "Json"))))
-(DFunDef false "fieldOr" ((PVar "key") (PVar "j")) (EMatch (EApp (EApp (EVar "get") (EVar "key")) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EVar "JNull"))))
-(DTypeSig false "fieldStr" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "fieldStr" ((PVar "key") (PVar "j")) (EMatch (EApp (EApp (EVar "get") (EVar "key")) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "asString") (EVar "v"))) (arm (PCon "None") () (EVar "None"))))
-(DTypeSig false "methodOf" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "methodOf" ((PVar "msg")) (EApp (EApp (EVar "fieldStr") (ELit (LString "method"))) (EVar "msg")))
 (DTypeSig false "fieldInt" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "fieldInt" ((PVar "key") (PVar "j")) (EMatch (EApp (EApp (EVar "get") (EVar "key")) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "asInt") (EVar "v"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "writeMessage" (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -2281,10 +2230,6 @@ unit = ()
 (DFunDef false "lintPathsToDiagQuads" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "paths")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "lintFileDiagTripleParsed") (EVar "idx")) (EVar "disable")) (EVar "only")) (EVar "deny"))) (EVar "paths")))
 (DTypeSig true "crossFileMcpFindings" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "crossFileMcpFindings" ((PVar "disable") (PVar "only") (PVar "deny") (PVar "quads")) (EBlock (DoLet false false (PVar "parsedTriples") (EApp (EApp (EMethodRef "map") (EVar "quadToParseTriple")) (EVar "quads"))) (DoLet false false (PVar "raw") (EApp (EApp (EApp (EVar "runCrossFileRules") (EVar "only")) (EVar "disable")) (EVar "parsedTriples"))) (DoLet false false (PVar "suppressed") (EApp (EApp (EVar "applySuppressionsMulti") (EApp (EApp (EMethodRef "map") (EVar "quadToSrc")) (EVar "quads"))) (EVar "raw"))) (DoExpr (EApp (EApp (EVar "applyFindingDeny") (EVar "deny")) (EVar "suppressed")))))
-(DTypeSig false "quadToParseTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "quadToParseTriple" ((PTuple (PVar "path") PWild PWild (PVar "pos") (PVar "decls"))) (ETuple (EVar "path") (EVar "pos") (EVar "decls")))
-(DTypeSig false "quadToSrc" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String"))))
-(DFunDef false "quadToSrc" ((PTuple (PVar "path") (PVar "src") PWild PWild PWild)) (ETuple (EVar "path") (EVar "src")))
 (DTypeSig false "dropQuadParse" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
 (DFunDef false "dropQuadParse" ((PTuple (PVar "path") (PVar "src") (PVar "diags") PWild PWild)) (ETuple (EVar "path") (EVar "src") (EVar "diags")))
 (DTypeSig false "anyTripleHasErr" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "Bool")))
@@ -2366,5 +2311,3 @@ unit = ()
 (DFunDef false "serveLoop" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "stalenessCheck") (PVar "serverVersion")) (EMatch (EApp (EVar "readLineOpt") (ELit LUnit)) (arm (PCon "None") () (EVar "unit")) (arm (PCon "Some" (PVar "raw")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "handleLine") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "raw")) (EVar "stalenessCheck")) (EVar "serverVersion"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "serveLoop") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "stalenessCheck")) (EVar "serverVersion")))))))
 (DTypeSig true "runMcpServer" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "runMcpServer" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "stalenessCheck") (PVar "serverVersion")) (EBlock (DoLet false false PWild (EApp (EVar "logMcp") (ELit (LString "medaka mcp server start")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "serveLoop") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "stalenessCheck")) (EVar "serverVersion")))))
-(DTypeSig false "unit" (TyCon "Unit"))
-(DFunDef false "unit" () (ELit LUnit))

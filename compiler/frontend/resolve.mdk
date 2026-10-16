@@ -14,6 +14,12 @@
 
 import support.stage_count.{stageBump}
 import frontend.ast.{
+  patBindings,
+  recFieldBindings,
+  isHint,
+  letBindName,
+  propParamName,
+  variantName,
   Loc(..),
   declNameLoc,
   orElseLoc,
@@ -95,6 +101,8 @@ import support.util.{
   splitOnChar,
   startsWith,
   sortUniqS,
+  isEmptyL,
+  selfBinding,
 }
 import test.{expectTrue}
 
@@ -449,27 +457,6 @@ ownersOf field idx =
     None => []
 
 -- ── pat_bindings ──────────────────────────────────────────────────────────
-patBindings : Pat -> List String
--- Intentional cross-file duplicate of annotate.mdk's copy. This one is on
--- resolve's own hot path and annotate.mdk imports nothing from the frontend
--- beyond the AST, deliberately: annotate runs after resolve and sharing this
--- would make the post-resolve pass depend on the pass that precedes it.
--- lint-disable-next-line rule-duplicate-body
-patBindings (PVar x _ _) = [x]
-patBindings PWild = []
-patBindings (PLit _) = []
-patBindings (PCon _ ps) = flatMap patBindings ps
-patBindings (PCons a b) = patBindings a ++ patBindings b
-patBindings (PTuple ps) = flatMap patBindings ps
-patBindings (PList ps) = flatMap patBindings ps
-patBindings (PAs x _ _ p) = x :: patBindings p
-patBindings (PRng _ _ _) = []
-patBindings (PRec _ fields _) = flatMap recFieldBindings fields
-
-recFieldBindings : RecPatField -> List String
-recFieldBindings (RecPatField fname _ _ None) = [fname]
-recFieldBindings (RecPatField _ _ _ (Some p)) = patBindings p
-
 patsBindings : List Pat -> List String
 patsBindings ps = flatMap patBindings ps
 
@@ -1190,14 +1177,6 @@ ifaceAmbigMods env n = match lookupAssoc n env.ifaceAmbiguous
   Some mods => mods
   None => []
 
-isHint : String -> Bool
-isHint n = startsWithAt (stringToChars n)
-
-startsWithAt : Array Char -> Bool
--- Intentional cross-file duplicate of the same helper in annotate.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
-startsWithAt cs = arrayLength cs > 0 && arrayGetUnsafe 0 cs == '@'
-
 lookupValue : Env -> Scope -> String -> Bool
 lookupValue env scope n =
   scopeMem n scope
@@ -1656,9 +1635,6 @@ checkLetGroup cur env scope binds body =
   let scope2 = scopeExtend (map letBindName binds) scope
   flatMap (checkLetBind cur env scope2) binds ++ checkExpr cur env scope2 body
 
-letBindName : LetBind -> String
-letBindName (LetBind n _ _ _) = n
-
 checkLetBind : Option Loc -> Env -> Scope -> LetBind -> List ResError
 checkLetBind cur env scope (LetBind n clauses _ _) =
   letBindDupErrors cur n clauses
@@ -1924,9 +1900,6 @@ checkProp env params body =
 checkPropParamTy : Env -> PropParam -> List ResError
 checkPropParamTy env (PropParam _ _ t) = checkType None env t
 
-propParamName : PropParam -> String
-propParamName (PropParam x _ _) = x
-
 checkInterfaceDecl : Env -> List Super -> List IfaceMethod -> List ResError
 checkInterfaceDecl env supers methods =
   flatMap (checkSuper env) supers ++ flatMap (checkIfaceMethod env) methods
@@ -2068,9 +2041,6 @@ ctorNames ((DData { dataCtors = vs }) :: rest) =
 ctorNames ((DNewtype { newtypeCtor = con }) :: rest) = con :: ctorNames rest
 ctorNames ((DAttrib _ d) :: rest) = ctorNames (d :: rest)
 ctorNames (_ :: rest) = ctorNames rest
-
-variantName : Variant -> String
-variantName (Variant n _) = n
 
 ifaceMethodNm : IfaceMethod -> String
 ifaceMethodNm (IfaceMethod n _ _ _) = n
@@ -2452,10 +2422,6 @@ dupValClause (DAttrib _ d) = dupValClause d
 dupValClause (DFunDef _ n ps body _ _) =
   Some (n, isEmptyL ps, firstExprLoc body)
 dupValClause _ = None
-
-isEmptyL : List a -> Bool
-isEmptyL [] = True
-isEmptyL _ = False
 
 -- Phase 148: the clauses of a top-level value binding must be contiguous.  Two
 -- same-named DFunDef/DLetGroup clause-runs separated by an intervening clause-body
@@ -4970,9 +4936,6 @@ reexportBindings (UseAlias _ _) _ = []
 
 dropLocOfExpanded : (String, String, Loc) -> (String, String)
 dropLocOfExpanded (origin, local, _) = (origin, local)
-
-selfBinding : String -> (String, String)
-selfBinding n = (n, n)
 
 -- the LOCAL names whose ORIGIN is one of `origins` (the source module's export list of
 -- the relevant kind).  This is the aliased form of `filterInSet`.
