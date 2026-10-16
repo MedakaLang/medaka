@@ -1880,31 +1880,41 @@ externBindings d = match d.edBinds
   [] => [ExternBind { ebHost = "c", ebSymbol = d.edName, ebLoc = d.edLoc }]
   bs => bs
 
--- The C symbol an extern links to on the native target, or None for a
--- declaration with no `c` binding (a `js`-only extern).  Both FFI row
--- producers drop a None, so such a declaration reaches no native `declare`.
-export
-externCSymbol : ExternDecl -> Option String
-externCSymbol d = cSymbolIn (externBindings d)
-
--- Prepends an extern's (Medaka name, (C symbol, signature)) row to `more`,
--- unless the declaration is `skip`ped (a builtin name) or has no `c` binding.
--- Both FFI row producers build their rows through this one rule.
+-- Prepends an extern's (Medaka name, ((host, symbol) bindings, signature)) row
+-- to `more`, unless the declaration is `skip`ped (a builtin name).  Both FFI
+-- row producers build their rows through this one rule.
 export
 externRowCons : Bool ->
   ExternDecl ->
   a ->
-  List (String, (String, a)) ->
-  List (String, (String, a))
-externRowCons skip d sig more = match externCSymbol d
-  Some sym if not skip => (d.edName, (sym, sig)) :: more
-  _ => more
+  List (String, (List (String, String), a)) ->
+  List (String, (List (String, String), a))
+externRowCons True _ _ more = more
+externRowCons False d sig more =
+  (d.edName, (map (b => (b.ebHost, b.ebSymbol)) (externBindings d), sig))
+    :: more
 
-cSymbolIn : List ExternBind -> Option String
-cSymbolIn [] = None
-cSymbolIn (b :: rest)
-  | b.ebHost == "c" = Some b.ebSymbol
-  | otherwise = cSymbolIn rest
+-- The symbol an FFI row binds for `host`.  Each emitter reads its own host's
+-- binding through this, so the two backends cannot disagree on which clause
+-- a declaration's call goes to.
+export
+hostSymbol : String -> List (String, String) -> Option String
+hostSymbol _ [] = None
+hostSymbol host ((h, sym) :: rest)
+  | h == host = Some sym
+  | otherwise = hostSymbol host rest
+
+-- The rows with a binding for `host`, each carrying that binding's symbol.  A
+-- declaration with no binding for `host` has no row, so it reaches no import
+-- or `declare` of that host.
+export
+hostRows : String ->
+  List (String, (List (String, String), a)) ->
+  List (String, (String, a))
+hostRows _ [] = []
+hostRows host ((n, (binds, sig)) :: rest) = match hostSymbol host binds
+  Some sym => (n, (sym, sig)) :: hostRows host rest
+  None => hostRows host rest
 
 public export data Decl =
   -- pub? name type site.  The site is the name token, where a signature with

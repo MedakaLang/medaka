@@ -1,0 +1,95 @@
+{- | #3672 (js binding lowers to a host import): a user extern's `js` binding,
+   reached under `wasmgc/*`, is an import from the `jsffi` module, and a host
+   that supplies it runs the program.
+
+   Each fixture in `test/wasm_jsffi_fixtures` is built for wasm and run by
+   `stub_host.mjs` with the functions `bindings.mjs` exports.  The stub host is
+   test-local: it supplies `jsffi` itself, implementing
+   docs/spec/WASM-SEMANTICS.md section 3.1 over `createHost`'s channels.  Every
+   expected triple below is that section's answer: a `String` round trip
+   (empty and non-ASCII included), `Int` at both ends of its range, a binding
+   called directly, as a value and in tail position, the two `i64` results an
+   `Int` cannot hold, a binding that throws, a binding the host was not given,
+   and a `String` result with a lone surrogate.
+
+   Runs under `medaka test --native`: it spawns the compiler and node. -}
+
+import io.{getEnvOr}
+import compiler_cli_test_support.{inFreshDirOf}
+import test.{Expectation, expectAll, expectEqual, fail}
+import test_process.{boundedVerbSeconds, medakaBin, medakaRoot}
+
+corpus : <IO> String
+corpus = "\{medakaRoot}/test/wasm_jsffi_fixtures"
+
+-- The wasm emitter binary the CLI's `--target wasm` path execs; the gate
+-- shard builds it but never exports the variable.
+wasmEmitter : <IO> String
+wasmEmitter =
+  getEnvOr "MEDAKA_WASM_EMITTER" "\{medakaRoot}/test/bin/wasm_emit_modules_main"
+
+-- `name`.mdk built for wasm into `scratch`, then run by the stub host: the
+-- exit code, stdout and stderr.  A stale compiler fails the build loudly
+-- (`MEDAKA_STRICT=1`).
+stubRun : String -> String -> <Exec, IO> Result String (Int, String, String)
+stubRun scratch name =
+  let wasm = "\{scratch}/\{name}.wasm"
+  match boundedVerbSeconds 60 "env" [
+    "MEDAKA_STRICT=1",
+    "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
+    medakaBin,
+    "build",
+    "--target",
+    "wasm",
+    "\{corpus}/\{name}.mdk",
+    "-o",
+    wasm,
+  ]
+    Err e => Err "medaka build --target wasm \{name}: \{e}"
+    Ok (code, out, err) =>
+      if code /= 0 then
+        Err
+          "medaka build --target wasm \{name} failed: exit=\{intToString code} \{debug (out ++ err)}"
+      else
+        boundedVerbSeconds 60 "node" [
+          "\{corpus}/stub_host.mjs",
+          wasm,
+          "\{corpus}/bindings.mjs",
+        ]
+
+runsAs : String -> String -> (Int, String, String) -> <Exec, IO> Expectation
+runsAs scratch name want = match stubRun scratch name
+  Err e => fail e
+  Ok got => expectEqual want got
+
+intRangeMsg : String -> String
+intRangeMsg binding =
+  "runtime error [E-PANIC]: foreign call '\{binding}' returned a value outside Int's range -4611686018427387904..4611686018427387903 (docs/spec/WASM-SEMANTICS.md section 3.1); declare the result I64 to receive the full 64-bit range\n"
+
+test "jsffi: each fixture under the stub host prints what WASM-SEMANTICS section 3.1 says" =
+  inFreshDirOf
+    (scratch => expectAll [
+      runsAs scratch "roundtrip" (
+        0,
+        "HELLO\n\nHÉLLO WÖRLD ✓ 𝄞\n[VALUE]\n4611686018427387903\n-4611686018427387904\n42\n[42]\n",
+        "",
+      ),
+      runsAs scratch "int_max" (1, "", intRangeMsg "jsIntMax"),
+      runsAs scratch "int_min" (1, "", intRangeMsg "jsIntMin"),
+      runsAs scratch "throws" (
+        1,
+        "before\n",
+        "runtime error: js binding `jsThrow` threw: boom: x\n",
+      ),
+      runsAs scratch "missing" (
+        1,
+        "before\n",
+        "runtime error: js binding `jsMissing` is not supplied by this host\n",
+      ),
+      runsAs scratch "lone_surrogate" (
+        1,
+        "",
+        "runtime error: js binding `jsLone` returned a string with a lone surrogate, not String\n",
+      ),
+    ])
+    (msg => fail msg)

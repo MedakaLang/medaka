@@ -195,6 +195,7 @@ import frontend.ast.{
   ifaceIdMatches,
   isTaggedFixedHead,
   fixedWidthMask,
+  hostSymbol,
 }
 import ir.core_ir.{
   CProgram(..),
@@ -250,8 +251,6 @@ import backend.core_validate.{
   validateBinderStamps,
   renderBinderRefusal,
   unrefusedExternMessage,
-  withheldExternNote,
-  checkedTarget,
   validateExterns,
 }
 import support.ordmap.{
@@ -322,6 +321,7 @@ import types.private_mangle.{dictTag, hashName, injectiveIdent}
 import types.disposition.{ifaceSuperCount, installedDispositionsOpt}
 import backend.emit_plan.{
   EmitPlan(..),
+  JsImport(..),
   WasmDemand(..),
   TrmcVerdicts,
   isTrmcFn,
@@ -374,6 +374,10 @@ import backend.wasm_preamble.{
   hashStringRuntimeLines,
   floatFmtImportLines,
   hostImportLines,
+  jsffiImportLines,
+  jsffiRuntimeLines,
+  jsffiWrapperLines,
+  jsCrossableHead,
   floatRemRuntimeLines,
   floatRuntimeLines,
   hashFloatRuntimeLines,
@@ -491,6 +495,8 @@ data WasmEmit = WasmEmit {
   useStrJoin : Ref Bool,
   tupleArities : Ref (List Int),
   wDispGroups : Ref (List DispGroup),
+  -- the plan's `jsffi` imports, by Medaka name (`EmitPlan.jsImports`)
+  wJsImports : Ref (OrdMap JsImport),
   -- the W7 scratch locals (`__rli2`, ...) the function being emitted references;
   -- see w7ScopeOpen.
   w7Used : Ref (OrdMap Unit),
@@ -553,6 +559,7 @@ freshWasmEmit mode = WasmEmit {
   useStrJoin = Ref False,
   tupleArities = Ref [],
   wDispGroups = Ref [],
+  wJsImports = Ref omEmpty,
   w7Used = Ref omEmpty,
 }
 
@@ -560,7 +567,7 @@ freshWasmEmit mode = WasmEmit {
 -- table is required; indexes preserve lookupAssoc's first-match result.  The
 -- last field is the `stdlib/runtime.mdk` extern names (`withRuntimeExternsW`).
 data WasmEmitInputData =
-  | WasmEmitInputData (List (String, List String)) (OrdMap (List Int)) Bool (OrdMap (List String, String)) Bool (List String)
+  | WasmEmitInputData (List (String, List String)) (OrdMap (List Int)) Bool (OrdMap (List (String, String), (List String, String))) Bool (List String)
 
 export type WasmEmitInput = WasmEmitInputData
 
@@ -584,10 +591,9 @@ makeWasmEmitInput methodIfaces ctorFieldTypes mainIsFloat recordFieldOrders =
 
 -- #2076: the same widening `makeEmitInput`/`ffiExternIndex` gets on the LLVM
 -- side (llvm_emit.mdk) — an index of USER-declared FFI extern names (name ->
--- (paramTypeHeads, retTypeHead)), used ONLY to recognize "this identifier IS a
--- declared FFI extern, just uncallable under WasmGC" so the wasm reject path
--- (isFfiExternW below) can name it specifically instead of falling through to a
--- generic unbound-variable panic.  A NEW smart constructor rather than widening
+-- (host bindings, (paramTypeHeads, retTypeHead))), every host's, so a reference
+-- to one is lowered as a `js` binding (`EmitPlan.jsImports`) or, with no `js`
+-- binding, is a gap that names it.  A NEW smart constructor rather than widening
 -- `makeWasmEmitInput`'s own arity, so the ~25 existing single-file test-harness
 -- callers (wasm_emit_typed_main.mdk and friends, which never declare a user FFI
 -- extern) are untouched; only the real multi-module build entry
@@ -599,18 +605,14 @@ makeWasmEmitInputFull : List (String, (String, String, Int)) ->
   Bool ->
   Bool ->
   List (String, List String) ->
-  List (String, (String, (List String, String))) ->
+  List (String, (List (String, String), (List String, String))) ->
   WasmEmitInput
-ffiRowSig : (String, (String, (List String, String))) ->
-  (String, (List String, String))
-ffiRowSig (n, (_, sg)) = (n, sg)
-
 makeWasmEmitInputFull _ ctorFieldTypes mainIsFloat mainIsUnit recordFieldOrders ffiExternRows =
   WasmEmitInputData
     ctorFieldTypes
     (omFromPairs (reverseL (map ctorToFloatIdxs ctorFieldTypes)) omEmpty)
     mainIsFloat
-    (omFromPairs (reverseL (map ffiRowSig ffiExternRows)) omEmpty)
+    (omFromPairs (reverseL ffiExternRows) omEmpty)
     mainIsUnit
     []
 
@@ -833,34 +835,134 @@ narrowByIfaceW "" entries = entries
 narrowByIfaceW iface entries =
   filterList (ent => implEntryIfaceWordW ent == iface) entries
 
--- #2076: the wasm peer of `llvm_emit.mdk`'s `ffiSigOf`/`isFfiExtern` — is `name`
--- a USER-declared FFI extern?  Built from `makeWasmEmitInputFull`'s
--- `ffiExternTypes` (empty for every other caller of `makeWasmEmitInput`, so this
--- always answers False for the ~25 single-file test-harness entries that never
--- pass one).  Consulted by `emitAppRef`/`emitTailCallW`'s CVar-head ladder, ahead
--- of the runtime extern families, so a call reaching this identifier gets a
--- specific "wasm: FFI extern is native-only" gap instead of falling through to
--- a generic unbound-variable panic.
-ffiSigOfW : Prog -> String -> Option (List String, String)
-ffiSigOfW prog name = match progInput prog
-  WasmEmitInputData _ _ _ ffiIndex _ _ => omLookup name ffiIndex
+-- #2076: the wasm peer of `llvm_emit.mdk`'s `ffiSigOf`/`isFfiExtern` — the host
+-- bindings of `name` when it is a USER-declared FFI extern.  Built from
+-- `makeWasmEmitInputFull`'s rows (empty for every caller of `makeWasmEmitInput`).
+-- Consulted by `emitAppRef`/`emitTailCallW`/`emitVarRefPlain` ahead of the
+-- runtime extern families, as `DemandScope` resolves a name.
+ffiBindsOfW : Prog -> String -> Option (List (String, String))
+ffiBindsOfW prog name = match progInput prog
+  WasmEmitInputData _ _ _ ffiIndex _ _ => map fst (omLookup name ffiIndex)
 
 isFfiExternW : Prog -> String -> Bool
-isFfiExternW prog name = match ffiSigOfW prog name
-  Some _ => True
-  None => False
+isFfiExternW prog name = isSome (ffiBindsOfW prog name)
 
--- What a reference to a user FFI extern meets: foreign C calls have no WasmGC
--- equivalent.  No wasm profile grants `FFI`, so under a checked target the
--- program names the extern without performing it (`withheldExternNote`).
-ffiWallW : Prog -> String -> List String
-ffiWallW prog name =
-  let wall =
-    "wasm: FFI extern '\{name}' is native-only — foreign C calls have no WasmGC equivalent"
-  match !checkedTarget
-    Some t =>
-      gapLP prog "\{wall}; \{withheldExternNote WasmBackend name ["FFI"] t}"
-    None => gapLP prog "\{wall}. Build for a native target instead."
+-- The plan's `jsffi` import for the user extern `name`, or the gap its
+-- reference is.  `check --target` refuses a reached extern with no `js`
+-- binding (T-TARGET-NO-BINDING), so only a lowering that skipped the target
+-- check meets the last gap.  An `Array Int` result has no channel on either target
+-- (compiler/FFI-ABI.md section 2.4), so wasm refuses it as native does.
+jsImportForW : Prog -> String -> Result (List String) JsImport
+jsImportForW prog name = match omLookup name (progEmit prog).wJsImports.value
+  Some imp =>
+    if not (allList jsCrossableHead (imp.result :: imp.params)) then
+      Err
+        (gapLP
+          prog
+          "wasm: a non-crossable type reached the lowering of foreign call '\{name}' (compiler/FFI-ABI.md section 1)")
+    else if imp.result == "Array" then
+      Err
+        (gapLP
+          prog
+          "wasm: foreign call '\{name}' returns 'Array Int', which no FFI target can return (compiler/FFI-ABI.md section 2.4, docs/spec/WASM-SEMANTICS.md section 3.1). Declare the array as a parameter instead and have the binding fill it in place: its elements are copied back after the call returns")
+    else
+      Ok imp
+  None => match ffiBindsOfW prog name
+    Some binds if isSome (hostSymbol "js" binds) =>
+      Err
+        (gapLP
+          prog
+          "internal error: the emit plan has no `jsffi` import for the reached extern '\{name}'")
+    _ =>
+      Err
+        (gapLP
+          prog
+          "wasm: the extern '\{name}' has no `js` binding, so the module has nothing to import for it; `check --target` refuses a reached extern with no binding for its target's host (T-TARGET-NO-BINDING)")
+
+-- A user extern applied: with all its arguments, the arguments and then its
+-- wrapper (`jsffiWrapperLines`); otherwise its eta closure, applied.
+emitFfiAppW : Prog ->
+  List String ->
+  Int ->
+  CExpr ->
+  String ->
+  List CExpr ->
+  CallEndW ->
+  List String
+emitFfiAppW prog env d hd name args end = match jsImportForW prog name
+  Err gap => gap
+  Ok imp =>
+    if listLen args == listLen imp.params then
+      flatMap (a => emitRefExpr prog env d a) args
+        ++ [callInstrW end (jsffiWrapperW prog imp)]
+    else
+      emitIndirectApp prog env d hd args end
+
+-- A user extern named as a value: a captureless closure whose code unpacks its
+-- arguments and calls the wrapper (the native peer is `emitFfiEtaClosure`).
+emitFfiEtaW : Prog -> String -> List String
+emitFfiEtaW prog name = match jsImportForW prog name
+  Err gap => gap
+  Ok imp =>
+    let arity = listLen imp.params
+    let lamName = "$mdk_ffi_" ++ name
+    let params = synthParams arity
+    let body =
+      flatMap argLoadAt (zipIdx params 0)
+        ++ map (p => "local.get $" ++ gname p) params
+        ++ ["call $" ++ jsffiWrapperW prog imp, "return"]
+    let _ = noteFuncRef (progEmit prog) lamName
+    let _ =
+      addLiftedNamed
+        (progEmit prog)
+        lamName
+        ([
+            "  (func "
+              ++ lamName
+              ++ " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))",
+          ]
+          ++ map ("    " ++ _) (map localDeclRef params)
+          ++ indent body
+          ++ ["  )"])
+    wConstClos (progEmit prog) lamName arity
+
+-- The binding's wrapper, lifted once; its name without the `$`.  Its traps are
+-- the native boundary's (compiler/FFI-ABI.md section 2.1a, 2.4).
+jsffiWrapperW : Prog -> JsImport -> String
+jsffiWrapperW prog imp =
+  let emit = progEmit prog
+  let name = "jsffi_w_" ++ imp.medakaName
+  let call = "foreign call '\{imp.jsName}'"
+  let intTrap =
+    if imp.result == "Int" then
+      wasmTrap
+        emit
+        "E-PANIC"
+        "\{call} returned a value outside Int's range -4611686018427387904..4611686018427387903 (docs/spec/WASM-SEMANTICS.md section 3.1); declare the result I64 to receive the full 64-bit range"
+    else
+      []
+  let charTrap =
+    if imp.result == "Char" then
+      wasmTrap
+        emit
+        "E-PANIC"
+        "\{call} returned a value that is not a valid Char: a Char must be a Unicode scalar, i.e. in 0..1114111 excluding the UTF-16 surrogates 55296..57343 (docs/spec/WASM-SEMANTICS.md section 3.1)"
+    else
+      []
+  let copyTrap =
+    if contains "Array" imp.params then
+      wasmTrap
+        emit
+        "E-PANIC"
+        "\{call} wrote a value outside Int's range -4611686018427387904..4611686018427387903 into an Array Int argument (docs/spec/WASM-SEMANTICS.md section 3.1)"
+    else
+      []
+  let _ =
+    addLiftedNamed
+      emit
+      ("$" ++ name)
+      (jsffiWrapperLines imp intTrap charTrap copyTrap)
+  name
 
 progFnMemberW : Prog -> String -> Bool
 progFnMemberW prog n = omHasKey n (indexFnNamesW (progIndex prog))
@@ -1510,6 +1612,7 @@ emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _
       || !emit.useStrSearch
       || !emit.useCharClass
       || isNonEmptyList plan.hostKeys
+      || isNonEmptyList plan.jsImports
   let typeNames = distinctTypeNames ctorTypes
   let prog = Prog index typeNames valNames useClos impls input emit freshFnCtx
   if useRef then
@@ -2898,6 +3001,11 @@ emitRefProgram prog plan groups =
       ++ (if (progEmit prog).useFloat.value then floatFmtImportLines else [])
       -- the host imports the reached externs' lowerings call (`EmitPlan.hostKeys`).
       ++ hostImportLines plan.hostKeys
+      ++ jsffiImportLines plan.jsImports
+  let _ =
+    setRef
+      (progEmit prog).wJsImports
+      (omFromPairs (map (imp => (imp.medakaName, imp)) plan.jsImports) omEmpty)
   let valNames = progValNames prog
   -- Stage-2/3 (b′) WASMGC-TRMC: the plan's dispatch-graph TMC groups (the lexer's
   -- `scan` token spine, the offside-rule `layout` family, `intersperse`), installed
@@ -3051,7 +3159,9 @@ emitRefProgram prog plan groups =
     if (progEmit prog).useCharClass.value then charClassRuntimeLines else []
   -- W12: the IO host-surface marshaling runtime, each helper gated on the host key
   -- it calls.  The `args` body is its own block: it builds a $C_Cons list.
-  let ioHostRt = ioHostRuntimeLines plan.hostKeys
+  let ioHostRt =
+    ioHostRuntimeLines plan.hostKeys
+      ++ jsffiRuntimeLines plan.hostKeys plan.jsImports
   let ioArgsRt = ioArgsRuntimeLines plan.hostKeys
   -- the UTF-8 validation every producer of outside bytes reads a $str through,
   -- emitted exactly when one of the blocks that call it is: the byte codec,
@@ -5562,12 +5672,7 @@ emitVarRefPlain prog env d x =
     -- (peer of the LLVM emitExternEtaClosure).  env = [] (externs capture nothing).
     emitExternEtaClosure prog x
   else if isFfiExternW prog x then
-    -- #2129: an FFI extern referenced in VALUE position (passed to a HOF, or a bare
-    -- nullary top-level reference) must get the same located capability-gap message
-    -- the saturated-call arms (emitAppRef/emitTailCallW) already give, not the generic
-    -- unbound-variable fallback below — wasm still can't call it either way, but the
-    -- diagnostic should say "exists but unsupported here", not "no such thing".
-    ffiWallW prog x
+    emitFfiEtaW prog x
   else if isUnprovidedOn WasmBackend x then
     unprovidedExternW (progEmit prog) x
   else
@@ -6666,7 +6771,7 @@ emitAppRef prog env d app =
       else if f == "setRef" then
         emitRefBoxSet prog env d args
       else if isFfiExternW prog f then
-        ffiWallW prog f
+        emitFfiAppW prog env d hd f args CallValueW
       else match externFamilyW f
         Some WasmStr => emitStrExternRef prog env d f args
         Some WasmLeaf => emitLeafExternRef prog env d f args
@@ -9063,7 +9168,7 @@ emitTailCallW prog env app =
       else if isCtor prog f then
         emitRefExpr prog env 0 app ++ ["return"]
       else if isFfiExternW prog f then
-        ffiWallW prog f
+        emitFfiAppW prog env 0 hd f args CallTailW
       else if f == "Ref" || f == "setRef" || isSome (externFamilyW f) then
         emitAppRef prog env 0 app ++ ["return"]
       else if progFnMemberW prog f && isExactCall mode then

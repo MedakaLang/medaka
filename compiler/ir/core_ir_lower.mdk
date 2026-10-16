@@ -31,6 +31,7 @@ import frontend.ast.{
   Decl(..),
   ExternDecl(..),
   externRowCons,
+  hostRows,
   Attr(..),
   Variant(..),
   ConPayload(..),
@@ -3818,7 +3819,7 @@ externArityEntries _ = []
 export
 ffiExternTypeNames : List Decl ->
   List Decl ->
-  List (String, (String, (List String, String)))
+  List (String, (List (String, String), (List String, String)))
 ffiExternTypeNames runtimeDecls userDecls =
   validateFfiExternTypeNames
     (ffiExternRows (externDeclNamesOf runtimeDecls) userDecls)
@@ -3829,8 +3830,8 @@ ffiExternTypeNames runtimeDecls userDecls =
 -- the untyped snapshot fallback share the existing one-symbol/one-signature
 -- refusal without asking typecheck to import lowering (which would be a cycle).
 export
-validateFfiExternTypeNames : List (String, (String, (List String, String))) ->
-  List (String, (String, (List String, String)))
+validateFfiExternTypeNames : List (String, (List (String, String), (List String, String))) ->
+  List (String, (List (String, String), (List String, String)))
 validateFfiExternTypeNames rows =
   -- 🚨 THE INDEX IS BARE-NAME KEYED ACROSS THE WHOLE PROGRAM, so a name declared
   -- twice with two different signatures is a contradiction the index cannot hold
@@ -3838,7 +3839,7 @@ validateFfiExternTypeNames rows =
   -- `ffiExternRows`: the property is about the FINISHED list, and `ffiExternRows`
   -- is a self-recursive walk that would have to re-scan its own tail at every step
   -- to ask it — the exact list-as-a-set shape `compiler/AGENTS.md` opens with.
-  let _ = ffiCheckExternRowsDistinct omEmpty rows
+  let _ = ffiCheckExternRowsDistinct omEmpty (hostRows "c" rows)
   rows
 
 -- Two modules may each declare `extern cDouble`, and the declared name IS the C
@@ -3897,7 +3898,7 @@ externDeclNamesOf (_ :: rest) = externDeclNamesOf rest
 -- so `Array` in this table always means `Array Int`.
 ffiExternRows : List String ->
   List Decl ->
-  List (String, (String, (List String, String)))
+  List (String, (List (String, String), (List String, String)))
 ffiExternRows _ [] = []
 ffiExternRows builtins ((DExtern d) :: rest) =
   externRowCons

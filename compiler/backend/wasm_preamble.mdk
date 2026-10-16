@@ -37,7 +37,8 @@
 -- section, function defs, `(start)`, and the trailing `)`), so this preamble
 -- deliberately leaves the `(module` paren OPEN.
 
-import support.util.{contains}
+import support.util.{anyList, contains, joinWith}
+import backend.emit_plan.{JsImport(..)}
 
 export
 preambleHeadLines : List String
@@ -2160,6 +2161,251 @@ ioResultLines = [
   "  ;; the host result buffer as a $str, read as UTF-8 by $mdk_u8_to_str_lossy.",
   "  (func $mdk_io_result_to_str (result (ref $str))",
   "    (call $mdk_u8_to_str_lossy (call $mdk_io_result_bytes)))"
+]
+
+-- ── user `js` bindings: the `jsffi` import module (WASM-SEMANTICS.md §3.1) ──
+-- One import per reached binding, named by its JS name and its declared heads,
+-- so the host reads each signature off the module.
+export
+jsffiImportLines : List JsImport -> List String
+jsffiImportLines imps = map jsffiImportLine imps
+
+jsffiImportLine : JsImport -> String
+jsffiImportLine imp =
+  let params = joinWith "" (map jsWireParam imp.params)
+  "  (import \"jsffi\" \"\{jsImportField imp}\" (func $jsffi_\{imp.medakaName}\{params}\{jsWireResult imp.result}))"
+
+-- `<jsName>:<P1>,...,<Pn>-><R>`, each head as declared.
+export
+jsImportField : JsImport -> String
+jsImportField imp = "\{imp.jsName}:\{joinWith "," imp.params}->\{imp.result}"
+
+-- The wasm parameter a head crosses as: a scalar by value, a `String` or `Array`
+-- as its length (its contents go on the path channel), a `Unit` as nothing.
+jsWireParam : String -> String
+jsWireParam "Unit" = ""
+jsWireParam head = " (param \{jsWireTy head})"
+
+-- The wasm result a head comes back as; a `String` comes back on the result
+-- channel and a `Unit` as nothing.
+jsWireResult : String -> String
+jsWireResult "Unit" = ""
+jsWireResult "String" = ""
+jsWireResult head = " (result \{jsWireTy head})"
+
+jsWireTy : String -> String
+jsWireTy "Int" = "i64"
+jsWireTy "U64" = "i64"
+jsWireTy "I64" = "i64"
+jsWireTy "Float" = "f64"
+jsWireTy _ = "i32"
+
+isChannelHead : String -> Bool
+isChannelHead head = head == "String" || head == "Array"
+
+-- The heads section 3.1 gives a crossing to: the FFI v1 crossable set
+-- (compiler/FFI-ABI.md section 1).  The wrapper's catch-all arms assume one.
+export
+jsCrossableHead : String -> Bool
+jsCrossableHead head = contains head [
+  "Int", "Float", "Bool", "Char", "String", "Array", "Unit", "U8", "U16", "U32",
+  "I32", "U64", "I64"
+]
+
+-- The wrapper `$jsffi_w_<name>`: Medaka values in, the import called, a Medaka
+-- value out.  `intTrap` and `charTrap` stop the program for a result that is
+-- not an `Int` or not a `Char`, and `copyTrap` for an `Array` element written
+-- back outside `Int`'s range.  An `Array` result never reaches here: it is an
+-- emitter gap, as on native.
+export
+jsffiWrapperLines : JsImport ->
+  List String ->
+  List String ->
+  List String ->
+  List String
+jsffiWrapperLines imp intTrap charTrap copyTrap =
+  let ps = zipHeads imp.params 0
+  let params =
+    joinWith "" (map (p => " (param $p\{intToString (snd p)} (ref eq))") ps)
+  let held = jsWireResult imp.result /= ""
+  let rLocal = if held then " (local $r \{jsWireTy imp.result})" else ""
+  let push =
+    if anyList (p => isChannelHead (fst p)) ps then
+      "    (call $mdk_path_reset)" :: flatMap jsPushArg ps
+    else
+      []
+  [
+      "  (func $jsffi_w_\{imp.medakaName}\{params} (result (ref eq))",
+      "    (local $off i32)\{rLocal}",
+    ]
+    ++ push
+    ++ flatMap jsWireArg ps
+    ++ ["    call $jsffi_\{imp.medakaName}"]
+    ++ (if held then ["    local.set $r"] else [])
+    ++ flatMap (jsCopyBack copyTrap) ps
+    ++ jsUnwire imp.result intTrap charTrap
+    ++ ["  )"]
+
+zipHeads : List String -> Int -> List (String, Int)
+zipHeads [] _ = []
+zipHeads (h :: rest) i = (h, i) :: zipHeads rest (i + 1)
+
+-- a `String` or `Array` argument's contents, appended to the path channel
+jsPushArg : (String, Int) -> List String
+jsPushArg ("String", i) = [
+  "    (call $mdk_push_path_more (ref.cast (ref $str) (local.get $p\{intToString i})))",
+]
+jsPushArg ("Array", i) = [
+  "    (call $mdk_jsffi_push_ints (ref.cast (ref $arr) (local.get $p\{intToString i})))",
+]
+jsPushArg _ = []
+
+-- an argument's wasm value (`jsWireParam`)
+jsWireArg : (String, Int) -> List String
+jsWireArg (head, i) =
+  let p = "(local.get $p\{intToString i})"
+  match head
+    "Unit" => []
+    "Int" => ["    (call $mdk_unbox_int \{p})"]
+    "Float" => ["    (struct.get $float 0 (ref.cast (ref $float) \{p}))"]
+    "Bool" => ["    (i31.get_u (ref.cast (ref i31) \{p}))"]
+    "Char" => ["    (i31.get_u (ref.cast (ref i31) \{p}))"]
+    "U64" => ["    (struct.get $u64 0 (ref.cast (ref $u64) \{p}))"]
+    "I64" => ["    (struct.get $i64 0 (ref.cast (ref $i64) \{p}))"]
+    "String" =>
+      ["    (array.len (struct.get $str $bytes (ref.cast (ref $str) \{p})))"]
+    "Array" => ["    (array.len (ref.cast (ref $arr) \{p}))"]
+    _ => ["    (i32.wrap_i64 (call $mdk_unbox_int \{p}))"]
+
+-- an `Array` argument's copy-back from the result channel, at `$off`
+jsCopyBack : List String -> (String, Int) -> List String
+jsCopyBack trap ("Array", i) =
+  [
+      "    (local.set $off (call $mdk_jsffi_copy_back (ref.cast (ref $arr) (local.get $p\{intToString i})) (local.get $off)))",
+      "    (if (i32.lt_s (local.get $off) (i32.const 0)) (then",
+    ]
+    ++ map ("      " ++ _) trap
+    ++ ["    ))"]
+jsCopyBack _ _ = []
+
+-- the result as a Medaka value
+jsUnwire : String -> List String -> List String -> List String
+jsUnwire "Int" intTrap _ =
+  [
+      "    (if (i64.ne (i64.shr_s (i64.shl (local.get $r) (i64.const 1)) (i64.const 1)) (local.get $r)) (then",
+    ]
+    ++ map ("      " ++ _) intTrap
+    ++ ["    ))", "    (call $mdk_box_int (local.get $r))"]
+jsUnwire "Char" _ charTrap =
+  [
+      "    (if (i32.eqz (i32.and (i32.lt_u (local.get $r) (i32.const 1114112))",
+      "        (i32.or (i32.lt_u (local.get $r) (i32.const 55296)) (i32.gt_u (local.get $r) (i32.const 57343))))) (then",
+    ]
+    ++ map ("      " ++ _) charTrap
+    ++ ["    ))", "    (ref.i31 (local.get $r))"]
+jsUnwire "Float" _ _ = ["    (struct.new $float (local.get $r))"]
+jsUnwire "Bool" _ _ = ["    (ref.i31 (i32.ne (local.get $r) (i32.const 0)))"]
+jsUnwire "U8" _ _ = [
+  "    (call $mdk_box_int (i64.extend_i32_u (i32.and (local.get $r) (i32.const 255))))",
+]
+jsUnwire "U16" _ _ = [
+  "    (call $mdk_box_int (i64.extend_i32_u (i32.and (local.get $r) (i32.const 65535))))",
+]
+jsUnwire "U32" _ _ =
+  ["    (call $mdk_box_int (i64.extend_i32_u (local.get $r)))"]
+jsUnwire "I32" _ _ =
+  ["    (call $mdk_box_int (i64.extend_i32_s (local.get $r)))"]
+jsUnwire "U64" _ _ = ["    (struct.new $u64 (local.get $r))"]
+jsUnwire "I64" _ _ = ["    (struct.new $i64 (local.get $r))"]
+jsUnwire "String" _ _ = ["    (call $mdk_jsffi_result_str (local.get $off))"]
+jsUnwire _ _ _ = ["    (ref.i31 (i32.const 0))"]
+
+-- The helpers the reached bindings' wrappers call, each emitted when one of
+-- them needs it.  `keys` are the plan's host keys: `rename` already emits
+-- `$mdk_push_path_more`.
+export
+jsffiRuntimeLines : List String -> List JsImport -> List String
+jsffiRuntimeLines keys imps =
+  let heads = flatMap (imp => imp.params) imps
+  let pushMore =
+    if anyList isChannelHead heads && not (contains "mdk_rename" keys) then
+      ioPushPathMoreLines
+    else
+      []
+  let arrays = if contains "Array" heads then jsffiArrayLines else []
+  let strs =
+    if anyList (imp => imp.result == "String") imps then
+      jsffiResultStrLines
+    else
+      []
+  pushMore ++ arrays ++ strs
+
+-- An `Array Int` argument crosses as 8 little-endian bytes per element, and its
+-- copy-back is read the same way.  `$mdk_jsffi_copy_back` checks every word
+-- before it writes any, and answers -1 for a word outside `Int`'s 63 bits.
+jsffiArrayLines : List String
+jsffiArrayLines = [
+  "  ;; push an Array Int's elements to the host path buffer, 8 LE bytes each.",
+  "  (func $mdk_jsffi_push_ints (param $a (ref $arr))",
+  "    (local $i i32) (local $n i32) (local $w i64) (local $k i32)",
+  "    (local.set $n (array.len (local.get $a)))",
+  "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (local.set $w (call $mdk_unbox_int (array.get $arr (local.get $a) (local.get $i))))",
+  "      (local.set $k (i32.const 0))",
+  "      (block $bd (loop $bl",
+  "        (br_if $bd (i32.ge_s (local.get $k) (i32.const 8)))",
+  "        (call $mdk_path_push (i32.wrap_i64 (i64.and (local.get $w) (i64.const 255))))",
+  "        (local.set $w (i64.shr_u (local.get $w) (i64.const 8)))",
+  "        (local.set $k (i32.add (local.get $k) (i32.const 1))) (br $bl)))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    )",
+  "  ;; the 8 LE bytes at $at of the host result buffer, as an i64.",
+  "  (func $mdk_jsffi_result_i64 (param $at i32) (result i64)",
+  "    (local $k i32) (local $w i64)",
+  "    (local.set $k (i32.const 8))",
+  "    (block $d (loop $l",
+  "      (br_if $d (i32.eqz (local.get $k)))",
+  "      (local.set $k (i32.sub (local.get $k) (i32.const 1)))",
+  "      (local.set $w (i64.or (i64.shl (local.get $w) (i64.const 8))",
+  "        (i64.extend_i32_u (i32.and (call $mdk_result_byte (i32.add (local.get $at) (local.get $k))) (i32.const 255)))))",
+  "      (br $l)))",
+  "    (local.get $w))",
+  "  ;; copy an Array Int argument back from the result buffer at $off: the next",
+  "  ;; offset, or -1 with nothing written when a word is outside Int's 63 bits.",
+  "  (func $mdk_jsffi_copy_back (param $a (ref $arr)) (param $off i32) (result i32)",
+  "    (local $i i32) (local $n i32) (local $w i64)",
+  "    (local.set $n (array.len (local.get $a)))",
+  "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (local.set $w (call $mdk_jsffi_result_i64 (i32.add (local.get $off) (i32.shl (local.get $i) (i32.const 3)))))",
+  "      (if (i64.ne (i64.shr_s (i64.shl (local.get $w) (i64.const 1)) (i64.const 1)) (local.get $w))",
+  "        (then (return (i32.const -1))))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d2 (loop $l2",
+  "      (br_if $d2 (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (array.set $arr (local.get $a) (local.get $i)",
+  "        (call $mdk_box_int (call $mdk_jsffi_result_i64 (i32.add (local.get $off) (i32.shl (local.get $i) (i32.const 3))))))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l2)))",
+  "    (i32.add (local.get $off) (i32.shl (local.get $n) (i32.const 3))))",
+]
+
+-- A `String` result: the result buffer from `$off`, past any copy-back words,
+-- read as UTF-8 by `$mdk_u8_to_str_lossy`.
+jsffiResultStrLines : List String
+jsffiResultStrLines = [
+  "  ;; the host result buffer from $off to its end, as a $str.",
+  "  (func $mdk_jsffi_result_str (param $off i32) (result (ref $str))",
+  "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))",
+  "    (local.set $n (i32.sub (call $mdk_result_len) (local.get $off)))",
+  "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
+  "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (array.set $u8arr (local.get $buf) (local.get $i)",
+  "        (call $mdk_result_byte (i32.add (local.get $off) (local.get $i))))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (call $mdk_u8_to_str_lossy (local.get $buf)))",
 ]
 
 ioReadFileLines : List String

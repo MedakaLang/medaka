@@ -2,7 +2,6 @@ authTermNames : List EffParamTy -> List String
 authTermSurface : (String -> String) -> EffParamTy -> String
 authTermsSurface : (String -> String) -> List EffParamTy -> String
 binderDomainSurface : Option EffAtomTy -> String
-cSymbolIn : List ExternBind -> Option String
 constraintUnresolved : String -> List Ty -> Constraint
 ctorBindersSource : List (String, KindAnn) -> String
 ctorBindersSurface : List (String, KindAnn) -> String
@@ -24,13 +23,14 @@ effParamSurface : (String -> String) -> EffParamTy -> String
 effSetSurface : (String -> String) -> List String -> String
 effectDeclUnstamped : Bool -> String -> Option String -> List (String, String) -> Option Loc -> Decl
 externBindings : ExternDecl -> List ExternBind
-externCSymbol : ExternDecl -> Option String
 externDataUnresolved : Bool -> String -> List String -> List (Option KindAnn) -> Decl
-externRowCons : Bool -> ExternDecl -> a -> List (String, (String, a)) -> List (String, (String, a))
+externRowCons : Bool -> ExternDecl -> a -> List (String, (List (String, String), a)) -> List (String, (List (String, String), a))
 fieldName : Field -> String
 firstTyLoc : Ty -> Option Loc
 firstTyLocList : List Ty -> Option Loc
 fixedWidthMask : String -> Option Int
+hostRows : String -> List (String, (List (String, String), a)) -> List (String, (String, a))
+hostSymbol : String -> List (String, String) -> Option String
 identOriginBuiltin : IdentOrigin
 identOriginFold : a -> (String -> a) -> IdentOrigin -> a
 identOriginOf : TyConOrigin -> Option IdentOrigin

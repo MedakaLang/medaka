@@ -1,0 +1,5 @@
+-- A binding that returns -2^63, which is an i64 but not an Int.
+extern jsIntMin : Unit -> <FFI "js"> Int
+  bind js "jsIntMin"
+
+main = println (jsIntMin ())
