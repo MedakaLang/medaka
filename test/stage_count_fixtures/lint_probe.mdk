@@ -1,0 +1,18 @@
+-- A small clean file for the lint probe.
+export
+addOne : Int -> Int
+addOne x = x + 1
+
+export
+addTwo : Int -> Int
+addTwo x = addOne (addOne x)
+
+export
+total : List Int -> Int
+total xs = sum (map addOne xs)
+
+export
+twice : (Int -> Int) -> Int -> Int
+twice f x = f (f x)
+
+main = println (total [1, 2, 3])

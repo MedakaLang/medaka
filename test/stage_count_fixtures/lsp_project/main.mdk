@@ -1,0 +1,12 @@
+import m1.{level1}
+import m2.{level2}
+import m3.{level3}
+import m4.{level4}
+import m5.{level5}
+import m6.{level6}
+import m7.{base}
+
+total : Int
+total = level1 + level2 + level3 + level4 + level5 + level6 + base
+
+main = println total

@@ -1,0 +1,5 @@
+import m3.{level3}
+
+export
+level2 : Int
+level2 = level3 + 2

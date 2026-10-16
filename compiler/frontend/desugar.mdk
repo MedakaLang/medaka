@@ -8,6 +8,7 @@
 -- traversal engine (mirror of `map_expr`/`map_decl`): a rewrite `f` is applied
 -- post-order (children first, then the node).
 
+import support.stage_count.{stageBump}
 import frontend.ast.{
   noBinderId,
   BinderId(..),
@@ -1158,6 +1159,7 @@ desugar prog = desugarIn "" prog
 export
 desugarIn : String -> List Decl -> List Decl
 desugarIn mid prog =
+  let _ = stageBump "desugar"
   qualifyAliasRefs prog
     |> mergeIfaceDefaults
     |> concatMapDecl expandDecl

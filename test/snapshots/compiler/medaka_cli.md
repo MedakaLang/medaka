@@ -1,5 +1,5 @@
 # META
-source_lines=4759
+source_lines=4763
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -61,6 +61,7 @@ import support.util.{
   stringTrim,
   lookupAssoc,
 }
+import support.stage_count.{stageCountInit, stageDump}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omFromNames}
 import support.path.{baseOf, chopExt, joinPath}
 import support.timer.{
@@ -523,6 +524,7 @@ dieMsg : String -> <IO> Unit
 dieMsg msg =
   let _ = emitAbortTotal ()
   let _ = ePutStrLn msg
+  let _ = stageDump ()
   exit 1
 
 runAbort : String -> <IO> Unit
@@ -546,8 +548,10 @@ orExit (Err msg) =
 
 main : <IO> Unit
 main =
+  let _ = stageCountInit ()
   let _ = checkSourceStaleness (args ())
-  runCli ()
+  let _ = runCli ()
+  stageDump ()
 
 runCli : Unit -> <IO> Unit
 runCli _ = match args ()
@@ -4769,6 +4773,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("tools" "new_cmd") ((mem "newProject" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "BuildReport" false) (mem "BuildTarget" true) (mem "ppBuildReport" false) (mem "runBuild" false) (mem "emitRtObj" false) (mem "emitPreludeObj" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "readPreludeFile" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "endsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false) (mem "sortUniqS" false) (mem "listLen" false) (mem "schemeLineName" false) (mem "stringTrim" false) (mem "lookupAssoc" false))))
+(DUse false (UseGroup ("support" "stage_count") ((mem "stageCountInit" false) (mem "stageDump" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omFromNames" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false) (mem "emitTotal" false) (mem "perfArm" false) (mem "emitAbortTotal" false) (mem "perfSinkOn" false) (mem "flushPerfSinkProse" false))))
@@ -4824,14 +4829,14 @@ runMcpServerFromEnv _ =
 (DTypeSig false "flushStaleNoticeProse" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "flushStaleNoticeProse" (PWild) (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EVar "None"))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg")))))))
 (DTypeSig false "dieMsg" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "dieMsg" ((PVar "msg")) (EBlock (DoLet false false PWild (EApp (EVar "emitAbortTotal") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
+(DFunDef false "dieMsg" ((PVar "msg")) (EBlock (DoLet false false PWild (EApp (EVar "emitAbortTotal") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoLet false false PWild (EApp (EVar "stageDump") (ELit LUnit))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
 (DTypeSig false "runAbort" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runAbort" ((PVar "msg")) (EBlock (DoLet false false PWild (EApp (EVar "flushStaleNoticeProse") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "emitAbortTotal") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "flushPerfSinkProse") (ELit LUnit))) (DoExpr (EApp (EVar "dieMsg") (EVar "msg")))))
 (DTypeSig false "orExit" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")) (TyEffect ("IO") None (TyVar "a"))))
 (DFunDef false "orExit" ((PCon "Ok" (PVar "v"))) (EVar "v"))
 (DFunDef false "orExit" ((PCon "Err" (PVar "msg"))) (EBlock (DoLet false false PWild (EApp (EVar "runAbort") (EVar "msg"))) (DoExpr (EApp (EVar "panic") (EVar "msg")))))
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))
-(DFunDef false "main" () (EBlock (DoLet false false PWild (EApp (EVar "checkSourceStaleness") (EApp (EVar "args") (ELit LUnit)))) (DoExpr (EApp (EVar "runCli") (ELit LUnit)))))
+(DFunDef false "main" () (EBlock (DoLet false false PWild (EApp (EVar "stageCountInit") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "checkSourceStaleness") (EApp (EVar "args") (ELit LUnit)))) (DoLet false false PWild (EApp (EVar "runCli") (ELit LUnit))) (DoExpr (EApp (EVar "stageDump") (ELit LUnit)))))
 (DTypeSig false "runCli" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runCli" (PWild) (EMatch (EApp (EVar "args") (ELit LUnit)) (arm (PList) () (EApp (EVar "usage") (ELit LUnit))) (arm (PCons (PLit (LString "help")) PWild) () (EApp (EVar "usage") (ELit LUnit))) (arm (PCons (PLit (LString "--help")) PWild) () (EApp (EVar "usage") (ELit LUnit))) (arm (PCons (PLit (LString "-h")) PWild) () (EApp (EVar "usage") (ELit LUnit))) (arm (PCons (PLit (LString "--version")) PWild) () (EApp (EVar "printVersion") (ELit LUnit))) (arm (PCons (PLit (LString "-v")) PWild) () (EApp (EVar "printVersion") (ELit LUnit))) (arm (PCons (PLit (LString "version")) PWild) () (EApp (EVar "printVersion") (ELit LUnit))) (arm (PCons (PLit (LString "check")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "checkHelpText")) (EVar "runCheckCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "fmt")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "fmtHelpText")) (EVar "runFmtCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "new")) (PVar "rest")) () (EApp (EVar "runNewCmd") (EVar "rest"))) (arm (PCons (PLit (LString "build")) (PVar "rest")) () (EApp (EVar "runBuildCmd") (EVar "rest"))) (arm (PCons (PLit (LString "run")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "runHelpText")) (EVar "runRunCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "test")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "testHelpText")) (EVar "runTestCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "snapshot")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "snapshotHelpText")) (EVar "runSnapshotCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "doc")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "docHelpText")) (EVar "runDocCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "lint")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "lintHelpText")) (EVar "runLintCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "codemod")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "codemodHelpText")) (EVar "runCodemodCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "check-policy")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "checkPolicyHelpText")) (EVar "runCheckPolicyCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "manifest")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "manifestHelpText")) (EVar "runManifestCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "gate")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "gateHelpText")) (EVar "runGateCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "repl")) (PVar "rest")) () (EApp (EVar "runReplCmd") (EVar "rest"))) (arm (PCons (PLit (LString "lsp")) (PVar "rest")) () (EApp (EVar "runLspCmd") (EVar "rest"))) (arm (PCons (PLit (LString "mcp")) (PVar "rest")) () (EApp (EVar "runMcpCmd") (EVar "rest"))) (arm (PCons (PVar "sub") PWild) () (EApp (EVar "unknownSubcommand") (EVar "sub")))))
 (DTypeSig false "dispatchSub" (TyFun (TyCon "String") (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))))
@@ -5280,6 +5285,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("tools" "new_cmd") ((mem "newProject" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "BuildReport" false) (mem "BuildTarget" true) (mem "ppBuildReport" false) (mem "runBuild" false) (mem "emitRtObj" false) (mem "emitPreludeObj" false) (mem "envOr" false) (mem "defaultMedakaRoot" false) (mem "readPreludeFile" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "endsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false) (mem "sortUniqS" false) (mem "listLen" false) (mem "schemeLineName" false) (mem "stringTrim" false) (mem "lookupAssoc" false))))
+(DUse false (UseGroup ("support" "stage_count") ((mem "stageCountInit" false) (mem "stageDump" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omFromNames" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false) (mem "emitTotal" false) (mem "perfArm" false) (mem "emitAbortTotal" false) (mem "perfSinkOn" false) (mem "flushPerfSinkProse" false))))
@@ -5335,14 +5341,14 @@ runMcpServerFromEnv _ =
 (DTypeSig false "flushStaleNoticeProse" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "flushStaleNoticeProse" (PWild) (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EVar "None"))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg")))))))
 (DTypeSig false "dieMsg" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "dieMsg" ((PVar "msg")) (EBlock (DoLet false false PWild (EApp (EVar "emitAbortTotal") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
+(DFunDef false "dieMsg" ((PVar "msg")) (EBlock (DoLet false false PWild (EApp (EVar "emitAbortTotal") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoLet false false PWild (EApp (EVar "stageDump") (ELit LUnit))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
 (DTypeSig false "runAbort" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runAbort" ((PVar "msg")) (EBlock (DoLet false false PWild (EApp (EVar "flushStaleNoticeProse") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "emitAbortTotal") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "flushPerfSinkProse") (ELit LUnit))) (DoExpr (EApp (EVar "dieMsg") (EVar "msg")))))
 (DTypeSig false "orExit" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")) (TyEffect ("IO") None (TyVar "a"))))
 (DFunDef false "orExit" ((PCon "Ok" (PVar "v"))) (EVar "v"))
 (DFunDef false "orExit" ((PCon "Err" (PVar "msg"))) (EBlock (DoLet false false PWild (EApp (EVar "runAbort") (EVar "msg"))) (DoExpr (EApp (EVar "panic") (EVar "msg")))))
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))
-(DFunDef false "main" () (EBlock (DoLet false false PWild (EApp (EVar "checkSourceStaleness") (EApp (EVar "args") (ELit LUnit)))) (DoExpr (EApp (EVar "runCli") (ELit LUnit)))))
+(DFunDef false "main" () (EBlock (DoLet false false PWild (EApp (EVar "stageCountInit") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "checkSourceStaleness") (EApp (EVar "args") (ELit LUnit)))) (DoLet false false PWild (EApp (EVar "runCli") (ELit LUnit))) (DoExpr (EApp (EVar "stageDump") (ELit LUnit)))))
 (DTypeSig false "runCli" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runCli" (PWild) (EMatch (EApp (EVar "args") (ELit LUnit)) (arm (PList) () (EApp (EVar "usage") (ELit LUnit))) (arm (PCons (PLit (LString "help")) PWild) () (EApp (EVar "usage") (ELit LUnit))) (arm (PCons (PLit (LString "--help")) PWild) () (EApp (EVar "usage") (ELit LUnit))) (arm (PCons (PLit (LString "-h")) PWild) () (EApp (EVar "usage") (ELit LUnit))) (arm (PCons (PLit (LString "--version")) PWild) () (EApp (EVar "printVersion") (ELit LUnit))) (arm (PCons (PLit (LString "-v")) PWild) () (EApp (EVar "printVersion") (ELit LUnit))) (arm (PCons (PLit (LString "version")) PWild) () (EApp (EVar "printVersion") (ELit LUnit))) (arm (PCons (PLit (LString "check")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "checkHelpText")) (EVar "runCheckCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "fmt")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "fmtHelpText")) (EVar "runFmtCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "new")) (PVar "rest")) () (EApp (EVar "runNewCmd") (EVar "rest"))) (arm (PCons (PLit (LString "build")) (PVar "rest")) () (EApp (EVar "runBuildCmd") (EVar "rest"))) (arm (PCons (PLit (LString "run")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "runHelpText")) (EVar "runRunCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "test")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "testHelpText")) (EVar "runTestCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "snapshot")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "snapshotHelpText")) (EVar "runSnapshotCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "doc")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "docHelpText")) (EVar "runDocCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "lint")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "lintHelpText")) (EVar "runLintCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "codemod")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "codemodHelpText")) (EVar "runCodemodCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "check-policy")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "checkPolicyHelpText")) (EVar "runCheckPolicyCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "manifest")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "manifestHelpText")) (EVar "runManifestCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "gate")) (PVar "rest")) () (EApp (EApp (EApp (EVar "dispatchSub") (EVar "gateHelpText")) (EVar "runGateCmd")) (EVar "rest"))) (arm (PCons (PLit (LString "repl")) (PVar "rest")) () (EApp (EVar "runReplCmd") (EVar "rest"))) (arm (PCons (PLit (LString "lsp")) (PVar "rest")) () (EApp (EVar "runLspCmd") (EVar "rest"))) (arm (PCons (PLit (LString "mcp")) (PVar "rest")) () (EApp (EVar "runMcpCmd") (EVar "rest"))) (arm (PCons (PVar "sub") PWild) () (EApp (EVar "unknownSubcommand") (EMethodRef "sub")))))
 (DTypeSig false "dispatchSub" (TyFun (TyCon "String") (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))))

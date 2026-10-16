@@ -1,0 +1,6 @@
+import list.{sortOn}
+import map as M
+
+export
+alphaSum : List Int -> Int
+alphaSum xs = sum (sortOn (x => x) xs) + M.size (M.fromList [(1, 2)])

@@ -1,5 +1,5 @@
 # META
-source_lines=1180
+source_lines=1184
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — standalone
@@ -15,6 +15,7 @@ stages=DESUGAR,MARK
 -- match/clause exhaustiveness (`check_match`) is type-aware and lives in
 -- typecheck, so it is out of scope here.
 
+import support.stage_count.{stageBump}
 import frontend.ast.{
   Lit(..),
   Loc,
@@ -172,35 +173,37 @@ public export data Oracle = Oracle {
 
 export
 buildOracle : List Decl -> Oracle
-buildOracle prog = Oracle {
-  -- No `reverseL`/`oracleMap` here: `lookupTab` is FIRST-match-wins, so the
-  -- natural order (user data ahead of the builtins, an earlier `data` decl
-  -- ahead of a later one) IS the shadowing convention directly, rather than
-  -- emulated through a reversed last-write-wins fold.
-  -- The `data` and `newtype` contributions are composed per decl rather than
-  -- appended as two whole passes, and the difference is load-bearing: `prog` on
-  -- the Module arm is this module's own decls first, then imported/accumulated
-  -- ones (`checkModuleFullDiags`' P0-9 order), and these tables are
-  -- first-match-wins.  Two appended passes would put every imported `data` row
-  -- ahead of this module's own `newtype` row, so an imported constructor
-  -- sharing the newtype's constructor name would win the bare-name arity/type
-  -- lookup — the wrong-arity false warning P0-9 records.
-  typeCtors =
-    flatMap (d => dataTypeCtors d ++ newtypeTypeCtors d) prog
-      ++ builtinTypeCtors,
-  ctorArity =
-    oracleMap
-      (flatMap (d => dataArity d ++ newtypeArity d) prog ++ builtinArity),
-  ctorType =
-    oracleMap
-      (flatMap (d => dataCtorType d ++ newtypeCtorType d) prog
-        ++ builtinCtorType),
-  ctorFields = oracleMap (flatMap dataCtorFields prog),
-  ctorSiblings =
-    oracleMap
-      (flatMap (d => dataSiblings d ++ newtypeSiblings d) prog
-        ++ flatMap rowSiblings builtinTypeCtors),
-}
+buildOracle prog =
+  let _ = stageBump "exhaust.oracle"
+  Oracle {
+    -- No `reverseL`/`oracleMap` here: `lookupTab` is FIRST-match-wins, so the
+    -- natural order (user data ahead of the builtins, an earlier `data` decl
+    -- ahead of a later one) IS the shadowing convention directly, rather than
+    -- emulated through a reversed last-write-wins fold.
+    -- The `data` and `newtype` contributions are composed per decl rather than
+    -- appended as two whole passes, and the difference is load-bearing: `prog` on
+    -- the Module arm is this module's own decls first, then imported/accumulated
+    -- ones (`checkModuleFullDiags`' P0-9 order), and these tables are
+    -- first-match-wins.  Two appended passes would put every imported `data` row
+    -- ahead of this module's own `newtype` row, so an imported constructor
+    -- sharing the newtype's constructor name would win the bare-name arity/type
+    -- lookup — the wrong-arity false warning P0-9 records.
+    typeCtors =
+      flatMap (d => dataTypeCtors d ++ newtypeTypeCtors d) prog
+        ++ builtinTypeCtors,
+    ctorArity =
+      oracleMap
+        (flatMap (d => dataArity d ++ newtypeArity d) prog ++ builtinArity),
+    ctorType =
+      oracleMap
+        (flatMap (d => dataCtorType d ++ newtypeCtorType d) prog
+          ++ builtinCtorType),
+    ctorFields = oracleMap (flatMap dataCtorFields prog),
+    ctorSiblings =
+      oracleMap
+        (flatMap (d => dataSiblings d ++ newtypeSiblings d) prog
+          ++ flatMap rowSiblings builtinTypeCtors),
+  }
 
 -- PERF: plain association LISTS for the oracle's four tables make every
 -- ctor→arity / type→ctors lookup an O(#ctors) scan.  `usefulCovered` does one
@@ -1126,6 +1129,7 @@ checkGuardExhaustivenessWith : List Decl ->
   List Decl ->
   List (String, Option Loc)
 checkGuardExhaustivenessWith oracleDecls checkDecls =
+  let _ = stageBump "exhaust.guards"
   let oracle = buildOracle (checkDecls ++ oracleDecls)
   flatMap (checkNamedGroup oracle) (groupByName (topFunDefClauses checkDecls))
     ++ flatMap (declBodyWarnings oracle) checkDecls
@@ -1183,6 +1187,7 @@ export
 exhaustToLines : List Decl -> String
 exhaustToLines prog = exhaustToLinesWith prog prog
 # DESUGAR
+(DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" false) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromPairs" false))))
@@ -1207,7 +1212,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "digitVal" ((PVar "c")) (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (EApp (EVar "charCode") (ELit (LChar "0")))))
 (DData Public "Oracle" () ((variant "Oracle" (ConNamed (field "typeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "String"))))) (field "ctorArity" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "ctorType" (TyApp (TyCon "OrdMap") (TyCon "TabKey"))) (field "ctorFields" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "ctorSiblings" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))) ())
 (DTypeSig true "buildOracle" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Oracle")))
-(DFunDef false "buildOracle" ((PVar "prog")) (ERecordCreate "Oracle" ((fa "typeCtors" (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataTypeCtors") (EVar "d")) (EApp (EVar "newtypeTypeCtors") (EVar "d"))))) (EVar "prog")) (EVar "builtinTypeCtors"))) (fa "ctorArity" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataArity") (EVar "d")) (EApp (EVar "newtypeArity") (EVar "d"))))) (EVar "prog")) (EVar "builtinArity")))) (fa "ctorType" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataCtorType") (EVar "d")) (EApp (EVar "newtypeCtorType") (EVar "d"))))) (EVar "prog")) (EVar "builtinCtorType")))) (fa "ctorFields" (EApp (EVar "oracleMap") (EApp (EApp (EVar "flatMap") (EVar "dataCtorFields")) (EVar "prog")))) (fa "ctorSiblings" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataSiblings") (EVar "d")) (EApp (EVar "newtypeSiblings") (EVar "d"))))) (EVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "rowSiblings")) (EVar "builtinTypeCtors"))))))))
+(DFunDef false "buildOracle" ((PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "exhaust.oracle")))) (DoExpr (ERecordCreate "Oracle" ((fa "typeCtors" (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataTypeCtors") (EVar "d")) (EApp (EVar "newtypeTypeCtors") (EVar "d"))))) (EVar "prog")) (EVar "builtinTypeCtors"))) (fa "ctorArity" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataArity") (EVar "d")) (EApp (EVar "newtypeArity") (EVar "d"))))) (EVar "prog")) (EVar "builtinArity")))) (fa "ctorType" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataCtorType") (EVar "d")) (EApp (EVar "newtypeCtorType") (EVar "d"))))) (EVar "prog")) (EVar "builtinCtorType")))) (fa "ctorFields" (EApp (EVar "oracleMap") (EApp (EApp (EVar "flatMap") (EVar "dataCtorFields")) (EVar "prog")))) (fa "ctorSiblings" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataSiblings") (EVar "d")) (EApp (EVar "newtypeSiblings") (EVar "d"))))) (EVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "rowSiblings")) (EVar "builtinTypeCtors"))))))))))
 (DTypeSig false "oracleMap" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "OrdMap") (TyVar "a"))))
 (DFunDef false "oracleMap" ((PVar "pairs")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "pairs"))) (EVar "omEmpty")))
 (DTypeSig false "builtinTypeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "String")))))
@@ -1565,7 +1570,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "interpBinds" ((PCon "InterpStr" PWild)) (EListLit))
 (DFunDef false "interpBinds" ((PCon "InterpExpr" (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
 (DTypeSig true "checkGuardExhaustivenessWith" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
-(DFunDef false "checkGuardExhaustivenessWith" ((PVar "oracleDecls") (PVar "checkDecls")) (EBlock (DoLet false false (PVar "oracle") (EApp (EVar "buildOracle") (EBinOp "++" (EVar "checkDecls") (EVar "oracleDecls")))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "checkNamedGroup") (EVar "oracle"))) (EApp (EVar "groupByName") (EApp (EVar "topFunDefClauses") (EVar "checkDecls")))) (EApp (EApp (EVar "flatMap") (EApp (EVar "declBodyWarnings") (EVar "oracle"))) (EVar "checkDecls"))))))
+(DFunDef false "checkGuardExhaustivenessWith" ((PVar "oracleDecls") (PVar "checkDecls")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "exhaust.guards")))) (DoLet false false (PVar "oracle") (EApp (EVar "buildOracle") (EBinOp "++" (EVar "checkDecls") (EVar "oracleDecls")))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "checkNamedGroup") (EVar "oracle"))) (EApp (EVar "groupByName") (EApp (EVar "topFunDefClauses") (EVar "checkDecls")))) (EApp (EApp (EVar "flatMap") (EApp (EVar "declBodyWarnings") (EVar "oracle"))) (EVar "checkDecls"))))))
 (DTypeSig false "checkNamedGroup" (TyFun (TyCon "Oracle") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "checkNamedGroup" ((PVar "oracle") (PTuple (PVar "name") (PVar "clauses"))) (EApp (EApp (EApp (EVar "checkGroup") (EVar "oracle")) (EVar "name")) (EVar "clauses")))
 (DTypeSig true "checkGuardExhaustiveness" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -1594,6 +1599,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig true "exhaustToLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
 (DFunDef false "exhaustToLines" ((PVar "prog")) (EApp (EApp (EVar "exhaustToLinesWith") (EVar "prog")) (EVar "prog")))
 # MARK
+(DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" false) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromPairs" false))))
@@ -1618,7 +1624,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "digitVal" ((PVar "c")) (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (EApp (EVar "charCode") (ELit (LChar "0")))))
 (DData Public "Oracle" () ((variant "Oracle" (ConNamed (field "typeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "String"))))) (field "ctorArity" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "ctorType" (TyApp (TyCon "OrdMap") (TyCon "TabKey"))) (field "ctorFields" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "ctorSiblings" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))) ())
 (DTypeSig true "buildOracle" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Oracle")))
-(DFunDef false "buildOracle" ((PVar "prog")) (ERecordCreate "Oracle" ((fa "typeCtors" (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataTypeCtors") (EVar "d")) (EApp (EVar "newtypeTypeCtors") (EVar "d"))))) (EVar "prog")) (EVar "builtinTypeCtors"))) (fa "ctorArity" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataArity") (EVar "d")) (EApp (EVar "newtypeArity") (EVar "d"))))) (EVar "prog")) (EVar "builtinArity")))) (fa "ctorType" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataCtorType") (EVar "d")) (EApp (EVar "newtypeCtorType") (EVar "d"))))) (EVar "prog")) (EVar "builtinCtorType")))) (fa "ctorFields" (EApp (EVar "oracleMap") (EApp (EApp (EDictApp "flatMap") (EVar "dataCtorFields")) (EVar "prog")))) (fa "ctorSiblings" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataSiblings") (EVar "d")) (EApp (EVar "newtypeSiblings") (EVar "d"))))) (EVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "rowSiblings")) (EVar "builtinTypeCtors"))))))))
+(DFunDef false "buildOracle" ((PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "exhaust.oracle")))) (DoExpr (ERecordCreate "Oracle" ((fa "typeCtors" (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataTypeCtors") (EVar "d")) (EApp (EVar "newtypeTypeCtors") (EVar "d"))))) (EVar "prog")) (EVar "builtinTypeCtors"))) (fa "ctorArity" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataArity") (EVar "d")) (EApp (EVar "newtypeArity") (EVar "d"))))) (EVar "prog")) (EVar "builtinArity")))) (fa "ctorType" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataCtorType") (EVar "d")) (EApp (EVar "newtypeCtorType") (EVar "d"))))) (EVar "prog")) (EVar "builtinCtorType")))) (fa "ctorFields" (EApp (EVar "oracleMap") (EApp (EApp (EDictApp "flatMap") (EVar "dataCtorFields")) (EVar "prog")))) (fa "ctorSiblings" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EBinOp "++" (EApp (EVar "dataSiblings") (EVar "d")) (EApp (EVar "newtypeSiblings") (EVar "d"))))) (EVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "rowSiblings")) (EVar "builtinTypeCtors"))))))))))
 (DTypeSig false "oracleMap" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "OrdMap") (TyVar "a"))))
 (DFunDef false "oracleMap" ((PVar "pairs")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "pairs"))) (EVar "omEmpty")))
 (DTypeSig false "builtinTypeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "String")))))
@@ -1976,7 +1982,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "interpBinds" ((PCon "InterpStr" PWild)) (EListLit))
 (DFunDef false "interpBinds" ((PCon "InterpExpr" (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
 (DTypeSig true "checkGuardExhaustivenessWith" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
-(DFunDef false "checkGuardExhaustivenessWith" ((PVar "oracleDecls") (PVar "checkDecls")) (EBlock (DoLet false false (PVar "oracle") (EApp (EVar "buildOracle") (EBinOp "++" (EVar "checkDecls") (EVar "oracleDecls")))) (DoExpr (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkNamedGroup") (EVar "oracle"))) (EApp (EVar "groupByName") (EApp (EVar "topFunDefClauses") (EVar "checkDecls")))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "declBodyWarnings") (EVar "oracle"))) (EVar "checkDecls"))))))
+(DFunDef false "checkGuardExhaustivenessWith" ((PVar "oracleDecls") (PVar "checkDecls")) (EBlock (DoLet false false PWild (EApp (EVar "stageBump") (ELit (LString "exhaust.guards")))) (DoLet false false (PVar "oracle") (EApp (EVar "buildOracle") (EBinOp "++" (EVar "checkDecls") (EVar "oracleDecls")))) (DoExpr (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkNamedGroup") (EVar "oracle"))) (EApp (EVar "groupByName") (EApp (EVar "topFunDefClauses") (EVar "checkDecls")))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "declBodyWarnings") (EVar "oracle"))) (EVar "checkDecls"))))))
 (DTypeSig false "checkNamedGroup" (TyFun (TyCon "Oracle") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
 (DFunDef false "checkNamedGroup" ((PVar "oracle") (PTuple (PVar "name") (PVar "clauses"))) (EApp (EApp (EApp (EVar "checkGroup") (EVar "oracle")) (EVar "name")) (EVar "clauses")))
 (DTypeSig true "checkGuardExhaustiveness" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))

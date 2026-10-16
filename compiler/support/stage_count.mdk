@@ -1,0 +1,51 @@
+-- Deterministic per-stage CALL counter: how many times each pipeline stage ran in
+-- this process, so a duplicated stage shows up as a count rather than as wall time.
+--
+-- The counter is write-only.  Only `stageDump` reads it, and only to print; no
+-- compiler pass may read it, so the output of any pass is the same whether counting
+-- is on or off.  `Ref`/`setRef` are typed pure (stdlib/runtime.mdk), so `stageBump`
+-- carries no effect row and can sit inside pure stage bodies.
+--
+-- Counting is off unless MEDAKA_STAGE_COUNTS is set non-empty, read once by
+-- `stageCountInit`.  The dump goes to stderr only, as `[stage]<TAB>key<TAB>n`; the
+-- prefix differs from MEDAKA_STATS's `[stats]` so a filtered read never mixes them.
+
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omKeys}
+
+stageCountOn : Ref Bool
+stageCountOn = Ref False
+
+stageCounts : Ref (OrdMap Int)
+stageCounts = Ref omEmpty
+
+-- Count one run of the stage named `key`; a no-op when counting is off.
+export
+stageBump : String -> Unit
+stageBump key = match !stageCountOn
+  True => stageCounts := omInsert key (countOf key + 1) !stageCounts
+  False => ()
+
+countOf : String -> Int
+countOf key = match omLookup key !stageCounts
+  Some n => n
+  None => 0
+
+-- Turn counting on when MEDAKA_STAGE_COUNTS is set and non-empty.
+export
+stageCountInit : Unit -> <IO> Unit
+stageCountInit () = match getEnv "MEDAKA_STAGE_COUNTS"
+  Some v => stageCountOn := v /= ""
+  None => ()
+
+-- Print one `[stage]` line per key, sorted, to stderr; silent when counting is off.
+export
+stageDump : Unit -> <IO> Unit
+stageDump () = match !stageCountOn
+  True => stageDumpKeys (omKeys !stageCounts)
+  False => ()
+
+stageDumpKeys : List String -> <IO> Unit
+stageDumpKeys [] = ()
+stageDumpKeys (k :: rest) =
+  let _ = ePutStrLn "[stage]\t\{k}\t\{countOf k}"
+  stageDumpKeys rest
