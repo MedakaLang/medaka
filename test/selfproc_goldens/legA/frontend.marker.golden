@@ -24,7 +24,6 @@ guardArmVars : GuardArm -> List String
 guardBound : Guard -> List String
 guardVars : Guard -> List String
 ifaceMethodBodies : IfaceMethod -> List Expr
-ifaceMethodName : IfaceMethod -> String
 implMethodBody : ImplMethod -> Expr
 implMethodNameOf : ImplMethod -> String
 interfaceMethodNames : List Decl -> List String
@@ -49,12 +48,10 @@ markVar : Map String Unit -> Map String Unit -> String -> Expr
 markWith : List String -> List String -> List String -> List Decl -> List Decl
 markWithPrelude : List Decl -> List Decl -> List Decl
 markerFor : List Decl -> List Decl -> List Decl
-patBindings : Pat -> List String
 preludePlainFnNames : List Decl -> List String
 preludeStandaloneSet : List Decl -> Map String Unit
 preludeStandaloneShadows : List Decl -> List Decl -> List (String, String, Option Loc)
 preludeStandaloneShadowsWith : Map String Unit -> List Decl -> List (String, String, Option Loc)
-recFieldBindings : RecPatField -> List String
 renameDecl : List String -> Decl -> Decl
 renameVar : List String -> Expr -> Expr
 seedExtraRefs : String -> List String

@@ -46,6 +46,7 @@
 -- `compiler/entries/selfproc_tc_probe.mdk`.
 
 import frontend.ast.{
+  variantName, letBindName, propParamName, implMethodName,
   noBinderId,
   BinderId(..),
   defaultReceiverDict,
@@ -2168,9 +2169,6 @@ checkPhantomAuthorityExport VisPublic tyName (p :: ps) variants =
       variants
   checkPhantomAuthorityExport VisPublic tyName ps variants
 checkPhantomAuthorityExport _ _ _ _ = ()
-
-variantName : Variant -> String
-variantName (Variant n _) = n
 
 -- The head's `Authority`-kinded parameter names, positional with the kinds.
 authorityParamNames : List String -> List (Option KindAnn) -> List String
@@ -25730,7 +25728,7 @@ inferLetGroup env binds body =
 -- one group: its components are not well defined.
 letGroupComponents : List LetBind -> List (List LetBind)
 letGroupComponents binds =
-  let names = map letBindNameTc binds
+  let names = map letBindName binds
   let nameSet = namesToSet names omEmpty
   if omSize nameSet < listLen names then
     [binds]
@@ -25743,7 +25741,7 @@ letGroupComponents binds =
     map
       (component =>
         let members = namesToSet component omEmpty
-        filterList (b => omHasKey (letBindNameTc b) members) binds)
+        filterList (b => omHasKey (letBindName b) members) binds)
       (tarjanSCCs names (depGraphMap names grouped))
 
 -- ── data declarations → constructor schemes ───────────────────────────────
@@ -26922,9 +26920,6 @@ checkRecBindNonFunction name e
 checkLetGroupBindsLocated : List LetBind -> Unit
 checkLetGroupBindsLocated = checkLetGroupBindsGo
 
-letBindName : LetBind -> String
-letBindName (LetBind name _ _ _) = name
-
 checkLetGroupBindsGo : List LetBind -> Unit
 checkLetGroupBindsGo [] = ()
 checkLetGroupBindsGo ((LetBind name clauses _ _) :: rest) =
@@ -27070,7 +27065,7 @@ processLetGroup env binds =
   let recursive =
     map (p => (fst p, monoScheme (snd p).bsRecursiveValue)) summaries
   let env2 = extendLocalVars env recursive
-  let _ = fold (_ bind => forgetLocalAbs (letBindNameTc bind)) () binds
+  let _ = fold (_ bind => forgetLocalAbs (letBindName bind)) () binds
   let lscopes = inferLetBinds env2 (zipL binds summaries)
   let _ = fold (_ entry => checkRecursiveValue (snd entry)) () summaries
   let residuals =
@@ -28248,9 +28243,6 @@ prePassImplMethodScoped rw (ImplMethod n ps e) =
 propParamNamesTc : List PropParam -> List String
 propParamNamesTc ps = map propParamName ps
 
-propParamName : PropParam -> String
-propParamName (PropParam n _ _) = n
-
 -- #1031: `bound` is an OrdMap-backed SET (name -> ()), not a `List String`
 -- scanned by `contains` — a deep local nesting (N sequential lets, a reference
 -- to an outer binding) made `contains n bound` an O(depth) scan per EVar,
@@ -28523,9 +28515,6 @@ rewriteArgStmts rw bound ((DoAssign x e) :: rest) =
 rewriteArgStmts rw bound ((DoFieldAssign x fs e) :: rest) =
   DoFieldAssign x fs (rewriteArgScoped rw bound e)
     :: rewriteArgStmts rw bound rest
-
-letBindNameTc : LetBind -> String
-letBindNameTc (LetBind n _ _ _) = n
 
 -- the variables a pattern binds (local copy; llvm_emit's patVars isn't importable
 -- here, and this one also covers PRec field/pun binders).
@@ -31305,9 +31294,6 @@ foreachUnit f (x :: xs) =
 -- correct answer.
 pushIncompleteImpl : (Option Loc, String) -> Unit
 pushIncompleteImpl (loc, msg) = pushTypeErrorOnceAt "T-INCOMPLETE-IMPL" loc msg
-
-implMethodName : ImplMethod -> String
-implMethodName (ImplMethod n _ _) = n
 
 -- a loc to attribute the error to: the first present impl-method body's span (the
 -- impl head carries no Loc of its own).  None for a wholly-empty impl body.
@@ -44651,7 +44637,7 @@ freeEVars bound (ELet _ r p e1 e2) =
   let after = namesToSet (patVarsTc p) bound
   freeEVars (if r then after else bound) e1 ++ freeEVars after e2
 freeEVars bound (ELetGroup binds body) =
-  let inner = namesToSet (map letBindNameTc binds) bound
+  let inner = namesToSet (map letBindName binds) bound
   flatMap (freeLetBindEVars inner) binds ++ freeEVars inner body
 freeEVars bound (EMatch e arms) =
   freeEVars bound e ++ flatMap (freeArmEVars bound) arms

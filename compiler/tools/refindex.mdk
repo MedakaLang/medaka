@@ -55,6 +55,8 @@
 -- non-allocating scan-quadratic, so op-count is the discriminator).
 
 import frontend.ast.{
+  letBindName,
+  variantName,
   Loc(..),
   Ty(..),
   Pat(..),
@@ -760,9 +762,6 @@ uriOf (W _ _ uri _ _) = uri
 locWithUriOf : W -> Loc -> Loc
 locWithUriOf w l = withUri (uriOf w) l
 
-letBindName : LetBind -> String
-letBindName (LetBind n _ _ _) = n
-
 -- a prop param paired with its OWN name-token `Loc` (#913 Inc 2b): renaming a
 -- prop param must land on its token, not the prop's DProp decl loc.
 ppNameLoc : PropParam -> (String, Loc)
@@ -904,9 +903,6 @@ letGroupDef ctx expSet mid uri loc pub (LetBind n _ _ _) =
     ctx
     uri
     (DefEntry nsVal n (mkKey mid nsVal n) loc (valuePub ctx expSet pub n))
-
-variantName : Variant -> String
-variantName (Variant cn _) = cn
 
 variantDefs : Ctx -> String -> String -> Loc -> Bool -> Variant -> List DefEntry
 variantDefs ctx mid uri loc pub (Variant cn payload) =

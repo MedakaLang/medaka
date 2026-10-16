@@ -1,17 +1,8 @@
 eqStr
-fieldName
-implMethodName
 isCommaTok
 isElseTok
 isEmptyL
 isEmptyList
-isHint
 isThenTok
-isWildPat
-letBindName
-propParamName
 pureRow
-recFieldBindings
 selfBinding
-stripLocE
-variantName

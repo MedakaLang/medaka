@@ -39,7 +39,6 @@ doStmtBinds : DoStmt -> List LetBind
 exhaustToLines : List Decl -> String
 exhaustToLinesWith : List Decl -> List Decl -> String
 fieldAssignBinds : FieldAssign -> List LetBind
-fieldName : Field -> String
 findRecField : String -> List RecPatField -> Option (Option Pat)
 firstMissing : List String -> List String -> Option String
 firstSeenNames : List (String, (List Pat, Expr)) -> Map String Unit -> List String
@@ -123,7 +122,6 @@ usefulWitness : Oracle -> Option TabKey -> List (List Pat) -> Int -> Option (Lis
 variantArity : Variant -> (String, Int)
 variantCtorFields : Variant -> List (String, List String)
 variantCtorType : TabKey -> Variant -> (String, TabKey)
-variantName : Variant -> String
 witnessBranch : Oracle -> String -> List (List Pat) -> Int -> Option (List Pat)
 witnessPrepend : Pat -> Option (List Pat) -> Option (List Pat)
 witnessSig : Oracle -> List String -> List (List Pat) -> Int -> Option (List Pat)

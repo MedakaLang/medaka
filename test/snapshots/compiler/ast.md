@@ -1,5 +1,5 @@
 # META
-source_lines=2622
+source_lines=2684
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -810,6 +810,68 @@ patBoundNames _ = []
 recPatFieldNames : RecPatField -> List String
 recPatFieldNames (RecPatField label _ _ None) = [label]
 recPatFieldNames (RecPatField _ _ _ (Some p)) = patBoundNames p
+
+-- The names a pattern binds, in source order (`PRec` puns included).
+export
+patBindings : Pat -> List String
+patBindings (PVar x _ _) = [x]
+patBindings PWild = []
+patBindings (PLit _) = []
+patBindings (PCon _ ps) = flatMap patBindings ps
+patBindings (PCons a b) = patBindings a ++ patBindings b
+patBindings (PTuple ps) = flatMap patBindings ps
+patBindings (PList ps) = flatMap patBindings ps
+patBindings (PAs x _ _ p) = x :: patBindings p
+patBindings (PRng _ _ _) = []
+patBindings (PRec _ fields _) = flatMap recFieldBindings fields
+
+export
+recFieldBindings : RecPatField -> List String
+recFieldBindings (RecPatField fname _ _ None) = [fname]
+recFieldBindings (RecPatField _ _ _ (Some p)) = patBindings p
+
+export
+letBindName : LetBind -> String
+letBindName (LetBind n _ _ _) = n
+
+export
+variantName : Variant -> String
+variantName (Variant n _) = n
+
+export
+fieldName : Field -> String
+fieldName (Field n _) = n
+
+export
+implMethodName : ImplMethod -> String
+implMethodName (ImplMethod n _ _) = n
+
+export
+ifaceMethodName : IfaceMethod -> String
+ifaceMethodName (IfaceMethod n _ _ _) = n
+
+export
+propParamName : PropParam -> String
+propParamName (PropParam x _ _) = x
+
+-- Peel transparent `ELoc` wrappers.
+export
+stripLocE : Expr -> Expr
+stripLocE (ELoc _ e) = stripLocE e
+stripLocE e = e
+
+export
+isWildPat : Pat -> Bool
+isWildPat PWild = True
+isWildPat _ = False
+
+-- A hint name is one that starts with `@`.
+export
+isHint : String -> Bool
+isHint n = startsWithAt (stringToChars n)
+
+startsWithAt : Array Char -> Bool
+startsWithAt cs = arrayLength cs > 0 && arrayGetUnsafe 0 cs == '@'
 
 -- An effect declaration as the parser produces it: the resolver stamps its
 -- declaring origin, so before resolve it carries none.
@@ -2703,6 +2765,42 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig false "recPatFieldNames" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "recPatFieldNames" ((PCon "RecPatField" (PVar "label") PWild PWild (PCon "None"))) (EListLit (EVar "label")))
 (DFunDef false "recPatFieldNames" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBoundNames") (EVar "p")))
+(DTypeSig true "patBindings" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "patBindings" ((PCon "PVar" (PVar "x") PWild PWild)) (EListLit (EVar "x")))
+(DFunDef false "patBindings" ((PCon "PWild")) (EListLit))
+(DFunDef false "patBindings" ((PCon "PLit" PWild)) (EListLit))
+(DFunDef false "patBindings" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
+(DFunDef false "patBindings" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patBindings") (EVar "a")) (EApp (EVar "patBindings") (EVar "b"))))
+(DFunDef false "patBindings" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
+(DFunDef false "patBindings" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
+(DFunDef false "patBindings" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBindings") (EVar "p"))))
+(DFunDef false "patBindings" ((PCon "PRng" PWild PWild PWild)) (EListLit))
+(DFunDef false "patBindings" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recFieldBindings")) (EVar "fields")))
+(DTypeSig true "recFieldBindings" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "recFieldBindings" ((PCon "RecPatField" (PVar "fname") PWild PWild (PCon "None"))) (EListLit (EVar "fname")))
+(DFunDef false "recFieldBindings" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBindings") (EVar "p")))
+(DTypeSig true "letBindName" (TyFun (TyCon "LetBind") (TyCon "String")))
+(DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
+(DTypeSig true "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
+(DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
+(DTypeSig true "fieldName" (TyFun (TyCon "Field") (TyCon "String")))
+(DFunDef false "fieldName" ((PCon "Field" (PVar "n") PWild)) (EVar "n"))
+(DTypeSig true "implMethodName" (TyFun (TyCon "ImplMethod") (TyCon "String")))
+(DFunDef false "implMethodName" ((PCon "ImplMethod" (PVar "n") PWild PWild)) (EVar "n"))
+(DTypeSig true "ifaceMethodName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
+(DFunDef false "ifaceMethodName" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
+(DTypeSig true "propParamName" (TyFun (TyCon "PropParam") (TyCon "String")))
+(DFunDef false "propParamName" ((PCon "PropParam" (PVar "x") PWild PWild)) (EVar "x"))
+(DTypeSig true "stripLocE" (TyFun (TyCon "Expr") (TyCon "Expr")))
+(DFunDef false "stripLocE" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "stripLocE") (EVar "e")))
+(DFunDef false "stripLocE" ((PVar "e")) (EVar "e"))
+(DTypeSig true "isWildPat" (TyFun (TyCon "Pat") (TyCon "Bool")))
+(DFunDef false "isWildPat" ((PCon "PWild")) (EVar "True"))
+(DFunDef false "isWildPat" (PWild) (EVar "False"))
+(DTypeSig true "isHint" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isHint" ((PVar "n")) (EApp (EVar "startsWithAt") (EApp (EVar "stringToChars") (EVar "n"))))
+(DTypeSig false "startsWithAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "Bool")))
+(DFunDef false "startsWithAt" ((PVar "cs")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "arrayLength") (EVar "cs")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")) (ELit (LChar "@")))))
 (DTypeSig true "effectDeclUnstamped" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Decl")))))))
 (DFunDef false "effectDeclUnstamped" ((PVar "pub") (PVar "name") (PVar "dom") (PVar "axes") (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "name")) (EVar "dom")) (EVar "axes")) (EVar "OriginUnresolved")) (EVar "loc")))
 (DTypeSig true "effAtomWith" (TyFun (TyCon "String") (TyFun (TyCon "EffParamTy") (TyCon "EffAtomTy"))))
@@ -3120,6 +3218,42 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig false "recPatFieldNames" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "recPatFieldNames" ((PCon "RecPatField" (PVar "label") PWild PWild (PCon "None"))) (EListLit (EVar "label")))
 (DFunDef false "recPatFieldNames" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBoundNames") (EVar "p")))
+(DTypeSig true "patBindings" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "patBindings" ((PCon "PVar" (PVar "x") PWild PWild)) (EListLit (EVar "x")))
+(DFunDef false "patBindings" ((PCon "PWild")) (EListLit))
+(DFunDef false "patBindings" ((PCon "PLit" PWild)) (EListLit))
+(DFunDef false "patBindings" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
+(DFunDef false "patBindings" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patBindings") (EVar "a")) (EApp (EVar "patBindings") (EVar "b"))))
+(DFunDef false "patBindings" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
+(DFunDef false "patBindings" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
+(DFunDef false "patBindings" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBindings") (EVar "p"))))
+(DFunDef false "patBindings" ((PCon "PRng" PWild PWild PWild)) (EListLit))
+(DFunDef false "patBindings" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recFieldBindings")) (EVar "fields")))
+(DTypeSig true "recFieldBindings" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "recFieldBindings" ((PCon "RecPatField" (PVar "fname") PWild PWild (PCon "None"))) (EListLit (EVar "fname")))
+(DFunDef false "recFieldBindings" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBindings") (EVar "p")))
+(DTypeSig true "letBindName" (TyFun (TyCon "LetBind") (TyCon "String")))
+(DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
+(DTypeSig true "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
+(DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
+(DTypeSig true "fieldName" (TyFun (TyCon "Field") (TyCon "String")))
+(DFunDef false "fieldName" ((PCon "Field" (PVar "n") PWild)) (EVar "n"))
+(DTypeSig true "implMethodName" (TyFun (TyCon "ImplMethod") (TyCon "String")))
+(DFunDef false "implMethodName" ((PCon "ImplMethod" (PVar "n") PWild PWild)) (EVar "n"))
+(DTypeSig true "ifaceMethodName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
+(DFunDef false "ifaceMethodName" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
+(DTypeSig true "propParamName" (TyFun (TyCon "PropParam") (TyCon "String")))
+(DFunDef false "propParamName" ((PCon "PropParam" (PVar "x") PWild PWild)) (EVar "x"))
+(DTypeSig true "stripLocE" (TyFun (TyCon "Expr") (TyCon "Expr")))
+(DFunDef false "stripLocE" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "stripLocE") (EVar "e")))
+(DFunDef false "stripLocE" ((PVar "e")) (EVar "e"))
+(DTypeSig true "isWildPat" (TyFun (TyCon "Pat") (TyCon "Bool")))
+(DFunDef false "isWildPat" ((PCon "PWild")) (EVar "True"))
+(DFunDef false "isWildPat" (PWild) (EVar "False"))
+(DTypeSig true "isHint" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isHint" ((PVar "n")) (EApp (EVar "startsWithAt") (EApp (EVar "stringToChars") (EVar "n"))))
+(DTypeSig false "startsWithAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "Bool")))
+(DFunDef false "startsWithAt" ((PVar "cs")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "arrayLength") (EVar "cs")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")) (ELit (LChar "@")))))
 (DTypeSig true "effectDeclUnstamped" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Decl")))))))
 (DFunDef false "effectDeclUnstamped" ((PVar "pub") (PVar "name") (PVar "dom") (PVar "axes") (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DEffect") (EVar "pub")) (EVar "name")) (EVar "dom")) (EVar "axes")) (EVar "OriginUnresolved")) (EVar "loc")))
 (DTypeSig true "effAtomWith" (TyFun (TyCon "String") (TyFun (TyCon "EffParamTy") (TyCon "EffAtomTy"))))

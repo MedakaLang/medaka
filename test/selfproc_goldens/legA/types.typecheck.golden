@@ -1578,7 +1578,6 @@ implMatchesU : ImplUniverse -> IfaceRef -> List Mono -> Bool
 implMatchesWithReqsU : ImplUniverse -> IfaceRef -> List Mono -> Bool
 implMethodDictArity : IfaceRef -> String -> Int
 implMethodEVars : ImplMethod -> List String
-implMethodName : ImplMethod -> String
 implMethodNameTc : ImplMethod -> String
 implReqDictVarOf : Option PredicateRequest -> Mono -> ScopeId -> Option AssumAnswer
 implRequiresRoot : String -> Int -> List (String, Mono) -> List Require -> Bool
@@ -1917,8 +1916,6 @@ legacyReturnReqRoutesForRow : String -> ScopeId -> Mono -> ImplRow -> List Route
 letBindDictSites : LetBind -> List (List Route)
 letBindEVars : LetBind -> List String
 letBindGeneralizes : TcEnv -> (LetBind, (String, BindingSummary)) -> (Bool, Mono)
-letBindName : LetBind -> String
-letBindNameTc : LetBind -> String
 letBindSites : LetBind -> List (Ref Route)
 letGroupComponents : List LetBind -> List (List LetBind)
 letGroupDefs : List LetBind -> List (String, (List Pat, Expr))
@@ -2525,7 +2522,6 @@ processTopGroups : TcEnv -> List (String, Ty) -> List (String, (List Pat, Expr))
 producedSlotCovariants : Mono -> List Bool
 productAxesProblems : List (String, Param) -> Param -> List String
 projectedGivenOf : EvidenceBinderId -> List Int -> Option GivenEntry
-propParamName : PropParam -> String
 propParamNamesTc : List PropParam -> List String
 propagatePoison : Ref Tyvar -> Mono -> Unit
 pubTopFnNames : List Decl -> List String
@@ -3345,7 +3341,6 @@ varHeadHere : String -> Ty -> List Ty -> List (List Ty)
 varNameForId : List (String, Ty, List (String, Mono)) -> String -> Int -> String
 varianceOf : Polarity -> Variance
 variantIdentRow : String -> TyConOrigin -> Variant -> List (String, String, Ident)
-variantName : Variant -> String
 variantNamed : String -> List Variant -> Bool
 variantPayload : Variant -> ConPayload
 vecOblKey : VecObl -> String

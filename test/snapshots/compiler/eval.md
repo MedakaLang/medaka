@@ -1,5 +1,5 @@
 # META
-source_lines=5523
+source_lines=5515
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -16,6 +16,10 @@ stages=DESUGAR,MARK
 -- against dev/eval_probe.exe (Eval.eval_program ~prelude:false → Eval.pp_value).
 
 import frontend.ast.{
+  variantName,
+  ifaceMethodName,
+  fieldName,
+  implMethodName,
   noBinderId,
   Loc(..),
   Lit(..),
@@ -376,9 +380,6 @@ externDeclNamesOfDecls ((DAttrib _ inner) :: rest) =
   externDeclNamesOfDecls [inner] ++ externDeclNamesOfDecls rest
 externDeclNamesOfDecls (_ :: rest) = externDeclNamesOfDecls rest
 
-variantName : Variant -> String
-variantName (Variant n _) = n
-
 -- named-field constructor field order: maps ctor name → ordered field name list.
 -- Only ConNamed variants produce entries; positional ConPos ones produce nothing.
 export
@@ -433,9 +434,6 @@ inheritedEntryRows (Some dt) (DInterface { name, ifaceOrigin, methods, ... }) =
         (inheritorsOf (ifaceWordOf ifaceOrigin name) (ifaceMethodName m) dt))
     methods
 inheritedEntryRows _ _ = []
-
-ifaceMethodName : IfaceMethod -> String
-ifaceMethodName (IfaceMethod mname _ _ _) = mname
 
 isInheritedEntry : String -> String -> Bool
 isInheritedEntry mname word = match omLookup mname !inheritedEntryRef
@@ -539,9 +537,6 @@ ctorFieldOrderEntries _ = []
 variantFieldOrder : Variant -> List (String, List String)
 variantFieldOrder (Variant n (ConNamed fs _)) = [(n, map fieldName fs)]
 variantFieldOrder _ = []
-
-fieldName : Field -> String
-fieldName (Field n _) = n
 
 -- runtime "head type" tag for a value, for filtering VMulti candidates
 runtimeTypeTag : Value e -> Option String
@@ -2854,9 +2849,6 @@ implDeclNames (DImpl { methods, ... }) = map implMethodName methods
 -- cell, so the two halves cannot be split.
 implDeclNames (DInterface { methods, ... }) = flatMap defaultNamesOf methods
 implDeclNames _ = []
-
-implMethodName : ImplMethod -> String
-implMethodName (ImplMethod n _ _) = n
 
 defaultNamesOf : IfaceMethod -> List String
 defaultNamesOf (IfaceMethod n _ (Some _) _) = [n]
@@ -5526,7 +5518,7 @@ evalOneRootEnvWith : List (String, Value e) ->
 evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
   evalModulesRootEnvWith extraExterns preludeDecls [(rootId, prog)]
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false) (mem "defaultReceiverDict" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "variantName" false) (mem "ifaceMethodName" false) (mem "fieldName" false) (mem "implMethodName" false) (mem "noBinderId" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "typeTagOf" false) (mem "typeTagName" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "inheritorsOf" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "endsWith" false) (mem "zipL" false))))
@@ -5616,8 +5608,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "externDeclNamesOfDecls" ((PCons (PCon "DExtern" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "externDeclNamesOfDecls") (EVar "rest"))))
 (DFunDef false "externDeclNamesOfDecls" ((PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "externDeclNamesOfDecls") (EListLit (EVar "inner"))) (EApp (EVar "externDeclNamesOfDecls") (EVar "rest"))))
 (DFunDef false "externDeclNamesOfDecls" ((PCons PWild (PVar "rest"))) (EApp (EVar "externDeclNamesOfDecls") (EVar "rest")))
-(DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
-(DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig true "ctorFieldOrdersRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "ctorFieldOrdersRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "methodReqCountRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
@@ -5630,8 +5620,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "inheritedEntryRows" ((PVar "dt") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "inheritedEntryRows") (EVar "dt")) (EVar "d")))
 (DFunDef false "inheritedEntryRows" ((PCon "Some" (PVar "dt")) (PRec "DInterface" ((rf "name" None) (rf "ifaceOrigin" None) (rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "map") (ELam ((PVar "shape")) (ETuple (ETuple (EApp (EVar "ifaceMethodName") (EVar "m")) (EFieldAccess (EVar "shape") "isWord")) (ELit (LInt 1))))) (EApp (EApp (EApp (EVar "inheritorsOf") (EApp (EApp (EVar "ifaceWordOf") (EVar "ifaceOrigin")) (EVar "name"))) (EApp (EVar "ifaceMethodName") (EVar "m"))) (EVar "dt"))))) (EVar "methods")))
 (DFunDef false "inheritedEntryRows" (PWild PWild) (EListLit))
-(DTypeSig false "ifaceMethodName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
-(DFunDef false "ifaceMethodName" ((PCon "IfaceMethod" (PVar "mname") PWild PWild PWild)) (EVar "mname"))
 (DTypeSig false "isInheritedEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isInheritedEntry" ((PVar "mname") (PVar "word")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mname")) (EUnOp "!" (EVar "inheritedEntryRef"))) (arm (PCon "Some" (PVar "words")) () (EApp (EApp (EVar "omHasKey") (EVar "word")) (EVar "words"))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "buildMethodReqCounts" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int")))))
@@ -5671,8 +5659,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "variantFieldOrder" (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "variantFieldOrder" ((PCon "Variant" (PVar "n") (PCon "ConNamed" (PVar "fs") PWild))) (EListLit (ETuple (EVar "n") (EApp (EApp (EVar "map") (EVar "fieldName")) (EVar "fs")))))
 (DFunDef false "variantFieldOrder" (PWild) (EListLit))
-(DTypeSig false "fieldName" (TyFun (TyCon "Field") (TyCon "String")))
-(DFunDef false "fieldName" ((PCon "Field" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "runtimeTypeTag" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "runtimeTypeTag" ((PCon "VInt" PWild)) (EApp (EVar "Some") (ELit (LString "Int"))))
 (DFunDef false "runtimeTypeTag" ((PCon "VFloat" PWild)) (EApp (EVar "Some") (ELit (LString "Float"))))
@@ -6526,8 +6512,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "implDeclNames" ((PRec "DImpl" ((rf "methods" None)) true)) (EApp (EApp (EVar "map") (EVar "implMethodName")) (EVar "methods")))
 (DFunDef false "implDeclNames" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (EVar "defaultNamesOf")) (EVar "methods")))
 (DFunDef false "implDeclNames" (PWild) (EListLit))
-(DTypeSig false "implMethodName" (TyFun (TyCon "ImplMethod") (TyCon "String")))
-(DFunDef false "implMethodName" ((PCon "ImplMethod" (PVar "n") PWild PWild)) (EVar "n"))
 (DTypeSig false "defaultNamesOf" (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "defaultNamesOf" ((PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" PWild) PWild)) (EListLit (EVar "n")))
 (DFunDef false "defaultNamesOf" ((PCon "IfaceMethod" PWild PWild (PCon "None") PWild)) (EListLit))
@@ -7354,7 +7338,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "evalOneRootEnvWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "evalOneRootEnvWith" ((PVar "extraExterns") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EVar "extraExterns")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false) (mem "defaultReceiverDict" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "variantName" false) (mem "ifaceMethodName" false) (mem "fieldName" false) (mem "implMethodName" false) (mem "noBinderId" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "typeTagOf" false) (mem "typeTagName" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "inheritorsOf" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "endsWith" false) (mem "zipL" false))))
@@ -7444,8 +7428,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "externDeclNamesOfDecls" ((PCons (PCon "DExtern" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "externDeclNamesOfDecls") (EVar "rest"))))
 (DFunDef false "externDeclNamesOfDecls" ((PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "externDeclNamesOfDecls") (EListLit (EVar "inner"))) (EApp (EVar "externDeclNamesOfDecls") (EVar "rest"))))
 (DFunDef false "externDeclNamesOfDecls" ((PCons PWild (PVar "rest"))) (EApp (EVar "externDeclNamesOfDecls") (EVar "rest")))
-(DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
-(DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig true "ctorFieldOrdersRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "ctorFieldOrdersRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "methodReqCountRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
@@ -7458,8 +7440,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "inheritedEntryRows" ((PVar "dt") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "inheritedEntryRows") (EVar "dt")) (EVar "d")))
 (DFunDef false "inheritedEntryRows" ((PCon "Some" (PVar "dt")) (PRec "DInterface" ((rf "name" None) (rf "ifaceOrigin" None) (rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "shape")) (ETuple (ETuple (EApp (EVar "ifaceMethodName") (EVar "m")) (EFieldAccess (EVar "shape") "isWord")) (ELit (LInt 1))))) (EApp (EApp (EApp (EVar "inheritorsOf") (EApp (EApp (EVar "ifaceWordOf") (EVar "ifaceOrigin")) (EVar "name"))) (EApp (EVar "ifaceMethodName") (EVar "m"))) (EVar "dt"))))) (EVar "methods")))
 (DFunDef false "inheritedEntryRows" (PWild PWild) (EListLit))
-(DTypeSig false "ifaceMethodName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
-(DFunDef false "ifaceMethodName" ((PCon "IfaceMethod" (PVar "mname") PWild PWild PWild)) (EVar "mname"))
 (DTypeSig false "isInheritedEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isInheritedEntry" ((PVar "mname") (PVar "word")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mname")) (EUnOp "!" (EVar "inheritedEntryRef"))) (arm (PCon "Some" (PVar "words")) () (EApp (EApp (EVar "omHasKey") (EVar "word")) (EVar "words"))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "buildMethodReqCounts" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int")))))
@@ -7499,8 +7479,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "variantFieldOrder" (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "variantFieldOrder" ((PCon "Variant" (PVar "n") (PCon "ConNamed" (PVar "fs") PWild))) (EListLit (ETuple (EVar "n") (EApp (EApp (EMethodRef "map") (EVar "fieldName")) (EVar "fs")))))
 (DFunDef false "variantFieldOrder" (PWild) (EListLit))
-(DTypeSig false "fieldName" (TyFun (TyCon "Field") (TyCon "String")))
-(DFunDef false "fieldName" ((PCon "Field" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "runtimeTypeTag" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "runtimeTypeTag" ((PCon "VInt" PWild)) (EApp (EVar "Some") (ELit (LString "Int"))))
 (DFunDef false "runtimeTypeTag" ((PCon "VFloat" PWild)) (EApp (EVar "Some") (ELit (LString "Float"))))
@@ -8354,8 +8332,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "implDeclNames" ((PRec "DImpl" ((rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (EVar "implMethodName")) (EVar "methods")))
 (DFunDef false "implDeclNames" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (EVar "defaultNamesOf")) (EVar "methods")))
 (DFunDef false "implDeclNames" (PWild) (EListLit))
-(DTypeSig false "implMethodName" (TyFun (TyCon "ImplMethod") (TyCon "String")))
-(DFunDef false "implMethodName" ((PCon "ImplMethod" (PVar "n") PWild PWild)) (EVar "n"))
 (DTypeSig false "defaultNamesOf" (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "defaultNamesOf" ((PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" PWild) PWild)) (EListLit (EVar "n")))
 (DFunDef false "defaultNamesOf" ((PCon "IfaceMethod" PWild PWild (PCon "None") PWild)) (EListLit))

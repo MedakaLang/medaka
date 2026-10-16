@@ -12,6 +12,10 @@
 -- against dev/eval_probe.exe (Eval.eval_program ~prelude:false → Eval.pp_value).
 
 import frontend.ast.{
+  variantName,
+  ifaceMethodName,
+  fieldName,
+  implMethodName,
   noBinderId,
   Loc(..),
   Lit(..),
@@ -372,9 +376,6 @@ externDeclNamesOfDecls ((DAttrib _ inner) :: rest) =
   externDeclNamesOfDecls [inner] ++ externDeclNamesOfDecls rest
 externDeclNamesOfDecls (_ :: rest) = externDeclNamesOfDecls rest
 
-variantName : Variant -> String
-variantName (Variant n _) = n
-
 -- named-field constructor field order: maps ctor name → ordered field name list.
 -- Only ConNamed variants produce entries; positional ConPos ones produce nothing.
 export
@@ -429,9 +430,6 @@ inheritedEntryRows (Some dt) (DInterface { name, ifaceOrigin, methods, ... }) =
         (inheritorsOf (ifaceWordOf ifaceOrigin name) (ifaceMethodName m) dt))
     methods
 inheritedEntryRows _ _ = []
-
-ifaceMethodName : IfaceMethod -> String
-ifaceMethodName (IfaceMethod mname _ _ _) = mname
 
 isInheritedEntry : String -> String -> Bool
 isInheritedEntry mname word = match omLookup mname !inheritedEntryRef
@@ -535,9 +533,6 @@ ctorFieldOrderEntries _ = []
 variantFieldOrder : Variant -> List (String, List String)
 variantFieldOrder (Variant n (ConNamed fs _)) = [(n, map fieldName fs)]
 variantFieldOrder _ = []
-
-fieldName : Field -> String
-fieldName (Field n _) = n
 
 -- runtime "head type" tag for a value, for filtering VMulti candidates
 runtimeTypeTag : Value e -> Option String
@@ -2850,9 +2845,6 @@ implDeclNames (DImpl { methods, ... }) = map implMethodName methods
 -- cell, so the two halves cannot be split.
 implDeclNames (DInterface { methods, ... }) = flatMap defaultNamesOf methods
 implDeclNames _ = []
-
-implMethodName : ImplMethod -> String
-implMethodName (ImplMethod n _ _) = n
 
 defaultNamesOf : IfaceMethod -> List String
 defaultNamesOf (IfaceMethod n _ (Some _) _) = [n]

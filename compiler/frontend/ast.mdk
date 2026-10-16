@@ -807,6 +807,68 @@ recPatFieldNames : RecPatField -> List String
 recPatFieldNames (RecPatField label _ _ None) = [label]
 recPatFieldNames (RecPatField _ _ _ (Some p)) = patBoundNames p
 
+-- The names a pattern binds, in source order (`PRec` puns included).
+export
+patBindings : Pat -> List String
+patBindings (PVar x _ _) = [x]
+patBindings PWild = []
+patBindings (PLit _) = []
+patBindings (PCon _ ps) = flatMap patBindings ps
+patBindings (PCons a b) = patBindings a ++ patBindings b
+patBindings (PTuple ps) = flatMap patBindings ps
+patBindings (PList ps) = flatMap patBindings ps
+patBindings (PAs x _ _ p) = x :: patBindings p
+patBindings (PRng _ _ _) = []
+patBindings (PRec _ fields _) = flatMap recFieldBindings fields
+
+export
+recFieldBindings : RecPatField -> List String
+recFieldBindings (RecPatField fname _ _ None) = [fname]
+recFieldBindings (RecPatField _ _ _ (Some p)) = patBindings p
+
+export
+letBindName : LetBind -> String
+letBindName (LetBind n _ _ _) = n
+
+export
+variantName : Variant -> String
+variantName (Variant n _) = n
+
+export
+fieldName : Field -> String
+fieldName (Field n _) = n
+
+export
+implMethodName : ImplMethod -> String
+implMethodName (ImplMethod n _ _) = n
+
+export
+ifaceMethodName : IfaceMethod -> String
+ifaceMethodName (IfaceMethod n _ _ _) = n
+
+export
+propParamName : PropParam -> String
+propParamName (PropParam x _ _) = x
+
+-- Peel transparent `ELoc` wrappers.
+export
+stripLocE : Expr -> Expr
+stripLocE (ELoc _ e) = stripLocE e
+stripLocE e = e
+
+export
+isWildPat : Pat -> Bool
+isWildPat PWild = True
+isWildPat _ = False
+
+-- A hint name is one that starts with `@`.
+export
+isHint : String -> Bool
+isHint n = startsWithAt (stringToChars n)
+
+startsWithAt : Array Char -> Bool
+startsWithAt cs = arrayLength cs > 0 && arrayGetUnsafe 0 cs == '@'
+
 -- An effect declaration as the parser produces it: the resolver stamps its
 -- declaring origin, so before resolve it carries none.
 export
