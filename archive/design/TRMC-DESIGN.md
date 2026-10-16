@@ -399,7 +399,7 @@ a constrained self-call is a `CDict self routes` spine (not `CVar self`), so
 `isSelfHead`/`isSelfSatApp`/`selfFree` had to learn the CDict shape, and the leaf
 stores skip the loop-invariant leading dict slots (`dropFirstN`) because the self-call
 arg list covers only the value params.  See §"F2(b)" below and
-compiler/WASM-TMC-GAP-DESIGN.md.
+archive/design/WASM-TMC-GAP-DESIGN.md.
 
 **`filterMap` awaits B-match.** `filterMap`'s cons lives inside a `match` arm (`CDecision`),
 which `trmcBodyOk` does NOT descend (a tail cons in a match arm is the B-match-descent stage).
@@ -529,7 +529,7 @@ SMALL–MEDIUM, risk LOW.
 
 **F2(b) — dict-carrying / eta-reshaped constrained cons-tail impls.**
 ⚠️ **CORRECTED 2026-07-14 — the "no real target" audit was IMPL-SCOPED and its
-conclusion did NOT generalize** (compiler/WASM-TMC-GAP-DESIGN.md is the full
+conclusion did NOT generalize** (archive/design/WASM-TMC-GAP-DESIGN.md is the full
 post-mortem).  The audit below is accurate *about stdlib impls*: only
 `Eq`/`Ord`/`Debug`/`Display`/`Hashable` instances carry `requires`, and none BUILDS a
 list (their `::` is pattern-deconstruction; their recursion is direct-tail
@@ -619,7 +619,7 @@ path) + full `diff_compiler_*` + `selfcompile_fixpoint` C3a/C3b.
 ## Phase 3 (historical) — (b′) dispatch-into-single-target for LLVM — SCOPED & DEFERRED (2026-06-22)
 
 The WasmGC backend gained a novel **dispatch-into-single-target (b′)** TMC
-(`compiler/WASMGC-TRMC-DESIGN.md`): a tail-connected GROUP rooted at one cons-target
+(`archive/design/WASMGC-TRMC-DESIGN.md`): a tail-connected GROUP rooted at one cons-target
 (e.g. the lexer's `scan`) where cons-free routers (`scanAt`) tail-call into the group
 and leaves do `tok :: scan …`. A read-only-then-reverted port pass (2026-06-22)
 attempted to mirror it into the LLVM backend to keep the two in sync. **Verdict:

@@ -11,11 +11,11 @@ and the native **LLVM backend**, which now self-hosts the compiler to a
 reproducing fixpoint (all 7 stages native==interpreter; C1–C3). The bytecode VM
 (§2.2, `compiler/bytecode.mdk` + dedicated drivers) was removed 2026-06-10 as
 confirmed off the canonical path — kept here as historical record only. See
-[`BOOTSTRAP.md`](./BOOTSTRAP.md) for the as-built log and
-[`../PLAN.md` Stage 3](../PLAN.md#stage-3--make-the-llvm-backend-canonical-retire-ocaml)
+[`BOOTSTRAP.md`](../../compiler/BOOTSTRAP.md) for the as-built log and
+[`../PLAN.md` Stage 3](../../PLAN.md#stage-3--make-the-llvm-backend-canonical-retire-ocaml)
 for forward work. Decides the *shape* of Stage 2 (the North star's native-codegen
-stage; see [`../PLAN.md`](../PLAN.md) §"Stage 2 — LLVM backend"). Companion to
-[`README.md`](./README.md) §Performance and [`PERF-NOTES.md`](./PERF-NOTES.md).
+stage; see [`../PLAN.md`](../../PLAN.md) §"Stage 2 — LLVM backend"). Companion to
+[`README.md`](../../compiler/README.md) §Performance and [`PERF-NOTES.md`](PERF-NOTES.md).
 
 Stage 1 is done: a Medaka-written front-end (lex → parse → desugar → resolve →
 mark → typecheck → exhaust) plus a tree-walking interpreter (`eval.mdk`), all
@@ -50,13 +50,13 @@ Three facts about the current tree-walker and elaborated AST drive the whole
 analysis. All are in the self-hosted source.
 
 **1. Execution is per-node AST dispatch over a by-name environment.**
-`eval : EvalEnv -> Expr -> <Mut> Value` ([`eval.mdk:610`](eval.mdk:610)) matches
+`eval : EvalEnv -> Expr -> <Mut> Value` ([`eval.mdk:610`](../../compiler/eval.mdk:610)) matches
 on the `Expr` constructor for every node, every time it is reached. The
 environment is a stack of assoc-list frames —
-`EvalEnv (List (List (String, Ref Value)))` ([`eval.mdk:51`](eval.mdk:51)) — and
+`EvalEnv (List (List (String, Ref Value)))` ([`eval.mdk:51`](../../compiler/eval.mdk:51)) — and
 every `EVar` is a linear frame walk with string `==` per binding
-([`lookupFrames`, `eval.mdk:231`](eval.mdk:231);
-[`lookupFrameCell`, `eval.mdk:253`](eval.mdk:253)). The OCaml reference
+([`lookupFrames`, `eval.mdk:231`](../../compiler/eval.mdk:231);
+[`lookupFrameCell`, `eval.mdk:253`](../../compiler/eval.mdk:253)). The OCaml reference
 interpreter has the same shape; its assoc-list→Hashtbl env rewrite was the single
 biggest perf win of the overnight session (`PERF-NOTES.md` commit `f06727c`,
 ~10–30× across harnesses), but that only swapped the *data structure* for by-name
@@ -67,20 +67,20 @@ pipeline rewrites method/constrained-function occurrences into two nodes that
 carry a *resolved* dispatch decision:
 
 - `EMethodAt String (Ref Route) (Ref (List Route)) (Ref (List Route))`
-  ([`ast.mdk:182`](ast.mdk:182)) — a return-position method occurrence: the route
+  ([`ast.mdk:182`](../../compiler/ast.mdk:182)) — a return-position method occurrence: the route
   the typechecker fills, plus instance-`requires` and method-constraint dict routes.
-- `EDictAt String (Ref (List Route))` ([`ast.mdk:187`](ast.mdk:187)) — a
+- `EDictAt String (Ref (List Route))` ([`ast.mdk:187`](../../compiler/ast.mdk:187)) — a
   constrained-function occurrence, one route per `=>` constraint.
 - `Route = RNone | RKey String (List Route) | RDict String | RDictFwd String`
-  ([`ast.mdk:38`](ast.mdk:38)): `RKey` is a concrete impl head tag (with nested
+  ([`ast.mdk:38`](../../compiler/ast.mdk:38)): `RKey` is a concrete impl head tag (with nested
   per-instance requires routes); `RDict`/`RDictFwd` read a named dict parameter at
   runtime.
 
 The routes are computed in `typecheck.mdk` (`elaborate`/`elaborateDict`
-[`:1175`](typecheck.mdk:1175); `resolveSite` [`:1266`](typecheck.mdk:1266)), and
+[`:1175`](../../compiler/typecheck.mdk:1175); `resolveSite` [`:1266`](../../compiler/typecheck.mdk:1266)), and
 the tree-walker consumes them in three short arms — `narrowMethod` /
-`applyDicts` / `dictPass` ([`eval.mdk:618-621`](eval.mdk:618), and
-[`narrowMethod`/`applyDicts`, `eval.mdk:506-558`](eval.mdk:506)). **This is
+`applyDicts` / `dictPass` ([`eval.mdk:618-621`](../../compiler/eval.mdk:618), and
+[`narrowMethod`/`applyDicts`, `eval.mdk:506-558`](../../compiler/eval.mdk:506)). **This is
 already a dictionary-passing IR in all but name.** PLAN Stage 2's "dictionaries
 explicit … the existing elaboration already inserts `EMethodRef`/`EDictApp` —
 that is the foundation" (`PLAN.md:204-208`) is describing nodes that exist today.
@@ -114,7 +114,7 @@ survive a later LLVM port.
 | Decision-tree match compilation (from Maranget) | **Yes, the tree** | A decision tree is a backend-neutral transform; bytecode emits `SWITCH`/`TEST_TAG` leaves, LLVM emits `switch`/`br`. Only leaf emission differs. Half-built already in `exhaust.mdk`. |
 | Dict/dispatch *routing* (`RKey`/`RDict`, who supplies the dict) | **Yes, fully** | Already done in `typecheck.mdk`; both backends consume the routed `EMethodAt`/`EDictAt`. |
 | Core IR design (desugared, typed, dicts explicit, lexically addressed) | **Yes** — but *shared regardless* | You design this for LLVM whether or not a VM exists. It is not a *product of* the bytecode step. |
-| Runtime dict *representation* (flat `VDict String` tag, [`eval.mdk:47`](eval.mdk:47)) | **Partly** | A VM can keep the flat string-tag dict; LLVM wants a real dict struct / vtable pointer. Routing reused, representation rewritten. |
+| Runtime dict *representation* (flat `VDict String` tag, [`eval.mdk:47`](../../compiler/eval.mdk:47)) | **Partly** | A VM can keep the flat string-tag dict; LLVM wants a real dict struct / vtable pointer. Routing reused, representation rewritten. |
 | **Bytecode ISA + the VM dispatch loop** | **No** | This is the genuinely-discarded part. |
 
 So the README's "on-ramp, not throwaway" is **substantially true but mis-attributed**.
@@ -218,7 +218,7 @@ reframes the perf case sharply:
 
 - A **bytecode VM's** *unique* perf contribution beyond "lexical addressing in the
   tree-walker" is removing per-node AST re-dispatch (the `match` on `Expr` at
-  [`eval.mdk:610`](eval.mdk:610) runs for every node, every visit), enabling
+  [`eval.mdk:610`](../../compiler/eval.mdk:610) runs for every node, every visit), enabling
   compiled decision-tree matches, and confirming static dispatch (routes resolved
   at elaboration aren't re-searched in `VMulti` at runtime). Real, structural, and
   *all three transfer to LLVM* — but a more modest increment than "lexical
@@ -259,7 +259,7 @@ every site is at a concrete type (the `Parser` monad, no `=>` constraints,
   "Dictionary passing"); the remaining residuals are method-level-constraint
   dicts (`foldMap`'s Monoid), instance-`requires` dicts, and
   **nested/structured (non-flat) dictionaries** (`README.md:711-716`). The current
-  runtime dict is a flat `VDict String` ([`eval.mdk:47`](eval.mdk:47)) — single
+  runtime dict is a flat `VDict String` ([`eval.mdk:47`](../../compiler/eval.mdk:47)) — single
   level only. LLVM's "dictionaries explicit" Core IR forces the structured-dict
   question; a VM can defer it (keep the flat tag) and still run everything the
   bootstrap needs.
@@ -350,7 +350,7 @@ reference. The reference is the tree-walker (`eval_modules` / `eval_probe` and t
   an allocation counter, to attribute cost rather than guess.
 - Land the parked `(frame,slot)` rework: `resolve.mdk` emits a lexical address on
   each `EVar`, `eval.mdk` indexes array frames. Must preserve `VThunk` forcing
-  ([`eval.mdk:238`](eval.mdk:238)), the `FTable` globals, and Phase-112
+  ([`eval.mdk:238`](../../compiler/eval.mdk:238)), the `FTable` globals, and Phase-112
   `lookup_method`'s deliberate shadow-bypass.
   - **EMIT half DONE (2026-06-05).** `ast.mdk` gained `data Addr = ALocal Int Int
     | AGlobal` and a new node `EVarAt String Addr` (a *separate* node rather than
@@ -440,7 +440,7 @@ reference. The reference is the tree-walker (`eval_modules` / `eval_probe` and t
     without touching the Medaka runtime or any in-memory state.
 
 **2.2 — Bytecode compiler + VM, slice by slice.** Compile Core IR → bytecode; the
-VM interprets it reusing the host `Value` ([`eval.mdk:18`](eval.mdk:18)),
+VM interprets it reusing the host `Value` ([`eval.mdk:18`](../../compiler/eval.mdk:18)),
 externs, and GC. Slices mirror `eval.mdk`'s own progression:
 1. ✅ **DONE (2026-06-05)** arithmetic + variables (slot-indexed) + application;
 2. ✅ **DONE (2026-06-05)** `match` via compiled decision trees;
@@ -544,7 +544,7 @@ catalog re-implementation, calling convention, FFI). The per-extern disposition
 for all 71 primitives (intrinsic / leaf-native / unicode / IO / GC-control /
 rewrite-in-Medaka / convert-to-typeclass) — and the argument that the extern ABI
 should be proven at the §2.2 VM stage, against the tree-walker oracle, *before*
-LLVM — is in [`RUNTIME-DESIGN.md`](./RUNTIME-DESIGN.md).
+LLVM — is in [`RUNTIME-DESIGN.md`](../../compiler/RUNTIME-DESIGN.md).
 - **Gate:** native stdout diffed against the tree-walker (EVAL goldens) **and**
   against the bytecode VM — the VM is now a *second oracle* and a single-steppable
   reference that localizes whether a native failure is front-end/IR (shared,
@@ -574,7 +574,7 @@ LLVM — is in [`RUNTIME-DESIGN.md`](./RUNTIME-DESIGN.md).
   decision; the tag/box arithmetic lives in the emitted IR (visibly), and the rep is
   revisable in one place (`llvm_emit.mdk` + `medaka_rt.c`). The ratified-by-a-human
   proposal (tagged word vs NaN-box vs boxed-everything, + the `musttail` calling
-  convention) it fed is [`RUNTIME-DESIGN.md`](./RUNTIME-DESIGN.md) §8.
+  convention) it fed is [`RUNTIME-DESIGN.md`](../../compiler/RUNTIME-DESIGN.md) §8.
 - **SPIKE SLICE 2 DONE (2026-06-05) — top-level functions + direct calls.** Extends
   the spike from scalars to top-level functions and saturated direct calls, still
   against the same tree-walker oracle. Each `name p… = …` lowers to
@@ -782,7 +782,7 @@ LLVM — is in [`RUNTIME-DESIGN.md`](./RUNTIME-DESIGN.md).
 
 **2.4a-3 — Slice 6 (TYPECLASS DISPATCH).** The largest remaining Core-IR feature
   gap and the one the bootstrap needs: the self-host compiler dispatches
-  return-position via `RKey` ([`README.md:57`](README.md)). Two Core-IR nodes lower
+  return-position via `RKey` ([`README.md:57`](../../compiler/README.md)). Two Core-IR nodes lower
   here (no change to `core_ir.mdk` — Axis-1: `llvm_emit.mdk` is a sibling consumer of
   the unchanged IR): `CMethod name route implRoutes methRoutes` (a method occurrence)
   and `CDict name routes` (a `=>`-constrained-function occurrence). Each `Route =
@@ -973,7 +973,7 @@ LLVM — is in [`RUNTIME-DESIGN.md`](./RUNTIME-DESIGN.md).
   fixtures** (`str_lit`, `str_int`) byte-identical; the prior 46 plain / 6 typed and
   the core_ir/eval gates unaffected.  **Covered:** String literals, raw print,
   `intToString`.  **Remaining catalog work is scoped as ordered slices 2–16** in
-  [`../PLAN.md`](../PLAN.md) §"Native extern catalog — slice breakdown" (each sized
+  [`../PLAN.md`](../../PLAN.md) §"Native extern catalog — slice breakdown" (each sized
   to this same template for a Sonnet agent): the mechanical string/char/array/IO
   slices, the `Char`-rep lock (slice 8) and reserved-built-in-ADT-tag precursor
   (slice 10) that gate the rest, and the separately-flagged non-mechanical ones
@@ -1104,14 +1104,14 @@ catalog is ported** (slices 1–14 + RNG/sorts/hash) — proving the decided too
 (textual LLVM IR + `clang`, no llc/opt/bindings) end-to-end against the tree-walker
 oracle. Its job is **done**: it is *not* the real backend, and no further spike slices
 are planned. What remains is promotion (close the spike→real gap, then bootstrap). The
-near-term sequence (mirrored in [`../PLAN.md`](../PLAN.md) §"Native backend (Stage 2) —
+near-term sequence (mirrored in [`../PLAN.md`](../../PLAN.md) §"Native backend (Stage 2) —
 near-term sequence"):
 1. ✅ **Value representation + calling convention RATIFIED (2026-06-07)** — Option A
    (uniform tagged word) as the native encoding *under §8.6's shared abstract
    contract* (WasmGC-compatible by construction); constructor tag = **dense i32
    ctor-ordinal per type** (replaces the spike's i64 hash — `br_table`-ready, no
    collisions); uniform one-word header kept; `Float` boxed-first.
-   [`RUNTIME-DESIGN.md`](./RUNTIME-DESIGN.md) §8.
+   [`RUNTIME-DESIGN.md`](../../compiler/RUNTIME-DESIGN.md) §8.
 2. **Promote the spike to the real backend** — ~~integrate a GC (Boehm to start; the
    spike is malloc-and-leak)~~ **GC DONE 2026-06-07** (`mdk_alloc` → Boehm `GC_malloc`,
    conservative; verified collecting — ~3 MB RSS on a 2×10⁸-cons churn vs ~614 MB
@@ -1166,8 +1166,8 @@ near-term sequence"):
    to a standalone native binary.
 
 **2.4b — WasmGC as a planned second backend (the wedge's delivery vehicle).** The
-capability-effects wedge ([`../CAPABILITY-EFFECTS.md`](../docs/design/CAPABILITY-EFFECTS.md) /
-[`../CAPABILITY-PLATFORM.md`](../docs/design/CAPABILITY-PLATFORM.md)) ships on WebAssembly, so
+capability-effects wedge ([`../CAPABILITY-EFFECTS.md`](../../docs/design/CAPABILITY-EFFECTS.md) /
+[`../CAPABILITY-PLATFORM.md`](../../docs/design/CAPABILITY-PLATFORM.md)) ships on WebAssembly, so
 WasmGC is a *planned* sibling backend, not someday-maybe — reached by a **direct
 WasmGC emitter** (LLVM targets only linear-memory Wasm, not WasmGC). The discipline
 is a **soft pivot**, decided 2026-06-06: LLVM stays the *first* backend (serves the

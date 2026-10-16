@@ -3,4 +3,4 @@
 # diff_compiler_parse.sh, kept out of the shared test/parse_fixtures/ corpus that
 # diff_compiler_{desugar,mark}.sh also consume.  Currently empty: the former
 # tenant (decls_extra.mdk) graduated to parse_fixtures/ once desugar+mark learned
-# its Phase-B nodes.  See compiler/README.md ("Phase-B nodes").
+# its Phase-B nodes.  See archive/design/COMPILER-PORT-LOG.md ("Phase-B nodes").

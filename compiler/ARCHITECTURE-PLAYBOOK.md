@@ -20,7 +20,7 @@ commands before citing them.
 
 ---
 
-## 1. Where we are (measured 2026-10-14 at `48e36f797`)
+## 1. Where we are (measured 2026-10-15 at `e7f91529a`, the end of Phase 0)
 
 Re-derive with `make arch-census` and the census scripts archived with the evaluation at
 `archive/findings/architecture-evaluation-2026-10-15/census/` (run as
@@ -29,43 +29,42 @@ records the method and the full tables).
 
 | Measure | Value |
 |---|---|
-| Compiler source, non-test | 170 modules, 207,683 lines; median 230, p90 2,217 |
-| `types/typecheck.mdk` | 57,032 lines (30,601 code, 22,695 comment); 27.5% of the compiler; 85% of `types/` |
-| Its growth | 10,925 (Jul 1), 19,885 (Aug 1), 38,963 (Sep 1), 53,048 (Oct 1), 57,032 (Oct 14) |
-| Extracted from it since August | 21 sibling modules, about 9,800 lines |
-| Module-level `= Ref` cells | 106 in 27 modules; typecheck 26 plus 147 fields in 4 bundles |
-| Import graph | 994 edges, 0 cycles, 7 layering violations (4 via `backend.private_mangle`) |
-| llvm_emit / wasm_emit twins | 95 named pairs out of 869 llvm names |
-| Names defined in 2+ modules | 214 (36 with identical bodies; `letBindName` in 10 modules) |
+| Compiler source, non-test | 172 modules, 207,653 lines; median 216, p90 2,173 |
+| `types/typecheck.mdk` | 57,023 lines (30,597 code, 22,697 comment); 27.5% of the compiler; 83% of `types/` |
+| Its growth | 10,925 (Jul 1), 19,885 (Aug 1), 38,963 (Sep 1), 53,048 (Oct 1), 57,032 (Oct 14), 57,023 (Oct 15, ratchet in force) |
+| Extracted from it since August | 21 sibling modules, about 9,800 lines (as of Oct 14; not re-derived) |
+| Module-level `= Ref` cells | 108 in 28 modules (`test/arch_goldens/cells.golden`); typecheck 26 plus 147 fields in 4 bundles (bundles as of Oct 14) |
+| Import graph | 1,005 edges, 0 cycles, 3 layering violations (`layering.golden`) |
+| llvm_emit / wasm_emit twins | 94 named pairs out of 866 llvm names (`twins.golden`) |
+| Names defined in 2+ modules | 185 (0 identical bodies, pinned empty by `dupbodies.golden`) |
 | `lookupAssoc` call sites | 194 in 25 modules (85 in typecheck) |
-| Prelude cost | re-parsed and re-typechecked per process, about 90% of a hello-world `check` |
-| Design docs in `compiler/` | 66 files, 40,015 lines; 36 tagged IMPLEMENTED |
+| Prelude cost | re-parsed and re-typechecked per process, about 90% of a hello-world `check` (as of Oct 14; the stage counts are now pinned by `stage_counts.golden`) |
+| Design docs in `compiler/` | 21 files, 19,577 lines (the keep list); 47 moved to `archive/design/` and `docs/design/` |
 
 Open milestones this plan draws on: M-SOLVER (5 open), M-PUBLISH (1), M-PIPELINE (2),
-M-CACHE (5), M-BOUNDARIES (3), M-IDENTITY (11); run-once O2 (10), O3 (4), O4 (8), O5 (5).
+M-CACHE (5), M-BOUNDARIES (3), M-IDENTITY (11); run-once O2 (10), O3 (4), O4 (8), O5 (5)
+(as of Oct 14; not re-derived).
 
 ---
 
-## 2. Phase 0: guards (no behaviour change)
+## 2. Phase 0: guards (no behaviour change) — met 2026-10-15
 
-Each guard is one slice, needs no other phase, and can run in any order and in parallel
-with everything below. The phase exists because the structural work in Phases 1 to 4
-ran for two months while the file it targets grew 5x. Without guards the plan is a race
-it loses by construction.
+**Exit criterion, met 2026-10-15** (epic #4206, PRs #4215, #4221, #4222, #4226):
+`types/typecheck.mdk` is no larger than at the phase's start (30,597 code lines against a
+floor of 30,609); the G3 boundaries test is green and enrolled; `compiler/*.md` holds
+only current maps, destinations, this playbook and `AGENTS.md`, exactly the keep list.
+The guards now run in CI: `test/arch_ratchet.sh`, `test/arch_boundaries_test.mdk` and
+`test/stage_counts_test.mdk`, with their goldens under `test/arch_goldens/`.
 
-| Id | Action | Mechanism | Acceptance | Size | Needs |
-|---|---|---|---|---|---|
-| **G1** | Growth ratchet on `types/typecheck.mdk` | Code lines of `types/typecheck.mdk` at HEAD against the PR base, checked from `test/typecheck_compiler_source.sh` the way `test/registry_keying_ratchet.sh` is. The count may not grow. A commit trailer `Arch-Growth-Override: <reason>` is the opt-out, mirroring `Gate-Budget-Override`. | A PR adding one code line to the file reds the `soundness` context; the override line greens it; the baseline script is the only writer. | slice | D1 (ruled). Landed 2026-10-15 (P0-D1, P0-D2): `test/arch_ratchet.sh`, delta against the PR base with no committed baseline; the override is a commit trailer, not a PR-body line. |
-| **G2a** | Close the `private_mangle` layering violations | Move the whole `private_mangle` module to `types/` (P0-D6). | Layering violations fall from 7 to 3; selfcompile fixpoint; snapshot `--new` for the new module. | slice | none |
-| **G2b** | The hooks record | `support/hooks.mdk`: one record of function-typed `Ref` fields, each with a one-line contract, filled by `driver/medaka_cli.mdk` and each entry at startup. First consumer: none (the module lands with `hookUnset` and the written contract; the record arrives with its first field). A boundary check in `test/arch_boundaries_test.mdk` refuses `types/` modules that import `support.hooks`. | Field count pinned at 0 and may only change with a `Hooks-Field:` commit trailer; the import rule is observed red on a planted import. | slice | D2 (ruled). Landed 2026-10-15 (P0-D3, P0-D4): `compiler/support/hooks.mdk` carries the contract and `hookUnset`, no record yet; the import rule and the field-count pin are in `test/arch_boundaries_test.mdk`, not a lint arm. |
-| **G3** | Architecture goldens | A native gate test under `test/` (planned name `arch_boundaries_test`) that computes and pins: the layering-violation count (A1), module-level cell count per module (A3), the llvm/wasm twin count (A4), the hooks field count (A6), and the sorted import closure of `frontend/ast`, `types/repr`, `ir/core_ir` (A9). Each pin may only fall or stay. | Each check observed red by planting one violation; enrolled in `test/gates.toml` with a cost row and `medaka gate balance`. | slice | Landed 2026-10-15 (P0-D3, P0-D7): `test/arch_boundaries_test.mdk` pins layering, cells, hooks fields and three closures under `test/arch_goldens/`; twins and identical bodies follow in the next slice. |
-| **G4** | Documentation in three piles | Create `compiler/archive/`; move the 36 IMPLEMENTED docs there with `git mv` (links follow, the index is regenerated); write one `ARCHITECTURE.md` per compiler directory (under 100 lines, no line numbers, the parts and the laws that bind them); retire `ARCH-REVIEW.md` into the archive once its open items are issues. | `make docs-index`, `make docs-links` and `make doc-census` green; `compiler/*.md` count falls below 20; every moved doc reachable from the generated index. | sprint (docs only, cheap model) | D3 (ruled) |
-| **G5** | Helper dedup | Finish `HELPER-CENSUS.md` steps 3 onward: the 36 names with identical bodies get one definition in `support/` or the stdlib; `letBindName` becomes one function in `frontend/ast.mdk`; the census becomes a pinned count. | `python3 -I census.py <root> D` reports 0 identical bodies; the duplicate-name count is pinned in G3 and may only fall; selfcompile fixpoint. | sprint (cheap model) | none |
-| **G6** | Pin compute-once | For each verb probe the duplicate-work survey measured (`check`, `check --target`, `run`, `build`, `test`, `lint`, LSP hover), pin the stage call counts (parse, desugar, resolve, typecheck drives) as a native test over `--json` or a probe entry, so the O1 wins and every later phase's wins cannot regress silently (#4189). | Reverting PR #4176 reds the pin; the pin reads counts from an instrument, not wall time. | slice | none |
-
-**Exit criterion for Phase 0.** `types/typecheck.mdk` is no larger than at the phase's
-start; the G3 boundaries test is green and enrolled; `compiler/*.md` holds only
-current maps, destinations, this playbook and `AGENTS.md`.
+| Id | Action | Landed |
+|---|---|---|
+| **G1** | Growth ratchet on `types/typecheck.mdk` | 2026-10-15 (P0-D1, P0-D2): `test/arch_ratchet.sh`, delta against the PR base with no committed baseline; the override is a commit trailer, not a PR-body line. #4200, PR #4215. |
+| **G2a** | Close the `private_mangle` layering violations | 2026-10-15 (P0-D6): the whole module moved to `types/`; layering violations 7 to 3. #4201, PR #4215. |
+| **G2b** | The hooks record | 2026-10-15 (P0-D3, P0-D4): `compiler/support/hooks.mdk` carries the contract and `hookUnset`, no record yet; the import rule and the field-count pin are in `test/arch_boundaries_test.mdk`. #4202, PR #4215. |
+| **G3** | Architecture goldens | 2026-10-15 (P0-D3, P0-D7, P0-D8): `test/arch_boundaries_test.mdk` pins layering, cells, hooks fields, three closures, twins and identical bodies under `test/arch_goldens/`. #4203, PR #4215. |
+| **G4** | Documentation in three piles | 2026-10-15 (P0-D5): landed design docs in `archive/design/`, open proposals in `docs/design/`, nine `ARCHITECTURE.md` maps, `compiler/README.md` as the entry page with the old body in `archive/design/COMPILER-PORT-LOG.md`. #4204, PR #4226. |
+| **G5** | Helper dedup | 2026-10-15 (P0-D8, P0-D9): `dupbodies.golden` is empty; `typecheck.mdk` 30,609 to 30,597 code lines; exempt residue `ir/core_ir_eval.nthArm` and `backend/emit_support.nthArm`. #4205, PR #4222; residue #4229. |
+| **G6** | Pin compute-once | 2026-10-15: `test/stage_counts_test.mdk` pins per-verb stage counts (7 CLI probes, 4 LSP transcripts) from a write-only instrument, `support/stage_count.mdk`; counts above 1 are pinned at today's value with their owning issue (#4148, #4151, #4160). #4189, PR #4221; gaps #4228. |
 
 ---
 
@@ -182,7 +181,7 @@ later sprint executes them and does not re-ask.
 |---|---|---|---|
 | **D1** | A may-only-fall code-line ratchet on `types/typecheck.mdk` alone, with a commit-trailer override. #2289 declined a tree-wide size gate because "a size ratchet teaches avoidance, not architecture"; this is a growth stop on one file, with an explicit reviewed opt-out, which is the rustc form. | G1 | **Adopted.** The soft census had not moved the curve in two months. #2289's tree-wide refusal stands; this is one file. |
 | **D2** | The hooks record's admissibility rule: rendering, tooling and backend-fact lookups only, never read from inference. | G2b | **Accepted** as written in A6. |
-| **D3** | Archive location (`compiler/archive/` beside `archive/PLAN-ARCHIVE.md` at the root) and the per-directory `ARCHITECTURE.md` shape (under 100 lines, no line numbers). | G4 | **Accepted:** `compiler/archive/`; the per-directory maps replace `ARCH-REVIEW.md`; `TYPECHECK-ARCHITECTURE.md` stays until Phase 4 re-derives it per module. *Open detail for G4:* the root `archive/design/` tier already exists for exactly this class of doc ("status banner says IMPLEMENTED or SUPERSEDED", `archive/README.md`) and `test/gen_docs_index.sh` already indexes it, so G4 may propose using it instead of a new `compiler/archive/`; that amendment is Val's to take when G4 is cut. |
+| **D3** | Archive location (`compiler/archive/` beside `archive/PLAN-ARCHIVE.md` at the root) and the per-directory `ARCHITECTURE.md` shape (under 100 lines, no line numbers). | G4 | **Accepted, amended by P0-D5 (Val ruling 2026-10-15, Phase 0 planning):** the archive is the root `archive/design/` tier, not `compiler/archive/`; it is the existing home for this class of doc and `test/gen_docs_index.sh` indexes it. Open proposals go to `docs/design/`. The per-directory maps replace `ARCH-REVIEW.md`; `TYPECHECK-ARCHITECTURE.md` stays until Phase 4 re-derives it per module. |
 | **D4** | Who owns `build`'s front end (#4160): the child runs resolve, or the parent hands the artifact across. | V3, C3 | **Accepted** in two steps: until C1 exists, the emitter child runs the whole pipeline including resolve and the parent stops doing front-end work; once C1 exists, the parent hands the artifact across. This also closes #2874's residual. |
 | **D5** | How a value `main` is checked (#4151) without a modified prelude defeating the memo. | V3 | **Accepted:** the auto-print obligation becomes an ordinary wanted on `main`'s type, solved in the same drive against the unmodified prelude. The implementing slice first confirms, by reading `autoPrintPinCore` and `COMPOSITE-MAIN-AUTOPRINT-DESIGN.md`, that the obligation is one predicate. |
 | **D6** | How the prelude's interface is delivered. | C2 | **Accepted: shipped interface files, OCaml's form.** `make medaka` produces one interface file per stdlib module beside the sources (`core.mdk` first), keyed by the source fingerprint the binary already bakes; the loader prefers the interface when the fingerprint matches, resolving it from `exeDir` as it already resolves `stdlib/`. Not baked into the binary: OCaml (`stdlib/*.cmi`), GHC (`base`'s `.hi` in the package db) and rustc (`std`'s `.rmeta` in the sysroot) all ship installed interface files beside the compiler and load them lazily, and one loader then serves the prelude, the stdlib and (C3) user modules. The playground fetches the interface the way it fetches `dist/*.mdk`. |

@@ -1,6 +1,6 @@
 # Self-host performance notes & log
 
-**Status:** SUPERSEDED BY `compiler/PERF-RESULTS.md` / `compiler/PERF-SCOPE.md`. This is
+**Status:** SUPERSEDED BY `compiler/PERF-RESULTS.md` / `archive/design/PERF-SCOPE.md`. This is
 the pre-LLVM-backend, pre-OCaml-removal perf log (an abandoned bytecode-VM experiment
 included). **Do NOT follow the "How to run things" section below** — it instructs
 `opam`/`dune`/`./_build/default/bin/main.exe`, all removed 2026-06-26, and its
@@ -13,7 +13,7 @@ nothing left to run it against; the rest of this file is kept as historical reco
 Living record of performance work on the self-hosted compiler (`compiler/*.mdk`)
 and its diff harnesses (`test/diff_compiler_*.sh`), from the era **before** the LLVM
 backend existed. **HISTORICAL — do not append new measurements here; use
-`compiler/PERF-RESULTS.md` (self-compile) or `compiler/PERF-RUNTIME.md` (compiled-program
+`compiler/PERF-RESULTS.md` (self-compile) or `archive/design/PERF-RUNTIME.md` (compiled-program
 perf) instead.**
 
 The harnesses ran the OCaml interpreter (`lib/eval.ml`, a tree-walker, since removed) over
@@ -44,7 +44,7 @@ self-hosted program was ~0.05s; a self-hosted parse of `core.mdk` (1003 lines) w
 > all removed 2026-06-26. There is no OCaml-free equivalent worth reconstructing here: this
 > whole log predates the LLVM backend, and the current profiling method is documented in
 > AGENTS.md's "Hunting an O(n²)" section (`MEDAKA_PERF=1 test/bin/profile_main …` +
-> `perf record --call-graph dwarf`) and `compiler/PERF-SCOPE.md`/`compiler/PERF-RESULTS.md`.
+> `perf record --call-graph dwarf`) and `archive/design/PERF-SCOPE.md`/`compiler/PERF-RESULTS.md`.
 > Use those instead.**
 
 ## What's already done (don't redo)

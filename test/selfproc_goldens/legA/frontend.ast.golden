@@ -23,6 +23,7 @@ effParamSurface : (String -> String) -> EffParamTy -> String
 effSetSurface : (String -> String) -> List String -> String
 effectDeclUnstamped : Bool -> String -> Option String -> List (String, String) -> Option Loc -> Decl
 externDataUnresolved : Bool -> String -> List String -> List (Option KindAnn) -> Decl
+fieldName : Field -> String
 firstTyLoc : Ty -> Option Loc
 firstTyLocList : List Ty -> Option Loc
 fixedWidthMask : String -> Option Int
@@ -31,19 +32,24 @@ identOriginFold : a -> (String -> a) -> IdentOrigin -> a
 identOriginOf : TyConOrigin -> Option IdentOrigin
 ifaceIdMatches : String -> String -> Bool
 ifaceIdentity : TyConOrigin -> String -> String
+ifaceMethodName : IfaceMethod -> String
+implMethodName : ImplMethod -> String
 intMinLiteralHelp : String
 intMinLiteralMsg : String
 isBoxed64Head : String -> Bool
 isFixedIntHead : String -> Bool
 isFixedWidthHead : String -> Bool
+isHint : String -> Bool
 isI32Head : String -> Bool
 isI64Head : String -> Bool
 isTaggedFixedHead : String -> Bool
 isU64Head : String -> Bool
 isUnsignedHead : String -> Bool
+isWildPat : Pat -> Bool
 kindAnnArg : KindAnn -> String
 kindAnnSource : KindAnn -> String
 kindAuthorityUnstamped : String -> Bool -> Option Loc -> KindAnn
+letBindName : LetBind -> String
 lookupTab : TabKey -> List (TabKey, a) -> Option a
 mapArmsB : (Ty -> (Ty, Bool)) -> List Arm -> (List Arm, Bool)
 mapConstraintsB : (Ty -> (Ty, Bool)) -> List Constraint -> (List Constraint, Bool)
@@ -75,14 +81,19 @@ negateLiteral : Int -> Int
 noBinderId : BinderId
 noDeclLoc : Loc
 orElseLoc : Option Loc -> Option Loc -> Option Loc
+patBindings : Pat -> List String
 patBoundNames : Pat -> List String
 patternMark : Bool -> String
+propParamName : PropParam -> String
 qualifiedLocal : String -> String -> String
 qualifierSource : (String -> String) -> List EffParamTy -> String
+recFieldBindings : RecPatField -> List String
 recPatFieldNames : RecPatField -> List String
 requireUnresolved : String -> List Ty -> Require
 sameTyConHead : String -> TyConOrigin -> String -> TyConOrigin -> Bool
 setDeclNameLoc : Loc -> Decl -> Decl
+startsWithAt : Array Char -> Bool
+stripLocE : Expr -> Expr
 superUnresolved : String -> List String -> Super
 tabHasName : String -> List (TabKey, a) -> Bool
 tabKeyEq : TabKey -> TabKey -> Bool
@@ -97,3 +108,4 @@ tyParamSources : List String -> List (Option KindAnn) -> List String
 useMemberAlias : UseMember -> Option String
 useMemberLocal : UseMember -> String
 useMemberOrigin : UseMember -> String
+variantName : Variant -> String

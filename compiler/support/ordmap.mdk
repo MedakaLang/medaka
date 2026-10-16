@@ -1,6 +1,6 @@
 -- `OrdMap a` is a transparent alias for `Map String a` (stdlib/map.mdk).
 -- Type-alias expansion now works end-to-end (see
--- `compiler/TYPE-ALIAS-EXPANSION-DESIGN.md` §10 AS-BUILT), so the old
+-- `archive/design/TYPE-ALIAS-EXPANSION-DESIGN.md` §10 AS-BUILT), so the old
 -- `data OrdMap a = OEmpty | OMap (Map String a)` wrapper is no longer needed.
 -- The `om*` helpers below are String-keyed (`omLookup` and `omHasKey` descend
 -- the tree with a direct String compare) and are kept for the existing call sites in types/typecheck.mdk, backend/llvm_emit.mdk, and support/util.mdk.

@@ -145,7 +145,7 @@ listing.
      `(,)`/`(,,)`/`(,,,)`/`(,,,,)` surface syntax names the bare (unsaturated)
      tuple constructor in type position, which is what makes `impl Bimappable (,)`
      possible at all (a saturated `(a, b)` head is kind-inconsistent with a
-     higher-kinded class param). See `compiler/TUPLE-TYPE-CONSTRUCTOR-DESIGN.md`.
+     higher-kinded class param). See `archive/design/TUPLE-TYPE-CONSTRUCTOR-DESIGN.md`.
      Seed re-minted (`9671acd`) — the prior seed couldn't parse `(,)`.
 
 **Deferred to P2** (per the tiering above — unchanged by this session):

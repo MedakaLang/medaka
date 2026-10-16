@@ -1,5 +1,5 @@
 # META
-source_lines=670
+source_lines=679
 stages=DESUGAR,MARK
 # SOURCE
 -- Shared internal helpers for the self-hosted compiler stages.  compiler
@@ -319,6 +319,15 @@ isEmptyL _ = False
 export
 isNonEmptyL : List a -> Bool
 isNonEmptyL xs = not (isEmptyL xs)
+
+export
+eqStr : String -> String -> Bool
+eqStr a b = a == b
+
+-- The identity entry `(n, n)` for a name imported or re-exported unchanged.
+export
+selfBinding : String -> (String, String)
+selfBinding n = (n, n)
 
 export
 filterList : (a -> Bool) -> List a -> List a
@@ -746,6 +755,10 @@ hexDigits k n acc =
 (DFunDef false "isEmptyL" (PWild) (EVar "False"))
 (DTypeSig true "isNonEmptyL" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
 (DFunDef false "isNonEmptyL" ((PVar "xs")) (EApp (EVar "not") (EApp (EVar "isEmptyL") (EVar "xs"))))
+(DTypeSig true "eqStr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "eqStr" ((PVar "a") (PVar "b")) (EBinOp "==" (EVar "a") (EVar "b")))
+(DTypeSig true "selfBinding" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))
+(DFunDef false "selfBinding" ((PVar "n")) (ETuple (EVar "n") (EVar "n")))
 (DTypeSig true "filterList" (TyFun (TyFun (TyVar "a") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "filterList" (PWild (PList)) (EListLit))
 (DFunDef false "filterList" ((PVar "p") (PCons (PVar "x") (PVar "xs"))) (EIf (EApp (EVar "p") (EVar "x")) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "filterList") (EVar "p")) (EVar "xs"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "filterList") (EVar "p")) (EVar "xs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -929,6 +942,10 @@ hexDigits k n acc =
 (DFunDef false "isEmptyL" (PWild) (EVar "False"))
 (DTypeSig true "isNonEmptyL" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
 (DFunDef false "isNonEmptyL" ((PVar "xs")) (EApp (EVar "not") (EApp (EVar "isEmptyL") (EVar "xs"))))
+(DTypeSig true "eqStr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "eqStr" ((PVar "a") (PVar "b")) (EBinOp "==" (EVar "a") (EVar "b")))
+(DTypeSig true "selfBinding" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))
+(DFunDef false "selfBinding" ((PVar "n")) (ETuple (EVar "n") (EVar "n")))
 (DTypeSig true "filterList" (TyFun (TyFun (TyVar "a") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "filterList" (PWild (PList)) (EListLit))
 (DFunDef false "filterList" ((PVar "p") (PCons (PVar "x") (PVar "xs"))) (EIf (EApp (EVar "p") (EVar "x")) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "filterList") (EVar "p")) (EVar "xs"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "filterList") (EVar "p")) (EVar "xs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

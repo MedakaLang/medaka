@@ -4,7 +4,7 @@
 convention RATIFIED, String representation DECIDED, native runtime exists and is
 canonical (verified live below). Still open: the `set_ref` write barrier (moot as long
 as Boehm GC, non-moving, stays the collector) and the "panic unwind model" — the latter
-is tracked and still genuinely open in `compiler/RUNTIME-TRAP-UNIFY-DESIGN.md` (verified:
+is tracked and still genuinely open in `docs/design/RUNTIME-TRAP-UNIFY-DESIGN.md` (verified:
 `stdlib/array.mdk:268` still has a bare uncoded `panic "Array.set: index out of bounds"`,
 exactly the under-coded state that doc's repro matrix describes).
 
@@ -16,7 +16,7 @@ interpreter is replaced by a bytecode VM (Stage 2.2, since removed as off the ca
 path — see `STAGE2-DESIGN.md`) and then LLVM (Stage 2.4, now canonical). This is the
 contract the native runtime must satisfy and the per-extern disposition for building it.
 
-See [`STAGE2-DESIGN.md`](./STAGE2-DESIGN.md) for the backend-architecture decision
+See [`STAGE2-DESIGN.md`](../archive/design/STAGE2-DESIGN.md) for the backend-architecture decision
 (bytecode-VM-first) and [`../PLAN.md`](../PLAN.md) "North star → Stage 2".
 
 > **Status (updated 2026-06-07; canonical flip done 2026-06-12):** the value representation + calling convention are

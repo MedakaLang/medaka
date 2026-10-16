@@ -16,6 +16,7 @@
 -- generic helpers still come from support.util; the rest is inline.
 
 import frontend.ast.{
+  letBindName,
   noBinderId,
   -- `frontend/exhaust.mdk`'s `typeCtors` is keyed by declaration identity
   -- (oracle-identity family leaf L1), so this file's three oracle consumers
@@ -1170,9 +1171,6 @@ topLevelBinders (DLetGroup _ binds) = map letBindName binds
 topLevelBinders (DInterface { methods, ... }) = map ifaceMethodNameOf methods
 topLevelBinders (DAttrib _ d) = topLevelBinders d
 topLevelBinders _ = []
-
-letBindName : LetBind -> String
-letBindName (LetBind n _ _ _) = n
 
 ifaceMethodNameOf : IfaceMethod -> String
 ifaceMethodNameOf (IfaceMethod n _ _ _) = n
@@ -4716,7 +4714,7 @@ whenUnlessFix _ d = exprRuleFix whenUnlessExcl (detApply whenUnlessOf) d
 -- `q`, rewritten to `q args…` (the args carried verbatim).  Curated BIDIRECTIONAL
 -- pairs only — the complement must actually exist:
 --   isEmptyL ↔ isNonEmptyL   (compiler `support/util.mdk`)
---   isEmptyList ↔ isNonEmptyList  (wasm_emit's private List helper + its complement)
+--   isEmptyList ↔ isNonEmptyList  (a List helper pair some modules define locally)
 --   isSome ↔ isNone          (prelude `core.mdk`)
 --   isOk ↔ isErr             (prelude `core.mdk`)
 -- Matches the `not` prelude-fn form only (see `notArgOf`).  Purely syntactic —

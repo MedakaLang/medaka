@@ -82,11 +82,25 @@ sentinelLine : String -> String -> String
 sentinelLine prefix tag = prefix ++ tag
 
 -- Fold a per-run nonce into an engine's fixed prefix base. Both engines call
--- this identically; only the base differs between them (already true of
--- `sentinelPrefix` before the nonce existed).
+-- this identically; only the base differs between them.
 export
 noncedPrefix : String -> String -> String
 noncedPrefix base nonce = "\{base}\{nonce}@@ "
+
+-- The nonce as an identifier fragment, and the probe-local alias built from it.
+export
+probeNameNonce : String -> String
+probeNameNonce nonce = replaceAll "-" "_" nonce
+
+export
+runtimeAlias : String -> String
+runtimeAlias nonce = "NpRuntime_\{probeNameNonce nonce}"
+
+-- Tag of the start chunk for test index `i`.  It is printed BEFORE the body is
+-- forced, so a panicking body is named rather than blamed on its predecessor.
+export
+startTag : Int -> String
+startTag i = "\{intToString i}.start"
 
 -- A scratch probe imports the runtime catalog through this generated dependency
 -- name.  It is deliberately separate from the probe's aliases: dependency

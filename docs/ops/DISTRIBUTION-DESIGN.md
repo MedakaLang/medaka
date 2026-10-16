@@ -210,7 +210,7 @@ the observed case. This is what splits the fix cleanly into two tracks (D2).
     ported to native.** The backtrace (§3a) proved the observed overflow is 100%
     the `b′`-shaped lexer token-spine; the native LLVM emitter now transforms it
     (shared detection in `backend/trmc_analysis.mdk`; the group inlines into the
-    root's single define — `compiler/TRMC-DESIGN.md` §Phase 3). The lexer token
+    root's single define — `archive/design/TRMC-DESIGN.md` §Phase 3). The lexer token
     spine is O(1) native stack (2M-deep gate fixture); both backends TMC
     identical function sets, gated by `test/diff_compiler_tmc_parity_test.mdk`.
     (Note: the §3a speculation that this alone lets self-compile fit an 8 MB

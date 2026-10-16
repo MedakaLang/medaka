@@ -10,6 +10,7 @@
 
 import support.stage_count.{stageBump}
 import frontend.ast.{
+  stripLocE,
   noBinderId,
   BinderId(..),
   KindAnn(..),
@@ -256,12 +257,6 @@ rewriteAssignIndex e = e
 assignIndexLhs : Expr -> Expr -> Expr -> Ref Route -> Expr
 assignIndexLhs (EIndex a i _) _ v _ = EApp (callBin "setIndex" a i) v
 assignIndexLhs _ lhs v r = EBinOp ":=" lhs v r
-
--- Peel transparent ELoc wrappers so the LHS shape is visible (mirror of the
--- parser's local `stripLoc`).
-stripLocE : Expr -> Expr
-stripLocE (ELoc _ e) = stripLocE e
-stripLocE e = e
 
 -- guard arms → nested if/match, terminated by `__fallthrough__ ()` (fold_right)
 guardsToCore : List GuardArm -> Expr

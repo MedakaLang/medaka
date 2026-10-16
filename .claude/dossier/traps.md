@@ -217,7 +217,7 @@ literal-character form to a 219-byte file produced 235 bytes, not 223.
   biggest instance — is this same register: provably wrong regardless of
   what it says. When relocating a paragraph out of source rather than
   deleting it outright, the pointer left behind MUST name the destination as
-  a **repo-relative path** (e.g. `compiler/STAGE2-DESIGN.md` §4), never a
+  a **repo-relative path** (e.g. `archive/design/STAGE2-DESIGN.md` §4), never a
   bare prose description — this is currently unverified by any gate for a
   RELOCATED paragraph specifically: `test/check_doc_links.sh`'s citing
   corpus is `git ls-files '*.md' '*.sh' '*.mdk' '*.txt'` (so a pointer left
@@ -372,6 +372,6 @@ reached for constantly.
 | `compiler/ERROR-QUALITY.md` | Error-message rubric — read before writing a diagnostic |
 | `compiler/DIAGNOSTIC-CODES-DESIGN.md` | Diagnostic code taxonomy + `Diag` JSON contract |
 | `compiler/PERF-RESULTS.md` / `PERF-SCOPE.md` | Perf log / ranked hot paths (`test/bench.sh`) |
-| `compiler/STAGE2-DESIGN.md` / `RUNTIME-DESIGN.md` | Backend design: Core IR seam, value rep, GC, per-extern disposition |
+| `archive/design/STAGE2-DESIGN.md` / `RUNTIME-DESIGN.md` | Backend design: Core IR seam, value rep, GC, per-extern disposition |
 | `docs/stdlib/index.md` | **THE stdlib reference** — generated, name-by-name, per-module signatures/docs/impls for every `stdlib/*.mdk` (`./medaka doc --out docs/stdlib stdlib/*.mdk stdlib/*/*.mdk`). Answer "does the stdlib have X" here, not in `STDLIB.md`. |
 | `docs/stdlib/STDLIB.md` / `stdlib/README.md` | Stdlib design rationale, history, and open roadmap (demoted from reference — see `docs/stdlib/index.md`) / conventions for externs |

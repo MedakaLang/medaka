@@ -106,7 +106,7 @@ which closed Map-impl + #21 one-level via `argImplRequiresRoutesRec`)** — exte
 `requires`-route propagation one level deeper. Diagnose against #13's fix. `compiler/typecheck.mdk`.
 **Siblings (doc-confirmed, `build` not directly exercised in the audit — VERIFY first):**
 - **C7-native:** the native backend keys impls by head tycon only → `Def (Pair Int Bool)` vs
-  `(Pair Bool Int)` mis-dispatch in `build`. `compiler/TYPECHECK-AUDIT.md` §C7.
+  `(Pair Bool Int)` mis-dispatch in `build`. `archive/design/TYPECHECK-AUDIT.md` §C7.
 - **D4:** `RHeadKey` route absent in compiler — non-ground headed dict-apps degrade to
   arg-tag/RNone; latent regression risk when the OCaml oracle retires.
 

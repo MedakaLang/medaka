@@ -1,5 +1,5 @@
 # META
-source_lines=6787
+source_lines=6778
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -93,6 +93,9 @@ import frontend.lexer.{
   lineStartsOf,
   offsetToLineColFast,
   describeToken,
+  isCommaTok,
+  isElseTok,
+  isThenTok,
 }
 import support.util.{reverseL, joinWith}
 import list.{last}
@@ -4995,10 +4998,6 @@ isColonTok : Token -> Bool
 isColonTok TColon = True
 isColonTok _ = False
 
-isCommaTok : Token -> Bool
-isCommaTok TComma = True
-isCommaTok _ = False
-
 isConsTok : Token -> Bool
 isConsTok TCons = True
 isConsTok _ = False
@@ -5010,10 +5009,6 @@ isDedentTok _ = False
 isDeferTok : Token -> Bool
 isDeferTok TDefer = True
 isDeferTok _ = False
-
-isElseTok : Token -> Bool
-isElseTok TElse = True
-isElseTok _ = False
 
 isEofTok : Token -> Bool
 isEofTok TEof = True
@@ -5074,10 +5069,6 @@ isRequiresTok _ = False
 isStarTok : Token -> Bool
 isStarTok TStar = True
 isStarTok _ = False
-
-isThenTok : Token -> Bool
-isThenTok TThen = True
-isThenTok _ = False
 
 isWhereTok : Token -> Bool
 isWhereTok TWhere = True
@@ -5774,7 +5765,7 @@ parseWithPositions src = match parseWithPositionsOpt src
 
 -- Backward-compatibility alias kept for callers in `compiler/tools/lint.mdk`'s
 -- `lintFileDiagTriple` and `compiler/driver/medaka_cli.mdk`'s `lintFileFresh`. See
--- compiler/SOURCE-POSITION-DESIGN.md § "Increment 3 — unify the parse entry points
+-- docs/design/SOURCE-POSITION-DESIGN.md § "Increment 3 — unify the parse entry points
 -- (I6)" for why the dual-tokenize design this replaced existed and was retired.
 export
 parseWithPositionsLocated : String -> (List Decl, Positions)
@@ -6792,7 +6783,7 @@ parseResultWith src tokList offList =
 # DESUGAR
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "intMinLiteralMsg" false) (mem "negateLiteral" false) (mem "DeriveRef" true) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "effAtomAt" false) (mem "effectDeclUnstamped" false) (mem "KindAnn" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "tyConBuiltin" false) (mem "dDataUnresolved" false) (mem "externDataUnresolved" false) (mem "kindAnnSource" false) (mem "kindAuthorityUnstamped" false) (mem "dTypeAliasUnresolved" false) (mem "dNewtypeUnresolved" false) (mem "dInterfaceUnresolved" false) (mem "setDeclNameLoc" false) (mem "dImplUnresolved" false) (mem "constraintUnresolved" false) (mem "superUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true) (mem "Route" true))))
-(DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false) (mem "tokenizeWithOffsets" false) (mem "tokenizeWithOffsetPairs" false) (mem "offsetToLineCol" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false) (mem "describeToken" false))))
+(DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false) (mem "tokenizeWithOffsets" false) (mem "tokenizeWithOffsetPairs" false) (mem "offsetToLineCol" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false) (mem "describeToken" false) (mem "isCommaTok" false) (mem "isElseTok" false) (mem "isThenTok" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
@@ -8345,9 +8336,6 @@ parseResultWith src tokList offList =
 (DTypeSig false "isColonTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isColonTok" ((PCon "TColon")) (EVar "True"))
 (DFunDef false "isColonTok" (PWild) (EVar "False"))
-(DTypeSig false "isCommaTok" (TyFun (TyCon "Token") (TyCon "Bool")))
-(DFunDef false "isCommaTok" ((PCon "TComma")) (EVar "True"))
-(DFunDef false "isCommaTok" (PWild) (EVar "False"))
 (DTypeSig false "isConsTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isConsTok" ((PCon "TCons")) (EVar "True"))
 (DFunDef false "isConsTok" (PWild) (EVar "False"))
@@ -8357,9 +8345,6 @@ parseResultWith src tokList offList =
 (DTypeSig false "isDeferTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isDeferTok" ((PCon "TDefer")) (EVar "True"))
 (DFunDef false "isDeferTok" (PWild) (EVar "False"))
-(DTypeSig false "isElseTok" (TyFun (TyCon "Token") (TyCon "Bool")))
-(DFunDef false "isElseTok" ((PCon "TElse")) (EVar "True"))
-(DFunDef false "isElseTok" (PWild) (EVar "False"))
 (DTypeSig false "isEofTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isEofTok" ((PCon "TEof")) (EVar "True"))
 (DFunDef false "isEofTok" (PWild) (EVar "False"))
@@ -8405,9 +8390,6 @@ parseResultWith src tokList offList =
 (DTypeSig false "isStarTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isStarTok" ((PCon "TStar")) (EVar "True"))
 (DFunDef false "isStarTok" (PWild) (EVar "False"))
-(DTypeSig false "isThenTok" (TyFun (TyCon "Token") (TyCon "Bool")))
-(DFunDef false "isThenTok" ((PCon "TThen")) (EVar "True"))
-(DFunDef false "isThenTok" (PWild) (EVar "False"))
 (DTypeSig false "isWhereTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isWhereTok" ((PCon "TWhere")) (EVar "True"))
 (DFunDef false "isWhereTok" (PWild) (EVar "False"))
@@ -8767,7 +8749,7 @@ parseResultWith src tokList offList =
 # MARK
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "intMinLiteralMsg" false) (mem "negateLiteral" false) (mem "DeriveRef" true) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "effAtomAt" false) (mem "effectDeclUnstamped" false) (mem "KindAnn" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "tyConBuiltin" false) (mem "dDataUnresolved" false) (mem "externDataUnresolved" false) (mem "kindAnnSource" false) (mem "kindAuthorityUnstamped" false) (mem "dTypeAliasUnresolved" false) (mem "dNewtypeUnresolved" false) (mem "dInterfaceUnresolved" false) (mem "setDeclNameLoc" false) (mem "dImplUnresolved" false) (mem "constraintUnresolved" false) (mem "superUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true) (mem "Route" true))))
-(DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false) (mem "tokenizeWithOffsets" false) (mem "tokenizeWithOffsetPairs" false) (mem "offsetToLineCol" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false) (mem "describeToken" false))))
+(DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false) (mem "tokenizeWithOffsets" false) (mem "tokenizeWithOffsetPairs" false) (mem "offsetToLineCol" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false) (mem "describeToken" false) (mem "isCommaTok" false) (mem "isElseTok" false) (mem "isThenTok" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
@@ -10320,9 +10302,6 @@ parseResultWith src tokList offList =
 (DTypeSig false "isColonTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isColonTok" ((PCon "TColon")) (EVar "True"))
 (DFunDef false "isColonTok" (PWild) (EVar "False"))
-(DTypeSig false "isCommaTok" (TyFun (TyCon "Token") (TyCon "Bool")))
-(DFunDef false "isCommaTok" ((PCon "TComma")) (EVar "True"))
-(DFunDef false "isCommaTok" (PWild) (EVar "False"))
 (DTypeSig false "isConsTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isConsTok" ((PCon "TCons")) (EVar "True"))
 (DFunDef false "isConsTok" (PWild) (EVar "False"))
@@ -10332,9 +10311,6 @@ parseResultWith src tokList offList =
 (DTypeSig false "isDeferTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isDeferTok" ((PCon "TDefer")) (EVar "True"))
 (DFunDef false "isDeferTok" (PWild) (EVar "False"))
-(DTypeSig false "isElseTok" (TyFun (TyCon "Token") (TyCon "Bool")))
-(DFunDef false "isElseTok" ((PCon "TElse")) (EVar "True"))
-(DFunDef false "isElseTok" (PWild) (EVar "False"))
 (DTypeSig false "isEofTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isEofTok" ((PCon "TEof")) (EVar "True"))
 (DFunDef false "isEofTok" (PWild) (EVar "False"))
@@ -10380,9 +10356,6 @@ parseResultWith src tokList offList =
 (DTypeSig false "isStarTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isStarTok" ((PCon "TStar")) (EVar "True"))
 (DFunDef false "isStarTok" (PWild) (EVar "False"))
-(DTypeSig false "isThenTok" (TyFun (TyCon "Token") (TyCon "Bool")))
-(DFunDef false "isThenTok" ((PCon "TThen")) (EVar "True"))
-(DFunDef false "isThenTok" (PWild) (EVar "False"))
 (DTypeSig false "isWhereTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isWhereTok" ((PCon "TWhere")) (EVar "True"))
 (DFunDef false "isWhereTok" (PWild) (EVar "False"))

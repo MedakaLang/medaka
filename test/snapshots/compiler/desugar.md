@@ -1,5 +1,5 @@
 # META
-source_lines=1299
+source_lines=1294
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -14,6 +14,7 @@ stages=DESUGAR,MARK
 
 import support.stage_count.{stageBump}
 import frontend.ast.{
+  stripLocE,
   noBinderId,
   BinderId(..),
   KindAnn(..),
@@ -260,12 +261,6 @@ rewriteAssignIndex e = e
 assignIndexLhs : Expr -> Expr -> Expr -> Ref Route -> Expr
 assignIndexLhs (EIndex a i _) _ v _ = EApp (callBin "setIndex" a i) v
 assignIndexLhs _ lhs v r = EBinOp ":=" lhs v r
-
--- Peel transparent ELoc wrappers so the LHS shape is visible (mirror of the
--- parser's local `stripLoc`).
-stripLocE : Expr -> Expr
-stripLocE (ELoc _ e) = stripLocE e
-stripLocE e = e
 
 -- guard arms → nested if/match, terminated by `__fallthrough__ ()` (fold_right)
 guardsToCore : List GuardArm -> Expr
@@ -1303,7 +1298,7 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
   RecPatField l loc noBinderId (Some (stampPat mid p))
 # DESUGAR
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DTypeSig true "mapExpr" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
@@ -1407,9 +1402,6 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DTypeSig false "assignIndexLhs" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Expr"))))))
 (DFunDef false "assignIndexLhs" ((PCon "EIndex" (PVar "a") (PVar "i") PWild) PWild (PVar "v") PWild) (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "callBin") (ELit (LString "setIndex"))) (EVar "a")) (EVar "i"))) (EVar "v")))
 (DFunDef false "assignIndexLhs" (PWild (PVar "lhs") (PVar "v") (PVar "r")) (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "lhs")) (EVar "v")) (EVar "r")))
-(DTypeSig false "stripLocE" (TyFun (TyCon "Expr") (TyCon "Expr")))
-(DFunDef false "stripLocE" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "stripLocE") (EVar "e")))
-(DFunDef false "stripLocE" ((PVar "e")) (EVar "e"))
 (DTypeSig false "guardsToCore" (TyFun (TyApp (TyCon "List") (TyCon "GuardArm")) (TyCon "Expr")))
 (DFunDef false "guardsToCore" ((PList)) (EVar "fallthrough"))
 (DFunDef false "guardsToCore" ((PCons (PCon "GuardArm" (PVar "quals") (PVar "body")) (PVar "rest"))) (EApp (EApp (EApp (EVar "armChain") (EVar "quals")) (EVar "body")) (EApp (EVar "guardsToCore") (EVar "rest"))))
@@ -1782,7 +1774,7 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DFunDef false "stampRecField" ((PVar "mid") (PCon "RecPatField" (PVar "l") (PVar "loc") PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "l")) (EVar "loc")) (EVar "noBinderId")) (EApp (EVar "Some") (EApp (EApp (EVar "stampPat") (EVar "mid")) (EVar "p")))))
 # MARK
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DTypeSig true "mapExpr" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
@@ -1886,9 +1878,6 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DTypeSig false "assignIndexLhs" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Expr"))))))
 (DFunDef false "assignIndexLhs" ((PCon "EIndex" (PVar "a") (PVar "i") PWild) PWild (PVar "v") PWild) (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "callBin") (ELit (LString "setIndex"))) (EVar "a")) (EVar "i"))) (EVar "v")))
 (DFunDef false "assignIndexLhs" (PWild (PVar "lhs") (PVar "v") (PVar "r")) (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "lhs")) (EVar "v")) (EVar "r")))
-(DTypeSig false "stripLocE" (TyFun (TyCon "Expr") (TyCon "Expr")))
-(DFunDef false "stripLocE" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "stripLocE") (EVar "e")))
-(DFunDef false "stripLocE" ((PVar "e")) (EVar "e"))
 (DTypeSig false "guardsToCore" (TyFun (TyApp (TyCon "List") (TyCon "GuardArm")) (TyCon "Expr")))
 (DFunDef false "guardsToCore" ((PList)) (EVar "fallthrough"))
 (DFunDef false "guardsToCore" ((PCons (PCon "GuardArm" (PVar "quals") (PVar "body")) (PVar "rest"))) (EApp (EApp (EApp (EVar "armChain") (EVar "quals")) (EVar "body")) (EApp (EVar "guardsToCore") (EVar "rest"))))

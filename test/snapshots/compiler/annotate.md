@@ -1,5 +1,5 @@
 # META
-source_lines=328
+source_lines=297
 stages=DESUGAR,MARK
 # SOURCE
 -- annotate.mdk — Lexical-addressing EMISSION pass (STAGE2-DESIGN §2.0).
@@ -35,6 +35,11 @@ stages=DESUGAR,MARK
 -- which already reaches a global method's VMulti past any local frame.
 
 import frontend.ast.{
+  patBindings,
+  recFieldBindings,
+  isHint,
+  letBindName,
+  propParamName,
   Lit(..),
   Ty(..),
   Constraint(..),
@@ -67,42 +72,6 @@ import frontend.ast.{
   Decl(..),
 }
 import support.util.{reverseL}
-
--- ── self-contained helper copies (resolve.mdk keeps its own for its main pass) ─
-patBindings : Pat -> List String
--- Intentional cross-file duplicate of resolve.mdk's copy. This module imports
--- only frontend.ast and support.util by design, so that annotation can run on a
--- raw AST without dragging the resolver in; importing resolve.mdk for a pattern
--- walk would invert the pass order this file sits after.
--- lint-disable-next-line rule-duplicate-body
-patBindings (PVar x _ _) = [x]
-patBindings PWild = []
-patBindings (PLit _) = []
-patBindings (PCon _ ps) = flatMap patBindings ps
-patBindings (PCons a b) = patBindings a ++ patBindings b
-patBindings (PTuple ps) = flatMap patBindings ps
-patBindings (PList ps) = flatMap patBindings ps
-patBindings (PAs x _ _ p) = x :: patBindings p
-patBindings (PRng _ _ _) = []
-patBindings (PRec _ fields _) = flatMap recFieldBindings fields
-
-recFieldBindings : RecPatField -> List String
-recFieldBindings (RecPatField fname _ _ None) = [fname]
-recFieldBindings (RecPatField _ _ _ (Some p)) = patBindings p
-
-startsWithAt : Array Char -> Bool
--- Intentional cross-file duplicate of the same helper in resolve.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
-startsWithAt cs = arrayLength cs > 0 && arrayGetUnsafe 0 cs == '@'
-
-isHint : String -> Bool
-isHint n = startsWithAt (stringToChars n)
-
-letBindName : LetBind -> String
-letBindName (LetBind n _ _ _) = n
-
-propParamName : PropParam -> String
-propParamName (PropParam x _ _) = x
 
 -- ── framed scope (innermost frame first; each frame its names in slot order) ──
 -- per-parameter frames for a closure's params: applyClosure pushes one frame per
@@ -331,30 +300,8 @@ export
 annotateProgram : List Decl -> List Decl
 annotateProgram prog = map annotateDecl prog
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" false) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "patBindings" false) (mem "recFieldBindings" false) (mem "isHint" false) (mem "letBindName" false) (mem "propParamName" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" false) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
-(DTypeSig false "patBindings" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patBindings" ((PCon "PVar" (PVar "x") PWild PWild)) (EListLit (EVar "x")))
-(DFunDef false "patBindings" ((PCon "PWild")) (EListLit))
-(DFunDef false "patBindings" ((PCon "PLit" PWild)) (EListLit))
-(DFunDef false "patBindings" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patBindings") (EVar "a")) (EApp (EVar "patBindings") (EVar "b"))))
-(DFunDef false "patBindings" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBindings") (EVar "p"))))
-(DFunDef false "patBindings" ((PCon "PRng" PWild PWild PWild)) (EListLit))
-(DFunDef false "patBindings" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recFieldBindings")) (EVar "fields")))
-(DTypeSig false "recFieldBindings" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "recFieldBindings" ((PCon "RecPatField" (PVar "fname") PWild PWild (PCon "None"))) (EListLit (EVar "fname")))
-(DFunDef false "recFieldBindings" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBindings") (EVar "p")))
-(DTypeSig false "startsWithAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "Bool")))
-(DFunDef false "startsWithAt" ((PVar "cs")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "arrayLength") (EVar "cs")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")) (ELit (LChar "@")))))
-(DTypeSig false "isHint" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isHint" ((PVar "n")) (EApp (EVar "startsWithAt") (EApp (EVar "stringToChars") (EVar "n"))))
-(DTypeSig false "letBindName" (TyFun (TyCon "LetBind") (TyCon "String")))
-(DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
-(DTypeSig false "propParamName" (TyFun (TyCon "PropParam") (TyCon "String")))
-(DFunDef false "propParamName" ((PCon "PropParam" (PVar "x") PWild PWild)) (EVar "x"))
 (DTypeSig false "paramFrames" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "paramFrames" ((PVar "pats")) (EApp (EVar "reverseL") (EApp (EApp (EVar "map") (EVar "patBindings")) (EVar "pats"))))
 (DTypeSig false "slotIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
@@ -459,30 +406,8 @@ annotateProgram prog = map annotateDecl prog
 (DTypeSig true "annotateProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "annotateProgram" ((PVar "prog")) (EApp (EApp (EVar "map") (EVar "annotateDecl")) (EVar "prog")))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" false) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "patBindings" false) (mem "recFieldBindings" false) (mem "isHint" false) (mem "letBindName" false) (mem "propParamName" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" false) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
-(DTypeSig false "patBindings" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patBindings" ((PCon "PVar" (PVar "x") PWild PWild)) (EListLit (EVar "x")))
-(DFunDef false "patBindings" ((PCon "PWild")) (EListLit))
-(DFunDef false "patBindings" ((PCon "PLit" PWild)) (EListLit))
-(DFunDef false "patBindings" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patBindings") (EVar "a")) (EApp (EVar "patBindings") (EVar "b"))))
-(DFunDef false "patBindings" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBindings") (EVar "p"))))
-(DFunDef false "patBindings" ((PCon "PRng" PWild PWild PWild)) (EListLit))
-(DFunDef false "patBindings" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recFieldBindings")) (EVar "fields")))
-(DTypeSig false "recFieldBindings" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "recFieldBindings" ((PCon "RecPatField" (PVar "fname") PWild PWild (PCon "None"))) (EListLit (EVar "fname")))
-(DFunDef false "recFieldBindings" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBindings") (EVar "p")))
-(DTypeSig false "startsWithAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "Bool")))
-(DFunDef false "startsWithAt" ((PVar "cs")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "arrayLength") (EVar "cs")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")) (ELit (LChar "@")))))
-(DTypeSig false "isHint" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isHint" ((PVar "n")) (EApp (EVar "startsWithAt") (EApp (EVar "stringToChars") (EVar "n"))))
-(DTypeSig false "letBindName" (TyFun (TyCon "LetBind") (TyCon "String")))
-(DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
-(DTypeSig false "propParamName" (TyFun (TyCon "PropParam") (TyCon "String")))
-(DFunDef false "propParamName" ((PCon "PropParam" (PVar "x") PWild PWild)) (EVar "x"))
 (DTypeSig false "paramFrames" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "paramFrames" ((PVar "pats")) (EApp (EVar "reverseL") (EApp (EApp (EMethodRef "map") (EVar "patBindings")) (EVar "pats"))))
 (DTypeSig false "slotIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))

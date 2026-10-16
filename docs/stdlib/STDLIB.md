@@ -212,7 +212,7 @@ and prepended to every program by the compiler.
   - `bimap : (a -> c) -> (b -> d) -> p a b -> p c d` — map both sides at once
   - `mapFirst : (a -> c) -> p a b -> p c b` (default via `bimap identity`) — touch only the left/`Err` side
   - `mapSecond : (b -> d) -> p a b -> p a d` (default via `bimap identity`) — touch only the right/`Ok` side
-  - ✅ Instances: `impl Bimappable (Result e)`, `impl Bimappable (,)` (the bare 2-tuple constructor — enabled by the tuple-as-type-constructor change, see `compiler/TUPLE-TYPE-CONSTRUCTOR-DESIGN.md`)
+  - ✅ Instances: `impl Bimappable (Result e)`, `impl Bimappable (,)` (the bare 2-tuple constructor — enabled by the tuple-as-type-constructor change, see `archive/design/TUPLE-TYPE-CONSTRUCTOR-DESIGN.md`)
 
 - ✅ `Slice c` (#670) — read-only slicing of a container by a half-open index range; the `c.[lo..hi]` / `c.[lo..=hi]` bracket sugar desugars to a `slice` call, so the receiver is constrained to a real container (a non-container slice is a `No impl of Slice` type error, not a wrong-container heap read). Parallels `Index`.
   - `slice : c -> Int -> Int -> c` — `slice c lo hi` is the sub-container over `[lo, hi)`; the inclusive `..=` form normalizes to `slice c lo (hi + 1)` in desugar
@@ -1179,7 +1179,7 @@ see §0.5 of the design doc) added four new import-by-bare-name modules plus
 combinators folded into `core`/`list` (documented above, in Modules 1/2). Two
 compiler changes enabled it: an emitter fix for wrapped-then-saturated partial
 applications (arity-carrying closures + runtime `mdk_apply`, EMITTER-GAPS.md),
-and tuples becoming a real type constructor (`compiler/TUPLE-TYPE-CONSTRUCTOR-DESIGN.md`),
+and tuples becoming a real type constructor (`archive/design/TUPLE-TYPE-CONSTRUCTOR-DESIGN.md`),
 which is what makes `impl Bimappable (,)` possible.
 
 ## Module 20 — `validation` ✅ implemented (P1, 2026-07-02)

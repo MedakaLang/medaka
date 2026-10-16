@@ -2,10 +2,7 @@
 -- the value it returns. The syntactic arity separates thunk initialization from
 -- invocation and prevents returned closures from donating their effect slots.
 import types.repr.{Mono(..), normalize}
-import types.effect_rows.{EffRow(..)}
-
-pureRow : EffRow
-pureRow = EffRow [] None
+import types.effect_rows.{EffRow(..), pureRow}
 
 public export data BindingSummary = BindingSummary {
   bsArity : Int,

@@ -170,6 +170,7 @@
 --            GC-managed under Boehm for free (aligned pointer, low bit 0).
 
 import frontend.ast.{
+  isWildPat,
   Lit(..),
   Pat(..),
   Addr(..),
@@ -239,6 +240,7 @@ import support.util.{
   dedupBy,
   lenKey,
   isNonEmptyL,
+  isEmptyL,
   u64HalvesHex,
 }
 import backend.llvm_preamble.{preambleLines}
@@ -332,6 +334,7 @@ import backend.emit_support.{
   isExactCall,
   isTailCall,
   implEntryDeclaredArity,
+  nthArm,
 }
 
 -- ── D4 emitter-completeness inventory (record-and-skip) ──────────────────────
@@ -7260,7 +7263,7 @@ argDecls (x :: rest) = "i64 \{x}, \{argDecls rest}"
 -- route is STATICALLY resolved — the typechecker already pinned the concrete type
 -- head, so the impl is known at COMPILE time and the site lowers to a DIRECT call
 -- to that impl's lifted `@mdk_impl_<tag>_<method>`, with NO runtime tag inspection.
--- The self-host compiler dispatches return-position via RKey (compiler/README.md),
+-- The self-host compiler dispatches return-position via RKey (archive/design/COMPILER-PORT-LOG.md),
 -- so RKey alone covers the bootstrap.  RDict/RDictFwd read a named dict PARAMETER
 -- at run time, so they lower to an if-chain switching on the dict's head tag over
 -- the method's impls (corpus completeness — the dict-passing fixtures).  This
@@ -9358,10 +9361,6 @@ ftClause lbl (pats, body) = (pats, labelFallthrough body lbl)
 chainNextLabel : Emit -> List (List Pat, CExpr) -> String -> String
 chainNextLabel _ [] outer = outer
 chainNextLabel e _ _ = "clause" ++ intToString (freshLocal e)
-
-isEmptyL : List a -> Bool
-isEmptyL [] = True
-isEmptyL _ = False
 
 -- the synthetic scrutinee components of a group: `[a0, a1, …]`.  Emitted through
 -- `emitArgs`, so each resolves to the param's operand word — `%argK` for an
@@ -11556,16 +11555,6 @@ tailS : List a -> List a
 tailS [] = []
 tailS (_ :: xs) = xs
 
-nthArm : List CArm -> Int -> Option CArm
--- Intentional cross-file duplicate of core_ir_eval.mdk's copy. The Core IR
--- interpreter is the oracle this backend is differenced against, so the two must
--- not share code: a defect in a shared helper would move both arms of the
--- differential together and the gate would report agreement.
--- lint-disable-next-line rule-duplicate-body
-nthArm (a :: _) 0 = Some a
-nthArm (_ :: rest) n = nthArm rest (n - 1)
-nthArm [] _ = None
-
 -- a readable tag for the unsupported-pattern panic.
 ptag : Pat -> String
 ptag (PTuple _) = "PTuple"
@@ -13664,10 +13653,6 @@ isBinderPat : Pat -> Bool
 isBinderPat (PVar _ _ _) = True
 isBinderPat (PAs _ _ _ _) = True
 isBinderPat _ = False
-
-isWildPat : Pat -> Bool
-isWildPat PWild = True
-isWildPat _ = False
 
 clauseArityC : List CClause -> Int
 clauseArityC ((CClause pats _) :: _) = listLen pats

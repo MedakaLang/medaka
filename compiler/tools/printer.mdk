@@ -35,6 +35,7 @@
 --     keep the match total.
 
 import frontend.ast.{
+  stripLocE,
   EffAtomTy(..),
   qualifierSource,
   effAtomSurface,
@@ -1250,10 +1251,6 @@ exprPrec (EMethodAt _ _ _) = precAtom
 exprPrec (EDictAt _ _) = precAtom
 -- ELoc is transparent: the wrapper takes its child's precedence.
 exprPrec (ELoc _ e) = exprPrec e
-
-stripLocE : Expr -> Expr
-stripLocE (ELoc _ e) = stripLocE e
-stripLocE e = e
 
 -- the outermost ELoc of an expression, if any (a literal's own span)
 -- ── Body shapes ───────────────────────────────────

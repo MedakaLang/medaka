@@ -99,6 +99,7 @@
 -- binder-threading of typecheck.mdk's `rewriteArgScoped`.
 
 import frontend.ast.{
+  letBindName,
   Decl(..),
   Expr(..),
   Pat(..),
@@ -1343,9 +1344,6 @@ declDefNames (DFunDef _ n _ _ _ _) = [n]
 declDefNames (DLetGroup _ binds) = map letBindName binds
 declDefNames (DAttrib _ d) = declDefNames d
 declDefNames _ = []
-
-letBindName : LetBind -> String
-letBindName (LetBind n _ _ _) = n
 
 -- names exported via a `pub` DTypeSig/DExtern in this unit (so their DFunDef
 -- clauses, which parse private, still count as exported function symbols).

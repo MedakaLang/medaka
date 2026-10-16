@@ -1,5 +1,5 @@
 # META
-source_lines=234
+source_lines=230
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/eval_props.mdk — nonce-framed property rows for the isolated
@@ -63,10 +63,6 @@ takeEvalPropBootstrap stdout = match splitNl stdout
 sentinelBase : String
 sentinelBase = "@@__mdk_eval_props__@@"
 
-export
-sentinelPrefix : String -> String
-sentinelPrefix nonce = noncedPrefix sentinelBase nonce
-
 rowTag : Int -> String
 rowTag i = "row-\{intToString i}"
 
@@ -77,13 +73,13 @@ export
 emitEvalPropRows : String -> List PropResult -> <IO> Unit
 emitEvalPropRows nonce rows = do
   let _ = emitRows nonce 0 rows
-  let _ = putStrLn (sentinelLine (sentinelPrefix nonce) endTag)
+  let _ = putStrLn (sentinelLine (noncedPrefix sentinelBase nonce) endTag)
   flushStdout ()
 
 emitRows : String -> Int -> List PropResult -> <IO> Unit
 emitRows _ _ [] = ()
 emitRows nonce i (row :: rest) = do
-  let _ = putStrLn (sentinelLine (sentinelPrefix nonce) (rowTag i))
+  let _ = putStrLn (sentinelLine (noncedPrefix sentinelBase nonce) (rowTag i))
   let _ = putStrLn (stringify (propResultJson row))
   let _ = flushStdout ()
   emitRows nonce (i + 1) rest
@@ -130,7 +126,7 @@ decodeEvalPropRows : String ->
   String ->
   Result String (List PropResult)
 decodeEvalPropRows nonce requests stdout =
-  let chunks = chunksOf (sentinelPrefix nonce) (splitNl stdout)
+  let chunks = chunksOf (noncedPrefix sentinelBase nonce) (splitNl stdout)
   if exactTags (expectedTags 0 requests) chunks then
     decodeRows requests chunks 0
   else
@@ -249,17 +245,15 @@ validateFailure _ _ =
 (DFunDef false "takeEvalPropBootstrap" ((PVar "stdout")) (EMatch (EApp (EVar "splitNl") (EVar "stdout")) (arm (PList) () (EApp (EVar "Err") (ELit (LString "interpreter property worker omitted its bootstrap header")))) (arm (PCons (PVar "header") (PVar "rest")) () (EIf (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (EVar "bootstrapBase")) (EVar "header"))) (EApp (EVar "Err") (ELit (LString "interpreter property worker emitted a malformed bootstrap header"))) (EBlock (DoLet false false (PVar "nonce") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "bootstrapBase"))) (EApp (EVar "stringLength") (EVar "header"))) (EVar "header"))) (DoExpr (EIf (EBinOp "==" (EVar "nonce") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "interpreter property worker emitted an empty bootstrap nonce"))) (EIf (EApp (EApp (EVar "anyList") (EApp (EVar "startsWith") (EVar "bootstrapBase"))) (EVar "rest")) (EApp (EVar "Err") (ELit (LString "interpreter property worker emitted a duplicate bootstrap header"))) (EApp (EVar "Ok") (ETuple (EVar "nonce") (EApp (EVar "joinNl") (EVar "rest"))))))))))))
 (DTypeSig false "sentinelBase" (TyCon "String"))
 (DFunDef false "sentinelBase" () (ELit (LString "@@__mdk_eval_props__@@")))
-(DTypeSig true "sentinelPrefix" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "sentinelPrefix" ((PVar "nonce")) (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce")))
 (DTypeSig false "rowTag" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "rowTag" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "row-")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))
 (DTypeSig false "endTag" (TyCon "String"))
 (DFunDef false "endTag" () (ELit (LString "END")))
 (DTypeSig true "emitEvalPropRows" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "emitEvalPropRows" ((PVar "nonce") (PVar "rows")) (ELet false PWild (EApp (EApp (EApp (EVar "emitRows") (EVar "nonce")) (ELit (LInt 0))) (EVar "rows")) (ELet false PWild (EApp (EVar "putStrLn") (EApp (EApp (EVar "sentinelLine") (EApp (EVar "sentinelPrefix") (EVar "nonce"))) (EVar "endTag"))) (EApp (EVar "flushStdout") (ELit LUnit)))))
+(DFunDef false "emitEvalPropRows" ((PVar "nonce") (PVar "rows")) (ELet false PWild (EApp (EApp (EApp (EVar "emitRows") (EVar "nonce")) (ELit (LInt 0))) (EVar "rows")) (ELet false PWild (EApp (EVar "putStrLn") (EApp (EApp (EVar "sentinelLine") (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (EVar "endTag"))) (EApp (EVar "flushStdout") (ELit LUnit)))))
 (DTypeSig false "emitRows" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "emitRows" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "emitRows" ((PVar "nonce") (PVar "i") (PCons (PVar "row") (PVar "rest"))) (ELet false PWild (EApp (EVar "putStrLn") (EApp (EApp (EVar "sentinelLine") (EApp (EVar "sentinelPrefix") (EVar "nonce"))) (EApp (EVar "rowTag") (EVar "i")))) (ELet false PWild (EApp (EVar "putStrLn") (EApp (EVar "stringify") (EApp (EVar "propResultJson") (EVar "row")))) (ELet false PWild (EApp (EVar "flushStdout") (ELit LUnit)) (EApp (EApp (EApp (EVar "emitRows") (EVar "nonce")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))))
+(DFunDef false "emitRows" ((PVar "nonce") (PVar "i") (PCons (PVar "row") (PVar "rest"))) (ELet false PWild (EApp (EVar "putStrLn") (EApp (EApp (EVar "sentinelLine") (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (EApp (EVar "rowTag") (EVar "i")))) (ELet false PWild (EApp (EVar "putStrLn") (EApp (EVar "stringify") (EApp (EVar "propResultJson") (EVar "row")))) (ELet false PWild (EApp (EVar "flushStdout") (ELit LUnit)) (EApp (EApp (EApp (EVar "emitRows") (EVar "nonce")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))))
 (DTypeSig true "propResultJson" (TyFun (TyCon "PropResult") (TyCon "Json")))
 (DFunDef false "propResultJson" ((PCon "PropResult" (PVar "engine") (PVar "name") (PVar "status") (PVar "failure") (PVar "detail") (PVar "seed") (PVar "cases"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "engine")) (EApp (EVar "JString") (EVar "engine"))) (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "status")) (EApp (EVar "JString") (EApp (EVar "propStatusText") (EVar "status")))) (ETuple (ELit (LString "failureKind")) (EApp (EVar "propFailureKindJson") (EVar "failure"))) (ETuple (ELit (LString "detail")) (EApp (EVar "JString") (EVar "detail"))) (ETuple (ELit (LString "seed")) (EApp (EVar "JInt") (EVar "seed"))) (ETuple (ELit (LString "cases")) (EApp (EVar "JInt") (EVar "cases"))))))
 (DTypeSig true "propStatusText" (TyFun (TyCon "PropStatus") (TyCon "String")))
@@ -277,7 +271,7 @@ validateFailure _ _ =
 (DFunDef false "propFailureKindText" ((PCon "PropProtocolError")) (ELit (LString "protocol")))
 (DFunDef false "propFailureKindText" ((PCon "PropTypeError")) (ELit (LString "type")))
 (DTypeSig true "decodeEvalPropRows" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "PropResult")))))))
-(DFunDef false "decodeEvalPropRows" ((PVar "nonce") (PVar "requests") (PVar "stdout")) (EBlock (DoLet false false (PVar "chunks") (EApp (EApp (EVar "chunksOf") (EApp (EVar "sentinelPrefix") (EVar "nonce"))) (EApp (EVar "splitNl") (EVar "stdout")))) (DoExpr (EIf (EApp (EApp (EVar "exactTags") (EApp (EApp (EVar "expectedTags") (ELit (LInt 0))) (EVar "requests"))) (EVar "chunks")) (EApp (EApp (EApp (EVar "decodeRows") (EVar "requests")) (EVar "chunks")) (ELit (LInt 0))) (EApp (EVar "Err") (ELit (LString "interpreter property worker emitted an incomplete or malformed transcript")))))))
+(DFunDef false "decodeEvalPropRows" ((PVar "nonce") (PVar "requests") (PVar "stdout")) (EBlock (DoLet false false (PVar "chunks") (EApp (EApp (EVar "chunksOf") (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (EApp (EVar "splitNl") (EVar "stdout")))) (DoExpr (EIf (EApp (EApp (EVar "exactTags") (EApp (EApp (EVar "expectedTags") (ELit (LInt 0))) (EVar "requests"))) (EVar "chunks")) (EApp (EApp (EApp (EVar "decodeRows") (EVar "requests")) (EVar "chunks")) (ELit (LInt 0))) (EApp (EVar "Err") (ELit (LString "interpreter property worker emitted an incomplete or malformed transcript")))))))
 (DTypeSig false "expectedTags" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "expectedTags" (PWild (PList)) (EListLit (EVar "endTag")))
 (DFunDef false "expectedTags" ((PVar "i") (PCons PWild (PVar "rest"))) (EBinOp "::" (EApp (EVar "rowTag") (EVar "i")) (EApp (EApp (EVar "expectedTags") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
@@ -333,17 +327,15 @@ validateFailure _ _ =
 (DFunDef false "takeEvalPropBootstrap" ((PVar "stdout")) (EMatch (EApp (EVar "splitNl") (EVar "stdout")) (arm (PList) () (EApp (EVar "Err") (ELit (LString "interpreter property worker omitted its bootstrap header")))) (arm (PCons (PVar "header") (PVar "rest")) () (EIf (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (EVar "bootstrapBase")) (EVar "header"))) (EApp (EVar "Err") (ELit (LString "interpreter property worker emitted a malformed bootstrap header"))) (EBlock (DoLet false false (PVar "nonce") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "bootstrapBase"))) (EApp (EVar "stringLength") (EVar "header"))) (EVar "header"))) (DoExpr (EIf (EBinOp "==" (EVar "nonce") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "interpreter property worker emitted an empty bootstrap nonce"))) (EIf (EApp (EApp (EVar "anyList") (EApp (EVar "startsWith") (EVar "bootstrapBase"))) (EVar "rest")) (EApp (EVar "Err") (ELit (LString "interpreter property worker emitted a duplicate bootstrap header"))) (EApp (EVar "Ok") (ETuple (EVar "nonce") (EApp (EVar "joinNl") (EVar "rest"))))))))))))
 (DTypeSig false "sentinelBase" (TyCon "String"))
 (DFunDef false "sentinelBase" () (ELit (LString "@@__mdk_eval_props__@@")))
-(DTypeSig true "sentinelPrefix" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "sentinelPrefix" ((PVar "nonce")) (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce")))
 (DTypeSig false "rowTag" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "rowTag" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "row-")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))
 (DTypeSig false "endTag" (TyCon "String"))
 (DFunDef false "endTag" () (ELit (LString "END")))
 (DTypeSig true "emitEvalPropRows" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "emitEvalPropRows" ((PVar "nonce") (PVar "rows")) (ELet false PWild (EApp (EApp (EApp (EVar "emitRows") (EVar "nonce")) (ELit (LInt 0))) (EVar "rows")) (ELet false PWild (EApp (EVar "putStrLn") (EApp (EApp (EVar "sentinelLine") (EApp (EVar "sentinelPrefix") (EVar "nonce"))) (EVar "endTag"))) (EApp (EVar "flushStdout") (ELit LUnit)))))
+(DFunDef false "emitEvalPropRows" ((PVar "nonce") (PVar "rows")) (ELet false PWild (EApp (EApp (EApp (EVar "emitRows") (EVar "nonce")) (ELit (LInt 0))) (EVar "rows")) (ELet false PWild (EApp (EVar "putStrLn") (EApp (EApp (EVar "sentinelLine") (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (EVar "endTag"))) (EApp (EVar "flushStdout") (ELit LUnit)))))
 (DTypeSig false "emitRows" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "emitRows" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "emitRows" ((PVar "nonce") (PVar "i") (PCons (PVar "row") (PVar "rest"))) (ELet false PWild (EApp (EVar "putStrLn") (EApp (EApp (EVar "sentinelLine") (EApp (EVar "sentinelPrefix") (EVar "nonce"))) (EApp (EVar "rowTag") (EVar "i")))) (ELet false PWild (EApp (EVar "putStrLn") (EApp (EVar "stringify") (EApp (EVar "propResultJson") (EVar "row")))) (ELet false PWild (EApp (EVar "flushStdout") (ELit LUnit)) (EApp (EApp (EApp (EVar "emitRows") (EVar "nonce")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))))
+(DFunDef false "emitRows" ((PVar "nonce") (PVar "i") (PCons (PVar "row") (PVar "rest"))) (ELet false PWild (EApp (EVar "putStrLn") (EApp (EApp (EVar "sentinelLine") (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (EApp (EVar "rowTag") (EVar "i")))) (ELet false PWild (EApp (EVar "putStrLn") (EApp (EVar "stringify") (EApp (EVar "propResultJson") (EVar "row")))) (ELet false PWild (EApp (EVar "flushStdout") (ELit LUnit)) (EApp (EApp (EApp (EVar "emitRows") (EVar "nonce")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))))
 (DTypeSig true "propResultJson" (TyFun (TyCon "PropResult") (TyCon "Json")))
 (DFunDef false "propResultJson" ((PCon "PropResult" (PVar "engine") (PVar "name") (PVar "status") (PVar "failure") (PVar "detail") (PVar "seed") (PVar "cases"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "engine")) (EApp (EVar "JString") (EVar "engine"))) (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "status")) (EApp (EVar "JString") (EApp (EVar "propStatusText") (EVar "status")))) (ETuple (ELit (LString "failureKind")) (EApp (EVar "propFailureKindJson") (EVar "failure"))) (ETuple (ELit (LString "detail")) (EApp (EVar "JString") (EVar "detail"))) (ETuple (ELit (LString "seed")) (EApp (EVar "JInt") (EVar "seed"))) (ETuple (ELit (LString "cases")) (EApp (EVar "JInt") (EVar "cases"))))))
 (DTypeSig true "propStatusText" (TyFun (TyCon "PropStatus") (TyCon "String")))
@@ -361,7 +353,7 @@ validateFailure _ _ =
 (DFunDef false "propFailureKindText" ((PCon "PropProtocolError")) (ELit (LString "protocol")))
 (DFunDef false "propFailureKindText" ((PCon "PropTypeError")) (ELit (LString "type")))
 (DTypeSig true "decodeEvalPropRows" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "PropResult")))))))
-(DFunDef false "decodeEvalPropRows" ((PVar "nonce") (PVar "requests") (PVar "stdout")) (EBlock (DoLet false false (PVar "chunks") (EApp (EApp (EVar "chunksOf") (EApp (EVar "sentinelPrefix") (EVar "nonce"))) (EApp (EVar "splitNl") (EVar "stdout")))) (DoExpr (EIf (EApp (EApp (EVar "exactTags") (EApp (EApp (EVar "expectedTags") (ELit (LInt 0))) (EVar "requests"))) (EVar "chunks")) (EApp (EApp (EApp (EVar "decodeRows") (EVar "requests")) (EVar "chunks")) (ELit (LInt 0))) (EApp (EVar "Err") (ELit (LString "interpreter property worker emitted an incomplete or malformed transcript")))))))
+(DFunDef false "decodeEvalPropRows" ((PVar "nonce") (PVar "requests") (PVar "stdout")) (EBlock (DoLet false false (PVar "chunks") (EApp (EApp (EVar "chunksOf") (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (EApp (EVar "splitNl") (EVar "stdout")))) (DoExpr (EIf (EApp (EApp (EVar "exactTags") (EApp (EApp (EVar "expectedTags") (ELit (LInt 0))) (EVar "requests"))) (EVar "chunks")) (EApp (EApp (EApp (EVar "decodeRows") (EVar "requests")) (EVar "chunks")) (ELit (LInt 0))) (EApp (EVar "Err") (ELit (LString "interpreter property worker emitted an incomplete or malformed transcript")))))))
 (DTypeSig false "expectedTags" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "expectedTags" (PWild (PList)) (EListLit (EVar "endTag")))
 (DFunDef false "expectedTags" ((PVar "i") (PCons PWild (PVar "rest"))) (EBinOp "::" (EApp (EVar "rowTag") (EVar "i")) (EApp (EApp (EVar "expectedTags") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))

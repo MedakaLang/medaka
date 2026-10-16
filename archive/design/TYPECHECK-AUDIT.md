@@ -2,7 +2,7 @@
 
 **Status:** IMPLEMENTED — essentially everything enumerated is marked CLOSED with a date
 in the doc's own body, several re-verified well after initial closure. Implements
-`compiler/DRIVER-COLLAPSE-PLAN.md` §6 (independently confirmed IMPLEMENTED). One item
+`archive/design/DRIVER-COLLAPSE-PLAN.md` §6 (independently confirmed IMPLEMENTED). One item
 remains explicitly open: the `empty`/`foldMap` default (`empty@?` RNone site, see
 `DISPATCH-INVENTORY.md`). Dead bare `compiler/*.mdk` path citations (~19) corrected to
 their post-restructure subfolder paths, 2026-07-13 doc pass. The "OCaml reference (`lib/`)

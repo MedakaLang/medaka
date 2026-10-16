@@ -1,5 +1,5 @@
 # META
-source_lines=15283
+source_lines=15268
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -174,6 +174,7 @@ stages=DESUGAR,MARK
 --            GC-managed under Boehm for free (aligned pointer, low bit 0).
 
 import frontend.ast.{
+  isWildPat,
   Lit(..),
   Pat(..),
   Addr(..),
@@ -243,6 +244,7 @@ import support.util.{
   dedupBy,
   lenKey,
   isNonEmptyL,
+  isEmptyL,
   u64HalvesHex,
 }
 import backend.llvm_preamble.{preambleLines}
@@ -336,6 +338,7 @@ import backend.emit_support.{
   isExactCall,
   isTailCall,
   implEntryDeclaredArity,
+  nthArm,
 }
 
 -- ── D4 emitter-completeness inventory (record-and-skip) ──────────────────────
@@ -7264,7 +7267,7 @@ argDecls (x :: rest) = "i64 \{x}, \{argDecls rest}"
 -- route is STATICALLY resolved — the typechecker already pinned the concrete type
 -- head, so the impl is known at COMPILE time and the site lowers to a DIRECT call
 -- to that impl's lifted `@mdk_impl_<tag>_<method>`, with NO runtime tag inspection.
--- The self-host compiler dispatches return-position via RKey (compiler/README.md),
+-- The self-host compiler dispatches return-position via RKey (archive/design/COMPILER-PORT-LOG.md),
 -- so RKey alone covers the bootstrap.  RDict/RDictFwd read a named dict PARAMETER
 -- at run time, so they lower to an if-chain switching on the dict's head tag over
 -- the method's impls (corpus completeness — the dict-passing fixtures).  This
@@ -9362,10 +9365,6 @@ ftClause lbl (pats, body) = (pats, labelFallthrough body lbl)
 chainNextLabel : Emit -> List (List Pat, CExpr) -> String -> String
 chainNextLabel _ [] outer = outer
 chainNextLabel e _ _ = "clause" ++ intToString (freshLocal e)
-
-isEmptyL : List a -> Bool
-isEmptyL [] = True
-isEmptyL _ = False
 
 -- the synthetic scrutinee components of a group: `[a0, a1, …]`.  Emitted through
 -- `emitArgs`, so each resolves to the param's operand word — `%argK` for an
@@ -11560,16 +11559,6 @@ tailS : List a -> List a
 tailS [] = []
 tailS (_ :: xs) = xs
 
-nthArm : List CArm -> Int -> Option CArm
--- Intentional cross-file duplicate of core_ir_eval.mdk's copy. The Core IR
--- interpreter is the oracle this backend is differenced against, so the two must
--- not share code: a defect in a shared helper would move both arms of the
--- differential together and the gate would report agreement.
--- lint-disable-next-line rule-duplicate-body
-nthArm (a :: _) 0 = Some a
-nthArm (_ :: rest) n = nthArm rest (n - 1)
-nthArm [] _ = None
-
 -- a readable tag for the unsupported-pattern panic.
 ptag : Pat -> String
 ptag (PTuple _) = "PTuple"
@@ -13669,10 +13658,6 @@ isBinderPat (PVar _ _ _) = True
 isBinderPat (PAs _ _ _ _) = True
 isBinderPat _ = False
 
-isWildPat : Pat -> Bool
-isWildPat PWild = True
-isWildPat _ = False
-
 clauseArityC : List CClause -> Int
 clauseArityC ((CClause pats _) :: _) = listLen pats
 clauseArityC [] = 0
@@ -15286,12 +15271,12 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
   let _ = gapU e "non-nullary / multi-clause value binding"
   emitTopBindsGaps e env rest
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "BinderId" true) (mem "RecPatField" true) (mem "noDeclLoc" false) (mem "ifaceIdMatches" false) (mem "isFixedWidthHead" false) (mem "fixedWidthMask" false) (mem "isU64Head" false) (mem "isFixedIntHead" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "BinderId" true) (mem "RecPatField" true) (mem "noDeclLoc" false) (mem "ifaceIdMatches" false) (mem "isFixedWidthHead" false) (mem "fixedWidthMask" false) (mem "isU64Head" false) (mem "isFixedIntHead" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "givenNames" false) (mem "isGivenRooted" false) (mem "receiverEvidence" false) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CProgram" true) (mem "DeclFacts" false) (mem "noDeclFacts" false) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "FailSite" true) (mem "CallMode" true) (mem "CallSite" true) (mem "siteSentinelName" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "compileTree" false) (mem "canonPat" false) (mem "definedArityOf" false) (mem "ifaceWordOfKey" false) (mem "programArities" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false))))
 (DUse false (UseAlias ("map") "BM"))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "isNonEmptyL" false) (mem "u64HalvesHex" false))))
+(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "isNonEmptyL" false) (mem "isEmptyL" false) (mem "u64HalvesHex" false))))
 (DUse false (UseGroup ("backend" "llvm_preamble") ((mem "preambleLines" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "LlvmFamily" true) (mem "llvmFamily" false) (mem "isLlvmExternFamily" false))))
 (DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "ExternFinding" false) (mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "renderRecordRefusal" false) (mem "renderCallRefusal" false) (mem "renderTailRefusal" false) (mem "renderBinderRefusal" false) (mem "validateBinderStamps" false) (mem "validateImplSymbolInjectivity" false) (mem "validateDictTags" false) (mem "validateCalls" false) (mem "validateImplSymbols" false) (mem "validateMethodContexts" false) (mem "validateDispatchEvidence" false) (mem "validateTails" false) (mem "validateRecords" false) (mem "unrefusedExternMessage" false) (mem "validateExterns" false))))
@@ -15301,7 +15286,7 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DUse false (UseGroup ("types" "disposition") ((mem "ifaceSuperCount" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "numIntWord" false))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "TrmcVerdicts" false) (mem "isTrmcFn" false) (mem "isTrmcImpl" false) (mem "checkPlanBackend" false))))
-(DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false))))
+(DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "nthArm" false))))
 (DData Private "GapMode" () ((variant "Strict" (ConPos)) (variant "Record" (ConPos))) ())
 (DTypeSig false "isFallthroughVar" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isFallthroughVar" ((PVar "x")) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "fallthroughName")) (EApp (EApp (EVar "startsWith") (EVar "ftPrefix")) (EVar "x"))))
@@ -16983,9 +16968,6 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DTypeSig false "chainNextLabel" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "chainNextLabel" (PWild (PList) (PVar "outer")) (EVar "outer"))
 (DFunDef false "chainNextLabel" ((PVar "e") PWild PWild) (EBinOp "++" (ELit (LString "clause")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))))
-(DTypeSig false "isEmptyL" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
-(DFunDef false "isEmptyL" ((PList)) (EVar "True"))
-(DFunDef false "isEmptyL" (PWild) (EVar "False"))
 (DTypeSig false "implScrutVars" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "CExpr")))))
 (DFunDef false "implScrutVars" ((PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EVar "CVar") (EBinOp "++" (ELit (LString "a")) (EApp (EVar "intToString") (EVar "i")))) (EVar "AGlobal")) (EApp (EApp (EVar "implScrutVars") (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "clauseArm" (TyFun (TyCon "Int") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")) (TyCon "CArm"))))
@@ -17323,10 +17305,6 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DTypeSig false "tailS" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
 (DFunDef false "tailS" ((PList)) (EListLit))
 (DFunDef false "tailS" ((PCons PWild (PVar "xs"))) (EVar "xs"))
-(DTypeSig false "nthArm" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "CArm")))))
-(DFunDef false "nthArm" ((PCons (PVar "a") PWild) (PLit (LInt 0))) (EApp (EVar "Some") (EVar "a")))
-(DFunDef false "nthArm" ((PCons PWild (PVar "rest")) (PVar "n")) (EApp (EApp (EVar "nthArm") (EVar "rest")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))))
-(DFunDef false "nthArm" ((PList) PWild) (EVar "None"))
 (DTypeSig false "ptag" (TyFun (TyCon "Pat") (TyCon "String")))
 (DFunDef false "ptag" ((PCon "PTuple" PWild)) (ELit (LString "PTuple")))
 (DFunDef false "ptag" ((PCon "PCons" PWild PWild)) (ELit (LString "PCons")))
@@ -17765,9 +17743,6 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DFunDef false "isBinderPat" ((PCon "PVar" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isBinderPat" ((PCon "PAs" PWild PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isBinderPat" (PWild) (EVar "False"))
-(DTypeSig false "isWildPat" (TyFun (TyCon "Pat") (TyCon "Bool")))
-(DFunDef false "isWildPat" ((PCon "PWild")) (EVar "True"))
-(DFunDef false "isWildPat" (PWild) (EVar "False"))
 (DTypeSig false "clauseArityC" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Int")))
 (DFunDef false "clauseArityC" ((PCons (PCon "CClause" (PVar "pats") PWild) PWild)) (EApp (EVar "listLen") (EVar "pats")))
 (DFunDef false "clauseArityC" ((PList)) (ELit (LInt 0)))
@@ -18065,12 +18040,12 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DFunDef false "emitTopBindsGaps" ((PVar "e") (PVar "env") (PCons (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) (PVar "body"))) PWild PWild) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setGapBind") (EVar "e")) (EBinOp "++" (ELit (LString "val ")) (EVar "name")))) (DoLet false false (PTuple (PVar "v") (PVar "ty")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "body"))) (DoExpr (EApp (EApp (EApp (EVar "emitTopBindsGaps") (EVar "e")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ETuple (EVar "v") (EVar "ty"))) (EVar "env"))) (EVar "rest")))))
 (DFunDef false "emitTopBindsGaps" ((PVar "e") (PVar "env") (PCons (PCon "CBind" (PVar "name") PWild PWild PWild) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setGapBind") (EVar "e")) (EBinOp "++" (ELit (LString "val ")) (EVar "name")))) (DoLet false false PWild (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "non-nullary / multi-clause value binding")))) (DoExpr (EApp (EApp (EApp (EVar "emitTopBindsGaps") (EVar "e")) (EVar "env")) (EVar "rest")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "BinderId" true) (mem "RecPatField" true) (mem "noDeclLoc" false) (mem "ifaceIdMatches" false) (mem "isFixedWidthHead" false) (mem "fixedWidthMask" false) (mem "isU64Head" false) (mem "isFixedIntHead" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "BinderId" true) (mem "RecPatField" true) (mem "noDeclLoc" false) (mem "ifaceIdMatches" false) (mem "isFixedWidthHead" false) (mem "fixedWidthMask" false) (mem "isU64Head" false) (mem "isFixedIntHead" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "givenNames" false) (mem "isGivenRooted" false) (mem "receiverEvidence" false) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CProgram" true) (mem "DeclFacts" false) (mem "noDeclFacts" false) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "FailSite" true) (mem "CallMode" true) (mem "CallSite" true) (mem "siteSentinelName" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "compileTree" false) (mem "canonPat" false) (mem "definedArityOf" false) (mem "ifaceWordOfKey" false) (mem "programArities" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false))))
 (DUse false (UseAlias ("map") "BM"))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "isNonEmptyL" false) (mem "u64HalvesHex" false))))
+(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "isNonEmptyL" false) (mem "isEmptyL" false) (mem "u64HalvesHex" false))))
 (DUse false (UseGroup ("backend" "llvm_preamble") ((mem "preambleLines" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "LlvmFamily" true) (mem "llvmFamily" false) (mem "isLlvmExternFamily" false))))
 (DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "ExternFinding" false) (mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "renderRecordRefusal" false) (mem "renderCallRefusal" false) (mem "renderTailRefusal" false) (mem "renderBinderRefusal" false) (mem "validateBinderStamps" false) (mem "validateImplSymbolInjectivity" false) (mem "validateDictTags" false) (mem "validateCalls" false) (mem "validateImplSymbols" false) (mem "validateMethodContexts" false) (mem "validateDispatchEvidence" false) (mem "validateTails" false) (mem "validateRecords" false) (mem "unrefusedExternMessage" false) (mem "validateExterns" false))))
@@ -18080,7 +18055,7 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DUse false (UseGroup ("types" "disposition") ((mem "ifaceSuperCount" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "numIntWord" false))))
 (DUse false (UseGroup ("backend" "emit_plan") ((mem "EmitPlan" true) (mem "TrmcVerdicts" false) (mem "isTrmcFn" false) (mem "isTrmcImpl" false) (mem "checkPlanBackend" false))))
-(DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false))))
+(DUse false (UseGroup ("backend" "emit_support") ((mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false) (mem "nthArm" false))))
 (DData Private "GapMode" () ((variant "Strict" (ConPos)) (variant "Record" (ConPos))) ())
 (DTypeSig false "isFallthroughVar" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isFallthroughVar" ((PVar "x")) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "fallthroughName")) (EApp (EApp (EVar "startsWith") (EVar "ftPrefix")) (EVar "x"))))
@@ -19762,9 +19737,6 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DTypeSig false "chainNextLabel" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "chainNextLabel" (PWild (PList) (PVar "outer")) (EVar "outer"))
 (DFunDef false "chainNextLabel" ((PVar "e") PWild PWild) (EBinOp "++" (ELit (LString "clause")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))))
-(DTypeSig false "isEmptyL" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
-(DFunDef false "isEmptyL" ((PList)) (EVar "True"))
-(DFunDef false "isEmptyL" (PWild) (EVar "False"))
 (DTypeSig false "implScrutVars" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "CExpr")))))
 (DFunDef false "implScrutVars" ((PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EVar "CVar") (EBinOp "++" (ELit (LString "a")) (EApp (EVar "intToString") (EVar "i")))) (EVar "AGlobal")) (EApp (EApp (EVar "implScrutVars") (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "clauseArm" (TyFun (TyCon "Int") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")) (TyCon "CArm"))))
@@ -20102,10 +20074,6 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DTypeSig false "tailS" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
 (DFunDef false "tailS" ((PList)) (EListLit))
 (DFunDef false "tailS" ((PCons PWild (PVar "xs"))) (EVar "xs"))
-(DTypeSig false "nthArm" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "CArm")))))
-(DFunDef false "nthArm" ((PCons (PVar "a") PWild) (PLit (LInt 0))) (EApp (EVar "Some") (EVar "a")))
-(DFunDef false "nthArm" ((PCons PWild (PVar "rest")) (PVar "n")) (EApp (EApp (EVar "nthArm") (EVar "rest")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))))
-(DFunDef false "nthArm" ((PList) PWild) (EVar "None"))
 (DTypeSig false "ptag" (TyFun (TyCon "Pat") (TyCon "String")))
 (DFunDef false "ptag" ((PCon "PTuple" PWild)) (ELit (LString "PTuple")))
 (DFunDef false "ptag" ((PCon "PCons" PWild PWild)) (ELit (LString "PCons")))
@@ -20544,9 +20512,6 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DFunDef false "isBinderPat" ((PCon "PVar" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isBinderPat" ((PCon "PAs" PWild PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isBinderPat" (PWild) (EVar "False"))
-(DTypeSig false "isWildPat" (TyFun (TyCon "Pat") (TyCon "Bool")))
-(DFunDef false "isWildPat" ((PCon "PWild")) (EVar "True"))
-(DFunDef false "isWildPat" (PWild) (EVar "False"))
 (DTypeSig false "clauseArityC" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Int")))
 (DFunDef false "clauseArityC" ((PCons (PCon "CClause" (PVar "pats") PWild) PWild)) (EApp (EVar "listLen") (EVar "pats")))
 (DFunDef false "clauseArityC" ((PList)) (ELit (LInt 0)))

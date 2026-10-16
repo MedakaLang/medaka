@@ -1,5 +1,5 @@
 # META
-source_lines=887
+source_lines=883
 stages=DESUGAR,MARK
 # SOURCE
 -- Concrete authority domains: the lattice each effect label's parameter is
@@ -8,7 +8,7 @@ stages=DESUGAR,MARK
 
 import support.util.{
   listLen, filterList, joinWith, sortUniqS, startsWith, contains, allList,
-  anyList, reverseL, lenKey, escStr, splitOnChar, splitLast
+  anyList, reverseL, lenKey, escStr, splitOnChar, splitLast, isEmptyL
 }
 
 -- A Product element lists every axis of its label's declared schema, in
@@ -706,12 +706,8 @@ lexicalPath abs parts = reverseL (fold (lexicalStep abs) [] parts)
 lexicalStep : Bool -> List String -> String -> List String
 lexicalStep abs acc c
   | c == "" || c == "." = acc
-  | c == ".." && abs && isEmptyList acc = acc
+  | c == ".." && abs && isEmptyL acc = acc
   | otherwise = c :: acc
-
-isEmptyList : List a -> Bool
-isEmptyList [] = True
-isEmptyList _ = False
 
 -- Whether normalized components hold a `..` after a named component.
 popsNamed : Bool -> List String -> Bool
@@ -890,7 +886,7 @@ retagParam : Param -> Param -> Param
 retagParam (PPath _) (PPrefix (Some s)) = canonParam (PPath (Some s))
 retagParam _ p = p
 # DESUGAR
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "contains" false) (mem "allList" false) (mem "anyList" false) (mem "reverseL" false) (mem "lenKey" false) (mem "escStr" false) (mem "splitOnChar" false) (mem "splitLast" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "contains" false) (mem "allList" false) (mem "anyList" false) (mem "reverseL" false) (mem "lenKey" false) (mem "escStr" false) (mem "splitOnChar" false) (mem "splitLast" false) (mem "isEmptyL" false))))
 (DData Public "Param" () ((variant "PUnit" (ConPos)) (variant "PPrefix" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "PPath" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "PSet" (ConPos (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))) (variant "PProduct" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))))) ())
 (DTypeSig true "canonParam" (TyFun (TyCon "Param") (TyCon "Param")))
 (DFunDef false "canonParam" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EApp (EVar "PPrefix") (EVar "None")) (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "s")))))
@@ -1125,10 +1121,7 @@ retagParam _ p = p
 (DTypeSig false "lexicalPath" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "lexicalPath" ((PVar "abs") (PVar "parts")) (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "fold") (EApp (EVar "lexicalStep") (EVar "abs"))) (EListLit)) (EVar "parts"))))
 (DTypeSig false "lexicalStep" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "lexicalStep" ((PVar "abs") (PVar "acc") (PVar "c")) (EIf (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LString ""))) (EBinOp "==" (EVar "c") (ELit (LString ".")))) (EVar "acc") (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LString ".."))) (EVar "abs")) (EApp (EVar "isEmptyList") (EVar "acc"))) (EVar "acc") (EIf (EVar "otherwise") (EBinOp "::" (EVar "c") (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "isEmptyList" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
-(DFunDef false "isEmptyList" ((PList)) (EVar "True"))
-(DFunDef false "isEmptyList" (PWild) (EVar "False"))
+(DFunDef false "lexicalStep" ((PVar "abs") (PVar "acc") (PVar "c")) (EIf (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LString ""))) (EBinOp "==" (EVar "c") (ELit (LString ".")))) (EVar "acc") (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LString ".."))) (EVar "abs")) (EApp (EVar "isEmptyL") (EVar "acc"))) (EVar "acc") (EIf (EVar "otherwise") (EBinOp "::" (EVar "c") (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "popsNamed" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "popsNamed" (PWild (PList)) (EVar "False"))
 (DFunDef false "popsNamed" ((PVar "named") (PCons (PVar "c") (PVar "cs"))) (EIf (EBinOp "==" (EVar "c") (ELit (LString ".."))) (EBinOp "||" (EVar "named") (EApp (EApp (EVar "popsNamed") (EVar "named")) (EVar "cs"))) (EApp (EApp (EVar "popsNamed") (EVar "True")) (EVar "cs"))))
@@ -1197,7 +1190,7 @@ retagParam _ p = p
 (DFunDef false "retagParam" ((PCon "PPath" PWild) (PCon "PPrefix" (PCon "Some" (PVar "s")))) (EApp (EVar "canonParam") (EApp (EVar "PPath") (EApp (EVar "Some") (EVar "s")))))
 (DFunDef false "retagParam" (PWild (PVar "p")) (EVar "p"))
 # MARK
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "contains" false) (mem "allList" false) (mem "anyList" false) (mem "reverseL" false) (mem "lenKey" false) (mem "escStr" false) (mem "splitOnChar" false) (mem "splitLast" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "contains" false) (mem "allList" false) (mem "anyList" false) (mem "reverseL" false) (mem "lenKey" false) (mem "escStr" false) (mem "splitOnChar" false) (mem "splitLast" false) (mem "isEmptyL" false))))
 (DData Public "Param" () ((variant "PUnit" (ConPos)) (variant "PPrefix" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "PPath" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "PSet" (ConPos (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))) (variant "PProduct" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param")))))) ())
 (DTypeSig true "canonParam" (TyFun (TyCon "Param") (TyCon "Param")))
 (DFunDef false "canonParam" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EApp (EVar "PPrefix") (EVar "None")) (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "s")))))
@@ -1432,10 +1425,7 @@ retagParam _ p = p
 (DTypeSig false "lexicalPath" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "lexicalPath" ((PVar "abs") (PVar "parts")) (EApp (EVar "reverseL") (EApp (EApp (EApp (EMethodRef "fold") (EApp (EVar "lexicalStep") (EMethodRef "abs"))) (EListLit)) (EVar "parts"))))
 (DTypeSig false "lexicalStep" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "lexicalStep" ((PVar "abs") (PVar "acc") (PVar "c")) (EIf (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LString ""))) (EBinOp "==" (EVar "c") (ELit (LString ".")))) (EVar "acc") (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LString ".."))) (EMethodRef "abs")) (EApp (EVar "isEmptyList") (EVar "acc"))) (EVar "acc") (EIf (EVar "otherwise") (EBinOp "::" (EVar "c") (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "isEmptyList" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
-(DFunDef false "isEmptyList" ((PList)) (EVar "True"))
-(DFunDef false "isEmptyList" (PWild) (EVar "False"))
+(DFunDef false "lexicalStep" ((PVar "abs") (PVar "acc") (PVar "c")) (EIf (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LString ""))) (EBinOp "==" (EVar "c") (ELit (LString ".")))) (EVar "acc") (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LString ".."))) (EMethodRef "abs")) (EApp (EVar "isEmptyL") (EVar "acc"))) (EVar "acc") (EIf (EVar "otherwise") (EBinOp "::" (EVar "c") (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "popsNamed" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "popsNamed" (PWild (PList)) (EVar "False"))
 (DFunDef false "popsNamed" ((PVar "named") (PCons (PVar "c") (PVar "cs"))) (EIf (EBinOp "==" (EVar "c") (ELit (LString ".."))) (EBinOp "||" (EVar "named") (EApp (EApp (EVar "popsNamed") (EVar "named")) (EVar "cs"))) (EApp (EApp (EVar "popsNamed") (EVar "True")) (EVar "cs"))))

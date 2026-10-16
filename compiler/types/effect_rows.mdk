@@ -199,6 +199,11 @@ findAtom k (y :: ys) = if k == atomKey y then Some y else findAtom k ys
 
 public export data EffRow = EffRow (List Atom) (Option (Ref Effvar))
 
+-- the empty closed row — a pure arrow
+export
+pureRow : EffRow
+pureRow = EffRow [] None
+
 public export data Effvar =
   | EUnbound Int Int
   | ELink Int EffRow

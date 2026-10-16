@@ -269,7 +269,6 @@ isBracketCloseTok : Token -> Bool
 isBracketOpenTok : Token -> Bool
 isCloseDelim : Token -> Bool
 isColonTok : Token -> Bool
-isCommaTok : Token -> Bool
 isConsTok : Token -> Bool
 isContextualKw : Token -> Bool
 isContinuationOpStr : String -> Bool
@@ -278,7 +277,6 @@ isCtorName : String -> Bool
 isDataDecl : Decl -> Bool
 isDedentTok : Token -> Bool
 isDeferTok : Token -> Bool
-isElseTok : Token -> Bool
 isEofTok : Token -> Bool
 isEqualTok : Token -> Bool
 isExportTok : Token -> Bool
@@ -304,7 +302,6 @@ isRequiresTok : Token -> Bool
 isStarTok : Token -> Bool
 isTStringTok : Token -> Bool
 isTUpperTok : Token -> Bool
-isThenTok : Token -> Bool
 isWhereTok : Token -> Bool
 kindArrowRest : KindAnn -> Token -> ParserE <> KindAnn
 kindAtomEmit : KindAnn -> ParserE <> KindAnn

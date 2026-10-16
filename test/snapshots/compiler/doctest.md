@@ -1,5 +1,5 @@
 # META
-source_lines=524
+source_lines=522
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted doctest extraction + running.
@@ -26,7 +26,9 @@ import frontend.lexer.{Comment, collectComments, commentLine, commentText}
 import frontend.ast.{Decl(..)}
 import frontend.parser.{parseLocatedResult, parseErrorMessage}
 import frontend.desugar.{desugar, moduleAliases, qualifyAliasRefsWith}
-import support.util.{listLen, reverseL, joinNl, startsWith, stringTrim, splitNl}
+import support.util.{
+  listLen, reverseL, joinNl, startsWith, stringTrim, splitNl, isEmptyL
+}
 import json.{Json(..)}
 import regex.{Regex, mustCompile, isMatch, find}
 import string.{repeat}
@@ -240,10 +242,6 @@ blocksGo acc current lastLine (c :: rest)
   | isEmptyL current || clLine c == lastLine + 1 =
     blocksGo acc (c :: current) (clLine c) rest
   | otherwise = blocksGo (reverseL current :: acc) [c] (clLine c) rest
-
-isEmptyL : List a -> Bool
-isEmptyL [] = True
-isEmptyL _ = False
 
 -- ── Phase 2: extract examples from one adjacent block ───────────────────────
 
@@ -531,7 +529,7 @@ isUse _ = False
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseLocatedResult" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "moduleAliases" false) (mem "qualifyAliasRefsWith" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "splitNl" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "splitNl" false) (mem "isEmptyL" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false))))
 (DUse false (UseGroup ("string") ((mem "repeat" false))))
@@ -597,9 +595,6 @@ isUse _ = False
 (DTypeSig false "blocksGo" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))))))
 (DFunDef false "blocksGo" ((PVar "acc") (PVar "current") PWild (PList)) (EIf (EApp (EVar "isEmptyL") (EVar "current")) (EVar "acc") (EBinOp "::" (EApp (EVar "reverseL") (EVar "current")) (EVar "acc"))))
 (DFunDef false "blocksGo" ((PVar "acc") (PVar "current") (PVar "lastLine") (PCons (PVar "c") (PVar "rest"))) (EIf (EApp (EVar "isBlankComment") (EVar "c")) (EBlock (DoLet false false (PVar "acc2") (EIf (EApp (EVar "isEmptyL") (EVar "current")) (EVar "acc") (EBinOp "::" (EApp (EVar "reverseL") (EVar "current")) (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "blocksGo") (EVar "acc2")) (EListLit)) (EApp (EVar "clLine") (EVar "c"))) (EVar "rest")))) (EIf (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "current")) (EBinOp "==" (EApp (EVar "clLine") (EVar "c")) (EBinOp "+" (EVar "lastLine") (ELit (LInt 1))))) (EApp (EApp (EApp (EApp (EVar "blocksGo") (EVar "acc")) (EBinOp "::" (EVar "c") (EVar "current"))) (EApp (EVar "clLine") (EVar "c"))) (EVar "rest")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "blocksGo") (EBinOp "::" (EApp (EVar "reverseL") (EVar "current")) (EVar "acc"))) (EListLit (EVar "c"))) (EApp (EVar "clLine") (EVar "c"))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "isEmptyL" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
-(DFunDef false "isEmptyL" ((PList)) (EVar "True"))
-(DFunDef false "isEmptyL" (PWild) (EVar "False"))
 (DTypeSig false "sealExample" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Example")))))
 (DFunDef false "sealExample" ((PCon "None") PWild) (EVar "None"))
 (DFunDef false "sealExample" ((PCon "Some" (PTuple (PVar "inp") (PVar "ln"))) (PVar "expectedRev")) (EBlock (DoLet false false (PVar "exp") (EMatch (EApp (EVar "reverseL") (EVar "expectedRev")) (arm (PList) () (EVar "None")) (arm (PVar "lines") () (EApp (EVar "Some") (EApp (EVar "joinNl") (EVar "lines")))))) (DoExpr (EApp (EVar "Some") (EApp (EApp (EApp (EVar "Example") (EVar "inp")) (EVar "exp")) (EVar "ln"))))))
@@ -688,7 +683,7 @@ isUse _ = False
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseLocatedResult" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "moduleAliases" false) (mem "qualifyAliasRefsWith" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "splitNl" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "splitNl" false) (mem "isEmptyL" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false))))
 (DUse false (UseGroup ("string") ((mem "repeat" false))))
@@ -754,9 +749,6 @@ isUse _ = False
 (DTypeSig false "blocksGo" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))))))
 (DFunDef false "blocksGo" ((PVar "acc") (PVar "current") PWild (PList)) (EIf (EApp (EVar "isEmptyL") (EVar "current")) (EVar "acc") (EBinOp "::" (EApp (EVar "reverseL") (EVar "current")) (EVar "acc"))))
 (DFunDef false "blocksGo" ((PVar "acc") (PVar "current") (PVar "lastLine") (PCons (PVar "c") (PVar "rest"))) (EIf (EApp (EVar "isBlankComment") (EVar "c")) (EBlock (DoLet false false (PVar "acc2") (EIf (EApp (EVar "isEmptyL") (EVar "current")) (EVar "acc") (EBinOp "::" (EApp (EVar "reverseL") (EVar "current")) (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "blocksGo") (EVar "acc2")) (EListLit)) (EApp (EVar "clLine") (EVar "c"))) (EVar "rest")))) (EIf (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "current")) (EBinOp "==" (EApp (EVar "clLine") (EVar "c")) (EBinOp "+" (EVar "lastLine") (ELit (LInt 1))))) (EApp (EApp (EApp (EApp (EVar "blocksGo") (EVar "acc")) (EBinOp "::" (EVar "c") (EVar "current"))) (EApp (EVar "clLine") (EVar "c"))) (EVar "rest")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "blocksGo") (EBinOp "::" (EApp (EVar "reverseL") (EVar "current")) (EVar "acc"))) (EListLit (EVar "c"))) (EApp (EVar "clLine") (EVar "c"))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "isEmptyL" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
-(DFunDef false "isEmptyL" ((PList)) (EVar "True"))
-(DFunDef false "isEmptyL" (PWild) (EVar "False"))
 (DTypeSig false "sealExample" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Example")))))
 (DFunDef false "sealExample" ((PCon "None") PWild) (EVar "None"))
 (DFunDef false "sealExample" ((PCon "Some" (PTuple (PVar "inp") (PVar "ln"))) (PVar "expectedRev")) (EBlock (DoLet false false (PVar "exp") (EMatch (EApp (EVar "reverseL") (EVar "expectedRev")) (arm (PList) () (EVar "None")) (arm (PVar "lines") () (EApp (EVar "Some") (EApp (EVar "joinNl") (EVar "lines")))))) (DoExpr (EApp (EVar "Some") (EApp (EApp (EApp (EVar "Example") (EVar "inp")) (EVar "exp")) (EVar "ln"))))))

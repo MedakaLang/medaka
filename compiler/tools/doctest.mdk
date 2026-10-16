@@ -22,7 +22,9 @@ import frontend.lexer.{Comment, collectComments, commentLine, commentText}
 import frontend.ast.{Decl(..)}
 import frontend.parser.{parseLocatedResult, parseErrorMessage}
 import frontend.desugar.{desugar, moduleAliases, qualifyAliasRefsWith}
-import support.util.{listLen, reverseL, joinNl, startsWith, stringTrim, splitNl}
+import support.util.{
+  listLen, reverseL, joinNl, startsWith, stringTrim, splitNl, isEmptyL
+}
 import json.{Json(..)}
 import regex.{Regex, mustCompile, isMatch, find}
 import string.{repeat}
@@ -236,10 +238,6 @@ blocksGo acc current lastLine (c :: rest)
   | isEmptyL current || clLine c == lastLine + 1 =
     blocksGo acc (c :: current) (clLine c) rest
   | otherwise = blocksGo (reverseL current :: acc) [c] (clLine c) rest
-
-isEmptyL : List a -> Bool
-isEmptyL [] = True
-isEmptyL _ = False
 
 -- ── Phase 2: extract examples from one adjacent block ───────────────────────
 
