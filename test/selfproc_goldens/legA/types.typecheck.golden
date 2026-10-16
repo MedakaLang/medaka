@@ -799,6 +799,7 @@ declEnvVariantOwnerModules : String -> List Variant -> Map String (List String) 
 declEnvVisibleAt : Int -> Int -> Bool
 declEnvVisibleTo : Int -> Int -> Bool -> Bool
 declEnvsOrdOf : String -> DeclEnvs -> Int
+declExternNames : List Decl -> List String
 declGradedScope : List String -> List (Option KindAnn) -> List IfaceMethod -> List (String, List Kind)
 declGradedScopeAdd : String -> List Kind -> List (String, List Kind) -> List (String, List Kind)
 declHasPolarityEntry : Map String (List TabKey) -> Decl -> Bool

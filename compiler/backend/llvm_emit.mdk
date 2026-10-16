@@ -798,9 +798,10 @@ data EmitInputData = EmitInputData {
   -- (eta-wrapped) form
   externArityIndex : OrdMap Int,
   -- #2074: the USER-declared externs only (the runtime catalog's own names are
-  -- subtracted at the mint, `ir.core_ir_lower.ffiExternTypeNames`), keyed name →
-  -- (declared param type-head names, declared return type-head name).  This is
-  -- the ONLY table that answers "is this name a foreign call?".
+  -- subtracted at the mint, `ir.core_ir_lower.ffiExternTypeNames`), keyed by the
+  -- extern's program-wide name (`types.private_mangle.externSymbolName`) →
+  -- (C symbol, (declared param type-head names, declared return type-head name)).
+  -- This is the ONLY table that answers "is this name a foreign call?".
   ffiExternIndex : OrdMap (String, (List String, String)),
   recordFieldOrders : List (String, List String),
   mainIsUnit : Bool,
@@ -10046,7 +10047,9 @@ emitExternEtaDefine e lamName name arity =
 -- declared signature (`ffiExternArity`).
 emitFfiEtaClosure : Emit -> String -> (String, LTy)
 emitFfiEtaClosure e name =
-  let lamName = "mdk_eta_\{name}\{mangleScoped e}"
+  -- `injectiveIdent`: a `bind c` extern's Medaka name is not its C symbol, so it
+  -- may hold a character an unquoted LLVM name cannot (`f'`).
+  let lamName = "mdk_eta_\{injectiveIdent name}\{mangleScoped e}"
   let _ = emitFfiEtaDefine e lamName name (ffiExternArity e name)
   emitConstClosure e lamName (ffiExternArity e name)
 

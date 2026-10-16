@@ -44093,6 +44093,9 @@ directExternSigs ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest)
   (n, ty) :: directExternSigs rest
 directExternSigs (_ :: rest) = directExternSigs rest
 
+declExternNames : List Decl -> List String
+declExternNames decls = map fst (directExternSigs decls)
+
 -- Interface method rows: each method's declaration identity, bare scheme, and
 -- method-level predicate slots are constructed together.  The walk deliberately admits
 -- only direct DInterface declarations; attributed-only interfaces retain their historical
@@ -55544,9 +55547,13 @@ moduleMarkCtx : MarkSets -> String -> List Decl -> OrdMap Scheme -> MarkCtx
 moduleMarkCtx ms mid prog imported =
   let candidates = methodMarkCtx ms mid prog
   let local = namesToSet (declTopFnNames prog) omEmpty
+  -- A module's own extern denotes itself wherever the module spells it, as its
+  -- own function named like an interface method does (SHADOW-SEMANTICS S2's
+  -- definer arm), so its occurrences are never method occurrences.
+  let externs = namesToSet (declExternNames prog) omEmpty
   MarkCtx {
-    mcRp = candidates.mcRp,
-    mcAn = candidates.mcAn,
+    mcRp = IdMap.difference candidates.mcRp externs,
+    mcAn = IdMap.difference candidates.mcAn externs,
     mcSm =
       filterList
         (entry => omHasKey (fst entry) local || omHasKey (snd entry) imported)
@@ -56627,10 +56634,7 @@ beginModuleMarking mid prog top seed =
     mmTop = top,
     mmDictSet = Ref (omFromNames names omEmpty),
     mmUserNames = omFromNames (declTopFnNames prog) seed.msImportedNames,
-    mmExterns =
-      omFromNames
-        (map fst (directExternSigs (externDecls prog)))
-        seed.msImportedExterns,
+    mmExterns = omFromNames (declExternNames prog) seed.msImportedExterns,
   }
 
 -- Mark one binding group's clauses (in the stored, newest-first order the map keeps)

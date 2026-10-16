@@ -123,7 +123,7 @@ import support.ordmap.{
   omFromNames,
   omKeys,
 }
-import types.private_mangle.{injectiveIdent}
+import types.private_mangle.{externDeclaredName, injectiveIdent}
 import support.util.{
   contains,
   listLen,
@@ -3833,23 +3833,29 @@ export
 validateFfiExternTypeNames : List (String, (List (String, String), (List String, String))) ->
   List (String, (List (String, String), (List String, String)))
 validateFfiExternTypeNames rows =
-  -- 🚨 THE INDEX IS BARE-NAME KEYED ACROSS THE WHOLE PROGRAM, so a name declared
-  -- twice with two different signatures is a contradiction the index cannot hold
-  -- ([T-GLOBAL-TABLE]).  Guard it HERE, in the wrapper, and not inside
-  -- `ffiExternRows`: the property is about the FINISHED list, and `ffiExternRows`
-  -- is a self-recursive walk that would have to re-scan its own tail at every step
-  -- to ask it — the exact list-as-a-set shape `compiler/AGENTS.md` opens with.
-  let _ = ffiCheckExternRowsDistinct omEmpty (hostRows "c" rows)
+  -- Guard it HERE, in the wrapper, and not inside `ffiExternRows`: the property is
+  -- about the FINISHED list, and `ffiExternRows` is a self-recursive walk that would
+  -- have to re-scan its own tail at every step to ask it — the exact list-as-a-set
+  -- shape `compiler/AGENTS.md` opens with.
+  let declared =
+    map (r => (externDeclaredName (fst r) (fst (snd r)), snd r)) rows
+  let _ = ffiCheckExternRowsDistinct omEmpty (hostRows "c" declared)
   rows
 
--- Two modules may each declare `extern cDouble`, and the declared name IS the C
--- symbol (`compiler/FFI-ABI.md`), so both calls link to ONE C function.  If the two
--- declarations agree, that is legitimate sharing and this walk is silent.  If they
--- DISAGREE, `omFromPairs (reverseL …)` in `EmitInputData` keeps the first row and
--- marshals the other module's calls through it: `useY 4.0` against an
+-- One C symbol is one C function, so it has one signature, however many
+-- declarations bind it.  The rows are keyed by the extern's program-wide name
+-- (`types.private_mangle.externSymbolName`): a declaration with `bind` clauses is
+-- module-scoped, so two modules binding one Medaka name to two symbols get two
+-- rows; one without them is keyed by its spelling, which is the C symbol it
+-- binds.  So every declaration of a symbol has its own row, under its own name or
+-- a shared one, and two of them that agree share the C function legitimately and
+-- this walk is silent.  Two that DISAGREE would each marshal through its own row
+-- into a function only one of the signatures can describe: `useY 4.0` against an
 -- `Int -> Int` row printed 139888567046080 at exit 0, and the `Float -> Float`
--- variant of the same collision segfaulted.  Neither has any channel to reach the
--- author, so the contradiction is refused here rather than emitted.
+-- variant segfaulted.  Neither has any channel to reach the author, so the
+-- contradiction is refused here rather than emitted.  The key is the symbol, not
+-- the row's name: a shared name would also keep only one of two rows
+-- (`omFromPairs` in `EmitInputData`), and a shared name implies a shared symbol.
 --
 -- A PANIC, not a located diagnostic, and that is the stage's own limit rather than
 -- a choice: Core IR lowering runs post-typecheck, where [T-ERRORS-ACCUM]'s

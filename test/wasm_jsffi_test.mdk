@@ -10,8 +10,9 @@
    (empty and non-ASCII included), `Int` at both ends of its range, a binding
    called directly, as a value and in tail position, the two `i64` results an
    `Int` cannot hold, a binding that throws, a binding the host was not given,
-   and a `String` result with a lone surrogate.  The last test builds the
-   two-host fixture native and for wasm and compares their output.
+   a `String` result with a lone surrogate, and externs whose names differ by
+   a `w_` prefix.  The last two tests build the programs in
+   `test/two_host_fixtures` native and for wasm and check both outputs.
 
    Runs under `medaka test --native`: it spawns the compiler and node. -}
 
@@ -92,6 +93,7 @@ test "jsffi: each fixture under the stub host prints what WASM-SEMANTICS section
         "",
         "runtime error: js binding `jsLone` returned a string with a lone surrogate, not String\n",
       ),
+      runsAs scratch "w_prefix" (0, "11\n21\n31\n", ""),
     ])
     (msg => fail msg)
 
@@ -117,10 +119,10 @@ mustRun what (Ok (code, out, err)) =
   else
     Ok out
 
--- The native build: the runtime built without LTO (`ld -r` cannot merge
--- ThinLTO bitcode) merged with stub.c, linked in through MEDAKA_RT_OBJ.
-nativeTwoHost : String -> <Exec, IO> Result String String
-nativeTwoHost scratch = do
+-- The runtime built without LTO (`ld -r` cannot merge ThinLTO bitcode) merged
+-- with stub.c: the object a native build links in through MEDAKA_RT_OBJ.
+twoHostObject : String -> <Exec, IO> Result String String
+twoHostObject scratch = do
   _ <- mustRun
     "emit-rt-obj"
     (boundedVerbSeconds 600 "env" [
@@ -149,23 +151,36 @@ nativeTwoHost scratch = do
       "-o",
       "\{scratch}/combined.o",
     ])
+  Ok "\{scratch}/combined.o"
+
+-- The native build of `test/two_host_fixtures/<entry>.mdk`, linked with `obj`
+-- into `scratch/<out>.bin`, then run.
+nativeTwoHost : String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO> Result String String
+nativeTwoHost scratch obj entry out = do
   _ <- mustRun
-    "build native"
+    "build native \{entry}"
     (boundedVerbSeconds 600 "env" [
       "MEDAKA_STRICT=1",
-      "MEDAKA_RT_OBJ=\{scratch}/combined.o",
+      "MEDAKA_RT_OBJ=\{obj}",
       medakaBin,
       "build",
-      "\{twoHostDir}/two_host.mdk",
+      "\{twoHostDir}/\{entry}.mdk",
       "-o",
-      "\{scratch}/two_host.bin",
+      "\{scratch}/\{out}.bin",
     ])
-  mustRun "run native" (boundedVerbSeconds 60 "\{scratch}/two_host.bin" [])
+  mustRun
+    "run native \{entry}"
+    (boundedVerbSeconds 60 "\{scratch}/\{out}.bin" [])
 
--- The wasmgc/node build run by run.js with the bindings module.
-wasmTwoHost : String -> <Exec, IO> Result String String
-wasmTwoHost scratch = match (mustRun
-  "build wasm"
+-- The wasmgc/node build of the same program, run by run.js with the bindings
+-- module.
+wasmTwoHost : String -> String -> String -> <Exec, IO> Result String String
+wasmTwoHost scratch entry out = match (mustRun
+  "build wasm \{entry}"
   (boundedVerbSeconds 120 "env" [
     "MEDAKA_STRICT=1",
     "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
@@ -173,27 +188,69 @@ wasmTwoHost scratch = match (mustRun
     "build",
     "--target",
     "wasm",
-    "\{twoHostDir}/two_host.mdk",
+    "\{twoHostDir}/\{entry}.mdk",
     "-o",
-    "\{scratch}/two_host.wasm",
+    "\{scratch}/\{out}.wasm",
   ]))
   Err e => Err e
   Ok _ =>
     mustRun
-      "run wasm"
+      "run wasm \{entry}"
       (boundedVerbSeconds 60 "node" [
         "\{medakaRoot}/test/wasm/run.js",
-        "\{scratch}/two_host.wasm",
+        "\{scratch}/\{out}.wasm",
         "\{twoHostDir}/bindings.mjs",
       ])
 
+-- `entry` prints `want` built native and built for wasmgc/node.
+printsOnBothHosts : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO> Expectation
+printsOnBothHosts scratch obj entry out want = match (
+  nativeTwoHost scratch obj entry out,
+  wasmTwoHost scratch entry out,
+)
+  (Err e, _) => fail e
+  (_, Err e) => fail e
+  (Ok native, Ok wasm) => expectAll [
+    expectEqual want native,
+    expectEqual want wasm,
+  ]
+
 test "two hosts: one declaration with bind c and bind js prints the same bytes native and wasmgc/node" =
   inFreshDirOf
-    (scratch => match (nativeTwoHost scratch, wasmTwoHost scratch)
-      (Err e, _) => fail e
-      (_, Err e) => fail e
-      (Ok native, Ok wasm) => expectAll [
-        expectEqual expectTwoHost native,
-        expectEqual native wasm,
+    (scratch => match twoHostObject scratch
+      Err e => fail e
+      Ok obj =>
+        printsOnBothHosts scratch obj "two_host" "two_host" expectTwoHost)
+    (msg => fail msg)
+
+-- # Extern identity on both hosts.
+--
+-- Each module's extern is its own declaration whatever another module names
+-- its own (`same_name/`), and a name a prelude interface method also has, or a
+-- primed one, denotes the extern (`method_names.mdk`).  Every expected line is
+-- derived in its fixture's header.
+test "two hosts: each extern is its own module's declaration, whatever its name" =
+  inFreshDirOf
+    (scratch => match twoHostObject scratch
+      Err e => fail e
+      Ok obj => expectAll [
+        printsOnBothHosts scratch obj "same_name/main" "same_name" "101\n201\n",
+        printsOnBothHosts
+          scratch
+          obj
+          "same_name/sig_main"
+          "same_sig"
+          "101\n6\n",
+        printsOnBothHosts
+          scratch
+          obj
+          "method_names"
+          "method_names"
+          "2022\n2022\n11\n[12]\n",
       ])
     (msg => fail msg)

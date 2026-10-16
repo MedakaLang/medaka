@@ -1,0 +1,27 @@
+-- Extern names a declaration is free to choose once it binds its symbols: two
+-- spelled like prelude interface methods, which in this module denote the
+-- externs as a function of the same name would, and a primed one, used as a
+-- value as well as applied.  `add` and `compare` bind one symbol at one
+-- signature.
+--
+--   2022   stub_mul_add 20 22 = 20 * 100 + 22
+--   2022   the same, through `compare`
+--   11     stub_prime 1 = 1 + 10
+--   [12]   stub_prime 2, through the extern as a value
+extern add : Int -> Int -> <FFI "c", FFI "js"> Int
+  bind c "stub_mul_add"
+  bind js "jsMulAdd"
+
+extern compare : Int -> Int -> <FFI "c", FFI "js"> Int
+  bind c "stub_mul_add"
+  bind js "jsMulAdd"
+
+extern f' : Int -> <FFI "c", FFI "js"> Int
+  bind c "stub_prime"
+  bind js "jsPrime"
+
+main =
+  let _ = println (add 20 22)
+  let _ = println (compare 20 22)
+  let _ = println (f' 1)
+  println (map (g => g 2) [f'])
