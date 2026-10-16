@@ -113,7 +113,7 @@
 # `compiler/*.mdk` + `stdlib/*.mdk` (the Medaka source proper) and
 # `runtime/*.c` (the C runtime — a doc legitimately cites real runtime
 # symbols like `GC_malloc_atomic`) but deliberately EXCLUDES the `*.md`
-# design docs that also live under compiler/ (compiler/HELPER-CENSUS.md,
+# design docs that also live under compiler/ (archive/design/HELPER-CENSUS.md,
 # docs/design/MESSAGE-AUDIT.md, …): those are PROSE, and grepping them let a
 # naming-CONVENTION mention (`*Msg` builders, described in prose as "Msg")
 # resolve a token that is not a real standalone identifier anywhere in actual
