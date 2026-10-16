@@ -1,5 +1,5 @@
 # META
-source_lines=2177
+source_lines=2189
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
@@ -41,7 +41,12 @@ import support.path.{dirOf, chopExt, joinPath}
 import frontend.parser.{parseResult}
 import frontend.parse_cache.{notePreludeParse}
 import types.target_profile.{selectedProfile, profileName, targetProfileEnv}
-import driver.front_gate.{GateAsk, gateAssignments, readDiagJson}
+import driver.front_gate.{
+  GateAsk,
+  gateAssignments,
+  noGateAssignments,
+  readDiagJson,
+}
 import driver.diagnostics.{
   Diag,
   Severity(..),
@@ -2027,12 +2032,19 @@ runEmitterFor frontGate diagPath prog args =
   let profileSet = match !selectedProfile
     Some p => ["\{targetProfileEnv}=\{profileName p}"]
     None => []
+  let ackPath = joinPath (dirOf diagPath) "gate.ack"
   let gateSet = match frontGate
-    Some ask => gateAssignments ask diagPath
-    None => []
-  match profileSet ++ gateSet
-    [] => runCommand prog args
-    sets => runCommand "env" (sets ++ [prog] ++ args)
+    Some ask => gateAssignments ask diagPath ackPath
+    None => noGateAssignments
+  let res = runCommand "env" (profileSet ++ gateSet ++ [prog] ++ args)
+  match (frontGate, res)
+    (Some _, Ok (0, _, _)) =>
+      if fileExists ackPath then
+        res
+      else
+        Err
+          "emitter did not run the front-end gate; rebuild it with `make medaka`"
+    _ => res
 
 -- `medaka build --emit-prelude-obj <path>`: emit stdlib/core.mdk ALONE as a
 -- library (MEDAKA_EMIT_HALF=prelude) and compile it to a reusable object with
@@ -2191,7 +2203,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false))))
 (DUse false (UseGroup ("frontend" "parse_cache") ((mem "notePreludeParse" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false) (mem "profileName" false) (mem "targetProfileEnv" false))))
-(DUse false (UseGroup ("driver" "front_gate") ((mem "GateAsk" false) (mem "gateAssignments" false) (mem "readDiagJson" false))))
+(DUse false (UseGroup ("driver" "front_gate") ((mem "GateAsk" false) (mem "gateAssignments" false) (mem "noGateAssignments" false) (mem "readDiagJson" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "Severity" true) (mem "emitDiagExitCode" false) (mem "mkDiag" false) (mem "parseErrDiag" false) (mem "ppDiag" false) (mem "ppDiagCliSrc" false))))
 (DData Public "BuildReport" () ((variant "BuildReport" (ConNamed (field "status" (TyCon "String")) (field "keptIr" (TyApp (TyCon "Option") (TyCon "String"))) (field "emitterStderr" (TyCon "String")) (field "notes" (TyApp (TyCon "List") (TyCon "Diag"))) (field "diagEnvelope" (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))))))) ())
 (DTypeSig true "buildOk" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport"))))
@@ -2407,7 +2419,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig false "withStrictEmit" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "withStrictEmit" ((PVar "prog") (PVar "args")) (ETuple (ELit (LString "env")) (EBinOp "++" (EListLit (ELit (LString "MEDAKA_STRICT=1")) (EVar "prog")) (EVar "args"))))
 (DTypeSig false "runEmitterFor" (TyFun (TyApp (TyCon "Option") (TyCon "GateAsk")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))))
-(DFunDef false "runEmitterFor" ((PVar "frontGate") (PVar "diagPath") (PVar "prog") (PVar "args")) (EBlock (DoLet false false (PVar "profileSet") (EMatch (EUnOp "!" (EVar "selectedProfile")) (arm (PCon "Some" (PVar "p")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "targetProfileEnv"))) (ELit (LString "="))) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "p")))) (ELit (LString ""))))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "gateSet") (EMatch (EVar "frontGate") (arm (PCon "Some" (PVar "ask")) () (EApp (EApp (EVar "gateAssignments") (EVar "ask")) (EVar "diagPath"))) (arm (PCon "None") () (EListLit)))) (DoExpr (EMatch (EBinOp "++" (EVar "profileSet") (EVar "gateSet")) (arm (PList) () (EApp (EApp (EVar "runCommand") (EVar "prog")) (EVar "args"))) (arm (PVar "sets") () (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EBinOp "++" (EBinOp "++" (EVar "sets") (EListLit (EVar "prog"))) (EVar "args"))))))))
+(DFunDef false "runEmitterFor" ((PVar "frontGate") (PVar "diagPath") (PVar "prog") (PVar "args")) (EBlock (DoLet false false (PVar "profileSet") (EMatch (EUnOp "!" (EVar "selectedProfile")) (arm (PCon "Some" (PVar "p")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "targetProfileEnv"))) (ELit (LString "="))) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "p")))) (ELit (LString ""))))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "ackPath") (EApp (EApp (EVar "joinPath") (EApp (EVar "dirOf") (EVar "diagPath"))) (ELit (LString "gate.ack")))) (DoLet false false (PVar "gateSet") (EMatch (EVar "frontGate") (arm (PCon "Some" (PVar "ask")) () (EApp (EApp (EApp (EVar "gateAssignments") (EVar "ask")) (EVar "diagPath")) (EVar "ackPath"))) (arm (PCon "None") () (EVar "noGateAssignments")))) (DoLet false false (PVar "res") (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "profileSet") (EVar "gateSet")) (EListLit (EVar "prog"))) (EVar "args")))) (DoExpr (EMatch (ETuple (EVar "frontGate") (EVar "res")) (arm (PTuple (PCon "Some" PWild) (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild))) () (EIf (EApp (EVar "fileExists") (EVar "ackPath")) (EVar "res") (EApp (EVar "Err") (ELit (LString "emitter did not run the front-end gate; rebuild it with `make medaka`"))))) (arm PWild () (EVar "res"))))))
 (DTypeSig true "emitPreludeObj" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport"))))))))
 (DFunDef false "emitPreludeObj" ((PVar "cc") (PVar "root") (PVar "medaka") (PVar "outObjPath")) (EMatch (EApp (EVar "probeClang") (EVar "cc")) (arm (PCon "None") () (EApp (EVar "buildErr") (EApp (EVar "clangMissingError") (EVar "cc")))) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "makeTempDir") (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not create a scratch directory for the prelude compile: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tmpDir")) () (EBlock (DoLet false false (PVar "res") (EApp (EApp (EApp (EApp (EApp (EVar "emitPreludeObjIn") (EVar "cc")) (EVar "root")) (EVar "medaka")) (EVar "outObjPath")) (EVar "tmpDir"))) (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "tmpDir"))) (DoExpr (EVar "res"))))))))
 (DTypeSig false "emitPreludeObjIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport")))))))))
@@ -2428,7 +2440,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false))))
 (DUse false (UseGroup ("frontend" "parse_cache") ((mem "notePreludeParse" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "selectedProfile" false) (mem "profileName" false) (mem "targetProfileEnv" false))))
-(DUse false (UseGroup ("driver" "front_gate") ((mem "GateAsk" false) (mem "gateAssignments" false) (mem "readDiagJson" false))))
+(DUse false (UseGroup ("driver" "front_gate") ((mem "GateAsk" false) (mem "gateAssignments" false) (mem "noGateAssignments" false) (mem "readDiagJson" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "Severity" true) (mem "emitDiagExitCode" false) (mem "mkDiag" false) (mem "parseErrDiag" false) (mem "ppDiag" false) (mem "ppDiagCliSrc" false))))
 (DData Public "BuildReport" () ((variant "BuildReport" (ConNamed (field "status" (TyCon "String")) (field "keptIr" (TyApp (TyCon "Option") (TyCon "String"))) (field "emitterStderr" (TyCon "String")) (field "notes" (TyApp (TyCon "List") (TyCon "Diag"))) (field "diagEnvelope" (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))))))) ())
 (DTypeSig true "buildOk" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport"))))
@@ -2644,7 +2656,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DTypeSig false "withStrictEmit" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "withStrictEmit" ((PVar "prog") (PVar "args")) (ETuple (ELit (LString "env")) (EBinOp "++" (EListLit (ELit (LString "MEDAKA_STRICT=1")) (EVar "prog")) (EVar "args"))))
 (DTypeSig false "runEmitterFor" (TyFun (TyApp (TyCon "Option") (TyCon "GateAsk")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))))
-(DFunDef false "runEmitterFor" ((PVar "frontGate") (PVar "diagPath") (PVar "prog") (PVar "args")) (EBlock (DoLet false false (PVar "profileSet") (EMatch (EUnOp "!" (EVar "selectedProfile")) (arm (PCon "Some" (PVar "p")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "targetProfileEnv"))) (ELit (LString "="))) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "p")))) (ELit (LString ""))))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "gateSet") (EMatch (EVar "frontGate") (arm (PCon "Some" (PVar "ask")) () (EApp (EApp (EVar "gateAssignments") (EVar "ask")) (EVar "diagPath"))) (arm (PCon "None") () (EListLit)))) (DoExpr (EMatch (EBinOp "++" (EVar "profileSet") (EVar "gateSet")) (arm (PList) () (EApp (EApp (EVar "runCommand") (EVar "prog")) (EVar "args"))) (arm (PVar "sets") () (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EBinOp "++" (EBinOp "++" (EVar "sets") (EListLit (EVar "prog"))) (EVar "args"))))))))
+(DFunDef false "runEmitterFor" ((PVar "frontGate") (PVar "diagPath") (PVar "prog") (PVar "args")) (EBlock (DoLet false false (PVar "profileSet") (EMatch (EUnOp "!" (EVar "selectedProfile")) (arm (PCon "Some" (PVar "p")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "targetProfileEnv"))) (ELit (LString "="))) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "p")))) (ELit (LString ""))))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "ackPath") (EApp (EApp (EVar "joinPath") (EApp (EVar "dirOf") (EVar "diagPath"))) (ELit (LString "gate.ack")))) (DoLet false false (PVar "gateSet") (EMatch (EVar "frontGate") (arm (PCon "Some" (PVar "ask")) () (EApp (EApp (EApp (EVar "gateAssignments") (EVar "ask")) (EVar "diagPath")) (EVar "ackPath"))) (arm (PCon "None") () (EVar "noGateAssignments")))) (DoLet false false (PVar "res") (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "profileSet") (EVar "gateSet")) (EListLit (EVar "prog"))) (EVar "args")))) (DoExpr (EMatch (ETuple (EVar "frontGate") (EVar "res")) (arm (PTuple (PCon "Some" PWild) (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild))) () (EIf (EApp (EVar "fileExists") (EVar "ackPath")) (EVar "res") (EApp (EVar "Err") (ELit (LString "emitter did not run the front-end gate; rebuild it with `make medaka`"))))) (arm PWild () (EVar "res"))))))
 (DTypeSig true "emitPreludeObj" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport"))))))))
 (DFunDef false "emitPreludeObj" ((PVar "cc") (PVar "root") (PVar "medaka") (PVar "outObjPath")) (EMatch (EApp (EVar "probeClang") (EVar "cc")) (arm (PCon "None") () (EApp (EVar "buildErr") (EApp (EVar "clangMissingError") (EVar "cc")))) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "makeTempDir") (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "buildErr") (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not create a scratch directory for the prelude compile: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tmpDir")) () (EBlock (DoLet false false (PVar "res") (EApp (EApp (EApp (EApp (EApp (EVar "emitPreludeObjIn") (EVar "cc")) (EVar "root")) (EVar "medaka")) (EVar "outObjPath")) (EVar "tmpDir"))) (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "tmpDir"))) (DoExpr (EVar "res"))))))))
 (DTypeSig false "emitPreludeObjIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport")))))))))

@@ -319,13 +319,43 @@ export
 diagJsonEnv : String
 diagJsonEnv = "MEDAKA_DIAG_JSON"
 
--- The `env` assignments that ask the child for the gate, writing the
--- envelope to `path` when the ask says so.
+-- The acknowledgement file: the child writes it once the gate has run and
+-- delivered its verdict, so a parent that asked for the gate can tell a child
+-- that ran it from an older emitter that ignores `frontGateEnv`.
 export
-gateAssignments : GateAsk -> String -> List String
-gateAssignments ask path =
-  frontGateAssignment ask.askAllowInternal
-    :: (if ask.askDiagJson then ["\{diagJsonEnv}=\{path}"] else [])
+gateAckEnv : String
+gateAckEnv = "MEDAKA_FRONT_GATE_ACK"
+
+-- The `env` assignments that ask the child for the gate, writing the envelope
+-- to `diagPath` when the ask says so and the acknowledgement to `ackPath`.
+-- Every variable is set, to empty when unused, so one inherited from the
+-- caller's environment never steers the child.
+export
+gateAssignments : GateAsk -> String -> String -> List String
+gateAssignments ask diagPath ackPath = [
+  frontGateAssignment ask.askAllowInternal,
+  "\{diagJsonEnv}=\{if ask.askDiagJson then diagPath else ""}",
+  "\{gateAckEnv}=\{ackPath}",
+]
+
+-- The assignments for a child that is not asked for the gate.
+export
+noGateAssignments : List String
+noGateAssignments = ["\{frontGateEnv}=", "\{diagJsonEnv}=", "\{gateAckEnv}="]
+
+-- The child's acknowledgement, when the parent asked for one.
+export
+writeGateAck : Unit -> <IO> Unit
+writeGateAck _ = match getEnv gateAckEnv
+  None => ()
+  Some "" => ()
+  Some path => match writeFile path "ran\n"
+    Ok _ => ()
+    Err e =>
+      let _ =
+        ePutStrLn
+          "error: could not write the gate acknowledgement to \{path}: \{e}"
+      stageExit 1
 
 export
 diagJsonPathOfEnv : Unit -> <IO> Option String

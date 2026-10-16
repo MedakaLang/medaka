@@ -37,7 +37,12 @@ import support.path.{dirOf, chopExt, joinPath}
 import frontend.parser.{parseResult}
 import frontend.parse_cache.{notePreludeParse}
 import types.target_profile.{selectedProfile, profileName, targetProfileEnv}
-import driver.front_gate.{GateAsk, gateAssignments, readDiagJson}
+import driver.front_gate.{
+  GateAsk,
+  gateAssignments,
+  noGateAssignments,
+  readDiagJson,
+}
 import driver.diagnostics.{
   Diag,
   Severity(..),
@@ -2023,12 +2028,19 @@ runEmitterFor frontGate diagPath prog args =
   let profileSet = match !selectedProfile
     Some p => ["\{targetProfileEnv}=\{profileName p}"]
     None => []
+  let ackPath = joinPath (dirOf diagPath) "gate.ack"
   let gateSet = match frontGate
-    Some ask => gateAssignments ask diagPath
-    None => []
-  match profileSet ++ gateSet
-    [] => runCommand prog args
-    sets => runCommand "env" (sets ++ [prog] ++ args)
+    Some ask => gateAssignments ask diagPath ackPath
+    None => noGateAssignments
+  let res = runCommand "env" (profileSet ++ gateSet ++ [prog] ++ args)
+  match (frontGate, res)
+    (Some _, Ok (0, _, _)) =>
+      if fileExists ackPath then
+        res
+      else
+        Err
+          "emitter did not run the front-end gate; rebuild it with `make medaka`"
+    _ => res
 
 -- `medaka build --emit-prelude-obj <path>`: emit stdlib/core.mdk ALONE as a
 -- library (MEDAKA_EMIT_HALF=prelude) and compile it to a reusable object with

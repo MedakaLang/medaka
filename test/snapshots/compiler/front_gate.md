@@ -1,5 +1,5 @@
 # META
-source_lines=534
+source_lines=564
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/front_gate.mdk — the front-end error renderers the CLI verbs
@@ -323,13 +323,43 @@ export
 diagJsonEnv : String
 diagJsonEnv = "MEDAKA_DIAG_JSON"
 
--- The `env` assignments that ask the child for the gate, writing the
--- envelope to `path` when the ask says so.
+-- The acknowledgement file: the child writes it once the gate has run and
+-- delivered its verdict, so a parent that asked for the gate can tell a child
+-- that ran it from an older emitter that ignores `frontGateEnv`.
 export
-gateAssignments : GateAsk -> String -> List String
-gateAssignments ask path =
-  frontGateAssignment ask.askAllowInternal
-    :: (if ask.askDiagJson then ["\{diagJsonEnv}=\{path}"] else [])
+gateAckEnv : String
+gateAckEnv = "MEDAKA_FRONT_GATE_ACK"
+
+-- The `env` assignments that ask the child for the gate, writing the envelope
+-- to `diagPath` when the ask says so and the acknowledgement to `ackPath`.
+-- Every variable is set, to empty when unused, so one inherited from the
+-- caller's environment never steers the child.
+export
+gateAssignments : GateAsk -> String -> String -> List String
+gateAssignments ask diagPath ackPath = [
+  frontGateAssignment ask.askAllowInternal,
+  "\{diagJsonEnv}=\{if ask.askDiagJson then diagPath else ""}",
+  "\{gateAckEnv}=\{ackPath}",
+]
+
+-- The assignments for a child that is not asked for the gate.
+export
+noGateAssignments : List String
+noGateAssignments = ["\{frontGateEnv}=", "\{diagJsonEnv}=", "\{gateAckEnv}="]
+
+-- The child's acknowledgement, when the parent asked for one.
+export
+writeGateAck : Unit -> <IO> Unit
+writeGateAck _ = match getEnv gateAckEnv
+  None => ()
+  Some "" => ()
+  Some path => match writeFile path "ran\n"
+    Ok _ => ()
+    Err e =>
+      let _ =
+        ePutStrLn
+          "error: could not write the gate acknowledgement to \{path}: \{e}"
+      stageExit 1
 
 export
 diagJsonPathOfEnv : Unit -> <IO> Option String
@@ -580,8 +610,14 @@ fileWithNotes _ _ _ = None
 (DData Public "GateAsk" () ((variant "GateAsk" (ConNamed (field "askAllowInternal" (TyCon "Bool")) (field "askDiagJson" (TyCon "Bool"))))) ())
 (DTypeSig true "diagJsonEnv" (TyCon "String"))
 (DFunDef false "diagJsonEnv" () (ELit (LString "MEDAKA_DIAG_JSON")))
-(DTypeSig true "gateAssignments" (TyFun (TyCon "GateAsk") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "gateAssignments" ((PVar "ask") (PVar "path")) (EBinOp "::" (EApp (EVar "frontGateAssignment") (EFieldAccess (EVar "ask") "askAllowInternal")) (EIf (EFieldAccess (EVar "ask") "askDiagJson") (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "diagJsonEnv"))) (ELit (LString "="))) (EApp (EVar "display") (EVar "path"))) (ELit (LString "")))) (EListLit))))
+(DTypeSig true "gateAckEnv" (TyCon "String"))
+(DFunDef false "gateAckEnv" () (ELit (LString "MEDAKA_FRONT_GATE_ACK")))
+(DTypeSig true "gateAssignments" (TyFun (TyCon "GateAsk") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "gateAssignments" ((PVar "ask") (PVar "diagPath") (PVar "ackPath")) (EListLit (EApp (EVar "frontGateAssignment") (EFieldAccess (EVar "ask") "askAllowInternal")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "diagJsonEnv"))) (ELit (LString "="))) (EApp (EVar "display") (EIf (EFieldAccess (EVar "ask") "askDiagJson") (EVar "diagPath") (ELit (LString ""))))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "gateAckEnv"))) (ELit (LString "="))) (EApp (EVar "display") (EVar "ackPath"))) (ELit (LString "")))))
+(DTypeSig true "noGateAssignments" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "noGateAssignments" () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "frontGateEnv"))) (ELit (LString "="))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "diagJsonEnv"))) (ELit (LString "="))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "gateAckEnv"))) (ELit (LString "=")))))
+(DTypeSig true "writeGateAck" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "writeGateAck" (PWild) (EMatch (EApp (EVar "getEnv") (EVar "gateAckEnv")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PLit (LString ""))) () (ELit LUnit)) (arm (PCon "Some" (PVar "path")) () (EMatch (EApp (EApp (EVar "writeFile") (EVar "path")) (ELit (LString "ran\n"))) (arm (PCon "Ok" PWild) () (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not write the gate acknowledgement to ")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))))))))
 (DTypeSig true "diagJsonPathOfEnv" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "diagJsonPathOfEnv" (PWild) (EMatch (EApp (EVar "getEnv") (EVar "diagJsonEnv")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PLit (LString ""))) () (EVar "None")) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "Some") (EVar "p")))))
 (DData Public "JsonFront" () ((variant "JsonSingle" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyApp (TyCon "List") (TyCon "Decl")))) (variant "JsonGraph" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))) ())
@@ -654,8 +690,14 @@ fileWithNotes _ _ _ = None
 (DData Public "GateAsk" () ((variant "GateAsk" (ConNamed (field "askAllowInternal" (TyCon "Bool")) (field "askDiagJson" (TyCon "Bool"))))) ())
 (DTypeSig true "diagJsonEnv" (TyCon "String"))
 (DFunDef false "diagJsonEnv" () (ELit (LString "MEDAKA_DIAG_JSON")))
-(DTypeSig true "gateAssignments" (TyFun (TyCon "GateAsk") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "gateAssignments" ((PVar "ask") (PVar "path")) (EBinOp "::" (EApp (EVar "frontGateAssignment") (EFieldAccess (EVar "ask") "askAllowInternal")) (EIf (EFieldAccess (EVar "ask") "askDiagJson") (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "diagJsonEnv"))) (ELit (LString "="))) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "")))) (EListLit))))
+(DTypeSig true "gateAckEnv" (TyCon "String"))
+(DFunDef false "gateAckEnv" () (ELit (LString "MEDAKA_FRONT_GATE_ACK")))
+(DTypeSig true "gateAssignments" (TyFun (TyCon "GateAsk") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "gateAssignments" ((PVar "ask") (PVar "diagPath") (PVar "ackPath")) (EListLit (EApp (EVar "frontGateAssignment") (EFieldAccess (EVar "ask") "askAllowInternal")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "diagJsonEnv"))) (ELit (LString "="))) (EApp (EMethodRef "display") (EIf (EFieldAccess (EVar "ask") "askDiagJson") (EVar "diagPath") (ELit (LString ""))))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "gateAckEnv"))) (ELit (LString "="))) (EApp (EMethodRef "display") (EVar "ackPath"))) (ELit (LString "")))))
+(DTypeSig true "noGateAssignments" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "noGateAssignments" () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "frontGateEnv"))) (ELit (LString "="))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "diagJsonEnv"))) (ELit (LString "="))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "gateAckEnv"))) (ELit (LString "=")))))
+(DTypeSig true "writeGateAck" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "writeGateAck" (PWild) (EMatch (EApp (EVar "getEnv") (EVar "gateAckEnv")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PLit (LString ""))) () (ELit LUnit)) (arm (PCon "Some" (PVar "path")) () (EMatch (EApp (EApp (EVar "writeFile") (EVar "path")) (ELit (LString "ran\n"))) (arm (PCon "Ok" PWild) () (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not write the gate acknowledgement to ")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))))))))
 (DTypeSig true "diagJsonPathOfEnv" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "diagJsonPathOfEnv" (PWild) (EMatch (EApp (EVar "getEnv") (EVar "diagJsonEnv")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PLit (LString ""))) () (EVar "None")) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "Some") (EVar "p")))))
 (DData Public "JsonFront" () ((variant "JsonSingle" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyApp (TyCon "List") (TyCon "Decl")))) (variant "JsonGraph" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))) ())

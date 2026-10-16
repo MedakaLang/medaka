@@ -20,6 +20,7 @@ import driver.front_gate.{
   frontGate,
   frontGateJson,
   frontGateOfEnv,
+  writeGateAck,
   frontJsonAfterDrive,
   writeDiagJson,
 }
@@ -239,7 +240,9 @@ driveModulesGo runEmit runtimeP coreP entry roots =
       -- `medaka build --json` asked for the gate's verdict as `check --json`'s
       -- envelope, written to `path` (`driver/front_gate.mdk`).
       (Some allowInternal, Some path) =>
-        match frontGateJson allowInternal (dirOf coreP) rsrc csrc entry
+        let verdict = frontGateJson allowInternal (dirOf coreP) rsrc csrc entry
+        let _ = writeGateAck ()
+        match verdict
           Err cj => refuseJson path cj
           Ok (g, front) =>
             emitLoaded
@@ -254,7 +257,9 @@ driveModulesGo runEmit runtimeP coreP entry roots =
       -- `medaka build` asked for its front-end gate, whose verdict is final and
       -- whose graph is the one elaborated (`driver/front_gate.mdk`).
       (Some allowInternal, None) =>
-        match frontGate allowInternal (dirOf coreP) rsrc csrc entry
+        let verdict = frontGate allowInternal (dirOf coreP) rsrc csrc entry
+        let _ = writeGateAck ()
+        match verdict
           Err msg =>
             let _ = ePutStrLn msg
             stageExit emitDiagExitCode

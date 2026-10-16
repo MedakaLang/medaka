@@ -96,20 +96,23 @@ import frontend.ast.{
 
 -- ── open-document store ─────────────────────────────────────────────────────
 -- uri → source text.  A plain association list; LSP sessions open a handful of
--- files, so linear scan is fine.
+-- files, so linear scan is fine.  The second field is the project manifests
+-- whose `[target]` diagnostic is currently published, so a repaired manifest
+-- gets it cleared.
 
-public export data Docs = Docs (List (String, String))
+public export data Docs = Docs (List (String, String)) (List String)
 
 -- Exported alongside `Docs`/`uriOfPath` so `medaka_references` (mcp.mdk) can
 -- build a single-buffer table and reuse `referencesResult` verbatim — the
 -- SAME code path the LSP handler runs, per #254's "one code path" design.
 export
 emptyDocs : Docs
-emptyDocs = Docs []
+emptyDocs = Docs [] []
 
 export
 docsPut : String -> String -> Docs -> Docs
-docsPut uri src (Docs xs) = Docs ((uri, src) :: docsRemove uri xs)
+docsPut uri src (Docs xs flagged) =
+  Docs ((uri, src) :: docsRemove uri xs) flagged
 
 docsRemove : String -> List (String, String) -> List (String, String)
 docsRemove _ [] = []
@@ -191,7 +194,7 @@ diagToJson src (Diag sev _ msg loc _ _) =
 -- Look up an open document's source by uri.  Request handlers (formatting/
 -- documentSymbol/definition/highlight) read the buffer the client last sent.
 docsGet : String -> Docs -> Option String
-docsGet uri (Docs xs) = docsLookup uri xs
+docsGet uri (Docs xs _) = docsLookup uri xs
 
 docsLookup : String -> List (String, String) -> Option String
 docsLookup _ [] = None
@@ -1776,38 +1779,49 @@ publishEach ((file, ds) :: rest) =
   publishEach rest
 
 -- Choose the single-document or project path for a freshly-edited buffer.
-publishFor : String -> String -> String -> String -> Docs -> <IO> Unit
+publishFor : String -> String -> String -> String -> Docs -> <IO> Docs
 publishFor runtimeSrc coreSrc uri text docs =
-  let _ = selectProjectProfileFor (pathOfUri uri)
-  publishForSelected runtimeSrc coreSrc uri text docs
-
--- Files whose project manifest we last flagged, so a repaired manifest gets its
--- diagnostic cleared.
-flaggedManifests : Ref (List String)
-flaggedManifests = Ref []
+  let docs2 = selectProjectProfileFor (pathOfUri uri) docs
+  let _ = publishForSelected runtimeSrc coreSrc uri text docs2
+  docs2
 
 -- The profile this analysis typechecks under is the one of the project holding
 -- `file`, chosen afresh per analysis because one server serves many projects.
 -- A manifest whose `[target]` cannot be read is published as a diagnostic on
 -- the manifest and the file is analyzed under no profile.
-selectProjectProfileFor : String -> <IO> Unit
-selectProjectProfileFor file = match carryProjectProfile None file
-  Ok _ => clearFlaggedManifest file
+selectProjectProfileFor : String -> Docs -> <IO> Docs
+selectProjectProfileFor file docs = match carryProjectProfile None file
+  Ok _ => clearFlaggedManifest file docs
   Err msg => match manifestPathOf file
-    None => ()
+    None => docs
     Some path =>
-      flaggedManifests := path :: !flaggedManifests
-      publishEach [
-        (path, [mkDiag SevError "R-MODULE-LOAD" msg (Some (Loc path 1 1 1 1))]),
+      let _ = publishEach [
+        (
+          path,
+          [mkDiag SevError "R-MODULE-LOAD" msg (Some (Loc path 1 1 1 1))],
+        ),
       ]
+      docsFlag path docs
 
-clearFlaggedManifest : String -> <IO> Unit
-clearFlaggedManifest file = match manifestPathOf file
-  None => ()
+clearFlaggedManifest : String -> Docs -> <IO> Docs
+clearFlaggedManifest file docs = match manifestPathOf file
+  None => docs
   Some path =>
-    if contains path !flaggedManifests then
-      flaggedManifests := filter (/= path) !flaggedManifests
-      publishEach [(path, [])]
+    if docsFlagged path docs then
+      let _ = publishEach [(path, [])]
+      docsUnflag path docs
+    else
+      docs
+
+docsFlagged : String -> Docs -> Bool
+docsFlagged path (Docs _ flagged) = contains path flagged
+
+docsFlag : String -> Docs -> Docs
+docsFlag path (Docs xs flagged) =
+  if contains path flagged then Docs xs flagged else Docs xs (path :: flagged)
+
+docsUnflag : String -> Docs -> Docs
+docsUnflag path (Docs xs flagged) = Docs xs (filter (/= path) flagged)
 
 publishForSelected : String -> String -> String -> String -> Docs -> <IO> Unit
 publishForSelected runtimeSrc coreSrc uri text docs =
@@ -1831,8 +1845,7 @@ handleDidOpen runtimeSrc coreSrc params docs =
       None => docs
       Some text =>
         let docs2 = docsPut uri text docs
-        let _ = publishFor runtimeSrc coreSrc uri text docs2
-        docs2
+        publishFor runtimeSrc coreSrc uri text docs2
 
 handleDidChange : String -> String -> Json -> Docs -> <IO> Docs
 handleDidChange runtimeSrc coreSrc params docs =
@@ -1842,8 +1855,7 @@ handleDidChange runtimeSrc coreSrc params docs =
       None => docs
       Some text =>
         let docs2 = docsPut uri text docs
-        let _ = publishFor runtimeSrc coreSrc uri text docs2
-        docs2
+        publishFor runtimeSrc coreSrc uri text docs2
 
 -- ── B.10.3 request handlers ─────────────────────────────────────────────────
 -- Each looks the doc up in the store and writes a JSON-RPC response.  A missing
