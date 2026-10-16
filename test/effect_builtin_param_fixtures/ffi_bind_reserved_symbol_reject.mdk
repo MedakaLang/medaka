@@ -1,0 +1,8 @@
+-- The `mdk_` namespace is judged on the C symbol a declaration binds, not on
+-- its Medaka name: a clean name bound to a runtime-internal symbol is refused.
+-- ffi_bind_reserved_name_accept.mdk is the converse.
+extern nilWord : Unit -> <FFI "c"> Int
+  bind c "mdk_nil"
+
+main : <IO> Unit
+main = println "unreached"

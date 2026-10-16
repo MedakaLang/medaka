@@ -1,0 +1,8 @@
+-- One host bound twice: which symbol the declaration calls would depend on
+-- clause order.
+extern fetchText : String -> <FFI "c"> String
+  bind c "fetch_text"
+  bind c "fetch_text_v2"
+
+main : <IO> Unit
+main = println "unreached"

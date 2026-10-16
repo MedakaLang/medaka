@@ -1,0 +1,7 @@
+-- A catalog name always runs the built-in, so a `bind` clause on its
+-- redeclaration would name a symbol nothing calls.
+extern bitAnd : Int -> Int -> <FFI "c"> Int
+  bind c "my_and"
+
+main : <IO> Unit
+main = println "unreached"

@@ -199,7 +199,6 @@ atomBindersIn : (EffAtomTy -> List a) -> Ty -> List a
 atomNaming : String -> EffAtomTy -> List String
 atomOfLabel : String -> Atom
 atomOfWrittenIn : SigVars -> EffAtomTy -> Atom
-atomParamIsTop : Atom -> Bool
 atomicLabelParamText : String -> String
 atomsAbsorbedInto : Int -> List AbsorptionEvent -> List Atom
 atomsEscape : List Atom -> List Atom -> List Atom
@@ -1092,30 +1091,23 @@ failureMentions : Map Int Unit -> SummaryFailure ObligationSite -> Bool
 ffiArrowNote : Int -> Int -> String
 ffiAtomsWithin : List EffAtomTy -> List EffAtomTy -> Bool
 ffiBinderSeed : List (String, Int) -> List (String, Int) -> List (String, Ty)
-ffiCatalogNarrowMsg : String -> String -> List Atom -> List Atom -> List Atom -> String
-ffiCatalogTailMsg : String -> String -> List String -> String
-ffiCatalogTopNote : List Atom -> String
 ffiCheckCatalogRowGo : List Decl -> Unit
 ffiCheckCatalogRowOne : String -> Ty -> String -> List EffAtomTy -> List (String, Int) -> List EffAtomTy -> Unit
-ffiCheckExternLabel : String -> Option Loc -> Ty -> Unit
 ffiCheckExternPos : String -> Option Loc -> Ty -> Unit
 ffiCheckExternSig : String -> Option Loc -> Ty -> Unit
 ffiCheckExternsCatalogRow : Bool -> List Decl -> Unit
 ffiCheckExternsCrossable : Bool -> List Decl -> Unit
 ffiCheckExternsGo : List Decl -> Unit
 ffiCheckExternsLabelled : Bool -> List Decl -> Unit
-ffiCheckExternsReserved : Bool -> List Decl -> Unit
 ffiCheckExternsShadow : Bool -> List Decl -> Unit
 ffiCheckLabelsGo : List Decl -> Unit
-ffiCheckReservedGo : List Decl -> Unit
 ffiCheckShadowGo : List Decl -> Unit
 ffiCheckSpineRow : String -> Ty -> List (String, Int) -> List (String, Ty) -> String -> (List EffAtomTy, List String) -> (List EffAtomTy, List String) -> Unit
 ffiCrossableConName : String -> Bool
 ffiCrossableTy : Ty -> Bool
-ffiDeclaredLabelMsg : String -> String
+ffiDeclaredRow : Ty -> Option (List EffAtomTy)
 ffiExpandTails : List (String, Ty) -> List String -> (List EffAtomTy, List String)
 ffiExternTypeRowsWith : List (TabKey, (List String, Ty)) -> List Decl -> List (String, (List String, String))
-ffiHasAtom : List EffAtomTy -> Bool
 ffiInstAtom : List (String, Ty) -> EffAtomTy -> List EffAtomTy
 ffiInstRow : List (String, Int) -> List (String, Ty) -> List EffAtomTy -> List EffAtomTy
 ffiIsBuiltinExternName : String -> Bool
@@ -1125,22 +1117,16 @@ ffiMatchRow : List EffAtomTy -> List String -> List EffAtomTy -> List String -> 
 ffiMatchSpine : List (TabKey, (List String, Ty)) -> Ty -> Ty -> Option (List (String, Ty)) -> Option (List (String, Ty))
 ffiMatchTy : List (TabKey, (List String, Ty)) -> Ty -> Ty -> Option (List (String, Ty)) -> Option (List (String, Ty))
 ffiMatchTys : List (TabKey, (List String, Ty)) -> List Ty -> List Ty -> Option (List (String, Ty)) -> Option (List (String, Ty))
-ffiNonCrossableMsg : String -> Ty -> String
-ffiNullaryMsg : String -> String
 ffiParamOf : Ty -> Option EffParamTy
 ffiParamTy : EffParamTy -> Ty
-ffiReservedMsg : String -> String
-ffiResultRowHasFFI : Ty -> Bool
+ffiResultRow : Ty -> List EffAtomTy
 ffiRowBody : Ty -> Ty
-ffiRowHasFFITy : Ty -> Option Bool
-ffiRowNamesDeclaredFfi : Ty -> Bool
 ffiRowParts : Ty -> (List EffAtomTy, List String, Ty)
 ffiSameAtom : EffAtomTy -> EffAtomTy -> Bool
 ffiSameNames : List String -> List String -> Bool
 ffiSameParam : EffParamTy -> EffParamTy -> Bool
 ffiSameRow : List EffAtomTy -> List String -> List EffAtomTy -> List String -> Bool
 ffiSameTy : List (TabKey, (List String, Ty)) -> Ty -> Ty -> Bool
-ffiShadowMsg : String -> String -> String -> String
 ffiSigArgHeadsWith : List (TabKey, (List String, Ty)) -> Ty -> List String
 ffiSigInstance : Ty -> Ty -> Option (List (String, Ty))
 ffiSigRetHeadWith : List (TabKey, (List String, Ty)) -> Ty -> String
@@ -1150,7 +1136,6 @@ ffiStampMode : String -> Bool
 ffiStampModeOwned : String -> Bool
 ffiTakeAtom : EffAtomTy -> List EffAtomTy -> List EffAtomTy -> List (String, Ty) -> Option (List (String, Ty), List EffAtomTy)
 ffiTyHeadNameWith : List (TabKey, (List String, Ty)) -> Ty -> String
-ffiUnlabelledMsg : String -> String
 fieldAssignDictSites : FieldAssign -> List (List Route)
 fieldAssignEVars : FieldAssign -> List String
 fieldAssignNamePair : FieldAssign -> (String, Unit)
@@ -1825,7 +1810,6 @@ isEPProduct : EffParamTy -> Bool
 isEPSet : EffParamTy -> Bool
 isEmptyStringLit : Expr -> Bool
 isExemptInPlaceSetIndex : Mono -> Expr -> Bool
-isForeignCallAtom : EffAtomTy -> Bool
 isGrantOnlyEv : EvId -> Bool
 isInterfaceDecl : Decl -> Bool
 isLegacyPredicateAnswer : Option AssumAnswer -> Bool
@@ -2399,7 +2383,6 @@ pairRows : EffRow -> EffRow -> List (Int, Int)
 pairsOfVecObls : List VecObl -> List (IfaceRef, Int)
 paramCarries : List TabKey -> TabKey -> Int -> Bool
 paramEtbl : List String -> List Kind -> List Mono -> SigVars
-paramIsTopDomain : Param -> Bool
 paramMonoOf : List (String, Mono) -> String -> Mono
 paramOccPolarities : List (TabKey, List Polarity) -> String -> Polarity -> Ty -> List Polarity
 paramOccPolaritiesArgs : List (TabKey, List Polarity) -> String -> Polarity -> Option (List Polarity) -> Int -> List Ty -> List Polarity
@@ -2548,6 +2531,7 @@ pushDictApp : PendingDictApp -> Unit
 pushDiscardedValueDesc : String -> Expr -> Unit
 pushDiscardedValueError : Mono -> Expr -> Unit
 pushExactReturnObl : MethodReturnRequest -> Unit
+pushFfiDiag : FfiDiag -> Unit
 pushGiven : GivenMatch -> GivenProvenance -> PredicateSlot -> EvidenceBinderId -> Unit
 pushGoal : Obligation -> Unit
 pushIncompleteImpl : (Option Loc, String) -> Unit

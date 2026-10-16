@@ -1,0 +1,7 @@
+-- A row naming the `js` host on a declaration bound only to C.  A `js` binding
+-- is never implied, so the declaration has no JavaScript function to call.
+extern fetchText : String -> <FFI "js/fetch"> String
+  bind c "fetch_text"
+
+main : <IO> Unit
+main = println "unreached"

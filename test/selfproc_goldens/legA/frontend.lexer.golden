@@ -27,6 +27,7 @@ canStartAtom : Token -> Bool
 charClose : Array Char -> Int -> Int -> Int
 charEscDecode : Char -> Option String
 charUntermMsg : String
+clauseBreaksGo : List RawTok -> Int -> Int -> List RawTok
 closeAll : List Int -> Int -> List (Token, Int)
 closeAllPairs : List Int -> Int -> List (Token, Int, Int)
 closeAllToks : List Int -> List Token
@@ -62,6 +63,7 @@ emit : Array Char -> Int -> Int -> Int -> Int -> Token -> Int -> Int -> List Raw
 endsWithNl : String -> Bool
 escChar : Array Char -> Int -> Int -> Int -> Int -> Char -> List RawTok
 expEnd : Array Char -> Int -> Int -> Int
+externClauseBreaks : List RawTok -> List RawTok
 firstNl : Bool -> String -> Bool
 floatIsFinite : Float -> Bool
 floatTok : Array Char -> Int -> Int -> Int -> Int -> Int -> List RawTok
@@ -80,6 +82,7 @@ flushSepPairsGo : Token -> Int -> Int -> List RawTok -> List Int -> Int -> List 
 flushSepToks : Token -> List RawTok -> List Int -> List BracketFrame -> Bool -> List Token
 frameHasLive : List BracketFrame -> Bool
 handleNewline : Array Char -> Int -> Int -> Int -> Int -> List RawTok
+hasBindLine : List RawTok -> Bool
 hasTripleInterpMark : String -> Bool
 hasTripleInterpOpen : List RawTok -> Bool
 identEnd : Array Char -> Int -> Int -> Int
@@ -160,6 +163,7 @@ radixMaxLead : Char -> Int
 radixMaxLen : Char -> Int
 radixTok : Array Char -> Int -> Int -> Int -> Char -> Int -> Int -> List RawTok
 rawChar : Array Char -> Int -> Int -> Int -> Int -> List RawTok
+rawStream : Array Char -> Int -> List RawTok
 rawToComments : Array Char -> List RawTok -> List Comment
 rawToCommentsGo : Array Char -> List RawTok -> Int -> Int -> Int -> List Comment
 readChar : Array Char -> Int -> Int -> Int -> Int -> List RawTok
@@ -197,6 +201,7 @@ skipBlockComment : Array Char -> Int -> Int -> Int -> Int
 skipLineComment : Array Char -> Int -> Int -> Int
 splitInterpGroup : List RawTok -> (List String, List RawTok, List RawTok)
 splitLines : Array Char -> Int -> Int -> String -> List String
+startsWithBind : List RawTok -> Bool
 startsWithNl : String -> Bool
 stripFirstAware : Int -> Bool -> List String -> List String
 stripIndent : String -> String

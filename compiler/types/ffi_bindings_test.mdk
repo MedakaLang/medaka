@@ -1,0 +1,101 @@
+-- The declaration rules over hand-built records, so each case states the
+-- binding list and the row the typechecker would pass in.
+import test.{expectAll, expectEqual}
+import frontend.ast.{
+  EffAtomTy(..),
+  EffParamTy(..),
+  ExternBind(..),
+  ExternDecl(..),
+  Ty(..),
+  TyConOrigin(..),
+  externBindings,
+  noDeclLoc,
+}
+import types.ffi_bindings.{FfiDiag(..), ffiDeclarationDiags}
+
+ffiAtom : TyConOrigin -> EffParamTy -> EffAtomTy
+ffiAtom origin p = EffAtomTy {
+  eatLabel = "FFI",
+  eatOrigin = origin,
+  eatParam = p,
+  eatLoc = None,
+  eatPattern = False,
+}
+
+hostAtom : String -> EffAtomTy
+hostAtom p = ffiAtom OriginBuiltin (EPLit p)
+
+decl : String -> List (String, String) -> ExternDecl
+decl name binds = ExternDecl {
+  edPub = False,
+  edName = name,
+  edTy = TyVar "a",
+  edLoc = noDeclLoc,
+  edBinds =
+    map
+      ((h, s) => ExternBind { ebHost = h, ebSymbol = s, ebLoc = noDeclLoc })
+      binds,
+}
+
+codes : Bool -> ExternDecl -> Option (List EffAtomTy) -> List String
+codes catalog d row =
+  map ((FfiDiag code _ _) => code) (ffiDeclarationDiags catalog d row)
+
+test "no clause binds c under the Medaka name, and never js" = expectAll [
+  expectEqual
+    [("c", "fetchText")]
+    (map (b => (b.ebHost, b.ebSymbol)) (externBindings (decl "fetchText" []))),
+  expectEqual [] (codes False (decl "f" []) (Some [hostAtom "c/libm"])),
+  expectEqual
+    ["T-FFI-UNBOUND-HOST"]
+    (codes False (decl "f" []) (Some [hostAtom "js/fetch"])),
+]
+
+test "a declaration row names a host, never a bound's pattern" = expectAll [
+  expectEqual
+    ["T-FFI-NO-HOST"]
+    (codes False (decl "f" []) (Some [ffiAtom OriginBuiltin EPTop])),
+  expectEqual
+    ["T-FFI-NO-HOST"]
+    (codes False (decl "f" []) (Some [hostAtom "c*"])),
+  expectEqual
+    ["T-FFI-NO-HOST"]
+    (codes False (decl "f" []) (Some [hostAtom "c/"])),
+  expectEqual
+    ["T-FFI-NO-HOST"]
+    (codes False (decl "f" []) (Some [hostAtom "cx"])),
+]
+
+test "a user-declared FFI label is not host-checked" =
+  expectEqual
+    ["T-FFI-UNLABELLED"]
+    (codes False (decl "f" []) (Some [ffiAtom (OriginModule "m") EPTop]))
+
+test "the C symbol, not the Medaka name, meets the C rules" = expectAll [
+  expectEqual
+    ["T-FFI-C-SYMBOL"]
+    (codes False (decl "f'" []) (Some [hostAtom "c"])),
+  expectEqual
+    []
+    (codes False (decl "f'" [("c", "f_prime")]) (Some [hostAtom "c"])),
+  expectEqual
+    []
+    (codes False (decl "mdk_f" [("c", "f_impl")]) (Some [hostAtom "c"])),
+  expectEqual
+    ["T-FFI-RESERVED-NAME"]
+    (codes False (decl "f" [("c", "mdk_f")]) (Some [hostAtom "c"])),
+]
+
+test "a js-only declaration binds no C symbol" =
+  expectEqual [] (codes False (decl "f'" [("js", "$f")]) (Some [hostAtom "js"]))
+
+test "a catalog redeclaration meets only the bind-clause rule" = expectAll [
+  expectEqual [] (codes True (decl "bitAnd" []) (Some [])),
+  expectEqual [] (codes True (decl "bitAnd" []) None),
+  expectEqual
+    ["T-FFI-BUILTIN-BIND"]
+    (codes True (decl "bitAnd" [("c", "my_and")]) (Some [hostAtom "c"])),
+]
+
+test "a signature with no arrow is refused once" =
+  expectEqual ["T-FFI-NULLARY"] (codes False (decl "k" []) None)

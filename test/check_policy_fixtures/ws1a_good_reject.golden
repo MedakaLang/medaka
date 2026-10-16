@@ -1,2 +1,2 @@
-rejected. transform requires <Cache, FFI, Log>. Not permitted by policy {Cache}
+rejected. transform requires <Cache, FFI "c", Log>. Not permitted by policy {Cache}
    reached via: transform → cacheGet

@@ -22,6 +22,7 @@ effParamNames : EffParamTy -> List String
 effParamSurface : (String -> String) -> EffParamTy -> String
 effSetSurface : (String -> String) -> List String -> String
 effectDeclUnstamped : Bool -> String -> Option String -> List (String, String) -> Option Loc -> Decl
+externBindings : ExternDecl -> List ExternBind
 externDataUnresolved : Bool -> String -> List String -> List (Option KindAnn) -> Decl
 fieldName : Field -> String
 firstTyLoc : Ty -> Option Loc
