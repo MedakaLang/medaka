@@ -1564,16 +1564,75 @@ analyzeLoadedFull : (List String -> <e> List (String, List String)) ->
   List (String, List Decl) ->
   <e> (List ModDiags, List (String, List Diag))
 analyzeLoadedFull exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc mods modPairs =
-  projectDiagsLoadedFull
+  typecheckLoadedBuckets
+    entry
+    roots
+    runtimeSrc
+    coreSrc
+    mods
+    modPairs
+    (resolveLoadedBuckets
+      exportsFor
+      allowInternal
+      trustedMods
+      entry
+      roots
+      runtimeSrc
+      coreSrc
+      mods
+      modPairs)
+
+-- `analyzeLoadedFull`'s resolve half: each module's resolve errors in its
+-- file's bucket, every loaded file seeded.  A caller that must know whether
+-- resolve rejected the graph before it chooses a typecheck reads these.
+export
+resolveLoadedBuckets : (List String -> <e> List (String, List String)) ->
+  Bool ->
+  List String ->
+  String ->
+  List String ->
+  String ->
+  String ->
+  List (String, String, List Decl) ->
+  List (String, List Decl) ->
+  <e> List (String, List Diag)
+resolveLoadedBuckets exportsFor allowInternal trustedMods entry roots runtimeSrc coreSrc mods modPairs =
+  resolvedBuckets
     exportsFor
     allowInternal
     trustedMods
+    (Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc))
+    (chainKeyOf entry roots)
+    (preludeDesugared runtimeSrc)
+    (preludeDesugared coreSrc)
+    mods
+    modPairs
+
+-- `analyzeLoadedFull`'s typecheck half, over the buckets its resolve half
+-- returned: the modules resolve did not block are driven once.
+export
+typecheckLoadedBuckets : String ->
+  List String ->
+  String ->
+  String ->
+  List (String, String, List Decl) ->
+  List (String, List Decl) ->
+  List (String, List Diag) ->
+  (List ModDiags, List (String, List Diag))
+typecheckLoadedBuckets entry roots runtimeSrc coreSrc mods modPairs buckets =
+  typecheckPassFull
     (preludeDesugared runtimeSrc)
     (preludeDesugared coreSrc)
     (Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc))
     (chainKeyOf entry roots)
     mods
     modPairs
+    buckets
+
+-- Whether resolve rejected any module of a bucketed graph.
+export
+bucketsResolveRejected : List (String, List Diag) -> Bool
+bucketsResolveRejected buckets = anyList (b => resolveRejected (snd b)) buckets
 
 -- `analyzeLoadedFull` for a caller that has ALREADY resolved this exact graph
 -- clean (`check`'s front pass, same guard and same desugared trees): resolve is
@@ -2696,8 +2755,10 @@ relDiagTriple root (path, src, diags) = (relDiagPath root path, src, diags)
 -- extra diagnostic lands INSIDE the entry file's existing `diagnostics`
 -- array instead of manufacturing a second, duplicate `{"file": ...}` entry for
 -- the same path.  A no-match ([] extra, or a path `analyzeProject` never
--- bucketed) leaves the list untouched.  Two callers: the main-shape warning
--- below, and `build --json`'s build-stage notes (#2243).
+-- bucketed) leaves the list untouched.  It folds the main-shape warning below
+-- and the target refusal; `build --json`'s build-stage notes (#2243) are
+-- folded the same way into the envelope the emitter child wrote
+-- (`driver/front_gate.envelopeWithNotes`).
 export
 cjFoldIntoFile : String ->
   List Diag ->
@@ -2991,10 +3052,19 @@ checkJsonSingleFromDecls exportsFor modName allowInternal rsrc csrc target src d
       csrc
       decls
       (internalGuardFor allowInternal)
+  let (cj, hasErr) = cjSingleParts target src decls diags
+  (cj, hasErr, drive)
+
+-- The single-module envelope over a module's whole diagnostic list: the
+-- main-shape warning joins it only on a clean program, as in
+-- `checkJsonSingleParts`.  `decls` are the entry's located decls, read after
+-- the drive that judged `main`.
+export
+cjSingleParts : String -> String -> List Decl -> List Diag -> (CheckJson, Bool)
+cjSingleParts target src decls diags =
   let hasErr = anyList diagIsError diags
-  -- Only on a clean program, as in `checkJsonSingleParts`.
   let mainWarns = if hasErr then [] else mainShapeWarnings [] [] [] decls
-  (CjParts target [(target, src, diags ++ mainWarns)], hasErr, drive)
+  (CjParts target [(target, src, diags ++ mainWarns)], hasErr)
 
 -- File check → JSON.  Reads `target`, loads its graph once, then routes exactly
 -- like runCheckJsonCmd: load failure → the entry's parse error if it has one, else
@@ -3015,9 +3085,9 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
   (ppCheckJson cj, hasErr)
 
 -- The same check, one step before serialization — see `CheckJson`.  `medaka
--- build --json` runs this rather than `checkJsonFile` so it can fold its own
--- build-stage notes into the SAME `{"files":[…]}` envelope (#2243) instead of
--- opening a second channel for them.
+-- check --json` runs this rather than `checkJsonFile` so it can fold the
+-- target refusal into the SAME `{"files":[…]}` envelope, judged from the drive
+-- it hands back.
 export
 checkJsonFileParts : Bool ->
   String ->
@@ -3029,13 +3099,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
   let src = readFileSafe target
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
   match loadProgramFilesLocatedE (_ => None) target roots
-    -- An unparsable entry is reported against the spelling the caller gave, not
-    -- the path the loader minted, so the entry's own parse is checked first.
-    Err le => match parseResult src
-      Err e => (CjRendered (cjParseErrJson target src e), True, None)
-      Ok _ =>
-        let (cj, hasErr) = checkJsonLoadErr target src stdlibDir le
-        (cj, hasErr, None)
+    Err le => (cjLoadFailure target src stdlibDir le, True, None)
     Ok [(mid, _, decls)] =>
       let mods = [(mid, decls)]
       let trusted = projectTrustedMods target roots stdlibDir mods
@@ -3076,23 +3140,41 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
           csrc
           modsWithPath
           modPairs
-      let hasErr = anyList cjHasErrD results
       let drive = graphCheckDrive perMod modPairs
-      -- #1236: same main-shape fold as the single-module arm, only on a clean
-      -- project.  The entry is the last loaded module; its located decls give
-      -- the warning the same `Loc` every other diagnostic on this file carries.
-      let mainWarns = match (hasErr, lastDecls mods)
-        (False, Some edecls) => mainShapeWarnings [] [] [] edecls
-        _ => []
-      let triples = map readDiagSrc results
-      let root = dirOf stdlibDir
-      let relTriples = map (relDiagTriple root) triples
-      let entryKey = relDiagPath root target
-      (
-        CjParts entryKey (cjFoldIntoFile entryKey mainWarns relTriples),
-        hasErr,
-        Some drive,
-      )
+      let (cj, hasErr) = cjGraphParts target stdlibDir mods results
+      (cj, hasErr, Some drive)
+
+-- An entry the loader could not load: its own parse error if it has one, else
+-- the loader's error.  An unparsable entry is reported against the spelling the
+-- caller gave, not the path the loader minted, so the entry's own parse is
+-- checked first.
+export
+cjLoadFailure : String -> String -> String -> LoadError -> <IO> CheckJson
+cjLoadFailure target src stdlibDir le = match parseResult src
+  Err e => CjRendered (cjParseErrJson target src e)
+  Ok _ => fst (checkJsonLoadErr target src stdlibDir le)
+
+-- The multi-module envelope over the per-file diagnostic buckets of a loaded
+-- graph, its paths relative to the install root.  #1236: the main-shape warning
+-- joins it only on a clean project, read off the entry (the last loaded
+-- module), whose located decls give it the `Loc` every other diagnostic on that
+-- file carries; the drive that produced `results` must have run.
+export
+cjGraphParts : String ->
+  String ->
+  List (String, List Decl) ->
+  List (String, List Diag) ->
+  <IO> (CheckJson, Bool)
+cjGraphParts target stdlibDir mods results =
+  let hasErr = anyList cjHasErrD results
+  let mainWarns = match (hasErr, lastDecls mods)
+    (False, Some edecls) => mainShapeWarnings [] [] [] edecls
+    _ => []
+  let triples = map readDiagSrc results
+  let root = dirOf stdlibDir
+  let relTriples = map (relDiagTriple root) triples
+  let entryKey = relDiagPath root target
+  (CjParts entryKey (cjFoldIntoFile entryKey mainWarns relTriples), hasErr)
 
 -- The entry of a loaded graph is its last module.
 lastDecls : List (String, List Decl) -> Option (List Decl)

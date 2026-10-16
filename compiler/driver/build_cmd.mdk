@@ -37,7 +37,7 @@ import support.path.{dirOf, chopExt, joinPath}
 import frontend.parser.{parseResult}
 import frontend.parse_cache.{notePreludeParse}
 import types.target_profile.{selectedProfile, profileName, targetProfileEnv}
-import driver.front_gate.{frontGateAssignment}
+import driver.front_gate.{GateAsk, gateAssignments, readDiagJson}
 import driver.diagnostics.{
   Diag,
   Severity(..),
@@ -57,11 +57,15 @@ import driver.diagnostics.{
 --   keptIr        = where --keep-ir copied the IR, when the copy succeeded
 --   emitterStderr = the emitter subprocess's own stderr, verbatim ("" = none)
 --   notes         = build-STAGE diagnostics (a failed keep-IR copy today)
+--   diagEnvelope  = the `--json` route's (entry key, `check --json` envelope)
+--                   the emitter child wrote, when it is the build's answer: a
+--                   front-end refusal, or a build that went on to succeed
 public export data BuildReport = BuildReport {
   status : String,
   keptIr : Option String,
   emitterStderr : String,
   notes : List Diag,
+  diagEnvelope : Option (String, String),
 }
 
 -- A build either succeeds (writing the binary) or fails; both arms report the
@@ -75,6 +79,7 @@ buildOk status = Ok BuildReport {
   keptIr = None,
   emitterStderr = "",
   notes = [],
+  diagEnvelope = None,
 }
 
 export
@@ -84,6 +89,7 @@ buildErr status = Err BuildReport {
   keptIr = None,
   emitterStderr = "",
   notes = [],
+  diagEnvelope = None,
 }
 
 -- Backend target: TNative = the LLVM/clang native binary (default); TWasm =
@@ -98,18 +104,36 @@ withBuildNotes : Option String ->
   List Diag ->
   Result BuildReport BuildReport ->
   Result BuildReport BuildReport
-withBuildNotes kept emitErr ns (Ok r) = Ok BuildReport {
-  status = r.status,
-  keptIr = kept,
-  emitterStderr = emitErr,
-  notes = ns,
+withBuildNotes kept emitErr ns (Ok r) =
+  Ok ({ r | keptIr = kept, emitterStderr = emitErr, notes = ns })
+withBuildNotes kept emitErr ns (Err r) =
+  Err ({ r | keptIr = kept, emitterStderr = emitErr, notes = ns })
+
+-- The child's envelope rides on the report only when it is the build's
+-- answer: a build that went on to succeed, or (`refusedWith`) the child's own
+-- refusal.  A later failure (clang, wasm-tools) is reported as itself.
+withEnvelopeOk : Option (String, String) ->
+  Result BuildReport BuildReport ->
+  Result BuildReport BuildReport
+withEnvelopeOk env (Ok r) = Ok ({ r | diagEnvelope = env })
+withEnvelopeOk _ err = err
+
+refusedWith : Option (String, String) ->
+  String ->
+  Result BuildReport BuildReport
+refusedWith env status = Err BuildReport {
+  status = status,
+  keptIr = None,
+  emitterStderr = "",
+  notes = [],
+  diagEnvelope = env,
 }
-withBuildNotes kept emitErr ns (Err r) = Err BuildReport {
-  status = r.status,
-  keptIr = kept,
-  emitterStderr = emitErr,
-  notes = ns,
-}
+
+-- The envelope the child wrote, when this build asked for one.
+askedEnvelope : Option GateAsk -> String -> <IO> Option (String, String)
+askedEnvelope (Some ask) path =
+  if ask.askDiagJson then readDiagJson path else None
+askedEnvelope None _ = None
 
 -- The plain-CLI rendering of a report: byte-for-byte what `medaka build`
 -- printed when these three facts were string-concatenated onto the status
@@ -737,22 +761,22 @@ keepIrOutcome path contents = match writeFile path contents
 -- outPath  = output binary path
 -- keepIrCli = True iff `--keep-ir` was passed on the command line (OR'd with
 --             MEDAKA_KEEP_IR inside effectiveKeepIr)
--- quietEmitStderr = True on the `--json` route only.  The child's stderr is the
---             build's diagnostics, and on that route this process has ALREADY
---             rendered the same diagnostics into the stdout envelope through
---             `checkJsonFileParts`, so forwarding the human copy reports one
---             diagnostic twice on two channels — which no other verb does, and
---             which docs/ops/CLI-CONFORMANCE.md exemplar X9 pins as empty stderr
---             for the `--json` route.  This suppresses the DUPLICATE only: a
---             failing emit still carries the child's text, through the report's
---             `status` and into `cjBuildFailedJson`, so nothing goes silent.
+-- quietEmitStderr = True on the `--json` route only.  On that route the
+--             child's verdict reaches stdout as the envelope it writes
+--             (`diagEnvelope`), so its stderr is not forwarded:
+--             docs/ops/CLI-CONFORMANCE.md exemplar X9 pins empty stderr for the
+--             `--json` route.  A failing emit still carries the child's text,
+--             through the report's `status` and into `cjBuildFailedJson`, so
+--             nothing goes silent.
 -- stampBuild = True iff `--stamp-build` was passed: link a provenance object so
 --             the binary's own `buildCommit`/`buildFingerprint`/`buildDate` read
 --             real strings instead of "" (see provenanceObject).  The wasm target
 --             has no such object and ignores it.
--- frontGate = `Some allowInternal` when the emitter child runs the program's
---             front-end gate (`driver/front_gate.frontGate`): the plain `build`
---             verb, whose process does no front-end work of its own.  `None`
+-- frontGate = `Some ask` when the emitter child runs the program's front-end
+--             gate (`driver/front_gate.frontGate`): the `build` verb, whose
+--             process does no front-end work of its own.  `askDiagJson` (the
+--             `--json` route) also has the child write its verdict as
+--             `check --json`'s envelope, read back into `diagEnvelope`.  `None`
 --             starts the child ungated, as every other caller does.
 export
 runBuild : String ->
@@ -764,7 +788,7 @@ runBuild : String ->
   Bool ->
   Bool ->
   Bool ->
-  Option Bool ->
+  Option GateAsk ->
   <IO> Result BuildReport BuildReport
 runBuild root medaka cc TNative inputAbs outPath keepIrCli quietEmitStderr stampBuild frontGate =
   let _ = sweepStaleTempDirs ()
@@ -795,7 +819,7 @@ runBuildNative : String ->
   Bool ->
   Bool ->
   Bool ->
-  Option Bool ->
+  Option GateAsk ->
   <IO> Result BuildReport BuildReport
 runBuildNative root medaka cc inputAbs outPath keepIrCli quietEmitStderr stampBuild frontGate =
   match makeTempDir ()
@@ -827,7 +851,7 @@ runBuildNativeIn : String ->
   Bool ->
   Bool ->
   Bool ->
-  Option Bool ->
+  Option GateAsk ->
   <IO> Result BuildReport BuildReport
 runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli quietEmitStderr stampBuild frontGate =
   runBuildNativeRootsGo
@@ -931,7 +955,7 @@ runBuildNativeRootsGo : String ->
   Bool ->
   Bool ->
   BuildProfile ->
-  Option Bool ->
+  Option GateAsk ->
   <IO> Result BuildReport BuildReport
 runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr stampBuild profile frontGate =
   let emitter = joinPath root "compiler/entries/llvm_emit_modules_main.mdk"
@@ -980,15 +1004,17 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
   -- names its own culprit instead of reporting one opaque 1.4 s number.
   let perfOn = perfEnabled ()
   let tEmit0 = now ()
-  let emitRes = runEmitterFor frontGate emitProg emitArgs
+  let diagPath = joinPath tmpDir "diag.json"
+  let emitRes = runEmitterFor frontGate diagPath emitProg emitArgs
   let tEmit1 = now ()
   let _ = emitPhase perfOn "emit-ir" (tEmit1 - tEmit0) inputAbs
   match emitRes
     Err e => buildErr "error: could not run the emitter `\{emitProg}`: \{e}"
     Ok (code, irRaw, emitRaw) =>
       let emitErr = forwardEmitterStageLines emitRaw
+      let envelope = askedEnvelope frontGate diagPath
       if code == emitDiagExitCode then
-        buildErr (dropTrailingNewline emitErr)
+        refusedWith envelope (dropTrailingNewline emitErr)
       else if code /= 0 then
         buildErr "error: emitter failed compiling \{inputAbs}\n\{emitErr}"
       else
@@ -1047,7 +1073,7 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
                 keepIrOutcome (outPath ++ ".ll") ir
               else
                 (None, [])
-            withBuildNotes keptIr "" keepNotes res
+            withEnvelopeOk envelope (withBuildNotes keptIr "" keepNotes res)
 
 -- ---- wasm (WasmGC + wasm-tools) target ----
 -- Structurally identical to runBuildNative: run the emitter (here the WasmGC
@@ -1087,7 +1113,7 @@ runBuildWasm : String ->
   String ->
   Bool ->
   Bool ->
-  Option Bool ->
+  Option GateAsk ->
   <IO> Result BuildReport BuildReport
 runBuildWasm root medaka inputAbs outPath keepIrCli quietEmitStderr frontGate =
   match makeTempDir ()
@@ -1117,7 +1143,7 @@ runBuildWasmIn : String ->
   String ->
   Bool ->
   Bool ->
-  Option Bool ->
+  Option GateAsk ->
   <IO> Result BuildReport BuildReport
 runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr frontGate =
   let runtimeP = joinPath root "stdlib/runtime.mdk"
@@ -1130,6 +1156,7 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr fro
   -- invocation's private mktemp dir, not at a globally-shared
   -- /tmp/medaka_build_<output basename>.wat that a concurrent build can clobber.
   let watPath = joinPath tmpDir "program.wat"
+  let diagPath = joinPath tmpDir "diag.json"
   let emitArgsBase =
     [runtimeP, preludeP, inputAbs] ++ inputRoots ++ [compilerDir, stdlibDir]
   let wasmEmitter = envOr "MEDAKA_WASM_EMITTER" ""
@@ -1146,13 +1173,14 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr fro
     None =>
       buildErr
         "error: wasm-tools not found on PATH; install it with `cargo install wasm-tools`"
-    Some _ => match runEmitterFor frontGate wasmEmitter emitArgsBase
+    Some _ => match runEmitterFor frontGate diagPath wasmEmitter emitArgsBase
       Err e =>
         buildErr "error: could not run the wasm emitter `\{wasmEmitter}`: \{e}"
       Ok (code, watRaw, emitRaw) =>
         let emitErr = forwardEmitterStageLines emitRaw
+        let envelope = askedEnvelope frontGate diagPath
         if code == emitDiagExitCode then
-          buildErr (dropTrailingNewline emitErr)
+          refusedWith envelope (dropTrailingNewline emitErr)
         else if code /= 0 then
           buildErr
             "error: wasm emitter failed compiling \{inputAbs}\n\{emitErr}"
@@ -1174,7 +1202,7 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr fro
                   keepIrOutcome (outPath ++ ".wat") wat
                 else
                   (None, [])
-              withBuildNotes keptIr "" keepNotes res
+              withEnvelopeOk envelope (withBuildNotes keptIr "" keepNotes res)
 
 -- The emitter child writes the build's diagnostics to its own stderr.  On a
 -- clean emit that stream carries the WARNINGS `medaka build` prints, so it must
@@ -1978,16 +2006,17 @@ withStrictEmit prog args = ("env", ["MEDAKA_STRICT=1", prog] ++ args)
 -- (`entries/entry_support.runEmitWith`), so a program `check` would refuse
 -- never reaches an emitter.  With no profile selected (a caller other than the
 -- `build` verb) the child checks nothing.
-runEmitterFor : Option Bool ->
+runEmitterFor : Option GateAsk ->
+  String ->
   String ->
   List String ->
   <IO> Result String (Int, String, String)
-runEmitterFor frontGate prog args =
+runEmitterFor frontGate diagPath prog args =
   let profileSet = match !selectedProfile
     Some p => ["\{targetProfileEnv}=\{profileName p}"]
     None => []
   let gateSet = match frontGate
-    Some allowInternal => [frontGateAssignment allowInternal]
+    Some ask => gateAssignments ask diagPath
     None => []
   match profileSet ++ gateSet
     [] => runCommand prog args

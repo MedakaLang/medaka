@@ -132,7 +132,13 @@ import driver.loader.{
   projectTrustedMods,
   stdlibOwnership,
 }
-import driver.front_gate.{ppParseError, moduleLoadErrText, cliStdlibExports}
+import driver.front_gate.{
+  GateAsk(..),
+  cliStdlibExports,
+  envelopeWithNotes,
+  moduleLoadErrText,
+  ppParseError,
+}
 import driver.diagnostics.{
   analyzeLoadedResolvedClean,
   desugaredModPairs,
@@ -1272,21 +1278,6 @@ checkTargetJson csrc target cj drive = match !selectedProfile
         Some (CjParts entry (cjFoldIntoFile entry [d] triples))
       _ => None
 
--- `build --json`'s copy of `check --json`'s target refusal: the envelope is
--- printed here, and the answer is whether it was.  The emitter child checks
--- the same program again; this copy only puts the code in the envelope.
-printedTargetRefusal : String ->
-  String ->
-  CheckJson ->
-  Option CheckDrive ->
-  <IO> Bool
-printedTargetRefusal csrc target cj drive =
-  match checkTargetJson csrc target cj drive
-    Some refusedCj =>
-      let _ = println (ppCheckJson refusedCj)
-      True
-    None => False
-
 -- `run`'s refusal, against `eval/run` and the selected profile together.  An
 -- entry `run` cannot start at all is left to `finishRunEval`'s own refusal.
 runTargetGate : Bool ->
@@ -1512,9 +1503,9 @@ runCheckJsonCmd allowInternal rsrc csrc target stdlibDir =
           if hasErr then stageExit 1
 
 -- #1078: `medaka build --json`'s envelope for a build-STAGE failure — the
--- emitter/clang step itself, AFTER the front-end gate (checkJsonFile, reused
--- unchanged) has already passed. Same `{"files":[...]}` shape as every other
--- `--json` path (`cjAllToJson`), one span-less `Diag` carrying the emitter's
+-- emitter/clang step itself, AFTER the front-end gate has already passed.
+-- Same `{"files":[...]}` shape as every other `--json` path (`cjAllToJson`),
+-- one span-less `Diag` carrying the emitter's
 -- own message verbatim, so a caller keying off `code` (AGENTS.md) can
 -- distinguish this from a front-end R-*/T-* diagnostic. Registered in
 -- compiler/DIAGNOSTIC-CODES-DESIGN.md.
@@ -1523,26 +1514,14 @@ cjBuildFailedJson target msg = cjAllToJson [
   (target, "", [Diag SevError "R-BUILD-FAILED" msg None None None]),
 ]
 
--- The `main` refusal of the entry file's own declarations, if any (the entry
--- is the last module the loader returns).  A file that does not parse
--- never reaches here: the check gate has already rejected it.  The located
--- parse primes the parser's position state with this source, so a refusal at an
--- import member carries this file's line and column.
-entryMainRefusal : String -> List Diag
-entryMainRefusal src = match parseLocatedResult src
-  Ok decls => match mainEntryError decls
-    Some d => [d]
-    None => []
-  Err _ => []
-
--- `medaka build --json`: front-end gate via `checkJsonFile` (BYTE-IDENTICAL
--- structured diagnostics to `check --json` on the same file — same code, same
--- envelope), then, only if clean, the real emit+clang build. A build-stage
+-- `medaka build --json`: one typecheck, in the emitter child, whose front-end
+-- gate writes the envelope `check --json` prints for the program (the same
+-- builders, so the bytes are the same): a refusal ends the build with it, and
+-- a clean build prints it as its success marker, with the build's own notes
+-- folded in — no separate "built X -> Y" prose on this channel, so a machine
+-- consumer sees exactly one shape regardless of outcome.  A build-stage
 -- failure (emitter/clang) becomes a `cjBuildFailedJson` envelope instead of the
--- plain rendered error text; a clean build prints the (empty-diagnostics)
--- gate JSON as its success marker, mirroring `check --json`'s clean output —
--- no separate "built X -> Y" prose on this channel, so a machine consumer sees
--- exactly one shape regardless of outcome.
+-- plain rendered error text.
 runBuildJsonCmd : Args ->
   Bool ->
   String ->
@@ -1563,64 +1542,55 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
         Err msg =>
           let _ = println (cjBuildFailedJson input msg)
           stageExit 1
-        Ok rsrc => match readPreludeFile corePath
+        Ok _ => match readPreludeFile corePath
           Err msg =>
             let _ = println (cjBuildFailedJson input msg)
             stageExit 1
-          Ok csrc =>
-            let (cj, hasErr, drive) =
-              checkJsonFileParts allowInternal rsrc csrc input stdlibDir
-            if hasErr then
-              let _ = println (ppCheckJson cj)
-              stageExit 1
-            else if not (isEmpty (entryMainRefusal entrySrc)) then
-              -- The same refusal `frontGate` gives the plain `build`: one
-              -- located diagnostic, never the emitter's panic wrapped in
-              -- R-BUILD-FAILED.
-              let _ =
-                println
-                  (cjAllToJson [(input, entrySrc, entryMainRefusal entrySrc)])
-              stageExit 1
-            else if printedTargetRefusal csrc input cj drive then
-              stageExit 1
-            else
-              let medaka = envOr "MEDAKA" "medaka"
-              let cc = envOr "CC" "clang"
-              let keepIrCli = flag "--keep-ir" a
-              let stampBuild = flag "--stamp-build" a
-              let outPath = match outOpt
-                Some o => o
-                None => defaultOutPath target input
-              -- `quietEmitStderr = True`: this route has already rendered every
-              -- diagnostic into the stdout envelope above (`checkJsonFileParts`),
-              -- so forwarding the child's human copy would report one diagnostic
-              -- twice on two channels. A FAILING emit still carries the child's
-              -- text, through `ppBuildReport rep` into `cjBuildFailedJson` below.
-              match (runBuild
-                root
-                medaka
-                cc
-                target
-                input
-                outPath
-                keepIrCli
-                True
-                stampBuild
-                None)
-                -- #2243: the build's own notes (a failed `--keep-ir` copy)
-                -- join the entry file's `diagnostics` array rather than
-                -- vanishing with the status line this channel never prints.
-                -- `CjRendered` is the hand-built parse-error envelope, which
-                -- only ever arrives with `hasErr` set — unreachable here.
-                Ok rep => match cj
-                  CjRendered json => println json
-                  CjParts entry triples =>
+          Ok _ =>
+            let medaka = envOr "MEDAKA" "medaka"
+            let cc = envOr "CC" "clang"
+            let keepIrCli = flag "--keep-ir" a
+            let stampBuild = flag "--stamp-build" a
+            let outPath = match outOpt
+              Some o => o
+              None => defaultOutPath target input
+            let ask =
+              GateAsk { askAllowInternal = allowInternal, askDiagJson = True }
+            -- `quietEmitStderr = True`: the child's verdict arrives as the
+            -- envelope (`diagEnvelope`), so its human copy is not forwarded.
+            match (runBuild
+              root
+              medaka
+              cc
+              target
+              input
+              outPath
+              keepIrCli
+              True
+              stampBuild
+              (Some ask))
+              -- #2243: the build's own notes (a failed `--keep-ir` copy) join
+              -- the entry file's `diagnostics` array rather than vanishing
+              -- with the status line this channel never prints.
+              Ok rep => match rep.diagEnvelope
+                Some (entry, envelope) =>
+                  println (envelopeWithNotes entry rep.notes envelope)
+                None =>
+                  let _ =
                     println
-                      (cjAllToJson (cjFoldIntoFile entry rep.notes triples))
+                      (cjBuildFailedJson
+                        input
+                        "error: the emitter wrote no diagnostics envelope; an emitter built from an older medaka does not write one")
+                  stageExit 1
+              Err rep => match rep.diagEnvelope
+                -- The front end refused the program.
+                Some (_, envelope) =>
+                  let _ = println envelope
+                  stageExit 1
                 -- A build-stage FAILURE already carried its notes: they are
                 -- part of the rendered message, exactly as the plain CLI
                 -- prints them, inside the one R-BUILD-FAILED diagnostic.
-                Err rep =>
+                None =>
                   let _ = println (cjBuildFailedJson input (ppBuildReport rep))
                   stageExit 1
 
@@ -2434,8 +2404,8 @@ runBuildModes a = match flagValue "--emit-rt-obj" a
     -- #1078: `--json` is now a recognized flag (claimed by `buildArgSpec`,
     -- above) rather than a phantom second positional. Dispatch to a
     -- dedicated function per mode rather than inlining the branch here —
-    -- `runBuildJsonCmd` reuses `checkJsonFile` (the SAME structured pass
-    -- `check --json` runs) for the front-end gate and wraps a genuine
+    -- `runBuildJsonCmd` prints the envelope `check --json` prints for the
+    -- program (written by the emitter child's gate) and wraps a genuine
     -- emit/clang failure in the same `{"files":[...]}` `Diag` envelope, so
     -- one JSON shape covers every failure mode, front-end or backend; the
     -- plain-text arm (`runBuildPlainCmd`) is the pre-#1078 body, unchanged.
@@ -2476,24 +2446,26 @@ runBuildPlainCmd a =
           readPreludeFile (root ++ "/stdlib/core.mdk")
         match prelude
           Err msg => dieMsg msg
-          Ok _ =>
-            match (runBuild
-              root
-              medaka
-              cc
-              target
-              inputAbs
-              outPath
-              keepIrCli
-              False
-              stampBuild
-              (Some allowInternal))
-              Ok rep =>
-                let perfTEmit = now ()
-                let _ = emitPhase perfOn "emit" (perfTEmit - perfT0) input
-                let _ = emitTotal perfOn (perfTEmit - perfT0)
-                println (ppBuildReport rep)
-              Err rep => dieMsg (ppBuildReport rep)
+          Ok _ => match (runBuild
+            root
+            medaka
+            cc
+            target
+            inputAbs
+            outPath
+            keepIrCli
+            False
+            stampBuild
+            (Some GateAsk {
+              askAllowInternal = allowInternal,
+              askDiagJson = False,
+            }))
+            Ok rep =>
+              let perfTEmit = now ()
+              let _ = emitPhase perfOn "emit" (perfTEmit - perfT0) input
+              let _ = emitTotal perfOn (perfTEmit - perfT0)
+              println (ppBuildReport rep)
+            Err rep => dieMsg (ppBuildReport rep)
 
 -- `medaka build --json`'s own argument-parsing arm: a flag error still goes
 -- through `parseBuildArgs`, but a bad-args message is now the JSON envelope

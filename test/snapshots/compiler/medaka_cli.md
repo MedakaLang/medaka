@@ -1,5 +1,5 @@
 # META
-source_lines=4533
+source_lines=4505
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -136,7 +136,13 @@ import driver.loader.{
   projectTrustedMods,
   stdlibOwnership,
 }
-import driver.front_gate.{ppParseError, moduleLoadErrText, cliStdlibExports}
+import driver.front_gate.{
+  GateAsk(..),
+  cliStdlibExports,
+  envelopeWithNotes,
+  moduleLoadErrText,
+  ppParseError,
+}
 import driver.diagnostics.{
   analyzeLoadedResolvedClean,
   desugaredModPairs,
@@ -1276,21 +1282,6 @@ checkTargetJson csrc target cj drive = match !selectedProfile
         Some (CjParts entry (cjFoldIntoFile entry [d] triples))
       _ => None
 
--- `build --json`'s copy of `check --json`'s target refusal: the envelope is
--- printed here, and the answer is whether it was.  The emitter child checks
--- the same program again; this copy only puts the code in the envelope.
-printedTargetRefusal : String ->
-  String ->
-  CheckJson ->
-  Option CheckDrive ->
-  <IO> Bool
-printedTargetRefusal csrc target cj drive =
-  match checkTargetJson csrc target cj drive
-    Some refusedCj =>
-      let _ = println (ppCheckJson refusedCj)
-      True
-    None => False
-
 -- `run`'s refusal, against `eval/run` and the selected profile together.  An
 -- entry `run` cannot start at all is left to `finishRunEval`'s own refusal.
 runTargetGate : Bool ->
@@ -1516,9 +1507,9 @@ runCheckJsonCmd allowInternal rsrc csrc target stdlibDir =
           if hasErr then stageExit 1
 
 -- #1078: `medaka build --json`'s envelope for a build-STAGE failure — the
--- emitter/clang step itself, AFTER the front-end gate (checkJsonFile, reused
--- unchanged) has already passed. Same `{"files":[...]}` shape as every other
--- `--json` path (`cjAllToJson`), one span-less `Diag` carrying the emitter's
+-- emitter/clang step itself, AFTER the front-end gate has already passed.
+-- Same `{"files":[...]}` shape as every other `--json` path (`cjAllToJson`),
+-- one span-less `Diag` carrying the emitter's
 -- own message verbatim, so a caller keying off `code` (AGENTS.md) can
 -- distinguish this from a front-end R-*/T-* diagnostic. Registered in
 -- compiler/DIAGNOSTIC-CODES-DESIGN.md.
@@ -1527,26 +1518,14 @@ cjBuildFailedJson target msg = cjAllToJson [
   (target, "", [Diag SevError "R-BUILD-FAILED" msg None None None]),
 ]
 
--- The `main` refusal of the entry file's own declarations, if any (the entry
--- is the last module the loader returns).  A file that does not parse
--- never reaches here: the check gate has already rejected it.  The located
--- parse primes the parser's position state with this source, so a refusal at an
--- import member carries this file's line and column.
-entryMainRefusal : String -> List Diag
-entryMainRefusal src = match parseLocatedResult src
-  Ok decls => match mainEntryError decls
-    Some d => [d]
-    None => []
-  Err _ => []
-
--- `medaka build --json`: front-end gate via `checkJsonFile` (BYTE-IDENTICAL
--- structured diagnostics to `check --json` on the same file — same code, same
--- envelope), then, only if clean, the real emit+clang build. A build-stage
+-- `medaka build --json`: one typecheck, in the emitter child, whose front-end
+-- gate writes the envelope `check --json` prints for the program (the same
+-- builders, so the bytes are the same): a refusal ends the build with it, and
+-- a clean build prints it as its success marker, with the build's own notes
+-- folded in — no separate "built X -> Y" prose on this channel, so a machine
+-- consumer sees exactly one shape regardless of outcome.  A build-stage
 -- failure (emitter/clang) becomes a `cjBuildFailedJson` envelope instead of the
--- plain rendered error text; a clean build prints the (empty-diagnostics)
--- gate JSON as its success marker, mirroring `check --json`'s clean output —
--- no separate "built X -> Y" prose on this channel, so a machine consumer sees
--- exactly one shape regardless of outcome.
+-- plain rendered error text.
 runBuildJsonCmd : Args ->
   Bool ->
   String ->
@@ -1567,64 +1546,55 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
         Err msg =>
           let _ = println (cjBuildFailedJson input msg)
           stageExit 1
-        Ok rsrc => match readPreludeFile corePath
+        Ok _ => match readPreludeFile corePath
           Err msg =>
             let _ = println (cjBuildFailedJson input msg)
             stageExit 1
-          Ok csrc =>
-            let (cj, hasErr, drive) =
-              checkJsonFileParts allowInternal rsrc csrc input stdlibDir
-            if hasErr then
-              let _ = println (ppCheckJson cj)
-              stageExit 1
-            else if not (isEmpty (entryMainRefusal entrySrc)) then
-              -- The same refusal `frontGate` gives the plain `build`: one
-              -- located diagnostic, never the emitter's panic wrapped in
-              -- R-BUILD-FAILED.
-              let _ =
-                println
-                  (cjAllToJson [(input, entrySrc, entryMainRefusal entrySrc)])
-              stageExit 1
-            else if printedTargetRefusal csrc input cj drive then
-              stageExit 1
-            else
-              let medaka = envOr "MEDAKA" "medaka"
-              let cc = envOr "CC" "clang"
-              let keepIrCli = flag "--keep-ir" a
-              let stampBuild = flag "--stamp-build" a
-              let outPath = match outOpt
-                Some o => o
-                None => defaultOutPath target input
-              -- `quietEmitStderr = True`: this route has already rendered every
-              -- diagnostic into the stdout envelope above (`checkJsonFileParts`),
-              -- so forwarding the child's human copy would report one diagnostic
-              -- twice on two channels. A FAILING emit still carries the child's
-              -- text, through `ppBuildReport rep` into `cjBuildFailedJson` below.
-              match (runBuild
-                root
-                medaka
-                cc
-                target
-                input
-                outPath
-                keepIrCli
-                True
-                stampBuild
-                None)
-                -- #2243: the build's own notes (a failed `--keep-ir` copy)
-                -- join the entry file's `diagnostics` array rather than
-                -- vanishing with the status line this channel never prints.
-                -- `CjRendered` is the hand-built parse-error envelope, which
-                -- only ever arrives with `hasErr` set — unreachable here.
-                Ok rep => match cj
-                  CjRendered json => println json
-                  CjParts entry triples =>
+          Ok _ =>
+            let medaka = envOr "MEDAKA" "medaka"
+            let cc = envOr "CC" "clang"
+            let keepIrCli = flag "--keep-ir" a
+            let stampBuild = flag "--stamp-build" a
+            let outPath = match outOpt
+              Some o => o
+              None => defaultOutPath target input
+            let ask =
+              GateAsk { askAllowInternal = allowInternal, askDiagJson = True }
+            -- `quietEmitStderr = True`: the child's verdict arrives as the
+            -- envelope (`diagEnvelope`), so its human copy is not forwarded.
+            match (runBuild
+              root
+              medaka
+              cc
+              target
+              input
+              outPath
+              keepIrCli
+              True
+              stampBuild
+              (Some ask))
+              -- #2243: the build's own notes (a failed `--keep-ir` copy) join
+              -- the entry file's `diagnostics` array rather than vanishing
+              -- with the status line this channel never prints.
+              Ok rep => match rep.diagEnvelope
+                Some (entry, envelope) =>
+                  println (envelopeWithNotes entry rep.notes envelope)
+                None =>
+                  let _ =
                     println
-                      (cjAllToJson (cjFoldIntoFile entry rep.notes triples))
+                      (cjBuildFailedJson
+                        input
+                        "error: the emitter wrote no diagnostics envelope; an emitter built from an older medaka does not write one")
+                  stageExit 1
+              Err rep => match rep.diagEnvelope
+                -- The front end refused the program.
+                Some (_, envelope) =>
+                  let _ = println envelope
+                  stageExit 1
                 -- A build-stage FAILURE already carried its notes: they are
                 -- part of the rendered message, exactly as the plain CLI
                 -- prints them, inside the one R-BUILD-FAILED diagnostic.
-                Err rep =>
+                None =>
                   let _ = println (cjBuildFailedJson input (ppBuildReport rep))
                   stageExit 1
 
@@ -2438,8 +2408,8 @@ runBuildModes a = match flagValue "--emit-rt-obj" a
     -- #1078: `--json` is now a recognized flag (claimed by `buildArgSpec`,
     -- above) rather than a phantom second positional. Dispatch to a
     -- dedicated function per mode rather than inlining the branch here —
-    -- `runBuildJsonCmd` reuses `checkJsonFile` (the SAME structured pass
-    -- `check --json` runs) for the front-end gate and wraps a genuine
+    -- `runBuildJsonCmd` prints the envelope `check --json` prints for the
+    -- program (written by the emitter child's gate) and wraps a genuine
     -- emit/clang failure in the same `{"files":[...]}` `Diag` envelope, so
     -- one JSON shape covers every failure mode, front-end or backend; the
     -- plain-text arm (`runBuildPlainCmd`) is the pre-#1078 body, unchanged.
@@ -2480,24 +2450,26 @@ runBuildPlainCmd a =
           readPreludeFile (root ++ "/stdlib/core.mdk")
         match prelude
           Err msg => dieMsg msg
-          Ok _ =>
-            match (runBuild
-              root
-              medaka
-              cc
-              target
-              inputAbs
-              outPath
-              keepIrCli
-              False
-              stampBuild
-              (Some allowInternal))
-              Ok rep =>
-                let perfTEmit = now ()
-                let _ = emitPhase perfOn "emit" (perfTEmit - perfT0) input
-                let _ = emitTotal perfOn (perfTEmit - perfT0)
-                println (ppBuildReport rep)
-              Err rep => dieMsg (ppBuildReport rep)
+          Ok _ => match (runBuild
+            root
+            medaka
+            cc
+            target
+            inputAbs
+            outPath
+            keepIrCli
+            False
+            stampBuild
+            (Some GateAsk {
+              askAllowInternal = allowInternal,
+              askDiagJson = False,
+            }))
+            Ok rep =>
+              let perfTEmit = now ()
+              let _ = emitPhase perfOn "emit" (perfTEmit - perfT0) input
+              let _ = emitTotal perfOn (perfTEmit - perfT0)
+              println (ppBuildReport rep)
+            Err rep => dieMsg (ppBuildReport rep)
 
 -- `medaka build --json`'s own argument-parsing arm: a flag error still goes
 -- through `parseBuildArgs`, but a bad-args message is now the JSON envelope
@@ -4562,7 +4534,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("tools" "target_parse") ((mem "targetDesugared" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "resolveModulesErrorsByFile" false) (mem "internalGuardFor" false) (mem "ResError" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedE" false) (mem "readSource" false) (mem "readSourceE" false) (mem "sourceNotUtf8Message" false) (mem "dropPathTriple" false) (mem "modIdToPath" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "entrySearchRoots" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false))))
-(DUse false (UseGroup ("driver" "front_gate") ((mem "ppParseError" false) (mem "moduleLoadErrText" false) (mem "cliStdlibExports" false))))
+(DUse false (UseGroup ("driver" "front_gate") ((mem "GateAsk" true) (mem "cliStdlibExports" false) (mem "envelopeWithNotes" false) (mem "moduleLoadErrText" false) (mem "ppParseError" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeLoadedResolvedClean" false) (mem "desugaredModPairs" false) (mem "analyzeLocated" false) (mem "analyzeLocatedG" false) (mem "analyzeFrom" false) (mem "analyzeFromDump" false) (mem "CheckDrive" true) (mem "CheckDump" true) (mem "graphCheckDrive" false) (mem "analyzeSurface" false) (mem "analyzeFinish" false) (mem "tcHalfOfPerModule" false) (mem "SurfaceAnalysis" true) (mem "ppDiagCli" false) (mem "ppDiagCliLines" false) (mem "renderTcDiags" false) (mem "ppResolveErrorsByFile" false) (mem "hintResErrorPairs" false) (mem "stdlibExportsReader" false) (mem "diagOfResError" false) (mem "diagOfTypeError" false) (mem "relDiagPath" false) (mem "srcLinesArr" false) (mem "Diag" true) (mem "Severity" true) (mem "Severity" true) (mem "cjPosition" false) (mem "cjRange" false) (mem "cjRangeOfLoc" false) (mem "cjDiagnostic" false) (mem "cjFileEntry" false) (mem "cjAllToJson" false) (mem "flushRunEnvelope" false) (mem "pendingStaleNotice" false) (mem "readDiagSrc" false) (mem "typecheckDiagsFold" false) (mem "seedAll" false) (mem "midPath" false) (mem "codeKind" false) (mem "optField" false) (mem "cjFixJson" false) (mem "mkDiag" false) (mem "checkJsonFileParts" false) (mem "CheckJson" true) (mem "ppCheckJson" false) (mem "cjFoldIntoFile" false) (mem "readFileSafe" false) (mem "diagIsError" false) (mem "diagIsWarn" false) (mem "cohWarnsOfTriple" false) (mem "joinedOrNone" false) (mem "renderTripleErrors" false) (mem "renderTripleWarnings" false) (mem "residualOrGeneric" false) (mem "coherenceWarnCode" false) (mem "runBuildWarnCodes" false) (mem "isCoherenceWarn" false) (mem "mainShapeWarnings" false) (mem "mainEntryError" false) (mem "ppMainEntryError" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false "parseJson") (mem "asString" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModules" false) (mem "resetTypeErrorsSticky" false) (mem "hadTypeErrors" false) (mem "TcDiag" false) (mem "ElabResult" false) (mem "ModDiags" false) (mem "mainTypeIsUnit" false) (mem "setStdlibOwnership" false))))
@@ -4666,8 +4638,6 @@ runMcpServerFromEnv _ =
 (DFunDef false "checkTargetInputs" ((PVar "csrc") (PVar "drive")) (EBlock (DoLet false false (PVar "printed") (EIf (EApp (EApp (EVar "shouldAutoPrintMain") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EFieldAccess (EVar "drive") "cdMods")) (EApp (EApp (EVar "lookupAssoc") (ELit (LString "println"))) (EFieldAccess (EVar "drive") "cdCoreSchemes")) (EVar "None"))) (DoExpr (ERecordCreate "TargetInputs" ((fa "tiSchemes" (EBinOp "++" (EFieldAccess (EVar "drive") "cdEntrySchemes") (EFieldAccess (EVar "drive") "cdCoreSchemes"))) (fa "tiOps" (EFieldAccess (EVar "drive") "cdOps")) (fa "tiEntryDecls" (EMatch (EApp (EVar "lastModPair") (EFieldAccess (EVar "drive") "cdMods")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EVar "decls")) (arm (PCon "None") () (EListLit)))) (fa "tiAutoPrintCall" (EVar "printed")))))))
 (DTypeSig false "checkTargetJson" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "CheckJson") (TyFun (TyApp (TyCon "Option") (TyCon "CheckDrive")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "CheckJson"))))))))
 (DFunDef false "checkTargetJson" ((PVar "csrc") (PVar "target") (PVar "cj") (PVar "drive")) (EMatch (EUnOp "!" (EVar "selectedProfile")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EMatch (EVar "drive") (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "check --json --target: a clean check left no drive to judge")))) (arm (PCon "Some" (PVar "dr")) () (EMatch (ETuple (EApp (EApp (EApp (EVar "checkTargetRefusal") (EVar "csrc")) (EVar "target")) (EVar "dr")) (EVar "cj")) (arm (PTuple (PCon "Some" (PVar "d")) (PCon "CjParts" (PVar "entry") (PVar "triples"))) () (EApp (EVar "Some") (EApp (EApp (EVar "CjParts") (EVar "entry")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "entry")) (EListLit (EVar "d"))) (EVar "triples"))))) (arm PWild () (EVar "None"))))))))
-(DTypeSig false "printedTargetRefusal" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "CheckJson") (TyFun (TyApp (TyCon "Option") (TyCon "CheckDrive")) (TyEffect ("IO") None (TyCon "Bool")))))))
-(DFunDef false "printedTargetRefusal" ((PVar "csrc") (PVar "target") (PVar "cj") (PVar "drive")) (EMatch (EApp (EApp (EApp (EApp (EVar "checkTargetJson") (EVar "csrc")) (EVar "target")) (EVar "cj")) (EVar "drive")) (arm (PCon "Some" (PVar "refusedCj")) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EVar "ppCheckJson") (EVar "refusedCj")))) (DoExpr (EVar "True")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "runTargetGate" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "EntryAnalysis") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "runTargetGate" ((PVar "jsonMode") (PVar "fileKey") (PVar "target") (PVar "mods") (PVar "analysis")) (EBlock (DoLet false false (PVar "startable") (EMatch (EApp (EVar "lastModPair") (EVar "mods")) (arm (PCon "Some" (PTuple PWild (PVar "edecls"))) () (EApp (EVar "isNone") (EApp (EVar "mainEntryError") (EVar "edecls")))) (arm (PCon "None") () (EVar "False")))) (DoLet false false (PVar "refusal") (EIf (EVar "startable") (EApp (EApp (EApp (EVar "targetRefusal") (EApp (EVar "runProfile") (EUnOp "!" (EVar "selectedProfile")))) (EVar "target")) (EFieldAccess (EVar "analysis") "eaTarget")) (EVar "None"))) (DoExpr (EMatch (EVar "refusal") (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "d")) () (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "target"))) (DoExpr (EMatch (EVar "jsonMode") (arm (PCon "True") () (EApp (EVar "runAbortJson") (EListLit (ETuple (EVar "fileKey") (EVar "src") (EListLit (EVar "d")))))) (arm (PCon "False") () (EApp (EVar "runAbort") (EApp (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "target")) (EVar "d"))))))))))))
 (DTypeSig false "runArgvFilter" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -4699,10 +4669,8 @@ runMcpServerFromEnv _ =
 (DFunDef false "runCheckJsonCmd" ((PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "stdlibDir")) (EMatch (EApp (EVar "readSourceE") (EVar "target")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjSourceReadJson") (EVar "target")) (EVar "e")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PTuple (PVar "cj") (PVar "hasErr") (PVar "drive")) (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonFileParts") (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "stdlibDir"))) (DoLet false false (PVar "refused") (EIf (EVar "hasErr") (EVar "None") (EApp (EApp (EApp (EApp (EVar "checkTargetJson") (EVar "csrc")) (EVar "target")) (EVar "cj")) (EVar "drive")))) (DoExpr (EMatch (EVar "refused") (arm (PCon "Some" (PVar "refusedCj")) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EVar "ppCheckJson") (EVar "refusedCj")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EVar "ppCheckJson") (EVar "cj")))) (DoExpr (EIf (EVar "hasErr") (EApp (EVar "stageExit") (ELit (LInt 1))) (ELit LUnit)))))))))))
 (DTypeSig false "cjBuildFailedJson" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "cjBuildFailedJson" ((PVar "target") (PVar "msg")) (EApp (EVar "cjAllToJson") (EListLit (ETuple (EVar "target") (ELit (LString "")) (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-BUILD-FAILED"))) (EVar "msg")) (EVar "None")) (EVar "None")) (EVar "None")))))))
-(DTypeSig false "entryMainRefusal" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))
-(DFunDef false "entryMainRefusal" ((PVar "src")) (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Ok" (PVar "decls")) () (EMatch (EApp (EVar "mainEntryError") (EVar "decls")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EListLit)))) (arm (PCon "Err" PWild) () (EListLit))))
 (DTypeSig false "runBuildJsonCmd" (TyFun (TyCon "Args") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "BuildTarget") (TyEffect ("IO") None (TyCon "Unit"))))))))))
-(DFunDef false "runBuildJsonCmd" ((PVar "a") (PVar "allowInternal") (PVar "root") (PVar "stdlibDir") (PVar "input") (PVar "outOpt") (PVar "target")) (EMatch (EApp (EVar "readSourceE") (EVar "input")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjSourceReadJson") (EVar "input")) (EVar "e")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "entrySrc")) () (EBlock (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EVar "msg")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EVar "msg")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "csrc")) () (EBlock (DoLet false false (PTuple (PVar "cj") (PVar "hasErr") (PVar "drive")) (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonFileParts") (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "input")) (EVar "stdlibDir"))) (DoExpr (EIf (EVar "hasErr") (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EVar "ppCheckJson") (EVar "cj")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))) (EIf (EApp (EVar "not") (EApp (EVar "isEmpty") (EApp (EVar "entryMainRefusal") (EVar "entrySrc")))) (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EVar "cjAllToJson") (EListLit (ETuple (EVar "input") (EVar "entrySrc") (EApp (EVar "entryMainRefusal") (EVar "entrySrc"))))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))) (EIf (EApp (EApp (EApp (EApp (EVar "printedTargetRefusal") (EVar "csrc")) (EVar "input")) (EVar "cj")) (EVar "drive")) (EApp (EVar "stageExit") (ELit (LInt 1))) (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (ELit (LString "medaka")))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "keepIrCli") (EApp (EApp (EVar "flag") (ELit (LString "--keep-ir"))) (EVar "a"))) (DoLet false false (PVar "stampBuild") (EApp (EApp (EVar "flag") (ELit (LString "--stamp-build"))) (EVar "a"))) (DoLet false false (PVar "outPath") (EMatch (EVar "outOpt") (arm (PCon "Some" (PVar "o")) () (EVar "o")) (arm (PCon "None") () (EApp (EApp (EVar "defaultOutPath") (EVar "target")) (EVar "input"))))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuild") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "target")) (EVar "input")) (EVar "outPath")) (EVar "keepIrCli")) (EVar "True")) (EVar "stampBuild")) (EVar "None")) (arm (PCon "Ok" (PVar "rep")) () (EMatch (EVar "cj") (arm (PCon "CjRendered" (PVar "json")) () (EApp (EVar "println") (EVar "json"))) (arm (PCon "CjParts" (PVar "entry") (PVar "triples")) () (EApp (EVar "println") (EApp (EVar "cjAllToJson") (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "entry")) (EFieldAccess (EVar "rep") "notes")) (EVar "triples"))))))) (arm (PCon "Err" (PVar "rep")) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EApp (EVar "ppBuildReport") (EVar "rep"))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))))))))))))))))))))
+(DFunDef false "runBuildJsonCmd" ((PVar "a") (PVar "allowInternal") (PVar "root") (PVar "stdlibDir") (PVar "input") (PVar "outOpt") (PVar "target")) (EMatch (EApp (EVar "readSourceE") (EVar "input")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjSourceReadJson") (EVar "input")) (EVar "e")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "entrySrc")) () (EBlock (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EVar "msg")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EVar "msg")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (ELit (LString "medaka")))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "keepIrCli") (EApp (EApp (EVar "flag") (ELit (LString "--keep-ir"))) (EVar "a"))) (DoLet false false (PVar "stampBuild") (EApp (EApp (EVar "flag") (ELit (LString "--stamp-build"))) (EVar "a"))) (DoLet false false (PVar "outPath") (EMatch (EVar "outOpt") (arm (PCon "Some" (PVar "o")) () (EVar "o")) (arm (PCon "None") () (EApp (EApp (EVar "defaultOutPath") (EVar "target")) (EVar "input"))))) (DoLet false false (PVar "ask") (ERecordCreate "GateAsk" ((fa "askAllowInternal" (EVar "allowInternal")) (fa "askDiagJson" (EVar "True"))))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuild") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "target")) (EVar "input")) (EVar "outPath")) (EVar "keepIrCli")) (EVar "True")) (EVar "stampBuild")) (EApp (EVar "Some") (EVar "ask"))) (arm (PCon "Ok" (PVar "rep")) () (EMatch (EFieldAccess (EVar "rep") "diagEnvelope") (arm (PCon "Some" (PTuple (PVar "entry") (PVar "envelope"))) () (EApp (EVar "println") (EApp (EApp (EApp (EVar "envelopeWithNotes") (EVar "entry")) (EFieldAccess (EVar "rep") "notes")) (EVar "envelope")))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (ELit (LString "error: the emitter wrote no diagnostics envelope; an emitter built from an older medaka does not write one"))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))))) (arm (PCon "Err" (PVar "rep")) () (EMatch (EFieldAccess (EVar "rep") "diagEnvelope") (arm (PCon "Some" (PTuple PWild (PVar "envelope"))) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EVar "envelope"))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EApp (EVar "ppBuildReport") (EVar "rep"))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))))))))))))))))))
 (DTypeSig false "cjFileNotFoundJson" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "cjFileNotFoundJson" ((PVar "target") (PVar "err")) (EApp (EApp (EApp (EVar "cjUnlocatedJson") (EVar "target")) (ELit (LString "R-FILE-NOT-FOUND"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot read file `")) (EApp (EVar "display") (EVar "target"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "err"))) (ELit (LString "")))))
 (DTypeSig false "cjSourceReadJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
@@ -4832,7 +4800,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "runBuildModes" (TyFun (TyCon "Args") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runBuildModes" ((PVar "a")) (EMatch (EApp (EApp (EVar "flagValue") (ELit (LString "--emit-rt-obj"))) (EVar "a")) (arm (PCon "Some" (PVar "objPath")) () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "emitRtObj") (EVar "cc")) (EVar "root")) (EVar "objPath")) (arm (PCon "Ok" (PVar "rep")) () (EApp (EVar "println") (EApp (EVar "ppBuildReport") (EVar "rep")))) (arm (PCon "Err" (PVar "rep")) () (EApp (EVar "dieMsg") (EApp (EVar "ppBuildReport") (EVar "rep")))))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "flagValue") (ELit (LString "--emit-prelude-obj"))) (EVar "a")) (arm (PCon "Some" (PVar "objPath")) () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (ELit (LString "./medaka")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "emitPreludeObj") (EVar "cc")) (EVar "root")) (EVar "medaka")) (EVar "objPath")) (arm (PCon "Ok" (PVar "rep")) () (EApp (EVar "println") (EApp (EVar "ppBuildReport") (EVar "rep")))) (arm (PCon "Err" (PVar "rep")) () (EApp (EVar "dieMsg") (EApp (EVar "ppBuildReport") (EVar "rep")))))))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "flag") (ELit (LString "--json"))) (EVar "a")) (EApp (EVar "runBuildJsonEntry") (EVar "a")) (EApp (EVar "runBuildPlainCmd") (EVar "a"))))))))
 (DTypeSig false "runBuildPlainCmd" (TyFun (TyCon "Args") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runBuildPlainCmd" ((PVar "a")) (EBlock (DoLet false false (PVar "perfOn") (EApp (EVar "perfEnabled") (ELit LUnit))) (DoLet false false (PVar "perfT0") (EApp (EVar "now") (ELit LUnit))) (DoExpr (EMatch (EApp (EVar "parseBuildArgs") (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PTuple (PVar "input") (PVar "outOpt") PWild)) () (EIf (EApp (EVar "not") (EApp (EVar "fileExists") (EVar "input"))) (EApp (EVar "dieMsg") (EBinOp "++" (ELit (LString "error: no such file: ")) (EVar "input"))) (EBlock (DoLet false false (PVar "target") (EApp (EApp (EVar "buildTargetOrDie") (EVar "a")) (EVar "input"))) (DoExpr (EApp (EVar "perfArm") (EVar "perfT0"))) (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (ELit (LString "medaka")))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "inputAbs") (EVar "input")) (DoLet false false (PVar "allowInternal") (EApp (EApp (EVar "flag") (ELit (LString "--allow-internal"))) (EVar "a"))) (DoLet false false (PVar "keepIrCli") (EApp (EApp (EVar "flag") (ELit (LString "--keep-ir"))) (EVar "a"))) (DoLet false false (PVar "stampBuild") (EApp (EApp (EVar "flag") (ELit (LString "--stamp-build"))) (EVar "a"))) (DoLet false false (PVar "outPath") (EMatch (EVar "outOpt") (arm (PCon "Some" (PVar "o")) () (EVar "o")) (arm (PCon "None") () (EApp (EApp (EVar "defaultOutPath") (EVar "target")) (EVar "input"))))) (DoLet false false (PVar "prelude") (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk"))))) (ELam (PWild) (EApp (EVar "readPreludeFile") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk"))))))) (DoExpr (EMatch (EVar "prelude") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuild") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "target")) (EVar "inputAbs")) (EVar "outPath")) (EVar "keepIrCli")) (EVar "False")) (EVar "stampBuild")) (EApp (EVar "Some") (EVar "allowInternal"))) (arm (PCon "Ok" (PVar "rep")) () (EBlock (DoLet false false (PVar "perfTEmit") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "emit"))) (EBinOp "-" (EVar "perfTEmit") (EVar "perfT0"))) (EVar "input"))) (DoLet false false PWild (EApp (EApp (EVar "emitTotal") (EVar "perfOn")) (EBinOp "-" (EVar "perfTEmit") (EVar "perfT0")))) (DoExpr (EApp (EVar "println") (EApp (EVar "ppBuildReport") (EVar "rep")))))) (arm (PCon "Err" (PVar "rep")) () (EApp (EVar "dieMsg") (EApp (EVar "ppBuildReport") (EVar "rep")))))))))))))))
+(DFunDef false "runBuildPlainCmd" ((PVar "a")) (EBlock (DoLet false false (PVar "perfOn") (EApp (EVar "perfEnabled") (ELit LUnit))) (DoLet false false (PVar "perfT0") (EApp (EVar "now") (ELit LUnit))) (DoExpr (EMatch (EApp (EVar "parseBuildArgs") (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PTuple (PVar "input") (PVar "outOpt") PWild)) () (EIf (EApp (EVar "not") (EApp (EVar "fileExists") (EVar "input"))) (EApp (EVar "dieMsg") (EBinOp "++" (ELit (LString "error: no such file: ")) (EVar "input"))) (EBlock (DoLet false false (PVar "target") (EApp (EApp (EVar "buildTargetOrDie") (EVar "a")) (EVar "input"))) (DoExpr (EApp (EVar "perfArm") (EVar "perfT0"))) (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (ELit (LString "medaka")))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "inputAbs") (EVar "input")) (DoLet false false (PVar "allowInternal") (EApp (EApp (EVar "flag") (ELit (LString "--allow-internal"))) (EVar "a"))) (DoLet false false (PVar "keepIrCli") (EApp (EApp (EVar "flag") (ELit (LString "--keep-ir"))) (EVar "a"))) (DoLet false false (PVar "stampBuild") (EApp (EApp (EVar "flag") (ELit (LString "--stamp-build"))) (EVar "a"))) (DoLet false false (PVar "outPath") (EMatch (EVar "outOpt") (arm (PCon "Some" (PVar "o")) () (EVar "o")) (arm (PCon "None") () (EApp (EApp (EVar "defaultOutPath") (EVar "target")) (EVar "input"))))) (DoLet false false (PVar "prelude") (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk"))))) (ELam (PWild) (EApp (EVar "readPreludeFile") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk"))))))) (DoExpr (EMatch (EVar "prelude") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuild") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "target")) (EVar "inputAbs")) (EVar "outPath")) (EVar "keepIrCli")) (EVar "False")) (EVar "stampBuild")) (EApp (EVar "Some") (ERecordCreate "GateAsk" ((fa "askAllowInternal" (EVar "allowInternal")) (fa "askDiagJson" (EVar "False")))))) (arm (PCon "Ok" (PVar "rep")) () (EBlock (DoLet false false (PVar "perfTEmit") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "emit"))) (EBinOp "-" (EVar "perfTEmit") (EVar "perfT0"))) (EVar "input"))) (DoLet false false PWild (EApp (EApp (EVar "emitTotal") (EVar "perfOn")) (EBinOp "-" (EVar "perfTEmit") (EVar "perfT0")))) (DoExpr (EApp (EVar "println") (EApp (EVar "ppBuildReport") (EVar "rep")))))) (arm (PCon "Err" (PVar "rep")) () (EApp (EVar "dieMsg") (EApp (EVar "ppBuildReport") (EVar "rep")))))))))))))))
 (DTypeSig false "runBuildJsonEntry" (TyFun (TyCon "Args") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runBuildJsonEntry" ((PVar "a")) (EMatch (EApp (EVar "parseBuildArgs") (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjBuildFailedJson") (ELit (LString ""))) (EVar "msg")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PTuple (PVar "input") (PVar "outOpt") PWild)) () (EMatch (EApp (EApp (EVar "selectBuildProfile") (EVar "a")) (EVar "input")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjBuildFailedJson") (ELit (LString ""))) (EVar "msg")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "target")) () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "allowInternal") (EApp (EApp (EVar "flag") (ELit (LString "--allow-internal"))) (EVar "a"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuildJsonCmd") (EVar "a")) (EVar "allowInternal")) (EVar "root")) (EVar "stdlibDir")) (EVar "input")) (EVar "outOpt")) (EVar "target")))))))))
 (DTypeSig false "buildUsage" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -5064,7 +5032,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("tools" "target_parse") ((mem "targetDesugared" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "resolveModulesErrorsByFile" false) (mem "internalGuardFor" false) (mem "ResError" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "loadProgramFilesLocatedE" false) (mem "readSource" false) (mem "readSourceE" false) (mem "sourceNotUtf8Message" false) (mem "dropPathTriple" false) (mem "modIdToPath" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "entrySearchRoots" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false))))
-(DUse false (UseGroup ("driver" "front_gate") ((mem "ppParseError" false) (mem "moduleLoadErrText" false) (mem "cliStdlibExports" false))))
+(DUse false (UseGroup ("driver" "front_gate") ((mem "GateAsk" true) (mem "cliStdlibExports" false) (mem "envelopeWithNotes" false) (mem "moduleLoadErrText" false) (mem "ppParseError" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeLoadedResolvedClean" false) (mem "desugaredModPairs" false) (mem "analyzeLocated" false) (mem "analyzeLocatedG" false) (mem "analyzeFrom" false) (mem "analyzeFromDump" false) (mem "CheckDrive" true) (mem "CheckDump" true) (mem "graphCheckDrive" false) (mem "analyzeSurface" false) (mem "analyzeFinish" false) (mem "tcHalfOfPerModule" false) (mem "SurfaceAnalysis" true) (mem "ppDiagCli" false) (mem "ppDiagCliLines" false) (mem "renderTcDiags" false) (mem "ppResolveErrorsByFile" false) (mem "hintResErrorPairs" false) (mem "stdlibExportsReader" false) (mem "diagOfResError" false) (mem "diagOfTypeError" false) (mem "relDiagPath" false) (mem "srcLinesArr" false) (mem "Diag" true) (mem "Severity" true) (mem "Severity" true) (mem "cjPosition" false) (mem "cjRange" false) (mem "cjRangeOfLoc" false) (mem "cjDiagnostic" false) (mem "cjFileEntry" false) (mem "cjAllToJson" false) (mem "flushRunEnvelope" false) (mem "pendingStaleNotice" false) (mem "readDiagSrc" false) (mem "typecheckDiagsFold" false) (mem "seedAll" false) (mem "midPath" false) (mem "codeKind" false) (mem "optField" false) (mem "cjFixJson" false) (mem "mkDiag" false) (mem "checkJsonFileParts" false) (mem "CheckJson" true) (mem "ppCheckJson" false) (mem "cjFoldIntoFile" false) (mem "readFileSafe" false) (mem "diagIsError" false) (mem "diagIsWarn" false) (mem "cohWarnsOfTriple" false) (mem "joinedOrNone" false) (mem "renderTripleErrors" false) (mem "renderTripleWarnings" false) (mem "residualOrGeneric" false) (mem "coherenceWarnCode" false) (mem "runBuildWarnCodes" false) (mem "isCoherenceWarn" false) (mem "mainShapeWarnings" false) (mem "mainEntryError" false) (mem "ppMainEntryError" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false "parseJson") (mem "asString" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModules" false) (mem "resetTypeErrorsSticky" false) (mem "hadTypeErrors" false) (mem "TcDiag" false) (mem "ElabResult" false) (mem "ModDiags" false) (mem "mainTypeIsUnit" false) (mem "setStdlibOwnership" false))))
@@ -5168,8 +5136,6 @@ runMcpServerFromEnv _ =
 (DFunDef false "checkTargetInputs" ((PVar "csrc") (PVar "drive")) (EBlock (DoLet false false (PVar "printed") (EIf (EApp (EApp (EVar "shouldAutoPrintMain") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EFieldAccess (EVar "drive") "cdMods")) (EApp (EApp (EVar "lookupAssoc") (ELit (LString "println"))) (EFieldAccess (EVar "drive") "cdCoreSchemes")) (EVar "None"))) (DoExpr (ERecordCreate "TargetInputs" ((fa "tiSchemes" (EBinOp "++" (EFieldAccess (EVar "drive") "cdEntrySchemes") (EFieldAccess (EVar "drive") "cdCoreSchemes"))) (fa "tiOps" (EFieldAccess (EVar "drive") "cdOps")) (fa "tiEntryDecls" (EMatch (EApp (EVar "lastModPair") (EFieldAccess (EVar "drive") "cdMods")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EVar "decls")) (arm (PCon "None") () (EListLit)))) (fa "tiAutoPrintCall" (EVar "printed")))))))
 (DTypeSig false "checkTargetJson" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "CheckJson") (TyFun (TyApp (TyCon "Option") (TyCon "CheckDrive")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "CheckJson"))))))))
 (DFunDef false "checkTargetJson" ((PVar "csrc") (PVar "target") (PVar "cj") (PVar "drive")) (EMatch (EUnOp "!" (EVar "selectedProfile")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EMatch (EVar "drive") (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "check --json --target: a clean check left no drive to judge")))) (arm (PCon "Some" (PVar "dr")) () (EMatch (ETuple (EApp (EApp (EApp (EVar "checkTargetRefusal") (EVar "csrc")) (EVar "target")) (EVar "dr")) (EVar "cj")) (arm (PTuple (PCon "Some" (PVar "d")) (PCon "CjParts" (PVar "entry") (PVar "triples"))) () (EApp (EVar "Some") (EApp (EApp (EVar "CjParts") (EVar "entry")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "entry")) (EListLit (EVar "d"))) (EVar "triples"))))) (arm PWild () (EVar "None"))))))))
-(DTypeSig false "printedTargetRefusal" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "CheckJson") (TyFun (TyApp (TyCon "Option") (TyCon "CheckDrive")) (TyEffect ("IO") None (TyCon "Bool")))))))
-(DFunDef false "printedTargetRefusal" ((PVar "csrc") (PVar "target") (PVar "cj") (PVar "drive")) (EMatch (EApp (EApp (EApp (EApp (EVar "checkTargetJson") (EVar "csrc")) (EVar "target")) (EVar "cj")) (EVar "drive")) (arm (PCon "Some" (PVar "refusedCj")) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EVar "ppCheckJson") (EVar "refusedCj")))) (DoExpr (EVar "True")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "runTargetGate" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "EntryAnalysis") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "runTargetGate" ((PVar "jsonMode") (PVar "fileKey") (PVar "target") (PVar "mods") (PVar "analysis")) (EBlock (DoLet false false (PVar "startable") (EMatch (EApp (EVar "lastModPair") (EVar "mods")) (arm (PCon "Some" (PTuple PWild (PVar "edecls"))) () (EApp (EVar "isNone") (EApp (EVar "mainEntryError") (EVar "edecls")))) (arm (PCon "None") () (EVar "False")))) (DoLet false false (PVar "refusal") (EIf (EVar "startable") (EApp (EApp (EApp (EVar "targetRefusal") (EApp (EVar "runProfile") (EUnOp "!" (EVar "selectedProfile")))) (EVar "target")) (EFieldAccess (EVar "analysis") "eaTarget")) (EVar "None"))) (DoExpr (EMatch (EVar "refusal") (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "d")) () (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "target"))) (DoExpr (EMatch (EVar "jsonMode") (arm (PCon "True") () (EApp (EVar "runAbortJson") (EListLit (ETuple (EVar "fileKey") (EVar "src") (EListLit (EVar "d")))))) (arm (PCon "False") () (EApp (EVar "runAbort") (EApp (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "target")) (EVar "d"))))))))))))
 (DTypeSig false "runArgvFilter" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -5201,10 +5167,8 @@ runMcpServerFromEnv _ =
 (DFunDef false "runCheckJsonCmd" ((PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "stdlibDir")) (EMatch (EApp (EVar "readSourceE") (EVar "target")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjSourceReadJson") (EVar "target")) (EVar "e")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PTuple (PVar "cj") (PVar "hasErr") (PVar "drive")) (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonFileParts") (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "stdlibDir"))) (DoLet false false (PVar "refused") (EIf (EVar "hasErr") (EVar "None") (EApp (EApp (EApp (EApp (EVar "checkTargetJson") (EVar "csrc")) (EVar "target")) (EVar "cj")) (EVar "drive")))) (DoExpr (EMatch (EVar "refused") (arm (PCon "Some" (PVar "refusedCj")) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EVar "ppCheckJson") (EVar "refusedCj")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EVar "ppCheckJson") (EVar "cj")))) (DoExpr (EIf (EVar "hasErr") (EApp (EVar "stageExit") (ELit (LInt 1))) (ELit LUnit)))))))))))
 (DTypeSig false "cjBuildFailedJson" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "cjBuildFailedJson" ((PVar "target") (PVar "msg")) (EApp (EVar "cjAllToJson") (EListLit (ETuple (EVar "target") (ELit (LString "")) (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-BUILD-FAILED"))) (EVar "msg")) (EVar "None")) (EVar "None")) (EVar "None")))))))
-(DTypeSig false "entryMainRefusal" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))
-(DFunDef false "entryMainRefusal" ((PVar "src")) (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Ok" (PVar "decls")) () (EMatch (EApp (EVar "mainEntryError") (EVar "decls")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EListLit)))) (arm (PCon "Err" PWild) () (EListLit))))
 (DTypeSig false "runBuildJsonCmd" (TyFun (TyCon "Args") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "BuildTarget") (TyEffect ("IO") None (TyCon "Unit"))))))))))
-(DFunDef false "runBuildJsonCmd" ((PVar "a") (PVar "allowInternal") (PVar "root") (PVar "stdlibDir") (PVar "input") (PVar "outOpt") (PVar "target")) (EMatch (EApp (EVar "readSourceE") (EVar "input")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjSourceReadJson") (EVar "input")) (EVar "e")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "entrySrc")) () (EBlock (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EVar "msg")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EVar "msg")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "csrc")) () (EBlock (DoLet false false (PTuple (PVar "cj") (PVar "hasErr") (PVar "drive")) (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonFileParts") (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "input")) (EVar "stdlibDir"))) (DoExpr (EIf (EVar "hasErr") (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EVar "ppCheckJson") (EVar "cj")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))) (EIf (EApp (EVar "not") (EApp (EMethodRef "isEmpty") (EApp (EVar "entryMainRefusal") (EVar "entrySrc")))) (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EVar "cjAllToJson") (EListLit (ETuple (EVar "input") (EVar "entrySrc") (EApp (EVar "entryMainRefusal") (EVar "entrySrc"))))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))) (EIf (EApp (EApp (EApp (EApp (EVar "printedTargetRefusal") (EVar "csrc")) (EVar "input")) (EVar "cj")) (EVar "drive")) (EApp (EVar "stageExit") (ELit (LInt 1))) (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (ELit (LString "medaka")))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "keepIrCli") (EApp (EApp (EVar "flag") (ELit (LString "--keep-ir"))) (EVar "a"))) (DoLet false false (PVar "stampBuild") (EApp (EApp (EVar "flag") (ELit (LString "--stamp-build"))) (EVar "a"))) (DoLet false false (PVar "outPath") (EMatch (EVar "outOpt") (arm (PCon "Some" (PVar "o")) () (EVar "o")) (arm (PCon "None") () (EApp (EApp (EVar "defaultOutPath") (EVar "target")) (EVar "input"))))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuild") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "target")) (EVar "input")) (EVar "outPath")) (EVar "keepIrCli")) (EVar "True")) (EVar "stampBuild")) (EVar "None")) (arm (PCon "Ok" (PVar "rep")) () (EMatch (EVar "cj") (arm (PCon "CjRendered" (PVar "json")) () (EApp (EDictApp "println") (EVar "json"))) (arm (PCon "CjParts" (PVar "entry") (PVar "triples")) () (EApp (EDictApp "println") (EApp (EVar "cjAllToJson") (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "entry")) (EFieldAccess (EVar "rep") "notes")) (EVar "triples"))))))) (arm (PCon "Err" (PVar "rep")) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EApp (EVar "ppBuildReport") (EVar "rep"))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))))))))))))))))))))
+(DFunDef false "runBuildJsonCmd" ((PVar "a") (PVar "allowInternal") (PVar "root") (PVar "stdlibDir") (PVar "input") (PVar "outOpt") (PVar "target")) (EMatch (EApp (EVar "readSourceE") (EVar "input")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjSourceReadJson") (EVar "input")) (EVar "e")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "entrySrc")) () (EBlock (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EVar "msg")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EVar "msg")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (ELit (LString "medaka")))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "keepIrCli") (EApp (EApp (EVar "flag") (ELit (LString "--keep-ir"))) (EVar "a"))) (DoLet false false (PVar "stampBuild") (EApp (EApp (EVar "flag") (ELit (LString "--stamp-build"))) (EVar "a"))) (DoLet false false (PVar "outPath") (EMatch (EVar "outOpt") (arm (PCon "Some" (PVar "o")) () (EVar "o")) (arm (PCon "None") () (EApp (EApp (EVar "defaultOutPath") (EVar "target")) (EVar "input"))))) (DoLet false false (PVar "ask") (ERecordCreate "GateAsk" ((fa "askAllowInternal" (EVar "allowInternal")) (fa "askDiagJson" (EVar "True"))))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuild") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "target")) (EVar "input")) (EVar "outPath")) (EVar "keepIrCli")) (EVar "True")) (EVar "stampBuild")) (EApp (EVar "Some") (EVar "ask"))) (arm (PCon "Ok" (PVar "rep")) () (EMatch (EFieldAccess (EVar "rep") "diagEnvelope") (arm (PCon "Some" (PTuple (PVar "entry") (PVar "envelope"))) () (EApp (EDictApp "println") (EApp (EApp (EApp (EVar "envelopeWithNotes") (EVar "entry")) (EFieldAccess (EVar "rep") "notes")) (EVar "envelope")))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (ELit (LString "error: the emitter wrote no diagnostics envelope; an emitter built from an older medaka does not write one"))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))))) (arm (PCon "Err" (PVar "rep")) () (EMatch (EFieldAccess (EVar "rep") "diagEnvelope") (arm (PCon "Some" (PTuple PWild (PVar "envelope"))) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EVar "envelope"))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EApp (EVar "ppBuildReport") (EVar "rep"))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))))))))))))))))))
 (DTypeSig false "cjFileNotFoundJson" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "cjFileNotFoundJson" ((PVar "target") (PVar "err")) (EApp (EApp (EApp (EVar "cjUnlocatedJson") (EVar "target")) (ELit (LString "R-FILE-NOT-FOUND"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot read file `")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "err"))) (ELit (LString "")))))
 (DTypeSig false "cjSourceReadJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
@@ -5334,7 +5298,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "runBuildModes" (TyFun (TyCon "Args") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runBuildModes" ((PVar "a")) (EMatch (EApp (EApp (EVar "flagValue") (ELit (LString "--emit-rt-obj"))) (EVar "a")) (arm (PCon "Some" (PVar "objPath")) () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "emitRtObj") (EVar "cc")) (EVar "root")) (EVar "objPath")) (arm (PCon "Ok" (PVar "rep")) () (EApp (EDictApp "println") (EApp (EVar "ppBuildReport") (EVar "rep")))) (arm (PCon "Err" (PVar "rep")) () (EApp (EVar "dieMsg") (EApp (EVar "ppBuildReport") (EVar "rep")))))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "flagValue") (ELit (LString "--emit-prelude-obj"))) (EVar "a")) (arm (PCon "Some" (PVar "objPath")) () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (ELit (LString "./medaka")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "emitPreludeObj") (EVar "cc")) (EVar "root")) (EVar "medaka")) (EVar "objPath")) (arm (PCon "Ok" (PVar "rep")) () (EApp (EDictApp "println") (EApp (EVar "ppBuildReport") (EVar "rep")))) (arm (PCon "Err" (PVar "rep")) () (EApp (EVar "dieMsg") (EApp (EVar "ppBuildReport") (EVar "rep")))))))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "flag") (ELit (LString "--json"))) (EVar "a")) (EApp (EVar "runBuildJsonEntry") (EVar "a")) (EApp (EVar "runBuildPlainCmd") (EVar "a"))))))))
 (DTypeSig false "runBuildPlainCmd" (TyFun (TyCon "Args") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runBuildPlainCmd" ((PVar "a")) (EBlock (DoLet false false (PVar "perfOn") (EApp (EVar "perfEnabled") (ELit LUnit))) (DoLet false false (PVar "perfT0") (EApp (EVar "now") (ELit LUnit))) (DoExpr (EMatch (EApp (EVar "parseBuildArgs") (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PTuple (PVar "input") (PVar "outOpt") PWild)) () (EIf (EApp (EVar "not") (EApp (EVar "fileExists") (EVar "input"))) (EApp (EVar "dieMsg") (EBinOp "++" (ELit (LString "error: no such file: ")) (EVar "input"))) (EBlock (DoLet false false (PVar "target") (EApp (EApp (EVar "buildTargetOrDie") (EVar "a")) (EVar "input"))) (DoExpr (EApp (EVar "perfArm") (EVar "perfT0"))) (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (ELit (LString "medaka")))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "inputAbs") (EVar "input")) (DoLet false false (PVar "allowInternal") (EApp (EApp (EVar "flag") (ELit (LString "--allow-internal"))) (EVar "a"))) (DoLet false false (PVar "keepIrCli") (EApp (EApp (EVar "flag") (ELit (LString "--keep-ir"))) (EVar "a"))) (DoLet false false (PVar "stampBuild") (EApp (EApp (EVar "flag") (ELit (LString "--stamp-build"))) (EVar "a"))) (DoLet false false (PVar "outPath") (EMatch (EVar "outOpt") (arm (PCon "Some" (PVar "o")) () (EVar "o")) (arm (PCon "None") () (EApp (EApp (EVar "defaultOutPath") (EVar "target")) (EVar "input"))))) (DoLet false false (PVar "prelude") (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk"))))) (ELam (PWild) (EApp (EVar "readPreludeFile") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk"))))))) (DoExpr (EMatch (EVar "prelude") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuild") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "target")) (EVar "inputAbs")) (EVar "outPath")) (EVar "keepIrCli")) (EVar "False")) (EVar "stampBuild")) (EApp (EVar "Some") (EVar "allowInternal"))) (arm (PCon "Ok" (PVar "rep")) () (EBlock (DoLet false false (PVar "perfTEmit") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "emit"))) (EBinOp "-" (EVar "perfTEmit") (EVar "perfT0"))) (EVar "input"))) (DoLet false false PWild (EApp (EApp (EVar "emitTotal") (EVar "perfOn")) (EBinOp "-" (EVar "perfTEmit") (EVar "perfT0")))) (DoExpr (EApp (EDictApp "println") (EApp (EVar "ppBuildReport") (EVar "rep")))))) (arm (PCon "Err" (PVar "rep")) () (EApp (EVar "dieMsg") (EApp (EVar "ppBuildReport") (EVar "rep")))))))))))))))
+(DFunDef false "runBuildPlainCmd" ((PVar "a")) (EBlock (DoLet false false (PVar "perfOn") (EApp (EVar "perfEnabled") (ELit LUnit))) (DoLet false false (PVar "perfT0") (EApp (EVar "now") (ELit LUnit))) (DoExpr (EMatch (EApp (EVar "parseBuildArgs") (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PTuple (PVar "input") (PVar "outOpt") PWild)) () (EIf (EApp (EVar "not") (EApp (EVar "fileExists") (EVar "input"))) (EApp (EVar "dieMsg") (EBinOp "++" (ELit (LString "error: no such file: ")) (EVar "input"))) (EBlock (DoLet false false (PVar "target") (EApp (EApp (EVar "buildTargetOrDie") (EVar "a")) (EVar "input"))) (DoExpr (EApp (EVar "perfArm") (EVar "perfT0"))) (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (ELit (LString "medaka")))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "inputAbs") (EVar "input")) (DoLet false false (PVar "allowInternal") (EApp (EApp (EVar "flag") (ELit (LString "--allow-internal"))) (EVar "a"))) (DoLet false false (PVar "keepIrCli") (EApp (EApp (EVar "flag") (ELit (LString "--keep-ir"))) (EVar "a"))) (DoLet false false (PVar "stampBuild") (EApp (EApp (EVar "flag") (ELit (LString "--stamp-build"))) (EVar "a"))) (DoLet false false (PVar "outPath") (EMatch (EVar "outOpt") (arm (PCon "Some" (PVar "o")) () (EVar "o")) (arm (PCon "None") () (EApp (EApp (EVar "defaultOutPath") (EVar "target")) (EVar "input"))))) (DoLet false false (PVar "prelude") (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk"))))) (ELam (PWild) (EApp (EVar "readPreludeFile") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk"))))))) (DoExpr (EMatch (EVar "prelude") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuild") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "target")) (EVar "inputAbs")) (EVar "outPath")) (EVar "keepIrCli")) (EVar "False")) (EVar "stampBuild")) (EApp (EVar "Some") (ERecordCreate "GateAsk" ((fa "askAllowInternal" (EVar "allowInternal")) (fa "askDiagJson" (EVar "False")))))) (arm (PCon "Ok" (PVar "rep")) () (EBlock (DoLet false false (PVar "perfTEmit") (EApp (EVar "now") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitPhase") (EVar "perfOn")) (ELit (LString "emit"))) (EBinOp "-" (EVar "perfTEmit") (EVar "perfT0"))) (EVar "input"))) (DoLet false false PWild (EApp (EApp (EVar "emitTotal") (EVar "perfOn")) (EBinOp "-" (EVar "perfTEmit") (EVar "perfT0")))) (DoExpr (EApp (EDictApp "println") (EApp (EVar "ppBuildReport") (EVar "rep")))))) (arm (PCon "Err" (PVar "rep")) () (EApp (EVar "dieMsg") (EApp (EVar "ppBuildReport") (EVar "rep")))))))))))))))
 (DTypeSig false "runBuildJsonEntry" (TyFun (TyCon "Args") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runBuildJsonEntry" ((PVar "a")) (EMatch (EApp (EVar "parseBuildArgs") (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjBuildFailedJson") (ELit (LString ""))) (EVar "msg")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PTuple (PVar "input") (PVar "outOpt") PWild)) () (EMatch (EApp (EApp (EVar "selectBuildProfile") (EVar "a")) (EVar "input")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjBuildFailedJson") (ELit (LString ""))) (EVar "msg")))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "target")) () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "allowInternal") (EApp (EApp (EVar "flag") (ELit (LString "--allow-internal"))) (EVar "a"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuildJsonCmd") (EVar "a")) (EVar "allowInternal")) (EVar "root")) (EVar "stdlibDir")) (EVar "input")) (EVar "outOpt")) (EVar "target")))))))))
 (DTypeSig false "buildUsage" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
