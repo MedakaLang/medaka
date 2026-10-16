@@ -89,6 +89,9 @@ import frontend.lexer.{
   lineStartsOf,
   offsetToLineColFast,
   describeToken,
+  isCommaTok,
+  isElseTok,
+  isThenTok,
 }
 import support.util.{reverseL, joinWith}
 import list.{last}
@@ -4991,10 +4994,6 @@ isColonTok : Token -> Bool
 isColonTok TColon = True
 isColonTok _ = False
 
-isCommaTok : Token -> Bool
-isCommaTok TComma = True
-isCommaTok _ = False
-
 isConsTok : Token -> Bool
 isConsTok TCons = True
 isConsTok _ = False
@@ -5006,10 +5005,6 @@ isDedentTok _ = False
 isDeferTok : Token -> Bool
 isDeferTok TDefer = True
 isDeferTok _ = False
-
-isElseTok : Token -> Bool
-isElseTok TElse = True
-isElseTok _ = False
 
 isEofTok : Token -> Bool
 isEofTok TEof = True
@@ -5070,10 +5065,6 @@ isRequiresTok _ = False
 isStarTok : Token -> Bool
 isStarTok TStar = True
 isStarTok _ = False
-
-isThenTok : Token -> Bool
-isThenTok TThen = True
-isThenTok _ = False
 
 isWhereTok : Token -> Bool
 isWhereTok TWhere = True

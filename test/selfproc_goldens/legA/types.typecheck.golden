@@ -1042,7 +1042,6 @@ envVarType : TcEnv -> String -> Option Mono
 eqCompareOp : Mono -> Mono -> Mono
 eqInt : Int -> Int -> Bool
 eqIntList : List Int -> List Int -> Bool
-eqStr : String -> String -> Bool
 erredDuring : (Unit -> a) -> (Bool, a)
 evCell : EvDest -> Ref Route
 evEntriesOf : List Obligation -> List EvEntry
@@ -2536,7 +2535,6 @@ publishMethodPredGivens : List String -> Ty -> MethodBodyInstance -> ScopeId -> 
 publishMethodReturnTrace : List EvEntry -> MethodReturnTraceEntry -> MethodReturnTraceEntry
 publishProducedResults : BindingSummary -> List (Option Loc, Mono) -> Unit
 publishedPolarity : Polarity -> Polarity
-pureRow : EffRow
 pushAdmittedOccObl : String -> Mono -> Unit
 pushAmbiguityAt : Bool -> Option Loc -> String -> Unit
 pushAmbiguousImports : String -> Loc -> List (String, List String) -> Unit
@@ -2997,7 +2995,6 @@ selectReturnRow : ImplEnv -> String -> List Mono -> Option ImplRow
 selectedCallSupers : String -> Option ImplRow -> String -> ScopeId -> List Mono -> List Route
 selectedRequireGoals : Map String Unit -> Map String Unit -> (UObligation, ReqWalk) -> List (UObligation, ReqWalk)
 selectedRowReqMatch : List Mono -> ImplRow -> Option (List (String, Mono), List Require)
-selfBinding : String -> (String, String)
 selfDeclArities : String -> List Decl -> List ((String, String), a) -> List (String, a) -> List (String, a)
 selfNameRows : List Decl -> List (String, a) -> List (String, a)
 selfQualEntries : String -> Map String Unit -> List ((String, String), a) -> List (String, a)

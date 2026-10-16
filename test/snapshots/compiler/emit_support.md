@@ -1,5 +1,5 @@
 # META
-source_lines=687
+source_lines=704
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -354,6 +354,23 @@ export
 bindNameMap : List CBind -> OrdMap CBind
 bindNameMap [] = omEmpty
 bindNameMap (b :: rest) = omInsert (bindName b) b (bindNameMap rest)
+
+-- Effectful left-to-right fold over a list, for its side effects only.
+export
+forEachU : (a -> Unit) -> List a -> Unit
+forEachU _ [] = ()
+forEachU f (x :: xs) = let _ = f x in forEachU f xs
+
+export
+nthArm : List CArm -> Int -> Option CArm
+-- Intentional cross-file duplicate of core_ir_eval.mdk's copy. The Core IR
+-- interpreter is the oracle this backend is differenced against, so the two must
+-- not share code: a defect in a shared helper would move both arms of the
+-- differential together and the gate would report agreement.
+-- lint-disable-next-line rule-duplicate-body
+nthArm (a :: _) 0 = Some a
+nthArm (_ :: rest) n = nthArm rest (n - 1)
+nthArm [] _ = None
 
 -- ── #561 PR-A: lazy-global classification (native fast-path predicate) ────────
 -- The topo sort (Stage B, above) makes eager init CORRECT wherever a static init
@@ -796,6 +813,13 @@ implEntryDeclaredArity (CImplEntry _ _ declared _) = declared
 (DTypeSig true "bindNameMap" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyCon "CBind"))))
 (DFunDef false "bindNameMap" ((PList)) (EVar "omEmpty"))
 (DFunDef false "bindNameMap" ((PCons (PVar "b") (PVar "rest"))) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (EVar "b")) (EApp (EVar "bindNameMap") (EVar "rest"))))
+(DTypeSig true "forEachU" (TyFun (TyFun (TyVar "a") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Unit"))))
+(DFunDef false "forEachU" (PWild (PList)) (ELit LUnit))
+(DFunDef false "forEachU" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (ELet false PWild (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "forEachU") (EVar "f")) (EVar "xs"))))
+(DTypeSig true "nthArm" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "CArm")))))
+(DFunDef false "nthArm" ((PCons (PVar "a") PWild) (PLit (LInt 0))) (EApp (EVar "Some") (EVar "a")))
+(DFunDef false "nthArm" ((PCons PWild (PVar "rest")) (PVar "n")) (EApp (EApp (EVar "nthArm") (EVar "rest")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))))
+(DFunDef false "nthArm" ((PList) PWild) (EVar "None"))
 (DTypeSig false "eagerHasMethod" (TyFun (TyCon "CExpr") (TyCon "Bool")))
 (DFunDef false "eagerHasMethod" ((PCon "CLam" PWild PWild)) (EVar "False"))
 (DFunDef false "eagerHasMethod" ((PCon "CMethod" PWild PWild)) (EVar "True"))
@@ -1026,6 +1050,13 @@ implEntryDeclaredArity (CImplEntry _ _ declared _) = declared
 (DTypeSig true "bindNameMap" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyCon "CBind"))))
 (DFunDef false "bindNameMap" ((PList)) (EVar "omEmpty"))
 (DFunDef false "bindNameMap" ((PCons (PVar "b") (PVar "rest"))) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (EVar "b")) (EApp (EVar "bindNameMap") (EVar "rest"))))
+(DTypeSig true "forEachU" (TyFun (TyFun (TyVar "a") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Unit"))))
+(DFunDef false "forEachU" (PWild (PList)) (ELit LUnit))
+(DFunDef false "forEachU" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (ELet false PWild (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "forEachU") (EVar "f")) (EVar "xs"))))
+(DTypeSig true "nthArm" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "CArm")))))
+(DFunDef false "nthArm" ((PCons (PVar "a") PWild) (PLit (LInt 0))) (EApp (EVar "Some") (EVar "a")))
+(DFunDef false "nthArm" ((PCons PWild (PVar "rest")) (PVar "n")) (EApp (EApp (EVar "nthArm") (EVar "rest")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))))
+(DFunDef false "nthArm" ((PList) PWild) (EVar "None"))
 (DTypeSig false "eagerHasMethod" (TyFun (TyCon "CExpr") (TyCon "Bool")))
 (DFunDef false "eagerHasMethod" ((PCon "CLam" PWild PWild)) (EVar "False"))
 (DFunDef false "eagerHasMethod" ((PCon "CMethod" PWild PWild)) (EVar "True"))

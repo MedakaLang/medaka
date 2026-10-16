@@ -1,5 +1,5 @@
 # META
-source_lines=3152
+source_lines=3155
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka lexer.
@@ -398,14 +398,17 @@ is3 src len pos a b c =
     && at src (pos + 2) == c
 
 -- Constructor matches, not derived `==` on Token (layout pass hot path).
+export
 isCommaTok : Token -> Bool
 isCommaTok TComma = True
 isCommaTok _ = False
 
+export
 isThenTok : Token -> Bool
 isThenTok TThen = True
 isThenTok _ = False
 
+export
 isElseTok : Token -> Bool
 isElseTok TElse = True
 isElseTok _ = False
@@ -3361,13 +3364,13 @@ collectComments s =
 (DFunDef false "is2" ((PVar "src") (PVar "len") (PVar "pos") (PVar "a") (PVar "b")) (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len")) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")) (EVar "a"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "b"))))
 (DTypeSig false "is3" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyCon "Bool"))))))))
 (DFunDef false "is3" ((PVar "src") (PVar "len") (PVar "pos") (PVar "a") (PVar "b") (PVar "c")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 2))) (EVar "len")) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")) (EVar "a"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "b"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "c"))))
-(DTypeSig false "isCommaTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DTypeSig true "isCommaTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isCommaTok" ((PCon "TComma")) (EVar "True"))
 (DFunDef false "isCommaTok" (PWild) (EVar "False"))
-(DTypeSig false "isThenTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DTypeSig true "isThenTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isThenTok" ((PCon "TThen")) (EVar "True"))
 (DFunDef false "isThenTok" (PWild) (EVar "False"))
-(DTypeSig false "isElseTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DTypeSig true "isElseTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isElseTok" ((PCon "TElse")) (EVar "True"))
 (DFunDef false "isElseTok" (PWild) (EVar "False"))
 (DTypeSig false "substr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
@@ -4256,13 +4259,13 @@ collectComments s =
 (DFunDef false "is2" ((PVar "src") (PVar "len") (PVar "pos") (PVar "a") (PVar "b")) (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len")) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")) (EVar "a"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "b"))))
 (DTypeSig false "is3" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyCon "Bool"))))))))
 (DFunDef false "is3" ((PVar "src") (PVar "len") (PVar "pos") (PVar "a") (PVar "b") (PVar "c")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 2))) (EVar "len")) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")) (EVar "a"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "b"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "c"))))
-(DTypeSig false "isCommaTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DTypeSig true "isCommaTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isCommaTok" ((PCon "TComma")) (EVar "True"))
 (DFunDef false "isCommaTok" (PWild) (EVar "False"))
-(DTypeSig false "isThenTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DTypeSig true "isThenTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isThenTok" ((PCon "TThen")) (EVar "True"))
 (DFunDef false "isThenTok" (PWild) (EVar "False"))
-(DTypeSig false "isElseTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DTypeSig true "isElseTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isElseTok" ((PCon "TElse")) (EVar "True"))
 (DFunDef false "isElseTok" (PWild) (EVar "False"))
 (DTypeSig false "substr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))

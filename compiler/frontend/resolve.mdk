@@ -101,6 +101,8 @@ import support.util.{
   splitOnChar,
   startsWith,
   sortUniqS,
+  isEmptyL,
+  selfBinding,
 }
 import test.{expectTrue}
 
@@ -2420,10 +2422,6 @@ dupValClause (DAttrib _ d) = dupValClause d
 dupValClause (DFunDef _ n ps body _ _) =
   Some (n, isEmptyL ps, firstExprLoc body)
 dupValClause _ = None
-
-isEmptyL : List a -> Bool
-isEmptyL [] = True
-isEmptyL _ = False
 
 -- Phase 148: the clauses of a top-level value binding must be contiguous.  Two
 -- same-named DFunDef/DLetGroup clause-runs separated by an intervening clause-body
@@ -4938,9 +4936,6 @@ reexportBindings (UseAlias _ _) _ = []
 
 dropLocOfExpanded : (String, String, Loc) -> (String, String)
 dropLocOfExpanded (origin, local, _) = (origin, local)
-
-selfBinding : String -> (String, String)
-selfBinding n = (n, n)
 
 -- the LOCAL names whose ORIGIN is one of `origins` (the source module's export list of
 -- the relevant kind).  This is the aliased form of `filterInSet`.

@@ -4,7 +4,7 @@
 
 import support.util.{
   listLen, filterList, joinWith, sortUniqS, startsWith, contains, allList,
-  anyList, reverseL, lenKey, escStr, splitOnChar, splitLast
+  anyList, reverseL, lenKey, escStr, splitOnChar, splitLast, isEmptyL
 }
 
 -- A Product element lists every axis of its label's declared schema, in
@@ -702,12 +702,8 @@ lexicalPath abs parts = reverseL (fold (lexicalStep abs) [] parts)
 lexicalStep : Bool -> List String -> String -> List String
 lexicalStep abs acc c
   | c == "" || c == "." = acc
-  | c == ".." && abs && isEmptyList acc = acc
+  | c == ".." && abs && isEmptyL acc = acc
   | otherwise = c :: acc
-
-isEmptyList : List a -> Bool
-isEmptyList [] = True
-isEmptyList _ = False
 
 -- Whether normalized components hold a `..` after a named component.
 popsNamed : Bool -> List String -> Bool

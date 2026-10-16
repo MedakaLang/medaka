@@ -297,6 +297,7 @@ import types.effect_rows.{
   linkRow,
   EffRow(..),
   Effvar(..),
+  pureRow,
 }
 import types.effect_infer.{
   recordEffect, captureEffects, alphaOf, typeAuthority, AlphaBinder(..)
@@ -435,6 +436,8 @@ import support.util.{
   startsWith,
   escStr,
   editDistance,
+  eqStr,
+  selfBinding,
 }
 -- Stage A-2 unit A-2.2 (#1111): the head-tycon projections below return a key
 -- that CAN carry identity.  `HeadKey`'s declaration half is A-2.3's `TabKey`
@@ -917,10 +920,6 @@ newEffvarId _ =
   let n = graphRun.value.effvarCounter.value
   graphRun.value.effvarCounter := n + 1
   n
-
--- the empty closed row — a pure arrow
-pureRow : EffRow
-pureRow = EffRow [] None
 
 freshEffvar : Unit -> Ref Effvar
 freshEffvar _ = Ref (EUnbound (newEffvarId ()) perRun.value.currentLevel.value)
@@ -33242,9 +33241,6 @@ tyStep (TyAuth _ _) _ = MOk
 tyStep (TyNamed _ t1 _) s = MKids [(t1, stripTyWrap s)]
 tyStep (TyQual t1 _ _) s = MKids [(t1, stripTyWrap s)]
 
-eqStr : String -> String -> Bool
-eqStr a b = a == b
-
 stripTyWrap : Ty -> Ty
 stripTyWrap (TyEffect _ _ t) = stripTyWrap t
 stripTyWrap (TyConstrained _ t) = stripTyWrap t
@@ -50802,9 +50798,6 @@ importedBindings (UseAlias _ _) = Some []
 
 memberBinding : UseMember -> (String, String)
 memberBinding m = (useMemberOrigin m, useMemberLocal m)
-
-selfBinding : String -> (String, String)
-selfBinding n = (n, n)
 
 -- resolve one imported bare member name to its actual key in a dependency's public
 -- schemes.  The golden path keys schemes by the bare name; the EMIT path runs after

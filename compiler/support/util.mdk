@@ -317,6 +317,15 @@ isNonEmptyL : List a -> Bool
 isNonEmptyL xs = not (isEmptyL xs)
 
 export
+eqStr : String -> String -> Bool
+eqStr a b = a == b
+
+-- The identity entry `(n, n)` for a name imported or re-exported unchanged.
+export
+selfBinding : String -> (String, String)
+selfBinding n = (n, n)
+
+export
 filterList : (a -> Bool) -> List a -> List a
 filterList _ [] = []
 filterList p (x :: xs)
