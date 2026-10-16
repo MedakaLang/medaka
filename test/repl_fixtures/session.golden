@@ -5,4 +5,7 @@ medaka repl (:quit to exit, :reset to clear session)
 > [2, 3] : List Int
 > 2.5 : Float
 > > 43 : Int
-> 
+> > 42 : Int
+> val putStrLn : a -> a
+> 4 : Int
+> > 

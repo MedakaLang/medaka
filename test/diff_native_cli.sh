@@ -158,16 +158,20 @@ fi
 # ── repl (native vs CANONICAL native golden — documented exception) ───────────
 REPL_IN="$ROOT/test/repl_fixtures/session.in"
 REPL_GOLDEN="$ROOT/test/repl_fixtures/session.golden"
+REPL_ERR_GOLDEN="$ROOT/test/repl_fixtures/session.stderr.golden"
 REPL_WIRED=1
-if [ "$REPL_WIRED" = 1 ] && [ -f "$REPL_IN" ] && [ -f "$REPL_GOLDEN" ]; then
+if [ "$REPL_WIRED" = 1 ] && [ -f "$REPL_IN" ] && [ -f "$REPL_GOLDEN" ] && [ -f "$REPL_ERR_GOLDEN" ]; then
   repl_want="$(cat "$REPL_GOLDEN")"
+  repl_err_want="$(cat "$REPL_ERR_GOLDEN")"
   repl_got="$(printf '%s' "$(cat "$REPL_IN")
-" | MEDAKA_ROOT="$ROOT" bound "$MEDAKA" repl 2>/dev/null | strip_unit)"
-  if [ "$repl_got" = "$repl_want" ]; then
-    pass=$((pass+1)); printf 'ok   repl/session (vs canonical native golden)\n'
+" | MEDAKA_ROOT="$ROOT" bound "$MEDAKA" repl 2>"$TMP/repl_err" | strip_unit)"
+  repl_err_got="$(cat "$TMP/repl_err")"
+  if [ "$repl_got" = "$repl_want" ] && [ "$repl_err_got" = "$repl_err_want" ]; then
+    pass=$((pass+1)); printf 'ok   repl/session (stdout+stderr vs canonical native goldens)\n'
   else
     fail=$((fail+1)); printf 'FAIL repl/session\n'
     printf '  want: [%s]\n  got:  [%s]\n' "$repl_want" "$repl_got"
+    printf '  want stderr: [%s]\n  got stderr:  [%s]\n' "$repl_err_want" "$repl_err_got"
   fi
 else
   printf 'skip repl/* (native repl not yet wired or golden missing)\n'

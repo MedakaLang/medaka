@@ -5,6 +5,11 @@ filter (n => n > 1) [1, 2, 3]
 max 1.5 2.5
 badname
 x + 1
+length xs = 42
+length [1, 2]
+putStrLn x = x + 1
+putStrLn 3
+1 + "a"
 type x
 browse
 reset
