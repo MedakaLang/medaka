@@ -44,6 +44,14 @@ stageDump () = match !stageCountOn
   True => stageDumpKeys (omKeys !stageCounts)
   False => ()
 
+-- Every process exit goes through here, so the dump runs on error exits too.
+-- `stageDump` is the only dump, so each process prints its counts exactly once.
+export
+stageExit : Int -> <IO> Unit
+stageExit code =
+  let _ = stageDump ()
+  exit code
+
 stageDumpKeys : List String -> <IO> Unit
 stageDumpKeys [] = ()
 stageDumpKeys (k :: rest) =

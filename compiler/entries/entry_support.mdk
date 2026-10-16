@@ -24,6 +24,7 @@ import types.typecheck.{
   setStdlibOwnership,
 }
 import support.path.{dirOf, joinPath}
+import support.stage_count.{stageExit}
 import support.ordmap.{OrdMap, omFromPairs, omLookup, omEmpty}
 import driver.diagnostics.{
   Diag,
@@ -93,7 +94,7 @@ failWith : String -> <IO> Unit
 -- lint-disable-next-line rule-duplicate-body
 failWith msg =
   let _ = ePutStrLn msg
-  exit 1
+  stageExit 1
 
 -- ── file readers ───────────────────────────────────────────────────────────────
 
@@ -289,7 +290,7 @@ emitResidualGate : List (String, String) ->
 emitResidualGate pathMap target residual =
   if hadTypeErrors () then
     let _ = ePutStrLn (residualOrGeneric pathMap target residual)
-    exit emitDiagExitCode
+    stageExit emitDiagExitCode
 
 -- The whole diagnostic verdict for a build, rendered as `medaka check` renders
 -- it: this process is the only one that typechecks the graph, so the warnings go
@@ -318,7 +319,7 @@ emitFullGate modsWithPath runtimeDecls coreDecls modules perMod residual =
       emitResidualGate pathMap (entryPathOf modsWithPath) residual
     _ =>
       let _ = map ePutStrLn errLines
-      exit emitDiagExitCode
+      stageExit emitDiagExitCode
 
 -- The auto-print / async wrap re-checks the WRAPPED program, and its diagnostics
 -- are about the user's own `main`.  They go out through the same located face as
@@ -332,7 +333,7 @@ emitWrapDiags modsWithPath ds =
     map
       ePutStrLn
       (renderTcDiags (map modIdToPath modsWithPath) (map (d => (mid, d)) ds))
-  exit emitDiagExitCode
+  stageExit emitDiagExitCode
 
 -- The entry module's path, for the residual's fallback text.  The loader is
 -- dependency-first, so the entry is last.
@@ -395,7 +396,7 @@ emitTargetGate modsWithPath _ (Some _) (Some d) =
     Ok text => text
     Err _ => ""
   let _ = ePutStrLn (ppDiagCliLines (srcLinesArr src) file d)
-  exit emitDiagExitCode
+  stageExit emitDiagExitCode
 emitTargetGate _ runtimeDecls (Some p) None =
   checkedTarget := Some (checkedTargetOf p runtimeDecls)
 

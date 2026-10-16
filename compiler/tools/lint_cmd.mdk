@@ -35,6 +35,7 @@ import driver.diagnostics.{
   srcLinesArr,
 }
 import support.cli_targets.{collectMdkFiles, expandLintTarget}
+import support.stage_count.{stageExit}
 import tools.lint.{
   Directive,
   Finding,
@@ -163,7 +164,7 @@ runLintJsonCmd idx disableNames onlyNames denyNames baseCtx files =
   let cross = crossFileJsonFindings disableNames onlyNames denyNames quads
   let merged = mergeCrossFileIntoTriples cross triples
   let _ = putStr (cjAllToJson merged)
-  if anyList cjLintTripleHasErr merged then exit 1
+  if anyList cjLintTripleHasErr merged then stageExit 1
 
 -- The cross-file tier's JSON-path inputs, reused from the per-file parses
 -- already sitting in `quads` (#394's no-second-read rule applies here too).
@@ -397,7 +398,7 @@ resolveLintTargets [] =
       let _ =
         ePutStrLn
           "medaka lint: no medaka.toml found; run from a project directory or pass file/dir paths"
-      let _ = exit 1
+      let _ = stageExit 1
       []
     Some root => collectMdkFiles root
 resolveLintTargets targets = flatMap expandLintTarget targets
@@ -605,7 +606,7 @@ lintOneFileFix onlyNames disableNames target = match readSource target
     else match writeFile target newSrc
       Err msg =>
         let _ = ePutStrLn "\{target}: \{msg}"
-        let _ = exit 1
+        let _ = stageExit 1
         True
       Ok _ =>
         let _ = putStrLn "fixed \{intToString n} finding(s) in \{target}"

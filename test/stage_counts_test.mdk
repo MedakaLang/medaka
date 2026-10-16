@@ -12,8 +12,9 @@
    stages; the parent forwards that stderr, and the `build_*` rows are the SUM
    by key of both processes' `[stage]` lines.
 
-   Only probes that exit 0 are pinned: error and non-zero exits mostly skip
-   `stageDump`, so they print no counts.
+   `probeRows` pins a probe that must exit 0; `probeRowsExit` names the exit
+   code it must meet. Every process exit goes through `stageExit`
+   (compiler/support/stage_count.mdk), so an error exit prints its counts too.
 
    The `lsp.` rows each feed one `medaka lsp` process a framed transcript
    ending `shutdown` then `exit`. Their frames are built here because
@@ -29,8 +30,12 @@
    changes, not a duplicate. -}
 import json.{Json(..), jArray, jObject, stringify}
 import list.{filterMap, nub, sort}
-import string.{byteLength, contains, lines, split, toInt, unlines}
-import test.{Expectation, expectAll, expectFalse, expectGolden, fail, pass}
+import string.{
+  byteLength, contains, lines, split, startsWith, toInt, unlines, words
+}
+import test.{
+  Expectation, expectAll, expectEqual, expectFalse, expectGolden, fail, pass
+}
 import test_process.{
   boundedVerbSeconds, medakaBin, spawnTimeoutSeconds, underRoot, withScratchDir
 }
@@ -85,12 +90,22 @@ countFor k (k2, n) = if k == k2 then toInt n else None
 probeRows : String ->
   List String ->
   <Exec, Env "MEDAKA_ROOT", Env "MEDAKA"> (List String, Expectation)
-probeRows name args =
+probeRows name args = probeRowsExit name 0 args
+
+-- `probeRows` for a probe that must exit `want`.
+probeRowsExit : String ->
+  Int ->
+  List String ->
+  <Exec, Env "MEDAKA_ROOT", Env "MEDAKA"> (List String, Expectation)
+probeRowsExit name want args =
   let (code, out, err) = spawnCounted args
   let rows = rowsOf name code err
   let clean = expectAll [
     expectFalse (contains "[stage]" out),
-    if code == 0 then pass else fail "\{name} exited \{code}: \{err}",
+    if code == want then
+      pass
+    else
+      fail "\{name} exited \{code}, want \{want}: \{err}",
   ]
   (rows, clean)
 
@@ -250,6 +265,9 @@ test "stage_counts: per-verb stage counts match stage_counts.golden" = withScrat
       probeRows "build_hello" ["build", fixture "hello.mdk", "-o", "\{dir}/h"],
       probeRows "test_probe" ["test", fixture "test_probe.mdk"],
       probeRows "lint_probe" ["lint", fixture "lint_probe.mdk"],
+      probeRowsExit "check_bad" 1 ["check", fixture "bad.mdk"],
+      probeRowsExit "run_bad" 1 ["run", fixture "bad.mdk"],
+      probeRowsExit "build_bad" 1 ["build", fixture "bad.mdk", "-o", "\{dir}/b"],
     ]
     let allProbes = probes ++ lspProbes dir
     let rows = flatMap fst allProbes
@@ -264,3 +282,55 @@ pinRows path rows = match getEnv "ARCH_PINS_WRITE"
     Ok _ => pass
     Err e => fail "could not write \{path}: \{e}"
   _ => expectGolden path (unlines rows)
+
+-- Structural pin: no code line of the two drivers calls `exit` directly, so
+-- every process exit prints the stage dump through `stageExit`.
+test "stage_counts: no raw exit in the drivers" = expectAll [
+  rawExitsIn "compiler/driver/medaka_cli.mdk",
+  rawExitsIn "compiler/entries/entry_support.mdk",
+]
+
+rawExitsIn : String -> <FileRead, Env "MEDAKA_ROOT"> Expectation
+rawExitsIn rel = match readFile (underRoot rel)
+  Ok src => expectEqual [] (filter rawExitLine (lines src))
+  Err _ => fail "could not read \{rel}"
+
+-- True for a line that calls `exit` outside a string literal and outside a
+-- `--` comment line.
+rawExitLine : String -> Bool
+rawExitLine line =
+  not (isCommentLine line) && exitCallIn (tokensOf (codeOf line))
+
+isCommentLine : String -> Bool
+isCommentLine line = match words line
+  w :: _ => startsWith "--" w
+  [] => False
+
+-- The text of `line` outside its string literals, each literal a space. An
+-- escaped quote is removed first, so it neither opens nor closes a literal.
+codeOf : String -> String
+codeOf line =
+  stringConcat
+    (map
+      (s => " \{s} ")
+      (everyOther True (split "\"" (stringConcat (split "\\\"" line)))))
+
+-- The even-indexed segments of a `"`-split line: the text outside literals.
+everyOther : Bool -> List String -> List String
+everyOther _ [] = []
+everyOther True (s :: rest) = s :: everyOther False rest
+everyOther False (_ :: rest) = everyOther True rest
+
+tokensOf : String -> List String
+tokensOf code = words (stringConcat (map (++ " ") (split "(" code)))
+
+argStarts : String
+argStarts = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_"
+
+-- `exit` followed by an argument starting with a letter, digit or `_`: the
+-- raw call `\bexit [0-9a-zA-Z]`.
+exitCallIn : List String -> Bool
+exitCallIn [] = False
+exitCallIn ("exit" :: arg :: rest) =
+  contains (stringSlice 0 1 arg) argStarts || exitCallIn (arg :: rest)
+exitCallIn (_ :: rest) = exitCallIn rest

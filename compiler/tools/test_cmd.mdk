@@ -227,6 +227,7 @@ import support.util.{
   anyList,
 }
 import support.path.{dirOf, baseOf, joinPath}
+import support.stage_count.{stageExit}
 import args.{
   ArgSpec, Args, spec, switch, value, internal, flag, flagValue, withStrictDash
 }
@@ -2533,7 +2534,7 @@ runEvalPropsWorker target requests =
 evalWorkerDie : String -> <IO> Unit
 evalWorkerDie message = do
   let _ = ePutStrLn "medaka test --props-worker: \{message}"
-  exit 1
+  stageExit 1
 
 runEvalPropsWorkerSource : String ->
   String ->
@@ -3713,7 +3714,7 @@ runTestOne engines cases filterOpt target =
   let stdlibDir = root ++ "/stdlib"
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
   let ok = runTest engines rtPath corePath target roots cases filterOpt
-  if ok then () else exit 1
+  if ok then () else stageExit 1
 
 export
 cliTestReportOk : Option String ->
