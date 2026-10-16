@@ -149,6 +149,9 @@ import driver.diagnostics.{
   analyzeLocatedG,
   analyzeFrom,
   analyzeFromDump,
+  CheckDrive(..),
+  CheckDump(..),
+  graphCheckDrive,
   analyzeSurface,
   analyzeFinish,
   tcHalfOfPerModule,
@@ -350,6 +353,7 @@ import tools.check_policy.{
   ManifestArgs(..),
   analyzeProgram,
   EntryAnalysis(..),
+  TargetInputs(..),
 }
 
 -- FLAG for user confirmation: exact version NUMBER not yet confirmed — using
@@ -1147,7 +1151,7 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _, d
   -- `parseLocated tsrc` would redundantly repeat) — call `analyzeFrom`
   -- directly with `decls` instead of going through `analyzeLocatedG`, to skip
   -- that re-parse.  Every OTHER `analyzeLocatedG` caller is untouched.
-  let (diags, dumpLines) =
+  let (diags, dumped) =
     analyzeFromDump
       cliStdlibExports
       mid
@@ -1167,12 +1171,17 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _, d
       let warns = filter diagIsWarn diags
       -- The dump comes from the typecheck drive `analyzeFromDump` already ran,
       -- so no second front end or elaboration is needed to print it.
+      let dumpLines = match dumped
+        Some d => d.cdLines
+        None => []
       let dump = stripWarningLines (joinNl dumpLines)
       let filtered = userSchemeLines decls dump
       let report = if typesMode then dump else filtered
-      -- The target check elaborates the program again, so it runs once the
-      -- report is rendered (see the multi-module arm below).
-      let _ = checkTargetGate rsrc csrc tsrc target [(mid, decls)]
+      -- The target check reads the drive that produced the report, so there
+      -- is no later elaboration to order the report ahead of.
+      let _ = match dumped
+        Some d => checkTargetGate csrc tsrc target d.cdDrive
+        None => ()
       let _ = putStrLn report
       -- #916: a clean single-file check gave no unambiguous success signal —
       -- "no error lines among the interface dump" was the only tell, and on a
@@ -1220,11 +1229,9 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
           let _ = putStrLn errText
           stageExit 1
         (None, projWarns, hiddenCount, perMod) =>
+          let drive = graphCheckDrive perMod modPairs
           let report = checkModulesReport exWarns perMod
-          -- After the report is rendered: the target check elaborates the graph
-          -- again, and a report rendered after that drive can name a scheme's
-          -- type variables differently (`Speak b => a -> String`), #4053.
-          let _ = checkTargetGate rsrc csrc tsrc target mods
+          let _ = checkTargetGate csrc tsrc target drive
           let _ = putStrLn report
           -- F-3d: an IMPORTED module's ⊑-incomparable pair, LOCATED against that
           -- module's own file.  The line above reaches the ENTRY's diagnostics only,
@@ -1300,61 +1307,52 @@ lastModPair (_ :: rest) = lastModPair rest
 -- ── the target check ────────────────────────────────────────────────────────
 -- `check`'s refusal of a program its typecheck accepted, when a profile is
 -- selected: the refusal is the verdict, so it replaces the clean report.
-checkTargetGate : String ->
-  String ->
-  String ->
-  String ->
-  List (String, List Decl) ->
-  <IO> Unit
-checkTargetGate rsrc csrc tsrc target mods =
-  match checkTargetRefusal rsrc csrc target mods
+checkTargetGate : String -> String -> String -> CheckDrive -> <IO> Unit
+checkTargetGate csrc tsrc target drive =
+  match checkTargetRefusal csrc target drive
     None => ()
     Some d =>
       let _ = emitAbortTotal ()
       let _ = ePutStrLn (ppDiagCliLines (srcLinesArr tsrc) target d)
       stageExit 1
 
--- The selected profile's refusal of a typechecked program, if any.
-checkTargetRefusal : String ->
-  String ->
-  String ->
-  List (String, List Decl) ->
-  <IO> Option Diag
-checkTargetRefusal rsrc csrc target mods = match !selectedProfile
+-- The selected profile's refusal of a typechecked program, judged from the
+-- drive that typechecked it.
+checkTargetRefusal : String -> String -> CheckDrive -> <IO> Option Diag
+checkTargetRefusal csrc target drive = match !selectedProfile
   None => None
-  Some profile =>
-    targetRefusal
-      profile
-      target
-      (analyzeProgram
-        False
-        (desugaredPrelude rsrc)
-        (desugaredPrelude csrc)
-        (map desugarPair mods))
+  Some profile => targetRefusal profile target (checkTargetInputs csrc drive)
 
--- `check --json`'s copy of the same refusal, folded into the entry's file.
--- The check already loaded this program, so a load failure here is not one
--- the target check can pass over.
+-- The target verdict's inputs, off a check drive.  Called right after the drive:
+-- `shouldAutoPrintMain` reads the drive's `main` type.
+checkTargetInputs : String -> CheckDrive -> TargetInputs
+checkTargetInputs csrc drive =
+  let printed =
+    if shouldAutoPrintMain (desugaredPrelude csrc) drive.cdMods then
+      lookupAssoc "println" drive.cdCoreSchemes
+    else
+      None
+  TargetInputs {
+    tiSchemes = drive.cdEntrySchemes ++ drive.cdCoreSchemes,
+    tiOps = drive.cdOps,
+    tiEntryDecls = match lastModPair drive.cdMods
+      Some (_, decls) => decls
+      None => [],
+    tiAutoPrintCall = printed,
+  }
+
+-- `check --json`'s copy of the same refusal, folded into the entry's file.  A
+-- check that found no error always has a drive; a missing one is a bug here.
 checkTargetJson : String ->
   String ->
-  String ->
-  String ->
   CheckJson ->
+  Option CheckDrive ->
   <IO> Option CheckJson
-checkTargetJson rsrc csrc target stdlibDir cj = match !selectedProfile
+checkTargetJson csrc target cj drive = match !selectedProfile
   None => None
-  Some _ =>
-    let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
-    let refusal = match loadProgramFilesLocatedE (_ => None) target roots
-      Ok mp => checkTargetRefusal rsrc csrc target (map dropPathTriple mp)
-      Err _ =>
-        Some
-          (mkDiag
-            SevError
-            "R-MODULE-LOAD"
-            "`\{target}` could not be loaded again to check it against the target"
-            None)
-    match (refusal, cj)
+  Some _ => match drive
+    None => panic "check --json --target: a clean check left no drive to judge"
+    Some dr => match (checkTargetRefusal csrc target dr, cj)
       (Some d, CjParts entry triples) =>
         Some (CjParts entry (cjFoldIntoFile entry [d] triples))
       _ => None
@@ -1364,12 +1362,11 @@ checkTargetJson rsrc csrc target stdlibDir cj = match !selectedProfile
 -- the same program again; this copy only puts the code in the envelope.
 printedTargetRefusal : String ->
   String ->
-  String ->
-  String ->
   CheckJson ->
+  Option CheckDrive ->
   <IO> Bool
-printedTargetRefusal rsrc csrc target stdlibDir cj =
-  match checkTargetJson rsrc csrc target stdlibDir cj
+printedTargetRefusal csrc target cj drive =
+  match checkTargetJson csrc target cj drive
     Some refusedCj =>
       let _ = println (ppCheckJson refusedCj)
       True
@@ -1389,7 +1386,7 @@ runTargetGate jsonMode fileKey target mods analysis =
     None => False
   let refusal =
     if startable then
-      targetRefusal (runProfile !selectedProfile) target analysis
+      targetRefusal (runProfile !selectedProfile) target analysis.eaTarget
     else
       None
   match refusal
@@ -1587,10 +1584,10 @@ runCheckJsonCmd allowInternal rsrc csrc target stdlibDir =
       let _ = println (cjSourceReadJson target e)
       stageExit 1
     Ok _ =>
-      let (cj, hasErr) =
+      let (cj, hasErr, drive) =
         checkJsonFileParts allowInternal rsrc csrc target stdlibDir
       let refused =
-        if hasErr then None else checkTargetJson rsrc csrc target stdlibDir cj
+        if hasErr then None else checkTargetJson csrc target cj drive
       match refused
         Some refusedCj =>
           let _ = println (ppCheckJson refusedCj)
@@ -1656,7 +1653,7 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
             let _ = println (cjBuildFailedJson input msg)
             stageExit 1
           Ok csrc =>
-            let (cj, hasErr) =
+            let (cj, hasErr, drive) =
               checkJsonFileParts allowInternal rsrc csrc input stdlibDir
             if hasErr then
               let _ = println (ppCheckJson cj)
@@ -1669,7 +1666,7 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
                 println
                   (cjAllToJson [(input, entrySrc, entryMainRefusal entrySrc)])
               stageExit 1
-            else if printedTargetRefusal rsrc csrc input stdlibDir cj then
+            else if printedTargetRefusal csrc input cj drive then
               stageExit 1
             else
               let medaka = envOr "MEDAKA" "medaka"

@@ -309,21 +309,26 @@ lookupValue k ((n, v) :: rest) = if k == n then Some v else lookupValue k rest
 -- sample run evaluates the same elaborated trees.  The caller refuses on the
 -- diagnostics `eaElab` carries before consulting anything else.
 --
--- `eaSchemes` holds the entry module's own schemes FIRST, then the prelude's:
+-- What the entry's verdicts read of a drive, taken straight off it:
+-- `tiSchemes` holds the entry module's own schemes FIRST, then the prelude's:
 -- `--fn <name>` is arbitrary CLI input looked up directly by bare name
 -- (`lookupAssoc` is a first-match scan), so an entry redefinition of a prelude
 -- name must win, and a prelude name (`--fn println`) must be present rather
--- than read as effect-free.  `eaOps` is read straight after the drive, since
+-- than read as effect-free.  `tiOps` is read straight after the drive, since
 -- `lastInvocationOps` describes whichever drive ran last, and so is
--- `eaAutoPrintCall`: when the drivers that run the program print a value `main`
+-- `tiAutoPrintCall`: when the drivers that run the program print a value `main`
 -- (`shouldAutoPrintMain` reads the drive's `main` type), the scheme of the
 -- prelude `println` the wrap applies to it.
+public export data TargetInputs = TargetInputs {
+  tiSchemes : List (String, Scheme),
+  tiOps : InvocationOps,
+  tiEntryDecls : List Decl,
+  tiAutoPrintCall : Option Scheme,
+}
+
 public export data EntryAnalysis = EntryAnalysis {
   eaElab : ElabResult,
-  eaSchemes : List (String, Scheme),
-  eaOps : InvocationOps,
-  eaEntryDecls : List Decl,
-  eaAutoPrintCall : Option Scheme,
+  eaTarget : TargetInputs,
 }
 
 -- [valueMain] is the drive's value-main candidate: a caller that reports the
@@ -346,10 +351,12 @@ analyzeProgram valueMain rtD coreD modsD =
       None
   EntryAnalysis {
     eaElab = elaborated,
-    eaSchemes = ownSchemes ++ preludeSchemes,
-    eaOps = ops,
-    eaEntryDecls = entryModuleDecls modsD,
-    eaAutoPrintCall = autoPrintCall,
+    eaTarget = TargetInputs {
+      tiSchemes = ownSchemes ++ preludeSchemes,
+      tiOps = ops,
+      tiEntryDecls = entryModuleDecls modsD,
+      tiAutoPrintCall = autoPrintCall,
+    },
   }
 
 -- The entry module's decls: the last of the loader's dependency-first list.
@@ -381,14 +388,14 @@ policyVerdict : List (String, EffParamTy) ->
   String ->
   PolicyOutcome
 policyVerdict policy analysis fnName =
-  let schemes = analysis.eaSchemes
+  let schemes = analysis.eaTarget.tiSchemes
   -- Existence is checked against the complete scheme list, not effTable:
   -- fnEffectsTable deliberately omits verified-pure bindings, so using it as
   -- a name index would reject a real pure entry exactly like an absent one.
   match lookupAssoc fnName schemes
     None => PolicyReject "rejected. no '\{fnName}' entry found\n"
     Some fnScheme =>
-      let fnEffects = invocationSummary analysis.eaOps fnScheme
+      let fnEffects = invocationSummary analysis.eaTarget.tiOps fnScheme
       match policyRefusals fnEffects policy
         PolicyAdmitted =>
           let effStr =
@@ -410,7 +417,7 @@ policyVerdict policy analysis fnName =
                 "   no sample run: '\{fnName}' is not a String -> String entry\n"
           PolicyAccept header pluginOutput
         PolicyRefused forbidden lines =>
-          let callGraph = buildCallGraph analysis.eaEntryDecls
+          let callGraph = buildCallGraph analysis.eaTarget.tiEntryDecls
           let effTable = fnEffectsTable schemes
           let chain = viaChain callGraph effTable fnName (firstOf forbidden)
           let header =
@@ -579,9 +586,11 @@ public export data ManifestArgs = ManifestArgs (Option String) String
 -- still emits the bare `[package.capabilities]` header.
 export
 runManifest : EntryAnalysis -> String -> Result String String
-runManifest analysis fnName = match lookupAssoc fnName analysis.eaSchemes
-  None => Err "no '\{fnName}' entry found"
-  Some sch => Ok (manifestToml (invocationSummary analysis.eaOps sch))
+runManifest analysis fnName =
+  match lookupAssoc fnName analysis.eaTarget.tiSchemes
+    None => Err "no '\{fnName}' entry found"
+    Some sch =>
+      Ok (manifestToml (invocationSummary analysis.eaTarget.tiOps sch))
 
 -- Render the manifest as --allow tokens for round-trip through check-policy.
 -- PPrefix (Some s) → "Label=s"

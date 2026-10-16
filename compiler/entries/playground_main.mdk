@@ -123,7 +123,7 @@ import driver.main_autoprint.{
   asyncMainShapeError,
 }
 import types.target_profile.{selectedProfile, lookupProfile}
-import tools.check_policy.{EntryAnalysis(..), analyzeProgram}
+import tools.check_policy.{EntryAnalysis(..), TargetInputs(..), analyzeProgram}
 import tools.target_check.{targetRefusal}
 import list.{last}
 import json.{
@@ -662,12 +662,13 @@ targetRefusalOf written analysis = match !selectedProfile
   Some profile =>
     let printedCall =
       if written.wePrinted then
-        lookupAssoc autoPrintPinName analysis.eaSchemes
+        lookupAssoc autoPrintPinName analysis.eaTarget.tiSchemes
       else
         None
-    targetRefusal profile written.wePath { analysis |
-      eaEntryDecls = written.weDecls,
-      eaAutoPrintCall = printedCall,
+    let inputs = analysis.eaTarget
+    targetRefusal profile written.wePath { inputs |
+      tiEntryDecls = written.weDecls,
+      tiAutoPrintCall = printedCall,
     }
 
 -- The warnings' report with the refusal folded into the entry's file, as

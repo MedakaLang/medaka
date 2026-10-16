@@ -393,7 +393,10 @@ elaborateForTarget (Some p) modsWithPath runtimeDecls coreDecls modules =
       runtimeDecls
       coreDecls
       modules
-  (analysis.eaElab, targetRefusal p (entryPathOf modsWithPath) analysis)
+  (
+    analysis.eaElab,
+    targetRefusal p (entryPathOf modsWithPath) analysis.eaTarget,
+  )
 
 -- The refusal `check --target` gives, located in the entry file, under the
 -- exit code that tells `build` it is a diagnostic.  An admitted program's

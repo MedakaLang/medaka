@@ -53024,6 +53024,14 @@ data CoreCheckMemo = CoreCheckMemo {
 coreCheckMemoRef : Ref (Option CoreCheckMemo)
 coreCheckMemoRef = Ref None
 
+-- The prelude's schemes from the core pass the last keyed diagnostics drive ran,
+-- for a caller that read them off a graph drive that returns only per-module rows.
+export
+lastCoreSchemes : Unit -> List (String, Scheme)
+lastCoreSchemes _ = match !coreCheckMemoRef
+  Some m => m.ccmCoreSchemes.mbSchemes
+  None => []
+
 coreCheckMemoHit : Option (Int, Int) -> Option CoreCheckMemo
 coreCheckMemoHit None = None
 coreCheckMemoHit (Some key) = match !coreCheckMemoRef
@@ -54642,6 +54650,7 @@ checkModulesEntryFullK preludeKey runtimeDecls coreDecls modules =
 -- the module's own entry for the same bare name.
 -- `preludeKey`: the prelude key for the core-check memo (see `checkCoreMemoized`);
 -- `None` = unkeyed, no memo.
+export
 checkModulesEntryFullSplitK : Bool ->
   Option (Int, Int) ->
   List Decl ->
@@ -54813,24 +54822,6 @@ checkOneDiagsK valueMain preludeKey runtimeDecls coreDecls (rootId, prog) =
     coreDecls
     [(rootId, prog)]
   (errs, warns)
-
--- `checkOneDiagsK` plus the entry's rendered `name : scheme` lines from the SAME
--- drive.  The lines are rendered here, before any later drive can run.
-export
-checkOneDiagsLinesK : Bool ->
-  Option (Int, Int) ->
-  List Decl ->
-  List Decl ->
-  (String, List Decl) ->
-  (List String, List TcDiag, List TcDiag)
-checkOneDiagsLinesK valueMain preludeKey runtimeDecls coreDecls (rootId, prog) =
-  let (_, schemes, errs, warns) = checkModulesEntryFullSplitK
-    valueMain
-    preludeKey
-    runtimeDecls
-    coreDecls
-    [(rootId, prog)]
-  (schemeLines schemes ++ map tcMsg warns, errs, warns)
 
 -- `checkModulesEntryFullK` for a SYNTHETIC program graph — one this driver derived
 -- from the user's rather than one the user wrote — with `mainSchemeRef` SAVED AND
@@ -57156,6 +57147,7 @@ popMarkedClause grouped pending n =
     c :: cs => (c, omInsert n cs pending)
     [] => panic "rebuildGroupDecls: no marked clause left for \{n}"
 
+export
 schemeLines : List (String, Scheme) -> List String
 schemeLines [] = []
 schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
