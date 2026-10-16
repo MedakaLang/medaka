@@ -31,7 +31,6 @@ records the method and the full tables).
 |---|---|
 | Compiler source, non-test | 172 modules, 207,653 lines; median 216, p90 2,173 |
 | `types/typecheck.mdk` | 57,023 lines (30,597 code, 22,697 comment); 27.5% of the compiler; 83% of `types/` |
-| Its growth | 10,925 (Jul 1), 19,885 (Aug 1), 38,963 (Sep 1), 53,048 (Oct 1), 57,032 (Oct 14), 57,023 (Oct 15, ratchet in force) |
 | Extracted from it since August | 21 sibling modules, about 9,800 lines (as of Oct 14; not re-derived) |
 | Module-level `= Ref` cells | 108 in 28 modules (`test/arch_goldens/cells.golden`); typecheck 26 plus 147 fields in 4 bundles (bundles as of Oct 14) |
 | Import graph | 1,005 edges, 0 cycles, 3 layering violations (`layering.golden`) |
@@ -75,19 +74,50 @@ the acceptance shape and the order of consumers.
 
 | Id | Action | Mechanism | Acceptance | Size | Needs |
 |---|---|---|---|---|---|
-| **V1** | Evidence side table | Resolve mints a stable site id for every dispatch and route-carrying occurrence; the solver returns `Map SiteId Evidence` from each binding group instead of writing `Ref Route`; during migration both are written and a validator asserts they agree; consumers switch one at a time (eval first, then `core_ir_lower`, then LSP hover), then the cells are deleted, one AST constructor per PR, `EBinOp` first. | `grep -c 'Ref Route' compiler/frontend/ast.mdk` reaches 0; `diff_compiler_engines`, `dict_semantics`, `run_check_agreement`, `selfproc` LEG A, fixpoint C3a and C3b; the agreement validator is observed red on a planted mismatch before it is removed. | arc | Phase 0 G3 |
-| **V2** | Finalized publication | `CheckedProgram` and `TcReport` as in `TYPECHECK-CONTRACTS.md` §4: zonk at the end of the graph, a validator that refuses a published scheme or evidence entry containing a live cell, partial analysis retained for the LSP. | `checkOneSchemeFullK` returns no live cell (a `prop` over the published schemes); same-process P then Q then P equals cold P on schemes, diagnostics and evidence (contract §7). | sprint | V1 |
+| **V1** | Evidence side table | Every site-bearing AST node carries an `EvId` minted by the typechecker's mark pass from the graph evidence counter, idempotently (a later marker over an inferred tree keeps the id); the answer lives in a graph-owned site cell keyed by that id (the `EvCell` precedent) and is published into the one `EvTable`; `dictPass` and `core_ir_lower` read the table by id. Evidence storage is bounded to one graph first. One AST constructor per slice, `EBinOp` first. | No `Ref` field in `frontend/ast.mdk` (all 9 cells; pinned as `ast_ref_fields 0`); each constructor slice's emitted LLVM IR is byte-identical to its base's over the engine and dict corpora and the compiler itself, and the comparison is observed red on a planted route swap; `run_check_agreement`, `selfproc` LEG A, fixpoint C3a and C3b. | arc | Phase 0 G3 |
+| **V2** | Finalized publication | `CheckedProgram` and `TcReport` as in `TYPECHECK-CONTRACTS.md` §4, in a new leaf `types/publish.mdk`: a scheme is published with its own constraint context, frozen by copy at the end of the graph; a validator refuses a published scheme or evidence entry containing a live cell; a variable still free at graph end is a listed weak variable; partial analysis retained for the LSP. | `checkOneSchemeFullK` returns no live cell (a test over the stdlib and the `run_check_agreement` corpus); same-process P then Q then P equals cold P on schemes with context, diagnostics and evidence, with P rendered after Q (contract §7, #4053). | sprint | V1 for the evidence half only |
 | **V3** | One pipeline | `check`, `run`, `build`, `test`, LSP and MCP read one `CheckedProgram` per graph; the precheck's responsibilities (exhaustiveness, impl obligations) are covered by the pipeline before the precheck is deleted; `build`'s child consumes the artifact or runs the same pipeline (D4). | G6's call-count pins show one typecheck drive per verb per graph; `run_check_agreement` corpus stays green. | sprint | V2, D4 and D5 (ruled) |
 
 **Exit criterion.** No `Ref` field in `frontend/ast.mdk`; the stamper order is a policy
-over a value, not a write order into a tree; one typecheck drive per verb.
+over a value, not a write order into a tree; one typecheck drive per verb, counted by G6's
+`typecheck.drive` key.
+
+**Amended 2026-10-16 (Phase 1 cut, at `7c03d2397`; rulings P1-D1 to P1-D17 on #4206).**
+Measured before cutting the sprints, and the reason the V1 and V2 rows above changed:
+- `EMethodAt` and `EDictAt` already carry an `EvId` (#2667, #2705). The AST holds 9 cells
+  in 8 constructors: the routes of `EBinOp`, `EUnOp`, `ENumLit`, `EWideLit`, `ENumLit`'s
+  float, the record heads of `EFieldAccess` and `ERecordUpdate` (written during inference,
+  not by a stamper), and dead fields on `ESlice` and `EIndex` (#700). The old acceptance
+  grep counted a comment and missed five of them.
+- The only reader of the four route cells is `dictPass`, in the writers' own file; the
+  record heads' only reader is `core_ir_lower`. Eval and the LSP read none, so there is no
+  consumer order to follow.
+- Resolve mints binding ids only; `EvId`s come from the typechecker's graph counter, and
+  the `EvId` contract forbids a second numbering. The mark pass already rebuilds every site
+  node once per drive, after desugar's copies.
+- The evidence table is read back out of the cells at drain time, so a cells-versus-table
+  validator cannot disagree; two-arm IR identity per constructor is the parity proof (Val).
+- On the unkeyed paths (elaboration, the REPL, the playground, `medaka test`) the evidence
+  array and `evCells` grow for the life of the process today; bounding them comes before V1
+  multiplies the ids.
+- The exit's "stamper order is a policy over a value" is half in Phase 1: V1 makes the drain
+  write graph-owned cells instead of the tree; stampers that return values instead of
+  writing destination cells are M-SOLVER's evidence-bindings step (#2705).
+- V2's schemes half needs nothing from V1 (today's `EvTable` holds no cells); #4053 is a
+  side table keyed by type-variable ids that the next drive overwrites.
+- #2874 (`build --json` checks in its parent) is in Phase 1 through a `--diag-json <path>`
+  side channel, as part of D4's first step (Val).
+- Seven sprints: two remove duplicate drives that need no artifact (V3), two do V1, one
+  does V2's schemes half, two move the consumers onto the report (V2's evidence half and
+  V3) and are re-cut after the fifth.
 
 ---
 
 ## 4. Phase 2: state by lifetime (A3)
 
-This is #2547 unit 1 and component X. It is the precondition of the file split (ruling 8)
-and of safe caching (A7).
+This is component X: `PerRun`'s 88 fields and `resetState` (#2547's three units and #2548
+landed 2026-09-03/04). It is the precondition of the file split (ruling 8) and of safe
+caching (A7).
 
 | Id | Action | Mechanism | Acceptance | Size | Needs |
 |---|---|---|---|---|---|
@@ -162,8 +192,8 @@ This is #1398's REVISION block and runs beside Phases 0 to 4; it needs nothing f
 | Playbook | Existing owner | Relationship |
 |---|---|---|
 | Phase 0 | epic #4206, milestone `Architecture: Phase 0 (the guards)`: G1 #4200, G2a #4201, G2b #4202, G3 #4203, G4 #4204, G5 #4205, G6 #4189 | adds the guards no existing plan has |
-| Phase 1 V1, V2, V3 | #2549 phase 2, M-PUBLISH, M-PIPELINE (#2874, #4160, #4151) | same work; this document adds consumer order and the agreement validator |
-| Phase 2 | #2547 unit 1, component X | same work; this document adds the cell-lifetime table and the exit grep |
+| Phase 1 V1, V2, V3 | milestone `Architecture: Phase 1 (output is a value)`; #2549 phase 2, M-PUBLISH (#2544, #4053), M-PIPELINE (#2874), run-once #4151, #4152, #4154, #4160, #4157, #3901, #3902 | same work; this document adds the IR-identity parity proof, the evidence bound and the sprint order |
+| Phase 2 | component X (`PerRun`, `resetState`); #2547 and #2548 landed 2026-09-03/04 | same work; this document adds the cell-lifetime table and the exit grep |
 | Phase 3 | M-CACHE #2732, run-once O3 (#4160, #3902) and O5 (#4169 to #4172, #3903) | same work; prelude-first ordering and D6 |
 | Phase 4 | #2586, ruling 8 | same sequencing; this document names the layer axis and the per-module acceptance |
 | Phase 5 | #1398 R3 to R9, #4107 | unchanged |
