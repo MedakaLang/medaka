@@ -1,5 +1,5 @@
 # META
-source_lines=3211
+source_lines=3283
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka lexer.
@@ -379,12 +379,15 @@ describeToken (TLexError s) = s
 -- the preceding line, so synthetic NEWLINE/INDENT/DEDENT tokens inserted by the
 -- layout pass get a source line too.
 -- `RClauseNl col off` is an `RNewline` that `externClauseBreaks` found before an
--- extern's `bind` clause line.
+-- extern's second or later `bind` clause line.  `RClauseOpen col off base` is
+-- the one before its first: it also closes every layout context deeper than
+-- `base`, the column of the extern's own line.
 data RawTok =
   | RTok Token Int Int
   | RNewline Int Int
   | RComment Int Int
   | RClauseNl Int Int
+  | RClauseOpen Int Int Int
 
 -- ── Character classification: ASCII Char -> Bool predicates now live in
 -- support/char.mdk (imported at the top of this module).
@@ -2177,6 +2180,29 @@ layout ((RNewline col off) :: rest) stack frames prev opener =
   applyNl col off rest stack frames prev opener
 layout ((RClauseNl col off) :: rest) stack frames _ opener =
   applyNl col off rest stack frames None opener
+layout ((RClauseOpen col off base) :: rest) stack frames _ opener =
+  clauseOpen col off base rest stack frames opener
+
+-- The first `bind` clause line of an extern: close each context a wrapped
+-- signature opened (`NEWLINE DEDENT`, which ends the signature's trailing-`->`
+-- continuation in the parser), then open the clause block against the
+-- extern's own column.
+clauseOpen : Int ->
+  Int ->
+  Int ->
+  List RawTok ->
+  List Int ->
+  List BracketFrame ->
+  Bool ->
+  List (Token, Int)
+clauseOpen col off base rest [] frames opener =
+  applyNl col off rest [] frames None opener
+clauseOpen col off base rest (top :: tl) frames opener
+  | top > base =
+    (TNewline, off)
+      :: (TDedent, off)
+      :: clauseOpen col off base rest tl (dropFrame frames) opener
+  | otherwise = applyNl col off rest (top :: tl) frames None opener
 
 -- A bracket closer force-flushes every nested layout context opened in the
 -- innermost bracket frame (emitting `NEWLINE DEDENT` per context, popping the
@@ -2558,16 +2584,19 @@ rawStream src len = externClauseBreaks (dedentTripleInterp (scan src len 0 0 0))
 --
 -- `bind` is an ordinary identifier, so by the continuation rule
 -- (LAYOUT-SEMANTICS §4, I.c) the deeper line would continue the signature as a
--- type application.  The line break before such a line becomes `RClauseNl`,
--- which every layout pass reads as a break after a token that cannot end an
--- expression: the clause lines open an indented block of their own.  The
--- rewrite applies only inside an extern declaration, from its `extern` token
--- to the first line no deeper than the extern's own line, so `bind` keeps its
--- meaning everywhere else.  A stream with no line led by `bind` is returned
--- without being rebuilt.
+-- type application.  The line break before the first such line becomes
+-- `RClauseOpen`, which closes whatever layout contexts a wrapped signature
+-- opened and then opens the clause block against the extern's own column, so
+-- the clause lines may sit at any column deeper than `extern` whatever the
+-- signature's continuation lines did (LAYOUT-SEMANTICS §5.5).  The breaks
+-- before later clause lines become `RClauseNl`, read as a break after a token
+-- that cannot end an expression.  The rewrite applies only inside an extern
+-- declaration, from its `extern` token to the first line no deeper than the
+-- extern's own line, so `bind` keeps its meaning everywhere else.  A stream
+-- with no line led by `bind` is returned without being rebuilt.
 externClauseBreaks : List RawTok -> List RawTok
 externClauseBreaks toks
-  | hasBindLine toks = clauseBreaksGo toks 0 (-1)
+  | hasBindLine toks = clauseBreaksGo toks 0 (-1) False
   | otherwise = toks
 
 hasBindLine : List RawTok -> Bool
@@ -2576,18 +2605,24 @@ hasBindLine ((RNewline _ _) :: (RTok (TIdent "bind") _ _) :: _) = True
 hasBindLine (_ :: rest) = hasBindLine rest
 
 -- `lineCol` is the column of the current line; `externCol` the column of the
--- line holding the enclosing `extern`, or -1 outside one.
-clauseBreaksGo : List RawTok -> Int -> Int -> List RawTok
-clauseBreaksGo [] _ _ = []
-clauseBreaksGo ((RTok TExtern s e) :: rest) lineCol _ =
-  RTok TExtern s e :: clauseBreaksGo rest lineCol lineCol
-clauseBreaksGo ((RNewline col off) :: rest) _ externCol
+-- line holding the enclosing `extern`, or -1 outside one; `opened` whether
+-- that extern's first clause line has been seen.
+clauseBreaksGo : List RawTok -> Int -> Int -> Bool -> List RawTok
+clauseBreaksGo [] _ _ _ = []
+clauseBreaksGo ((RTok TExtern s e) :: rest) lineCol _ _ =
+  RTok TExtern s e :: clauseBreaksGo rest lineCol lineCol False
+clauseBreaksGo ((RNewline col off) :: rest) _ externCol opened
   | externCol >= 0 && col > externCol && startsWithBind rest =
-    RClauseNl col off :: clauseBreaksGo rest col externCol
-  | col <= externCol = RNewline col off :: clauseBreaksGo rest col (-1)
-  | otherwise = RNewline col off :: clauseBreaksGo rest col externCol
-clauseBreaksGo (t :: rest) lineCol externCol =
-  t :: clauseBreaksGo rest lineCol externCol
+    clauseBreak col off externCol opened
+      :: clauseBreaksGo rest col externCol True
+  | col <= externCol = RNewline col off :: clauseBreaksGo rest col (-1) False
+  | otherwise = RNewline col off :: clauseBreaksGo rest col externCol opened
+clauseBreaksGo (t :: rest) lineCol externCol opened =
+  t :: clauseBreaksGo rest lineCol externCol opened
+
+clauseBreak : Int -> Int -> Int -> Bool -> RawTok
+clauseBreak col off _ True = RClauseNl col off
+clauseBreak col off externCol False = RClauseOpen col off externCol
 
 startsWithBind : List RawTok -> Bool
 startsWithBind ((RTok (TIdent "bind") _ _) :: _) = True
@@ -2624,6 +2659,25 @@ layoutPairs ((RNewline col off) :: rest) stack frames prev opener =
   applyNlPairs col off rest stack frames prev opener
 layoutPairs ((RClauseNl col off) :: rest) stack frames _ opener =
   applyNlPairs col off rest stack frames None opener
+layoutPairs ((RClauseOpen col off base) :: rest) stack frames _ opener =
+  clauseOpenPairs col off base rest stack frames opener
+
+clauseOpenPairs : Int ->
+  Int ->
+  Int ->
+  List RawTok ->
+  List Int ->
+  List BracketFrame ->
+  Bool ->
+  List (Token, Int, Int)
+clauseOpenPairs col off base rest [] frames opener =
+  applyNlPairs col off rest [] frames None opener
+clauseOpenPairs col off base rest (top :: tl) frames opener
+  | top > base =
+    (TNewline, off, off)
+      :: (TDedent, off, off)
+      :: clauseOpenPairs col off base rest tl (dropFrame frames) opener
+  | otherwise = applyNlPairs col off rest (top :: tl) frames None opener
 
 flushSepPairs : Token ->
   Int ->
@@ -2880,6 +2934,24 @@ layoutToks ((RNewline col _) :: rest) stack frames prev opener =
   applyNlToks col rest stack frames prev opener
 layoutToks ((RClauseNl col _) :: rest) stack frames _ opener =
   applyNlToks col rest stack frames TNewline opener
+layoutToks ((RClauseOpen col _ base) :: rest) stack frames _ opener =
+  clauseOpenToks col base rest stack frames opener
+
+clauseOpenToks : Int ->
+  Int ->
+  List RawTok ->
+  List Int ->
+  List BracketFrame ->
+  Bool ->
+  List Token
+clauseOpenToks col base rest [] frames opener =
+  applyNlToks col rest [] frames TNewline opener
+clauseOpenToks col base rest (top :: tl) frames opener
+  | top > base =
+    TNewline
+      :: TDedent
+      :: clauseOpenToks col base rest tl (dropFrame frames) opener
+  | otherwise = applyNlToks col rest (top :: tl) frames TNewline opener
 
 closeAllToks : List Int -> List Token
 closeAllToks stack = TNewline :: closeDedentsToks stack
@@ -3413,7 +3485,7 @@ collectComments s =
 (DFunDef false "describeToken" ((PCon "TDedent")) (ELit (LString "a dedent")))
 (DFunDef false "describeToken" ((PCon "TEof")) (ELit (LString "end of input")))
 (DFunDef false "describeToken" ((PCon "TLexError" (PVar "s"))) (EVar "s"))
-(DData Private "RawTok" () ((variant "RTok" (ConPos (TyCon "Token") (TyCon "Int") (TyCon "Int"))) (variant "RNewline" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RComment" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RClauseNl" (ConPos (TyCon "Int") (TyCon "Int")))) ())
+(DData Private "RawTok" () ((variant "RTok" (ConPos (TyCon "Token") (TyCon "Int") (TyCon "Int"))) (variant "RNewline" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RComment" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RClauseNl" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RClauseOpen" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
 (DTypeSig false "at" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Char"))))
 (DFunDef false "at" ((PVar "src") (PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "src")))
 (DTypeSig false "is2" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyCon "Bool")))))))
@@ -3837,6 +3909,10 @@ collectComments s =
 (DFunDef false "layout" ((PCons (PCon "RComment" PWild PWild) (PVar "rest")) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")))
 (DFunDef false "layout" ((PCons (PCon "RNewline" (PVar "col") (PVar "off")) (PVar "rest")) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNl") (EVar "col")) (EVar "off")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")))
 (DFunDef false "layout" ((PCons (PCon "RClauseNl" (PVar "col") (PVar "off")) (PVar "rest")) (PVar "stack") (PVar "frames") PWild (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNl") (EVar "col")) (EVar "off")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "None")) (EVar "opener")))
+(DFunDef false "layout" ((PCons (PCon "RClauseOpen" (PVar "col") (PVar "off") (PVar "base")) (PVar "rest")) (PVar "stack") (PVar "frames") PWild (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "clauseOpen") (EVar "col")) (EVar "off")) (EVar "base")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "opener")))
+(DTypeSig false "clauseOpen" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int")))))))))))
+(DFunDef false "clauseOpen" ((PVar "col") (PVar "off") (PVar "base") (PVar "rest") (PList) (PVar "frames") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNl") (EVar "col")) (EVar "off")) (EVar "rest")) (EListLit)) (EVar "frames")) (EVar "None")) (EVar "opener")))
+(DFunDef false "clauseOpen" ((PVar "col") (PVar "off") (PVar "base") (PVar "rest") (PCons (PVar "top") (PVar "tl")) (PVar "frames") (PVar "opener")) (EIf (EBinOp ">" (EVar "top") (EVar "base")) (EBinOp "::" (ETuple (EVar "TNewline") (EVar "off")) (EBinOp "::" (ETuple (EVar "TDedent") (EVar "off")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "clauseOpen") (EVar "col")) (EVar "off")) (EVar "base")) (EVar "rest")) (EVar "tl")) (EApp (EVar "dropFrame") (EVar "frames"))) (EVar "opener")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNl") (EVar "col")) (EVar "off")) (EVar "rest")) (EBinOp "::" (EVar "top") (EVar "tl"))) (EVar "frames")) (EVar "None")) (EVar "opener")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "flushClose" (TyFun (TyCon "Token") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int"))))))))))
 (DFunDef false "flushClose" ((PVar "t") (PVar "off") (PVar "rest") (PVar "stack") (PList) (PVar "opener")) (EBinOp "::" (ETuple (EVar "t") (EVar "off")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EVar "rest")) (EVar "stack")) (EListLit)) (EApp (EVar "Some") (EVar "t"))) (EBinOp "||" (EVar "opener") (EApp (EVar "isOpener") (EVar "t"))))))
 (DFunDef false "flushClose" ((PVar "t") (PVar "off") (PVar "rest") (PVar "stack") (PCons (PCon "BracketFrame" (PVar "f") (PVar "saved")) (PVar "fs")) PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "flushCloseGo") (EVar "t")) (EVar "off")) (EVar "rest")) (EVar "stack")) (EVar "f")) (EVar "fs")) (EVar "saved")))
@@ -3975,16 +4051,19 @@ collectComments s =
 (DTypeSig false "rawStream" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok")))))
 (DFunDef false "rawStream" ((PVar "src") (PVar "len")) (EApp (EVar "externClauseBreaks") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))))
 (DTypeSig false "externClauseBreaks" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyApp (TyCon "List") (TyCon "RawTok"))))
-(DFunDef false "externClauseBreaks" ((PVar "toks")) (EIf (EApp (EVar "hasBindLine") (EVar "toks")) (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "toks")) (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "toks") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "externClauseBreaks" ((PVar "toks")) (EIf (EApp (EVar "hasBindLine") (EVar "toks")) (EApp (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "toks")) (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1)))) (EVar "False")) (EIf (EVar "otherwise") (EVar "toks") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "hasBindLine" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyCon "Bool")))
 (DFunDef false "hasBindLine" ((PList)) (EVar "False"))
 (DFunDef false "hasBindLine" ((PCons (PCon "RNewline" PWild PWild) (PCons (PCon "RTok" (PCon "TIdent" (PLit (LString "bind"))) PWild PWild) PWild))) (EVar "True"))
 (DFunDef false "hasBindLine" ((PCons PWild (PVar "rest"))) (EApp (EVar "hasBindLine") (EVar "rest")))
-(DTypeSig false "clauseBreaksGo" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))
-(DFunDef false "clauseBreaksGo" ((PList) PWild PWild) (EListLit))
-(DFunDef false "clauseBreaksGo" ((PCons (PCon "RTok" (PCon "TExtern") (PVar "s") (PVar "e")) (PVar "rest")) (PVar "lineCol") PWild) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "TExtern")) (EVar "s")) (EVar "e")) (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "rest")) (EVar "lineCol")) (EVar "lineCol"))))
-(DFunDef false "clauseBreaksGo" ((PCons (PCon "RNewline" (PVar "col") (PVar "off")) (PVar "rest")) PWild (PVar "externCol")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "externCol") (ELit (LInt 0))) (EBinOp ">" (EVar "col") (EVar "externCol"))) (EApp (EVar "startsWithBind") (EVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "RClauseNl") (EVar "col")) (EVar "off")) (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "rest")) (EVar "col")) (EVar "externCol"))) (EIf (EBinOp "<=" (EVar "col") (EVar "externCol")) (EBinOp "::" (EApp (EApp (EVar "RNewline") (EVar "col")) (EVar "off")) (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "rest")) (EVar "col")) (EUnOp "-" (ELit (LInt 1))))) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EVar "RNewline") (EVar "col")) (EVar "off")) (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "rest")) (EVar "col")) (EVar "externCol"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DFunDef false "clauseBreaksGo" ((PCons (PVar "t") (PVar "rest")) (PVar "lineCol") (PVar "externCol")) (EBinOp "::" (EVar "t") (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "rest")) (EVar "lineCol")) (EVar "externCol"))))
+(DTypeSig false "clauseBreaksGo" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "RawTok")))))))
+(DFunDef false "clauseBreaksGo" ((PList) PWild PWild PWild) (EListLit))
+(DFunDef false "clauseBreaksGo" ((PCons (PCon "RTok" (PCon "TExtern") (PVar "s") (PVar "e")) (PVar "rest")) (PVar "lineCol") PWild PWild) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "TExtern")) (EVar "s")) (EVar "e")) (EApp (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "rest")) (EVar "lineCol")) (EVar "lineCol")) (EVar "False"))))
+(DFunDef false "clauseBreaksGo" ((PCons (PCon "RNewline" (PVar "col") (PVar "off")) (PVar "rest")) PWild (PVar "externCol") (PVar "opened")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "externCol") (ELit (LInt 0))) (EBinOp ">" (EVar "col") (EVar "externCol"))) (EApp (EVar "startsWithBind") (EVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "clauseBreak") (EVar "col")) (EVar "off")) (EVar "externCol")) (EVar "opened")) (EApp (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "rest")) (EVar "col")) (EVar "externCol")) (EVar "True"))) (EIf (EBinOp "<=" (EVar "col") (EVar "externCol")) (EBinOp "::" (EApp (EApp (EVar "RNewline") (EVar "col")) (EVar "off")) (EApp (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "rest")) (EVar "col")) (EUnOp "-" (ELit (LInt 1)))) (EVar "False"))) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EVar "RNewline") (EVar "col")) (EVar "off")) (EApp (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "rest")) (EVar "col")) (EVar "externCol")) (EVar "opened"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "clauseBreaksGo" ((PCons (PVar "t") (PVar "rest")) (PVar "lineCol") (PVar "externCol") (PVar "opened")) (EBinOp "::" (EVar "t") (EApp (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "rest")) (EVar "lineCol")) (EVar "externCol")) (EVar "opened"))))
+(DTypeSig false "clauseBreak" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "RawTok"))))))
+(DFunDef false "clauseBreak" ((PVar "col") (PVar "off") PWild (PCon "True")) (EApp (EApp (EVar "RClauseNl") (EVar "col")) (EVar "off")))
+(DFunDef false "clauseBreak" ((PVar "col") (PVar "off") (PVar "externCol") (PCon "False")) (EApp (EApp (EApp (EVar "RClauseOpen") (EVar "col")) (EVar "off")) (EVar "externCol")))
 (DTypeSig false "startsWithBind" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyCon "Bool")))
 (DFunDef false "startsWithBind" ((PCons (PCon "RTok" (PCon "TIdent" (PLit (LString "bind"))) PWild PWild) PWild)) (EVar "True"))
 (DFunDef false "startsWithBind" (PWild) (EVar "False"))
@@ -3994,6 +4073,10 @@ collectComments s =
 (DFunDef false "layoutPairs" ((PCons (PCon "RComment" PWild PWild) (PVar "rest")) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")))
 (DFunDef false "layoutPairs" ((PCons (PCon "RNewline" (PVar "col") (PVar "off")) (PVar "rest")) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlPairs") (EVar "col")) (EVar "off")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")))
 (DFunDef false "layoutPairs" ((PCons (PCon "RClauseNl" (PVar "col") (PVar "off")) (PVar "rest")) (PVar "stack") (PVar "frames") PWild (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlPairs") (EVar "col")) (EVar "off")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "None")) (EVar "opener")))
+(DFunDef false "layoutPairs" ((PCons (PCon "RClauseOpen" (PVar "col") (PVar "off") (PVar "base")) (PVar "rest")) (PVar "stack") (PVar "frames") PWild (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "clauseOpenPairs") (EVar "col")) (EVar "off")) (EVar "base")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "opener")))
+(DTypeSig false "clauseOpenPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int")))))))))))
+(DFunDef false "clauseOpenPairs" ((PVar "col") (PVar "off") (PVar "base") (PVar "rest") (PList) (PVar "frames") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlPairs") (EVar "col")) (EVar "off")) (EVar "rest")) (EListLit)) (EVar "frames")) (EVar "None")) (EVar "opener")))
+(DFunDef false "clauseOpenPairs" ((PVar "col") (PVar "off") (PVar "base") (PVar "rest") (PCons (PVar "top") (PVar "tl")) (PVar "frames") (PVar "opener")) (EIf (EBinOp ">" (EVar "top") (EVar "base")) (EBinOp "::" (ETuple (EVar "TNewline") (EVar "off") (EVar "off")) (EBinOp "::" (ETuple (EVar "TDedent") (EVar "off") (EVar "off")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "clauseOpenPairs") (EVar "col")) (EVar "off")) (EVar "base")) (EVar "rest")) (EVar "tl")) (EApp (EVar "dropFrame") (EVar "frames"))) (EVar "opener")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlPairs") (EVar "col")) (EVar "off")) (EVar "rest")) (EBinOp "::" (EVar "top") (EVar "tl"))) (EVar "frames")) (EVar "None")) (EVar "opener")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "flushSepPairs" (TyFun (TyCon "Token") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int")))))))))))
 (DFunDef false "flushSepPairs" ((PVar "t") (PVar "s") (PVar "e") (PVar "rest") (PVar "stack") (PList) (PVar "opener")) (EBinOp "::" (ETuple (EVar "t") (EVar "s") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EVar "rest")) (EVar "stack")) (EListLit)) (EApp (EVar "Some") (EVar "t"))) (EVar "opener"))))
 (DFunDef false "flushSepPairs" ((PVar "t") (PVar "s") (PVar "e") (PVar "rest") (PVar "stack") (PCons (PCon "BracketFrame" (PVar "f") (PVar "saved")) (PVar "fs")) (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "flushSepPairsGo") (EVar "t")) (EVar "s")) (EVar "e")) (EVar "rest")) (EVar "stack")) (EVar "f")) (EBinOp "::" (EApp (EApp (EVar "BracketFrame") (ELit (LInt 0))) (EVar "saved")) (EVar "fs"))) (EVar "opener")))
@@ -4053,6 +4136,10 @@ collectComments s =
 (DFunDef false "layoutToks" ((PCons (PCon "RComment" PWild PWild) (PVar "rest")) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")))
 (DFunDef false "layoutToks" ((PCons (PCon "RNewline" (PVar "col") PWild) (PVar "rest")) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlToks") (EVar "col")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")))
 (DFunDef false "layoutToks" ((PCons (PCon "RClauseNl" (PVar "col") PWild) (PVar "rest")) (PVar "stack") (PVar "frames") PWild (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlToks") (EVar "col")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "TNewline")) (EVar "opener")))
+(DFunDef false "layoutToks" ((PCons (PCon "RClauseOpen" (PVar "col") PWild (PVar "base")) (PVar "rest")) (PVar "stack") (PVar "frames") PWild (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "clauseOpenToks") (EVar "col")) (EVar "base")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "opener")))
+(DTypeSig false "clauseOpenToks" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token")))))))))
+(DFunDef false "clauseOpenToks" ((PVar "col") (PVar "base") (PVar "rest") (PList) (PVar "frames") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlToks") (EVar "col")) (EVar "rest")) (EListLit)) (EVar "frames")) (EVar "TNewline")) (EVar "opener")))
+(DFunDef false "clauseOpenToks" ((PVar "col") (PVar "base") (PVar "rest") (PCons (PVar "top") (PVar "tl")) (PVar "frames") (PVar "opener")) (EIf (EBinOp ">" (EVar "top") (EVar "base")) (EBinOp "::" (EVar "TNewline") (EBinOp "::" (EVar "TDedent") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "clauseOpenToks") (EVar "col")) (EVar "base")) (EVar "rest")) (EVar "tl")) (EApp (EVar "dropFrame") (EVar "frames"))) (EVar "opener")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlToks") (EVar "col")) (EVar "rest")) (EBinOp "::" (EVar "top") (EVar "tl"))) (EVar "frames")) (EVar "TNewline")) (EVar "opener")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "closeAllToks" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Token"))))
 (DFunDef false "closeAllToks" ((PVar "stack")) (EBinOp "::" (EVar "TNewline") (EApp (EVar "closeDedentsToks") (EVar "stack"))))
 (DTypeSig false "closeDedentsToks" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Token"))))
@@ -4327,7 +4414,7 @@ collectComments s =
 (DFunDef false "describeToken" ((PCon "TDedent")) (ELit (LString "a dedent")))
 (DFunDef false "describeToken" ((PCon "TEof")) (ELit (LString "end of input")))
 (DFunDef false "describeToken" ((PCon "TLexError" (PVar "s"))) (EVar "s"))
-(DData Private "RawTok" () ((variant "RTok" (ConPos (TyCon "Token") (TyCon "Int") (TyCon "Int"))) (variant "RNewline" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RComment" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RClauseNl" (ConPos (TyCon "Int") (TyCon "Int")))) ())
+(DData Private "RawTok" () ((variant "RTok" (ConPos (TyCon "Token") (TyCon "Int") (TyCon "Int"))) (variant "RNewline" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RComment" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RClauseNl" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RClauseOpen" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
 (DTypeSig false "at" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Char"))))
 (DFunDef false "at" ((PVar "src") (PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "src")))
 (DTypeSig false "is2" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyCon "Bool")))))))
@@ -4751,6 +4838,10 @@ collectComments s =
 (DFunDef false "layout" ((PCons (PCon "RComment" PWild PWild) (PVar "rest")) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")))
 (DFunDef false "layout" ((PCons (PCon "RNewline" (PVar "col") (PVar "off")) (PVar "rest")) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNl") (EVar "col")) (EVar "off")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")))
 (DFunDef false "layout" ((PCons (PCon "RClauseNl" (PVar "col") (PVar "off")) (PVar "rest")) (PVar "stack") (PVar "frames") PWild (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNl") (EVar "col")) (EVar "off")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "None")) (EVar "opener")))
+(DFunDef false "layout" ((PCons (PCon "RClauseOpen" (PVar "col") (PVar "off") (PVar "base")) (PVar "rest")) (PVar "stack") (PVar "frames") PWild (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "clauseOpen") (EVar "col")) (EVar "off")) (EVar "base")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "opener")))
+(DTypeSig false "clauseOpen" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int")))))))))))
+(DFunDef false "clauseOpen" ((PVar "col") (PVar "off") (PVar "base") (PVar "rest") (PList) (PVar "frames") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNl") (EVar "col")) (EVar "off")) (EVar "rest")) (EListLit)) (EVar "frames")) (EVar "None")) (EVar "opener")))
+(DFunDef false "clauseOpen" ((PVar "col") (PVar "off") (PVar "base") (PVar "rest") (PCons (PVar "top") (PVar "tl")) (PVar "frames") (PVar "opener")) (EIf (EBinOp ">" (EVar "top") (EVar "base")) (EBinOp "::" (ETuple (EVar "TNewline") (EVar "off")) (EBinOp "::" (ETuple (EVar "TDedent") (EVar "off")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "clauseOpen") (EVar "col")) (EVar "off")) (EVar "base")) (EVar "rest")) (EVar "tl")) (EApp (EVar "dropFrame") (EVar "frames"))) (EVar "opener")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNl") (EVar "col")) (EVar "off")) (EVar "rest")) (EBinOp "::" (EVar "top") (EVar "tl"))) (EVar "frames")) (EVar "None")) (EVar "opener")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "flushClose" (TyFun (TyCon "Token") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int"))))))))))
 (DFunDef false "flushClose" ((PVar "t") (PVar "off") (PVar "rest") (PVar "stack") (PList) (PVar "opener")) (EBinOp "::" (ETuple (EVar "t") (EVar "off")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EVar "rest")) (EVar "stack")) (EListLit)) (EApp (EVar "Some") (EVar "t"))) (EBinOp "||" (EVar "opener") (EApp (EVar "isOpener") (EVar "t"))))))
 (DFunDef false "flushClose" ((PVar "t") (PVar "off") (PVar "rest") (PVar "stack") (PCons (PCon "BracketFrame" (PVar "f") (PVar "saved")) (PVar "fs")) PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "flushCloseGo") (EVar "t")) (EVar "off")) (EVar "rest")) (EVar "stack")) (EVar "f")) (EVar "fs")) (EVar "saved")))
@@ -4889,16 +4980,19 @@ collectComments s =
 (DTypeSig false "rawStream" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok")))))
 (DFunDef false "rawStream" ((PVar "src") (PVar "len")) (EApp (EVar "externClauseBreaks") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))))
 (DTypeSig false "externClauseBreaks" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyApp (TyCon "List") (TyCon "RawTok"))))
-(DFunDef false "externClauseBreaks" ((PVar "toks")) (EIf (EApp (EVar "hasBindLine") (EVar "toks")) (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "toks")) (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "toks") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "externClauseBreaks" ((PVar "toks")) (EIf (EApp (EVar "hasBindLine") (EVar "toks")) (EApp (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "toks")) (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1)))) (EVar "False")) (EIf (EVar "otherwise") (EVar "toks") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "hasBindLine" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyCon "Bool")))
 (DFunDef false "hasBindLine" ((PList)) (EVar "False"))
 (DFunDef false "hasBindLine" ((PCons (PCon "RNewline" PWild PWild) (PCons (PCon "RTok" (PCon "TIdent" (PLit (LString "bind"))) PWild PWild) PWild))) (EVar "True"))
 (DFunDef false "hasBindLine" ((PCons PWild (PVar "rest"))) (EApp (EVar "hasBindLine") (EVar "rest")))
-(DTypeSig false "clauseBreaksGo" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))
-(DFunDef false "clauseBreaksGo" ((PList) PWild PWild) (EListLit))
-(DFunDef false "clauseBreaksGo" ((PCons (PCon "RTok" (PCon "TExtern") (PVar "s") (PVar "e")) (PVar "rest")) (PVar "lineCol") PWild) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "TExtern")) (EVar "s")) (EVar "e")) (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "rest")) (EVar "lineCol")) (EVar "lineCol"))))
-(DFunDef false "clauseBreaksGo" ((PCons (PCon "RNewline" (PVar "col") (PVar "off")) (PVar "rest")) PWild (PVar "externCol")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "externCol") (ELit (LInt 0))) (EBinOp ">" (EVar "col") (EVar "externCol"))) (EApp (EVar "startsWithBind") (EVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "RClauseNl") (EVar "col")) (EVar "off")) (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "rest")) (EVar "col")) (EVar "externCol"))) (EIf (EBinOp "<=" (EVar "col") (EVar "externCol")) (EBinOp "::" (EApp (EApp (EVar "RNewline") (EVar "col")) (EVar "off")) (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "rest")) (EVar "col")) (EUnOp "-" (ELit (LInt 1))))) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EVar "RNewline") (EVar "col")) (EVar "off")) (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "rest")) (EVar "col")) (EVar "externCol"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DFunDef false "clauseBreaksGo" ((PCons (PVar "t") (PVar "rest")) (PVar "lineCol") (PVar "externCol")) (EBinOp "::" (EVar "t") (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "rest")) (EVar "lineCol")) (EVar "externCol"))))
+(DTypeSig false "clauseBreaksGo" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "RawTok")))))))
+(DFunDef false "clauseBreaksGo" ((PList) PWild PWild PWild) (EListLit))
+(DFunDef false "clauseBreaksGo" ((PCons (PCon "RTok" (PCon "TExtern") (PVar "s") (PVar "e")) (PVar "rest")) (PVar "lineCol") PWild PWild) (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "TExtern")) (EVar "s")) (EVar "e")) (EApp (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "rest")) (EVar "lineCol")) (EVar "lineCol")) (EVar "False"))))
+(DFunDef false "clauseBreaksGo" ((PCons (PCon "RNewline" (PVar "col") (PVar "off")) (PVar "rest")) PWild (PVar "externCol") (PVar "opened")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "externCol") (ELit (LInt 0))) (EBinOp ">" (EVar "col") (EVar "externCol"))) (EApp (EVar "startsWithBind") (EVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "clauseBreak") (EVar "col")) (EVar "off")) (EVar "externCol")) (EVar "opened")) (EApp (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "rest")) (EVar "col")) (EVar "externCol")) (EVar "True"))) (EIf (EBinOp "<=" (EVar "col") (EVar "externCol")) (EBinOp "::" (EApp (EApp (EVar "RNewline") (EVar "col")) (EVar "off")) (EApp (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "rest")) (EVar "col")) (EUnOp "-" (ELit (LInt 1)))) (EVar "False"))) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EVar "RNewline") (EVar "col")) (EVar "off")) (EApp (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "rest")) (EVar "col")) (EVar "externCol")) (EVar "opened"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "clauseBreaksGo" ((PCons (PVar "t") (PVar "rest")) (PVar "lineCol") (PVar "externCol") (PVar "opened")) (EBinOp "::" (EVar "t") (EApp (EApp (EApp (EApp (EVar "clauseBreaksGo") (EVar "rest")) (EVar "lineCol")) (EVar "externCol")) (EVar "opened"))))
+(DTypeSig false "clauseBreak" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "RawTok"))))))
+(DFunDef false "clauseBreak" ((PVar "col") (PVar "off") PWild (PCon "True")) (EApp (EApp (EVar "RClauseNl") (EVar "col")) (EVar "off")))
+(DFunDef false "clauseBreak" ((PVar "col") (PVar "off") (PVar "externCol") (PCon "False")) (EApp (EApp (EApp (EVar "RClauseOpen") (EVar "col")) (EVar "off")) (EVar "externCol")))
 (DTypeSig false "startsWithBind" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyCon "Bool")))
 (DFunDef false "startsWithBind" ((PCons (PCon "RTok" (PCon "TIdent" (PLit (LString "bind"))) PWild PWild) PWild)) (EVar "True"))
 (DFunDef false "startsWithBind" (PWild) (EVar "False"))
@@ -4908,6 +5002,10 @@ collectComments s =
 (DFunDef false "layoutPairs" ((PCons (PCon "RComment" PWild PWild) (PVar "rest")) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")))
 (DFunDef false "layoutPairs" ((PCons (PCon "RNewline" (PVar "col") (PVar "off")) (PVar "rest")) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlPairs") (EVar "col")) (EVar "off")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")))
 (DFunDef false "layoutPairs" ((PCons (PCon "RClauseNl" (PVar "col") (PVar "off")) (PVar "rest")) (PVar "stack") (PVar "frames") PWild (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlPairs") (EVar "col")) (EVar "off")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "None")) (EVar "opener")))
+(DFunDef false "layoutPairs" ((PCons (PCon "RClauseOpen" (PVar "col") (PVar "off") (PVar "base")) (PVar "rest")) (PVar "stack") (PVar "frames") PWild (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "clauseOpenPairs") (EVar "col")) (EVar "off")) (EVar "base")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "opener")))
+(DTypeSig false "clauseOpenPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int")))))))))))
+(DFunDef false "clauseOpenPairs" ((PVar "col") (PVar "off") (PVar "base") (PVar "rest") (PList) (PVar "frames") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlPairs") (EVar "col")) (EVar "off")) (EVar "rest")) (EListLit)) (EVar "frames")) (EVar "None")) (EVar "opener")))
+(DFunDef false "clauseOpenPairs" ((PVar "col") (PVar "off") (PVar "base") (PVar "rest") (PCons (PVar "top") (PVar "tl")) (PVar "frames") (PVar "opener")) (EIf (EBinOp ">" (EVar "top") (EVar "base")) (EBinOp "::" (ETuple (EVar "TNewline") (EVar "off") (EVar "off")) (EBinOp "::" (ETuple (EVar "TDedent") (EVar "off") (EVar "off")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "clauseOpenPairs") (EVar "col")) (EVar "off")) (EVar "base")) (EVar "rest")) (EVar "tl")) (EApp (EVar "dropFrame") (EVar "frames"))) (EVar "opener")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlPairs") (EVar "col")) (EVar "off")) (EVar "rest")) (EBinOp "::" (EVar "top") (EVar "tl"))) (EVar "frames")) (EVar "None")) (EVar "opener")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "flushSepPairs" (TyFun (TyCon "Token") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int")))))))))))
 (DFunDef false "flushSepPairs" ((PVar "t") (PVar "s") (PVar "e") (PVar "rest") (PVar "stack") (PList) (PVar "opener")) (EBinOp "::" (ETuple (EVar "t") (EVar "s") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EVar "rest")) (EVar "stack")) (EListLit)) (EApp (EVar "Some") (EVar "t"))) (EVar "opener"))))
 (DFunDef false "flushSepPairs" ((PVar "t") (PVar "s") (PVar "e") (PVar "rest") (PVar "stack") (PCons (PCon "BracketFrame" (PVar "f") (PVar "saved")) (PVar "fs")) (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "flushSepPairsGo") (EVar "t")) (EVar "s")) (EVar "e")) (EVar "rest")) (EVar "stack")) (EVar "f")) (EBinOp "::" (EApp (EApp (EVar "BracketFrame") (ELit (LInt 0))) (EVar "saved")) (EVar "fs"))) (EVar "opener")))
@@ -4967,6 +5065,10 @@ collectComments s =
 (DFunDef false "layoutToks" ((PCons (PCon "RComment" PWild PWild) (PVar "rest")) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutToks") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")))
 (DFunDef false "layoutToks" ((PCons (PCon "RNewline" (PVar "col") PWild) (PVar "rest")) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlToks") (EVar "col")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")))
 (DFunDef false "layoutToks" ((PCons (PCon "RClauseNl" (PVar "col") PWild) (PVar "rest")) (PVar "stack") (PVar "frames") PWild (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlToks") (EVar "col")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "TNewline")) (EVar "opener")))
+(DFunDef false "layoutToks" ((PCons (PCon "RClauseOpen" (PVar "col") PWild (PVar "base")) (PVar "rest")) (PVar "stack") (PVar "frames") PWild (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "clauseOpenToks") (EVar "col")) (EVar "base")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "opener")))
+(DTypeSig false "clauseOpenToks" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Token")))))))))
+(DFunDef false "clauseOpenToks" ((PVar "col") (PVar "base") (PVar "rest") (PList) (PVar "frames") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlToks") (EVar "col")) (EVar "rest")) (EListLit)) (EVar "frames")) (EVar "TNewline")) (EVar "opener")))
+(DFunDef false "clauseOpenToks" ((PVar "col") (PVar "base") (PVar "rest") (PCons (PVar "top") (PVar "tl")) (PVar "frames") (PVar "opener")) (EIf (EBinOp ">" (EVar "top") (EVar "base")) (EBinOp "::" (EVar "TNewline") (EBinOp "::" (EVar "TDedent") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "clauseOpenToks") (EVar "col")) (EVar "base")) (EVar "rest")) (EVar "tl")) (EApp (EVar "dropFrame") (EVar "frames"))) (EVar "opener")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyNlToks") (EVar "col")) (EVar "rest")) (EBinOp "::" (EVar "top") (EVar "tl"))) (EVar "frames")) (EVar "TNewline")) (EVar "opener")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "closeAllToks" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Token"))))
 (DFunDef false "closeAllToks" ((PVar "stack")) (EBinOp "::" (EVar "TNewline") (EApp (EVar "closeDedentsToks") (EVar "stack"))))
 (DTypeSig false "closeDedentsToks" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Token"))))

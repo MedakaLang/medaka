@@ -1,0 +1,12 @@
+-- extern signatures that span lines, followed by host `bind` clauses
+extern fetchSomethingWithAVeryLongName : (url : String) -> (retries : Int) -> (timeoutSeconds : Float) -> <FFI "c/libfetch", FFI "js/fetch"> String
+  bind c "fetch_something"
+  bind js "fetchSomething"
+
+extern cAdd : Int ->
+    Int ->
+    <FFI "c"> Int
+  bind c "stub_add"
+
+main : <IO> Unit
+main = println "extern bind wrapped"
