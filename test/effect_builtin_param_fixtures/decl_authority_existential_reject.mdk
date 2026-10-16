@@ -5,6 +5,6 @@ effect Web2 Product (Method : Set, Host : Prefix)
 effect Dir Prefix
 effect Keys Set
 
-data E = E (q : Authority Keys) (Unit -> <FFI, Dir q> Unit)
+data E = E (q : Authority Keys) (Unit -> <FFI "c*", Dir q> Unit)
 
 main = println 1

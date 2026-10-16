@@ -338,8 +338,8 @@ effectParamFailures =
               None
           let inferFail =
             if containsAll natText [
-              "fetch : String -> <FFI, Net \"a.com/foo\"> String",
-              "netGet : String -> <FFI, Net \"a.com/foo\"> String",
+              "fetch : String -> <FFI \"c*\", Net \"a.com/foo\"> String",
+              "netGet : String -> <FFI \"c\", Net \"a.com/foo\"> String",
             ] then
               None
             else
@@ -360,7 +360,7 @@ effectHoleSnapshot = "test/snapshots/diff_fixtures_types/effect_param_hole.md"
 effectHoleWs2Src : String
 effectHoleWs2Src = unlines [
   "effect Net Prefix",
-  "extern netGet : (url : String) -> <FFI, Net url> String",
+  "extern netGet : (url : String) -> <FFI \"c\", Net url> String",
   "fetch _ =",
   "  let dest = \"a.com/foo\"",
   "  netGet dest",
@@ -371,8 +371,8 @@ effectHoleWs2Src = unlines [
 effectHoleRejectSiblingSrc : String
 effectHoleRejectSiblingSrc = unlines [
   "effect Net Prefix",
-  "extern netGet : (url : String) -> <FFI, Net url> String",
-  "fetch : Unit -> <FFI, Net \"a.com/*\"> String",
+  "extern netGet : (url : String) -> <FFI \"c\", Net url> String",
+  "fetch : Unit -> <FFI \"c*\", Net \"a.com/*\"> String",
   "fetch _ = netGet \"a.com.evil.com/x\"",
   "main : <IO> Unit",
   "main = println \"x\"",
@@ -381,8 +381,8 @@ effectHoleRejectSiblingSrc = unlines [
 effectHoleRejectComputedSrc : String
 effectHoleRejectComputedSrc = unlines [
   "effect Net Prefix",
-  "extern netGet : (url : String) -> <FFI, Net url> String",
-  "fetch : String -> <FFI, Net \"a.com/*\"> String",
+  "extern netGet : (url : String) -> <FFI \"c\", Net url> String",
+  "fetch : String -> <FFI \"c*\", Net \"a.com/*\"> String",
   "fetch url = netGet url",
   "main : <IO> Unit",
   "main = println \"x\"",
@@ -391,8 +391,8 @@ effectHoleRejectComputedSrc = unlines [
 effectHoleRejectOuterComputedSrc : String
 effectHoleRejectOuterComputedSrc = unlines [
   "effect Net Prefix",
-  "extern netGet : (url : String) -> <FFI, Net url> String",
-  "fetch : String -> <FFI, Net \"a.com/*\"> String",
+  "extern netGet : (url : String) -> <FFI \"c\", Net url> String",
+  "fetch : String -> <FFI \"c*\", Net \"a.com/*\"> String",
   "fetch url =",
   "  let dest = url",
   "  netGet dest",
@@ -439,8 +439,8 @@ effectHoleFailures =
               None
           let inferFail =
             if containsAll natText [
-              "netGet : (url : String) -> <FFI, Net url> String",
-              "fetch : Unit -> <FFI, Net \"a.com/*\"> String",
+              "netGet : (url : String) -> <FFI \"c\", Net url> String",
+              "fetch : Unit -> <FFI \"c*\", Net \"a.com/*\"> String",
             ] then
               None
             else
@@ -502,7 +502,9 @@ effectHoleWs2Check host rt core f = match boundedVerb host [rt, core, f]
       None =>
         let text =
           chompNewlines (unlines (sort (lines (stripUnitAutoPrint out))))
-        if contains "fetch : a -> <FFI, Net \"a.com/foo\"> String" text then
+        if contains
+          "fetch : a -> <FFI \"c\", Net \"a.com/foo\"> String"
+          text then
           None
         else
           Some "WS-2: outer-let row not recovered"

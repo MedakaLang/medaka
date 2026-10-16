@@ -4,25 +4,25 @@
 effect Web Product (Host : Prefix, Method : Set)
 effect P Product (X : Set, Y : Set)
 
-extern getX : Unit -> <FFI, Web Host="a.com/x/*" Method={"GET"}> Unit
-extern postX : Unit -> <FFI, Web Host="a.com/x/*" Method={"POST"}> Unit
+extern getX : Unit -> <FFI "c", Web Host="a.com/x/*" Method={"GET"}> Unit
+extern postX : Unit -> <FFI "c", Web Host="a.com/x/*" Method={"POST"}> Unit
 
-h : Unit -> <FFI, Web Host="a.com/*" Method={"GET"}, Web Host="a.com/x/*" Method={"POST"}> Unit
+h : Unit -> <FFI "c*", Web Host="a.com/*" Method={"GET"}, Web Host="a.com/x/*" Method={"POST"}> Unit
 h _ =
   let _ = getX ()
   postX ()
 
-extern f1 : Unit -> <FFI, P X={"1"} Y={"1"}> Unit
-extern f2 : Unit -> <FFI, P X={"2"} Y={"1"}> Unit
-extern f3 : Unit -> <FFI, P X={"1"} Y={"2"}> Unit
+extern f1 : Unit -> <FFI "c", P X={"1"} Y={"1"}> Unit
+extern f2 : Unit -> <FFI "c", P X={"2"} Y={"1"}> Unit
+extern f3 : Unit -> <FFI "c", P X={"1"} Y={"2"}> Unit
 
-hA : Unit -> <FFI, P X={"1"} Y={"1", "2"}, P X={"2"} Y={"1"}> Unit
+hA : Unit -> <FFI "c*", P X={"1"} Y={"1", "2"}, P X={"2"} Y={"1"}> Unit
 hA _ =
   let _ = f1 ()
   let _ = f3 ()
   f2 ()
 
-hB : Unit -> <FFI, P X={"1"} Y={"1", "2"}, P X={"2"} Y={"1"}> Unit
+hB : Unit -> <FFI "c*", P X={"1"} Y={"1", "2"}, P X={"2"} Y={"1"}> Unit
 hB _ =
   let _ = f1 ()
   let _ = f2 ()

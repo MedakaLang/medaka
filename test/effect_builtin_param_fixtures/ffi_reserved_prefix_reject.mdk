@@ -15,7 +15,7 @@
 -- case; this one is an unconditional namespace ban, with no signature test and
 -- no catalog-name exemption -- the catalog holds no `mdk_`-prefixed row, so the
 -- two rules cannot collide.
-extern mdk_nil : Unit -> <FFI> Int
+extern mdk_nil : Unit -> <FFI "c"> Int
 
-main : <IO, FFI> Unit
+main : <IO, FFI "c*"> Unit
 main = println (mdk_nil ())

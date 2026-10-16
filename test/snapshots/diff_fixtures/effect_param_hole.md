@@ -15,13 +15,13 @@ stages=TOKENS,DESUGAR,MARK
 -- both rejected) is exercised by the companion gate diff_compiler_effect_hole.sh.
 effect Net Prefix
 
-extern netGet : (url : String) -> <FFI, Net url> String
+extern netGet : (url : String) -> <FFI "c", Net url> String
 
 -- α("a.com/foo") = Known "a.com/foo"; admitted by the wildcard <Net "a.com/*">.
 -- `fetch` is a function (unforced closure) so the extern netGet is never
 -- actually evaluated — the fixture exercises the front-end (parse + α + subsume),
 -- not the runtime, exactly like effect_param.mdk.
-fetch : Unit -> <Net "a.com/*", FFI> String
+fetch : Unit -> <Net "a.com/*", FFI "c*"> String
 fetch _ = netGet "a.com/foo"
 
 main : <IO> Unit
@@ -43,6 +43,7 @@ RPAREN
 ARROW
 LT
 UPPER "FFI"
+STRING "c"
 COMMA
 UPPER "Net"
 IDENT "url"
@@ -58,6 +59,7 @@ UPPER "Net"
 STRING "a.com/*"
 COMMA
 UPPER "FFI"
+STRING "c*"
 GT
 UPPER "String"
 NEWLINE
@@ -83,15 +85,15 @@ NEWLINE
 EOF
 # DESUGAR
 (DEffect false "Net" (Some "Prefix") ())
-(DExtern false "netGet" (TyFun (TyNamed "url" (TyCon "String")) (TyEffect ("FFI" (atom "Net" (name "url"))) None (TyCon "String"))))
-(DTypeSig false "fetch" (TyFun (TyCon "Unit") (TyEffect ((atom "Net" "a.com/*") "FFI") None (TyCon "String"))))
+(DExtern false "netGet" (TyFun (TyNamed "url" (TyCon "String")) (TyEffect ((atom "FFI" "c") (atom "Net" (name "url"))) None (TyCon "String"))))
+(DTypeSig false "fetch" (TyFun (TyCon "Unit") (TyEffect ((atom "Net" "a.com/*") (atom "FFI" "c*")) None (TyCon "String"))))
 (DFunDef false "fetch" (PWild) (EApp (EVar "netGet") (ELit (LString "a.com/foo"))))
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))
 (DFunDef false "main" () (EApp (EVar "println") (ELit (LString "effect hole ok"))))
 # MARK
 (DEffect false "Net" (Some "Prefix") ())
-(DExtern false "netGet" (TyFun (TyNamed "url" (TyCon "String")) (TyEffect ("FFI" (atom "Net" (name "url"))) None (TyCon "String"))))
-(DTypeSig false "fetch" (TyFun (TyCon "Unit") (TyEffect ((atom "Net" "a.com/*") "FFI") None (TyCon "String"))))
+(DExtern false "netGet" (TyFun (TyNamed "url" (TyCon "String")) (TyEffect ((atom "FFI" "c") (atom "Net" (name "url"))) None (TyCon "String"))))
+(DTypeSig false "fetch" (TyFun (TyCon "Unit") (TyEffect ((atom "Net" "a.com/*") (atom "FFI" "c*")) None (TyCon "String"))))
 (DFunDef false "fetch" (PWild) (EApp (EVar "netGet") (ELit (LString "a.com/foo"))))
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))
 (DFunDef false "main" () (EApp (EDictApp "println") (ELit (LString "effect hole ok"))))

@@ -1,6 +1,6 @@
 -- A foreign function spelled like the stdlib's `fs.stat`.
 export
-extern stat : Int -> <FFI> Int
+extern stat : Int -> <FFI "c"> Int
 
 export
 twice : Int -> Int

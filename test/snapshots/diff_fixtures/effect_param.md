@@ -16,9 +16,9 @@ stages=TOKENS,DESUGAR,MARK
 effect Net Prefix
 effect Stdout
 
-extern netGet : String -> <FFI, Net "a.com/foo"> String
+extern netGet : String -> <FFI "c", Net "a.com/foo"> String
 
-fetch : String -> <Net "a.com/foo", FFI> String
+fetch : String -> <Net "a.com/foo", FFI "c*"> String
 fetch path = netGet path
 
 data Async (e : Effect) a = Done a | Suspend (Unit -> <e> Async e a)
@@ -72,6 +72,7 @@ UPPER "String"
 ARROW
 LT
 UPPER "FFI"
+STRING "c"
 COMMA
 UPPER "Net"
 STRING "a.com/foo"
@@ -87,6 +88,7 @@ UPPER "Net"
 STRING "a.com/foo"
 COMMA
 UPPER "FFI"
+STRING "c*"
 GT
 UPPER "String"
 NEWLINE
@@ -313,8 +315,8 @@ EOF
 # DESUGAR
 (DEffect false "Net" (Some "Prefix") ())
 (DEffect false "Stdout" None ())
-(DExtern false "netGet" (TyFun (TyCon "String") (TyEffect ("FFI" (atom "Net" "a.com/foo")) None (TyCon "String"))))
-(DTypeSig false "fetch" (TyFun (TyCon "String") (TyEffect ((atom "Net" "a.com/foo") "FFI") None (TyCon "String"))))
+(DExtern false "netGet" (TyFun (TyCon "String") (TyEffect ((atom "FFI" "c") (atom "Net" "a.com/foo")) None (TyCon "String"))))
+(DTypeSig false "fetch" (TyFun (TyCon "String") (TyEffect ((atom "Net" "a.com/foo") (atom "FFI" "c*")) None (TyCon "String"))))
 (DFunDef false "fetch" ((PVar "path")) (EApp (EVar "netGet") (EVar "path")))
 (DData Private "Async" ("e" "a") ((variant "Done" (ConPos (TyVar "a"))) (variant "Suspend" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))))))) ())
 (DTypeSig false "runAsync" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a")) (TyEffect () (Some "e") (TyVar "a"))))
@@ -333,8 +335,8 @@ EOF
 # MARK
 (DEffect false "Net" (Some "Prefix") ())
 (DEffect false "Stdout" None ())
-(DExtern false "netGet" (TyFun (TyCon "String") (TyEffect ("FFI" (atom "Net" "a.com/foo")) None (TyCon "String"))))
-(DTypeSig false "fetch" (TyFun (TyCon "String") (TyEffect ((atom "Net" "a.com/foo") "FFI") None (TyCon "String"))))
+(DExtern false "netGet" (TyFun (TyCon "String") (TyEffect ((atom "FFI" "c") (atom "Net" "a.com/foo")) None (TyCon "String"))))
+(DTypeSig false "fetch" (TyFun (TyCon "String") (TyEffect ((atom "Net" "a.com/foo") (atom "FFI" "c*")) None (TyCon "String"))))
 (DFunDef false "fetch" ((PVar "path")) (EApp (EVar "netGet") (EVar "path")))
 (DData Private "Async" ("e" "a") ((variant "Done" (ConPos (TyVar "a"))) (variant "Suspend" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))))))) ())
 (DTypeSig false "runAsync" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a")) (TyEffect () (Some "e") (TyVar "a"))))

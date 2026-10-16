@@ -19,9 +19,9 @@
 -- FFI-ABI.md section 1 crossable set and the row names `FFI`, so routing this
 -- declaration through the crossable and label guards instead of rejecting it
 -- would change nothing at all.  That is why this is its own rule.
-extern log : String -> <FFI "mylog"> Unit
+extern log : String -> <FFI "c/mylog"> Unit
 
-main : <IO, FFI "mylog"> Unit
+main : <IO, FFI "c/mylog"> Unit
 main =
   let _ = log "hello from my C logger"
   println "done"

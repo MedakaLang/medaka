@@ -5,9 +5,9 @@ effect Http Product (Host : Prefix, Method : Set)
 
 extern request : (host : String) ->
   (method : String) ->
-  <FFI, Http Host=host Method=method> Int
+  <FFI "c", Http Host=host Method=method> Int
 
-get : String -> <FFI, Http Host="api.example.com/*" Method={"GET"}> Int
+get : String -> <FFI "c*", Http Host="api.example.com/*" Method={"GET"}> Int
 get m = request "api.example.com/users" m
 
 main : <IO> Unit

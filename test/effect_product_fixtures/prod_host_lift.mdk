@@ -5,9 +5,9 @@
 -- annotations ergonomic under an opt-in product Net.
 effect Net Product (Host : Prefix, Method : Set)
 
-extern fetch : String -> <FFI, Net "idp.example.com/api/*"> String
+extern fetch : String -> <FFI "c", Net "idp.example.com/api/*"> String
 
-call : Unit -> <Net Host="idp.example.com/*", FFI> String
+call : Unit -> <Net Host="idp.example.com/*", FFI "c*"> String
 call _ = fetch "x"
 
 main : <IO> Unit

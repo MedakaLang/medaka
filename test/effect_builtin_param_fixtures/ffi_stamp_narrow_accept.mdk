@@ -1,14 +1,14 @@
 -- F1 (epic #2070): a NARROWER user-declared extern carrying its own
 -- Prefix-domain param.  `FFI` is WRITTEN alongside that param —
--- `<FFI, Net "idp.example.com/*">` — because nothing joins it in silently any
+-- `<FFI "c*", Net "idp.example.com/*">` — because nothing joins it in silently any
 -- more; the row naming only `Net` is a declaration error, pinned by the
 -- byte-identical-but-for-that-label ffi_stamp_missing_reject.mdk.  A caller
 -- bounded at the SAME row admits it ⇒ ACCEPT.
 effect Net Prefix
 
-extern ffiFetch : String -> <FFI, Net "idp.example.com/*"> String
+extern ffiFetch : String -> <FFI "c", Net "idp.example.com/*"> String
 
-wrapFetch : String -> <FFI, Net "idp.example.com/*"> String
+wrapFetch : String -> <FFI "c*", Net "idp.example.com/*"> String
 wrapFetch x = ffiFetch x
 
 main : <IO> Unit

@@ -3229,7 +3229,7 @@ esac
 #     — and `build` must agree (exit 1, no binary), the same shape as leg 4's
 #     agreement check.
 cat > "$TMP/ffimod.mdk" <<'EOF'
-export extern bad : List Int -> <FFI> Int
+export extern bad : List Int -> <FFI "c"> Int
 EOF
 cat > "$TMP/ffiuse.mdk" <<'EOF'
 import ffimod.{bad}

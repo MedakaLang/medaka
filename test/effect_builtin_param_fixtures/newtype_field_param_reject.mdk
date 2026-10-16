@@ -4,6 +4,6 @@ effect Web2 Product (Method : Set, Host : Prefix)
 effect Dir Prefix
 effect Keys Set
 
-newtype M = M (Unit -> <FFI, Web1 Host="a.com/*" Host="b.com/*"> Unit)
+newtype M = M (Unit -> <FFI "c*", Web1 Host="a.com/*" Host="b.com/*"> Unit)
 
 main = println 1

@@ -5,11 +5,11 @@
 -- literal says nothing about it and a missing axis means top.
 effect Db Product (Table : Prefix, Op : Set)
 
-extern query : String -> <FFI, Db "users/*"> String
+extern query : String -> <FFI "c", Db "users/*"> String
 
-extern mutate : String -> <FFI, Db Table="users/active" Op={"write"}> String
+extern mutate : String -> <FFI "c", Db Table="users/active" Op={"write"}> String
 
-run : Unit -> <Db Table="users/*", FFI> String
+run : Unit -> <Db Table="users/*", FFI "c*"> String
 run _ = query (mutate "x")
 
 main : <IO> Unit
