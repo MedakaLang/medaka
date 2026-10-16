@@ -71,7 +71,13 @@ import driver.loader.{
   readSource,
 }
 import driver.build_cmd.{readPreludeFile, envOr, defaultMedakaRoot}
-import types.typecheck.{elaborateModules, TcDiag(..), tcDiagGoalKey}
+import types.typecheck.{
+  elaborateModules,
+  elaborateModulesWithSchemes,
+  TcDiag(..),
+  tcDiagGoalKey,
+}
+import driver.main_autoprint.{valueMainCandidate}
 import types.route_key.{withEvidencePreserved}
 import types.private_mangle.{mangleCtorCollisionsPair}
 import frontend.marker.{declRefs}
@@ -781,7 +787,13 @@ elaborateFor rsrc csrc _target _roots mods exempt False _ =
   let runtimeDecls = desugaredPrelude rsrc
   let coreDecls = desugaredPrelude csrc
   let rawModules = desugaredModPairs mods
-  match elaborateModules runtimeDecls coreDecls rawModules
+  let (elaborated, _, _) =
+    elaborateModulesWithSchemes
+      (valueMainCandidate coreDecls rawModules)
+      runtimeDecls
+      coreDecls
+      rawModules
+  match elaborated
     (coreE, modulesE, perModule, _, _, _) => (
       gateOfPerModule exempt runtimeDecls coreDecls mods perModule,
       PreparedPair

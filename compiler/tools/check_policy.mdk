@@ -326,14 +326,18 @@ public export data EntryAnalysis = EntryAnalysis {
   eaAutoPrintCall : Option Scheme,
 }
 
+-- [valueMain] is the drive's value-main candidate: a caller that reports the
+-- analysis' diagnostics passes `valueMainCandidate`, so they carry a value
+-- `main`'s auto-print obligation.
 export
-analyzeProgram : List Decl ->
+analyzeProgram : Bool ->
+  List Decl ->
   List Decl ->
   List (String, List Decl) ->
   EntryAnalysis
-analyzeProgram rtD coreD modsD =
+analyzeProgram valueMain rtD coreD modsD =
   let (elaborated, preludeSchemes, ownSchemes) =
-    elaborateModulesWithSchemes rtD coreD modsD
+    elaborateModulesWithSchemes valueMain rtD coreD modsD
   let ops = lastInvocationOps ()
   let autoPrintCall =
     if shouldAutoPrintMain coreD modsD then

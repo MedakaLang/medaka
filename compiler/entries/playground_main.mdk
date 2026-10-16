@@ -25,10 +25,10 @@
 -- HOW MANY TIMES IT RUNS (S2/#2442 — this line used to read "ONCE" and was wrong).
 -- Per invocation, over the user's program:
 --   `analyze` — parsed + loaded ONCE (`run`'s `loadProgramFilesLocatedCachedE`, threaded downstream),
---     typechecked ONCE (`analyzeFrom`/`analyzeProject`); PLUS one further check of
---     the SYNTHETIC auto-print wrap (`underivedMainDiags`) on the bare-value mains
---     that trigger it, which is a different program and not a repeat of the same
---     work.
+--     typechecked ONCE (`analyzeFrom`/`analyzeProject`), a drive that also judges
+--     a bare-value main's auto-print `Display` obligation; PLUS one further check
+--     of the SYNTHETIC async wrap (`underivedMainDiags`) on the `Async` mains that
+--     trigger it, which is a different program and not a repeat of the same work.
 --     Prelude parsing+desugaring goes through the process-wide content-keyed
 --     `desugaredPrelude` memo (`frontend/desugar_cache.mdk`) on BOTH arms —
 --     `analyzeFrom` on the single-module arm, `analyzeProject` on the
@@ -179,7 +179,7 @@ import backend.emit_plan.{buildEmitPlanReached}
 --
 -- `analyze` (#2442) is `compile` minus the emit tail: it runs the IDENTICAL
 -- diagnostic-producing logic — the same analyzeLocated/analyzeProject route, the
--- same main-shape guard, the same `underivedMainDiags` — and stops where `compile`
+-- same main-shape guard, the same async `underivedMainDiags` — and stops where `compile`
 -- would call `runEmit`.  It exists because the editor's live-squiggle path
 -- (playground/language-worker.js) throws the WAT away: on a clean one-liner, 596ms
 -- of a 769ms `compile` was codegen nobody read.  The `emit` flag threaded through
@@ -531,11 +531,11 @@ mainShapeError decls = match findMainFunDef decls
 --
 -- COMPOSITE-MAIN AUTO-PRINT (design §10, single-process in-browser path): a bare
 -- non-Unit VALUE main is rewritten `main = <e>` → `main = println <e>` (so composite
--- mains no longer crash the emitter); a bare underived-ADT main surfaces the clean
--- `No impl of Display …` diagnostic (via the __MEDAKA_DIAGNOSTICS__ marker, NOT the WAT
--- marker).  A Unit/Async main is unchanged.
--- `underivedMainDiags` below is a DIAGNOSTIC, not part of emit, so it runs in
--- `analyze` mode too; only the `finishClean` tail is mode-dependent.
+-- mains no longer crash the emitter).  A bare underived-ADT main never reaches here:
+-- the analyze drive posed the wrap's `Display` obligation and reported it.  A
+-- Unit/Async main is unchanged.
+-- The async branch's `underivedMainDiags` is a DIAGNOSTIC, not part of emit, so it
+-- runs in `analyze` mode too; only the `finishClean` tail is mode-dependent.
 doEmit : Bool ->
   String ->
   String ->
@@ -558,12 +558,14 @@ doEmit emit rsrc csrc tsrc entry paths mods warnTriples =
     }
   if shouldAutoPrintMain core modules then
     -- coreW carries the wrap's prelude-pinned callee (autoPrintPinCore, #2185).
-    let coreW = autoPrintPinCore core
-    let modulesW = autoPrintWrapModules modules
-    match underivedMainDiags rt coreW modulesW
-      [] => finishClean emit (written True) paths warnTriples rt coreW modulesW
-      errs =>
-        emitDiagnostics (cjAllToJson [(entry, tsrc, map diagOfTypeError errs)])
+    finishClean
+      emit
+      (written True)
+      paths
+      warnTriples
+      rt
+      (autoPrintPinCore core)
+      (autoPrintWrapModules modules)
   else match asyncMainShapeError modules
     -- An `Async` main is driven by the sequential `runAsync`: the browser build
     -- has no clock host-imports (see wasm_emit_modules_main).
@@ -641,7 +643,7 @@ finishClean : Bool ->
   List (String, List Decl) ->
   <IO> Unit
 finishClean emit written paths warnTriples runtimeDecls coreDecls modules =
-  let analysis = analyzeProgram runtimeDecls coreDecls modules
+  let analysis = analyzeProgram False runtimeDecls coreDecls modules
   match targetRefusalOf written analysis
     Some d => emitDiagnostics (cjAllToJson (withRefusal written d warnTriples))
     None =>

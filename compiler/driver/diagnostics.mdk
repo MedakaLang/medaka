@@ -65,7 +65,7 @@ import frontend.marker.{
 }
 import types.repr.{Scheme}
 import types.typecheck.{
-  checkOneDiagsK, checkOneDiagsLinesK, checkModulesDiagsChain, chainFullKey, checkModulesK,
+  checkOneDiagsK, checkOneDiagsLinesK, checkModulesDiagsChainFor, chainFullKey, checkModulesK,
   entryOwnSchemes, dropModSchemes, ModDiags, setCoherenceUserDecls,
   setStdlibOwnership, TcDiag(..), tcMsg,
   -- #2738: the importer peer of `preludeStandaloneShadows`.  It lives in the
@@ -97,12 +97,7 @@ import driver.loader.{
   importModId,
 }
 import support.path.{dirOf}
-import driver.main_autoprint.{
-  shouldAutoPrintMain,
-  autoPrintWrapModules,
-  autoPrintPinCore,
-  underivedMainDiags,
-}
+import driver.main_autoprint.{valueMainCandidate}
 import support.util.{
   joinNl,
   listLen,
@@ -907,7 +902,8 @@ analyzeFrom exportsFor modName runtimeSrc coreSrc raw internalGuard =
   fst
     (analyzeFromBy
       (preludeKey rt core up =>
-        let (tcErrs, tcWarns) = checkOneDiagsK preludeKey rt core up
+        let (tcErrs, tcWarns) =
+          checkOneDiagsK (valueMainCandidate core [up]) preludeKey rt core up
         ([], tcErrs, tcWarns))
       exportsFor
       modName
@@ -918,9 +914,9 @@ analyzeFrom exportsFor modName runtimeSrc coreSrc raw internalGuard =
 
 -- `analyzeFrom` plus the entry's rendered `name : scheme` lines from the SAME
 -- typecheck drive, for the one caller that prints them (`checkRoute`'s
--- single-file arm).  The lines are rendered inside that drive, before the
--- auto-print obligation drive or a target check can run: a scheme rendered
--- after another elaboration can name its type variables differently (#4053).
+-- single-file arm).  The lines are rendered inside that drive, before a target
+-- check can run: a scheme rendered after another elaboration can name its type
+-- variables differently (#4053).
 -- Every other caller uses `analyzeFrom`, which does not render them.
 export
 analyzeFromDump : (List String -> <e> List (String, List String)) ->
@@ -932,7 +928,8 @@ analyzeFromDump : (List String -> <e> List (String, List String)) ->
   <e> (List Diag, List String)
 analyzeFromDump exportsFor modName runtimeSrc coreSrc raw internalGuard =
   analyzeFromBy
-    checkOneDiagsLinesK
+    (preludeKey rt core up =>
+      checkOneDiagsLinesK (valueMainCandidate core [up]) preludeKey rt core up)
     exportsFor
     modName
     runtimeSrc
@@ -1023,30 +1020,13 @@ analyzeSurface exportsFor modName runtimeSrc coreSrc raw internalGuard =
     surfacePreludeKey = preludeKey,
   }
 
--- The surface half, the typecheck half and the auto-print half, in the result
--- order every `analyzeFrom` consumer depends on.
---
--- AUTO-PRINT visibility (composite-main design §10): a bare non-Unit VALUE main
--- (`main = (Red, 5)`) is auto-printed via `Display` at emit, so its Display
--- obligation must surface in `check`/LSP/playground too — not only at `build`.
--- Mirror the emit driver's wrap+recheck: wrap `main = <e>` → `main = println <e>`
--- and re-run the check gate on the wrapped single module (underivedMainDiags).
--- Gated on shouldAutoPrintMain, which reads the `mainSchemeRef` only a typecheck
--- of the program sets, so this must run AFTER the caller's typecheck half — a
--- Unit/Async/function main and a satisfied value main then add nothing.
+-- The surface half and the typecheck half, in the result order every
+-- `analyzeFrom` consumer depends on.  A value `main`'s auto-print `Display`
+-- obligation is already in the typecheck half: the drive that produced it poses
+-- it (`autoPrintWanted`, types/typecheck.mdk).
 export
 analyzeFinish : SurfaceAnalysis -> List Diag -> List Diag
-analyzeFinish s tcDiags =
-  let autoDiags = match s.resolveClean
-    True =>
-      filterNewDiags
-        tcDiags
-        (autoPrintObligationDiags
-          s.surfaceRuntimeP
-          s.surfaceCoreP
-          s.surfaceDesugared)
-    False => []
-  s.surfaceDiags ++ tcDiags ++ autoDiags
+analyzeFinish s tcDiags = s.surfaceDiags ++ tcDiags
 
 -- An elaboration's per-module `(errs, warns)` as `analyzeFrom`'s typecheck half:
 -- the same `diagOfTypeError`/`diagOfTypeWarning` conversion, errors before
@@ -1065,33 +1045,6 @@ perModuleErrs (_, (errs, _)) = errs
 perModuleWarns : (String, (List TcDiag, List TcDiag)) -> List TcDiag
 perModuleWarns (_, (_, warns)) = warns
 
--- The auto-print Display obligation for a bare non-Unit value main, as located
--- Diags (empty when the wrap doesn't fire or the obligation is satisfied).
--- underivedMainDiags re-runs the WHOLE check on the wrapped program, so it also
--- re-reports every non-auto-print error already in `tcDiags`; `filterNewDiags`
--- (at the call site) drops those, keeping only the wrap-introduced obligation.
-autoPrintObligationDiags : List Decl -> List Decl -> List Decl -> List Diag
-autoPrintObligationDiags runtimeP coreP desugared =
-  let modules = [("__main__", desugared)]
-  if shouldAutoPrintMain coreP modules then
-    map
-      diagOfTypeError
-      (underivedMainDiags
-        runtimeP
-        (autoPrintPinCore coreP)
-        (autoPrintWrapModules modules))
-  else
-    []
-
-diagMsg : Diag -> String
-diagMsg (Diag _ _ m _ _ _) = m
-
--- Keep only [news] Diags whose message isn't already present in [existing] — so
--- the auto-print re-check contributes ONLY its wrap-introduced obligation, never a
--- duplicate of an error the primary check already reported.
-filterNewDiags : List Diag -> List Diag -> List Diag
-filterNewDiags existing news =
-  filterList (d => not (anyList (e => diagMsg e == diagMsg d) existing)) news
 -- resolve over runtime + core (prelude) + target
 
 -- resolve has no per-error loc in the compiler pipeline → None.
@@ -1830,8 +1783,15 @@ typecheckPassFull runtimeP coreP preludeKey chainKey mods modPairs buckets =
     filterList ((mid, _) => not (omHasKey mid blocked)) modPairs
   -- the module-chain memo (types/typecheck.mdk): an unchanged import prefix is
   -- resumed from its snapshot, so only the modules after it are re-checked.
+  -- A value `main`'s auto-print obligation is posed by this drive, unless some
+  -- module is resolve-rejected: the entry is then not the graph's last checked
+  -- module.
+  let valueMain =
+    not (anyList (b => resolveRejected (snd b)) buckets)
+      && valueMainCandidate coreP modPairs
   let full =
-    checkModulesDiagsChain
+    checkModulesDiagsChainFor
+      valueMain
       preludeKey
       chainKey
       (map moduleStepKey checkedMods)
@@ -1888,16 +1848,6 @@ typecheckDiagsFold runtimeP coreP mods modPairs tcByMid buckets =
   -- displaced function's own signature lives there, not here), which is exactly the
   -- operand the flat path cannot have.
   let shadowGraph = ("core", runtimeP ++ coreP) :: modPairs
-  -- AUTO-PRINT visibility, multi-module peer of `analyzeFinish`'s flat-path wiring
-  -- (composite-main design §10, #2873): the graph's terminal (entry) module gets
-  -- the same auto-print Display-obligation re-check the flat path already runs,
-  -- computed once here (not per module — `shouldAutoPrintMain`/`underivedMainDiags`
-  -- read the WHOLE graph) and folded in only at the entry module below.
-  -- This re-check typechecks a synthetic program wrapping every module, so it is
-  -- skipped when any module is resolve-rejected, as `analyzeFinish` does.
-  let autoPrintDiags = match anyList (b => resolveRejected (snd b)) buckets
-    True => []
-    False => multiModuleAutoPrintDiags runtimeP coreP modPairs
   foldModuleTc
     shadowPool
     shadowGraph
@@ -1905,31 +1855,7 @@ typecheckDiagsFold runtimeP coreP mods modPairs tcByMid buckets =
     modPairs
     mods
     tcByMid
-    autoPrintDiags
     buckets
-
--- Multi-module sibling of `autoPrintObligationDiags` (the flat half, above): the
--- same auto-print Display obligation, over the graph's own module-list shape
--- instead of a synthesized singleton.  `shouldAutoPrintMain`, `autoPrintWrapModules`
--- and `underivedMainDiags` are already general over any module-list shape, so this
--- differs from the flat wrapper only in taking `modPairs` (dependency-first, entry
--- last) rather than `[("__main__", desugared)]`.  Unfiltered — the caller
--- (`foldModuleTc`) drops any duplicate of the entry module's own tc diagnostics,
--- the same job `filterNewDiags` does for the flat path.
-multiModuleAutoPrintDiags : List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  List Diag
-multiModuleAutoPrintDiags runtimeP coreP modPairs =
-  if shouldAutoPrintMain coreP modPairs then
-    map
-      diagOfTypeError
-      (underivedMainDiags
-        runtimeP
-        (autoPrintPinCore coreP)
-        (autoPrintWrapModules modPairs))
-  else
-    []
 
 -- Resolve a graph the caller has already loaded, bucketing each module's errors
 -- by its file.  The shared prefix of `projectDiagsLoaded` and
@@ -2159,11 +2085,10 @@ foldModuleTc : OrdMap Unit ->
   List (String, List Decl) ->
   List (String, String, List Decl) ->
   List (String, (List TcDiag, List TcDiag)) ->
-  List Diag ->
   List (String, List Diag) ->
   List (String, List Diag)
-foldModuleTc _ _ _ _ [] _ _ buckets = buckets
-foldModuleTc shadowPool shadowGraph oracle modPairs ((mid, path, prog) :: rest) tcByMid autoPrintDiags buckets =
+foldModuleTc _ _ _ _ [] _ buckets = buckets
+foldModuleTc shadowPool shadowGraph oracle modPairs ((mid, path, prog) :: rest) tcByMid buckets =
   let (tcErrs, tcWarns) = lookupTcDiags mid tcByMid
   let tcReported = match lookupBucket path buckets
     Some existing => not (resolveRejected existing)
@@ -2196,15 +2121,6 @@ foldModuleTc shadowPool shadowGraph oracle modPairs ((mid, path, prog) :: rest) 
     map
       (importShadowWarnToDiag mid)
       (importedStandaloneShadows shadowGraph (lookupDesugaredMod mid modPairs))
-  -- #2873: the auto-print Display obligation belongs to the TERMINAL (entry)
-  -- module only (`rest == []`) — `multiModuleAutoPrintDiags` (typecheckDiagsFold)
-  -- already computed it once for the whole graph; filter out anything that
-  -- duplicates this module's own tc diagnostics, the same job `filterNewDiags`
-  -- does for the flat path.
-  let ownTcDiags = errDiags ++ warnDiags
-  let autoPrintHere = match rest
-    [] => if tcReported then filterNewDiags ownTcDiags autoPrintDiags else []
-    _ => []
   let buckets2 =
     pushDiags
       path
@@ -2213,18 +2129,9 @@ foldModuleTc shadowPool shadowGraph oracle modPairs ((mid, path, prog) :: rest) 
         ++ shadowDiags
         ++ importShadowDiags
         ++ errDiags
-        ++ warnDiags
-        ++ autoPrintHere)
+        ++ warnDiags)
       buckets
-  foldModuleTc
-    shadowPool
-    shadowGraph
-    oracle
-    modPairs
-    rest
-    tcByMid
-    autoPrintDiags
-    buckets2
+  foldModuleTc shadowPool shadowGraph oracle modPairs rest tcByMid buckets2
 
 lookupTcDiags : String ->
   List (String, (List TcDiag, List TcDiag)) ->

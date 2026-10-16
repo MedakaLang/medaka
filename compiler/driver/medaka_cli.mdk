@@ -227,6 +227,7 @@ import driver.main_autoprint.{
   asyncWrapModules,
   asyncMainShapeError,
   shouldAutoPrintMain,
+  valueMainCandidate,
   autoPrintWrapModules,
   autoPrintPinCore,
 }
@@ -1326,6 +1327,7 @@ checkTargetRefusal rsrc csrc target mods = match !selectedProfile
       profile
       target
       (analyzeProgram
+        False
         (desugaredPrelude rsrc)
         (desugaredPrelude csrc)
         (map desugarPair mods))
@@ -3190,9 +3192,6 @@ runRunCmd argv =
               let _ = resetTypeErrorsSticky ()
               let analysis = elaborateRun rtD coreD modsD
               let (coreE, modsE, perMod, residual, _, _) = analysis.eaElab
-              -- Read the sticky flag before `analyzeFinish`: the auto-print
-              -- obligation re-check it runs typechecks a synthetic wrapped
-              -- program, whose errors would otherwise land in this read.
               let residualHit = hadTypeErrors ()
               let diags = analyzeFinish surface (tcHalfOfPerModule perMod)
               match filter diagIsError diags
@@ -3352,7 +3351,7 @@ elaborateRun : List Decl ->
   List (String, List Decl) ->
   <IO> EntryAnalysis
 elaborateRun rtD coreD modsD =
-  let analysis = analyzeProgram rtD coreD modsD
+  let analysis = analyzeProgram (valueMainCandidate coreD modsD) rtD coreD modsD
   match asyncMainShapeError modsD
     Some msg =>
       let _ = runAbort msg
@@ -3374,10 +3373,10 @@ elaborateRun rtD coreD modsD =
 -- The trees `run` evaluates for a zero-arg value `main` of a non-Unit type: the
 -- auto-print-wrapped program (driver/main_autoprint.mdk), so `run` prints the
 -- value exactly as `build`'s binary does.  Called only once the gate has
--- accepted the program, and that gate already re-checked the wrapped program's
--- `Display` obligation (`analyzeFinish` / `typecheckDiagsFold`), while
--- `mainSchemeRef` still holds the user's own `main`.  Any other `main` keeps
--- the elaboration the gate ran.
+-- accepted the program, whose drive already judged the `Display` obligation
+-- (`elaborateRun`'s value-main candidate), while `mainSchemeRef` still holds
+-- the user's own `main`; its own diagnostics are not read.  Any other `main`
+-- keeps the elaboration the gate ran.
 autoPrintElaborated : List Decl ->
   List Decl ->
   List (String, List Decl) ->
@@ -3984,7 +3983,8 @@ analyzeLoaded rsrc csrc target roots stdlibDir modsWithPath =
   match resDiags
     "" =>
       let _ = resetTypeErrorsSticky ()
-      let analysis = analyzeProgram rtD coreD modsD
+      let analysis =
+        analyzeProgram (valueMainCandidate coreD modsD) rtD coreD modsD
       let residualHit = hadTypeErrors ()
       let (_, _, perMod, residual, _, _) = analysis.eaElab
       match elaboratedProjectDiags rtD coreD modsWithPath modsD perMod

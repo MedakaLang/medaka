@@ -1,5 +1,5 @@
 # META
-source_lines=623
+source_lines=627
 stages=DESUGAR,MARK
 # SOURCE
 import types.effect_domain.{
@@ -330,14 +330,18 @@ public export data EntryAnalysis = EntryAnalysis {
   eaAutoPrintCall : Option Scheme,
 }
 
+-- [valueMain] is the drive's value-main candidate: a caller that reports the
+-- analysis' diagnostics passes `valueMainCandidate`, so they carry a value
+-- `main`'s auto-print obligation.
 export
-analyzeProgram : List Decl ->
+analyzeProgram : Bool ->
+  List Decl ->
   List Decl ->
   List (String, List Decl) ->
   EntryAnalysis
-analyzeProgram rtD coreD modsD =
+analyzeProgram valueMain rtD coreD modsD =
   let (elaborated, preludeSchemes, ownSchemes) =
-    elaborateModulesWithSchemes rtD coreD modsD
+    elaborateModulesWithSchemes valueMain rtD coreD modsD
   let ops = lastInvocationOps ()
   let autoPrintCall =
     if shouldAutoPrintMain coreD modsD then
@@ -688,8 +692,8 @@ joinSemiTok xs = joinWith ";" xs
 (DFunDef false "lookupValue" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupValue" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupValue") (EVar "k")) (EVar "rest"))))
 (DData Public "EntryAnalysis" () ((variant "EntryAnalysis" (ConNamed (field "eaElab" (TyCon "ElabResult")) (field "eaSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "eaOps" (TyCon "InvocationOps")) (field "eaEntryDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "eaAutoPrintCall" (TyApp (TyCon "Option") (TyCon "Scheme")))))) ())
-(DTypeSig true "analyzeProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "EntryAnalysis")))))
-(DFunDef false "analyzeProgram" ((PVar "rtD") (PVar "coreD") (PVar "modsD")) (EBlock (DoLet false false (PTuple (PVar "elaborated") (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "elaborateModulesWithSchemes") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoLet false false (PVar "ops") (EApp (EVar "lastInvocationOps") (ELit LUnit))) (DoLet false false (PVar "autoPrintCall") (EIf (EApp (EApp (EVar "shouldAutoPrintMain") (EVar "coreD")) (EVar "modsD")) (EApp (EApp (EVar "lookupAssoc") (ELit (LString "println"))) (EVar "preludeSchemes")) (EVar "None"))) (DoExpr (ERecordCreate "EntryAnalysis" ((fa "eaElab" (EVar "elaborated")) (fa "eaSchemes" (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (fa "eaOps" (EVar "ops")) (fa "eaEntryDecls" (EApp (EVar "entryModuleDecls") (EVar "modsD"))) (fa "eaAutoPrintCall" (EVar "autoPrintCall")))))))
+(DTypeSig true "analyzeProgram" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "EntryAnalysis"))))))
+(DFunDef false "analyzeProgram" ((PVar "valueMain") (PVar "rtD") (PVar "coreD") (PVar "modsD")) (EBlock (DoLet false false (PTuple (PVar "elaborated") (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithSchemes") (EVar "valueMain")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoLet false false (PVar "ops") (EApp (EVar "lastInvocationOps") (ELit LUnit))) (DoLet false false (PVar "autoPrintCall") (EIf (EApp (EApp (EVar "shouldAutoPrintMain") (EVar "coreD")) (EVar "modsD")) (EApp (EApp (EVar "lookupAssoc") (ELit (LString "println"))) (EVar "preludeSchemes")) (EVar "None"))) (DoExpr (ERecordCreate "EntryAnalysis" ((fa "eaElab" (EVar "elaborated")) (fa "eaSchemes" (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (fa "eaOps" (EVar "ops")) (fa "eaEntryDecls" (EApp (EVar "entryModuleDecls") (EVar "modsD"))) (fa "eaAutoPrintCall" (EVar "autoPrintCall")))))))
 (DTypeSig false "entryModuleDecls" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "entryModuleDecls" ((PList)) (EListLit))
 (DFunDef false "entryModuleDecls" ((PList (PTuple PWild (PVar "decls")))) (EVar "decls"))
@@ -825,8 +829,8 @@ joinSemiTok xs = joinWith ";" xs
 (DFunDef false "lookupValue" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupValue" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupValue") (EVar "k")) (EVar "rest"))))
 (DData Public "EntryAnalysis" () ((variant "EntryAnalysis" (ConNamed (field "eaElab" (TyCon "ElabResult")) (field "eaSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (field "eaOps" (TyCon "InvocationOps")) (field "eaEntryDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "eaAutoPrintCall" (TyApp (TyCon "Option") (TyCon "Scheme")))))) ())
-(DTypeSig true "analyzeProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "EntryAnalysis")))))
-(DFunDef false "analyzeProgram" ((PVar "rtD") (PVar "coreD") (PVar "modsD")) (EBlock (DoLet false false (PTuple (PVar "elaborated") (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "elaborateModulesWithSchemes") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoLet false false (PVar "ops") (EApp (EVar "lastInvocationOps") (ELit LUnit))) (DoLet false false (PVar "autoPrintCall") (EIf (EApp (EApp (EVar "shouldAutoPrintMain") (EVar "coreD")) (EVar "modsD")) (EApp (EApp (EVar "lookupAssoc") (ELit (LString "println"))) (EVar "preludeSchemes")) (EVar "None"))) (DoExpr (ERecordCreate "EntryAnalysis" ((fa "eaElab" (EVar "elaborated")) (fa "eaSchemes" (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (fa "eaOps" (EVar "ops")) (fa "eaEntryDecls" (EApp (EVar "entryModuleDecls") (EVar "modsD"))) (fa "eaAutoPrintCall" (EVar "autoPrintCall")))))))
+(DTypeSig true "analyzeProgram" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "EntryAnalysis"))))))
+(DFunDef false "analyzeProgram" ((PVar "valueMain") (PVar "rtD") (PVar "coreD") (PVar "modsD")) (EBlock (DoLet false false (PTuple (PVar "elaborated") (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithSchemes") (EVar "valueMain")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoLet false false (PVar "ops") (EApp (EVar "lastInvocationOps") (ELit LUnit))) (DoLet false false (PVar "autoPrintCall") (EIf (EApp (EApp (EVar "shouldAutoPrintMain") (EVar "coreD")) (EVar "modsD")) (EApp (EApp (EVar "lookupAssoc") (ELit (LString "println"))) (EVar "preludeSchemes")) (EVar "None"))) (DoExpr (ERecordCreate "EntryAnalysis" ((fa "eaElab" (EVar "elaborated")) (fa "eaSchemes" (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (fa "eaOps" (EVar "ops")) (fa "eaEntryDecls" (EApp (EVar "entryModuleDecls") (EVar "modsD"))) (fa "eaAutoPrintCall" (EVar "autoPrintCall")))))))
 (DTypeSig false "entryModuleDecls" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "entryModuleDecls" ((PList)) (EListLit))
 (DFunDef false "entryModuleDecls" ((PList (PTuple PWild (PVar "decls")))) (EVar "decls"))
