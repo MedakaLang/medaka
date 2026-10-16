@@ -76,6 +76,10 @@ import tools.fmt.{formatSourceChecked}
 import tools.refindex.{RefIndex, buildRefIndexProject, binderAt, usesOf, defsOf}
 import list.{sortBy}
 import frontend.ast.{
+  fieldName,
+  ifaceMethodName,
+  implMethodName,
+  letBindName,
   Decl(..),
   Ty(..),
   Loc(..),
@@ -375,9 +379,6 @@ jChildLoc name kind fallback loc =
     None => fallback
   jSymbol name kind r r []
 
-fieldName : Field -> String
-fieldName (Field n _) = n
-
 -- Outline children for the variant list of a data decl, consuming child-name
 -- `Loc`s (#331, increment 2) from `locs` in outline order.  Mirrors the old
 -- `flatMap variantSymChildren`: a nameOmitted record variant (`data X = { … }`)
@@ -416,15 +417,6 @@ zipKids fb kind [] (nm :: nms) =
   jChildLoc nm kind fb None :: zipKids fb kind [] nms
 zipKids fb kind (l :: ls) (nm :: nms) =
   jChildLoc nm kind fb l :: zipKids fb kind ls nms
-
-ifaceMethodName : IfaceMethod -> String
-ifaceMethodName (IfaceMethod n _ _ _) = n
-
-implMethodName : ImplMethod -> String
-implMethodName (ImplMethod n _ _) = n
-
-letBindName : LetBind -> String
-letBindName (LetBind n _ _ _) = n
 
 -- The outline (name, kind, clauseLike, children) for a decl, given its
 -- precomputed decl-level `range` (used for the child symbols' spans), or None for

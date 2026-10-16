@@ -1,5 +1,5 @@
 # META
-source_lines=7227
+source_lines=7225
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -20,6 +20,7 @@ stages=DESUGAR,MARK
 -- generic helpers still come from support.util; the rest is inline.
 
 import frontend.ast.{
+  letBindName,
   noBinderId,
   -- `frontend/exhaust.mdk`'s `typeCtors` is keyed by declaration identity
   -- (oracle-identity family leaf L1), so this file's three oracle consumers
@@ -1174,9 +1175,6 @@ topLevelBinders (DLetGroup _ binds) = map letBindName binds
 topLevelBinders (DInterface { methods, ... }) = map ifaceMethodNameOf methods
 topLevelBinders (DAttrib _ d) = topLevelBinders d
 topLevelBinders _ = []
-
-letBindName : LetBind -> String
-letBindName (LetBind n _ _ _) = n
 
 ifaceMethodNameOf : IfaceMethod -> String
 ifaceMethodNameOf (IfaceMethod n _ _ _) = n
@@ -7230,7 +7228,7 @@ preludeShadowFinding name loc = Finding {
   loc = loc,
 }
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "IfaceMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "noBinderId" false) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "IfaceMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
@@ -7489,8 +7487,6 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "topLevelBinders" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EVar "map") (EVar "ifaceMethodNameOf")) (EVar "methods")))
 (DFunDef false "topLevelBinders" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topLevelBinders") (EVar "d")))
 (DFunDef false "topLevelBinders" (PWild) (EListLit))
-(DTypeSig false "letBindName" (TyFun (TyCon "LetBind") (TyCon "String")))
-(DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "ifaceMethodNameOf" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
 (DFunDef false "ifaceMethodNameOf" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "foreignImportNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
@@ -9317,7 +9313,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "preludeShadowFinding" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding"))))
 (DFunDef false "preludeShadowFinding" ((PVar "name") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestPreludeShadow")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` shadows the prelude function of that name for this file only; other modules, and any `deriving` impl, keep calling the prelude one. Remove the local declaration")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "IfaceMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "noBinderId" false) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "IfaceMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
@@ -9576,8 +9572,6 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "topLevelBinders" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (EVar "ifaceMethodNameOf")) (EVar "methods")))
 (DFunDef false "topLevelBinders" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topLevelBinders") (EVar "d")))
 (DFunDef false "topLevelBinders" (PWild) (EListLit))
-(DTypeSig false "letBindName" (TyFun (TyCon "LetBind") (TyCon "String")))
-(DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "ifaceMethodNameOf" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
 (DFunDef false "ifaceMethodNameOf" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "foreignImportNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))

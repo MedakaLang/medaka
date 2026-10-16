@@ -136,7 +136,6 @@ stampNode : String -> Expr -> Expr
 stampPat : String -> Pat -> Pat
 stampRecField : String -> RecPatField -> RecPatField
 stampStmt : String -> DoStmt -> DoStmt
-stripLocE : Expr -> Expr
 toRep : String -> Expr
 typeKindedParams : List String -> List (Option KindAnn) -> List String
 unknownDerive : String -> List String -> DeriveRef -> List (String, Option Loc)

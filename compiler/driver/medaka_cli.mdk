@@ -104,7 +104,9 @@ import args.{
   usageExitCode,
   withStrictDash,
 }
-import frontend.ast.{Decl(..), Expr(..), Loc(..), Pat, LetBind(..), EvTable}
+import frontend.ast.{
+  letBindName, Decl(..), Expr(..), Loc(..), Pat, LetBind(..), EvTable
+}
 import frontend.parser.{
   parseLocated,
   parseWithPositions,
@@ -1794,9 +1796,6 @@ topLevelNames ((DExtern _ n _) :: rest) = n :: topLevelNames rest
 topLevelNames ((DLetGroup _ binds) :: rest) =
   map letBindName binds ++ topLevelNames rest
 topLevelNames (_ :: rest) = topLevelNames rest
-
-letBindName : LetBind -> String
-letBindName (LetBind n _ _ _) = n
 
 -- Re-render warning Diags LOCATED (file:L:C: + caret) to STDERR, exactly like
 -- errors (ppDiagCliSrc).  Warnings do not change the exit code (stays 0).

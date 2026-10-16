@@ -1,5 +1,5 @@
 # META
-source_lines=1933
+source_lines=1931
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -103,6 +103,7 @@ stages=DESUGAR,MARK
 -- binder-threading of typecheck.mdk's `rewriteArgScoped`.
 
 import frontend.ast.{
+  letBindName,
   Decl(..),
   Expr(..),
   Pat(..),
@@ -1348,9 +1349,6 @@ declDefNames (DLetGroup _ binds) = map letBindName binds
 declDefNames (DAttrib _ d) = declDefNames d
 declDefNames _ = []
 
-letBindName : LetBind -> String
-letBindName (LetBind n _ _ _) = n
-
 -- names exported via a `pub` DTypeSig/DExtern in this unit (so their DFunDef
 -- clauses, which parse private, still count as exported function symbols).
 pubSigNames : List Decl -> List String
@@ -1936,7 +1934,7 @@ recPatFieldVarsPM : RecPatField -> List String
 recPatFieldVarsPM (RecPatField label _ _ None) = [label]
 recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true) (mem "Route" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvId" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true) (mem "Route" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvId" true))))
 (DUse false (UseGroup ("types" "route_key") ((mem "remapEvidence" false))))
 (DUse false (UseAlias ("u64") "U64"))
 (DUse false (UseGroup ("list") ((mem "last" false))))
@@ -2186,8 +2184,6 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "declDefNames" ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds")))
 (DFunDef false "declDefNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declDefNames") (EVar "d")))
 (DFunDef false "declDefNames" (PWild) (EListLit))
-(DTypeSig false "letBindName" (TyFun (TyCon "LetBind") (TyCon "String")))
-(DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "pubSigNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "pubSigNames" ((PList)) (EListLit))
 (DFunDef false "pubSigNames" ((PCons (PCon "DTypeSig" (PCon "True") (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "pubSigNames") (EVar "rest"))))
@@ -2365,7 +2361,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "recPatFieldVarsPM" ((PCon "RecPatField" (PVar "label") PWild PWild (PCon "None"))) (EListLit (EVar "label")))
 (DFunDef false "recPatFieldVarsPM" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patVarsPM") (EVar "p")))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true) (mem "Route" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvId" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true) (mem "Route" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvId" true))))
 (DUse false (UseGroup ("types" "route_key") ((mem "remapEvidence" false))))
 (DUse false (UseAlias ("u64") "U64"))
 (DUse false (UseGroup ("list") ((mem "last" false))))
@@ -2615,8 +2611,6 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "declDefNames" ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds")))
 (DFunDef false "declDefNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declDefNames") (EVar "d")))
 (DFunDef false "declDefNames" (PWild) (EListLit))
-(DTypeSig false "letBindName" (TyFun (TyCon "LetBind") (TyCon "String")))
-(DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "pubSigNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "pubSigNames" ((PList)) (EListLit))
 (DFunDef false "pubSigNames" ((PCons (PCon "DTypeSig" (PCon "True") (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "pubSigNames") (EVar "rest"))))

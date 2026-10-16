@@ -1,5 +1,5 @@
 # META
-source_lines=15283
+source_lines=15280
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -174,6 +174,7 @@ stages=DESUGAR,MARK
 --            GC-managed under Boehm for free (aligned pointer, low bit 0).
 
 import frontend.ast.{
+  isWildPat,
   Lit(..),
   Pat(..),
   Addr(..),
@@ -13669,10 +13670,6 @@ isBinderPat (PVar _ _ _) = True
 isBinderPat (PAs _ _ _ _) = True
 isBinderPat _ = False
 
-isWildPat : Pat -> Bool
-isWildPat PWild = True
-isWildPat _ = False
-
 clauseArityC : List CClause -> Int
 clauseArityC ((CClause pats _) :: _) = listLen pats
 clauseArityC [] = 0
@@ -15286,7 +15283,7 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
   let _ = gapU e "non-nullary / multi-clause value binding"
   emitTopBindsGaps e env rest
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "BinderId" true) (mem "RecPatField" true) (mem "noDeclLoc" false) (mem "ifaceIdMatches" false) (mem "isFixedWidthHead" false) (mem "fixedWidthMask" false) (mem "isU64Head" false) (mem "isFixedIntHead" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "BinderId" true) (mem "RecPatField" true) (mem "noDeclLoc" false) (mem "ifaceIdMatches" false) (mem "isFixedWidthHead" false) (mem "fixedWidthMask" false) (mem "isU64Head" false) (mem "isFixedIntHead" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "givenNames" false) (mem "isGivenRooted" false) (mem "receiverEvidence" false) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CProgram" true) (mem "DeclFacts" false) (mem "noDeclFacts" false) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "FailSite" true) (mem "CallMode" true) (mem "CallSite" true) (mem "siteSentinelName" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "compileTree" false) (mem "canonPat" false) (mem "definedArityOf" false) (mem "ifaceWordOfKey" false) (mem "programArities" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false))))
@@ -17765,9 +17762,6 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DFunDef false "isBinderPat" ((PCon "PVar" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isBinderPat" ((PCon "PAs" PWild PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isBinderPat" (PWild) (EVar "False"))
-(DTypeSig false "isWildPat" (TyFun (TyCon "Pat") (TyCon "Bool")))
-(DFunDef false "isWildPat" ((PCon "PWild")) (EVar "True"))
-(DFunDef false "isWildPat" (PWild) (EVar "False"))
 (DTypeSig false "clauseArityC" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Int")))
 (DFunDef false "clauseArityC" ((PCons (PCon "CClause" (PVar "pats") PWild) PWild)) (EApp (EVar "listLen") (EVar "pats")))
 (DFunDef false "clauseArityC" ((PList)) (ELit (LInt 0)))
@@ -18065,7 +18059,7 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DFunDef false "emitTopBindsGaps" ((PVar "e") (PVar "env") (PCons (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) (PVar "body"))) PWild PWild) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setGapBind") (EVar "e")) (EBinOp "++" (ELit (LString "val ")) (EVar "name")))) (DoLet false false (PTuple (PVar "v") (PVar "ty")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "body"))) (DoExpr (EApp (EApp (EApp (EVar "emitTopBindsGaps") (EVar "e")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ETuple (EVar "v") (EVar "ty"))) (EVar "env"))) (EVar "rest")))))
 (DFunDef false "emitTopBindsGaps" ((PVar "e") (PVar "env") (PCons (PCon "CBind" (PVar "name") PWild PWild PWild) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setGapBind") (EVar "e")) (EBinOp "++" (ELit (LString "val ")) (EVar "name")))) (DoLet false false PWild (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "non-nullary / multi-clause value binding")))) (DoExpr (EApp (EApp (EApp (EVar "emitTopBindsGaps") (EVar "e")) (EVar "env")) (EVar "rest")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "BinderId" true) (mem "RecPatField" true) (mem "noDeclLoc" false) (mem "ifaceIdMatches" false) (mem "isFixedWidthHead" false) (mem "fixedWidthMask" false) (mem "isU64Head" false) (mem "isFixedIntHead" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "BinderId" true) (mem "RecPatField" true) (mem "noDeclLoc" false) (mem "ifaceIdMatches" false) (mem "isFixedWidthHead" false) (mem "fixedWidthMask" false) (mem "isU64Head" false) (mem "isFixedIntHead" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isBoxed64Head" false) (mem "isTaggedFixedHead" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "givenNames" false) (mem "isGivenRooted" false) (mem "receiverEvidence" false) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CProgram" true) (mem "DeclFacts" false) (mem "noDeclFacts" false) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "FailSite" true) (mem "CallMode" true) (mem "CallSite" true) (mem "siteSentinelName" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "compileTree" false) (mem "canonPat" false) (mem "definedArityOf" false) (mem "ifaceWordOfKey" false) (mem "programArities" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderOrdinal" false))))
@@ -20544,9 +20538,6 @@ emitTopBindsGaps e env ((CBind name _ _ _) :: rest) =
 (DFunDef false "isBinderPat" ((PCon "PVar" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isBinderPat" ((PCon "PAs" PWild PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isBinderPat" (PWild) (EVar "False"))
-(DTypeSig false "isWildPat" (TyFun (TyCon "Pat") (TyCon "Bool")))
-(DFunDef false "isWildPat" ((PCon "PWild")) (EVar "True"))
-(DFunDef false "isWildPat" (PWild) (EVar "False"))
 (DTypeSig false "clauseArityC" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Int")))
 (DFunDef false "clauseArityC" ((PCons (PCon "CClause" (PVar "pats") PWild) PWild)) (EApp (EVar "listLen") (EVar "pats")))
 (DFunDef false "clauseArityC" ((PList)) (ELit (LInt 0)))

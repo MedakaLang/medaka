@@ -1,5 +1,5 @@
 # META
-source_lines=3983
+source_lines=3978
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -15,6 +15,8 @@ stages=DESUGAR,MARK
 -- is a clean diff, not a rewrite).
 
 import frontend.ast.{
+  isWildPat,
+  letBindName,
   noBinderId,
   BinderId(..),
   Lit(..),
@@ -559,10 +561,6 @@ canonPat (PRec _ _ _) = PWild
 -- ── matrix predicates / column analysis ────────────────────────────────────
 allWild : List Pat -> Bool
 allWild ps = allList isWildPat ps
-
-isWildPat : Pat -> Bool
-isWildPat PWild = True
-isWildPat _ = False
 
 rowHasCon : (List Pat, Int) -> Bool
 rowHasCon ((PCon _ _) :: _, _) = True
@@ -1966,9 +1964,6 @@ noteLocalFuns acc (e@(ELetGroup binds _)) =
   acc := map letBindName binds ++ !acc
   e
 noteLocalFuns _ e = e
-
-letBindName : LetBind -> String
-letBindName (LetBind n _ _ _) = n
 
 -- ── the ONE authority on a record's field order (#1513) ──────────────────────
 -- ctor name → [field label in declared order], from every DData named-field
@@ -3986,7 +3981,7 @@ nodeTag (EMethodRef _) = "EMethodRef"
 nodeTag (EDictApp _) = "EDictApp"
 nodeTag _ = "?"
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "letBindName" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "numIntWord" false) (mem "numFloatWord" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "DeclFacts" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "obviousRuntimeType" false) (mem "withBinderRows" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "freshBinderId" false))))
@@ -4174,9 +4169,6 @@ nodeTag _ = "?"
 (DFunDef false "canonPat" ((PCon "PRec" PWild PWild PWild)) (EVar "PWild"))
 (DTypeSig false "allWild" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Bool")))
 (DFunDef false "allWild" ((PVar "ps")) (EApp (EApp (EVar "allList") (EVar "isWildPat")) (EVar "ps")))
-(DTypeSig false "isWildPat" (TyFun (TyCon "Pat") (TyCon "Bool")))
-(DFunDef false "isWildPat" ((PCon "PWild")) (EVar "True"))
-(DFunDef false "isWildPat" (PWild) (EVar "False"))
 (DTypeSig false "rowHasCon" (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")) (TyCon "Bool")))
 (DFunDef false "rowHasCon" ((PTuple (PCons (PCon "PCon" PWild PWild) PWild) PWild)) (EVar "True"))
 (DFunDef false "rowHasCon" (PWild) (EVar "False"))
@@ -4670,8 +4662,6 @@ nodeTag _ = "?"
 (DTypeSig false "noteLocalFuns" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "noteLocalFuns" ((PVar "acc") (PAs "e" (PCon "ELetGroup" (PVar "binds") PWild))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "acc")) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds")) (EUnOp "!" (EVar "acc"))))) (DoExpr (EVar "e"))))
 (DFunDef false "noteLocalFuns" (PWild (PVar "e")) (EVar "e"))
-(DTypeSig false "letBindName" (TyFun (TyCon "LetBind") (TyCon "String")))
-(DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig true "declaredRecordFieldOrders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "declaredRecordFieldOrders" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "recPatFieldOrderEntries")) (EVar "prog")))
 (DTypeSig false "recPatFieldOrderEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -5312,7 +5302,7 @@ nodeTag _ = "?"
 (DFunDef false "nodeTag" ((PCon "EDictApp" PWild)) (ELit (LString "EDictApp")))
 (DFunDef false "nodeTag" (PWild) (ELit (LString "?")))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "isWildPat" false) (mem "letBindName" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Attr" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "numIntWord" false) (mem "numFloatWord" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "DeclFacts" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false) (mem "mapProgramBinders" false) (mem "BinderSite" true) (mem "obviousRuntimeType" false) (mem "withBinderRows" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "freshBinderId" false))))
@@ -5500,9 +5490,6 @@ nodeTag _ = "?"
 (DFunDef false "canonPat" ((PCon "PRec" PWild PWild PWild)) (EVar "PWild"))
 (DTypeSig false "allWild" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Bool")))
 (DFunDef false "allWild" ((PVar "ps")) (EApp (EApp (EVar "allList") (EVar "isWildPat")) (EVar "ps")))
-(DTypeSig false "isWildPat" (TyFun (TyCon "Pat") (TyCon "Bool")))
-(DFunDef false "isWildPat" ((PCon "PWild")) (EVar "True"))
-(DFunDef false "isWildPat" (PWild) (EVar "False"))
 (DTypeSig false "rowHasCon" (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")) (TyCon "Bool")))
 (DFunDef false "rowHasCon" ((PTuple (PCons (PCon "PCon" PWild PWild) PWild) PWild)) (EVar "True"))
 (DFunDef false "rowHasCon" (PWild) (EVar "False"))
@@ -5996,8 +5983,6 @@ nodeTag _ = "?"
 (DTypeSig false "noteLocalFuns" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "noteLocalFuns" ((PVar "acc") (PAs "e" (PCon "ELetGroup" (PVar "binds") PWild))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "acc")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds")) (EUnOp "!" (EVar "acc"))))) (DoExpr (EVar "e"))))
 (DFunDef false "noteLocalFuns" (PWild (PVar "e")) (EVar "e"))
-(DTypeSig false "letBindName" (TyFun (TyCon "LetBind") (TyCon "String")))
-(DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig true "declaredRecordFieldOrders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "declaredRecordFieldOrders" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "recPatFieldOrderEntries")) (EVar "prog")))
 (DTypeSig false "recPatFieldOrderEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))

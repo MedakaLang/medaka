@@ -17,11 +17,5 @@ annotateLetGroup : List (List String) -> List LetBind -> Expr -> Expr
 annotateProgram : List Decl -> List Decl
 annotateSection : List (List String) -> Section -> Section
 annotateStmts : List (List String) -> List DoStmt -> List DoStmt
-isHint : String -> Bool
-letBindName : LetBind -> String
 paramFrames : List Pat -> List (List String)
-patBindings : Pat -> List String
-propParamName : PropParam -> String
-recFieldBindings : RecPatField -> List String
 slotIn : List String -> String -> Int -> Option Int
-startsWithAt : Array Char -> Bool

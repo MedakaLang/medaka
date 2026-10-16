@@ -1,5 +1,5 @@
 # META
-source_lines=586
+source_lines=572
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted method_marker stage.
@@ -19,6 +19,9 @@ stages=DESUGAR,MARK
 -- added incrementally for the corpus files that shadow prelude names.
 
 import frontend.ast.{
+  ifaceMethodName,
+  patBindings,
+  recFieldBindings,
   Lit(..),
   Ty(..),
   Constraint(..),
@@ -61,9 +64,6 @@ interfaceMethodNames [] = []
 interfaceMethodNames ((DInterface { methods, ... }) :: rest) =
   map ifaceMethodName methods ++ interfaceMethodNames rest
 interfaceMethodNames (_ :: rest) = interfaceMethodNames rest
-
-ifaceMethodName : IfaceMethod -> String
-ifaceMethodName (IfaceMethod n _ _ _) = n
 
 -- Names of functions whose declared signature carries a constraint (`Foo a =>`).
 constrainedFnNames : List Decl -> List String
@@ -443,20 +443,6 @@ mapLitPairVars (k, v) = collectVars k ++ collectVars v
 -- in-scope local).  Excluding such names from the rename set leaves lexical scope
 -- to resolve them, exactly as the OCaml oracle does.
 
-patBindings : Pat -> List String
-patBindings (PVar x _ _) = [x]
-patBindings (PCon _ ps) = flatMap patBindings ps
-patBindings (PCons a b) = patBindings a ++ patBindings b
-patBindings (PTuple ps) = flatMap patBindings ps
-patBindings (PList ps) = flatMap patBindings ps
-patBindings (PAs x _ _ p) = x :: patBindings p
-patBindings (PRec _ fields _) = flatMap recFieldBindings fields
-patBindings _ = []
-
-recFieldBindings : RecPatField -> List String
-recFieldBindings (RecPatField fname _ _ None) = [fname]
-recFieldBindings (RecPatField _ _ _ (Some p)) = patBindings p
-
 -- Names bound by local patterns *within* an expression tree.
 localBoundExpr : Expr -> List String
 localBoundExpr (ELam ps b) = flatMap patBindings ps ++ localBoundExpr b
@@ -589,7 +575,7 @@ markerFor preludeProg =
   let preludeConstrained = constrainedFnNames preludeProg
   prog => markWith preludeMethods preludeDroppable preludeConstrained prog
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Route" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Loc" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "ifaceMethodName" false) (mem "patBindings" false) (mem "recFieldBindings" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Route" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Loc" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "mapExpr" false) (mem "mapDecl" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omEmpty" false))))
@@ -597,8 +583,6 @@ markerFor preludeProg =
 (DFunDef false "interfaceMethodNames" ((PList)) (EListLit))
 (DFunDef false "interfaceMethodNames" ((PCons (PRec "DInterface" ((rf "methods" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "ifaceMethodName")) (EVar "methods")) (EApp (EVar "interfaceMethodNames") (EVar "rest"))))
 (DFunDef false "interfaceMethodNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "interfaceMethodNames") (EVar "rest")))
-(DTypeSig false "ifaceMethodName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
-(DFunDef false "ifaceMethodName" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "constrainedFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "constrainedFnNames" ((PList)) (EListLit))
 (DFunDef false "constrainedFnNames" ((PCons (PCon "DTypeSig" PWild (PVar "name") (PVar "ty") PWild) (PVar "rest"))) (EApp (EApp (EApp (EVar "constrainedAdd") (EVar "name")) (EVar "ty")) (EApp (EVar "constrainedFnNames") (EVar "rest"))))
@@ -771,18 +755,6 @@ markerFor preludeProg =
 (DFunDef false "interpVars" ((PCon "InterpExpr" (PVar "e"))) (EApp (EVar "collectVars") (EVar "e")))
 (DTypeSig false "mapLitPairVars" (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "mapLitPairVars" ((PTuple (PVar "k") (PVar "v"))) (EBinOp "++" (EApp (EVar "collectVars") (EVar "k")) (EApp (EVar "collectVars") (EVar "v"))))
-(DTypeSig false "patBindings" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patBindings" ((PCon "PVar" (PVar "x") PWild PWild)) (EListLit (EVar "x")))
-(DFunDef false "patBindings" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patBindings") (EVar "a")) (EApp (EVar "patBindings") (EVar "b"))))
-(DFunDef false "patBindings" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBindings") (EVar "p"))))
-(DFunDef false "patBindings" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recFieldBindings")) (EVar "fields")))
-(DFunDef false "patBindings" (PWild) (EListLit))
-(DTypeSig false "recFieldBindings" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "recFieldBindings" ((PCon "RecPatField" (PVar "fname") PWild PWild (PCon "None"))) (EListLit (EVar "fname")))
-(DFunDef false "recFieldBindings" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBindings") (EVar "p")))
 (DTypeSig false "localBoundExpr" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "localBoundExpr" ((PCon "ELam" (PVar "ps") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "patBindings")) (EVar "ps")) (EApp (EVar "localBoundExpr") (EVar "b"))))
 (DFunDef false "localBoundExpr" ((PCon "ELet" PWild PWild (PVar "p") (PVar "e1") (PVar "e2"))) (EBinOp "++" (EBinOp "++" (EApp (EVar "patBindings") (EVar "p")) (EApp (EVar "localBoundExpr") (EVar "e1"))) (EApp (EVar "localBoundExpr") (EVar "e2"))))
@@ -856,7 +828,7 @@ markerFor preludeProg =
 (DTypeSig true "markerFor" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "markerFor" ((PVar "preludeProg")) (EBlock (DoLet false false (PVar "preludeMethods") (EApp (EVar "interfaceMethodNames") (EVar "preludeProg"))) (DoLet false false (PVar "preludeDroppable") (EApp (EVar "droppablePreludeFns") (EVar "preludeProg"))) (DoLet false false (PVar "preludeConstrained") (EApp (EVar "constrainedFnNames") (EVar "preludeProg"))) (DoExpr (ELam ((PVar "prog")) (EApp (EApp (EApp (EApp (EVar "markWith") (EVar "preludeMethods")) (EVar "preludeDroppable")) (EVar "preludeConstrained")) (EVar "prog"))))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Route" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Loc" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "ifaceMethodName" false) (mem "patBindings" false) (mem "recFieldBindings" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Route" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Loc" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "mapExpr" false) (mem "mapDecl" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omEmpty" false))))
@@ -864,8 +836,6 @@ markerFor preludeProg =
 (DFunDef false "interfaceMethodNames" ((PList)) (EListLit))
 (DFunDef false "interfaceMethodNames" ((PCons (PRec "DInterface" ((rf "methods" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "ifaceMethodName")) (EVar "methods")) (EApp (EVar "interfaceMethodNames") (EVar "rest"))))
 (DFunDef false "interfaceMethodNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "interfaceMethodNames") (EVar "rest")))
-(DTypeSig false "ifaceMethodName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
-(DFunDef false "ifaceMethodName" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "constrainedFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "constrainedFnNames" ((PList)) (EListLit))
 (DFunDef false "constrainedFnNames" ((PCons (PCon "DTypeSig" PWild (PVar "name") (PVar "ty") PWild) (PVar "rest"))) (EApp (EApp (EApp (EVar "constrainedAdd") (EVar "name")) (EVar "ty")) (EApp (EVar "constrainedFnNames") (EVar "rest"))))
@@ -1038,18 +1008,6 @@ markerFor preludeProg =
 (DFunDef false "interpVars" ((PCon "InterpExpr" (PVar "e"))) (EApp (EVar "collectVars") (EVar "e")))
 (DTypeSig false "mapLitPairVars" (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "mapLitPairVars" ((PTuple (PVar "k") (PVar "v"))) (EBinOp "++" (EApp (EVar "collectVars") (EVar "k")) (EApp (EVar "collectVars") (EVar "v"))))
-(DTypeSig false "patBindings" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "patBindings" ((PCon "PVar" (PVar "x") PWild PWild)) (EListLit (EVar "x")))
-(DFunDef false "patBindings" ((PCon "PCon" PWild (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PCons" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "patBindings") (EVar "a")) (EApp (EVar "patBindings") (EVar "b"))))
-(DFunDef false "patBindings" ((PCon "PTuple" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PList" (PVar "ps"))) (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")))
-(DFunDef false "patBindings" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patBindings") (EVar "p"))))
-(DFunDef false "patBindings" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recFieldBindings")) (EVar "fields")))
-(DFunDef false "patBindings" (PWild) (EListLit))
-(DTypeSig false "recFieldBindings" (TyFun (TyCon "RecPatField") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "recFieldBindings" ((PCon "RecPatField" (PVar "fname") PWild PWild (PCon "None"))) (EListLit (EVar "fname")))
-(DFunDef false "recFieldBindings" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patBindings") (EVar "p")))
 (DTypeSig false "localBoundExpr" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "localBoundExpr" ((PCon "ELam" (PVar "ps") (PVar "b"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "patBindings")) (EVar "ps")) (EApp (EVar "localBoundExpr") (EVar "b"))))
 (DFunDef false "localBoundExpr" ((PCon "ELet" PWild PWild (PVar "p") (PVar "e1") (PVar "e2"))) (EBinOp "++" (EBinOp "++" (EApp (EVar "patBindings") (EVar "p")) (EApp (EVar "localBoundExpr") (EVar "e1"))) (EApp (EVar "localBoundExpr") (EVar "e2"))))

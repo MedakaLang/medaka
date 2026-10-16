@@ -1,5 +1,5 @@
 # META
-source_lines=2187
+source_lines=2179
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -80,6 +80,10 @@ import tools.fmt.{formatSourceChecked}
 import tools.refindex.{RefIndex, buildRefIndexProject, binderAt, usesOf, defsOf}
 import list.{sortBy}
 import frontend.ast.{
+  fieldName,
+  ifaceMethodName,
+  implMethodName,
+  letBindName,
   Decl(..),
   Ty(..),
   Loc(..),
@@ -379,9 +383,6 @@ jChildLoc name kind fallback loc =
     None => fallback
   jSymbol name kind r r []
 
-fieldName : Field -> String
-fieldName (Field n _) = n
-
 -- Outline children for the variant list of a data decl, consuming child-name
 -- `Loc`s (#331, increment 2) from `locs` in outline order.  Mirrors the old
 -- `flatMap variantSymChildren`: a nameOmitted record variant (`data X = { … }`)
@@ -420,15 +421,6 @@ zipKids fb kind [] (nm :: nms) =
   jChildLoc nm kind fb None :: zipKids fb kind [] nms
 zipKids fb kind (l :: ls) (nm :: nms) =
   jChildLoc nm kind fb l :: zipKids fb kind ls nms
-
-ifaceMethodName : IfaceMethod -> String
-ifaceMethodName (IfaceMethod n _ _ _) = n
-
-implMethodName : ImplMethod -> String
-implMethodName (ImplMethod n _ _) = n
-
-letBindName : LetBind -> String
-letBindName (LetBind n _ _ _) = n
 
 -- The outline (name, kind, clauseLike, children) for a decl, given its
 -- precomputed decl-level `range` (used for the child symbols' spans), or None for
@@ -2206,7 +2198,7 @@ unit = ()
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSourceChecked" false))))
 (DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProject" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "Loc" true) (mem "Variant" false) (mem "ConPayload" true) (mem "Field" false) (mem "IfaceMethod" false) (mem "ImplMethod" false) (mem "LetBind" false) (mem "UsePath" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "fieldName" false) (mem "ifaceMethodName" false) (mem "implMethodName" false) (mem "letBindName" false) (mem "Decl" true) (mem "Ty" true) (mem "Loc" true) (mem "Variant" false) (mem "ConPayload" true) (mem "Field" false) (mem "IfaceMethod" false) (mem "ImplMethod" false) (mem "LetBind" false) (mem "UsePath" true))))
 (DData Public "Docs" () ((variant "Docs" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))) ())
 (DTypeSig true "emptyDocs" (TyCon "Docs"))
 (DFunDef false "emptyDocs" () (EApp (EVar "Docs") (EListLit)))
@@ -2277,8 +2269,6 @@ unit = ()
 (DFunDef false "jSymbol" ((PVar "name") (PVar "kind") (PVar "range") (PVar "selRange") (PVar "children")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "kind")) (EApp (EVar "JInt") (EVar "kind"))) (ETuple (ELit (LString "range")) (EVar "range")) (ETuple (ELit (LString "selectionRange")) (EVar "selRange")) (ETuple (ELit (LString "children")) (EApp (EVar "jArray") (EVar "children"))))))
 (DTypeSig false "jChildLoc" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Json"))))))
 (DFunDef false "jChildLoc" ((PVar "name") (PVar "kind") (PVar "fallback") (PVar "loc")) (EBlock (DoLet false false (PVar "r") (EMatch (EVar "loc") (arm (PCon "Some" (PVar "l")) () (EApp (EVar "jRangeOfLoc") (EVar "l"))) (arm (PCon "None") () (EVar "fallback")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "jSymbol") (EVar "name")) (EVar "kind")) (EVar "r")) (EVar "r")) (EListLit)))))
-(DTypeSig false "fieldName" (TyFun (TyCon "Field") (TyCon "String")))
-(DFunDef false "fieldName" ((PCon "Field" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "variantKids" (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyCon "Json"))))))
 (DFunDef false "variantKids" (PWild PWild (PList)) (EListLit))
 (DFunDef false "variantKids" ((PVar "fb") (PVar "locs") (PCons (PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") (PCon "True"))) (PVar "vs"))) (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EVar "fieldKidsStep") (EVar "fb")) (EVar "locs")) (EApp (EApp (EVar "map") (EVar "fieldName")) (EVar "fs")))) (DoExpr (EBinOp "++" (EApp (EVar "fst") (EVar "step")) (EApp (EApp (EApp (EVar "variantKids") (EVar "fb")) (EApp (EVar "snd") (EVar "step"))) (EVar "vs"))))))
@@ -2292,12 +2282,6 @@ unit = ()
 (DFunDef false "zipKids" (PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "zipKids" ((PVar "fb") (PVar "kind") (PList) (PCons (PVar "nm") (PVar "nms"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EVar "nm")) (EVar "kind")) (EVar "fb")) (EVar "None")) (EApp (EApp (EApp (EApp (EVar "zipKids") (EVar "fb")) (EVar "kind")) (EListLit)) (EVar "nms"))))
 (DFunDef false "zipKids" ((PVar "fb") (PVar "kind") (PCons (PVar "l") (PVar "ls")) (PCons (PVar "nm") (PVar "nms"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EVar "nm")) (EVar "kind")) (EVar "fb")) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "zipKids") (EVar "fb")) (EVar "kind")) (EVar "ls")) (EVar "nms"))))
-(DTypeSig false "ifaceMethodName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
-(DFunDef false "ifaceMethodName" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
-(DTypeSig false "implMethodName" (TyFun (TyCon "ImplMethod") (TyCon "String")))
-(DFunDef false "implMethodName" ((PCon "ImplMethod" (PVar "n") PWild PWild)) (EVar "n"))
-(DTypeSig false "letBindName" (TyFun (TyCon "LetBind") (TyCon "String")))
-(DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "symbolPartsOfDecl" (TyFun (TyCon "Decl") (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Json"))))))))
 (DFunDef false "symbolPartsOfDecl" ((PVar "d") (PVar "range") (PVar "childLocs")) (EMatch (EApp (EVar "innerDecl") (EVar "d")) (arm (PCon "DTypeSig" PWild (PVar "name") PWild PWild) () (EApp (EVar "Some") (ETuple (EVar "name") (ELit (LInt 13)) (EVar "True") (EListLit)))) (arm (PCon "DExtern" PWild (PVar "name") PWild) () (EApp (EVar "Some") (ETuple (EVar "name") (ELit (LInt 12)) (EVar "False") (EListLit)))) (arm (PCon "DFunDef" PWild (PVar "name") PWild PWild PWild PWild) () (EApp (EVar "Some") (ETuple (EVar "name") (ELit (LInt 12)) (EVar "True") (EListLit)))) (arm (PCon "DLetGroup" PWild (PVar "binds")) () (EMatch (EVar "binds") (arm (PList) () (EVar "None")) (arm (PCons (PCon "LetBind" (PVar "n0") PWild PWild PWild) PWild) () (EBlock (DoLet false false (PVar "kids") (EApp (EApp (EApp (EApp (EVar "zipKids") (EVar "range")) (ELit (LInt 12))) (EVar "childLocs")) (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds")))) (DoExpr (EApp (EVar "Some") (ETuple (EVar "n0") (ELit (LInt 12)) (EVar "True") (EVar "kids")))))))) (arm (PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataCtors" (PVar "variants"))) false) () (EBlock (DoLet false false (PVar "kids") (EApp (EApp (EApp (EVar "variantKids") (EVar "range")) (EVar "childLocs")) (EVar "variants"))) (DoExpr (EApp (EVar "Some") (ETuple (EVar "name") (ELit (LInt 10)) (EVar "False") (EVar "kids")))))) (arm (PRec "DInterface" ((rf "name" (PVar "n")) (rf "methods" (PVar "ms"))) true) () (EBlock (DoLet false false (PVar "kids") (EApp (EApp (EApp (EApp (EVar "zipKids") (EVar "range")) (ELit (LInt 6))) (EVar "childLocs")) (EApp (EApp (EVar "map") (EVar "ifaceMethodName")) (EVar "ms")))) (DoExpr (EApp (EVar "Some") (ETuple (EVar "n") (ELit (LInt 11)) (EVar "False") (EVar "kids")))))) (arm (PRec "DImpl" ((rf "iface" (PVar "ifc")) (rf "methods" (PVar "ms"))) true) () (EBlock (DoLet false false (PVar "label") (EApp (EVar "implLabel") (EVar "ifc"))) (DoLet false false (PVar "kids") (EApp (EApp (EApp (EApp (EVar "zipKids") (EVar "range")) (ELit (LInt 6))) (EVar "childLocs")) (EApp (EApp (EVar "map") (EVar "implMethodName")) (EVar "ms")))) (DoExpr (EApp (EVar "Some") (ETuple (EVar "label") (ELit (LInt 5)) (EVar "False") (EVar "kids")))))) (arm (PRec "DTypeAlias" ((rf "tyAliasName" (PVar "name"))) false) () (EApp (EVar "Some") (ETuple (EVar "name") (ELit (LInt 26)) (EVar "False") (EListLit)))) (arm (PRec "DNewtype" ((rf "newtypeName" (PVar "name"))) false) () (EApp (EVar "Some") (ETuple (EVar "name") (ELit (LInt 23)) (EVar "False") (EListLit)))) (arm (PCon "DUse" PWild PWild PWild) () (EVar "None")) (arm (PCon "DProp" PWild (PVar "name") PWild PWild) () (EApp (EVar "Some") (ETuple (EVar "name") (ELit (LInt 12)) (EVar "False") (EListLit)))) (arm (PCon "DTest" PWild (PVar "name") PWild) () (EApp (EVar "Some") (ETuple (EVar "name") (ELit (LInt 12)) (EVar "False") (EListLit)))) (arm (PCon "DEffect" PWild (PVar "name") PWild PWild PWild PWild) () (EApp (EVar "Some") (ETuple (EVar "name") (ELit (LInt 24)) (EVar "False") (EListLit)))) (arm (PCon "DAttrib" PWild PWild) () (EVar "None"))))
 (DTypeSig false "implLabel" (TyFun (TyCon "String") (TyCon "String")))
@@ -2659,7 +2643,7 @@ unit = ()
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSourceChecked" false))))
 (DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProject" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "Loc" true) (mem "Variant" false) (mem "ConPayload" true) (mem "Field" false) (mem "IfaceMethod" false) (mem "ImplMethod" false) (mem "LetBind" false) (mem "UsePath" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "fieldName" false) (mem "ifaceMethodName" false) (mem "implMethodName" false) (mem "letBindName" false) (mem "Decl" true) (mem "Ty" true) (mem "Loc" true) (mem "Variant" false) (mem "ConPayload" true) (mem "Field" false) (mem "IfaceMethod" false) (mem "ImplMethod" false) (mem "LetBind" false) (mem "UsePath" true))))
 (DData Public "Docs" () ((variant "Docs" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))) ())
 (DTypeSig true "emptyDocs" (TyCon "Docs"))
 (DFunDef false "emptyDocs" () (EApp (EVar "Docs") (EListLit)))
@@ -2730,8 +2714,6 @@ unit = ()
 (DFunDef false "jSymbol" ((PVar "name") (PVar "kind") (PVar "range") (PVar "selRange") (PVar "children")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "kind")) (EApp (EVar "JInt") (EVar "kind"))) (ETuple (ELit (LString "range")) (EVar "range")) (ETuple (ELit (LString "selectionRange")) (EVar "selRange")) (ETuple (ELit (LString "children")) (EApp (EVar "jArray") (EVar "children"))))))
 (DTypeSig false "jChildLoc" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Json"))))))
 (DFunDef false "jChildLoc" ((PVar "name") (PVar "kind") (PVar "fallback") (PVar "loc")) (EBlock (DoLet false false (PVar "r") (EMatch (EVar "loc") (arm (PCon "Some" (PVar "l")) () (EApp (EVar "jRangeOfLoc") (EVar "l"))) (arm (PCon "None") () (EVar "fallback")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "jSymbol") (EVar "name")) (EVar "kind")) (EVar "r")) (EVar "r")) (EListLit)))))
-(DTypeSig false "fieldName" (TyFun (TyCon "Field") (TyCon "String")))
-(DFunDef false "fieldName" ((PCon "Field" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "variantKids" (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyCon "Json"))))))
 (DFunDef false "variantKids" (PWild PWild (PList)) (EListLit))
 (DFunDef false "variantKids" ((PVar "fb") (PVar "locs") (PCons (PCon "Variant" PWild (PCon "ConNamed" (PVar "fs") (PCon "True"))) (PVar "vs"))) (EBlock (DoLet false false (PVar "step") (EApp (EApp (EApp (EVar "fieldKidsStep") (EVar "fb")) (EVar "locs")) (EApp (EApp (EMethodRef "map") (EVar "fieldName")) (EVar "fs")))) (DoExpr (EBinOp "++" (EApp (EVar "fst") (EVar "step")) (EApp (EApp (EApp (EVar "variantKids") (EVar "fb")) (EApp (EVar "snd") (EVar "step"))) (EVar "vs"))))))
@@ -2745,12 +2727,6 @@ unit = ()
 (DFunDef false "zipKids" (PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "zipKids" ((PVar "fb") (PVar "kind") (PList) (PCons (PVar "nm") (PVar "nms"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EVar "nm")) (EVar "kind")) (EVar "fb")) (EVar "None")) (EApp (EApp (EApp (EApp (EVar "zipKids") (EVar "fb")) (EVar "kind")) (EListLit)) (EVar "nms"))))
 (DFunDef false "zipKids" ((PVar "fb") (PVar "kind") (PCons (PVar "l") (PVar "ls")) (PCons (PVar "nm") (PVar "nms"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "jChildLoc") (EVar "nm")) (EVar "kind")) (EVar "fb")) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "zipKids") (EVar "fb")) (EVar "kind")) (EVar "ls")) (EVar "nms"))))
-(DTypeSig false "ifaceMethodName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
-(DFunDef false "ifaceMethodName" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
-(DTypeSig false "implMethodName" (TyFun (TyCon "ImplMethod") (TyCon "String")))
-(DFunDef false "implMethodName" ((PCon "ImplMethod" (PVar "n") PWild PWild)) (EVar "n"))
-(DTypeSig false "letBindName" (TyFun (TyCon "LetBind") (TyCon "String")))
-(DFunDef false "letBindName" ((PCon "LetBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "symbolPartsOfDecl" (TyFun (TyCon "Decl") (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Json"))))))))
 (DFunDef false "symbolPartsOfDecl" ((PVar "d") (PVar "range") (PVar "childLocs")) (EMatch (EApp (EVar "innerDecl") (EVar "d")) (arm (PCon "DTypeSig" PWild (PVar "name") PWild PWild) () (EApp (EVar "Some") (ETuple (EVar "name") (ELit (LInt 13)) (EVar "True") (EListLit)))) (arm (PCon "DExtern" PWild (PVar "name") PWild) () (EApp (EVar "Some") (ETuple (EVar "name") (ELit (LInt 12)) (EVar "False") (EListLit)))) (arm (PCon "DFunDef" PWild (PVar "name") PWild PWild PWild PWild) () (EApp (EVar "Some") (ETuple (EVar "name") (ELit (LInt 12)) (EVar "True") (EListLit)))) (arm (PCon "DLetGroup" PWild (PVar "binds")) () (EMatch (EVar "binds") (arm (PList) () (EVar "None")) (arm (PCons (PCon "LetBind" (PVar "n0") PWild PWild PWild) PWild) () (EBlock (DoLet false false (PVar "kids") (EApp (EApp (EApp (EApp (EVar "zipKids") (EVar "range")) (ELit (LInt 12))) (EVar "childLocs")) (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds")))) (DoExpr (EApp (EVar "Some") (ETuple (EVar "n0") (ELit (LInt 12)) (EVar "True") (EVar "kids")))))))) (arm (PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataCtors" (PVar "variants"))) false) () (EBlock (DoLet false false (PVar "kids") (EApp (EApp (EApp (EVar "variantKids") (EVar "range")) (EVar "childLocs")) (EVar "variants"))) (DoExpr (EApp (EVar "Some") (ETuple (EVar "name") (ELit (LInt 10)) (EVar "False") (EVar "kids")))))) (arm (PRec "DInterface" ((rf "name" (PVar "n")) (rf "methods" (PVar "ms"))) true) () (EBlock (DoLet false false (PVar "kids") (EApp (EApp (EApp (EApp (EVar "zipKids") (EVar "range")) (ELit (LInt 6))) (EVar "childLocs")) (EApp (EApp (EMethodRef "map") (EVar "ifaceMethodName")) (EVar "ms")))) (DoExpr (EApp (EVar "Some") (ETuple (EVar "n") (ELit (LInt 11)) (EVar "False") (EVar "kids")))))) (arm (PRec "DImpl" ((rf "iface" (PVar "ifc")) (rf "methods" (PVar "ms"))) true) () (EBlock (DoLet false false (PVar "label") (EApp (EVar "implLabel") (EVar "ifc"))) (DoLet false false (PVar "kids") (EApp (EApp (EApp (EApp (EVar "zipKids") (EVar "range")) (ELit (LInt 6))) (EVar "childLocs")) (EApp (EApp (EMethodRef "map") (EVar "implMethodName")) (EVar "ms")))) (DoExpr (EApp (EVar "Some") (ETuple (EVar "label") (ELit (LInt 5)) (EVar "False") (EVar "kids")))))) (arm (PRec "DTypeAlias" ((rf "tyAliasName" (PVar "name"))) false) () (EApp (EVar "Some") (ETuple (EVar "name") (ELit (LInt 26)) (EVar "False") (EListLit)))) (arm (PRec "DNewtype" ((rf "newtypeName" (PVar "name"))) false) () (EApp (EVar "Some") (ETuple (EVar "name") (ELit (LInt 23)) (EVar "False") (EListLit)))) (arm (PCon "DUse" PWild PWild PWild) () (EVar "None")) (arm (PCon "DProp" PWild (PVar "name") PWild PWild) () (EApp (EVar "Some") (ETuple (EVar "name") (ELit (LInt 12)) (EVar "False") (EListLit)))) (arm (PCon "DTest" PWild (PVar "name") PWild) () (EApp (EVar "Some") (ETuple (EVar "name") (ELit (LInt 12)) (EVar "False") (EListLit)))) (arm (PCon "DEffect" PWild (PVar "name") PWild PWild PWild PWild) () (EApp (EVar "Some") (ETuple (EVar "name") (ELit (LInt 24)) (EVar "False") (EListLit)))) (arm (PCon "DAttrib" PWild PWild) () (EVar "None"))))
 (DTypeSig false "implLabel" (TyFun (TyCon "String") (TyCon "String")))

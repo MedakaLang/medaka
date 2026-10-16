@@ -1,5 +1,5 @@
 # META
-source_lines=1184
+source_lines=1180
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — standalone
@@ -17,6 +17,8 @@ stages=DESUGAR,MARK
 
 import support.stage_count.{stageBump}
 import frontend.ast.{
+  variantName,
+  fieldName,
   Lit(..),
   Loc,
   Ty(..),
@@ -318,9 +320,6 @@ newtypeCtorType (DNewtype { newtypeName = tyname, newtypeOrigin = origin, newtyp
   [(c, tabKeyOf NsType origin tyname)]
 newtypeCtorType _ = []
 
-variantName : Variant -> String
-variantName (Variant n _) = n
-
 variantArity : Variant -> (String, Int)
 variantArity (Variant n (ConPos tys)) = (n, listLen tys)
 variantArity (Variant n (ConNamed fs _)) = (n, listLen fs)
@@ -336,9 +335,6 @@ dataCtorFields _ = []
 variantCtorFields : Variant -> List (String, List String)
 variantCtorFields (Variant n (ConNamed fs _)) = [(n, map fieldName fs)]
 variantCtorFields _ = []
-
-fieldName : Field -> String
-fieldName (Field n _) = n
 
 oGetCtorFields : Oracle -> String -> Option (List String)
 oGetCtorFields oracle c = omLookup c oracle.ctorFields
@@ -1188,7 +1184,7 @@ exhaustToLines : List Decl -> String
 exhaustToLines prog = exhaustToLinesWith prog prog
 # DESUGAR
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" false) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "variantName" false) (mem "fieldName" false) (mem "Lit" true) (mem "Loc" false) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromPairs" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "allList" false) (mem "anyList" false) (mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "splitOnChar" false))))
@@ -1253,8 +1249,6 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "newtypeCtorType" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TabKey")))))
 (DFunDef false "newtypeCtorType" ((PRec "DNewtype" ((rf "newtypeName" (PVar "tyname")) (rf "newtypeOrigin" (PVar "origin")) (rf "newtypeCtor" (PVar "c"))) false)) (EListLit (ETuple (EVar "c") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "origin")) (EVar "tyname")))))
 (DFunDef false "newtypeCtorType" (PWild) (EListLit))
-(DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
-(DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "variantArity" (TyFun (TyCon "Variant") (TyTuple (TyCon "String") (TyCon "Int"))))
 (DFunDef false "variantArity" ((PCon "Variant" (PVar "n") (PCon "ConPos" (PVar "tys")))) (ETuple (EVar "n") (EApp (EVar "listLen") (EVar "tys"))))
 (DFunDef false "variantArity" ((PCon "Variant" (PVar "n") (PCon "ConNamed" (PVar "fs") PWild))) (ETuple (EVar "n") (EApp (EVar "listLen") (EVar "fs"))))
@@ -1266,8 +1260,6 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "variantCtorFields" (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "variantCtorFields" ((PCon "Variant" (PVar "n") (PCon "ConNamed" (PVar "fs") PWild))) (EListLit (ETuple (EVar "n") (EApp (EApp (EVar "map") (EVar "fieldName")) (EVar "fs")))))
 (DFunDef false "variantCtorFields" (PWild) (EListLit))
-(DTypeSig false "fieldName" (TyFun (TyCon "Field") (TyCon "String")))
-(DFunDef false "fieldName" ((PCon "Field" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "oGetCtorFields" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "oGetCtorFields" ((PVar "oracle") (PVar "c")) (EApp (EApp (EVar "omLookup") (EVar "c")) (EFieldAccess (EVar "oracle") "ctorFields")))
 (DTypeSig true "oGetCtors" (TyFun (TyCon "Oracle") (TyFun (TyCon "TabKey") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -1600,7 +1592,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "exhaustToLines" ((PVar "prog")) (EApp (EApp (EVar "exhaustToLinesWith") (EVar "prog")) (EVar "prog")))
 # MARK
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" false) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "variantName" false) (mem "fieldName" false) (mem "Lit" true) (mem "Loc" false) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromPairs" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "allList" false) (mem "anyList" false) (mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "splitOnChar" false))))
@@ -1665,8 +1657,6 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "newtypeCtorType" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TabKey")))))
 (DFunDef false "newtypeCtorType" ((PRec "DNewtype" ((rf "newtypeName" (PVar "tyname")) (rf "newtypeOrigin" (PVar "origin")) (rf "newtypeCtor" (PVar "c"))) false)) (EListLit (ETuple (EVar "c") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "origin")) (EVar "tyname")))))
 (DFunDef false "newtypeCtorType" (PWild) (EListLit))
-(DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
-(DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "variantArity" (TyFun (TyCon "Variant") (TyTuple (TyCon "String") (TyCon "Int"))))
 (DFunDef false "variantArity" ((PCon "Variant" (PVar "n") (PCon "ConPos" (PVar "tys")))) (ETuple (EVar "n") (EApp (EVar "listLen") (EVar "tys"))))
 (DFunDef false "variantArity" ((PCon "Variant" (PVar "n") (PCon "ConNamed" (PVar "fs") PWild))) (ETuple (EVar "n") (EApp (EVar "listLen") (EVar "fs"))))
@@ -1678,8 +1668,6 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "variantCtorFields" (TyFun (TyCon "Variant") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "variantCtorFields" ((PCon "Variant" (PVar "n") (PCon "ConNamed" (PVar "fs") PWild))) (EListLit (ETuple (EVar "n") (EApp (EApp (EMethodRef "map") (EVar "fieldName")) (EVar "fs")))))
 (DFunDef false "variantCtorFields" (PWild) (EListLit))
-(DTypeSig false "fieldName" (TyFun (TyCon "Field") (TyCon "String")))
-(DFunDef false "fieldName" ((PCon "Field" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "oGetCtorFields" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "oGetCtorFields" ((PVar "oracle") (PVar "c")) (EApp (EApp (EVar "omLookup") (EVar "c")) (EFieldAccess (EVar "oracle") "ctorFields")))
 (DTypeSig true "oGetCtors" (TyFun (TyCon "Oracle") (TyFun (TyCon "TabKey") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
