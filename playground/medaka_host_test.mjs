@@ -14,7 +14,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import os from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createHost, runProgram, confine, CapabilityError, HostKeyError, MemoryVfs, SLICES, KEY_EXTERN } from './medaka_host.mjs';
+import { createHost, runProgram, confine, CapabilityError, JsBindingError, HostKeyError, MemoryVfs, SLICES, KEY_EXTERN } from './medaka_host.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = dirname(here);
@@ -131,6 +131,12 @@ main =
     rename => rename * 2
   println (count [1, 2, 3] + listDir + getEnv 1 + r)
 `,
+  jsmissing: 'extern jsMissing : String -> <FFI "js"> String\n  bind js "jsMissing"\n\n'
+    + 'main =\n  let _ = println "before"\n  println (jsMissing "x")\n',
+  jsthrow: 'extern jsThrow : String -> <FFI "js"> String\n  bind js "jsThrow"\n\n'
+    + 'main =\n  let _ = println "before"\n  println (jsThrow "x")\n',
+  jsupper: 'extern jsUpper : String -> <FFI "js"> String\n  bind js "jsUpper"\n\n'
+    + 'main =\n  let _ = println (jsUpper "abc")\n  exit 3\n',
   bigexit: BIG_LOOP + 'main =\n  let _ = loop 1\n  exit 3\n',
   bigtrap: BIG_LOOP + 'main =\n  let _ = loop 1\n  let z = length [1] - 1\n  println (10 / z)\n',
 };
@@ -603,6 +609,42 @@ function check(name, ok, detail) {
   const msgs = await runInWorker(build('shadow', 'wasmgc/browser-worker'));
   check('(r) worker (browser-worker): the same program runs',
     last(msgs).type === 'done' && streamText(msgs, 'stdout') === '22\n', JSON.stringify(msgs));
+}
+
+// (s) The `jsffi` slice (docs/spec/WASM-SEMANTICS.md section 3.1).
+{
+  const upper = { jsUpper: (x) => x.toUpperCase() };
+  // a missing binding: the module instantiates, the call is a CapabilityError naming it
+  const host = createHost('wasmgc/node');
+  const r = await runProgram(readFileSync(build('jsmissing', 'wasmgc/node')), host);
+  check('(s1) jsffi: a missing binding is a CapabilityError at the call, after instantiation',
+    r.kind === 'error' && r.inProgram && r.error instanceof CapabilityError && r.error.capability === 'FFI'
+      && r.error.message === 'js binding `jsMissing` is not supplied by this host'
+      && host.sink.text('stdout') === 'before\n',
+    JSON.stringify({ kind: r.kind, inProgram: r.inProgram, error: r.error && r.error.message, out: host.sink.text('stdout') }));
+  // a supplied jsffi import is not refused by checkImportKeys (runProgram runs it)
+  const h2 = createHost('wasmgc/node', { bindings: upper });
+  const r2 = await runProgram(readFileSync(build('jsupper', 'wasmgc/node')), h2);
+  check('(s2) jsffi: a supplied jsffi import passes checkImportKeys and runs',
+    r2.kind === 'exit' && r2.code === 3 && h2.sink.text('stdout') === 'ABC\n',
+    JSON.stringify({ kind: r2.kind, code: r2.code, error: r2.error && r2.error.message, out: h2.sink.text('stdout') }));
+  // a throwing binding: JsBindingError, stdout flushed first
+  const h3 = createHost('wasmgc/node', { bindings: { jsThrow: (x) => { throw new Error('boom: ' + x); } } });
+  const r3 = await runProgram(readFileSync(build('jsthrow', 'wasmgc/node')), h3);
+  check('(s3) jsffi: a throwing binding is a JsBindingError with stdout flushed first',
+    r3.kind === 'error' && r3.error instanceof JsBindingError
+      && r3.error.message === 'js binding `jsThrow` threw: boom: x' && h3.sink.text('stdout') === 'before\n',
+    JSON.stringify({ kind: r3.kind, error: r3.error && r3.error.message, out: h3.sink.text('stdout') }));
+  // an extra binding the module does not import is ignored; one named like an env key
+  // lands in jsffi and cannot shadow env (the program's `exit` still reaches mdk_exit)
+  const shadow = () => { throw new Error('shadowed env'); };
+  const h4 = createHost('wasmgc/node', { bindings: { ...upper, unusedExtra: shadow, mdk_exit: shadow } });
+  const envExit = h4.imports.env.mdk_exit;
+  const r4 = await runProgram(readFileSync(build('jsupper', 'wasmgc/node')), h4);
+  check('(s4) jsffi: an extra binding is ignored and a binding named mdk_exit cannot shadow env',
+    r4.kind === 'exit' && r4.code === 3 && h4.imports.env.mdk_exit === envExit
+      && h4.imports.env.mdk_exit !== shadow && h4.sink.text('stdout') === 'ABC\n',
+    JSON.stringify({ kind: r4.kind, code: r4.code, error: r4.error && r4.error.message }));
 }
 
 // Report only: slices no module built above imports a key of.

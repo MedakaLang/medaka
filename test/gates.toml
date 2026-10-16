@@ -2418,7 +2418,7 @@ migration = "done"
 run = "test/wasm_jsffi_test.mdk"
 oracles = ["wasm_emit_modules_main"]
 sources = ["compiler/backend/emit_plan.mdk", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_preamble.mdk", "playground/medaka_host.mjs"]
-corpus = ["test/wasm_jsffi_fixtures"]
+corpus = ["test/wasm_jsffi_fixtures", "test/two_host_fixtures"]
 toolchain = ["clang", "node>=24"]
 link = "production"
 

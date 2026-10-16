@@ -281,6 +281,15 @@ symbol once a clause says otherwise); with no clause the declaration is bound to
 `c` under its own name. Every host the row names needs a binding, and a `js`
 binding is never implied.
 
+That is one declaration run on two hosts. Built native, `fetchText` calls the C
+symbol `fetch_text`; built with `--target wasmgc/node`, it calls the function named
+`fetchText` in the bindings module the host was given (`node test/wasm/run.js
+prog.wasm bindings.mjs`, or `createHost(profile, { bindings })` in a page). The
+program is the same and prints the same bytes on both. A `js` binding the host
+does not supply is a `CapabilityError` when the call happens, not when the module
+loads. `test/two_host_fixtures/` is a runnable example covering every crossable
+type.
+
 `FFI` is not part of `IO`. A function declared `<IO>` cannot call a foreign
 function:
 

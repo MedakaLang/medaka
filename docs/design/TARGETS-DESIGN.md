@@ -381,6 +381,12 @@ Issue: #3670 (fs slice receives the grant). Closes #3590.
 
 ## 7. Host bindings (T4)
 
+**Status of this section:** shipped. The per-host `bind` clause is accepted syntax
+(#3671), a `js` binding lowers to a `jsffi` import that the host supplies
+(#3672, `docs/spec/WASM-SEMANTICS.md` section 3.1), and one declaration with both
+a `bind c` and a `bind js` clause prints the same bytes built native and built
+for `wasmgc/node` (`test/two_host_fixtures/`, run by `test/wasm_jsffi_test.mdk`).
+
 ### 7.1 Why
 
 A user can call C (`extern f : … -> <FFI "lib"> …`, #2070) and cannot call
@@ -396,15 +402,19 @@ There is one rule, one `T-FFI-UNLABELLED` check, and symmetric walls (§7.5). A
 second label would double each of those.
 
 A declaration carries one binding per host ABI. The spelling is a parser
-decision inside #3671 (per-host bindings surface); the shape, with a placeholder
-syntax, is:
+decision inside #3671 (per-host bindings surface); the shape is below. Every
+type in the signature is crossable (§7.4), so `Bytes` is out and the result is a
+`String`:
 
-```medaka-nocheck: the binding form is not yet accepted syntax; this illustrates one declaration with two host bindings and a fallback body
-extern fetchText : (url : String) -> <Net url, FFI "js/fetch"> Result String String
-  bind c  "mdk_fetch_text"      -- llvm/native-posix: a C symbol, linked per [foreign-libraries]
-  bind js "env.fetchText"       -- wasmgc/*: an import the host's `jsffi` slice supplies
+```medaka-nocheck: needs libfetch at link time and a fetchText binding at run time
+extern fetchText : String -> <FFI "c/libfetch", FFI "js/fetch"> String
+  bind c  "fetch_text"          -- llvm/native-posix: a C symbol, linked per [foreign-libraries]
+  bind js "fetchText"           -- wasmgc/*: a function the host's bindings module supplies
 ```
 
+- The `js` string is a JavaScript name, not a module path: the host looks it up in
+  the bindings it was given. It must be written; a `js` binding is never implied
+  from the Medaka name or the `c` symbol.
 - A Medaka body may stand in for a host with no binding (the Gleam fallback).
 - The terminal row must name `FFI` with a prefix matching a host the declaration
   binds; `<>` is refused as today. The parameter stays in the `Prefix` domain;
@@ -424,25 +434,34 @@ Issue: #3671 (per-host bindings surface).
 
 ### 7.4 Lowering a `js/` binding
 
-- The emitter turns a bound declaration into an `env` import named by its
-  binding, marshalled over the existing byte channel (WH5: GC references never
-  cross). The crossable surface is FFI v1's (#2073): `Int`, `Float`, `Bool`,
-  `Char`, `String`, `Bytes`, `Array Int`. A signature outside it is a located
-  refusal at the declaration with the same text the C side gives.
-- The host module gains a `jsffi` slice: `makeImports(profile, { bindings })`
-  installs each user binding under its import name. A binding the host did not
-  supply is a named `CapabilityError` at call time.
-- `test/wasm/run.js` accepts a bindings module so a gate can exercise a binding
-  end to end. The one-fixture-two-hosts probe — the same declaration bound to a
-  stub C library on native and a bindings module on wasm, returning the same
-  values — is the law's "never change a meaning" check for this feature.
+- The emitter turns a bound declaration into an import from the `jsffi` module
+  (not `env`, whose keys stay a closed catalog), named
+  `<jsName>:<P1>,...,<Pn>-><R>`: the signature is in the field name, so the host
+  learns it from `WebAssembly.Module.imports` and needs no side table.
+  `String` and `Array Int` cross over the existing path and result channels (WH5:
+  GC references never cross). The crossable surface is FFI v1's (#2073) less
+  `Bytes`: `Int`, `Float`, `Bool`, `Char`, `String`, `Array Int`, and the
+  fixed-width integers. A signature outside it is a located refusal at the
+  declaration with the same text the C side gives.
+- The host gains a `jsffi` slice: `createHost(profile, { bindings })` and
+  `makeImports(profile, { bindings })` put `host.imports.jsffi`, built from the
+  field name on first use. A binding the host did not supply is a named
+  `CapabilityError` at call time, never at instantiation; one that throws ends
+  the program with a `JsBindingError`, both streams flushed.
+- `test/wasm/run.js` accepts a bindings module (third argument or
+  `MEDAKA_JSFFI_BINDINGS`). The one-declaration-two-hosts fixture, `bind c` to a
+  stub C library on native and `bind js` to a bindings module on wasm, prints the
+  same bytes: the law's "never change a meaning" check for this feature.
+- The binding wall: an `Int` result outside 63 bits traps on both hosts, and an
+  `Array Int` result is a gap on both, so the two targets never give one
+  declaration two meanings.
 
 Issue: #3672 (js binding lowering).
 
 ### 7.5 Symmetric walls
 
-Today the wall is one-sided: `wasm_emit` refuses `FFI`, and LLVM has nothing to
-refuse. With prefixes both walls are `check`-time profile refusals (§5.4):
+The wasm emitter no longer refuses `FFI`: a `js`-bound extern lowers to a `jsffi`
+import (§7.4). With prefixes both walls are `check`-time profile refusals (§5.4):
 `c/` reached under a `wasmgc/*` profile, `js/` reached under `llvm/native-posix`,
 and either under `medaka run`, which grants no `FFI` prefix. The emitter-side FFI
 refusals are deleted as unreachable; `test/wasm/diff_wasm_ffi_wall.sh` is
