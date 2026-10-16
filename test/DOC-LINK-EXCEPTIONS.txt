@@ -376,3 +376,15 @@ REF	test/diff_compiler_build.sh	migrated to a `kind = "native"` gate module (tes
 REF	test/build_construct_coverage.sh	migrated to a `kind = "native"` gate module (test/build_construct_coverage_test.mdk, registry name unchanged; fan-out is runCommandBatch), epic #2600; cited by docs/ops/TESTING-INVENTORY.md (a dated survey), archive/ findings, archive/design/REROOT-PLAN.md, and test/capture_goldens.sh comments about the retired producer (history).
 REF	test/diff_compiler_comment_shout_diff.sh	migrated to a `kind = "native"` gate module (test/diff_compiler_comment_shout_diff_test.mdk, registry name unchanged), epic #2600; cited by comments in compiler/**.
 REF	compiler/entries/exhaust_main.mdk	retired: the stage is called in-process by compiler/frontend/exhaust_test.mdk (epic #2600, #2594); cited by a comment in compiler/entries/lint_main.mdk.
+REF	compiler/check.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/tools/check.mdk
+REF	compiler/desugar.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/frontend/desugar.mdk
+REF	compiler/exhaust.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/frontend/exhaust.mdk
+REF	compiler/loader.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/driver/loader.mdk
+REF	compiler/marker.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/frontend/marker.mdk
+REF	compiler/resolve.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/frontend/resolve.mdk
+REF	compiler/sexp.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/ir/sexp.mdk
+REF	compiler/entries/mark_main.mdk	TODO(docs-cleanup): entry point renamed/removed during the compiler/entries/ reorg; no mark_main.mdk exists in compiler/entries/
+REF	compiler/entries/perf_main.mdk	TODO(docs-cleanup): entry point renamed during the compiler/entries/ reorg; now compiler/entries/profile_main.mdk (or profile_modules_main.mdk)
+REF	test/diff_compiler_eval_bytecode.sh	TODO(docs-cleanup): gate for the retired bytecode pipeline stage; no successor script exists
+REF	test/diff_compiler_eval_bytecode_modules.sh	TODO(docs-cleanup): gate for the retired bytecode pipeline stage; no successor script exists
+REF	test/diff_compiler_eval_typed.sh	migrated into the snapshot # EVAL section in #81 R6 (diff_compiler_snapshot_eval.sh); the eval_typed_main probe + eval_typed_fixtures/*.eval.golden survive for the batch gate — compiler/README.md's as-built port-slice log records the gate as it existed

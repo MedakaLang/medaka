@@ -1,6 +1,6 @@
 # tools/ — one module per user-facing tool: check, fmt, lint, test, doc, lsp, mcp, gate
 
-**Status:** CURRENT — re-derived from source at `ffd3bdb65897da35db70d06dbb5df3df35d884d7` on 2026-10-16. When it drifts, re-derive; do not patch.
+**Status:** CURRENT — re-derived from source at `ffd3bdb65897da35db70d06dbb5df3df35d884d7` on 2026-10-15. When it drifts, re-derive; do not patch.
 
 ## What this directory is
 The verbs and services built on the pipeline (`ARCHITECTURE.md` section 1), at the top of A1 beside
@@ -51,7 +51,7 @@ set of entries (#4141).
 
 ## Laws that bind it
 - **A1** — `tools` may import any lower layer; only `driver` and `entries` import `tools`.
-- **A3** — `printer.mdk`, `repl.mdk`, `prop_runner.mdk`, `lsp.mdk`, `refindex.mdk` and `target_parse.mdk` hold module-level cells; `cells.golden` counts them.
+- **A3** — `printer.mdk`, `repl.mdk`, `prop_runner.mdk`, `lsp.mdk`, `lsp_harness.mdk`, `probe_transcript.mdk`, `test_cmd.mdk`, `refindex.mdk` and `target_parse.mdk` hold module-level cells; `cells.golden` counts them.
 - **A5** — `check.mdk` and the lint tier report diagnostics as data.
 - **A7** — `target_parse.mdk` is the compute-once memo for `medaka test`.
 

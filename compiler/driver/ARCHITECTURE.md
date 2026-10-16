@@ -1,6 +1,6 @@
 # driver/ — the `medaka` CLI, the module loader, diagnostics and `build`
 
-**Status:** CURRENT — re-derived from source at `ffd3bdb65897da35db70d06dbb5df3df35d884d7` on 2026-10-16. When it drifts, re-derive; do not patch.
+**Status:** CURRENT — re-derived from source at `ffd3bdb65897da35db70d06dbb5df3df35d884d7` on 2026-10-15. When it drifts, re-derive; do not patch.
 
 ## What this directory is
 The top of the stack (A1: `driver`, `tools` and `entries` sit above every layer and nothing below imports
@@ -11,7 +11,7 @@ them). It turns argv and a root file into a dependency-ordered module list, runs
 ## Parts
 | Module | Owns | Entry points |
 |---|---|---|
-| `medaka_cli.mdk` | The native `medaka` dispatcher: one arm per verb (check, fmt, new, build, run, test, repl, lsp, doc, check-policy, manifest, gate, lint); installs the stage-count dump | `main` |
+| `medaka_cli.mdk` | The native `medaka` dispatcher: one arm per verb (check, fmt, new, build, run, test, snapshot, repl, lsp, mcp, doc, codemod, check-policy, manifest, gate, lint); installs the stage-count dump | `main` |
 | `loader.mdk` | The dependency walk: dotted module id to file, topological order, cycle detection, project-root discovery from `medaka.toml` | `loadProgramE`, `findProjectRoot`, `fileOfModuleId` |
 | `diagnostics.mdk` | The accumulating error pipeline: every stage runs without exit-on-first-error and returns a structured `Diag` list with optional spans, plus hints and fixes | `mkDiag`, `diagOfResError` |
 | `build_cmd.mdk` | `medaka build`: shells out to a fresh emitter process, then clang, the C runtime and Boehm GC; native and wasm targets | `runBuild`, `runBuildNative`, `envOr` |

@@ -1,6 +1,6 @@
 # frontend/ — source text to resolved, marked AST
 
-**Status:** CURRENT — re-derived from source at e6ed1546a6ab399d084f40fb118c294fc36dfdef on 2026-10-16. When it drifts, re-derive; do not patch.
+**Status:** CURRENT — re-derived from source at e6ed1546a6ab399d084f40fb118c294fc36dfdef on 2026-10-15. When it drifts, re-derive; do not patch.
 
 ## What this directory is
 The first four stages of the pipeline (`ARCHITECTURE.md` section 1): lexer, parser, desugar,

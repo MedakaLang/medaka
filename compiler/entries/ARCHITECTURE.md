@@ -1,6 +1,6 @@
 # entries/ — per-stage probe mains for the differential gates and the oracles
 
-**Status:** CURRENT — re-derived from source at `ffd3bdb65897da35db70d06dbb5df3df35d884d7` on 2026-10-16. When it drifts, re-derive; do not patch.
+**Status:** CURRENT — re-derived from source at `ffd3bdb65897da35db70d06dbb5df3df35d884d7` on 2026-10-15. When it drifts, re-derive; do not patch.
 
 ## What this directory is
 Thin `main` programs, each driving one pipeline stage (`ARCHITECTURE.md` section 1) so a shell gate or an
@@ -10,7 +10,7 @@ binary, so they may import the whole compiler. The shared setup (read the runtim
 off argv, parse and desugar each) lives in `entry_support.mdk`, and each probe adds its terminal call.
 
 ## Parts
-This directory has 67 non-test modules, so it takes the template's one exception: rows group
+This directory holds one probe per pipeline stage and mode, so it takes the template's one exception: rows group
 probes by filename family, and the count column says how many files a row covers.
 
 | Module (family) | Owns | Entry points |

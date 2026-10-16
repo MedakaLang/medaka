@@ -1,6 +1,6 @@
 # support/ — the compiler-private mini-stdlib, the hooks seam and the write-only counters
 
-**Status:** CURRENT — re-derived from source at `ffd3bdb65897da35db70d06dbb5df3df35d884d7` on 2026-10-16. When it drifts, re-derive; do not patch.
+**Status:** CURRENT — re-derived from source at `ffd3bdb65897da35db70d06dbb5df3df35d884d7` on 2026-10-15. When it drifts, re-derive; do not patch.
 
 ## What this directory is
 The bottom layer of A1 (`ARCHITECTURE.md` section 1): `support` < `frontend` < `types` < `ir` <

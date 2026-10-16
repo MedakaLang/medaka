@@ -1,6 +1,6 @@
 # types/ — type inference, interfaces, effects and the facts downstream stages read
 
-**Status:** CURRENT — re-derived from source at e6ed1546a6ab399d084f40fb118c294fc36dfdef on 2026-10-16. When it drifts, re-derive; do not patch.
+**Status:** CURRENT — re-derived from source at e6ed1546a6ab399d084f40fb118c294fc36dfdef on 2026-10-15. When it drifts, re-derive; do not patch.
 
 ## What this directory is
 Stage five of the pipeline (`ARCHITECTURE.md` section 1), layer `types` in A1: above `frontend/`,
@@ -11,7 +11,7 @@ One module, `typecheck.mdk`, still holds the inference core; the rest are the mo
 ## Parts
 | Module | Owns | Entry points |
 |---|---|---|
-| `typecheck.mdk` | Hindley-Milner inference, constraint solving, dict-passing elaboration, coherence, the effect-row checker's wiring; six fenced regions, described in `TYPECHECK-ARCHITECTURE.md` | `elaborateOne`, `grantWholeDomain` |
+| `typecheck.mdk` | Hindley-Milner inference, constraint solving, dict-passing elaboration, coherence, the effect-row checker's wiring; described in `TYPECHECK-ARCHITECTURE.md` | `elaborateOne`, `grantWholeDomain` |
 | `repr.mdk` | The type representation (`Mono`, union-find `Tyvar`, `Scheme`) and every renderer over it; reads no typechecker state cell | `normalize`, `ppMono` |
 | `registry.mdk` | Identity and registry substrate the per-table re-keying units build on | `identKey`, `tabKeys` |
 | `evidence.mdk` | Request-owned nominal identities for goals, scopes, binders, instances, destinations | `EvidenceBinderId`, `ScopeId` |
@@ -59,7 +59,7 @@ Filled by playbook S1 (A3). Until then the per-module counts of module-level `Re
 - `ARCHITECTURE-PLAYBOOK.md` phases 1 to 4 for the split; issue #2586 sequences it.
 
 ## Traps
-- `[P-EXHAUST-IN-TYPECHECK]` — `checkMatchExhaustive` is called here once per `EMatch` but lives in `frontend/`.
+- `[P-EXHAUST-IN-TYPECHECK]` — `checkMatchExhaustive` is defined and called in `typecheck.mdk`, once per `EMatch`; it sees only core patterns.
 - `[T-TUPLES]` — tuples are `__tupleN__`-headed `TApp` spines.
 - `[T-ERRORS-ACCUM]` — no early exits.
 - `[T-GLOBAL-TABLE]` — key new tables by scope.

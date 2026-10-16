@@ -23,7 +23,7 @@ guards that check it and its traps. Open the map before editing a file in that d
 | `frontend/` | Lexer, parser, desugar, resolve, exhaustiveness | [frontend/ARCHITECTURE.md](frontend/ARCHITECTURE.md) |
 | `types/` | Type inference, interfaces, effects, facts downstream stages read | [types/ARCHITECTURE.md](types/ARCHITECTURE.md) |
 | `ir/` | Core IR: types, lowering, serialization, DCE, the Core IR interpreter | [ir/ARCHITECTURE.md](ir/ARCHITECTURE.md) |
-| `backend/` | LLVM and wasm emission, mangling, TRMC analysis | [backend/ARCHITECTURE.md](backend/ARCHITECTURE.md) |
+| `backend/` | LLVM and wasm emission, TRMC analysis | [backend/ARCHITECTURE.md](backend/ARCHITECTURE.md) |
 | `eval/` | The tree-walking interpreter and its 64-bit integer halves | [eval/ARCHITECTURE.md](eval/ARCHITECTURE.md) |
 | `driver/` | The `medaka` CLI dispatcher, loader, diagnostics, `build` | [driver/ARCHITECTURE.md](driver/ARCHITECTURE.md) |
 | `tools/` | One module per user-facing tool: fmt, lint, test, doc, lsp, mcp, gate | [tools/ARCHITECTURE.md](tools/ARCHITECTURE.md) |

@@ -1,6 +1,6 @@
 # eval/ — the tree-walking interpreter and its 64-bit integer halves
 
-**Status:** CURRENT — re-derived from source at `ffd3bdb65897da35db70d06dbb5df3df35d884d7` on 2026-10-16. When it drifts, re-derive; do not patch.
+**Status:** CURRENT — re-derived from source at `ffd3bdb65897da35db70d06dbb5df3df35d884d7` on 2026-10-15. When it drifts, re-derive; do not patch.
 
 ## What this directory is
 The interpreter behind `medaka run`, the REPL and the Core IR equivalence oracle (`ARCHITECTURE.md`
