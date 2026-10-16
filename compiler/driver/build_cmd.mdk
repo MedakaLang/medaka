@@ -26,6 +26,8 @@
 
 import support.util.{stringTrim, joinWith, joinNl}
 import string.{words, contains, startsWith, endsWith, split}
+import list.{partition}
+import support.stage_count.{isStageLine}
 import io.{runCommandOk}
 import support.timer.{perfEnabled, now, emitPhase}
 import driver.loader.{
@@ -975,7 +977,7 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
   match emitRes
     Err e => buildErr "error: could not run the emitter `\{emitProg}`: \{e}"
     Ok (code, irRaw, emitRaw) =>
-      let emitErr = takeEmitterStageLines emitRaw
+      let emitErr = forwardEmitterStageLines emitRaw
       if code == emitDiagExitCode then
         buildErr (dropTrailingNewline emitErr)
       else if code /= 0 then
@@ -1131,7 +1133,7 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr =
       Err e =>
         buildErr "error: could not run the wasm emitter `\{wasmEmitter}`: \{e}"
       Ok (code, watRaw, emitRaw) =>
-        let emitErr = takeEmitterStageLines emitRaw
+        let emitErr = forwardEmitterStageLines emitRaw
         if code == emitDiagExitCode then
           buildErr (dropTrailingNewline emitErr)
         else if code /= 0 then
@@ -1181,25 +1183,13 @@ forwardEmitterStderr quiet err =
 -- process's stderr on every route, `--json` included, so they are lifted out
 -- here, before any route decides what to embed or forward.  The rest of the
 -- child's stream is returned unchanged when it has no stage lines.
-takeEmitterStageLines : String -> <IO> String
-takeEmitterStageLines err =
-  let lines = split "\n" err
-  let _ = ePutStageLines lines
-  joinNl (filter (l => not (isStageLine l)) lines)
-
-ePutStageLines : List String -> <IO> Unit
-ePutStageLines [] = ()
-ePutStageLines (l :: rest) =
-  let _ = ePutStageLine l
-  ePutStageLines rest
-
-ePutStageLine : String -> <IO> Unit
-ePutStageLine l = match isStageLine l
-  True => ePutStrLn l
-  False => ()
-
-isStageLine : String -> Bool
-isStageLine l = startsWith "[stage]\t" l
+forwardEmitterStageLines : String -> <IO> String
+forwardEmitterStageLines err =
+  let (stage, rest) = partition isStageLine (split "\n" err)
+  let _ = match stage
+    [] => ()
+    _ => ePutStrLn (joinNl stage)
+  joinNl rest
 
 -- Probe `wasm-tools` up front (the wasm analogue of the implicit clang
 -- requirement).  `wasm-tools --version` exits 0 iff the tool is reachable.
@@ -2047,7 +2037,7 @@ emitPreludeObjIn cc root medaka outObjPath tmpDir = match detectGC cc tmpDir
           Err e =>
             buildErr "error: could not run the emitter `\{emitProg}`: \{e}"
           Ok (code, irRaw, emitRaw) =>
-            let emitErr = takeEmitterStageLines emitRaw
+            let emitErr = forwardEmitterStageLines emitRaw
             if code /= 0 then
               buildErr
                 "error: emitter failed emitting the prelude object\n\{emitErr}"

@@ -10,8 +10,8 @@ length [1, 2]
 putStrLn x = x + 1
 putStrLn 3
 1 + "a"
-type x
-browse
-reset
-browse
-quit
+:type x
+:browse
+:reset
+:browse
+:quit

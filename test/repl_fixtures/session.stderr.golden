@@ -1,3 +1,2 @@
 <repl>: unbound variable `badname`
 <repl>: no impl of Num for String
-compiler/frontend/parser.mdk:5826:16: runtime error [E-PANIC]: parse error

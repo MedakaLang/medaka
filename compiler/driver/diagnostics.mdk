@@ -870,8 +870,8 @@ analyzeLocatedG exportsFor modName allowInternal runtimeSrc coreSrc progSrc =
 -- The RAW/AST-level half of `analyzeFrom`, plus the derived trees its typecheck
 -- half consumes.  `surfaceDiags` holds the first four groups of `analyzeFrom`'s
 -- fixed result order (derives, guard exhaustiveness, prelude-standalone shadows,
--- resolve); `analyzeFinish` appends the typecheck half and the auto-print half
--- after them.  `resolveClean` is False when `resolveProgramG2` reported, and no
+-- resolve); `analyzeFinish` appends the typecheck half after them (a value
+-- `main`'s auto-print obligation is already inside it).  `resolveClean` is False when `resolveProgramG2` reported, and no
 -- caller may typecheck a program resolve rejected.
 public export data SurfaceAnalysis = SurfaceAnalysis {
   surfaceDiags : List Diag,

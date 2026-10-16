@@ -10,6 +10,7 @@
 -- `stageCountInit`.  The dump goes to stderr only, as `[stage]<TAB>key<TAB>n`; the
 -- prefix differs from MEDAKA_STATS's `[stats]` so a filtered read never mixes them.
 
+import string.{startsWith}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omKeys}
 
 stageCountOn : Ref Bool
@@ -52,8 +53,17 @@ stageExit code =
   let _ = stageDump ()
   exit code
 
+stagePrefix : String
+stagePrefix = "[stage]\t"
+
+-- True for a line `stageDump` printed; the build driver separates a child's
+-- stage lines from its other stderr with it.
+export
+isStageLine : String -> Bool
+isStageLine l = startsWith stagePrefix l
+
 stageDumpKeys : List String -> <IO> Unit
 stageDumpKeys [] = ()
 stageDumpKeys (k :: rest) =
-  let _ = ePutStrLn "[stage]\t\{k}\t\{countOf k}"
+  let _ = ePutStrLn "\{stagePrefix}\{k}\t\{countOf k}"
   stageDumpKeys rest

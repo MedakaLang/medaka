@@ -1266,8 +1266,8 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    and **1 on this branch**, with a located `No impl of Display for Foo`. The branch is the
    more correct arm — main's binary builds and then dies `E-DISPATCH-NO-IMPL` at run time —
    and the defect underneath is pre-existing and `check`'s: multi-module `check` never runs
-   the auto-print obligation, because `analyzeFinish`'s auto-print half is flat-path only.
-   The child reaches it through `underivedMainDiags`, so shape (a) turns a runtime failure
+   the auto-print obligation for a value `main`. The child poses it through
+   `autoPrintWanted` in its own drive, so shape (a) turns a runtime failure
    into a compile-time diagnostic. It is still a `check`/`build` verdict divergence a user
    can hit, so it is named here rather than filed under "report only", and #2873 owns the
    `check` gap.

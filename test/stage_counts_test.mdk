@@ -19,15 +19,16 @@
    The `lsp.` rows each feed one `medaka lsp` process a framed transcript
    ending `shutdown` then `exit`. Their frames are built here because
    compiler/tools/lsp_harness.mdk is not importable from a test project.
-   `lsp.d_hover.parse.positions` 1 and its extra `lex.offsets` are today's
-   value of the open hover second parse (#4148), not a minimum.
+   `lsp.d_hover.parse.positions` 1 and its extra `lex.offsets` are the
+   current value of the open hover second parse (#4148, hover/completion second
+   parse), not a minimum.
 
    `typecheck.module` counts the typechecker's per-module entries, the prelude
    (core) included, so it is not a count of user modules. `typecheck.drive`
-   counts whole-graph typecheck drives. Every count here is today's value; a
-   duplicate that a later slice removes falls in the golden, and the issue that
-   owns it is named beside its probe. Counts above 1 for
-   `desugar`, `parse.prescan` and `exhaust.oracle` are today's values, not a
+   counts whole-graph typecheck drives. Every count here is a pinned value that
+   may only fall, and only by re-capturing with `ARCH_PINS_WRITE=1`; the issue
+   that owns a duplicate drive is named beside its probe. Counts above 1 for
+   `desugar`, `parse.prescan` and `exhaust.oracle` are pinned values, not a
    claim that they are the minimum. `lint`'s 50 parses are 49 stdlib-index
    parses plus 1 per file: a constant that moves when the stdlib module set
    changes, not a duplicate. -}
@@ -273,9 +274,9 @@ replRows dir =
   ]
   (rows, clean)
 
--- Probes for the duplicate and extra drives that later slices remove. Each
--- count is today's value; the issue named beside a probe owns the drive that a
--- later slice removes, so its removal shows as a fall in the golden.
+-- Probes for the duplicate and extra drives. Each count is a pinned value; the
+-- issue named beside a probe owns the drive, so its removal shows as a fall in
+-- the golden.
 driveProbes : String ->
   <Exec, FileWrite, Env "MEDAKA_ROOT", Env "MEDAKA"> List (List String, Expectation)
 driveProbes dir = [
@@ -307,7 +308,7 @@ driveProbes dir = [
     ],
   -- #4152 REPL three drives
   replRows dir,
-  -- P1-D15 test-engine drives
+  -- the test engine drives the doctest-injected program as a second graph
   probeRows "test_doc_eval" ["test", "--engines", "eval", fixture "doc.mdk"],
   probeRows "test_docimp_eval" [
     "test",

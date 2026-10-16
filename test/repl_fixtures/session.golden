@@ -8,4 +8,10 @@ medaka repl (:quit to exit, :reset to clear session)
 > > 42 : Int
 > val putStrLn : a -> a
 > 4 : Int
-> > 
+> > Int
+> val putStrLn : a -> a
+val x : Int
+val y : Int
+> Session reset
+> (no user-defined bindings)
+> 

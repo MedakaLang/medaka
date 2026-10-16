@@ -1,5 +1,5 @@
 # META
-source_lines=59
+source_lines=69
 stages=DESUGAR,MARK
 # SOURCE
 -- Deterministic per-stage CALL counter: how many times each pipeline stage ran in
@@ -14,6 +14,7 @@ stages=DESUGAR,MARK
 -- `stageCountInit`.  The dump goes to stderr only, as `[stage]<TAB>key<TAB>n`; the
 -- prefix differs from MEDAKA_STATS's `[stats]` so a filtered read never mixes them.
 
+import string.{startsWith}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omKeys}
 
 stageCountOn : Ref Bool
@@ -56,12 +57,22 @@ stageExit code =
   let _ = stageDump ()
   exit code
 
+stagePrefix : String
+stagePrefix = "[stage]\t"
+
+-- True for a line `stageDump` printed; the build driver separates a child's
+-- stage lines from its other stderr with it.
+export
+isStageLine : String -> Bool
+isStageLine l = startsWith stagePrefix l
+
 stageDumpKeys : List String -> <IO> Unit
 stageDumpKeys [] = ()
 stageDumpKeys (k :: rest) =
-  let _ = ePutStrLn "[stage]\t\{k}\t\{countOf k}"
+  let _ = ePutStrLn "\{stagePrefix}\{k}\t\{countOf k}"
   stageDumpKeys rest
 # DESUGAR
+(DUse false (UseGroup ("string") ((mem "startsWith" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omKeys" false))))
 (DTypeSig false "stageCountOn" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "stageCountOn" () (EApp (EVar "Ref") (EVar "False")))
@@ -77,10 +88,15 @@ stageDumpKeys (k :: rest) =
 (DFunDef false "stageDump" ((PLit LUnit)) (EMatch (EUnOp "!" (EVar "stageCountOn")) (arm (PCon "True") () (EApp (EVar "stageDumpKeys") (EApp (EVar "omKeys") (EUnOp "!" (EVar "stageCounts"))))) (arm (PCon "False") () (ELit LUnit))))
 (DTypeSig true "stageExit" (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "stageExit" ((PVar "code")) (EBlock (DoLet false false PWild (EApp (EVar "stageDump") (ELit LUnit))) (DoExpr (EApp (EVar "exit") (EVar "code")))))
+(DTypeSig false "stagePrefix" (TyCon "String"))
+(DFunDef false "stagePrefix" () (ELit (LString "[stage]\t")))
+(DTypeSig true "isStageLine" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isStageLine" ((PVar "l")) (EApp (EApp (EVar "startsWith") (EVar "stagePrefix")) (EVar "l")))
 (DTypeSig false "stageDumpKeys" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "stageDumpKeys" ((PList)) (ELit LUnit))
-(DFunDef false "stageDumpKeys" ((PCons (PVar "k") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[stage]\t")) (EApp (EVar "display") (EVar "k"))) (ELit (LString "\t"))) (EApp (EVar "display") (EApp (EVar "countOf") (EVar "k")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "stageDumpKeys") (EVar "rest")))))
+(DFunDef false "stageDumpKeys" ((PCons (PVar "k") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "stagePrefix"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "k"))) (ELit (LString "\t"))) (EApp (EVar "display") (EApp (EVar "countOf") (EVar "k")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "stageDumpKeys") (EVar "rest")))))
 # MARK
+(DUse false (UseGroup ("string") ((mem "startsWith" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omKeys" false))))
 (DTypeSig false "stageCountOn" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "stageCountOn" () (EApp (EVar "Ref") (EVar "False")))
@@ -96,6 +112,10 @@ stageDumpKeys (k :: rest) =
 (DFunDef false "stageDump" ((PLit LUnit)) (EMatch (EUnOp "!" (EVar "stageCountOn")) (arm (PCon "True") () (EApp (EVar "stageDumpKeys") (EApp (EVar "omKeys") (EUnOp "!" (EVar "stageCounts"))))) (arm (PCon "False") () (ELit LUnit))))
 (DTypeSig true "stageExit" (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "stageExit" ((PVar "code")) (EBlock (DoLet false false PWild (EApp (EVar "stageDump") (ELit LUnit))) (DoExpr (EApp (EVar "exit") (EVar "code")))))
+(DTypeSig false "stagePrefix" (TyCon "String"))
+(DFunDef false "stagePrefix" () (ELit (LString "[stage]\t")))
+(DTypeSig true "isStageLine" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isStageLine" ((PVar "l")) (EApp (EApp (EVar "startsWith") (EVar "stagePrefix")) (EVar "l")))
 (DTypeSig false "stageDumpKeys" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "stageDumpKeys" ((PList)) (ELit LUnit))
-(DFunDef false "stageDumpKeys" ((PCons (PVar "k") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[stage]\t")) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EApp (EVar "countOf") (EVar "k")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "stageDumpKeys") (EVar "rest")))))
+(DFunDef false "stageDumpKeys" ((PCons (PVar "k") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "stagePrefix"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EApp (EVar "countOf") (EVar "k")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "stageDumpKeys") (EVar "rest")))))
