@@ -2,7 +2,7 @@
 -- (`twice`, `wrap`) and a prelude one (`filter`).  The plugin run evaluates the
 -- elaborated program, where a default reaches its instance.
 effect Log
-extern logEvent : String -> <FFI, Log> Unit
+extern logEvent : String -> <FFI "c", Log> Unit
 
 interface Tw a where
   step : a -> a

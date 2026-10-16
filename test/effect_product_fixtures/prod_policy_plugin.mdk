@@ -8,11 +8,11 @@
 effect Net Product (Host : Prefix, Method : Set)
 
 extern fetch : String ->
-  <FFI, Net Host="idp.example.com/api" Method={"GET"}> String
+  <FFI "c", Net Host="idp.example.com/api" Method={"GET"}> String
 
 transform : String ->
   Unit ->
-  <Net Host="idp.example.com/*" Method={"GET", "POST"}, FFI> String
+  <Net Host="idp.example.com/*" Method={"GET", "POST"}, FFI "c*"> String
 transform req = _ => fetch req
 
 main : <IO> Unit

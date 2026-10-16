@@ -566,7 +566,7 @@ test "every eval and Core IR oracle reproduces its corpus's goldens" =
    three programs written on the spot, and the reset probe takes a flag no
    row has. So they stay a second test rather than being bent into a `Row`.
 
-   What they pin: a user-declared `<FFI>` extern that is REACHED must stop
+   What they pin: a user-declared `<FFI "c">` extern that is REACHED must stop
    both engines with the same deliberate message.  Both are driven through
    their oracle entries, which run no target check: `medaka run` refuses the
    program at check before either engine starts (`run_refuses_ffi` in
@@ -576,10 +576,11 @@ test "every eval and Core IR oracle reproduces its corpus's goldens" =
    second. -}
 ffiReachedSrc : String
 ffiReachedSrc =
-  "extern ffiBlocked : Int -> <FFI> Int\n\nmain = println (ffiBlocked 1)\n"
+  "extern ffiBlocked : Int -> <FFI \"c\"> Int\n\nmain = println (ffiBlocked 1)\n"
 
 ffiUnreachableSrc : String
-ffiUnreachableSrc = "extern ffiBlocked : Int -> <FFI> Int\n\nmain = println 7\n"
+ffiUnreachableSrc =
+  "extern ffiBlocked : Int -> <FFI \"c\"> Int\n\nmain = println 7\n"
 
 pureSrc : String
 pureSrc = "main = println 9\n"

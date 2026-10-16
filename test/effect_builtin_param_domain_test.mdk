@@ -198,7 +198,7 @@ test "check-policy rejects an Env Set token missing HOME" =
 
 test "IO does not subsume an FFI-performing body" = expectCheckReject (fixture
   "ffi_io_reject.mdk") [
-  "performs <FFI \"libcurl*\">",
+  "performs <FFI \"c/libcurl*\">",
 ]
 
 test "IO still subsumes an Exec-performing body" =
@@ -260,7 +260,7 @@ test "an extern row missing FFI is rejected even when the row is non-empty" = ex
   ]
 
 test "an empty caller row does not subsume a declared FFI row" =
-  expectCheckReject (fixture "ffi_stamp_bare_reject.mdk") ["performs <FFI>"]
+  expectCheckReject (fixture "ffi_stamp_bare_reject.mdk") ["performs <FFI \"c\">"]
 
 test "a caller explicitly naming FFI accepts a declared FFI row" =
   expectCheckAccept (fixture "ffi_stamp_bare_accept.mdk")
@@ -545,7 +545,7 @@ test "the manifest renders a set as an array of its elements" = expectAll [
   expectManifest
     "product_set_accept.mdk"
     "both"
-    "[package.capabilities]\nFFI = true\nWeb = [{ host = \"a.com/*\", method = [\"GET\"] }, { host = \"b.com/*\", method = [\"POST\"] }]",
+    "[package.capabilities]\nFFI = \"c*\"\nWeb = [{ host = \"a.com/*\", method = [\"GET\"] }, { host = \"b.com/*\", method = [\"POST\"] }]",
 ]
 
 test "check-policy reads every entry of a label, in either order" = expectAll [

@@ -9,12 +9,12 @@ stages=TOKENS,DESUGAR,MARK
 effect KV
 effect Log
 
-extern kvGet : String -> <FFI, KV> String
+extern kvGet : String -> <FFI "c", KV> String
 
-get : String -> <KV, FFI> String
+get : String -> <KV, FFI "c*"> String
 get k = kvGet k
 
-handler : String -> <KV, Log, FFI> String
+handler : String -> <KV, Log, FFI "c*"> String
 handler k = get k
 
 main : <IO> Unit
@@ -34,6 +34,7 @@ UPPER "String"
 ARROW
 LT
 UPPER "FFI"
+STRING "c"
 COMMA
 UPPER "KV"
 GT
@@ -47,6 +48,7 @@ LT
 UPPER "KV"
 COMMA
 UPPER "FFI"
+STRING "c*"
 GT
 UPPER "String"
 NEWLINE
@@ -66,6 +68,7 @@ COMMA
 UPPER "Log"
 COMMA
 UPPER "FFI"
+STRING "c*"
 GT
 UPPER "String"
 NEWLINE
@@ -92,20 +95,20 @@ EOF
 # DESUGAR
 (DEffect false "KV" None ())
 (DEffect false "Log" None ())
-(DExtern false "kvGet" (TyFun (TyCon "String") (TyEffect ("FFI" "KV") None (TyCon "String"))))
-(DTypeSig false "get" (TyFun (TyCon "String") (TyEffect ("KV" "FFI") None (TyCon "String"))))
+(DExtern false "kvGet" (TyFun (TyCon "String") (TyEffect ((atom "FFI" "c") "KV") None (TyCon "String"))))
+(DTypeSig false "get" (TyFun (TyCon "String") (TyEffect ("KV" (atom "FFI" "c*")) None (TyCon "String"))))
 (DFunDef false "get" ((PVar "k")) (EApp (EVar "kvGet") (EVar "k")))
-(DTypeSig false "handler" (TyFun (TyCon "String") (TyEffect ("KV" "Log" "FFI") None (TyCon "String"))))
+(DTypeSig false "handler" (TyFun (TyCon "String") (TyEffect ("KV" "Log" (atom "FFI" "c*")) None (TyCon "String"))))
 (DFunDef false "handler" ((PVar "k")) (EApp (EVar "get") (EVar "k")))
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))
 (DFunDef false "main" () (EApp (EVar "println") (ELit (LString "effect labels ok"))))
 # MARK
 (DEffect false "KV" None ())
 (DEffect false "Log" None ())
-(DExtern false "kvGet" (TyFun (TyCon "String") (TyEffect ("FFI" "KV") None (TyCon "String"))))
-(DTypeSig false "get" (TyFun (TyCon "String") (TyEffect ("KV" "FFI") None (TyCon "String"))))
+(DExtern false "kvGet" (TyFun (TyCon "String") (TyEffect ((atom "FFI" "c") "KV") None (TyCon "String"))))
+(DTypeSig false "get" (TyFun (TyCon "String") (TyEffect ("KV" (atom "FFI" "c*")) None (TyCon "String"))))
 (DFunDef false "get" ((PVar "k")) (EApp (EVar "kvGet") (EVar "k")))
-(DTypeSig false "handler" (TyFun (TyCon "String") (TyEffect ("KV" "Log" "FFI") None (TyCon "String"))))
+(DTypeSig false "handler" (TyFun (TyCon "String") (TyEffect ("KV" "Log" (atom "FFI" "c*")) None (TyCon "String"))))
 (DFunDef false "handler" ((PVar "k")) (EApp (EVar "get") (EVar "k")))
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))
 (DFunDef false "main" () (EApp (EDictApp "println") (ELit (LString "effect labels ok"))))

@@ -1,7 +1,7 @@
 exit=1
 --- stdout
 --- stderr
-error: <fixtures>/user_spelled_net.mdk:8:0: `main` performs <FFI> via `main → netGet`, and the target `wasmgc/edge` does not grant FFI
+error: <fixtures>/user_spelled_net.mdk:8:0: `main` performs <FFI "c*"> via `main → netGet`, and the target `wasmgc/edge` does not grant FFI
   |
-8 | main : <Stdout, FFI, Net> Unit
+8 | main : <Stdout, FFI "c*", Net> Unit
   | ^

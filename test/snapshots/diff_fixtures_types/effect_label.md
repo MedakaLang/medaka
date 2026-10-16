@@ -9,18 +9,18 @@ stages=TYPES_USER
 effect KV
 effect Log
 
-extern kvGet : String -> <FFI, KV> String
+extern kvGet : String -> <FFI "c", KV> String
 
-get : String -> <KV, FFI> String
+get : String -> <KV, FFI "c*"> String
 get k = kvGet k
 
-handler : String -> <KV, Log, FFI> String
+handler : String -> <KV, Log, FFI "c*"> String
 handler k = get k
 
 main : <IO> Unit
 main = println "effect labels ok"
 # TYPES_USER
-kvGet : String -> <FFI, KV> String
-get : String -> <FFI, KV> String
-handler : String -> <FFI, KV, Log> String
+kvGet : String -> <FFI "c", KV> String
+get : String -> <FFI "c*", KV> String
+handler : String -> <FFI "c*", KV, Log> String
 main : <IO> Unit

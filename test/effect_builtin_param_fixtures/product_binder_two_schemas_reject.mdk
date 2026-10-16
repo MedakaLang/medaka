@@ -4,10 +4,10 @@
 effect Web2 Product (Method : Set, Host : Prefix)
 effect Web3 Product (Host : Prefix, Port : Set)
 
-extern req2 : (u : String) -> <FFI, Web2 u> Unit
-extern req3 : (u : String) -> <FFI, Web3 u> Unit
+extern req2 : (u : String) -> <FFI "c", Web2 u> Unit
+extern req3 : (u : String) -> <FFI "c", Web3 u> Unit
 
-both : (u : String) -> <FFI, Web2 u, Web3 u> Unit
+both : (u : String) -> <FFI "c*", Web2 u, Web3 u> Unit
 both u =
   let _ = req2 u
   req3 u

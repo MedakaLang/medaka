@@ -15,18 +15,18 @@ stages=TYPES_USER
 -- both rejected) is exercised by the companion gate diff_compiler_effect_hole.sh.
 effect Net Prefix
 
-extern netGet : (url : String) -> <FFI, Net url> String
+extern netGet : (url : String) -> <FFI "c", Net url> String
 
 -- α("a.com/foo") = Known "a.com/foo"; admitted by the wildcard <Net "a.com/*">.
 -- `fetch` is a function (unforced closure) so the extern netGet is never
 -- actually evaluated — the fixture exercises the front-end (parse + α + subsume),
 -- not the runtime, exactly like effect_param.mdk.
-fetch : Unit -> <Net "a.com/*", FFI> String
+fetch : Unit -> <Net "a.com/*", FFI "c*"> String
 fetch _ = netGet "a.com/foo"
 
 main : <IO> Unit
 main = println "effect hole ok"
 # TYPES_USER
-netGet : (url : String) -> <FFI, Net url> String
-fetch : Unit -> <FFI, Net "a.com/*"> String
+netGet : (url : String) -> <FFI "c", Net url> String
+fetch : Unit -> <FFI "c*", Net "a.com/*"> String
 main : <IO> Unit

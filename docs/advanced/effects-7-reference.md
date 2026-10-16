@@ -19,8 +19,8 @@ where the system is known not to express something yet.
 | `f : … -> <e \| e2> b` | the join of two independent rows | [II](effects-2-polymorphism.md) |
 | `effect Audit` | declare an atomic label | [III](effects-3-labels.md) |
 | `export effect Audit` | declare and export one | [III](effects-3-labels.md) |
-| `extern f : A -> <FFI> B` | a foreign call; `FFI` is mandatory | [III](effects-3-labels.md) |
-| `extern f : A -> <FFI "libm"> B` | a foreign call, naming the library | [III](effects-3-labels.md) |
+| `extern f : A -> <FFI "c"> B` | a foreign call; `FFI` is mandatory | [III](effects-3-labels.md) |
+| `extern f : A -> <FFI "c/libm"> B` | a foreign call, naming the library | [III](effects-3-labels.md) |
 | `effect Store Prefix` | a label whose parameter is a path or host | [IV](effects-4-authority.md) |
 | `effect Var Set` | a label whose parameter is a set of names | [IV](effects-4-authority.md) |
 | `effect Http Product (Host : Prefix, Method : Set)` | a label with axes | [IV](effects-4-authority.md) |

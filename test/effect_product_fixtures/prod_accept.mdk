@@ -6,9 +6,10 @@
 effect Net Product (Host : Prefix, Method : Set)
 
 extern fetch : String ->
-  <FFI, Net Host="idp.example.com/api" Method={"GET"}> String
+  <FFI "c", Net Host="idp.example.com/api" Method={"GET"}> String
 
-call : Unit -> <Net Host="idp.example.com/*" Method={"GET", "POST"}, FFI> String
+call : Unit ->
+  <Net Host="idp.example.com/*" Method={"GET", "POST"}, FFI "c*"> String
 call _ = fetch "x"
 
 main : <IO> Unit

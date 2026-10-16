@@ -219,13 +219,13 @@ arrow; an atom that names it charges the effect on whatever that argument is:
 
 ```medaka
 effect Store Prefix
-extern load : (path : String) -> <FFI, Store path> Int
+extern load : (path : String) -> <FFI "c", Store path> Int
 extern move : (src : String) ->
   (dst : String) ->
-  <FFI, Store src, Store dst> Unit
-under : (path : String) -> <FFI, Store path> Int  -- may read path, nothing else
+  <FFI "c", Store src, Store dst> Unit
+under : (path : String) -> <FFI "c*", Store path> Int  -- may read path, nothing else
 under path = load path
-config : String -> <FFI, Store "cfg/*"> Int  -- the caller extends the path
+config : String -> <FFI "c*", Store "cfg/*"> Int  -- the caller extends the path
 config name = under ("cfg/" ++ name)
 pathOf : (dir : String @Store) -> String @dir  -- a domain on the binder, no charge
 pathOf dir = dir
@@ -247,11 +247,11 @@ cannot fill a pattern slot, and neither can an exact literal
 
 ```medaka
 effect Store Prefix
-extern load : (path : String) -> <FFI, Store path> Int
-under : (dir : String @Store*) -> String -> <FFI, Store dir> Int
+extern load : (path : String) -> <FFI "c", Store path> Int
+under : (dir : String @Store*) -> String -> <FFI "c*", Store dir> Int
 under dir name = load (dir ++ name)  -- stays within `dir`
 data Dir (d : Authority Store*) = Dir (String @d)
-readIn : Dir d -> String -> <FFI, Store d> Int
+readIn : Dir d -> String -> <FFI "c*", Store d> Int
 readIn (Dir root) name = load (root ++ "blocks/" ++ name)
 cfg : Dir "cfg/*"
 cfg = Dir "cfg/"
@@ -1103,25 +1103,27 @@ effect row must name `FFI` — the compiler does not add the label for you, beca
 row it rewrote would no longer be the row you read.
 
 ```medaka
-extern foo : Int -> <FFI> String
-extern add2 : Int -> Int -> <FFI> Int
-extern cCurlVersion : Unit -> <FFI "libcurl"> String
+extern foo : Int -> <FFI "c"> String
+extern add2 : Int -> Int -> <FFI "c"> Int
+extern cCurlVersion : Unit -> <FFI "c/libcurl"> String
 ```
 
 The optional string parameter names the library, exactly as `<Exec "clang">` names a
 binary. It is a **statement about where the call goes, not an enforcement** — the
-linker decides what actually resolves.
+linker decides what actually resolves. The parameter is host-qualified: `"c"` is the
+C host and `"c/libcurl"` is a library on it. A bound `"c*"` admits both `"c"` and
+`"c/libcurl"`; a bound `"c"` admits only `"c"`.
 
 Rules, each a located error when broken:
 
 - The row must name `FFI`, joined with whatever else it names
-  (`String -> <FFI, Net "a.com/*"> String` is fine). Omitting it is
+  (`String -> <FFI "c", Net "a.com/*"> String` is fine). Omitting it is
   `T-FFI-UNLABELLED`.
 - Only the types in `compiler/FFI-ABI.md` §1 may cross: `Int`, `Float`, `Bool`,
   `Char`, `String`, `Array Int`, `Unit`. Anything else is `T-FFI-NONCROSSABLE`.
 - A **nullary** `extern k : Int` is refused (`T-FFI-NULLARY`) — an effect row lives
   on an arrow's result, so a signature with no arrow has nowhere to write `FFI`.
-  Write `extern k : Unit -> <FFI> Int` and call it as `k ()`.
+  Write `extern k : Unit -> <FFI "c"> Int` and call it as `k ()`.
 - Names beginning `mdk_` are reserved for the runtime's own C symbols
   (`T-FFI-RESERVED-NAME`).
 - Redeclaring a `stdlib/runtime.mdk` catalog name may not **narrow** its effect
@@ -1130,8 +1132,8 @@ Rules, each a located error when broken:
 - One C symbol has one signature program-wide; two modules declaring the same name
   with different shapes is refused.
 
-`<FFI>` is **not** an `<IO>` alias member, deliberately: an `<IO>` bound does not
-admit `<FFI>`, so a boundary has to say `FFI` literally to let a foreign call
+`<FFI "c*">` is **not** an `<IO>` alias member, deliberately: an `<IO>` bound does not
+admit `<FFI "c*">`, so a boundary has to say `FFI` literally to let a foreign call
 through.
 
 The externs in `stdlib/runtime.mdk` are the compiler's own catalog and are exempt —
@@ -1197,7 +1199,7 @@ FFI is **native-build only**. `medaka run` (the tree-walking interpreter) and
 `build --target wasm` both reject a program with a user FFI extern, with a
 capability message — neither can make a foreign C call.
 
-⚠️ `<FFI>` tracks **authority, not memory safety**. A foreign function shares the
+⚠️ `<FFI "c*">` tracks **authority, not memory safety**. A foreign function shares the
 address space and the GC heap; nothing in the effect system detects or prevents a
 bad pointer. See `docs/KNOWN-GAPS.md`.
 

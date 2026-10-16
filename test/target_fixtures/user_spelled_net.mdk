@@ -3,7 +3,7 @@
 -- `FFI` alone and llvm/native-posix admits the program.
 effect Net Prefix
 
-extern netGet : (url : String) -> <FFI, Net url> String
+extern netGet : (url : String) -> <FFI "c", Net url> String
 
-main : <Stdout, FFI, Net> Unit
+main : <Stdout, FFI "c*", Net> Unit
 main = println (netGet "a.com/api")

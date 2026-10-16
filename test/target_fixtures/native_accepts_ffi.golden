@@ -1,6 +1,6 @@
 exit=0
 --- stdout
-ffiAddInts : Int -> Int -> <FFI> Int
-main : <FFI, Stdout> Unit
+ffiAddInts : Int -> Int -> <FFI "c"> Int
+main : <FFI "c*", Stdout> Unit
 -- <fixtures>/ffi_entry.mdk: ok (2 declaration(s) checked, 0 errors)
 --- stderr

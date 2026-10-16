@@ -104,9 +104,9 @@ if [ -f "$PLAYGROUND" ] && node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGR
 # for wasmgc/browser-worker, so its refusal is the target check's, which names
 # the label and the extern the entry reaches it through, before the emitter runs.
 cat > "$WORK/input.mdk" <<'EOF2'
-extern cNegate : Int -> <FFI "x"> Int
+extern cNegate : Int -> <FFI "c/x"> Int
 
-main : <FFI> Int
+main : <FFI "c*"> Int
 main = cNegate 5
 EOF2
 check_ffi_wall() {

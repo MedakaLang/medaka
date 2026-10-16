@@ -21,17 +21,17 @@ test "Product accepts when Host and Method are independently confined" =
 
 test "Product rejects an out-of-prefix Host" = expectCheckReject (fixture
   "prod_reject_host.mdk") [
-  "performs <FFI, Net Host=\"other.com/api\" Method={\"GET\"}>",
+  "performs <FFI \"c\", Net Host=\"other.com/api\" Method={\"GET\"}>",
 ]
 
 test "Product rejects an out-of-set Method" = expectCheckReject (fixture
   "prod_reject_method.mdk") [
-  "performs <FFI, Net Host=\"idp.example.com/api\" Method={\"POST\"}>",
+  "performs <FFI \"c\", Net Host=\"idp.example.com/api\" Method={\"POST\"}>",
 ]
 
 test "Product treats a missing inferred Method axis as top" = expectCheckReject
   (fixture "prod_soundness.mdk")
-  ["performs <FFI, Net Host=\"idp.example.com/api\">"]
+  ["performs <FFI \"c\", Net Host=\"idp.example.com/api\">"]
 
 test "a bare Product literal lifts into the Host axis" =
   expectCheckAccept (fixture "prod_host_lift.mdk")
@@ -53,7 +53,7 @@ test "every axis takes a binder, each in its own axis's domain" =
 test "a runtime argument on the Method axis is that axis's top" = expectCheckReject
   (fixture "prod_axis_binder_runtime.mdk")
   [
-    "performs <Http Host=\"api.example.com/users\"> where only <FFI, Http Host=\"api.example.com/*\" Method={\"GET\"}> is allowed",
+    "performs <Http Host=\"api.example.com/users\"> where only <FFI \"c*\", Http Host=\"api.example.com/*\" Method={\"GET\"}> is allowed",
   ]
 
 test "arguments passed swapped are charged on the axes they land on" = expectCheckReject

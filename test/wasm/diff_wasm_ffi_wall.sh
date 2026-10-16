@@ -78,17 +78,17 @@ check_refused() {
 
 # regression floor: the saturated-call shape was already correct pre-#2129.
 check_one "saturated" \
-'extern cNegate : Int -> <FFI "x"> Int
+'extern cNegate : Int -> <FFI "c/x"> Int
 
-main : <FFI> Int
+main : <FFI "c*"> Int
 main = cNegate 5' \
   "cNegate"
 
 # #2129 b6_hof: an FFI extern referenced in value position (passed to a HOF).
 check_one "value_position_hof" \
-'extern cNegate : Int -> <FFI "x"> Int
+'extern cNegate : Int -> <FFI "c/x"> Int
 
-main : <FFI> List Int
+main : <FFI "c*"> List Int
 main = map cNegate [1, 2, 3]' \
   "cNegate"
 
@@ -98,12 +98,12 @@ main = map cNegate [1, 2, 3]' \
 # extern's own type has an arrow, but the reference to it (`gNullary`, inside
 # `useIt`) is a bare name that is never called.
 check_one "bare_toplevel_reference" \
-'extern gNullary : Unit -> <FFI "x"> Int
+'extern gNullary : Unit -> <FFI "c/x"> Int
 
-useIt : Unit -> Unit -> <FFI "x"> Int
+useIt : Unit -> Unit -> <FFI "c/x"> Int
 useIt _ = gNullary
 
-main : <FFI> Int
+main : <FFI "c*"> Int
 main = (useIt ()) ()' \
   "gNullary"
 

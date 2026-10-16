@@ -34,7 +34,7 @@ and from then on every caller is charged with it. `check` prints
 `main : <Audit, Stdout> Unit`.
 
 In a real system the function behind a label is usually a host import, an `extern`
-the platform provides (`extern kvGet : String -> <FFI, KV> String`, with the
+the platform provides (`extern kvGet : String -> <FFI "c", KV> String`, with the
 `FFI` every foreign declaration must carry, see below), and the label is the
 platform's name for that capability. But nothing about a label depends on
 that. `Audit` above is pure Medaka, and it still tracks: a function that calls
@@ -255,13 +255,13 @@ error: ffi.mdk:1:14: foreign declaration `cAbs` does not name the `FFI` effect i
 ```
 
 The parameter names the library. The compiler checks it like any other parameter,
-so a function bounded to `<FFI "libc">` cannot call a `<FFI "libm">` extern; what
+so a function bounded to `<FFI "c/libc">` cannot call a `<FFI "c/libm">` extern; what
 it cannot check is where the call really goes, since the linker decides that:
 
 ```medaka
-extern cSqrt : Float -> <FFI "libm"> Float
+extern cSqrt : Float -> <FFI "c/libm"> Float
 
-root : Float -> <FFI "libm"> Float
+root : Float -> <FFI "c/libm"> Float
 root x = cSqrt x
 ```
 
@@ -269,7 +269,7 @@ root x = cSqrt x
 function:
 
 ```
-error: ffi.mdk:4:17: performs <FFI> where only <IO> is allowed
+error: ffi.mdk:4:17: performs <FFI "c*"> where only <IO> is allowed
   |
 4 | wrapped n = cAbs n
   |                  ^

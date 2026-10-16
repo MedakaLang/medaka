@@ -3,7 +3,8 @@
 -- is in-set.  Host axis escapes => REJECT (performs the narrow product).
 effect Net Product (Host : Prefix, Method : Set)
 
-extern fetch : String -> <FFI, Net Host="other.com/api" Method={"GET"}> String
+extern fetch : String ->
+  <FFI "c", Net Host="other.com/api" Method={"GET"}> String
 
 call : Unit -> <Net Host="idp.example.com/*" Method={"GET", "POST"}> String
 call _ = fetch "x"

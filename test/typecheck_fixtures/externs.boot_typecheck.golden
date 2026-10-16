@@ -1,8 +1,8 @@
-strLen : String -> <FFI> Int
-charAt : String -> Int -> <FFI> Char
-emit : String -> <FFI, IO> Unit
-rng : Unit -> <FFI, Rand> Int
-useLen : String -> <FFI> Int
-firstOf : String -> <FFI> Char
-combine : String -> String -> <FFI> Int
-shout : String -> <FFI, IO> Unit
+strLen : String -> <FFI "c"> Int
+charAt : String -> Int -> <FFI "c"> Char
+emit : String -> <FFI "c", IO> Unit
+rng : Unit -> <FFI "c", Rand> Int
+useLen : String -> <FFI "c"> Int
+firstOf : String -> <FFI "c"> Char
+combine : String -> String -> <FFI "c"> Int
+shout : String -> <FFI "c*", IO> Unit

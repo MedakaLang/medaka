@@ -13,6 +13,7 @@ UPPER "String"
 ARROW
 LT
 UPPER "FFI"
+STRING "c"
 COMMA
 UPPER "Net"
 STRING "a.com/foo"
@@ -28,6 +29,7 @@ UPPER "Net"
 STRING "a.com/foo"
 COMMA
 UPPER "FFI"
+STRING "c*"
 GT
 UPPER "String"
 NEWLINE

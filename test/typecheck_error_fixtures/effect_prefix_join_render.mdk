@@ -4,14 +4,14 @@
 -- covering both is accepted as a wider bound.
 effect Net Prefix
 
-extern visit : (host : String) -> <Net host, FFI> Unit
+extern visit : (host : String) -> <Net host, FFI "c"> Unit
 
 joined b = if b then visit "a.com/x" else visit "a.com.evil/x"
 
-written : Bool -> <FFI, Net "a.com.evil/x", Net "a.com/x"> Unit
+written : Bool -> <FFI "c*", Net "a.com.evil/x", Net "a.com/x"> Unit
 written b = if b then visit "a.com/x" else visit "a.com.evil/x"
 
-wider : Bool -> <FFI, Net "a.com*"> Unit
+wider : Bool -> <FFI "c*", Net "a.com*"> Unit
 wider b = if b then visit "a.com/x" else visit "a.com.evil/x"
 
 main = println 1
