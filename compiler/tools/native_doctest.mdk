@@ -57,7 +57,6 @@ import driver.build_cmd.{
 import driver.loader.{entrySearchRoots}
 import support.path.{joinPath, baseOf, dirOf}
 import support.util.{joinNl, splitNl}
-import string.{replaceAll}
 import tools.probe_transcript.{
   Chunk(..),
   chunksOf,
@@ -68,7 +67,9 @@ import tools.probe_transcript.{
   lookupChunk,
   mintNonce,
   noncedPrefix,
+  probeNameNonce,
   renameUserMain,
+  runtimeAlias,
   runtimeDependencyName,
   runtimeDependencyPrefix,
   sentinelLine,
@@ -89,18 +90,11 @@ import tools.doctest.{
 -- `test "…"` engine.  What is per-engine is the PREFIX, so neither engine can
 -- read the other's transcript.
 
--- `sentinelPrefix` takes the per-run nonce `mintNonce` draws in
--- `nativeRendered` — the target's spliced-in source is fixed before that draw
--- happens, so it cannot spell the resulting prefix. See
--- `probe_transcript.mdk`'s "the nonce".
+-- The per-run nonce `mintNonce` draws in `nativeRendered` — the target's
+-- spliced-in source is fixed before that draw happens, so it cannot spell the
+-- resulting prefix. See `probe_transcript.mdk`'s "the nonce".
 sentinelBase : String
 sentinelBase = "@@__mdk_native_doctest__@@"
-
-sentinelPrefix : String -> String
-sentinelPrefix nonce = noncedPrefix sentinelBase nonce
-
-sentinelFor : String -> String -> String
-sentinelFor nonce tag = sentinelLine (sentinelPrefix nonce) tag
 
 -- Every tag this engine's probe prints, in the order it prints them — one per
 -- example whose synth PARSED (mirroring `mainLines`), then the terminator.
@@ -327,7 +321,7 @@ buildAndRun target entryPath outPath tmpDir examples synthResults nonce =
       Err e =>
         Err "native doctest runner: could not run the compiled probe: \{e}"
       Ok (code, out, errOut) =>
-        let chunks = chunksOf (sentinelPrefix nonce) (splitNl out)
+        let chunks = chunksOf (noncedPrefix sentinelBase nonce) (splitNl out)
         if tagsInOrder (expectedTags 0 examples synthResults) chunks then
           Ok (renderAll chunks (abortNote code errOut) 0 examples synthResults)
         else
@@ -361,15 +355,9 @@ probeSource nonce tsrc examples synthResults =
       ++ ["", "main ="]
       ++ mainLines nonce 0 examples synthResults
       ++ [
-        "  \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce endTag}\"",
+        "  \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) endTag}\"",
         "",
       ])
-
-runtimeAlias : String -> String
-runtimeAlias nonce = "NpRuntime_\{probeNameNonce nonce}"
-
-probeNameNonce : String -> String
-probeNameNonce nonce = replaceAll "-" "_" nonce
 
 probeNamespacePrefixes : List String
 probeNamespacePrefixes = ["__ndt_", "NpRuntime_", runtimeDependencyPrefix]
@@ -413,7 +401,7 @@ mainLines nonce i (_ :: rest) ((Err _) :: srRest) =
   mainLines nonce (i + 1) rest srRest
 mainLines nonce i (ex :: rest) ((Ok _) :: srRest) =
   [
-      "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (intToString i)}\"",
+      "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) (intToString i)}\"",
       valueLine nonce i ex,
     ]
     ++ mainLines nonce (i + 1) rest srRest

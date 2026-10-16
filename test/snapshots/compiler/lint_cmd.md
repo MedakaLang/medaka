@@ -1,5 +1,5 @@
 # META
-source_lines=610
+source_lines=612
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cmd.mdk — the `medaka lint` engine.
@@ -190,10 +190,12 @@ crossFileJsonFindings disableNames onlyNames denyNames quads =
   let suppressed = applySuppressionsMulti (map quadToSrc quads) raw
   applyFindingDeny denyNames suppressed
 
+export
 quadToParseTriple : (String, String, List Diag, Positions, List Decl) ->
   (String, Positions, List Decl)
 quadToParseTriple (path, _, _, pos, decls) = (path, pos, decls)
 
+export
 quadToSrc : (String, String, List Diag, Positions, List Decl) ->
   (String, String)
 quadToSrc (path, src, _, _, _) = (path, src)
@@ -630,9 +632,9 @@ lintOneFileFix onlyNames disableNames target = match readSource target
 (DFunDef false "runLintJsonCmd" ((PVar "idx") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "files")) (EBlock (DoLet false false (PVar "quads") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesToDiagQuads") (EVar "idx")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "files"))) (DoLet false false (PVar "triples") (EApp (EApp (EVar "map") (EVar "dropQuadParse")) (EVar "quads"))) (DoLet false false (PVar "cross") (EApp (EApp (EApp (EApp (EVar "crossFileJsonFindings") (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "quads"))) (DoLet false false (PVar "merged") (EApp (EApp (EVar "mergeCrossFileIntoTriples") (EVar "cross")) (EVar "triples"))) (DoLet false false PWild (EApp (EVar "putStr") (EApp (EVar "cjAllToJson") (EVar "merged")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (EVar "cjLintTripleHasErr")) (EVar "merged")) (EApp (EVar "exit") (ELit (LInt 1))) (ELit LUnit)))))
 (DTypeSig true "crossFileJsonFindings" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "crossFileJsonFindings" ((PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "quads")) (EBlock (DoLet false false (PVar "parsedTriples") (EApp (EApp (EVar "map") (EVar "quadToParseTriple")) (EVar "quads"))) (DoLet false false (PVar "raw") (EApp (EApp (EApp (EVar "runCrossFileRules") (EVar "onlyNames")) (EVar "disableNames")) (EVar "parsedTriples"))) (DoLet false false (PVar "suppressed") (EApp (EApp (EVar "applySuppressionsMulti") (EApp (EApp (EVar "map") (EVar "quadToSrc")) (EVar "quads"))) (EVar "raw"))) (DoExpr (EApp (EApp (EVar "applyFindingDeny") (EVar "denyNames")) (EVar "suppressed")))))
-(DTypeSig false "quadToParseTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))))
+(DTypeSig true "quadToParseTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "quadToParseTriple" ((PTuple (PVar "path") PWild PWild (PVar "pos") (PVar "decls"))) (ETuple (EVar "path") (EVar "pos") (EVar "decls")))
-(DTypeSig false "quadToSrc" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String"))))
+(DTypeSig true "quadToSrc" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "quadToSrc" ((PTuple (PVar "path") (PVar "src") PWild PWild PWild)) (ETuple (EVar "path") (EVar "src")))
 (DTypeSig false "dropQuadParse" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
 (DFunDef false "dropQuadParse" ((PTuple (PVar "path") (PVar "src") (PVar "diags") PWild PWild)) (ETuple (EVar "path") (EVar "src") (EVar "diags")))
@@ -711,9 +713,9 @@ lintOneFileFix onlyNames disableNames target = match readSource target
 (DFunDef false "runLintJsonCmd" ((PVar "idx") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "baseCtx") (PVar "files")) (EBlock (DoLet false false (PVar "quads") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesToDiagQuads") (EVar "idx")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "baseCtx")) (EVar "files"))) (DoLet false false (PVar "triples") (EApp (EApp (EMethodRef "map") (EVar "dropQuadParse")) (EVar "quads"))) (DoLet false false (PVar "cross") (EApp (EApp (EApp (EApp (EVar "crossFileJsonFindings") (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "quads"))) (DoLet false false (PVar "merged") (EApp (EApp (EVar "mergeCrossFileIntoTriples") (EVar "cross")) (EVar "triples"))) (DoLet false false PWild (EApp (EVar "putStr") (EApp (EVar "cjAllToJson") (EVar "merged")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (EVar "cjLintTripleHasErr")) (EVar "merged")) (EApp (EVar "exit") (ELit (LInt 1))) (ELit LUnit)))))
 (DTypeSig true "crossFileJsonFindings" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "crossFileJsonFindings" ((PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "quads")) (EBlock (DoLet false false (PVar "parsedTriples") (EApp (EApp (EMethodRef "map") (EVar "quadToParseTriple")) (EVar "quads"))) (DoLet false false (PVar "raw") (EApp (EApp (EApp (EVar "runCrossFileRules") (EVar "onlyNames")) (EVar "disableNames")) (EVar "parsedTriples"))) (DoLet false false (PVar "suppressed") (EApp (EApp (EVar "applySuppressionsMulti") (EApp (EApp (EMethodRef "map") (EVar "quadToSrc")) (EVar "quads"))) (EVar "raw"))) (DoExpr (EApp (EApp (EVar "applyFindingDeny") (EVar "denyNames")) (EVar "suppressed")))))
-(DTypeSig false "quadToParseTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))))
+(DTypeSig true "quadToParseTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "quadToParseTriple" ((PTuple (PVar "path") PWild PWild (PVar "pos") (PVar "decls"))) (ETuple (EVar "path") (EVar "pos") (EVar "decls")))
-(DTypeSig false "quadToSrc" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String"))))
+(DTypeSig true "quadToSrc" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "quadToSrc" ((PTuple (PVar "path") (PVar "src") PWild PWild PWild)) (ETuple (EVar "path") (EVar "src")))
 (DTypeSig false "dropQuadParse" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))
 (DFunDef false "dropQuadParse" ((PTuple (PVar "path") (PVar "src") (PVar "diags") PWild PWild)) (ETuple (EVar "path") (EVar "src") (EVar "diags")))

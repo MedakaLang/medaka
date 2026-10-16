@@ -7,9 +7,8 @@ import json.{Json, parse, get, asArray, asInt, asString, stringify}
 import test.{Expectation, expectAll, expectEqual, expectTrue, fail, labelFail}
 import test_process.{boundedVerbSeconds, medakaBin}
 import tools.native_fixture_test_support_test.{writeFixtureFiles}
-import tools.eval_props.{
-  decodeEvalPropRows, sentinelPrefix, takeEvalPropBootstrap
-}
+import tools.eval_props.{decodeEvalPropRows, takeEvalPropBootstrap}
+import tools.probe_transcript.{noncedPrefix}
 import tools.prop_runner.{
   PropResult(..), PropStatus(..), PropFailureKind(..), PropRequest(..)
 }
@@ -19,7 +18,7 @@ request = PropRequest "law" 7 3
 
 completeWire : String -> String -> String
 completeWire nonce row =
-  "\{sentinelPrefix nonce}row-0\n\{row}\n\{sentinelPrefix nonce}END\n"
+  "\{noncedPrefix "@@__mdk_eval_props__@@" nonce}row-0\n\{row}\n\{noncedPrefix "@@__mdk_eval_props__@@" nonce}END\n"
 
 runtimeRow : String
 runtimeRow =
@@ -51,7 +50,8 @@ test "eval property worker decoder accepts one complete typed row" =
 test "eval property worker decoder rejects truncated, mismatched, and contradictory rows" = expectAll
   [
     expectTrue
-      (decodeRejects "\{sentinelPrefix "nonce"}row-0\n\{runtimeRow}\n"),
+      (decodeRejects
+        "\{noncedPrefix "@@__mdk_eval_props__@@" "nonce"}row-0\n\{runtimeRow}\n"),
     expectTrue
       (decodeRejects
         (completeWire

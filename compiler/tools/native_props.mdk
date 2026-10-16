@@ -17,12 +17,12 @@ import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omKeys, omLookup}
 import support.util.{
   joinNl, joinWith, splitNl, filterList, lookupAssoc, listLen, zipL, reverseL
 }
-import string.{replaceAll}
 import string.{toInt}
 import tools.probe_transcript.{
   Chunk(..), chunksOf, decodeValue, endTag, firstNonEmptyLine, mintNonce,
-  freshProbeNonce, noncedPrefix, renameUserMain, runtimeDependencyName,
-  runtimeDependencyPrefix, sentinelLine, tagsInOrder, valuePrintExprWith
+  freshProbeNonce, noncedPrefix, probeNameNonce, renameUserMain, runtimeAlias,
+  runtimeDependencyName, runtimeDependencyPrefix, sentinelLine, startTag,
+  tagsInOrder, valuePrintExprWith
 }
 import tools.printer.{exprToString, ppTy}
 import tools.prop_plan.{
@@ -44,15 +44,6 @@ import tools.prop_runner.{
 
 sentinelBase : String
 sentinelBase = "@@__mdk_native_prop__@@"
-
-sentinelPrefix : String -> String
-sentinelPrefix nonce = noncedPrefix sentinelBase nonce
-
-sentinelFor : String -> String -> String
-sentinelFor nonce tag = sentinelLine (sentinelPrefix nonce) tag
-
-startTag : Int -> String
-startTag i = "\{intToString i}.start"
 
 boolTag : Int -> String
 boolTag i = "\{intToString i}.bool"
@@ -425,7 +416,7 @@ buildAndRunPlanned target entry out tmp jobs nonce =
             "native property runner: could not run the compiled probe: \{e}")
       Ok (code, stdout, stderr) =>
         let props = plannedDeclRequests jobs
-        let chunks = chunksOf (sentinelPrefix nonce) (splitNl stdout)
+        let chunks = chunksOf (noncedPrefix sentinelBase nonce) (splitNl stdout)
         if tagsInOrder (expectedTags 0 props) chunks then
           Ok (renderAll chunks (abortNote code stderr) 0 props)
         else
@@ -621,7 +612,7 @@ plannedProbeSource nonce target tsrc modules env jobs =
       ++ ["main ="]
       ++ plannedMainLines nonce jobs 0
       ++ [
-        "  \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce endTag}\"",
+        "  \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) endTag}\"",
         "",
       ])
 
@@ -629,12 +620,6 @@ plannedProbeSource nonce target tsrc modules env jobs =
 -- the TypeKey owner, never by a bare source spelling.
 coreAlias : String -> String
 coreAlias nonce = "NpCore_\{probeNameNonce nonce}"
-
-runtimeAlias : String -> String
-runtimeAlias nonce = "NpRuntime_\{probeNameNonce nonce}"
-
-probeNameNonce : String -> String
-probeNameNonce nonce = replaceAll "-" "_" nonce
 
 generatedPrefix : String -> String
 generatedPrefix nonce = "__np_\{probeNameNonce nonce}_"
@@ -2095,19 +2080,19 @@ plannedMainLines : String -> List NativePlanOutcome -> Int -> List String
 plannedMainLines _ [] _ = []
 plannedMainLines nonce ((NativeRunnable (DProp _ _ params _) r plans) :: rest) i =
   [
-      "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (startTag i)}\"",
+      "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) (startTag i)}\"",
       "  let _ = \{generatedPrefix nonce}state := ((\{intToString (propRequestSeed r)} % \{intToString structuralRngModulus}) + \{intToString structuralRngModulus}) % \{intToString structuralRngModulus}",
       "  let caller = \{runtimeAlias nonce}.randomState ()",
       "  let _ = \{runtimeAlias nonce}.setSeed \{intToString (propRequestSeed r)}",
       "  let _ = \{generatedPrefix nonce}custom_state := \{runtimeAlias nonce}.randomState ()",
       "  let _ = \{runtimeAlias nonce}.restoreRandomState caller",
       "  let seed = \{intToString (propRequestSeed r)}",
-      "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (seedTag i)}\"",
+      "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) (seedTag i)}\"",
       "  let _ = \{valuePrintExprWith (runtimeAlias nonce ++ ".putStrLn") (runtimeAlias nonce ++ ".debugStringLit") (runtimeAlias nonce ++ ".intToString seed")}",
       "  let (ok, detail) = \{runName nonce i} \{intToString (propRequestCases r)}",
-      "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (boolTag i)}\"",
+      "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) (boolTag i)}\"",
       "  let _ = \{valuePrintExprWith (runtimeAlias nonce ++ ".putStrLn") (runtimeAlias nonce ++ ".debugStringLit") (coreAlias nonce ++ ".debug ok")}",
-      "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (detailTag i)}\"",
+      "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) (detailTag i)}\"",
       "  let _ = \{valuePrintExprWith (runtimeAlias nonce ++ ".putStrLn") (runtimeAlias nonce ++ ".debugStringLit") "detail"}",
     ]
     ++ plannedMainLines nonce rest (i + 1)
