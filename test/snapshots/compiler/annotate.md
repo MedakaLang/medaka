@@ -1,5 +1,5 @@
 # META
-source_lines=298
+source_lines=297
 stages=DESUGAR,MARK
 # SOURCE
 -- annotate.mdk — Lexical-addressing EMISSION pass (STAGE2-DESIGN §2.0).
@@ -73,7 +73,6 @@ import frontend.ast.{
 }
 import support.util.{reverseL}
 
--- ── self-contained helper copies (resolve.mdk keeps its own for its main pass) ─
 -- ── framed scope (innermost frame first; each frame its names in slot order) ──
 -- per-parameter frames for a closure's params: applyClosure pushes one frame per
 -- param, innermost = last, so reverse the left-to-right per-param binding lists

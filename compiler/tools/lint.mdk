@@ -4714,7 +4714,7 @@ whenUnlessFix _ d = exprRuleFix whenUnlessExcl (detApply whenUnlessOf) d
 -- `q`, rewritten to `q args…` (the args carried verbatim).  Curated BIDIRECTIONAL
 -- pairs only — the complement must actually exist:
 --   isEmptyL ↔ isNonEmptyL   (compiler `support/util.mdk`)
---   isEmptyList ↔ isNonEmptyList  (wasm_emit's private List helper + its complement)
+--   isEmptyList ↔ isNonEmptyList  (a List helper pair some modules define locally)
 --   isSome ↔ isNone          (prelude `core.mdk`)
 --   isOk ↔ isErr             (prelude `core.mdk`)
 -- Matches the `not` prelude-fn form only (see `notArgOf`).  Purely syntactic —
