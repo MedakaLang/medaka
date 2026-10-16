@@ -9,16 +9,9 @@ isHint
 isThenTok
 isWildPat
 letBindName
-probeNameNonce
 propParamName
 pureRow
-quadToParseTriple
-quadToSrc
 recFieldBindings
-runtimeAlias
 selfBinding
-sentinelFor
-sentinelPrefix
-startTag
 stripLocE
 variantName

@@ -1284,6 +1284,7 @@ writeMessage j =
 -- live in `compiler/support/util.mdk` (imported above).
 
 -- A JSON-RPC response envelope: { jsonrpc, id, result }.
+export
 responseMsg : Json -> Json -> Json
 responseMsg idJson result =
   jObject [("jsonrpc", JString "2.0"), ("id", idJson), ("result", result)]
@@ -2036,11 +2037,13 @@ lastChangeText (JArray arr)
 lastChangeText _ = None
 
 -- json field accessors specialized to the shapes we read.
+export
 fieldOr : String -> Json -> Json
 fieldOr key j = match get key j
   Some v => v
   None => JNull
 
+export
 fieldStr : String -> Json -> Option String
 fieldStr key j = match get key j
   Some v => asString v
@@ -2051,6 +2054,7 @@ fieldStr key j = match get key j
 requestId : Json -> Json
 requestId msg = fieldOr "id" msg
 
+export
 methodOf : Json -> Option String
 methodOf msg = fieldStr "method" msg
 
@@ -2178,5 +2182,6 @@ runServer runtimeSrc coreSrc serverVersion =
   let _ = logLine "=== medaka-lsp session start ==="
   serve runtimeSrc coreSrc serverVersion emptyDocs
 
+export
 unit : Unit
 unit = ()
