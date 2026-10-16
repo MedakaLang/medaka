@@ -38,7 +38,7 @@ obligations — `[W-PROJECT-BY-MANIFEST]` in `AGENTS.md`, not this skill.
 |---|---|---|
 | `compiler/frontend/` | Source text → resolved, marked AST: `lexer.mdk`, `parser.mdk`, `ast.mdk`, `desugar.mdk`, `resolve.mdk`, `marker.mdk`, `exhaust.mdk`. | Know about Core IR, LLVM, or any CLI verb. |
 | `compiler/types/` | Type inference, interfaces, effects — `typecheck.mdk`, `annotate.mdk`. Exhaustiveness is *called from* here (`[P-EXHAUST-IN-TYPECHECK]`) but lives in `frontend/`. | Emit diagnostics by raising — errors accumulate (`[T-ERRORS-ACCUM]`). |
-| `compiler/ir/` | Core IR: the types, lowering, S-expr form, DCE, and the Core IR interpreter. The seam between front and back (`compiler/STAGE2-DESIGN.md`). | Contain surface-AST knowledge, or backend target detail. |
+| `compiler/ir/` | Core IR: the types, lowering, S-expr form, DCE, and the Core IR interpreter. The seam between front and back (`archive/design/STAGE2-DESIGN.md`). | Contain surface-AST knowledge, or backend target detail. |
 | `compiler/backend/` | Target emission — `llvm_emit.mdk`, `wasm_emit.mdk`, mangling, TRMC analysis. Consumes Core IR only. | Re-derive anything the frontend or typechecker already computed. |
 | `compiler/eval/` | The tree-walking interpreter and its dict-passing dispatch. Its module driver moves in lockstep with `compiler/ir/core_ir_eval.mdk`'s (`[T-EVAL-LOCKSTEP]`). | Drift from the Core IR interpreter's frame semantics. |
 | `compiler/driver/` | **Dispatch, never implementation.** Verb routing (`medaka_cli.mdk`), the dependency walk (`loader.mdk`), the accumulating diagnostics pipeline (`diagnostics.mdk`), the build pipeline (`build_cmd.mdk`). | Hold a subcommand's *logic* or its command-local ADTs. That is the de-grab-bag work, #2282. |

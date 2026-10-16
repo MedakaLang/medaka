@@ -6,7 +6,7 @@ analysis + build plan; nothing here is implemented yet.
 **Goal:** catch every quadratic-or-worse regression *in CI*, before it reaches `main`.
 **Scope:** the whole compiler pipeline, not just the front end the current gate favours.
 
-Companion perf docs: `compiler/PERF-SCOPE.md` (ranked hot paths), `compiler/PERF-RESULTS.md`
+Companion perf docs: `archive/design/PERF-SCOPE.md` (ranked hot paths), `compiler/PERF-RESULTS.md`
 (measured log incl. dead ends), and the deep-dive `.claude/workstreams/PERF.md`. This doc is
 the *coverage map*: what the gates see, what they cannot, and how to close the gap.
 

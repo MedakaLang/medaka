@@ -7,7 +7,7 @@ itself got wrong.
 
 **What this is.** A responsibility map: the subsystems inside the typechecker, what each
 owns, which state it touches, and which spec clause governs it. It exists because every
-prior artifact about this file is *defect-indexed* — `compiler/ARCH-REVIEW.md` is a
+prior artifact about this file is *defect-indexed* — `archive/design/ARCH-REVIEW.md` is a
 critique, `.claude/workstreams/TYPECHECK.md` is a duplicate-family map, #991–#995 are five
 seam deep-dives. None of them answers *"what are the parts?"*, which is the question you
 need answered before you can argue about a target architecture.
@@ -796,9 +796,9 @@ projections plus `entryOwnSchemes`; `ir/` reaches this file only through
 
 | Document | Claim | Status |
 |---|---|---|
-| `compiler/ARCH-REVIEW.md` | "6,916 lines; 48 top-level `Ref`s" | Historical (2026-06-14). Now 18,668 lines / 118 cells across 4 bundles + 9 loose. |
-| `compiler/ARCH-REVIEW.md` | status banner: "still one ~13k-line file" | Stale — 18,668. |
-| `compiler/ARCH-REVIEW.md` | "a 7k-line god-module with concentrated mutable state" | **Half fixed.** State is bundled; the concentration is now control-flow (§7.1). |
+| `archive/design/ARCH-REVIEW.md` | "6,916 lines; 48 top-level `Ref`s" | Historical (2026-06-14). Now 18,668 lines / 118 cells across 4 bundles + 9 loose. |
+| `archive/design/ARCH-REVIEW.md` | status banner: "still one ~13k-line file" | Stale — 18,668. |
+| `archive/design/ARCH-REVIEW.md` | "a 7k-line god-module with concentrated mutable state" | **Half fixed.** State is bundled; the concentration is now control-flow (§7.1). |
 | `.claude/workstreams/TYPECHECK.md` | "13,717 lines / 97 `Ref`s at `db33eeab`" | Line count correct; `db33eeab` is dated **2026-07-14**, not 07-15, and the genuine cell count there is **95**, not 97 — the same `: Ref ` over-count (§0 trap 4). |
 | This document, §2 | the 75 banners describe their regions | False — they are insertion markers, and §4 inherited two of their errors before review. |
 | This document, §7 | "marker produces `EMethodRef` — this file's **input contract**" | False (corrected 2026-09-02): `markWithPrelude` is imported only by `tools/snapshot.mdk` and two `entries/` probes, so `EMethodRef` is constructed on no production verb; the elaborate driver's own `prePassDictArg` mints `EMethodAt`/`EDictAt` and `check` runs no mark pass. |
@@ -844,7 +844,7 @@ written down as a trap. Only re-derivation caught any of them.
 - `docs/spec/EFFECTS-SEMANTICS.md` — §2 rows and domains, §3 judgment, §5 no-laundering,
   §6 polymorphism and kinds (§6.1–§6.5, §6.7), §8 erasure, §10 conformance gaps
 - `docs/spec/SHADOW-SEMANTICS.md` — §1 clauses S1–S9, §3 per-stage enforcement table
-- `compiler/DRIVER-COLLAPSE-PLAN.md` — the Flat/Module collapse invariant (§7.6)
+- `archive/design/DRIVER-COLLAPSE-PLAN.md` — the Flat/Module collapse invariant (§7.6)
 - `.claude/workstreams/TYPECHECK.md` — the standing gate, duplicate-family map
-- `compiler/ARCH-REVIEW.md` — PASS 1/2 prior review
+- `archive/design/ARCH-REVIEW.md` — PASS 1/2 prior review
 - `compiler/ERROR-QUALITY.md` — the rubric governing Layer 8's error-path machinery

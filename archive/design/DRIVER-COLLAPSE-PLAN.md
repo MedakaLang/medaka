@@ -22,7 +22,7 @@ tracked as Stage E of the typechecker target-architecture arc (`compiler/`
 `TYPECHECK-TARGET-ARCHITECTURE.md` §6, epic #1122: E-1 consumers → E-2 `CheckMode`
 collapse → E-3 defaulting placement → E-4 scheduled marking).
 
-Status: APPROVED 2026-06-13 (user). Implements `compiler/TYPECHECK-AUDIT.md §6`
+Status: APPROVED 2026-06-13 (user). Implements `archive/design/TYPECHECK-AUDIT.md §6`
 ("Dual drivers … the recurring defect"). Collapse the single-file typecheck+eval
 paths into the **1-module case of the multi-module path**, in compiler only, while
 the OCaml byte-diff oracle still exists — a prerequisite for the gated `lib/`

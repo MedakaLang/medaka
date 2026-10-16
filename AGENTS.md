@@ -343,7 +343,7 @@ playground is the site: static Cloudflare Pages, compiler in WasmGC. Deploy:
 - **[T-STDLIB-IMPORT]** The compiler may import `list`/`string` **selectively** (near-free).
   Never `.*`-import two modules with colliding names. A new-type module like `map` has real
   fixed cost. Don't route hot helpers through Foldable (`elem`/`any`/`length`).
-- **[T-TUPLES]** Tuples are `__tupleN__`-headed `TApp` spines, not `TTuple` (`compiler/TUPLE-TYPE-CONSTRUCTOR-DESIGN.md`).
+- **[T-TUPLES]** Tuples are `__tupleN__`-headed `TApp` spines, not `TTuple` (`archive/design/TUPLE-TYPE-CONSTRUCTOR-DESIGN.md`).
 - **[T-ERRORS-ACCUM]** Errors accumulate in `compiler/driver/diagnostics.mdk`. No early exits.
 - **[T-MAIN-ZERO-ARG]** `main = …` is a value; `main () = …` is an error on `run`/`build`.
   `main = 1 + 2` is a valid probe.
@@ -379,4 +379,4 @@ playground is the site: static Cloudflare Pages, compiler in WasmGC. Deploy:
 - **[DOC-INDEX]** `docs/README.md` is the generated doc index. Most used: `docs/spec/SYNTAX.md`
   (ground truth for syntax), `docs/spec/language-design.md` (may describe unimplemented
   features), `compiler/BOOTSTRAP.md`, `compiler/EMITTER-GAPS.md`,
-  `compiler/STAGE2-DESIGN.md`, `compiler/RUNTIME-DESIGN.md`, `compiler/PERF-RESULTS.md`.
+  `archive/design/STAGE2-DESIGN.md`, `compiler/RUNTIME-DESIGN.md`, `compiler/PERF-RESULTS.md`.

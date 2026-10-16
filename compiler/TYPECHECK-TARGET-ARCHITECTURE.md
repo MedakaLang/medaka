@@ -3734,7 +3734,7 @@ stays accepted, and A-3.7 (not A-3.4) is where it is at risk. Do not tidy it.
    consistent with a self-compile regression.
 
    **The bar:** `sh test/bench.sh` `selfcompile`, min-of-N, on a quiet box
-   (`compiler/PERF-SCOPE.md` §2b), **arms ALTERNATED A,B,A,B… — not all of A then
+   (`archive/design/PERF-SCOPE.md` §2b), **arms ALTERNATED A,B,A,B… — not all of A then
    all of B.** Interleaving is not pedantry: a shared box drifts under other
    agents' load, and a blocked run is exactly how a drift gets attributed to the
    diff. State the minimum detectable effect and the invocation that produced the
@@ -4374,7 +4374,7 @@ of a duplicate key, not the ORDER a whole-table walk produces.
 - [`TYPECHECK-ARCHITECTURE.md`](TYPECHECK-ARCHITECTURE.md) — the derived map this design targets
 - `docs/spec/DICT-SEMANTICS.md`, `docs/spec/EFFECTS-SEMANTICS.md`,
   `docs/spec/SHADOW-SEMANTICS.md` — the governing semantics
-- `compiler/ARCH-REVIEW.md` (PASS 2), `compiler/DRIVER-COLLAPSE-PLAN.md` — prior
+- `archive/design/ARCH-REVIEW.md` (PASS 2), `archive/design/DRIVER-COLLAPSE-PLAN.md` — prior
   structural verdicts this design keeps or completes
 - `.claude/workstreams/TYPECHECK.md` — the standing gate
 - Issues: **#1122 (the epic / stage tracker)**; #991–#995 (adopted),

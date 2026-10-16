@@ -196,7 +196,7 @@ discarded stdout on panic**, so a `println` probe returned nothing whether the p
 
 - `docs/spec/SHADOW-SEMANTICS.md` — the standalone-fn ⇄ interface-method shadowing rules (S1–S8), and
   the **S7 path-agreement** rule that #54 violated (S-3 / row 26, closed 2026-07-17).
-- `compiler/SHADOW-INVERSION-DESIGN.md` — the design for **#50** (a standalone must WIN over a
+- `archive/design/SHADOW-INVERSION-DESIGN.md` — the design for **#50** (a standalone must WIN over a
   same-named method). *The compiler is obeying the spec; the SPEC is the bug.*
 - `docs/spec/DICT-SEMANTICS.md` — dictionary-passing semantics (D1–D10, all closed).
 - `docs/spec/EMITTER-SEMANTICS.md` — the native-backend refinement contract (observation

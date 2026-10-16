@@ -154,7 +154,7 @@ enforcement table. Where the binary disagrees with a clause, the matrix row says
 > of the method stealing the call. Row 14 (`d8`) **deliberately reverts** `ebb8ee90`
 > (P0-19 batch 2), which had made a definer shadow dispatch cross-module — that fix
 > faithfully implemented the OLD S2, and the inversion abolishes the rule it
-> implemented. Design: `compiler/SHADOW-INVERSION-DESIGN.md`.
+> implemented. Design: `archive/design/SHADOW-INVERSION-DESIGN.md`.
 
 **Why this exists.** This one rule produced four bugs in four different stages
 (P0-18 arc: typecheck routing `953d9ea1`, mangle/mark ordering `0b4a7882`,
@@ -2304,7 +2304,7 @@ same "which stage owns S4/S6" decision.
 > by spurious errors, not miscompiled. **That stops being true the moment S2 is inverted so
 > a standalone WINS over a same-named method**: the same leaked occurrence would then ROUTE
 > the prelude's `println` into the user's `display`. So this is Stage 0 of the inversion
-> arc (`compiler/SHADOW-INVERSION-DESIGN.md`) and had to land first.
+> arc (`archive/design/SHADOW-INVERSION-DESIGN.md`) and had to land first.
 >
 > Fix (`compiler/types/typecheck.mdk`): the flat path now knows **where the prelude ends**.
 > Every driver that flattens the prelude into what it checks (`desugar coreP ++ desugared`)

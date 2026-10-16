@@ -11,7 +11,7 @@
  * VALUE (Node + Leaf) — 2^17-1 = 131,071 calls/tree, exactly 2x the C
  * version's traversal work, not 4x. Compiled with -O2. Establishes an upper
  * bound on how fast this shape of allocation-heavy computation can go on
- * this box, for compiler/PERF-RUNTIME.md's C sanity paragraph —
+ * this box, for archive/design/PERF-RUNTIME.md's C sanity paragraph —
  * informational only for bintrees, not an apples-to-apples traversal
  * comparison. Not built or run by any gate. */
 #include <stdio.h>

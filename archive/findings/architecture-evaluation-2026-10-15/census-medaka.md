@@ -537,7 +537,7 @@ Leading status word tally over the 96 status lines found (99 docs; 3 have none: 
 | PARSE-ERROR-LOCATION-DESIGN.md | 343 | **Status:** PARTIAL/IMPLEMENTED - the location half (furthest-failure heuristic) shipped | IMPLEMENTED,PARTIAL | 4 | 3 | 0 |
 | PERF-BASELINE.md | 559 | **Status:** the `## Table` section is GENERATED - its content is the stdout of |  | 3 | 2 | 2 |
 | PERF-CI-COVERAGE.md | 304 | **Status:** DESIGN - 2026-07-23, tracked in #880 (sub-issues #881-#887). A coverage-gap |  | 2 | 1 | 1 |
-| PERF-NOTES.md | 1009 | **Status:** SUPERSEDED BY `compiler/PERF-RESULTS.md` / `compiler/PERF-SCOPE.md`. This is | SUPERSEDED | 13 | 12 | 4 |
+| PERF-NOTES.md | 1009 | **Status:** SUPERSEDED BY `compiler/PERF-RESULTS.md` / `archive/design/PERF-SCOPE.md`. This is | SUPERSEDED | 13 | 12 | 4 |
 | PERF-RESULTS.md | 1872 | **Status:** PARTIAL - live, actively-updated log, but its own numbers have drifted | PARTIAL,LIVE | 25 | 24 | 7 |
 | PERF-RUNTIME.md | 721 | **Status:** IMPLEMENTED - 11 fixpoint-gated native-codegen wins (float unboxing, | IMPLEMENTED | 7 | 6 | 3 |
 | PERF-SCOPE.md | 478 | **Status:** IMPLEMENTED - bar-4 executed 2026-06-11; results in `compiler/PERF-RESULTS.md`. | IMPLEMENTED | 16 | 15 | 5 |

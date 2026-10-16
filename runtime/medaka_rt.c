@@ -2,7 +2,7 @@
  *
  * This is NOT the real runtime.  It is the minimal C stub the spike's emitted
  * LLVM IR links against to prove the emit -> clang -> link -> run -> diff
- * toolchain end-to-end (see compiler/STAGE2-DESIGN.md §2.4 and the "Value
+ * toolchain end-to-end (see archive/design/STAGE2-DESIGN.md §2.4 and the "Value
  * representation & calling convention" section of compiler/RUNTIME-DESIGN.md).
  *
  * Scope discipline (matches the emitter): integers, floats, booleans, let, if,

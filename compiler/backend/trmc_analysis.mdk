@@ -860,7 +860,7 @@ lastStmtExpr (_ :: rest) = lastStmtExpr rest
 -- (b′) dispatch-graph path now: a group has heterogeneous member arities and
 -- (on LLVM) one shared slot set, so a per-member dict cannot be threaded without
 -- a cross-backend redesign — deliberately deferred, see
--- compiler/WASM-TMC-GAP-DESIGN.md §5 Stage 3.  The Stage-1 self-recursive and
+-- archive/design/WASM-TMC-GAP-DESIGN.md §5 Stage 3.  The Stage-1 self-recursive and
 -- impl paths use `dictCountUniform` below instead.
 export
 dispNonDict : List CClause -> Bool

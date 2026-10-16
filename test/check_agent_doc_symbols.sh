@@ -114,7 +114,7 @@
 # `runtime/*.c` (the C runtime — a doc legitimately cites real runtime
 # symbols like `GC_malloc_atomic`) but deliberately EXCLUDES the `*.md`
 # design docs that also live under compiler/ (compiler/HELPER-CENSUS.md,
-# compiler/MESSAGE-AUDIT.md, …): those are PROSE, and grepping them let a
+# docs/design/MESSAGE-AUDIT.md, …): those are PROSE, and grepping them let a
 # naming-CONVENTION mention (`*Msg` builders, described in prose as "Msg")
 # resolve a token that is not a real standalone identifier anywhere in actual
 # source — a false-negative in the checker's OWN corpus, found and closed

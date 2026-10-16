@@ -181,7 +181,7 @@ currently: unbox operands (load), op, **box result** (`mdk_alloc(16)` + 2 stores
 - **Float**: heap-boxed `{i64 tag=2, double}`, 16B. **Every float op allocates.**
 - **Cons / ADT / tuple / record / closure**: heap cell `{i64 header, fields…}`.
 - **Nullary ctors (Nil/None/…)**: immediate `(tag<<1)|1`. No alloc (no win there).
-- **TRMC**: DONE comprehensively (`compiler/TRMC-DESIGN.md`) — cons/ctor builders,
+- **TRMC**: DONE comprehensively (`archive/design/TRMC-DESIGN.md`) — cons/ctor builders,
   dispatched impls (`map`), match-arm descent (`filter`/`filterMap`), stack-safe to
   2M+. Not an available lever; only deferred seams F1(b)/F2(b) (no real targets).
 

@@ -142,4 +142,4 @@ an optimization look like a regression; it has happened, and it cost ~40 minutes
 ## Where the numbers live
 
 `compiler/PERF-RESULTS.md` — measured perf log, reusable patterns, and every dead end.
-`compiler/PERF-SCOPE.md` — ranked hot paths and scoping. Harness: `test/bench.sh`.
+`archive/design/PERF-SCOPE.md` — ranked hot paths and scoping. Harness: `test/bench.sh`.

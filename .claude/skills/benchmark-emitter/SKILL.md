@@ -93,7 +93,7 @@ WasmGC apply TMC to the same functions (needs the wasm probes:
 `EMITTER_OPT` / `ORACLE_OPT` / `CLI_OPT` / `WASM_ORACLE_OPT` / `GC_INITIAL_HEAP_SIZE` all
 preserve **byte-identical emitted IR** — the text IR is produced *before* `clang` runs, so
 an opt level can never change it. That is why `-O2` is fixpoint-safe. See
-`compiler/PERF-SCOPE.md`.
+`archive/design/PERF-SCOPE.md`.
 
 ## If you are hunting a slow stage rather than validating codegen
 

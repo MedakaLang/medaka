@@ -5765,7 +5765,7 @@ parseWithPositions src = match parseWithPositionsOpt src
 
 -- Backward-compatibility alias kept for callers in `compiler/tools/lint.mdk`'s
 -- `lintFileDiagTriple` and `compiler/driver/medaka_cli.mdk`'s `lintFileFresh`. See
--- compiler/SOURCE-POSITION-DESIGN.md § "Increment 3 — unify the parse entry points
+-- docs/design/SOURCE-POSITION-DESIGN.md § "Increment 3 — unify the parse entry points
 -- (I6)" for why the dual-tokenize design this replaced existed and was retired.
 export
 parseWithPositionsLocated : String -> (List Decl, Positions)

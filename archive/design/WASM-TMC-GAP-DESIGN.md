@@ -10,7 +10,7 @@ identity-forwarded), `selfFree` needed a `mentionsSelfDict` structural walk (fre
 is as blind to a CDict fn name as to a CMethod name), and both leaf emitters now skip
 the loop-invariant leading dict slots when storing recomputed args.  The rest of the
 diagnosis held.  Originally: diagnosed 2026-07-14. The TMC-parity arc
-(`compiler/TRMC-DESIGN.md` Phase 3, `compiler/WASMGC-TRMC-DESIGN.md` §12) is
+(`archive/design/TRMC-DESIGN.md` Phase 3, `archive/design/WASMGC-TRMC-DESIGN.md` §12) is
 *correct about parity*: both backends TMC the same functions, on the probe path
 **and** on the shipping path. What neither backend does is TMC a function that
 carries a leading `$dict` parameter — and every unannotated polymorphic list
@@ -18,8 +18,8 @@ builder in user code is exactly that. `test/wasm/fixtures/w_deep_append.mdk` and
 `test/wasm/fixtures/w_trmc_deep_cons.mdk` stack-overflow under `medaka build
 --target wasm`; native survives the *same* un-transformed code only because
 `runtime/medaka_rt.c` gives it a 256 MB worker stack. Companion to
-`compiler/TRMC-DESIGN.md` (§Phase 2(b), the deferral this document falsifies) and
-`compiler/WASMGC-TRMC-DESIGN.md`.
+`archive/design/TRMC-DESIGN.md` (§Phase 2(b), the deferral this document falsifies) and
+`archive/design/WASMGC-TRMC-DESIGN.md`.
 
 ---
 
@@ -118,7 +118,7 @@ dict param.**
 
 ## 2. Root cause: the F2(b) deferral audited the wrong population
 
-`compiler/TRMC-DESIGN.md` §"Phase 2 (b) — SCOPED & DEFERRED" defers F2(b)
+`archive/design/TRMC-DESIGN.md` §"Phase 2 (b) — SCOPED & DEFERRED" defers F2(b)
 (dict-carrying TMC) with this justification:
 
 > **F2(b) — dict-carrying / eta-reshaped constrained cons-tail impls.** No real
@@ -323,7 +323,7 @@ of its predicates is a parity gate waiting to fail silently. Delete `trmcNonDict
 point `trmcTryFn`/`trmcImplTry` at the shared predicate. (Byte-identical LLVM output
 expected — pure predicate unification. `test/selfcompile_fixpoint.sh` C3a/C3b is the
 decisive gate, and `trmc_analysis.mdk` is IN-GRAPH, so a seed re-mint may be needed;
-see `compiler/WASMGC-TRMC-DESIGN.md` §11 Stage 0, the precedent.)
+see `archive/design/WASMGC-TRMC-DESIGN.md` §11 Stage 0, the precedent.)
 
 ### Stage 3 — dispatch-graph (b′) groups: DEFER, deliberately
 
@@ -351,7 +351,7 @@ the same commit, or the parity gate will (correctly) reject it.
   `wasm/w_trmc_deep_cons` both attribute the failure to `$mdk_append` / "TRMC does
   not take effect" without naming the cause. Replace with the dict-param diagnosis
   and a pointer here; remove the rows when Stage 1 lands.
-- **`compiler/TRMC-DESIGN.md` §"Phase 2 (b) — SCOPED & DEFERRED"** must record that
+- **`archive/design/TRMC-DESIGN.md` §"Phase 2 (b) — SCOPED & DEFERRED"** must record that
   F2(b)'s "no real target" was an *impl-scoped* audit, that `trmcNonDict` also gates
   the **top-level** path, and that the real target class is every unannotated
   polymorphic user builder.

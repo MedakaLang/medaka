@@ -3,7 +3,7 @@
 -- A bare non-Unit VALUE `main` (`main = ("abc", 1.23)`, `main = [1,2,3]`, a
 -- `deriving Display` ADT, …) would otherwise CRASH the emitter (`emitPrint` panics on a
 -- non-scalar `main`).  This module implements the uniform fix from
--- compiler/COMPOSITE-MAIN-AUTOPRINT-DESIGN.md §10: rewrite the entry decl
+-- archive/design/COMPOSITE-MAIN-AUTOPRINT-DESIGN.md §10: rewrite the entry decl
 --   main = <e>   ⟶   main = 0autoprintln <e>
 -- where `0autoprintln` is the PRELUDE's own `println` declaration re-bound under
 -- a name no user program can spell (`autoPrintPinCore`; `display` renders → raw

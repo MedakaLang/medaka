@@ -1,7 +1,7 @@
 /* C sanity ceiling for test/bench_fixtures/fib.mdk — same recursive
  * definition, same input (fib 38), no I/O in the timed path. Compiled
  * with -O2, no GC/runtime — establishes an upper bound on how fast this
- * shape of computation can go on this box, for compiler/PERF-RUNTIME.md's
+ * shape of computation can go on this box, for archive/design/PERF-RUNTIME.md's
  * C sanity paragraph. Not built or run by any gate. */
 #include <stdio.h>
 

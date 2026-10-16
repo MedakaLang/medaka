@@ -3,7 +3,7 @@
 **Status:** IMPLEMENTED — all four gaps closed, `c1f31ce5` (#55 eval path) /
 `5ee7eef3` (#21), 2026-06-11–14. See the doc's own ✅ banner below (already accurate and
 self-updating — a model example in this doc family). Shared root cause retired by
-`compiler/ARGSTAMP-UNIFY-PLAN.md` (also verified IMPLEMENTED, see that doc).
+`archive/design/ARGSTAMP-UNIFY-PLAN.md` (also verified IMPLEMENTED, see that doc).
 
 ## Scoping Audit — Four Native-Backend Dispatch Gaps
 **Date:** 2026-06-10 (audit) · **Updated 2026-06-14**
@@ -15,7 +15,7 @@ self-updating — a model example in this doc family). Shared root cause retired
 > binop over-application) closed 2026-06-14 (commit 5ee7eef — gated binop element
 > reqs on `emitArgStampPasses`, removed the `suppressBinopStamp` workaround). The
 > shared deeper root — the `emitArgStampPasses` eval-vs-emit elaboration fork — is
-> RETIRED by `compiler/ARGSTAMP-UNIFY-PLAN.md` (COMPLETE 2026-06-14; eval-vs-emit
+> RETIRED by `archive/design/ARGSTAMP-UNIFY-PLAN.md` (COMPLETE 2026-06-14; eval-vs-emit
 > dispatch fork retired; flag now a single emit-pass gate). The audit below is the
 > original (2026-06-10) scope; kept for the repro/root-cause record.
 

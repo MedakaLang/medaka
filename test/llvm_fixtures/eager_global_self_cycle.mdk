@@ -8,7 +8,7 @@
 -- lazy-nullary semantics — black-holes the cell and raises E-CYCLIC-VALUE (exit 1).
 -- #561 makes BOTH backends match: a top-level nullary global reaching a cycle is
 -- emitted LAZILY (native: @mdk_force_x + an @mdk_gs_x state flag; wasm: $force_x + a
--- $gs_x state flag — the same 3-state mechanism, see compiler/EAGER-INIT-DESIGN.md
+-- $gs_x state flag — the same 3-state mechanism, see archive/design/EAGER-INIT-DESIGN.md
 -- §10), and re-entering the still-FORCING cell raises the same coded E-CYCLIC-VALUE,
 -- exit 1, EMPTY stdout, on every engine.
 --

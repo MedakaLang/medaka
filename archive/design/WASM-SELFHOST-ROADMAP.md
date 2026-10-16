@@ -106,7 +106,7 @@ wrapper emitted → ref-to-undefined). Gate: `test/wasm/assemble_check_main.sh`.
   bytes (`(b & 0xC0) /= 0x80`), mirroring `$mdk_chars_to_str`. The self-hosted **lexer now lexes
   `runtime.mdk` (749 tokens) byte-identical to native.** Emitter-only → no fixpoint/seed.
 - 🏁 **layer-5 CLOSED — the WasmGC TRMC arc (Stages 0–2, emitter-only)** — the self-hosted lexer now
-  runs to COMPLETION under Node. Design `compiler/WASMGC-TRMC-DESIGN.md` diagnosed the overflow as
+  runs to COMPLETION under Node. Design `archive/design/WASMGC-TRMC-DESIGN.md` diagnosed the overflow as
   **shape (b′) dispatch-into-single-target TMC** (each per-token leaf does `RTok :: scan …`; cons-bearer
   ≠ recursion target — the single dispatcher `scan`). Ported the existing LLVM TMC (`TRMC-DESIGN.md`):
   Stage 0 (`8c69296`, seed re-mint `6bbcde8`) made cons/ctor recursive fields `mut` + lifted the

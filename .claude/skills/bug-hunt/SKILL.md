@@ -59,11 +59,11 @@ have paid out repeatedly (non-exhaustive — re-derive each time):
 | **dict-passing / impl selection / overlap / constraints** | most-specific-wins + dict elaboration is subtle; enforcement is *occurrence-sourced not declaration-sourced* | `docs/spec/DICT-SEMANTICS.md` |
 | **shadowing** (definer/importer, value/type, annotated/unannotated) | shadow × dispatch × arity is a large matrix; the corpus is always missing a cell | `docs/spec/SHADOW-SEMANTICS.md` |
 | **lexer literals & escapes** (char/int/float/radix/unicode) | validation gaps: a literal that should be a lex error is silently accepted | `docs/spec/SYNTAX.md` |
-| **emitter ordering / laziness** | native must refine `run`; top-level init order is a classic run≠build source | `docs/spec/EMITTER-SEMANTICS.md`, `compiler/EAGER-INIT-DESIGN.md` |
+| **emitter ordering / laziness** | native must refine `run`; top-level init order is a classic run≠build source | `docs/spec/EMITTER-SEMANTICS.md`, `archive/design/EAGER-INIT-DESIGN.md` |
 | **memory safety / OOB / slices** | wrong-container static dispatch reads foreign heap; `run` traps, `build` returns garbage | `docs/spec/EMITTER-SEMANTICS.md` §5 (trap totality) |
-| **int / float / NaN** | totalOrder is sign-dependent; const-fold vs runtime NaN sign diverges | `docs/spec/language-design.md`, `compiler/SHARED-FLOAT-RESIDUAL-DESIGN.md` |
+| **int / float / NaN** | totalOrder is sign-dependent; const-fold vs runtime NaN sign diverges | `docs/spec/language-design.md`, `archive/design/SHARED-FLOAT-RESIDUAL-DESIGN.md` |
 | **multi-module** | two ctor resolvers (typecheck global vs mangler per-unit) with opposite tie-breaks | `docs/spec/DICT-SEMANTICS.md` |
-| **pattern matching / exhaustiveness / guards** | guard-exhaustion fallthrough emits the wrong trap; the `@mdk_oob` shape | `compiler/MULTICLAUSE-EXHAUST-DESIGN.md` |
+| **pattern matching / exhaustiveness / guards** | guard-exhaustion fallthrough emits the wrong trap; the `@mdk_oob` shape | `archive/design/MULTICLAUSE-EXHAUST-DESIGN.md` |
 
 **The `*-SEMANTICS.md` docs are the ground truth for "is this a bug and what is correct."**
 `EMITTER-SEMANTICS.md` formalizes the **refinement contract**: `run` (the tree-walker)

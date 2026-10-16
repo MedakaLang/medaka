@@ -9,7 +9,7 @@ pass, not a benchmarking one; see AGENTS.md's own "two rebuilds" warning before
 re-measuring an emitter change).
 
 Running log of measured native-backend performance. Companion to
-`compiler/PERF-SCOPE.md` (the scoping/plan). Each entry: what changed, the
+`archive/design/PERF-SCOPE.md` (the scoping/plan). Each entry: what changed, the
 gate state, and the numbers (min-of-N, single-threaded, quiet machine).
 
 > **STALE-NUMBER WARNING (2026-07-02).** The "2.12 s self-compile" TL;DR below is

@@ -447,7 +447,7 @@ laws bind **all four engines** and every reflective helper (V6).
 ## 9. Conformance status — where the implementation stands against this spec
 
 > Audit of 2026-07-16 (this document's founding audit, at `40e14b85`).
-> Verification legend follows `compiler/TYPECHECK-AUDIT.md`: **CONFIRMED**
+> Verification legend follows `archive/design/TYPECHECK-AUDIT.md`: **CONFIRMED**
 > (repro run against the binary) / **LATENT** (code path exists, trigger
 > stated) / **STATIC** (code reading only). The backlog lives as `ws:emitter`
 > GitHub issues (tracking: **#362**); this table maps law → status and is

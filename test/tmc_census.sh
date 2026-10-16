@@ -32,7 +32,7 @@
 #     out to): the path users take.  Written as <name>.ship.{llvm,wasm}.tmc.
 #     An unannotated polymorphic builder carries a `$dict` param ONLY here, which
 #     is how TMC once silently declined on every such builder while this census
-#     stayed green (compiler/WASM-TMC-GAP-DESIGN.md).
+#     stayed green (archive/design/WASM-TMC-GAP-DESIGN.md).
 #
 # COVERAGE PINS: a fixture may declare `-- EXPECT-TMC: fn1 fn2 …` in its header.
 # Every pinned fn must appear (any mode) in BOTH backends' SHIPPING sets, else

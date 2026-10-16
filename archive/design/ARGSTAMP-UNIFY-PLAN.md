@@ -21,7 +21,7 @@ ONE elaboration mode (full static dict-threading); arg-tag (`filterByTag`) survi
 for the irreducible primitive `Eq Int`/`Ord Int` + genuinely-`RNone` residual — parity
 with the native backend. `evalDictLayerActive` retired (zero readers). Approved
 2026-06-14 (user — **full unification**). Sequel to
-`compiler/DRIVER-COLLAPSE-PLAN.md` (unified single-file vs multi-module drivers;
+`archive/design/DRIVER-COLLAPSE-PLAN.md` (unified single-file vs multi-module drivers;
 left this finer eval-vs-emit split). Implements `TYPECHECK-AUDIT.md §6`'s "third
 semantic axis." Selfhost-only; OCaml `lib/` stays the frozen byte-diff oracle.
 Land BEFORE `lib/` removal (the oracle verifies every phase).
@@ -58,7 +58,7 @@ residual.
     generic/primitive receiver (`sequence : (Traversable t, Thenable m) => …` as a
     free fn) fails `medaka build`: the caller's arg-position `debug` stays `RNone` →
     arg-tag-dispatches over primitive impl groups (no cell tag). The real fix is the
-    cross-cutting **A+B** in [`../GAP3-SLICE7-DESIGN.md`](../docs/design/GAP3-SLICE7-DESIGN.md)
+    cross-cutting **A+B** in [`../GAP3-SLICE7-DESIGN.md`](../../docs/design/GAP3-SLICE7-DESIGN.md)
     (typecheck arg-stamp grounding so the site never reaches arg-tag, + a
     generic-receiver dict-threading ABI). DEFERRED (2026-06-26): zero current callers
     (per-impl specialization covers `sequence`); schedule with the A+B staging

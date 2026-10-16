@@ -171,7 +171,7 @@ downstream argument-position interface method with primitive impl groups
 `reservedCtorsOfType` only covers List/Option/Result/Ordering, llvm_emit.mdk:
 1038-1051) → the `emitTagMatch _ _ [] => gapStr …` arm fires
 (**llvm_emit.mdk:3515-3518**). This is exactly the "irreducible primitive
-residual" that `compiler/ARGSTAMP-UNIFY-PLAN.md` predicts arg-tag cannot serve.
+residual" that `archive/design/ARGSTAMP-UNIFY-PLAN.md` predicts arg-tag cannot serve.
 
 ### 2d. The second (runtime) defect
 

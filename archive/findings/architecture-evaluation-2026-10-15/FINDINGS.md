@@ -74,4 +74,4 @@ Every mature compiler lands architecture as sequences of 2 to 10 behaviour-prese
 
 ## 6. Sources
 
-report-ocaml.md, report-ghc.md, report-rustc.md, census-medaka.md in this directory; the clones under ocaml-src/, ghc-src/, rustc-src/; the census scripts (census.py, docs.py, ent.py, growth.py). Repo: compiler/ARCH-REVIEW.md, compiler/TYPECHECK-ARCHITECTURE.md, compiler/TYPECHECK-TARGET-ARCHITECTURE.md, compiler/TYPECHECK-CONTRACTS.md, compiler/EMITTER-ARCHITECTURE.md, compiler/EMITTER-TARGET-ARCHITECTURE.md, .claude/skills/architecture/SKILL.md; issues #1122, #2549, #2586, #2547, #2732, #1398, #4141, #4189, #2289.
+report-ocaml.md, report-ghc.md, report-rustc.md, census-medaka.md in this directory; the clones under ocaml-src/, ghc-src/, rustc-src/; the census scripts (census.py, docs.py, ent.py, growth.py). Repo: archive/design/ARCH-REVIEW.md, compiler/TYPECHECK-ARCHITECTURE.md, compiler/TYPECHECK-TARGET-ARCHITECTURE.md, compiler/TYPECHECK-CONTRACTS.md, compiler/EMITTER-ARCHITECTURE.md, compiler/EMITTER-TARGET-ARCHITECTURE.md, .claude/skills/architecture/SKILL.md; issues #1122, #2549, #2586, #2547, #2732, #1398, #4141, #4189, #2289.
