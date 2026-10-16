@@ -13,6 +13,8 @@ import frontend.ast.{Decl(..), Expr(..), DoStmt(..), LetBind(..), Loc(..)}
 import types.typecheck.{TcDiag}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar, desugarIn, mapProg}
+import frontend.desugar_cache.{desugaredPrelude}
+import driver.front_gate.{frontGate, frontGateOfEnv}
 export import support.util.{rootsOrDefault}
 import support.util.{splitLast, startsWith}
 import types.typecheck.{
@@ -217,28 +219,59 @@ driveModulesGo runEmit runtimeP coreP entry roots =
     Ok (rsrc, csrc)
   match r
     Err e => failWith e
-    Ok (rsrc, csrc) => match loadProgramFilesLocatedE (_ => None) entry roots
-      Err e => failWith (moduleLoadHint (loadErrorMessage e))
-      Ok mods =>
-        -- #2072: publish the FFI-stamp discriminator before anything elaborates.
-        -- `ffiStampModeOwned` DEFAULTS to "apply the `extern` declaration rules",
-        -- so a driver that never publishes this rejects a stdlib-root-owned module
-        -- whose externs the stdlib itself wrote — which `medaka check` accepts.
-        -- The parent derives it in `medaka_cli.typecheckGate`; since ruling 3 this
-        -- process owns the type verdict for a build, so it must derive the same
-        -- fact from the same inputs or the two verdicts differ on that one class.
-        -- The stdlib root is `dirOf coreP`: this driver's CLI shape hands it the
-        -- stdlib's own `core.mdk`, which is the file the parent spells
-        -- `<root>/stdlib/core.mdk`.
-        let pairs = map dropPathTriple mods
-        let (flatStdlib, ownedStdlib) =
-          stdlibOwnership entry roots (dirOf coreP) pairs
-        let _ = setStdlibOwnership flatStdlib ownedStdlib
-        runEmit
-          mods
-          (desugar (parse rsrc))
-          (desugar (parse csrc))
-          (map desugarPair pairs)
+    Ok (rsrc, csrc) => match frontGateOfEnv ()
+      -- `medaka build` asked for its front-end gate, whose verdict is final and
+      -- whose graph is the one elaborated (`driver/front_gate.mdk`).
+      Some allowInternal =>
+        match frontGate allowInternal (dirOf coreP) rsrc csrc entry
+          Err msg =>
+            let _ = ePutStrLn msg
+            stageExit emitDiagExitCode
+          Ok g =>
+            emitLoaded
+              runEmit
+              coreP
+              entry
+              g.fgRoots
+              g.fgMods
+              g.fgRuntimeD
+              g.fgCoreD
+              g.fgModsD
+      None => match loadProgramFilesLocatedE (_ => None) entry roots
+        Err e => failWith (moduleLoadHint (loadErrorMessage e))
+        Ok mods =>
+          emitLoaded
+            runEmit
+            coreP
+            entry
+            roots
+            mods
+            (desugaredPrelude rsrc)
+            (desugaredPrelude csrc)
+            (map desugarPair (map dropPathTriple mods))
+
+-- #2072: publish the FFI-stamp discriminator before anything elaborates.
+-- `ffiStampModeOwned` DEFAULTS to "apply the `extern` declaration rules", so a
+-- driver that never publishes this rejects a stdlib-root-owned module whose
+-- externs the stdlib itself wrote — which `medaka check` accepts.  This process
+-- owns the type verdict for a build, so it derives the fact `check` derives,
+-- from the roots the graph was loaded with.  The stdlib root is `dirOf coreP`:
+-- this driver's CLI shape hands it the stdlib's own `core.mdk`, which is the
+-- file the parent spells `<root>/stdlib/core.mdk`.
+emitLoaded : (List (String, String, List Decl) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+  String ->
+  String ->
+  List String ->
+  List (String, String, List Decl) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  <IO> Unit
+emitLoaded runEmit coreP entry roots mods runtimeD coreD modsD =
+  let (flatStdlib, ownedStdlib) =
+    stdlibOwnership entry roots (dirOf coreP) (map dropPathTriple mods)
+  let _ = setStdlibOwnership flatStdlib ownedStdlib
+  runEmit mods runtimeD coreD modsD
 
 -- #1796: `usageModules`' `[root ...]` bracket notation reads as "root args are
 -- optional" — they aren't, the moment the entry graph spans more than one root

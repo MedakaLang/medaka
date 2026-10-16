@@ -1,31 +1,51 @@
 -- compiler/driver/front_gate.mdk — the front-end error renderers the CLI verbs
--- and the `build` parent share.  Each takes the source text and the file it was
--- read from, and none reads the process environment: the stdlib directory is a
+-- share, and `build`'s front-end gate, which the `medaka_emitter` child runs
+-- when the `build` verb asks for it (`frontGateEnv`).  Nothing here reads the
+-- process environment except `frontGateOfEnv`: the stdlib directory is a
 -- parameter.  So a caller that is not the CLI dispatcher (the emitter child)
 -- can import this module without `medaka_cli.mdk`.
 
-import frontend.ast.{Loc(..)}
+import frontend.ast.{Decl, Loc(..)}
 import frontend.parser.{
   parseLocated,
+  parseResult,
   ParseError,
   parseErrorLine,
   parseErrorCol,
   parseErrorMessage,
 }
+import frontend.desugar.{desugarIn}
+import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.resolve.{internalGuardFor, resolveModulesErrorsByFile}
 import driver.diagnostics.{
   Diag(..),
   Severity(..),
+  hintResErrorPairs,
+  mainEntryError,
+  ppDiagCliLines,
   ppDiagCliSrc,
+  ppMainEntryError,
+  ppResolveErrorsByFile,
   parseErrHelpFix,
   parseErrCode,
+  srcLinesArr,
   stdlibExportsReader,
+  surfaceErrors,
 }
 import driver.loader.{
   LoadError(..),
+  dropPathTriple,
+  entrySearchRoots,
+  loadProgramFilesLocatedE,
+  modIdToPath,
+  projectTrustedMods,
+  readSource,
   unknownModuleIdOf,
   findImportLoc,
   availableModulesHint,
 }
+import support.path.{dirOf}
+import support.util.{contains, joinNl, splitLast}
 
 -- The import hint's reader for `check`/`run`/`build`: `stdlibDir` is the stdlib
 -- directory every verb resolves `stdlib/` against, supplied by the caller.
@@ -108,3 +128,146 @@ moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) =
             tsrc
             target
             (Diag SevError "R-MODULE-LOAD" msg (Some loc) None None)
+
+-- ── the `build` front-end gate ───────────────────────────────────────────────
+-- `medaka build` sets this variable on the `medaka_emitter` child it spawns, and
+-- nothing else does: the bootstrap, the fixpoint, the gates that run an emitter
+-- directly and `medaka test --native`'s children start it without the variable
+-- and keep the ungated driver.  Not an argv flag, because the emitter reads
+-- every argument after the entry as a search root.  The value carries
+-- `--allow-internal`.
+export
+frontGateEnv : String
+frontGateEnv = "MEDAKA_FRONT_GATE"
+
+-- The `env` assignment that asks the child for the gate.
+export
+frontGateAssignment : Bool -> String
+frontGateAssignment True = "\{frontGateEnv}=allow-internal"
+frontGateAssignment False = "\{frontGateEnv}=1"
+
+-- `Some allowInternal` when the parent asked for the gate.
+export
+frontGateOfEnv : Unit -> <IO> Option Bool
+frontGateOfEnv _ = match getEnv frontGateEnv
+  None => None
+  Some "" => None
+  Some "allow-internal" => Some True
+  Some _ => Some False
+
+-- What the gate hands on when it admits a program: the search roots it loaded
+-- with, the loader's (module, path, raw decls) graph with the entry last, and
+-- the desugared trees elaboration reads, so the program is loaded, parsed and
+-- desugared once.
+public export data FrontGraph = FrontGraph {
+  fgRoots : List String,
+  fgMods : List (String, String, List Decl),
+  fgRuntimeD : List Decl,
+  fgCoreD : List Decl,
+  fgModsD : List (String, List Decl),
+}
+
+-- `build`'s front-end verdict on `entry`: load, a located parse or load error,
+-- resolve, then the `main` refusal, each rendered as `check` renders it.  The
+-- search roots are the entry's own (`entrySearchRoots`) and the stdlib, the set
+-- every verb loads with, and never the emitter's argv roots, which also name
+-- the compiler's own sources.  The prelude sources were validated by the
+-- parent (`readPreludeFile`); `stdlibDir` is the directory holding them.
+export
+frontGate : Bool ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO> Result String FrontGraph
+frontGate allowInternal stdlibDir rsrc csrc entry =
+  let roots = entrySearchRoots (dirOf entry) ++ [stdlibDir]
+  match loadProgramFilesLocatedE (_ => None) entry roots
+    Err lerr => Err (loadRefusal stdlibDir entry lerr)
+    Ok mods =>
+      let pairs = map dropPathTriple mods
+      let graph = FrontGraph {
+        fgRoots = roots,
+        fgMods = mods,
+        fgRuntimeD = desugaredPrelude rsrc,
+        fgCoreD = desugaredPrelude csrc,
+        fgModsD = map ((mid, p) => (mid, desugarIn mid p)) pairs,
+      }
+      let trusted = projectTrustedMods entry roots stdlibDir pairs
+      let resolved =
+        resolveRefusal allowInternal stdlibDir trusted rsrc csrc entry graph
+      match resolved
+        Some msg => Err msg
+        None => match mainRefusal entry pairs
+          Some msg => Err msg
+          None => Ok graph
+
+-- A failed load: the entry's own parse error if it has one, else the loader's
+-- error.  The entry is read here, not before the load, so a valid entry is read
+-- once; an entry the loader could not read fails `readSource` the same way.
+loadRefusal : String -> String -> LoadError -> <IO> String
+loadRefusal stdlibDir entry lerr = match readSource entry
+  Err e => e
+  Ok tsrc => match parseResult tsrc
+    Err e => ppParseError tsrc entry e
+    Ok _ => moduleLoadErrText tsrc entry stdlibDir lerr
+
+-- Resolve's verdict, by module count.  One module: the errors of the raw-tree
+-- surface passes (`surfaceErrors`), against the entry file.  A graph: each
+-- module's resolve errors against its own file (`resolveModulesErrorsByFile`),
+-- the seam `check` uses.
+resolveRefusal : Bool ->
+  String ->
+  List String ->
+  String ->
+  String ->
+  String ->
+  FrontGraph ->
+  <IO> Option String
+resolveRefusal allowInternal stdlibDir trusted rsrc csrc entry g =
+  let trees = (g.fgMods, g.fgModsD)
+  match trees
+    ([(mid, _, raw)], [(_, desugared)]) =>
+      let errs =
+        surfaceErrors
+          (cliStdlibExports stdlibDir)
+          g.fgRuntimeD
+          g.fgCoreD
+          raw
+          desugared
+          (internalGuardFor (allowInternal || contains mid trusted))
+      match errs
+        [] => None
+        _ =>
+          let lines = srcLinesArr (entrySource entry)
+          Some (joinNl (map (ppDiagCliLines lines entry) errs))
+    _ =>
+      let text =
+        ppResolveErrorsByFile
+          (hintResErrorPairs
+            (cliStdlibExports stdlibDir)
+            (resolveModulesErrorsByFile
+              (map modIdToPath g.fgMods)
+              allowInternal
+              trusted
+              (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
+              g.fgRuntimeD
+              g.fgCoreD
+              g.fgModsD))
+      if text == "" then None else Some text
+
+-- A program `build` cannot start: a function-shaped `main` or none at all in
+-- the entry, which the loader puts last.
+mainRefusal : String -> List (String, List Decl) -> <IO> Option String
+mainRefusal entry pairs = match splitLast pairs
+  None => None
+  Some (_, (_, decls)) =>
+    map
+      (d => ppMainEntryError (entrySource entry) entry d)
+      (mainEntryError decls)
+
+-- The entry's text, for rendering a refusal; the loader has already read it.
+entrySource : String -> <IO> String
+entrySource entry = match readFile entry
+  Ok src => src
+  Err _ => ""

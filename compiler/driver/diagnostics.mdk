@@ -1108,6 +1108,26 @@ analyzeSurface exportsFor modName runtimeSrc coreSrc raw internalGuard =
     surfacePreludeKey = preludeKey,
   }
 
+-- The errors among `analyzeSurface`'s diagnostics, in its order, without its
+-- warning passes (guard exhaustiveness and the two shadow checks), which a
+-- caller that renders warnings from a later typecheck would otherwise run twice.
+-- `desugared` is the tree resolve reads: `raw` desugared by the caller.
+export
+surfaceErrors : (List String -> <e> List (String, List String)) ->
+  List Decl ->
+  List Decl ->
+  List Decl ->
+  List Decl ->
+  List String ->
+  <e> List Diag
+surfaceErrors exportsFor runtimeP coreP raw desugared internalGuard =
+  map deriveErrToDiag (checkDerives raw)
+    ++ map
+      diagOfResError
+      (hintResErrors
+        exportsFor
+        (resolveProgramG2 internalGuard runtimeP coreP desugared))
+
 -- The surface half and the typecheck half, in the result order every
 -- `analyzeFrom` consumer depends on.  A value `main`'s auto-print `Display`
 -- obligation is already in the typecheck half: the drive that produced it poses

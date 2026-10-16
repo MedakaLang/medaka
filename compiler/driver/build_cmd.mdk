@@ -37,6 +37,7 @@ import support.path.{dirOf, chopExt, joinPath}
 import frontend.parser.{parseResult}
 import frontend.parse_cache.{notePreludeParse}
 import types.target_profile.{selectedProfile, profileName, targetProfileEnv}
+import driver.front_gate.{frontGateAssignment}
 import driver.diagnostics.{
   Diag,
   Severity(..),
@@ -749,6 +750,10 @@ keepIrOutcome path contents = match writeFile path contents
 --             the binary's own `buildCommit`/`buildFingerprint`/`buildDate` read
 --             real strings instead of "" (see provenanceObject).  The wasm target
 --             has no such object and ignores it.
+-- frontGate = `Some allowInternal` when the emitter child runs the program's
+--             front-end gate (`driver/front_gate.frontGate`): the plain `build`
+--             verb, whose process does no front-end work of its own.  `None`
+--             starts the child ungated, as every other caller does.
 export
 runBuild : String ->
   String ->
@@ -759,8 +764,9 @@ runBuild : String ->
   Bool ->
   Bool ->
   Bool ->
+  Option Bool ->
   <IO> Result BuildReport BuildReport
-runBuild root medaka cc TNative inputAbs outPath keepIrCli quietEmitStderr stampBuild =
+runBuild root medaka cc TNative inputAbs outPath keepIrCli quietEmitStderr stampBuild frontGate =
   let _ = sweepStaleTempDirs ()
   runBuildNative
     root
@@ -771,9 +777,10 @@ runBuild root medaka cc TNative inputAbs outPath keepIrCli quietEmitStderr stamp
     keepIrCli
     quietEmitStderr
     stampBuild
-runBuild root medaka cc TWasm inputAbs outPath keepIrCli quietEmitStderr _ =
+    frontGate
+runBuild root medaka cc TWasm inputAbs outPath keepIrCli quietEmitStderr _ frontGate =
   let _ = sweepStaleTempDirs ()
-  runBuildWasm root medaka inputAbs outPath keepIrCli quietEmitStderr
+  runBuildWasm root medaka inputAbs outPath keepIrCli quietEmitStderr frontGate
 
 -- ---- native (LLVM/clang) target — the original path ----
 -- Wrapper: allocate the per-invocation scratch dir (see makeTempDir), run the
@@ -788,8 +795,9 @@ runBuildNative : String ->
   Bool ->
   Bool ->
   Bool ->
+  Option Bool ->
   <IO> Result BuildReport BuildReport
-runBuildNative root medaka cc inputAbs outPath keepIrCli quietEmitStderr stampBuild =
+runBuildNative root medaka cc inputAbs outPath keepIrCli quietEmitStderr stampBuild frontGate =
   match makeTempDir ()
     Err e =>
       buildErr "error: could not create a scratch directory for the build: \{e}"
@@ -805,12 +813,11 @@ runBuildNative root medaka cc inputAbs outPath keepIrCli quietEmitStderr stampBu
           keepIrCli
           quietEmitStderr
           stampBuild
+          frontGate
       let _ = cleanupTempDir tmpDir
       res
 
--- Thin compatibility wrapper: every existing caller wants the plain P0-13 root
--- set with nothing extra appended. Delegates to runBuildNativeRoots with
--- extraRoots = [] — byte-identical behavior to the pre-Stage-0 function.
+-- The build verb's root set: the plain P0-13 roots with nothing extra appended.
 runBuildNativeIn : String ->
   String ->
   String ->
@@ -820,9 +827,10 @@ runBuildNativeIn : String ->
   Bool ->
   Bool ->
   Bool ->
+  Option Bool ->
   <IO> Result BuildReport BuildReport
-runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli quietEmitStderr stampBuild =
-  runBuildNativeRoots
+runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli quietEmitStderr stampBuild frontGate =
+  runBuildNativeRootsGo
     root
     medaka
     cc
@@ -835,12 +843,14 @@ runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli quietEmitStder
     quietEmitStderr
     stampBuild
     BuildNormal
+    frontGate
 
--- Probe the C compiler up front — the native analogue of probeWasmTools
--- below, run BEFORE the emitter/link path so a missing/misconfigured `cc`
--- (respects CC — never hardcodes "clang") is diagnosed immediately instead
--- of surfacing as an opaque "clang failed linking" from deep inside the
--- link step (issue #2514).
+-- Probe the C compiler before the link, so a missing/misconfigured `cc`
+-- (respects CC — never hardcodes "clang") is diagnosed as such instead of
+-- surfacing as an opaque "clang failed linking" from deep inside the link step
+-- (issue #2514).  It runs after a successful emit, not before it: the emitter
+-- child may be the build's front end, and a diagnostic about the program comes
+-- before a complaint about a tool.
 probeClang : String -> <IO> Option Unit
 probeClang cc = match runCommand cc ["--version"]
   -- fail-open-by-design: any non-clean version check reports "missing"
@@ -892,25 +902,23 @@ runBuildNativeRoots : String ->
   BuildProfile ->
   <IO> Result BuildReport BuildReport
 runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr stampBuild profile =
-  match probeClang cc
-    None => buildErr (clangMissingError cc)
-    Some _ =>
-      runBuildNativeRootsGo
-        root
-        medaka
-        cc
-        inputAbs
-        outPath
-        tmpDir
-        keepIrCli
-        extraRoots
-        strictEmit
-        quietEmitStderr
-        stampBuild
-        profile
+  runBuildNativeRootsGo
+    root
+    medaka
+    cc
+    inputAbs
+    outPath
+    tmpDir
+    keepIrCli
+    extraRoots
+    strictEmit
+    quietEmitStderr
+    stampBuild
+    profile
+    None
 
--- The original body, unmoved — split out only so the up-front probe above
--- doesn't force reindenting this whole function under a match arm.
+-- `runBuildNativeRoots` with the emitter child's front-end gate selectable
+-- (`runBuild`'s `frontGate`); the exported entry never selects it.
 runBuildNativeRootsGo : String ->
   String ->
   String ->
@@ -923,8 +931,9 @@ runBuildNativeRootsGo : String ->
   Bool ->
   Bool ->
   BuildProfile ->
+  Option Bool ->
   <IO> Result BuildReport BuildReport
-runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr stampBuild profile =
+runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr stampBuild profile frontGate =
   let emitter = joinPath root "compiler/entries/llvm_emit_modules_main.mdk"
   let runtimeP = joinPath root "stdlib/runtime.mdk"
   let preludeP = joinPath root "stdlib/core.mdk"
@@ -971,7 +980,7 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
   -- names its own culprit instead of reporting one opaque 1.4 s number.
   let perfOn = perfEnabled ()
   let tEmit0 = now ()
-  let emitRes = runEmitterFor emitProg emitArgs
+  let emitRes = runEmitterFor frontGate emitProg emitArgs
   let tEmit1 = now ()
   let _ = emitPhase perfOn "emit-ir" (tEmit1 - tEmit0) inputAbs
   match emitRes
@@ -992,6 +1001,8 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
         if stringLength ir == 0 then
           buildErr
             "error: emitter produced empty IR for \{inputAbs}\n\{emitErr}"
+        else if isNone (probeClang cc) then
+          buildErr (clangMissingError cc)
         else match writeFile llPath (programModuleName ++ ir)
           Err e => buildErr ("error: could not write IR: " ++ e)
           Ok _ =>
@@ -1076,8 +1087,9 @@ runBuildWasm : String ->
   String ->
   Bool ->
   Bool ->
+  Option Bool ->
   <IO> Result BuildReport BuildReport
-runBuildWasm root medaka inputAbs outPath keepIrCli quietEmitStderr =
+runBuildWasm root medaka inputAbs outPath keepIrCli quietEmitStderr frontGate =
   match makeTempDir ()
     Err e =>
       buildErr "error: could not create a scratch directory for the build: \{e}"
@@ -1091,9 +1103,13 @@ runBuildWasm root medaka inputAbs outPath keepIrCli quietEmitStderr =
           tmpDir
           keepIrCli
           quietEmitStderr
+          frontGate
       let _ = cleanupTempDir tmpDir
       res
 
+-- The front-end gate runs in the wasm emitter child, so an unset or missing
+-- `MEDAKA_WASM_EMITTER`, or a missing `wasm-tools`, is reported before any
+-- diagnostic about the program: without the emitter there is no gate.
 runBuildWasmIn : String ->
   String ->
   String ->
@@ -1101,8 +1117,9 @@ runBuildWasmIn : String ->
   String ->
   Bool ->
   Bool ->
+  Option Bool ->
   <IO> Result BuildReport BuildReport
-runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr =
+runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr frontGate =
   let runtimeP = joinPath root "stdlib/runtime.mdk"
   let preludeP = joinPath root "stdlib/core.mdk"
   let compilerDir = joinPath root "compiler"
@@ -1129,7 +1146,7 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr =
     None =>
       buildErr
         "error: wasm-tools not found on PATH; install it with `cargo install wasm-tools`"
-    Some _ => match runEmitterFor wasmEmitter emitArgsBase
+    Some _ => match runEmitterFor frontGate wasmEmitter emitArgsBase
       Err e =>
         buildErr "error: could not run the wasm emitter `\{wasmEmitter}`: \{e}"
       Ok (code, watRaw, emitRaw) =>
@@ -1955,18 +1972,26 @@ withEmitHalf half prog args =
 withStrictEmit : String -> List String -> (String, List String)
 withStrictEmit prog args = ("env", ["MEDAKA_STRICT=1", prog] ++ args)
 
--- Run the emitter child, handing it the selected target profile by the same
--- `env` idiom.  The child checks the program against that profile before it
--- lowers anything (`entries/entry_support.runEmitWith`), so a program `check`
--- would refuse never reaches an emitter.  With no profile selected (a caller
--- other than the `build` verb) the child checks nothing.
-runEmitterFor : String ->
+-- Run the emitter child, handing it the selected target profile and the
+-- front-end gate request by the same `env` idiom.  The child checks the program
+-- against that profile before it lowers anything
+-- (`entries/entry_support.runEmitWith`), so a program `check` would refuse
+-- never reaches an emitter.  With no profile selected (a caller other than the
+-- `build` verb) the child checks nothing.
+runEmitterFor : Option Bool ->
+  String ->
   List String ->
   <IO> Result String (Int, String, String)
-runEmitterFor prog args = match !selectedProfile
-  Some p =>
-    runCommand "env" (["\{targetProfileEnv}=\{profileName p}", prog] ++ args)
-  None => runCommand prog args
+runEmitterFor frontGate prog args =
+  let profileSet = match !selectedProfile
+    Some p => ["\{targetProfileEnv}=\{profileName p}"]
+    None => []
+  let gateSet = match frontGate
+    Some allowInternal => [frontGateAssignment allowInternal]
+    None => []
+  match profileSet ++ gateSet
+    [] => runCommand prog args
+    sets => runCommand "env" (sets ++ [prog] ++ args)
 
 -- `medaka build --emit-prelude-obj <path>`: emit stdlib/core.mdk ALONE as a
 -- library (MEDAKA_EMIT_HALF=prelude) and compile it to a reusable object with
