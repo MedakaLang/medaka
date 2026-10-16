@@ -419,7 +419,7 @@ extern fetchText : String -> <FFI "c/libfetch", FFI "js/fetch"> String
   the bindings it was given. It must be written; a `js` binding is never implied
   from the Medaka name or the `c` symbol.
 - A Medaka fallback body for a host with no binding (the Gleam fallback): not yet;
-  tracked in #NNNN.
+  tracked in #4247.
 - The terminal row must name `FFI` with a prefix matching a host the declaration
   binds; `<>` is refused as today. The parameter stays in the `Prefix` domain;
   the first path element is the host ABI, which is what the walls key on.
