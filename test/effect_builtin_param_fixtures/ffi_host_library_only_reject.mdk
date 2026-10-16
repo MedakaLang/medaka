@@ -1,0 +1,5 @@
+-- A library with no host: the fix-it puts the library under the `c` host.
+extern cSqrt : Float -> <FFI "libm"> Float
+
+main : <IO> Unit
+main = println "unreached"

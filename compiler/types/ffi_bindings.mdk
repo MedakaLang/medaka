@@ -1,0 +1,315 @@
+-- The declaration rules for a user `extern`'s host bindings and declared row,
+-- and the messages of every `T-FFI-*` declaration rule.  Pure over the
+-- declaration record and the atoms of its terminal result row, which the
+-- typechecker reads with aliases expanded (`ffiDeclaredRow`) and passes in;
+-- the rules return their diagnostics as data and the typechecker reports
+-- them.  Ownership gating (`ffiStampMode`) and the catalog-name test stay with
+-- the typechecker, which holds that state.
+--
+-- An `FFI` parameter in a declaration row is `HOST` or `HOST/LIBRARY`, HOST
+-- being `c` or `js`.  The rule is about declaration rows only: a bound (a row
+-- on any other signature, or a policy) compares parameters as text
+-- (`types/effect_domain.mdk`), so `"c*"` admits both `"c"` and `"c/m"`, while
+-- `"c"` does not admit `"c/m"` and `"c/*"` does not admit `"c"`.
+
+import frontend.ast.{
+  EffAtomTy(..),
+  EffParamTy(..),
+  ExternBind(..),
+  ExternDecl(..),
+  Loc,
+  Ty,
+  TyConOrigin(..),
+  externBindings,
+  firstTyLoc,
+}
+import types.repr.{ppTy}
+import types.effect_domain.{Param(..), canonParam, isSubTop}
+import types.effect_rows.{Atom, atomConst, atomLabel, atomsNorm, renderAtoms}
+import support.util.{anyList, contains, filterList, joinWith, startsWith}
+import support.char.{isAlnum, isApos, isDigit}
+import string.{stripSuffix}
+
+-- One declaration diagnostic: its code, where it is reported, its message.
+public export data FfiDiag = FfiDiag String (Option Loc) String
+
+-- The hosts a binding may name.
+ffiHosts : List String
+ffiHosts = ["c", "js"]
+
+-- Every rule over one user extern.  `catalog` says the name is a
+-- `stdlib/runtime.mdk` catalog name, which always runs the built-in: its
+-- signature is held to the catalog's by the shadow and catalog-row rules
+-- instead, so of these rules it meets only the one refusing a `bind` clause.
+-- `row` is `None` when the signature has no arrow.
+export
+ffiDeclarationDiags : Bool ->
+  ExternDecl ->
+  Option (List EffAtomTy) ->
+  List FfiDiag
+ffiDeclarationDiags True d _ = match d.edBinds
+  b :: _ =>
+    [FfiDiag "T-FFI-BUILTIN-BIND" (Some b.ebLoc) (ffiBuiltinBindMsg d.edName)]
+  [] => []
+ffiDeclarationDiags False d row =
+  ffiLabelDiags d row ++ ffiRowHostDiags d row ++ ffiBindDiags d
+
+-- The row must name the foreign-call `FFI`, and the signature must have an
+-- arrow to carry a row at all.  A nullary extern is refused, not passed: the
+-- emitter lowers every user extern as a foreign call, so its name would
+-- evaluate to an eta closure where a value is expected (#2106).
+ffiLabelDiags : ExternDecl -> Option (List EffAtomTy) -> List FfiDiag
+ffiLabelDiags d row =
+  let fb = firstTyLoc d.edTy
+  match row
+    None => [FfiDiag "T-FFI-NULLARY" fb (ffiNullaryMsg d.edName)]
+    Some atoms =>
+      if anyList isForeignCallAtom atoms then
+        []
+      else if anyList (a => a.eatLabel == "FFI") atoms then
+        [FfiDiag "T-FFI-UNLABELLED" fb (ffiDeclaredLabelMsg d.edName)]
+      else
+        [FfiDiag "T-FFI-UNLABELLED" fb (ffiUnlabelledMsg d.edName)]
+
+-- The foreign-call effect itself.  A label a module declares with `effect FFI`
+-- is spelled the same but is a user label, which the target check never gates,
+-- so it cannot be what makes a declaration honest about calling foreign code.
+isForeignCallAtom : EffAtomTy -> Bool
+isForeignCallAtom a = match a.eatOrigin
+  OriginModule _ => False
+  _ => a.eatLabel == "FFI"
+
+-- Each foreign-call atom names a host, and the declaration binds it.
+ffiRowHostDiags : ExternDecl -> Option (List EffAtomTy) -> List FfiDiag
+ffiRowHostDiags _ None = []
+ffiRowHostDiags d (Some atoms) =
+  flatMap (ffiAtomHostDiags d) (filterList isForeignCallAtom atoms)
+
+ffiAtomHostDiags : ExternDecl -> EffAtomTy -> List FfiDiag
+ffiAtomHostDiags d a = match a.eatParam
+  -- the empty literal is refused by the parameter check already
+  EPLit "" => []
+  EPLit p => match ffiParamHost p ffiHosts
+    Some h =>
+      if anyList (b => b.ebHost == h) (externBindings d) then
+        []
+      else
+        [
+          FfiDiag
+            "T-FFI-UNBOUND-HOST"
+            (Some d.edLoc)
+            (ffiUnboundHostMsg d.edName h),
+        ]
+    None =>
+      [FfiDiag "T-FFI-NO-HOST" (Some d.edLoc) (ffiNoHostMsg d.edName (Some p))]
+  _ => [FfiDiag "T-FFI-NO-HOST" (Some d.edLoc) (ffiNoHostMsg d.edName None)]
+
+-- The host an `FFI` parameter names: a host alone, or a host, `/` and a
+-- non-empty library.
+ffiParamHost : String -> List String -> Option String
+ffiParamHost _ [] = None
+ffiParamHost p (h :: hs)
+  | p == h = Some h
+  | startsWith "\{h}/" p && stringLength p > stringLength h + 1 = Some h
+  | otherwise = ffiParamHost p hs
+
+-- The written clauses name known hosts, each once; every binding, written or
+-- implied, names a symbol its host can call.
+ffiBindDiags : ExternDecl -> List FfiDiag
+ffiBindDiags d =
+  ffiClauseDiags d.edName [] d.edBinds
+    ++ flatMap (ffiSymbolDiags d) (externBindings d)
+
+ffiClauseDiags : String -> List String -> List ExternBind -> List FfiDiag
+ffiClauseDiags _ _ [] = []
+ffiClauseDiags n seen (b :: rest)
+  | not (contains b.ebHost ffiHosts) =
+    FfiDiag "T-FFI-UNKNOWN-HOST" (Some b.ebLoc) (ffiUnknownHostMsg n b.ebHost)
+      :: ffiClauseDiags n seen rest
+  | contains b.ebHost seen =
+    FfiDiag
+        "T-FFI-DUPLICATE-HOST"
+        (Some b.ebLoc)
+        (ffiDuplicateHostMsg n b.ebHost)
+      :: ffiClauseDiags n seen rest
+  | otherwise = ffiClauseDiags n (b.ebHost :: seen) rest
+
+ffiSymbolDiags : ExternDecl -> ExternBind -> List FfiDiag
+ffiSymbolDiags d b = match b.ebHost
+  "c" =>
+    if not (isIdentWith isCIdentStart isCIdentChar b.ebSymbol) then
+      [
+        FfiDiag
+          "T-FFI-C-SYMBOL"
+          (Some b.ebLoc)
+          (ffiCSymbolMsg d.edName b.ebSymbol (isEmptyBinds d)),
+      ]
+    else if startsWith "mdk_" b.ebSymbol then
+      [
+        FfiDiag
+          "T-FFI-RESERVED-NAME"
+          (Some b.ebLoc)
+          (ffiReservedMsg d.edName b.ebSymbol (isEmptyBinds d)),
+      ]
+    else
+      []
+  "js" =>
+    if isIdentWith isJsIdentStart isJsIdentChar b.ebSymbol then
+      []
+    else
+      [
+        FfiDiag
+          "T-FFI-JS-NAME"
+          (Some b.ebLoc)
+          (ffiJsNameMsg d.edName b.ebSymbol),
+      ]
+  _ => []
+
+isEmptyBinds : ExternDecl -> Bool
+isEmptyBinds d = match d.edBinds
+  [] => True
+  _ => False
+
+-- A non-empty string whose first character satisfies `start` and whose rest
+-- satisfy `rest`.
+isIdentWith : (Char -> Bool) -> (Char -> Bool) -> String -> Bool
+isIdentWith start rest s =
+  let cs = stringToChars s
+  arrayLength cs > 0 && start (arrayGetUnsafe 0 cs) && identCharsFrom rest cs 1
+
+identCharsFrom : (Char -> Bool) -> Array Char -> Int -> Bool
+identCharsFrom p cs i =
+  i >= arrayLength cs || p (arrayGetUnsafe i cs) && identCharsFrom p cs (i + 1)
+
+-- A Medaka identifier character less the apostrophe.
+isCIdentChar : Char -> Bool
+isCIdentChar c = isAlnum c && not (isApos c)
+
+isCIdentStart : Char -> Bool
+isCIdentStart c = isCIdentChar c && not (isDigit c)
+
+isJsIdentStart : Char -> Bool
+isJsIdentStart c = isCIdentStart c || c == '$'
+
+isJsIdentChar : Char -> Bool
+isJsIdentChar c = isJsIdentStart c || isDigit c
+
+-- ── messages ─────────────────────────────────────────────────────────────
+
+ffiNullaryMsg : String -> String
+ffiNullaryMsg n =
+  "foreign declaration `\{n}` has no arrow in its signature, so it declares a foreign value rather than a foreign call; declare a call instead, `extern \{n} : Unit -> <FFI \"c\"> T`, invoked as `\{n} ()`"
+
+ffiDeclaredLabelMsg : String -> String
+ffiDeclaredLabelMsg n =
+  "foreign declaration `\{n}` names `FFI` in its result row, but that `FFI` is a label declared with `effect FFI`, not the foreign-call effect; rename the declared label so `FFI` here means the foreign call"
+
+ffiUnlabelledMsg : String -> String
+ffiUnlabelledMsg n =
+  "foreign declaration `\{n}` does not name the `FFI` effect in its result row; write `<FFI \"c\">` joined with whatever else the row names, such as `<FFI \"c\", Net \"a.com/*\">`"
+
+ffiNoHostMsg : String -> Option String -> String
+ffiNoHostMsg n written =
+  let fix = match written
+    Some lib if not (contains (dropTrailingStar lib) ffiHosts) =>
+      "`<FFI \"c/\{lib}\">` for a C library"
+    _ => "`<FFI \"c\">` for a C function"
+  let shown = match written
+    Some lib => "`FFI \"\{lib}\"`"
+    None => "`FFI`"
+  "foreign declaration `\{n}` names \{shown} with no host in its result row; the parameter is a host, `c` or `js`, optionally followed by `/` and a library: write \{fix}"
+
+-- A bound's spelling of a whole host, `"c*"`, written in a declaration row.
+dropTrailingStar : String -> String
+dropTrailingStar s = match stripSuffix "*" s
+  Some rest => rest
+  None => s
+
+ffiUnboundHostMsg : String -> String -> String
+ffiUnboundHostMsg n h =
+  "foreign declaration `\{n}` names the `\{h}` host in its result row but has no `\{h}` binding; add an indented `bind \{h} \"<name>\"` line under its signature"
+
+ffiUnknownHostMsg : String -> String -> String
+ffiUnknownHostMsg n h =
+  "foreign declaration `\{n}` binds the unknown host `\{h}`; a binding names `c` or `js`"
+
+ffiDuplicateHostMsg : String -> String -> String
+ffiDuplicateHostMsg n h =
+  "foreign declaration `\{n}` binds the `\{h}` host more than once; keep one `bind \{h}` line"
+
+ffiCSymbolMsg : String -> String -> Bool -> String
+ffiCSymbolMsg n sym implied =
+  let what =
+    if implied then
+      "is bound to C under its own name, and `\{sym}`"
+    else
+      "binds the C symbol `\{sym}`, which"
+  "foreign declaration `\{n}` \{what} is not a C identifier (a letter or `_`, then letters, digits and `_`); bind a C symbol with `bind c \"<symbol>\"`"
+
+ffiJsNameMsg : String -> String -> String
+ffiJsNameMsg n name =
+  "foreign declaration `\{n}` binds the JavaScript name `\{name}`, which is not a JavaScript identifier (a letter, `_` or `$`, then letters, digits, `_` and `$`)"
+
+ffiReservedMsg : String -> String -> Bool -> String
+ffiReservedMsg n sym implied =
+  let fix =
+    if implied then
+      "rename the extern, or bind another symbol with `bind c \"<symbol>\"`"
+    else
+      "bind another symbol"
+  "foreign declaration `\{n}` claims a reserved name: its C symbol `\{sym}` is in the `mdk_` prefix, the runtime's own C symbol namespace; \{fix}"
+
+ffiBuiltinBindMsg : String -> String
+ffiBuiltinBindMsg n =
+  "foreign declaration `\{n}` redeclares a built-in, which always runs the built-in's own implementation, so it takes no `bind` clause; drop the clause, or rename the extern"
+
+export
+ffiNonCrossableMsg : String -> Ty -> String
+ffiNonCrossableMsg n t =
+  "type `\{ppTy t}` cannot cross the foreign-function boundary in extern `\{n}`; marshal it into one of Int, Float, Bool, Char, String, Unit, U8, U16, U32, U64, I32, I64 or Array Int"
+
+export
+ffiShadowMsg : String -> String -> String -> String
+ffiShadowMsg n want got =
+  "foreign declaration `\{n}` redeclares a built-in at a type it does not have: the built-in is `\{want}`, this declaration claims `\{got}`; rename the extern, or declare it at the built-in's signature"
+
+export
+ffiCatalogTailMsg : String -> String -> List String -> String
+ffiCatalogTailMsg n arrow missing =
+  "foreign declaration `\{n}` redeclares a built-in with a narrower effect row\{arrow}: the built-in also performs the row variable \{joinWith ", " missing}; write that variable in the row, or rename the extern"
+
+export
+ffiCatalogNarrowMsg : String ->
+  String ->
+  List Atom ->
+  List Atom ->
+  List Atom ->
+  String
+ffiCatalogNarrowMsg n arrow cat decl missing =
+  "foreign declaration `\{n}` redeclares a built-in with a narrower effect row\{arrow}: the built-in performs <\{renderAtoms cat}>, which this row does not cover at <\{renderAtoms missing}>\{ffiCatalogTopNote missing}; declare `<\{renderAtoms cat}>` or wider, or rename the extern"
+
+-- A parameterised label whose parameter is the top renders as the bare label,
+-- which against a declaration narrowing by a concrete parameter reads as "the
+-- built-in touches nothing" rather than "the built-in may touch anything".  The
+-- note is added here, in this one message: the shared renderers' top-renders-
+-- empty is the intended surface elsewhere.  A domainless label has no
+-- parameter that could be unconstrained, so it gets no note.
+ffiCatalogTopNote : List Atom -> String
+ffiCatalogTopNote missing =
+  match map atomLabel (filterList atomParamIsTop (atomsNorm missing))
+    [] => ""
+    ls => " (\{joinWith "/" ls} there admits any value, not none)"
+
+-- The top of a parameterised domain; `PUnit` is "no parameter", not "any
+-- value".
+atomParamIsTop : Atom -> Bool
+atomParamIsTop a = match atomConst a
+  Some p => paramIsTopDomain (canonParam p)
+  None => False
+
+paramIsTopDomain : Param -> Bool
+paramIsTopDomain (PPrefix None) = True
+paramIsTopDomain (PPath None) = True
+paramIsTopDomain (PSet None) = True
+paramIsTopDomain (p@(PProduct _)) = isSubTop p
+paramIsTopDomain _ = False

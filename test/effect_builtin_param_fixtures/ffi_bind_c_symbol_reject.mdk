@@ -1,0 +1,6 @@
+-- A `bind c` symbol that is not a C identifier: no C function can carry it.
+extern fastPath : Int -> <FFI "c"> Int
+  bind c "2fast"
+
+main : <IO> Unit
+main = println "unreached"

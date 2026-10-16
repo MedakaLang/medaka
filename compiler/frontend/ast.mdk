@@ -1870,6 +1870,16 @@ public export data ExternBind = ExternBind {
   ebLoc : Loc,
 }
 
+-- The host bindings an extern declares: its `bind` clauses as written, or,
+-- with none, a `c` binding under its Medaka name.  A `js` binding is never
+-- implied.  The declaration rules, the target walls and both emitters read an
+-- extern's bindings through this function and nowhere else.
+export
+externBindings : ExternDecl -> List ExternBind
+externBindings d = match d.edBinds
+  [] => [ExternBind { ebHost = "c", ebSymbol = d.edName, ebLoc = d.edLoc }]
+  bs => bs
+
 public export data Decl =
   -- pub? name type site.  The site is the name token, where a signature with
   -- no binding or a second signature for one name is reported.  No printer or

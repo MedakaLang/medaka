@@ -1,0 +1,8 @@
+-- A Medaka name in the `mdk_` prefix bound to a clean C symbol links to that
+-- symbol, outside the runtime's namespace, so it is accepted.  Its converse is
+-- ffi_bind_reserved_symbol_reject.mdk.
+extern mdk_shim : Unit -> <FFI "c"> Int
+  bind c "shim_word"
+
+main : <IO> Unit
+main = println "ffi reserved name accept"

@@ -1,0 +1,6 @@
+-- An `FFI` row with no host.  The parameter names the host, so the fix-it
+-- writes `<FFI "c">`.
+extern cAdd : Int -> Int -> <FFI> Int
+
+main : <IO> Unit
+main = println "unreached"

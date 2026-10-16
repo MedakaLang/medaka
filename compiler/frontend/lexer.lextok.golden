@@ -1490,18 +1490,29 @@ NEWLINE
 DATA
 UPPER "RawTok"
 EQUAL
+INDENT
+PIPE
 UPPER "RTok"
 UPPER "Token"
 UPPER "Int"
 UPPER "Int"
+NEWLINE
 PIPE
 UPPER "RNewline"
 UPPER "Int"
 UPPER "Int"
+NEWLINE
 PIPE
 UPPER "RComment"
 UPPER "Int"
 UPPER "Int"
+NEWLINE
+PIPE
+UPPER "RClauseNl"
+UPPER "Int"
+UPPER "Int"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "at"
 COLON
@@ -12969,6 +12980,33 @@ IDENT "opener"
 NEWLINE
 DEDENT
 NEWLINE
+IDENT "layout"
+LPAREN
+LPAREN
+UPPER "RClauseNl"
+IDENT "col"
+IDENT "off"
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+IDENT "stack"
+IDENT "frames"
+UNDERSCORE
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "applyNl"
+IDENT "col"
+IDENT "off"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+UPPER "None"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
 IDENT "flushClose"
 COLON
 UPPER "Token"
@@ -15011,15 +15049,9 @@ IDENT "elseFilter"
 LPAREN
 IDENT "layout"
 LPAREN
-IDENT "dedentTripleInterp"
-LPAREN
-IDENT "scan"
+IDENT "rawStream"
 IDENT "src"
 IDENT "len"
-INT 0
-INT 0
-INT 0
-RPAREN
 RPAREN
 LBRACKET
 INT 0
@@ -15031,6 +15063,273 @@ UPPER "False"
 RPAREN
 NEWLINE
 DEDENT
+NEWLINE
+IDENT "rawStream"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+IDENT "rawStream"
+IDENT "src"
+IDENT "len"
+EQUAL
+IDENT "externClauseBreaks"
+LPAREN
+IDENT "dedentTripleInterp"
+LPAREN
+IDENT "scan"
+IDENT "src"
+IDENT "len"
+INT 0
+INT 0
+INT 0
+RPAREN
+RPAREN
+NEWLINE
+IDENT "externClauseBreaks"
+COLON
+UPPER "List"
+UPPER "RawTok"
+ARROW
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+IDENT "externClauseBreaks"
+IDENT "toks"
+INDENT
+PIPE
+IDENT "hasBindLine"
+IDENT "toks"
+EQUAL
+IDENT "clauseBreaksGo"
+IDENT "toks"
+INT 0
+LPAREN
+MINUS
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "toks"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "hasBindLine"
+COLON
+UPPER "List"
+UPPER "RawTok"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "hasBindLine"
+LBRACKET
+RBRACKET
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "hasBindLine"
+LPAREN
+LPAREN
+UPPER "RNewline"
+UNDERSCORE
+UNDERSCORE
+RPAREN
+CONS
+LPAREN
+UPPER "RTok"
+LPAREN
+UPPER "TIdent"
+STRING "bind"
+RPAREN
+UNDERSCORE
+UNDERSCORE
+RPAREN
+CONS
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "hasBindLine"
+LPAREN
+UNDERSCORE
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+IDENT "hasBindLine"
+IDENT "rest"
+NEWLINE
+IDENT "clauseBreaksGo"
+COLON
+UPPER "List"
+UPPER "RawTok"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+IDENT "clauseBreaksGo"
+LBRACKET
+RBRACKET
+UNDERSCORE
+UNDERSCORE
+EQUAL
+LBRACKET
+RBRACKET
+NEWLINE
+IDENT "clauseBreaksGo"
+LPAREN
+LPAREN
+UPPER "RTok"
+UPPER "TExtern"
+IDENT "s"
+IDENT "e"
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+IDENT "lineCol"
+UNDERSCORE
+EQUAL
+INDENT
+UPPER "RTok"
+UPPER "TExtern"
+IDENT "s"
+IDENT "e"
+CONS
+IDENT "clauseBreaksGo"
+IDENT "rest"
+IDENT "lineCol"
+IDENT "lineCol"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "clauseBreaksGo"
+LPAREN
+LPAREN
+UPPER "RNewline"
+IDENT "col"
+IDENT "off"
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+UNDERSCORE
+IDENT "externCol"
+INDENT
+PIPE
+IDENT "externCol"
+GEQ
+INT 0
+AND
+IDENT "col"
+GT
+IDENT "externCol"
+AND
+IDENT "startsWithBind"
+IDENT "rest"
+EQUAL
+INDENT
+UPPER "RClauseNl"
+IDENT "col"
+IDENT "off"
+CONS
+IDENT "clauseBreaksGo"
+IDENT "rest"
+IDENT "col"
+IDENT "externCol"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "col"
+LEQ
+IDENT "externCol"
+EQUAL
+UPPER "RNewline"
+IDENT "col"
+IDENT "off"
+CONS
+IDENT "clauseBreaksGo"
+IDENT "rest"
+IDENT "col"
+LPAREN
+MINUS
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+UPPER "RNewline"
+IDENT "col"
+IDENT "off"
+CONS
+IDENT "clauseBreaksGo"
+IDENT "rest"
+IDENT "col"
+IDENT "externCol"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "clauseBreaksGo"
+LPAREN
+IDENT "t"
+CONS
+IDENT "rest"
+RPAREN
+IDENT "lineCol"
+IDENT "externCol"
+EQUAL
+INDENT
+IDENT "t"
+CONS
+IDENT "clauseBreaksGo"
+IDENT "rest"
+IDENT "lineCol"
+IDENT "externCol"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "startsWithBind"
+COLON
+UPPER "List"
+UPPER "RawTok"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "startsWithBind"
+LPAREN
+LPAREN
+UPPER "RTok"
+LPAREN
+UPPER "TIdent"
+STRING "bind"
+RPAREN
+UNDERSCORE
+UNDERSCORE
+RPAREN
+CONS
+UNDERSCORE
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "startsWithBind"
+UNDERSCORE
+EQUAL
+UPPER "False"
 NEWLINE
 IDENT "layoutPairs"
 COLON
@@ -15239,6 +15538,33 @@ IDENT "rest"
 IDENT "stack"
 IDENT "frames"
 IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "layoutPairs"
+LPAREN
+LPAREN
+UPPER "RClauseNl"
+IDENT "col"
+IDENT "off"
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+IDENT "stack"
+IDENT "frames"
+UNDERSCORE
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "applyNlPairs"
+IDENT "col"
+IDENT "off"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+UPPER "None"
 IDENT "opener"
 NEWLINE
 DEDENT
@@ -16785,15 +17111,9 @@ IDENT "elseFilterPairs"
 LPAREN
 IDENT "layoutPairs"
 LPAREN
-IDENT "dedentTripleInterp"
-LPAREN
-IDENT "scan"
+IDENT "rawStream"
 IDENT "src"
 IDENT "len"
-INT 0
-INT 0
-INT 0
-RPAREN
 RPAREN
 LBRACKET
 INT 0
@@ -16841,15 +17161,9 @@ IDENT "elseFilterToks"
 LPAREN
 IDENT "layoutToks"
 LPAREN
-IDENT "dedentTripleInterp"
-LPAREN
-IDENT "scan"
+IDENT "rawStream"
 IDENT "src"
 IDENT "len"
-INT 0
-INT 0
-INT 0
-RPAREN
 RPAREN
 LBRACKET
 INT 0
@@ -17122,6 +17436,32 @@ IDENT "rest"
 IDENT "stack"
 IDENT "frames"
 IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "layoutToks"
+LPAREN
+LPAREN
+UPPER "RClauseNl"
+IDENT "col"
+UNDERSCORE
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+IDENT "stack"
+IDENT "frames"
+UNDERSCORE
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "applyNlToks"
+IDENT "col"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+UPPER "TNewline"
 IDENT "opener"
 NEWLINE
 DEDENT

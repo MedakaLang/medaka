@@ -1,0 +1,12 @@
+-- #3638: the row is read at the extern's terminal result with return-position
+-- aliases expanded, as elaboration reads it, not only an alias at the head of
+-- the whole signature.  `Eff Int` declares `<FFI "c"> Int`.
+type Eff r = <FFI "c"> r
+
+extern cIncr : Int -> Eff Int
+
+incr : Int -> <FFI "c"> Int
+incr x = cIncr x
+
+main : <IO> Unit
+main = println "ffi alias row accept"

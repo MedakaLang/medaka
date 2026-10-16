@@ -1,5 +1,5 @@
 # META
-source_lines=2679
+source_lines=2691
 stages=DESUGAR,MARK
 # SOURCE
 -- Pretty printer for Medaka, producing parseable source from the AST
@@ -81,6 +81,7 @@ import frontend.ast.{
   Variant(..),
   Decl(..),
   ExternDecl(..),
+  ExternBind(..),
   Attr(..),
   authTermsSurface,
 }
@@ -2404,14 +2405,25 @@ export
 setImportForced : Bool -> Unit
 setImportForced b = importForcedRef := b
 
+-- One `bind <host> "<symbol>"` clause, on its own line under the signature.
+externBindDoc : ExternBind -> Doc
+externBindDoc b =
+  Nest 2 (Cat Hardline (text "bind \{b.ebHost} \{escStringLit b.ebSymbol}"))
+
 export
 printDecl : Decl -> Doc
 printDecl (DTypeSig pub n t _) =
   Cat (valueExportPrefix pub) (Cat (text n) (Cat (text " : ") (sigTypeDoc t)))
-printDecl (DExtern (ExternDecl { edPub = pub, edName = n, edTy = t, ... })) =
+printDecl (DExtern (ExternDecl { edPub = pub, edName = n, edTy = t, edBinds = bs, ... })) =
   Cat
     (valueExportPrefix pub)
-    (Cat (text "extern ") (Cat (text n) (Cat (text " : ") (sigTypeDoc t))))
+    (Cat
+      (text "extern ")
+      (Cat
+        (text n)
+        (Cat
+          (text " : ")
+          (Cat (sigTypeDoc t) (concatD (map externBindDoc bs))))))
 printDecl (DFunDef pub n pats body _ _) =
   Cat
     (if pub then text "export " else Nil)
@@ -2682,7 +2694,7 @@ effAxesDoc axes =
       (text (joinWith ", " (map (a => "\{fst a} : \{snd a}") axes)))
       (text ")"))
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Attr" true) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "ExternBind" true) (mem "Attr" true) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "zipL" false) (mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
 (DUse false (UseGroup ("list") ((mem "last" false) (mem "sortBy" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
@@ -3535,9 +3547,11 @@ effAxesDoc axes =
 (DFunDef false "importForcedRef" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig true "setImportForced" (TyFun (TyCon "Bool") (TyCon "Unit")))
 (DFunDef false "setImportForced" ((PVar "b")) (EApp (EApp (EVar "setRef") (EVar "importForcedRef")) (EVar "b")))
+(DTypeSig false "externBindDoc" (TyFun (TyCon "ExternBind") (TyCon "Doc")))
+(DFunDef false "externBindDoc" ((PVar "b")) (EApp (EApp (EVar "Nest") (ELit (LInt 2))) (EApp (EApp (EVar "Cat") (EVar "Hardline")) (EApp (EVar "text") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "bind ")) (EApp (EVar "display") (EFieldAccess (EVar "b") "ebHost"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "escStringLit") (EFieldAccess (EVar "b") "ebSymbol")))) (ELit (LString "")))))))
 (DTypeSig true "printDecl" (TyFun (TyCon "Decl") (TyCon "Doc")))
 (DFunDef false "printDecl" ((PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "t") PWild)) (EApp (EApp (EVar "Cat") (EApp (EVar "valueExportPrefix") (EVar "pub"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EVar "sigTypeDoc") (EVar "t"))))))
-(DFunDef false "printDecl" ((PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PVar "pub")) (rf "edName" (PVar "n")) (rf "edTy" (PVar "t"))) true))) (EApp (EApp (EVar "Cat") (EApp (EVar "valueExportPrefix") (EVar "pub"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "extern ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EVar "sigTypeDoc") (EVar "t")))))))
+(DFunDef false "printDecl" ((PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PVar "pub")) (rf "edName" (PVar "n")) (rf "edTy" (PVar "t")) (rf "edBinds" (PVar "bs"))) true))) (EApp (EApp (EVar "Cat") (EApp (EVar "valueExportPrefix") (EVar "pub"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "extern ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "sigTypeDoc") (EVar "t"))) (EApp (EVar "concatD") (EApp (EApp (EVar "map") (EVar "externBindDoc")) (EVar "bs")))))))))
 (DFunDef false "printDecl" ((PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "pats") (PVar "body") PWild PWild)) (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EVar "text") (ELit (LString "export "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "defHeader") (EVar "n")) (EVar "pats"))) (EApp (EVar "printDefRhs") (EVar "body")))))
 (DFunDef false "printDecl" ((PCon "DLetGroup" (PVar "pub") (PVar "bindings"))) (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EVar "text") (ELit (LString "export "))) (EVar "Nil"))) (EApp (EVar "letGroupDecl") (EVar "bindings"))))
 (DFunDef false "printDecl" ((PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataParams" (PVar "params")) (rf "dataParamKinds" (PVar "kinds")) (rf "dataExtern" (PCon "True"))) false)) (EApp (EApp (EVar "Cat") (EApp (EVar "visPrefix") (EVar "vis"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "extern data ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "tyParamsDoc") (EVar "params")) (EVar "kinds"))))))
@@ -3634,7 +3648,7 @@ effAxesDoc axes =
 (DFunDef false "effAxesDoc" ((PList)) (EVar "Nil"))
 (DFunDef false "effAxesDoc" ((PVar "axes")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " (")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "fst") (EVar "a")))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "snd") (EVar "a")))) (ELit (LString ""))))) (EVar "axes"))))) (EApp (EVar "text") (ELit (LString ")"))))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Attr" true) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "ctorBindersSurface" false) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "ExternBind" true) (mem "Attr" true) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "zipL" false) (mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
 (DUse false (UseGroup ("list") ((mem "last" false) (mem "sortBy" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
@@ -4487,9 +4501,11 @@ effAxesDoc axes =
 (DFunDef false "importForcedRef" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig true "setImportForced" (TyFun (TyCon "Bool") (TyCon "Unit")))
 (DFunDef false "setImportForced" ((PVar "b")) (EApp (EApp (EVar "setRef") (EVar "importForcedRef")) (EVar "b")))
+(DTypeSig false "externBindDoc" (TyFun (TyCon "ExternBind") (TyCon "Doc")))
+(DFunDef false "externBindDoc" ((PVar "b")) (EApp (EApp (EVar "Nest") (ELit (LInt 2))) (EApp (EApp (EVar "Cat") (EVar "Hardline")) (EApp (EVar "text") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "bind ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "b") "ebHost"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "escStringLit") (EFieldAccess (EVar "b") "ebSymbol")))) (ELit (LString "")))))))
 (DTypeSig true "printDecl" (TyFun (TyCon "Decl") (TyCon "Doc")))
 (DFunDef false "printDecl" ((PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "t") PWild)) (EApp (EApp (EVar "Cat") (EApp (EVar "valueExportPrefix") (EVar "pub"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EVar "sigTypeDoc") (EVar "t"))))))
-(DFunDef false "printDecl" ((PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PVar "pub")) (rf "edName" (PVar "n")) (rf "edTy" (PVar "t"))) true))) (EApp (EApp (EVar "Cat") (EApp (EVar "valueExportPrefix") (EVar "pub"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "extern ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EVar "sigTypeDoc") (EVar "t")))))))
+(DFunDef false "printDecl" ((PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PVar "pub")) (rf "edName" (PVar "n")) (rf "edTy" (PVar "t")) (rf "edBinds" (PVar "bs"))) true))) (EApp (EApp (EVar "Cat") (EApp (EVar "valueExportPrefix") (EVar "pub"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "extern ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "sigTypeDoc") (EVar "t"))) (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (EVar "externBindDoc")) (EVar "bs")))))))))
 (DFunDef false "printDecl" ((PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "pats") (PVar "body") PWild PWild)) (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EVar "text") (ELit (LString "export "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "defHeader") (EVar "n")) (EVar "pats"))) (EApp (EVar "printDefRhs") (EVar "body")))))
 (DFunDef false "printDecl" ((PCon "DLetGroup" (PVar "pub") (PVar "bindings"))) (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EVar "text") (ELit (LString "export "))) (EVar "Nil"))) (EApp (EVar "letGroupDecl") (EVar "bindings"))))
 (DFunDef false "printDecl" ((PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataParams" (PVar "params")) (rf "dataParamKinds" (PVar "kinds")) (rf "dataExtern" (PCon "True"))) false)) (EApp (EApp (EVar "Cat") (EApp (EVar "visPrefix") (EVar "vis"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "extern data ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "tyParamsDoc") (EVar "params")) (EVar "kinds"))))))

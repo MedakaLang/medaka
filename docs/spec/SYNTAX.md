@@ -1111,8 +1111,11 @@ extern cCurlVersion : Unit -> <FFI "c/libcurl"> String
 The optional string parameter names the library, exactly as `<Exec "clang">` names a
 binary. It is a **statement about where the call goes, not an enforcement** — the
 linker decides what actually resolves. The parameter is host-qualified: `"c"` is the
-C host and `"c/libcurl"` is a library on it. A bound `"c*"` admits both `"c"` and
-`"c/libcurl"`; a bound `"c"` admits only `"c"`.
+C host and `"c/libcurl"` is a library on it. An extern's own row writes `"HOST"` or
+`"HOST/LIBRARY"` with HOST `c` or `js`; anything else, bare `<FFI>` included, is
+`T-FFI-NO-HOST`. A bound (a row on any other signature, or a policy) compares the
+parameter as text: `"c*"` admits both `"c"` and `"c/libcurl"`, `"c"` admits only
+`"c"`, and `"c/*"` does not admit `"c"`.
 
 Rules, each a located error when broken:
 

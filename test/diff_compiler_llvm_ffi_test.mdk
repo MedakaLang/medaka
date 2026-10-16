@@ -475,7 +475,7 @@ aliasReturnSrc =
 
 aliasWholeSrc : String
 aliasWholeSrc =
-  "type FfiCharCall = Char -> <FFI \"c*\"> Char\n\nextern ffiCharNext : FfiCharCall\n\nmain : <IO, FFI \"c*\"> Unit\nmain = println (ffiCharNext 'a')\n"
+  "type FfiCharCall = Char -> <FFI \"c\"> Char\n\nextern ffiCharNext : FfiCharCall\n\nmain : <IO, FFI \"c*\"> Unit\nmain = println (ffiCharNext 'a')\n"
 
 aliasCase : String ->
   String ->
