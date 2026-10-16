@@ -926,20 +926,28 @@ runBuildNativeRoots : String ->
   BuildProfile ->
   <IO> Result BuildReport BuildReport
 runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr stampBuild profile =
-  runBuildNativeRootsGo
-    root
-    medaka
-    cc
-    inputAbs
-    outPath
-    tmpDir
-    keepIrCli
-    extraRoots
-    strictEmit
-    quietEmitStderr
-    stampBuild
-    profile
-    None
+  -- The callers are `medaka test`'s native engines: the project profile gates
+  -- the test verb's own typecheck, and these synthesized entries are an engine
+  -- detail that runs under no profile, so the child is handed none.
+  let held = !selectedProfile
+  selectedProfile := None
+  let res =
+    runBuildNativeRootsGo
+      root
+      medaka
+      cc
+      inputAbs
+      outPath
+      tmpDir
+      keepIrCli
+      extraRoots
+      strictEmit
+      quietEmitStderr
+      stampBuild
+      profile
+      None
+  selectedProfile := held
+  res
 
 -- `runBuildNativeRoots` with the emitter child's front-end gate selectable
 -- (`runBuild`'s `frontGate`); the exported entry never selects it.

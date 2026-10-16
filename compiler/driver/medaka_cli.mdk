@@ -70,16 +70,14 @@ import support.timer.{
   perfSinkOn,
   flushPerfSinkProse,
 }
-import list.{sortOn}
-import toml.{parse as parseToml}
-import support.manifest.{targetProfile, statesTargetSection}
+import list.{sortOn, head}
+import driver.profile_select.{manifestProfileOf, carryProjectProfile}
 import types.target_profile.{
   Backend(..),
   buildableNames,
   lookupProfile,
   profileBackend,
   runProfile,
-  selectProfile,
   selectedProfile,
 }
 import tools.target_check.{targetRefusal}
@@ -1352,38 +1350,12 @@ runTargetGo acc (x :: rest)
   | otherwise = acc
 runTargetGo acc [] = acc
 
--- The manifest's `[target] profile` for the project holding `entry`; `Err`
--- when a manifest exists but its `[target]` cannot be read.  The walk-up
--- starts from the entry's absolute directory: a relative entry's `dirOf2` is
--- `.`, whose parent is itself.  A manifest the TOML reader rejects with no
--- `[target]` header reads as no target: its other readers judge it.
-manifestProfileOf : String -> <IO> Result String (Option String)
-manifestProfileOf entry =
-  match findProjectRoot (canonicalizePath (dirOf2 entry))
-    None => Ok None
-    Some root =>
-      let path = root ++ "/medaka.toml"
-      let read = match readFile path
-        Err e => Err e
-        Ok text => match parseToml text
-          Err e =>
-            if statesTargetSection text then
-              Err "not valid TOML: \{e}"
-            else
-              Ok None
-          Ok doc => targetProfile doc
-      mapErr (why => "cannot read `[target]` in \{path}: \{why}") read
-
 -- Resolve `--target` (over the manifest) and carry the profile; a name the
 -- table does not know aborts.
 carryTargetProfile : Option String -> String -> <IO> Unit
-carryTargetProfile flagValue entry =
-  let fromManifest = match flagValue
-    Some _ => Ok None
-    None => manifestProfileOf entry
-  match andThen fromManifest (selectProfile flagValue)
-    Ok p => selectedProfile := p
-    Err m => dieMsg ("error: " ++ m)
+carryTargetProfile flagValue entry = match carryProjectProfile flagValue entry
+  Ok _ => ()
+  Err m => dieMsg ("error: " ++ m)
 
 -- True if the flag appears in `run`'s PRE-positional prefix ONLY — the same
 -- prefix `runArgvFilter` consumes, program passthrough args (after the first
@@ -3455,6 +3427,7 @@ runDocTargets [] = dieMsg "usage: medaka doc <file.mdk>"
 runDocTargets (_ :: _ :: _) =
   dieMsg "usage: medaka doc <file.mdk> (doc takes exactly one file)"
 runDocTargets (target :: _) =
+  let _ = carryTargetProfile None target
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
@@ -3476,6 +3449,7 @@ runDocLibraryTargets : String -> List String -> <IO> Unit
 runDocLibraryTargets _ [] =
   dieMsg "usage: medaka doc --out DIR <file.mdk> [<file.mdk> ...]"
 runDocLibraryTargets outDir targets =
+  let _ = carryTargetProfile None (optionOr "." (head targets))
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
@@ -3679,6 +3653,7 @@ runCheckPolicyArgs (PolicyArgs (Some target) allow fn) =
 -- manifest's claim is one `check-policy` can verify.
 analyzeTarget : String -> <IO> Result String EntryAnalysis
 analyzeTarget target =
+  let _ = carryTargetProfile None target
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let stdlibDir = root ++ "/stdlib"
   let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
@@ -4364,6 +4339,7 @@ replUsageLine = stringConcat [
 -- explicit/unknown arg needs handling before the loop starts.
 runReplCmd : List String -> <IO> Unit
 runReplCmd [] =
+  let _ = carryTargetProfile None (canonicalizePath "." ++ "/repl")
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"

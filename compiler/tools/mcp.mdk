@@ -83,6 +83,8 @@ import tools.lint.{
   StdlibIndex,
 }
 import tools.test_cmd.{runTestGradedReport}
+import driver.profile_select.{carryProjectProfile}
+import types.target_profile.{selectedProfile}
 import tools.doctest.{
   Example,
   ExResult(..),
@@ -471,10 +473,16 @@ runCheckTool runtimeSrc coreSrc stdlibDir args = match (
     Err e =>
       toolArgError
         (stringConcat ["medaka_check: cannot read file '", path, "': ", e])
-    Ok _ =>
-      let (json, hasErr) = checkJsonFile False runtimeSrc coreSrc path stdlibDir
-      toolTextResult json hasErr
+    Ok _ => match carryProjectProfile None path
+      Err m => toolArgError ("medaka_check: error: " ++ m)
+      Ok _ =>
+        let (json, hasErr) =
+          checkJsonFile False runtimeSrc coreSrc path stdlibDir
+        toolTextResult json hasErr
   (None, Some src) =>
+    -- Inline source belongs to no project, and this server has analyzed other
+    -- projects' files before it.
+    selectedProfile := None
     let (json, hasErr) =
       checkJsonSingle
         (stdlibExportsReader stdlibDir)
@@ -1699,6 +1707,7 @@ handleToolsCall runtimeSrc coreSrc stdlibDir idJson params stalenessCheck =
     Some name =>
       let args = fieldOr "arguments" params
       let _ = logMcpCall "tools/call" name (stringify args)
+      let _ = selectToolProfile args
       match callTool runtimeSrc coreSrc stdlibDir name args
         None =>
           writeMessage
@@ -1709,6 +1718,16 @@ handleToolsCall runtimeSrc coreSrc stdlibDir idJson params stalenessCheck =
         Some result =>
           let augmented = attachStaleness stalenessCheck result
           writeMessage (responseMsg idJson augmented)
+
+-- The profile of the project holding the call's `file`, chosen afresh per call
+-- (this server analyzes many projects).  An unreadable `[target]` leaves no
+-- profile selected; `medaka_check` reports it.
+selectToolProfile : Json -> <IO> Unit
+selectToolProfile args = match fieldStr "file" args
+  Some path =>
+    let _ = carryProjectProfile None path
+    ()
+  None => selectedProfile := None
 
 -- ── request dispatch ─────────────────────────────────────────────────────────
 

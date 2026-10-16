@@ -398,6 +398,12 @@ inlang-frontend-exhaust-test:
 inlang-driver-diagnostics-test:
 	./medaka test --native compiler/driver/diagnostics_test.mdk
 
+## The profile each verb typechecks under follows the project holding its
+## entry. A `*_test.mdk` sibling is outside every entry's closure
+## ([W-MODULE-BLIND]); `--native` for `readFile`/`writeFile`.
+inlang-driver-profile-select-test:
+	./medaka test --native compiler/driver/profile_select_test.mdk
+
 ## compiler/frontend/resolve.mdk carries its own `test "…"` block
 ## (the did-you-mean pool memo's once-per-Env discipline, #2800): the
 ## module's TYPES are checked on every build via the live pipeline's

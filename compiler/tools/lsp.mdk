@@ -38,12 +38,14 @@ import json.{
 import driver.diagnostics.{
   Diag,
   Severity(..),
+  mkDiag,
   analyzeFrom,
   analyzeProject,
   projectEntrySchemes,
   stdlibExportsReader,
 }
 import driver.loader.{findProjectRootOrSelf, parseCachedLocated}
+import driver.profile_select.{carryProjectProfile, manifestPathOf}
 import frontend.parser.{
   ParseError,
   parseResult,
@@ -63,7 +65,7 @@ import frontend.parser.{
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
 import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
 import support.char.{isIdentChar}
-import support.util.{maxI, utf8Len, joinWith, startsWith}
+import support.util.{maxI, utf8Len, joinWith, startsWith, contains}
 import string.{stripCR, toInt}
 import regex.{Regex, Match, mustCompile, escape, findAll, find}
 import frontend.desugar.{desugar}
@@ -1776,6 +1778,39 @@ publishEach ((file, ds) :: rest) =
 -- Choose the single-document or project path for a freshly-edited buffer.
 publishFor : String -> String -> String -> String -> Docs -> <IO> Unit
 publishFor runtimeSrc coreSrc uri text docs =
+  let _ = selectProjectProfileFor (pathOfUri uri)
+  publishForSelected runtimeSrc coreSrc uri text docs
+
+-- Files whose project manifest we last flagged, so a repaired manifest gets its
+-- diagnostic cleared.
+flaggedManifests : Ref (List String)
+flaggedManifests = Ref []
+
+-- The profile this analysis typechecks under is the one of the project holding
+-- `file`, chosen afresh per analysis because one server serves many projects.
+-- A manifest whose `[target]` cannot be read is published as a diagnostic on
+-- the manifest and the file is analyzed under no profile.
+selectProjectProfileFor : String -> <IO> Unit
+selectProjectProfileFor file = match carryProjectProfile None file
+  Ok _ => clearFlaggedManifest file
+  Err msg => match manifestPathOf file
+    None => ()
+    Some path =>
+      flaggedManifests := path :: !flaggedManifests
+      publishEach [
+        (path, [mkDiag SevError "R-MODULE-LOAD" msg (Some (Loc path 1 1 1 1))]),
+      ]
+
+clearFlaggedManifest : String -> <IO> Unit
+clearFlaggedManifest file = match manifestPathOf file
+  None => ()
+  Some path =>
+    if contains path !flaggedManifests then
+      flaggedManifests := filter (/= path) !flaggedManifests
+      publishEach [(path, [])]
+
+publishForSelected : String -> String -> String -> String -> Docs -> <IO> Unit
+publishForSelected runtimeSrc coreSrc uri text docs =
   match parseCachedLocated projectParseCache text
     Err e => publishDiagnosticsList uri (parseErrorDiags e)
     Ok decls =>

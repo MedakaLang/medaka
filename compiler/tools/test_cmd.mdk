@@ -71,6 +71,7 @@ import driver.loader.{
   readSource,
 }
 import driver.build_cmd.{readPreludeFile, envOr, defaultMedakaRoot}
+import driver.profile_select.{carryProjectProfile}
 import types.typecheck.{
   elaborateModules,
   elaborateModulesWithSchemes,
@@ -273,6 +274,23 @@ runTest : List Engine ->
   Option String ->
   <IO> Bool
 runTest engines runtimeP coreP target roots cases filterOpt =
+  match carryProjectProfile None target
+    Err m =>
+      let _ = ePutStrLn ("error: " ++ m)
+      False
+    Ok _ =>
+      runTestUnderProfile engines runtimeP coreP target roots cases filterOpt
+
+-- `runTest` once the target's project profile is the selected one.
+runTestUnderProfile : List Engine ->
+  String ->
+  String ->
+  String ->
+  List String ->
+  Int ->
+  Option String ->
+  <IO> Bool
+runTestUnderProfile engines runtimeP coreP target roots cases filterOpt =
   match readPreludeFile runtimeP
     Err e =>
       let _ = ePutStrLn e
@@ -2004,6 +2022,33 @@ runTestGradedReport : List Engine ->
   Bool ->
   <IO> (Option String, List (Engine, RunResult), List GradedProp, List GradedTest, Bool)
 runTestGradedReport engines runtimeSrc coreSrc target tsrc userDecls stdlibDir cases filterOpt includeTestDecls =
+  match carryProjectProfile None target
+    Err m => (Some ("error: " ++ m), [], [], [], False)
+    Ok _ =>
+      gradedReportUnderProfile
+        engines
+        runtimeSrc
+        coreSrc
+        target
+        tsrc
+        userDecls
+        stdlibDir
+        cases
+        filterOpt
+        includeTestDecls
+
+gradedReportUnderProfile : List Engine ->
+  String ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  String ->
+  Int ->
+  Option String ->
+  Bool ->
+  <IO> (Option String, List (Engine, RunResult), List GradedProp, List GradedTest, Bool)
+gradedReportUnderProfile engines runtimeSrc coreSrc target tsrc userDecls stdlibDir cases filterOpt includeTestDecls =
   do
     match loadPinContext target
       Err err => (Some err, [], [], [], False)

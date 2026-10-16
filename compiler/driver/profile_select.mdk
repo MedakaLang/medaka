@@ -1,0 +1,64 @@
+-- compiler/driver/profile_select.mdk — which target profile a verb typechecks
+-- under: `--target` first, then the `[target] profile` of the project holding
+-- the entry, then none.  Every verb that typechecks selects through here, and
+-- the selection is published on `selectedProfile`, the Ref the typechecker's
+-- IO join and the target refusal read.
+import toml.{parse as parseToml}
+import support.manifest.{targetProfile, statesTargetSection}
+import support.path.{dirOf}
+import types.target_profile.{TargetProfile, selectProfile, selectedProfile}
+import driver.loader.{findProjectRoot}
+
+-- The `medaka.toml` of the project holding `entry`.  The walk-up starts from
+-- the entry's absolute directory: a relative entry's directory is `.`, whose
+-- parent is itself.
+export
+manifestPathOf : String -> <IO> Option String
+manifestPathOf entry =
+  map (++ "/medaka.toml") (findProjectRoot (canonicalizePath (dirOf entry)))
+
+-- The manifest's `[target] profile` for the project holding `entry`; `Err`
+-- when a manifest exists but its `[target]` cannot be read.  A manifest the
+-- TOML reader rejects with no `[target]` header reads as no target: its other
+-- readers judge it.
+export
+manifestProfileOf : String -> <IO> Result String (Option String)
+manifestProfileOf entry = match manifestPathOf entry
+  None => Ok None
+  Some path =>
+    let read = match readFile path
+      Err e => Err e
+      Ok text => match parseToml text
+        Err e =>
+          if statesTargetSection text then
+            Err "not valid TOML: \{e}"
+          else
+            Ok None
+        Ok doc => targetProfile doc
+    mapErr (why => "cannot read `[target]` in \{path}: \{why}") read
+
+-- The profile for `entry`: `flagValue` (`--target`) over the manifest.  A name
+-- the profile table does not know is an `Err`.
+export
+selectProjectProfile : Option String ->
+  String ->
+  <IO> Result String (Option TargetProfile)
+selectProjectProfile flagValue entry =
+  let fromManifest = match flagValue
+    Some _ => Ok None
+    None => manifestProfileOf entry
+  andThen fromManifest (selectProfile flagValue)
+
+-- Select and publish: after the call the typechecker reads the profile for
+-- `entry`, or no profile when it cannot be read.  A long-lived process calls
+-- this once per analysis, so a failed selection must not leave the previous
+-- project's profile behind.
+export
+carryProjectProfile : Option String -> String -> <IO> Result String Unit
+carryProjectProfile flagValue entry = match selectProjectProfile flagValue entry
+  Ok p =>
+    selectedProfile := p
+    Ok ()
+  Err m =>
+    selectedProfile := None
+    Err m
