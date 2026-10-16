@@ -6,7 +6,7 @@ The C-ABI runtime that compiled Medaka links against. See
 [`../compiler/RUNTIME-DESIGN.md`](../compiler/RUNTIME-DESIGN.md) for the full
 extern-disposition strategy (all 71 primitives) and the value-representation +
 calling-convention proposal (§8), and
-[`../compiler/STAGE2-DESIGN.md`](../compiler/STAGE2-DESIGN.md) §2.4 for where this
+[`../archive/design/STAGE2-DESIGN.md`](../archive/design/STAGE2-DESIGN.md) §2.4 for where this
 fits in the backend plan.
 
 ## Status: canonical LLVM runtime (verified done 2026-06-22)

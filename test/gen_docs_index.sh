@@ -192,7 +192,7 @@ HEADER
     $STDLIB_FILES
 
   emit_group "compiler internals — stay in compiler/, indexed here for findability" \
-    "47 docs live next to the code they describe (compiler/*.md) and are NOT moved by the docs-tree reorg. Listed here so they're still one search away." \
+    "$(echo $COMPILER_FILES | wc -w | tr -d ' ') docs live next to the code they describe (compiler/*.md). Listed here so they're still one search away." \
     $COMPILER_FILES
 
   printf '### archive — closed / historical\n\n'

@@ -186,6 +186,6 @@ purpose: a perf fix without #359 is un-regressable.
 - `docs/spec/DICT-SEMANTICS.md` §7 — the single-evaluator law this backend refines.
 - `compiler/RUNTIME-DESIGN.md` §8 — the ratified value representation (V-laws' source).
 - `compiler/EMITTER-GAPS.md` — the E-series closure history + open capability residuals.
-- `compiler/SHARED-FLOAT-RESIDUAL-DESIGN.md` — the float-typing case study (why N8 exists).
+- `archive/design/SHARED-FLOAT-RESIDUAL-DESIGN.md` — the float-typing case study (why N8 exists).
 - `compiler/PERF-RESULTS.md` — the fixpoint-safe-container evidence and the reverted attempts.
 - `benchmark-emitter` + `perf-hunt` skills — measurement discipline; two-rebuild rule.

@@ -18,7 +18,7 @@ mirror). Cross-module effect label export (gap 3) shipped 2026-06-07. **Manifest
 emission shipped 2026-06-21** (`medaka check-policy` + parameter-level policy +
 `medaka manifest` TOML — WS-1a/1b/1c per `EFFECTS-CONFORMANCE-ROADMAP.md`).
 See **§5a (current state)** for the precise done/remaining split. Companion to [`language-design.md`](../spec/language-design.md)
-(effect rows as they exist today) and [`compiler/STAGE2-DESIGN.md`](../../compiler/STAGE2-DESIGN.md)
+(effect rows as they exist today) and [`archive/design/STAGE2-DESIGN.md`](../../archive/design/STAGE2-DESIGN.md)
 (effects are erased before codegen). The **platform/runtime architecture** that
 consumes this feature (verification pipeline, plugin SDK model, worked plugin
 examples) is in [`CAPABILITY-PLATFORM.md`](./CAPABILITY-PLATFORM.md).
@@ -249,7 +249,7 @@ verified against `dev/tc_probe.exe` first. Every `diff_compiler_*` typecheck/err
 golden/check/check_modules/selfproc/eval harness is byte-identical; `@thorough`
 green. The self-hosted typechecker now rejects laundering identically to the
 reference. (Expected proportionate cost: ~+20% per-decl typecheck overhead from
-per-arrow effvar allocation — see `compiler/PERF-NOTES.md`.)
+per-arrow effvar allocation — see `archive/design/PERF-NOTES.md`.)
 
 **Done (2026-06-21, WS-1a/1b/1c per `EFFECTS-CONFORMANCE-ROADMAP.md`):** manifest
 emission. `medaka check-policy` ported to the native CLI (WS-1a), extended to

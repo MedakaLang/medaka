@@ -18,7 +18,7 @@ duplicate two things that already have owners:
 
 - **Which stage lives in which file, and in what order they run** — `AGENTS.md`
   § "Pipeline — where each stage lives". That table is current; the Layout
-  table in `compiler/README.md` predates the subfolder restructure and says so
+  table in the old `compiler/README.md` body (now `archive/design/COMPILER-PORT-LOG.md`) predates the subfolder restructure and says so
   in its own header.
 - **How not to make the compiler slow** — `compiler/AGENTS.md`. Placement never
   overrides its one rule (a `List` is not a set and not a map).
@@ -36,15 +36,15 @@ obligations — `[W-PROJECT-BY-MANIFEST]` in `AGENTS.md`, not this skill.
 
 | Directory | It owns | It must not |
 |---|---|---|
-| `compiler/frontend/` | Source text → resolved, marked AST: `lexer.mdk`, `parser.mdk`, `ast.mdk`, `desugar.mdk`, `resolve.mdk`, `marker.mdk`, `exhaust.mdk`. | Know about Core IR, LLVM, or any CLI verb. |
-| `compiler/types/` | Type inference, interfaces, effects — `typecheck.mdk`, `annotate.mdk`. Exhaustiveness is *called from* here (`[P-EXHAUST-IN-TYPECHECK]`) but lives in `frontend/`. | Emit diagnostics by raising — errors accumulate (`[T-ERRORS-ACCUM]`). |
-| `compiler/ir/` | Core IR: the types, lowering, S-expr form, DCE, and the Core IR interpreter. The seam between front and back (`compiler/STAGE2-DESIGN.md`). | Contain surface-AST knowledge, or backend target detail. |
-| `compiler/backend/` | Target emission — `llvm_emit.mdk`, `wasm_emit.mdk`, mangling, TRMC analysis. Consumes Core IR only. | Re-derive anything the frontend or typechecker already computed. |
-| `compiler/eval/` | The tree-walking interpreter and its dict-passing dispatch. Its module driver moves in lockstep with `compiler/ir/core_ir_eval.mdk`'s (`[T-EVAL-LOCKSTEP]`). | Drift from the Core IR interpreter's frame semantics. |
-| `compiler/driver/` | **Dispatch, never implementation.** Verb routing (`medaka_cli.mdk`), the dependency walk (`loader.mdk`), the accumulating diagnostics pipeline (`diagnostics.mdk`), the build pipeline (`build_cmd.mdk`). | Hold a subcommand's *logic* or its command-local ADTs. That is the de-grab-bag work, #2282. |
-| `compiler/tools/` | One file per user-facing tool: `fmt`, `lint`, `doc`, `doctest`, `test_cmd`, `lsp`, `mcp`, `repl`, `check`, `gate_cmd`, `printer`, `snapshot`. A new tool is a NEW FILE here. | Become a shared grab-bag; cross-tool helpers go to `support/`. |
-| `compiler/support/` | The compiler-private mini-stdlib: `util`, `char`, `path`, `ordmap`, `scc`, `timer`, `opcount`, `manifest`. Thin wrappers over `stdlib/` are fine and expected. | Grow a second copy of something `stdlib/` exports — see the duplication rule below. |
-| `compiler/entries/` | Per-stage probe entry points, one `main` each, **thin**: parse argv, call one pipeline function, print. They exist so gates and oracles can drive one stage. | Contain logic. If an entry needs a real algorithm, the algorithm belongs in the owning stage and the entry calls it. |
+| [`compiler/frontend/`](../../../compiler/frontend/ARCHITECTURE.md) | Source text → resolved, marked AST: `lexer.mdk`, `parser.mdk`, `ast.mdk`, `desugar.mdk`, `resolve.mdk`, `marker.mdk`, `exhaust.mdk`. | Know about Core IR, LLVM, or any CLI verb. |
+| [`compiler/types/`](../../../compiler/types/ARCHITECTURE.md) | Type inference, interfaces, effects — `typecheck.mdk`, `annotate.mdk`. Exhaustiveness is checked here (`[P-EXHAUST-IN-TYPECHECK]`) and defined in `typecheck.mdk`; it sees only core patterns. | Emit diagnostics by raising — errors accumulate (`[T-ERRORS-ACCUM]`). |
+| [`compiler/ir/`](../../../compiler/ir/ARCHITECTURE.md) | Core IR: the types, lowering, S-expr form, DCE, and the Core IR interpreter. The seam between front and back (`archive/design/STAGE2-DESIGN.md`). | Contain surface-AST knowledge, or backend target detail. |
+| [`compiler/backend/`](../../../compiler/backend/ARCHITECTURE.md) | Target emission — `llvm_emit.mdk`, `wasm_emit.mdk`, mangling, TRMC analysis. | Re-derive anything the frontend or typechecker already computed. |
+| [`compiler/eval/`](../../../compiler/eval/ARCHITECTURE.md) | The tree-walking interpreter and its dict-passing dispatch. Its module driver moves in lockstep with `compiler/ir/core_ir_eval.mdk`'s (`[T-EVAL-LOCKSTEP]`). | Drift from the Core IR interpreter's frame semantics. |
+| [`compiler/driver/`](../../../compiler/driver/ARCHITECTURE.md) | **Dispatch, never implementation.** Verb routing (`medaka_cli.mdk`), the dependency walk (`loader.mdk`), the accumulating diagnostics pipeline (`diagnostics.mdk`), the build pipeline (`build_cmd.mdk`). | Hold a subcommand's *logic* or its command-local ADTs. That is the de-grab-bag work, #2282. |
+| [`compiler/tools/`](../../../compiler/tools/ARCHITECTURE.md) | One file per user-facing tool: `fmt`, `lint`, `doc`, `doctest`, `test_cmd`, `lsp`, `mcp`, `repl`, `check`, `gate_cmd`, `printer`, `snapshot`. A new tool is a NEW FILE here. | Become a shared grab-bag; cross-tool helpers go to `support/`. |
+| [`compiler/support/`](../../../compiler/support/ARCHITECTURE.md) | The compiler-private mini-stdlib: `util`, `char`, `path`, `ordmap`, `scc`, `timer`, `opcount`, `manifest`. Thin wrappers over `stdlib/` are fine and expected. | Grow a second copy of something `stdlib/` exports — see the duplication rule below. |
+| [`compiler/entries/`](../../../compiler/entries/ARCHITECTURE.md) | Per-stage probe entry points, one `main` each, **thin**: parse argv, call one pipeline function, print. They exist so gates and oracles can drive one stage. | Contain logic. If an entry needs a real algorithm, the algorithm belongs in the owning stage and the entry calls it. |
 | `compiler/seed/` | The checked-in LLVM IR seed for cold bootstrap. Machine-managed (`test/refresh_seed.sh`). | Be hand-edited, ever. |
 | `stdlib/` | The language's public library. `core.mdk` is the only auto-prelude. | — |
 
@@ -100,7 +100,7 @@ why it is not reopened here.
 | New lint rules as a placement/style enforcement mechanism — **DECLINED for now** | crusade #2276 | Not because a rule with findings has nowhere to land: `[H-LINT]`'s max ratchet (`GATED_LINT_RULES`, for a rule the tree is already clean of) is now joined by a per-(file, rule) count baseline (`BASELINED_LINT_RULES` + `test/lint_baseline.toml`, #2619 (lint count baseline)), which admits a rule the tree is NOT clean of and lets each file's count only fall. What stays declined is *authoring* one as a review outcome: a repeated, syntactically-detectable finding becomes a **filed lint-rule issue**, not an implemented rule. |
 | A comment **length** ratchet — **DECLINED on record** | #2281 | A length ratchet teaches agents to write short bad comments. The register norms are prose (`[T-COMMENT-REGISTER]` in `AGENTS.md`) plus a census (`make comment-census`), not a gate. |
 | Mirroring `.claude/skills/` into `.agents/` and `.opencode/` — **DELETED** 2026-09-04 | #2313 (Val ruling) | `.agents/` and `.opencode/` removed as unreferenced, diverged mirror trees — `.agents/skills` was a stale copy of `.claude/skills`, `.opencode/` an independent, unused roster. No gate referenced either tree. |
-| The `compiler/types/` module map README — **PENDING, referenced not written** | #2283 (open) | It is leg 4 **R** and will land as a `README.md` under `compiler/types/`, carrying the per-module depth this skill deliberately does not: which of `typecheck.mdk`'s fenced regions does what. It does not exist yet (this skill functions without it); when it lands, link it from here rather than copying it. Not cited as a live path above precisely because it is not on disk. |
+| The `compiler/types/` module map README — **DONE**, now `compiler/types/ARCHITECTURE.md` | #2283 (closed) | The per-module map landed as `compiler/types/ARCHITECTURE.md` (with the other directory maps); link it, do not copy it. Which of `typecheck.mdk`'s fenced regions does what is `compiler/TYPECHECK-ARCHITECTURE.md`. |
 
 Codex discovers the canonical skills through the `.agents/skills` symlink to
 `.claude/skills`. Keep that link as a discovery entry point, not a copied tree;

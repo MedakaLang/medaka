@@ -7,7 +7,7 @@ line 1387, plus `E-NONEXHAUSTIVE-MATCH`/`E-INDEX-OOB`/`E-STACK-OVERFLOW`/
 `E-NOT-A-FUNCTION`/`E-SLICE-OOB`/`E-LET-REFUTE`), matching this doc's proposal exactly.
 The original header below ("proposed, decision-ready... no source changed") predates the
 fix — cross-backend consistency is the natural sequel, tracked in
-`compiler/RUNTIME-TRAP-UNIFY-DESIGN.md` (still OPEN).
+`docs/design/RUNTIME-TRAP-UNIFY-DESIGN.md` (still OPEN).
 
 **Status:** proposed, decision-ready. Read-only design pass — no source changed.
 **Owning goal:** error-message quality (`compiler/ERROR-QUALITY.md`,

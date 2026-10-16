@@ -486,7 +486,7 @@ These need a human call before implementation; do not decide unilaterally.
    consumer asks (it is pure and cheap, so "always" is likely fine).
 
 5. ~~**Warning-range regression.**~~ **DECIDED + SHIPPED** — warnings now carry a real
-   `range`, not `{0,0}`. See `compiler/DIAGNOSTICS-SURFACING-PLAN.md`'s Stage A/B/C
+   `range`, not `{0,0}`. See `archive/design/DIAGNOSTICS-SURFACING-PLAN.md`'s Stage A/B/C
    completion.
 
 6. **How much prose.** House style is one compact `file:L:C:` block + caret +

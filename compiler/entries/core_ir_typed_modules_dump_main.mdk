@@ -14,7 +14,7 @@
 --
 -- Reach for this when a backend decision depends on the LOWERED shape of a bind
 -- and reasoning from emitted IR would be a guess.  Existence proof: the TMC
--- dict-veto fix (compiler/WASM-TMC-GAP-DESIGN.md) shipped against a design doc
+-- dict-veto fix (archive/design/WASM-TMC-GAP-DESIGN.md) shipped against a design doc
 -- that read the EMITTED LLVM and concluded the self-call was a `CVar`-headed
 -- spine `isSelfSatApp` already matched; one dump from this path showed the truth
 -- (`CDict self ((RDict "$dict_…")) …`, arity 3 for a 2-arg source fn) and

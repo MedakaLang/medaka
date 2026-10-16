@@ -410,7 +410,7 @@ was right to flag it as "may already be half-true". It is more than half-true:**
 
 - **`.claude/ORCHESTRATING.md:885`** — *"**Decided invariants — do not relitigate** (see memory):
   retirement ≠ removal; **lazy top-level nullary canonical**; no catchable panics."*
-- **`compiler/WASMGC-DESIGN.md:249-252`** — *"Thunks (**lazy top-level nullary, see MEMORY 'Lazy
+- **`archive/design/WASMGC-DESIGN.md:249-252`** — *"Thunks (**lazy top-level nullary, see MEMORY 'Lazy
   top-level nullary canonical'**) = a 0-capture closure forced on first reference; represent
   identically to closures with a forced/value cache field."*
 
@@ -574,7 +574,7 @@ of comment this issue's history shows to be wrong** (*"native is unaffected"* wa
 confidently-stated comment). **Measure it before choosing.**
 
 ### F6 — Where does the LAW live? The native spec is SILENT. (a spec finding)
-**`grep -rn 'eager' compiler/STAGE2-DESIGN.md compiler/RUNTIME-DESIGN.md compiler/EMITTER-GAPS.md
+**`grep -rn 'eager' archive/design/STAGE2-DESIGN.md compiler/RUNTIME-DESIGN.md compiler/EMITTER-GAPS.md
 docs/spec/*.md` returns hits ONLY in `docs/spec/WASM-SEMANTICS.md` — ZERO in any native
 document.** WP10 is thorough and *does* state the native arm — but it lives in a file called
 **WASM-SEMANTICS**, under a law-code (`WP*`) meaning *wasm physical encoding*, while describing a

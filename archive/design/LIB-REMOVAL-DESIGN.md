@@ -125,7 +125,7 @@ machinery and die cleanly with `lib/`.
   - `Makefile` — delete the `reference:` target + the two-compiler header comment.
   - `PLAN.md` / `PLAN-ARCHIVE.md` / various `*-DESIGN.md` — historical `lib/eval.ml` etc.
     references; leave archival, update only forward-looking PLAN.md.
-  - `compiler/REROOT-PLAN.md` §5 blocker #3 (the "run OCaml-oracle'd fixpoint once per soak
+  - `archive/design/REROOT-PLAN.md` §5 blocker #3 (the "run OCaml-oracle'd fixpoint once per soak
     checkpoint" compensating control) becomes void — note it as retired.
 
 ---

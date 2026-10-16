@@ -83,7 +83,7 @@ most.
 **Note (2026-06-18):** the gap-census and dispatch-inventory entry points (`dispatch_argclass_main`,
 `dispatch_inventory_main`, `llvm_emit_gaps_main`) were debugging/gap-hunting probes created
 during the Stage-3 gap-closure arc. The dispatch gaps they inventoried are all closed
-(#54/#55/#50/#21 — see `compiler/DISPATCH-GAPS-SCOPE.md`). These entries are
+(#54/#55/#50/#21 — see `archive/design/DISPATCH-GAPS-SCOPE.md`). These entries are
 **consumed only by the dead sections they were built to diagnose** — they are safe to
 prune and any sections in this review that reference them as investigation entry points
 are historical (the gaps they pointed at no longer exist).

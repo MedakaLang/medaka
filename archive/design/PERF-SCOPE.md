@@ -4,10 +4,10 @@
 Kept as historical rationale/hot-path analysis (its own ✅ banner below is accurate). The
 dual OCaml+native scoping content and the Mach-O-only `-Wl,-stack_size` link flag are
 historical — both are gone (OCaml removed 2026-06-26; the stack flag retired with the
-Mac→Linux box migration, see `compiler/PERF-RUNTIME.md`). Dead bare `compiler/build_cmd.mdk`
+Mac→Linux box migration, see `archive/design/PERF-RUNTIME.md`). Dead bare `compiler/build_cmd.mdk`
 citations corrected to `compiler/driver/build_cmd.mdk` (2026-07-13 doc pass).
 
-> ✅ **EXECUTED 2026-06-11 — see [`PERF-RESULTS.md`](./PERF-RESULTS.md).** This was the
+> ✅ **EXECUTED 2026-06-11 — see [`PERF-RESULTS.md`](../../compiler/PERF-RESULTS.md).** This was the
 > read-only scoping pass; the work it planned (and much more) is done: `-O2` flipped, GC tuned,
 > 18 fixpoint-gated O(N²) fixes → self-compile **12.04 s → 2.12 s (5.68×); ~59× vs the OCaml
 > interpreter**. The `-O2`-is-fixpoint-safe and `mem2reg`-alloca-win predictions below were

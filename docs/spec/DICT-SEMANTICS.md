@@ -2515,7 +2515,7 @@ see `test/MUST-FAIL-NOT-PINNABLE.txt` entry #1223 for why no `medaka` CLI verb c
 express this residual.
 
 ⚠️ **U1/U2 are clauses, not a description of the current state, and that difference
-has already misled.** `compiler/DRIVER-COLLAPSE-PLAN.md` records U1 as its own
+has already misled.** `archive/design/DRIVER-COLLAPSE-PLAN.md` records U1 as its own
 governing invariant (*"the degenerate 1-module case automatically satisfies the flat
 path's invariants"*) and carries the status **IMPLEMENTED**. It is not implemented: a
 second mode is live, and its consumers are live production paths rather than

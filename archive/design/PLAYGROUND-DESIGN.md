@@ -6,7 +6,7 @@
 > Medaka compiler runs fully client-side as a WasmGC module; `playground/server.js`
 > is a static file server only. See `playground/README.md` for build + run
 > instructions. The original server-side compile plan (§6.1 below) is marked
-> SUPERSEDED. Companion to `compiler/WASMGC-DESIGN.md` (the WasmGC backend this
+> SUPERSEDED. Companion to `archive/design/WASMGC-DESIGN.md` (the WasmGC backend this
 > rides on), `ASYNC-DESIGN.md` (the locked async contract), `compiler/RUNTIME-DESIGN.md`
 > §6a (the capability-interface/extern disposition model), and `CAPABILITY-PLATFORM.md`
 > (the product vision this is an instance of — §388 there already names "a web
@@ -27,7 +27,7 @@ Slices W5 (dispatch/dict-passing), W6 (strings), W7 (collections), and W9 (multi
 module / real programs) land this, riding the real `medaka build` front end through
 `compiler/entries/wasm_emit_modules_main.mdk` (loader → `elaborateModules` with the
 REAL `core.mdk` prelude → `lowerProgramEmit` → DCE → `emitProgram`). *Caveat for the
-reader: the committed `compiler/WASMGC-DESIGN.md` §9 at this base still marks only
+reader: the committed `archive/design/WASMGC-DESIGN.md` §9 at this base still marks only
 W1–W4 DONE and reads "not yet implemented" in its header — that doc is being updated
 by a parallel effort to reflect the met MVP; trust the MVP-met status, not the stale
 slice ticks.* This plan therefore treats the client target as **available**, not a
@@ -524,7 +524,7 @@ platform doc already *names* the playground (§388) — that's the anchor for th
 
 | Need | Source (verified) |
 |---|---|
-| WasmGC backend status, host-import ABI, engine caveats, `--target wasm` sketch | `compiler/WASMGC-DESIGN.md` §6/§7/§8/§9/§11 |
+| WasmGC backend status, host-import ABI, engine caveats, `--target wasm` sketch | `archive/design/WASMGC-DESIGN.md` §6/§7/§8/§9/§11 |
 | LLVM build-driver shape (historical: at design time paralleled `lib/build_cmd.ml`, removed 2026-06-26) | `compiler/driver/build_cmd.mdk`; dispatch in `compiler/driver/medaka_cli.mdk` |
 | Browser runtime glue | `test/wasm/run.js` |
 | Locked async contract (the swap) | `ASYNC-DESIGN.md` §0/§4/§5 |

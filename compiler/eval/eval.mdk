@@ -1265,7 +1265,7 @@ isDispatching _ = False
 -- `check` is GC-bound ([T-PERF-HUNT]: profile ALLOCATION, not wall clock), so a cheap-
 -- looking scan that allocates per candidate is exactly the shape that has surprised this
 -- compiler before.  If a `check`-path regression is ever reported, start here:
--- `compiler/PERF-SCOPE.md` ranks the hot paths and `test/bench.sh` is the per-stage
+-- `archive/design/PERF-SCOPE.md` ranks the hot paths and `test/bench.sh` is the per-stage
 -- harness; a memoised or key-sorted collision test is the obvious first move if it bites.
 checkArgTagDecidable : List (Value e) -> Value e -> Unit
 checkArgTagDecidable vs arg

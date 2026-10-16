@@ -147,7 +147,7 @@ into every caller.
   per impl, so a uniform indirect call needs a trampoline anyway ⇒ it converges on outlining's IR for **~3%** more,
   and it needs the interface at dict-construction (`RKey` carries none — `Eq Int` and `Ord Int` build **identical
   cells**), which means an AST change to `Route` that `eval`/`wasm` pattern-match ⇒ **escapes the backend blast
-  radius.** Full analysis: `compiler/PRELUDE-OBJ-DESIGN.md`.
+  radius.** Full analysis: `archive/design/PRELUDE-OBJ-DESIGN.md`.
 - **Chain DEPTH is not a runtime cost.** 31 vs 159 arms = **1.05×** (non-monotonic ⇒ noise): the branch predictor
   nails the always-taken path. But IR grows **linearly** in arms (2.00× IR, 1.72× build). **The chain costs COMPILE
   time, not RUN time** — which is why outlining wins and a vtable does not.
@@ -193,7 +193,7 @@ Read the **`benchmark-emitter`** skill first. Every time.
 
 ## Know which problems are STRUCTURAL before you chase them
 
-Two of the four ranked hot paths in `compiler/PERF-SCOPE.md` are **not fixable by tuning**, and an
+Two of the four ranked hot paths in `archive/design/PERF-SCOPE.md` are **not fixable by tuning**, and an
 agent who does not know that will burn a session:
 
 - **GC allocation density** (`PERF-SCOPE.md:206`) — *"a structural property of the value

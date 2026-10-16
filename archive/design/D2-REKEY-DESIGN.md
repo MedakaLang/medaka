@@ -94,7 +94,7 @@ application) or the inner constraint-var method (`pure`/`andThen`) routes `RNone
 → arg-tag → no impl (return case).
 
 ### Why this is identity, not collision
-The WS2 Option-B re-key (`compiler/WS2-REKEY-DIAGNOSIS.md`) targets the **bare-name
+The WS2 Option-B re-key (`archive/design/WS2-REKEY-DIAGNOSIS.md`) targets the **bare-name
 first-match COLLISION**: two *distinct same-named* callees in different modules,
 disambiguated by an AST `EVarFrom`-style definer origin. **My repro has no name
 collision** — `btraverse`/`sizeWith` are unique across the project. A single,

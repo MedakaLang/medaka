@@ -2,18 +2,18 @@
 # bench.sh — native-backend performance harness for Medaka.
 #
 # Times the standard workloads on the CURRENT sources/binary and prints a table.
-# Companion to compiler/PERF-SCOPE.md (plan) and compiler/PERF-RESULTS.md (log).
+# Companion to archive/design/PERF-SCOPE.md (plan) and compiler/PERF-RESULTS.md (log).
 #
 # Workloads:
 #   fib 38      test/bench_fixtures/fib.mdk     — pure compute, NO heap alloc.
 #   listsum     test/bench_fixtures/listsum.mdk — cons churn / GC pressure.
 #   (the runtime micro-suite loop) — float/ADT/list/closure/string isolation
-#               fixtures; see compiler/PERF-RUNTIME.md's fixture table.
+#               fixtures; see archive/design/PERF-RUNTIME.md's fixture table.
 #   startup     trivial `main = putStrLn "x"` — process/runtime-init floor,
 #               isolates fixed per-process overhead from every workload above.
 #   fib_c/bintrees_c — hand-written C equivalents of fib/bintrees
 #               (test/bench_fixtures/c/*.c), no GC/runtime, -O2: a sanity
-#               ceiling, not a fair comparison (see compiler/PERF-RUNTIME.md).
+#               ceiling, not a fair comparison (see archive/design/PERF-RUNTIME.md).
 #   selfcompile native emitter emitting its OWN module graph (~10 MB IR) — the
 #               heaviest representative workload, the OCaml-retirement perf bar.
 #
@@ -183,7 +183,7 @@ echo "building listsum..."; "$MAIN" build test/bench_fixtures/listsum.mdk -o /tm
 printf 'listsum      %s  size=%sB\n' "$(time_min /tmp/_bench_ls)" "$(wc -c </tmp/_bench_ls | tr -d ' ')"
 
 # ── runtime micro-suite (float/ADT/list/closure/string) ──────────────────────
-# See compiler/PERF-RUNTIME.md. floatsum/mandel isolate float boxing (Win 1/2:
+# See archive/design/PERF-RUNTIME.md. floatsum/mandel isolate float boxing (Win 1/2:
 # fusion + let-unboxing); bintrees = ADT/GC; listops/closures = cons/closure churn.
 for b in intsum floatsum floatsum_guard mandel mandel_let bintrees closures strbuild dispatch strlit listlit tuplit listops taylor fhelp; do
   src="test/bench_fixtures/$b.mdk"
@@ -214,7 +214,7 @@ fi
 # test/bench_fixtures/c/{fib,bintrees}.c are hand-written equivalents of the
 # same two fixtures (same recursion, same input, malloc/free instead of Boehm
 # GC for bintrees). Not a fair like-for-like (no GC, no boxing, no dispatch)
-# — an upper bound, not a target: see compiler/PERF-RUNTIME.md's C sanity
+# — an upper bound, not a target: see archive/design/PERF-RUNTIME.md's C sanity
 # paragraph for the flags and the caveat.
 for cb in fib bintrees; do
   csrc="test/bench_fixtures/c/$cb.c"

@@ -94,6 +94,7 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`D3-DEFAULTING-DESIGN.md`](design/D3-DEFAULTING-DESIGN.md) | Numeric defaulting at a multi-parameter goal — the D3 rule, determination, and the settle sequence | design pass, 2026-10-03/04 |
 | [`EFFECTS-CONFORMANCE-ROADMAP.md`](design/EFFECTS-CONFORMANCE-ROADMAP.md) | Effect-and-Capability Conformance Roadmap | PARTIAL |
 | [`EFFECTS-ISSUE-ARCHITECTURE-REVIEW.md`](design/EFFECTS-ISSUE-ARCHITECTURE-REVIEW.md) | Effects issues against the architecture | REVIEWED |
+| [`EQ-DISPATCH-DESIGN.md`](design/EQ-DISPATCH-DESIGN.md) | `==`/`/=` → `Eq` Dispatch (Option A) — Design + Blast-Radius Census | OPEN |
 | [`GAP3-SLICE7-DESIGN.md`](design/GAP3-SLICE7-DESIGN.md) | Gap 3 — slice-7 arg-tag dispatch on a generic prelude free function | OPEN |
 | [`GZIP-DESIGN.md`](design/GZIP-DESIGN.md) | DEFLATE / gzip — a compression codec in pure Medaka | PARTIAL |
 | [`INTEGER-TYPES-DESIGN.md`](design/INTEGER-TYPES-DESIGN.md) | The integer stack | — |
@@ -101,9 +102,15 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`JEV-DESIGN.md`](design/JEV-DESIGN.md) | Jev judgment tools: calibrated judgments between lint and LLM review | PROPOSED, 2026-09-16 |
 | [`JEV-LEDGER.md`](design/JEV-LEDGER.md) | Jev: the experiment ledger | — |
 | [`LANGUAGE-SURFACE-AUDIT.md`](design/LANGUAGE-SURFACE-AUDIT.md) | LANGUAGE-SURFACE-AUDIT.md | OPEN |
+| [`MESSAGE-AUDIT.md`](design/MESSAGE-AUDIT.md) | MESSAGE-AUDIT.md | PARTIAL |
 | [`MUT-SCOPING-DESIGN.md`](design/MUT-SCOPING-DESIGN.md) | `<Mut>` scoping — effect masking for allocate→fill→freeze | CLOSED |
+| [`PERF-CI-COVERAGE.md`](design/PERF-CI-COVERAGE.md) | PERF-CI-COVERAGE.md — a comprehensive design for catching quadratics in CI | DESIGN |
+| [`REFERENCES-RENAME-DESIGN.md`](design/REFERENCES-RENAME-DESIGN.md) | Cross-file `references` + `rename` (#254) — Design / Scoping | DESIGN |
 | [`REGEX-DESIGN.md`](design/REGEX-DESIGN.md) | Regular expressions in the stdlib | — |
+| [`RUNTIME-TRAP-UNIFY-DESIGN.md`](design/RUNTIME-TRAP-UNIFY-DESIGN.md) | Runtime-trap-format unification — design | OPEN, but the `Array.set`/`Vector.set` OOB row is discharged: `setInPlace` |
+| [`SOURCE-POSITION-DESIGN.md`](design/SOURCE-POSITION-DESIGN.md) | SOURCE-POSITION-DESIGN.md — principled, unified line:column (source-span) tracking; #331 as increment 1 | DESIGN |
 | [`TARGETS-DESIGN.md`](design/TARGETS-DESIGN.md) | Targets and host profiles | OPEN |
+| [`TYPE-AWARE-LINT-DESIGN.md`](design/TYPE-AWARE-LINT-DESIGN.md) | Type-Aware Lint Tier — Design | PARTLY SHIPPED and RE-COSTED; TIER 1 UNBLOCKED, TIER 2 STILL BLOCKED |
 | [`WASM-ASYNC-DESIGN.md`](design/WASM-ASYNC-DESIGN.md) | Async on the WasmGC target | PARTIAL |
 
 ### ops — release, testing, distribution
@@ -188,78 +195,31 @@ What's in the standard library, what's planned, module-by-module status.
 
 ### compiler internals — stay in compiler/, indexed here for findability
 
-47 docs live next to the code they describe (compiler/*.md) and are NOT moved by the docs-tree reorg. Listed here so they're still one search away.
+21 docs live next to the code they describe (compiler/*.md). Listed here so they're still one search away.
 
 | Doc | What it is | Status |
 |-----|------------|--------|
 | [`AGENTS.md`](../compiler/AGENTS.md) | compiler/AGENTS.md — how not to make the compiler slow | LIVE |
-| [`ARCH-REVIEW.md`](../compiler/ARCH-REVIEW.md) | Medaka Architecture Review | PARTIAL |
 | [`ARCHITECTURE-PLAYBOOK.md`](../compiler/ARCHITECTURE-PLAYBOOK.md) | From here to there: the architecture playbook | ADOPTED 2026-10-15 as the plan of record; Val ratified |
 | [`ARCHITECTURE.md`](../compiler/ARCHITECTURE.md) | The compiler's target architecture | ADOPTED 2026-10-15 |
-| [`ARGSTAMP-UNIFY-PLAN.md`](../compiler/ARGSTAMP-UNIFY-PLAN.md) | ARGSTAMP-UNIFY-PLAN.md — retire the `emitArgStampPasses` eval-vs-emit dispatch fork | IMPLEMENTED |
 | [`BOOTSTRAP.md`](../compiler/BOOTSTRAP.md) | BOOTSTRAP.md — Native self-compile slices | IMPLEMENTED |
-| [`COMPOSITE-MAIN-AUTOPRINT-DESIGN.md`](../compiler/COMPOSITE-MAIN-AUTOPRINT-DESIGN.md) | Composite-`main` Auto-Print — Design (Option A: uniform auto-print) | IMPLEMENTED on every verb |
 | [`CONSTRUCT-COVERAGE.md`](../compiler/CONSTRUCT-COVERAGE.md) | CONSTRUCT-COVERAGE.md — `medaka build` native coverage matrix | PARTIAL |
 | [`DIAGNOSTIC-CODES-DESIGN.md`](../compiler/DIAGNOSTIC-CODES-DESIGN.md) | DIAGNOSTIC-CODES-DESIGN.md | IMPLEMENTED |
-| [`DIAGNOSTICS-SURFACING-PLAN.md`](../compiler/DIAGNOSTICS-SURFACING-PLAN.md) | DIAGNOSTICS-SURFACING-PLAN.md — native `check` error positions + messages (WS-4 / F6) | IMPLEMENTED |
-| [`DISPATCH-GAPS-SCOPE.md`](../compiler/DISPATCH-GAPS-SCOPE.md) | DISPATCH-GAPS-SCOPE.md | IMPLEMENTED |
-| [`DISPATCH-INVENTORY.md`](../compiler/DISPATCH-INVENTORY.md) | DISPATCH-INVENTORY.md | PARTIAL |
-| [`DRIVER-COLLAPSE-PLAN.md`](../compiler/DRIVER-COLLAPSE-PLAN.md) | DRIVER-COLLAPSE-PLAN.md — collapse the dual single-file / multi-module drivers | PARTIALLY IMPLEMENTED |
-| [`EAGER-INIT-DESIGN.md`](../compiler/EAGER-INIT-DESIGN.md) | EAGER-INIT-DESIGN — closing the shared eager-global init-order hole (#553, S0) | COMPLETE |
 | [`EFFECTS-ARCHITECTURE.md`](../compiler/EFFECTS-ARCHITECTURE.md) | Effects within the typechecker | PARTIAL |
 | [`EMITTER-ARCH-BUG-FIT.md`](../compiler/EMITTER-ARCH-BUG-FIT.md) | Emitter target architecture - per-bug fit ledger | RE-DERIVED 2026-09-03 |
 | [`EMITTER-ARCHITECTURE.md`](../compiler/EMITTER-ARCHITECTURE.md) | Emitter Architecture - the derived current map | CURRENT - source-derived LLVM/WasmGC emitter map, re-derived 2026-09-03 at `7132909b7` |
 | [`EMITTER-GAPS.md`](../compiler/EMITTER-GAPS.md) | EMITTER-GAPS.md | PARTIAL |
 | [`EMITTER-TARGET-ARCHITECTURE.md`](../compiler/EMITTER-TARGET-ARCHITECTURE.md) | Emitter Target Architecture - one semantic plan, two physical lowerings | REVISED 2026-09-03 |
-| [`EQ-DISPATCH-DESIGN.md`](../compiler/EQ-DISPATCH-DESIGN.md) | `==`/`/=` → `Eq` Dispatch (Option A) — Design + Blast-Radius Census | OPEN |
 | [`ERROR-QUALITY.md`](../compiler/ERROR-QUALITY.md) | ERROR-QUALITY.md | IMPLEMENTED |
 | [`FFI-ABI.md`](../compiler/FFI-ABI.md) | FFI ABI contract | DECISION, and now LOWERED |
-| [`FMT-COMMENT-INTERLEAVING-DESIGN.md`](../compiler/FMT-COMMENT-INTERLEAVING-DESIGN.md) | FMT comment placement — design | the design below replaced the 2026-07-01 line-index splice |
-| [`HELPER-CENSUS.md`](../compiler/HELPER-CENSUS.md) | compiler/ generic-helper census | PARTIAL |
-| [`MESSAGE-AUDIT.md`](../compiler/MESSAGE-AUDIT.md) | MESSAGE-AUDIT.md | PARTIAL |
-| [`MULTICLAUSE-EXHAUST-DESIGN.md`](../compiler/MULTICLAUSE-EXHAUST-DESIGN.md) | Multi-Clause Function Exhaustiveness — Design | IMPLEMENTED |
-| [`PARSE-ERROR-LOCATION-DESIGN.md`](../compiler/PARSE-ERROR-LOCATION-DESIGN.md) | PARSE-ERROR-LOCATION-DESIGN | PARTIAL/IMPLEMENTED |
 | [`PERF-BASELINE.md`](../compiler/PERF-BASELINE.md) | PERF-BASELINE.md — absolute CLI-verb latency baseline | the `## Table` section is GENERATED |
-| [`PERF-CI-COVERAGE.md`](../compiler/PERF-CI-COVERAGE.md) | PERF-CI-COVERAGE.md — a comprehensive design for catching quadratics in CI | DESIGN |
-| [`PERF-NOTES.md`](../compiler/PERF-NOTES.md) | Self-host performance notes & log | SUPERSEDED BY `compiler/PERF-RESULTS.md` / `compiler/PERF-SCOPE.md` |
 | [`PERF-RESULTS.md`](../compiler/PERF-RESULTS.md) | PERF-RESULTS.md — native-backend performance log | PARTIAL |
-| [`PERF-RUNTIME.md`](../compiler/PERF-RUNTIME.md) | PERF-RUNTIME.md — general compiled-program performance | IMPLEMENTED |
-| [`PERF-SCOPE.md`](../compiler/PERF-SCOPE.md) | PERF-SCOPE.md — Stage-3 bar-item-4 performance scoping | IMPLEMENTED |
-| [`PRE-FLIP-GAPS.md`](../compiler/PRE-FLIP-GAPS.md) | PRE-FLIP-GAPS.md — outstanding native-compiler items to close before the canonicalization milestone flip | IMPLEMENTED |
-| [`PRELUDE-OBJ-DESIGN.md`](../compiler/PRELUDE-OBJ-DESIGN.md) | PRELUDE-OBJ-DESIGN.md — precompiling the prelude to a shared object | SHIPPED |
-| [`README.md`](../compiler/README.md) | compiler — the Medaka-in-Medaka compiler | IMPLEMENTED / SUPERSEDED-FRAMING |
-| [`REFERENCES-RENAME-DESIGN.md`](../compiler/REFERENCES-RENAME-DESIGN.md) | Cross-file `references` + `rename` (#254) — Design / Scoping | DESIGN |
-| [`REROOT-PLAN.md`](../compiler/REROOT-PLAN.md) | REROOT-PLAN — taking the gate suite OFF the OCaml oracle | IMPLEMENTED |
-| [`RESOLVER-DIAG-LOCATION-DESIGN.md`](../compiler/RESOLVER-DIAG-LOCATION-DESIGN.md) | Real source locations for the 3 `{0,0}`-range resolver diagnostics (F3) | IMPLEMENTED |
+| [`README.md`](../compiler/README.md) | compiler — the Medaka-in-Medaka compiler | CURRENT |
 | [`RUNTIME-DESIGN.md`](../compiler/RUNTIME-DESIGN.md) | Runtime & extern strategy for the native (Stage 2.4) backend | IMPLEMENTED, with 2 items still deferred |
-| [`RUNTIME-DIAGNOSTIC-CHANNEL-DESIGN.md`](../compiler/RUNTIME-DIAGNOSTIC-CHANNEL-DESIGN.md) | RUNTIME-DIAGNOSTIC-CHANNEL-DESIGN | IMPLEMENTED |
-| [`RUNTIME-TRAP-UNIFY-DESIGN.md`](../compiler/RUNTIME-TRAP-UNIFY-DESIGN.md) | Runtime-trap-format unification — design | OPEN, but the `Array.set`/`Vector.set` OOB row is discharged: `setInPlace` |
-| [`S1-CONSTRAINED-SHADOW-DESIGN.md`](../compiler/S1-CONSTRAINED-SHADOW-DESIGN.md) | S-1 — a CONSTRAINED definer-shadow standalone is miscompiled | IMPLEMENTED |
-| [`SHADOW-INVERSION-DESIGN.md`](../compiler/SHADOW-INVERSION-DESIGN.md) | SHADOW-INVERSION-DESIGN — invert S2: a top-level standalone WINS over a same-named interface method | SHIPPED 2026-07-14 |
-| [`SHARED-FLOAT-RESIDUAL-DESIGN.md`](../compiler/SHARED-FLOAT-RESIDUAL-DESIGN.md) | SHARED-FLOAT-RESIDUAL-DESIGN — the signature-free type-lost-Float residual | IMPLEMENTED |
-| [`SOURCE-POSITION-DESIGN.md`](../compiler/SOURCE-POSITION-DESIGN.md) | SOURCE-POSITION-DESIGN.md — principled, unified line:column (source-span) tracking; #331 as increment 1 | DESIGN |
-| [`STAGE2-DESIGN.md`](../compiler/STAGE2-DESIGN.md) | Stage 2 backend architecture — bytecode VM first, or straight to LLVM? | IMPLEMENTED |
-| [`TRMC-DESIGN.md`](../compiler/TRMC-DESIGN.md) | TRMC-DESIGN.md — tail-recursion-modulo-cons for the native LLVM backend | IMPLEMENTED |
-| [`TUPLE-TYPE-CONSTRUCTOR-DESIGN.md`](../compiler/TUPLE-TYPE-CONSTRUCTOR-DESIGN.md) | Tuple as a real type constructor — design doc | IMPLEMENTED |
-| [`TYPE-ALIAS-EXPANSION-DESIGN.md`](../compiler/TYPE-ALIAS-EXPANSION-DESIGN.md) | Type-Alias Expansion — Design | IMPLEMENTED |
-| [`TYPE-AWARE-LINT-DESIGN.md`](../compiler/TYPE-AWARE-LINT-DESIGN.md) | Type-Aware Lint Tier — Design | PARTLY SHIPPED and RE-COSTED; TIER 1 UNBLOCKED, TIER 2 STILL BLOCKED |
-| [`TYPE-ERROR-SPAN-DESIGN.md`](../compiler/TYPE-ERROR-SPAN-DESIGN.md) | Type-error span precision — design | IMPLEMENTED |
 | [`TYPECHECK-ARCH-BUG-FIT.md`](../compiler/TYPECHECK-ARCH-BUG-FIT.md) | Typechecker target architecture — per-bug fit ledger | CURRENT |
 | [`TYPECHECK-ARCHITECTURE.md`](../compiler/TYPECHECK-ARCHITECTURE.md) | Typechecker Architecture — the derived map | CURRENT |
-| [`TYPECHECK-AUDIT.md`](../compiler/TYPECHECK-AUDIT.md) | Selfhost Typechecker Audit — 2026-06-09 | IMPLEMENTED |
 | [`TYPECHECK-CONTRACTS.md`](../compiler/TYPECHECK-CONTRACTS.md) | Typechecker destination contracts | target architecture, implementation incomplete |
-| [`TYPECHECK-ERROR-FRAMING-DESIGN.md`](../compiler/TYPECHECK-ERROR-FRAMING-DESIGN.md) | TYPECHECK ERROR FRAMING — Design (Tier-3 "typecheck mis-framing" reservoir) | IMPLEMENTED |
-| [`TYPECHECK-SIGNATURE-CONSTRAINT-DESIGN.md`](../compiler/TYPECHECK-SIGNATURE-CONSTRAINT-DESIGN.md) | Signature Constraint Soundness — Design + Blast-Radius Census | IMPLEMENTED |
 | [`TYPECHECK-TARGET-ARCHITECTURE.md`](../compiler/TYPECHECK-TARGET-ARCHITECTURE.md) | Typechecker Target Architecture — the ground-up design | PROPOSAL |
-| [`VALUE-RESTRICTION-DESIGN.md`](../compiler/VALUE-RESTRICTION-DESIGN.md) | Generalizing constructor / record applications of values (value-restriction relaxation) | IMPLEMENTED, then AMENDED |
-| [`WASM-FLOAT-TYPING-DESIGN.md`](../compiler/WASM-FLOAT-TYPING-DESIGN.md) | WASM-FLOAT-TYPING-DESIGN — the principled fix for W-SQLITE-4 | IMPLEMENTED |
-| [`WASM-POLY-NUM-DESIGN.md`](../compiler/WASM-POLY-NUM-DESIGN.md) | WASM-POLY-NUM-DESIGN — closing the wasm polymorphic-`Num` arithmetic gap | IMPLEMENTED |
-| [`WASM-SELFHOST-GAPS.md`](../compiler/WASM-SELFHOST-GAPS.md) | WasmGC self-host gap census | IMPLEMENTED |
-| [`WASM-SELFHOST-ROADMAP.md`](../compiler/WASM-SELFHOST-ROADMAP.md) | WASM-SELFHOST-ROADMAP.md — driving the WasmGC backend to compile the compiler | IMPLEMENTED |
-| [`WASM-TMC-GAP-DESIGN.md`](../compiler/WASM-TMC-GAP-DESIGN.md) | WASM-TMC-GAP-DESIGN.md — TMC does not fire on constrained (dict-passed) builders | FIXED |
-| [`WASMGC-DESIGN.md`](../compiler/WASMGC-DESIGN.md) | WASMGC-DESIGN.md — WasmGC backend implementation plan | IMPLEMENTED |
-| [`WASMGC-TRMC-DESIGN.md`](../compiler/WASMGC-TRMC-DESIGN.md) | WASMGC-TRMC-DESIGN.md — scoping the general fix for the WasmGC runtime stack overflow (layer-5) | IMPLEMENTED |
-| [`WS2-REKEY-DIAGNOSIS.md`](../compiler/WS2-REKEY-DIAGNOSIS.md) | WS-2 full re-key — diagnosis & deferral (module-qualified dict-arity identity) | PARTIAL |
 
 ### archive — closed / historical
 
@@ -269,29 +229,70 @@ IMPLEMENTED or SUPERSEDED work, kept for provenance. Links inside these docs are
 
 | Doc | What it is | Status |
 |-----|------------|--------|
+| [`ARCH-REVIEW.md`](../archive/design/ARCH-REVIEW.md) | Medaka Architecture Review | PARTIAL |
+| [`ARGSTAMP-UNIFY-PLAN.md`](../archive/design/ARGSTAMP-UNIFY-PLAN.md) | ARGSTAMP-UNIFY-PLAN.md — retire the `emitArgStampPasses` eval-vs-emit dispatch fork | IMPLEMENTED |
 | [`ASYNC-DESIGN.md`](../archive/design/ASYNC-DESIGN.md) | ASYNC-DESIGN.md | IMPLEMENTED |
 | [`BROWSER-STACK-DIAGNOSIS.md`](../archive/design/BROWSER-STACK-DIAGNOSIS.md) | BROWSER-STACK-DIAGNOSIS.md — the playground `Maximum call stack size exceeded` overflow | IMPLEMENTED |
 | [`CAPABILITY-EFFECTS-RESEARCH.md`](../archive/design/CAPABILITY-EFFECTS-RESEARCH.md) | Capability-effects research findings | IMPLEMENTED |
 | [`CAPABILITY-EFFECTS-V2-DESIGN.md`](../archive/design/CAPABILITY-EFFECTS-V2-DESIGN.md) | Capability-Effects v2 — design doc (parameterized effects + IO decomposition) | IMPLEMENTED |
+| [`COMPILER-PORT-LOG.md`](../archive/design/COMPILER-PORT-LOG.md) | compiler — the Medaka-in-Medaka compiler | IMPLEMENTED / SUPERSEDED-FRAMING |
+| [`COMPOSITE-MAIN-AUTOPRINT-DESIGN.md`](../archive/design/COMPOSITE-MAIN-AUTOPRINT-DESIGN.md) | Composite-`main` Auto-Print — Design (Option A: uniform auto-print) | IMPLEMENTED on every verb |
 | [`D2-REKEY-DESIGN.md`](../archive/design/D2-REKEY-DESIGN.md) | D2 cross-module dict-identity — design (reproduced + root-caused) | IMPLEMENTED |
+| [`DIAGNOSTICS-SURFACING-PLAN.md`](../archive/design/DIAGNOSTICS-SURFACING-PLAN.md) | DIAGNOSTICS-SURFACING-PLAN.md — native `check` error positions + messages (WS-4 / F6) | IMPLEMENTED |
+| [`DISPATCH-GAPS-SCOPE.md`](../archive/design/DISPATCH-GAPS-SCOPE.md) | DISPATCH-GAPS-SCOPE.md | IMPLEMENTED |
+| [`DISPATCH-INVENTORY.md`](../archive/design/DISPATCH-INVENTORY.md) | DISPATCH-INVENTORY.md | PARTIAL |
+| [`DRIVER-COLLAPSE-PLAN.md`](../archive/design/DRIVER-COLLAPSE-PLAN.md) | DRIVER-COLLAPSE-PLAN.md — collapse the dual single-file / multi-module drivers | PARTIALLY IMPLEMENTED |
+| [`EAGER-INIT-DESIGN.md`](../archive/design/EAGER-INIT-DESIGN.md) | EAGER-INIT-DESIGN — closing the shared eager-global init-order hole (#553, S0) | COMPLETE |
 | [`F1B-MODULE-IDENTITY-DESIGN.md`](../archive/design/F1B-MODULE-IDENTITY-DESIGN.md) | F1b Loader Module-Identity — Decision-Ready Design | IMPLEMENTED |
+| [`FMT-COMMENT-INTERLEAVING-DESIGN.md`](../archive/design/FMT-COMMENT-INTERLEAVING-DESIGN.md) | FMT comment placement — design | the design below replaced the 2026-07-01 line-index splice |
+| [`HELPER-CENSUS.md`](../archive/design/HELPER-CENSUS.md) | compiler/ generic-helper census | PARTIAL |
 | [`INDEX-16-PLAN.md`](../archive/design/INDEX-16-PLAN.md) | INDEX-16-PLAN.md — concrete staged implementation plan for the Index arc, Phase #16 | IMPLEMENTED |
 | [`INDEX-DESIGN.md`](../archive/design/INDEX-DESIGN.md) | INDEX-DESIGN.md — Indexing (`a[i]` / `a[i] := v`) design pass | IMPLEMENTED |
 | [`LAYOUT-BRACKETS-DESIGN.md`](../archive/design/LAYOUT-BRACKETS-DESIGN.md) | LAYOUT-BRACKETS-DESIGN — block expressions inside brackets | IMPLEMENTED |
 | [`LIB-REMOVAL-DESIGN.md`](../archive/design/LIB-REMOVAL-DESIGN.md) | LIB-REMOVAL-DESIGN — retiring the OCaml reference compiler (`lib/`+`bin/`+`gen/`) | IMPLEMENTED |
 | [`MAP-SET-AMBIGUITY-DESIGN.md`](../archive/design/MAP-SET-AMBIGUITY-DESIGN.md) | MAP-SET-AMBIGUITY-DESIGN.md — ambiguous unqualified-import occurrence (use-time / approach A) | IMPLEMENTED |
+| [`MULTICLAUSE-EXHAUST-DESIGN.md`](../archive/design/MULTICLAUSE-EXHAUST-DESIGN.md) | Multi-Clause Function Exhaustiveness — Design | IMPLEMENTED |
 | [`NET-DESIGN.md`](../archive/design/NET-DESIGN.md) | NET-DESIGN.md — Medaka networking (decision-ready) | IMPLEMENTED |
 | [`NUMLIT-DESIGN.md`](../archive/design/NUMLIT-DESIGN.md) | Design: Num-polymorphic numeric literals (PLAN.md #11) | IMPLEMENTED |
+| [`PARSE-ERROR-LOCATION-DESIGN.md`](../archive/design/PARSE-ERROR-LOCATION-DESIGN.md) | PARSE-ERROR-LOCATION-DESIGN | PARTIAL/IMPLEMENTED |
+| [`PERF-NOTES.md`](../archive/design/PERF-NOTES.md) | Self-host performance notes & log | SUPERSEDED BY `compiler/PERF-RESULTS.md` / `archive/design/PERF-SCOPE.md` |
+| [`PERF-RUNTIME.md`](../archive/design/PERF-RUNTIME.md) | PERF-RUNTIME.md — general compiled-program performance | IMPLEMENTED |
+| [`PERF-SCOPE.md`](../archive/design/PERF-SCOPE.md) | PERF-SCOPE.md — Stage-3 bar-item-4 performance scoping | IMPLEMENTED |
 | [`PLAYGROUND-DESIGN.md`](../archive/design/PLAYGROUND-DESIGN.md) | PLAYGROUND-DESIGN.md — in-browser Medaka playground | IMPLEMENTED |
 | [`PLAYGROUND-EDITOR-DESIGN.md`](../archive/design/PLAYGROUND-EDITOR-DESIGN.md) | PLAYGROUND-EDITOR-DESIGN.md — Tier 3 in-browser editor | IMPLEMENTED |
+| [`PRE-FLIP-GAPS.md`](../archive/design/PRE-FLIP-GAPS.md) | PRE-FLIP-GAPS.md — outstanding native-compiler items to close before the canonicalization milestone flip | IMPLEMENTED |
+| [`PRELUDE-OBJ-DESIGN.md`](../archive/design/PRELUDE-OBJ-DESIGN.md) | PRELUDE-OBJ-DESIGN.md — precompiling the prelude to a shared object | SHIPPED |
 | [`REEXPORT-METHOD-SCHEME-DESIGN.md`](../archive/design/REEXPORT-METHOD-SCHEME-DESIGN.md) | Re-export does not thread schemes into the importer's typecheck seed | IMPLEMENTED |
+| [`REROOT-PLAN.md`](../archive/design/REROOT-PLAN.md) | REROOT-PLAN — taking the gate suite OFF the OCaml oracle | IMPLEMENTED |
+| [`RESOLVER-DIAG-LOCATION-DESIGN.md`](../archive/design/RESOLVER-DIAG-LOCATION-DESIGN.md) | Real source locations for the 3 `{0,0}`-range resolver diagnostics (F3) | IMPLEMENTED |
 | [`RETPOS-DISPATCH-DESIGN.md`](../archive/design/RETPOS-DISPATCH-DESIGN.md) | RETPOS-DISPATCH-DESIGN — return-position-only method mis-dispatch (run≠build) | IMPLEMENTED |
+| [`RUNTIME-DIAGNOSTIC-CHANNEL-DESIGN.md`](../archive/design/RUNTIME-DIAGNOSTIC-CHANNEL-DESIGN.md) | RUNTIME-DIAGNOSTIC-CHANNEL-DESIGN | IMPLEMENTED |
+| [`S1-CONSTRAINED-SHADOW-DESIGN.md`](../archive/design/S1-CONSTRAINED-SHADOW-DESIGN.md) | S-1 — a CONSTRAINED definer-shadow standalone is miscompiled | IMPLEMENTED |
+| [`SHADOW-INVERSION-DESIGN.md`](../archive/design/SHADOW-INVERSION-DESIGN.md) | SHADOW-INVERSION-DESIGN — invert S2: a top-level standalone WINS over a same-named interface method | SHIPPED 2026-07-14 |
+| [`SHARED-FLOAT-RESIDUAL-DESIGN.md`](../archive/design/SHARED-FLOAT-RESIDUAL-DESIGN.md) | SHARED-FLOAT-RESIDUAL-DESIGN — the signature-free type-lost-Float residual | IMPLEMENTED |
 | [`SQLITE-DESIGN.md`](../archive/design/SQLITE-DESIGN.md) | SQLite Read-Path Library — Design | design document |
 | [`SQLITE-MUTATION-DESIGN.md`](../archive/design/SQLITE-MUTATION-DESIGN.md) | SQLite Mutation (UPDATE / DELETE) — Design & Feasibility | IMPLEMENTED |
 | [`SQLITE-WASM-DESIGN.md`](../archive/design/SQLITE-WASM-DESIGN.md) | SQLITE-WASM-DESIGN.md — scoping the WasmGC port of the Medaka SQLite library | IMPLEMENTED |
 | [`SQLITE-WRITE-DESIGN.md`](../archive/design/SQLITE-WRITE-DESIGN.md) | SQLite WRITE path — design (v1) | IMPLEMENTED |
+| [`STAGE2-DESIGN.md`](../archive/design/STAGE2-DESIGN.md) | Stage 2 backend architecture — bytecode VM first, or straight to LLVM? | IMPLEMENTED |
 | [`TRAVERSABLE-DEFAULT-METHOD-DESIGN.md`](../archive/design/TRAVERSABLE-DEFAULT-METHOD-DESIGN.md) | Making `sequence` a default method of `Traversable t` | IMPLEMENTED |
+| [`TRMC-DESIGN.md`](../archive/design/TRMC-DESIGN.md) | TRMC-DESIGN.md — tail-recursion-modulo-cons for the native LLVM backend | IMPLEMENTED |
+| [`TUPLE-TYPE-CONSTRUCTOR-DESIGN.md`](../archive/design/TUPLE-TYPE-CONSTRUCTOR-DESIGN.md) | Tuple as a real type constructor — design doc | IMPLEMENTED |
+| [`TYPE-ALIAS-EXPANSION-DESIGN.md`](../archive/design/TYPE-ALIAS-EXPANSION-DESIGN.md) | Type-Alias Expansion — Design | IMPLEMENTED |
+| [`TYPE-ERROR-SPAN-DESIGN.md`](../archive/design/TYPE-ERROR-SPAN-DESIGN.md) | Type-error span precision — design | IMPLEMENTED |
+| [`TYPECHECK-AUDIT.md`](../archive/design/TYPECHECK-AUDIT.md) | Selfhost Typechecker Audit — 2026-06-09 | IMPLEMENTED |
+| [`TYPECHECK-ERROR-FRAMING-DESIGN.md`](../archive/design/TYPECHECK-ERROR-FRAMING-DESIGN.md) | TYPECHECK ERROR FRAMING — Design (Tier-3 "typecheck mis-framing" reservoir) | IMPLEMENTED |
+| [`TYPECHECK-SIGNATURE-CONSTRAINT-DESIGN.md`](../archive/design/TYPECHECK-SIGNATURE-CONSTRAINT-DESIGN.md) | Signature Constraint Soundness — Design + Blast-Radius Census | IMPLEMENTED |
+| [`VALUE-RESTRICTION-DESIGN.md`](../archive/design/VALUE-RESTRICTION-DESIGN.md) | Generalizing constructor / record applications of values (value-restriction relaxation) | IMPLEMENTED, then AMENDED |
+| [`WASM-FLOAT-TYPING-DESIGN.md`](../archive/design/WASM-FLOAT-TYPING-DESIGN.md) | WASM-FLOAT-TYPING-DESIGN — the principled fix for W-SQLITE-4 | IMPLEMENTED |
+| [`WASM-POLY-NUM-DESIGN.md`](../archive/design/WASM-POLY-NUM-DESIGN.md) | WASM-POLY-NUM-DESIGN — closing the wasm polymorphic-`Num` arithmetic gap | IMPLEMENTED |
+| [`WASM-SELFHOST-GAPS.md`](../archive/design/WASM-SELFHOST-GAPS.md) | WasmGC self-host gap census | IMPLEMENTED |
+| [`WASM-SELFHOST-ROADMAP.md`](../archive/design/WASM-SELFHOST-ROADMAP.md) | WASM-SELFHOST-ROADMAP.md — driving the WasmGC backend to compile the compiler | IMPLEMENTED |
+| [`WASM-TMC-GAP-DESIGN.md`](../archive/design/WASM-TMC-GAP-DESIGN.md) | WASM-TMC-GAP-DESIGN.md — TMC does not fire on constrained (dict-passed) builders | FIXED |
+| [`WASMGC-DESIGN.md`](../archive/design/WASMGC-DESIGN.md) | WASMGC-DESIGN.md — WasmGC backend implementation plan | IMPLEMENTED |
+| [`WASMGC-TRMC-DESIGN.md`](../archive/design/WASMGC-TRMC-DESIGN.md) | WASMGC-TRMC-DESIGN.md — scoping the general fix for the WasmGC runtime stack overflow (layer-5) | IMPLEMENTED |
 | [`WS-4-DESIGN.md`](../archive/design/WS-4-DESIGN.md) | WS-4 Design — `Product` refinement domain (structure-aware `Net = Host(Prefix) × Method(Set)`) | IMPLEMENTED |
+| [`WS2-REKEY-DIAGNOSIS.md`](../archive/design/WS2-REKEY-DIAGNOSIS.md) | WS-2 full re-key — diagnosis & deferral (module-qualified dict-arity identity) | PARTIAL |
 
 ### archive/findings — point-in-time QA/investigation sweeps
 
