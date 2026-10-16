@@ -305,6 +305,39 @@ enforced in two complementary places, and **both** are required:
 > for the general lesson (two independent implementations of the same relation
 > is where such bugs concentrate). See `archive/LAYOUT-CONFORMANCE-ROADMAP.md` WS-2.
 
+### 5.5 `extern` `bind` clause lines (raw-stream rewrite between Stages A and B)
+
+An `extern` declaration may be followed by indented clause lines, each led by
+the identifier `bind`:
+
+```
+extern fetch : (url : String) ->
+  (retries : Int) ->
+  <FFI "c/libfetch", FFI "js/fetch"> String
+  bind c "fetch_text"
+  bind js "fetchText"
+```
+
+`bind` is not a keyword, so by rule I.c a deeper line led by it would continue
+the signature as a type application. `externClauseBreaks`
+(`compiler/frontend/lexer.mdk`) therefore rewrites the raw stream before
+Stage B, and only inside an `extern` declaration (from `extern` to the first
+line no deeper than the extern's own line). Every other `bind` is untouched.
+
+- The `Nl` before the **first** clause line closes every layout context deeper
+  than the extern's own column, each as `NEWLINE DEDENT`. Those contexts are
+  the ones a wrapped signature opened after a line-final `->` or `=>`. It then
+  opens the clause block against the extern's column (`INDENT`), as if the
+  previous token could not end an expression.
+- The `Nl` before each **later** clause line is read the same way without the
+  closing step, so a clause at the block's column is a `NEWLINE` (II).
+
+So clause lines may sit at any column deeper than `extern`, whatever columns
+the signature's continuation lines used, and all clauses of one extern share
+one column. A wrapped signature with clauses follows the same continuation rules
+as one without them. The canonical shape, which `medaka fmt` prints, indents
+both the signature's continuation lines and the clause lines by 2.
+
 ---
 
 ## 6. Bracket depth disables layout
@@ -508,6 +541,7 @@ An empty source lexes to exactly `NEWLINE EOF`. (Both lexers: verified.)
 | `Arm => body` (body on next line) | implicit | `=>` heralds the arm-body block |
 | `if / then / else` (multi-line) | none | `then`/`else` leading a line continue the `if` (§5.4); **no** block. Corollary: `else let x = e` with the body on a *following* line is a **parse error by design** — `let x = e`'s RHS (`e`) is the last token (`canEndExpr`, §7.1), so the next line is absorbed as a continuation (§5.0/I.c), not a block; and the inline `let` form requires `in`. Use `else let x = e in body` (one-liner) or `else`-on-its-own-line + an indented `let … ⏎ body` block. Same root as the §11 `x = id⏎ let …` example. |
 | `data T =⏎ \| A \| B` (leading `\|`) | implicit | `=` heralds the variant block; each `\| A` is a sibling line (II). The native parser accepts leading-`\|`. (Historical: the former OCaml oracle parser rejected it — a frozen-oracle parser gap, not a layout gap, moot since `lib/` removal.) See AUDIT P-DATAPIPE |
+| `extern f : T` + `bind` clause lines | implicit | the first clause line closes the signature's continuation contexts and opens the clause block; clauses are siblings (II); see §5.5 |
 | record `{ … }`, set `{ … }`, list `[ … ]`, array `[\| … \|]`, tuple `( … )` | **explicit** | bracket depth > 0 ⟹ layout **off** (§6); free-form multi-line |
 | string interpolation `"… \{e} …"` | explicit | separate interp depth; layout off inside `e` |
 

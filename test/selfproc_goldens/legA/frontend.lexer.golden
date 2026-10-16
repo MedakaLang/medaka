@@ -27,7 +27,11 @@ canStartAtom : Token -> Bool
 charClose : Array Char -> Int -> Int -> Int
 charEscDecode : Char -> Option String
 charUntermMsg : String
-clauseBreaksGo : List RawTok -> Int -> Int -> List RawTok
+clauseBreak : Int -> Int -> Int -> Bool -> RawTok
+clauseBreaksGo : List RawTok -> Int -> Int -> Bool -> List RawTok
+clauseOpen : Int -> Int -> Int -> List RawTok -> List Int -> List BracketFrame -> Bool -> List (Token, Int)
+clauseOpenPairs : Int -> Int -> Int -> List RawTok -> List Int -> List BracketFrame -> Bool -> List (Token, Int, Int)
+clauseOpenToks : Int -> Int -> List RawTok -> List Int -> List BracketFrame -> Bool -> List Token
 closeAll : List Int -> Int -> List (Token, Int)
 closeAllPairs : List Int -> Int -> List (Token, Int, Int)
 closeAllToks : List Int -> List Token
