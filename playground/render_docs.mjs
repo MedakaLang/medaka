@@ -122,7 +122,7 @@ const escapeHtml = (s) =>
 //   2. its source names no extern of a slice the playground's runner withholds
 //      (playground/medaka_host.mjs `withheldExterns('wasmgc/browser-worker')`:
 //      getEnv, args, exit and the stdin family), nor one no wasm build lowers
-//      (`WASM_GAP_EXTERNS` there: osEntropyBytes).
+//      (`WASM_GAP_EXTERNS` there, empty while every such extern has a lowering).
 //      A program reaching one is refused by the compiler or throws a
 //      `CapabilityError` at run time instead of producing the documented
 //      output, which is worse than no link.

@@ -19,6 +19,7 @@
    source files, neither of which the interpreter binds. -}
 
 import fs.{expectUnitCount, fixtureFiles}
+import io.{getEnvOr}
 import list.{dropWhile, takeWhile}
 import string.{contains, endsWith, lines, startsWith, unlines}
 import compiler_cli_test_support.{inFreshDirOf}
@@ -154,12 +155,28 @@ buildRejected scratch name fixture wantSubstring =
       else
         pass
 
+-- The wasm emitter binary the CLI's `--target wasm` path execs; the gate
+-- shard builds it but never exports the variable.
+wasmEmitter : <IO> String
+wasmEmitter =
+  getEnvOr "MEDAKA_WASM_EMITTER" "\{medakaRoot}/test/bin/wasm_emit_modules_main"
+
 -- The wasm arm: `fixture` built for `wasm` into `scratch` as `name.wasm`, which is
 -- run under node by test/wasm/run.js (the wasmgc/node profile, which grants Rand).
 wasmBuild : String -> String -> String -> <Exec, IO> Result String String
 wasmBuild scratch name fixture =
   let binPath = "\{scratch}/\{name}.wasm"
-  match strictSpawn 60 ["build", "--target", "wasm", fixture, "-o", binPath]
+  match boundedVerbSeconds 60 "env" [
+    "MEDAKA_STRICT=1",
+    "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
+    medakaBin,
+    "build",
+    "--target",
+    "wasm",
+    fixture,
+    "-o",
+    binPath,
+  ]
     Err e => Err "medaka build --target wasm \{name}: \{e}"
     Ok (code, bo, be) =>
       if code /= 0 then
@@ -168,30 +185,50 @@ wasmBuild scratch name fixture =
       else
         Ok binPath
 
-wasmRun : String -> <Exec, IO> Result String (Int, String, String)
-wasmRun binPath =
-  boundedVerbSeconds 60 "node" ["\{medakaRoot}/test/wasm/run.js", binPath]
+-- Runs a built module under node; an exit other than `want` is an error
+-- carrying the code and stderr, so a crash is never a result.
+wasmRun : Int -> String -> <Exec, IO> Result String (Int, String, String)
+wasmRun want binPath = match boundedVerbSeconds 60 "node" [
+  "\{medakaRoot}/test/wasm/run.js",
+  binPath,
+]
+  Err e => Err e
+  Ok (code, out, err) =>
+    if code /= want then
+      Err
+        "node exited \{intToString code}, want \{intToString want}: stdout=\{debug out} stderr=\{debug err}"
+    else
+      Ok (code, out, err)
+
+-- A clean wasm run writes nothing to stderr, as native does.
+wasmClean : String -> (Int, String, String) -> Expectation
+wasmClean tag (_, _, err) =
+  if err == "" then
+    pass
+  else
+    fail "\{tag}: expected empty stderr, got \{debug err}"
 
 wasmIndependence : String -> String -> String -> <Exec, IO> Expectation
 wasmIndependence scratch name fixture = match wasmBuild scratch name fixture
   Err e => fail e
-  Ok binPath => match wasmRun binPath
+  Ok binPath => match wasmRun 0 binPath
     Err e => fail "\{name} (wasm): first run: \{e}"
-    Ok a => match wasmRun binPath
+    Ok a => match wasmRun 0 binPath
       Err e => fail "\{name} (wasm): second run: \{e}"
-      Ok b => freshSpawnsIndependent "\{name} (wasm)" a b
+      Ok b => expectAll [
+        wasmClean "\{name} (wasm) first" a,
+        wasmClean "\{name} (wasm) second" b,
+        freshSpawnsIndependent "\{name} (wasm)" a b,
+      ]
 
 wasmRejected : String -> String -> String -> String -> <Exec, IO> Expectation
 wasmRejected scratch name fixture wantSubstring =
   match wasmBuild scratch name fixture
     Err e => fail e
-    Ok binPath => match wasmRun binPath
+    Ok binPath => match wasmRun 1 binPath
       Err e => fail "\{name} (wasm): run: \{e}"
-      Ok (nc, no, ne) =>
-        if nc == 0 then
-          fail
-            "\{name} (wasm): built binary unexpectedly succeeded: stdout=\{debug no}"
-        else if not (contains wantSubstring ne) then
+      Ok (_, _, ne) =>
+        if not (contains wantSubstring ne) then
           fail
             "\{name} (wasm): expected stderr containing \{debug wantSubstring}, got \{debug ne}"
         else

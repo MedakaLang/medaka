@@ -130,7 +130,8 @@ export function withheldExterns(profile) {
 // Externs of a slice a profile can install that no wasm build lowers (their wasm row in
 // compiler/backend/extern_catalog.mdk is NotProvided): a call to one does not compile
 // for any wasmgc profile, so the runnability rule reads them beside withheldExterns.
-// None now: every extern a granted slice serves has a wasm lowering.
+// Empty while every extern a granted slice serves has a wasm lowering; an extern whose
+// wasm row is NotProvided belongs here until it gains one.
 export const WASM_GAP_EXTERNS = [];
 
 // The extern a key serves, for a withheld slice's message.  medaka_host_test.mjs asserts

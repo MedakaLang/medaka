@@ -6645,9 +6645,6 @@ emitAppRef prog env d app =
   match hd
     CVar f0 _ =>
       let f = canonFn prog f0
-      -- the desugared `__fallthrough__ ()` / `__ft__<label> ()` form: ignore the (unit)
-      -- arg, lower the sentinel (br to the clause label, or trap stub).  The bare-CVar
-      -- form is handled by emitVarRef; this catches the applied form guard chains make.
       if f0 == "$withFileReadBound"
         || f0 == "$withFileWriteBound" then match fileBoundW app
         Some (g, body, mode) =>
@@ -6657,6 +6654,9 @@ emitAppRef prog env d app =
             ++ ["call $mdk_file_bound_exit"]
         None => gapLP prog "wasm: a file bound requires a grant and a thunk"
       else if isFtSentinel f0 then
+        -- the desugared `__fallthrough__ ()` / `__ft__<label> ()` form: ignore the (unit)
+        -- arg, lower the sentinel (br to the clause label, or trap stub).  The bare-CVar
+        -- form is handled by emitVarRef; this catches the applied form guard chains make.
         ftSentinelInstrs f0
       else if contains f0 env then
         -- E24 (wasm peer): a LOCALLY-BOUND name (param / let-binding) SHADOWS any same-named
@@ -9024,8 +9024,6 @@ emitAppTail prog env arity app =
   let (hd, args, _) = appParts app
   match hd
     CVar f0 _ =>
-      -- tail-position `__fallthrough__ ()` / `__ft__<label> ()`: lower the sentinel
-      -- (a `br`, NOT a `return` — control leaves the clause, not the function).
       if f0 == "$withFileReadBound"
         || f0 == "$withFileWriteBound" then match fileBoundW app
         Some (g, body, mode) =>
@@ -9040,6 +9038,8 @@ emitAppTail prog env arity app =
             ++ ["end", "unreachable"]
         None => gapLP prog "wasm: a file bound requires a grant and a thunk"
       else if isFtSentinel f0 then
+        -- tail-position `__fallthrough__ ()` / `__ft__<label> ()`: lower the sentinel
+        -- (a `br`, NOT a `return` — control leaves the clause, not the function).
         ftSentinelInstrs f0
       else
         emitFlaggedAppW prog env app

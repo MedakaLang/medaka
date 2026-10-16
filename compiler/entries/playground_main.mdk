@@ -737,7 +737,7 @@ runEmit paths warnTriples runtimeDecls elaborated =
         (declaredRecordFieldOrders allDecls)
         (validateFfiExternTypeNames
           (checkedFfiExternTypeNamesModules modules2)))
-  -- #2359 (F1): mirror wasm_emit_modules_main.emitTail — bind the lowered
+  -- Mirrors wasm_emit_modules_main.emitTail: bind the lowered
   -- program, then drop the impl bodies (and the plain bindings only they
   -- reached) that no dispatchable method name in this program can reach.  Without
   -- this the in-browser compiler emitted ~84k lines of WAT for a one-line program.

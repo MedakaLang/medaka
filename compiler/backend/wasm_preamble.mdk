@@ -1662,22 +1662,13 @@ floatFmtImportLines = [
 -- key is an import some reached extern's lowering calls, at its own call site or
 -- in a WAT runtime helper (`extern_catalog.wasmHostKeys`), so a module imports
 -- exactly what it calls.
---
--- #101: WasmGC has no libm, so the transcendentals and pow/atan2/hypot are host
--- imports backed by JS `Math.*`: byte-identical to C libm on the values the
--- fixtures exercise, with any printed sub-ULP divergence ledgered as
--- native:libm-vs-jsmath-ulp (test/engine_divergence.txt).  The IEEE-exact ops
--- (sqrt/floor/ceil/trunc/round) and floatRem lower to f64 opcodes, $mdk_round
--- and $mdk_float_rem, not host imports.  The clock reads are seconds as f64 and
--- the sleep milliseconds as i64 (design WA-1); a host binds a non-positive sleep
--- to a no-op.  `mdk_exit` flushes and exits, so its call site is followed by
--- `unreachable`.  `stderrByteKey` is skipped: the module declares it once, at
--- the late trap-import site, where body emission can add the coded traps' need.
 export
 hostImportLines : List String -> List String
 hostImportLines [] = []
 hostImportLines (key :: rest) =
   if key == stderrByteKey then
+    -- declared once, at the late trap-import site, where body emission can add
+    -- the coded traps' need
     hostImportLines rest
   else
     hostImportLine key :: hostImportLines rest
@@ -1700,6 +1691,16 @@ hostImportSig key = match hostImportSigOf key
 
 -- the signature each host binds a key with, written after the function's name,
 -- or `None` for a key it does not bind
+--
+-- `mdk_exit` flushes and exits, so its call site is followed by `unreachable`.
+-- The clock reads are seconds as f64 and the sleep milliseconds as i64 (design
+-- WA-1); a host binds a non-positive sleep to a no-op.  WasmGC has no libm, so
+-- the transcendentals and pow/atan2/hypot (the `unaryF64Sig` and `binaryF64Sig`
+-- rows) are host imports backed by JS `Math.*`: byte-identical to C libm on the
+-- values the fixtures exercise, with any printed sub-ULP divergence ledgered as
+-- native:libm-vs-jsmath-ulp (test/engine_divergence.txt).  The IEEE-exact ops
+-- (sqrt/floor/ceil/trunc/round) and floatRem lower to f64 opcodes, $mdk_round
+-- and $mdk_float_rem, not host imports.
 export
 hostImportSigOf : String -> Option String
 hostImportSigOf "mdk_exit" = Some " (param i32)"
@@ -2017,7 +2018,9 @@ export
 ioHostRuntimeLines : List String -> List String
 ioHostRuntimeLines keys =
   gatedOn "mdk_path_push" keys ioPushPathLines
+    ++ gatedOn "mdk_rename" keys ioPushPathMoreLines
     ++ gatedOn "mdk_grant_push" keys ioPushGrantLines
+    ++ gatedOn "mdk_rename" keys ioPushGrantMoreLines
     ++ gatedOn "mdk_result_len" keys ioResultLines
     ++ (if contains "mdk_file_exists" keys
       || contains "mdk_canonicalize_path" keys
@@ -2051,8 +2054,21 @@ gatedOn key keys block = if contains key keys then block else []
 ioPushPathLines : List String
 ioPushPathLines = [
   "  ;; push a $str's bytes to the host path buffer (reset first).",
-  "  (func $mdk_push_path (param $s (ref $str))", "    (call $mdk_path_reset)",
-  "    (call $mdk_push_path_more (local.get $s)))",
+  "  (func $mdk_push_path (param $s (ref $str))",
+  "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
+  "    (call $mdk_path_reset)",
+  "    (local.set $b (struct.get $str $bytes (local.get $s)))",
+  "    (local.set $n (array.len (local.get $b)))",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    )"
+]
+
+-- Only rename pushes a second path; the helper is emitted for it alone.
+ioPushPathMoreLines : List String
+ioPushPathMoreLines = [
   "  ;; append a $str's bytes to the host path buffer (rename's second path).",
   "  (func $mdk_push_path_more (param $s (ref $str))",
   "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
@@ -2069,8 +2085,25 @@ ioPushPathLines = [
 ioPushGrantLines : List String
 ioPushGrantLines = [
   "  ;; push a grant (List String) to the host grant buffer (reset first).",
-  "  (func $mdk_push_grant (param $g (ref eq))", "    (call $mdk_grant_reset)",
-  "    (call $mdk_push_grant_more (local.get $g)))",
+  "  (func $mdk_push_grant (param $g (ref eq))",
+  "    (local $cell (ref $C_Cons)) (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
+  "    (call $mdk_grant_reset)", "    (block $done (loop $next",
+  "      (br_if $done (i32.eqz (ref.test (ref $C_Cons) (local.get $g))))",
+  "      (local.set $cell (ref.cast (ref $C_Cons) (local.get $g)))",
+  "      (local.set $b (struct.get $str $bytes (ref.cast (ref $str) (struct.get $C_Cons 1 (local.get $cell)))))",
+  "      (local.set $n (array.len (local.get $b)))",
+  "      (local.set $i (i32.const 0))", "      (block $d (loop $l",
+  "        (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "        (call $mdk_grant_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "        (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "      (call $mdk_grant_push (i32.const -1))",
+  "      (local.set $g (struct.get $C_Cons 2 (local.get $cell))) (br $next)))",
+  "    )"
+]
+
+-- Only rename pushes a second grant; the helper is emitted for it alone.
+ioPushGrantMoreLines : List String
+ioPushGrantMoreLines = [
   "  ;; append a grant to the host grant buffer (rename's second grant).",
   "  (func $mdk_push_grant_more (param $g (ref eq))",
   "    (local $cell (ref $C_Cons)) (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
