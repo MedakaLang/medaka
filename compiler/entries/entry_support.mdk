@@ -245,9 +245,9 @@ driveModulesGo runEmit runtimeP coreP entry roots =
 -- directory (e.g. both `compiler` and `stdlib`).  Omitting them degrades to a
 -- bare loader `unknown module: X` with no hint that ROOT arguments are the
 -- fix.  Same gate + suffix convention as `moduleLoadErrText`'s
--- `availableModulesHint` (medaka_cli.mdk): `unknownModuleIdOf` recognizes the
--- one loader message shape this applies to, and every other loader error
--- (cycle / unreadable file) passes through unchanged.
+-- `availableModulesHint` (compiler/driver/front_gate.mdk): `unknownModuleIdOf`
+-- recognizes the one loader message shape this applies to, and every other
+-- loader error (cycle / unreadable file) passes through unchanged.
 moduleLoadHint : String -> String
 moduleLoadHint e = match unknownModuleIdOf e
   None => e

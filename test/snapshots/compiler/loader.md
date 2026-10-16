@@ -471,7 +471,7 @@ findImportLoc mid (_ :: rest) = findImportLoc mid rest
 
 -- ── F: available-module hint enumeration ────────────────────────────────────
 -- List the importable stdlib module ids — used to build the "available
--- modules: ..." hint on an `unknown module` error (see moduleLoadErrText /
+-- modules: ..." hint on an `unknown module` error (see front_gate.mdk moduleLoadErrText /
 -- runCheckJsonCmd in medaka_cli.mdk).  Enumerates the STDLIB DIRECTORY ONLY
 -- (not the project/CWD root): the stdlib set is the stable, canonical "which
 -- module did you mean" list, whereas the project root can hold loose `.mdk`
