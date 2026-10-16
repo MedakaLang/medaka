@@ -31,6 +31,7 @@ import ir.core_ir.{
   CImplBody(..),
   CImplEntry(..),
   CProgram(..),
+  CStmt(..),
   MethodEvidence(..),
   noImplSym,
   CTree(..),
@@ -704,9 +705,14 @@ test "a wasm plan's host keys are its reached externs' imports, per group" = exp
         ["mdk_read_exactly", "mdk_result_byte", "mdk_result_len"]
         (hostKeysOf WasmBackend (call "readExactly" [ref "n"]))),
     labelFail
-      "osEntropyBytes: the entropy key and the result channel"
+      "osEntropyBytes: the entropy key, the result channel and a refusal's panic"
       (expectEqual
-        ["mdk_os_entropy", "mdk_result_byte", "mdk_result_len"]
+        [
+          "mdk_os_entropy",
+          "mdk_result_byte",
+          "mdk_result_len",
+          "mdk_write_err_byte",
+        ]
         (hostKeysOf WasmBackend (call "osEntropyBytes" [ref "n"]))),
     labelFail
       "executablePath: the path key and the result channel"
@@ -777,4 +783,208 @@ test "the stderr writer's key comes with each extern whose runtime writes stderr
     labelFail
       "putStrLn writes stdout only"
       (expectEqual [] (hostKeysOf WasmBackend (call "putStrLn" [str "x"]))),
+  ]
+
+-- ── names the emitter does not lower as an extern ───────────────────────────
+
+-- A binder shadows an extern of its name wherever it is in scope, so the plan
+-- notes the extern's keys only where the emitter would call the extern: outside
+-- the binder's scope, or in a `let`'s own right side when the `let` is not `rec`.
+-- A top-level binding wins over an extern in value position, and so does the
+-- `core__` function a bare prelude name stands for in either position.  An applied
+-- name the program also defines at top level is still the extern, which is the
+-- emitter's order; a lowered program never has one, because module lowering
+-- prefixes every top-level name with its module.
+pvar : String -> Pat
+pvar x = PVar x noDeclLoc noBinderId
+
+argsKeys : List String
+argsKeys = ["mdk_arg_byte", "mdk_arg_len", "mdk_args_count"]
+
+keysOf : List CBind -> List String
+keysOf binds = (buildEmitPlan WasmBackend (program binds)).hostKeys
+
+test "a binder named like an extern demands nothing; the extern itself does" = expectAll
+  [
+    labelFail
+      "a clause parameter, read and applied"
+      (expectEqual
+        []
+        (keysOf [
+          fn "count" ["args"] (CTuple [ref "args", call "args" [unit]]),
+          val "main" (call "count" [int 1]),
+        ])),
+    labelFail
+      "a clause parameter does not reach another function"
+      (expectEqual
+        argsKeys
+        (keysOf [
+          fn "count" ["args"] (ref "args"),
+          fn "other" ["xs"] (call "args" [unit]),
+        ])),
+    labelFail
+      "a let binder over its body"
+      (expectEqual
+        []
+        (keysOf [
+          val
+            "main"
+            (CLet
+              False
+              (pvar "listDir")
+              (int 7)
+              (prim "+" (ref "listDir") (int 1))),
+        ])),
+    labelFail
+      "a let binder is not in scope in its own right side"
+      (expectEqual
+        argsKeys
+        (keysOf [
+          val
+            "main"
+            (CLet False (pvar "args") (call "args" [unit]) (ref "args")),
+        ])),
+    labelFail
+      "a rec let binder is in scope in its own right side"
+      (expectEqual
+        []
+        (keysOf [
+          val
+            "main"
+            (CLet
+              True
+              (pvar "args")
+              (CLam [pvar "u"] (call "args" [ref "u"]))
+              (call "args" [unit])),
+        ])),
+    labelFail
+      "a lambda parameter, and not past the lambda"
+      (expectEqual
+        argsKeys
+        (keysOf [
+          val
+            "main"
+            (CTuple [
+              CLam [pvar "getEnv", pvar "args"] (call "getEnv" [ref "args"]),
+              call "args" [unit],
+            ]),
+        ])),
+    labelFail
+      "a match arm's pattern and a guard's binder"
+      (expectEqual
+        []
+        (keysOf [
+          val
+            "main"
+            (CMatch (int 1) [
+              CArm (pvar "args") [] (call "args" [unit]),
+              CArm
+                PWild
+                [CGBind (pvar "rename") (int 2)]
+                (call "rename" [int 3]),
+            ]),
+        ])),
+    labelFail
+      "a guard's right side is outside its own binder"
+      (expectEqual
+        argsKeys
+        (keysOf [
+          val
+            "main"
+            (CMatch (int 1) [
+              CArm PWild [CGBind (pvar "args") (call "args" [unit])] (int 0),
+            ]),
+        ])),
+    labelFail
+      "a block let and a let group"
+      (expectEqual
+        []
+        (keysOf [
+          val
+            "main"
+            (CBlock [
+              CSLet False (pvar "args") (int 1),
+              CSExpr (call "args" [unit]),
+              CSExpr
+                (CLetGroup [fn "listDir" ["u"] (int 1)] (call "listDir" [unit])),
+            ]),
+        ])),
+    labelFail
+      "an impl clause's parameter"
+      (expectEqual
+        []
+        (buildEmitPlan
+          WasmBackend
+          (CProgram
+            []
+            []
+            []
+            [
+              CImplEntry
+                "pick"
+                0
+                1
+                (CImplTagged
+                  "Int"
+                  "K"
+                  "Pick"
+                  noImplSym
+                  []
+                  [pvar "getEnv"]
+                  (call "getEnv" [str "HOME"])),
+            ]
+            []
+            noDeclFacts)).hostKeys),
+    labelFail
+      "a shadowed extern demands none of its runtime either"
+      (expectEqual
+        []
+        (buildEmitPlan
+          WasmBackend
+          (program [fn "count" ["args"] (call "args" [unit])])).wasmDemand.uses),
+  ]
+
+test "a top-level definition named like an extern, as the emitter resolves it" = expectAll
+  [
+    labelFail
+      "a lowered user definition carries its module's prefix"
+      (expectEqual
+        []
+        (keysOf [
+          fn "main__rename" ["x"] (prim "+" (ref "x") (int 1)),
+          fn "main__fsync" ["x"] (ref "x"),
+          fn "main__statFile" ["x"] (ref "x"),
+          val
+            "main"
+            (CTuple [
+              call "main__rename" [int 1],
+              call "main__fsync" [int 2],
+              call "main__statFile" [int 3],
+            ]),
+        ])),
+    labelFail
+      "read as a value, a top-level function or value is the definition"
+      (expectEqual
+        []
+        (keysOf [
+          fn "fsync" ["x"] (ref "x"),
+          val "statFile" (int 3),
+          val "main" (CTuple [ref "fsync", ref "statFile"]),
+        ])),
+    labelFail
+      "a bare prelude name is its core__ function, applied or read"
+      (expectEqual
+        []
+        (keysOf [
+          fn "core__rename" ["x"] (ref "x"),
+          val "main" (CTuple [call "rename" [int 1], ref "rename"]),
+        ])),
+    labelFail
+      "applied, an unprefixed top-level name is still the extern"
+      (expectEqual
+        argsKeys
+        (keysOf [
+          fn "args" ["u"] (int 0),
+          val "main" (call "args" [unit]),
+        ])),
   ]

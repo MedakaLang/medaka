@@ -119,6 +119,18 @@ main =
   println "write: \{okErr (writeFile "" "x")}"
   println "mkdir: \{okErr (makeDir "")}"
 `,
+  shadow: String.raw`count : List Int -> Int
+count args = match args
+  [] => 0
+  _ :: rest => 1 + count rest
+
+main =
+  let listDir = 7
+  let getEnv = k => k + 1
+  let r = match 5
+    rename => rename * 2
+  println (count [1, 2, 3] + listDir + getEnv 1 + r)
+`,
   bigexit: BIG_LOOP + 'main =\n  let _ = loop 1\n  exit 3\n',
   bigtrap: BIG_LOOP + 'main =\n  let _ = loop 1\n  let z = length [1] - 1\n  println (10 / z)\n',
 };
@@ -577,6 +589,20 @@ function check(name, ok, detail) {
     entered === 1 && read === 0 && readText === 'a.txt is outside the granted authority: no grant was given'
       && write === 1 && after === 1,
     JSON.stringify({ entered, read, readText, write, after }));
+}
+
+// (r) A binder named like an extern is no use of it: a parameter `args`, locals `listDir`
+// and `getEnv` and an arm binder `rename` import none of their slices, so the program
+// runs on the profiles that withhold them.
+{
+  const host = createHost('wasmgc/edge');
+  const r = await runProgram(readFileSync(build('shadow', 'wasmgc/edge')), host);
+  check('(r) edge: binders named args, listDir, getEnv and rename need no capability',
+    r.kind === 'done' && host.sink.text('stdout') === '22\n',
+    JSON.stringify({ kind: r.kind, error: r.error && r.error.message, out: host.sink.text('stdout') }));
+  const msgs = await runInWorker(build('shadow', 'wasmgc/browser-worker'));
+  check('(r) worker (browser-worker): the same program runs',
+    last(msgs).type === 'done' && streamText(msgs, 'stdout') === '22\n', JSON.stringify(msgs));
 }
 
 // Report only: slices no module built above imports a key of.

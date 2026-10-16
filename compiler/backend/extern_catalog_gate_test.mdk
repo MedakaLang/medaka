@@ -70,7 +70,10 @@ import backend.extern_catalog.{
   rowLlvm,
   rowName,
   rowWasm,
+  fileBoundHostKeys,
+  wasmHostKeys,
 }
+import backend.wasm_preamble.{hostImportSigOf, stderrByteKey}
 import fs.{mkdirAll}
 import list.{span}
 import string.{
@@ -161,6 +164,84 @@ accountingFindings engine column rows =
     [
       "\{engine}: \{intToString provided} provided + \{intToString gaps} categorised gaps /= \{intToString (length rows)} rows",
     ]
+
+-- # Host keys
+
+-- Every `env` import a wasm lowering calls, beside the extern (or the file
+-- bound) that calls it.
+hostKeyUses : List ExternRow -> List (String, String)
+hostKeyUses rows =
+  flatMap (r => map (k => (rowName r, k)) (wasmHostKeys (rowName r))) rows
+    ++ map (k => ("a declared file bound", k)) fileBoundHostKeys
+
+-- A key with no import signature panics the emitter only when a program
+-- reaches it.  The stderr writer's import is written by its own lines.
+sigFindings : (String -> Option String) -> List (String, String) -> List String
+sigFindings sigOf uses = flatMap (sigFinding sigOf) uses
+
+sigFinding : (String -> Option String) -> (String, String) -> List String
+sigFinding sigOf (ext, key) =
+  if key == stderrByteKey || isSome (sigOf key) then
+    []
+  else
+    ["`\{ext}` imports `\{key}`, which has no `hostImportSigOf` clause"]
+
+-- The host source up to the end of its `SLICES` table: the key constants the
+-- table spreads and the table itself.
+slicesRegion : String -> String
+slicesRegion src =
+  let (before, rest) =
+    span (l => not (startsWith "export const SLICES" l)) (lines src)
+  let (table, _) = span (/= "};") rest
+  unlines (before ++ table)
+
+-- A key no slice lists is refused by every host (`HostKeyError`), again only
+-- when a program reaches it.
+sliceFindings : String -> List (String, String) -> List String
+sliceFindings hostSrc uses =
+  let region = slicesRegion hostSrc
+  flatMap (sliceFinding region) uses
+
+sliceFinding : String -> (String, String) -> List String
+sliceFinding region (ext, key) =
+  if contains "'\{key}'" region then
+    []
+  else
+    [
+      "`\{ext}` imports `\{key}`, which no SLICES keys list in playground/medaka_host.mjs names",
+    ]
+
+hostText : <IO, FileRead> Result String String
+hostText = readFile (underRoot "playground/medaka_host.mjs")
+
+test "every host key a wasm lowering calls has an import signature" =
+  expectNoFindings
+    "host key signatures"
+    (Ok (sigFindings hostImportSigOf (hostKeyUses catalogRows)))
+
+test "red: a host key with no import signature is named" =
+  expectEqual
+    ["`rename` imports `mdk_rename`, which has no `hostImportSigOf` clause"]
+    (sigFindings
+      (k => if k == "mdk_rename" then None else hostImportSigOf k)
+      (hostKeyUses catalogRows))
+
+test "every host key a wasm lowering calls is in a host slice" = expectNoFindings
+  "host key slices"
+  (match hostText
+    Err e => Err "cannot read playground/medaka_host.mjs: \{e}"
+    Ok src => Ok (sliceFindings src (hostKeyUses catalogRows)))
+
+test "red: a host key no slice lists is named" = match hostText
+  Err e => expectEqual "read medaka_host.mjs" "failed: \{e}"
+  Ok src =>
+    expectEqual
+      [
+        "`rename` imports `mdk_rename`, which no SLICES keys list in playground/medaka_host.mjs names",
+      ]
+      (sliceFindings
+        (join "" (split "'mdk_rename', " src))
+        (hostKeyUses catalogRows))
 
 -- # The domain ledger
 

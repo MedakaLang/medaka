@@ -1691,69 +1691,77 @@ hostImportLine : String -> String
 hostImportLine key =
   "  (import \"env\" \"\{key}\" (func $\{key}\{hostImportSig key}))"
 
--- the signature each host binds a key with, written after the function's name
 hostImportSig : String -> String
-hostImportSig "mdk_exit" = " (param i32)"
-hostImportSig "mdk_wall_time_sec" = " (result f64)"
-hostImportSig "mdk_monotonic_sec" = " (result f64)"
-hostImportSig "mdk_sleep_ms" = " (param i64)"
-hostImportSig "mdk_cbrt" = unaryF64Sig
-hostImportSig "mdk_exp" = unaryF64Sig
-hostImportSig "mdk_log" = unaryF64Sig
-hostImportSig "mdk_log2" = unaryF64Sig
-hostImportSig "mdk_log10" = unaryF64Sig
-hostImportSig "mdk_sin" = unaryF64Sig
-hostImportSig "mdk_cos" = unaryF64Sig
-hostImportSig "mdk_tan" = unaryF64Sig
-hostImportSig "mdk_asin" = unaryF64Sig
-hostImportSig "mdk_acos" = unaryF64Sig
-hostImportSig "mdk_atan" = unaryF64Sig
-hostImportSig "mdk_sinh" = unaryF64Sig
-hostImportSig "mdk_cosh" = unaryF64Sig
-hostImportSig "mdk_tanh" = unaryF64Sig
-hostImportSig "mdk_pow" = binaryF64Sig
-hostImportSig "mdk_atan2" = binaryF64Sig
-hostImportSig "mdk_hypot" = binaryF64Sig
-hostImportSig "mdk_path_reset" = ""
-hostImportSig "mdk_path_push" = " (param i32)"
-hostImportSig "mdk_read_file" = " (result i32)"
-hostImportSig "mdk_file_exists" = " (result i32)"
-hostImportSig "mdk_get_env" = " (result i32)"
-hostImportSig "mdk_read_line" = " (result i32)"
-hostImportSig "mdk_read_all" = ""
-hostImportSig "mdk_read_exactly" = " (param i64) (result i32)"
-hostImportSig "mdk_os_entropy" = " (param i64) (result i32)"
-hostImportSig "mdk_executable_path" = " (result i32)"
-hostImportSig "mdk_args_count" = " (result i32)"
-hostImportSig "mdk_arg_len" = " (param i32) (result i32)"
-hostImportSig "mdk_arg_byte" = " (param i32) (param i32) (result i32)"
-hostImportSig "mdk_result_len" = " (result i32)"
-hostImportSig "mdk_result_byte" = " (param i32) (result i32)"
-hostImportSig "mdk_write_file_reset" = ""
-hostImportSig "mdk_write_file_push" = " (param i32)"
-hostImportSig "mdk_write_file_commit" = " (result i32)"
-hostImportSig "mdk_str_to_float" = " (result f64)"
-hostImportSig "mdk_str_to_float_ok" = " (result i32)"
-hostImportSig "mdk_grant_reset" = ""
-hostImportSig "mdk_grant_push" = " (param i32)"
-hostImportSig "mdk_canonicalize_path" = " (result i32)"
-hostImportSig "mdk_write_file" = " (result i32)"
-hostImportSig "mdk_append_file" = " (result i32)"
-hostImportSig "mdk_make_dir" = " (result i32)"
-hostImportSig "mdk_remove_file" = " (result i32)"
-hostImportSig "mdk_remove_dir" = " (result i32)"
-hostImportSig "mdk_fsync" = " (result i32)"
-hostImportSig "mdk_file_mode" = " (result i32)"
-hostImportSig "mdk_write_file_mode" = " (param i32) (result i32)"
-hostImportSig "mdk_rename" = " (param i32) (result i32)"
-hostImportSig "mdk_list_dir" = " (result i32)"
-hostImportSig "mdk_stat_file" = " (result i32)"
-hostImportSig "mdk_stat_field" = " (param i32) (result f64)"
-hostImportSig "mdk_file_bound_enter" = " (param i32) (param i32) (result i32)"
-hostImportSig "mdk_file_bound_exit" = ""
-hostImportSig key =
-  panic
-    "internal error: host key \{key} has no wasm import signature in wasm_preamble.mdk"
+hostImportSig key = match hostImportSigOf key
+  Some sig => sig
+  None =>
+    panic
+      "internal error: host key \{key} has no wasm import signature in wasm_preamble.mdk"
+
+-- the signature each host binds a key with, written after the function's name,
+-- or `None` for a key it does not bind
+export
+hostImportSigOf : String -> Option String
+hostImportSigOf "mdk_exit" = Some " (param i32)"
+hostImportSigOf "mdk_wall_time_sec" = Some " (result f64)"
+hostImportSigOf "mdk_monotonic_sec" = Some " (result f64)"
+hostImportSigOf "mdk_sleep_ms" = Some " (param i64)"
+hostImportSigOf "mdk_cbrt" = Some unaryF64Sig
+hostImportSigOf "mdk_exp" = Some unaryF64Sig
+hostImportSigOf "mdk_log" = Some unaryF64Sig
+hostImportSigOf "mdk_log2" = Some unaryF64Sig
+hostImportSigOf "mdk_log10" = Some unaryF64Sig
+hostImportSigOf "mdk_sin" = Some unaryF64Sig
+hostImportSigOf "mdk_cos" = Some unaryF64Sig
+hostImportSigOf "mdk_tan" = Some unaryF64Sig
+hostImportSigOf "mdk_asin" = Some unaryF64Sig
+hostImportSigOf "mdk_acos" = Some unaryF64Sig
+hostImportSigOf "mdk_atan" = Some unaryF64Sig
+hostImportSigOf "mdk_sinh" = Some unaryF64Sig
+hostImportSigOf "mdk_cosh" = Some unaryF64Sig
+hostImportSigOf "mdk_tanh" = Some unaryF64Sig
+hostImportSigOf "mdk_pow" = Some binaryF64Sig
+hostImportSigOf "mdk_atan2" = Some binaryF64Sig
+hostImportSigOf "mdk_hypot" = Some binaryF64Sig
+hostImportSigOf "mdk_path_reset" = Some ""
+hostImportSigOf "mdk_path_push" = Some " (param i32)"
+hostImportSigOf "mdk_read_file" = Some " (result i32)"
+hostImportSigOf "mdk_file_exists" = Some " (result i32)"
+hostImportSigOf "mdk_get_env" = Some " (result i32)"
+hostImportSigOf "mdk_read_line" = Some " (result i32)"
+hostImportSigOf "mdk_read_all" = Some ""
+hostImportSigOf "mdk_read_exactly" = Some " (param i64) (result i32)"
+hostImportSigOf "mdk_os_entropy" = Some " (param i64) (result i32)"
+hostImportSigOf "mdk_executable_path" = Some " (result i32)"
+hostImportSigOf "mdk_args_count" = Some " (result i32)"
+hostImportSigOf "mdk_arg_len" = Some " (param i32) (result i32)"
+hostImportSigOf "mdk_arg_byte" = Some " (param i32) (param i32) (result i32)"
+hostImportSigOf "mdk_result_len" = Some " (result i32)"
+hostImportSigOf "mdk_result_byte" = Some " (param i32) (result i32)"
+hostImportSigOf "mdk_write_file_reset" = Some ""
+hostImportSigOf "mdk_write_file_push" = Some " (param i32)"
+hostImportSigOf "mdk_write_file_commit" = Some " (result i32)"
+hostImportSigOf "mdk_str_to_float" = Some " (result f64)"
+hostImportSigOf "mdk_str_to_float_ok" = Some " (result i32)"
+hostImportSigOf "mdk_grant_reset" = Some ""
+hostImportSigOf "mdk_grant_push" = Some " (param i32)"
+hostImportSigOf "mdk_canonicalize_path" = Some " (result i32)"
+hostImportSigOf "mdk_write_file" = Some " (result i32)"
+hostImportSigOf "mdk_append_file" = Some " (result i32)"
+hostImportSigOf "mdk_make_dir" = Some " (result i32)"
+hostImportSigOf "mdk_remove_file" = Some " (result i32)"
+hostImportSigOf "mdk_remove_dir" = Some " (result i32)"
+hostImportSigOf "mdk_fsync" = Some " (result i32)"
+hostImportSigOf "mdk_file_mode" = Some " (result i32)"
+hostImportSigOf "mdk_write_file_mode" = Some " (param i32) (result i32)"
+hostImportSigOf "mdk_rename" = Some " (param i32) (result i32)"
+hostImportSigOf "mdk_list_dir" = Some " (result i32)"
+hostImportSigOf "mdk_stat_file" = Some " (result i32)"
+hostImportSigOf "mdk_stat_field" = Some " (param i32) (result f64)"
+hostImportSigOf "mdk_file_bound_enter" =
+  Some " (param i32) (param i32) (result i32)"
+hostImportSigOf "mdk_file_bound_exit" = Some ""
+hostImportSigOf _ = None
 
 unaryF64Sig : String
 unaryF64Sig = " (param f64) (result f64)"

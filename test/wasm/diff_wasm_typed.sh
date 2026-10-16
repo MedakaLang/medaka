@@ -305,16 +305,16 @@ done
 # one authority, and the emitter's seed is each seeded flag's one writer.
 for required in \
   'wasmDemandOf : List CBind -> List CImplEntry -> (WasmDemand, List String)' \
-  'dBind : DemandAcc -> CBind -> DemandAcc' \
-  'dClause : DemandAcc -> CClause -> DemandAcc' \
-  'dImpl : DemandAcc -> CImplEntry -> DemandAcc' \
-  'dExpr : DemandAcc -> CExpr -> DemandAcc' \
-  'dAppHead : DemandAcc -> CExpr -> DemandAcc' \
+  'dBind : DemandScope -> DemandAcc -> CBind -> DemandAcc' \
+  'dClause : DemandScope -> DemandAcc -> CClause -> DemandAcc' \
+  'dImpl : DemandScope -> DemandAcc -> CImplEntry -> DemandAcc' \
+  'dExpr : DemandScope -> DemandAcc -> CExpr -> DemandAcc' \
+  'dAppHead : DemandScope -> DemandAcc -> CExpr -> DemandAcc' \
   'noteName : DemandAcc -> String -> DemandAcc' \
   'noteBinop : DemandAcc -> String -> DemandAcc' \
-  'dArm : DemandAcc -> CArm -> DemandAcc' \
-  'dGuard : DemandAcc -> CGuard -> DemandAcc' \
-  'dStmt : DemandAcc -> CStmt -> DemandAcc' \
+  'dArm : DemandScope -> DemandAcc -> CArm -> DemandAcc' \
+  'dGuarded : DemandScope -> DemandAcc -> List CGuard -> CExpr -> DemandAcc' \
+  'dStmts : DemandScope -> DemandAcc -> List CStmt -> DemandAcc' \
   'dPat : DemandAcc -> Pat -> DemandAcc' \
   'dTree : DemandAcc -> CTree -> DemandAcc' \
   'dBranch : DemandAcc -> CTBranch -> DemandAcc' \
@@ -339,8 +339,8 @@ done
   echo "FAIL H2B9-DIV-AUTHORITY: expected ten W7 scope brackets (one per function emitter)"
   exit 1
 }
-has_plan_pin 'dExpr acc (CFieldAccess ex _ _ _) = dExpr acc ex' &&
-  ! grep -A 1 -F 'dExpr acc (CRecord _ fields) =' "$PLAN_SRC" | grep -F 'useRecUpdate' >/dev/null || {
+has_plan_pin 'dExpr sc acc (CFieldAccess ex _ _ _) = dExpr sc acc ex' &&
+  ! grep -A 1 -F 'dExpr sc acc (CRecord _ fields) =' "$PLAN_SRC" | grep -F 'useRecUpdate' >/dev/null || {
   echo "FAIL H2B9-RECUPDATE-NEAREST-MISS: plain record construction/access changed authority"
   exit 1
 }

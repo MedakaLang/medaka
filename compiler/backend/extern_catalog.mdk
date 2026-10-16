@@ -343,7 +343,7 @@ wasmHelperKeyRows = [
   ("readLineOpt", hostResultKeys "mdk_read_line"),
   ("readAll", hostResultKeys "mdk_read_all"),
   ("readExactly", hostResultKeys "mdk_read_exactly"),
-  ("osEntropyBytes", hostResultKeys "mdk_os_entropy"),
+  ("osEntropyBytes", "mdk_os_entropy" :: refusedPanicKeys),
   ("executablePath", hostResultKeys "mdk_executable_path"),
   (
     "stringToFloat",
@@ -373,13 +373,11 @@ fileOpKeys key =
 -- the path channel in, and a refusal read from the result channel and written
 -- to stderr as a panic
 refusalPanicKeys : List String
-refusalPanicKeys = [
-  "mdk_path_reset",
-  "mdk_path_push",
-  "mdk_result_len",
-  "mdk_result_byte",
-  "mdk_write_err_byte",
-]
+refusalPanicKeys = ["mdk_path_reset", "mdk_path_push"] ++ refusedPanicKeys
+
+-- what `$mdk_refused_panic` calls: the result channel, then the stderr writer
+refusedPanicKeys : List String
+refusedPanicKeys = ["mdk_result_len", "mdk_result_byte", "mdk_write_err_byte"]
 
 -- A declared file bound (`$withFileReadBound`/`$withFileWriteBound`, which the
 -- type checker writes around the body of a binding with a closed narrow file

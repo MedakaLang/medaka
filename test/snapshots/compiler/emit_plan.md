@@ -1,5 +1,5 @@
 # META
-source_lines=494
+source_lines=569
 stages=DESUGAR,MARK
 # SOURCE
 -- The per-emission plan: facts about the lowered program that both backends read
@@ -53,6 +53,7 @@ import backend.trmc_analysis.{
   methodSelf,
   clauseArityOf,
   bindName,
+  patVarsList,
 }
 
 -- `wasmOnlyReach` is `Some` only on a plan from `buildEmitPlanReached`: the unit
@@ -92,9 +93,9 @@ public export data ReachUnits = ReachUnits { total : Int, kept : Int }
 -- each, the catalog demands (`wasmUses`) of every runtime extern the program
 -- names and the demands its literals, collection forms and `++`/`::` make.
 -- `refBox` is a `Ref` cell, `divGuard` a `/` or `%`, and `tupleArities` the
--- distinct tuple arities, first seen first.  The walk keys on names alone: it
--- does not track binders, so a local that shares an extern's name demands what
--- the extern does.
+-- distinct tuple arities, first seen first.  A name demands what its extern
+-- does only where the emitter would lower it as that extern (`DemandScope`), so a
+-- binder that shares an extern's name demands nothing.
 public export data WasmDemand = WasmDemand {
   uses : List WasmUse,
   refBox : Bool,
@@ -318,6 +319,20 @@ data DemandAcc = DemandAcc {
   seenArities : List Int,
 }
 
+-- What a bare name denotes where the walk meets it, resolved in the order the
+-- wasm emitter resolves it (`emitAppRef`, `emitTailCallW`, `emitVarRefPlain`).
+-- A binder in scope is a local, whatever else shares its name.  Otherwise a
+-- value reference is a top-level binding of that name, or the `core__`
+-- function a bare prelude name stands for, before it is an extern; an applied
+-- name is an extern before it is a top-level function, unless only its
+-- `core__` function exists.  `topFns` and `topVals` partition the top-level
+-- bindings other than `main` as the emitter's own indexes do.
+data DemandScope = DemandScope {
+  locals : OrdMap Unit,
+  topFns : OrdMap Unit,
+  topVals : OrdMap Unit,
+}
+
 wasmDemandOf : List CBind -> List CImplEntry -> (WasmDemand, List String)
 wasmDemandOf groups impls =
   let start = DemandAcc {
@@ -327,7 +342,16 @@ wasmDemandOf groups impls =
     seenDivGuard = False,
     seenArities = [],
   }
-  let acc = walkEach dImpl (walkEach dBind start groups) impls
+  let tops = filterList (b => bindName b /= "main") groups
+  let sc = DemandScope {
+    locals = omEmpty,
+    topFns =
+      omFromNames
+        (map bindName (filterList (b => not (isValBind b)) tops))
+        omEmpty,
+    topVals = omFromNames (map bindName (filterList isValBind tops)) omEmpty,
+  }
+  let acc = walkEach (dImpl sc) (walkEach (dBind sc) start groups) impls
   (
     WasmDemand {
       uses = reverseL acc.seenUses,
@@ -400,76 +424,127 @@ noteBinop acc "/" = { acc | seenDivGuard = True }
 noteBinop acc "%" = { acc | seenDivGuard = True }
 noteBinop acc _ = acc
 
-dBind : DemandAcc -> CBind -> DemandAcc
-dBind acc (CBind _ clauses _ _) = walkEach dClause acc clauses
+-- the emitter's value-global partition (`isValBind` in wasm_emit.mdk)
+isValBind : CBind -> Bool
+isValBind (CBind _ [CClause [] _] _ _) = True
+isValBind _ = False
 
--- a clause's parameter patterns, then its body
-dClause : DemandAcc -> CClause -> DemandAcc
-dClause acc (CClause pats body) = dExpr (walkEach dPat acc pats) body
+-- [sc] with every variable [pats] bind in scope
+bindIn : DemandScope -> List Pat -> DemandScope
+bindIn sc pats = match patVarsList pats
+  [] => sc
+  names => { sc | locals = omFromNames names sc.locals }
 
-dImpl : DemandAcc -> CImplEntry -> DemandAcc
-dImpl acc (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ pats b)) =
-  dExpr (walkEach dPat acc pats) b
-dImpl acc (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ pats b)) =
-  dExpr (walkEach dPat acc pats) b
+isLocal : DemandScope -> String -> Bool
+isLocal sc x = omHasKey x sc.locals
 
-dExpr : DemandAcc -> CExpr -> DemandAcc
-dExpr acc (CList es) = walkEach dExpr (noteUse acc UseList) es
-dExpr acc (CRangeList lo hi _) = dExpr (dExpr (noteUse acc UseList) lo) hi
-dExpr acc (CTuple es) = walkEach dExpr (noteArity acc (listLen es)) es
-dExpr acc (CArray es) = walkEach dExpr (noteUse acc UseArray) es
-dExpr acc (CRangeArray lo hi _) = dExpr (dExpr (noteUse acc UseArray) lo) hi
-dExpr acc (CIndex a i) = dExpr (dExpr (noteUse acc UseArray) a) i
-dExpr acc (CSlice a lo hi _) =
-  dExpr (dExpr (dExpr (noteUse acc UseArray) a) lo) hi
-dExpr acc (CRecord _ fields) = walkEach dField acc fields
-dExpr acc (CFieldAccess ex _ _ _) = dExpr acc ex
-dExpr acc (CRecordUpdate _ base fields) =
-  walkEach dField (dExpr acc base) fields
-dExpr acc (CVariantUpdate _ base fields) =
-  walkEach dField (dExpr acc base) fields
-dExpr acc (app@(CApp _ _ _)) =
+isCoreFn : DemandScope -> String -> Bool
+isCoreFn sc x = omHasKey ("core__" ++ x) sc.topFns
+
+-- a name read as a value
+dVar : DemandScope -> DemandAcc -> String -> DemandAcc
+dVar sc acc x =
+  if isLocal sc x
+    || omHasKey x sc.topVals
+    || omHasKey x sc.topFns
+    || isCoreFn sc x then
+    acc
+  else
+    noteName acc x
+
+dBind : DemandScope -> DemandAcc -> CBind -> DemandAcc
+dBind sc acc (CBind _ clauses _ _) = walkEach (dClause sc) acc clauses
+
+-- a clause's parameter patterns, then its body with them in scope
+dClause : DemandScope -> DemandAcc -> CClause -> DemandAcc
+dClause sc acc (CClause pats body) =
+  dExpr (bindIn sc pats) (walkEach dPat acc pats) body
+
+dImpl : DemandScope -> DemandAcc -> CImplEntry -> DemandAcc
+dImpl sc acc (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ pats b)) =
+  dExpr (bindIn sc pats) (walkEach dPat acc pats) b
+dImpl sc acc (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ pats b)) =
+  dExpr (bindIn sc pats) (walkEach dPat acc pats) b
+
+dExpr : DemandScope -> DemandAcc -> CExpr -> DemandAcc
+dExpr sc acc (CList es) = walkEach (dExpr sc) (noteUse acc UseList) es
+dExpr sc acc (CRangeList lo hi _) =
+  dExpr sc (dExpr sc (noteUse acc UseList) lo) hi
+dExpr sc acc (CTuple es) = walkEach (dExpr sc) (noteArity acc (listLen es)) es
+dExpr sc acc (CArray es) = walkEach (dExpr sc) (noteUse acc UseArray) es
+dExpr sc acc (CRangeArray lo hi _) =
+  dExpr sc (dExpr sc (noteUse acc UseArray) lo) hi
+dExpr sc acc (CIndex a i) = dExpr sc (dExpr sc (noteUse acc UseArray) a) i
+dExpr sc acc (CSlice a lo hi _) =
+  dExpr sc (dExpr sc (dExpr sc (noteUse acc UseArray) a) lo) hi
+dExpr sc acc (CRecord _ fields) = walkEach (dField sc) acc fields
+dExpr sc acc (CFieldAccess ex _ _ _) = dExpr sc acc ex
+dExpr sc acc (CRecordUpdate _ base fields) =
+  walkEach (dField sc) (dExpr sc acc base) fields
+dExpr sc acc (CVariantUpdate _ base fields) =
+  walkEach (dField sc) (dExpr sc acc base) fields
+dExpr sc acc (app@(CApp _ _ _)) =
   let (hd, args) = flattenApp app []
-  walkEach dExpr (dAppHead acc hd) args
-dExpr acc (CVar x _) = noteName acc x
-dExpr acc (CLit (LFloat _)) = noteUse acc UseFloat
-dExpr acc (CLit (LU64 _ _)) = noteUse acc UseU64
-dExpr acc (CLit (LI64 _ _)) = noteUse acc UseI64
-dExpr acc (CLit (LString _)) = noteUse acc UseStr
-dExpr acc (CLit (LChar _)) = noteUse acc UseStr
-dExpr acc (CLam _ b) = dExpr acc b
-dExpr acc (CBinPrim op l r tag _) =
-  dExpr (dExpr (noteBinop (noteTag acc tag) op) l) r
-dExpr acc (CUnOp _ x) = dExpr acc x
-dExpr acc (CIf c t f) = dExpr (dExpr (dExpr acc c) t) f
-dExpr acc (CLet _ pat a b) = dExpr (dExpr (dPat acc pat) a) b
-dExpr acc (CBlock stmts) = walkEach dStmt acc stmts
-dExpr acc (CDecision scrut arms tree) =
-  dTree (walkEach dArm (dExpr acc scrut) arms) tree
-dExpr acc (CMatch scrut arms) = walkEach dArm (dExpr acc scrut) arms
-dExpr acc (CLetGroup binds b) = dExpr (walkEach dBind acc binds) b
-dExpr acc _ = acc
+  walkEach (dExpr sc) (dAppHead sc acc hd) args
+dExpr sc acc (CVar x _) = dVar sc acc x
+dExpr _ acc (CLit (LFloat _)) = noteUse acc UseFloat
+dExpr _ acc (CLit (LU64 _ _)) = noteUse acc UseU64
+dExpr _ acc (CLit (LI64 _ _)) = noteUse acc UseI64
+dExpr _ acc (CLit (LString _)) = noteUse acc UseStr
+dExpr _ acc (CLit (LChar _)) = noteUse acc UseStr
+dExpr sc acc (CLam pats b) = dExpr (bindIn sc pats) acc b
+dExpr sc acc (CBinPrim op l r tag _) =
+  dExpr sc (dExpr sc (noteBinop (noteTag acc tag) op) l) r
+dExpr sc acc (CUnOp _ x) = dExpr sc acc x
+dExpr sc acc (CIf c t f) = dExpr sc (dExpr sc (dExpr sc acc c) t) f
+dExpr sc acc (CLet r pat a b) =
+  let inner = bindIn sc [pat]
+  dExpr inner (dExpr (if r then inner else sc) (dPat acc pat) a) b
+dExpr sc acc (CBlock stmts) = dStmts sc acc stmts
+dExpr sc acc (CDecision scrut arms tree) =
+  dTree (walkEach (dArm sc) (dExpr sc acc scrut) arms) tree
+dExpr sc acc (CMatch scrut arms) = walkEach (dArm sc) (dExpr sc acc scrut) arms
+dExpr sc acc (CLetGroup binds b) =
+  let inner = { sc | locals = omFromNames (map bindName binds) sc.locals }
+  dExpr inner (walkEach (dBind inner) acc binds) b
+dExpr _ acc _ = acc
 
-dAppHead : DemandAcc -> CExpr -> DemandAcc
-dAppHead acc (CVar "setRef" _) = noteRefBox acc
-dAppHead acc (CVar f _) = noteName acc f
-dAppHead acc h = dExpr acc h
+-- an applied name: a local is a closure call, a `core__` function a call to it
+dAppHead : DemandScope -> DemandAcc -> CExpr -> DemandAcc
+dAppHead sc acc (CVar f _) =
+  if isLocal sc f || not (omHasKey f sc.topFns) && isCoreFn sc f then
+    acc
+  else if f == "setRef" then
+    noteRefBox acc
+  else
+    noteName acc f
+dAppHead sc acc h = dExpr sc acc h
 
-dField : DemandAcc -> CField -> DemandAcc
-dField acc (CField _ _ e) = dExpr acc e
+dField : DemandScope -> DemandAcc -> CField -> DemandAcc
+dField sc acc (CField _ _ e) = dExpr sc acc e
 
-dArm : DemandAcc -> CArm -> DemandAcc
-dArm acc (CArm pat guards body) =
-  dExpr (walkEach dGuard (dPat acc pat) guards) body
+-- an arm's pattern binds its guards and body; a `Pat <- e` guard binds the
+-- guards after it and the body
+dArm : DemandScope -> DemandAcc -> CArm -> DemandAcc
+dArm sc acc (CArm pat guards body) =
+  dGuarded (bindIn sc [pat]) (dPat acc pat) guards body
 
-dGuard : DemandAcc -> CGuard -> DemandAcc
-dGuard acc (CGBool g) = dExpr acc g
-dGuard acc (CGBind p e) = dExpr (dPat acc p) e
+dGuarded : DemandScope -> DemandAcc -> List CGuard -> CExpr -> DemandAcc
+dGuarded sc acc [] body = dExpr sc acc body
+dGuarded sc acc ((CGBool g) :: rest) body =
+  dGuarded sc (dExpr sc acc g) rest body
+dGuarded sc acc ((CGBind p e) :: rest) body =
+  dGuarded (bindIn sc [p]) (dExpr sc (dPat acc p) e) rest body
 
-dStmt : DemandAcc -> CStmt -> DemandAcc
-dStmt acc (CSExpr e) = dExpr acc e
-dStmt acc (CSLet _ pat e) = dExpr (dPat acc pat) e
-dStmt acc (CSAssign _ e) = dExpr acc e
+-- a block's `let` binds the statements after it, and its own right side when
+-- it is `rec`
+dStmts : DemandScope -> DemandAcc -> List CStmt -> DemandAcc
+dStmts _ acc [] = acc
+dStmts sc acc ((CSExpr e) :: rest) = dStmts sc (dExpr sc acc e) rest
+dStmts sc acc ((CSLet r pat e) :: rest) =
+  let inner = bindIn sc [pat]
+  dStmts inner (dExpr (if r then inner else sc) (dPat acc pat) e) rest
+dStmts sc acc ((CSAssign _ e) :: rest) = dStmts sc (dExpr sc acc e) rest
 
 -- a pattern's collection heads: a cons or list pattern is a list, a tuple
 -- pattern its arity
@@ -505,7 +580,7 @@ dSwitchHead acc _ = acc
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "reverseL" false) (mem "filterList" false) (mem "listLen" false))))
 (DUse false (UseGroup ("backend" "wasm_reach") ((mem "wasmReachFilter" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "lazyGlobalNames" false))))
-(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "flattenApp" false) (mem "DispGroup" false) (mem "trmcEligible" false) (mem "detectDispatchGroups" false) (mem "dictUniformClauses" false) (mem "methodSelf" false) (mem "clauseArityOf" false) (mem "bindName" false))))
+(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "flattenApp" false) (mem "DispGroup" false) (mem "trmcEligible" false) (mem "detectDispatchGroups" false) (mem "dictUniformClauses" false) (mem "methodSelf" false) (mem "clauseArityOf" false) (mem "bindName" false) (mem "patVarsList" false))))
 (DData Public "EmitPlan" () ((variant "EmitPlan" (ConNamed (field "target" (TyCon "Backend")) (field "wasmOnlyReach" (TyApp (TyCon "Option") (TyCon "ReachUnits"))) (field "lazyGlobals" (TyApp (TyCon "List") (TyCon "String"))) (field "eagerReach" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "trmc" (TyCon "TrmcVerdicts")) (field "dispGroups" (TyApp (TyCon "List") (TyCon "DispGroup"))) (field "wasmDemand" (TyCon "WasmDemand")) (field "hostKeys" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DData Public "ReachUnits" () ((variant "ReachUnits" (ConNamed (field "total" (TyCon "Int")) (field "kept" (TyCon "Int"))))) ())
 (DData Public "WasmDemand" () ((variant "WasmDemand" (ConNamed (field "uses" (TyApp (TyCon "List") (TyCon "WasmUse"))) (field "refBox" (TyCon "Bool")) (field "divGuard" (TyCon "Bool")) (field "tupleArities" (TyApp (TyCon "List") (TyCon "Int")))))) ())
@@ -560,8 +635,9 @@ dSwitchHead acc _ = acc
 (DTypeSig false "noDemand" (TyCon "WasmDemand"))
 (DFunDef false "noDemand" () (ERecordCreate "WasmDemand" ((fa "uses" (EListLit)) (fa "refBox" (EVar "False")) (fa "divGuard" (EVar "False")) (fa "tupleArities" (EListLit)))))
 (DData Private "DemandAcc" () ((variant "DemandAcc" (ConNamed (field "seenUses" (TyApp (TyCon "List") (TyCon "WasmUse"))) (field "seenKeys" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "seenRefBox" (TyCon "Bool")) (field "seenDivGuard" (TyCon "Bool")) (field "seenArities" (TyApp (TyCon "List") (TyCon "Int")))))) ())
+(DData Private "DemandScope" () ((variant "DemandScope" (ConNamed (field "locals" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "topFns" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "topVals" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DTypeSig false "wasmDemandOf" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyTuple (TyCon "WasmDemand") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "wasmDemandOf" ((PVar "groups") (PVar "impls")) (EBlock (DoLet false false (PVar "start") (ERecordCreate "DemandAcc" ((fa "seenUses" (EListLit)) (fa "seenKeys" (EVar "omEmpty")) (fa "seenRefBox" (EVar "False")) (fa "seenDivGuard" (EVar "False")) (fa "seenArities" (EListLit))))) (DoLet false false (PVar "acc") (EApp (EApp (EApp (EVar "walkEach") (EVar "dImpl")) (EApp (EApp (EApp (EVar "walkEach") (EVar "dBind")) (EVar "start")) (EVar "groups"))) (EVar "impls"))) (DoExpr (ETuple (ERecordCreate "WasmDemand" ((fa "uses" (EApp (EVar "reverseL") (EFieldAccess (EVar "acc") "seenUses"))) (fa "refBox" (EFieldAccess (EVar "acc") "seenRefBox")) (fa "divGuard" (EFieldAccess (EVar "acc") "seenDivGuard")) (fa "tupleArities" (EApp (EVar "reverseL") (EFieldAccess (EVar "acc") "seenArities"))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "acc") "seenKeys"))))))
+(DFunDef false "wasmDemandOf" ((PVar "groups") (PVar "impls")) (EBlock (DoLet false false (PVar "start") (ERecordCreate "DemandAcc" ((fa "seenUses" (EListLit)) (fa "seenKeys" (EVar "omEmpty")) (fa "seenRefBox" (EVar "False")) (fa "seenDivGuard" (EVar "False")) (fa "seenArities" (EListLit))))) (DoLet false false (PVar "tops") (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EBinOp "/=" (EApp (EVar "bindName") (EVar "b")) (ELit (LString "main"))))) (EVar "groups"))) (DoLet false false (PVar "sc") (ERecordCreate "DemandScope" ((fa "locals" (EVar "omEmpty")) (fa "topFns" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EVar "not") (EApp (EVar "isValBind") (EVar "b"))))) (EVar "tops")))) (EVar "omEmpty"))) (fa "topVals" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (EVar "isValBind")) (EVar "tops")))) (EVar "omEmpty")))))) (DoLet false false (PVar "acc") (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dImpl") (EVar "sc"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dBind") (EVar "sc"))) (EVar "start")) (EVar "groups"))) (EVar "impls"))) (DoExpr (ETuple (ERecordCreate "WasmDemand" ((fa "uses" (EApp (EVar "reverseL") (EFieldAccess (EVar "acc") "seenUses"))) (fa "refBox" (EFieldAccess (EVar "acc") "seenRefBox")) (fa "divGuard" (EFieldAccess (EVar "acc") "seenDivGuard")) (fa "tupleArities" (EApp (EVar "reverseL") (EFieldAccess (EVar "acc") "seenArities"))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "acc") "seenKeys"))))))
 (DTypeSig false "walkEach" (TyFun (TyFun (TyCon "DemandAcc") (TyFun (TyVar "a") (TyCon "DemandAcc"))) (TyFun (TyCon "DemandAcc") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "DemandAcc")))))
 (DFunDef false "walkEach" (PWild (PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "walkEach" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "f")) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (EVar "xs")))
@@ -590,57 +666,69 @@ dSwitchHead acc _ = acc
 (DFunDef false "noteBinop" ((PVar "acc") (PLit (LString "/"))) (ERecordUpdate (EVar "acc") ((fa "seenDivGuard" (EVar "True")))))
 (DFunDef false "noteBinop" ((PVar "acc") (PLit (LString "%"))) (ERecordUpdate (EVar "acc") ((fa "seenDivGuard" (EVar "True")))))
 (DFunDef false "noteBinop" ((PVar "acc") PWild) (EVar "acc"))
-(DTypeSig false "dBind" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CBind") (TyCon "DemandAcc"))))
-(DFunDef false "dBind" ((PVar "acc") (PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EApp (EVar "walkEach") (EVar "dClause")) (EVar "acc")) (EVar "clauses")))
-(DTypeSig false "dClause" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CClause") (TyCon "DemandAcc"))))
-(DFunDef false "dClause" ((PVar "acc") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "dExpr") (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EVar "acc")) (EVar "pats"))) (EVar "body")))
-(DTypeSig false "dImpl" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CImplEntry") (TyCon "DemandAcc"))))
-(DFunDef false "dImpl" ((PVar "acc") (PCon "CImplEntry" PWild PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "pats") (PVar "b")))) (EApp (EApp (EVar "dExpr") (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EVar "acc")) (EVar "pats"))) (EVar "b")))
-(DFunDef false "dImpl" ((PVar "acc") (PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" PWild PWild PWild PWild PWild (PVar "pats") (PVar "b")))) (EApp (EApp (EVar "dExpr") (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EVar "acc")) (EVar "pats"))) (EVar "b")))
-(DTypeSig false "dExpr" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CExpr") (TyCon "DemandAcc"))))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CList" (PVar "es"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dExpr")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList"))) (EVar "es")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList"))) (EVar "lo"))) (EVar "hi")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CTuple" (PVar "es"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dExpr")) (EApp (EApp (EVar "noteArity") (EVar "acc")) (EApp (EVar "listLen") (EVar "es")))) (EVar "es")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CArray" (PVar "es"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dExpr")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "es")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "lo"))) (EVar "hi")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "a"))) (EVar "i")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "a"))) (EVar "lo"))) (EVar "hi")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dField")) (EVar "acc")) (EVar "fields")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "ex")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dField")) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "base"))) (EVar "fields")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dField")) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "base"))) (EVar "fields")))
-(DFunDef false "dExpr" ((PVar "acc") (PAs "app" (PCon "CApp" PWild PWild PWild))) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit))) (DoExpr (EApp (EApp (EApp (EVar "walkEach") (EVar "dExpr")) (EApp (EApp (EVar "dAppHead") (EVar "acc")) (EVar "hd"))) (EVar "args")))))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CVar" (PVar "x") PWild)) (EApp (EApp (EVar "noteName") (EVar "acc")) (EVar "x")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CLit" (PCon "LFloat" PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseFloat")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CLit" (PCon "LU64" PWild PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseU64")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CLit" (PCon "LI64" PWild PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseI64")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CLit" (PCon "LString" PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStr")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CLit" (PCon "LChar" PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStr")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CLam" PWild (PVar "b"))) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "b")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") PWild)) (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "noteBinop") (EApp (EApp (EVar "noteTag") (EVar "acc")) (EVar "tag"))) (EVar "op"))) (EVar "l"))) (EVar "r")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "x")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "c"))) (EVar "t"))) (EVar "f")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CLet" PWild (PVar "pat") (PVar "a") (PVar "b"))) (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "a"))) (EVar "b")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dStmt")) (EVar "acc")) (EVar "stmts")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EVar "dTree") (EApp (EApp (EApp (EVar "walkEach") (EVar "dArm")) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "scrut"))) (EVar "arms"))) (EVar "tree")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dArm")) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "scrut"))) (EVar "arms")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CLetGroup" (PVar "binds") (PVar "b"))) (EApp (EApp (EVar "dExpr") (EApp (EApp (EApp (EVar "walkEach") (EVar "dBind")) (EVar "acc")) (EVar "binds"))) (EVar "b")))
-(DFunDef false "dExpr" ((PVar "acc") PWild) (EVar "acc"))
-(DTypeSig false "dAppHead" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CExpr") (TyCon "DemandAcc"))))
-(DFunDef false "dAppHead" ((PVar "acc") (PCon "CVar" (PLit (LString "setRef")) PWild)) (EApp (EVar "noteRefBox") (EVar "acc")))
-(DFunDef false "dAppHead" ((PVar "acc") (PCon "CVar" (PVar "f") PWild)) (EApp (EApp (EVar "noteName") (EVar "acc")) (EVar "f")))
-(DFunDef false "dAppHead" ((PVar "acc") (PVar "h")) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "h")))
-(DTypeSig false "dField" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CField") (TyCon "DemandAcc"))))
-(DFunDef false "dField" ((PVar "acc") (PCon "CField" PWild PWild (PVar "e"))) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "e")))
-(DTypeSig false "dArm" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CArm") (TyCon "DemandAcc"))))
-(DFunDef false "dArm" ((PVar "acc") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EApp (EVar "dExpr") (EApp (EApp (EApp (EVar "walkEach") (EVar "dGuard")) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "guards"))) (EVar "body")))
-(DTypeSig false "dGuard" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CGuard") (TyCon "DemandAcc"))))
-(DFunDef false "dGuard" ((PVar "acc") (PCon "CGBool" (PVar "g"))) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "g")))
-(DFunDef false "dGuard" ((PVar "acc") (PCon "CGBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "p"))) (EVar "e")))
-(DTypeSig false "dStmt" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CStmt") (TyCon "DemandAcc"))))
-(DFunDef false "dStmt" ((PVar "acc") (PCon "CSExpr" (PVar "e"))) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "e")))
-(DFunDef false "dStmt" ((PVar "acc") (PCon "CSLet" PWild (PVar "pat") (PVar "e"))) (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "e")))
-(DFunDef false "dStmt" ((PVar "acc") (PCon "CSAssign" PWild (PVar "e"))) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "e")))
+(DTypeSig false "isValBind" (TyFun (TyCon "CBind") (TyCon "Bool")))
+(DFunDef false "isValBind" ((PCon "CBind" PWild (PList (PCon "CClause" (PList) PWild)) PWild PWild)) (EVar "True"))
+(DFunDef false "isValBind" (PWild) (EVar "False"))
+(DTypeSig false "bindIn" (TyFun (TyCon "DemandScope") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "DemandScope"))))
+(DFunDef false "bindIn" ((PVar "sc") (PVar "pats")) (EMatch (EApp (EVar "patVarsList") (EVar "pats")) (arm (PList) () (EVar "sc")) (arm (PVar "names") () (ERecordUpdate (EVar "sc") ((fa "locals" (EApp (EApp (EVar "omFromNames") (EVar "names")) (EFieldAccess (EVar "sc") "locals"))))))))
+(DTypeSig false "isLocal" (TyFun (TyCon "DemandScope") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "isLocal" ((PVar "sc") (PVar "x")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EFieldAccess (EVar "sc") "locals")))
+(DTypeSig false "isCoreFn" (TyFun (TyCon "DemandScope") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "isCoreFn" ((PVar "sc") (PVar "x")) (EApp (EApp (EVar "omHasKey") (EBinOp "++" (ELit (LString "core__")) (EVar "x"))) (EFieldAccess (EVar "sc") "topFns")))
+(DTypeSig false "dVar" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc")))))
+(DFunDef false "dVar" ((PVar "sc") (PVar "acc") (PVar "x")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "isLocal") (EVar "sc")) (EVar "x")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EFieldAccess (EVar "sc") "topVals"))) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EFieldAccess (EVar "sc") "topFns"))) (EApp (EApp (EVar "isCoreFn") (EVar "sc")) (EVar "x"))) (EVar "acc") (EApp (EApp (EVar "noteName") (EVar "acc")) (EVar "x"))))
+(DTypeSig false "dBind" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CBind") (TyCon "DemandAcc")))))
+(DFunDef false "dBind" ((PVar "sc") (PVar "acc") (PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dClause") (EVar "sc"))) (EVar "acc")) (EVar "clauses")))
+(DTypeSig false "dClause" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CClause") (TyCon "DemandAcc")))))
+(DFunDef false "dClause" ((PVar "sc") (PVar "acc") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EVar "pats"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EVar "acc")) (EVar "pats"))) (EVar "body")))
+(DTypeSig false "dImpl" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CImplEntry") (TyCon "DemandAcc")))))
+(DFunDef false "dImpl" ((PVar "sc") (PVar "acc") (PCon "CImplEntry" PWild PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "pats") (PVar "b")))) (EApp (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EVar "pats"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EVar "acc")) (EVar "pats"))) (EVar "b")))
+(DFunDef false "dImpl" ((PVar "sc") (PVar "acc") (PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" PWild PWild PWild PWild PWild (PVar "pats") (PVar "b")))) (EApp (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EVar "pats"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EVar "acc")) (EVar "pats"))) (EVar "b")))
+(DTypeSig false "dExpr" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CExpr") (TyCon "DemandAcc")))))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CList" (PVar "es"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dExpr") (EVar "sc"))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList"))) (EVar "es")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList"))) (EVar "lo"))) (EVar "hi")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CTuple" (PVar "es"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dExpr") (EVar "sc"))) (EApp (EApp (EVar "noteArity") (EVar "acc")) (EApp (EVar "listLen") (EVar "es")))) (EVar "es")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CArray" (PVar "es"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dExpr") (EVar "sc"))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "es")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "lo"))) (EVar "hi")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "a"))) (EVar "i")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "a"))) (EVar "lo"))) (EVar "hi")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dField") (EVar "sc"))) (EVar "acc")) (EVar "fields")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "ex")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dField") (EVar "sc"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "base"))) (EVar "fields")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dField") (EVar "sc"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "base"))) (EVar "fields")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PAs "app" (PCon "CApp" PWild PWild PWild))) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit))) (DoExpr (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dExpr") (EVar "sc"))) (EApp (EApp (EApp (EVar "dAppHead") (EVar "sc")) (EVar "acc")) (EVar "hd"))) (EVar "args")))))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CVar" (PVar "x") PWild)) (EApp (EApp (EApp (EVar "dVar") (EVar "sc")) (EVar "acc")) (EVar "x")))
+(DFunDef false "dExpr" (PWild (PVar "acc") (PCon "CLit" (PCon "LFloat" PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseFloat")))
+(DFunDef false "dExpr" (PWild (PVar "acc") (PCon "CLit" (PCon "LU64" PWild PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseU64")))
+(DFunDef false "dExpr" (PWild (PVar "acc") (PCon "CLit" (PCon "LI64" PWild PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseI64")))
+(DFunDef false "dExpr" (PWild (PVar "acc") (PCon "CLit" (PCon "LString" PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStr")))
+(DFunDef false "dExpr" (PWild (PVar "acc") (PCon "CLit" (PCon "LChar" PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStr")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CLam" (PVar "pats") (PVar "b"))) (EApp (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EVar "pats"))) (EVar "acc")) (EVar "b")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "noteBinop") (EApp (EApp (EVar "noteTag") (EVar "acc")) (EVar "tag"))) (EVar "op"))) (EVar "l"))) (EVar "r")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "x")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "c"))) (EVar "t"))) (EVar "f")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CLet" (PVar "r") (PVar "pat") (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "pat")))) (DoExpr (EApp (EApp (EApp (EVar "dExpr") (EVar "inner")) (EApp (EApp (EApp (EVar "dExpr") (EIf (EVar "r") (EVar "inner") (EVar "sc"))) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "a"))) (EVar "b")))))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "dStmts") (EVar "sc")) (EVar "acc")) (EVar "stmts")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EVar "dTree") (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dArm") (EVar "sc"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "scrut"))) (EVar "arms"))) (EVar "tree")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dArm") (EVar "sc"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "scrut"))) (EVar "arms")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CLetGroup" (PVar "binds") (PVar "b"))) (EBlock (DoLet false false (PVar "inner") (ERecordUpdate (EVar "sc") ((fa "locals" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "bindName")) (EVar "binds"))) (EFieldAccess (EVar "sc") "locals")))))) (DoExpr (EApp (EApp (EApp (EVar "dExpr") (EVar "inner")) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dBind") (EVar "inner"))) (EVar "acc")) (EVar "binds"))) (EVar "b")))))
+(DFunDef false "dExpr" (PWild (PVar "acc") PWild) (EVar "acc"))
+(DTypeSig false "dAppHead" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CExpr") (TyCon "DemandAcc")))))
+(DFunDef false "dAppHead" ((PVar "sc") (PVar "acc") (PCon "CVar" (PVar "f") PWild)) (EIf (EBinOp "||" (EApp (EApp (EVar "isLocal") (EVar "sc")) (EVar "f")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "f")) (EFieldAccess (EVar "sc") "topFns"))) (EApp (EApp (EVar "isCoreFn") (EVar "sc")) (EVar "f")))) (EVar "acc") (EIf (EBinOp "==" (EVar "f") (ELit (LString "setRef"))) (EApp (EVar "noteRefBox") (EVar "acc")) (EApp (EApp (EVar "noteName") (EVar "acc")) (EVar "f")))))
+(DFunDef false "dAppHead" ((PVar "sc") (PVar "acc") (PVar "h")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "h")))
+(DTypeSig false "dField" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CField") (TyCon "DemandAcc")))))
+(DFunDef false "dField" ((PVar "sc") (PVar "acc") (PCon "CField" PWild PWild (PVar "e"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "e")))
+(DTypeSig false "dArm" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CArm") (TyCon "DemandAcc")))))
+(DFunDef false "dArm" ((PVar "sc") (PVar "acc") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "dGuarded") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "pat")))) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "guards")) (EVar "body")))
+(DTypeSig false "dGuarded" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "CExpr") (TyCon "DemandAcc"))))))
+(DFunDef false "dGuarded" ((PVar "sc") (PVar "acc") (PList) (PVar "body")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "body")))
+(DFunDef false "dGuarded" ((PVar "sc") (PVar "acc") (PCons (PCon "CGBool" (PVar "g")) (PVar "rest")) (PVar "body")) (EApp (EApp (EApp (EApp (EVar "dGuarded") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "g"))) (EVar "rest")) (EVar "body")))
+(DFunDef false "dGuarded" ((PVar "sc") (PVar "acc") (PCons (PCon "CGBind" (PVar "p") (PVar "e")) (PVar "rest")) (PVar "body")) (EApp (EApp (EApp (EApp (EVar "dGuarded") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "p")))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "p"))) (EVar "e"))) (EVar "rest")) (EVar "body")))
+(DTypeSig false "dStmts" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "DemandAcc")))))
+(DFunDef false "dStmts" (PWild (PVar "acc") (PList)) (EVar "acc"))
+(DFunDef false "dStmts" ((PVar "sc") (PVar "acc") (PCons (PCon "CSExpr" (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "dStmts") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "e"))) (EVar "rest")))
+(DFunDef false "dStmts" ((PVar "sc") (PVar "acc") (PCons (PCon "CSLet" (PVar "r") (PVar "pat") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "pat")))) (DoExpr (EApp (EApp (EApp (EVar "dStmts") (EVar "inner")) (EApp (EApp (EApp (EVar "dExpr") (EIf (EVar "r") (EVar "inner") (EVar "sc"))) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "e"))) (EVar "rest")))))
+(DFunDef false "dStmts" ((PVar "sc") (PVar "acc") (PCons (PCon "CSAssign" PWild (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "dStmts") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "e"))) (EVar "rest")))
 (DTypeSig false "dPat" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "Pat") (TyCon "DemandAcc"))))
 (DFunDef false "dPat" ((PVar "acc") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "dPat") (EApp (EApp (EVar "dPat") (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList"))) (EVar "h"))) (EVar "t")))
 (DFunDef false "dPat" ((PVar "acc") (PCon "PList" (PVar "ps"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList"))) (EVar "ps")))
@@ -669,7 +757,7 @@ dSwitchHead acc _ = acc
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "reverseL" false) (mem "filterList" false) (mem "listLen" false))))
 (DUse false (UseGroup ("backend" "wasm_reach") ((mem "wasmReachFilter" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "lazyGlobalNames" false))))
-(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "flattenApp" false) (mem "DispGroup" false) (mem "trmcEligible" false) (mem "detectDispatchGroups" false) (mem "dictUniformClauses" false) (mem "methodSelf" false) (mem "clauseArityOf" false) (mem "bindName" false))))
+(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "flattenApp" false) (mem "DispGroup" false) (mem "trmcEligible" false) (mem "detectDispatchGroups" false) (mem "dictUniformClauses" false) (mem "methodSelf" false) (mem "clauseArityOf" false) (mem "bindName" false) (mem "patVarsList" false))))
 (DData Public "EmitPlan" () ((variant "EmitPlan" (ConNamed (field "target" (TyCon "Backend")) (field "wasmOnlyReach" (TyApp (TyCon "Option") (TyCon "ReachUnits"))) (field "lazyGlobals" (TyApp (TyCon "List") (TyCon "String"))) (field "eagerReach" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "trmc" (TyCon "TrmcVerdicts")) (field "dispGroups" (TyApp (TyCon "List") (TyCon "DispGroup"))) (field "wasmDemand" (TyCon "WasmDemand")) (field "hostKeys" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DData Public "ReachUnits" () ((variant "ReachUnits" (ConNamed (field "total" (TyCon "Int")) (field "kept" (TyCon "Int"))))) ())
 (DData Public "WasmDemand" () ((variant "WasmDemand" (ConNamed (field "uses" (TyApp (TyCon "List") (TyCon "WasmUse"))) (field "refBox" (TyCon "Bool")) (field "divGuard" (TyCon "Bool")) (field "tupleArities" (TyApp (TyCon "List") (TyCon "Int")))))) ())
@@ -724,8 +812,9 @@ dSwitchHead acc _ = acc
 (DTypeSig false "noDemand" (TyCon "WasmDemand"))
 (DFunDef false "noDemand" () (ERecordCreate "WasmDemand" ((fa "uses" (EListLit)) (fa "refBox" (EVar "False")) (fa "divGuard" (EVar "False")) (fa "tupleArities" (EListLit)))))
 (DData Private "DemandAcc" () ((variant "DemandAcc" (ConNamed (field "seenUses" (TyApp (TyCon "List") (TyCon "WasmUse"))) (field "seenKeys" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "seenRefBox" (TyCon "Bool")) (field "seenDivGuard" (TyCon "Bool")) (field "seenArities" (TyApp (TyCon "List") (TyCon "Int")))))) ())
+(DData Private "DemandScope" () ((variant "DemandScope" (ConNamed (field "locals" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "topFns" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "topVals" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DTypeSig false "wasmDemandOf" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyTuple (TyCon "WasmDemand") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "wasmDemandOf" ((PVar "groups") (PVar "impls")) (EBlock (DoLet false false (PVar "start") (ERecordCreate "DemandAcc" ((fa "seenUses" (EListLit)) (fa "seenKeys" (EVar "omEmpty")) (fa "seenRefBox" (EVar "False")) (fa "seenDivGuard" (EVar "False")) (fa "seenArities" (EListLit))))) (DoLet false false (PVar "acc") (EApp (EApp (EApp (EVar "walkEach") (EVar "dImpl")) (EApp (EApp (EApp (EVar "walkEach") (EVar "dBind")) (EVar "start")) (EVar "groups"))) (EVar "impls"))) (DoExpr (ETuple (ERecordCreate "WasmDemand" ((fa "uses" (EApp (EVar "reverseL") (EFieldAccess (EVar "acc") "seenUses"))) (fa "refBox" (EFieldAccess (EVar "acc") "seenRefBox")) (fa "divGuard" (EFieldAccess (EVar "acc") "seenDivGuard")) (fa "tupleArities" (EApp (EVar "reverseL") (EFieldAccess (EVar "acc") "seenArities"))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "acc") "seenKeys"))))))
+(DFunDef false "wasmDemandOf" ((PVar "groups") (PVar "impls")) (EBlock (DoLet false false (PVar "start") (ERecordCreate "DemandAcc" ((fa "seenUses" (EListLit)) (fa "seenKeys" (EVar "omEmpty")) (fa "seenRefBox" (EVar "False")) (fa "seenDivGuard" (EVar "False")) (fa "seenArities" (EListLit))))) (DoLet false false (PVar "tops") (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EBinOp "/=" (EApp (EVar "bindName") (EVar "b")) (ELit (LString "main"))))) (EVar "groups"))) (DoLet false false (PVar "sc") (ERecordCreate "DemandScope" ((fa "locals" (EVar "omEmpty")) (fa "topFns" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EVar "not") (EApp (EVar "isValBind") (EVar "b"))))) (EVar "tops")))) (EVar "omEmpty"))) (fa "topVals" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EApp (EApp (EVar "filterList") (EVar "isValBind")) (EVar "tops")))) (EVar "omEmpty")))))) (DoLet false false (PVar "acc") (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dImpl") (EVar "sc"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dBind") (EVar "sc"))) (EVar "start")) (EVar "groups"))) (EVar "impls"))) (DoExpr (ETuple (ERecordCreate "WasmDemand" ((fa "uses" (EApp (EVar "reverseL") (EFieldAccess (EVar "acc") "seenUses"))) (fa "refBox" (EFieldAccess (EVar "acc") "seenRefBox")) (fa "divGuard" (EFieldAccess (EVar "acc") "seenDivGuard")) (fa "tupleArities" (EApp (EVar "reverseL") (EFieldAccess (EVar "acc") "seenArities"))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "acc") "seenKeys"))))))
 (DTypeSig false "walkEach" (TyFun (TyFun (TyCon "DemandAcc") (TyFun (TyVar "a") (TyCon "DemandAcc"))) (TyFun (TyCon "DemandAcc") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "DemandAcc")))))
 (DFunDef false "walkEach" (PWild (PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "walkEach" ((PVar "f") (PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "f")) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "x"))) (EVar "xs")))
@@ -754,57 +843,69 @@ dSwitchHead acc _ = acc
 (DFunDef false "noteBinop" ((PVar "acc") (PLit (LString "/"))) (ERecordUpdate (EVar "acc") ((fa "seenDivGuard" (EVar "True")))))
 (DFunDef false "noteBinop" ((PVar "acc") (PLit (LString "%"))) (ERecordUpdate (EVar "acc") ((fa "seenDivGuard" (EVar "True")))))
 (DFunDef false "noteBinop" ((PVar "acc") PWild) (EVar "acc"))
-(DTypeSig false "dBind" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CBind") (TyCon "DemandAcc"))))
-(DFunDef false "dBind" ((PVar "acc") (PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EApp (EVar "walkEach") (EVar "dClause")) (EVar "acc")) (EVar "clauses")))
-(DTypeSig false "dClause" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CClause") (TyCon "DemandAcc"))))
-(DFunDef false "dClause" ((PVar "acc") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "dExpr") (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EVar "acc")) (EVar "pats"))) (EVar "body")))
-(DTypeSig false "dImpl" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CImplEntry") (TyCon "DemandAcc"))))
-(DFunDef false "dImpl" ((PVar "acc") (PCon "CImplEntry" PWild PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "pats") (PVar "b")))) (EApp (EApp (EVar "dExpr") (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EVar "acc")) (EVar "pats"))) (EVar "b")))
-(DFunDef false "dImpl" ((PVar "acc") (PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" PWild PWild PWild PWild PWild (PVar "pats") (PVar "b")))) (EApp (EApp (EVar "dExpr") (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EVar "acc")) (EVar "pats"))) (EVar "b")))
-(DTypeSig false "dExpr" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CExpr") (TyCon "DemandAcc"))))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CList" (PVar "es"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dExpr")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList"))) (EVar "es")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList"))) (EVar "lo"))) (EVar "hi")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CTuple" (PVar "es"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dExpr")) (EApp (EApp (EVar "noteArity") (EVar "acc")) (EApp (EVar "listLen") (EVar "es")))) (EVar "es")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CArray" (PVar "es"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dExpr")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "es")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "lo"))) (EVar "hi")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "a"))) (EVar "i")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "a"))) (EVar "lo"))) (EVar "hi")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dField")) (EVar "acc")) (EVar "fields")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "ex")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dField")) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "base"))) (EVar "fields")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dField")) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "base"))) (EVar "fields")))
-(DFunDef false "dExpr" ((PVar "acc") (PAs "app" (PCon "CApp" PWild PWild PWild))) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit))) (DoExpr (EApp (EApp (EApp (EVar "walkEach") (EVar "dExpr")) (EApp (EApp (EVar "dAppHead") (EVar "acc")) (EVar "hd"))) (EVar "args")))))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CVar" (PVar "x") PWild)) (EApp (EApp (EVar "noteName") (EVar "acc")) (EVar "x")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CLit" (PCon "LFloat" PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseFloat")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CLit" (PCon "LU64" PWild PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseU64")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CLit" (PCon "LI64" PWild PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseI64")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CLit" (PCon "LString" PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStr")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CLit" (PCon "LChar" PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStr")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CLam" PWild (PVar "b"))) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "b")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") PWild)) (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "noteBinop") (EApp (EApp (EVar "noteTag") (EVar "acc")) (EVar "tag"))) (EVar "op"))) (EVar "l"))) (EVar "r")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "x")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "c"))) (EVar "t"))) (EVar "f")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CLet" PWild (PVar "pat") (PVar "a") (PVar "b"))) (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "a"))) (EVar "b")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dStmt")) (EVar "acc")) (EVar "stmts")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EVar "dTree") (EApp (EApp (EApp (EVar "walkEach") (EVar "dArm")) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "scrut"))) (EVar "arms"))) (EVar "tree")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dArm")) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "scrut"))) (EVar "arms")))
-(DFunDef false "dExpr" ((PVar "acc") (PCon "CLetGroup" (PVar "binds") (PVar "b"))) (EApp (EApp (EVar "dExpr") (EApp (EApp (EApp (EVar "walkEach") (EVar "dBind")) (EVar "acc")) (EVar "binds"))) (EVar "b")))
-(DFunDef false "dExpr" ((PVar "acc") PWild) (EVar "acc"))
-(DTypeSig false "dAppHead" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CExpr") (TyCon "DemandAcc"))))
-(DFunDef false "dAppHead" ((PVar "acc") (PCon "CVar" (PLit (LString "setRef")) PWild)) (EApp (EVar "noteRefBox") (EVar "acc")))
-(DFunDef false "dAppHead" ((PVar "acc") (PCon "CVar" (PVar "f") PWild)) (EApp (EApp (EVar "noteName") (EVar "acc")) (EVar "f")))
-(DFunDef false "dAppHead" ((PVar "acc") (PVar "h")) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "h")))
-(DTypeSig false "dField" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CField") (TyCon "DemandAcc"))))
-(DFunDef false "dField" ((PVar "acc") (PCon "CField" PWild PWild (PVar "e"))) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "e")))
-(DTypeSig false "dArm" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CArm") (TyCon "DemandAcc"))))
-(DFunDef false "dArm" ((PVar "acc") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EApp (EVar "dExpr") (EApp (EApp (EApp (EVar "walkEach") (EVar "dGuard")) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "guards"))) (EVar "body")))
-(DTypeSig false "dGuard" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CGuard") (TyCon "DemandAcc"))))
-(DFunDef false "dGuard" ((PVar "acc") (PCon "CGBool" (PVar "g"))) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "g")))
-(DFunDef false "dGuard" ((PVar "acc") (PCon "CGBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "p"))) (EVar "e")))
-(DTypeSig false "dStmt" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CStmt") (TyCon "DemandAcc"))))
-(DFunDef false "dStmt" ((PVar "acc") (PCon "CSExpr" (PVar "e"))) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "e")))
-(DFunDef false "dStmt" ((PVar "acc") (PCon "CSLet" PWild (PVar "pat") (PVar "e"))) (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "e")))
-(DFunDef false "dStmt" ((PVar "acc") (PCon "CSAssign" PWild (PVar "e"))) (EApp (EApp (EVar "dExpr") (EVar "acc")) (EVar "e")))
+(DTypeSig false "isValBind" (TyFun (TyCon "CBind") (TyCon "Bool")))
+(DFunDef false "isValBind" ((PCon "CBind" PWild (PList (PCon "CClause" (PList) PWild)) PWild PWild)) (EVar "True"))
+(DFunDef false "isValBind" (PWild) (EVar "False"))
+(DTypeSig false "bindIn" (TyFun (TyCon "DemandScope") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "DemandScope"))))
+(DFunDef false "bindIn" ((PVar "sc") (PVar "pats")) (EMatch (EApp (EVar "patVarsList") (EVar "pats")) (arm (PList) () (EVar "sc")) (arm (PVar "names") () (ERecordUpdate (EVar "sc") ((fa "locals" (EApp (EApp (EVar "omFromNames") (EVar "names")) (EFieldAccess (EVar "sc") "locals"))))))))
+(DTypeSig false "isLocal" (TyFun (TyCon "DemandScope") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "isLocal" ((PVar "sc") (PVar "x")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EFieldAccess (EVar "sc") "locals")))
+(DTypeSig false "isCoreFn" (TyFun (TyCon "DemandScope") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "isCoreFn" ((PVar "sc") (PVar "x")) (EApp (EApp (EVar "omHasKey") (EBinOp "++" (ELit (LString "core__")) (EVar "x"))) (EFieldAccess (EVar "sc") "topFns")))
+(DTypeSig false "dVar" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "String") (TyCon "DemandAcc")))))
+(DFunDef false "dVar" ((PVar "sc") (PVar "acc") (PVar "x")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "isLocal") (EVar "sc")) (EVar "x")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EFieldAccess (EVar "sc") "topVals"))) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EFieldAccess (EVar "sc") "topFns"))) (EApp (EApp (EVar "isCoreFn") (EVar "sc")) (EVar "x"))) (EVar "acc") (EApp (EApp (EVar "noteName") (EVar "acc")) (EVar "x"))))
+(DTypeSig false "dBind" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CBind") (TyCon "DemandAcc")))))
+(DFunDef false "dBind" ((PVar "sc") (PVar "acc") (PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dClause") (EVar "sc"))) (EVar "acc")) (EVar "clauses")))
+(DTypeSig false "dClause" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CClause") (TyCon "DemandAcc")))))
+(DFunDef false "dClause" ((PVar "sc") (PVar "acc") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EVar "pats"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EVar "acc")) (EVar "pats"))) (EVar "body")))
+(DTypeSig false "dImpl" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CImplEntry") (TyCon "DemandAcc")))))
+(DFunDef false "dImpl" ((PVar "sc") (PVar "acc") (PCon "CImplEntry" PWild PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "pats") (PVar "b")))) (EApp (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EVar "pats"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EVar "acc")) (EVar "pats"))) (EVar "b")))
+(DFunDef false "dImpl" ((PVar "sc") (PVar "acc") (PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" PWild PWild PWild PWild PWild (PVar "pats") (PVar "b")))) (EApp (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EVar "pats"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EVar "acc")) (EVar "pats"))) (EVar "b")))
+(DTypeSig false "dExpr" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CExpr") (TyCon "DemandAcc")))))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CList" (PVar "es"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dExpr") (EVar "sc"))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList"))) (EVar "es")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList"))) (EVar "lo"))) (EVar "hi")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CTuple" (PVar "es"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dExpr") (EVar "sc"))) (EApp (EApp (EVar "noteArity") (EVar "acc")) (EApp (EVar "listLen") (EVar "es")))) (EVar "es")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CArray" (PVar "es"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dExpr") (EVar "sc"))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "es")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "lo"))) (EVar "hi")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "a"))) (EVar "i")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseArray"))) (EVar "a"))) (EVar "lo"))) (EVar "hi")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dField") (EVar "sc"))) (EVar "acc")) (EVar "fields")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "ex")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dField") (EVar "sc"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "base"))) (EVar "fields")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dField") (EVar "sc"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "base"))) (EVar "fields")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PAs "app" (PCon "CApp" PWild PWild PWild))) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit))) (DoExpr (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dExpr") (EVar "sc"))) (EApp (EApp (EApp (EVar "dAppHead") (EVar "sc")) (EVar "acc")) (EVar "hd"))) (EVar "args")))))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CVar" (PVar "x") PWild)) (EApp (EApp (EApp (EVar "dVar") (EVar "sc")) (EVar "acc")) (EVar "x")))
+(DFunDef false "dExpr" (PWild (PVar "acc") (PCon "CLit" (PCon "LFloat" PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseFloat")))
+(DFunDef false "dExpr" (PWild (PVar "acc") (PCon "CLit" (PCon "LU64" PWild PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseU64")))
+(DFunDef false "dExpr" (PWild (PVar "acc") (PCon "CLit" (PCon "LI64" PWild PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseI64")))
+(DFunDef false "dExpr" (PWild (PVar "acc") (PCon "CLit" (PCon "LString" PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStr")))
+(DFunDef false "dExpr" (PWild (PVar "acc") (PCon "CLit" (PCon "LChar" PWild))) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseStr")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CLam" (PVar "pats") (PVar "b"))) (EApp (EApp (EApp (EVar "dExpr") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EVar "pats"))) (EVar "acc")) (EVar "b")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") PWild)) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "noteBinop") (EApp (EApp (EVar "noteTag") (EVar "acc")) (EVar "tag"))) (EVar "op"))) (EVar "l"))) (EVar "r")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "x")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "c"))) (EVar "t"))) (EVar "f")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CLet" (PVar "r") (PVar "pat") (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "pat")))) (DoExpr (EApp (EApp (EApp (EVar "dExpr") (EVar "inner")) (EApp (EApp (EApp (EVar "dExpr") (EIf (EVar "r") (EVar "inner") (EVar "sc"))) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "a"))) (EVar "b")))))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "dStmts") (EVar "sc")) (EVar "acc")) (EVar "stmts")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EVar "dTree") (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dArm") (EVar "sc"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "scrut"))) (EVar "arms"))) (EVar "tree")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dArm") (EVar "sc"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "scrut"))) (EVar "arms")))
+(DFunDef false "dExpr" ((PVar "sc") (PVar "acc") (PCon "CLetGroup" (PVar "binds") (PVar "b"))) (EBlock (DoLet false false (PVar "inner") (ERecordUpdate (EVar "sc") ((fa "locals" (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EVar "binds"))) (EFieldAccess (EVar "sc") "locals")))))) (DoExpr (EApp (EApp (EApp (EVar "dExpr") (EVar "inner")) (EApp (EApp (EApp (EVar "walkEach") (EApp (EVar "dBind") (EVar "inner"))) (EVar "acc")) (EVar "binds"))) (EVar "b")))))
+(DFunDef false "dExpr" (PWild (PVar "acc") PWild) (EVar "acc"))
+(DTypeSig false "dAppHead" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CExpr") (TyCon "DemandAcc")))))
+(DFunDef false "dAppHead" ((PVar "sc") (PVar "acc") (PCon "CVar" (PVar "f") PWild)) (EIf (EBinOp "||" (EApp (EApp (EVar "isLocal") (EVar "sc")) (EVar "f")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "f")) (EFieldAccess (EVar "sc") "topFns"))) (EApp (EApp (EVar "isCoreFn") (EVar "sc")) (EVar "f")))) (EVar "acc") (EIf (EBinOp "==" (EVar "f") (ELit (LString "setRef"))) (EApp (EVar "noteRefBox") (EVar "acc")) (EApp (EApp (EVar "noteName") (EVar "acc")) (EVar "f")))))
+(DFunDef false "dAppHead" ((PVar "sc") (PVar "acc") (PVar "h")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "h")))
+(DTypeSig false "dField" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CField") (TyCon "DemandAcc")))))
+(DFunDef false "dField" ((PVar "sc") (PVar "acc") (PCon "CField" PWild PWild (PVar "e"))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "e")))
+(DTypeSig false "dArm" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyCon "CArm") (TyCon "DemandAcc")))))
+(DFunDef false "dArm" ((PVar "sc") (PVar "acc") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "dGuarded") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "pat")))) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "guards")) (EVar "body")))
+(DTypeSig false "dGuarded" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "CExpr") (TyCon "DemandAcc"))))))
+(DFunDef false "dGuarded" ((PVar "sc") (PVar "acc") (PList) (PVar "body")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "body")))
+(DFunDef false "dGuarded" ((PVar "sc") (PVar "acc") (PCons (PCon "CGBool" (PVar "g")) (PVar "rest")) (PVar "body")) (EApp (EApp (EApp (EApp (EVar "dGuarded") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "g"))) (EVar "rest")) (EVar "body")))
+(DFunDef false "dGuarded" ((PVar "sc") (PVar "acc") (PCons (PCon "CGBind" (PVar "p") (PVar "e")) (PVar "rest")) (PVar "body")) (EApp (EApp (EApp (EApp (EVar "dGuarded") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "p")))) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "p"))) (EVar "e"))) (EVar "rest")) (EVar "body")))
+(DTypeSig false "dStmts" (TyFun (TyCon "DemandScope") (TyFun (TyCon "DemandAcc") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "DemandAcc")))))
+(DFunDef false "dStmts" (PWild (PVar "acc") (PList)) (EVar "acc"))
+(DFunDef false "dStmts" ((PVar "sc") (PVar "acc") (PCons (PCon "CSExpr" (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "dStmts") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "e"))) (EVar "rest")))
+(DFunDef false "dStmts" ((PVar "sc") (PVar "acc") (PCons (PCon "CSLet" (PVar "r") (PVar "pat") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindIn") (EVar "sc")) (EListLit (EVar "pat")))) (DoExpr (EApp (EApp (EApp (EVar "dStmts") (EVar "inner")) (EApp (EApp (EApp (EVar "dExpr") (EIf (EVar "r") (EVar "inner") (EVar "sc"))) (EApp (EApp (EVar "dPat") (EVar "acc")) (EVar "pat"))) (EVar "e"))) (EVar "rest")))))
+(DFunDef false "dStmts" ((PVar "sc") (PVar "acc") (PCons (PCon "CSAssign" PWild (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "dStmts") (EVar "sc")) (EApp (EApp (EApp (EVar "dExpr") (EVar "sc")) (EVar "acc")) (EVar "e"))) (EVar "rest")))
 (DTypeSig false "dPat" (TyFun (TyCon "DemandAcc") (TyFun (TyCon "Pat") (TyCon "DemandAcc"))))
 (DFunDef false "dPat" ((PVar "acc") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "dPat") (EApp (EApp (EVar "dPat") (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList"))) (EVar "h"))) (EVar "t")))
 (DFunDef false "dPat" ((PVar "acc") (PCon "PList" (PVar "ps"))) (EApp (EApp (EApp (EVar "walkEach") (EVar "dPat")) (EApp (EApp (EVar "noteUse") (EVar "acc")) (EVar "UseList"))) (EVar "ps")))
