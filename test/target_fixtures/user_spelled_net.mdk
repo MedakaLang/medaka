@@ -1,6 +1,6 @@
 -- A module-declared label spelled `Net` is a user label, not the host `Net`:
--- only the `FFI` it travels with is gated, so a profile without `FFI` names
--- `FFI` alone and llvm/native-posix admits the program.
+-- no profile gates it, so a wasm profile refuses only the extern it has no
+-- `js` binding for, and llvm/native-posix admits the program.
 effect Net Prefix
 
 extern netGet : (url : String) -> <FFI "c", Net url> String

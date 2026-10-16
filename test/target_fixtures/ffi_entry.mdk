@@ -1,6 +1,6 @@
--- A foreign call: `FFI` is outside the `IO` join, granted on
--- llvm/native-posix only, so `run` (eval/run) and every wasm profile refuse it
--- at check, before the interpreter could reach the call.
+-- A foreign call bound for `c` alone: llvm/native-posix calls it, while `run`
+-- (eval/run, no host) and every wasm profile (`js`) refuse the reached
+-- declaration at check, before the interpreter or the emitter meets the call.
 extern ffiAddInts : Int -> Int -> <FFI "c"> Int
 
 main : <Stdout, FFI "c*"> Unit

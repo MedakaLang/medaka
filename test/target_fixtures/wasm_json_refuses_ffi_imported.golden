@@ -1,0 +1,4 @@
+exit=1
+--- stdout
+{"files":[{"file":"test/target_fixtures/ffi_imported/cbind.mdk","diagnostics":[{"code":"T-TARGET-NO-BINDING","kind":"type","message":"the extern `cAdd` is reached via `main → cAdd`, and has no binding for the host `js`, which the target `wasmgc/node` calls foreign code through (it binds `c`); add a `bind js` clause or build for a target whose host it binds","range":{"end":{"character":41,"line":2},"start":{"character":7,"line":2}},"severity":1,"source":"medaka"}]},{"file":"test/target_fixtures/ffi_imported/main.mdk","diagnostics":[]}]}
+--- stderr

@@ -82,17 +82,19 @@ export const SLICES = {
 
 // The wasmgc rows of compiler/types/target_profile.mdk `profileRows`: the labels
 // each profile grants.  A profile's slices are the ones whose `needs` it grants.
+// Every profile grants `FFI`: a foreign call runs through the extern's `js` binding,
+// and the compiler's target check refuses a reached extern that has none.
 export const PROFILES = {
   'wasmgc/node': {
-    grants: ['Stdout', 'Stderr', 'Stdin', 'Clock', 'Env', 'Rand', 'FileRead', 'FileWrite'],
+    grants: ['Stdout', 'Stderr', 'Stdin', 'Clock', 'Env', 'Rand', 'FileRead', 'FileWrite', 'FFI'],
     process: true,
   },
   'wasmgc/browser-worker': {
-    grants: ['Stdout', 'Stderr', 'Clock', 'Rand', 'FileRead', 'FileWrite'],
+    grants: ['Stdout', 'Stderr', 'Clock', 'Rand', 'FileRead', 'FileWrite', 'FFI'],
     process: false,
   },
-  'wasmgc/edge': { grants: ['Stdout', 'Stderr', 'Clock', 'Rand'], process: false },
-  'wasmgc/wasi-p2': { grants: [], process: false },
+  'wasmgc/edge': { grants: ['Stdout', 'Stderr', 'Clock', 'Rand', 'FFI'], process: false },
+  'wasmgc/wasi-p2': { grants: ['FFI'], process: false },
 };
 
 // The compiler running in the browser (playground/compile.mjs) is a host

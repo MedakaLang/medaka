@@ -1,59 +1,217 @@
--- compiler/tools/target_check.mdk — does a program's entry fit a target
--- profile?  The entry's invocation summary, cut to the labels a profile gates,
--- is judged by the same subsumption `check-policy` uses, and a refusal becomes
--- one located `T-TARGET-CAPABILITY` diagnostic.
-import frontend.ast.{Decl(..), Loc(..), TyConOrigin(..)}
-import types.target_profile.{
-  TargetProfile, profileName, profileGrants, isGatedLabel, reachesLabel
+-- compiler/tools/target_check.mdk — does a program fit a target profile?
+-- Two rules.  The entry's invocation summary, cut to the labels a profile
+-- gates, is judged by the same subsumption `check-policy` uses, and a refusal
+-- becomes one located `T-TARGET-CAPABILITY` diagnostic.  And every user extern
+-- the program reaches must be bound for the host the profile calls foreign
+-- code through, else it is a `T-TARGET-NO-BINDING` diagnostic located at the
+-- declaration.
+import frontend.ast.{
+  Decl(..),
+  ExternBind(..),
+  ExternDecl(..),
+  Loc(..),
+  TyConOrigin(..),
+  externBindings,
 }
+import types.target_profile.{
+  TargetProfile,
+  profileName,
+  profileGrants,
+  profileBindingHost,
+  isGatedLabel,
+  reachesLabel,
+}
+import ir.dce.{reachedExternChains}
 import types.effect_policy.{
   PolicyVerdict(..), policyRefusals, buildCallGraph, fnEffectsTable, viaChain
 }
 import types.effect_invocation.{invocationSummary}
+import types.repr.{Scheme}
 import types.effect_rows.{
   Atom, atomLabel, atomLabelOf, effLabelOrigin, renderAtom
 }
 import tools.check_policy.{EntryAnalysis(..)}
-import driver.diagnostics.{Diag(..), Severity(..), mkDiag}
-import support.util.{lookupAssoc, joinWith, dedup, contains}
+import driver.diagnostics.{
+  Diag(..),
+  Severity(..),
+  mkDiag,
+  cjFoldIntoFile,
+  ppDiagCliLines,
+  readFileSafe,
+  srcLinesArr,
+}
+import support.util.{lookupAssoc, joinWith, dedup, contains, anyList}
 import string.{trim}
 
 export
 targetCapabilityCode : String
 targetCapabilityCode = "T-TARGET-CAPABILITY"
 
--- The refusal of the program whose entry file is `file`, or `None` when its
--- `main` performs nothing the profile withholds.  A program with no `main` of
--- its own has no entry to judge, and that is a refusal too.  The entry judged
--- is the one the drivers run: a value `main` they print performs what the
--- `println` applied to it performs.
 export
-targetRefusal : TargetProfile -> String -> EntryAnalysis -> Option Diag
-targetRefusal profile file analysis =
+targetNoBindingCode : String
+targetNoBindingCode = "T-TARGET-NO-BINDING"
+
+-- The refusals of the program whose entry file is `file`; `[]` admits it.
+-- `paths` maps each module to its file, where a refused extern is located.  A
+-- program with no `main` of its own has no entry to judge, and that is a
+-- refusal too.  A reached extern with no binding for the profile's host is the
+-- verdict, one diagnostic per declaration; the entry's capability refusal is
+-- reported only when no declaration is refused.  The two meet on `FFI`, which
+-- `eval/run` alone withholds, so the declaration names the cause where the
+-- entry's row would only name the label.
+export
+targetRefusal : TargetProfile ->
+  String ->
+  List (String, String) ->
+  EntryAnalysis ->
+  List Diag
+targetRefusal profile file paths analysis =
   match lookupAssoc "main" analysis.eaSchemes
-    None => Some (missingEntryDiag profile file)
-    Some sch =>
-      let printed = match analysis.eaAutoPrintCall
-        Some call => invocationSummary analysis.eaOps call
+    None => [missingEntryDiag profile file]
+    Some sch => match bindingRefusals profile paths analysis
+      [] => match capabilityRefusal profile analysis sch
+        Some d => [d]
         None => []
-      let summary = invocationSummary analysis.eaOps sch ++ printed
-      let atoms = filter isGatedAtom summary
-      let unjoined = filter (unjoinedIo profile) summary
-      let ioLabels = match unjoined
-        [] => []
-        _ => ["IO"]
-      match policyRefusals atoms (profileGrants profile)
-        PolicyAdmitted => match unjoined
-          [] => None
-          _ => Some (refusalDiag profile analysis unjoined ioLabels [])
-        PolicyRefused labels lines =>
-          Some
-            (refusalDiag
-              profile
-              analysis
-              (atoms ++ unjoined)
-              (dedup labels ++ ioLabels)
-              lines)
+      ds => ds
+
+-- The file a target refusal is located in: a refused extern's module, else
+-- the entry.
+export
+targetDiagFile : String -> Diag -> String
+targetDiagFile entry (Diag _ _ _ (Some (Loc f _ _ _ _)) _ _) =
+  if f == "" then entry else f
+targetDiagFile entry _ = entry
+
+-- One refusal as the verbs print it, against the source of its file.
+export
+ppTargetDiag : String -> String -> Diag -> <IO> String
+ppTargetDiag entry entrySrc d =
+  let file = targetDiagFile entry d
+  let src = if file == entry then entrySrc else readFileSafe file
+  ppDiagCliLines (srcLinesArr src) file d
+
+-- The refusals folded into a JSON report's per-file triples: each into its
+-- file's triple, or into a new one for a file the report has none for.
+export
+foldTargetDiags : String ->
+  String ->
+  List Diag ->
+  List (String, String, List Diag) ->
+  <IO> List (String, String, List Diag)
+foldTargetDiags _ _ [] triples = triples
+foldTargetDiags entry entrySrc (d :: ds) triples =
+  let file = targetDiagFile entry d
+  let folded =
+    if anyList ((p, _, _) => p == file) triples then
+      cjFoldIntoFile file [d] triples
+    else
+      let src = if file == entry then entrySrc else readFileSafe file
+      triples ++ [(file, src, [d])]
+  foldTargetDiags entry entrySrc ds folded
+
+-- The entry's refusal, or `None` when `main` performs nothing the profile
+-- withholds.  The entry judged is the one the drivers run: a value `main` they
+-- print performs what the `println` applied to it performs.
+capabilityRefusal : TargetProfile -> EntryAnalysis -> Scheme -> Option Diag
+capabilityRefusal profile analysis sch =
+  let printed = match analysis.eaAutoPrintCall
+    Some call => invocationSummary analysis.eaOps call
+    None => []
+  let summary = invocationSummary analysis.eaOps sch ++ printed
+  let atoms = filter isGatedAtom summary
+  let unjoined = filter (unjoinedIo profile) summary
+  let ioLabels = match unjoined
+    [] => []
+    _ => ["IO"]
+  match policyRefusals atoms (profileGrants profile)
+    PolicyAdmitted => match unjoined
+      [] => None
+      _ => Some (refusalDiag profile analysis unjoined ioLabels [])
+    PolicyRefused labels lines =>
+      Some
+        (refusalDiag
+          profile
+          analysis
+          (atoms ++ unjoined)
+          (dedup labels ++ ioLabels)
+          lines)
+
+-- ── the binding rule ────────────────────────────────────────────────────────
+-- Every user extern of every module that the program reaches (`dce`'s reach,
+-- over the whole elaborated program) and that has no binding for the
+-- profile's host.  A catalog extern declared again runs the built-in, so it is
+-- not judged here.  A program declaring no user extern skips the reach.
+bindingRefusals : TargetProfile ->
+  List (String, String) ->
+  EntryAnalysis ->
+  List Diag
+bindingRefusals profile paths analysis =
+  let (coreE, modsE, _, _, _, _) = analysis.eaElab
+  let userExterns =
+    flatMap
+      ((mid, decls) =>
+        map
+          (ed => (lookupAssoc mid paths, ed))
+          (filter
+            (ed => not (contains ed.edName analysis.eaCatalogExterns))
+            (externDecls decls)))
+      modsE
+  match userExterns
+    [] => []
+    _ =>
+      let chains = reachedExternChains (coreE ++ flatMap snd modsE)
+      filterMap (unboundReached profile chains) userExterns
+
+externDecls : List Decl -> List ExternDecl
+externDecls [] = []
+externDecls ((DAttrib _ d) :: rest) = externDecls (d :: rest)
+externDecls ((DExtern ed) :: rest) = ed :: externDecls rest
+externDecls (_ :: rest) = externDecls rest
+
+-- The refusal of a declaration (in the file `path` names) that is reached and
+-- not bound for the profile's host.
+unboundReached : TargetProfile ->
+  List (String, List String) ->
+  (Option String, ExternDecl) ->
+  Option Diag
+unboundReached profile chains (path, ed) = match lookupAssoc ed.edName chains
+  None => None
+  Some chain =>
+    let bound = match profileBindingHost profile
+      Some h => anyList (b => b.ebHost == h) (externBindings ed)
+      None => False
+    if bound then None else Some (noBindingDiag profile path (ed, chain))
+
+noBindingDiag : TargetProfile ->
+  Option String ->
+  (ExternDecl, List String) ->
+  Diag
+noBindingDiag profile path (ed, chain) =
+  let hosts = joinWith ", " (map (b => "`\{b.ebHost}`") (externBindings ed))
+  let target = profileName profile
+  let why = match profileBindingHost profile
+    Some h =>
+      "has no binding for the host `\{h}`, which the target `\{target}` calls foreign code through (it binds \{hosts}); add a `bind \{h}` clause or build for a target whose host it binds"
+    None =>
+      "the target `\{target}` calls foreign code through no host (it binds \{hosts}); build for a target whose host it binds"
+  mkDiag
+    SevError
+    targetNoBindingCode
+    "the extern `\{ed.edName}` is reached\{reachRoute chain}, and \{why}"
+    (Some (inFile path ed.edLoc))
+
+-- How a reached name is reached: from `main`, or from a body the program
+-- emits whatever `main` calls.
+reachRoute : List String -> String
+reachRoute [_] =
+  " from an impl method, interface default or top-level let group"
+reachRoute ("main" :: rest) = " via `\{joinWith " → " ("main" :: rest)}`"
+reachRoute chain =
+  " from an impl method, interface default or top-level let group, via `\{joinWith " → " chain}`"
+
+inFile : Option String -> Loc -> Loc
+inFile (Some f) (Loc _ sl sc el ec) = Loc f sl sc el ec
+inFile None l = l
 
 -- A label a user module declares is never a host capability, whatever it is
 -- spelled: only a builtin host label or `FFI` is gated.  An `IO` atom is left

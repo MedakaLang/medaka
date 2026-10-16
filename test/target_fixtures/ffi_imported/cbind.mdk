@@ -1,0 +1,3 @@
+-- A `c`-only extern the entry reaches from another module.
+export
+extern cAdd : Int -> Int -> <FFI "c"> Int

@@ -1,7 +1,7 @@
 exit=1
 --- stdout
 --- stderr
-error: <fixtures>/ffi_entry.mdk:6:0: `main` performs <FFI "c*"> via `main → ffiAddInts`, and the target `wasmgc/browser-worker` does not grant FFI
+error: <fixtures>/ffi_entry.mdk:4:7: the extern `ffiAddInts` is reached via `main → ffiAddInts`, and has no binding for the host `js`, which the target `wasmgc/browser-worker` calls foreign code through (it binds `c`); add a `bind js` clause or build for a target whose host it binds
   |
-6 | main : <Stdout, FFI "c*"> Unit
-  | ^
+4 | extern ffiAddInts : Int -> Int -> <FFI "c"> Int
+  |        ^

@@ -1,7 +1,7 @@
 exit=1
 --- stdout
 --- stderr
-error: <fixtures>/user_spelled_net.mdk:8:0: `main` performs <FFI "c*"> via `main → netGet`, and the target `wasmgc/edge` does not grant FFI
+error: <fixtures>/user_spelled_net.mdk:6:7: the extern `netGet` is reached via `main → netGet`, and has no binding for the host `js`, which the target `wasmgc/edge` calls foreign code through (it binds `c`); add a `bind js` clause or build for a target whose host it binds
   |
-8 | main : <Stdout, FFI "c*", Net> Unit
-  | ^
+6 | extern netGet : (url : String) -> <FFI "c", Net url> String
+  |        ^

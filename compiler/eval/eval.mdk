@@ -359,9 +359,12 @@ ctorTypeEntries _ = []
 -- `ctorToTypeRef` immediately above) — evalModulesWith seeds it before any
 -- lookup, same as ctorToTypeRef.  Consulted ONLY by `lookupFrames`'s failure
 -- arm, to upgrade the generic "unbound identifier" panic into one that names
--- the identifier as a declared FFI extern `medaka run` cannot call (no C-ABI
+-- the identifier as a declared FFI extern the interpreter cannot call (no C-ABI
 -- capability under the tree-walking interpreter — that is the emitter's job,
--- not eval's).  Intentional local duplicate of
+-- not eval's).  `medaka run` never gets here: its target check refuses every
+-- user extern the program reaches (`T-TARGET-NO-BINDING`).  A driver that
+-- evaluates without that check still can, such as `check-policy`'s sample
+-- run, so the arm stays.  Intentional local duplicate of
 -- `ir.core_ir_lower.externDeclNamesOf` rather than an import: `core_ir_lower`
 -- already imports `eval.eval`, so the reverse import would cycle.
 export
@@ -745,7 +748,7 @@ lookupFrames [] name =
     panic
       ("capability error: `"
         ++ name
-        ++ "` is a user-declared FFI extern and `medaka run` cannot make a foreign C call; build a native binary with `medaka build`")
+        ++ "` is a user-declared FFI extern and the interpreter cannot make a foreign C call; build a native binary with `medaka build`")
   else
     panic ("unbound identifier: " ++ name)
 lookupFrames (frame :: rest) name = match lookupFrameCell frame name

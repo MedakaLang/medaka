@@ -6,11 +6,11 @@
 # of a generic "unbound variable" panic for the value-position/bare-reference shapes.
 #
 # `build` checks the program against the selected profile (`wasmgc/node` for
-# `--target wasm`) before anything is lowered, and no wasm profile grants `FFI`,
-# so every shape is refused by that check (`T-TARGET-CAPABILITY`, located at
-# `main`, with the via-chain to the extern).  The emitter's own FFI arms
-# (`ffiWallW`, compiler/backend/wasm_emit.mdk) are reached only by a child
-# started without a profile.
+# `--target wasm`) before anything is lowered, and each extern here is bound for
+# `c` alone, so every shape is refused by that check (`T-TARGET-NO-BINDING`,
+# located at the extern, with the via-chain to it).  The emitter's own FFI arms
+# (`ffiWallW`, compiler/backend/wasm_emit.mdk) are reached by a `js`-bound
+# extern, or by a child started without a profile.
 #
 # No real C linkage needed: `build --target wasm` must refuse BEFORE attempting to
 # emit/validate/link anything, so the wall fixtures never reach Node.  The
@@ -45,7 +45,7 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-EXPECT="→ %s\`, and the target \`wasmgc/node\` does not grant FFI"
+EXPECT="→ %s\`, and has no binding for the host \`js\`, which the target \`wasmgc/node\`"
 
 fail=0
 

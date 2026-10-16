@@ -14,7 +14,7 @@ import types.typecheck.{TcDiag}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar, desugarIn, mapProg}
 export import support.util.{rootsOrDefault}
-import support.util.{splitLast, startsWith}
+import support.util.{splitLast, startsWith, joinNl}
 import types.typecheck.{
   ElabResult,
   elaborateOne,
@@ -29,16 +29,14 @@ import driver.diagnostics.{
   Diag,
   emitDiagExitCode,
   emitGateDiags,
-  ppDiagCliLines,
   renderTcDiags,
   residualOrGeneric,
-  srcLinesArr,
 }
 import types.target_profile.{
   TargetProfile, selectProfile, selectedProfile, targetProfileEnv
 }
 import tools.check_policy.{EntryAnalysis(..), analyzeProgram}
-import tools.target_check.{targetRefusal}
+import tools.target_check.{targetRefusal, ppTargetDiag}
 import backend.core_validate.{checkedTarget, checkedTargetOf}
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp}
 import driver.loader.{
@@ -373,12 +371,19 @@ elaborateForTarget : Option TargetProfile ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (ElabResult, Option Diag)
+  (ElabResult, List Diag)
 elaborateForTarget None _ runtimeDecls coreDecls modules =
-  (elaborateModules runtimeDecls coreDecls modules, None)
+  (elaborateModules runtimeDecls coreDecls modules, [])
 elaborateForTarget (Some p) modsWithPath runtimeDecls coreDecls modules =
   let analysis = analyzeProgram runtimeDecls coreDecls modules
-  (analysis.eaElab, targetRefusal p (entryPathOf modsWithPath) analysis)
+  (
+    analysis.eaElab,
+    targetRefusal
+      p
+      (entryPathOf modsWithPath)
+      (map modIdToPath modsWithPath)
+      analysis,
+  )
 
 -- The refusal `check --target` gives, located in the entry file, under the
 -- exit code that tells `build` it is a diagnostic.  An admitted program's
@@ -386,18 +391,18 @@ elaborateForTarget (Some p) modsWithPath runtimeDecls coreDecls modules =
 emitTargetGate : List (String, String, List Decl) ->
   List Decl ->
   Option TargetProfile ->
-  Option Diag ->
+  List Diag ->
   <IO> Unit
 emitTargetGate _ _ None _ = ()
-emitTargetGate modsWithPath _ (Some _) (Some d) =
+emitTargetGate _ runtimeDecls (Some p) [] =
+  checkedTarget := Some (checkedTargetOf p runtimeDecls)
+emitTargetGate modsWithPath _ (Some _) ds =
   let file = entryPathOf modsWithPath
   let src = match readFile file
     Ok text => text
     Err _ => ""
-  let _ = ePutStrLn (ppDiagCliLines (srcLinesArr src) file d)
+  let _ = ePutStrLn (joinNl (map (ppTargetDiag file src) ds))
   exit emitDiagExitCode
-emitTargetGate _ runtimeDecls (Some p) None =
-  checkedTarget := Some (checkedTargetOf p runtimeDecls)
 
 export
 runEmitWith : String ->

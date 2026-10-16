@@ -257,6 +257,56 @@ test "target_fixtures: a project's target is found from any directory and read o
     targetCase "profile_not_string_run" "run" [] "profile_not_string/main.mdk",
   ]
 
+-- `T-TARGET-NO-BINDING`: an extern the program reaches, with no binding for
+-- the host the profile calls foreign code through, is refused at its
+-- declaration, whether it is called, only named as a value, or declared in an
+-- imported module.  Under `run` the binding refusal is the verdict, and the
+-- entry's capability refusal is not reported beside it (`run_refuses_ffi`).
+test "target_fixtures: a reached extern needs a binding for the target's host" = expectEach
+  [
+    targetCase
+      "node_refuses_ffi_c_only"
+      "check"
+      ["--target", "wasmgc/node"]
+      "ffi_entry.mdk",
+    targetCase
+      "native_refuses_ffi_js_only"
+      "check"
+      ["--target", "native"]
+      "ffi_js_only.mdk",
+    targetCase "run_refuses_ffi_value_only" "run" [] "ffi_value_only.mdk",
+    targetCase
+      "native_accepts_ffi_dual"
+      "check"
+      ["--target", "native"]
+      "ffi_dual.mdk",
+    targetCase
+      "node_accepts_ffi_dual"
+      "check"
+      ["--target", "wasmgc/node"]
+      "ffi_dual.mdk",
+    targetCase
+      "native_accepts_ffi_js_unreached"
+      "check"
+      ["--target", "native"]
+      "ffi_js_unreached.mdk",
+    targetCase
+      "wasm_refuses_ffi_imported"
+      "check"
+      ["--target", "wasm"]
+      "ffi_imported/main.mdk",
+    targetCase
+      "wasm_refuses_ffi_imported_qualified"
+      "check"
+      ["--target", "wasm"]
+      "ffi_imported/qualified.mdk",
+    targetCase
+      "wasm_json_refuses_ffi_imported"
+      "check"
+      ["--json", "--target", "wasm"]
+      "ffi_imported/main.mdk",
+  ]
+
 test "target_fixtures: a module label spelled FFI does not label a foreign call" = expectEach
   [
     targetCase

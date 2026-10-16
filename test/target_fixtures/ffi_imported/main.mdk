@@ -1,0 +1,6 @@
+-- The extern is declared in an imported module: the refusal is located at
+-- its declaration there.
+import cbind.{cAdd}
+
+main : <Stdout, FFI "c"> Unit
+main = println (cAdd 20 22)

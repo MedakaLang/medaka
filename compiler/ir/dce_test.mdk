@@ -22,7 +22,7 @@ import frontend.ast.{
   dImplUnresolved,
   dInterfaceUnresolved,
 }
-import ir.dce.{dceFilter}
+import ir.dce.{dceFilter, reachedExternChains}
 import support.util.{contains}
 
 names : List String
@@ -216,3 +216,27 @@ test "DCE resolves a bare synthesized prelude reference to its core-mangled defi
   let decls =
     [funDecl "main" ["not"], funDecl "core__not" [], funDecl "dead" []]
   expectEqual ["main", "core__not"] (functionNames (dceFilter decls))
+
+test "reached externs: each with the chain from its root, and none reached only from dead code" =
+  let implDecl =
+    dImplUnresolved False "I" [] [] [ImplMethod "method" [] (EVar "viaImpl")]
+  let decls = [
+    mkExtern False "called" (TyVar "a"),
+    mkExtern False "valueOnly" (TyVar "a"),
+    mkExtern False "deadOnly" (TyVar "a"),
+    mkExtern False "viaImpl" (TyVar "a"),
+    mkExtern False "aliased" (TyVar "a"),
+    funDecl "main" ["helper", "table", "M.aliased"],
+    funDecl "helper" ["called"],
+    funDecl "table" ["valueOnly"],
+    funDecl "dead" ["deadOnly"],
+    implDecl,
+  ]
+  expectEqual
+    [
+      ("called", ["main", "helper", "called"]),
+      ("valueOnly", ["main", "table", "valueOnly"]),
+      ("viaImpl", ["viaImpl"]),
+      ("aliased", ["main", "aliased"]),
+    ]
+    (reachedExternChains decls)
