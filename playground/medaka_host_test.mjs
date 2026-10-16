@@ -10,11 +10,11 @@
 // run.js, worker.js or compile.mjs, which is how a probe is shown red against an older
 // host.
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createHost, runProgram, CapabilityError, HostKeyError, SLICES, KEY_EXTERN } from './medaka_host.mjs';
+import { createHost, runProgram, confine, CapabilityError, HostKeyError, MemoryVfs, SLICES, KEY_EXTERN } from './medaka_host.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = dirname(here);
@@ -50,6 +50,10 @@ const PROGRAMS = {
     + '  match readFile "probe.bin"\n    Ok s => putStr "read back: \\{s}"\n    Err e => putStrLn "read err: \\{e}"\n',
   read: 'main = match readFile "probe.bin"\n  Ok s => putStr "present: \\{s}"\n  Err e => putStrLn "missing: \\{e}"\n',
   env: 'main = match getEnv "HOME"\n  Some _ => putStrLn "home set"\n  None => putStrLn "home unset"\n',
+  entropy: 'main =\n  let a = osEntropyBytes 70000\n  let b = osEntropyBytes 0\n'
+    + '  putStrLn "lengths \\{arrayLength a} \\{arrayLength b}"\n'
+    + '  putStrLn "negative \\{arrayLength (osEntropyBytes (0 - 1))}"\n',
+  exe: 'main = putStrLn "exe \\{executablePath ()}"\n',
   trap: 'main =\n  let _ = putStr "out-partial"\n  let _ = ePutStr "err-partial"\n'
     + '  let z = length [1] - 1\n  println (10 / z)\n',
   hello: 'main = putStrLn "hello"\n',
@@ -69,6 +73,63 @@ main =
   let _ = putStrLn "exists nodir_zz/a.txt: \{debug (fileExists "nodir_zz/a.txt")}"
   let _ = putStrLn "exists .: \{debug (fileExists ".")}"
   putStrLn "read .: \{okErr (readFile ".")}"
+`,
+  fsfam: String.raw`import list.{sort}
+
+okErr : Result String a -> String
+okErr r = match r
+  Ok _ => "Ok"
+  Err _ => "Err"
+
+names : Result String (List String) -> String
+names (Ok xs) = "Ok \{sort xs}"
+names (Err _) = "Err"
+
+shape : Result String (Int, Bool, Bool, Float) -> String
+shape (Ok (size, isDir, isFile, _)) =
+  "Ok \{if isFile then intToString size else "-"} \{isDir} \{isFile}"
+shape (Err _) = "Err"
+
+main =
+  println "write a: \{okErr (writeFile "a.txt" "héllo")}"
+  println "write b: \{okErr (writeFile "b.txt" "x")}"
+  println "list: \{names (listDir ".")}"
+  println "stat a: \{shape (statFile "a.txt")}"
+  println "stat root: \{shape (statFile ".")}"
+  println "stat missing: \{shape (statFile "zz.txt")}"
+  println "rename: \{okErr (rename "a.txt" "c.txt")}"
+  println "old name: \{debug (fileExists "a.txt")}"
+  println "list: \{names (listDir ".")}"
+  println "rename missing: \{okErr (rename "a.txt" "d.txt")}"
+  println "write into nodir: \{okErr (writeFile "nodir_zz/a.txt" "x")}"
+  println "list nodir: \{names (listDir "nodir_zz")}"
+  println "list a file: \{names (listDir "b.txt")}"
+`,
+  empty: String.raw`okErr : Result String a -> String
+okErr r = match r
+  Ok _ => "Ok"
+  Err _ => "Err"
+
+main =
+  println "list: \{okErr (listDir "")}"
+  println "stat: \{okErr (statFile "")}"
+  println "read: \{okErr (readFile "")}"
+  println "exists: \{debug (fileExists "")}"
+  println "canon: [\{canonicalizePath ""}]"
+  println "write: \{okErr (writeFile "" "x")}"
+  println "mkdir: \{okErr (makeDir "")}"
+`,
+  shadow: String.raw`count : List Int -> Int
+count args = match args
+  [] => 0
+  _ :: rest => 1 + count rest
+
+main =
+  let listDir = 7
+  let getEnv = k => k + 1
+  let r = match 5
+    rename => rename * 2
+  println (count [1, 2, 3] + listDir + getEnv 1 + r)
 `,
   bigexit: BIG_LOOP + 'main =\n  let _ = loop 1\n  exit 3\n',
   bigtrap: BIG_LOOP + 'main =\n  let _ = loop 1\n  let z = length [1] - 1\n  println (10 / z)\n',
@@ -239,7 +300,7 @@ function check(name, ok, detail) {
     .catch((e) => ({ threw: String(e && e.message) }));
   const text = JSON.stringify(r);
   check('(i) compile.mjs: the HostKeyError names the compiler host',
-    text.includes('env.mdk_fake_key') && text.includes('no slice of the playground compiler host provides'),
+    text.includes('env.mdk_fake_key') && text.includes('no slice of the playground compiler host lists'),
     text.slice(0, 400));
 }
 
@@ -258,6 +319,290 @@ function check(name, ok, detail) {
         bad.push(`${name}: ${k} -> ${e}, not among the slice's externs`);
     }
   check('(j) KEY_EXTERN agrees with SLICES externs', bad.length === 0, bad.join('; '));
+}
+
+// (k) Confinement (mdk_confine's port) over a real tree, through the host's import
+// surface as a guest calls it: a symlink in the existing prefix, `..` after a
+// symlink, a dangling symlink, two directory names that are not UTF-8, the whole
+// domain `[]`, a bound frame, and a grant left by a previous call, which the next call
+// must not inherit.  The vfs's confinement primitives are run.js's.
+{
+  const t = realpathSync.native(mkdtempSync(join(os.tmpdir(), 'medaka-confine-')));
+  mkdirSync(join(t, 'cfg'));
+  mkdirSync(join(t, 'outdir'));
+  writeFileSync(join(t, 'secret.txt'), 'top secret');
+  writeFileSync(join(t, 'cfg', 'a.txt'), 'granted');
+  symlinkSync('../outdir', join(t, 'cfg', 'link'));
+  symlinkSync('../nowhere.txt', join(t, 'cfg', 'dangling'));
+  // Two directories named by the bytes FE and FF, which are not UTF-8, and a symlink to each.
+  for (const b of [0xfe, 0xff]) {
+    mkdirSync(Buffer.concat([Buffer.from(`${t}/`), Buffer.from([b])]));
+    symlinkSync(Buffer.from([0x2e, 0x2e, 0x2f, b]), join(t, 'cfg', b === 0xfe ? 'fe' : 'ff'));
+  }
+  const vfs = {
+    readFile: (p) => readFileSync(p), exists: (p) => existsSync(p), writeFile: (p, b) => writeFileSync(p, b),
+    realpath: (b) => realpathSync.native(Buffer.from(b, 'latin1'), { encoding: 'buffer' }).toString('latin1'),
+    lexists: (b) => { try { lstatSync(Buffer.from(b, 'latin1')); return true; } catch (e) { return false; } },
+  };
+  const cfg = [`${t}/cfg/*`];
+  const out = (p) => `${p} is outside the granted authority ["${t}/cfg/*"]`;
+  const fe = [`${t}/cfg/fe/*`];
+  const cases = [
+    ['a name that is not UTF-8', `${t}/cfg/fe/x.txt`, fe, null],
+    ['another name that is not UTF-8', `${t}/cfg/ff/x.txt`, fe,
+      `${t}/cfg/ff/x.txt is outside the granted authority ["${t}/cfg/fe/*"]`],
+    ['inside', `${t}/cfg/a.txt`, cfg, null],
+    ['a new file inside', `${t}/cfg/new.txt`, cfg, null],
+    ['a symlink in the prefix', `${t}/cfg/link/x.txt`, cfg, out(`${t}/cfg/link/x.txt`)],
+    ['`..` after a symlink', `${t}/cfg/link/../a.txt`, cfg, out(`${t}/cfg/link/../a.txt`)],
+    ['a dangling symlink', `${t}/cfg/dangling`, cfg, out(`${t}/cfg/dangling`)],
+    ['`..` out of the grant', `${t}/cfg/../secret.txt`, cfg, out(`${t}/cfg/../secret.txt`)],
+    ['the whole domain', `${t}/secret.txt`, [], null],
+  ];
+  const bad = cases.filter(([, p, g, want]) => confine(vfs, p, g, false) !== want)
+    .map(([name, p, g]) => `${name}: ${confine(vfs, p, g, false)}`);
+  check('(k) confine: canonical paths, as medaka_rt.c mdk_confine', bad.length === 0, bad.join('; '));
+
+  const host = createHost('wasmgc/node', { vfs });
+  const env = host.imports.env;
+  const bytes = (s) => new TextEncoder().encode(s);
+  const grant = (g) => { env.mdk_grant_reset(); for (const e of g) { for (const b of bytes(e)) env.mdk_grant_push(b); env.mdk_grant_push(-1); } };
+  const read = (p) => { env.mdk_path_reset(); for (const b of bytes(p)) env.mdk_path_push(b); return env.mdk_read_file(); };
+  const text = () => new TextDecoder().decode(host.resultBuf);
+  grant([]);
+  const first = read(`${t}/secret.txt`);
+  const stale = read(`${t}/secret.txt`);
+  check('(k) host: a grant serves one call; the next call without one is refused',
+    first === 1 && stale === 0 && text().includes('is outside the granted authority'),
+    JSON.stringify({ first, stale, text: text() }));
+  grant(cfg);
+  const pushed = env.mdk_file_bound_enter(0, 1);
+  grant([]);
+  const underRead = read(`${t}/secret.txt`);
+  grant(cfg);
+  const reentered = env.mdk_file_bound_enter(0, 0);
+  grant(cfg);
+  const writeBound = env.mdk_file_bound_enter(1, 0);
+  env.mdk_file_bound_exit();
+  env.mdk_file_bound_exit();
+  grant([]);
+  const left = read(`${t}/secret.txt`);
+  grant(cfg);
+  env.mdk_file_bound_enter(0, 1);
+  host.reset();
+  grant([]);
+  const afterReset = read(`${t}/secret.txt`);
+  check('(k) host: a bound frame confines its mode, re-entry adds none, reset clears it',
+    pushed === 1 && underRead === 0 && reentered === 0 && writeBound === 1 && left === 1 && afterReset === 1,
+    JSON.stringify({ pushed, underRead, reentered, writeBound, left, afterReset }));
+  rmSync(t, { recursive: true, force: true });
+}
+
+// (l) The directory and metadata externs over the worker's vfs, with the text the
+// native build of the same program prints (a listing is sorted by the program, and a
+// directory's size, which each host chooses, is not printed).
+{
+  const msgs = await runInWorker(build('fsfam', 'wasmgc/browser-worker'));
+  const native = 'write a: Ok\nwrite b: Ok\nlist: Ok [a.txt, b.txt]\nstat a: Ok 6 False True\n'
+    + 'stat root: Ok - True False\nstat missing: Err\nrename: Ok\nold name: False\n'
+    + 'list: Ok [b.txt, c.txt]\nrename missing: Err\nwrite into nodir: Err\nlist nodir: Err\nlist a file: Err\n';
+  check('(l) worker: writeFile, listDir, statFile and rename over the vfs',
+    last(msgs).type === 'done' && streamText(msgs, 'stdout') === native,
+    JSON.stringify(msgs));
+}
+
+// (m) The vfs mode model: a file made without a mode reads 0o644, a mode given at
+// write sticks and survives the file being overwritten without one, and a rename
+// carries it; a directory reads 0o755.  rename replaces a file and moves a directory
+// with what is under it.
+{
+  const v = new MemoryVfs([['d/x.txt', new Uint8Array([1])]]);
+  const bad = [];
+  const eq = (name, got, want) => { if (JSON.stringify(got) !== JSON.stringify(want)) bad.push(`${name}: ${JSON.stringify(got)} != ${JSON.stringify(want)}`); };
+  eq('default file mode', v.stat('d/x.txt').mode, 0o644);
+  eq('directory mode', v.stat('d').mode, 0o755);
+  v.writeFile('new.txt', new Uint8Array([1, 2]), 0o600);
+  eq('mode given', v.stat('new.txt').mode, 0o600);
+  v.writeFile('new.txt', new Uint8Array([3]));
+  eq('overwrite keeps the mode', v.stat('new.txt').mode, 0o600);
+  eq('size', v.stat('new.txt').size, 1);
+  v.rename('new.txt', 'd/moved.txt');
+  eq('rename carries the mode', v.stat('d/moved.txt').mode, 0o600);
+  eq('rename removes the source', v.exists('new.txt'), false);
+  v.rename('d', 'e');
+  eq('directory moves with its entries', v.readdir('e').sort(), ['moved.txt', 'x.txt']);
+  eq('old directory gone', v.exists('d/x.txt'), false);
+  eq('mode moved with the directory', v.stat('e/moved.txt').mode, 0o600);
+  let err = '';
+  try { v.rename('e', 'e/inside'); } catch (e) { err = e.message; }
+  eq('a directory into itself', err.startsWith('EINVAL'), true);
+  err = '';
+  try { v.readdir('e/x.txt'); } catch (e) { err = e.message; }
+  eq('readdir of a file', err.startsWith('ENOTDIR'), true);
+  err = '';
+  try { v.stat('nowhere'); } catch (e) { err = e.message; }
+  eq('stat of a missing path', err.startsWith('ENOENT'), true);
+  v.appendFile('e/moved.txt', new Uint8Array([9]));
+  eq('append keeps the mode', v.stat('e/moved.txt').mode, 0o600);
+  eq('append grows the file', v.stat('e/moved.txt').size, 2);
+  v.appendFile('made.txt', new Uint8Array([4]));
+  eq('append creates at the default mode', v.stat('made.txt').mode, 0o644);
+  err = '';
+  try { v.appendFile('nowhere/x', new Uint8Array([1])); } catch (e) { err = e.message; }
+  eq('append into a missing directory', err.startsWith('ENOENT'), true);
+  v.unlink('made.txt');
+  v.mkdir('mk');
+  eq('mkdir adds a directory', v.stat('mk').isDir, true);
+  eq('mkdir mode', v.stat('mk').mode, 0o755);
+  v.mkdir('mk/inner');
+  eq('mkdir under a made directory', v.exists('mk/inner'), true);
+  err = '';
+  try { v.mkdir('mk'); } catch (e) { err = e.message; }
+  eq('mkdir of an existing directory', err.startsWith('EEXIST'), true);
+  err = '';
+  try { v.mkdir('e/x.txt'); } catch (e) { err = e.message; }
+  eq('mkdir over a file', err.startsWith('EEXIST'), true);
+  err = '';
+  try { v.mkdir('nowhere/sub'); } catch (e) { err = e.message; }
+  eq('mkdir under a missing parent', err.startsWith('ENOENT'), true);
+  err = '';
+  try { v.mkdir('e/x.txt/sub'); } catch (e) { err = e.message; }
+  eq('mkdir under a file', err.startsWith('ENOTDIR'), true);
+  v.rmdir('mk/inner');
+  v.rmdir('mk');
+  eq('unlink removes a file', v.exists('made.txt'), false);
+  err = '';
+  try { v.unlink('e'); } catch (e) { err = e.message; }
+  eq('unlink of a directory', err.startsWith('EISDIR'), true);
+  err = '';
+  try { v.rmdir('e'); } catch (e) { err = e.message; }
+  eq('rmdir of a non-empty directory', err.startsWith('ENOTEMPTY'), true);
+  err = '';
+  try { v.rmdir('e/moved.txt'); } catch (e) { err = e.message; }
+  eq('rmdir of a file', err.startsWith('ENOTDIR'), true);
+  v.unlink('e/moved.txt');
+  v.unlink('e/x.txt');
+  v.rmdir('e');
+  eq('rmdir removes an empty directory', v.exists('e'), false);
+  err = '';
+  try { v.rmdir('e'); } catch (e) { err = e.message; }
+  eq('rmdir of a missing directory', err.startsWith('ENOENT'), true);
+  v.writeFile('f.txt', new Uint8Array([1]));
+  let flushed = true;
+  try { v.fsync('f.txt'); v.fsync('.'); } catch (e) { flushed = false; }
+  eq('fsync of a file and of the root', flushed, true);
+  err = '';
+  try { v.fsync('missing.txt'); } catch (e) { err = e.message; }
+  eq('fsync of a missing path', err.startsWith('ENOENT'), true);
+  eq('fileMode reads the stored mode', v.stat('f.txt').mode, 0o644);
+  v.writeFile('f.txt', new Uint8Array([2]), 0o600);
+  eq('writeFileMode over an existing file sets its mode', v.stat('f.txt').mode, 0o600);
+  eq('writeFileMode writes the contents', v.stat('f.txt').size, 1);
+  check('(m) MemoryVfs: stored modes (default 0o644), rename, readdir, stat, append, unlink, mkdir, rmdir, fsync, fileMode', bad.length === 0, bad.join('; '));
+}
+
+// (n) rename takes two grants on one channel (-2 ends the first) and confines the source
+// under the first and the destination under the second, in entry mode, source first; a
+// missing second grant refuses.
+{
+  const v = new MemoryVfs([['a/x.txt', new Uint8Array([1])], ['b/y.txt', new Uint8Array([2])]]);
+  const host = createHost('wasmgc/node', { vfs: v });
+  const env = host.imports.env;
+  const bytes = (s) => new TextEncoder().encode(s);
+  const pushGrant = (g) => { for (const e of g) { for (const b of bytes(e)) env.mdk_grant_push(b); env.mdk_grant_push(-1); } };
+  const move = (src, dst, gs, gd) => {
+    env.mdk_grant_reset(); pushGrant(gs);
+    if (gd) { env.mdk_grant_push(-2); pushGrant(gd); }
+    env.mdk_path_reset();
+    for (const b of [...bytes(src), ...bytes(dst)]) env.mdk_path_push(b);
+    const st = env.mdk_rename(bytes(src).length);
+    return st === 1 ? 'Ok' : new TextDecoder().decode(host.resultBuf);
+  };
+  const out = (p, g) => `${p} is outside the granted authority [${g.map((x) => `"${x}"`).join(', ')}]`;
+  const got = [
+    move('a/x.txt', 'b/z.txt', ['a/*'], ['b/*']),
+    move('b/z.txt', 'a/w.txt', ['a/*'], ['b/*']),
+    move('b/z.txt', 'a/w.txt', ['b/*'], ['a/*']),
+    move('a/w.txt', 'a/w2.txt', ['a/*'], ['b/*']),
+    move('a/w.txt', 'b/q.txt', ['a/*'], null),
+  ];
+  const want = [
+    'Ok',
+    out('b/z.txt', ['a/*']),
+    'Ok',
+    out('a/w2.txt', ['b/*']),
+    'a/w.txt is outside the granted authority: no grant was given',
+  ];
+  const bad = got.map((g, i) => (g === want[i] ? null : `${i}: ${g} != ${want[i]}`)).filter(Boolean);
+  check('(n) host: rename confines each path under its own grant, source first', bad.length === 0, bad.join('; '));
+}
+
+// (o) osEntropyBytes and executablePath on wasmgc/node: the requested lengths, a negative
+// count refused with native's text, and the path the host was given.
+{
+  const host = createHost('wasmgc/node', { executablePath: '/abs/x.wasm' });
+  const r = await runProgram(readFileSync(build('entropy', 'wasmgc/node')), host);
+  check('(o) host: osEntropyBytes gives the requested lengths, then refuses a negative count',
+    r.kind === 'error' && host.sink.text('stdout') === 'lengths 70000 0\n'
+      && host.sink.text('stderr').includes('osEntropyBytes: length must be non-negative'),
+    JSON.stringify({ kind: r.kind, out: host.sink.text('stdout'), err: host.sink.text('stderr') }));
+  const h2 = createHost('wasmgc/node', { executablePath: '/abs/x.wasm' });
+  await runProgram(readFileSync(build('exe', 'wasmgc/node')), h2);
+  check('(o) host: executablePath is the path the host was given',
+    h2.sink.text('stdout') === 'exe /abs/x.wasm\n', JSON.stringify(h2.sink.text('stdout')));
+}
+
+// (p) The worker's vfs and the empty path: it names nothing, as open(2), access(2) and
+// realpath(3) find (the text is what the native build of the same program prints).  The
+// root is the working directory, so a relative path and its absolute spelling alias.
+{
+  const msgs = await runInWorker(build('empty', 'wasmgc/browser-worker'));
+  const native = 'list: Err\nstat: Err\nread: Err\nexists: False\ncanon: []\nwrite: Err\nmkdir: Err\n';
+  check('(p) worker: the empty path names no entry',
+    last(msgs).type === 'done' && streamText(msgs, 'stdout') === native,
+    JSON.stringify(msgs));
+  const v = new MemoryVfs([['cfg/a.txt', new Uint8Array([1])]]);
+  check('(p) MemoryVfs: `cfg/a.txt` and `/cfg/a.txt` name one entry, `` none',
+    v.exists('/cfg/a.txt') && v.exists('cfg/a.txt') && !v.exists(''),
+    JSON.stringify([v.exists('/cfg/a.txt'), v.exists('cfg/a.txt'), v.exists('')]));
+}
+
+// (q) A bound entered with no grant pushed fails closed: every path of its mode is
+// refused until it exits, and the other mode is not confined by it.
+{
+  const v = new MemoryVfs([['a.txt', new Uint8Array([1])]]);
+  const host = createHost('wasmgc/node', { vfs: v });
+  const env = host.imports.env;
+  const bytes = (s) => new TextEncoder().encode(s);
+  const path = (p) => { env.mdk_path_reset(); for (const b of bytes(p)) env.mdk_path_push(b); };
+  const text = () => new TextDecoder().decode(host.resultBuf);
+  const entered = env.mdk_file_bound_enter(0, 0);
+  env.mdk_grant_reset(); path('a.txt');
+  const read = env.mdk_read_file();
+  const readText = text();
+  env.mdk_grant_reset(); path('b.txt'); env.mdk_write_file_reset();
+  const write = env.mdk_write_file();
+  env.mdk_file_bound_exit();
+  env.mdk_grant_reset(); path('a.txt');
+  const after = env.mdk_read_file();
+  check('(q) host: a bound with no grant refuses its mode until exit',
+    entered === 1 && read === 0 && readText === 'a.txt is outside the granted authority: no grant was given'
+      && write === 1 && after === 1,
+    JSON.stringify({ entered, read, readText, write, after }));
+}
+
+// (r) A binder named like an extern is no use of it: a parameter `args`, locals `listDir`
+// and `getEnv` and an arm binder `rename` import none of their slices, so the program
+// runs on the profiles that withhold them.
+{
+  const host = createHost('wasmgc/edge');
+  const r = await runProgram(readFileSync(build('shadow', 'wasmgc/edge')), host);
+  check('(r) edge: binders named args, listDir, getEnv and rename need no capability',
+    r.kind === 'done' && host.sink.text('stdout') === '22\n',
+    JSON.stringify({ kind: r.kind, error: r.error && r.error.message, out: host.sink.text('stdout') }));
+  const msgs = await runInWorker(build('shadow', 'wasmgc/browser-worker'));
+  check('(r) worker (browser-worker): the same program runs',
+    last(msgs).type === 'done' && streamText(msgs, 'stdout') === '22\n', JSON.stringify(msgs));
 }
 
 // Report only: slices no module built above imports a key of.

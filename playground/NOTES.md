@@ -104,36 +104,41 @@ bash playground/build_site.sh                     # needs site/guide + dist/
 node playground/guide_wasm_differential.mjs       # add --list, --only <id>, --json <path>
 ```
 
-**Result at the time of writing: 56 matched / 3 wasm divergence / 6 rule gap, of
-65.** Of the 56, all 55 that carry a `medaka-expect` fence print exactly what the
-guide says they print.
+**Result at the time of writing (S-fs-family-c-makedir, measured): 57 matched / 1
+wasm divergence / 0 rule gap, of 58 runnable (14 not runnable).** Of the 57, all 57
+that carry a `medaka-expect` fence print exactly what the guide says they print.
+`--guide playground/site/advanced` runs the same differential over the advanced docs:
+37 matched / 1 oracle-build failure (`effects-1-rows#11`, the native emitter panics
+`CDict head 'main__count' is not a known top-level function`; not a wasm matter) of 38
+runnable (10 not runnable).
 
-The three **wasm divergences** are compiler bugs, not guide bugs — each works
-natively and fails only on the browser's path. Minimal repros are in the
-S-prove-the-promise sprint report; none is fixed here.
+The **wasm divergence** (`04-data-modeling#15`) is a compiler bug, not a guide bug:
+it works natively and fails only on the browser's path (the diagnostic's file path
+differs, `/var/tmp/.../main.mdk` natively and `./main.mdk` on wasm). It is not fixed
+here.
 
-The six **rule gaps** are a different animal: on those, native and browser AGREE
-that the program cannot run, so the runnable partition should never have offered
-a ▶ button. `classifyRunnable` in `render_docs.mjs` asks two questions — is the
-fence label exactly `medaka`, and does the source call a stubbed capability — and
-it needs two more:
+A **rule gap** is a different animal: a block on which native and browser AGREE
+that the program cannot run, so the runnable partition should never offer a ▶
+button. The differential reports none now, because `classifyRunnable` in
+`render_docs.mjs` asks four questions — is the fence label exactly `medaka`, does
+the source call a stubbed capability, and the two below:
 
 1. **does the block define a top-level `main`?** Five blocks do not
    (`02-expressions#7/#8/#14`, `04-data-modeling#1`, `09-modules-and-projects#12`).
    They are fragments; native `build`/`run` refuse them with one located error
    (`W-MAIN-MISSING`) and the browser answers the same code.
-2. **does it import a module the page SHIPS?** `10-tooling-and-workflow#5` does
-   `import test`, and `test` was excluded from the
-   hand-kept shipped list then in force (the set is now derived into
-   `dist/stdlib_modules.json` by `build_playground_wasm.sh`). The rule then only
-   inspected stubbed *calls*, never unshipped *imports*.
+2. **does it import only modules the page SHIPS?** `10-tooling-and-workflow#5`
+   does `import test`, which the page does not ship. The shipped set is derived
+   into `dist/stdlib_modules.json` by `build_playground_wasm.sh`, so the rule
+   inspects unshipped *imports* as well as stubbed *calls*.
 
 The differential deliberately does **not** patch that rule — it reports the gap
 and recomputes the rule independently of `render_docs.mjs`, so a future
 render/rule drift shows up as `MISCLASSIFIED` rather than as silent agreement.
 
 ⚠️ Not enrolled in `test/gates.toml`: it needs a built `playground.wasm`, and it
-is currently RED by design (the nine above are real). Enrolling a red gate needs
+is currently RED by design (the wasm divergence and the oracle-build failure above
+are real). Enrolling a red gate needs
 a `known-red` issue and the `[W-SHARD-DERIVED]` cost-baseline dance — the
 orchestrator's call once the three compiler bugs are filed.
 

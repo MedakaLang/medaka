@@ -447,8 +447,8 @@ would delete.
 ## 7. The bindings, exactly
 
 Declared in `compiler/backend/wasm_preamble.mdk` beside `mdk_exit`, emitted
-when the program reaches a `<Clock>` extern (a `useClock` flag set in
-`noteW8Extern`'s family, the pattern every other import group follows,
+when the program reaches a `<Clock>` extern (the clock keys come from the
+emit plan's host keys, `EmitPlan.hostKeys`, as every other import group's do,
 **read**):
 
 ```wat

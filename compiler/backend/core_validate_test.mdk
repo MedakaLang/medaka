@@ -121,15 +121,15 @@ test "(a) wasm: a reference to a net extern is refused, naming extern, backend, 
     ]
     (refusalLines WasmBackend "main = netTcpConnect \"localhost\" 80")
 
-test "(b) wasm: references to WASM-GAP externs are refused, applied or as values, each in its binding" =
+test "(b) wasm: references to a WASM-GAP and a PERMANENT extern are refused, applied or as values, each in its binding" =
   expectEqual
     [
-      "wasm: runtime extern 'writeFile' is not available on the wasm backend (WASM-GAP: \{wasmReason "writeFile"}) [in save]",
-      "wasm: runtime extern 'listDir' is not available on the wasm backend (WASM-GAP: \{wasmReason "listDir"}) [in main]",
+      "wasm: runtime extern 'allocBytes' is not available on the wasm backend (WASM-GAP: \{wasmReason "allocBytes"}) [in save]",
+      "wasm: runtime extern 'netTcpConnect' is not available on the wasm backend (PERMANENT: \{wasmReason "netTcpConnect"}) [in main]",
     ]
     (refusalLines
       WasmBackend
-      "save = writeFile\nmain =\n  let _ = save \"a\" \"b\"\n  listDir \".\"")
+      "save = allocBytes\nmain =\n  let _ = save ()\n  netTcpConnect \"localhost\" 80")
 
 test "(c) wasm: a program that names an extern only as text, a field or a lowered extern is not refused" =
   expectEqual
@@ -144,7 +144,7 @@ test "(d) a local binder or a program binding named like a refused extern shadow
       "lambda parameter",
       expectEqual
         []
-        (refused WasmBackend "main = (writeFile => writeFile 1) (x => x)"),
+        (refused WasmBackend "main = (allocBytes => allocBytes 1) (x => x)"),
     ),
     (
       "let binding",
@@ -158,7 +158,7 @@ test "(d) a local binder or a program binding named like a refused extern shadow
         []
         (refused
           WasmBackend
-          "main = match Some 1\n  Some listDir => listDir\n  None => 0"),
+          "main = match Some 1\n  Some allocBytes => allocBytes\n  None => 0"),
     ),
     (
       "top-level binding",
@@ -167,10 +167,10 @@ test "(d) a local binder or a program binding named like a refused extern shadow
     (
       "the extern outside its shadow's scope",
       expectEqual
-        ["makeDir"]
+        ["allocBytes"]
         (refused
           WasmBackend
-          "main =\n  let _ = (makeDir => makeDir) 1\n  makeDir \"d\""),
+          "main =\n  let _ = (allocBytes => allocBytes) 1\n  allocBytes ()"),
     ),
   ]
 
@@ -179,7 +179,7 @@ test "(d) a local binder or a program binding named like a refused extern shadow
 -- panics with, one per extern.
 recordSrc : String
 recordSrc =
-  "main =\n  let _ = writeFile \"a\" \"b\"\n  let _ = writeFile \"c\" \"d\"\n  let f = netSend\n  netSend 1 \"x\""
+  "main =\n  let _ = allocBytes ()\n  let _ = allocBytes ()\n  let f = netSend\n  netSend 1 \"x\""
 
 test "(e) record mode logs one event per refused extern, and no unbound-variable event" =
   let decls = grantWholeDomain (desugar (parse recordSrc))
@@ -197,7 +197,7 @@ test "(e) record mode logs one event per refused extern, and no unbound-variable
   expectAll [
     labelFail
       "the refused externs"
-      (expectEqual ["writeFile", "netSend"] (refused WasmBackend recordSrc)),
+      (expectEqual ["allocBytes", "netSend"] (refused WasmBackend recordSrc)),
     labelFail "record emission" (expectEqual expected events),
     labelFail
       "gap census"
@@ -330,15 +330,6 @@ test "(y) under a checked target, a withheld label names what check admits and a
             "IO"
             "wasmgc/wasi-p2"))
         (wasmRefusalUnder "wasmgc/wasi-p2" "main = allocBytes ()"),
-    ),
-    (
-      "a FileWrite ratchet row on wasmgc/node",
-      expectEqual
-        (Ok
-          (owedLine
-            "wasm: runtime extern 'writeFile' is not available on the wasm backend (WASM-GAP: \{wasmReason "writeFile"}) [in main]"
-            "wasmgc/node"))
-        (wasmRefusalUnder "wasmgc/node" "main = writeFile \"a\" \"b\""),
     ),
     (
       "an IO ratchet row on wasmgc/node, whose IO joins its host labels",

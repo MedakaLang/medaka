@@ -103,21 +103,6 @@ const GUIDE_DIR = opts.guide
 const STUBBED_CAPABILITY_RE = new RegExp(
   `\\b(${[...withheldExterns('wasmgc/browser-worker'), ...WASM_GAP_EXTERNS].join('|')})\\b`);
 
-// A wasm build refuses a pattern file grant (`<FileRead "cfg/*">`) that a live call
-// writes (T-WASM-FILE-GRANT).  From the text: a top-level binding whose signature line
-// writes one, named on a line of `main`'s definition.
-function grantedFromMain(source) {
-  const names = [];
-  for (const m of source.matchAll(/^([a-z][A-Za-z0-9_']*)\s*:.*\bFile(?:Read|Write)\s+"[^"\n]*\*"/gm))
-    names.push(m[1]);
-  const lines = source.split('\n');
-  const start = lines.findIndex((l) => /^main\b/.test(l));
-  if (start < 0) return null;
-  let end = start + 1;
-  while (end < lines.length && (/^main\b/.test(lines[end]) || /^(\s|$)/.test(lines[end]))) end++;
-  const mainDef = lines.slice(start, end).join('\n');
-  return names.find((n) => new RegExp(`(^|[^A-Za-z0-9_'])${n}($|[^A-Za-z0-9_'])`).test(mainDef)) || null;
-}
 const KIND_MEDAKA_LABELS = new Set(['medaka', 'medaka-project', 'medaka-nocheck']);
 
 // Two further conditions decide whether the ▶ button does anything, and both are
@@ -150,8 +135,6 @@ function ruleSaysRunnable(label, source, shipped) {
   if (label !== 'medaka') return { runnable: false, reason: `fence label \`${label}\`` };
   const m = source.match(STUBBED_CAPABILITY_RE);
   if (m) return { runnable: false, reason: `uses \`${m[1]}\` (playground stubs it)` };
-  const granted = grantedFromMain(source);
-  if (granted) return { runnable: false, reason: `\`${granted}\` writes a pattern file grant (wasm refuses it)` };
   if (!definesMain(source)) return { runnable: false, reason: 'defines no top-level `main`' };
   const missing = unshippedImports(source, shipped);
   if (missing.length) {

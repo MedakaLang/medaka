@@ -2,7 +2,10 @@
 -- `..` anywhere in the path, symlinks leading out of and into the granted tree,
 -- a new file under a granted directory, an entry removed or renamed across the
 -- boundary, an absolute element, an element that does not exist, and elements
--- that are themselves a symlink or hold `..`.  run.sh builds the tree.
+-- that are themselves a symlink or hold `..`.  An OS error prints as `Err (host)`: each
+-- engine words it its own way.  run.sh builds the tree.
+import string.{contains}
+
 readCfg : String -> <FileRead "cfg/*"> Result String String
 readCfg name = readFile ("cfg/" ++ name)
 
@@ -32,7 +35,11 @@ readUp name = readFile ("cfg/sub/../" ++ name)
 
 said : Result String a -> String
 said (Ok _) = "Ok"
-said (Err e) = "Err \{e}"
+said (Err e) =
+  if contains "is outside the granted authority" e then
+    "Err \{e}"
+  else
+    "Err (host)"
 
 main =
   println "dotdot first: \{said (readCfg "../cfg/a.txt")}"

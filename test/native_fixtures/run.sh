@@ -232,12 +232,40 @@ confine_tree() {
   ln -s cfg "$1/link"
   ln -s ../outdir/sub "$1/cfg/link"
   printf 'outside' > "$1/outdir/sub/a.txt"
+  # Two directories whose names are the bytes FE and FF, not UTF-8, each behind a
+  # symlink in lossy/w (lossy_names).
+  fe="$(printf '\376')"
+  ff="$(printf '\377')"
+  mkdir -p "$1/lossy/w" "$1/lossy/$fe" "$1/lossy/$ff"
+  printf 'granted' > "$1/lossy/$fe/ok.txt"
+  printf 'top secret' > "$1/lossy/$ff/secret.txt"
+  ln -s "../$fe" "$1/lossy/w/g"
+  ln -s "../$ff" "$1/lossy/w/s"
 }
 confine_untouched() {
   for f in newsecret.txt new.txt pwned.txt x.txt outdir/stolen.txt outdir/sub/stolen.txt cfg/stolen.txt; do
     [ -e "$1/$f" ] && { echo "$f was created"; return; }
   done
   [ -f "$1/secret.txt" ] && [ -L "$1/inlink" ] || echo "an entry outside cfg/ was removed"
+}
+# The wasmgc/node engine: the host confines a wasm build's file operations
+# (playground/medaka_host.mjs), so every fixture whose file externs wasm lowers
+# runs there too, with the same expected output.  It needs the wasm emitter
+# (test/wasm/build_wasm_oracle.sh) and node; without them the arm is reported
+# NOT RUN, and with MEDAKA_REQUIRE_WASM=1 that is a failure.
+CONFINE_WASM=' alias_method cwd join exists_panic canonicalize_panic dependency_method/main redeclared_extern/main method_named_readfile/main bounded_recursion declared_bound_read fs_family append_file names paths make_dir remove_file remove_dir fsync file_mode write_file_mode shapes indexed_head user_file_labels pattern_binder grant_bound_joins declared_bound lossy_names '
+WASM_EMIT="${MEDAKA_WASM_EMITTER:-$ROOT/test/bin/wasm_emit_modules_main}"
+wasm_ok=1
+if [ ! -x "$WASM_EMIT" ] || ! command -v node >/dev/null 2>&1; then
+  wasm_ok=0
+  if [ "${MEDAKA_REQUIRE_WASM:-}" = 1 ]; then
+    bad confine_wasm_arm "no wasm emitter at $WASM_EMIT, or no node"
+  else
+    echo "NOT RUN confine wasm arm: no wasm emitter at $WASM_EMIT, or no node"
+  fi
+fi
+wasm_build() {
+  (cd "$FIX" && MEDAKA_WASM_EMITTER="$WASM_EMIT" perl -e 'alarm 180; exec @ARGV' -- "$M" build --target wasmgc/node "$1" -o "$2" >/dev/null 2>&1)
 }
 # confine_case <fixture> <dir to run from, relative to the tree> <stdout> [panic]
 # A multi-module fixture is named by its entry, `<dir>/main`.
@@ -251,10 +279,16 @@ confine_case() {
   detail=""
   engines='run build'
   [ "${4:-}" = native ] && engines=build
+  case "$CONFINE_WASM" in
+    *" $1 "*) [ "$wasm_ok" -eq 1 ] && engines="$engines wasm" ;;
+  esac
+  case "$engines" in *wasm*) wasm_build "$CONFINE/$1.mdk" "$bin.wasm" ;; esac
   for engine in $engines; do
     confine_tree "$tree"
     if [ "$engine" = run ]; then
       out="$(cd "$tree/$2" && perl -e 'alarm 60; exec @ARGV' -- "$M" run "$CONFINE/$1.mdk" 2>"$tree.err")"
+    elif [ "$engine" = wasm ]; then
+      out="$(cd "$tree/$2" && perl -e 'alarm 60; exec @ARGV' -- node "$ROOT/test/wasm/run.js" "$bin.wasm" 2>"$tree.err")"
     else
       out="$(cd "$tree/$2" && "$bin" 2>"$tree.err")"
     fi
@@ -273,10 +307,24 @@ confine_case() {
     touched="$(confine_untouched "$tree")"
     [ -z "$touched" ] || detail="$detail $engine: $touched;"
   done
-  rm -rf "$tree" "$tree.err" "$bin" "$bin.ll"
+  rm -rf "$tree" "$tree.err" "$bin" "$bin.ll" "$bin.wasm"
   if [ -z "$detail" ]; then ok "confine_$1"; else bad "confine_$1" "$detail"; fi
 }
 outside='is outside the granted authority'
+# The read-side twin of declared_bound, written with externs wasm lowers: nested
+# bounds, a helper, a delayed and a stored callback, mode independence, and a
+# bound re-entered by non-tail recursion.
+confine_case declared_bound_read . "read: Err cfg/link/a.txt $outside [\"cfg/*\"]
+helper: Err cfg/link/a.txt $outside [\"cfg/*\"]
+inner: Ok
+outer: Err cfg/link/a.txt $outside [\"cfg/*\"]
+delay: Err cfg/link/a.txt $outside [\"cfg/*\"]
+packed: Err cfg/link/a.txt $outside [\"cfg/*\"]
+read under write: Ok
+write under write: Err cfg/link/stolen.txt $outside [\"cfg/*\"]
+write under read: Ok
+3
+restored: Ok"
 confine_case declared_bound . "direct: Err cfg/link/stolen.txt $outside [\"cfg/*\"]
 dotdot: Err cfg/link/../stolen.txt $outside [\"cfg/link/*\"]
 helper: Err cfg/link/stolen.txt $outside [\"cfg/*\"]
@@ -290,7 +338,122 @@ method: Err cfg/link/stolen.txt $outside [\"cfg/*\"]
 union: Ok
 explicit link: Ok
 restored: Ok"
+# The wasm engine runs it too: a non-tail call at this depth overflows its stack.
 confine_case bounded_recursion . "True" native
+# writeFile, rename, listDir and statFile: each refuses an escape in the mode native
+# confines it in (rename both paths, the source first), and a bound a wide row cannot lift.
+confine_case fs_family . "list cfg: Ok [a.txt, dangling, link, out, sub]
+list sub: Ok []
+list up: Err cfg/../outdir $outside [\"cfg/*\"]
+list link: Err cfg/link $outside [\"cfg/*\"]
+list absent: Err (host)
+list file: Err (host)
+stat file: Ok size=7 isDir=False isFile=True
+stat dir: Ok size=- isDir=True isFile=False
+stat inside link: Ok size=7 isDir=False isFile=True
+stat up: Err cfg/../secret.txt $outside [\"cfg/*\"]
+stat link out: Err cfg/out $outside [\"cfg/*\"]
+stat absent: Err (host)
+write new: Ok
+write inside: Ok
+write up: Err cfg/../new.txt $outside [\"cfg/*\"]
+write link out: Err cfg/out $outside [\"cfg/*\"]
+write dangling: Err cfg/dangling $outside [\"cfg/*\"]
+write dir: Err (host)
+move: Ok
+move back: Ok
+move over: Ok
+move absent: Err (host)
+move dst out: Err cfg/../outdir/stolen.txt $outside [\"cfg/*\"]
+move src out: Err cfg/../secret.txt $outside [\"cfg/*\"]
+move both out: Err cfg/../secret.txt $outside [\"cfg/*\"]
+move symlink: Ok
+move across: Ok
+move across back: Ok
+move across wrong way: Err outdir/../secret.txt $outside [\"outdir/*\"]
+after: Ok [b.txt, out]
+bound move: Err cfg/link/a.txt $outside [\"cfg/*\"]
+bound write: Err cfg/link/stolen.txt $outside [\"cfg/*\"]
+bound list: Err cfg/link/ $outside [\"cfg/*\"]
+bound stat: Err cfg/link/a.txt $outside [\"cfg/*\"]"
+# appendFile: the write mode of writeFile, the bound through a wide row, and an OS error.
+confine_case append_file . "inside: Ok
+inside read: Ok granted+x
+new: Ok
+new read: Ok +x
+sub: Ok
+up: Err cfg/../outdir/stolen.txt $outside [\"cfg/*\"]
+link out: Err cfg/out $outside [\"cfg/*\"]
+dangling: Err cfg/dangling $outside [\"cfg/*\"]
+dir: Err (host)
+absent dir: Err (host)
+bound append: Err cfg/link/stolen.txt $outside [\"cfg/*\"]"
+# makeDir confines in entry mode: a link as the last component is the entry, which
+# exists already, so it is never made through.
+confine_case make_dir . "make new: Ok
+make inside new: Ok
+make new again: Err (host)
+make existing: Err (host)
+make file: Err (host)
+make up: Err cfg/../outdir/stolen.txt $outside [\"cfg/*\"]
+make link: Err (host)
+make link out: Err (host)
+make dangling: Err (host)
+make absent parent: Err (host)
+make through link: Err cfg/link/stolen.txt $outside [\"cfg/*\"]
+bound make: Err cfg/link/stolen.txt $outside [\"cfg/*\"]"
+# removeFile and removeDir confine in entry mode: a link as the last component is the
+# entry (removed, or ENOTDIR for rmdir), and a link before it is followed.
+confine_case remove_file . "remove a: Ok
+remove a again: Err (host)
+remove up: Err cfg/../secret.txt $outside [\"cfg/*\"]
+remove link: Ok
+remove dangling: Ok
+remove dir: Err (host)
+remove absent dir: Err (host)
+remove through link: Err cfg/link/a.txt $outside [\"cfg/*\"]
+bound remove: Err cfg/link/stolen.txt $outside [\"cfg/*\"]"
+confine_case remove_dir . "remove sub: Ok
+remove sub again: Err (host)
+remove file: Err (host)
+remove link: Err (host)
+remove up: Err cfg/../outdir $outside [\"cfg/*\"]
+remove absent: Err (host)
+remove through link: Err cfg/link/sub $outside [\"cfg/*\"]
+bound remove: Err cfg/link/sub $outside [\"cfg/*\"]"
+# fsync follows its last component, as writeFile does, and flushes a directory too.
+confine_case fsync . "flush file: Ok
+flush dir: Ok
+flush up: Err cfg/../secret.txt $outside [\"cfg/*\"]
+flush link out: Err cfg/out $outside [\"cfg/*\"]
+flush dangling: Err cfg/dangling $outside [\"cfg/*\"]
+flush absent: Err (host)
+flush through link: Err cfg/link/a.txt $outside [\"cfg/*\"]
+bound flush: Err cfg/link/stolen.txt $outside [\"cfg/*\"]"
+# fileMode follows its last component, as statFile does; the bits themselves are the
+# umask's, so a success prints only that they lie in 0 to 4095.
+confine_case file_mode . "mode file: Ok in range
+mode dir: Ok in range
+mode inside link: Ok in range
+mode up: Err cfg/../secret.txt $outside [\"cfg/*\"]
+mode link out: Err cfg/out $outside [\"cfg/*\"]
+mode dangling: Err cfg/dangling $outside [\"cfg/*\"]
+mode absent: Err (host)
+mode through link: Err cfg/link/a.txt $outside [\"cfg/*\"]
+bound mode: Err cfg/link/stolen.txt $outside [\"cfg/*\"]"
+# writeFileMode writes as writeFile does, and leaves the file at exactly the mode given.
+confine_case write_file_mode . "new: Ok
+new mode: Ok 384
+overwrite: Ok
+overwrite mode: Ok 420
+inside sub: Ok
+up: Err cfg/../new2.txt $outside [\"cfg/*\"]
+link out: Err cfg/out $outside [\"cfg/*\"]
+dangling: Err cfg/dangling $outside [\"cfg/*\"]
+dir: Err (host)
+absent dir: Err (host)
+through link: Err cfg/link/a.txt $outside [\"cfg/*\"]
+bound write: Err cfg/link/stolen.txt $outside [\"cfg/*\"]"
 confine_case user_file_labels . "Ok granted
 Ok ()"
 confine_case grant_bound_joins . "Ok ()
@@ -335,7 +498,7 @@ rename src out: Err cfg/../secret.txt $outside [\"cfg/*\"]
 rename inside: Ok
 absolute in: Ok
 absolute out: Err /dev/../etc/passwd $outside [\"/dev/*\"]
-absent element in: Err No such file or directory
+absent element in: Err (host)
 absent element out: Err nowhere/../secret.txt $outside [\"nowhere/*\"]
 element symlink in: Ok
 element symlink out: Err link/../secret.txt $outside [\"link/*\"]
@@ -361,6 +524,43 @@ Ok granted
 Err (outdir/../secret.txt $outside [\"cfg/a.txt\", \"outdir/*\"])"
 confine_case exists_panic . "True" panic
 confine_case canonicalize_panic . "True" panic
+# canonicalizePath answers the same absolute path on every engine: `.` dropped,
+# `..` and a symlink resolved, and a path with no canonical form unchanged.
+canon_case() {
+  tree="${TMPDIR:-/tmp}/medaka_canon_$$"
+  bin="${TMPDIR:-/tmp}/medaka_canon_$$_bin"
+  src="$CONFINE/canonicalize_dots.mdk"
+  (cd "$FIX" && perl -e 'alarm 180; exec @ARGV' -- "$M" build "$src" -o "$bin" >/dev/null 2>&1)
+  engines='run build'
+  if [ "$wasm_ok" -eq 1 ]; then
+    engines="$engines wasm"
+    wasm_build "$src" "$bin.wasm"
+  fi
+  confine_tree "$tree"
+  phys="$(cd "$tree" && pwd -P)"
+  want="$phys/cfg/a.txt
+$phys/cfg/a.txt
+cfg/../nowhere/./x.txt"
+  detail=""
+  for engine in $engines; do
+    case "$engine" in
+      run) out="$(cd "$tree" && perl -e 'alarm 60; exec @ARGV' -- "$M" run "$src" 2>&1)" ;;
+      build) out="$(cd "$tree" && "$bin" 2>&1)" ;;
+      wasm) out="$(cd "$tree" && perl -e 'alarm 60; exec @ARGV' -- node "$ROOT/test/wasm/run.js" "$bin.wasm" 2>&1)" ;;
+    esac
+    [ "$out" = "$want" ] || detail="$detail $engine printed [$out];"
+  done
+  rm -rf "$tree" "$bin" "$bin.ll" "$bin.wasm"
+  if [ -z "$detail" ]; then ok confine_canonicalize_dots; else bad confine_canonicalize_dots "$detail"; fi
+}
+canon_case
+# Canonical paths compare as bytes: names that are not UTF-8 stay distinct.  The
+# interpreter's confinePath (compiler/eval/eval.mdk) compares canonicalizePath's
+# U+FFFD text instead and admits the escape, so `run` is not an engine here.
+confine_case lossy_names lossy/w "inside: Ok granted
+escape: Err g/../w/s/secret.txt $outside [\"g/*\"]
+True
+True" native
 # A binding's grants follow its identity, never its spelling: a helper named like
 # an interface method or a foreign function anywhere in the graph, an instance
 # head index named like a method's binder, an imported redeclaration of a file
@@ -429,15 +629,65 @@ deep_case() {
   (cd "$FIX" && perl -e 'alarm 180; exec @ARGV' -- "$M" build "$CONFINE/deep_cwd.mdk" -o "$bin" >/dev/null 2>&1)
   out_run="$(deep_in "$tree" "$M" run "$CONFINE/deep_cwd.mdk" 2>&1)"
   out_build="$(deep_in "$tree" "$bin" 2>&1)"
-  rm -rf "$tree" "$bin" "$bin.ll"
-  if [ "$out_run" = "$1" ] && [ "$out_build" = "$1" ]; then
+  out_wasm="$1"
+  if [ "$wasm_ok" -eq 1 ]; then
+    wasm_build "$CONFINE/deep_cwd.mdk" "$bin.wasm"
+    out_wasm="$(deep_in "$tree" node "$ROOT/test/wasm/run.js" "$bin.wasm" 2>&1)"
+  fi
+  rm -rf "$tree" "$bin" "$bin.ll" "$bin.wasm"
+  if [ "$out_run" = "$1" ] && [ "$out_build" = "$1" ] && [ "$out_wasm" = "$1" ]; then
     ok "confine_deep_cwd"
   else
-    bad "confine_deep_cwd" "expected [$1], run printed [$out_run], build printed [$out_build]"
+    bad "confine_deep_cwd" "expected [$1], run printed [$out_run], build printed [$out_build], wasm printed [$out_wasm]"
   fi
 }
 deep_case "Err (cfg/a.txt $outside [\"cfg/*\"])
 Err (cfg/../secret.txt $outside [\"cfg/*\"])"
+
+# ── stdin ────────────────────────────────────────────────────────────────────
+# The four readers share one buffer on native and on wasmgc/node, so the same
+# stdin bytes give the same trace on both.  `readers` prints each read as it
+# happens; an input is given to printf as a format, so `\r`, `\303` and the
+# like are bytes.  The first input's trace is also pinned here from the readers'
+# semantics (a line ends at \n only, readExactly 3 starts where the line reader
+# stopped, a short readExactly is None and consumes the rest).
+stdin_case() {
+  bin="${TMPDIR:-/tmp}/medaka_stdin_$$"
+  (cd "$FIX" && perl -e 'alarm 180; exec @ARGV' -- "$M" build "$FIX/stdin/readers.mdk" -o "$bin" >/dev/null 2>&1)
+  engines=build
+  if [ "$wasm_ok" -eq 1 ]; then
+    wasm_build "$FIX/stdin/readers.mdk" "$bin.wasm"
+    engines="build wasm"
+  fi
+  detail=""
+  for input in 'abc\ndef\nghijkl\nmn\nop\nqr\n' '' 'x' 'a\r\nb\r\nc' 'h\303\251llo\n\342\202\254uro\nxyz\n\377\n' 'BIG'; do
+    printf "${input}" > "$bin.in"
+    # 100 KB over 1 line, then 3000 more of 33 bytes: the host refills many times
+    [ "$input" = BIG ] && perl -e 'print "q" x 100000, "\n"; print "line $_ " . "z" x 24 . "\n" for 1 .. 3000; print "tail"' > "$bin.in"
+    native_out="$("$bin" < "$bin.in" 2>&1)"
+    for engine in $engines; do
+      [ "$engine" = build ] && continue
+      wasm_out="$(perl -e 'alarm 60; exec @ARGV' -- node "$ROOT/test/wasm/run.js" "$bin.wasm" < "$bin.in" 2>&1)"
+      [ "$wasm_out" = "$native_out" ] || detail="$detail wasm differs on [$input]: [$wasm_out] vs native [$native_out];"
+    done
+    if [ "$input" = 'abc\ndef\nghijkl\nmn\nop\nqr\n' ]; then
+      want='readLine 3/3/96354 "abc"
+readLineOpt Some 3/3/99333 "def"
+readExactly 3 Some 3/3/102312 "ghi"
+readLineOpt Some 3/3/105291 "jkl"
+readAll 9/9/340112 "mn\nop\nqr\n"
+readExactly 2 None
+readLine 0/0/0 ""
+readLineOpt None
+readExactly 0 Some 0/0/0 ""
+readAll 0/0/0 ""'
+      [ "$native_out" = "$want" ] || detail="$detail native on [$input] printed [$native_out];"
+    fi
+  done
+  rm -rf "$bin" "$bin.ll" "$bin.wasm" "$bin.in"
+  if [ -z "$detail" ]; then ok stdin_readers; else bad stdin_readers "$detail"; fi
+}
+stdin_case
 
 echo
 

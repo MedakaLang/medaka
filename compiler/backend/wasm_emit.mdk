@@ -151,13 +151,11 @@
 --     host's strtod), not a trap stub — no deferred-Float trap path
 --     remains; see ~line 1005 / 2143 / 2216.
 --   * The IO/WASI surface (readFile/args/getEnv/fileExists/exit) — CLOSED (W12): real
---     host imports (`ioHostImportLines`/`ioHostRuntimeLines`), ~line 1029/1443.
---     Not everything file-shaped is closed, though: the write/dir side (writeFile/
---     listDir/makeDir/removeFile/removeDir/statFile) remains a real gap, and
---     `runCommand` (explicitly named in this bullet's original scope) has no wasm
---     equivalent at all (no wasm profile grants Exec). Their rows in
---     `backend.extern_catalog` are the source of truth, `WASM-GAP` and `PERMANENT`
---     respectively; don't infer "IO is done" from this comment.
+--     host imports (the plan's host keys) and `ioHostRuntimeLines`.
+--     The file externs are all lowered since; `runCommand` (explicitly named in this
+--     bullet's original scope) has no wasm equivalent at all (no wasm profile grants
+--     Exec). Its row in `backend.extern_catalog` is the source of truth, `PERMANENT`;
+--     don't infer "IO is done" from this comment.
 --   * self-host-on-WasmGC — CLOSED (layers 12/16): `wasm_emit_modules_main` compiles
 --     Medaka programs to working WasmGC modules end-to-end; the in-browser playground
 --     (`playground/dist/playground.wasm`) is live. Detail: `WASM-SELFHOST-ROADMAP.md`.
@@ -231,7 +229,6 @@ import backend.extern_catalog.{
   WasmUse(..),
   isWasmExternFamily,
   wasmFamily,
-  wasmUses,
 }
 import backend.core_validate.{
   Backend(..),
@@ -325,6 +322,7 @@ import types.private_mangle.{dictTag, hashName, injectiveIdent}
 import types.disposition.{ifaceSuperCount, installedDispositionsOpt}
 import backend.emit_plan.{
   EmitPlan(..),
+  WasmDemand(..),
   TrmcVerdicts,
   isTrmcFn,
   isTrmcImpl,
@@ -352,6 +350,7 @@ import backend.wasm_preamble.{
   ioRuntimeLines,
   ioStrRuntimeLines,
   stderrByteImportLines,
+  stderrByteKey,
   stderrRuntimeLines,
   trapIntRuntimeLines,
   intRuntimeLines,
@@ -374,12 +373,11 @@ import backend.wasm_preamble.{
   hashRuntimeLines,
   hashStringRuntimeLines,
   floatFmtImportLines,
-  mathHostImportLines,
+  hostImportLines,
   floatRemRuntimeLines,
   floatRuntimeLines,
   hashFloatRuntimeLines,
   randomFloatRuntimeLines,
-  floatStrImportLines,
   floatStrRuntimeLines,
   strSearchRuntimeLines,
   strToIntRuntimeLines,
@@ -390,11 +388,8 @@ import backend.wasm_preamble.{
   byteBlockRuntimeLines,
   charFromCodeRuntimeLines,
   charClassRuntimeLines,
-  ioHostImportLines,
-  clockHostImportLines,
   ioHostRuntimeLines,
   ioArgsRuntimeLines,
-  fileBytesHostImportLines,
   fileBytesRuntimeLines,
 }
 
@@ -464,21 +459,18 @@ data WasmEmit = WasmEmit {
   useRng : Ref Bool,
   useHash : Ref Bool,
   useFloatHash : Ref Bool,
-  useFloatStr : Ref Bool,
   useFloatRng : Ref Bool,
-  useArgs : Ref Bool,
   useFileBytes : Ref Bool,
   useStrCodec : Ref Bool,
   useByteBlock : Ref Bool,
   useValueCmp : Ref Bool,
-  useMath : Ref Bool,
   useCharFromCode : Ref Bool,
   useCharClass : Ref Bool,
   -- ── lifted from module-level ambient cells (X-W.H) ─────────────────────
-  -- PROGRAM-lifetime: the representation / runtime demand this emission's
-  -- pre-scan (scanProgW7 / scanImplsW7 / noteW8*) observed, plus the tuple
-  -- arities and the statically-Float top-level globals it seeded.  Each is
-  -- written during the scan and read by the type / import / runtime sections.
+  -- PROGRAM-lifetime: the representation / runtime demand the plan's
+  -- `wasmDemand` seeds (`seedDemandW`), plus the tuple arities and the
+  -- statically-Float top-level globals.  Body emission may turn more on; the
+  -- type / import / runtime sections read them.
   useStr : Ref Bool,
   useList : Ref Bool,
   useArray : Ref Bool,
@@ -494,8 +486,6 @@ data WasmEmit = WasmEmit {
   useValueDiv : Ref Bool,
   useValueMod : Ref Bool,
   useValueCmpNum : Ref Bool,
-  useIO : Ref Bool,
-  useClock : Ref Bool,
   useStrToInt : Ref Bool,
   useStrReverse : Ref Bool,
   useStrJoin : Ref Bool,
@@ -536,14 +526,11 @@ freshWasmEmit mode = WasmEmit {
   useRng = Ref False,
   useHash = Ref False,
   useFloatHash = Ref False,
-  useFloatStr = Ref False,
   useFloatRng = Ref False,
-  useArgs = Ref False,
   useFileBytes = Ref False,
   useStrCodec = Ref False,
   useByteBlock = Ref False,
   useValueCmp = Ref False,
-  useMath = Ref False,
   useCharFromCode = Ref False,
   useCharClass = Ref False,
   useStr = Ref False,
@@ -561,8 +548,6 @@ freshWasmEmit mode = WasmEmit {
   useValueDiv = Ref False,
   useValueMod = Ref False,
   useValueCmpNum = Ref False,
-  useIO = Ref False,
-  useClock = Ref False,
   useStrToInt = Ref False,
   useStrReverse = Ref False,
   useStrJoin = Ref False,
@@ -1208,10 +1193,6 @@ isLazyGlobalW prog x = omHasKey x (indexLazyGlobalsW (progIndex prog))
 -- Forces ref-mode (a Float is a boxed (ref eq) $float struct) + gates the Float runtime
 -- (floatRuntimeLines + the floatToString host import).  WasmEmit.useFloatHash / useFloatRng
 -- gate the hashFloat / randomFloat runtimes (which need the shared mix64 / next_u64).
--- WasmEmit.useFloatStr records per-emission stringToFloat host-seam demand. It takes
--- a $str, pushes its bytes via the IO path channel (mdk_path_reset/mdk_path_push), and
--- calls mdk_str_to_float to parse the f64 JS-side. Its scalar Float/String/IO
--- prerequisites remain on their existing carriers.
 
 -- W8b: the program uses stringIndexOf / stringCompare (the strSearchRuntime).
 -- WasmEmit.useValueCmp records layer-9 per-emission demand from a ref-mode
@@ -1265,14 +1246,6 @@ isFloatCtorField prog ctor idx = match progInput prog
     match omLookup ctor ctorFloatIndex
       Some idxs => containsInt idx idxs
       None => False
-
--- the distinct tuple arities used anywhere in the program (construction or match).
-noteTupleArity : WasmEmit -> Int -> Unit
-noteTupleArity emit n =
-  if containsInt n !emit.tupleArities then
-    ()
-  else
-    setRef emit.tupleArities (n :: !emit.tupleArities)
 
 containsInt : Int -> List Int -> Bool
 -- Intentional cross-file duplicate of eval.mdk's private helper. The interpreter
@@ -1490,12 +1463,9 @@ emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _
   let _ = checkPlanBackend WasmBackend plan
   let _ = refuseUnprovidedExternsW emit input cp
   let _ = setRef emit.useStr (programUsesStr groups)
-  -- W7: scan the program for collection usage (gates type-section decls + forces
-  -- ref-mode — every collection is a boxed (ref eq) value).  The scan only ever
-  -- turns demand ON; `emit` is born with every cell off (freshWasmEmit), so the
-  -- ambient-cell era's explicit per-emission reset block is gone with the cells.
-  let _ = scanProgW7 emit groups
-  let _ = scanImplsW7 emit impls
+  -- the plan's demand only turns cells ON; `emit` is born with every cell off
+  -- (freshWasmEmit).
+  let _ = seedDemandW emit plan.wasmDemand
   -- W8b: any Float program needs the $str rep — a Float value-main auto-prints through
   -- floatToString (a $str), and $mdk_float_to_str builds a $str.  Force useStr so the
   -- $str type + the $str print runtime emit.
@@ -1535,8 +1505,7 @@ emitUniqueProgram emit input plan (cp@(CProgram groups ctorArs ctorTypes impls _
       || !emit.useI64
       || !emit.useStrSearch
       || !emit.useCharClass
-      || !emit.useIO
-      || !emit.useClock
+      || isNonEmptyList plan.hostKeys
   let typeNames = distinctTypeNames ctorTypes
   let prog = Prog index typeNames valNames useClos impls input emit freshFnCtx
   if useRef then
@@ -1702,8 +1671,7 @@ emitProgramGaps input plan cp0 =
       input
       (CProgram groups ctorArs ctorTypes impls mctx facts)
   let _ = setRef emit.useStr (programUsesStr groups)
-  let _ = scanProgW7 emit groups
-  let _ = scanImplsW7 emit impls
+  let _ = seedDemandW emit plan.wasmDemand
   let _ = if !emit.useFloat then setRef emit.useStr True
   let fnNames = collectFnNames groups
   let valNames = collectValNames groups
@@ -1824,6 +1792,12 @@ externArityW name =
       "stringToUtf8Bytes",
       "stringFromUtf8Bytes",
       "getEnv",
+      "readLine",
+      "readLineOpt",
+      "readAll",
+      "readExactly",
+      "osEntropyBytes",
+      "executablePath",
       "exit",
       "args",
       "wallTimeSec",
@@ -1929,6 +1903,13 @@ externArityW name =
       "fileExists",
       "readFileBytes",
       "canonicalizePath",
+      "listDir",
+      "statFile",
+      "makeDir",
+      "removeFile",
+      "removeDir",
+      "fsync",
+      "fileMode",
     ] then
     -- a file extern whose path is an authority: its path and its grant
 
@@ -1950,11 +1931,17 @@ externArityW name =
       "arraySetUnsafe",
       "byteBlockSetUnsafe",
       "writeFileBytes",
+      "writeFile",
+      "appendFile",
       "ioPoll",
       siteSentinelName,
     ] then
-    -- writeFileBytes: its path, its bytes and the path's grant
+    -- writeFileBytes, writeFile, appendFile: its path, its contents and the path's grant
     3
+  else if contains name ["rename", "writeFileMode"] then
+    -- rename: its two paths and the grant of each; writeFileMode: its path, its mode,
+    -- its contents and the path's grant
+    4
   else if contains name ["arrayBlit", "byteBlockBlit"] then
     -- stage-A: arrayBlit src srcOff dst dstOff len (5 args); byteBlockBlit is
     -- its byte-block peer, same argument order.
@@ -1981,80 +1968,37 @@ isStrExternFamilyW name = match externFamilyW name
   Some WasmStr => True
   _ => False
 
--- The file externs wasm ports, with the number of value arguments each takes
--- before its grant.  The wasm host import reads a path and nothing else, so it
--- cannot refuse a path outside a grant (`wasmGrantConfined`).
-export
-wasmFileGrantExterns : List (String, Int)
-wasmFileGrantExterns = [
-  ("readFile", 1),
-  ("fileExists", 1),
-  ("canonicalizePath", 1),
-  ("readFileBytes", 1),
-  ("writeFileBytes", 2),
-]
+-- A declared file bound's grant, thunk body and mode (1 for FileWrite): the type
+-- checker writes `$withFileReadBound grant (_ => body)` around the body of a
+-- binding whose row is closed and names a narrow file authority.  The body is
+-- emitted inline, in the enclosing function, between entering and leaving a host
+-- bound frame (`emitAppRef`, `emitAppTail`).
+fileBoundW : CExpr -> Option (CExpr, CExpr, Int)
+fileBoundW app = match flattenApp app []
+  (CVar "$withFileReadBound" _, [g, CLam [PWild] b]) => Some (g, b, 0)
+  (CVar "$withFileWriteBound" _, [g, CLam [PWild] b]) => Some (g, b, 1)
+  _ => None
 
-export
-wasmFileGrantArity : String -> Option Int
-wasmFileGrantArity name = lookupAssoc name wasmFileGrantExterns
-
--- Whether the concrete elements of a grant need no runtime check.  An authority
--- written only of exact paths (no `*`, not the empty element) admits exactly
--- those strings, which the type checker has already held every path to, and a
--- path admitted as a string equal to an element is admitted as a file, since
--- the runtime would compare a path with itself.  A file extern whose path is a
--- literal naming an exact element needs no check either.  A pattern, or the
--- empty authority a lost binder renders, needs the runtime the wasm host lacks.
-export
-wasmGrantConfined : Option String -> List String -> Bool
-wasmGrantConfined path es =
-  let exact = s => s /= "" && not (endsWith "*" s)
-  allList exact es
-    || (match path
-      Some p => exact p && contains p es
-      None => False)
-
-export
-wasmFileGrantMsg : String -> List String -> String
-wasmFileGrantMsg name es =
-  let grant = joinWith ", " (map (s => "\"\{s}\"") es)
-  "`\{name}` is given the file grant [\{grant}], but a wasm build cannot confine a file operation to a pattern: its host reads the path alone, so the operation could reach any file. Build for a native target, grant exact paths, or give this call the whole domain (a bare `FileRead` or `FileWrite` label)"
-
--- A file extern leaf's grant.  A literal grant is refused here unless its
--- elements need no check.  The whole domain, and a grant parameter of the
--- enclosing binding (alone or joined), are emitted: a parameter's value is a
--- concrete grant at some call site, which the build driver checks where it is
--- written (`wasm_emit_modules_main.refuseNarrowFileGrants`).
-confinedGrantW : Prog -> String -> CExpr -> CExpr -> List String
-confinedGrantW prog name p (CList (elems@(_ :: _))) = match stringLitsW elems []
-  Some es =>
-    let path = match p
-      CLit (LString s) => Some s
-      _ => None
-    if wasmGrantConfined path es then
-      []
-    else
-      let emit = progEmit prog
-      let msg = "wasm: \{wasmFileGrantMsg name es}"
-      match emit.gapMode
-        WGapRecord => let _ = noteGapW emit msg in []
-        WGapStrict => panic msg
-  None => []
-confinedGrantW _ _ _ _ = []
-
-confinedFileBoundW : Prog -> String -> CExpr -> List String
-confinedFileBoundW prog name bound =
-  let label =
-    if name == "$withFileReadBound" then
-      "declared FileRead bound"
-    else
-      "declared FileWrite bound"
-  confinedGrantW prog label (CVar "$fileBoundPath" AGlobal) bound
-
-stringLitsW : List CExpr -> List String -> Option (List String)
-stringLitsW [] acc = Some (reverseL acc)
-stringLitsW ((CLit (LString s)) :: rest) acc = stringLitsW rest (s :: acc)
-stringLitsW _ _ = None
+-- Entering a bound pushes its grant and asks the host for a frame.  Off a tail
+-- position the host always keeps a record, so leaving pops one unconditionally.
+-- In a tail position it pushes a frame only when no equal bound of the mode is
+-- active, as medaka_rt.c mdk_with_file_bound does, and says whether it did: a
+-- re-entered bound leaves the body's tail call a tail call.
+fileBoundEnterW : Prog ->
+  List String ->
+  Int ->
+  CExpr ->
+  Int ->
+  Bool ->
+  List String
+fileBoundEnterW prog env d g mode keep =
+  emitRefExpr prog env d g
+    ++ [
+      "call $mdk_push_grant",
+      "i32.const \{intToString mode}",
+      "i32.const \{if keep then "1" else "0"}",
+      "call $mdk_file_bound_enter",
+    ]
 
 -- ── W6: does the program use strings? ────────────────────────────────────────
 -- True if any body contains a String/Char literal, or applies an extern whose
@@ -2097,129 +2041,13 @@ headUsesStr : CExpr -> Bool
 headUsesStr (CVar fn _) = isStrExternFamilyW fn
 headUsesStr h = exprUsesStr h
 
--- ── W7: scan the program for collection usage (sets the type-section gating refs) ──
--- Sets useList/useArray/useRefBox and records every tuple arity seen, from
--- BOTH constructions (CList/CTuple/CArray/CRangeArray/CIndex/CSlice/CRangeList, Ref/
--- setRef) AND match heads (HCons/HNil → list, HTuple n → tuple).  Mirrors how
--- programUsesStr scans, but mutates the refs as it walks (peer to noteTupleArity).
-scanProgW7 : WasmEmit -> List CBind -> Unit
-scanProgW7 emit groups = forEachU (b => scanBindW7 emit b) groups
-
--- W9: scan impl method bodies + interface defaults for collection/extern use too
--- (e.g. `eq (x::xs) (y::ys)` forces lists; `display n = intToString n` forces $str).
-scanImplsW7 : WasmEmit -> List CImplEntry -> Unit
-scanImplsW7 emit impls = forEachU (entry => scanImplEntryW7 emit entry) impls
-
-scanImplEntryW7 : WasmEmit -> CImplEntry -> Unit
-scanImplEntryW7 emit (CImplEntry _ _ _ body) = match body
-  CImplTagged _ _ _ _ _ pats b =>
-    let _ = forEachU (p => scanPatW7 emit p) pats in scanExprW7 emit b
-  CImplDefault _ _ _ _ _ pats b =>
-    let _ = forEachU (p => scanPatW7 emit p) pats in scanExprW7 emit b
-
-scanBindW7 : WasmEmit -> CBind -> Unit
-scanBindW7 emit (CBind _ clauses _ _) =
-  forEachU (clause => scanClauseW7 emit clause) clauses
-
--- W9: scan BOTH a clause's param patterns (a list/tuple clause head forces the
--- collection type sections even when the body has no collection literal — e.g.
--- core.mdk's debugListItems `(y::rest)` heads) AND its body.
-scanClauseW7 : WasmEmit -> CClause -> Unit
-scanClauseW7 emit (CClause pats body) =
-  let _ = forEachU (p => scanPatW7 emit p) pats
-  scanExprW7 emit body
-
-scanExprW7 : WasmEmit -> CExpr -> Unit
-scanExprW7 emit (CList es) =
-  let _ = setRef emit.useList True in forEachU (e => scanExprW7 emit e) es
-scanExprW7 emit (CRangeList lo hi _) =
-  let _ = setRef emit.useList True in
-    let _ = scanExprW7 emit lo in scanExprW7 emit hi
-scanExprW7 emit (CTuple es) =
-  let _ = noteTupleArity emit (listLen es) in
-    forEachU (e => scanExprW7 emit e) es
-scanExprW7 emit (CArray es) =
-  let _ = setRef emit.useArray True in forEachU (e => scanExprW7 emit e) es
-scanExprW7 emit (CRangeArray lo hi _) =
-  let _ = setRef emit.useArray True in
-    let _ = scanExprW7 emit lo in scanExprW7 emit hi
-scanExprW7 emit (CIndex a i) =
-  let _ = setRef emit.useArray True in
-    let _ = scanExprW7 emit a in scanExprW7 emit i
-scanExprW7 emit (CSlice a lo hi _) =
-  let _ = setRef emit.useArray True in
-    let _ = scanExprW7 emit a in
-      let _ = scanExprW7 emit lo in scanExprW7 emit hi
-scanExprW7 emit (CRecord _ fields) =
-  forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
-scanExprW7 emit (CFieldAccess ex _ _ _) = scanExprW7 emit ex
-scanExprW7 emit (CRecordUpdate _ base fields) =
-  let _ = scanExprW7 emit base in
-    forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
-scanExprW7 emit (CVariantUpdate _ base fields) =
-  let _ = scanExprW7 emit base in
-    forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
-scanExprW7 emit (app@(CApp _ _ _)) =
-  let (hd, args) = flattenApp app []
-  let _ = scanW7Head emit hd
-  forEachU (arg => scanExprW7 emit arg) args
-scanExprW7 emit (CVar x _) =
-  if x == "Ref" then setRef emit.useRefBox True else noteW8Extern emit x
--- W8b: a Float literal forces the Float rep + runtime.  (Bare `pi`/`e` are NOT keyed
--- here — scanExprW7 doesn't track binders, so a LOCAL named `e`/`pi`, e.g. `Err e`,
--- would false-positive; useFloat is instead forced by a Float literal, a Float
--- extern, OR a Float-kinded main, post-scan in emitProgram.)
-scanExprW7 emit (CLit (LFloat _)) = setRef emit.useFloat True
--- A `U64` value is born from a literal, a `U64` operator, or a `u64` kernel
--- extern (noteW8Extern), so those three demand the `$u64` type and runtime; an
--- `I64` the same way demands `$i64`.
-scanExprW7 emit (CLit (LU64 _ _)) = setRef emit.useU64 True
-scanExprW7 emit (CLit (LI64 _ _)) = setRef emit.useI64 True
--- A String/Char literal forces the $str rep.  `programUsesStr` already sees
--- literals in top-level bindings; this scan is the only one that walks impl
--- method bodies, so without this arm a prelude impl such as
--- `impl Monoid String where empty = ""` is emitted naming `$u8arr` while the
--- type section omits it.  A Unit `main` is the shape with no other string
--- demand (no output at all), so it was the shape that failed to assemble.
-scanExprW7 emit (CLit (LString _)) = setRef emit.useStr True
-scanExprW7 emit (CLit (LChar _)) = setRef emit.useStr True
-scanExprW7 emit (CLam _ b) = scanExprW7 emit b
-scanExprW7 emit (CBinPrim op l r tag _) =
-  let _ = if tag == "U64" then setRef emit.useU64 True
-  let _ = if tag == "I64" then setRef emit.useI64 True
-  let _ = noteW8Binop emit op
-  let _ = scanExprW7 emit l
-  scanExprW7 emit r
-scanExprW7 emit (CUnOp _ x) = scanExprW7 emit x
-scanExprW7 emit (CIf c t f) =
-  let _ = scanExprW7 emit c in let _ = scanExprW7 emit t in scanExprW7 emit f
-scanExprW7 emit (CLet _ pat a b) =
-  let _ = scanPatW7 emit pat in let _ = scanExprW7 emit a in scanExprW7 emit b
-scanExprW7 emit (CBlock stmts) = forEachU (stmt => scanStmtW7 emit stmt) stmts
-scanExprW7 emit (CDecision scrut arms tree) =
-  let _ = scanExprW7 emit scrut in
-    let _ = forEachU (arm => scanArmW7 emit arm) arms in scanTreeW7 emit tree
-scanExprW7 emit (CMatch scrut arms) =
-  let _ = scanExprW7 emit scrut in forEachU (arm => scanArmW7 emit arm) arms
--- W9: descend a CLetGroup so its lifted members' bodies (and their externs /
--- collection use, e.g. arbitraryList's `go` using `randomInt` + `::`) gate the
--- runtime/type sections.
-scanExprW7 emit (CLetGroup binds b) =
-  let _ = forEachU (bd => scanBindW7 emit bd) binds in scanExprW7 emit b
-scanExprW7 _ _ = ()
-
-scanW7Head : WasmEmit -> CExpr -> Unit
-scanW7Head emit (CVar "Ref" _) = setRef emit.useRefBox True
-scanW7Head emit (CVar "setRef" _) = setRef emit.useRefBox True
-scanW7Head emit (CVar f _) = noteW8Extern emit f
-scanW7Head emit h = scanExprW7 emit h
-
--- ── W8: note which runtime groups an extern occurrence reaches ───────────────
--- Sets the flag of every demand the catalog lists for the name (`wasmUses`).
--- Piggybacks on the W7 walk, which keys on the name alone: it does not track
--- binders, so a local that shares an extern's name demands what the extern does.
-noteW8Extern : WasmEmit -> String -> Unit
-noteW8Extern emit name = forEachU (u => noteWasmUse emit u) (wasmUses name)
+-- Seeds the demand cells from the plan's walk of the program (`wasmDemandOf`).
+seedDemandW : WasmEmit -> WasmDemand -> Unit
+seedDemandW emit d =
+  let _ = forEachU (u => noteWasmUse emit u) d.uses
+  let _ = if d.refBox then setRef emit.useRefBox True
+  let _ = if d.divGuard then setRef emit.useDivGuard True
+  setRef emit.tupleArities (reverseL d.tupleArities)
 
 -- The `WasmEmit` flag that carries one catalog demand.
 noteWasmUse : WasmEmit -> WasmUse -> Unit
@@ -2230,8 +2058,9 @@ noteWasmUse emit UseHash = setRef emit.useHash True
 noteWasmUse emit UseFloat = setRef emit.useFloat True
 noteWasmUse emit UseU64 = setRef emit.useU64 True
 noteWasmUse emit UseI64 = setRef emit.useI64 True
-noteWasmUse emit UseMath = setRef emit.useMath True
-noteWasmUse emit UseFloatStr = setRef emit.useFloatStr True
+-- the libm and clock imports are the extern's own host keys (`EmitPlan.hostKeys`)
+noteWasmUse _ UseMath = ()
+noteWasmUse _ UseFloatStr = ()
 noteWasmUse emit UseFloatHash = setRef emit.useFloatHash True
 noteWasmUse emit UseFloatRng = setRef emit.useFloatRng True
 noteWasmUse emit UseStrSearch = setRef emit.useStrSearch True
@@ -2242,77 +2071,12 @@ noteWasmUse emit UseCharFromCode = setRef emit.useCharFromCode True
 noteWasmUse emit UseCharClass = setRef emit.useCharClass True
 noteWasmUse emit UseEPut = setRef emit.useEPut True
 noteWasmUse emit UseByteBlock = setRef emit.useByteBlock True
-noteWasmUse emit UseIO = setRef emit.useIO True
-noteWasmUse emit UseArgs = setRef emit.useArgs True
+noteWasmUse _ UseArgs = ()
 noteWasmUse emit UseFileBytes = setRef emit.useFileBytes True
-noteWasmUse emit UseClock = setRef emit.useClock True
+noteWasmUse _ UseClock = ()
 noteWasmUse emit UseStrToInt = setRef emit.useStrToInt True
 noteWasmUse emit UseStrReverse = setRef emit.useStrReverse True
 noteWasmUse emit UseStrJoin = setRef emit.useStrJoin True
--- `++` is runtime-dispatched ($mdk_append): needs the $str leaf concat ($mdk_str_append)
--- AND the W7 cons list types ($C_Cons/$T_List) for the list-append branch.
-noteW8Binop : WasmEmit -> String -> Unit
-noteW8Binop emit "++" =
-  let _ = setRef emit.useStrLeaf True
-  let _ = setRef emit.useStr True
-  setRef emit.useList True
-noteW8Binop emit "::" = setRef emit.useList True
--- B5: a concrete-Int `/`/`%` needs the divisor-guard scratch local (the scalar fn+init
--- decls; ref mode declares `$__divr<d>` through w7Local).  Float `/` never traps on zero.
-noteW8Binop emit "/" = setRef emit.useDivGuard True
-noteW8Binop emit "%" = setRef emit.useDivGuard True
-noteW8Binop _ _ = ()
-
-scanArmW7 : WasmEmit -> CArm -> Unit
-scanArmW7 emit (CArm pat guards body) =
-  let _ = scanPatW7 emit pat
-  let _ = forEachU (guard => scanGuardW7 emit guard) guards
-  scanExprW7 emit body
-
-scanGuardW7 : WasmEmit -> CGuard -> Unit
-scanGuardW7 emit (CGBool g) = scanExprW7 emit g
-scanGuardW7 emit (CGBind p e) = let _ = scanPatW7 emit p in scanExprW7 emit e
-
-scanStmtW7 : WasmEmit -> CStmt -> Unit
-scanStmtW7 emit (CSExpr e) = scanExprW7 emit e
-scanStmtW7 emit (CSLet _ pat e) =
-  let _ = scanPatW7 emit pat in scanExprW7 emit e
-scanStmtW7 emit (CSAssign _ e) = scanExprW7 emit e
-
--- a pattern's collection heads: a cons/nil/list pattern → list; a tuple pattern → its arity.
-scanPatW7 : WasmEmit -> Pat -> Unit
-scanPatW7 emit (PCons h t) =
-  let _ = setRef emit.useList True in
-    let _ = scanPatW7 emit h in scanPatW7 emit t
-scanPatW7 emit (PList ps) =
-  let _ = setRef emit.useList True in forEachU (p => scanPatW7 emit p) ps
-scanPatW7 emit (PTuple ps) =
-  let _ = noteTupleArity emit (listLen ps) in
-    forEachU (p => scanPatW7 emit p) ps
-scanPatW7 emit (PCon _ args) = forEachU (p => scanPatW7 emit p) args
-scanPatW7 emit (PAs _ _ _ p) = scanPatW7 emit p
-scanPatW7 _ _ = ()
-
--- a decision tree's match heads (the lowered shape of list/tuple patterns).
-scanTreeW7 : WasmEmit -> CTree -> Unit
-scanTreeW7 _ (CTFail _) = ()
-scanTreeW7 _ (CTLeaf _) = ()
-scanTreeW7 emit (CTGuard _ fail) = scanTreeW7 emit fail
-scanTreeW7 emit (CTDrop sub) = scanTreeW7 emit sub
-scanTreeW7 emit (CTSwitch branches dft) =
-  let _ = forEachU (branch => scanBranchW7 emit branch) branches in
-    scanTreeW7 emit dft
-
-scanBranchW7 : WasmEmit -> CTBranch -> Unit
-scanBranchW7 emit (CTBranch h sub) =
-  let _ = scanHeadW7 emit h in scanTreeW7 emit sub
-
-scanHeadW7 : WasmEmit -> CHead -> Unit
-scanHeadW7 emit HCons = setRef emit.useList True
-scanHeadW7 emit HNil = setRef emit.useList True
-scanHeadW7 emit (HTuple n) = noteTupleArity emit n
-scanHeadW7 _ _ = ()
-
 cFieldExpr : CField -> CExpr
 cFieldExpr (CField _ _ e) = e
 
@@ -3128,19 +2892,8 @@ emitRefProgram prog plan groups =
       -- W8b: floatToString is a host import (the shortest-round-trip formatter, #57,
       -- lives JS-side).
       ++ (if (progEmit prog).useFloat.value then floatFmtImportLines else [])
-      -- #101: the libm transcendentals / pow / atan2 / hypot are JS Math.* host imports.
-      ++ (if (progEmit prog).useMath.value then mathHostImportLines else [])
-      -- layer-6: stringToFloat is a host import (mdk_str_to_float = the host strtod parser).
-      ++ (if (progEmit prog).useFloatStr.value then floatStrImportLines else [])
-      -- W12: the IO host surface (readFile/fileExists/args/getEnv/exit) host imports.
-      ++ (if (progEmit prog).useIO.value then ioHostImportLines else [])
-      -- the clock externs (wallTimeSec/monotonicSec/sleepMs) are three host imports.
-      ++ (if (progEmit prog).useClock.value then clockHostImportLines else [])
-      -- stage-D: writeFileBytes's write host imports (reset/push/commit).
-      ++ (if (progEmit prog).useFileBytes.value then
-        fileBytesHostImportLines
-      else
-        [])
+      -- the host imports the reached externs' lowerings call (`EmitPlan.hostKeys`).
+      ++ hostImportLines plan.hostKeys
   let valNames = progValNames prog
   -- Stage-2/3 (b′) WASMGC-TRMC: the plan's dispatch-graph TMC groups (the lexer's
   -- `scan` token spine, the offside-rule `layout` family, `intersperse`), installed
@@ -3262,11 +3015,8 @@ emitRefProgram prog plan groups =
     if (progEmit prog).useFloatHash.value then hashFloatRuntimeLines else []
   let randomFloatRt =
     if (progEmit prog).useFloatRng.value then randomFloatRuntimeLines else []
-  -- layer-6: stringToFloat runtime ($mdk_string_to_float).  Needs ioHostRt for the
-  -- path channel ($mdk_path_reset/$mdk_path_push), but emitted AFTER ioHostRt since
-  -- those functions are defined there (wasm forward refs are fine, but order is clear).
-  let floatStrRt =
-    if (progEmit prog).useFloatStr.value then floatStrRuntimeLines else []
+  -- layer-6: stringToFloat runtime ($mdk_string_to_float), gated on its host key.
+  let floatStrRt = floatStrRuntimeLines plan.hostKeys
   let strSearchRt =
     if (progEmit prog).useStrSearch.value then strSearchRuntimeLines else []
   -- W8d: stringToInt / stringReverse / stringJoin, each behind its own demand.
@@ -3279,12 +3029,12 @@ emitRefProgram prog plan groups =
     if (progEmit prog).useStrJoin.value then strJoinRuntimeLines else []
   -- W11b: the UTF-8 codec ($mdk_str_to_chars / $mdk_chars_to_str) + charFromCode's
   -- range-check runtime ($mdk_char_from_code).  The codec needs the $str rep ($u8arr)
-  -- and the $arr rep (both forced via noteW8Extern).  charFromCode alone needs neither
+  -- and the $arr rep (both demanded with useStrCodec in the catalog).  charFromCode alone needs neither
   -- the codec nor strLeaf, so its runtime fn is gated independently.
   let strCodecRt =
     if (progEmit prog).useStrCodec.value then strCodecRuntimeLines else []
   -- the `ByteBlock` builtin's loop/copy helpers.  Needs $u8arr + $str (forced
-  -- via useStr) and $arr (useArray), both set with useByteBlock in noteW8Extern.
+  -- via useStr) and $arr (useArray), both demanded with useByteBlock in the catalog.
   let byteBlockRt =
     if (progEmit prog).useByteBlock.value then byteBlockRuntimeLines else []
   let charFromCodeRt =
@@ -3295,31 +3045,31 @@ emitRefProgram prog plan groups =
   -- W11b: char classification + case-mapping helpers (ASCII-only pure WAT).
   let charClassRt =
     if (progEmit prog).useCharClass.value then charClassRuntimeLines else []
-  -- W12: the IO host-surface marshaling runtime (byte-channel + the five extern bodies).
-  -- The `args` body lives in a separate block (it builds a $C_Cons list, needing the
-  -- list types) gated on this emission's useArgs observation.
-  let ioHostRt = if (progEmit prog).useIO.value then ioHostRuntimeLines else []
-  let ioArgsRt =
-    if (progEmit prog).useArgs.value then ioArgsRuntimeLines else []
+  -- W12: the IO host-surface marshaling runtime, each helper gated on the host key
+  -- it calls.  The `args` body is its own block: it builds a $C_Cons list.
+  let ioHostRt = ioHostRuntimeLines plan.hostKeys
+  let ioArgsRt = ioArgsRuntimeLines plan.hostKeys
   -- the UTF-8 validation every producer of outside bytes reads a $str through,
   -- emitted exactly when one of the blocks that call it is: the byte codec,
   -- byteBlockToString, and the IO host surface.
   let utf8LossyRt =
-    if isEmptyL (strCodecRt ++ byteBlockRt ++ ioHostRt) then
+    if isEmptyL (strCodecRt ++ byteBlockRt ++ ioHostRt ++ ioArgsRt) then
       []
     else
       utf8LossyRuntimeLines
   -- stage-D: the byte-clean file I/O bodies ($mdk_read_file_bytes_io / _write_).  Needs
   -- ioHostRt in scope ($mdk_push_path / $mdk_io_result_to_str) + the $arr rep.
   let fileBytesRt =
-    if (progEmit prog).useFileBytes.value then fileBytesRuntimeLines else []
+    fileBytesRuntimeLines (progEmit prog).useFileBytes.value plan.hostKeys
   let dataSegs = emitDataSegs (progEmit prog)
-  -- B5: the stderr byte-write import — for ePutStr (`WasmEmit.useEPut`) OR a coded runtime trap
-  -- (trapImportNeeded, set during the body emit above). Emitted ONCE. This binding is
-  -- forced after all body-emit bindings (strict `let`), so trapImportNeeded is visible;
+  -- B5: the stderr byte-write import, emitted ONCE.  The plan's key is a lower
+  -- bound here: it covers the externs whose runtime writes stderr, but a coded
+  -- trap (a checked Int operator, a divisor guard, a failed match) is chosen
+  -- while lowering, so trapImportNeeded, set during the body emit above, adds the
+  -- rest.  This binding is forced after all body-emit bindings (strict `let`);
   -- `dataSegs` above already relies on that same after-body ordering.
   let trapImport =
-    if (progEmit prog).useEPut.value
+    if contains stderrByteKey plan.hostKeys
       || (progEmit prog).trapImportNeeded.value then
       stderrByteImportLines
     else
@@ -6881,15 +6631,18 @@ emitAppRef prog env d app =
   match hd
     CVar f0 _ =>
       let f = canonFn prog f0
-      -- the desugared `__fallthrough__ ()` / `__ft__<label> ()` form: ignore the (unit)
-      -- arg, lower the sentinel (br to the clause label, or trap stub).  The bare-CVar
-      -- form is handled by emitVarRef; this catches the applied form guard chains make.
       if f0 == "$withFileReadBound"
-        || f0 == "$withFileWriteBound" then match args
-        [bound, CLam [PWild] body] =>
-          confinedFileBoundW prog f0 bound ++ emitRefExpr prog env d body
-        _ => gapLP prog "wasm: a file bound requires a grant and a thunk"
+        || f0 == "$withFileWriteBound" then match fileBoundW app
+        Some (g, body, mode) =>
+          fileBoundEnterW prog env d g mode True
+            ++ ["drop"]
+            ++ emitRefExpr prog env d body
+            ++ ["call $mdk_file_bound_exit"]
+        None => gapLP prog "wasm: a file bound requires a grant and a thunk"
       else if isFtSentinel f0 then
+        -- the desugared `__fallthrough__ ()` / `__ft__<label> ()` form: ignore the (unit)
+        -- arg, lower the sentinel (br to the clause label, or trap stub).  The bare-CVar
+        -- form is handled by emitVarRef; this catches the applied form guard chains make.
         ftSentinelInstrs f0
       else if contains f0 env then
         -- E24 (wasm peer): a LOCALLY-BOUND name (param / let-binding) SHADOWS any same-named
@@ -7342,30 +7095,62 @@ emitLeafExternRef prog env d "randomFloat" _ =
 -- (ref eq), fileExists a Bool i31, getEnv an Option (ref eq), args a List (ref eq),
 -- exit traps (mdk_exit + unreachable, stack-polymorphic like panic).
 -- A file extern whose path is an authority takes its grant last
--- (EFFECTS-SEMANTICS §8); the host import carries only the path, so only a
--- confined call may drop its grant (`confinedGrantW`).
+-- (EFFECTS-SEMANTICS §8), and its runtime body hands both to the host, which
+-- confines the path (`ioHostRuntimeLines`).
 emitLeafExternRef prog env d "readFile" [p, g] =
-  confinedGrantW prog "readFile" p g
-    ++ emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)", "call $mdk_read_file_io"]
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_read_file_io"]
 emitLeafExternRef prog env d "readFile" _ =
   gapLP prog "wasm W12: readFile takes exactly one argument and its grant"
--- canonicalizePath : String -> String — IDENTITY on the wasm host (no realpath in a
--- browser vfs).  Emit the $str argument and leave it on the stack as the result.
 emitLeafExternRef prog env d "canonicalizePath" [p, g] =
-  confinedGrantW prog "canonicalizePath" p g ++ emitRefExpr prog env d p
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_canonicalize_path_io"]
 emitLeafExternRef prog env d "canonicalizePath" _ =
   gapLP prog "wasm: canonicalizePath takes exactly one argument and its grant"
 emitLeafExternRef prog env d "fileExists" [p, g] =
-  confinedGrantW prog "fileExists" p g
-    ++ emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)", "call $mdk_file_exists_io"]
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_file_exists_io"]
 emitLeafExternRef prog env d "fileExists" _ =
   gapLP prog "wasm W12: fileExists takes exactly one argument and its grant"
 emitLeafExternRef prog env d "getEnv" [n] =
   emitRefExpr prog env d n ++ ["ref.cast (ref $str)", "call $mdk_get_env_io"]
 emitLeafExternRef prog env d "getEnv" _ =
   gapLP prog "wasm W12: getEnv takes exactly one argument"
+-- The stdin readers share one host-side buffer: a Unit argument is dropped, and
+-- readExactly's Int is unboxed to the i64 the import takes.
+emitLeafExternRef prog env d "readLine" [u] =
+  emitRefExpr prog env d u ++ ["drop", "call $mdk_read_line_io"]
+emitLeafExternRef prog env d "readLine" _ =
+  gapLP prog "wasm: readLine takes exactly one (Unit) argument"
+emitLeafExternRef prog env d "readLineOpt" [u] =
+  emitRefExpr prog env d u ++ ["drop", "call $mdk_read_line_opt_io"]
+emitLeafExternRef prog env d "readLineOpt" _ =
+  gapLP prog "wasm: readLineOpt takes exactly one (Unit) argument"
+emitLeafExternRef prog env d "readAll" [u] =
+  emitRefExpr prog env d u ++ ["drop", "call $mdk_read_all_io"]
+emitLeafExternRef prog env d "readAll" _ =
+  gapLP prog "wasm: readAll takes exactly one (Unit) argument"
+emitLeafExternRef prog env d "readExactly" [n] =
+  emitRefExpr prog env d n
+    ++ ["call $mdk_unbox_int", "call $mdk_read_exactly_io"]
+emitLeafExternRef prog env d "readExactly" _ =
+  gapLP prog "wasm: readExactly takes exactly one argument"
+-- osEntropyBytes unboxes its Int to the i64 the import takes and builds an Array Int;
+-- executablePath takes a Unit (dropped) and answers its String through the result channel.
+emitLeafExternRef prog env d "osEntropyBytes" [n] =
+  emitRefExpr prog env d n ++ ["call $mdk_unbox_int", "call $mdk_os_entropy_io"]
+emitLeafExternRef prog env d "osEntropyBytes" _ =
+  gapLP prog "wasm: osEntropyBytes takes exactly one argument"
+emitLeafExternRef prog env d "executablePath" [u] =
+  emitRefExpr prog env d u ++ ["drop", "call $mdk_executable_path_io"]
+emitLeafExternRef prog env d "executablePath" _ =
+  gapLP prog "wasm: executablePath takes exactly one (Unit) argument"
 emitLeafExternRef prog env d "args" [u] =
   emitRefExpr prog env d u ++ ["drop", "call $mdk_args_io"]
 emitLeafExternRef prog env d "args" args =
@@ -7415,28 +7200,117 @@ emitLeafExternRef prog env d "ioPoll" _ =
 -- writeFileBytes takes (path, Array Int) and returns Result String Unit.  Both route
 -- into the fileBytes host seam ($mdk_read_file_bytes_io / $mdk_write_file_bytes_io).
 emitLeafExternRef prog env d "readFileBytes" [p, g] =
-  confinedGrantW prog "readFileBytes" p g
-    ++ emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)", "call $mdk_read_file_bytes_io"]
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_read_file_bytes_io"]
 emitLeafExternRef prog env d "readFileBytes" _ =
   gapLP
     prog
     "wasm stage-D: readFileBytes takes exactly one argument and its grant"
 emitLeafExternRef prog env d "writeFileBytes" [p, arr, g] =
-  confinedGrantW prog "writeFileBytes" p g
-    ++ emitRefExpr prog env d p
+  emitRefExpr prog env d p
     ++ ["ref.cast (ref $str)"]
     ++ emitRefExpr prog env d arr
-    ++ ["ref.cast (ref $arr)", "call $mdk_write_file_bytes_io"]
+    ++ ["ref.cast (ref $arr)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_write_file_bytes_io"]
 emitLeafExternRef prog env d "writeFileBytes" _ =
   gapLP
     prog
     "wasm stage-D: writeFileBytes takes exactly two arguments and its grant"
+emitLeafExternRef prog env d "writeFile" [p, s, g] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d s
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_write_file_io"]
+emitLeafExternRef prog env d "writeFile" _ =
+  gapLP prog "wasm: writeFile takes exactly two arguments and its grant"
+emitLeafExternRef prog env d "appendFile" [p, s, g] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d s
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_append_file_io"]
+emitLeafExternRef prog env d "appendFile" _ =
+  gapLP prog "wasm: appendFile takes exactly two arguments and its grant"
+emitLeafExternRef prog env d "rename" [src, dst, gs, gd] =
+  emitRefExpr prog env d src
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d dst
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d gs
+    ++ emitRefExpr prog env d gd
+    ++ ["call $mdk_rename_io"]
+emitLeafExternRef prog env d "rename" _ =
+  gapLP prog "wasm: rename takes exactly two arguments and the grant of each"
+emitLeafExternRef prog env d "listDir" [p, g] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_list_dir_io"]
+emitLeafExternRef prog env d "listDir" _ =
+  gapLP prog "wasm: listDir takes exactly one argument and its grant"
+emitLeafExternRef prog env d "statFile" [p, g] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_stat_file_io"]
+emitLeafExternRef prog env d "statFile" _ =
+  gapLP prog "wasm: statFile takes exactly one argument and its grant"
+emitLeafExternRef prog env d "makeDir" [p, g] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_make_dir_io"]
+emitLeafExternRef prog env d "makeDir" _ =
+  gapLP prog "wasm: makeDir takes exactly one argument and its grant"
+emitLeafExternRef prog env d "removeFile" [p, g] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_remove_file_io"]
+emitLeafExternRef prog env d "removeFile" _ =
+  gapLP prog "wasm: removeFile takes exactly one argument and its grant"
+emitLeafExternRef prog env d "removeDir" [p, g] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_remove_dir_io"]
+emitLeafExternRef prog env d "removeDir" _ =
+  gapLP prog "wasm: removeDir takes exactly one argument and its grant"
+emitLeafExternRef prog env d "fsync" [p, g] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_fsync_io"]
+emitLeafExternRef prog env d "fsync" _ =
+  gapLP prog "wasm: fsync takes exactly one argument and its grant"
+emitLeafExternRef prog env d "fileMode" [p, g] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_file_mode_io"]
+emitLeafExternRef prog env d "fileMode" _ =
+  gapLP prog "wasm: fileMode takes exactly one argument and its grant"
+emitLeafExternRef prog env d "writeFileMode" [p, m, s, g] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d m
+    ++ emitRefExpr prog env d s
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d g
+    ++ ["call $mdk_write_file_mode_io"]
+emitLeafExternRef prog env d "writeFileMode" _ =
+  gapLP prog "wasm: writeFileMode takes three arguments and its grant"
 -- W10/B5: `panic msg` → stream the coded line `runtime error [E-PANIC]: <msg>\n` to
 -- stderr, then `unreachable` (peer of native @mdk_panic / the interp's runtimePanic).
 -- The fixed prefix is unrolled to byte-writes; the user message (a $str (ref eq), any
--- expression) is streamed through $mdk_eprint_str (forced via `WasmEmit.useEPut` in noteW8Extern
--- for `panic`), then a trailing newline byte.  `unreachable` is stack-polymorphic, so it
+-- expression) is streamed through $mdk_eprint_str (forced via `WasmEmit.useEPut`, which the
+-- catalog demands for `panic`), then a trailing newline byte.  `unreachable` is stack-polymorphic, so it
 -- validates as any result type.
 emitLeafExternRef prog env d "panic" [msg] =
   wasmTrapBytes (progEmit prog) "runtime error [E-PANIC]: "
@@ -7449,7 +7323,7 @@ emitLeafExternRef prog env d "panic" _ =
 -- Index-16a: `indexError msg` streams the coded line `runtime error
 -- [E-INDEX-OOB]: <msg>` to stderr and traps, the same shape `panic` uses above
 -- and the same line native's @mdk_oob_msg and the interpreter both print.  The
--- $str rep and $mdk_eprint_str are forced for `indexError` in noteW8Extern.
+-- $str rep and $mdk_eprint_str are demanded for `indexError` in the catalog.
 emitLeafExternRef prog env d "indexError" [msg] =
   wasmTrapBytes (progEmit prog) "runtime error [E-INDEX-OOB]: "
     ++ emitRefExpr prog env d msg
@@ -9136,14 +9010,22 @@ emitAppTail prog env arity app =
   let (hd, args, _) = appParts app
   match hd
     CVar f0 _ =>
-      -- tail-position `__fallthrough__ ()` / `__ft__<label> ()`: lower the sentinel
-      -- (a `br`, NOT a `return` — control leaves the clause, not the function).
       if f0 == "$withFileReadBound"
-        || f0 == "$withFileWriteBound" then match args
-        [bound, CLam [PWild] body] =>
-          confinedFileBoundW prog f0 bound ++ emitRefTail prog env arity body
-        _ => gapLP prog "wasm: a file bound requires a grant and a thunk"
+        || f0 == "$withFileWriteBound" then match fileBoundW app
+        Some (g, body, mode) =>
+          let pushed =
+            emitRefExpr prog env 0 body
+              ++ ["call $mdk_file_bound_exit", "return"]
+          fileBoundEnterW prog env 0 g mode False
+            ++ ["if"]
+            ++ indent pushed
+            ++ ["else"]
+            ++ indent (emitRefTail prog env arity body)
+            ++ ["end", "unreachable"]
+        None => gapLP prog "wasm: a file bound requires a grant and a thunk"
       else if isFtSentinel f0 then
+        -- tail-position `__fallthrough__ ()` / `__ft__<label> ()`: lower the sentinel
+        -- (a `br`, NOT a `return` — control leaves the clause, not the function).
         ftSentinelInstrs f0
       else
         emitFlaggedAppW prog env app
@@ -11187,8 +11069,9 @@ collectExprLocals (CBinPrim _ l r _ _) =
 collectExprLocals (CUnOp _ x) = collectExprLocals x
 collectExprLocals (CIf c t f) =
   collectExprLocals c ++ collectExprLocals t ++ collectExprLocals f
-collectExprLocals (CApp f args _) =
-  collectExprLocals f ++ flatMap collectExprLocals args
+collectExprLocals (app@(CApp f args _)) = match fileBoundW app
+  Some (g, body, _) => collectExprLocals g ++ collectExprLocals body
+  None => collectExprLocals f ++ flatMap collectExprLocals args
 collectExprLocals (CTuple items) = flatMap collectExprLocals items
 collectExprLocals (CList items) = flatMap collectExprLocals items
 collectExprLocals (CArray items) = flatMap collectExprLocals items
@@ -11999,8 +11882,9 @@ maxIndexAt (CBinPrim op a b _ _) d =
   let sub = maxI (maxIndexAt a d) (maxIndexAt b d)
   if op == "/" || op == "%" then maxI d sub else sub
 maxIndexAt (CUnOp _ a) d = maxIndexAt a d
-maxIndexAt (CApp f args _) d =
-  foldMaxI (maxIndexAt f d :: map (a => maxIndexAt a d) args)
+maxIndexAt (app@(CApp f args _)) d = match fileBoundW app
+  Some (g, body, _) => maxI (maxIndexAt g d) (maxIndexAt body d)
+  None => foldMaxI (maxIndexAt f d :: map (a => maxIndexAt a d) args)
 maxIndexAt (CBlock stmts) d = foldMaxI (map (s => maxIndexAtStmt s d) stmts)
 -- a let-group's BODY is emitted at this same depth `d` at the use site (its lifted
 -- members carry their own scratch in their own functions); descend into the body so

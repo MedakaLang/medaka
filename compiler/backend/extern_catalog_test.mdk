@@ -207,14 +207,14 @@ test "(b) wasm: each demand has exactly its producers and implies its cofactors"
     ),
     (
       "FileBytes uses the IO path channel, $arr and $str",
-      implies UseFileBytes [UseIO, UseArray, UseStr],
+      implies UseFileBytes [UseArray, UseStr],
     ),
     ("Args: args", demandedBy UseArgs ["args"]),
-    ("Args builds a list of $str", implies UseArgs [UseStr, UseList, UseIO]),
+    ("Args builds a list of $str", implies UseArgs [UseStr, UseList]),
     ("FloatStr: stringToFloat", demandedBy UseFloatStr ["stringToFloat"]),
     (
       "FloatStr parses through the IO path channel",
-      implies UseFloatStr [UseFloat, UseStr, UseIO],
+      implies UseFloatStr [UseFloat, UseStr],
     ),
     (
       "CharClass: the char classification externs",
@@ -402,11 +402,6 @@ test "(d) wasm: a program reaching an extern gets each runtime group it demands"
       "byteBlockMake"
       "main = byteBlockLength (byteBlockMake 4)"
       "(func $mdk_bb_copy",
-    demandRow
-      UseIO
-      "exit"
-      "main =\n  let _ = putStrLn \"bye\"\n  exit 0"
-      "(func $mdk_push_path",
     demandRow
       UseArgs
       "args"

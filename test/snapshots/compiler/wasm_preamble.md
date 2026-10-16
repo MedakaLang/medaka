@@ -1,5 +1,5 @@
 # META
-source_lines=2537
+source_lines=2983
 stages=DESUGAR,MARK
 # SOURCE
 -- WasmGC module PREAMBLE — the fixed lines that head every emitted WAT module
@@ -40,6 +40,8 @@ stages=DESUGAR,MARK
 -- in EXACTLY this order.  The module is CLOSED by the emitter (it appends the type
 -- section, function defs, `(start)`, and the trailing `)`), so this preamble
 -- deliberately leaves the `(module` paren OPEN.
+
+import support.util.{contains}
 
 export
 preambleHeadLines : List String
@@ -991,7 +993,7 @@ strJoinRuntimeLines = [
 --   • a list (i31 Nil or $C_Cons) → rebuild the left spine onto `b` (list append).
 -- List append walks the left list into a fixed array, then conses back-to-front
 -- onto `b` so cell identity/order matches the W7 cons rep.  Gated by useStrLeafRef
--- && useListRef (both forced by `noteW8Binop "++"`), so $str + $C_Cons are in scope.
+-- && useListRef (both demanded by `++` in the plan's walk, `emit_plan.noteBinop`), so $str + $C_Cons are in scope.
 export
 appendRuntimeLines : List String
 appendRuntimeLines = [
@@ -1660,39 +1662,117 @@ floatFmtImportLines = [
   "  (import \"env\" \"mdk_float_fmt_byte\" (func $mdk_float_fmt_byte (param i32) (result i32)))"
 ]
 
--- #101: the libm transcendental (+ pow/atan2/hypot) math externs.  WasmGC has no libm,
--- so — like the floatToString formatter — each is a HOST IMPORT backed by JS
--- `Math.*` (byte-identical to C libm on the values these fixtures exercise; sub-ULP
--- transcendental divergences could still surface in a printed digit since the shortest-
--- round-trip formatter (unlike the old %.12g truncation) no longer masks them, and if
--- printed-divergent, are ledgered as native:libm-vs-jsmath-ulp — see
--- test/engine_divergence.txt).  IEEE-exact ops (sqrt/floor/ceil/trunc/round) and
--- floatRem lower to native f64 opcodes / $mdk_round / $mdk_float_rem — NOT host imports.
--- Every JS harness that instantiates a module (test/wasm/run.js + the playground
--- worker.js / compile.mjs / *_test.mjs) provides these $mdk_<name> functions.
--- Gated on WasmEmit.useMath (set by noteW8Extern when a host-math extern is referenced).
+-- One `env` import per host key of `EmitPlan.hostKeys`, in the plan's order.  A
+-- key is an import some reached extern's lowering calls, at its own call site or
+-- in a WAT runtime helper (`extern_catalog.wasmHostKeys`), so a module imports
+-- exactly what it calls.
 export
-mathHostImportLines : List String
-mathHostImportLines = [
-  "  ;; -- #101 libm math host seam (JS Math.*, see run.js / worker.js) --",
-  "  (import \"env\" \"mdk_cbrt\" (func $mdk_cbrt (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_exp\" (func $mdk_exp (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_log\" (func $mdk_log (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_log2\" (func $mdk_log2 (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_log10\" (func $mdk_log10 (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_sin\" (func $mdk_sin (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_cos\" (func $mdk_cos (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_tan\" (func $mdk_tan (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_asin\" (func $mdk_asin (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_acos\" (func $mdk_acos (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_atan\" (func $mdk_atan (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_sinh\" (func $mdk_sinh (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_cosh\" (func $mdk_cosh (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_tanh\" (func $mdk_tanh (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_pow\" (func $mdk_pow (param f64) (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_atan2\" (func $mdk_atan2 (param f64) (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_hypot\" (func $mdk_hypot (param f64) (param f64) (result f64)))"
-]
+hostImportLines : List String -> List String
+hostImportLines [] = []
+hostImportLines (key :: rest) =
+  if key == stderrByteKey then
+    -- declared once, at the late trap-import site, where body emission can add
+    -- the coded traps' need
+    hostImportLines rest
+  else
+    hostImportLine key :: hostImportLines rest
+
+-- the stderr byte writer's host key (`stderrByteImportLines`)
+export
+stderrByteKey : String
+stderrByteKey = "mdk_write_err_byte"
+
+hostImportLine : String -> String
+hostImportLine key =
+  "  (import \"env\" \"\{key}\" (func $\{key}\{hostImportSig key}))"
+
+hostImportSig : String -> String
+hostImportSig key = match hostImportSigOf key
+  Some sig => sig
+  None =>
+    panic
+      "internal error: host key \{key} has no wasm import signature in wasm_preamble.mdk"
+
+-- the signature each host binds a key with, written after the function's name,
+-- or `None` for a key it does not bind
+--
+-- `mdk_exit` flushes and exits, so its call site is followed by `unreachable`.
+-- The clock reads are seconds as f64 and the sleep milliseconds as i64 (design
+-- WA-1); a host binds a non-positive sleep to a no-op.  WasmGC has no libm, so
+-- the transcendentals and pow/atan2/hypot (the `unaryF64Sig` and `binaryF64Sig`
+-- rows) are host imports backed by JS `Math.*`: byte-identical to C libm on the
+-- values the fixtures exercise, with any printed sub-ULP divergence ledgered as
+-- native:libm-vs-jsmath-ulp (test/engine_divergence.txt).  The IEEE-exact ops
+-- (sqrt/floor/ceil/trunc/round) and floatRem lower to f64 opcodes, $mdk_round
+-- and $mdk_float_rem, not host imports.
+export
+hostImportSigOf : String -> Option String
+hostImportSigOf "mdk_exit" = Some " (param i32)"
+hostImportSigOf "mdk_wall_time_sec" = Some " (result f64)"
+hostImportSigOf "mdk_monotonic_sec" = Some " (result f64)"
+hostImportSigOf "mdk_sleep_ms" = Some " (param i64)"
+hostImportSigOf "mdk_cbrt" = Some unaryF64Sig
+hostImportSigOf "mdk_exp" = Some unaryF64Sig
+hostImportSigOf "mdk_log" = Some unaryF64Sig
+hostImportSigOf "mdk_log2" = Some unaryF64Sig
+hostImportSigOf "mdk_log10" = Some unaryF64Sig
+hostImportSigOf "mdk_sin" = Some unaryF64Sig
+hostImportSigOf "mdk_cos" = Some unaryF64Sig
+hostImportSigOf "mdk_tan" = Some unaryF64Sig
+hostImportSigOf "mdk_asin" = Some unaryF64Sig
+hostImportSigOf "mdk_acos" = Some unaryF64Sig
+hostImportSigOf "mdk_atan" = Some unaryF64Sig
+hostImportSigOf "mdk_sinh" = Some unaryF64Sig
+hostImportSigOf "mdk_cosh" = Some unaryF64Sig
+hostImportSigOf "mdk_tanh" = Some unaryF64Sig
+hostImportSigOf "mdk_pow" = Some binaryF64Sig
+hostImportSigOf "mdk_atan2" = Some binaryF64Sig
+hostImportSigOf "mdk_hypot" = Some binaryF64Sig
+hostImportSigOf "mdk_path_reset" = Some ""
+hostImportSigOf "mdk_path_push" = Some " (param i32)"
+hostImportSigOf "mdk_read_file" = Some " (result i32)"
+hostImportSigOf "mdk_file_exists" = Some " (result i32)"
+hostImportSigOf "mdk_get_env" = Some " (result i32)"
+hostImportSigOf "mdk_read_line" = Some " (result i32)"
+hostImportSigOf "mdk_read_all" = Some ""
+hostImportSigOf "mdk_read_exactly" = Some " (param i64) (result i32)"
+hostImportSigOf "mdk_os_entropy" = Some " (param i64) (result i32)"
+hostImportSigOf "mdk_executable_path" = Some " (result i32)"
+hostImportSigOf "mdk_args_count" = Some " (result i32)"
+hostImportSigOf "mdk_arg_len" = Some " (param i32) (result i32)"
+hostImportSigOf "mdk_arg_byte" = Some " (param i32) (param i32) (result i32)"
+hostImportSigOf "mdk_result_len" = Some " (result i32)"
+hostImportSigOf "mdk_result_byte" = Some " (param i32) (result i32)"
+hostImportSigOf "mdk_write_file_reset" = Some ""
+hostImportSigOf "mdk_write_file_push" = Some " (param i32)"
+hostImportSigOf "mdk_write_file_commit" = Some " (result i32)"
+hostImportSigOf "mdk_str_to_float" = Some " (result f64)"
+hostImportSigOf "mdk_str_to_float_ok" = Some " (result i32)"
+hostImportSigOf "mdk_grant_reset" = Some ""
+hostImportSigOf "mdk_grant_push" = Some " (param i32)"
+hostImportSigOf "mdk_canonicalize_path" = Some " (result i32)"
+hostImportSigOf "mdk_write_file" = Some " (result i32)"
+hostImportSigOf "mdk_append_file" = Some " (result i32)"
+hostImportSigOf "mdk_make_dir" = Some " (result i32)"
+hostImportSigOf "mdk_remove_file" = Some " (result i32)"
+hostImportSigOf "mdk_remove_dir" = Some " (result i32)"
+hostImportSigOf "mdk_fsync" = Some " (result i32)"
+hostImportSigOf "mdk_file_mode" = Some " (result i32)"
+hostImportSigOf "mdk_write_file_mode" = Some " (param i32) (result i32)"
+hostImportSigOf "mdk_rename" = Some " (param i32) (result i32)"
+hostImportSigOf "mdk_list_dir" = Some " (result i32)"
+hostImportSigOf "mdk_stat_file" = Some " (result i32)"
+hostImportSigOf "mdk_stat_field" = Some " (param i32) (result f64)"
+hostImportSigOf "mdk_file_bound_enter" =
+  Some " (param i32) (param i32) (result i32)"
+hostImportSigOf "mdk_file_bound_exit" = Some ""
+hostImportSigOf _ = None
+
+unaryF64Sig : String
+unaryF64Sig = " (param f64) (result f64)"
+
+binaryF64Sig : String
+binaryF64Sig = " (param f64) (param f64) (result f64)"
 
 -- stringToFloat host seam: the guest pushes the string's bytes via the path channel
 -- (mdk_path_reset + mdk_path_push, shared with IO) then calls mdk_str_to_float, which
@@ -1702,16 +1782,8 @@ mathHostImportLines = [
 -- NaN cannot double as the failure signal — the old single-f64 seam mapped every NaN to
 -- None and lost it.  The host parser (test/wasm/run.js + playground/worker.js, kept
 -- byte-identical per WH3) reproduces medaka_rt.c mdk_string_to_float: strtod + a full-
--- consumption endptr check + an empty-string reject. Gated on per-emission
--- WasmEmit.useFloatStr demand (set by noteW8Extern when "stringToFloat" is referenced).
-export
-floatStrImportLines : List String
-floatStrImportLines = [
-  "  ;; -- stringToFloat host seam (strtod acceptance set JS-side, see run.js) --",
-  "  (import \"env\" \"mdk_str_to_float\" (func $mdk_str_to_float (result f64)))",
-  "  (import \"env\" \"mdk_str_to_float_ok\" (func $mdk_str_to_float_ok (result i32)))"
-]
-
+-- consumption endptr check + an empty-string reject. Gated on
+-- the plan's `mdk_str_to_float` host key.
 -- $mdk_string_to_float : (ref $str) -> (ref eq)  (= Option Float = Some(boxed $float) | None)
 -- Protocol: reset the path buffer, push each UTF-8 byte of the string, call
 -- mdk_str_to_float (which parses the pathBuf bytes and LATCHES an ok flag), then
@@ -1721,8 +1793,11 @@ floatStrImportLines = [
 -- — strtod("nan") SUCCEEDS with a NaN value, while strtod("") and strtod("1.5 ") fail.
 -- Testing the f64 for NaN can distinguish neither.
 export
-floatStrRuntimeLines : List String
-floatStrRuntimeLines = [
+floatStrRuntimeLines : List String -> List String
+floatStrRuntimeLines keys = gatedOn "mdk_str_to_float" keys floatStrLines
+
+floatStrLines : List String
+floatStrLines = [
   "  ;; stringToFloat : $str -> Option Float (ref eq).",
   "  (func $mdk_string_to_float (param $s (ref $str)) (result (ref eq))",
   "    (local $b (ref $u8arr)) (local $i i32) (local $n i32) (local $d f64)",
@@ -1884,7 +1959,7 @@ randomFloatRuntimeLines = [
   "          (f64.const 2.0))", "        (f64.const 1.0))))"
 ]
 
--- ── W12 IO host surface (readFile / fileExists / args / getEnv / exit) ───────
+-- ── W12 IO host surface (readFile / fileExists / args / getEnv) ──────────────
 -- The LAST emitter-gap category: the IO externs.  GC refs ($str) cannot cross the
 -- wasm import boundary, so strings are marshaled through a byte-at-a-time channel —
 -- exactly the length+byte protocol the floatToString host seam uses (run.js fmt12g).
@@ -1900,47 +1975,36 @@ randomFloatRuntimeLines = [
 --   readFile  : push path, mdk_read_file() -> i32 (1=Ok, 0=Err); rebuild the result
 --     $str and wrap Ok (struct.new $C_Ok, ord 0) / Err (struct.new $C_Err, ord 1).
 --     Contents that are not UTF-8 are an Err naming the path ($mdk_str_not_utf8).
---   fileExists: push path, mdk_file_exists() -> i32 (1/0) -> Bool i31.
+--   fileExists: push path, mdk_file_exists() -> i32 (1/0) -> Bool i31; 2 is a
+--     refusal, whose message is on the result channel ($mdk_refused_panic).
+--   canonicalizePath: push path, mdk_canonicalize_path() -> i32 (1=the canonical
+--     path, or the path itself when it has none, on the result channel / 0=a refusal).
+--   A file extern whose path is an authority pushes its grant first
+--   ($mdk_push_grant): mdk_grant_reset(), then each element's bytes through
+--   mdk_grant_push(byte), each element ended by mdk_grant_push(-1).  `[]` pushes
+--   no element: the whole domain.  The host confines the path against that grant
+--   and every enclosing declared bound of the same mode, as medaka_rt.c
+--   mdk_confine_bounds does, and a refusal is an Err of the extern's result.
 --   getEnv    : push name, mdk_get_env() -> i32 (1=Some / 0=None); rebuild $str and
 --     wrap Some (struct.new $C_Some, ord 0) / None (i31 ord 1).
+--   executablePath : mdk_executable_path() -> i32 (always 1); the path on the result channel.
+--   osEntropyBytes : mdk_os_entropy(n) -> i32 (1 = n bytes on the result channel; 0 = a
+--     refusal, its panic text on the channel, which the guest panics with).
 --   args      : mdk_args_count(); per i build a $str from mdk_arg_len(i)/mdk_arg_byte(i,j),
 --     fold a Cons chain right-to-left ending in Nil (i31 ord 1).
---   exit      : mdk_exit(i32) host import then `unreachable` (stack-polymorphic).
--- Gated on useIORef (set by noteW8Extern when any IO extern is referenced).
-export
-ioHostImportLines : List String
-ioHostImportLines = [
-  "  ;; -- W12 IO host surface (byte-channel marshaling, see run.js) --",
-  "  (import \"env\" \"mdk_path_reset\" (func $mdk_path_reset))",
-  "  (import \"env\" \"mdk_path_push\" (func $mdk_path_push (param i32)))",
-  "  (import \"env\" \"mdk_read_file\" (func $mdk_read_file (result i32)))",
-  "  (import \"env\" \"mdk_file_exists\" (func $mdk_file_exists (result i32)))",
-  "  (import \"env\" \"mdk_get_env\" (func $mdk_get_env (result i32)))",
-  "  (import \"env\" \"mdk_args_count\" (func $mdk_args_count (result i32)))",
-  "  (import \"env\" \"mdk_arg_len\" (func $mdk_arg_len (param i32) (result i32)))",
-  "  (import \"env\" \"mdk_arg_byte\" (func $mdk_arg_byte (param i32) (param i32) (result i32)))",
-  "  (import \"env\" \"mdk_result_len\" (func $mdk_result_len (result i32)))",
-  "  (import \"env\" \"mdk_result_byte\" (func $mdk_result_byte (param i32) (result i32)))",
-  "  (import \"env\" \"mdk_exit\" (func $mdk_exit (param i32)))"
-]
-
--- The clock host surface (design WA-1): reads in seconds as f64, a sleep in
--- milliseconds as i64.  A host binds a non-positive sleep to a no-op.
-export
-clockHostImportLines : List String
-clockHostImportLines = [
-  "  ;; -- clock host surface (wallTimeSec / monotonicSec / sleepMs) --",
-  "  (import \"env\" \"mdk_wall_time_sec\" (func $mdk_wall_time_sec (result f64)))",
-  "  (import \"env\" \"mdk_monotonic_sec\" (func $mdk_monotonic_sec (result f64)))",
-  "  (import \"env\" \"mdk_sleep_ms\" (func $mdk_sleep_ms (param i64)))"
-]
-
+-- Each import is a host key of the reached externs (`EmitPlan.hostKeys`), and
+-- each runtime helper below is gated on the key it calls.
 -- readFile's Err suffix for contents that are not UTF-8, the text of
 -- medaka_rt.c mdk_read_file's, as the WAT that builds it as a $u8arr.  ASCII,
 -- so one element per character.
 notUtf8SuffixWat : String
 notUtf8SuffixWat =
-  let cs = stringToChars ": not valid UTF-8 (use readFileBytes for raw bytes)"
+  asciiU8arrWat ": not valid UTF-8 (use readFileBytes for raw bytes)"
+
+-- the WAT that builds an ASCII string's bytes as a $u8arr
+asciiU8arrWat : String -> String
+asciiU8arrWat s =
+  let cs = stringToChars s
   "(array.new_fixed $u8arr \{intToString (arrayLength cs)}\{asciiConstsW cs (arrayLength cs) 0})"
 
 asciiConstsW : Array Char -> Int -> Int -> String
@@ -1955,35 +2019,155 @@ asciiConstsW cs n i =
 -- $str-dependent (every path/result is a $str) and $C_Ok/$C_Err/$C_Some/$T_List are
 -- always declared in ref-mode, so these are always in scope when emitted.
 export
-ioHostRuntimeLines : List String
-ioHostRuntimeLines = [
-  "  ;; -- W12 IO host-surface runtime --",
+ioHostRuntimeLines : List String -> List String
+ioHostRuntimeLines keys =
+  gatedOn "mdk_path_push" keys ioPushPathLines
+    ++ gatedOn "mdk_rename" keys ioPushPathMoreLines
+    ++ gatedOn "mdk_grant_push" keys ioPushGrantLines
+    ++ gatedOn "mdk_rename" keys ioPushGrantMoreLines
+    ++ gatedOn "mdk_result_len" keys ioResultLines
+    ++ (if contains "mdk_file_exists" keys
+      || contains "mdk_canonicalize_path" keys
+      || contains "mdk_os_entropy" keys then
+      ioRefusedPanicLines
+    else
+      [])
+    ++ gatedOn "mdk_read_file" keys ioReadFileLines
+    ++ gatedOn "mdk_file_exists" keys ioFileExistsLines
+    ++ gatedOn "mdk_canonicalize_path" keys ioCanonicalizeLines
+    ++ gatedOn "mdk_write_file" keys ioWriteFileLines
+    ++ gatedOn "mdk_append_file" keys ioAppendFileLines
+    ++ gatedOn "mdk_rename" keys ioRenameLines
+    ++ gatedOn "mdk_list_dir" keys ioListDirLines
+    ++ gatedOn "mdk_stat_file" keys ioStatFileLines
+    ++ gatedOn "mdk_make_dir" keys ioMakeDirLines
+    ++ gatedOn "mdk_remove_file" keys ioRemoveFileLines
+    ++ gatedOn "mdk_remove_dir" keys ioRemoveDirLines
+    ++ gatedOn "mdk_fsync" keys ioFsyncLines
+    ++ gatedOn "mdk_file_mode" keys ioFileModeLines
+    ++ gatedOn "mdk_write_file_mode" keys ioWriteFileModeLines
+    ++ gatedOn "mdk_get_env" keys ioGetEnvLines
+    ++ gatedOn "mdk_read_line" keys ioReadLineLines
+    ++ gatedOn "mdk_read_all" keys ioReadAllLines
+    ++ gatedOn "mdk_read_exactly" keys ioReadExactlyLines
+    ++ gatedOn "mdk_executable_path" keys ioExecutablePathLines
+
+gatedOn : String -> List String -> List String -> List String
+gatedOn key keys block = if contains key keys then block else []
+
+ioPushPathLines : List String
+ioPushPathLines = [
   "  ;; push a $str's bytes to the host path buffer (reset first).",
   "  (func $mdk_push_path (param $s (ref $str))",
   "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
   "    (call $mdk_path_reset)",
   "    (local.set $b (struct.get $str $bytes (local.get $s)))",
   "    (local.set $n (array.len (local.get $b)))",
-  "    (local.set $i (i32.const 0))",
-  "    (block $d (loop $l",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
   "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    )"
+]
+
+-- Only rename pushes a second path; the helper is emitted for it alone.
+ioPushPathMoreLines : List String
+ioPushPathMoreLines = [
+  "  ;; append a $str's bytes to the host path buffer (rename's second path).",
+  "  (func $mdk_push_path_more (param $s (ref $str))",
+  "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
+  "    (local.set $b (struct.get $str $bytes (local.get $s)))",
+  "    (local.set $n (array.len (local.get $b)))",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    )"
+]
+
+-- A grant is the W7 cons list of $str elements; Nil is an i31.
+ioPushGrantLines : List String
+ioPushGrantLines = [
+  "  ;; push a grant (List String) to the host grant buffer (reset first).",
+  "  (func $mdk_push_grant (param $g (ref eq))",
+  "    (local $cell (ref $C_Cons)) (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
+  "    (call $mdk_grant_reset)", "    (block $done (loop $next",
+  "      (br_if $done (i32.eqz (ref.test (ref $C_Cons) (local.get $g))))",
+  "      (local.set $cell (ref.cast (ref $C_Cons) (local.get $g)))",
+  "      (local.set $b (struct.get $str $bytes (ref.cast (ref $str) (struct.get $C_Cons 1 (local.get $cell)))))",
+  "      (local.set $n (array.len (local.get $b)))",
+  "      (local.set $i (i32.const 0))", "      (block $d (loop $l",
+  "        (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "        (call $mdk_grant_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "        (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "      (call $mdk_grant_push (i32.const -1))",
+  "      (local.set $g (struct.get $C_Cons 2 (local.get $cell))) (br $next)))",
+  "    )"
+]
+
+-- Only rename pushes a second grant; the helper is emitted for it alone.
+ioPushGrantMoreLines : List String
+ioPushGrantMoreLines = [
+  "  ;; append a grant to the host grant buffer (rename's second grant).",
+  "  (func $mdk_push_grant_more (param $g (ref eq))",
+  "    (local $cell (ref $C_Cons)) (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
+  "    (block $done (loop $next",
+  "      (br_if $done (i32.eqz (ref.test (ref $C_Cons) (local.get $g))))",
+  "      (local.set $cell (ref.cast (ref $C_Cons) (local.get $g)))",
+  "      (local.set $b (struct.get $str $bytes (ref.cast (ref $str) (struct.get $C_Cons 1 (local.get $cell)))))",
+  "      (local.set $n (array.len (local.get $b)))",
+  "      (local.set $i (i32.const 0))", "      (block $d (loop $l",
+  "        (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "        (call $mdk_grant_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "        (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "      (call $mdk_grant_push (i32.const -1))",
+  "      (local.set $g (struct.get $C_Cons 2 (local.get $cell))) (br $next)))",
+  "    )"
+]
+
+-- A refusal from an extern that returns no Result panics, as medaka_rt.c
+-- mdk_panic prints it: the E-PANIC banner, the message, a newline.
+ioRefusedPanicLines : List String
+ioRefusedPanicLines = [
+  "  ;; the host's refusal message (result channel) as an E-PANIC line, then trap.",
+  "  (func $mdk_refused_panic",
+  "    (call $mdk_err_u8arr \{panicBannerWat})",
+  "    (call $mdk_err_u8arr (call $mdk_io_result_bytes))",
+  "    (call $mdk_write_err_byte (i32.const 10))",
+  "    (unreachable))",
+  "  (func $mdk_err_u8arr (param $b (ref $u8arr))",
+  "    (local $i i32) (local $n i32)",
+  "    (local.set $n (array.len (local.get $b)))",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (call $mdk_write_err_byte (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
   "    )",
+]
+
+panicBannerWat : String
+panicBannerWat = asciiU8arrWat "runtime error [E-PANIC]: "
+
+ioResultLines : List String
+ioResultLines = [
   "  ;; copy the host result buffer (length + byte-at-index) into a fresh $u8arr.",
   "  (func $mdk_io_result_bytes (result (ref $u8arr))",
   "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))",
   "    (local.set $n (call $mdk_result_len))",
   "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
-  "    (local.set $i (i32.const 0))",
-  "    (block $d (loop $l",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
   "      (array.set $u8arr (local.get $buf) (local.get $i) (call $mdk_result_byte (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
   "    (local.get $buf))",
   "  ;; the host result buffer as a $str, read as UTF-8 by $mdk_u8_to_str_lossy.",
   "  (func $mdk_io_result_to_str (result (ref $str))",
-  "    (call $mdk_u8_to_str_lossy (call $mdk_io_result_bytes)))",
+  "    (call $mdk_u8_to_str_lossy (call $mdk_io_result_bytes)))"
+]
+
+ioReadFileLines : List String
+ioReadFileLines = [
   "  ;; readFile's Err for contents that are not UTF-8: the path, then a fixed ASCII",
   "  ;; suffix, byte-identical to medaka_rt.c mdk_read_file.",
   "  (func $mdk_str_not_utf8 (param $path (ref $str)) (result (ref $str))",
@@ -1997,8 +2181,9 @@ ioHostRuntimeLines = [
   "    (struct.new $str (i32.add (struct.get $str $cp_count (local.get $path)) (array.len (local.get $sfx))) (local.get $out)))",
   "  ;; readFile : $str path -> Result String String.  1=Ok contents / 0=Err message.",
   "  ;; Contents that are not UTF-8 are an Err naming the path (medaka_rt.c mdk_read_file).",
-  "  (func $mdk_read_file_io (param $path (ref $str)) (result (ref eq))",
+  "  (func $mdk_read_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
   "    (local $st i32) (local $buf (ref $u8arr)) (local $c i32)",
+  "    (call $mdk_push_grant (local.get $g))",
   "    (call $mdk_push_path (local.get $path))",
   "    (local.set $st (call $mdk_read_file))",
   "    (if (i32.eqz (local.get $st))",
@@ -2008,27 +2193,265 @@ ioHostRuntimeLines = [
   "    (if (result (ref eq)) (i32.ge_s (local.get $c) (i32.const 0))",
   "      (then (struct.new $C_Ok (i32.const 0) (struct.new $str (local.get $c) (local.get $buf))))",
   "      (else (struct.new $C_Err (i32.const 1) (call $mdk_str_not_utf8 (local.get $path))))))",
-  "  ;; fileExists : $str path -> Bool (i31 ordinal: False=0 / True=1).",
-  "  (func $mdk_file_exists_io (param $path (ref $str)) (result (ref eq))",
+]
+
+ioFileExistsLines : List String
+ioFileExistsLines = [
+  "  ;; fileExists : $str path -> Bool (i31 ordinal: False=0 / True=1); 2 = refused.",
+  "  (func $mdk_file_exists_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (local $r i32)", "    (call $mdk_push_grant (local.get $g))",
   "    (call $mdk_push_path (local.get $path))",
-  "    (ref.i31 (call $mdk_file_exists)))",
+  "    (local.set $r (call $mdk_file_exists))",
+  "    (if (i32.eq (local.get $r) (i32.const 2)) (then (call $mdk_refused_panic)))",
+  "    (ref.i31 (local.get $r)))"
+]
+
+ioCanonicalizeLines : List String
+ioCanonicalizeLines = [
+  "  ;; canonicalizePath : $str path -> $str.  1=the host's answer / 0=refused.",
+  "  (func $mdk_canonicalize_path_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (i32.eqz (call $mdk_canonicalize_path)) (then (call $mdk_refused_panic)))",
+  "    (call $mdk_io_result_to_str))"
+]
+
+ioWriteFileLines : List String
+ioWriteFileLines = [
+  "  ;; writeFile : $str path -> $str contents -> Result String Unit.  1=Ok () / 0=Err msg.",
+  "  ;; The contents' bytes stream to the host's write buffer, as writeFileBytes streams its array.",
+  "  (func $mdk_write_file_io (param $path (ref $str)) (param $s (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (call $mdk_write_file_reset)",
+  "    (local.set $b (struct.get $str $bytes (local.get $s)))",
+  "    (local.set $n (array.len (local.get $b)))",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (call $mdk_write_file_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (if (result (ref eq)) (call $mdk_write_file)",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioWriteFileModeLines : List String
+ioWriteFileModeLines = [
+  "  ;; writeFileMode : $str path -> Int mode -> $str contents -> Result String Unit.",
+  "  ;; 1=Ok () / 0=Err msg.  The contents stream to the host's write buffer; the host sets",
+  "  ;; the file's mode before the first byte is written.",
+  "  (func $mdk_write_file_mode_io (param $path (ref $str)) (param $mode (ref eq)) (param $s (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (call $mdk_write_file_reset)",
+  "    (local.set $b (struct.get $str $bytes (local.get $s)))",
+  "    (local.set $n (array.len (local.get $b)))",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (call $mdk_write_file_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (if (result (ref eq)) (call $mdk_write_file_mode (i32.wrap_i64 (call $mdk_unbox_int (local.get $mode))))",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioAppendFileLines : List String
+ioAppendFileLines = [
+  "  ;; appendFile : $str path -> $str contents -> Result String Unit.  1=Ok () / 0=Err msg.",
+  "  ;; The contents' bytes stream to the host's write buffer; the host appends them.",
+  "  (func $mdk_append_file_io (param $path (ref $str)) (param $s (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (call $mdk_write_file_reset)",
+  "    (local.set $b (struct.get $str $bytes (local.get $s)))",
+  "    (local.set $n (array.len (local.get $b)))",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (call $mdk_write_file_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (if (result (ref eq)) (call $mdk_append_file)",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioRenameLines : List String
+ioRenameLines = [
+  "  ;; rename : $str src -> $str dst -> src grant -> dst grant -> Result String Unit.",
+  "  ;; The grants share the grant channel (-2 ends the first), the paths the path channel;",
+  "  ;; the host splits the path buffer at the source's byte length.",
+  "  (func $mdk_rename_io (param $src (ref $str)) (param $dst (ref $str)) (param $gs (ref eq)) (param $gd (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $gs))",
+  "    (call $mdk_grant_push (i32.const -2))",
+  "    (call $mdk_push_grant_more (local.get $gd))",
+  "    (call $mdk_push_path (local.get $src))",
+  "    (call $mdk_push_path_more (local.get $dst))",
+  "    (if (result (ref eq)) (call $mdk_rename (array.len (struct.get $str $bytes (local.get $src))))",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioListDirLines : List String
+ioListDirLines = [
+  "  ;; listDir : $str path -> Result String (List String).  The host answers each entry's",
+  "  ;; name followed by a NUL byte; the list is built from the last entry back.",
+  "  (func $mdk_list_dir_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (local $buf (ref $u8arr)) (local $name (ref $u8arr)) (local $acc (ref eq))",
+  "    (local $pos i32) (local $end i32) (local $k i32)",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (i32.eqz (call $mdk_list_dir))",
+  "      (then (return (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))",
+  "    (local.set $buf (call $mdk_io_result_bytes))",
+  "    (local.set $acc (ref.i31 (i32.const 1)))",
+  "    (local.set $pos (array.len (local.get $buf)))", "    (block $d (loop $l",
+  "      (br_if $d (i32.le_s (local.get $pos) (i32.const 0)))",
+  "      (local.set $end (i32.sub (local.get $pos) (i32.const 1)))",
+  "      (local.set $k (local.get $end))", "      (block $s (loop $m",
+  "        (br_if $s (i32.eqz (local.get $k)))",
+  "        (br_if $s (i32.eqz (array.get_u $u8arr (local.get $buf) (i32.sub (local.get $k) (i32.const 1)))))",
+  "        (local.set $k (i32.sub (local.get $k) (i32.const 1))) (br $m)))",
+  "      (local.set $name (array.new $u8arr (i32.const 0) (i32.sub (local.get $end) (local.get $k))))",
+  "      (array.copy $u8arr $u8arr (local.get $name) (i32.const 0) (local.get $buf) (local.get $k) (i32.sub (local.get $end) (local.get $k)))",
+  "      (local.set $acc (struct.new $C_Cons (i32.const 0) (call $mdk_u8_to_str_lossy (local.get $name)) (local.get $acc)))",
+  "      (local.set $pos (local.get $k)) (br $l)))",
+  "    (struct.new $C_Ok (i32.const 0) (local.get $acc)))"
+]
+
+ioStatFileLines : List String
+ioStatFileLines = [
+  "  ;; statFile : $str path -> Result String (Int, Bool, Bool, Float): size, isDir, isFile,",
+  "  ;; mtime in seconds.  The host answers each field of the stat it took as an f64.",
+  "  (func $mdk_stat_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (result (ref eq)) (call $mdk_stat_file)",
+  "      (then (struct.new $C_Ok (i32.const 0)",
+  "        (struct.new $C_Tup4 (i32.const 0)",
+  "          (call $mdk_box_int (i64.trunc_f64_s (call $mdk_stat_field (i32.const 0))))",
+  "          (ref.i31 (i32.trunc_f64_s (call $mdk_stat_field (i32.const 1))))",
+  "          (ref.i31 (i32.trunc_f64_s (call $mdk_stat_field (i32.const 2))))",
+  "          (struct.new $float (call $mdk_stat_field (i32.const 3))))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioMakeDirLines : List String
+ioMakeDirLines = [
+  "  ;; makeDir : $str path -> Result String Unit.  1=Ok () / 0=Err msg.",
+  "  (func $mdk_make_dir_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (result (ref eq)) (call $mdk_make_dir)",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioRemoveFileLines : List String
+ioRemoveFileLines = [
+  "  ;; removeFile : $str path -> Result String Unit.  1=Ok () / 0=Err msg.",
+  "  (func $mdk_remove_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (result (ref eq)) (call $mdk_remove_file)",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioRemoveDirLines : List String
+ioRemoveDirLines = [
+  "  ;; removeDir : $str path -> Result String Unit.  1=Ok () / 0=Err msg.",
+  "  (func $mdk_remove_dir_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (result (ref eq)) (call $mdk_remove_dir)",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioFsyncLines : List String
+ioFsyncLines = [
+  "  ;; fsync : $str path -> Result String Unit.  1=Ok () / 0=Err msg.",
+  "  (func $mdk_fsync_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (result (ref eq)) (call $mdk_fsync)",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioFileModeLines : List String
+ioFileModeLines = [
+  "  ;; fileMode : $str path -> Result String Int: the permission bits, 0 to 4095.  The host",
+  "  ;; takes the stat that statFile takes and answers its mode field, field 4.",
+  "  (func $mdk_file_mode_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (result (ref eq)) (call $mdk_file_mode)",
+  "      (then (struct.new $C_Ok (i32.const 0)",
+  "        (call $mdk_box_int (i64.trunc_f64_s (call $mdk_stat_field (i32.const 4))))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioGetEnvLines : List String
+ioGetEnvLines = [
   "  ;; getEnv : $str name -> Option String.  1=Some value / 0=None.",
   "  (func $mdk_get_env_io (param $name (ref $str)) (result (ref eq))",
-  "    (local $st i32)",
-  "    (call $mdk_push_path (local.get $name))",
+  "    (local $st i32)", "    (call $mdk_push_path (local.get $name))",
   "    (local.set $st (call $mdk_get_env))",
   "    (if (result (ref eq)) (local.get $st)",
   "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))",
-  "      (else (ref.i31 (i32.const 1)))))",
+  "      (else (ref.i31 (i32.const 1)))))"
+]
+
+ioReadLineLines : List String
+ioReadLineLines = [
+  "  ;; readLine : Unit -> String.  The host answers 1 with a line (its newline",
+  "  ;; stripped) on the result channel, or 0 at end of input, where the channel is empty.",
+  "  (func $mdk_read_line_io (result (ref eq))",
+  "    (drop (call $mdk_read_line))", "    (call $mdk_io_result_to_str))",
+  "  ;; readLineOpt : Unit -> Option String.  0 is None.",
+  "  (func $mdk_read_line_opt_io (result (ref eq))",
+  "    (if (result (ref eq)) (call $mdk_read_line)",
+  "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))",
+  "      (else (ref.i31 (i32.const 1)))))"
+]
+
+ioReadAllLines : List String
+ioReadAllLines = [
+  "  ;; readAll : Unit -> String.  The rest of the host's stdin buffer.",
+  "  (func $mdk_read_all_io (result (ref eq))", "    (call $mdk_read_all)",
+  "    (call $mdk_io_result_to_str))"
+]
+
+ioReadExactlyLines : List String
+ioReadExactlyLines = [
+  "  ;; readExactly : Int -> Option String.  1=Some the n bytes / 0=None (end of input",
+  "  ;; or a short read, whose bytes the host has consumed).",
+  "  (func $mdk_read_exactly_io (param $n i64) (result (ref eq))",
+  "    (if (result (ref eq)) (call $mdk_read_exactly (local.get $n))",
+  "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))",
+  "      (else (ref.i31 (i32.const 1)))))"
+]
+
+-- executablePath : Unit -> String.  The host's path (always 1) on the result channel.
+ioExecutablePathLines : List String
+ioExecutablePathLines = [
+  "  (func $mdk_executable_path_io (result (ref eq))",
+  "    (drop (call $mdk_executable_path))", "    (call $mdk_io_result_to_str))"
 ]
 
 -- the `args` extern body — split out from ioHostRuntimeLines because it references
 -- the cons-list types ($C_Cons / Nil), which are only declared when the program uses
--- a list. Gated on the fresh emission's WasmEmit.useArgs demand (set when `args` is
--- referenced, which also forces useListRef so $C_Cons is in scope).
+-- a list. Gated on the `mdk_args_count` host key; the `args` extern's catalog
+-- demand brings the list types with it.
 export
-ioArgsRuntimeLines : List String
-ioArgsRuntimeLines = [
+ioArgsRuntimeLines : List String -> List String
+ioArgsRuntimeLines keys = gatedOn "mdk_args_count" keys ioArgsLines
+
+ioArgsLines : List String
+ioArgsLines = [
   "  ;; build a $str from the i-th host arg (mdk_arg_len(i) + mdk_arg_byte(i,j)).",
   "  (func $mdk_arg_to_str (param $idx i32) (result (ref $str))",
   "    (local $n i32) (local $j i32) (local $buf (ref $u8arr))",
@@ -2061,26 +2484,26 @@ ioArgsRuntimeLines = [
 -- direction: three new host imports stream the path (reuse $mdk_push_path) + the byte
 -- array OUT to a JS write buffer, then commit a Node `fs.writeFileSync`.  Both return
 -- a Result String (…) byte-identical to the native runtime (medaka_rt.c
--- mdk_read_file_bytes / mdk_write_file_bytes).  Gated on per-emission
--- WasmEmit.useFileBytes demand; IO, Array, and String cofactors keep $mdk_push_path /
--- $mdk_io_result_to_str in scope, declare $arr, and provide the Err/path $str.
+-- mdk_read_file_bytes / mdk_write_file_bytes).  The write body is gated on the
+-- `mdk_write_file_commit` key.  The read body shares its keys with readFile, so
+-- it also needs `readsBytes` (the extern's `useFileBytes` demand, which brings $arr).
 export
-fileBytesHostImportLines : List String
-fileBytesHostImportLines = [
-  "  ;; -- stage-D writeFileBytes host imports (path via mdk_path_push; bytes streamed) --",
-  "  (import \"env\" \"mdk_write_file_reset\" (func $mdk_write_file_reset))",
-  "  (import \"env\" \"mdk_write_file_push\" (func $mdk_write_file_push (param i32)))",
-  "  (import \"env\" \"mdk_write_file_commit\" (func $mdk_write_file_commit (result i32)))",
-]
+fileBytesRuntimeLines : Bool -> List String -> List String
+fileBytesRuntimeLines readsBytes keys =
+  gatedOn "mdk_write_file_commit" keys writeFileBytesLines
+    ++ gatedOn "mdk_os_entropy" keys osEntropyLines
+    ++ (if readsBytes then
+      gatedOn "mdk_read_file" keys readFileBytesLines
+    else
+      [])
 
-export
-fileBytesRuntimeLines : List String
-fileBytesRuntimeLines = [
-  "  ;; -- stage-D byte-clean file I/O runtime --",
+readFileBytesLines : List String
+readFileBytesLines = [
   "  ;; readFileBytes : $str path -> Result String (Array Int).  1=Ok bytes / 0=Err msg.",
   "  ;; Reuses the read byte-channel but rebuilds an $arr of i31 Int bytes (0..255).",
-  "  (func $mdk_read_file_bytes_io (param $path (ref $str)) (result (ref eq))",
+  "  (func $mdk_read_file_bytes_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
   "    (local $st i32) (local $n i32) (local $i i32) (local $out (ref $arr))",
+  "    (call $mdk_push_grant (local.get $g))",
   "    (call $mdk_push_path (local.get $path))",
   "    (local.set $st (call $mdk_read_file))",
   "    (if (result (ref eq)) (local.get $st)", "      (then",
@@ -2091,11 +2514,34 @@ fileBytesRuntimeLines = [
   "          (array.set $arr (local.get $out) (local.get $i) (ref.i31 (call $mdk_result_byte (local.get $i))))",
   "          (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
   "        (struct.new $C_Ok (i32.const 0) (local.get $out)))",
-  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+-- osEntropyBytes : Int -> Array Int.  The host fills the result channel with n random
+-- bytes, or refuses a negative or oversized count with its panic text on the channel,
+-- which $mdk_refused_panic writes as the E-PANIC line.  Built like readFileBytes's array.
+osEntropyLines : List String
+osEntropyLines = [
+  "  ;; osEntropyBytes : Int -> Array Int.  1=n random bytes / 0=a refusal (its text on the channel).",
+  "  (func $mdk_os_entropy_io (param $n i64) (result (ref eq))",
+  "    (local $len i32) (local $i i32) (local $out (ref $arr))",
+  "    (if (i32.eqz (call $mdk_os_entropy (local.get $n))) (then (call $mdk_refused_panic)))",
+  "    (local.set $len (call $mdk_result_len))",
+  "    (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $len)))",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $len)))",
+  "      (array.set $arr (local.get $out) (local.get $i) (ref.i31 (call $mdk_result_byte (local.get $i))))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (local.get $out))"
+]
+
+writeFileBytesLines : List String
+writeFileBytesLines = [
   "  ;; writeFileBytes : $str path -> $arr bytes -> Result String Unit.  1=Ok () / 0=Err msg.",
   "  ;; Stream each i31 byte (masked to 0..255) to the host, then commit fs.writeFileSync.",
-  "  (func $mdk_write_file_bytes_io (param $path (ref $str)) (param $ba (ref $arr)) (result (ref eq))",
+  "  (func $mdk_write_file_bytes_io (param $path (ref $str)) (param $ba (ref $arr)) (param $g (ref eq)) (result (ref eq))",
   "    (local $st i32) (local $n i32) (local $i i32)",
+  "    (call $mdk_push_grant (local.get $g))",
   "    (call $mdk_push_path (local.get $path))",
   "    (call $mdk_write_file_reset)",
   "    (local.set $n (array.len (local.get $ba)))",
@@ -2314,7 +2760,7 @@ utf8LossyRuntimeLines = [
 -- mdk_utf8_decode / mdk_utf8_encode).  A Char is an i31 codepoint; an `Array Char` is
 -- the §3.3 $arr = (array (mut (ref eq))) holding `cp_count` i31s.  Emitted when the
 -- program uses stringToChars/stringFromChars (`WasmEmit.useStrCodec`); needs the $str rep
--- ($u8arr) AND the $arr rep (both forced by noteW8Extern).
+-- ($u8arr) AND the $arr rep (both demanded with it in the catalog).
 --   $mdk_str_to_chars : decode each UTF-8 codepoint (lead byte <0x80 → 1B; <0xE0 → 2B
 --     & 0x1F; <0xF0 → 3B & 0x0F; else 4B & 0x07; each continuation byte & 0x3F, shift
 --     << 6 and OR), pushing `ref.i31 cp` into a fresh $arr of length cp_count.
@@ -2540,6 +2986,7 @@ charFromCodeRuntimeLines = [
   "    (ref.i31 (i32.const 1)))",
 ]
 # DESUGAR
+(DUse false (UseGroup ("support" "util") ((mem "contains" false))))
 (DTypeSig true "preambleHeadLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preambleHeadLines" () (EListLit (ELit (LString ";; Medaka WasmGC backend (Stage 2.4c) — emitted WAT.")) (ELit (LString ";; Value rep: WASMGC-DESIGN.md §3 / §8.6.  W2 = scalar i32; W3 = (ref eq) + i31/structs.")) (ELit (LString "(module"))))
 (DTypeSig true "importLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -2671,12 +3118,83 @@ charFromCodeRuntimeLines = [
 (DFunDef false "charClassRuntimeLines" () (EListLit (ELit (LString "  ;; ── W11b ASCII char classification + case mapping (byte-identical to medaka_rt.c) ──")) (ELit (LString "  (func $mdk_char_is_alpha (param $c i32) (result i32)")) (ELit (LString "    (i32.or")) (ELit (LString "      (i32.and (i32.ge_u (local.get $c) (i32.const 97)) (i32.le_u (local.get $c) (i32.const 122)))")) (ELit (LString "      (i32.and (i32.ge_u (local.get $c) (i32.const 65)) (i32.le_u (local.get $c) (i32.const 90)))))")) (ELit (LString "  (func $mdk_char_is_space (param $c i32) (result i32)")) (ELit (LString "    (i32.or")) (ELit (LString "      (i32.eq (local.get $c) (i32.const 32))")) (ELit (LString "      (i32.and (i32.ge_u (local.get $c) (i32.const 9)) (i32.le_u (local.get $c) (i32.const 13)))))")) (ELit (LString "  (func $mdk_char_is_upper (param $c i32) (result i32)")) (ELit (LString "    (i32.and (i32.ge_u (local.get $c) (i32.const 65)) (i32.le_u (local.get $c) (i32.const 90))))")) (ELit (LString "  (func $mdk_char_is_lower (param $c i32) (result i32)")) (ELit (LString "    (i32.and (i32.ge_u (local.get $c) (i32.const 97)) (i32.le_u (local.get $c) (i32.const 122))))")) (ELit (LString "  ;; charIsPunct: exact set from medaka_rt.c switch — Unicode Pc/Pd/Pe/Pf/Pi/Po/Ps ASCII.")) (ELit (LString "  ;; Included: ! \" # % & ' ( ) * , - . / : ; ? @ [ \\ ] _ { }")) (ELit (LString "  ;; Excluded ($+<=>^`|~): those are Unicode symbols (Sm/Sc/Sk), not punctuation.")) (ELit (LString "  ;; Right-associative OR chain over 23 chars = 22 i32.or nodes.")) (ELit (LString "  (func $mdk_char_is_punct (param $c i32) (result i32)")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 33))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 34))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 35))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 37))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 38))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 39))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 40))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 41))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 42))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 44))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 45))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 46))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 47))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 58))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 59))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 63))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 64))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 91))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 92))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 93))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 95))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 123))")) (ELit (LString "           (i32.eq (local.get $c) (i32.const 125))")) (ELit (LString "    )))))))))))))))))))))))")) (ELit (LString "  (func $mdk_char_to_upper (param $c i32) (result i32)")) (ELit (LString "    (if (result i32)")) (ELit (LString "      (i32.and (i32.ge_u (local.get $c) (i32.const 97)) (i32.le_u (local.get $c) (i32.const 122)))")) (ELit (LString "      (then (i32.sub (local.get $c) (i32.const 32)))")) (ELit (LString "      (else (local.get $c))))")) (ELit (LString "  (func $mdk_char_to_lower (param $c i32) (result i32)")) (ELit (LString "    (if (result i32)")) (ELit (LString "      (i32.and (i32.ge_u (local.get $c) (i32.const 65)) (i32.le_u (local.get $c) (i32.const 90)))")) (ELit (LString "      (then (i32.add (local.get $c) (i32.const 32)))")) (ELit (LString "      (else (local.get $c))))"))))
 (DTypeSig true "floatFmtImportLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "floatFmtImportLines" () (EListLit (ELit (LString "  ;; -- W8b floatToString host seam (shortest-round-trip since #57 — reproduced JS-side, see run.js) --")) (ELit (LString "  (import \"env\" \"mdk_float_fmt\" (func $mdk_float_fmt (param f64) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_float_fmt_byte\" (func $mdk_float_fmt_byte (param i32) (result i32)))"))))
-(DTypeSig true "mathHostImportLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "mathHostImportLines" () (EListLit (ELit (LString "  ;; -- #101 libm math host seam (JS Math.*, see run.js / worker.js) --")) (ELit (LString "  (import \"env\" \"mdk_cbrt\" (func $mdk_cbrt (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_exp\" (func $mdk_exp (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_log\" (func $mdk_log (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_log2\" (func $mdk_log2 (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_log10\" (func $mdk_log10 (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_sin\" (func $mdk_sin (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_cos\" (func $mdk_cos (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_tan\" (func $mdk_tan (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_asin\" (func $mdk_asin (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_acos\" (func $mdk_acos (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_atan\" (func $mdk_atan (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_sinh\" (func $mdk_sinh (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_cosh\" (func $mdk_cosh (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_tanh\" (func $mdk_tanh (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_pow\" (func $mdk_pow (param f64) (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_atan2\" (func $mdk_atan2 (param f64) (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_hypot\" (func $mdk_hypot (param f64) (param f64) (result f64)))"))))
-(DTypeSig true "floatStrImportLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "floatStrImportLines" () (EListLit (ELit (LString "  ;; -- stringToFloat host seam (strtod acceptance set JS-side, see run.js) --")) (ELit (LString "  (import \"env\" \"mdk_str_to_float\" (func $mdk_str_to_float (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_str_to_float_ok\" (func $mdk_str_to_float_ok (result i32)))"))))
-(DTypeSig true "floatStrRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "floatStrRuntimeLines" () (EListLit (ELit (LString "  ;; stringToFloat : $str -> Option Float (ref eq).")) (ELit (LString "  (func $mdk_string_to_float (param $s (ref $str)) (result (ref eq))")) (ELit (LString "    (local $b (ref $u8arr)) (local $i i32) (local $n i32) (local $d f64)")) (ELit (LString "    (call $mdk_path_reset)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $done (loop $loop")) (ELit (LString "      (br_if $done (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1)))")) (ELit (LString "      (br $loop)))")) (ELit (LString "    (local.set $d (call $mdk_str_to_float))")) (ELit (LString "    ;; #370: the host latched an ok flag during that call; ask it, rather than")) (ELit (LString "    ;; testing $d for NaN — strtod(\"nan\") legitimately yields Some(NaN), and")) (ELit (LString "    ;; strtod(\"\")/strtod(\"1.5 \") legitimately FAIL with a non-NaN value.")) (ELit (LString "    (if (result (ref eq)) (i32.eqz (call $mdk_str_to_float_ok))")) (ELit (LString "      (then (ref.i31 (i32.const 1)))")) (ELit (LString "      (else (struct.new $C_Some (i32.const 0) (struct.new $float (local.get $d)))))")) (ELit (LString "  )"))))
+(DTypeSig true "hostImportLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "hostImportLines" ((PList)) (EListLit))
+(DFunDef false "hostImportLines" ((PCons (PVar "key") (PVar "rest"))) (EIf (EBinOp "==" (EVar "key") (EVar "stderrByteKey")) (EApp (EVar "hostImportLines") (EVar "rest")) (EBinOp "::" (EApp (EVar "hostImportLine") (EVar "key")) (EApp (EVar "hostImportLines") (EVar "rest")))))
+(DTypeSig true "stderrByteKey" (TyCon "String"))
+(DFunDef false "stderrByteKey" () (ELit (LString "mdk_write_err_byte")))
+(DTypeSig false "hostImportLine" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "hostImportLine" ((PVar "key")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (import \"env\" \"")) (EApp (EVar "display") (EVar "key"))) (ELit (LString "\" (func $"))) (EApp (EVar "display") (EVar "key"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "hostImportSig") (EVar "key")))) (ELit (LString "))"))))
+(DTypeSig false "hostImportSig" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "hostImportSig" ((PVar "key")) (EMatch (EApp (EVar "hostImportSigOf") (EVar "key")) (arm (PCon "Some" (PVar "sig")) () (EVar "sig")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: host key ")) (EApp (EVar "display") (EVar "key"))) (ELit (LString " has no wasm import signature in wasm_preamble.mdk")))))))
+(DTypeSig true "hostImportSigOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_exit"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_wall_time_sec"))) (EApp (EVar "Some") (ELit (LString " (result f64)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_monotonic_sec"))) (EApp (EVar "Some") (ELit (LString " (result f64)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_sleep_ms"))) (EApp (EVar "Some") (ELit (LString " (param i64)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_cbrt"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_exp"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_log"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_log2"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_log10"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_sin"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_cos"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_tan"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_asin"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_acos"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_atan"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_sinh"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_cosh"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_tanh"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_pow"))) (EApp (EVar "Some") (EVar "binaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_atan2"))) (EApp (EVar "Some") (EVar "binaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_hypot"))) (EApp (EVar "Some") (EVar "binaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_path_reset"))) (EApp (EVar "Some") (ELit (LString ""))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_path_push"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_read_file"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_exists"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_get_env"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_read_line"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_read_all"))) (EApp (EVar "Some") (ELit (LString ""))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_read_exactly"))) (EApp (EVar "Some") (ELit (LString " (param i64) (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_os_entropy"))) (EApp (EVar "Some") (ELit (LString " (param i64) (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_executable_path"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_args_count"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_arg_len"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_arg_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32) (param i32) (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_result_len"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_result_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_reset"))) (EApp (EVar "Some") (ELit (LString ""))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_push"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_commit"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_str_to_float"))) (EApp (EVar "Some") (ELit (LString " (result f64)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_str_to_float_ok"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_grant_reset"))) (EApp (EVar "Some") (ELit (LString ""))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_grant_push"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_canonicalize_path"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_append_file"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_make_dir"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_remove_file"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_remove_dir"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_fsync"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_mode"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_mode"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_rename"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_list_dir"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_stat_file"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_stat_field"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result f64)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_enter"))) (EApp (EVar "Some") (ELit (LString " (param i32) (param i32) (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_exit"))) (EApp (EVar "Some") (ELit (LString ""))))
+(DFunDef false "hostImportSigOf" (PWild) (EVar "None"))
+(DTypeSig false "unaryF64Sig" (TyCon "String"))
+(DFunDef false "unaryF64Sig" () (ELit (LString " (param f64) (result f64)")))
+(DTypeSig false "binaryF64Sig" (TyCon "String"))
+(DFunDef false "binaryF64Sig" () (ELit (LString " (param f64) (param f64) (result f64)")))
+(DTypeSig true "floatStrRuntimeLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "floatStrRuntimeLines" ((PVar "keys")) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_str_to_float"))) (EVar "keys")) (EVar "floatStrLines")))
+(DTypeSig false "floatStrLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "floatStrLines" () (EListLit (ELit (LString "  ;; stringToFloat : $str -> Option Float (ref eq).")) (ELit (LString "  (func $mdk_string_to_float (param $s (ref $str)) (result (ref eq))")) (ELit (LString "    (local $b (ref $u8arr)) (local $i i32) (local $n i32) (local $d f64)")) (ELit (LString "    (call $mdk_path_reset)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $done (loop $loop")) (ELit (LString "      (br_if $done (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1)))")) (ELit (LString "      (br $loop)))")) (ELit (LString "    (local.set $d (call $mdk_str_to_float))")) (ELit (LString "    ;; #370: the host latched an ok flag during that call; ask it, rather than")) (ELit (LString "    ;; testing $d for NaN — strtod(\"nan\") legitimately yields Some(NaN), and")) (ELit (LString "    ;; strtod(\"\")/strtod(\"1.5 \") legitimately FAIL with a non-NaN value.")) (ELit (LString "    (if (result (ref eq)) (i32.eqz (call $mdk_str_to_float_ok))")) (ELit (LString "      (then (ref.i31 (i32.const 1)))")) (ELit (LString "      (else (struct.new $C_Some (i32.const 0) (struct.new $float (local.get $d)))))")) (ELit (LString "  )"))))
 (DTypeSig true "floatRemRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "floatRemRuntimeLines" () (EListLit (ELit (LString "  (func $mdk_float_rem (param $a f64) (param $b f64) (result f64)")) (ELit (LString "    (local $x f64) (local $y f64) (local $t f64)")) (ELit (LString "    (local.set $y (f64.abs (local.get $b)))")) (ELit (LString "    (if (result f64)")) (ELit (LString "      (i32.or (i32.or")) (ELit (LString "        (f64.ne (f64.sub (local.get $a) (local.get $a)) (f64.const 0))")) (ELit (LString "        (f64.ne (local.get $b) (local.get $b)))")) (ELit (LString "        (f64.eq (local.get $y) (f64.const 0)))")) (ELit (LString "      ;; #672: the NaN result must carry the HOST's NaN SIGN, not WAT `nan`.  WAT")) (ELit (LString "      ;; `(f64.const nan)` is the FIXED canonical +NaN (0x7FF8..), but eval")) (ELit (LString "      ;; (`floatRem`=fmod) and native (`mdk_float_rem`=fmod) yield the host's NaN")) (ELit (LString "      ;; -- -NaN (0xFFF8..) on x86 -- and under the sign-dependent totalOrder (N6)")) (ELit (LString "      ;; a +NaN sorts/compares/hashes OPPOSITELY, so a fixed +NaN here made every")) (ELit (LString "      ;; `%`-NaN (e.g. `x % 0.0`) disagree with the other two engines on x86.")) (ELit (LString "      ;; `f64.div 0/0` is computed at RUNTIME by V8 (same as the `/` path), so it")) (ELit (LString "      ;; yields whatever NaN this box's hardware does -- matching eval/native and")) (ELit (LString "      ;; the wasm `f64.div` NaN on every platform (#509-safe: host-following, not")) (ELit (LString "      ;; a baked sign).")) (ELit (LString "      (then (f64.div (f64.const 0) (f64.const 0)))")) (ELit (LString "      (else")) (ELit (LString "        (local.set $x (f64.abs (local.get $a)))")) (ELit (LString "        (local.set $t (local.get $y))")) (ELit (LString "        (block $up (loop $ul")) (ELit (LString "          (br_if $up (f64.gt (f64.add (local.get $t) (local.get $t)) (local.get $x)))")) (ELit (LString "          (local.set $t (f64.add (local.get $t) (local.get $t)))")) (ELit (LString "          (br $ul)))")) (ELit (LString "        (block $dn (loop $dl")) (ELit (LString "          (if (f64.ge (local.get $x) (local.get $t))")) (ELit (LString "            (then (local.set $x (f64.sub (local.get $x) (local.get $t)))))")) (ELit (LString "          (br_if $dn (f64.eq (local.get $t) (local.get $y)))")) (ELit (LString "          (local.set $t (f64.mul (local.get $t) (f64.const 0.5)))")) (ELit (LString "          (br $dl)))")) (ELit (LString "        (f64.copysign (local.get $x) (local.get $a)))))"))))
 (DTypeSig true "floatRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -2685,22 +3203,80 @@ charFromCodeRuntimeLines = [
 (DFunDef false "hashFloatRuntimeLines" () (EListLit (ELit (LString "  ;; hashFloat (#758): normalise -0.0 -> +0.0 and every NaN -> one qNaN bit")) (ELit (LString "  ;; pattern, then reinterpret bits as i64 -> mix64 -> mask [0,2^30).  Matches")) (ELit (LString "  ;; mdk_hash_float (native) and pHashFloat (eval), or run /= build reappears.")) (ELit (LString "  (func $mdk_hash_float (param $f (ref $float)) (result i32)")) (ELit (LString "    (local $d f64) (local $bits i64)")) (ELit (LString "    (local.set $d (struct.get $float 0 (local.get $f)))")) (ELit (LString "    (if (f64.eq (local.get $d) (f64.const 0))")) (ELit (LString "      (then (local.set $bits (i64.const 0)))")) (ELit (LString "      (else")) (ELit (LString "        (if (f64.ne (local.get $d) (local.get $d))")) (ELit (LString "          (then (local.set $bits (i64.const 0x7FF8000000000000)))")) (ELit (LString "          (else (local.set $bits (i64.reinterpret_f64 (local.get $d)))))))")) (ELit (LString "    (i32.wrap_i64 (i64.and (call $mdk_hash_mix64 (local.get $bits)) (i64.const 0x3FFFFFFF))))"))))
 (DTypeSig true "randomFloatRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "randomFloatRuntimeLines" () (EListLit (ELit (LString "  ;; randomFloat : SplitMix64 -> f64 in [-1,1) (NOTE the -1 offset — see medaka_rt.c).")) (ELit (LString "  (func $mdk_random_float (result (ref $float))")) (ELit (LString "    (struct.new $float")) (ELit (LString "      (f64.sub")) (ELit (LString "        (f64.mul")) (ELit (LString "          (f64.mul (f64.convert_i64_u (i64.shr_u (call $mdk_next_u64) (i64.const 11)))")) (ELit (LString "                   (f64.const 1.1102230246251565e-16))")) (ELit (LString "          (f64.const 2.0))")) (ELit (LString "        (f64.const 1.0))))"))))
-(DTypeSig true "ioHostImportLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "ioHostImportLines" () (EListLit (ELit (LString "  ;; -- W12 IO host surface (byte-channel marshaling, see run.js) --")) (ELit (LString "  (import \"env\" \"mdk_path_reset\" (func $mdk_path_reset))")) (ELit (LString "  (import \"env\" \"mdk_path_push\" (func $mdk_path_push (param i32)))")) (ELit (LString "  (import \"env\" \"mdk_read_file\" (func $mdk_read_file (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_file_exists\" (func $mdk_file_exists (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_get_env\" (func $mdk_get_env (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_args_count\" (func $mdk_args_count (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_arg_len\" (func $mdk_arg_len (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_arg_byte\" (func $mdk_arg_byte (param i32) (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_result_len\" (func $mdk_result_len (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_result_byte\" (func $mdk_result_byte (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_exit\" (func $mdk_exit (param i32)))"))))
-(DTypeSig true "clockHostImportLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "clockHostImportLines" () (EListLit (ELit (LString "  ;; -- clock host surface (wallTimeSec / monotonicSec / sleepMs) --")) (ELit (LString "  (import \"env\" \"mdk_wall_time_sec\" (func $mdk_wall_time_sec (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_monotonic_sec\" (func $mdk_monotonic_sec (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_sleep_ms\" (func $mdk_sleep_ms (param i64)))"))))
 (DTypeSig false "notUtf8SuffixWat" (TyCon "String"))
-(DFunDef false "notUtf8SuffixWat" () (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (ELit (LString ": not valid UTF-8 (use readFileBytes for raw bytes)")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(array.new_fixed $u8arr ")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "arrayLength") (EVar "cs"))))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "asciiConstsW") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))) (ELit (LString ")"))))))
+(DFunDef false "notUtf8SuffixWat" () (EApp (EVar "asciiU8arrWat") (ELit (LString ": not valid UTF-8 (use readFileBytes for raw bytes)"))))
+(DTypeSig false "asciiU8arrWat" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "asciiU8arrWat" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(array.new_fixed $u8arr ")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "arrayLength") (EVar "cs"))))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "asciiConstsW") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))) (ELit (LString ")"))))))
 (DTypeSig false "asciiConstsW" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "asciiConstsW" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " (i32.const ")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")))))) (ELit (LString ")"))) (EApp (EApp (EApp (EVar "asciiConstsW") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))
-(DTypeSig true "ioHostRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "ioHostRuntimeLines" () (EListLit (ELit (LString "  ;; -- W12 IO host-surface runtime --")) (ELit (LString "  ;; push a $str's bytes to the host path buffer (reset first).")) (ELit (LString "  (func $mdk_push_path (param $s (ref $str))")) (ELit (LString "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)")) (ELit (LString "    (call $mdk_path_reset)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    )")) (ELit (LString "  ;; copy the host result buffer (length + byte-at-index) into a fresh $u8arr.")) (ELit (LString "  (func $mdk_io_result_bytes (result (ref $u8arr))")) (ELit (LString "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))")) (ELit (LString "    (local.set $n (call $mdk_result_len))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $buf) (local.get $i) (call $mdk_result_byte (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $buf))")) (ELit (LString "  ;; the host result buffer as a $str, read as UTF-8 by $mdk_u8_to_str_lossy.")) (ELit (LString "  (func $mdk_io_result_to_str (result (ref $str))")) (ELit (LString "    (call $mdk_u8_to_str_lossy (call $mdk_io_result_bytes)))")) (ELit (LString "  ;; readFile's Err for contents that are not UTF-8: the path, then a fixed ASCII")) (ELit (LString "  ;; suffix, byte-identical to medaka_rt.c mdk_read_file.")) (ELit (LString "  (func $mdk_str_not_utf8 (param $path (ref $str)) (result (ref $str))")) (ELit (LString "    (local $pb (ref $u8arr)) (local $pl i32) (local $sfx (ref $u8arr)) (local $out (ref $u8arr))")) (ELit (LString "    (local.set $pb (struct.get $str $bytes (local.get $path)))")) (ELit (LString "    (local.set $pl (array.len (local.get $pb)))")) (EBinOp "++" (EBinOp "++" (ELit (LString "    (local.set $sfx ")) (EApp (EVar "display") (EVar "notUtf8SuffixWat"))) (ELit (LString ")"))) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (i32.add (local.get $pl) (array.len (local.get $sfx)))))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $pb) (i32.const 0) (local.get $pl))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (local.get $pl) (local.get $sfx) (i32.const 0) (array.len (local.get $sfx)))")) (ELit (LString "    (struct.new $str (i32.add (struct.get $str $cp_count (local.get $path)) (array.len (local.get $sfx))) (local.get $out)))")) (ELit (LString "  ;; readFile : $str path -> Result String String.  1=Ok contents / 0=Err message.")) (ELit (LString "  ;; Contents that are not UTF-8 are an Err naming the path (medaka_rt.c mdk_read_file).")) (ELit (LString "  (func $mdk_read_file_io (param $path (ref $str)) (result (ref eq))")) (ELit (LString "    (local $st i32) (local $buf (ref $u8arr)) (local $c i32)")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (local.set $st (call $mdk_read_file))")) (ELit (LString "    (if (i32.eqz (local.get $st))")) (ELit (LString "      (then (return (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))")) (ELit (LString "    (local.set $buf (call $mdk_io_result_bytes))")) (ELit (LString "    (local.set $c (call $mdk_utf8_valid_count (local.get $buf)))")) (ELit (LString "    (if (result (ref eq)) (i32.ge_s (local.get $c) (i32.const 0))")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (struct.new $str (local.get $c) (local.get $buf))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_str_not_utf8 (local.get $path))))))")) (ELit (LString "  ;; fileExists : $str path -> Bool (i31 ordinal: False=0 / True=1).")) (ELit (LString "  (func $mdk_file_exists_io (param $path (ref $str)) (result (ref eq))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (ref.i31 (call $mdk_file_exists)))")) (ELit (LString "  ;; getEnv : $str name -> Option String.  1=Some value / 0=None.")) (ELit (LString "  (func $mdk_get_env_io (param $name (ref $str)) (result (ref eq))")) (ELit (LString "    (local $st i32)")) (ELit (LString "    (call $mdk_push_path (local.get $name))")) (ELit (LString "    (local.set $st (call $mdk_get_env))")) (ELit (LString "    (if (result (ref eq)) (local.get $st)")) (ELit (LString "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))")) (ELit (LString "      (else (ref.i31 (i32.const 1)))))"))))
-(DTypeSig true "ioArgsRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "ioArgsRuntimeLines" () (EListLit (ELit (LString "  ;; build a $str from the i-th host arg (mdk_arg_len(i) + mdk_arg_byte(i,j)).")) (ELit (LString "  (func $mdk_arg_to_str (param $idx i32) (result (ref $str))")) (ELit (LString "    (local $n i32) (local $j i32) (local $buf (ref $u8arr))")) (ELit (LString "    (local.set $n (call $mdk_arg_len (local.get $idx)))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (local.set $j (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $j) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $buf) (local.get $j) (call $mdk_arg_byte (local.get $idx) (local.get $j)))")) (ELit (LString "      (local.set $j (i32.add (local.get $j) (i32.const 1))) (br $l)))")) (ELit (LString "    (call $mdk_u8_to_str_lossy (local.get $buf)))")) (ELit (LString "  ;; args : Unit -> List String.  Fold a Cons chain right-to-left ending in Nil.")) (ELit (LString "  (func $mdk_args_io (result (ref eq))")) (ELit (LString "    (local $c i32) (local $i i32) (local $acc (ref eq))")) (ELit (LString "    (local.set $c (call $mdk_args_count))")) (ELit (LString "    (local.set $acc (ref.i31 (i32.const 1)))")) (ELit (LString "    (local.set $i (i32.sub (local.get $c) (i32.const 1)))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.lt_s (local.get $i) (i32.const 0)))")) (ELit (LString "      (local.set $acc (struct.new $C_Cons (i32.const 0) (call $mdk_arg_to_str (local.get $i)) (local.get $acc)))")) (ELit (LString "      (local.set $i (i32.sub (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $acc))"))))
-(DTypeSig true "fileBytesHostImportLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "fileBytesHostImportLines" () (EListLit (ELit (LString "  ;; -- stage-D writeFileBytes host imports (path via mdk_path_push; bytes streamed) --")) (ELit (LString "  (import \"env\" \"mdk_write_file_reset\" (func $mdk_write_file_reset))")) (ELit (LString "  (import \"env\" \"mdk_write_file_push\" (func $mdk_write_file_push (param i32)))")) (ELit (LString "  (import \"env\" \"mdk_write_file_commit\" (func $mdk_write_file_commit (result i32)))"))))
-(DTypeSig true "fileBytesRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "fileBytesRuntimeLines" () (EListLit (ELit (LString "  ;; -- stage-D byte-clean file I/O runtime --")) (ELit (LString "  ;; readFileBytes : $str path -> Result String (Array Int).  1=Ok bytes / 0=Err msg.")) (ELit (LString "  ;; Reuses the read byte-channel but rebuilds an $arr of i31 Int bytes (0..255).")) (ELit (LString "  (func $mdk_read_file_bytes_io (param $path (ref $str)) (result (ref eq))")) (ELit (LString "    (local $st i32) (local $n i32) (local $i i32) (local $out (ref $arr))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (local.set $st (call $mdk_read_file))")) (ELit (LString "    (if (result (ref eq)) (local.get $st)")) (ELit (LString "      (then")) (ELit (LString "        (local.set $n (call $mdk_result_len))")) (ELit (LString "        (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $n)))")) (ELit (LString "        (local.set $i (i32.const 0))")) (ELit (LString "        (block $d (loop $l")) (ELit (LString "          (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "          (array.set $arr (local.get $out) (local.get $i) (ref.i31 (call $mdk_result_byte (local.get $i))))")) (ELit (LString "          (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "        (struct.new $C_Ok (i32.const 0) (local.get $out)))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))")) (ELit (LString "  ;; writeFileBytes : $str path -> $arr bytes -> Result String Unit.  1=Ok () / 0=Err msg.")) (ELit (LString "  ;; Stream each i31 byte (masked to 0..255) to the host, then commit fs.writeFileSync.")) (ELit (LString "  (func $mdk_write_file_bytes_io (param $path (ref $str)) (param $ba (ref $arr)) (result (ref eq))")) (ELit (LString "    (local $st i32) (local $n i32) (local $i i32)")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (call $mdk_write_file_reset)")) (ELit (LString "    (local.set $n (array.len (local.get $ba)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_write_file_push (i32.and (i31.get_s (ref.cast (ref i31) (array.get $arr (local.get $ba) (local.get $i)))) (i32.const 255)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.set $st (call $mdk_write_file_commit))")) (ELit (LString "    (if (result (ref eq)) (local.get $st)")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig true "ioHostRuntimeLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "ioHostRuntimeLines" ((PVar "keys")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_path_push"))) (EVar "keys")) (EVar "ioPushPathLines")) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_rename"))) (EVar "keys")) (EVar "ioPushPathMoreLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_grant_push"))) (EVar "keys")) (EVar "ioPushGrantLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_rename"))) (EVar "keys")) (EVar "ioPushGrantMoreLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_result_len"))) (EVar "keys")) (EVar "ioResultLines"))) (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "contains") (ELit (LString "mdk_file_exists"))) (EVar "keys")) (EApp (EApp (EVar "contains") (ELit (LString "mdk_canonicalize_path"))) (EVar "keys"))) (EApp (EApp (EVar "contains") (ELit (LString "mdk_os_entropy"))) (EVar "keys"))) (EVar "ioRefusedPanicLines") (EListLit))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_read_file"))) (EVar "keys")) (EVar "ioReadFileLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_file_exists"))) (EVar "keys")) (EVar "ioFileExistsLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_canonicalize_path"))) (EVar "keys")) (EVar "ioCanonicalizeLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_write_file"))) (EVar "keys")) (EVar "ioWriteFileLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_append_file"))) (EVar "keys")) (EVar "ioAppendFileLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_rename"))) (EVar "keys")) (EVar "ioRenameLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_list_dir"))) (EVar "keys")) (EVar "ioListDirLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_stat_file"))) (EVar "keys")) (EVar "ioStatFileLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_make_dir"))) (EVar "keys")) (EVar "ioMakeDirLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_remove_file"))) (EVar "keys")) (EVar "ioRemoveFileLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_remove_dir"))) (EVar "keys")) (EVar "ioRemoveDirLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_fsync"))) (EVar "keys")) (EVar "ioFsyncLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_file_mode"))) (EVar "keys")) (EVar "ioFileModeLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_write_file_mode"))) (EVar "keys")) (EVar "ioWriteFileModeLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_get_env"))) (EVar "keys")) (EVar "ioGetEnvLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_read_line"))) (EVar "keys")) (EVar "ioReadLineLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_read_all"))) (EVar "keys")) (EVar "ioReadAllLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_read_exactly"))) (EVar "keys")) (EVar "ioReadExactlyLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_executable_path"))) (EVar "keys")) (EVar "ioExecutablePathLines"))))
+(DTypeSig false "gatedOn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "gatedOn" ((PVar "key") (PVar "keys") (PVar "block")) (EIf (EApp (EApp (EVar "contains") (EVar "key")) (EVar "keys")) (EVar "block") (EListLit)))
+(DTypeSig false "ioPushPathLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioPushPathLines" () (EListLit (ELit (LString "  ;; push a $str's bytes to the host path buffer (reset first).")) (ELit (LString "  (func $mdk_push_path (param $s (ref $str))")) (ELit (LString "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)")) (ELit (LString "    (call $mdk_path_reset)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    )"))))
+(DTypeSig false "ioPushPathMoreLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioPushPathMoreLines" () (EListLit (ELit (LString "  ;; append a $str's bytes to the host path buffer (rename's second path).")) (ELit (LString "  (func $mdk_push_path_more (param $s (ref $str))")) (ELit (LString "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    )"))))
+(DTypeSig false "ioPushGrantLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioPushGrantLines" () (EListLit (ELit (LString "  ;; push a grant (List String) to the host grant buffer (reset first).")) (ELit (LString "  (func $mdk_push_grant (param $g (ref eq))")) (ELit (LString "    (local $cell (ref $C_Cons)) (local $b (ref $u8arr)) (local $i i32) (local $n i32)")) (ELit (LString "    (call $mdk_grant_reset)")) (ELit (LString "    (block $done (loop $next")) (ELit (LString "      (br_if $done (i32.eqz (ref.test (ref $C_Cons) (local.get $g))))")) (ELit (LString "      (local.set $cell (ref.cast (ref $C_Cons) (local.get $g)))")) (ELit (LString "      (local.set $b (struct.get $str $bytes (ref.cast (ref $str) (struct.get $C_Cons 1 (local.get $cell)))))")) (ELit (LString "      (local.set $n (array.len (local.get $b)))")) (ELit (LString "      (local.set $i (i32.const 0))")) (ELit (LString "      (block $d (loop $l")) (ELit (LString "        (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "        (call $mdk_grant_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "        (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "      (call $mdk_grant_push (i32.const -1))")) (ELit (LString "      (local.set $g (struct.get $C_Cons 2 (local.get $cell))) (br $next)))")) (ELit (LString "    )"))))
+(DTypeSig false "ioPushGrantMoreLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioPushGrantMoreLines" () (EListLit (ELit (LString "  ;; append a grant to the host grant buffer (rename's second grant).")) (ELit (LString "  (func $mdk_push_grant_more (param $g (ref eq))")) (ELit (LString "    (local $cell (ref $C_Cons)) (local $b (ref $u8arr)) (local $i i32) (local $n i32)")) (ELit (LString "    (block $done (loop $next")) (ELit (LString "      (br_if $done (i32.eqz (ref.test (ref $C_Cons) (local.get $g))))")) (ELit (LString "      (local.set $cell (ref.cast (ref $C_Cons) (local.get $g)))")) (ELit (LString "      (local.set $b (struct.get $str $bytes (ref.cast (ref $str) (struct.get $C_Cons 1 (local.get $cell)))))")) (ELit (LString "      (local.set $n (array.len (local.get $b)))")) (ELit (LString "      (local.set $i (i32.const 0))")) (ELit (LString "      (block $d (loop $l")) (ELit (LString "        (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "        (call $mdk_grant_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "        (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "      (call $mdk_grant_push (i32.const -1))")) (ELit (LString "      (local.set $g (struct.get $C_Cons 2 (local.get $cell))) (br $next)))")) (ELit (LString "    )"))))
+(DTypeSig false "ioRefusedPanicLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioRefusedPanicLines" () (EListLit (ELit (LString "  ;; the host's refusal message (result channel) as an E-PANIC line, then trap.")) (ELit (LString "  (func $mdk_refused_panic")) (EBinOp "++" (EBinOp "++" (ELit (LString "    (call $mdk_err_u8arr ")) (EApp (EVar "display") (EVar "panicBannerWat"))) (ELit (LString ")"))) (ELit (LString "    (call $mdk_err_u8arr (call $mdk_io_result_bytes))")) (ELit (LString "    (call $mdk_write_err_byte (i32.const 10))")) (ELit (LString "    (unreachable))")) (ELit (LString "  (func $mdk_err_u8arr (param $b (ref $u8arr))")) (ELit (LString "    (local $i i32) (local $n i32)")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_write_err_byte (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    )"))))
+(DTypeSig false "panicBannerWat" (TyCon "String"))
+(DFunDef false "panicBannerWat" () (EApp (EVar "asciiU8arrWat") (ELit (LString "runtime error [E-PANIC]: "))))
+(DTypeSig false "ioResultLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioResultLines" () (EListLit (ELit (LString "  ;; copy the host result buffer (length + byte-at-index) into a fresh $u8arr.")) (ELit (LString "  (func $mdk_io_result_bytes (result (ref $u8arr))")) (ELit (LString "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))")) (ELit (LString "    (local.set $n (call $mdk_result_len))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $buf) (local.get $i) (call $mdk_result_byte (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $buf))")) (ELit (LString "  ;; the host result buffer as a $str, read as UTF-8 by $mdk_u8_to_str_lossy.")) (ELit (LString "  (func $mdk_io_result_to_str (result (ref $str))")) (ELit (LString "    (call $mdk_u8_to_str_lossy (call $mdk_io_result_bytes)))"))))
+(DTypeSig false "ioReadFileLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioReadFileLines" () (EListLit (ELit (LString "  ;; readFile's Err for contents that are not UTF-8: the path, then a fixed ASCII")) (ELit (LString "  ;; suffix, byte-identical to medaka_rt.c mdk_read_file.")) (ELit (LString "  (func $mdk_str_not_utf8 (param $path (ref $str)) (result (ref $str))")) (ELit (LString "    (local $pb (ref $u8arr)) (local $pl i32) (local $sfx (ref $u8arr)) (local $out (ref $u8arr))")) (ELit (LString "    (local.set $pb (struct.get $str $bytes (local.get $path)))")) (ELit (LString "    (local.set $pl (array.len (local.get $pb)))")) (EBinOp "++" (EBinOp "++" (ELit (LString "    (local.set $sfx ")) (EApp (EVar "display") (EVar "notUtf8SuffixWat"))) (ELit (LString ")"))) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (i32.add (local.get $pl) (array.len (local.get $sfx)))))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $pb) (i32.const 0) (local.get $pl))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (local.get $pl) (local.get $sfx) (i32.const 0) (array.len (local.get $sfx)))")) (ELit (LString "    (struct.new $str (i32.add (struct.get $str $cp_count (local.get $path)) (array.len (local.get $sfx))) (local.get $out)))")) (ELit (LString "  ;; readFile : $str path -> Result String String.  1=Ok contents / 0=Err message.")) (ELit (LString "  ;; Contents that are not UTF-8 are an Err naming the path (medaka_rt.c mdk_read_file).")) (ELit (LString "  (func $mdk_read_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (local $st i32) (local $buf (ref $u8arr)) (local $c i32)")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (local.set $st (call $mdk_read_file))")) (ELit (LString "    (if (i32.eqz (local.get $st))")) (ELit (LString "      (then (return (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))")) (ELit (LString "    (local.set $buf (call $mdk_io_result_bytes))")) (ELit (LString "    (local.set $c (call $mdk_utf8_valid_count (local.get $buf)))")) (ELit (LString "    (if (result (ref eq)) (i32.ge_s (local.get $c) (i32.const 0))")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (struct.new $str (local.get $c) (local.get $buf))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_str_not_utf8 (local.get $path))))))"))))
+(DTypeSig false "ioFileExistsLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioFileExistsLines" () (EListLit (ELit (LString "  ;; fileExists : $str path -> Bool (i31 ordinal: False=0 / True=1); 2 = refused.")) (ELit (LString "  (func $mdk_file_exists_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (local $r i32)")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (local.set $r (call $mdk_file_exists))")) (ELit (LString "    (if (i32.eq (local.get $r) (i32.const 2)) (then (call $mdk_refused_panic)))")) (ELit (LString "    (ref.i31 (local.get $r)))"))))
+(DTypeSig false "ioCanonicalizeLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioCanonicalizeLines" () (EListLit (ELit (LString "  ;; canonicalizePath : $str path -> $str.  1=the host's answer / 0=refused.")) (ELit (LString "  (func $mdk_canonicalize_path_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (if (i32.eqz (call $mdk_canonicalize_path)) (then (call $mdk_refused_panic)))")) (ELit (LString "    (call $mdk_io_result_to_str))"))))
+(DTypeSig false "ioWriteFileLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioWriteFileLines" () (EListLit (ELit (LString "  ;; writeFile : $str path -> $str contents -> Result String Unit.  1=Ok () / 0=Err msg.")) (ELit (LString "  ;; The contents' bytes stream to the host's write buffer, as writeFileBytes streams its array.")) (ELit (LString "  (func $mdk_write_file_io (param $path (ref $str)) (param $s (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (call $mdk_write_file_reset)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_write_file_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_write_file)")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "ioWriteFileModeLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioWriteFileModeLines" () (EListLit (ELit (LString "  ;; writeFileMode : $str path -> Int mode -> $str contents -> Result String Unit.")) (ELit (LString "  ;; 1=Ok () / 0=Err msg.  The contents stream to the host's write buffer; the host sets")) (ELit (LString "  ;; the file's mode before the first byte is written.")) (ELit (LString "  (func $mdk_write_file_mode_io (param $path (ref $str)) (param $mode (ref eq)) (param $s (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (call $mdk_write_file_reset)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_write_file_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_write_file_mode (i32.wrap_i64 (call $mdk_unbox_int (local.get $mode))))")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "ioAppendFileLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioAppendFileLines" () (EListLit (ELit (LString "  ;; appendFile : $str path -> $str contents -> Result String Unit.  1=Ok () / 0=Err msg.")) (ELit (LString "  ;; The contents' bytes stream to the host's write buffer; the host appends them.")) (ELit (LString "  (func $mdk_append_file_io (param $path (ref $str)) (param $s (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (call $mdk_write_file_reset)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_write_file_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_append_file)")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "ioRenameLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioRenameLines" () (EListLit (ELit (LString "  ;; rename : $str src -> $str dst -> src grant -> dst grant -> Result String Unit.")) (ELit (LString "  ;; The grants share the grant channel (-2 ends the first), the paths the path channel;")) (ELit (LString "  ;; the host splits the path buffer at the source's byte length.")) (ELit (LString "  (func $mdk_rename_io (param $src (ref $str)) (param $dst (ref $str)) (param $gs (ref eq)) (param $gd (ref eq)) (result (ref eq))")) (ELit (LString "    (call $mdk_push_grant (local.get $gs))")) (ELit (LString "    (call $mdk_grant_push (i32.const -2))")) (ELit (LString "    (call $mdk_push_grant_more (local.get $gd))")) (ELit (LString "    (call $mdk_push_path (local.get $src))")) (ELit (LString "    (call $mdk_push_path_more (local.get $dst))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_rename (array.len (struct.get $str $bytes (local.get $src))))")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "ioListDirLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioListDirLines" () (EListLit (ELit (LString "  ;; listDir : $str path -> Result String (List String).  The host answers each entry's")) (ELit (LString "  ;; name followed by a NUL byte; the list is built from the last entry back.")) (ELit (LString "  (func $mdk_list_dir_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (local $buf (ref $u8arr)) (local $name (ref $u8arr)) (local $acc (ref eq))")) (ELit (LString "    (local $pos i32) (local $end i32) (local $k i32)")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (if (i32.eqz (call $mdk_list_dir))")) (ELit (LString "      (then (return (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))")) (ELit (LString "    (local.set $buf (call $mdk_io_result_bytes))")) (ELit (LString "    (local.set $acc (ref.i31 (i32.const 1)))")) (ELit (LString "    (local.set $pos (array.len (local.get $buf)))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.le_s (local.get $pos) (i32.const 0)))")) (ELit (LString "      (local.set $end (i32.sub (local.get $pos) (i32.const 1)))")) (ELit (LString "      (local.set $k (local.get $end))")) (ELit (LString "      (block $s (loop $m")) (ELit (LString "        (br_if $s (i32.eqz (local.get $k)))")) (ELit (LString "        (br_if $s (i32.eqz (array.get_u $u8arr (local.get $buf) (i32.sub (local.get $k) (i32.const 1)))))")) (ELit (LString "        (local.set $k (i32.sub (local.get $k) (i32.const 1))) (br $m)))")) (ELit (LString "      (local.set $name (array.new $u8arr (i32.const 0) (i32.sub (local.get $end) (local.get $k))))")) (ELit (LString "      (array.copy $u8arr $u8arr (local.get $name) (i32.const 0) (local.get $buf) (local.get $k) (i32.sub (local.get $end) (local.get $k)))")) (ELit (LString "      (local.set $acc (struct.new $C_Cons (i32.const 0) (call $mdk_u8_to_str_lossy (local.get $name)) (local.get $acc)))")) (ELit (LString "      (local.set $pos (local.get $k)) (br $l)))")) (ELit (LString "    (struct.new $C_Ok (i32.const 0) (local.get $acc)))"))))
+(DTypeSig false "ioStatFileLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioStatFileLines" () (EListLit (ELit (LString "  ;; statFile : $str path -> Result String (Int, Bool, Bool, Float): size, isDir, isFile,")) (ELit (LString "  ;; mtime in seconds.  The host answers each field of the stat it took as an f64.")) (ELit (LString "  (func $mdk_stat_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_stat_file)")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0)")) (ELit (LString "        (struct.new $C_Tup4 (i32.const 0)")) (ELit (LString "          (call $mdk_box_int (i64.trunc_f64_s (call $mdk_stat_field (i32.const 0))))")) (ELit (LString "          (ref.i31 (i32.trunc_f64_s (call $mdk_stat_field (i32.const 1))))")) (ELit (LString "          (ref.i31 (i32.trunc_f64_s (call $mdk_stat_field (i32.const 2))))")) (ELit (LString "          (struct.new $float (call $mdk_stat_field (i32.const 3))))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "ioMakeDirLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioMakeDirLines" () (EListLit (ELit (LString "  ;; makeDir : $str path -> Result String Unit.  1=Ok () / 0=Err msg.")) (ELit (LString "  (func $mdk_make_dir_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_make_dir)")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "ioRemoveFileLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioRemoveFileLines" () (EListLit (ELit (LString "  ;; removeFile : $str path -> Result String Unit.  1=Ok () / 0=Err msg.")) (ELit (LString "  (func $mdk_remove_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_remove_file)")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "ioRemoveDirLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioRemoveDirLines" () (EListLit (ELit (LString "  ;; removeDir : $str path -> Result String Unit.  1=Ok () / 0=Err msg.")) (ELit (LString "  (func $mdk_remove_dir_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_remove_dir)")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "ioFsyncLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioFsyncLines" () (EListLit (ELit (LString "  ;; fsync : $str path -> Result String Unit.  1=Ok () / 0=Err msg.")) (ELit (LString "  (func $mdk_fsync_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_fsync)")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "ioFileModeLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioFileModeLines" () (EListLit (ELit (LString "  ;; fileMode : $str path -> Result String Int: the permission bits, 0 to 4095.  The host")) (ELit (LString "  ;; takes the stat that statFile takes and answers its mode field, field 4.")) (ELit (LString "  (func $mdk_file_mode_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_file_mode)")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0)")) (ELit (LString "        (call $mdk_box_int (i64.trunc_f64_s (call $mdk_stat_field (i32.const 4))))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "ioGetEnvLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioGetEnvLines" () (EListLit (ELit (LString "  ;; getEnv : $str name -> Option String.  1=Some value / 0=None.")) (ELit (LString "  (func $mdk_get_env_io (param $name (ref $str)) (result (ref eq))")) (ELit (LString "    (local $st i32)")) (ELit (LString "    (call $mdk_push_path (local.get $name))")) (ELit (LString "    (local.set $st (call $mdk_get_env))")) (ELit (LString "    (if (result (ref eq)) (local.get $st)")) (ELit (LString "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))")) (ELit (LString "      (else (ref.i31 (i32.const 1)))))"))))
+(DTypeSig false "ioReadLineLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioReadLineLines" () (EListLit (ELit (LString "  ;; readLine : Unit -> String.  The host answers 1 with a line (its newline")) (ELit (LString "  ;; stripped) on the result channel, or 0 at end of input, where the channel is empty.")) (ELit (LString "  (func $mdk_read_line_io (result (ref eq))")) (ELit (LString "    (drop (call $mdk_read_line))")) (ELit (LString "    (call $mdk_io_result_to_str))")) (ELit (LString "  ;; readLineOpt : Unit -> Option String.  0 is None.")) (ELit (LString "  (func $mdk_read_line_opt_io (result (ref eq))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_read_line)")) (ELit (LString "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))")) (ELit (LString "      (else (ref.i31 (i32.const 1)))))"))))
+(DTypeSig false "ioReadAllLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioReadAllLines" () (EListLit (ELit (LString "  ;; readAll : Unit -> String.  The rest of the host's stdin buffer.")) (ELit (LString "  (func $mdk_read_all_io (result (ref eq))")) (ELit (LString "    (call $mdk_read_all)")) (ELit (LString "    (call $mdk_io_result_to_str))"))))
+(DTypeSig false "ioReadExactlyLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioReadExactlyLines" () (EListLit (ELit (LString "  ;; readExactly : Int -> Option String.  1=Some the n bytes / 0=None (end of input")) (ELit (LString "  ;; or a short read, whose bytes the host has consumed).")) (ELit (LString "  (func $mdk_read_exactly_io (param $n i64) (result (ref eq))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_read_exactly (local.get $n))")) (ELit (LString "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))")) (ELit (LString "      (else (ref.i31 (i32.const 1)))))"))))
+(DTypeSig false "ioExecutablePathLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioExecutablePathLines" () (EListLit (ELit (LString "  (func $mdk_executable_path_io (result (ref eq))")) (ELit (LString "    (drop (call $mdk_executable_path))")) (ELit (LString "    (call $mdk_io_result_to_str))"))))
+(DTypeSig true "ioArgsRuntimeLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "ioArgsRuntimeLines" ((PVar "keys")) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_args_count"))) (EVar "keys")) (EVar "ioArgsLines")))
+(DTypeSig false "ioArgsLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioArgsLines" () (EListLit (ELit (LString "  ;; build a $str from the i-th host arg (mdk_arg_len(i) + mdk_arg_byte(i,j)).")) (ELit (LString "  (func $mdk_arg_to_str (param $idx i32) (result (ref $str))")) (ELit (LString "    (local $n i32) (local $j i32) (local $buf (ref $u8arr))")) (ELit (LString "    (local.set $n (call $mdk_arg_len (local.get $idx)))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (local.set $j (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $j) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $buf) (local.get $j) (call $mdk_arg_byte (local.get $idx) (local.get $j)))")) (ELit (LString "      (local.set $j (i32.add (local.get $j) (i32.const 1))) (br $l)))")) (ELit (LString "    (call $mdk_u8_to_str_lossy (local.get $buf)))")) (ELit (LString "  ;; args : Unit -> List String.  Fold a Cons chain right-to-left ending in Nil.")) (ELit (LString "  (func $mdk_args_io (result (ref eq))")) (ELit (LString "    (local $c i32) (local $i i32) (local $acc (ref eq))")) (ELit (LString "    (local.set $c (call $mdk_args_count))")) (ELit (LString "    (local.set $acc (ref.i31 (i32.const 1)))")) (ELit (LString "    (local.set $i (i32.sub (local.get $c) (i32.const 1)))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.lt_s (local.get $i) (i32.const 0)))")) (ELit (LString "      (local.set $acc (struct.new $C_Cons (i32.const 0) (call $mdk_arg_to_str (local.get $i)) (local.get $acc)))")) (ELit (LString "      (local.set $i (i32.sub (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $acc))"))))
+(DTypeSig true "fileBytesRuntimeLines" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "fileBytesRuntimeLines" ((PVar "readsBytes") (PVar "keys")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_write_file_commit"))) (EVar "keys")) (EVar "writeFileBytesLines")) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_os_entropy"))) (EVar "keys")) (EVar "osEntropyLines"))) (EIf (EVar "readsBytes") (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_read_file"))) (EVar "keys")) (EVar "readFileBytesLines")) (EListLit))))
+(DTypeSig false "readFileBytesLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "readFileBytesLines" () (EListLit (ELit (LString "  ;; readFileBytes : $str path -> Result String (Array Int).  1=Ok bytes / 0=Err msg.")) (ELit (LString "  ;; Reuses the read byte-channel but rebuilds an $arr of i31 Int bytes (0..255).")) (ELit (LString "  (func $mdk_read_file_bytes_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (local $st i32) (local $n i32) (local $i i32) (local $out (ref $arr))")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (local.set $st (call $mdk_read_file))")) (ELit (LString "    (if (result (ref eq)) (local.get $st)")) (ELit (LString "      (then")) (ELit (LString "        (local.set $n (call $mdk_result_len))")) (ELit (LString "        (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $n)))")) (ELit (LString "        (local.set $i (i32.const 0))")) (ELit (LString "        (block $d (loop $l")) (ELit (LString "          (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "          (array.set $arr (local.get $out) (local.get $i) (ref.i31 (call $mdk_result_byte (local.get $i))))")) (ELit (LString "          (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "        (struct.new $C_Ok (i32.const 0) (local.get $out)))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "osEntropyLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "osEntropyLines" () (EListLit (ELit (LString "  ;; osEntropyBytes : Int -> Array Int.  1=n random bytes / 0=a refusal (its text on the channel).")) (ELit (LString "  (func $mdk_os_entropy_io (param $n i64) (result (ref eq))")) (ELit (LString "    (local $len i32) (local $i i32) (local $out (ref $arr))")) (ELit (LString "    (if (i32.eqz (call $mdk_os_entropy (local.get $n))) (then (call $mdk_refused_panic)))")) (ELit (LString "    (local.set $len (call $mdk_result_len))")) (ELit (LString "    (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $len)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $len)))")) (ELit (LString "      (array.set $arr (local.get $out) (local.get $i) (ref.i31 (call $mdk_result_byte (local.get $i))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $out))"))))
+(DTypeSig false "writeFileBytesLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "writeFileBytesLines" () (EListLit (ELit (LString "  ;; writeFileBytes : $str path -> $arr bytes -> Result String Unit.  1=Ok () / 0=Err msg.")) (ELit (LString "  ;; Stream each i31 byte (masked to 0..255) to the host, then commit fs.writeFileSync.")) (ELit (LString "  (func $mdk_write_file_bytes_io (param $path (ref $str)) (param $ba (ref $arr)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (local $st i32) (local $n i32) (local $i i32)")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (call $mdk_write_file_reset)")) (ELit (LString "    (local.set $n (array.len (local.get $ba)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_write_file_push (i32.and (i31.get_s (ref.cast (ref i31) (array.get $arr (local.get $ba) (local.get $i)))) (i32.const 255)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.set $st (call $mdk_write_file_commit))")) (ELit (LString "    (if (result (ref eq)) (local.get $st)")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
 (DTypeSig true "strSearchRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "strSearchRuntimeLines" () (EListLit (ELit (LString "  ;; -- W8b stringIndexOf / stringCompare (byte-identical to medaka_rt.c) --")) (ELit (LString "  (func $mdk_str_index_of (param $needle (ref $str)) (param $hay (ref $str)) (result (ref eq))")) (ELit (LString "    (local $nb (ref $u8arr)) (local $hb (ref $u8arr)) (local $nl i32) (local $hl i32)")) (ELit (LString "    (local $b i32) (local $j i32) (local $ok i32)")) (ELit (LString "    (local.set $nb (struct.get $str $bytes (local.get $needle)))")) (ELit (LString "    (local.set $hb (struct.get $str $bytes (local.get $hay)))")) (ELit (LString "    (local.set $nl (array.len (local.get $nb)))")) (ELit (LString "    (local.set $hl (array.len (local.get $hb)))")) (ELit (LString "    ;; empty needle -> Some 0 (codepoint index 0).")) (ELit (LString "    (if (i32.eqz (local.get $nl))")) (ELit (LString "      (then (return (struct.new $C_Some (i32.const 0) (ref.i31 (i32.const 0))))))")) (ELit (LString "    (local.set $b (i32.const 0))")) (ELit (LString "    (block $done (loop $scan")) (ELit (LString "      ;; while b + nl <= hl")) (ELit (LString "      (br_if $done (i32.gt_s (i32.add (local.get $b) (local.get $nl)) (local.get $hl)))")) (ELit (LString "      (local.set $ok (i32.const 1))")) (ELit (LString "      (local.set $j (i32.const 0))")) (ELit (LString "      (block $cmpd (loop $cmpl")) (ELit (LString "        (br_if $cmpd (i32.ge_s (local.get $j) (local.get $nl)))")) (ELit (LString "        (if (i32.ne (array.get_u $u8arr (local.get $hb) (i32.add (local.get $b) (local.get $j)))")) (ELit (LString "                    (array.get_u $u8arr (local.get $nb) (local.get $j)))")) (ELit (LString "          (then (local.set $ok (i32.const 0)) (br $cmpd)))")) (ELit (LString "        (local.set $j (i32.add (local.get $j) (i32.const 1))) (br $cmpl)))")) (ELit (LString "      (if (local.get $ok)")) (ELit (LString "        (then (return (struct.new $C_Some (i32.const 0)")) (ELit (LString "          (ref.i31 (call $mdk_cp_count (local.get $hb) (local.get $b)))))))")) (ELit (LString "      (local.set $b (i32.add (local.get $b) (i32.const 1))) (br $scan)))")) (ELit (LString "    ;; not found -> None (i31 ordinal 1).")) (ELit (LString "    (ref.i31 (i32.const 1)))")) (ELit (LString "  ;; -- W8c byte-level count / last-index (byte-identical to medaka_rt.c) --")) (ELit (LString "  ;; non-overlapping occurrences; 0 for an empty needle.")) (ELit (LString "  (func $mdk_str_count_occ (param $n (ref $str)) (param $h (ref $str)) (result i32)")) (ELit (LString "    (local $nb (ref $u8arr)) (local $hb (ref $u8arr)) (local $nl i32) (local $hl i32)")) (ELit (LString "    (local $b i32) (local $c i32)")) (ELit (LString "    (local.set $nb (struct.get $str $bytes (local.get $n)))")) (ELit (LString "    (local.set $hb (struct.get $str $bytes (local.get $h)))")) (ELit (LString "    (local.set $nl (array.len (local.get $nb)))")) (ELit (LString "    (local.set $hl (array.len (local.get $hb)))")) (ELit (LString "    (if (i32.eqz (local.get $nl)) (then (return (i32.const 0))))")) (ELit (LString "    (block $done (loop $scan")) (ELit (LString "      (br_if $done (i32.gt_s (i32.add (local.get $b) (local.get $nl)) (local.get $hl)))")) (ELit (LString "      (if (call $mdk_bytes_match_at (local.get $nb) (local.get $hb) (local.get $b))")) (ELit (LString "        (then")) (ELit (LString "          (local.set $c (i32.add (local.get $c) (i32.const 1)))")) (ELit (LString "          (local.set $b (i32.add (local.get $b) (local.get $nl))))")) (ELit (LString "        (else (local.set $b (i32.add (local.get $b) (i32.const 1)))))")) (ELit (LString "      (br $scan)))")) (ELit (LString "    (local.get $c))")) (ELit (LString "  ;; overlapping occurrences, the last one wins; an empty needle is at the codepoint end.")) (ELit (LString "  (func $mdk_str_last_index_of (param $n (ref $str)) (param $h (ref $str)) (result (ref eq))")) (ELit (LString "    (local $nb (ref $u8arr)) (local $hb (ref $u8arr)) (local $nl i32) (local $hl i32)")) (ELit (LString "    (local $b i32) (local $last i32)")) (ELit (LString "    (local.set $nb (struct.get $str $bytes (local.get $n)))")) (ELit (LString "    (local.set $hb (struct.get $str $bytes (local.get $h)))")) (ELit (LString "    (local.set $nl (array.len (local.get $nb)))")) (ELit (LString "    (local.set $hl (array.len (local.get $hb)))")) (ELit (LString "    (if (i32.eqz (local.get $nl))")) (ELit (LString "      (then (return (struct.new $C_Some (i32.const 0)")) (ELit (LString "        (ref.i31 (struct.get $str $cp_count (local.get $h)))))))")) (ELit (LString "    (local.set $last (i32.const -1))")) (ELit (LString "    (block $done (loop $scan")) (ELit (LString "      (br_if $done (i32.gt_s (i32.add (local.get $b) (local.get $nl)) (local.get $hl)))")) (ELit (LString "      (if (call $mdk_bytes_match_at (local.get $nb) (local.get $hb) (local.get $b))")) (ELit (LString "        (then (local.set $last (local.get $b))))")) (ELit (LString "      (local.set $b (i32.add (local.get $b) (i32.const 1)))")) (ELit (LString "      (br $scan)))")) (ELit (LString "    (if (i32.lt_s (local.get $last) (i32.const 0))")) (ELit (LString "      (then (return (ref.i31 (i32.const 1)))))")) (ELit (LString "    (struct.new $C_Some (i32.const 0)")) (ELit (LString "      (ref.i31 (call $mdk_cp_count (local.get $hb) (local.get $last)))))")) (ELit (LString "  (func $mdk_str_compare (param $a (ref $str)) (param $b (ref $str)) (result (ref eq))")) (ELit (LString "    (local $ab (ref $u8arr)) (local $bb (ref $u8arr)) (local $al i32) (local $bl i32)")) (ELit (LString "    (local $m i32) (local $i i32) (local $ca i32) (local $cb i32)")) (ELit (LString "    (local.set $ab (struct.get $str $bytes (local.get $a)))")) (ELit (LString "    (local.set $bb (struct.get $str $bytes (local.get $b)))")) (ELit (LString "    (local.set $al (array.len (local.get $ab)))")) (ELit (LString "    (local.set $bl (array.len (local.get $bb)))")) (ELit (LString "    (local.set $m (if (result i32) (i32.lt_s (local.get $al) (local.get $bl))")) (ELit (LString "      (then (local.get $al)) (else (local.get $bl))))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $done (loop $l")) (ELit (LString "      (br_if $done (i32.ge_s (local.get $i) (local.get $m)))")) (ELit (LString "      (local.set $ca (array.get_u $u8arr (local.get $ab) (local.get $i)))")) (ELit (LString "      (local.set $cb (array.get_u $u8arr (local.get $bb) (local.get $i)))")) (ELit (LString "      ;; byte less -> Lt (i31 0); byte greater -> Gt (i31 2).")) (ELit (LString "      (if (i32.lt_u (local.get $ca) (local.get $cb)) (then (return (ref.i31 (i32.const 0)))))")) (ELit (LString "      (if (i32.gt_u (local.get $ca) (local.get $cb)) (then (return (ref.i31 (i32.const 2)))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    ;; common prefix equal: shorter < longer; equal length -> Eq.")) (ELit (LString "    (if (i32.lt_s (local.get $al) (local.get $bl)) (then (return (ref.i31 (i32.const 0)))))")) (ELit (LString "    (if (i32.gt_s (local.get $al) (local.get $bl)) (then (return (ref.i31 (i32.const 2)))))")) (ELit (LString "    (ref.i31 (i32.const 1)))"))))
 (DTypeSig true "utf8LossyRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -2712,6 +3288,7 @@ charFromCodeRuntimeLines = [
 (DTypeSig true "charFromCodeRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "charFromCodeRuntimeLines" () (EListLit (ELit (LString "  ;; -- W11b charFromCode (byte-identical to medaka_rt.c mdk_char_from_code) --")) (ELit (LString "  (func $mdk_char_from_code (param $cp i32) (result (ref eq))")) (ELit (LString "    ;; valid: 0 <= cp <= 0x10FFFF and not (0xD800 <= cp <= 0xDFFF).")) (ELit (LString "    (if (i32.and (i32.and (i32.ge_s (local.get $cp) (i32.const 0)) (i32.le_s (local.get $cp) (i32.const 1114111)))")) (ELit (LString "                 (i32.eqz (i32.and (i32.ge_s (local.get $cp) (i32.const 55296)) (i32.le_s (local.get $cp) (i32.const 57343)))))")) (ELit (LString "      (then (return (struct.new $C_Some (i32.const 0) (ref.i31 (local.get $cp))))))")) (ELit (LString "    (ref.i31 (i32.const 1)))"))))
 # MARK
+(DUse false (UseGroup ("support" "util") ((mem "contains" false))))
 (DTypeSig true "preambleHeadLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preambleHeadLines" () (EListLit (ELit (LString ";; Medaka WasmGC backend (Stage 2.4c) — emitted WAT.")) (ELit (LString ";; Value rep: WASMGC-DESIGN.md §3 / §8.6.  W2 = scalar i32; W3 = (ref eq) + i31/structs.")) (ELit (LString "(module"))))
 (DTypeSig true "importLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -2843,12 +3420,83 @@ charFromCodeRuntimeLines = [
 (DFunDef false "charClassRuntimeLines" () (EListLit (ELit (LString "  ;; ── W11b ASCII char classification + case mapping (byte-identical to medaka_rt.c) ──")) (ELit (LString "  (func $mdk_char_is_alpha (param $c i32) (result i32)")) (ELit (LString "    (i32.or")) (ELit (LString "      (i32.and (i32.ge_u (local.get $c) (i32.const 97)) (i32.le_u (local.get $c) (i32.const 122)))")) (ELit (LString "      (i32.and (i32.ge_u (local.get $c) (i32.const 65)) (i32.le_u (local.get $c) (i32.const 90)))))")) (ELit (LString "  (func $mdk_char_is_space (param $c i32) (result i32)")) (ELit (LString "    (i32.or")) (ELit (LString "      (i32.eq (local.get $c) (i32.const 32))")) (ELit (LString "      (i32.and (i32.ge_u (local.get $c) (i32.const 9)) (i32.le_u (local.get $c) (i32.const 13)))))")) (ELit (LString "  (func $mdk_char_is_upper (param $c i32) (result i32)")) (ELit (LString "    (i32.and (i32.ge_u (local.get $c) (i32.const 65)) (i32.le_u (local.get $c) (i32.const 90))))")) (ELit (LString "  (func $mdk_char_is_lower (param $c i32) (result i32)")) (ELit (LString "    (i32.and (i32.ge_u (local.get $c) (i32.const 97)) (i32.le_u (local.get $c) (i32.const 122))))")) (ELit (LString "  ;; charIsPunct: exact set from medaka_rt.c switch — Unicode Pc/Pd/Pe/Pf/Pi/Po/Ps ASCII.")) (ELit (LString "  ;; Included: ! \" # % & ' ( ) * , - . / : ; ? @ [ \\ ] _ { }")) (ELit (LString "  ;; Excluded ($+<=>^`|~): those are Unicode symbols (Sm/Sc/Sk), not punctuation.")) (ELit (LString "  ;; Right-associative OR chain over 23 chars = 22 i32.or nodes.")) (ELit (LString "  (func $mdk_char_is_punct (param $c i32) (result i32)")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 33))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 34))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 35))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 37))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 38))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 39))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 40))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 41))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 42))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 44))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 45))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 46))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 47))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 58))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 59))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 63))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 64))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 91))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 92))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 93))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 95))")) (ELit (LString "    (i32.or (i32.eq (local.get $c) (i32.const 123))")) (ELit (LString "           (i32.eq (local.get $c) (i32.const 125))")) (ELit (LString "    )))))))))))))))))))))))")) (ELit (LString "  (func $mdk_char_to_upper (param $c i32) (result i32)")) (ELit (LString "    (if (result i32)")) (ELit (LString "      (i32.and (i32.ge_u (local.get $c) (i32.const 97)) (i32.le_u (local.get $c) (i32.const 122)))")) (ELit (LString "      (then (i32.sub (local.get $c) (i32.const 32)))")) (ELit (LString "      (else (local.get $c))))")) (ELit (LString "  (func $mdk_char_to_lower (param $c i32) (result i32)")) (ELit (LString "    (if (result i32)")) (ELit (LString "      (i32.and (i32.ge_u (local.get $c) (i32.const 65)) (i32.le_u (local.get $c) (i32.const 90)))")) (ELit (LString "      (then (i32.add (local.get $c) (i32.const 32)))")) (ELit (LString "      (else (local.get $c))))"))))
 (DTypeSig true "floatFmtImportLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "floatFmtImportLines" () (EListLit (ELit (LString "  ;; -- W8b floatToString host seam (shortest-round-trip since #57 — reproduced JS-side, see run.js) --")) (ELit (LString "  (import \"env\" \"mdk_float_fmt\" (func $mdk_float_fmt (param f64) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_float_fmt_byte\" (func $mdk_float_fmt_byte (param i32) (result i32)))"))))
-(DTypeSig true "mathHostImportLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "mathHostImportLines" () (EListLit (ELit (LString "  ;; -- #101 libm math host seam (JS Math.*, see run.js / worker.js) --")) (ELit (LString "  (import \"env\" \"mdk_cbrt\" (func $mdk_cbrt (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_exp\" (func $mdk_exp (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_log\" (func $mdk_log (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_log2\" (func $mdk_log2 (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_log10\" (func $mdk_log10 (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_sin\" (func $mdk_sin (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_cos\" (func $mdk_cos (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_tan\" (func $mdk_tan (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_asin\" (func $mdk_asin (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_acos\" (func $mdk_acos (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_atan\" (func $mdk_atan (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_sinh\" (func $mdk_sinh (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_cosh\" (func $mdk_cosh (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_tanh\" (func $mdk_tanh (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_pow\" (func $mdk_pow (param f64) (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_atan2\" (func $mdk_atan2 (param f64) (param f64) (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_hypot\" (func $mdk_hypot (param f64) (param f64) (result f64)))"))))
-(DTypeSig true "floatStrImportLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "floatStrImportLines" () (EListLit (ELit (LString "  ;; -- stringToFloat host seam (strtod acceptance set JS-side, see run.js) --")) (ELit (LString "  (import \"env\" \"mdk_str_to_float\" (func $mdk_str_to_float (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_str_to_float_ok\" (func $mdk_str_to_float_ok (result i32)))"))))
-(DTypeSig true "floatStrRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "floatStrRuntimeLines" () (EListLit (ELit (LString "  ;; stringToFloat : $str -> Option Float (ref eq).")) (ELit (LString "  (func $mdk_string_to_float (param $s (ref $str)) (result (ref eq))")) (ELit (LString "    (local $b (ref $u8arr)) (local $i i32) (local $n i32) (local $d f64)")) (ELit (LString "    (call $mdk_path_reset)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $done (loop $loop")) (ELit (LString "      (br_if $done (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1)))")) (ELit (LString "      (br $loop)))")) (ELit (LString "    (local.set $d (call $mdk_str_to_float))")) (ELit (LString "    ;; #370: the host latched an ok flag during that call; ask it, rather than")) (ELit (LString "    ;; testing $d for NaN — strtod(\"nan\") legitimately yields Some(NaN), and")) (ELit (LString "    ;; strtod(\"\")/strtod(\"1.5 \") legitimately FAIL with a non-NaN value.")) (ELit (LString "    (if (result (ref eq)) (i32.eqz (call $mdk_str_to_float_ok))")) (ELit (LString "      (then (ref.i31 (i32.const 1)))")) (ELit (LString "      (else (struct.new $C_Some (i32.const 0) (struct.new $float (local.get $d)))))")) (ELit (LString "  )"))))
+(DTypeSig true "hostImportLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "hostImportLines" ((PList)) (EListLit))
+(DFunDef false "hostImportLines" ((PCons (PVar "key") (PVar "rest"))) (EIf (EBinOp "==" (EVar "key") (EVar "stderrByteKey")) (EApp (EVar "hostImportLines") (EVar "rest")) (EBinOp "::" (EApp (EVar "hostImportLine") (EVar "key")) (EApp (EVar "hostImportLines") (EVar "rest")))))
+(DTypeSig true "stderrByteKey" (TyCon "String"))
+(DFunDef false "stderrByteKey" () (ELit (LString "mdk_write_err_byte")))
+(DTypeSig false "hostImportLine" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "hostImportLine" ((PVar "key")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (import \"env\" \"")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString "\" (func $"))) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "hostImportSig") (EVar "key")))) (ELit (LString "))"))))
+(DTypeSig false "hostImportSig" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "hostImportSig" ((PVar "key")) (EMatch (EApp (EVar "hostImportSigOf") (EVar "key")) (arm (PCon "Some" (PVar "sig")) () (EVar "sig")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: host key ")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString " has no wasm import signature in wasm_preamble.mdk")))))))
+(DTypeSig true "hostImportSigOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_exit"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_wall_time_sec"))) (EApp (EVar "Some") (ELit (LString " (result f64)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_monotonic_sec"))) (EApp (EVar "Some") (ELit (LString " (result f64)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_sleep_ms"))) (EApp (EVar "Some") (ELit (LString " (param i64)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_cbrt"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_exp"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_log"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_log2"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_log10"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_sin"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_cos"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_tan"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_asin"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_acos"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_atan"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_sinh"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_cosh"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_tanh"))) (EApp (EVar "Some") (EVar "unaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_pow"))) (EApp (EVar "Some") (EVar "binaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_atan2"))) (EApp (EVar "Some") (EVar "binaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_hypot"))) (EApp (EVar "Some") (EVar "binaryF64Sig")))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_path_reset"))) (EApp (EVar "Some") (ELit (LString ""))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_path_push"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_read_file"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_exists"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_get_env"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_read_line"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_read_all"))) (EApp (EVar "Some") (ELit (LString ""))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_read_exactly"))) (EApp (EVar "Some") (ELit (LString " (param i64) (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_os_entropy"))) (EApp (EVar "Some") (ELit (LString " (param i64) (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_executable_path"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_args_count"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_arg_len"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_arg_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32) (param i32) (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_result_len"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_result_byte"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_reset"))) (EApp (EVar "Some") (ELit (LString ""))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_push"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_commit"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_str_to_float"))) (EApp (EVar "Some") (ELit (LString " (result f64)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_str_to_float_ok"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_grant_reset"))) (EApp (EVar "Some") (ELit (LString ""))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_grant_push"))) (EApp (EVar "Some") (ELit (LString " (param i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_canonicalize_path"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_append_file"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_make_dir"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_remove_file"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_remove_dir"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_fsync"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_mode"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_write_file_mode"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_rename"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_list_dir"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_stat_file"))) (EApp (EVar "Some") (ELit (LString " (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_stat_field"))) (EApp (EVar "Some") (ELit (LString " (param i32) (result f64)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_enter"))) (EApp (EVar "Some") (ELit (LString " (param i32) (param i32) (result i32)"))))
+(DFunDef false "hostImportSigOf" ((PLit (LString "mdk_file_bound_exit"))) (EApp (EVar "Some") (ELit (LString ""))))
+(DFunDef false "hostImportSigOf" (PWild) (EVar "None"))
+(DTypeSig false "unaryF64Sig" (TyCon "String"))
+(DFunDef false "unaryF64Sig" () (ELit (LString " (param f64) (result f64)")))
+(DTypeSig false "binaryF64Sig" (TyCon "String"))
+(DFunDef false "binaryF64Sig" () (ELit (LString " (param f64) (param f64) (result f64)")))
+(DTypeSig true "floatStrRuntimeLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "floatStrRuntimeLines" ((PVar "keys")) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_str_to_float"))) (EVar "keys")) (EVar "floatStrLines")))
+(DTypeSig false "floatStrLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "floatStrLines" () (EListLit (ELit (LString "  ;; stringToFloat : $str -> Option Float (ref eq).")) (ELit (LString "  (func $mdk_string_to_float (param $s (ref $str)) (result (ref eq))")) (ELit (LString "    (local $b (ref $u8arr)) (local $i i32) (local $n i32) (local $d f64)")) (ELit (LString "    (call $mdk_path_reset)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $done (loop $loop")) (ELit (LString "      (br_if $done (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1)))")) (ELit (LString "      (br $loop)))")) (ELit (LString "    (local.set $d (call $mdk_str_to_float))")) (ELit (LString "    ;; #370: the host latched an ok flag during that call; ask it, rather than")) (ELit (LString "    ;; testing $d for NaN — strtod(\"nan\") legitimately yields Some(NaN), and")) (ELit (LString "    ;; strtod(\"\")/strtod(\"1.5 \") legitimately FAIL with a non-NaN value.")) (ELit (LString "    (if (result (ref eq)) (i32.eqz (call $mdk_str_to_float_ok))")) (ELit (LString "      (then (ref.i31 (i32.const 1)))")) (ELit (LString "      (else (struct.new $C_Some (i32.const 0) (struct.new $float (local.get $d)))))")) (ELit (LString "  )"))))
 (DTypeSig true "floatRemRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "floatRemRuntimeLines" () (EListLit (ELit (LString "  (func $mdk_float_rem (param $a f64) (param $b f64) (result f64)")) (ELit (LString "    (local $x f64) (local $y f64) (local $t f64)")) (ELit (LString "    (local.set $y (f64.abs (local.get $b)))")) (ELit (LString "    (if (result f64)")) (ELit (LString "      (i32.or (i32.or")) (ELit (LString "        (f64.ne (f64.sub (local.get $a) (local.get $a)) (f64.const 0))")) (ELit (LString "        (f64.ne (local.get $b) (local.get $b)))")) (ELit (LString "        (f64.eq (local.get $y) (f64.const 0)))")) (ELit (LString "      ;; #672: the NaN result must carry the HOST's NaN SIGN, not WAT `nan`.  WAT")) (ELit (LString "      ;; `(f64.const nan)` is the FIXED canonical +NaN (0x7FF8..), but eval")) (ELit (LString "      ;; (`floatRem`=fmod) and native (`mdk_float_rem`=fmod) yield the host's NaN")) (ELit (LString "      ;; -- -NaN (0xFFF8..) on x86 -- and under the sign-dependent totalOrder (N6)")) (ELit (LString "      ;; a +NaN sorts/compares/hashes OPPOSITELY, so a fixed +NaN here made every")) (ELit (LString "      ;; `%`-NaN (e.g. `x % 0.0`) disagree with the other two engines on x86.")) (ELit (LString "      ;; `f64.div 0/0` is computed at RUNTIME by V8 (same as the `/` path), so it")) (ELit (LString "      ;; yields whatever NaN this box's hardware does -- matching eval/native and")) (ELit (LString "      ;; the wasm `f64.div` NaN on every platform (#509-safe: host-following, not")) (ELit (LString "      ;; a baked sign).")) (ELit (LString "      (then (f64.div (f64.const 0) (f64.const 0)))")) (ELit (LString "      (else")) (ELit (LString "        (local.set $x (f64.abs (local.get $a)))")) (ELit (LString "        (local.set $t (local.get $y))")) (ELit (LString "        (block $up (loop $ul")) (ELit (LString "          (br_if $up (f64.gt (f64.add (local.get $t) (local.get $t)) (local.get $x)))")) (ELit (LString "          (local.set $t (f64.add (local.get $t) (local.get $t)))")) (ELit (LString "          (br $ul)))")) (ELit (LString "        (block $dn (loop $dl")) (ELit (LString "          (if (f64.ge (local.get $x) (local.get $t))")) (ELit (LString "            (then (local.set $x (f64.sub (local.get $x) (local.get $t)))))")) (ELit (LString "          (br_if $dn (f64.eq (local.get $t) (local.get $y)))")) (ELit (LString "          (local.set $t (f64.mul (local.get $t) (f64.const 0.5)))")) (ELit (LString "          (br $dl)))")) (ELit (LString "        (f64.copysign (local.get $x) (local.get $a)))))"))))
 (DTypeSig true "floatRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -2857,22 +3505,80 @@ charFromCodeRuntimeLines = [
 (DFunDef false "hashFloatRuntimeLines" () (EListLit (ELit (LString "  ;; hashFloat (#758): normalise -0.0 -> +0.0 and every NaN -> one qNaN bit")) (ELit (LString "  ;; pattern, then reinterpret bits as i64 -> mix64 -> mask [0,2^30).  Matches")) (ELit (LString "  ;; mdk_hash_float (native) and pHashFloat (eval), or run /= build reappears.")) (ELit (LString "  (func $mdk_hash_float (param $f (ref $float)) (result i32)")) (ELit (LString "    (local $d f64) (local $bits i64)")) (ELit (LString "    (local.set $d (struct.get $float 0 (local.get $f)))")) (ELit (LString "    (if (f64.eq (local.get $d) (f64.const 0))")) (ELit (LString "      (then (local.set $bits (i64.const 0)))")) (ELit (LString "      (else")) (ELit (LString "        (if (f64.ne (local.get $d) (local.get $d))")) (ELit (LString "          (then (local.set $bits (i64.const 0x7FF8000000000000)))")) (ELit (LString "          (else (local.set $bits (i64.reinterpret_f64 (local.get $d)))))))")) (ELit (LString "    (i32.wrap_i64 (i64.and (call $mdk_hash_mix64 (local.get $bits)) (i64.const 0x3FFFFFFF))))"))))
 (DTypeSig true "randomFloatRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "randomFloatRuntimeLines" () (EListLit (ELit (LString "  ;; randomFloat : SplitMix64 -> f64 in [-1,1) (NOTE the -1 offset — see medaka_rt.c).")) (ELit (LString "  (func $mdk_random_float (result (ref $float))")) (ELit (LString "    (struct.new $float")) (ELit (LString "      (f64.sub")) (ELit (LString "        (f64.mul")) (ELit (LString "          (f64.mul (f64.convert_i64_u (i64.shr_u (call $mdk_next_u64) (i64.const 11)))")) (ELit (LString "                   (f64.const 1.1102230246251565e-16))")) (ELit (LString "          (f64.const 2.0))")) (ELit (LString "        (f64.const 1.0))))"))))
-(DTypeSig true "ioHostImportLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "ioHostImportLines" () (EListLit (ELit (LString "  ;; -- W12 IO host surface (byte-channel marshaling, see run.js) --")) (ELit (LString "  (import \"env\" \"mdk_path_reset\" (func $mdk_path_reset))")) (ELit (LString "  (import \"env\" \"mdk_path_push\" (func $mdk_path_push (param i32)))")) (ELit (LString "  (import \"env\" \"mdk_read_file\" (func $mdk_read_file (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_file_exists\" (func $mdk_file_exists (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_get_env\" (func $mdk_get_env (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_args_count\" (func $mdk_args_count (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_arg_len\" (func $mdk_arg_len (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_arg_byte\" (func $mdk_arg_byte (param i32) (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_result_len\" (func $mdk_result_len (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_result_byte\" (func $mdk_result_byte (param i32) (result i32)))")) (ELit (LString "  (import \"env\" \"mdk_exit\" (func $mdk_exit (param i32)))"))))
-(DTypeSig true "clockHostImportLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "clockHostImportLines" () (EListLit (ELit (LString "  ;; -- clock host surface (wallTimeSec / monotonicSec / sleepMs) --")) (ELit (LString "  (import \"env\" \"mdk_wall_time_sec\" (func $mdk_wall_time_sec (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_monotonic_sec\" (func $mdk_monotonic_sec (result f64)))")) (ELit (LString "  (import \"env\" \"mdk_sleep_ms\" (func $mdk_sleep_ms (param i64)))"))))
 (DTypeSig false "notUtf8SuffixWat" (TyCon "String"))
-(DFunDef false "notUtf8SuffixWat" () (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (ELit (LString ": not valid UTF-8 (use readFileBytes for raw bytes)")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(array.new_fixed $u8arr ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "arrayLength") (EVar "cs"))))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "asciiConstsW") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))) (ELit (LString ")"))))))
+(DFunDef false "notUtf8SuffixWat" () (EApp (EVar "asciiU8arrWat") (ELit (LString ": not valid UTF-8 (use readFileBytes for raw bytes)"))))
+(DTypeSig false "asciiU8arrWat" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "asciiU8arrWat" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(array.new_fixed $u8arr ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "arrayLength") (EVar "cs"))))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "asciiConstsW") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))) (ELit (LString ")"))))))
 (DTypeSig false "asciiConstsW" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "asciiConstsW" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " (i32.const ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")))))) (ELit (LString ")"))) (EApp (EApp (EApp (EVar "asciiConstsW") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))
-(DTypeSig true "ioHostRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "ioHostRuntimeLines" () (EListLit (ELit (LString "  ;; -- W12 IO host-surface runtime --")) (ELit (LString "  ;; push a $str's bytes to the host path buffer (reset first).")) (ELit (LString "  (func $mdk_push_path (param $s (ref $str))")) (ELit (LString "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)")) (ELit (LString "    (call $mdk_path_reset)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    )")) (ELit (LString "  ;; copy the host result buffer (length + byte-at-index) into a fresh $u8arr.")) (ELit (LString "  (func $mdk_io_result_bytes (result (ref $u8arr))")) (ELit (LString "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))")) (ELit (LString "    (local.set $n (call $mdk_result_len))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $buf) (local.get $i) (call $mdk_result_byte (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $buf))")) (ELit (LString "  ;; the host result buffer as a $str, read as UTF-8 by $mdk_u8_to_str_lossy.")) (ELit (LString "  (func $mdk_io_result_to_str (result (ref $str))")) (ELit (LString "    (call $mdk_u8_to_str_lossy (call $mdk_io_result_bytes)))")) (ELit (LString "  ;; readFile's Err for contents that are not UTF-8: the path, then a fixed ASCII")) (ELit (LString "  ;; suffix, byte-identical to medaka_rt.c mdk_read_file.")) (ELit (LString "  (func $mdk_str_not_utf8 (param $path (ref $str)) (result (ref $str))")) (ELit (LString "    (local $pb (ref $u8arr)) (local $pl i32) (local $sfx (ref $u8arr)) (local $out (ref $u8arr))")) (ELit (LString "    (local.set $pb (struct.get $str $bytes (local.get $path)))")) (ELit (LString "    (local.set $pl (array.len (local.get $pb)))")) (EBinOp "++" (EBinOp "++" (ELit (LString "    (local.set $sfx ")) (EApp (EMethodRef "display") (EVar "notUtf8SuffixWat"))) (ELit (LString ")"))) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (i32.add (local.get $pl) (array.len (local.get $sfx)))))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $pb) (i32.const 0) (local.get $pl))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (local.get $pl) (local.get $sfx) (i32.const 0) (array.len (local.get $sfx)))")) (ELit (LString "    (struct.new $str (i32.add (struct.get $str $cp_count (local.get $path)) (array.len (local.get $sfx))) (local.get $out)))")) (ELit (LString "  ;; readFile : $str path -> Result String String.  1=Ok contents / 0=Err message.")) (ELit (LString "  ;; Contents that are not UTF-8 are an Err naming the path (medaka_rt.c mdk_read_file).")) (ELit (LString "  (func $mdk_read_file_io (param $path (ref $str)) (result (ref eq))")) (ELit (LString "    (local $st i32) (local $buf (ref $u8arr)) (local $c i32)")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (local.set $st (call $mdk_read_file))")) (ELit (LString "    (if (i32.eqz (local.get $st))")) (ELit (LString "      (then (return (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))")) (ELit (LString "    (local.set $buf (call $mdk_io_result_bytes))")) (ELit (LString "    (local.set $c (call $mdk_utf8_valid_count (local.get $buf)))")) (ELit (LString "    (if (result (ref eq)) (i32.ge_s (local.get $c) (i32.const 0))")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (struct.new $str (local.get $c) (local.get $buf))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_str_not_utf8 (local.get $path))))))")) (ELit (LString "  ;; fileExists : $str path -> Bool (i31 ordinal: False=0 / True=1).")) (ELit (LString "  (func $mdk_file_exists_io (param $path (ref $str)) (result (ref eq))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (ref.i31 (call $mdk_file_exists)))")) (ELit (LString "  ;; getEnv : $str name -> Option String.  1=Some value / 0=None.")) (ELit (LString "  (func $mdk_get_env_io (param $name (ref $str)) (result (ref eq))")) (ELit (LString "    (local $st i32)")) (ELit (LString "    (call $mdk_push_path (local.get $name))")) (ELit (LString "    (local.set $st (call $mdk_get_env))")) (ELit (LString "    (if (result (ref eq)) (local.get $st)")) (ELit (LString "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))")) (ELit (LString "      (else (ref.i31 (i32.const 1)))))"))))
-(DTypeSig true "ioArgsRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "ioArgsRuntimeLines" () (EListLit (ELit (LString "  ;; build a $str from the i-th host arg (mdk_arg_len(i) + mdk_arg_byte(i,j)).")) (ELit (LString "  (func $mdk_arg_to_str (param $idx i32) (result (ref $str))")) (ELit (LString "    (local $n i32) (local $j i32) (local $buf (ref $u8arr))")) (ELit (LString "    (local.set $n (call $mdk_arg_len (local.get $idx)))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (local.set $j (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $j) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $buf) (local.get $j) (call $mdk_arg_byte (local.get $idx) (local.get $j)))")) (ELit (LString "      (local.set $j (i32.add (local.get $j) (i32.const 1))) (br $l)))")) (ELit (LString "    (call $mdk_u8_to_str_lossy (local.get $buf)))")) (ELit (LString "  ;; args : Unit -> List String.  Fold a Cons chain right-to-left ending in Nil.")) (ELit (LString "  (func $mdk_args_io (result (ref eq))")) (ELit (LString "    (local $c i32) (local $i i32) (local $acc (ref eq))")) (ELit (LString "    (local.set $c (call $mdk_args_count))")) (ELit (LString "    (local.set $acc (ref.i31 (i32.const 1)))")) (ELit (LString "    (local.set $i (i32.sub (local.get $c) (i32.const 1)))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.lt_s (local.get $i) (i32.const 0)))")) (ELit (LString "      (local.set $acc (struct.new $C_Cons (i32.const 0) (call $mdk_arg_to_str (local.get $i)) (local.get $acc)))")) (ELit (LString "      (local.set $i (i32.sub (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $acc))"))))
-(DTypeSig true "fileBytesHostImportLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "fileBytesHostImportLines" () (EListLit (ELit (LString "  ;; -- stage-D writeFileBytes host imports (path via mdk_path_push; bytes streamed) --")) (ELit (LString "  (import \"env\" \"mdk_write_file_reset\" (func $mdk_write_file_reset))")) (ELit (LString "  (import \"env\" \"mdk_write_file_push\" (func $mdk_write_file_push (param i32)))")) (ELit (LString "  (import \"env\" \"mdk_write_file_commit\" (func $mdk_write_file_commit (result i32)))"))))
-(DTypeSig true "fileBytesRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "fileBytesRuntimeLines" () (EListLit (ELit (LString "  ;; -- stage-D byte-clean file I/O runtime --")) (ELit (LString "  ;; readFileBytes : $str path -> Result String (Array Int).  1=Ok bytes / 0=Err msg.")) (ELit (LString "  ;; Reuses the read byte-channel but rebuilds an $arr of i31 Int bytes (0..255).")) (ELit (LString "  (func $mdk_read_file_bytes_io (param $path (ref $str)) (result (ref eq))")) (ELit (LString "    (local $st i32) (local $n i32) (local $i i32) (local $out (ref $arr))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (local.set $st (call $mdk_read_file))")) (ELit (LString "    (if (result (ref eq)) (local.get $st)")) (ELit (LString "      (then")) (ELit (LString "        (local.set $n (call $mdk_result_len))")) (ELit (LString "        (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $n)))")) (ELit (LString "        (local.set $i (i32.const 0))")) (ELit (LString "        (block $d (loop $l")) (ELit (LString "          (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "          (array.set $arr (local.get $out) (local.get $i) (ref.i31 (call $mdk_result_byte (local.get $i))))")) (ELit (LString "          (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "        (struct.new $C_Ok (i32.const 0) (local.get $out)))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))")) (ELit (LString "  ;; writeFileBytes : $str path -> $arr bytes -> Result String Unit.  1=Ok () / 0=Err msg.")) (ELit (LString "  ;; Stream each i31 byte (masked to 0..255) to the host, then commit fs.writeFileSync.")) (ELit (LString "  (func $mdk_write_file_bytes_io (param $path (ref $str)) (param $ba (ref $arr)) (result (ref eq))")) (ELit (LString "    (local $st i32) (local $n i32) (local $i i32)")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (call $mdk_write_file_reset)")) (ELit (LString "    (local.set $n (array.len (local.get $ba)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_write_file_push (i32.and (i31.get_s (ref.cast (ref i31) (array.get $arr (local.get $ba) (local.get $i)))) (i32.const 255)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.set $st (call $mdk_write_file_commit))")) (ELit (LString "    (if (result (ref eq)) (local.get $st)")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig true "ioHostRuntimeLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "ioHostRuntimeLines" ((PVar "keys")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_path_push"))) (EVar "keys")) (EVar "ioPushPathLines")) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_rename"))) (EVar "keys")) (EVar "ioPushPathMoreLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_grant_push"))) (EVar "keys")) (EVar "ioPushGrantLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_rename"))) (EVar "keys")) (EVar "ioPushGrantMoreLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_result_len"))) (EVar "keys")) (EVar "ioResultLines"))) (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "contains") (ELit (LString "mdk_file_exists"))) (EVar "keys")) (EApp (EApp (EVar "contains") (ELit (LString "mdk_canonicalize_path"))) (EVar "keys"))) (EApp (EApp (EVar "contains") (ELit (LString "mdk_os_entropy"))) (EVar "keys"))) (EVar "ioRefusedPanicLines") (EListLit))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_read_file"))) (EVar "keys")) (EVar "ioReadFileLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_file_exists"))) (EVar "keys")) (EVar "ioFileExistsLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_canonicalize_path"))) (EVar "keys")) (EVar "ioCanonicalizeLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_write_file"))) (EVar "keys")) (EVar "ioWriteFileLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_append_file"))) (EVar "keys")) (EVar "ioAppendFileLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_rename"))) (EVar "keys")) (EVar "ioRenameLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_list_dir"))) (EVar "keys")) (EVar "ioListDirLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_stat_file"))) (EVar "keys")) (EVar "ioStatFileLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_make_dir"))) (EVar "keys")) (EVar "ioMakeDirLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_remove_file"))) (EVar "keys")) (EVar "ioRemoveFileLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_remove_dir"))) (EVar "keys")) (EVar "ioRemoveDirLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_fsync"))) (EVar "keys")) (EVar "ioFsyncLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_file_mode"))) (EVar "keys")) (EVar "ioFileModeLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_write_file_mode"))) (EVar "keys")) (EVar "ioWriteFileModeLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_get_env"))) (EVar "keys")) (EVar "ioGetEnvLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_read_line"))) (EVar "keys")) (EVar "ioReadLineLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_read_all"))) (EVar "keys")) (EVar "ioReadAllLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_read_exactly"))) (EVar "keys")) (EVar "ioReadExactlyLines"))) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_executable_path"))) (EVar "keys")) (EVar "ioExecutablePathLines"))))
+(DTypeSig false "gatedOn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "gatedOn" ((PVar "key") (PVar "keys") (PVar "block")) (EIf (EApp (EApp (EVar "contains") (EVar "key")) (EVar "keys")) (EVar "block") (EListLit)))
+(DTypeSig false "ioPushPathLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioPushPathLines" () (EListLit (ELit (LString "  ;; push a $str's bytes to the host path buffer (reset first).")) (ELit (LString "  (func $mdk_push_path (param $s (ref $str))")) (ELit (LString "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)")) (ELit (LString "    (call $mdk_path_reset)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    )"))))
+(DTypeSig false "ioPushPathMoreLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioPushPathMoreLines" () (EListLit (ELit (LString "  ;; append a $str's bytes to the host path buffer (rename's second path).")) (ELit (LString "  (func $mdk_push_path_more (param $s (ref $str))")) (ELit (LString "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    )"))))
+(DTypeSig false "ioPushGrantLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioPushGrantLines" () (EListLit (ELit (LString "  ;; push a grant (List String) to the host grant buffer (reset first).")) (ELit (LString "  (func $mdk_push_grant (param $g (ref eq))")) (ELit (LString "    (local $cell (ref $C_Cons)) (local $b (ref $u8arr)) (local $i i32) (local $n i32)")) (ELit (LString "    (call $mdk_grant_reset)")) (ELit (LString "    (block $done (loop $next")) (ELit (LString "      (br_if $done (i32.eqz (ref.test (ref $C_Cons) (local.get $g))))")) (ELit (LString "      (local.set $cell (ref.cast (ref $C_Cons) (local.get $g)))")) (ELit (LString "      (local.set $b (struct.get $str $bytes (ref.cast (ref $str) (struct.get $C_Cons 1 (local.get $cell)))))")) (ELit (LString "      (local.set $n (array.len (local.get $b)))")) (ELit (LString "      (local.set $i (i32.const 0))")) (ELit (LString "      (block $d (loop $l")) (ELit (LString "        (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "        (call $mdk_grant_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "        (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "      (call $mdk_grant_push (i32.const -1))")) (ELit (LString "      (local.set $g (struct.get $C_Cons 2 (local.get $cell))) (br $next)))")) (ELit (LString "    )"))))
+(DTypeSig false "ioPushGrantMoreLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioPushGrantMoreLines" () (EListLit (ELit (LString "  ;; append a grant to the host grant buffer (rename's second grant).")) (ELit (LString "  (func $mdk_push_grant_more (param $g (ref eq))")) (ELit (LString "    (local $cell (ref $C_Cons)) (local $b (ref $u8arr)) (local $i i32) (local $n i32)")) (ELit (LString "    (block $done (loop $next")) (ELit (LString "      (br_if $done (i32.eqz (ref.test (ref $C_Cons) (local.get $g))))")) (ELit (LString "      (local.set $cell (ref.cast (ref $C_Cons) (local.get $g)))")) (ELit (LString "      (local.set $b (struct.get $str $bytes (ref.cast (ref $str) (struct.get $C_Cons 1 (local.get $cell)))))")) (ELit (LString "      (local.set $n (array.len (local.get $b)))")) (ELit (LString "      (local.set $i (i32.const 0))")) (ELit (LString "      (block $d (loop $l")) (ELit (LString "        (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "        (call $mdk_grant_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "        (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "      (call $mdk_grant_push (i32.const -1))")) (ELit (LString "      (local.set $g (struct.get $C_Cons 2 (local.get $cell))) (br $next)))")) (ELit (LString "    )"))))
+(DTypeSig false "ioRefusedPanicLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioRefusedPanicLines" () (EListLit (ELit (LString "  ;; the host's refusal message (result channel) as an E-PANIC line, then trap.")) (ELit (LString "  (func $mdk_refused_panic")) (EBinOp "++" (EBinOp "++" (ELit (LString "    (call $mdk_err_u8arr ")) (EApp (EMethodRef "display") (EVar "panicBannerWat"))) (ELit (LString ")"))) (ELit (LString "    (call $mdk_err_u8arr (call $mdk_io_result_bytes))")) (ELit (LString "    (call $mdk_write_err_byte (i32.const 10))")) (ELit (LString "    (unreachable))")) (ELit (LString "  (func $mdk_err_u8arr (param $b (ref $u8arr))")) (ELit (LString "    (local $i i32) (local $n i32)")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_write_err_byte (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    )"))))
+(DTypeSig false "panicBannerWat" (TyCon "String"))
+(DFunDef false "panicBannerWat" () (EApp (EVar "asciiU8arrWat") (ELit (LString "runtime error [E-PANIC]: "))))
+(DTypeSig false "ioResultLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioResultLines" () (EListLit (ELit (LString "  ;; copy the host result buffer (length + byte-at-index) into a fresh $u8arr.")) (ELit (LString "  (func $mdk_io_result_bytes (result (ref $u8arr))")) (ELit (LString "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))")) (ELit (LString "    (local.set $n (call $mdk_result_len))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $buf) (local.get $i) (call $mdk_result_byte (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $buf))")) (ELit (LString "  ;; the host result buffer as a $str, read as UTF-8 by $mdk_u8_to_str_lossy.")) (ELit (LString "  (func $mdk_io_result_to_str (result (ref $str))")) (ELit (LString "    (call $mdk_u8_to_str_lossy (call $mdk_io_result_bytes)))"))))
+(DTypeSig false "ioReadFileLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioReadFileLines" () (EListLit (ELit (LString "  ;; readFile's Err for contents that are not UTF-8: the path, then a fixed ASCII")) (ELit (LString "  ;; suffix, byte-identical to medaka_rt.c mdk_read_file.")) (ELit (LString "  (func $mdk_str_not_utf8 (param $path (ref $str)) (result (ref $str))")) (ELit (LString "    (local $pb (ref $u8arr)) (local $pl i32) (local $sfx (ref $u8arr)) (local $out (ref $u8arr))")) (ELit (LString "    (local.set $pb (struct.get $str $bytes (local.get $path)))")) (ELit (LString "    (local.set $pl (array.len (local.get $pb)))")) (EBinOp "++" (EBinOp "++" (ELit (LString "    (local.set $sfx ")) (EApp (EMethodRef "display") (EVar "notUtf8SuffixWat"))) (ELit (LString ")"))) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (i32.add (local.get $pl) (array.len (local.get $sfx)))))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $pb) (i32.const 0) (local.get $pl))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (local.get $pl) (local.get $sfx) (i32.const 0) (array.len (local.get $sfx)))")) (ELit (LString "    (struct.new $str (i32.add (struct.get $str $cp_count (local.get $path)) (array.len (local.get $sfx))) (local.get $out)))")) (ELit (LString "  ;; readFile : $str path -> Result String String.  1=Ok contents / 0=Err message.")) (ELit (LString "  ;; Contents that are not UTF-8 are an Err naming the path (medaka_rt.c mdk_read_file).")) (ELit (LString "  (func $mdk_read_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (local $st i32) (local $buf (ref $u8arr)) (local $c i32)")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (local.set $st (call $mdk_read_file))")) (ELit (LString "    (if (i32.eqz (local.get $st))")) (ELit (LString "      (then (return (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))")) (ELit (LString "    (local.set $buf (call $mdk_io_result_bytes))")) (ELit (LString "    (local.set $c (call $mdk_utf8_valid_count (local.get $buf)))")) (ELit (LString "    (if (result (ref eq)) (i32.ge_s (local.get $c) (i32.const 0))")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (struct.new $str (local.get $c) (local.get $buf))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_str_not_utf8 (local.get $path))))))"))))
+(DTypeSig false "ioFileExistsLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioFileExistsLines" () (EListLit (ELit (LString "  ;; fileExists : $str path -> Bool (i31 ordinal: False=0 / True=1); 2 = refused.")) (ELit (LString "  (func $mdk_file_exists_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (local $r i32)")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (local.set $r (call $mdk_file_exists))")) (ELit (LString "    (if (i32.eq (local.get $r) (i32.const 2)) (then (call $mdk_refused_panic)))")) (ELit (LString "    (ref.i31 (local.get $r)))"))))
+(DTypeSig false "ioCanonicalizeLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioCanonicalizeLines" () (EListLit (ELit (LString "  ;; canonicalizePath : $str path -> $str.  1=the host's answer / 0=refused.")) (ELit (LString "  (func $mdk_canonicalize_path_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (if (i32.eqz (call $mdk_canonicalize_path)) (then (call $mdk_refused_panic)))")) (ELit (LString "    (call $mdk_io_result_to_str))"))))
+(DTypeSig false "ioWriteFileLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioWriteFileLines" () (EListLit (ELit (LString "  ;; writeFile : $str path -> $str contents -> Result String Unit.  1=Ok () / 0=Err msg.")) (ELit (LString "  ;; The contents' bytes stream to the host's write buffer, as writeFileBytes streams its array.")) (ELit (LString "  (func $mdk_write_file_io (param $path (ref $str)) (param $s (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (call $mdk_write_file_reset)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_write_file_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_write_file)")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "ioWriteFileModeLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioWriteFileModeLines" () (EListLit (ELit (LString "  ;; writeFileMode : $str path -> Int mode -> $str contents -> Result String Unit.")) (ELit (LString "  ;; 1=Ok () / 0=Err msg.  The contents stream to the host's write buffer; the host sets")) (ELit (LString "  ;; the file's mode before the first byte is written.")) (ELit (LString "  (func $mdk_write_file_mode_io (param $path (ref $str)) (param $mode (ref eq)) (param $s (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (call $mdk_write_file_reset)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_write_file_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_write_file_mode (i32.wrap_i64 (call $mdk_unbox_int (local.get $mode))))")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "ioAppendFileLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioAppendFileLines" () (EListLit (ELit (LString "  ;; appendFile : $str path -> $str contents -> Result String Unit.  1=Ok () / 0=Err msg.")) (ELit (LString "  ;; The contents' bytes stream to the host's write buffer; the host appends them.")) (ELit (LString "  (func $mdk_append_file_io (param $path (ref $str)) (param $s (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (call $mdk_write_file_reset)")) (ELit (LString "    (local.set $b (struct.get $str $bytes (local.get $s)))")) (ELit (LString "    (local.set $n (array.len (local.get $b)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_write_file_push (array.get_u $u8arr (local.get $b) (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_append_file)")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "ioRenameLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioRenameLines" () (EListLit (ELit (LString "  ;; rename : $str src -> $str dst -> src grant -> dst grant -> Result String Unit.")) (ELit (LString "  ;; The grants share the grant channel (-2 ends the first), the paths the path channel;")) (ELit (LString "  ;; the host splits the path buffer at the source's byte length.")) (ELit (LString "  (func $mdk_rename_io (param $src (ref $str)) (param $dst (ref $str)) (param $gs (ref eq)) (param $gd (ref eq)) (result (ref eq))")) (ELit (LString "    (call $mdk_push_grant (local.get $gs))")) (ELit (LString "    (call $mdk_grant_push (i32.const -2))")) (ELit (LString "    (call $mdk_push_grant_more (local.get $gd))")) (ELit (LString "    (call $mdk_push_path (local.get $src))")) (ELit (LString "    (call $mdk_push_path_more (local.get $dst))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_rename (array.len (struct.get $str $bytes (local.get $src))))")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "ioListDirLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioListDirLines" () (EListLit (ELit (LString "  ;; listDir : $str path -> Result String (List String).  The host answers each entry's")) (ELit (LString "  ;; name followed by a NUL byte; the list is built from the last entry back.")) (ELit (LString "  (func $mdk_list_dir_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (local $buf (ref $u8arr)) (local $name (ref $u8arr)) (local $acc (ref eq))")) (ELit (LString "    (local $pos i32) (local $end i32) (local $k i32)")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (if (i32.eqz (call $mdk_list_dir))")) (ELit (LString "      (then (return (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))")) (ELit (LString "    (local.set $buf (call $mdk_io_result_bytes))")) (ELit (LString "    (local.set $acc (ref.i31 (i32.const 1)))")) (ELit (LString "    (local.set $pos (array.len (local.get $buf)))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.le_s (local.get $pos) (i32.const 0)))")) (ELit (LString "      (local.set $end (i32.sub (local.get $pos) (i32.const 1)))")) (ELit (LString "      (local.set $k (local.get $end))")) (ELit (LString "      (block $s (loop $m")) (ELit (LString "        (br_if $s (i32.eqz (local.get $k)))")) (ELit (LString "        (br_if $s (i32.eqz (array.get_u $u8arr (local.get $buf) (i32.sub (local.get $k) (i32.const 1)))))")) (ELit (LString "        (local.set $k (i32.sub (local.get $k) (i32.const 1))) (br $m)))")) (ELit (LString "      (local.set $name (array.new $u8arr (i32.const 0) (i32.sub (local.get $end) (local.get $k))))")) (ELit (LString "      (array.copy $u8arr $u8arr (local.get $name) (i32.const 0) (local.get $buf) (local.get $k) (i32.sub (local.get $end) (local.get $k)))")) (ELit (LString "      (local.set $acc (struct.new $C_Cons (i32.const 0) (call $mdk_u8_to_str_lossy (local.get $name)) (local.get $acc)))")) (ELit (LString "      (local.set $pos (local.get $k)) (br $l)))")) (ELit (LString "    (struct.new $C_Ok (i32.const 0) (local.get $acc)))"))))
+(DTypeSig false "ioStatFileLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioStatFileLines" () (EListLit (ELit (LString "  ;; statFile : $str path -> Result String (Int, Bool, Bool, Float): size, isDir, isFile,")) (ELit (LString "  ;; mtime in seconds.  The host answers each field of the stat it took as an f64.")) (ELit (LString "  (func $mdk_stat_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_stat_file)")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0)")) (ELit (LString "        (struct.new $C_Tup4 (i32.const 0)")) (ELit (LString "          (call $mdk_box_int (i64.trunc_f64_s (call $mdk_stat_field (i32.const 0))))")) (ELit (LString "          (ref.i31 (i32.trunc_f64_s (call $mdk_stat_field (i32.const 1))))")) (ELit (LString "          (ref.i31 (i32.trunc_f64_s (call $mdk_stat_field (i32.const 2))))")) (ELit (LString "          (struct.new $float (call $mdk_stat_field (i32.const 3))))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "ioMakeDirLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioMakeDirLines" () (EListLit (ELit (LString "  ;; makeDir : $str path -> Result String Unit.  1=Ok () / 0=Err msg.")) (ELit (LString "  (func $mdk_make_dir_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_make_dir)")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "ioRemoveFileLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioRemoveFileLines" () (EListLit (ELit (LString "  ;; removeFile : $str path -> Result String Unit.  1=Ok () / 0=Err msg.")) (ELit (LString "  (func $mdk_remove_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_remove_file)")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "ioRemoveDirLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioRemoveDirLines" () (EListLit (ELit (LString "  ;; removeDir : $str path -> Result String Unit.  1=Ok () / 0=Err msg.")) (ELit (LString "  (func $mdk_remove_dir_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_remove_dir)")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "ioFsyncLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioFsyncLines" () (EListLit (ELit (LString "  ;; fsync : $str path -> Result String Unit.  1=Ok () / 0=Err msg.")) (ELit (LString "  (func $mdk_fsync_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_fsync)")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "ioFileModeLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioFileModeLines" () (EListLit (ELit (LString "  ;; fileMode : $str path -> Result String Int: the permission bits, 0 to 4095.  The host")) (ELit (LString "  ;; takes the stat that statFile takes and answers its mode field, field 4.")) (ELit (LString "  (func $mdk_file_mode_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_file_mode)")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0)")) (ELit (LString "        (call $mdk_box_int (i64.trunc_f64_s (call $mdk_stat_field (i32.const 4))))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "ioGetEnvLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioGetEnvLines" () (EListLit (ELit (LString "  ;; getEnv : $str name -> Option String.  1=Some value / 0=None.")) (ELit (LString "  (func $mdk_get_env_io (param $name (ref $str)) (result (ref eq))")) (ELit (LString "    (local $st i32)")) (ELit (LString "    (call $mdk_push_path (local.get $name))")) (ELit (LString "    (local.set $st (call $mdk_get_env))")) (ELit (LString "    (if (result (ref eq)) (local.get $st)")) (ELit (LString "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))")) (ELit (LString "      (else (ref.i31 (i32.const 1)))))"))))
+(DTypeSig false "ioReadLineLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioReadLineLines" () (EListLit (ELit (LString "  ;; readLine : Unit -> String.  The host answers 1 with a line (its newline")) (ELit (LString "  ;; stripped) on the result channel, or 0 at end of input, where the channel is empty.")) (ELit (LString "  (func $mdk_read_line_io (result (ref eq))")) (ELit (LString "    (drop (call $mdk_read_line))")) (ELit (LString "    (call $mdk_io_result_to_str))")) (ELit (LString "  ;; readLineOpt : Unit -> Option String.  0 is None.")) (ELit (LString "  (func $mdk_read_line_opt_io (result (ref eq))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_read_line)")) (ELit (LString "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))")) (ELit (LString "      (else (ref.i31 (i32.const 1)))))"))))
+(DTypeSig false "ioReadAllLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioReadAllLines" () (EListLit (ELit (LString "  ;; readAll : Unit -> String.  The rest of the host's stdin buffer.")) (ELit (LString "  (func $mdk_read_all_io (result (ref eq))")) (ELit (LString "    (call $mdk_read_all)")) (ELit (LString "    (call $mdk_io_result_to_str))"))))
+(DTypeSig false "ioReadExactlyLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioReadExactlyLines" () (EListLit (ELit (LString "  ;; readExactly : Int -> Option String.  1=Some the n bytes / 0=None (end of input")) (ELit (LString "  ;; or a short read, whose bytes the host has consumed).")) (ELit (LString "  (func $mdk_read_exactly_io (param $n i64) (result (ref eq))")) (ELit (LString "    (if (result (ref eq)) (call $mdk_read_exactly (local.get $n))")) (ELit (LString "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))")) (ELit (LString "      (else (ref.i31 (i32.const 1)))))"))))
+(DTypeSig false "ioExecutablePathLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioExecutablePathLines" () (EListLit (ELit (LString "  (func $mdk_executable_path_io (result (ref eq))")) (ELit (LString "    (drop (call $mdk_executable_path))")) (ELit (LString "    (call $mdk_io_result_to_str))"))))
+(DTypeSig true "ioArgsRuntimeLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "ioArgsRuntimeLines" ((PVar "keys")) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_args_count"))) (EVar "keys")) (EVar "ioArgsLines")))
+(DTypeSig false "ioArgsLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "ioArgsLines" () (EListLit (ELit (LString "  ;; build a $str from the i-th host arg (mdk_arg_len(i) + mdk_arg_byte(i,j)).")) (ELit (LString "  (func $mdk_arg_to_str (param $idx i32) (result (ref $str))")) (ELit (LString "    (local $n i32) (local $j i32) (local $buf (ref $u8arr))")) (ELit (LString "    (local.set $n (call $mdk_arg_len (local.get $idx)))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (local.set $j (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $j) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $buf) (local.get $j) (call $mdk_arg_byte (local.get $idx) (local.get $j)))")) (ELit (LString "      (local.set $j (i32.add (local.get $j) (i32.const 1))) (br $l)))")) (ELit (LString "    (call $mdk_u8_to_str_lossy (local.get $buf)))")) (ELit (LString "  ;; args : Unit -> List String.  Fold a Cons chain right-to-left ending in Nil.")) (ELit (LString "  (func $mdk_args_io (result (ref eq))")) (ELit (LString "    (local $c i32) (local $i i32) (local $acc (ref eq))")) (ELit (LString "    (local.set $c (call $mdk_args_count))")) (ELit (LString "    (local.set $acc (ref.i31 (i32.const 1)))")) (ELit (LString "    (local.set $i (i32.sub (local.get $c) (i32.const 1)))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.lt_s (local.get $i) (i32.const 0)))")) (ELit (LString "      (local.set $acc (struct.new $C_Cons (i32.const 0) (call $mdk_arg_to_str (local.get $i)) (local.get $acc)))")) (ELit (LString "      (local.set $i (i32.sub (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $acc))"))))
+(DTypeSig true "fileBytesRuntimeLines" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "fileBytesRuntimeLines" ((PVar "readsBytes") (PVar "keys")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_write_file_commit"))) (EVar "keys")) (EVar "writeFileBytesLines")) (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_os_entropy"))) (EVar "keys")) (EVar "osEntropyLines"))) (EIf (EVar "readsBytes") (EApp (EApp (EApp (EVar "gatedOn") (ELit (LString "mdk_read_file"))) (EVar "keys")) (EVar "readFileBytesLines")) (EListLit))))
+(DTypeSig false "readFileBytesLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "readFileBytesLines" () (EListLit (ELit (LString "  ;; readFileBytes : $str path -> Result String (Array Int).  1=Ok bytes / 0=Err msg.")) (ELit (LString "  ;; Reuses the read byte-channel but rebuilds an $arr of i31 Int bytes (0..255).")) (ELit (LString "  (func $mdk_read_file_bytes_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (local $st i32) (local $n i32) (local $i i32) (local $out (ref $arr))")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (local.set $st (call $mdk_read_file))")) (ELit (LString "    (if (result (ref eq)) (local.get $st)")) (ELit (LString "      (then")) (ELit (LString "        (local.set $n (call $mdk_result_len))")) (ELit (LString "        (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $n)))")) (ELit (LString "        (local.set $i (i32.const 0))")) (ELit (LString "        (block $d (loop $l")) (ELit (LString "          (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "          (array.set $arr (local.get $out) (local.get $i) (ref.i31 (call $mdk_result_byte (local.get $i))))")) (ELit (LString "          (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "        (struct.new $C_Ok (i32.const 0) (local.get $out)))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
+(DTypeSig false "osEntropyLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "osEntropyLines" () (EListLit (ELit (LString "  ;; osEntropyBytes : Int -> Array Int.  1=n random bytes / 0=a refusal (its text on the channel).")) (ELit (LString "  (func $mdk_os_entropy_io (param $n i64) (result (ref eq))")) (ELit (LString "    (local $len i32) (local $i i32) (local $out (ref $arr))")) (ELit (LString "    (if (i32.eqz (call $mdk_os_entropy (local.get $n))) (then (call $mdk_refused_panic)))")) (ELit (LString "    (local.set $len (call $mdk_result_len))")) (ELit (LString "    (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $len)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $len)))")) (ELit (LString "      (array.set $arr (local.get $out) (local.get $i) (ref.i31 (call $mdk_result_byte (local.get $i))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $out))"))))
+(DTypeSig false "writeFileBytesLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "writeFileBytesLines" () (EListLit (ELit (LString "  ;; writeFileBytes : $str path -> $arr bytes -> Result String Unit.  1=Ok () / 0=Err msg.")) (ELit (LString "  ;; Stream each i31 byte (masked to 0..255) to the host, then commit fs.writeFileSync.")) (ELit (LString "  (func $mdk_write_file_bytes_io (param $path (ref $str)) (param $ba (ref $arr)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (local $st i32) (local $n i32) (local $i i32)")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (call $mdk_write_file_reset)")) (ELit (LString "    (local.set $n (array.len (local.get $ba)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (call $mdk_write_file_push (i32.and (i31.get_s (ref.cast (ref i31) (array.get $arr (local.get $ba) (local.get $i)))) (i32.const 255)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.set $st (call $mdk_write_file_commit))")) (ELit (LString "    (if (result (ref eq)) (local.get $st)")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"))))
 (DTypeSig true "strSearchRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "strSearchRuntimeLines" () (EListLit (ELit (LString "  ;; -- W8b stringIndexOf / stringCompare (byte-identical to medaka_rt.c) --")) (ELit (LString "  (func $mdk_str_index_of (param $needle (ref $str)) (param $hay (ref $str)) (result (ref eq))")) (ELit (LString "    (local $nb (ref $u8arr)) (local $hb (ref $u8arr)) (local $nl i32) (local $hl i32)")) (ELit (LString "    (local $b i32) (local $j i32) (local $ok i32)")) (ELit (LString "    (local.set $nb (struct.get $str $bytes (local.get $needle)))")) (ELit (LString "    (local.set $hb (struct.get $str $bytes (local.get $hay)))")) (ELit (LString "    (local.set $nl (array.len (local.get $nb)))")) (ELit (LString "    (local.set $hl (array.len (local.get $hb)))")) (ELit (LString "    ;; empty needle -> Some 0 (codepoint index 0).")) (ELit (LString "    (if (i32.eqz (local.get $nl))")) (ELit (LString "      (then (return (struct.new $C_Some (i32.const 0) (ref.i31 (i32.const 0))))))")) (ELit (LString "    (local.set $b (i32.const 0))")) (ELit (LString "    (block $done (loop $scan")) (ELit (LString "      ;; while b + nl <= hl")) (ELit (LString "      (br_if $done (i32.gt_s (i32.add (local.get $b) (local.get $nl)) (local.get $hl)))")) (ELit (LString "      (local.set $ok (i32.const 1))")) (ELit (LString "      (local.set $j (i32.const 0))")) (ELit (LString "      (block $cmpd (loop $cmpl")) (ELit (LString "        (br_if $cmpd (i32.ge_s (local.get $j) (local.get $nl)))")) (ELit (LString "        (if (i32.ne (array.get_u $u8arr (local.get $hb) (i32.add (local.get $b) (local.get $j)))")) (ELit (LString "                    (array.get_u $u8arr (local.get $nb) (local.get $j)))")) (ELit (LString "          (then (local.set $ok (i32.const 0)) (br $cmpd)))")) (ELit (LString "        (local.set $j (i32.add (local.get $j) (i32.const 1))) (br $cmpl)))")) (ELit (LString "      (if (local.get $ok)")) (ELit (LString "        (then (return (struct.new $C_Some (i32.const 0)")) (ELit (LString "          (ref.i31 (call $mdk_cp_count (local.get $hb) (local.get $b)))))))")) (ELit (LString "      (local.set $b (i32.add (local.get $b) (i32.const 1))) (br $scan)))")) (ELit (LString "    ;; not found -> None (i31 ordinal 1).")) (ELit (LString "    (ref.i31 (i32.const 1)))")) (ELit (LString "  ;; -- W8c byte-level count / last-index (byte-identical to medaka_rt.c) --")) (ELit (LString "  ;; non-overlapping occurrences; 0 for an empty needle.")) (ELit (LString "  (func $mdk_str_count_occ (param $n (ref $str)) (param $h (ref $str)) (result i32)")) (ELit (LString "    (local $nb (ref $u8arr)) (local $hb (ref $u8arr)) (local $nl i32) (local $hl i32)")) (ELit (LString "    (local $b i32) (local $c i32)")) (ELit (LString "    (local.set $nb (struct.get $str $bytes (local.get $n)))")) (ELit (LString "    (local.set $hb (struct.get $str $bytes (local.get $h)))")) (ELit (LString "    (local.set $nl (array.len (local.get $nb)))")) (ELit (LString "    (local.set $hl (array.len (local.get $hb)))")) (ELit (LString "    (if (i32.eqz (local.get $nl)) (then (return (i32.const 0))))")) (ELit (LString "    (block $done (loop $scan")) (ELit (LString "      (br_if $done (i32.gt_s (i32.add (local.get $b) (local.get $nl)) (local.get $hl)))")) (ELit (LString "      (if (call $mdk_bytes_match_at (local.get $nb) (local.get $hb) (local.get $b))")) (ELit (LString "        (then")) (ELit (LString "          (local.set $c (i32.add (local.get $c) (i32.const 1)))")) (ELit (LString "          (local.set $b (i32.add (local.get $b) (local.get $nl))))")) (ELit (LString "        (else (local.set $b (i32.add (local.get $b) (i32.const 1)))))")) (ELit (LString "      (br $scan)))")) (ELit (LString "    (local.get $c))")) (ELit (LString "  ;; overlapping occurrences, the last one wins; an empty needle is at the codepoint end.")) (ELit (LString "  (func $mdk_str_last_index_of (param $n (ref $str)) (param $h (ref $str)) (result (ref eq))")) (ELit (LString "    (local $nb (ref $u8arr)) (local $hb (ref $u8arr)) (local $nl i32) (local $hl i32)")) (ELit (LString "    (local $b i32) (local $last i32)")) (ELit (LString "    (local.set $nb (struct.get $str $bytes (local.get $n)))")) (ELit (LString "    (local.set $hb (struct.get $str $bytes (local.get $h)))")) (ELit (LString "    (local.set $nl (array.len (local.get $nb)))")) (ELit (LString "    (local.set $hl (array.len (local.get $hb)))")) (ELit (LString "    (if (i32.eqz (local.get $nl))")) (ELit (LString "      (then (return (struct.new $C_Some (i32.const 0)")) (ELit (LString "        (ref.i31 (struct.get $str $cp_count (local.get $h)))))))")) (ELit (LString "    (local.set $last (i32.const -1))")) (ELit (LString "    (block $done (loop $scan")) (ELit (LString "      (br_if $done (i32.gt_s (i32.add (local.get $b) (local.get $nl)) (local.get $hl)))")) (ELit (LString "      (if (call $mdk_bytes_match_at (local.get $nb) (local.get $hb) (local.get $b))")) (ELit (LString "        (then (local.set $last (local.get $b))))")) (ELit (LString "      (local.set $b (i32.add (local.get $b) (i32.const 1)))")) (ELit (LString "      (br $scan)))")) (ELit (LString "    (if (i32.lt_s (local.get $last) (i32.const 0))")) (ELit (LString "      (then (return (ref.i31 (i32.const 1)))))")) (ELit (LString "    (struct.new $C_Some (i32.const 0)")) (ELit (LString "      (ref.i31 (call $mdk_cp_count (local.get $hb) (local.get $last)))))")) (ELit (LString "  (func $mdk_str_compare (param $a (ref $str)) (param $b (ref $str)) (result (ref eq))")) (ELit (LString "    (local $ab (ref $u8arr)) (local $bb (ref $u8arr)) (local $al i32) (local $bl i32)")) (ELit (LString "    (local $m i32) (local $i i32) (local $ca i32) (local $cb i32)")) (ELit (LString "    (local.set $ab (struct.get $str $bytes (local.get $a)))")) (ELit (LString "    (local.set $bb (struct.get $str $bytes (local.get $b)))")) (ELit (LString "    (local.set $al (array.len (local.get $ab)))")) (ELit (LString "    (local.set $bl (array.len (local.get $bb)))")) (ELit (LString "    (local.set $m (if (result i32) (i32.lt_s (local.get $al) (local.get $bl))")) (ELit (LString "      (then (local.get $al)) (else (local.get $bl))))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $done (loop $l")) (ELit (LString "      (br_if $done (i32.ge_s (local.get $i) (local.get $m)))")) (ELit (LString "      (local.set $ca (array.get_u $u8arr (local.get $ab) (local.get $i)))")) (ELit (LString "      (local.set $cb (array.get_u $u8arr (local.get $bb) (local.get $i)))")) (ELit (LString "      ;; byte less -> Lt (i31 0); byte greater -> Gt (i31 2).")) (ELit (LString "      (if (i32.lt_u (local.get $ca) (local.get $cb)) (then (return (ref.i31 (i32.const 0)))))")) (ELit (LString "      (if (i32.gt_u (local.get $ca) (local.get $cb)) (then (return (ref.i31 (i32.const 2)))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    ;; common prefix equal: shorter < longer; equal length -> Eq.")) (ELit (LString "    (if (i32.lt_s (local.get $al) (local.get $bl)) (then (return (ref.i31 (i32.const 0)))))")) (ELit (LString "    (if (i32.gt_s (local.get $al) (local.get $bl)) (then (return (ref.i31 (i32.const 2)))))")) (ELit (LString "    (ref.i31 (i32.const 1)))"))))
 (DTypeSig true "utf8LossyRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))

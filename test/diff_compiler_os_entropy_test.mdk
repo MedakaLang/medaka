@@ -7,18 +7,19 @@
    of each engine — independence must hold across real processes, since a
    fixture that sampled twice inside one process could pass by calling the
    same in-process RNG state twice without ever exercising a fresh OS call.
-   `negative.mdk`/`too_large.mdk` must be rejected, by name, on both
-   engines. Five structural checks below protect the security contract that
-   the executable checks alone cannot see: the exact effect annotation, that
-   the extern never leaks into a deterministic dispatch table, and that the C
-   helper never falls back to the runtime's seeded SplitMix generator. That
-   the WASM gap is a declared decision rather than a silent omission is a
-   catalog row, pinned in `compiler/backend/extern_catalog_gate_test.mdk`.
+   `negative.mdk`/`too_large.mdk` must be rejected, by name, on every
+   engine (native, and wasmgc/node under test/wasm/run.js). Five structural
+   checks below protect the security contract that the executable checks alone
+   cannot see: the exact effect annotation, that the extern never leaks into a
+   deterministic dispatch table, and that the C helper never falls back to the
+   runtime's seeded SplitMix generator. The wasm lowering is pinned as an
+   Inline row in `compiler/backend/extern_catalog_gate_test.mdk`.
 
    Runs under `medaka test --native`: it spawns subprocesses and reads
    source files, neither of which the interpreter binds. -}
 
 import fs.{expectUnitCount, fixtureFiles}
+import io.{getEnvOr}
 import list.{dropWhile, takeWhile}
 import string.{contains, endsWith, lines, startsWith, unlines}
 import compiler_cli_test_support.{inFreshDirOf}
@@ -154,6 +155,85 @@ buildRejected scratch name fixture wantSubstring =
       else
         pass
 
+-- The wasm emitter binary the CLI's `--target wasm` path execs; the gate
+-- shard builds it but never exports the variable.
+wasmEmitter : <IO> String
+wasmEmitter =
+  getEnvOr "MEDAKA_WASM_EMITTER" "\{medakaRoot}/test/bin/wasm_emit_modules_main"
+
+-- The wasm arm: `fixture` built for `wasm` into `scratch` as `name.wasm`, which is
+-- run under node by test/wasm/run.js (the wasmgc/node profile, which grants Rand).
+wasmBuild : String -> String -> String -> <Exec, IO> Result String String
+wasmBuild scratch name fixture =
+  let binPath = "\{scratch}/\{name}.wasm"
+  match boundedVerbSeconds 60 "env" [
+    "MEDAKA_STRICT=1",
+    "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
+    medakaBin,
+    "build",
+    "--target",
+    "wasm",
+    fixture,
+    "-o",
+    binPath,
+  ]
+    Err e => Err "medaka build --target wasm \{name}: \{e}"
+    Ok (code, bo, be) =>
+      if code /= 0 then
+        Err
+          "medaka build --target wasm \{name} failed: exit=\{intToString code} \{debug (bo ++ be)}"
+      else
+        Ok binPath
+
+-- Runs a built module under node; an exit other than `want` is an error
+-- carrying the code and stderr, so a crash is never a result.
+wasmRun : Int -> String -> <Exec, IO> Result String (Int, String, String)
+wasmRun want binPath = match boundedVerbSeconds 60 "node" [
+  "\{medakaRoot}/test/wasm/run.js",
+  binPath,
+]
+  Err e => Err e
+  Ok (code, out, err) =>
+    if code /= want then
+      Err
+        "node exited \{intToString code}, want \{intToString want}: stdout=\{debug out} stderr=\{debug err}"
+    else
+      Ok (code, out, err)
+
+-- A clean wasm run writes nothing to stderr, as native does.
+wasmClean : String -> (Int, String, String) -> Expectation
+wasmClean tag (_, _, err) =
+  if err == "" then
+    pass
+  else
+    fail "\{tag}: expected empty stderr, got \{debug err}"
+
+wasmIndependence : String -> String -> String -> <Exec, IO> Expectation
+wasmIndependence scratch name fixture = match wasmBuild scratch name fixture
+  Err e => fail e
+  Ok binPath => match wasmRun 0 binPath
+    Err e => fail "\{name} (wasm): first run: \{e}"
+    Ok a => match wasmRun 0 binPath
+      Err e => fail "\{name} (wasm): second run: \{e}"
+      Ok b => expectAll [
+        wasmClean "\{name} (wasm) first" a,
+        wasmClean "\{name} (wasm) second" b,
+        freshSpawnsIndependent "\{name} (wasm)" a b,
+      ]
+
+wasmRejected : String -> String -> String -> String -> <Exec, IO> Expectation
+wasmRejected scratch name fixture wantSubstring =
+  match wasmBuild scratch name fixture
+    Err e => fail e
+    Ok binPath => match wasmRun 1 binPath
+      Err e => fail "\{name} (wasm): run: \{e}"
+      Ok (_, _, ne) =>
+        if not (contains wantSubstring ne) then
+          fail
+            "\{name} (wasm): expected stderr containing \{debug wantSubstring}, got \{debug ne}"
+        else
+          pass
+
 test "os_entropy: build+exec — positive is independent, negative and too-large are rejected" =
   inFreshDirOf
     (scratch => expectAll [
@@ -164,6 +244,17 @@ test "os_entropy: build+exec — positive is independent, negative and too-large
         negativeFixture
         "osEntropyBytes: length must be non-negative",
       buildRejected
+        scratch
+        "too_large"
+        tooLargeFixture
+        "osEntropyBytes: requested length is too large",
+      wasmIndependence scratch "positive" positiveFixture,
+      wasmRejected
+        scratch
+        "negative"
+        negativeFixture
+        "osEntropyBytes: length must be non-negative",
+      wasmRejected
         scratch
         "too_large"
         tooLargeFixture

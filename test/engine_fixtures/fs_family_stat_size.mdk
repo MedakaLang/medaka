@@ -1,0 +1,16 @@
+-- statFile's size through fs.fileSize: Result String Int.  The size counts bytes (a
+-- two-byte and a three-byte character), an empty file is 0 and a missing path is an Err.
+import fs.{fileSize}
+
+size : Result String Int -> String
+size (Ok n) = "Ok \{n}"
+size (Err _) = "Err"
+
+main =
+  println "seed: \{writeFile "/tmp/medaka_engine_fs_size.txt" "12345"}"
+  println "ascii: \{size (fileSize "/tmp/medaka_engine_fs_size.txt")}"
+  println "seed: \{writeFile "/tmp/medaka_engine_fs_size.txt" "é✓✓"}"
+  println "utf-8: \{size (fileSize "/tmp/medaka_engine_fs_size.txt")}"
+  println "seed: \{writeFile "/tmp/medaka_engine_fs_size.txt" ""}"
+  println "empty: \{size (fileSize "/tmp/medaka_engine_fs_size.txt")}"
+  println "missing: \{size (fileSize "/tmp/medaka_engine_fs_no_such_file.txt")}"

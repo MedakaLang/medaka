@@ -29,8 +29,8 @@ That ruling stands. None of it is implemented. Measured on 2026-10-01:
 - **An extern wasm cannot lower fails after typechecking**, inside the emitter,
   as `unbound variable 'writeFile'` — an unlocated panic (#380, #2130, #2426).
   Only the 28 net names and user FFI externs get a worded refusal. The one
-  located, pre-lowering refusal is the file-grant check in
-  `compiler/backend/wasm_file_grants.mdk`.
+  located, pre-lowering refusal was the emitter's file-grant check, deleted
+  when the host began to confine file operations (§6.5).
 - **Which backend lowers which extern is recorded in name lists.** A ladder of
   predicates in `compiler/backend/wasm_emit.mdk` (`isStrExternW`, `isLeafExternW`,
   `isArrayExternW`, `isByteBlockExternW`, `isNetExternW`, `isFfiExternW`), the
@@ -50,8 +50,10 @@ That ruling stands. None of it is implemented. Measured on 2026-10-01:
 - **User code cannot call JavaScript.** `extern f : … -> <FFI "lib"> …` binds a
   C symbol; `wasm_emit` refuses it (pinned by `test/wasm/diff_wasm_ffi_wall.sh`).
   No issue tracked a JavaScript binding, a WASI target, or an edge profile.
-- **Some divergences are not capability gaps.** `canonicalizePath` lowers to
-  identity on wasm; Unicode classification is ASCII-only on wasm; JavaScript
+- **Some divergences are not capability gaps.** `canonicalizePath` lowered to
+  identity on wasm until the host received the grant (§6.5); it now answers the
+  host's `realpath`, and `test/native_fixtures/confinement/canonicalize_dots.mdk`
+  pins native and `wasmgc/node` to one answer. Unicode classification is ASCII-only on wasm; JavaScript
   `Math.*` and libm differ sub-ULP; float formatting executes in the host. Under
   §3's law these are defects or ledgered deviations with a drain date, not
   properties of the target.
@@ -113,9 +115,8 @@ Four consequences:
 - No `#ifdef`, no `@target` on a Medaka definition, no per-target stdlib file.
   Divergence lives in catalog rows and host bindings, both of which are data the
   compiler can check.
-- A difference in a *value* between two targets is a defect. `canonicalizePath`
-  as identity, ASCII-only Unicode on wasm, and the libm/`Math.*` ULP class are
-  tracked as such, or sit in `test/engine_divergence.txt` with a reason and an
+- A difference in a *value* between two targets is a defect. ASCII-only Unicode
+  on wasm and the libm/`Math.*` ULP class are tracked as such, or sit in `test/engine_divergence.txt` with a reason and an
   issue, never as a property of the target.
 - A difference in *availability* is static. A program that needs a label the
   profile does not grant is refused by `check`, located, before any emitter runs
@@ -369,8 +370,8 @@ elaboration its `compile` emits from. The runnability rule's withheld calls
 
 Native and `medaka run` confine a file operation to the authority granted at the
 call (`docs/spec/EFFECTS-SEMANTICS.md` §2.3, §8). A wasm host import receives the
-path alone, so `compiler/backend/wasm_file_grants.mdk` refuses pattern grants at
-build and lets exact and whole-domain grants run unchecked (#3590). With one host
+path alone, so the emitter's file-grant check refused pattern grants at
+build, and exact and whole-domain grants ran unchecked (#3590). With one host
 module the fix is a channel: the emitter passes the hidden grant argument the file
 externs already carry ahead of the path, through the existing byte channel; the
 `fs` slice canonicalizes and checks the way `runtime/medaka_rt.c` does, against
@@ -533,7 +534,7 @@ and a WIT `world` is what a profile would lower to there.
 | `wasm:emitter-gap` rows in `test/engine_divergence.txt` quoting `unbound variable` | drained; the program is refused at `check` (T2) |
 | the shim-parity gate byte-diffs marked blocks | retired; `compiler/types/target_profile_host_test.mdk` (`wasm_host_profile_agreement`) derives the import key set ⊆ profile slices (T3) |
 | `playground/main.js` hand list of shipped stdlib modules | generated from the catalog (T3) |
-| `compiler/backend/wasm_file_grants.mdk` refuses pattern grants | deleted; the host enforces the grant (T3) |
+| the emitter's file-grant check refuses pattern grants | deleted; the host enforces the grant (T3) |
 | `test/wasm/diff_wasm_ffi_wall.sh`, one direction | both directions, check-time (T4) |
 | no edge runner | a Node-simulated edge gate over the admitted corpus (T5) |
 

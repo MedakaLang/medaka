@@ -28,7 +28,43 @@ const hostUrl = pathToFileURL(nodePath.join(__dirname, '..', '..', 'playground',
 const vfs = {
   readFile: (p) => fs.readFileSync(p),   // -> Buffer; throws on missing/unreadable
   exists: (p) => fs.existsSync(p),
-  writeFile: (p, buf) => fs.writeFileSync(p, buf),   // throws on unwritable path
+  // throws on unwritable path.  A given mode is set on the open file before the first
+  // byte, so neither the umask nor an existing file's mode can widen it.
+  writeFile: (p, buf, mode) => {
+    if (mode === undefined) { fs.writeFileSync(p, buf); return; }
+    const fd = fs.openSync(p, 'w', mode);
+    try { fs.fchmodSync(fd, mode); fs.writeFileSync(fd, buf); } finally { fs.closeSync(fd); }
+  },
+  appendFile: (p, buf) => fs.appendFileSync(p, buf), // creates the file when absent
+  // stat(2) following links; the time is whole seconds, as st_mtime
+  stat: (p) => {
+    const st = fs.statSync(p);
+    return { size: st.size, isDir: st.isDirectory(), isFile: st.isFile(), mtime: Math.floor(st.mtimeMs / 1000), mode: st.mode & 0o7777 };
+  },
+  readdir: (p) => fs.readdirSync(p),
+  rename: (a, b) => fs.renameSync(a, b),
+  mkdir: (p) => fs.mkdirSync(p, 0o755),
+  unlink: (p) => fs.unlinkSync(p),   // a link is removed itself, not its target
+  rmdir: (p) => fs.rmdirSync(p),
+  // a file or a directory: open it read-only, flush, close
+  fsync: (p) => { const fd = fs.openSync(p, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } },
+  // confinement's primitives: realpath(3) itself, and whether lstat(2) succeeds, over
+  // byte strings (one char per byte), so a name that is not UTF-8 keeps its bytes
+  realpath: (b) => fs.realpathSync.native(Buffer.from(b, 'latin1'), { encoding: 'buffer' }).toString('latin1'),
+  lexists: (b) => { try { fs.lstatSync(Buffer.from(b, 'latin1')); return true; } catch (e) { return false; } },
+};
+// fd 0, blocking: a read that would block (EAGAIN on a non-blocking pipe) is retried,
+// and zero bytes is end of input.
+const stdin = () => {
+  const b = Buffer.alloc(65536);
+  for (;;) {
+    try { return b.subarray(0, fs.readSync(0, b, 0, b.length, null)); }
+    catch (e) {
+      if (e.code === 'EOF') return new Uint8Array(0);
+      if (e.code !== 'EAGAIN') throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2);
+    }
+  }
 };
 const args = (process.env.MDK_ARGS ? process.env.MDK_ARGS.split(' ') : []);
 let wroteStderr = false;
@@ -40,7 +76,7 @@ const sink = {
 };
 
 import(hostUrl).then(async ({ createHost, runProgram, OldEntryShape }) => {
-  const host = createHost('wasmgc/node', { vfs, args, getEnv: (n) => process.env[n], sink });
+  const host = createHost('wasmgc/node', { vfs, args, getEnv: (n) => process.env[n], executablePath: nodePath.resolve(path), stdin, sink });
   const r = await runProgram(bytes, host);
   if (r.kind === 'exit') { process.exitCode = r.code; return; }
   if (r.kind === 'error') {

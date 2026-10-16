@@ -122,13 +122,10 @@ const escapeHtml = (s) =>
 //   2. its source names no extern of a slice the playground's runner withholds
 //      (playground/medaka_host.mjs `withheldExterns('wasmgc/browser-worker')`:
 //      getEnv, args, exit and the stdin family), nor one no wasm build lowers
-//      (`WASM_GAP_EXTERNS` there: text-mode writeFile, osEntropyBytes), and
-//      `main` names no binding whose declared row writes a pattern file grant
-//      (`<FileRead "cfg/*">`), which the wasm build refuses (T-WASM-FILE-GRANT).
+//      (`WASM_GAP_EXTERNS` there, empty while every such extern has a lowering).
 //      A program reaching one is refused by the compiler or throws a
 //      `CapabilityError` at run time instead of producing the documented
-//      output, which is worse than no link.  The grant test reads text, not
-//      liveness: a grant reached only through a further call is not seen.
+//      output, which is worse than no link.
 //   3. it defines a top-level `main`. A block without one is not a program:
 //      natively `medaka run`/`build` refuse it with one located error
 //      (W-MAIN-MISSING), and the browser answers the same code. The ▶ button would open a guaranteed
@@ -151,22 +148,6 @@ const escapeHtml = (s) =>
 // there.
 const UNSUPPORTED_CALL_RE = new RegExp(
   `\\b(${[...withheldExterns('wasmgc/browser-worker'), ...WASM_GAP_EXTERNS].join('|')})\\b`);
-
-// Conjunct 2, grants: the top-level bindings whose signature line writes a pattern
-// file grant, and the first of them that a line of `main`'s definition names.
-function patternGrantInMain(text) {
-  const granted = [...text.matchAll(/^([a-z][A-Za-z0-9_']*)\s*:.*\bFile(?:Read|Write)\s+"[^"\n]*\*"/gm)]
-    .map((m) => m[1]);
-  const mainLines = [];
-  let inMain = false;
-  for (const line of text.split('\n')) {
-    if (/^main\b/.test(line)) inMain = true;
-    else if (!/^(\s|$)/.test(line)) inMain = false;
-    if (inMain) mainLines.push(line);
-  }
-  const body = mainLines.join('\n');
-  return granted.find((g) => new RegExp(`(^|[^A-Za-z0-9_'])${g}($|[^A-Za-z0-9_'])`).test(body)) || null;
-}
 
 // Conjunct 3. A top-level `main` binding starts a line, so anchor to one.
 const definesMain = (text) => /^main\b/m.test(text);
@@ -207,10 +188,6 @@ export function classifyRunnable(label, text, shipped) {
   const m = text.match(UNSUPPORTED_CALL_RE);
   if (m) {
     return { runnable: false, reason: `uses \`${m[1]}\`, which the browser playground has no host support for` };
-  }
-  const g = patternGrantInMain(text);
-  if (g) {
-    return { runnable: false, reason: `\`${g}\` has a pattern file grant, which a wasm build cannot confine` };
   }
   if (!definesMain(text)) {
     return { runnable: false, reason: 'defines no top-level `main`, so there is no program to run' };

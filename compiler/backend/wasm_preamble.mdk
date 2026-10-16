@@ -37,6 +37,8 @@
 -- section, function defs, `(start)`, and the trailing `)`), so this preamble
 -- deliberately leaves the `(module` paren OPEN.
 
+import support.util.{contains}
+
 export
 preambleHeadLines : List String
 preambleHeadLines = [
@@ -987,7 +989,7 @@ strJoinRuntimeLines = [
 --   • a list (i31 Nil or $C_Cons) → rebuild the left spine onto `b` (list append).
 -- List append walks the left list into a fixed array, then conses back-to-front
 -- onto `b` so cell identity/order matches the W7 cons rep.  Gated by useStrLeafRef
--- && useListRef (both forced by `noteW8Binop "++"`), so $str + $C_Cons are in scope.
+-- && useListRef (both demanded by `++` in the plan's walk, `emit_plan.noteBinop`), so $str + $C_Cons are in scope.
 export
 appendRuntimeLines : List String
 appendRuntimeLines = [
@@ -1656,39 +1658,117 @@ floatFmtImportLines = [
   "  (import \"env\" \"mdk_float_fmt_byte\" (func $mdk_float_fmt_byte (param i32) (result i32)))"
 ]
 
--- #101: the libm transcendental (+ pow/atan2/hypot) math externs.  WasmGC has no libm,
--- so — like the floatToString formatter — each is a HOST IMPORT backed by JS
--- `Math.*` (byte-identical to C libm on the values these fixtures exercise; sub-ULP
--- transcendental divergences could still surface in a printed digit since the shortest-
--- round-trip formatter (unlike the old %.12g truncation) no longer masks them, and if
--- printed-divergent, are ledgered as native:libm-vs-jsmath-ulp — see
--- test/engine_divergence.txt).  IEEE-exact ops (sqrt/floor/ceil/trunc/round) and
--- floatRem lower to native f64 opcodes / $mdk_round / $mdk_float_rem — NOT host imports.
--- Every JS harness that instantiates a module (test/wasm/run.js + the playground
--- worker.js / compile.mjs / *_test.mjs) provides these $mdk_<name> functions.
--- Gated on WasmEmit.useMath (set by noteW8Extern when a host-math extern is referenced).
+-- One `env` import per host key of `EmitPlan.hostKeys`, in the plan's order.  A
+-- key is an import some reached extern's lowering calls, at its own call site or
+-- in a WAT runtime helper (`extern_catalog.wasmHostKeys`), so a module imports
+-- exactly what it calls.
 export
-mathHostImportLines : List String
-mathHostImportLines = [
-  "  ;; -- #101 libm math host seam (JS Math.*, see run.js / worker.js) --",
-  "  (import \"env\" \"mdk_cbrt\" (func $mdk_cbrt (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_exp\" (func $mdk_exp (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_log\" (func $mdk_log (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_log2\" (func $mdk_log2 (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_log10\" (func $mdk_log10 (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_sin\" (func $mdk_sin (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_cos\" (func $mdk_cos (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_tan\" (func $mdk_tan (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_asin\" (func $mdk_asin (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_acos\" (func $mdk_acos (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_atan\" (func $mdk_atan (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_sinh\" (func $mdk_sinh (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_cosh\" (func $mdk_cosh (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_tanh\" (func $mdk_tanh (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_pow\" (func $mdk_pow (param f64) (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_atan2\" (func $mdk_atan2 (param f64) (param f64) (result f64)))",
-  "  (import \"env\" \"mdk_hypot\" (func $mdk_hypot (param f64) (param f64) (result f64)))"
-]
+hostImportLines : List String -> List String
+hostImportLines [] = []
+hostImportLines (key :: rest) =
+  if key == stderrByteKey then
+    -- declared once, at the late trap-import site, where body emission can add
+    -- the coded traps' need
+    hostImportLines rest
+  else
+    hostImportLine key :: hostImportLines rest
+
+-- the stderr byte writer's host key (`stderrByteImportLines`)
+export
+stderrByteKey : String
+stderrByteKey = "mdk_write_err_byte"
+
+hostImportLine : String -> String
+hostImportLine key =
+  "  (import \"env\" \"\{key}\" (func $\{key}\{hostImportSig key}))"
+
+hostImportSig : String -> String
+hostImportSig key = match hostImportSigOf key
+  Some sig => sig
+  None =>
+    panic
+      "internal error: host key \{key} has no wasm import signature in wasm_preamble.mdk"
+
+-- the signature each host binds a key with, written after the function's name,
+-- or `None` for a key it does not bind
+--
+-- `mdk_exit` flushes and exits, so its call site is followed by `unreachable`.
+-- The clock reads are seconds as f64 and the sleep milliseconds as i64 (design
+-- WA-1); a host binds a non-positive sleep to a no-op.  WasmGC has no libm, so
+-- the transcendentals and pow/atan2/hypot (the `unaryF64Sig` and `binaryF64Sig`
+-- rows) are host imports backed by JS `Math.*`: byte-identical to C libm on the
+-- values the fixtures exercise, with any printed sub-ULP divergence ledgered as
+-- native:libm-vs-jsmath-ulp (test/engine_divergence.txt).  The IEEE-exact ops
+-- (sqrt/floor/ceil/trunc/round) and floatRem lower to f64 opcodes, $mdk_round
+-- and $mdk_float_rem, not host imports.
+export
+hostImportSigOf : String -> Option String
+hostImportSigOf "mdk_exit" = Some " (param i32)"
+hostImportSigOf "mdk_wall_time_sec" = Some " (result f64)"
+hostImportSigOf "mdk_monotonic_sec" = Some " (result f64)"
+hostImportSigOf "mdk_sleep_ms" = Some " (param i64)"
+hostImportSigOf "mdk_cbrt" = Some unaryF64Sig
+hostImportSigOf "mdk_exp" = Some unaryF64Sig
+hostImportSigOf "mdk_log" = Some unaryF64Sig
+hostImportSigOf "mdk_log2" = Some unaryF64Sig
+hostImportSigOf "mdk_log10" = Some unaryF64Sig
+hostImportSigOf "mdk_sin" = Some unaryF64Sig
+hostImportSigOf "mdk_cos" = Some unaryF64Sig
+hostImportSigOf "mdk_tan" = Some unaryF64Sig
+hostImportSigOf "mdk_asin" = Some unaryF64Sig
+hostImportSigOf "mdk_acos" = Some unaryF64Sig
+hostImportSigOf "mdk_atan" = Some unaryF64Sig
+hostImportSigOf "mdk_sinh" = Some unaryF64Sig
+hostImportSigOf "mdk_cosh" = Some unaryF64Sig
+hostImportSigOf "mdk_tanh" = Some unaryF64Sig
+hostImportSigOf "mdk_pow" = Some binaryF64Sig
+hostImportSigOf "mdk_atan2" = Some binaryF64Sig
+hostImportSigOf "mdk_hypot" = Some binaryF64Sig
+hostImportSigOf "mdk_path_reset" = Some ""
+hostImportSigOf "mdk_path_push" = Some " (param i32)"
+hostImportSigOf "mdk_read_file" = Some " (result i32)"
+hostImportSigOf "mdk_file_exists" = Some " (result i32)"
+hostImportSigOf "mdk_get_env" = Some " (result i32)"
+hostImportSigOf "mdk_read_line" = Some " (result i32)"
+hostImportSigOf "mdk_read_all" = Some ""
+hostImportSigOf "mdk_read_exactly" = Some " (param i64) (result i32)"
+hostImportSigOf "mdk_os_entropy" = Some " (param i64) (result i32)"
+hostImportSigOf "mdk_executable_path" = Some " (result i32)"
+hostImportSigOf "mdk_args_count" = Some " (result i32)"
+hostImportSigOf "mdk_arg_len" = Some " (param i32) (result i32)"
+hostImportSigOf "mdk_arg_byte" = Some " (param i32) (param i32) (result i32)"
+hostImportSigOf "mdk_result_len" = Some " (result i32)"
+hostImportSigOf "mdk_result_byte" = Some " (param i32) (result i32)"
+hostImportSigOf "mdk_write_file_reset" = Some ""
+hostImportSigOf "mdk_write_file_push" = Some " (param i32)"
+hostImportSigOf "mdk_write_file_commit" = Some " (result i32)"
+hostImportSigOf "mdk_str_to_float" = Some " (result f64)"
+hostImportSigOf "mdk_str_to_float_ok" = Some " (result i32)"
+hostImportSigOf "mdk_grant_reset" = Some ""
+hostImportSigOf "mdk_grant_push" = Some " (param i32)"
+hostImportSigOf "mdk_canonicalize_path" = Some " (result i32)"
+hostImportSigOf "mdk_write_file" = Some " (result i32)"
+hostImportSigOf "mdk_append_file" = Some " (result i32)"
+hostImportSigOf "mdk_make_dir" = Some " (result i32)"
+hostImportSigOf "mdk_remove_file" = Some " (result i32)"
+hostImportSigOf "mdk_remove_dir" = Some " (result i32)"
+hostImportSigOf "mdk_fsync" = Some " (result i32)"
+hostImportSigOf "mdk_file_mode" = Some " (result i32)"
+hostImportSigOf "mdk_write_file_mode" = Some " (param i32) (result i32)"
+hostImportSigOf "mdk_rename" = Some " (param i32) (result i32)"
+hostImportSigOf "mdk_list_dir" = Some " (result i32)"
+hostImportSigOf "mdk_stat_file" = Some " (result i32)"
+hostImportSigOf "mdk_stat_field" = Some " (param i32) (result f64)"
+hostImportSigOf "mdk_file_bound_enter" =
+  Some " (param i32) (param i32) (result i32)"
+hostImportSigOf "mdk_file_bound_exit" = Some ""
+hostImportSigOf _ = None
+
+unaryF64Sig : String
+unaryF64Sig = " (param f64) (result f64)"
+
+binaryF64Sig : String
+binaryF64Sig = " (param f64) (param f64) (result f64)"
 
 -- stringToFloat host seam: the guest pushes the string's bytes via the path channel
 -- (mdk_path_reset + mdk_path_push, shared with IO) then calls mdk_str_to_float, which
@@ -1698,16 +1778,8 @@ mathHostImportLines = [
 -- NaN cannot double as the failure signal — the old single-f64 seam mapped every NaN to
 -- None and lost it.  The host parser (test/wasm/run.js + playground/worker.js, kept
 -- byte-identical per WH3) reproduces medaka_rt.c mdk_string_to_float: strtod + a full-
--- consumption endptr check + an empty-string reject. Gated on per-emission
--- WasmEmit.useFloatStr demand (set by noteW8Extern when "stringToFloat" is referenced).
-export
-floatStrImportLines : List String
-floatStrImportLines = [
-  "  ;; -- stringToFloat host seam (strtod acceptance set JS-side, see run.js) --",
-  "  (import \"env\" \"mdk_str_to_float\" (func $mdk_str_to_float (result f64)))",
-  "  (import \"env\" \"mdk_str_to_float_ok\" (func $mdk_str_to_float_ok (result i32)))"
-]
-
+-- consumption endptr check + an empty-string reject. Gated on
+-- the plan's `mdk_str_to_float` host key.
 -- $mdk_string_to_float : (ref $str) -> (ref eq)  (= Option Float = Some(boxed $float) | None)
 -- Protocol: reset the path buffer, push each UTF-8 byte of the string, call
 -- mdk_str_to_float (which parses the pathBuf bytes and LATCHES an ok flag), then
@@ -1717,8 +1789,11 @@ floatStrImportLines = [
 -- — strtod("nan") SUCCEEDS with a NaN value, while strtod("") and strtod("1.5 ") fail.
 -- Testing the f64 for NaN can distinguish neither.
 export
-floatStrRuntimeLines : List String
-floatStrRuntimeLines = [
+floatStrRuntimeLines : List String -> List String
+floatStrRuntimeLines keys = gatedOn "mdk_str_to_float" keys floatStrLines
+
+floatStrLines : List String
+floatStrLines = [
   "  ;; stringToFloat : $str -> Option Float (ref eq).",
   "  (func $mdk_string_to_float (param $s (ref $str)) (result (ref eq))",
   "    (local $b (ref $u8arr)) (local $i i32) (local $n i32) (local $d f64)",
@@ -1880,7 +1955,7 @@ randomFloatRuntimeLines = [
   "          (f64.const 2.0))", "        (f64.const 1.0))))"
 ]
 
--- ── W12 IO host surface (readFile / fileExists / args / getEnv / exit) ───────
+-- ── W12 IO host surface (readFile / fileExists / args / getEnv) ──────────────
 -- The LAST emitter-gap category: the IO externs.  GC refs ($str) cannot cross the
 -- wasm import boundary, so strings are marshaled through a byte-at-a-time channel —
 -- exactly the length+byte protocol the floatToString host seam uses (run.js fmt12g).
@@ -1896,47 +1971,36 @@ randomFloatRuntimeLines = [
 --   readFile  : push path, mdk_read_file() -> i32 (1=Ok, 0=Err); rebuild the result
 --     $str and wrap Ok (struct.new $C_Ok, ord 0) / Err (struct.new $C_Err, ord 1).
 --     Contents that are not UTF-8 are an Err naming the path ($mdk_str_not_utf8).
---   fileExists: push path, mdk_file_exists() -> i32 (1/0) -> Bool i31.
+--   fileExists: push path, mdk_file_exists() -> i32 (1/0) -> Bool i31; 2 is a
+--     refusal, whose message is on the result channel ($mdk_refused_panic).
+--   canonicalizePath: push path, mdk_canonicalize_path() -> i32 (1=the canonical
+--     path, or the path itself when it has none, on the result channel / 0=a refusal).
+--   A file extern whose path is an authority pushes its grant first
+--   ($mdk_push_grant): mdk_grant_reset(), then each element's bytes through
+--   mdk_grant_push(byte), each element ended by mdk_grant_push(-1).  `[]` pushes
+--   no element: the whole domain.  The host confines the path against that grant
+--   and every enclosing declared bound of the same mode, as medaka_rt.c
+--   mdk_confine_bounds does, and a refusal is an Err of the extern's result.
 --   getEnv    : push name, mdk_get_env() -> i32 (1=Some / 0=None); rebuild $str and
 --     wrap Some (struct.new $C_Some, ord 0) / None (i31 ord 1).
+--   executablePath : mdk_executable_path() -> i32 (always 1); the path on the result channel.
+--   osEntropyBytes : mdk_os_entropy(n) -> i32 (1 = n bytes on the result channel; 0 = a
+--     refusal, its panic text on the channel, which the guest panics with).
 --   args      : mdk_args_count(); per i build a $str from mdk_arg_len(i)/mdk_arg_byte(i,j),
 --     fold a Cons chain right-to-left ending in Nil (i31 ord 1).
---   exit      : mdk_exit(i32) host import then `unreachable` (stack-polymorphic).
--- Gated on useIORef (set by noteW8Extern when any IO extern is referenced).
-export
-ioHostImportLines : List String
-ioHostImportLines = [
-  "  ;; -- W12 IO host surface (byte-channel marshaling, see run.js) --",
-  "  (import \"env\" \"mdk_path_reset\" (func $mdk_path_reset))",
-  "  (import \"env\" \"mdk_path_push\" (func $mdk_path_push (param i32)))",
-  "  (import \"env\" \"mdk_read_file\" (func $mdk_read_file (result i32)))",
-  "  (import \"env\" \"mdk_file_exists\" (func $mdk_file_exists (result i32)))",
-  "  (import \"env\" \"mdk_get_env\" (func $mdk_get_env (result i32)))",
-  "  (import \"env\" \"mdk_args_count\" (func $mdk_args_count (result i32)))",
-  "  (import \"env\" \"mdk_arg_len\" (func $mdk_arg_len (param i32) (result i32)))",
-  "  (import \"env\" \"mdk_arg_byte\" (func $mdk_arg_byte (param i32) (param i32) (result i32)))",
-  "  (import \"env\" \"mdk_result_len\" (func $mdk_result_len (result i32)))",
-  "  (import \"env\" \"mdk_result_byte\" (func $mdk_result_byte (param i32) (result i32)))",
-  "  (import \"env\" \"mdk_exit\" (func $mdk_exit (param i32)))"
-]
-
--- The clock host surface (design WA-1): reads in seconds as f64, a sleep in
--- milliseconds as i64.  A host binds a non-positive sleep to a no-op.
-export
-clockHostImportLines : List String
-clockHostImportLines = [
-  "  ;; -- clock host surface (wallTimeSec / monotonicSec / sleepMs) --",
-  "  (import \"env\" \"mdk_wall_time_sec\" (func $mdk_wall_time_sec (result f64)))",
-  "  (import \"env\" \"mdk_monotonic_sec\" (func $mdk_monotonic_sec (result f64)))",
-  "  (import \"env\" \"mdk_sleep_ms\" (func $mdk_sleep_ms (param i64)))"
-]
-
+-- Each import is a host key of the reached externs (`EmitPlan.hostKeys`), and
+-- each runtime helper below is gated on the key it calls.
 -- readFile's Err suffix for contents that are not UTF-8, the text of
 -- medaka_rt.c mdk_read_file's, as the WAT that builds it as a $u8arr.  ASCII,
 -- so one element per character.
 notUtf8SuffixWat : String
 notUtf8SuffixWat =
-  let cs = stringToChars ": not valid UTF-8 (use readFileBytes for raw bytes)"
+  asciiU8arrWat ": not valid UTF-8 (use readFileBytes for raw bytes)"
+
+-- the WAT that builds an ASCII string's bytes as a $u8arr
+asciiU8arrWat : String -> String
+asciiU8arrWat s =
+  let cs = stringToChars s
   "(array.new_fixed $u8arr \{intToString (arrayLength cs)}\{asciiConstsW cs (arrayLength cs) 0})"
 
 asciiConstsW : Array Char -> Int -> Int -> String
@@ -1951,35 +2015,155 @@ asciiConstsW cs n i =
 -- $str-dependent (every path/result is a $str) and $C_Ok/$C_Err/$C_Some/$T_List are
 -- always declared in ref-mode, so these are always in scope when emitted.
 export
-ioHostRuntimeLines : List String
-ioHostRuntimeLines = [
-  "  ;; -- W12 IO host-surface runtime --",
+ioHostRuntimeLines : List String -> List String
+ioHostRuntimeLines keys =
+  gatedOn "mdk_path_push" keys ioPushPathLines
+    ++ gatedOn "mdk_rename" keys ioPushPathMoreLines
+    ++ gatedOn "mdk_grant_push" keys ioPushGrantLines
+    ++ gatedOn "mdk_rename" keys ioPushGrantMoreLines
+    ++ gatedOn "mdk_result_len" keys ioResultLines
+    ++ (if contains "mdk_file_exists" keys
+      || contains "mdk_canonicalize_path" keys
+      || contains "mdk_os_entropy" keys then
+      ioRefusedPanicLines
+    else
+      [])
+    ++ gatedOn "mdk_read_file" keys ioReadFileLines
+    ++ gatedOn "mdk_file_exists" keys ioFileExistsLines
+    ++ gatedOn "mdk_canonicalize_path" keys ioCanonicalizeLines
+    ++ gatedOn "mdk_write_file" keys ioWriteFileLines
+    ++ gatedOn "mdk_append_file" keys ioAppendFileLines
+    ++ gatedOn "mdk_rename" keys ioRenameLines
+    ++ gatedOn "mdk_list_dir" keys ioListDirLines
+    ++ gatedOn "mdk_stat_file" keys ioStatFileLines
+    ++ gatedOn "mdk_make_dir" keys ioMakeDirLines
+    ++ gatedOn "mdk_remove_file" keys ioRemoveFileLines
+    ++ gatedOn "mdk_remove_dir" keys ioRemoveDirLines
+    ++ gatedOn "mdk_fsync" keys ioFsyncLines
+    ++ gatedOn "mdk_file_mode" keys ioFileModeLines
+    ++ gatedOn "mdk_write_file_mode" keys ioWriteFileModeLines
+    ++ gatedOn "mdk_get_env" keys ioGetEnvLines
+    ++ gatedOn "mdk_read_line" keys ioReadLineLines
+    ++ gatedOn "mdk_read_all" keys ioReadAllLines
+    ++ gatedOn "mdk_read_exactly" keys ioReadExactlyLines
+    ++ gatedOn "mdk_executable_path" keys ioExecutablePathLines
+
+gatedOn : String -> List String -> List String -> List String
+gatedOn key keys block = if contains key keys then block else []
+
+ioPushPathLines : List String
+ioPushPathLines = [
   "  ;; push a $str's bytes to the host path buffer (reset first).",
   "  (func $mdk_push_path (param $s (ref $str))",
   "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
   "    (call $mdk_path_reset)",
   "    (local.set $b (struct.get $str $bytes (local.get $s)))",
   "    (local.set $n (array.len (local.get $b)))",
-  "    (local.set $i (i32.const 0))",
-  "    (block $d (loop $l",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
   "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    )"
+]
+
+-- Only rename pushes a second path; the helper is emitted for it alone.
+ioPushPathMoreLines : List String
+ioPushPathMoreLines = [
+  "  ;; append a $str's bytes to the host path buffer (rename's second path).",
+  "  (func $mdk_push_path_more (param $s (ref $str))",
+  "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
+  "    (local.set $b (struct.get $str $bytes (local.get $s)))",
+  "    (local.set $n (array.len (local.get $b)))",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (call $mdk_path_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    )"
+]
+
+-- A grant is the W7 cons list of $str elements; Nil is an i31.
+ioPushGrantLines : List String
+ioPushGrantLines = [
+  "  ;; push a grant (List String) to the host grant buffer (reset first).",
+  "  (func $mdk_push_grant (param $g (ref eq))",
+  "    (local $cell (ref $C_Cons)) (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
+  "    (call $mdk_grant_reset)", "    (block $done (loop $next",
+  "      (br_if $done (i32.eqz (ref.test (ref $C_Cons) (local.get $g))))",
+  "      (local.set $cell (ref.cast (ref $C_Cons) (local.get $g)))",
+  "      (local.set $b (struct.get $str $bytes (ref.cast (ref $str) (struct.get $C_Cons 1 (local.get $cell)))))",
+  "      (local.set $n (array.len (local.get $b)))",
+  "      (local.set $i (i32.const 0))", "      (block $d (loop $l",
+  "        (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "        (call $mdk_grant_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "        (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "      (call $mdk_grant_push (i32.const -1))",
+  "      (local.set $g (struct.get $C_Cons 2 (local.get $cell))) (br $next)))",
+  "    )"
+]
+
+-- Only rename pushes a second grant; the helper is emitted for it alone.
+ioPushGrantMoreLines : List String
+ioPushGrantMoreLines = [
+  "  ;; append a grant to the host grant buffer (rename's second grant).",
+  "  (func $mdk_push_grant_more (param $g (ref eq))",
+  "    (local $cell (ref $C_Cons)) (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
+  "    (block $done (loop $next",
+  "      (br_if $done (i32.eqz (ref.test (ref $C_Cons) (local.get $g))))",
+  "      (local.set $cell (ref.cast (ref $C_Cons) (local.get $g)))",
+  "      (local.set $b (struct.get $str $bytes (ref.cast (ref $str) (struct.get $C_Cons 1 (local.get $cell)))))",
+  "      (local.set $n (array.len (local.get $b)))",
+  "      (local.set $i (i32.const 0))", "      (block $d (loop $l",
+  "        (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "        (call $mdk_grant_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "        (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "      (call $mdk_grant_push (i32.const -1))",
+  "      (local.set $g (struct.get $C_Cons 2 (local.get $cell))) (br $next)))",
+  "    )"
+]
+
+-- A refusal from an extern that returns no Result panics, as medaka_rt.c
+-- mdk_panic prints it: the E-PANIC banner, the message, a newline.
+ioRefusedPanicLines : List String
+ioRefusedPanicLines = [
+  "  ;; the host's refusal message (result channel) as an E-PANIC line, then trap.",
+  "  (func $mdk_refused_panic",
+  "    (call $mdk_err_u8arr \{panicBannerWat})",
+  "    (call $mdk_err_u8arr (call $mdk_io_result_bytes))",
+  "    (call $mdk_write_err_byte (i32.const 10))",
+  "    (unreachable))",
+  "  (func $mdk_err_u8arr (param $b (ref $u8arr))",
+  "    (local $i i32) (local $n i32)",
+  "    (local.set $n (array.len (local.get $b)))",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (call $mdk_write_err_byte (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
   "    )",
+]
+
+panicBannerWat : String
+panicBannerWat = asciiU8arrWat "runtime error [E-PANIC]: "
+
+ioResultLines : List String
+ioResultLines = [
   "  ;; copy the host result buffer (length + byte-at-index) into a fresh $u8arr.",
   "  (func $mdk_io_result_bytes (result (ref $u8arr))",
   "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))",
   "    (local.set $n (call $mdk_result_len))",
   "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
-  "    (local.set $i (i32.const 0))",
-  "    (block $d (loop $l",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
   "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
   "      (array.set $u8arr (local.get $buf) (local.get $i) (call $mdk_result_byte (local.get $i)))",
   "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
   "    (local.get $buf))",
   "  ;; the host result buffer as a $str, read as UTF-8 by $mdk_u8_to_str_lossy.",
   "  (func $mdk_io_result_to_str (result (ref $str))",
-  "    (call $mdk_u8_to_str_lossy (call $mdk_io_result_bytes)))",
+  "    (call $mdk_u8_to_str_lossy (call $mdk_io_result_bytes)))"
+]
+
+ioReadFileLines : List String
+ioReadFileLines = [
   "  ;; readFile's Err for contents that are not UTF-8: the path, then a fixed ASCII",
   "  ;; suffix, byte-identical to medaka_rt.c mdk_read_file.",
   "  (func $mdk_str_not_utf8 (param $path (ref $str)) (result (ref $str))",
@@ -1993,8 +2177,9 @@ ioHostRuntimeLines = [
   "    (struct.new $str (i32.add (struct.get $str $cp_count (local.get $path)) (array.len (local.get $sfx))) (local.get $out)))",
   "  ;; readFile : $str path -> Result String String.  1=Ok contents / 0=Err message.",
   "  ;; Contents that are not UTF-8 are an Err naming the path (medaka_rt.c mdk_read_file).",
-  "  (func $mdk_read_file_io (param $path (ref $str)) (result (ref eq))",
+  "  (func $mdk_read_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
   "    (local $st i32) (local $buf (ref $u8arr)) (local $c i32)",
+  "    (call $mdk_push_grant (local.get $g))",
   "    (call $mdk_push_path (local.get $path))",
   "    (local.set $st (call $mdk_read_file))",
   "    (if (i32.eqz (local.get $st))",
@@ -2004,27 +2189,265 @@ ioHostRuntimeLines = [
   "    (if (result (ref eq)) (i32.ge_s (local.get $c) (i32.const 0))",
   "      (then (struct.new $C_Ok (i32.const 0) (struct.new $str (local.get $c) (local.get $buf))))",
   "      (else (struct.new $C_Err (i32.const 1) (call $mdk_str_not_utf8 (local.get $path))))))",
-  "  ;; fileExists : $str path -> Bool (i31 ordinal: False=0 / True=1).",
-  "  (func $mdk_file_exists_io (param $path (ref $str)) (result (ref eq))",
+]
+
+ioFileExistsLines : List String
+ioFileExistsLines = [
+  "  ;; fileExists : $str path -> Bool (i31 ordinal: False=0 / True=1); 2 = refused.",
+  "  (func $mdk_file_exists_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (local $r i32)", "    (call $mdk_push_grant (local.get $g))",
   "    (call $mdk_push_path (local.get $path))",
-  "    (ref.i31 (call $mdk_file_exists)))",
+  "    (local.set $r (call $mdk_file_exists))",
+  "    (if (i32.eq (local.get $r) (i32.const 2)) (then (call $mdk_refused_panic)))",
+  "    (ref.i31 (local.get $r)))"
+]
+
+ioCanonicalizeLines : List String
+ioCanonicalizeLines = [
+  "  ;; canonicalizePath : $str path -> $str.  1=the host's answer / 0=refused.",
+  "  (func $mdk_canonicalize_path_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (i32.eqz (call $mdk_canonicalize_path)) (then (call $mdk_refused_panic)))",
+  "    (call $mdk_io_result_to_str))"
+]
+
+ioWriteFileLines : List String
+ioWriteFileLines = [
+  "  ;; writeFile : $str path -> $str contents -> Result String Unit.  1=Ok () / 0=Err msg.",
+  "  ;; The contents' bytes stream to the host's write buffer, as writeFileBytes streams its array.",
+  "  (func $mdk_write_file_io (param $path (ref $str)) (param $s (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (call $mdk_write_file_reset)",
+  "    (local.set $b (struct.get $str $bytes (local.get $s)))",
+  "    (local.set $n (array.len (local.get $b)))",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (call $mdk_write_file_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (if (result (ref eq)) (call $mdk_write_file)",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioWriteFileModeLines : List String
+ioWriteFileModeLines = [
+  "  ;; writeFileMode : $str path -> Int mode -> $str contents -> Result String Unit.",
+  "  ;; 1=Ok () / 0=Err msg.  The contents stream to the host's write buffer; the host sets",
+  "  ;; the file's mode before the first byte is written.",
+  "  (func $mdk_write_file_mode_io (param $path (ref $str)) (param $mode (ref eq)) (param $s (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (call $mdk_write_file_reset)",
+  "    (local.set $b (struct.get $str $bytes (local.get $s)))",
+  "    (local.set $n (array.len (local.get $b)))",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (call $mdk_write_file_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (if (result (ref eq)) (call $mdk_write_file_mode (i32.wrap_i64 (call $mdk_unbox_int (local.get $mode))))",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioAppendFileLines : List String
+ioAppendFileLines = [
+  "  ;; appendFile : $str path -> $str contents -> Result String Unit.  1=Ok () / 0=Err msg.",
+  "  ;; The contents' bytes stream to the host's write buffer; the host appends them.",
+  "  (func $mdk_append_file_io (param $path (ref $str)) (param $s (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (local $b (ref $u8arr)) (local $i i32) (local $n i32)",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (call $mdk_write_file_reset)",
+  "    (local.set $b (struct.get $str $bytes (local.get $s)))",
+  "    (local.set $n (array.len (local.get $b)))",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (call $mdk_write_file_push (array.get_u $u8arr (local.get $b) (local.get $i)))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (if (result (ref eq)) (call $mdk_append_file)",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioRenameLines : List String
+ioRenameLines = [
+  "  ;; rename : $str src -> $str dst -> src grant -> dst grant -> Result String Unit.",
+  "  ;; The grants share the grant channel (-2 ends the first), the paths the path channel;",
+  "  ;; the host splits the path buffer at the source's byte length.",
+  "  (func $mdk_rename_io (param $src (ref $str)) (param $dst (ref $str)) (param $gs (ref eq)) (param $gd (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $gs))",
+  "    (call $mdk_grant_push (i32.const -2))",
+  "    (call $mdk_push_grant_more (local.get $gd))",
+  "    (call $mdk_push_path (local.get $src))",
+  "    (call $mdk_push_path_more (local.get $dst))",
+  "    (if (result (ref eq)) (call $mdk_rename (array.len (struct.get $str $bytes (local.get $src))))",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioListDirLines : List String
+ioListDirLines = [
+  "  ;; listDir : $str path -> Result String (List String).  The host answers each entry's",
+  "  ;; name followed by a NUL byte; the list is built from the last entry back.",
+  "  (func $mdk_list_dir_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (local $buf (ref $u8arr)) (local $name (ref $u8arr)) (local $acc (ref eq))",
+  "    (local $pos i32) (local $end i32) (local $k i32)",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (i32.eqz (call $mdk_list_dir))",
+  "      (then (return (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))",
+  "    (local.set $buf (call $mdk_io_result_bytes))",
+  "    (local.set $acc (ref.i31 (i32.const 1)))",
+  "    (local.set $pos (array.len (local.get $buf)))", "    (block $d (loop $l",
+  "      (br_if $d (i32.le_s (local.get $pos) (i32.const 0)))",
+  "      (local.set $end (i32.sub (local.get $pos) (i32.const 1)))",
+  "      (local.set $k (local.get $end))", "      (block $s (loop $m",
+  "        (br_if $s (i32.eqz (local.get $k)))",
+  "        (br_if $s (i32.eqz (array.get_u $u8arr (local.get $buf) (i32.sub (local.get $k) (i32.const 1)))))",
+  "        (local.set $k (i32.sub (local.get $k) (i32.const 1))) (br $m)))",
+  "      (local.set $name (array.new $u8arr (i32.const 0) (i32.sub (local.get $end) (local.get $k))))",
+  "      (array.copy $u8arr $u8arr (local.get $name) (i32.const 0) (local.get $buf) (local.get $k) (i32.sub (local.get $end) (local.get $k)))",
+  "      (local.set $acc (struct.new $C_Cons (i32.const 0) (call $mdk_u8_to_str_lossy (local.get $name)) (local.get $acc)))",
+  "      (local.set $pos (local.get $k)) (br $l)))",
+  "    (struct.new $C_Ok (i32.const 0) (local.get $acc)))"
+]
+
+ioStatFileLines : List String
+ioStatFileLines = [
+  "  ;; statFile : $str path -> Result String (Int, Bool, Bool, Float): size, isDir, isFile,",
+  "  ;; mtime in seconds.  The host answers each field of the stat it took as an f64.",
+  "  (func $mdk_stat_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (result (ref eq)) (call $mdk_stat_file)",
+  "      (then (struct.new $C_Ok (i32.const 0)",
+  "        (struct.new $C_Tup4 (i32.const 0)",
+  "          (call $mdk_box_int (i64.trunc_f64_s (call $mdk_stat_field (i32.const 0))))",
+  "          (ref.i31 (i32.trunc_f64_s (call $mdk_stat_field (i32.const 1))))",
+  "          (ref.i31 (i32.trunc_f64_s (call $mdk_stat_field (i32.const 2))))",
+  "          (struct.new $float (call $mdk_stat_field (i32.const 3))))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioMakeDirLines : List String
+ioMakeDirLines = [
+  "  ;; makeDir : $str path -> Result String Unit.  1=Ok () / 0=Err msg.",
+  "  (func $mdk_make_dir_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (result (ref eq)) (call $mdk_make_dir)",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioRemoveFileLines : List String
+ioRemoveFileLines = [
+  "  ;; removeFile : $str path -> Result String Unit.  1=Ok () / 0=Err msg.",
+  "  (func $mdk_remove_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (result (ref eq)) (call $mdk_remove_file)",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioRemoveDirLines : List String
+ioRemoveDirLines = [
+  "  ;; removeDir : $str path -> Result String Unit.  1=Ok () / 0=Err msg.",
+  "  (func $mdk_remove_dir_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (result (ref eq)) (call $mdk_remove_dir)",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioFsyncLines : List String
+ioFsyncLines = [
+  "  ;; fsync : $str path -> Result String Unit.  1=Ok () / 0=Err msg.",
+  "  (func $mdk_fsync_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (result (ref eq)) (call $mdk_fsync)",
+  "      (then (struct.new $C_Ok (i32.const 0) (ref.i31 (i32.const 0))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioFileModeLines : List String
+ioFileModeLines = [
+  "  ;; fileMode : $str path -> Result String Int: the permission bits, 0 to 4095.  The host",
+  "  ;; takes the stat that statFile takes and answers its mode field, field 4.",
+  "  (func $mdk_file_mode_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
+  "    (call $mdk_push_grant (local.get $g))",
+  "    (call $mdk_push_path (local.get $path))",
+  "    (if (result (ref eq)) (call $mdk_file_mode)",
+  "      (then (struct.new $C_Ok (i32.const 0)",
+  "        (call $mdk_box_int (i64.trunc_f64_s (call $mdk_stat_field (i32.const 4))))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+ioGetEnvLines : List String
+ioGetEnvLines = [
   "  ;; getEnv : $str name -> Option String.  1=Some value / 0=None.",
   "  (func $mdk_get_env_io (param $name (ref $str)) (result (ref eq))",
-  "    (local $st i32)",
-  "    (call $mdk_push_path (local.get $name))",
+  "    (local $st i32)", "    (call $mdk_push_path (local.get $name))",
   "    (local.set $st (call $mdk_get_env))",
   "    (if (result (ref eq)) (local.get $st)",
   "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))",
-  "      (else (ref.i31 (i32.const 1)))))",
+  "      (else (ref.i31 (i32.const 1)))))"
+]
+
+ioReadLineLines : List String
+ioReadLineLines = [
+  "  ;; readLine : Unit -> String.  The host answers 1 with a line (its newline",
+  "  ;; stripped) on the result channel, or 0 at end of input, where the channel is empty.",
+  "  (func $mdk_read_line_io (result (ref eq))",
+  "    (drop (call $mdk_read_line))", "    (call $mdk_io_result_to_str))",
+  "  ;; readLineOpt : Unit -> Option String.  0 is None.",
+  "  (func $mdk_read_line_opt_io (result (ref eq))",
+  "    (if (result (ref eq)) (call $mdk_read_line)",
+  "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))",
+  "      (else (ref.i31 (i32.const 1)))))"
+]
+
+ioReadAllLines : List String
+ioReadAllLines = [
+  "  ;; readAll : Unit -> String.  The rest of the host's stdin buffer.",
+  "  (func $mdk_read_all_io (result (ref eq))", "    (call $mdk_read_all)",
+  "    (call $mdk_io_result_to_str))"
+]
+
+ioReadExactlyLines : List String
+ioReadExactlyLines = [
+  "  ;; readExactly : Int -> Option String.  1=Some the n bytes / 0=None (end of input",
+  "  ;; or a short read, whose bytes the host has consumed).",
+  "  (func $mdk_read_exactly_io (param $n i64) (result (ref eq))",
+  "    (if (result (ref eq)) (call $mdk_read_exactly (local.get $n))",
+  "      (then (struct.new $C_Some (i32.const 0) (call $mdk_io_result_to_str)))",
+  "      (else (ref.i31 (i32.const 1)))))"
+]
+
+-- executablePath : Unit -> String.  The host's path (always 1) on the result channel.
+ioExecutablePathLines : List String
+ioExecutablePathLines = [
+  "  (func $mdk_executable_path_io (result (ref eq))",
+  "    (drop (call $mdk_executable_path))", "    (call $mdk_io_result_to_str))"
 ]
 
 -- the `args` extern body — split out from ioHostRuntimeLines because it references
 -- the cons-list types ($C_Cons / Nil), which are only declared when the program uses
--- a list. Gated on the fresh emission's WasmEmit.useArgs demand (set when `args` is
--- referenced, which also forces useListRef so $C_Cons is in scope).
+-- a list. Gated on the `mdk_args_count` host key; the `args` extern's catalog
+-- demand brings the list types with it.
 export
-ioArgsRuntimeLines : List String
-ioArgsRuntimeLines = [
+ioArgsRuntimeLines : List String -> List String
+ioArgsRuntimeLines keys = gatedOn "mdk_args_count" keys ioArgsLines
+
+ioArgsLines : List String
+ioArgsLines = [
   "  ;; build a $str from the i-th host arg (mdk_arg_len(i) + mdk_arg_byte(i,j)).",
   "  (func $mdk_arg_to_str (param $idx i32) (result (ref $str))",
   "    (local $n i32) (local $j i32) (local $buf (ref $u8arr))",
@@ -2057,26 +2480,26 @@ ioArgsRuntimeLines = [
 -- direction: three new host imports stream the path (reuse $mdk_push_path) + the byte
 -- array OUT to a JS write buffer, then commit a Node `fs.writeFileSync`.  Both return
 -- a Result String (…) byte-identical to the native runtime (medaka_rt.c
--- mdk_read_file_bytes / mdk_write_file_bytes).  Gated on per-emission
--- WasmEmit.useFileBytes demand; IO, Array, and String cofactors keep $mdk_push_path /
--- $mdk_io_result_to_str in scope, declare $arr, and provide the Err/path $str.
+-- mdk_read_file_bytes / mdk_write_file_bytes).  The write body is gated on the
+-- `mdk_write_file_commit` key.  The read body shares its keys with readFile, so
+-- it also needs `readsBytes` (the extern's `useFileBytes` demand, which brings $arr).
 export
-fileBytesHostImportLines : List String
-fileBytesHostImportLines = [
-  "  ;; -- stage-D writeFileBytes host imports (path via mdk_path_push; bytes streamed) --",
-  "  (import \"env\" \"mdk_write_file_reset\" (func $mdk_write_file_reset))",
-  "  (import \"env\" \"mdk_write_file_push\" (func $mdk_write_file_push (param i32)))",
-  "  (import \"env\" \"mdk_write_file_commit\" (func $mdk_write_file_commit (result i32)))",
-]
+fileBytesRuntimeLines : Bool -> List String -> List String
+fileBytesRuntimeLines readsBytes keys =
+  gatedOn "mdk_write_file_commit" keys writeFileBytesLines
+    ++ gatedOn "mdk_os_entropy" keys osEntropyLines
+    ++ (if readsBytes then
+      gatedOn "mdk_read_file" keys readFileBytesLines
+    else
+      [])
 
-export
-fileBytesRuntimeLines : List String
-fileBytesRuntimeLines = [
-  "  ;; -- stage-D byte-clean file I/O runtime --",
+readFileBytesLines : List String
+readFileBytesLines = [
   "  ;; readFileBytes : $str path -> Result String (Array Int).  1=Ok bytes / 0=Err msg.",
   "  ;; Reuses the read byte-channel but rebuilds an $arr of i31 Int bytes (0..255).",
-  "  (func $mdk_read_file_bytes_io (param $path (ref $str)) (result (ref eq))",
+  "  (func $mdk_read_file_bytes_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))",
   "    (local $st i32) (local $n i32) (local $i i32) (local $out (ref $arr))",
+  "    (call $mdk_push_grant (local.get $g))",
   "    (call $mdk_push_path (local.get $path))",
   "    (local.set $st (call $mdk_read_file))",
   "    (if (result (ref eq)) (local.get $st)", "      (then",
@@ -2087,11 +2510,34 @@ fileBytesRuntimeLines = [
   "          (array.set $arr (local.get $out) (local.get $i) (ref.i31 (call $mdk_result_byte (local.get $i))))",
   "          (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
   "        (struct.new $C_Ok (i32.const 0) (local.get $out)))",
-  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
+]
+
+-- osEntropyBytes : Int -> Array Int.  The host fills the result channel with n random
+-- bytes, or refuses a negative or oversized count with its panic text on the channel,
+-- which $mdk_refused_panic writes as the E-PANIC line.  Built like readFileBytes's array.
+osEntropyLines : List String
+osEntropyLines = [
+  "  ;; osEntropyBytes : Int -> Array Int.  1=n random bytes / 0=a refusal (its text on the channel).",
+  "  (func $mdk_os_entropy_io (param $n i64) (result (ref eq))",
+  "    (local $len i32) (local $i i32) (local $out (ref $arr))",
+  "    (if (i32.eqz (call $mdk_os_entropy (local.get $n))) (then (call $mdk_refused_panic)))",
+  "    (local.set $len (call $mdk_result_len))",
+  "    (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $len)))",
+  "    (local.set $i (i32.const 0))", "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $len)))",
+  "      (array.set $arr (local.get $out) (local.get $i) (ref.i31 (call $mdk_result_byte (local.get $i))))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (local.get $out))"
+]
+
+writeFileBytesLines : List String
+writeFileBytesLines = [
   "  ;; writeFileBytes : $str path -> $arr bytes -> Result String Unit.  1=Ok () / 0=Err msg.",
   "  ;; Stream each i31 byte (masked to 0..255) to the host, then commit fs.writeFileSync.",
-  "  (func $mdk_write_file_bytes_io (param $path (ref $str)) (param $ba (ref $arr)) (result (ref eq))",
+  "  (func $mdk_write_file_bytes_io (param $path (ref $str)) (param $ba (ref $arr)) (param $g (ref eq)) (result (ref eq))",
   "    (local $st i32) (local $n i32) (local $i i32)",
+  "    (call $mdk_push_grant (local.get $g))",
   "    (call $mdk_push_path (local.get $path))",
   "    (call $mdk_write_file_reset)",
   "    (local.set $n (array.len (local.get $ba)))",
@@ -2310,7 +2756,7 @@ utf8LossyRuntimeLines = [
 -- mdk_utf8_decode / mdk_utf8_encode).  A Char is an i31 codepoint; an `Array Char` is
 -- the §3.3 $arr = (array (mut (ref eq))) holding `cp_count` i31s.  Emitted when the
 -- program uses stringToChars/stringFromChars (`WasmEmit.useStrCodec`); needs the $str rep
--- ($u8arr) AND the $arr rep (both forced by noteW8Extern).
+-- ($u8arr) AND the $arr rep (both demanded with it in the catalog).
 --   $mdk_str_to_chars : decode each UTF-8 codepoint (lead byte <0x80 → 1B; <0xE0 → 2B
 --     & 0x1F; <0xF0 → 3B & 0x0F; else 4B & 0x07; each continuation byte & 0x3F, shift
 --     << 6 and OR), pushing `ref.i31 cp` into a fresh $arr of length cp_count.

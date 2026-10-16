@@ -1,0 +1,20 @@
+-- Confinement compares canonical paths as bytes: two directories whose names are
+-- not UTF-8 (the bytes FE and FF) stay distinct, so a grant through a symlink to
+-- one does not admit a path through a symlink to the other.  canonicalizePath
+-- answers such a name with each ill-formed byte as U+FFFD, so both read the same.
+-- run.sh installs lossy/<FE>/ok.txt, lossy/<FF>/secret.txt, lossy/w/g -> ../<FE>
+-- and lossy/w/s -> ../<FF>, and runs this from lossy/w.
+import string.{endsWith}
+
+readG : String -> <FileRead "g/*"> Result String String
+readG p = readFile ("g/" ++ p)
+
+report : String -> Result String String -> <Stdout> Unit
+report tag (Ok s) = println "\{tag}: Ok \{s}"
+report tag (Err e) = println "\{tag}: Err \{e}"
+
+main =
+  report "inside" (readG "ok.txt")
+  report "escape" (readG "../w/s/secret.txt")
+  println (endsWith "/lossy/�" (canonicalizePath "g"))
+  println (canonicalizePath "g" == canonicalizePath "s")

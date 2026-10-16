@@ -38,9 +38,6 @@ import types.typecheck.{
   mainTypeIsUnit,
   checkedFfiExternTypeNamesModules,
 }
-import driver.diagnostics.{emitDiagExitCode, renderTcDiags}
-import driver.loader.{modIdToPath}
-import backend.wasm_file_grants.{prepareWasmFileGrants}
 import ir.core_ir_lower.{
   declaredRecordFieldOrders,
   lowerProgramEmit,
@@ -86,8 +83,7 @@ emitTail : List (String, String, List Decl) ->
 emitTail mods runtimeDecls coreD modules1 =
   let modules2 = stampSiteFiles mods modules1
   let allDecls0 = coreD ++ flatMap snd modules2
-  let kept = dceFilter allDecls0
-  let allDecls = refuseNarrowFileGrants mods runtimeDecls kept modules2
+  let allDecls = dceFilter allDecls0
   let _ =
     preludeReturnPosDictNames coreD allDecls
       ++ preludeArgPosDictNames coreD allDecls
@@ -116,16 +112,3 @@ emitTail mods runtimeDecls coreD modules1 =
       ]
       None => ()
   putStr (emitProgram input plan reached)
-
-refuseNarrowFileGrants : List (String, String, List Decl) ->
-  List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  <IO> List Decl
-refuseNarrowFileGrants mods runtimeDecls kept modules =
-  match prepareWasmFileGrants runtimeDecls kept modules
-    Ok decls => decls
-    Err diags =>
-      let _ = map ePutStrLn (renderTcDiags (map modIdToPath mods) diags)
-      let _ = exit emitDiagExitCode
-      []

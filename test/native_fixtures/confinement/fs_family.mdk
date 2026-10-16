@@ -1,0 +1,119 @@
+-- writeFile, rename, listDir and statFile refuse a path whose canonical form the
+-- grant does not admit, each in the mode medaka_rt.c confines it in: writeFile,
+-- listDir and statFile follow the last component, rename takes it unresolved and
+-- confines both paths, the source first.  The last section calls each under a
+-- declared bound that a wider grant cannot lift.  An OS error prints as `Err (host)`:
+-- each engine words it its own way.  run.sh builds the tree and installs
+-- cfg/link -> ../outdir/sub.
+import string.{contains}
+import list.{sort}
+
+said : Result String a -> String
+said (Ok _) = "Ok"
+said (Err e) =
+  if contains "is outside the granted authority" e then
+    "Err \{e}"
+  else
+    "Err (host)"
+
+writeCfg : String -> <FileWrite "cfg/*"> Result String Unit
+writeCfg name = writeFile ("cfg/" ++ name) "w"
+
+moveCfg : String -> String -> <FileWrite "cfg/*"> Result String Unit
+moveCfg a b = rename ("cfg/" ++ a) ("cfg/" ++ b)
+
+moveToOutdir : String ->
+  String ->
+  <FileWrite "cfg/*", FileWrite "outdir/*"> Result String Unit
+moveToOutdir a b = rename ("cfg/" ++ a) ("outdir/" ++ b)
+
+moveFromOutdir : String ->
+  String ->
+  <FileWrite "outdir/*", FileWrite "cfg/*"> Result String Unit
+moveFromOutdir a b = rename ("outdir/" ++ a) ("cfg/" ++ b)
+
+listCfg : String -> <FileRead "cfg/*"> Result String (List String)
+listCfg name = listDir ("cfg/" ++ name)
+
+statCfg : String -> <FileRead "cfg/*"> Result String (Int, Bool, Bool, Float)
+statCfg name = statFile ("cfg/" ++ name)
+
+names : Result String (List String) -> String
+names (Ok xs) = "Ok \{sort xs}"
+names (Err e) = said (Err e)
+
+shape : Result String (Int, Bool, Bool, Float) -> String
+shape (Ok (size, isDir, isFile, _)) =
+  "Ok size=\{if isFile then intToString size else "-"} isDir=\{isDir} isFile=\{isFile}"
+shape (Err e) = said (Err e)
+
+-- the same four under a narrow bound, called through a wide row
+moveBound : String -> String -> <FileWrite "cfg/*"> Result String Unit
+moveBound a b = rename ("cfg/link/" ++ a) ("cfg/" ++ b)
+
+writeBound : String -> <FileWrite "cfg/*"> Result String Unit
+writeBound leaf = writeFile ("cfg/link/" ++ leaf) "w"
+
+listBound : String -> <FileRead "cfg/*"> Result String (List String)
+listBound leaf = listDir ("cfg/link/" ++ leaf)
+
+statBound : String -> <FileRead "cfg/*"> Result String (Int, Bool, Bool, Float)
+statBound leaf = statFile ("cfg/link/" ++ leaf)
+
+widePackedMove : Option (String -> String -> <FileWrite> Result String Unit)
+widePackedMove = Some moveBound
+
+widePackedWrite : Option (String -> <FileWrite> Result String Unit)
+widePackedWrite = Some writeBound
+
+widePackedList : Option (String -> <FileRead> Result String (List String))
+widePackedList = Some listBound
+
+widePackedStat : Option (String -> <FileRead> Result String (Int, Bool, Bool, Float))
+widePackedStat = Some statBound
+
+main =
+  println "list cfg: \{names (listCfg "")}"
+  println "list sub: \{names (listCfg "sub")}"
+  println "list up: \{names (listCfg "../outdir")}"
+  println "list link: \{names (listCfg "link")}"
+  println "list absent: \{names (listCfg "nowhere")}"
+  println "list file: \{names (listCfg "a.txt")}"
+  println "stat file: \{shape (statCfg "a.txt")}"
+  println "stat dir: \{shape (statCfg "sub")}"
+  println "stat inside link: \{shape (statCfg "../inlink")}"
+  println "stat up: \{shape (statCfg "../secret.txt")}"
+  println "stat link out: \{shape (statCfg "out")}"
+  println "stat absent: \{shape (statCfg "nowhere")}"
+  println "write new: \{said (writeCfg "new.txt")}"
+  println "write inside: \{said (writeCfg "sub/b.txt")}"
+  println "write up: \{said (writeCfg "../new.txt")}"
+  println "write link out: \{said (writeCfg "out")}"
+  println "write dangling: \{said (writeCfg "dangling")}"
+  println "write dir: \{said (writeCfg "sub")}"
+  println "move: \{said (moveCfg "new.txt" "sub/moved.txt")}"
+  println "move back: \{said (moveCfg "sub/moved.txt" "new.txt")}"
+  println "move over: \{said (moveCfg "new.txt" "sub/b.txt")}"
+  println "move absent: \{said (moveCfg "nowhere.txt" "sub/x.txt")}"
+  println "move dst out: \{said (moveCfg "sub/b.txt" "../outdir/stolen.txt")}"
+  println "move src out: \{said (moveCfg "../secret.txt" "stolen.txt")}"
+  println
+    "move both out: \{said (moveCfg "../secret.txt" "../outdir/stolen.txt")}"
+  println "move symlink: \{said (moveCfg "out" "sub/out")}"
+  println "move across: \{said (moveToOutdir "sub/b.txt" "across.txt")}"
+  println "move across back: \{said (moveFromOutdir "across.txt" "sub/b.txt")}"
+  println
+    "move across wrong way: \{said (moveToOutdir "sub/b.txt" "../secret.txt")}"
+  println "after: \{names (listCfg "sub")}"
+  let _ = match widePackedMove
+    Some f => println "bound move: \{said (f "a.txt" "stolen.txt")}"
+    None => println "unexpected empty container"
+  let _ = match widePackedWrite
+    Some f => println "bound write: \{said (f "stolen.txt")}"
+    None => println "unexpected empty container"
+  let _ = match widePackedList
+    Some f => println "bound list: \{names (f "")}"
+    None => println "unexpected empty container"
+  let _ = match widePackedStat
+    Some f => println "bound stat: \{shape (f "a.txt")}"
+    None => println "unexpected empty container"

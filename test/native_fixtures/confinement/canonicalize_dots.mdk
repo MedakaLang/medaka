@@ -1,0 +1,7 @@
+-- `canonicalizePath` drops `.`, resolves `..` and symbolic links, and answers
+-- an absolute path; a path with no canonical form is answered unchanged.
+-- run.sh installs inlink -> cfg/a.txt.
+main =
+  println (canonicalizePath "cfg/./sub/../a.txt")
+  println (canonicalizePath "./inlink")
+  println (canonicalizePath "cfg/../nowhere/./x.txt")
