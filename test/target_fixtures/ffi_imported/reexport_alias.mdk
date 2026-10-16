@@ -1,0 +1,5 @@
+-- The extern reached through a re-export, under a member alias.
+import relay.{cAdd as plus}
+
+main : <Stdout, FFI "c"> Unit
+main = println (plus 20 22)

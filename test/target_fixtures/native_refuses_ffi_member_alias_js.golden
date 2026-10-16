@@ -1,0 +1,7 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/ffi_imported/jsbind.mdk:3:7: the extern `jsAdd` is reached via `main → jsAdd`, and has no binding for the host `c`, which the target `llvm/native-posix` calls foreign code through (it binds `js`); add a `bind c` clause or build for a target whose host it binds
+  |
+3 | extern jsAdd : Int -> Int -> <FFI "js"> Int
+  |        ^

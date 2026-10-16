@@ -33,40 +33,67 @@
 -- the eval pipeline are unaffected.  The target check reads the same reach,
 -- without filtering anything, through `reachedExternChains`.
 
-import frontend.ast.{Decl(..), ExternDecl(..)}
+import frontend.ast.{Decl(..), ExternDecl(..), letBindName}
 import frontend.marker.{declRefs}
-import hash_map.{HashMap, new, setInPlace, has, findWithDefault, get}
-import string.{indexOf, drop}
+import types.private_mangle.{scopeUnitNames}
+import hash_map.{HashMap, new, fromList, setInPlace, has, findWithDefault, get}
+import list.{zip}
 
 -- ── entry point ────────────────────────────────────────────────────────────
 -- Filter `decls` (the flattened, elaborated whole-program decl list) to retain
 -- every non-DFunDef decl plus the DFunDefs reachable from main + impls/interfaces.
 export
 dceFilter : List Decl -> List Decl
-dceFilter decls = filterReachable (reachableNames canonRef decls) decls
+dceFilter decls = filterReachable (reachableNames decls) decls
 
--- Each `DExtern` of `decls` that a reached decl refers to, in declaration
--- order, with the names that reach it: the root first (`main`, or a name an
--- impl method, interface default or top-level let group refers to), the
--- extern last.  An extern is never a root, so it is reached only through a
--- reference, and the reach is `dceFilter`'s.  `decls` is the elaborated,
--- unmangled program the target check reads: names are not module-unique
--- there, so same-named functions of two modules share their edges, and an
--- alias-qualified reference `M.f` reaches `f`.  Both only widen the reach.
+-- Each `DExtern` of `modules` that a reached decl refers to, as its module and
+-- declared name, in declaration order, with the names that reach it: the root
+-- first (`main`, or a name an impl method, interface default or top-level let
+-- group refers to), the extern last.  An extern is never a root, so it is
+-- reached only through a reference, and the reach is `dceFilter`'s, over the
+-- program with every top-level name scoped by its module
+-- (`types.private_mangle.scopeUnitNames`): a reference reaches the declaration
+-- it resolves to through any import form, and not a same-named declaration of
+-- another module or a local binder.
 export
-reachedExternChains : List Decl -> List (String, List String)
-reachedExternChains decls =
-  let reach = reachableNames qualifiedRef decls
-  filterMap (d => externChain reach d) decls
+reachedExternChains : List Decl ->
+  List (String, List Decl) ->
+  List ((String, String), List String)
+reachedExternChains core modules =
+  let (scopedCore, scopedModules) = scopeUnitNames core modules
+  let reach = reachableNames (scopedCore ++ flatMap snd scopedModules)
+  let pairs =
+    flatMap
+      (((mid, ds), (_, scoped)) => map (p => (mid, p)) (zip ds scoped))
+      (zip modules scopedModules)
+  let declared = fromList (flatMap ((_, (d, s)) => scopedNames d s) pairs)
+  filterMap (externChain reach declared) pairs
 
-externChain : HashMap String String -> Decl -> Option (String, List String)
-externChain reach (DAttrib _ d) = externChain reach d
-externChain reach (DExtern ed) =
-  if has ed.edName reach then
-    Some (ed.edName, chainTo reach ed.edName [])
+-- Each top-level name of a scoped declaration, with the name its source
+-- declaration `d` wrote.
+scopedNames : Decl -> Decl -> List (String, String)
+scopedNames (DAttrib _ d) (DAttrib _ s) = scopedNames d s
+scopedNames (DFunDef _ n _ _ _ _) (DFunDef _ scoped _ _ _ _) = [(scoped, n)]
+scopedNames (DExtern ed) (DExtern scoped) = [(scoped.edName, ed.edName)]
+scopedNames (DLetGroup _ bs) (DLetGroup _ scoped) =
+  zip (map letBindName scoped) (map letBindName bs)
+scopedNames _ _ = []
+
+externChain : HashMap String String ->
+  HashMap String String ->
+  (String, (Decl, Decl)) ->
+  Option ((String, String), List String)
+externChain reach declared (mid, (DAttrib _ d, DAttrib _ s)) =
+  externChain reach declared (mid, (d, s))
+externChain reach declared (mid, (DExtern ed, DExtern scoped)) =
+  if has scoped.edName reach then
+    Some (
+      (mid, ed.edName),
+      map (n => findWithDefault n n declared) (chainTo reach scoped.edName []),
+    )
   else
     None
-externChain _ _ = None
+externChain _ _ _ = None
 
 -- The names from the root to `n`, following each name to the one it was
 -- first reached from.
@@ -75,12 +102,6 @@ chainTo reach n acc = match get n reach
   Some "" => n :: acc
   Some from => chainTo reach from (n :: acc)
   None => n :: acc
-
--- `canonRef`, after dropping an import alias: `M.f` names `f`.
-qualifiedRef : HashMap String Unit -> String -> String
-qualifiedRef defined n = match indexOf "." n
-  Some i if i > 0 && i + 1 < stringLength n => canonRef defined (drop (i + 1) n)
-  _ => canonRef defined n
 
 -- Drop only unreachable DFunDefs; keep everything else verbatim, in order.
 -- `reach` is a HashMap-as-set, so `has` is O(1) average and this is O(#decls).
@@ -143,52 +164,45 @@ definedFnNamesInto (_ :: rest) s = definedFnNamesInto rest s
 -- Transitive closure of the roots over the DFunDef call graph, as a map from
 -- each reached name to the name it was first reached from (`""` for a root).
 -- O(1)-average membership + O(1) graph lookup keep it ~O(reachable + edges).
--- `canon` spells each reference as the graph keys it.
-reachableNames : (HashMap String Unit -> String -> String) ->
-  List Decl ->
-  HashMap String String
-reachableNames canon decls =
+reachableNames : List Decl -> HashMap String String
+reachableNames decls =
   let defined = definedFnNames decls
-  let graph = funGraph canon defined decls
+  let graph = funGraph defined decls
   let seen = new ()
   let _ = closure graph seen [
-    ("", map (canon defined) ("main" :: emittingRoots decls)),
+    ("", map (canonRef defined) ("main" :: emittingRoots decls)),
   ]
   seen
 
 -- name -> refs(body) as a HashMap (multi-clause defs merged). O(1)
 -- setInPlace/get; replaces the old O(N²) assoc-list `addRefs`. Ref-list order
 -- decides only which first reach a name records, never whether it is reached.
--- Each ref is spelled by `canon` against the defined set, so a post-mangle bare
+-- Each ref is canonicalized against the defined set so a post-mangle bare
 -- prelude reference (`not`) resolves to `core__not`.
-funGraph : (HashMap String Unit -> String -> String) ->
-  HashMap String Unit ->
-  List Decl ->
-  HashMap String (List String)
-funGraph canon defined decls =
+funGraph : HashMap String Unit -> List Decl -> HashMap String (List String)
+funGraph defined decls =
   let g = new ()
-  let _ = funGraphInto canon defined decls g
+  let _ = funGraphInto defined decls g
   g
 
-funGraphInto : (HashMap String Unit -> String -> String) ->
-  HashMap String Unit ->
+funGraphInto : HashMap String Unit ->
   List Decl ->
   HashMap String (List String) ->
   Unit
-funGraphInto _ _ [] _ = ()
+funGraphInto _ [] _ = ()
 -- #1037: see definedFnNamesInto — an attributed definition must still contribute
 -- its call-graph edges.
-funGraphInto canon defined ((DAttrib _ d) :: rest) g =
-  funGraphInto canon defined (d :: rest) g
-funGraphInto canon defined ((DFunDef _ n ps body site bid) :: rest) g =
+funGraphInto defined ((DAttrib _ d) :: rest) g =
+  funGraphInto defined (d :: rest) g
+funGraphInto defined ((DFunDef _ n ps body site bid) :: rest) g =
   let _ =
     setInPlace
       n
-      (map (canon defined) (declRefs (DFunDef False n ps body site bid))
+      (map (canonRef defined) (declRefs (DFunDef False n ps body site bid))
         ++ findWithDefault [] n g)
       g
-  funGraphInto canon defined rest g
-funGraphInto canon defined (_ :: rest) g = funGraphInto canon defined rest g
+  funGraphInto defined rest g
+funGraphInto defined (_ :: rest) g = funGraphInto defined rest g
 
 -- roots from emitting non-DFunDef decls: impl-method + interface-default bodies.
 -- (declRefs walks an impl's method bodies / an interface's default bodies; it is

@@ -1,0 +1,5 @@
+-- The extern reached through a wildcard import.
+import cbind.*
+
+main : <Stdout, FFI "c"> Unit
+main = println (cAdd 20 22)

@@ -1,0 +1,14 @@
+-- A local `let` and a parameter, each named like a `c`-only extern without
+-- clauses, shadow it, so nothing reaches the extern and wasm admits the
+-- program.
+extern cInc : Int -> <FFI "c"> Int
+
+twice : Int -> Int
+twice n =
+  let cInc = x => x + 1
+  cInc (cInc n)
+
+apply : (Int -> Int) -> Int
+apply cInc = cInc 1
+
+main = println (twice (apply (x => x + 1)))

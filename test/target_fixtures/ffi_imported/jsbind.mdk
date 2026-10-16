@@ -1,0 +1,4 @@
+-- A `js`-only extern the entry reaches from another module.
+export
+extern jsAdd : Int -> Int -> <FFI "js"> Int
+  bind js "add"

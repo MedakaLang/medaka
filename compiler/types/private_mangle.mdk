@@ -176,23 +176,50 @@ mangleUnits : List Decl ->
   (List Decl, List (String, List Decl))
 mangleUnits coreDecls modules =
   let allUnits = ("core", coreDecls) :: modules
+  let _ = symbolInjectivityGuard (entryUnitMid allUnits) allUnits
+  renameUnits externSymbolName coreDecls modules
+
+-- The same rename for the target check's reach (`ir.dce.reachedExternChains`),
+-- which must tell which declaration each reference denotes.  Every extern takes
+-- its module-scoped name, with `bind` clauses or without, so a reference
+-- reaches exactly the declaration it resolves to, and a local binder, which
+-- the rename leaves alone, reaches none.  No injectivity guard: two module ids
+-- that sanitize alike merge their names, which only widens the reach.
+export
+scopeUnitNames : List Decl ->
+  List (String, List Decl) ->
+  (List Decl, List (String, List Decl))
+scopeUnitNames = renameUnits (mid ed => mangledName mid ed.edName)
+
+-- `externName` names an extern program-wide from its module and declaration.
+renameUnits : (String -> ExternDecl -> String) ->
+  List Decl ->
+  List (String, List Decl) ->
+  (List Decl, List (String, List Decl))
+renameUnits externName coreDecls modules =
+  let allUnits = ("core", coreDecls) :: modules
   let entryMid = entryUnitMid allUnits
-  let _ = symbolInjectivityGuard entryMid allUnits
   let exportsPerUnit =
     withPreludeDefs
       (dedup (unitDefNames ("", coreDecls)))
       (buildExportsPerUnit [] allUnits)
   let ctorExportsPerUnit = buildCtorExportsPerUnit [] allUnits
-  let externExports = buildExternExports omEmpty allUnits
+  let externExports = buildExternExports externName omEmpty allUnits
   let coreOut = mangleUnitU
     entryMid
     exportsPerUnit
     ctorExportsPerUnit
+    externName
     externExports
     ("core", coreDecls)
   let modsOut =
     map
-      (mangleModule entryMid exportsPerUnit ctorExportsPerUnit externExports)
+      (mangleModule
+        entryMid
+        exportsPerUnit
+        ctorExportsPerUnit
+        externName
+        externExports)
       modules
   (coreOut, modsOut)
 
@@ -226,7 +253,7 @@ mangleUnitsEv coreDecls modules =
       (dedup (unitDefNames ("", coreDecls)))
       (buildExportsPerUnit [] allUnits)
   let ctorExportsPerUnit = buildCtorExportsPerUnit [] allUnits
-  let externExports = buildExternExports omEmpty allUnits
+  let externExports = buildExternExports externSymbolName omEmpty allUnits
   -- ONE map per unit, threaded to both readers: the decl rename and the evidence
   -- remap name the same symbols, and building the map twice was measured at +0.99%
   -- Ir on the emitter child over the compiler's own graph.
@@ -261,7 +288,13 @@ unitRenameMapEntry : String ->
   (String, (OrdMap String, Bool, List Decl))
 unitRenameMapEntry entryMid exportsPerUnit ctorExportsPerUnit externExports (mid, decls) =
   let rmList =
-    buildUnitRenameMap entryMid mid exportsPerUnit externExports decls
+    buildUnitRenameMap
+        entryMid
+        mid
+        exportsPerUnit
+        externSymbolName
+        externExports
+        decls
       ++ buildUnitCtorRenameMap mid ctorExportsPerUnit decls
   (mid, (omFromPairs (reverseL rmList) omEmpty, isEmptyL rmList, decls))
 
@@ -947,15 +980,19 @@ lookupCtorExports k ((m, es) :: rest) =
 mangleModule : String ->
   List (String, List (String, String)) ->
   List (String, List (String, String, List String)) ->
+  (String -> ExternDecl -> String) ->
   OrdMap (OrdMap String) ->
   (String, List Decl) ->
   (String, List Decl)
-mangleModule entryMid exportsPerUnit ctorExportsPerUnit externExports (mid, decls) = (
+mangleModule entryMid exportsPerUnit ctorExportsPerUnit externName externExports (mid, decls) = (
   mid,
-  mangleUnitU entryMid exportsPerUnit ctorExportsPerUnit externExports (
-    mid,
-    decls,
-  ),
+  mangleUnitU
+    entryMid
+    exportsPerUnit
+    ctorExportsPerUnit
+    externName
+    externExports
+    (mid, decls),
 )
 
 -- ── per-unit universal rename ────────────────────────────────────────────────
@@ -965,11 +1002,19 @@ mangleModule entryMid exportsPerUnit ctorExportsPerUnit externExports (mid, decl
 mangleUnitU : String ->
   List (String, List (String, String)) ->
   List (String, List (String, String, List String)) ->
+  (String -> ExternDecl -> String) ->
   OrdMap (OrdMap String) ->
   (String, List Decl) ->
   List Decl
-mangleUnitU entryMid exportsPerUnit ctorExportsPerUnit externExports (mid, decls) =
-  let rmFn = buildUnitRenameMap entryMid mid exportsPerUnit externExports decls
+mangleUnitU entryMid exportsPerUnit ctorExportsPerUnit externName externExports (mid, decls) =
+  let rmFn =
+    buildUnitRenameMap
+      entryMid
+      mid
+      exportsPerUnit
+      externName
+      externExports
+      decls
   let rmCtor = buildUnitCtorRenameMap mid ctorExportsPerUnit decls
   let rmList = rmFn ++ rmCtor
   -- omFromPairs over the REVERSED list so the FIRST list entry wins on a duplicate
@@ -989,14 +1034,15 @@ mangleUnitU entryMid exportsPerUnit ctorExportsPerUnit externExports (mid, decls
 buildUnitRenameMap : String ->
   String ->
   List (String, List (String, String)) ->
+  (String -> ExternDecl -> String) ->
   OrdMap (OrdMap String) ->
   List Decl ->
   List (String, String)
-buildUnitRenameMap entryMid mid exportsPerUnit externExports decls =
+buildUnitRenameMap entryMid mid exportsPerUnit externName externExports decls =
   let localFns = dedup (unitDefNames (mid, decls))
   let localEntries =
     map (n => (n, mangledName mid n)) localFns
-      ++ externDeclEntries mid False decls
+      ++ externDeclEntries (externName mid) False decls
   let importEntries = importRenameEntries mid exportsPerUnit decls
   let entries =
     localEntries
@@ -1010,31 +1056,36 @@ buildUnitRenameMap entryMid mid exportsPerUnit externExports decls =
 
 -- Extern declarations name host symbols. Their imported spellings must be
 -- erased without adding a module prefix, including through re-export chains.
-buildExternExports : OrdMap (OrdMap String) ->
+buildExternExports : (String -> ExternDecl -> String) ->
+  OrdMap (OrdMap String) ->
   List (String, List Decl) ->
   OrdMap (OrdMap String)
-buildExternExports exports [] = exports
-buildExternExports exports ((mid, decls) :: rest) =
+buildExternExports _ exports [] = exports
+buildExternExports externName exports ((mid, decls) :: rest) =
   let entries =
-    externDeclEntries mid True decls
+    externDeclEntries (externName mid) True decls
       ++ flatMap (externImportEntries exports True) decls
   buildExternExports
+    externName
     (omInsert mid (omFromPairs (reverseL entries) omEmpty) exports)
     rest
 
-externDeclEntries : String -> Bool -> List Decl -> List (String, String)
+-- `name` is the extern-naming function, applied to the unit's module already.
+externDeclEntries : (ExternDecl -> String) ->
+  Bool ->
+  List Decl ->
+  List (String, String)
 externDeclEntries _ _ [] = []
-externDeclEntries mid publicOnly ((DExtern ed) :: rest) =
+externDeclEntries name publicOnly ((DExtern ed) :: rest) =
   if ed.edPub || not publicOnly then
-    (ed.edName, externSymbolName mid ed)
-      :: externDeclEntries mid publicOnly rest
+    (ed.edName, name ed) :: externDeclEntries name publicOnly rest
   else
-    externDeclEntries mid publicOnly rest
-externDeclEntries mid publicOnly ((DAttrib _ decl) :: rest) =
-  externDeclEntries mid publicOnly [decl]
-    ++ externDeclEntries mid publicOnly rest
-externDeclEntries mid publicOnly (_ :: rest) =
-  externDeclEntries mid publicOnly rest
+    externDeclEntries name publicOnly rest
+externDeclEntries name publicOnly ((DAttrib _ decl) :: rest) =
+  externDeclEntries name publicOnly [decl]
+    ++ externDeclEntries name publicOnly rest
+externDeclEntries name publicOnly (_ :: rest) =
+  externDeclEntries name publicOnly rest
 
 -- The program-wide name of an extern declared in module `mid`.  One with `bind`
 -- clauses names whatever its clauses bind, which another module may bind

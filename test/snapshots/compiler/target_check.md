@@ -1,5 +1,5 @@
 # META
-source_lines=296
+source_lines=303
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/target_check.mdk — does a program fit a target profile?
@@ -46,6 +46,7 @@ import driver.diagnostics.{
 }
 import support.util.{lookupAssoc, joinWith, dedup, contains, anyList}
 import string.{trim}
+import list.{lookup}
 
 export
 targetCapabilityCode : String
@@ -142,9 +143,10 @@ capabilityRefusal profile analysis sch =
 
 -- ── the binding rule ────────────────────────────────────────────────────────
 -- Every user extern of every module that the program reaches (`dce`'s reach,
--- over the whole elaborated program) and that has no binding for the
--- profile's host.  A catalog extern declared again runs the built-in, so it is
--- not judged here.  A program declaring no user extern skips the reach.
+-- over the whole elaborated program, each reference resolved to the
+-- declaration it denotes) and that has no binding for the profile's host.  A
+-- catalog extern declared again runs the built-in, so it is not judged here.
+-- A program declaring no user extern skips the reach.
 bindingRefusals : TargetProfile ->
   List (String, String) ->
   EntryAnalysis ->
@@ -155,7 +157,7 @@ bindingRefusals profile paths analysis =
     flatMap
       ((mid, decls) =>
         map
-          (ed => (lookupAssoc mid paths, ed))
+          (ed => (mid, ed))
           (filter
             (ed => not (contains ed.edName analysis.eaCatalogExterns))
             (externDecls decls)))
@@ -163,8 +165,8 @@ bindingRefusals profile paths analysis =
   match userExterns
     [] => []
     _ =>
-      let chains = reachedExternChains (coreE ++ flatMap snd modsE)
-      filterMap (unboundReached profile chains) userExterns
+      let chains = reachedExternChains coreE modsE
+      filterMap (unboundReached profile paths chains) userExterns
 
 externDecls : List Decl -> List ExternDecl
 externDecls [] = []
@@ -172,19 +174,24 @@ externDecls ((DAttrib _ d) :: rest) = externDecls (d :: rest)
 externDecls ((DExtern ed) :: rest) = ed :: externDecls rest
 externDecls (_ :: rest) = externDecls rest
 
--- The refusal of a declaration (in the file `path` names) that is reached and
--- not bound for the profile's host.
+-- The refusal of a declaration of the module `mid` that is reached and not
+-- bound for the profile's host, located in the module's file.
 unboundReached : TargetProfile ->
-  List (String, List String) ->
-  (Option String, ExternDecl) ->
+  List (String, String) ->
+  List ((String, String), List String) ->
+  (String, ExternDecl) ->
   Option Diag
-unboundReached profile chains (path, ed) = match lookupAssoc ed.edName chains
-  None => None
-  Some chain =>
-    let bound = match profileBindingHost profile
-      Some h => anyList (b => b.ebHost == h) (externBindings ed)
-      None => False
-    if bound then None else Some (noBindingDiag profile path (ed, chain))
+unboundReached profile paths chains (mid, ed) =
+  match lookup (mid, ed.edName) chains
+    None => None
+    Some chain =>
+      let bound = match profileBindingHost profile
+        Some h => anyList (b => b.ebHost == h) (externBindings ed)
+        None => False
+      if bound then
+        None
+      else
+        Some (noBindingDiag profile (lookupAssoc mid paths) (ed, chain))
 
 noBindingDiag : TargetProfile ->
   Option String ->
@@ -310,6 +317,7 @@ firstOr _ (x :: _) = x
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "mkDiag" false) (mem "cjFoldIntoFile" false) (mem "ppDiagCliLines" false) (mem "readFileSafe" false) (mem "srcLinesArr" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "joinWith" false) (mem "dedup" false) (mem "contains" false) (mem "anyList" false))))
 (DUse false (UseGroup ("string") ((mem "trim" false))))
+(DUse false (UseGroup ("list") ((mem "lookup" false))))
 (DTypeSig true "targetCapabilityCode" (TyCon "String"))
 (DFunDef false "targetCapabilityCode" () (ELit (LString "T-TARGET-CAPABILITY")))
 (DTypeSig true "targetNoBindingCode" (TyCon "String"))
@@ -327,14 +335,14 @@ firstOr _ (x :: _) = x
 (DTypeSig false "capabilityRefusal" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "EntryAnalysis") (TyFun (TyCon "Scheme") (TyApp (TyCon "Option") (TyCon "Diag"))))))
 (DFunDef false "capabilityRefusal" ((PVar "profile") (PVar "analysis") (PVar "sch")) (EBlock (DoLet false false (PVar "printed") (EMatch (EFieldAccess (EVar "analysis") "eaAutoPrintCall") (arm (PCon "Some" (PVar "call")) () (EApp (EApp (EVar "invocationSummary") (EFieldAccess (EVar "analysis") "eaOps")) (EVar "call"))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "summary") (EBinOp "++" (EApp (EApp (EVar "invocationSummary") (EFieldAccess (EVar "analysis") "eaOps")) (EVar "sch")) (EVar "printed"))) (DoLet false false (PVar "atoms") (EApp (EApp (EVar "filter") (EVar "isGatedAtom")) (EVar "summary"))) (DoLet false false (PVar "unjoined") (EApp (EApp (EVar "filter") (EApp (EVar "unjoinedIo") (EVar "profile"))) (EVar "summary"))) (DoLet false false (PVar "ioLabels") (EMatch (EVar "unjoined") (arm (PList) () (EListLit)) (arm PWild () (EListLit (ELit (LString "IO")))))) (DoExpr (EMatch (EApp (EApp (EVar "policyRefusals") (EVar "atoms")) (EApp (EVar "profileGrants") (EVar "profile"))) (arm (PCon "PolicyAdmitted") () (EMatch (EVar "unjoined") (arm (PList) () (EVar "None")) (arm PWild () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "refusalDiag") (EVar "profile")) (EVar "analysis")) (EVar "unjoined")) (EVar "ioLabels")) (EListLit)))))) (arm (PCon "PolicyRefused" (PVar "labels") (PVar "lines")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "refusalDiag") (EVar "profile")) (EVar "analysis")) (EBinOp "++" (EVar "atoms") (EVar "unjoined"))) (EBinOp "++" (EApp (EVar "dedup") (EVar "labels")) (EVar "ioLabels"))) (EVar "lines"))))))))
 (DTypeSig false "bindingRefusals" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "EntryAnalysis") (TyApp (TyCon "List") (TyCon "Diag"))))))
-(DFunDef false "bindingRefusals" ((PVar "profile") (PVar "paths") (PVar "analysis")) (EBlock (DoLet false false (PTuple (PVar "coreE") (PVar "modsE") PWild PWild PWild PWild) (EFieldAccess (EVar "analysis") "eaElab")) (DoLet false false (PVar "userExterns") (EApp (EApp (EVar "flatMap") (ELam ((PTuple (PVar "mid") (PVar "decls"))) (EApp (EApp (EVar "map") (ELam ((PVar "ed")) (ETuple (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "paths")) (EVar "ed")))) (EApp (EApp (EVar "filter") (ELam ((PVar "ed")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "ed") "edName")) (EFieldAccess (EVar "analysis") "eaCatalogExterns"))))) (EApp (EVar "externDecls") (EVar "decls")))))) (EVar "modsE"))) (DoExpr (EMatch (EVar "userExterns") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "chains") (EApp (EVar "reachedExternChains") (EBinOp "++" (EVar "coreE") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modsE"))))) (DoExpr (EApp (EApp (EVar "filterMap") (EApp (EApp (EVar "unboundReached") (EVar "profile")) (EVar "chains"))) (EVar "userExterns")))))))))
+(DFunDef false "bindingRefusals" ((PVar "profile") (PVar "paths") (PVar "analysis")) (EBlock (DoLet false false (PTuple (PVar "coreE") (PVar "modsE") PWild PWild PWild PWild) (EFieldAccess (EVar "analysis") "eaElab")) (DoLet false false (PVar "userExterns") (EApp (EApp (EVar "flatMap") (ELam ((PTuple (PVar "mid") (PVar "decls"))) (EApp (EApp (EVar "map") (ELam ((PVar "ed")) (ETuple (EVar "mid") (EVar "ed")))) (EApp (EApp (EVar "filter") (ELam ((PVar "ed")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "ed") "edName")) (EFieldAccess (EVar "analysis") "eaCatalogExterns"))))) (EApp (EVar "externDecls") (EVar "decls")))))) (EVar "modsE"))) (DoExpr (EMatch (EVar "userExterns") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "chains") (EApp (EApp (EVar "reachedExternChains") (EVar "coreE")) (EVar "modsE"))) (DoExpr (EApp (EApp (EVar "filterMap") (EApp (EApp (EApp (EVar "unboundReached") (EVar "profile")) (EVar "paths")) (EVar "chains"))) (EVar "userExterns")))))))))
 (DTypeSig false "externDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ExternDecl"))))
 (DFunDef false "externDecls" ((PList)) (EListLit))
 (DFunDef false "externDecls" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "externDecls") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "externDecls" ((PCons (PCon "DExtern" (PVar "ed")) (PVar "rest"))) (EBinOp "::" (EVar "ed") (EApp (EVar "externDecls") (EVar "rest"))))
 (DFunDef false "externDecls" ((PCons PWild (PVar "rest"))) (EApp (EVar "externDecls") (EVar "rest")))
-(DTypeSig false "unboundReached" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyCon "ExternDecl")) (TyApp (TyCon "Option") (TyCon "Diag"))))))
-(DFunDef false "unboundReached" ((PVar "profile") (PVar "chains") (PTuple (PVar "path") (PVar "ed"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EFieldAccess (EVar "ed") "edName")) (EVar "chains")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "chain")) () (EBlock (DoLet false false (PVar "bound") (EMatch (EApp (EVar "profileBindingHost") (EVar "profile")) (arm (PCon "Some" (PVar "h")) () (EApp (EApp (EVar "anyList") (ELam ((PVar "b")) (EBinOp "==" (EFieldAccess (EVar "b") "ebHost") (EVar "h")))) (EApp (EVar "externBindings") (EVar "ed")))) (arm (PCon "None") () (EVar "False")))) (DoExpr (EIf (EVar "bound") (EVar "None") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "noBindingDiag") (EVar "profile")) (EVar "path")) (ETuple (EVar "ed") (EVar "chain"))))))))))
+(DTypeSig false "unboundReached" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyTuple (TyCon "String") (TyCon "ExternDecl")) (TyApp (TyCon "Option") (TyCon "Diag")))))))
+(DFunDef false "unboundReached" ((PVar "profile") (PVar "paths") (PVar "chains") (PTuple (PVar "mid") (PVar "ed"))) (EMatch (EApp (EApp (EVar "lookup") (ETuple (EVar "mid") (EFieldAccess (EVar "ed") "edName"))) (EVar "chains")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "chain")) () (EBlock (DoLet false false (PVar "bound") (EMatch (EApp (EVar "profileBindingHost") (EVar "profile")) (arm (PCon "Some" (PVar "h")) () (EApp (EApp (EVar "anyList") (ELam ((PVar "b")) (EBinOp "==" (EFieldAccess (EVar "b") "ebHost") (EVar "h")))) (EApp (EVar "externBindings") (EVar "ed")))) (arm (PCon "None") () (EVar "False")))) (DoExpr (EIf (EVar "bound") (EVar "None") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "noBindingDiag") (EVar "profile")) (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "paths"))) (ETuple (EVar "ed") (EVar "chain"))))))))))
 (DTypeSig false "noBindingDiag" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyTuple (TyCon "ExternDecl") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Diag")))))
 (DFunDef false "noBindingDiag" ((PVar "profile") (PVar "path") (PTuple (PVar "ed") (PVar "chain"))) (EBlock (DoLet false false (PVar "hosts") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PVar "b")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EFieldAccess (EVar "b") "ebHost"))) (ELit (LString "`"))))) (EApp (EVar "externBindings") (EVar "ed"))))) (DoLet false false (PVar "target") (EApp (EVar "profileName") (EVar "profile"))) (DoLet false false (PVar "why") (EMatch (EApp (EVar "profileBindingHost") (EVar "profile")) (arm (PCon "Some" (PVar "h")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "has no binding for the host `")) (EApp (EVar "display") (EVar "h"))) (ELit (LString "`, which the target `"))) (EApp (EVar "display") (EVar "target"))) (ELit (LString "` calls foreign code through (it binds "))) (EApp (EVar "display") (EVar "hosts"))) (ELit (LString "); add a `bind "))) (EApp (EVar "display") (EVar "h"))) (ELit (LString "` clause or build for a target whose host it binds")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the target `")) (EApp (EVar "display") (EVar "target"))) (ELit (LString "` calls foreign code through no host (it binds "))) (EApp (EVar "display") (EVar "hosts"))) (ELit (LString "); build for a target whose host it binds")))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "targetNoBindingCode")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the extern `")) (EApp (EVar "display") (EFieldAccess (EVar "ed") "edName"))) (ELit (LString "` is reached"))) (EApp (EVar "display") (EApp (EVar "reachRoute") (EVar "chain")))) (ELit (LString ", and "))) (EApp (EVar "display") (EVar "why"))) (ELit (LString "")))) (EApp (EVar "Some") (EApp (EApp (EVar "inFile") (EVar "path")) (EFieldAccess (EVar "ed") "edLoc")))))))
 (DTypeSig false "reachRoute" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
@@ -382,6 +390,7 @@ firstOr _ (x :: _) = x
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "mkDiag" false) (mem "cjFoldIntoFile" false) (mem "ppDiagCliLines" false) (mem "readFileSafe" false) (mem "srcLinesArr" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "joinWith" false) (mem "dedup" false) (mem "contains" false) (mem "anyList" false))))
 (DUse false (UseGroup ("string") ((mem "trim" false))))
+(DUse false (UseGroup ("list") ((mem "lookup" false))))
 (DTypeSig true "targetCapabilityCode" (TyCon "String"))
 (DFunDef false "targetCapabilityCode" () (ELit (LString "T-TARGET-CAPABILITY")))
 (DTypeSig true "targetNoBindingCode" (TyCon "String"))
@@ -399,14 +408,14 @@ firstOr _ (x :: _) = x
 (DTypeSig false "capabilityRefusal" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "EntryAnalysis") (TyFun (TyCon "Scheme") (TyApp (TyCon "Option") (TyCon "Diag"))))))
 (DFunDef false "capabilityRefusal" ((PVar "profile") (PVar "analysis") (PVar "sch")) (EBlock (DoLet false false (PVar "printed") (EMatch (EFieldAccess (EVar "analysis") "eaAutoPrintCall") (arm (PCon "Some" (PVar "call")) () (EApp (EApp (EVar "invocationSummary") (EFieldAccess (EVar "analysis") "eaOps")) (EVar "call"))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PVar "summary") (EBinOp "++" (EApp (EApp (EVar "invocationSummary") (EFieldAccess (EVar "analysis") "eaOps")) (EVar "sch")) (EVar "printed"))) (DoLet false false (PVar "atoms") (EApp (EApp (EMethodRef "filter") (EVar "isGatedAtom")) (EVar "summary"))) (DoLet false false (PVar "unjoined") (EApp (EApp (EMethodRef "filter") (EApp (EVar "unjoinedIo") (EVar "profile"))) (EVar "summary"))) (DoLet false false (PVar "ioLabels") (EMatch (EVar "unjoined") (arm (PList) () (EListLit)) (arm PWild () (EListLit (ELit (LString "IO")))))) (DoExpr (EMatch (EApp (EApp (EVar "policyRefusals") (EVar "atoms")) (EApp (EVar "profileGrants") (EVar "profile"))) (arm (PCon "PolicyAdmitted") () (EMatch (EVar "unjoined") (arm (PList) () (EVar "None")) (arm PWild () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "refusalDiag") (EVar "profile")) (EVar "analysis")) (EVar "unjoined")) (EVar "ioLabels")) (EListLit)))))) (arm (PCon "PolicyRefused" (PVar "labels") (PVar "lines")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "refusalDiag") (EVar "profile")) (EVar "analysis")) (EBinOp "++" (EVar "atoms") (EVar "unjoined"))) (EBinOp "++" (EApp (EVar "dedup") (EVar "labels")) (EVar "ioLabels"))) (EVar "lines"))))))))
 (DTypeSig false "bindingRefusals" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "EntryAnalysis") (TyApp (TyCon "List") (TyCon "Diag"))))))
-(DFunDef false "bindingRefusals" ((PVar "profile") (PVar "paths") (PVar "analysis")) (EBlock (DoLet false false (PTuple (PVar "coreE") (PVar "modsE") PWild PWild PWild PWild) (EFieldAccess (EVar "analysis") "eaElab")) (DoLet false false (PVar "userExterns") (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple (PVar "mid") (PVar "decls"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "ed")) (ETuple (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "paths")) (EVar "ed")))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "ed")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "ed") "edName")) (EFieldAccess (EVar "analysis") "eaCatalogExterns"))))) (EApp (EVar "externDecls") (EVar "decls")))))) (EVar "modsE"))) (DoExpr (EMatch (EVar "userExterns") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "chains") (EApp (EVar "reachedExternChains") (EBinOp "++" (EVar "coreE") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modsE"))))) (DoExpr (EApp (EApp (EMethodRef "filterMap") (EApp (EApp (EVar "unboundReached") (EVar "profile")) (EVar "chains"))) (EVar "userExterns")))))))))
+(DFunDef false "bindingRefusals" ((PVar "profile") (PVar "paths") (PVar "analysis")) (EBlock (DoLet false false (PTuple (PVar "coreE") (PVar "modsE") PWild PWild PWild PWild) (EFieldAccess (EVar "analysis") "eaElab")) (DoLet false false (PVar "userExterns") (EApp (EApp (EDictApp "flatMap") (ELam ((PTuple (PVar "mid") (PVar "decls"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "ed")) (ETuple (EVar "mid") (EVar "ed")))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "ed")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EFieldAccess (EVar "ed") "edName")) (EFieldAccess (EVar "analysis") "eaCatalogExterns"))))) (EApp (EVar "externDecls") (EVar "decls")))))) (EVar "modsE"))) (DoExpr (EMatch (EVar "userExterns") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "chains") (EApp (EApp (EVar "reachedExternChains") (EVar "coreE")) (EVar "modsE"))) (DoExpr (EApp (EApp (EMethodRef "filterMap") (EApp (EApp (EApp (EVar "unboundReached") (EVar "profile")) (EVar "paths")) (EVar "chains"))) (EVar "userExterns")))))))))
 (DTypeSig false "externDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ExternDecl"))))
 (DFunDef false "externDecls" ((PList)) (EListLit))
 (DFunDef false "externDecls" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "externDecls") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "externDecls" ((PCons (PCon "DExtern" (PVar "ed")) (PVar "rest"))) (EBinOp "::" (EVar "ed") (EApp (EVar "externDecls") (EVar "rest"))))
 (DFunDef false "externDecls" ((PCons PWild (PVar "rest"))) (EApp (EVar "externDecls") (EVar "rest")))
-(DTypeSig false "unboundReached" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyCon "ExternDecl")) (TyApp (TyCon "Option") (TyCon "Diag"))))))
-(DFunDef false "unboundReached" ((PVar "profile") (PVar "chains") (PTuple (PVar "path") (PVar "ed"))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EFieldAccess (EVar "ed") "edName")) (EVar "chains")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "chain")) () (EBlock (DoLet false false (PVar "bound") (EMatch (EApp (EVar "profileBindingHost") (EVar "profile")) (arm (PCon "Some" (PVar "h")) () (EApp (EApp (EVar "anyList") (ELam ((PVar "b")) (EBinOp "==" (EFieldAccess (EVar "b") "ebHost") (EVar "h")))) (EApp (EVar "externBindings") (EVar "ed")))) (arm (PCon "None") () (EVar "False")))) (DoExpr (EIf (EVar "bound") (EVar "None") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "noBindingDiag") (EVar "profile")) (EVar "path")) (ETuple (EVar "ed") (EVar "chain"))))))))))
+(DTypeSig false "unboundReached" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyTuple (TyCon "String") (TyCon "ExternDecl")) (TyApp (TyCon "Option") (TyCon "Diag")))))))
+(DFunDef false "unboundReached" ((PVar "profile") (PVar "paths") (PVar "chains") (PTuple (PVar "mid") (PVar "ed"))) (EMatch (EApp (EApp (EVar "lookup") (ETuple (EVar "mid") (EFieldAccess (EVar "ed") "edName"))) (EVar "chains")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "chain")) () (EBlock (DoLet false false (PVar "bound") (EMatch (EApp (EVar "profileBindingHost") (EVar "profile")) (arm (PCon "Some" (PVar "h")) () (EApp (EApp (EVar "anyList") (ELam ((PVar "b")) (EBinOp "==" (EFieldAccess (EVar "b") "ebHost") (EVar "h")))) (EApp (EVar "externBindings") (EVar "ed")))) (arm (PCon "None") () (EVar "False")))) (DoExpr (EIf (EVar "bound") (EVar "None") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "noBindingDiag") (EVar "profile")) (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "paths"))) (ETuple (EVar "ed") (EVar "chain"))))))))))
 (DTypeSig false "noBindingDiag" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyTuple (TyCon "ExternDecl") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Diag")))))
 (DFunDef false "noBindingDiag" ((PVar "profile") (PVar "path") (PTuple (PVar "ed") (PVar "chain"))) (EBlock (DoLet false false (PVar "hosts") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "b")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EFieldAccess (EVar "b") "ebHost"))) (ELit (LString "`"))))) (EApp (EVar "externBindings") (EVar "ed"))))) (DoLet false false (PVar "target") (EApp (EVar "profileName") (EVar "profile"))) (DoLet false false (PVar "why") (EMatch (EApp (EVar "profileBindingHost") (EVar "profile")) (arm (PCon "Some" (PVar "h")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "has no binding for the host `")) (EApp (EMethodRef "display") (EVar "h"))) (ELit (LString "`, which the target `"))) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString "` calls foreign code through (it binds "))) (EApp (EMethodRef "display") (EVar "hosts"))) (ELit (LString "); add a `bind "))) (EApp (EMethodRef "display") (EVar "h"))) (ELit (LString "` clause or build for a target whose host it binds")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the target `")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString "` calls foreign code through no host (it binds "))) (EApp (EMethodRef "display") (EVar "hosts"))) (ELit (LString "); build for a target whose host it binds")))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "targetNoBindingCode")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the extern `")) (EApp (EMethodRef "display") (EFieldAccess (EVar "ed") "edName"))) (ELit (LString "` is reached"))) (EApp (EMethodRef "display") (EApp (EVar "reachRoute") (EVar "chain")))) (ELit (LString ", and "))) (EApp (EMethodRef "display") (EVar "why"))) (ELit (LString "")))) (EApp (EVar "Some") (EApp (EApp (EVar "inFile") (EVar "path")) (EFieldAccess (EVar "ed") "edLoc")))))))
 (DTypeSig false "reachRoute" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
