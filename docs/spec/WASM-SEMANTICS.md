@@ -397,9 +397,13 @@ import surface part of the semantics, with laws:
 | `mdk_write_int` / `mdk_write_bool` | ~53–54 | **never** (dead W2 scaffold; verified unreferenced) | absent | absent | n/a (never emitted in ref mode) | legacy | — |
 
 **The in-memory vfs (`MemoryVfs`, `playground/medaka_host.mjs`).** The worker's
-per-run vfs and the compiler's source vfs share one path model. A path is
-relative to the vfs root, which `.`, `/` and the empty path all name. Empty and
-`.` components are dropped and `..` steps up a level, never above the root, so
+per-run vfs and the compiler's source vfs share one path model. The vfs root is
+also the working directory, so `.` and `/` both name it and `a.txt` and `/a.txt`
+are one file, as they are for a native program run from `/`; this is a model
+choice, not a defect. The empty path names nothing, as on native (`open`, `access`
+and `realpath` find no entry): `listDir ""`, `statFile ""` and `readFile ""` are
+each an `Err`, `fileExists ""` is `False`, and `canonicalizePath ""` is `""`. Empty
+and `.` components are dropped and `..` steps up a level, never above the root, so
 `./a.txt`, `.//a.txt` and `a.txt` are one file. Every component that a `/`
 follows must be an existing directory. The root always exists. Another directory
 exists only when an entry the vfs was built with lies under it, since no call a
@@ -411,7 +415,7 @@ directory, open '<path>'`, `EISDIR: illegal operation on a directory, read`, and
 for example `No such file or directory`. A file's permission bits are stored per file:
 a file made without a mode reads `0o644`, a mode given at write sticks, an overwrite
 without one keeps it, and a rename carries it; a directory reads `0o755`. Pinned by
-`playground/medaka_host_test.mjs` probes (e), (g), (l) and (m).
+`playground/medaka_host_test.mjs` probes (e), (g), (l), (m) and (p).
 
 **Confinement (EFFECTS-SEMANTICS §7).** The host confines every file operation
 the way `runtime/medaka_rt.c` does: `confine` in `playground/medaka_host.mjs`
@@ -423,15 +427,26 @@ active bound of its mode must admit the path. A refusal is the native text,
 `<path> is outside the granted authority ["e1", "e2"]`: an `Err` from a
 `Result` extern, a panic from `fileExists` and `canonicalizePath`. The vfs
 supplies `realpath` and `lexists` (`run.js`: `fs.realpathSync.native`, `lstat`;
-`MemoryVfs`: no symbolic links). The modes follow `runtime/medaka_rt.c`
+`MemoryVfs`: no symbolic links). Both take and return byte strings, one char
+per byte, and every comparison and length is over those bytes, as `strcmp`,
+`strncmp` and `strlen` are in the C runtime: two directories whose names are
+not UTF-8 stay distinct, where text decoded with U+FFFD would make them equal.
+`canonicalizePath` hands the guest a resolved name that is not UTF-8 with each
+ill-formed subpart as U+FFFD, as native's `mdk_str_lossy` does. A bound entered
+with no grant pushed refuses every path of its mode, as an operation with no
+grant does. The known differences from native are three. The worker's vfs has no
+symbolic links. The host measures lengths against Linux's `PATH_MAX`, 4096
+bytes, where a native build on macOS has 1024. A path holding a NUL byte is an
+`Err` on the host (Node refuses it), where native reads the path up to the NUL.
+The modes follow `runtime/medaka_rt.c`
 (`MDK_CONFINE(path, grant, entry, write)`): `readFile`, `readFileBytes`, `fileMode`,
 `fileExists`, `canonicalizePath`, `listDir` and `statFile` are `(0, 0)`; `writeFile`,
 `appendFile`, `writeFileBytes`, `writeFileMode` and `fsync` are `(0, 1)`; `makeDir`,
 `removeFile` and `removeDir` are `(1, 1)`; `rename` is `(1, 1)` on both paths. Grant and bound state belong to one run:
 `reset()` clears them, and a trap ends the run, so a frame a trap unwinds
 through is never seen by a later run. Pinned by the wasm arm of
-`confine_case` in `test/native_fixtures/run.sh` and `playground/medaka_host_test.mjs`
-probe (k).
+`confine_case` in `test/native_fixtures/run.sh` (`lossy_names` for the bytes) and
+`playground/medaka_host_test.mjs` probes (k) and (q).
 
 **Not an import: `ioPoll`.** No host binds descriptor readiness, and `ioPoll`
 declares no `env.*` import. The emitter lowers it inline (`emitLeafExternRef`

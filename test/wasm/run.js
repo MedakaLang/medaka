@@ -48,9 +48,10 @@ const vfs = {
   rmdir: (p) => fs.rmdirSync(p),
   // a file or a directory: open it read-only, flush, close
   fsync: (p) => { const fd = fs.openSync(p, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } },
-  // confinement's primitives: realpath(3) itself, and whether lstat(2) succeeds
-  realpath: (p) => fs.realpathSync.native(p),
-  lexists: (p) => { try { fs.lstatSync(p); return true; } catch (e) { return false; } },
+  // confinement's primitives: realpath(3) itself, and whether lstat(2) succeeds, over
+  // byte strings (one char per byte), so a name that is not UTF-8 keeps its bytes
+  realpath: (b) => fs.realpathSync.native(Buffer.from(b, 'latin1'), { encoding: 'buffer' }).toString('latin1'),
+  lexists: (b) => { try { fs.lstatSync(Buffer.from(b, 'latin1')); return true; } catch (e) { return false; } },
 };
 // fd 0, blocking: a read that would block (EAGAIN on a non-blocking pipe) is retried,
 // and zero bytes is end of input.

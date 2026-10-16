@@ -232,6 +232,15 @@ confine_tree() {
   ln -s cfg "$1/link"
   ln -s ../outdir/sub "$1/cfg/link"
   printf 'outside' > "$1/outdir/sub/a.txt"
+  # Two directories whose names are the bytes FE and FF, not UTF-8, each behind a
+  # symlink in lossy/w (lossy_names).
+  fe="$(printf '\376')"
+  ff="$(printf '\377')"
+  mkdir -p "$1/lossy/w" "$1/lossy/$fe" "$1/lossy/$ff"
+  printf 'granted' > "$1/lossy/$fe/ok.txt"
+  printf 'top secret' > "$1/lossy/$ff/secret.txt"
+  ln -s "../$fe" "$1/lossy/w/g"
+  ln -s "../$ff" "$1/lossy/w/s"
 }
 confine_untouched() {
   for f in newsecret.txt new.txt pwned.txt x.txt outdir/stolen.txt outdir/sub/stolen.txt cfg/stolen.txt; do
@@ -244,7 +253,7 @@ confine_untouched() {
 # runs there too, with the same expected output.  It needs the wasm emitter
 # (test/wasm/build_wasm_oracle.sh) and node; without them the arm is reported
 # NOT RUN, and with MEDAKA_REQUIRE_WASM=1 that is a failure.
-CONFINE_WASM=' alias_method cwd join exists_panic canonicalize_panic dependency_method/main redeclared_extern/main method_named_readfile/main bounded_recursion declared_bound_read fs_family append_file names paths make_dir remove_file remove_dir fsync file_mode write_file_mode shapes indexed_head user_file_labels pattern_binder grant_bound_joins declared_bound '
+CONFINE_WASM=' alias_method cwd join exists_panic canonicalize_panic dependency_method/main redeclared_extern/main method_named_readfile/main bounded_recursion declared_bound_read fs_family append_file names paths make_dir remove_file remove_dir fsync file_mode write_file_mode shapes indexed_head user_file_labels pattern_binder grant_bound_joins declared_bound lossy_names '
 WASM_EMIT="${MEDAKA_WASM_EMITTER:-$ROOT/test/bin/wasm_emit_modules_main}"
 wasm_ok=1
 if [ ! -x "$WASM_EMIT" ] || ! command -v node >/dev/null 2>&1; then
@@ -545,6 +554,13 @@ cfg/../nowhere/./x.txt"
   if [ -z "$detail" ]; then ok confine_canonicalize_dots; else bad confine_canonicalize_dots "$detail"; fi
 }
 canon_case
+# Canonical paths compare as bytes: names that are not UTF-8 stay distinct.  The
+# interpreter's confinePath (compiler/eval/eval.mdk) compares canonicalizePath's
+# U+FFFD text instead and admits the escape, so `run` is not an engine here.
+confine_case lossy_names lossy/w "inside: Ok granted
+escape: Err g/../w/s/secret.txt $outside [\"g/*\"]
+True
+True" native
 # A binding's grants follow its identity, never its spelling: a helper named like
 # an interface method or a foreign function anywhere in the graph, an instance
 # head index named like a method's binder, an imported redeclaration of a file

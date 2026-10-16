@@ -115,9 +115,8 @@ Four consequences:
 - No `#ifdef`, no `@target` on a Medaka definition, no per-target stdlib file.
   Divergence lives in catalog rows and host bindings, both of which are data the
   compiler can check.
-- A difference in a *value* between two targets is a defect. `canonicalizePath`
-  as identity, ASCII-only Unicode on wasm, and the libm/`Math.*` ULP class are
-  tracked as such, or sit in `test/engine_divergence.txt` with a reason and an
+- A difference in a *value* between two targets is a defect. ASCII-only Unicode
+  on wasm and the libm/`Math.*` ULP class are tracked as such, or sit in `test/engine_divergence.txt` with a reason and an
   issue, never as a property of the target.
 - A difference in *availability* is static. A program that needs a label the
   profile does not grant is refused by `check`, located, before any emitter runs

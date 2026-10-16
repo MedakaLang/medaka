@@ -95,12 +95,16 @@ search for.
   symlink swapped inside the granted tree between the two can escape it.
   Closing this needs resolution beneath the granted directory (`openat` with
   `O_NOFOLLOW`, or `openat2`). [#3585](https://github.com/MedakaLang/medaka/issues/3585)
-- **The wasm host confines a file operation exactly as native does.** A
-  pattern grant such as `"cfg/*"` builds for `medaka build --target wasm`, and
-  the host checks each path against the grant the call writes and against each
-  declared bound it runs under. The whole domain and exact paths build, and so
-  does a wrapper such as `io.readLines` or `fs.*`, which only passes on the
-  grant its caller writes.
+- **The wasm host confines a file operation as native does, with three
+  differences.** A pattern grant such as `"cfg/*"` builds for
+  `medaka build --target wasm`, and the host checks each path, compared as
+  bytes, against the grant the call writes and against each declared bound it
+  runs under. The whole domain and exact paths build, and so does a wrapper such
+  as `io.readLines` or `fs.*`, which only passes on the grant its caller writes.
+  The differences: the browser's in-memory file system has no symbolic links;
+  the host measures paths against Linux's 4096-byte `PATH_MAX`, where a native
+  build on macOS has 1024; and a path holding a NUL byte is an `Err` on wasm,
+  where native reads it only up to the NUL.
   [#3590](https://github.com/MedakaLang/medaka/issues/3590)
 - **An opened existential or an instance head's index grants the whole
   domain.** Neither has a caller to supply an authority. The declaration that

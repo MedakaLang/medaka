@@ -105,6 +105,20 @@ main =
   println "list nodir: \{names (listDir "nodir_zz")}"
   println "list a file: \{names (listDir "b.txt")}"
 `,
+  empty: String.raw`okErr : Result String a -> String
+okErr r = match r
+  Ok _ => "Ok"
+  Err _ => "Err"
+
+main =
+  println "list: \{okErr (listDir "")}"
+  println "stat: \{okErr (statFile "")}"
+  println "read: \{okErr (readFile "")}"
+  println "exists: \{debug (fileExists "")}"
+  println "canon: [\{canonicalizePath ""}]"
+  println "write: \{okErr (writeFile "" "x")}"
+  println "mkdir: \{okErr (makeDir "")}"
+`,
   bigexit: BIG_LOOP + 'main =\n  let _ = loop 1\n  exit 3\n',
   bigtrap: BIG_LOOP + 'main =\n  let _ = loop 1\n  let z = length [1] - 1\n  println (10 / z)\n',
 };
@@ -297,8 +311,9 @@ function check(name, ok, detail) {
 
 // (k) Confinement (mdk_confine's port) over a real tree, through the host's import
 // surface as a guest calls it: a symlink in the existing prefix, `..` after a
-// symlink, a dangling symlink, the whole domain `[]`, a bound frame, and a grant left
-// by a previous call, which the next call must not inherit.
+// symlink, a dangling symlink, two directory names that are not UTF-8, the whole
+// domain `[]`, a bound frame, and a grant left by a previous call, which the next call
+// must not inherit.  The vfs's confinement primitives are run.js's.
 {
   const t = realpathSync.native(mkdtempSync(join(os.tmpdir(), 'medaka-confine-')));
   mkdirSync(join(t, 'cfg'));
@@ -307,14 +322,23 @@ function check(name, ok, detail) {
   writeFileSync(join(t, 'cfg', 'a.txt'), 'granted');
   symlinkSync('../outdir', join(t, 'cfg', 'link'));
   symlinkSync('../nowhere.txt', join(t, 'cfg', 'dangling'));
+  // Two directories named by the bytes FE and FF, which are not UTF-8, and a symlink to each.
+  for (const b of [0xfe, 0xff]) {
+    mkdirSync(Buffer.concat([Buffer.from(`${t}/`), Buffer.from([b])]));
+    symlinkSync(Buffer.from([0x2e, 0x2e, 0x2f, b]), join(t, 'cfg', b === 0xfe ? 'fe' : 'ff'));
+  }
   const vfs = {
     readFile: (p) => readFileSync(p), exists: (p) => existsSync(p), writeFile: (p, b) => writeFileSync(p, b),
-    realpath: (p) => realpathSync.native(p),
-    lexists: (p) => { try { lstatSync(p); return true; } catch (e) { return false; } },
+    realpath: (b) => realpathSync.native(Buffer.from(b, 'latin1'), { encoding: 'buffer' }).toString('latin1'),
+    lexists: (b) => { try { lstatSync(Buffer.from(b, 'latin1')); return true; } catch (e) { return false; } },
   };
   const cfg = [`${t}/cfg/*`];
   const out = (p) => `${p} is outside the granted authority ["${t}/cfg/*"]`;
+  const fe = [`${t}/cfg/fe/*`];
   const cases = [
+    ['a name that is not UTF-8', `${t}/cfg/fe/x.txt`, fe, null],
+    ['another name that is not UTF-8', `${t}/cfg/ff/x.txt`, fe,
+      `${t}/cfg/ff/x.txt is outside the granted authority ["${t}/cfg/fe/*"]`],
     ['inside', `${t}/cfg/a.txt`, cfg, null],
     ['a new file inside', `${t}/cfg/new.txt`, cfg, null],
     ['a symlink in the prefix', `${t}/cfg/link/x.txt`, cfg, out(`${t}/cfg/link/x.txt`)],
@@ -514,6 +538,45 @@ function check(name, ok, detail) {
   await runProgram(readFileSync(build('exe', 'wasmgc/node')), h2);
   check('(o) host: executablePath is the path the host was given',
     h2.sink.text('stdout') === 'exe /abs/x.wasm\n', JSON.stringify(h2.sink.text('stdout')));
+}
+
+// (p) The worker's vfs and the empty path: it names nothing, as open(2), access(2) and
+// realpath(3) find (the text is what the native build of the same program prints).  The
+// root is the working directory, so a relative path and its absolute spelling alias.
+{
+  const msgs = await runInWorker(build('empty', 'wasmgc/browser-worker'));
+  const native = 'list: Err\nstat: Err\nread: Err\nexists: False\ncanon: []\nwrite: Err\nmkdir: Err\n';
+  check('(p) worker: the empty path names no entry',
+    last(msgs).type === 'done' && streamText(msgs, 'stdout') === native,
+    JSON.stringify(msgs));
+  const v = new MemoryVfs([['cfg/a.txt', new Uint8Array([1])]]);
+  check('(p) MemoryVfs: `cfg/a.txt` and `/cfg/a.txt` name one entry, `` none',
+    v.exists('/cfg/a.txt') && v.exists('cfg/a.txt') && !v.exists(''),
+    JSON.stringify([v.exists('/cfg/a.txt'), v.exists('cfg/a.txt'), v.exists('')]));
+}
+
+// (q) A bound entered with no grant pushed fails closed: every path of its mode is
+// refused until it exits, and the other mode is not confined by it.
+{
+  const v = new MemoryVfs([['a.txt', new Uint8Array([1])]]);
+  const host = createHost('wasmgc/node', { vfs: v });
+  const env = host.imports.env;
+  const bytes = (s) => new TextEncoder().encode(s);
+  const path = (p) => { env.mdk_path_reset(); for (const b of bytes(p)) env.mdk_path_push(b); };
+  const text = () => new TextDecoder().decode(host.resultBuf);
+  const entered = env.mdk_file_bound_enter(0, 0);
+  env.mdk_grant_reset(); path('a.txt');
+  const read = env.mdk_read_file();
+  const readText = text();
+  env.mdk_grant_reset(); path('b.txt'); env.mdk_write_file_reset();
+  const write = env.mdk_write_file();
+  env.mdk_file_bound_exit();
+  env.mdk_grant_reset(); path('a.txt');
+  const after = env.mdk_read_file();
+  check('(q) host: a bound with no grant refuses its mode until exit',
+    entered === 1 && read === 0 && readText === 'a.txt is outside the granted authority: no grant was given'
+      && write === 1 && after === 1,
+    JSON.stringify({ entered, read, readText, write, after }));
 }
 
 // Report only: slices no module built above imports a key of.

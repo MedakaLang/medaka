@@ -263,21 +263,29 @@ function mdkHexFloat(ip, fp, pexp) {
 
 const enc = (s) => new TextEncoder().encode(s);
 const dec = (a) => new TextDecoder('utf-8').decode(a instanceof Uint8Array ? a : new Uint8Array(a));
+// A byte string holds one char per byte (Node's `latin1`), so `===`, `startsWith` and
+// `length` on two of them compare and count bytes, as strcmp, strncmp and strlen do.
+const byteString = (bytes) => { let s = ''; for (const b of bytes) s += String.fromCharCode(b); return s; };
+const byteStringBytes = (s) => Uint8Array.from(s, (c) => c.charCodeAt(0));
 
 // ── vfs ──────────────────────────────────────────────────────────────────────
 // The file source behind the `fs` slice: readFile(path) -> bytes (throws an Error
 // whose message is the guest's Err text), exists(path) -> bool, writeFile(path, bytes),
 // and for confinement realpath(path) -> the canonical path (throws when it has none)
 // and lexists(path) -> whether an entry is present, a dangling symlink included.
+// Those two take and return byte strings (one char per byte, Node's `latin1`), since
+// confinement compares paths as bytes and a name need not be UTF-8; every other
+// primitive takes the guest's path as text.
 // Four more primitives serve the directory and metadata externs: stat(path) -> { size,
 // isDir, isFile, mtime (seconds), mode (permission bits) } (follows links, throws when
 // the path is absent), readdir(path) -> the entry names (throws on a missing path or a
 // non-directory) and rename(src, dst).  writeFile(path, bytes, mode?) sets the file's
 // permission bits to `mode` when one is given.
-// An in-memory vfs, with the path model of docs/spec/WASM-SEMANTICS.md §3: paths are
-// relative to its root (`.`, `/` and `` all name it), `.` and empty components are
-// dropped, `..` steps up (never above the root), and every component a `/` follows
-// must be an existing directory.  The root always exists; another directory exists
+// An in-memory vfs, with the path model of docs/spec/WASM-SEMANTICS.md §3: the root
+// is also the working directory, so `a` and `/a` name one entry and `.` and `/` name
+// the root; the empty path names nothing (ENOENT, as open(2) answers); `.` and empty
+// components are dropped, `..` steps up (never above the root), and every component
+// a `/` follows must be an existing directory.  The root always exists; another directory exists
 // when a constructor entry lies under it, since nothing a program calls creates one.
 // A missing path, or a write into a missing directory, is an Err naming the path,
 // never empty contents; the texts are Node's, as on test/wasm/run.js.
@@ -307,6 +315,7 @@ export class MemoryVfs {
   // The key of `p`, or the errno of the first component a `/` follows that is not a
   // directory.
   resolve(p) {
+    if (p === '') return { error: 'ENOENT: no such file or directory' };
     const parts = p.split('/');
     const out = [];
     for (let i = 0; i < parts.length; i++) {
@@ -334,14 +343,16 @@ export class MemoryVfs {
     return !error && (this.dirs.has(key) || this.files.has(key));
   }
   // The canonical absolute form of an existing path, the root being `/`; it has no
-  // symbolic links, so an entry is present exactly when it exists.
-  realpath(p) {
+  // symbolic links, so an entry is present exactly when it exists.  Both take a byte
+  // string; every name here is guest text, so the bytes are well-formed UTF-8.
+  realpath(b) {
+    const p = dec(byteStringBytes(b));
     const { key, error } = this.resolve(p);
     if (error || !(this.dirs.has(key) || this.files.has(key)))
       throw new Error(`ENOENT: no such file or directory, realpath '${p}'`);
-    return '/' + key;
+    return byteString(enc('/' + key));
   }
-  lexists(p) { return this.exists(p); }
+  lexists(b) { return this.exists(dec(byteStringBytes(b))); }
   writeFile(p, bytes, mode) {
     const { key, error } = this.resolve(p);
     if (error) throw new Error(`${error}, open '${p}'`);
@@ -454,10 +465,10 @@ export class MemoryVfs {
 // ── confinement (EFFECTS-SEMANTICS §7) ──────────────────────────────────────
 // The port of runtime/medaka_rt.c's mdk_canon_path, mdk_element_admits,
 // mdk_confine and mdk_confine_bounds, over a vfs's `realpath` (realpath(3): throws
-// when a path does not resolve) and `lexists` (lstat(2) succeeds).  Lengths are
-// counted in bytes against Linux's PATH_MAX, as the C buffers are.
+// when a path does not resolve) and `lexists` (lstat(2) succeeds).  Every path here
+// is a byte string, so two names that are not UTF-8 stay as distinct as their bytes,
+// and lengths count bytes against Linux's PATH_MAX, as the C buffers do.
 const PATH_MAX = 4096;
-const blen = (s) => enc(s).length;
 
 // The components of `p`, split on `/`, with empty and `.` components dropped.
 const pathComponents = (p) => p.split('/').filter((c) => c !== '' && c !== '.');
@@ -466,7 +477,7 @@ const pathComponents = (p) => p.split('/').filter((c) => c !== '' && c !== '.');
 function pathJoin(absolute, comps, k) {
   let out = absolute ? '/' : '.';
   for (let i = 0; i < k; i++) {
-    if (blen(out) + 1 + blen(comps[i]) >= PATH_MAX) return null;
+    if (out.length + 1 + comps[i].length >= PATH_MAX) return null;
     out += (absolute && out === '/' ? '' : '/') + comps[i];
   }
   return out;
@@ -475,7 +486,7 @@ function pathJoin(absolute, comps, k) {
 // `dir` (canonical) followed by `/name`; null past PATH_MAX.
 function pathAppend(dir, name) {
   const root = dir === '/';
-  if (blen(dir) + (root ? 0 : 1) + blen(name) >= PATH_MAX) return null;
+  if (dir.length + (root ? 0 : 1) + name.length >= PATH_MAX) return null;
   return dir + (root ? '' : '/') + name;
 }
 
@@ -489,7 +500,7 @@ function tryRealpath(vfs, p) {
 // dangling or looping symlink).  In entry mode the last component is appended to
 // its directory's canonical form unresolved.
 export function canonPath(vfs, p, entry) {
-  if (p === '' || blen(p) >= PATH_MAX) return null;
+  if (p === '' || p.length >= PATH_MAX) return null;
   const absolute = p[0] === '/';
   const comps = pathComponents(p);
   const n = comps.length;
@@ -522,7 +533,7 @@ export function canonPath(vfs, p, entry) {
 // canonical equality, a pattern `<dir>/<stem>*` by prefix of the canonical `<dir>`
 // followed by `/<stem>` (and `<dir>` itself for an empty stem), `*` alone always.
 function elementAdmits(vfs, elem, canon) {
-  if (blen(elem) >= PATH_MAX) return false;
+  if (elem.length >= PATH_MAX) return false;
   if (elem.endsWith('*')) {
     const e = elem.slice(0, -1);
     if (e === '') return true;
@@ -540,10 +551,12 @@ function elementAdmits(vfs, elem, canon) {
 }
 
 // null when `grant` (`[]` = the whole domain) admits `path`, else the refusal text.
+// `path` and the grant are the guest's text, which is UTF-8, so its byte strings are
+// exactly the bytes native compares.
 export function confine(vfs, path, grant, entry) {
   if (grant.length === 0) return null;
-  const canon = canonPath(vfs, path, entry);
-  if (canon !== null && grant.some((g) => elementAdmits(vfs, g, canon))) return null;
+  const canon = canonPath(vfs, byteString(enc(path)), entry);
+  if (canon !== null && grant.some((g) => elementAdmits(vfs, byteString(enc(g)), canon))) return null;
   return `${path} is outside the granted authority [${grant.map((g) => `"${g}"`).join(', ')}]`;
 }
 
@@ -553,7 +566,8 @@ const compareBytes = (a, b) => {
   return a.length - b.length;
 };
 
-const sameGrant = (a, b) => a.length === b.length && a.every((g, i) => g === b[i]);
+// A missing grant (null) equals no grant, not even another missing one.
+const sameGrant = (a, b) => a !== null && b !== null && a.length === b.length && a.every((g, i) => g === b[i]);
 
 // A sink that keeps every delivered byte; `text(stream)` decodes what it holds.
 export function bufferSink() {
@@ -647,14 +661,17 @@ export function createHost(profile, opts = {}) {
   // A grant is taken by the operation it was pushed for, so an operation that finds
   // none refuses rather than inherit a previous call's.
   const takeGrant = () => { const g = host.grant; host.grant = null; host.grantFirst = null; return g; };
+  // A missing grant (null) refuses every path.
+  const confineUnder = (grant, path, entry) => grant === null
+    ? `${path} is outside the granted authority: no grant was given`
+    : confine(host.vfs, path, grant, entry);
   // The refusal text for `path` under `grant`, or null: the grant, then each active
   // bound of the operation's mode, innermost first (mdk_confine_bounds).
   const refusalUnder = (grant, path, entry, write) => {
-    if (grant === null) return `${path} is outside the granted authority: no grant was given`;
-    let refused = confine(host.vfs, path, grant, entry);
+    let refused = confineUnder(grant, path, entry);
     for (let i = host.bounds.length - 1; refused === null && i >= 0; i--) {
       const b = host.bounds[i];
-      if (b.active && b.write === write) refused = confine(host.vfs, path, b.grant, entry);
+      if (b.active && b.write === write) refused = confineUnder(b.grant, path, entry);
     }
     return refused;
   };
@@ -729,11 +746,12 @@ export function createHost(profile, opts = {}) {
     // A declared bound (mdk_with_file_bound): `keep` 1 always records a frame, which
     // exit pops; `keep` 0 (a tail position) records one only when it restricts, and
     // the guest calls exit only when this returns 1.  The whole domain, or an equal
-    // bound of the same mode already active, adds no restriction.
+    // bound of the same mode already active, adds no restriction.  A bound entered
+    // with no grant pushed records one that refuses every path of its mode.
     mdk_file_bound_enter: (write, keep) => {
-      const grant = takeGrant() || [];
-      const active = grant.length > 0
-        && !host.bounds.some((b) => b.active && b.write === write && sameGrant(b.grant, grant));
+      const grant = takeGrant();
+      const active = grant === null || (grant.length > 0
+        && !host.bounds.some((b) => b.active && b.write === write && sameGrant(b.grant, grant)));
       if (active || keep) host.bounds.push({ write, grant, active });
       return active ? 1 : 0;
     },
@@ -752,13 +770,15 @@ export function createHost(profile, opts = {}) {
       if (refused !== null) { refuse(refused); return 2; }
       return host.vfs.exists(p) ? 1 : 0;
     },
-    // realpath(3), or the path unchanged when it has none (mdk_canonicalize_path).
+    // realpath(3), or the path unchanged when it has none (mdk_canonicalize_path).  A
+    // resolved name that is not UTF-8 reaches the guest with each ill-formed subpart
+    // as U+FFFD, as native's mdk_str_lossy gives it.
     mdk_canonicalize_path: () => {
       const p = takePath();
       const refused = refusal(p, false, 0);
       if (refused !== null) return refuse(refused);
       let out = p;
-      try { out = host.vfs.realpath(p); } catch (e) { out = p; }
+      try { out = dec(byteStringBytes(host.vfs.realpath(byteString(enc(p))))); } catch (e) { out = p; }
       host.resultBuf = enc(out);
       return 1;
     },
