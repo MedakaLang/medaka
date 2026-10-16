@@ -170,6 +170,7 @@
 --            GC-managed under Boehm for free (aligned pointer, low bit 0).
 
 import frontend.ast.{
+  hostRows,
   isWildPat,
   Lit(..),
   Pat(..),
@@ -841,7 +842,7 @@ makeEmitInput : List ((String, String), Bool) ->
   List (String, String, String) ->
   String ->
   List (String, List String) ->
-  List (String, (String, (List String, String))) ->
+  List (String, (List (String, String), (List String, String))) ->
   EmitInput
 makeEmitInput returnsSelf selfFnParams methodIfaces ctorFieldTypes externArities mainIsUnit mainIsFloat emitHalf preludeBinds preludeImpls srcName recordFieldOrders ffiExternTypes = EmitInputData {
   returnsSelf = returnsSelf,
@@ -849,7 +850,7 @@ makeEmitInput returnsSelf selfFnParams methodIfaces ctorFieldTypes externArities
   methodIfaces = map bareIfaceArityRow methodIfaces,
   ctorFieldIndex = omFromPairs (reverseL ctorFieldTypes) omEmpty,
   externArityIndex = omFromPairs (reverseL externArities) omEmpty,
-  ffiExternIndex = omFromPairs (reverseL ffiExternTypes) omEmpty,
+  ffiExternIndex = omFromPairs (reverseL (hostRows "c" ffiExternTypes)) omEmpty,
   mainIsUnit = mainIsUnit,
   mainIsFloat = mainIsFloat,
   emitHalf = emitHalf,

@@ -1,0 +1,22 @@
+-- `js` bindings called directly, as values, and in tail position.
+extern jsUpper : String -> <FFI "js"> String
+  bind js "jsUpper"
+
+extern jsAddInts : Int -> Int -> <FFI "js"> Int
+  bind js "jsAddInts"
+
+shout : String -> <FFI "js"> String
+shout s = jsUpper s
+
+sumTail : Int -> Int -> <FFI "js"> Int
+sumTail a b = jsAddInts a b
+
+main =
+  let _ = println (jsUpper "hello")
+  let _ = println (shout "")
+  let _ = println (shout "héllo wörld ✓ 𝄞")
+  let _ = println (map (f => f "value") [jsUpper])
+  let _ = println (jsAddInts 4611686018427387903 0)
+  let _ = println (jsAddInts (-4611686018427387904) 0)
+  let _ = println (sumTail 20 22)
+  println (map (f => f 41) [jsAddInts 1])

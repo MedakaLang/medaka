@@ -43944,14 +43944,14 @@ ffiTyHeadNameWith aliases ty = match expandAliasHeadTyWith aliases ty
 -- tool's intentionally untyped emitter stage.
 export
 checkedFfiExternTypeNames : List Decl ->
-  List (String, (String, (List String, String)))
+  List (String, (List (String, String), (List String, String)))
 checkedFfiExternTypeNames decls =
   let denv = dataEnvFromDeclsGo 0 decls emptyDataEnv
   ffiExternTypeRowsWith (aliasOwnAt 0 denv.deAliases) decls
 
 export
 checkedFfiExternTypeNamesModules : List (String, List Decl) ->
-  List (String, (String, (List String, String)))
+  List (String, (List (String, String), (List String, String)))
 checkedFfiExternTypeNamesModules modules =
   flatMap
     (checkedFfiExternTypeNamesModule driverState.value.declEnvsRef.value)
@@ -43959,7 +43959,7 @@ checkedFfiExternTypeNamesModules modules =
 
 checkedFfiExternTypeNamesModule : DeclEnvs ->
   (String, List Decl) ->
-  List (String, (String, (List String, String)))
+  List (String, (List (String, String), (List String, String)))
 checkedFfiExternTypeNamesModule envs (mid, decls) =
   let cur = declEnvsOrdOf mid envs
   let aliases =
@@ -43979,7 +43979,7 @@ aliasOwnAt cur ((key, ad) :: rest)
 
 ffiExternTypeRowsWith : List (TabKey, (List String, Ty)) ->
   List Decl ->
-  List (String, (String, (List String, String)))
+  List (String, (List (String, String), (List String, String)))
 ffiExternTypeRowsWith _ [] = []
 ffiExternTypeRowsWith aliases ((DExtern d) :: rest) =
   externRowCons

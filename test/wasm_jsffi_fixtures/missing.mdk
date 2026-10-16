@@ -1,0 +1,7 @@
+-- A binding the host was not given fails when it is called, not before.
+extern jsMissing : String -> <FFI "js"> String
+  bind js "jsMissing"
+
+main =
+  let _ = println "before"
+  println (jsMissing "x")

@@ -7,9 +7,10 @@
 #
 # The binding refusal for a c-only extern (`T-TARGET-NO-BINDING`: saturated call,
 # value-position reference, bare reference) is pinned by test/target_fixtures_test.mdk
-# (`wall_*` rows).  The emitter's own FFI arms (`ffiWallW`,
-# compiler/backend/wasm_emit.mdk) are reached by a `js`-bound extern, or by a
-# child started without a profile.
+# (`wall_*` rows).  The emitter's own FFI arms (`emitFfiAppW`/`emitFfiEtaW`,
+# compiler/backend/wasm_emit.mdk) lower a `js`-bound extern to a `jsffi` import
+# (test/wasm_jsffi_test.mdk); a c-only extern reaches them only in a child
+# started without a profile, where it is a gap naming the missing `js` binding.
 #
 # No real C linkage needed: `build --target wasm` must refuse BEFORE attempting to
 # emit/validate/link anything, so the wall fixtures never reach Node.  The

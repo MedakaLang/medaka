@@ -538,9 +538,9 @@ checkUndeterminedRetEffVarsDecl : Decl -> Unit
 checkWideLiterals : List (Mono, String, Int, Int, Bool, Option Loc) -> Unit
 checkWrittenElementCap : List EffAtomTy -> Unit
 checkedAxis : List (String, Param) -> (String, EffParamTy) -> (String, Param)
-checkedFfiExternTypeNames : List Decl -> List (String, (String, (List String, String)))
-checkedFfiExternTypeNamesModule : DeclEnvs -> (String, List Decl) -> List (String, (String, (List String, String)))
-checkedFfiExternTypeNamesModules : List (String, List Decl) -> List (String, (String, (List String, String)))
+checkedFfiExternTypeNames : List Decl -> List (String, (List (String, String), (List String, String)))
+checkedFfiExternTypeNamesModule : DeclEnvs -> (String, List Decl) -> List (String, (List (String, String), (List String, String)))
+checkedFfiExternTypeNamesModules : List (String, List Decl) -> List (String, (List (String, String), (List String, String)))
 checkedInto : TcEnv -> Expr -> Mono -> Mono -> Mono
 clampPrefix : List CSlot -> Option CDeclaredPrefix -> CDeclaredPrefix
 classEnvDeclFact : Decl -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin)
@@ -1107,7 +1107,7 @@ ffiCrossableConName : String -> Bool
 ffiCrossableTy : Ty -> Bool
 ffiDeclaredRow : Ty -> Option (List EffAtomTy)
 ffiExpandTails : List (String, Ty) -> List String -> (List EffAtomTy, List String)
-ffiExternTypeRowsWith : List (TabKey, (List String, Ty)) -> List Decl -> List (String, (String, (List String, String)))
+ffiExternTypeRowsWith : List (TabKey, (List String, Ty)) -> List Decl -> List (String, (List (String, String), (List String, String)))
 ffiInstAtom : List (String, Ty) -> EffAtomTy -> List EffAtomTy
 ffiInstRow : List (String, Int) -> List (String, Ty) -> List EffAtomTy -> List EffAtomTy
 ffiIsBuiltinExternName : String -> Bool
