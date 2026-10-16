@@ -24,7 +24,7 @@ Tree: worktree `/root/medaka/.claude/worktrees/agent-ac37943b3d2016cf3` at `48e3
 
 ### Flagged as surprising (measured, not judged)
 
-- `support/ordmap.mdk`'s header says the `om*` helpers "are kept for the existing call sites in types/typecheck.mdk, backend/llvm_emit.mdk, and support/util.mdk"; the module has 35 importers. `compiler/HELPER-CENSUS.md` reports OrdMap -> stdlib `Map` as shipped; `OrdMap` survives as an alias with that fan-in.
+- `support/ordmap.mdk`'s header says the `om*` helpers "are kept for the existing call sites in types/typecheck.mdk, backend/llvm_emit.mdk, and support/util.mdk"; the module has 35 importers. `archive/design/HELPER-CENSUS.md` reports OrdMap -> stdlib `Map` as shipped; `OrdMap` survives as an alias with that fan-in.
 - `backend.private_mangle` (a backend module) is imported by the typechecker, both ir modules and the evaluator: it is the single node behind 4 of the 7 layering violations.
 - `driver` and `tools` import each other heavily in both directions (driver -> tools 21 edges, tools -> driver 25 edges).
 - `types.typecheck` (a non-test module) contains `observeMethodSchemeRowsForTest`, 134 lines, its 5th-largest declaration. 14 `test`/`prop` blocks live in non-test modules (`tools.gate_cost` 8, `tools.gate_registry` 4, `frontend.resolve` 2).
@@ -494,7 +494,7 @@ Defined in: support.util. Total call sites (non-comment, excluding definition li
 | backend.private_mangle | 1 |
 | backend.emit_support | 1 |
 
-### D5 `compiler/HELPER-CENSUS.md` headline (240 lines, last touched 2026-09-05)
+### D5 `archive/design/HELPER-CENSUS.md` headline (240 lines, last touched 2026-09-05)
 
 Its summary table: ~38 generic-helper clusters, 23 duplicated across 2+ files, 6 whose canonical already lives in `support/` but still has local copies, 5 drifted, 28 files defining at least one (from 706 type-filtered candidates).
 Status line: PARTIAL; steps 1-2 (OrdMap -> stdlib `Map`, util `reverseL`/`zipL`/`joinWith` -> stdlib) shipped, the section 6 file-by-file dedup plan shows no completion markers, and the headline quadratic `joinWith` finding was re-checked fixed on 2026-07-13.

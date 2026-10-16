@@ -195,7 +195,7 @@ What's in the standard library, what's planned, module-by-module status.
 
 ### compiler internals — stay in compiler/, indexed here for findability
 
-22 docs live next to the code they describe (compiler/*.md). Listed here so they're still one search away.
+21 docs live next to the code they describe (compiler/*.md). Listed here so they're still one search away.
 
 | Doc | What it is | Status |
 |-----|------------|--------|
@@ -212,7 +212,6 @@ What's in the standard library, what's planned, module-by-module status.
 | [`EMITTER-TARGET-ARCHITECTURE.md`](../compiler/EMITTER-TARGET-ARCHITECTURE.md) | Emitter Target Architecture - one semantic plan, two physical lowerings | REVISED 2026-09-03 |
 | [`ERROR-QUALITY.md`](../compiler/ERROR-QUALITY.md) | ERROR-QUALITY.md | IMPLEMENTED |
 | [`FFI-ABI.md`](../compiler/FFI-ABI.md) | FFI ABI contract | DECISION, and now LOWERED |
-| [`HELPER-CENSUS.md`](../compiler/HELPER-CENSUS.md) | compiler/ generic-helper census | PARTIAL |
 | [`PERF-BASELINE.md`](../compiler/PERF-BASELINE.md) | PERF-BASELINE.md — absolute CLI-verb latency baseline | the `## Table` section is GENERATED |
 | [`PERF-RESULTS.md`](../compiler/PERF-RESULTS.md) | PERF-RESULTS.md — native-backend performance log | PARTIAL |
 | [`README.md`](../compiler/README.md) | compiler — the Medaka-in-Medaka compiler | IMPLEMENTED / SUPERSEDED-FRAMING |
@@ -245,6 +244,7 @@ IMPLEMENTED or SUPERSEDED work, kept for provenance. Links inside these docs are
 | [`EAGER-INIT-DESIGN.md`](../archive/design/EAGER-INIT-DESIGN.md) | EAGER-INIT-DESIGN — closing the shared eager-global init-order hole (#553, S0) | COMPLETE |
 | [`F1B-MODULE-IDENTITY-DESIGN.md`](../archive/design/F1B-MODULE-IDENTITY-DESIGN.md) | F1b Loader Module-Identity — Decision-Ready Design | IMPLEMENTED |
 | [`FMT-COMMENT-INTERLEAVING-DESIGN.md`](../archive/design/FMT-COMMENT-INTERLEAVING-DESIGN.md) | FMT comment placement — design | the design below replaced the 2026-07-01 line-index splice |
+| [`HELPER-CENSUS.md`](../archive/design/HELPER-CENSUS.md) | compiler/ generic-helper census | PARTIAL |
 | [`INDEX-16-PLAN.md`](../archive/design/INDEX-16-PLAN.md) | INDEX-16-PLAN.md — concrete staged implementation plan for the Index arc, Phase #16 | IMPLEMENTED |
 | [`INDEX-DESIGN.md`](../archive/design/INDEX-DESIGN.md) | INDEX-DESIGN.md — Indexing (`a[i]` / `a[i] := v`) design pass | IMPLEMENTED |
 | [`LAYOUT-BRACKETS-DESIGN.md`](../archive/design/LAYOUT-BRACKETS-DESIGN.md) | LAYOUT-BRACKETS-DESIGN — block expressions inside brackets | IMPLEMENTED |

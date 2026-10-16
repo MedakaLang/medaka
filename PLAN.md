@@ -1794,7 +1794,7 @@ routes land. Detail lives in the owning doc cited. **(D7/D8/foldMap reproduce-ve
 - **Helper duplication (code quality).** ~38 generic-helper clusters duplicated across
   compiler stages; `joinWith`/`joinNl` in `typecheck.mdk`/`eval.mdk` are O(n²) local copies
   despite the O(n) canonical in `support/util.mdk`. Consolidate into `support/`. Owner:
-  [`compiler/HELPER-CENSUS.md`](./compiler/HELPER-CENSUS.md).
+  [`archive/design/HELPER-CENSUS.md`](./archive/design/HELPER-CENSUS.md).
 - **Deferred design seams (not pending work, tracked for provenance):** the `set_ref` write
   barrier (needed only if Boehm GC is ever replaced — [`compiler/RUNTIME-DESIGN.md`](./compiler/RUNTIME-DESIGN.md) §7);
   TRMC Phase 2 F1(b)/F2(b) (no corpus target; emit seams pre-parameterized — the Phase 3 b′
