@@ -306,6 +306,46 @@ test "target_fixtures: a reached extern needs a binding for the target's host" =
       ["--json", "--target", "wasm"]
       "ffi_imported/main.mdk",
     targetCase
+      "wasm_refuses_ffi_member_alias"
+      "check"
+      ["--target", "wasm"]
+      "ffi_imported/member_alias.mdk",
+    targetCase
+      "native_refuses_ffi_member_alias_js"
+      "check"
+      ["--target", "native"]
+      "ffi_imported/member_alias_js.mdk",
+    targetCase
+      "run_refuses_ffi_member_alias_value"
+      "run"
+      []
+      "ffi_imported/member_alias_value.mdk",
+    targetCase
+      "wasm_refuses_ffi_reexport_alias"
+      "check"
+      ["--target", "wasm"]
+      "ffi_imported/reexport_alias.mdk",
+    targetCase
+      "wasm_refuses_ffi_wild"
+      "check"
+      ["--target", "wasm"]
+      "ffi_imported/wild.mdk",
+    targetCase
+      "native_accepts_ffi_shadow_param"
+      "check"
+      ["--target", "native"]
+      "ffi_shadow_param.mdk",
+    targetCase
+      "node_accepts_ffi_shadow_local"
+      "check"
+      ["--target", "wasmgc/node"]
+      "ffi_shadow_local.mdk",
+    targetCase
+      "node_accepts_ffi_same_name"
+      "check"
+      ["--target", "wasmgc/node"]
+      "ffi_same_name/main.mdk",
+    targetCase
       "node_refuses_ffi_impl"
       "check"
       ["--target", "wasmgc/node"]

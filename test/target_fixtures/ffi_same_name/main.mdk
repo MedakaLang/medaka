@@ -1,0 +1,6 @@
+-- `useHelper` reaches `fun`'s function `helper`, not `decl`'s extern of the
+-- same name, so the extern is not reached.
+import decl.{twice}
+import fun.{useHelper}
+
+main = println (twice (useHelper 1))

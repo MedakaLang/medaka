@@ -1,0 +1,7 @@
+exit=0
+--- stdout
+jsLog : Int -> <FFI "js"> Int
+apply : (Int -> Int) -> Int
+main : <Stdout> Unit
+-- <fixtures>/ffi_shadow_param.mdk: ok (3 declaration(s) checked, 0 errors)
+--- stderr

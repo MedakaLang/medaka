@@ -42,6 +42,7 @@ import driver.diagnostics.{
 }
 import support.util.{lookupAssoc, joinWith, dedup, contains, anyList}
 import string.{trim}
+import list.{lookup}
 
 export
 targetCapabilityCode : String
@@ -138,9 +139,10 @@ capabilityRefusal profile analysis sch =
 
 -- ── the binding rule ────────────────────────────────────────────────────────
 -- Every user extern of every module that the program reaches (`dce`'s reach,
--- over the whole elaborated program) and that has no binding for the
--- profile's host.  A catalog extern declared again runs the built-in, so it is
--- not judged here.  A program declaring no user extern skips the reach.
+-- over the whole elaborated program, each reference resolved to the
+-- declaration it denotes) and that has no binding for the profile's host.  A
+-- catalog extern declared again runs the built-in, so it is not judged here.
+-- A program declaring no user extern skips the reach.
 bindingRefusals : TargetProfile ->
   List (String, String) ->
   EntryAnalysis ->
@@ -151,7 +153,7 @@ bindingRefusals profile paths analysis =
     flatMap
       ((mid, decls) =>
         map
-          (ed => (lookupAssoc mid paths, ed))
+          (ed => (mid, ed))
           (filter
             (ed => not (contains ed.edName analysis.eaCatalogExterns))
             (externDecls decls)))
@@ -159,8 +161,8 @@ bindingRefusals profile paths analysis =
   match userExterns
     [] => []
     _ =>
-      let chains = reachedExternChains (coreE ++ flatMap snd modsE)
-      filterMap (unboundReached profile chains) userExterns
+      let chains = reachedExternChains coreE modsE
+      filterMap (unboundReached profile paths chains) userExterns
 
 externDecls : List Decl -> List ExternDecl
 externDecls [] = []
@@ -168,19 +170,24 @@ externDecls ((DAttrib _ d) :: rest) = externDecls (d :: rest)
 externDecls ((DExtern ed) :: rest) = ed :: externDecls rest
 externDecls (_ :: rest) = externDecls rest
 
--- The refusal of a declaration (in the file `path` names) that is reached and
--- not bound for the profile's host.
+-- The refusal of a declaration of the module `mid` that is reached and not
+-- bound for the profile's host, located in the module's file.
 unboundReached : TargetProfile ->
-  List (String, List String) ->
-  (Option String, ExternDecl) ->
+  List (String, String) ->
+  List ((String, String), List String) ->
+  (String, ExternDecl) ->
   Option Diag
-unboundReached profile chains (path, ed) = match lookupAssoc ed.edName chains
-  None => None
-  Some chain =>
-    let bound = match profileBindingHost profile
-      Some h => anyList (b => b.ebHost == h) (externBindings ed)
-      None => False
-    if bound then None else Some (noBindingDiag profile path (ed, chain))
+unboundReached profile paths chains (mid, ed) =
+  match lookup (mid, ed.edName) chains
+    None => None
+    Some chain =>
+      let bound = match profileBindingHost profile
+        Some h => anyList (b => b.ebHost == h) (externBindings ed)
+        None => False
+      if bound then
+        None
+      else
+        Some (noBindingDiag profile (lookupAssoc mid paths) (ed, chain))
 
 noBindingDiag : TargetProfile ->
   Option String ->

@@ -1,0 +1,8 @@
+exit=0
+--- stdout
+cInc : Int -> <FFI "c"> Int
+twice : Int -> Int
+apply : (Int -> Int) -> Int
+main : <Stdout> Unit
+-- <fixtures>/ffi_shadow_local.mdk: ok (4 declaration(s) checked, 0 errors)
+--- stderr

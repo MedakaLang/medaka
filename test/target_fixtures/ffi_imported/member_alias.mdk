@@ -1,0 +1,5 @@
+-- The extern reached under a member alias: `plus` denotes `cAdd`.
+import cbind.{cAdd as plus}
+
+main : <Stdout, FFI "c"> Unit
+main = println (plus 20 22)
