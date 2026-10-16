@@ -163,6 +163,15 @@ export class CapabilityError extends Error {
     this.capability = capability;
   }
 }
+// A `js` binding failed: it threw, or returned a value of the wrong type
+// (docs/spec/WASM-SEMANTICS.md section 3.1).  `binding` is the JS name.
+export class JsBindingError extends Error {
+  constructor(binding, message) {
+    super(message);
+    this.name = 'JsBindingError';
+    this.binding = binding;
+  }
+}
 // A module that exports `mdk_main` without the `mdk_entry_split` marker was emitted
 // with `main` inside its start function: instantiating it runs the program, and
 // calling `mdk_main` would run it again.  It is refused before instantiation.
@@ -946,8 +955,146 @@ export function createHost(profile, opts = {}) {
       if (installed.has(k)) { env[k] = real[k]; continue; }
       env[k] = () => { throw host.withheldError(slice, k); };
     }
-  host.imports = { env };
+  host.bindings = opts.bindings || {};
+  host.imports = { env, jsffi: jsffiImports(host, host.bindings) };
   return host;
+}
+
+// ── jsffi: the `js` binding slice (docs/spec/WASM-SEMANTICS.md section 3.1) ──
+// A module imports each reached `js` binding as `jsffi` / `<jsName>:<P1>,...,<Pn>-><R>`,
+// so the signature is in the field name and the host needs no side table.  Arguments and
+// results of `String` and `Array Int` cross over host.pathBuf / host.resultBuf.  The
+// slice owns no catalog key, so it is in no SLICES row and the profile parity tables
+// do not model it; `FFI` is granted on every `wasmgc/*` profile.
+function parseJsField(field) {
+  const colon = field.indexOf(':');
+  const sig = field.slice(colon + 1);
+  const arrow = sig.lastIndexOf('->');
+  const params = sig.slice(0, arrow);
+  return {
+    name: field.slice(0, colon),
+    params: params === '' ? [] : params.split(','),
+    result: sig.slice(arrow + 2),
+  };
+}
+
+function describeJsValue(v) {
+  if (typeof v === 'bigint') return `the BigInt ${v}`;
+  if (typeof v === 'string') return v.isWellFormed() ? 'a string' : 'a string with a lone surrogate';
+  if (typeof v === 'number') return `the Number ${v}`;
+  return v === null ? 'null' : `a value of type ${typeof v}`;
+}
+
+const JS_NARROW = { U8: [0, 255], U16: [0, 65535], U32: [0, 4294967295], I32: [-2147483648, 2147483647] };
+
+// The arguments one call carries: scalars from the wasm parameters, `String` and `Array`
+// contents from the path channel, in parameter order.
+function decodeJsArgs(params, wire, bytes) {
+  const args = [];
+  const arrays = [];
+  let at = 0;
+  let wi = 0;
+  for (const p of params) {
+    if (p === 'Unit') continue;
+    const w = wire[wi++];
+    if (p === 'String') {
+      args.push(new TextDecoder().decode(bytes.subarray(at, at + w)));
+      at += w;
+    } else if (p === 'Array') {
+      const a = new BigInt64Array(w);
+      const dv = new DataView(bytes.buffer, bytes.byteOffset + at, w * 8);
+      for (let i = 0; i < w; i++) a[i] = dv.getBigInt64(i * 8, true);
+      at += w * 8;
+      args.push(a);
+      arrays.push(a);
+    } else if (p === 'U64') args.push(BigInt.asUintN(64, w));
+    else if (p === 'Bool') args.push(w !== 0);
+    else if (p === 'Char') args.push(String.fromCodePoint(w));
+    else if (p === 'U32') args.push(w >>> 0);
+    else args.push(w);
+  }
+  return { args, arrays };
+}
+
+// The result's wasm value (undefined for `String` and `Unit`), and the bytes it puts on
+// the result channel after the copy-back words.
+function encodeJsResult(name, result, v) {
+  const bad = () => new JsBindingError(name, `js binding \`${name}\` returned ${describeJsValue(v)}, not ${result}`);
+  const isInt = (lo, hi) => typeof v === 'bigint' && v >= lo && v <= hi;
+  switch (result) {
+    case 'Unit': return { wire: undefined, bytes: [] };
+    case 'String':
+      if (typeof v !== 'string' || !v.isWellFormed()) throw bad();
+      return { wire: undefined, bytes: [new TextEncoder().encode(v)] };
+    case 'Int': case 'I64':
+      if (!isInt(-(2n ** 63n), 2n ** 63n - 1n)) throw bad();
+      return { wire: v, bytes: [] };
+    case 'U64':
+      if (!isInt(0n, 2n ** 64n - 1n)) throw bad();
+      return { wire: BigInt.asIntN(64, v), bytes: [] };
+    case 'Float':
+      if (typeof v !== 'number') throw bad();
+      return { wire: v, bytes: [] };
+    case 'Bool':
+      if (typeof v !== 'boolean') throw bad();
+      return { wire: v ? 1 : 0, bytes: [] };
+    case 'Char':
+      if (typeof v !== 'string' || [...v].length !== 1) throw bad();
+      return { wire: v.codePointAt(0), bytes: [] };
+    default: {
+      const [lo, hi] = JS_NARROW[result];
+      if (typeof v !== 'number' || !Number.isInteger(v) || v < lo || v > hi) throw bad();
+      return { wire: v, bytes: [] };
+    }
+  }
+}
+
+function concatJsBytes(chunks) {
+  const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+  let at = 0;
+  for (const c of chunks) { out.set(c, at); at += c.length; }
+  return out;
+}
+
+// The import callable for one `jsffi` field.  `bindings` maps JS names to functions;
+// a name it lacks gives a callable that fails at the call, never at instantiation.
+function jsffiCallable(host, bindings, field) {
+  const { name, params, result } = parseJsField(field);
+  const fn = Object.prototype.hasOwnProperty.call(bindings, name) ? bindings[name] : undefined;
+  if (typeof fn !== 'function')
+    return () => { throw new CapabilityError('FFI', `js binding \`${name}\` is not supplied by this host`); };
+  return (...wire) => {
+    const { args, arrays } = decodeJsArgs(params, wire, Uint8Array.from(host.pathBuf));
+    host.pathBuf = [];
+    let v;
+    try {
+      v = fn(...args);
+    } catch (e) {
+      throw new JsBindingError(name, `js binding \`${name}\` threw: ${e && e.message !== undefined ? e.message : String(e)}`);
+    }
+    const r = encodeJsResult(name, result, v);
+    const back = arrays.map((a) => {
+      const b = new Uint8Array(a.length * 8);
+      const dv = new DataView(b.buffer);
+      for (let i = 0; i < a.length; i++) dv.setBigInt64(i * 8, a[i], true);
+      return b;
+    });
+    host.resultBuf = concatJsBytes([...back, ...r.bytes]);
+    return r.wire;
+  };
+}
+
+// An import object whose every field is built on first read from the field name, so the
+// module's own import list is not needed and a binding the module never imports is ignored.
+function jsffiImports(host, bindings) {
+  const made = new Map();
+  return new Proxy({}, {
+    get(_, field) {
+      if (typeof field !== 'string') return undefined;
+      if (!made.has(field)) made.set(field, jsffiCallable(host, bindings, field));
+      return made.get(field);
+    },
+  });
 }
 
 // Every `env` import key of `module` must be a key the host installs for real

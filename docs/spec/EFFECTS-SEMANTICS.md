@@ -1336,7 +1336,7 @@ order: a performed `<IO>` fits a bound that names every label of the join (and, 
 join is empty, only a bound that names `IO` itself), and a policy given to `check-policy`,
 which has no target, admits an `<IO>` entry when it allows all eleven. Because the
 typechecker already bounds `IO` by the selected profile, a profile's target check gates
-only the host labels and `FFI`. `IO` is admitted exactly when the selected profile's `IO` join is non-empty; on `wasmgc/wasi-p2`, which grants nothing, an `IO` atom is refused ("does not grant any host label"). `FFI` ([#2071](https://github.com/MedakaLang/medaka/issues/2071))
+only the host labels and `FFI`. `IO` is admitted exactly when the selected profile's `IO` join is non-empty; on `wasmgc/wasi-p2`, which grants no host label (only `FFI`), an `IO` atom is refused ("does not grant any host label"). `FFI` ([#2071](https://github.com/MedakaLang/medaka/issues/2071))
 is deliberately EXCLUDED from this join by design — `<IO>` does not subsume
 `<FFI "c*">` — because FFI crosses a trust boundary the IO alias is not meant to
 paper over; see [`CAPABILITY-PLATFORM.md`](../design/CAPABILITY-PLATFORM.md) §8

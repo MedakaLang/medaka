@@ -10,7 +10,8 @@
    (empty and non-ASCII included), `Int` at both ends of its range, a binding
    called directly, as a value and in tail position, the two `i64` results an
    `Int` cannot hold, a binding that throws, a binding the host was not given,
-   and a `String` result with a lone surrogate.
+   and a `String` result with a lone surrogate.  The last test builds the
+   two-host fixture native and for wasm and compares their output.
 
    Runs under `medaka test --native`: it spawns the compiler and node. -}
 
@@ -92,4 +93,107 @@ test "jsffi: each fixture under the stub host prints what WASM-SEMANTICS section
         "runtime error: js binding `jsLone` returned a string with a lone surrogate, not String\n",
       ),
     ])
+    (msg => fail msg)
+
+-- # The two-host cell: one declaration set, `bind c` and `bind js`.
+--
+-- test/two_host_fixtures/two_host.mdk built native (stub.c linked in) and built
+-- for wasmgc/node (run.js with bindings.mjs) must print the same bytes, and
+-- those bytes are the ones the fixture's header derives from the C and JS bodies.
+
+twoHostDir : <IO> String
+twoHostDir = "\{medakaRoot}/test/two_host_fixtures"
+
+expectTwoHost : String
+expectTwoHost =
+  "42\n4611686018427387903\n-4611686018427387904\n6.0\nTrue\nTrue\nTrue\nTrue\nTrue\nFalse\nTrue\nb\n𝄞\n[!]\n[héllo ✓ 𝄞!]\n0\n15\n6\n[|2, 4, 6|]\n9\n5.5\n"
+
+-- A spawn that must exit 0: its stdout, else the failure.
+mustRun : String -> Result String (Int, String, String) -> Result String String
+mustRun what (Err e) = Err "\{what}: could not spawn: \{e}"
+mustRun what (Ok (code, out, err)) =
+  if code /= 0 then
+    Err "\{what}: exit=\{intToString code} \{debug (out ++ err)}"
+  else
+    Ok out
+
+-- The native build: the runtime built without LTO (`ld -r` cannot merge
+-- ThinLTO bitcode) merged with stub.c, linked in through MEDAKA_RT_OBJ.
+nativeTwoHost : String -> <Exec, IO> Result String String
+nativeTwoHost scratch = do
+  _ <- mustRun
+    "emit-rt-obj"
+    (boundedVerbSeconds 600 "env" [
+      "MEDAKA_STRICT=1",
+      "MEDAKA_NO_LTO=1",
+      medakaBin,
+      "build",
+      "--emit-rt-obj",
+      "\{scratch}/rt.o",
+    ])
+  _ <- mustRun
+    "compile stub.c"
+    (boundedVerbSeconds 120 "clang" [
+      "-O2",
+      "-c",
+      "\{twoHostDir}/stub.c",
+      "-o",
+      "\{scratch}/stub.o",
+    ])
+  _ <- mustRun
+    "ld -r"
+    (boundedVerbSeconds 120 "ld" [
+      "-r",
+      "\{scratch}/rt.o",
+      "\{scratch}/stub.o",
+      "-o",
+      "\{scratch}/combined.o",
+    ])
+  _ <- mustRun
+    "build native"
+    (boundedVerbSeconds 600 "env" [
+      "MEDAKA_STRICT=1",
+      "MEDAKA_RT_OBJ=\{scratch}/combined.o",
+      medakaBin,
+      "build",
+      "\{twoHostDir}/two_host.mdk",
+      "-o",
+      "\{scratch}/two_host.bin",
+    ])
+  mustRun "run native" (boundedVerbSeconds 60 "\{scratch}/two_host.bin" [])
+
+-- The wasmgc/node build run by run.js with the bindings module.
+wasmTwoHost : String -> <Exec, IO> Result String String
+wasmTwoHost scratch = match (mustRun
+  "build wasm"
+  (boundedVerbSeconds 120 "env" [
+    "MEDAKA_STRICT=1",
+    "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
+    medakaBin,
+    "build",
+    "--target",
+    "wasm",
+    "\{twoHostDir}/two_host.mdk",
+    "-o",
+    "\{scratch}/two_host.wasm",
+  ]))
+  Err e => Err e
+  Ok _ =>
+    mustRun
+      "run wasm"
+      (boundedVerbSeconds 60 "node" [
+        "\{medakaRoot}/test/wasm/run.js",
+        "\{scratch}/two_host.wasm",
+        "\{twoHostDir}/bindings.mjs",
+      ])
+
+test "two hosts: one declaration with bind c and bind js prints the same bytes native and wasmgc/node" =
+  inFreshDirOf
+    (scratch => match (nativeTwoHost scratch, wasmTwoHost scratch)
+      (Err e, _) => fail e
+      (_, Err e) => fail e
+      (Ok native, Ok wasm) => expectAll [
+        expectEqual expectTwoHost native,
+        expectEqual native wasm,
+      ])
     (msg => fail msg)
