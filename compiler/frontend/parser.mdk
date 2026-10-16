@@ -19,6 +19,7 @@
 -- `DFunDef`/`DTypeSig`.  Multi-statement indented blocks, the remaining decl
 -- forms, and the rest of the operator ladder come in later slices.
 
+import support.stage_count.{stageBump}
 import frontend.ast.{
   noBinderId,
   intMinLiteralMsg,
@@ -5781,8 +5782,10 @@ parseWithPositionsLocated src = parseWithPositions src
 -- files are unparseable constantly mid-edit.
 export
 parseWithPositionsOpt : String -> Option (List Decl, Positions)
-parseWithPositionsOpt src = match tokenizeWithOffsetPairs src
-  (tokList, offPairList) => parseWithPositionsOptPairs src tokList offPairList
+parseWithPositionsOpt src =
+  let _ = stageBump "parse.positions"
+  match tokenizeWithOffsetPairs src
+    (tokList, offPairList) => parseWithPositionsOptPairs src tokList offPairList
 
 -- `parseWithPositionsOpt` over an ALREADY-tokenized stream: `tokList` and
 -- `offPairList` must be `tokenizeWithOffsetPairs src`.  Lets a caller that has
@@ -6671,6 +6674,7 @@ prescanWalk toks offs n i depth ls sb im h
 export
 prescanError : String -> Array Token -> Array Int -> Option ParseError
 prescanError src toks offs =
+  let _ = stageBump "parse.prescan"
   let srcLen = stringLength src
   let hits =
     prescanWalk toks offs (arrayLength toks) 0 0 True True False prescanNoHits

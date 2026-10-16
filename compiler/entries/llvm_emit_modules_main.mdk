@@ -65,6 +65,7 @@ import entries.entry_support.{
 import support.timer.{statsEnabled, emitStats}
 import support.util.{endsWith, filterList}
 import driver.main_autoprint.{autoPrintPinName}
+import support.stage_count.{stageCountInit, stageDump}
 
 -- The entry-module path is argv[2] (`<runtime> <core> <entry> [root ...]`); hand it
 -- to the emitter so a main-less program's diagnostic names the file (issue #397).
@@ -186,4 +187,10 @@ emitTail mods runtimeDecls coreD modules1 =
 -- targets) are retained whole; only unreachable DFunDefs are removed.  Order-
 -- preserving ⇒ IR stays byte-stable.  See compiler/ir/dce.mdk.
 
-main = oracleMain ()
+-- The emitter is the process `medaka build` typechecks in, so it counts its own
+-- stages; its stderr rides back through the parent's `forwardEmitterStderr`.
+main : <IO> Unit
+main =
+  let _ = stageCountInit ()
+  let _ = oracleMain ()
+  stageDump ()

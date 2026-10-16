@@ -1,0 +1,6 @@
+import list.{reverse}
+import map as M
+
+export
+betaSize : Int
+betaSize = length (reverse [1, 2]) + M.size (M.fromList [(3, 4)])

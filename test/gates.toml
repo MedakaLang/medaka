@@ -3960,3 +3960,19 @@ sources = ["compiler/*", "test/arch_boundaries_test.mdk"]
 corpus = ["test/arch_goldens"]
 toolchain = []
 link = "production"
+
+[[gate]]
+name = "stage_counts"
+area = "types"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "native"
+migration = "done"
+run = "test/stage_counts_test.mdk"
+oracles = []
+sources = ["compiler/*", "test/stage_counts_test.mdk"]
+corpus = ["test/stage_count_fixtures", "test/arch_goldens"]
+toolchain = []
+link = "production"
