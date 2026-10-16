@@ -245,7 +245,7 @@ authorityTermAsTypeMsg : List EffParamTy -> String
 authorityTermTextIn : Ref (List (Int, String)) -> Ref Int -> Authority -> String
 authorityUsesOf : Ty -> List (String, Param)
 authvarIdOf : (String, Ref Authvar) -> Int
-autoPrintWanted : Bool -> List Decl -> List (String, List Decl) -> List DrainFinding
+autoPrintWanted : Bool -> List TcDiag -> List Decl -> List (String, List Decl) -> List DrainFinding
 axisAtomBinders : EffAtomTy -> List (String, Param)
 axisNamesArgument : List (String, EffParamTy) -> Bool
 axisProblems : List (String, Param) -> String -> Param -> List String
@@ -946,6 +946,7 @@ domainIsTupleOfArity : Mono -> Int -> Bool
 domainParam : Option String -> Param
 domainParamWith : Option String -> List (String, String) -> Param
 drainStampQueue : Unit -> List DrainFinding
+driveErrs : List DrainFinding -> List (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> List TcDiag
 driveGraphK : GraphOut -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> GraphDrive
 driverState : Ref DriverState
 dropFirst : Int -> List a -> List a
@@ -1991,6 +1992,7 @@ mainBodySpan : List Decl -> Option Loc
 mainTypeIsAsync : Unit -> Bool
 mainTypeIsFloat : Unit -> Bool
 mainTypeIsUnit : Unit -> Bool
+mainUseDiags : Option Loc -> List Decl -> List TcDiag
 mangledCtorShaped : Array Char -> Int -> Int -> Bool
 mapDeclBodies : (Expr -> Expr) -> Decl -> Decl
 mapGroupClauses : ((List Pat, Expr) -> (List Pat, Expr)) -> List String -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))

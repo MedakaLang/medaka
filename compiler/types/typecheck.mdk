@@ -356,6 +356,7 @@ import types.registry.{
 }
 import frontend.desugar.{mapProg, mapChildren, mapExpr}
 import frontend.marker.{localBoundNames}
+import types.value_main.{inMainBinding, mainUseSite, mainUsedMsg}
 import frontend.resolve.{
   firstExprLoc,
   programIsCore,
@@ -54119,7 +54120,12 @@ checkModulesDiagsChainFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDec
   -- #2705: the graph-end drain for what the steps did not already drain (the entry
   -- module, and any module after the last recorded step) — see `chainGo`.
   let findings = checkGraphFinish ()
-  let wanted = autoPrintWanted valueMain coreDecls modules
+  let wanted =
+    autoPrintWanted
+      valueMain
+      (driveErrs findings finalResults)
+      coreDecls
+      modules
   attachCoherenceConflict
     (attachDrainFindings (findings ++ wanted) (reverseL finalResults))
 
@@ -54415,7 +54421,8 @@ driveGraphK sel valueMain preludeKey runtimeDecls coreDecls0 modulesIn =
   -- what excludes the prelude, replacing "walk the user `modules` list".
   -- It reads `deImpls` only, which nothing between here and the tree arm's return
   -- writes, so attaching once here serves both selections.
-  let wanted = autoPrintWanted valueMain coreDecls modules
+  let wanted =
+    autoPrintWanted valueMain (driveErrs findings perModRaw) coreDecls modules
   let perMod =
     attachCoherenceConflict (attachDrainFindings (findings ++ wanted) perModRaw)
   -- #1112 A-3: the whole-graph IE/CE `buildDeclEnvs` filled in the preamble
@@ -54504,15 +54511,17 @@ attachEntryPayload f (m :: rest) = m :: attachEntryPayload f rest
 -- Unit-shaped or `Async` main poses nothing.  The obligation is the `println`
 -- signature's own context at τ_main, `main`'s scheme as the entry module left it:
 -- the declared type under a signature, else the inferred one.  It joins the entry
--- module's errors whether or not the drive already has some.  It runs after the
--- drain, which can still default a numeric `main`, and before anything later
+-- module's errors whether or not the drive already has some, except that an
+-- ambiguity verdict is dropped when one of [reported] lies in `main`'s binding:
+-- that error already explains the undetermined type.  It runs after the drain, which can still default a numeric `main`, and before anything later
 -- reads `main`'s variables, since the verdict can ground them.
 autoPrintWanted : Bool ->
+  List TcDiag ->
   List Decl ->
   List (String, List Decl) ->
   List DrainFinding
-autoPrintWanted False _ _ = []
-autoPrintWanted True coreDecls modules =
+autoPrintWanted False _ _ _ = []
+autoPrintWanted True reported coreDecls modules =
   let decls = coreDecls ++ flatMap snd modules
   match (
     driverState.value.mainSchemeRef.value,
@@ -54534,8 +54543,26 @@ autoPrintWanted True coreDecls modules =
         let diags = captureTypeErrors (_ => judgeAutoPrintUse iface scheme loc)
         currentLoc := savedLoc
         let _ = closeScope ()
-        map (verdictFinding mid False) diags
+        let kept =
+          if anyList (d => inMainBinding entry (tcLoc d)) reported then
+            filterList (d => tcCode d /= "T-AMBIGUOUS-INSTANCE") diags
+          else
+            diags
+        map (verdictFinding mid False) (mainUseDiags loc entry ++ kept)
     _ => []
+
+-- Every error a drive has reported so far, the drain's included.
+driveErrs : List DrainFinding -> List ModDiags -> List TcDiag
+driveErrs findings perMod =
+  map (f => f.dfDiag) findings ++ flatMap modDiagErrs perMod
+
+-- Another binding's use of `main` is typed against the printing wrap's `main`
+-- where run, build and test elaborate the wrapped program, so it is rejected.
+mainUseDiags : Option Loc -> List Decl -> List TcDiag
+mainUseDiags None _ = []
+mainUseDiags (Some site) entry = match mainUseSite site entry
+  Some at => [TcDiag "T-MAIN-USED" 1 (Some at) mainUsedMsg None None]
+  None => []
 
 -- The printing use of `main` is a closed boundary, as a test body is (see
 -- `settleClosedBody`): it instantiates `main`'s scheme with its context, poses
@@ -54560,8 +54587,8 @@ judgeAutoPrintUse iface scheme loc =
   let id = optionOr 0 (omLookup "main" perRun.value.schemeDefIdsRef.value)
   let context =
     lookupSchemeObls "main" id perRun.value.schemeObligationsRef.value
-  let _ = recordSchemeCallObligations id (optionOr [] context) subst
   let _ = recordObl Predicate { iface = iface, args = [tau] } 0 PCallSlot loc
+  let _ = recordSchemeCallObligations id (optionOr [] context) subst
   let _ = exitLevel ()
   let _ = settleClosedBody (tconBuiltin "Unit") oblMark callMark dictMark
   checkCallObligationsU

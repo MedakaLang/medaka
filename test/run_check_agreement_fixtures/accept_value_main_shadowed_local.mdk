@@ -1,0 +1,19 @@
+-- A local binding named `main` (a `let`, a parameter, a match pattern, a lambda
+-- parameter) is not a use of the auto-printed top-level `main`.
+-- Hand-derived: ACCEPT on all three verbs, printing `[1, 2]`.
+main : List Int
+main = [1, 2]
+
+f : Int -> Int
+f x = let main = x + 1 in main * 2
+
+g : Int -> Int
+g main = main + 1
+
+h : Option Int -> Int
+h o = match o
+  Some main => main
+  None => 0
+
+k : Int
+k = (main => main + 3) 4
