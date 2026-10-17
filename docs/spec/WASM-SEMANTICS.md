@@ -181,7 +181,7 @@ above Core IR; these laws are the wasm peers of EMITTER-SEMANTICS §2 (V1–V6).
   slice gates (`eager_global_{string,list}_slice.mdk`) were removed by #670: slice now
   desugars to a `Slice` prelude method whose impls use `stringSlice`/`arrayGetUnsafe`, so
   the built-in `CStringSlice`/`CListSlice` Core IR nodes are unreachable — the Stage A drop
-  they gated is dead-code now (removal tracked in #700).
+  they gated is dead-code now (removal tracked in #4261).
   Stage A emits **byte-identical IR for the whole compiler** (679,516 lines, 504
   globals, no reordering), so it forges no false cycles.
 

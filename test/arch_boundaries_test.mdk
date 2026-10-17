@@ -192,10 +192,11 @@ cellRows mods =
       mods)
 
 -- Lines of `frontend.ast` that hold the word `Ref` (as `grep -nw`) outside a
--- `--` comment. Zero means the AST carries no mutable cell on any node.
+-- `--` comment. Zero means the AST carries no mutable cell on any node; -1 when
+-- the module is absent, so a rename cannot satisfy the pin vacuously.
 astRefFields : List (String, List String) -> Int
 astRefFields mods = match filter (p => fst p == "frontend.ast") mods
-  [] => 0
+  [] => -1
   (_, ls) :: _ => length (filter hasRefLine ls)
 
 hasRefLine : String -> Bool
