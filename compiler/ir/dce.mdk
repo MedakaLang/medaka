@@ -54,19 +54,41 @@ dceFilter decls = filterReachable (reachableNames decls) decls
 -- program with every top-level name scoped by its module
 -- (`types.private_mangle.scopeUnitNames`): a reference reaches the declaration
 -- it resolves to through any import form, and not a same-named declaration of
--- another module or a local binder.
+-- another module or a local binder.  `builtins`, when given, is a module every
+-- unit sees without an import (`scopeUnitNames`), and its externs are reported
+-- under its module name.
 export
-reachedExternChains : List Decl ->
+reachedExternChains : Option (String, List Decl) ->
+  List Decl ->
   List (String, List Decl) ->
   List ((String, String), List String)
-reachedExternChains core modules =
-  let (scopedCore, scopedModules) = scopeUnitNames core modules
+reachedExternChains builtins core modules =
+  map
+    ((key, route) => (key, map snd route))
+    (reachedExternRoutes builtins core modules)
+
+-- The same chains with each name's module, `""` for a name no module of the
+-- program declares (a prelude binding).
+export
+reachedExternRoutes : Option (String, List Decl) ->
+  List Decl ->
+  List (String, List Decl) ->
+  List ((String, String), List (String, String))
+reachedExternRoutes builtins core modules =
+  let units = match builtins
+    Some b => b :: modules
+    None => modules
+  let (scopedCore, scopedModules) = scopeUnitNames builtins core modules
   let reach = reachableNames (scopedCore ++ flatMap snd scopedModules)
   let pairs =
     flatMap
       (((mid, ds), (_, scoped)) => map (p => (mid, p)) (zip ds scoped))
-      (zip modules scopedModules)
-  let declared = fromList (flatMap ((_, (d, s)) => scopedNames d s) pairs)
+      (zip units scopedModules)
+  let declared =
+    fromList
+      (flatMap
+        ((mid, (d, s)) => map ((sc, n) => (sc, (mid, n))) (scopedNames d s))
+        pairs)
   filterMap (externChain reach declared) pairs
 
 -- Each top-level name of a scoped declaration, with the name its source
@@ -80,16 +102,18 @@ scopedNames (DLetGroup _ bs) (DLetGroup _ scoped) =
 scopedNames _ _ = []
 
 externChain : HashMap String String ->
-  HashMap String String ->
+  HashMap String (String, String) ->
   (String, (Decl, Decl)) ->
-  Option ((String, String), List String)
+  Option ((String, String), List (String, String))
 externChain reach declared (mid, (DAttrib _ d, DAttrib _ s)) =
   externChain reach declared (mid, (d, s))
 externChain reach declared (mid, (DExtern ed, DExtern scoped)) =
   if has scoped.edName reach then
     Some (
       (mid, ed.edName),
-      map (n => findWithDefault n n declared) (chainTo reach scoped.edName []),
+      map
+        (n => findWithDefault ("", n) n declared)
+        (chainTo reach scoped.edName []),
     )
   else
     None

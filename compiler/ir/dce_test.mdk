@@ -243,7 +243,7 @@ test "reached externs: each with the chain from its root, and none reached only 
       (("main", "valueOnly"), ["main", "table", "valueOnly"]),
       (("main", "viaImpl"), ["viaImpl"]),
     ]
-    (reachedExternChains [] [("main", main)])
+    (reachedExternChains None [] [("main", main)])
 
 test "reached externs: a reference reaches the declaration it resolves to" =
   let lib = [
@@ -280,4 +280,8 @@ test "reached externs: a reference reaches the declaration it resolves to" =
       (("lib", "aliased"), ["main", "aliased"]),
       (("lib", "qualified"), ["main", "qualified"]),
     ]
-    (reachedExternChains [] [("lib", lib), ("other", other), ("main", main)])
+    (reachedExternChains None [] [
+      ("lib", lib),
+      ("other", other),
+      ("main", main),
+    ])

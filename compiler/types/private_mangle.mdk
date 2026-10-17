@@ -177,7 +177,7 @@ mangleUnits : List Decl ->
 mangleUnits coreDecls modules =
   let allUnits = ("core", coreDecls) :: modules
   let _ = symbolInjectivityGuard (entryUnitMid allUnits) allUnits
-  renameUnits externSymbolName coreDecls modules
+  renameUnits externSymbolName [] coreDecls modules
 
 -- The same rename for the target check's reach (`ir.dce.reachedExternChains`),
 -- which must tell which declaration each reference denotes.  Every extern takes
@@ -185,23 +185,44 @@ mangleUnits coreDecls modules =
 -- reaches exactly the declaration it resolves to, and a local binder, which
 -- the rename leaves alone, reaches none.  No injectivity guard: two module ids
 -- that sanitize alike merge their names, which only widens the reach.
+-- `builtins` names the module of declarations every unit sees without an
+-- import, as it sees the prelude's, and that the prelude's own bindings shadow.
 export
-scopeUnitNames : List Decl ->
-  List (String, List Decl) ->
-  (List Decl, List (String, List Decl))
-scopeUnitNames = renameUnits (mid ed => mangledName mid ed.edName)
-
--- `externName` names an extern program-wide from its module and declaration.
-renameUnits : (String -> ExternDecl -> String) ->
+scopeUnitNames : Option (String, List Decl) ->
   List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl))
-renameUnits externName coreDecls modules =
+scopeUnitNames None coreDecls modules =
+  renameUnits scopedExternName [] coreDecls modules
+scopeUnitNames (Some (mid, decls)) coreDecls modules =
+  renameUnits
+    scopedExternName
+    (map (n => (n, mid)) (externDeclNames decls))
+    coreDecls
+    ((mid, decls) :: modules)
+
+scopedExternName : String -> ExternDecl -> String
+scopedExternName mid ed = mangledName mid ed.edName
+
+externDeclNames : List Decl -> List String
+externDeclNames decls =
+  map fst (externDeclEntries (ed => ed.edName) False decls)
+
+-- `externName` names an extern program-wide from its module and declaration.
+-- `implicit` is in scope in every unit after the prelude, each name with the
+-- module that defines it.
+renameUnits : (String -> ExternDecl -> String) ->
+  List (String, String) ->
+  List Decl ->
+  List (String, List Decl) ->
+  (List Decl, List (String, List Decl))
+renameUnits externName implicit coreDecls modules =
   let allUnits = ("core", coreDecls) :: modules
   let entryMid = entryUnitMid allUnits
   let exportsPerUnit =
     withPreludeDefs
       (dedup (unitDefNames ("", coreDecls)))
+      implicit
       (buildExportsPerUnit [] allUnits)
   let ctorExportsPerUnit = buildCtorExportsPerUnit [] allUnits
   let externExports = buildExternExports externName omEmpty allUnits
@@ -251,6 +272,7 @@ mangleUnitsEv coreDecls modules =
   let exportsPerUnit =
     withPreludeDefs
       (dedup (unitDefNames ("", coreDecls)))
+      []
       (buildExportsPerUnit [] allUnits)
   let ctorExportsPerUnit = buildCtorExportsPerUnit [] allUnits
   let externExports = buildExternExports externSymbolName omEmpty allUnits
@@ -1239,13 +1261,19 @@ importRenameEntries _ exportsPerUnit decls =
 -- error that nothing read.  Only the "core" row is widened; sibling imports stay
 -- export-scoped.  This mirrors `check`'s visibility rule; whether that rule is
 -- right (core's private helpers reachable from user code) is #2640's question, and
--- this row must keep every binding until it is answered.
+-- this row must keep every binding until it is answered.  `implicit` follows
+-- core's bindings in the row, so a core binding shadows an implicit name.
 withPreludeDefs : List String ->
+  List (String, String) ->
   List (String, List (String, String)) ->
   List (String, List (String, String))
-withPreludeDefs names entries =
+withPreludeDefs names implicit entries =
   map
-    (e => if fst e == "core" then ("core", map (n => (n, "core")) names) else e)
+    (e =>
+      if fst e == "core" then
+        ("core", map (n => (n, "core")) names ++ implicit)
+      else
+        e)
     entries
 
 -- core's bindings as implicit-prelude entries (`name → core__name`).
