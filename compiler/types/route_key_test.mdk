@@ -1,9 +1,10 @@
 -- Sibling tests for the published evidence table in `route_key.mdk`.
 --
--- A lookup that finds no entry panics, and `stdlib/test.mdk` has no verb that observes
--- a panic in-process, so the miss arms are pinned through the `Result` twins the
--- panicking readers wrap (`installedLookup`, `evidenceLookup`, `evSiteRouteResult`,
--- `evSiteLitResult`): each wrapper is one `match` that panics with the `Err` text.
+-- A lookup that finds no entry panics, and `stdlib/test.mdk` has no verb that
+-- observes a panic in-process, so the miss arms are pinned through the `Result`
+-- twins the panicking readers wrap (`installedLookup`, `evidenceLookup`,
+-- `evSiteRouteResult`, `evSiteLitResult`): each wrapper is one `match` that
+-- panics with the `Err` text.
 
 import test.{expectEqual, expectAll}
 import types.route_key.{

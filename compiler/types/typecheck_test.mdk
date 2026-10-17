@@ -5660,7 +5660,7 @@ test "a closed numeric, nested or operator goal with no instance keeps no route"
     ),
   ]
 
--- #2705 (P1-D16): every array indexed by evidence ordinals spans one graph lineage,
+-- #2705: every array indexed by evidence ordinals spans one graph lineage,
 -- so repeating an unkeyed drive in one process leaves it the size the first drive
 -- left it, however many ordinals the earlier drives minted.
 spanProgramModule : (String, List Decl)

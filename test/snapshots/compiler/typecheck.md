@@ -1,5 +1,5 @@
 # META
-source_lines=57187
+source_lines=57186
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -11770,6 +11770,11 @@ mintOpSite _ = mintSite (OpSite (Ref RNone))
 mintLitSite : Unit -> EvId
 mintLitSite _ = mintSite (LitSite (Ref None) (Ref RNone))
 
+-- [ev] if it already has a site, else a freshly minted one: a body re-marked after
+-- inference keeps the ids inference wrote through.
+mintedOr : (Unit -> EvId) -> EvId -> EvId
+mintedOr mint ev = if isUnminted ev then mint () else ev
+
 mintSite : SiteCell -> EvId
 mintSite cell =
   let ev = freshEvId ()
@@ -11791,11 +11796,12 @@ siteCellOf ev = match siteCellLookup ev
 
 -- `siteCellOf`'s answer, or the reason it has none.
 siteCellLookup : EvId -> Result String SiteCell
-siteCellLookup (EvId m n) =
+siteCellLookup ev =
+  let (EvId m n) = ev
   let g = graphRun.value
   let i = n - g.evBase
   let arr = g.siteCells.value
-  if isUnminted (EvId m n) then
+  if isUnminted ev then
     Err "site reached inference unminted"
   else if i < 0 then
     Err "site cell \{m}#\{intToString n} is from an earlier graph"
@@ -11914,9 +11920,9 @@ methodCellEntriesFrom arr i acc
           :: acc)
 
 -- Install the table the readers below this file consult: the per-goal entries the
--- drain recorded plus one entry per method occurrence and per minted site.  Called before `dictPass`
--- (which reads `EDictAt` routes) and again after it (which mints `EMethodAt`
--- nodes of its own), on both arms.
+-- drain recorded plus one entry per method occurrence and per minted site.  Called
+-- before `dictPass` (which reads `EDictAt` routes) and again after it (which mints
+-- `EMethodAt` nodes of its own), on both arms.
 publishEvidence : Unit -> Unit
 publishEvidence _ =
   installEvidence
@@ -28574,20 +28580,13 @@ rewriteArgScoped rw bound (EIf c t e) =
     (rewriteArgScoped rw bound e)
 -- An operator site is minted once: `markRecursiveOccurrences` re-marks bodies
 -- inference already wrote through these ids, so a minted id passes through.
-rewriteArgScoped rw bound (EBinOp op l r ev) = EBinOp op (rewriteArgScoped
-  rw
-  bound
-  l) (rewriteArgScoped rw bound r) (if isUnminted ev then
-  mintOpSite ()
-else
-  ev)
-rewriteArgScoped rw bound (EUnOp op x ev) = EUnOp op (rewriteArgScoped
-  rw
-  bound
-  x) (if isUnminted ev then
-  mintOpSite ()
-else
-  ev)
+rewriteArgScoped rw bound (EBinOp op l r ev) =
+  let l2 = rewriteArgScoped rw bound l
+  let r2 = rewriteArgScoped rw bound r
+  EBinOp op l2 r2 (mintedOr mintOpSite ev)
+rewriteArgScoped rw bound (EUnOp op x ev) =
+  let x2 = rewriteArgScoped rw bound x
+  EUnOp op x2 (mintedOr mintOpSite ev)
 rewriteArgScoped rw bound (EInfix op l r) =
   EInfix op (rewriteArgScoped rw bound l) (rewriteArgScoped rw bound r)
 rewriteArgScoped rw bound (EFieldAccess e0 n r) =
@@ -28641,11 +28640,11 @@ rewriteArgScoped rw bound (ESetLit n es) =
   ESetLit n (map (rewriteArgScoped rw bound) es)
 rewriteArgScoped rw bound (EAsPat x sub) =
   EAsPat x (rewriteArgScoped rw bound sub)
--- leaves (ELit / EMethodRef / EDictApp / EVarAt / EMethodAt / EDictAt / SecBare)
-rewriteArgScoped _ _ (ENumLit n ev lx) =
-  ENumLit n (if isUnminted ev then mintLitSite () else ev) lx
+-- Numeric literals carry a site id that is minted here, like operators.
+rewriteArgScoped _ _ (ENumLit n ev lx) = ENumLit n (mintedOr mintLitSite ev) lx
 rewriteArgScoped _ _ (EWideLit hi lo ev lx) =
-  EWideLit hi lo (if isUnminted ev then mintOpSite () else ev) lx
+  EWideLit hi lo (mintedOr mintOpSite ev) lx
+-- leaves (ELit / EMethodRef / EDictApp / EVarAt / EMethodAt / EDictAt / SecBare)
 rewriteArgScoped _ _ e = e
 
 rewriteArgField : ArgRw -> OrdMap String -> FieldAssign -> FieldAssign
@@ -35940,8 +35939,8 @@ rewriteBinopExpr (EBinOp op l r ev) = match evSiteRoute ev
   -- SHARED-FLOAT-RESIDUAL §3(C): an RScalar route is NOT a typeclass dispatch — it
   -- is the scalar-type tag typecheck stamped on a monomorphic binop
   -- ("Float" on arithmetic, "Int" on comparison). Lowering does not read the
-  -- EBinOp's site id, so we carry the scalar
-  -- type in a NODE by wrapping the binop in `EAnnot … (TyCon tag)`.  Eval ignores the
+  -- EBinOp's site id, so we carry the scalar type in a NODE by wrapping the binop
+  -- in `EAnnot … (TyCon tag)`.  Eval ignores the
   -- annotation (`eval (EAnnot e _) = eval e`) and evaluates the binop dynamically
   -- (Float-correct); lowering reads the annotation to stamp CBinPrim's scalar tag so
   -- the native emitter picks that type's primitive without reading the operands'
@@ -59011,12 +59010,14 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "mintOpSite" (PWild) (EApp (EVar "mintSite") (EApp (EVar "OpSite") (EApp (EVar "Ref") (EVar "RNone")))))
 (DTypeSig false "mintLitSite" (TyFun (TyCon "Unit") (TyCon "EvId")))
 (DFunDef false "mintLitSite" (PWild) (EApp (EVar "mintSite") (EApp (EApp (EVar "LitSite") (EApp (EVar "Ref") (EVar "None"))) (EApp (EVar "Ref") (EVar "RNone")))))
+(DTypeSig false "mintedOr" (TyFun (TyFun (TyCon "Unit") (TyCon "EvId")) (TyFun (TyCon "EvId") (TyCon "EvId"))))
+(DFunDef false "mintedOr" ((PVar "mint") (PVar "ev")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "mint") (ELit LUnit)) (EVar "ev")))
 (DTypeSig false "mintSite" (TyFun (TyCon "SiteCell") (TyCon "EvId")))
 (DFunDef false "mintSite" ((PVar "cell")) (EBlock (DoLet false false (PVar "ev") (EApp (EVar "freshEvId") (ELit LUnit))) (DoLet false false (PVar "g") (EFieldAccess (EVar "graphRun") "value")) (DoLet false false (PVar "i") (EBinOp "-" (EApp (EVar "evOrdinal") (EVar "ev")) (EFieldAccess (EVar "g") "evBase"))) (DoLet false false (PVar "arr") (EApp (EApp (EVar "indexWithSlot") (EFieldAccess (EVar "g") "siteCells")) (EVar "i"))) (DoLet false false PWild (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EApp (EVar "Some") (ETuple (EVar "ev") (EVar "cell")))) (EVar "arr"))) (arm (PCon "Some" PWild) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "site cell #")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "evOrdinal") (EVar "ev"))))) (ELit (LString " minted twice"))))))) (DoExpr (EVar "ev"))))
 (DTypeSig false "siteCellOf" (TyFun (TyCon "EvId") (TyCon "SiteCell")))
 (DFunDef false "siteCellOf" ((PVar "ev")) (EMatch (EApp (EVar "siteCellLookup") (EVar "ev")) (arm (PCon "Ok" (PVar "c")) () (EVar "c")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
 (DTypeSig false "siteCellLookup" (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "SiteCell"))))
-(DFunDef false "siteCellLookup" ((PCon "EvId" (PVar "m") (PVar "n"))) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EVar "graphRun") "value")) (DoLet false false (PVar "i") (EBinOp "-" (EVar "n") (EFieldAccess (EVar "g") "evBase"))) (DoLet false false (PVar "arr") (EFieldAccess (EFieldAccess (EVar "g") "siteCells") "value")) (DoExpr (EIf (EApp (EVar "isUnminted") (EApp (EApp (EVar "EvId") (EVar "m")) (EVar "n"))) (EApp (EVar "Err") (ELit (LString "site reached inference unminted"))) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "site cell ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " is from an earlier graph")))) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "site cell ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " was never minted")))) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PTuple PWild (PVar "c"))) () (EApp (EVar "Ok") (EVar "c"))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "site cell ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " was never minted"))))))))))))
+(DFunDef false "siteCellLookup" ((PVar "ev")) (EBlock (DoLet false false (PCon "EvId" (PVar "m") (PVar "n")) (EVar "ev")) (DoLet false false (PVar "g") (EFieldAccess (EVar "graphRun") "value")) (DoLet false false (PVar "i") (EBinOp "-" (EVar "n") (EFieldAccess (EVar "g") "evBase"))) (DoLet false false (PVar "arr") (EFieldAccess (EFieldAccess (EVar "g") "siteCells") "value")) (DoExpr (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "Err") (ELit (LString "site reached inference unminted"))) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "site cell ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " is from an earlier graph")))) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "site cell ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " was never minted")))) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PTuple PWild (PVar "c"))) () (EApp (EVar "Ok") (EVar "c"))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "site cell ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " was never minted"))))))))))))
 (DTypeSig false "siteRouteCell" (TyFun (TyCon "EvId") (TyApp (TyCon "Ref") (TyCon "Route"))))
 (DFunDef false "siteRouteCell" ((PVar "ev")) (EMatch (EApp (EVar "siteCellOf") (EVar "ev")) (arm (PCon "OpSite" (PVar "r")) () (EVar "r")) (arm (PCon "LitSite" PWild (PVar "r")) () (EVar "r")) (arm (PCon "HeadSite" PWild) () (EApp (EVar "notAnOpSite") (EVar "ev")))))
 (DTypeSig false "siteFloatCell" (TyFun (TyCon "EvId") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float")))))
@@ -62288,8 +62289,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "f"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "x"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "EIf") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "c"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "t"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))))
-(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "ev"))) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "l"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "r"))) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "mintOpSite") (ELit LUnit)) (EVar "ev"))))
-(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EUnOp" (PVar "op") (PVar "x") (PVar "ev"))) (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "x"))) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "mintOpSite") (ELit LUnit)) (EVar "ev"))))
+(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "ev"))) (EBlock (DoLet false false (PVar "l2") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "l"))) (DoLet false false (PVar "r2") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "r"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l2")) (EVar "r2")) (EApp (EApp (EVar "mintedOr") (EVar "mintOpSite")) (EVar "ev"))))))
+(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EUnOp" (PVar "op") (PVar "x") (PVar "ev"))) (EBlock (DoLet false false (PVar "x2") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "x"))) (DoExpr (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "x2")) (EApp (EApp (EVar "mintedOr") (EVar "mintOpSite")) (EVar "ev"))))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EInfix" (PVar "op") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "EInfix") (EVar "op")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "l"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "r"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EFieldAccess" (PVar "e0") (PVar "n") (PVar "r"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EVar "n")) (EVar "r")))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ETuple" (PVar "es"))) (EApp (EVar "ETuple") (EApp (EApp (EVar "map") (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound"))) (EVar "es"))))
@@ -62311,8 +62312,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "EMapLit") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "rewriteArgKv") (EVar "rw")) (EVar "bound"))) (EVar "kvs"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EAsPat" (PVar "x") (PVar "sub"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "sub"))))
-(DFunDef false "rewriteArgScoped" (PWild PWild (PCon "ENumLit" (PVar "n") (PVar "ev") (PVar "lx"))) (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "mintLitSite") (ELit LUnit)) (EVar "ev"))) (EVar "lx")))
-(DFunDef false "rewriteArgScoped" (PWild PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "ev") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "mintOpSite") (ELit LUnit)) (EVar "ev"))) (EVar "lx")))
+(DFunDef false "rewriteArgScoped" (PWild PWild (PCon "ENumLit" (PVar "n") (PVar "ev") (PVar "lx"))) (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EApp (EVar "mintedOr") (EVar "mintLitSite")) (EVar "ev"))) (EVar "lx")))
+(DFunDef false "rewriteArgScoped" (PWild PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "ev") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EApp (EApp (EVar "mintedOr") (EVar "mintOpSite")) (EVar "ev"))) (EVar "lx")))
 (DFunDef false "rewriteArgScoped" (PWild PWild (PVar "e")) (EVar "e"))
 (DTypeSig false "rewriteArgField" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign")))))
 (DFunDef false "rewriteArgField" ((PVar "rw") (PVar "bound") (PCon "FieldAssign" (PVar "n") (PVar "e"))) (EApp (EApp (EVar "FieldAssign") (EVar "n")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))))
@@ -68479,12 +68480,14 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "mintOpSite" (PWild) (EApp (EVar "mintSite") (EApp (EVar "OpSite") (EApp (EVar "Ref") (EVar "RNone")))))
 (DTypeSig false "mintLitSite" (TyFun (TyCon "Unit") (TyCon "EvId")))
 (DFunDef false "mintLitSite" (PWild) (EApp (EVar "mintSite") (EApp (EApp (EVar "LitSite") (EApp (EVar "Ref") (EVar "None"))) (EApp (EVar "Ref") (EVar "RNone")))))
+(DTypeSig false "mintedOr" (TyFun (TyFun (TyCon "Unit") (TyCon "EvId")) (TyFun (TyCon "EvId") (TyCon "EvId"))))
+(DFunDef false "mintedOr" ((PVar "mint") (PVar "ev")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "mint") (ELit LUnit)) (EVar "ev")))
 (DTypeSig false "mintSite" (TyFun (TyCon "SiteCell") (TyCon "EvId")))
 (DFunDef false "mintSite" ((PVar "cell")) (EBlock (DoLet false false (PVar "ev") (EApp (EVar "freshEvId") (ELit LUnit))) (DoLet false false (PVar "g") (EFieldAccess (EVar "graphRun") "value")) (DoLet false false (PVar "i") (EBinOp "-" (EApp (EVar "evOrdinal") (EVar "ev")) (EFieldAccess (EVar "g") "evBase"))) (DoLet false false (PVar "arr") (EApp (EApp (EVar "indexWithSlot") (EFieldAccess (EVar "g") "siteCells")) (EVar "i"))) (DoLet false false PWild (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EApp (EVar "Some") (ETuple (EVar "ev") (EVar "cell")))) (EVar "arr"))) (arm (PCon "Some" PWild) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "site cell #")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "evOrdinal") (EVar "ev"))))) (ELit (LString " minted twice"))))))) (DoExpr (EVar "ev"))))
 (DTypeSig false "siteCellOf" (TyFun (TyCon "EvId") (TyCon "SiteCell")))
 (DFunDef false "siteCellOf" ((PVar "ev")) (EMatch (EApp (EVar "siteCellLookup") (EVar "ev")) (arm (PCon "Ok" (PVar "c")) () (EVar "c")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
 (DTypeSig false "siteCellLookup" (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "SiteCell"))))
-(DFunDef false "siteCellLookup" ((PCon "EvId" (PVar "m") (PVar "n"))) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EVar "graphRun") "value")) (DoLet false false (PVar "i") (EBinOp "-" (EVar "n") (EFieldAccess (EVar "g") "evBase"))) (DoLet false false (PVar "arr") (EFieldAccess (EFieldAccess (EVar "g") "siteCells") "value")) (DoExpr (EIf (EApp (EVar "isUnminted") (EApp (EApp (EVar "EvId") (EVar "m")) (EVar "n"))) (EApp (EVar "Err") (ELit (LString "site reached inference unminted"))) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "site cell ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " is from an earlier graph")))) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "site cell ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " was never minted")))) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PTuple PWild (PVar "c"))) () (EApp (EVar "Ok") (EVar "c"))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "site cell ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " was never minted"))))))))))))
+(DFunDef false "siteCellLookup" ((PVar "ev")) (EBlock (DoLet false false (PCon "EvId" (PVar "m") (PVar "n")) (EVar "ev")) (DoLet false false (PVar "g") (EFieldAccess (EVar "graphRun") "value")) (DoLet false false (PVar "i") (EBinOp "-" (EVar "n") (EFieldAccess (EVar "g") "evBase"))) (DoLet false false (PVar "arr") (EFieldAccess (EFieldAccess (EVar "g") "siteCells") "value")) (DoExpr (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "Err") (ELit (LString "site reached inference unminted"))) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "site cell ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " is from an earlier graph")))) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "site cell ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " was never minted")))) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PTuple PWild (PVar "c"))) () (EApp (EVar "Ok") (EVar "c"))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "site cell ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " was never minted"))))))))))))
 (DTypeSig false "siteRouteCell" (TyFun (TyCon "EvId") (TyApp (TyCon "Ref") (TyCon "Route"))))
 (DFunDef false "siteRouteCell" ((PVar "ev")) (EMatch (EApp (EVar "siteCellOf") (EVar "ev")) (arm (PCon "OpSite" (PVar "r")) () (EVar "r")) (arm (PCon "LitSite" PWild (PVar "r")) () (EVar "r")) (arm (PCon "HeadSite" PWild) () (EApp (EVar "notAnOpSite") (EVar "ev")))))
 (DTypeSig false "siteFloatCell" (TyFun (TyCon "EvId") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float")))))
@@ -71756,8 +71759,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "f"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "x"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "EIf") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "c"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "t"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))))
-(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "ev"))) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "l"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "r"))) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "mintOpSite") (ELit LUnit)) (EVar "ev"))))
-(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EUnOp" (PVar "op") (PVar "x") (PVar "ev"))) (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "x"))) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "mintOpSite") (ELit LUnit)) (EVar "ev"))))
+(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "ev"))) (EBlock (DoLet false false (PVar "l2") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "l"))) (DoLet false false (PVar "r2") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "r"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l2")) (EVar "r2")) (EApp (EApp (EVar "mintedOr") (EVar "mintOpSite")) (EVar "ev"))))))
+(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EUnOp" (PVar "op") (PVar "x") (PVar "ev"))) (EBlock (DoLet false false (PVar "x2") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "x"))) (DoExpr (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "x2")) (EApp (EApp (EVar "mintedOr") (EVar "mintOpSite")) (EVar "ev"))))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EInfix" (PVar "op") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "EInfix") (EVar "op")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "l"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "r"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EFieldAccess" (PVar "e0") (PVar "n") (PVar "r"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EVar "n")) (EVar "r")))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ETuple" (PVar "es"))) (EApp (EVar "ETuple") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound"))) (EVar "es"))))
@@ -71779,8 +71782,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "EMapLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "rewriteArgKv") (EVar "rw")) (EVar "bound"))) (EVar "kvs"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EAsPat" (PVar "x") (PVar "sub"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EMethodRef "sub"))))
-(DFunDef false "rewriteArgScoped" (PWild PWild (PCon "ENumLit" (PVar "n") (PVar "ev") (PVar "lx"))) (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "mintLitSite") (ELit LUnit)) (EVar "ev"))) (EVar "lx")))
-(DFunDef false "rewriteArgScoped" (PWild PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "ev") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "mintOpSite") (ELit LUnit)) (EVar "ev"))) (EVar "lx")))
+(DFunDef false "rewriteArgScoped" (PWild PWild (PCon "ENumLit" (PVar "n") (PVar "ev") (PVar "lx"))) (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EApp (EVar "mintedOr") (EVar "mintLitSite")) (EVar "ev"))) (EVar "lx")))
+(DFunDef false "rewriteArgScoped" (PWild PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "ev") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EApp (EApp (EVar "mintedOr") (EVar "mintOpSite")) (EVar "ev"))) (EVar "lx")))
 (DFunDef false "rewriteArgScoped" (PWild PWild (PVar "e")) (EVar "e"))
 (DTypeSig false "rewriteArgField" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign")))))
 (DFunDef false "rewriteArgField" ((PVar "rw") (PVar "bound") (PCon "FieldAssign" (PVar "n") (PVar "e"))) (EApp (EApp (EVar "FieldAssign") (EVar "n")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))))

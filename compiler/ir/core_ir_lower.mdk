@@ -171,6 +171,7 @@ lower (ELet _ recFlag pat e1 e2) = CLet recFlag pat (lower e1) (lower e2)
 lower (ELetGroup binds body) = CLetGroup (map lowerBind binds) (lower body)
 lower (EMatch scrut arms) = lowerMatch noDeclLoc (lower scrut) arms
 lower (EIf c t e) = CIf (lower c) (lower t) (lower e)
+-- The empty tag means "no scalar tag"; only the `EAnnot (EBinOp …)` arm below sets one.
 lower (EBinOp op l r _) = lowerBinop op l r ""
 lower (EInfix op l r) = mkApp (CVar op AGlobal) [lower l, lower r]
 -- #1739 half A: `!x` lowers to the SAME Core IR node `x.value` does, rather than a
@@ -209,9 +210,8 @@ lower (EVariantUpdate con base fields) =
 lower (EBlock stmts) = CBlock (lowerStmts stmts)
 -- SHARED-FLOAT-RESIDUAL §3(C): dictPass wraps a scalar-tagged binop (arithmetic
 -- "Float" or comparison "Int") in `EAnnot (EBinOp …) (TyCon tag)`; a bare EBinOp
--- carries no tag.  Read the tag into CBinPrim's
--- scalar field so the emitter picks that type's primitive.  Must precede the
--- transparent `EAnnot e _` strip below.
+-- carries no tag.  Read the tag into CBinPrim's scalar field so the emitter picks
+-- that type's primitive.  Must precede the transparent `EAnnot e _` strip below.
 lower (EAnnot (EBinOp op l r _) (TyCon { tyConName = tag })) =
   lowerBinop op l r tag
 lower (EAnnot e _) = lower e

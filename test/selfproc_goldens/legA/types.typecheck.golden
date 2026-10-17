@@ -2193,6 +2193,7 @@ mintMethodCellWith : String -> Int -> Route -> List Route -> EvId
 mintOpSite : Unit -> EvId
 mintParamReprs : List String -> List Kind -> List Mono
 mintSite : SiteCell -> EvId
+mintedOr : (Unit -> EvId) -> EvId -> EvId
 missText : Result String a -> String
 missingConstraintMsg : String -> String -> String -> String
 missingConstraintVecMsg : String -> String -> List String -> String
