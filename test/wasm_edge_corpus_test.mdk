@@ -1,0 +1,572 @@
+{- | The simulated-edge gate: the engines corpus, restricted to the programs
+   `medaka check --target wasmgc/edge` admits, built for the edge and run under
+   the edge host profile with JSPI, must print what the native build prints.
+
+   The corpus is the directory union `test/lib_engines_differential.sh` runs
+   (llvm_fixtures, llvm_fixtures_typed, wasm/fixtures, wasm/fixtures_typed,
+   engine_fixtures, llvm_fixtures_modules/*). Nothing here names a program. A
+   program is in the sweep when `check --target wasmgc/node` accepts it, which
+   drops the rejection-parity sub-corpus and anything else no profile takes;
+   it is admitted when `check --target wasmgc/edge` also accepts it, and
+   refused when that does not.
+
+   What `main` needs is read from the program's own type: the `main :` line
+   of `check --types --target wasmgc/node`. The refusal assertion runs both
+   ways, so every program whose row carries `FileRead`, `FileWrite`, `Stdin`
+   or `Env` is refused on the edge, and every refusal carries one of them.
+   The expected stdout is the native build of the same source, run live, as
+   the engines gate compares.
+
+   An admitted program that does not print the native output is graded by
+   what node prints for the same module:
+     - the node profile prints the same wrong output: the wasm engine itself
+       diverges, which the engines gate ledgers (test/engine_divergence.txt);
+       this gate requires the ledger row and its wasm column to say so;
+     - the node profile prints the native output and the edge run died on a
+       withheld `exit` or `args` slice: those two carry no effect label
+       (#4178), so `check` admits a program the edge cannot run. The count is
+       printed, and any other withheld slice is red;
+     - anything else is red.
+
+   Runs under `medaka test --native`: it spawns the compiler, clang's output
+   and node. The sweep is computed once per process, in batches `testJobs`
+   wide. -}
+
+import compiler_cli_test_support.{
+  emitterBin,
+  inFreshDirOf,
+  spawnEach,
+  stageRun,
+  wasmEmitter,
+}
+import fs.{fixtureDirs, fixtureFiles}
+import list.{sort}
+import path.{basename, dirname, stem}
+import string.{contains, endsWith, join, lines, sliceClamped, split, startsWith}
+import test.{Expectation, expectAll, expectEqual, expectTrue, fail, pass}
+import test_process.{boundedVerbSeconds, medakaBin, medakaRoot}
+
+-- # The corpus
+
+-- A flat corpus directory: its top-level `.mdk` files, keyed as the engines
+-- gate keys them. A subdirectory holds modules a fixture imports.
+flatCorpus : String ->
+  String ->
+  <FileRead, IO> Result String (List (String, String))
+flatCorpus prefix dir =
+  let root = "\{medakaRoot}/\{dir}"
+  let keyed =
+    paths =>
+      sort
+        (map
+          (p => ("\{prefix}/\{stem p}", p))
+          (filter (p => endsWith ".mdk" p && dirname p == root) paths))
+  map keyed (fixtureFiles root)
+
+-- The multi-module programs: each subdirectory's `entry.mdk`.
+moduleCorpus : <FileRead, IO> Result String (List (String, String))
+moduleCorpus =
+  let keyed =
+    dirs => sort (map (d => ("llvmM/\{basename d}", "\{d}/entry.mdk")) dirs)
+  map keyed (fixtureDirs "\{medakaRoot}/test/llvm_fixtures_modules")
+
+corpus : <FileRead, IO> Result String (List (String, String))
+corpus =
+  let parts = [
+    flatCorpus "llvm" "test/llvm_fixtures",
+    flatCorpus "llvmT" "test/llvm_fixtures_typed",
+    flatCorpus "wasm" "test/wasm/fixtures",
+    flatCorpus "wasmT" "test/wasm/fixtures_typed",
+    flatCorpus "engine" "test/engine_fixtures",
+    moduleCorpus,
+  ]
+  foldRight
+    (part acc => match (part, acc)
+      (Ok xs, Ok ys) => Ok (xs ++ ys)
+      (Err e, _) => Err e
+      (_, Err e) => Err e)
+    (Ok [])
+    parts
+
+-- # What the sweep records
+
+data Probe = Probe {
+  key : String,
+  src : String,
+  nodeCode : Int,
+  nodeMain : String,
+  edgeCode : Int,
+  edgeText : String,
+}
+
+data Verdict =
+  | Passed
+  | EngineDivergence
+  | WithheldSlice String
+  | ExternRefused String
+  | Failed String
+  | Contained
+  | Unreached
+  | Escaped String
+
+data Ran = Ran {
+  probe : Probe,
+  base : String,
+  nativeOut : String,
+  edgeOut : String,
+  edgeErr : String,
+}
+
+data Sweep = Sweep {
+  swept : List Probe,
+  unprobed : List String,
+  verdicts : List (String, Verdict),
+}
+
+-- The labels the edge does not grant and a corpus program can need.
+gatedLabels : List String
+gatedLabels = ["FileRead", "FileWrite", "Stdin", "Env"]
+
+needsGated : String -> Bool
+needsGated row = any (l => contains l row) gatedLabels
+
+refusesGated : String -> Bool
+refusesGated text = any (l => contains "does not grant \{l}" text) gatedLabels
+
+-- The `main :` line of a `check --types` dump, or "".
+mainLine : String -> String
+mainLine out = match filter (startsWith "main :") (lines out)
+  l :: _ => l
+  [] => ""
+
+clip : String -> String
+clip s = sliceClamped 0 300 s
+
+slugOf : String -> String
+slugOf key = join "__" (split "/" key)
+
+-- # The spawns
+
+-- The environment every compiler spawn names, so a shard that exports none of
+-- it still finds this tree's emitters, and a stale binary fails loudly.
+envBase : <IO> List String
+envBase = [
+  "MEDAKA_ROOT=\{medakaRoot}",
+  "MEDAKA_EMITTER=\{emitterBin}",
+  "MEDAKA_STRICT=1",
+  "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
+  medakaBin,
+]
+
+checkSpawns : List String -> (String, String) -> List (String, List String)
+checkSpawns env (_, src) = [
+  (
+    "env",
+    env
+      ++ [
+        "check",
+        "--allow-internal",
+        "--types",
+        "--target",
+        "wasmgc/node",
+        src,
+      ],
+  ),
+  (
+    "env",
+    env ++ ["check", "--allow-internal", "--target", "wasmgc/edge", src],
+  ),
+]
+
+probeOf : (String, String) ->
+  List (Result String (Int, String, String)) ->
+  Probe
+probeOf (key, src) [Ok (nc, nout, _), Ok (ec, eout, eerr)] = Probe {
+  key = key,
+  src = src,
+  nodeCode = nc,
+  nodeMain = mainLine nout,
+  edgeCode = ec,
+  edgeText = eout ++ eerr,
+}
+probeOf (key, src) _ = Probe {
+  key = key,
+  src = src,
+  nodeCode = -1,
+  nodeMain = "",
+  edgeCode = -1,
+  edgeText = "",
+}
+
+-- Where program `p` builds, one directory per program: an edge build writes
+-- the loader files beside the wasm, and a native build's scratch IR is named
+-- from the output basename.
+baseOf : String -> Probe -> String
+baseOf scratch p = "\{scratch}/\{slugOf p.key}/\{slugOf p.key}"
+
+buildSpawns : List String -> String -> Probe -> List (String, List String)
+buildSpawns env scratch p = [
+  (
+    "env",
+    env
+      ++ [
+        "build",
+        "--target",
+        "wasmgc/edge",
+        "--allow-internal",
+        p.src,
+        "-o",
+        "\{baseOf scratch p}.wasm",
+      ],
+  ),
+  (
+    "env",
+    env
+      ++ [
+        "build",
+        "--allow-internal",
+        p.src,
+        "-o",
+        "\{baseOf scratch p}.bin",
+      ],
+  ),
+]
+
+runJs : <IO> String
+runJs = "\{medakaRoot}/test/wasm/run.js"
+
+runSpawns : String -> String -> Probe -> List (String, List String)
+runSpawns js scratch p = [
+  ("\{baseOf scratch p}.bin", []),
+  (
+    "node",
+    [
+      "--experimental-wasm-jspi",
+      js,
+      "--profile",
+      "wasmgc/edge",
+      "\{baseOf scratch p}.wasm",
+    ],
+  ),
+]
+
+nodeSpawns : String -> String -> Ran -> List (String, List String)
+nodeSpawns js _ r = [("node", [js, "\{r.base}.wasm"])]
+
+-- A program the edge check refuses, built for the node profile and run under
+-- the edge profile: the host must stop it at its first withheld call.
+containSpawns : List String -> String -> Probe -> List (String, List String)
+containSpawns env scratch p = [
+  (
+    "env",
+    env
+      ++ [
+        "build",
+        "--target",
+        "wasmgc/node",
+        "--allow-internal",
+        p.src,
+        "-o",
+        "\{baseOf scratch p}.wasm",
+      ],
+  ),
+]
+
+edgeRunSpawns : String -> String -> Probe -> List (String, List String)
+edgeRunSpawns js scratch p = [
+  (
+    "node",
+    [
+      "--experimental-wasm-jspi",
+      js,
+      "--profile",
+      "wasmgc/edge",
+      "\{baseOf scratch p}.wasm",
+    ],
+  ),
+]
+
+-- # Grading
+
+gradeContainBuild : Probe ->
+  List (Result String (Int, String, String)) ->
+  Result (String, Verdict) Probe
+gradeContainBuild p [Ok (0, _, _)] = Ok p
+gradeContainBuild p _ =
+  settled p.key (Escaped "the node-profile build of a refused program failed")
+
+gradeContained : Probe ->
+  List (Result String (Int, String, String)) ->
+  Result (String, Verdict) Verdict
+gradeContained p [Ok (code, _, err)] =
+  if code /= 0 && contains "capability is withheld on wasmgc/edge" err then
+    settled p.key Contained
+  else if code == 0 && err == "" then
+    settled p.key Unreached
+  else
+    settled
+      p.key
+      (Escaped "exit \{intToString code}, stderr \{debug (clip err)}")
+gradeContained p _ = settled p.key (Escaped "the edge run could not be spawned")
+
+settled : String -> Verdict -> Result (String, Verdict) a
+settled key v = Err (key, v)
+
+internal : String -> (String, Verdict)
+internal m = ("(internal)", Failed m)
+
+gradeBuild : Probe ->
+  List (Result String (Int, String, String)) ->
+  Result (String, Verdict) Probe
+gradeBuild p [Ok (0, _, _), Ok (0, _, _)] = Ok p
+gradeBuild p [Ok (0, _, _), Ok (code, out, err)] =
+  settled
+    p.key
+    (Failed "native build exited \{intToString code}: \{clip (out ++ err)}")
+gradeBuild p ((Ok (code, out, err)) :: _) =
+  let text = out ++ err
+  if contains "runtime extern '" text || contains "validateExterns" text then
+    settled p.key (ExternRefused (clip text))
+  else
+    settled p.key (Failed "edge build exited \{intToString code}: \{clip text}")
+gradeBuild p _ = settled p.key (Failed "a build could not be spawned")
+
+gradeRun : String ->
+  Probe ->
+  List (Result String (Int, String, String)) ->
+  Result (String, Verdict) Ran
+gradeRun scratch p [Ok (_, nout, _), Ok (_, eout, eerr)] =
+  if nout == eout then
+    settled p.key Passed
+  else
+    Ok Ran {
+      probe = p,
+      base = baseOf scratch p,
+      nativeOut = nout,
+      edgeOut = eout,
+      edgeErr = eerr,
+    }
+gradeRun _ p _ = settled p.key (Failed "a run could not be spawned")
+
+-- The slice a CapabilityError names: the word between the first pair of
+-- backticks of the line that says it is withheld on the edge.
+withheldSlice : String -> Option String
+withheldSlice err =
+  let said =
+    filter (contains "capability is withheld on wasmgc/edge") (lines err)
+  match said
+    l :: _ => match split "`" l
+      _ :: slice :: _ => Some slice
+      _ => None
+    [] => None
+
+gradeNode : Ran ->
+  List (Result String (Int, String, String)) ->
+  Result (String, Verdict) Verdict
+gradeNode r [Ok (_, xout, _)] =
+  let key = r.probe.key
+  if xout == r.edgeOut then
+    settled key EngineDivergence
+  else if xout == r.nativeOut then match withheldSlice r.edgeErr
+    Some slice => settled key (WithheldSlice slice)
+    None =>
+      settled
+        key
+        (Failed
+          "edge printed \{debug (clip r.edgeOut)}, native and node print \{debug (clip r.nativeOut)}; edge stderr \{debug (clip r.edgeErr)}")
+  else
+    settled
+      key
+      (Failed
+        "edge printed \{debug (clip r.edgeOut)}, node \{debug (clip xout)}, native \{debug (clip r.nativeOut)}")
+gradeNode r _ = settled r.probe.key (Failed "the node run could not be spawned")
+
+finish : Result (String, Verdict) Verdict -> (String, Verdict)
+finish (Err kv) = kv
+finish (Ok _) = ("(internal)", Failed "a program was left unsettled")
+
+-- # The sweep
+
+sweepIn : List (String, String) -> String -> <Exec, FileRead, IO> Sweep
+sweepIn programs scratch =
+  let env = envBase
+  let js = runJs
+  let probes = map2 probeOf programs (spawnEach 120 (checkSpawns env) programs)
+  let unprobed =
+    map (p => p.key) (filter (p => p.nodeCode < 0 || p.edgeCode < 0) probes)
+  let swept = filter (p => p.nodeCode == 0) probes
+  let admitted = filter (p => p.edgeCode == 0) swept
+  let refused = filter (p => p.edgeCode > 0) swept
+  let _ =
+    boundedVerbSeconds
+      60
+      "mkdir"
+      (["-p"]
+        ++ map (p => dirname (baseOf scratch p ++ ".x")) (admitted ++ refused))
+  let built =
+    stageRun
+      (spawnEach 300 (buildSpawns env scratch))
+      (m => internal m)
+      gradeBuild
+      (map Ok admitted)
+  let ran =
+    stageRun
+      (spawnEach 120 (runSpawns js scratch))
+      (m => internal m)
+      (gradeRun scratch)
+      built
+  let graded =
+    stageRun
+      (spawnEach 120 (nodeSpawns js scratch))
+      (m => internal m)
+      gradeNode
+      ran
+  let containBuilt =
+    stageRun
+      (spawnEach 300 (containSpawns env scratch))
+      (m => internal m)
+      gradeContainBuild
+      (map Ok refused)
+  let contained =
+    stageRun
+      (spawnEach 120 (edgeRunSpawns js scratch))
+      (m => internal m)
+      gradeContained
+      containBuilt
+  Sweep {
+    swept = swept,
+    unprobed = unprobed,
+    verdicts = map finish graded ++ map finish contained,
+  }
+
+map2 : (a -> b -> c) -> List a -> List b -> List c
+map2 f (a :: xs) (b :: ys) = f a b :: map2 f xs ys
+map2 _ _ _ = []
+
+-- Computed once per process; the scratch directory is gone before it returns.
+world : <Exec, FileRead, IO> Result String Sweep
+world = match corpus
+  Err e => Err e
+  Ok programs =>
+    inFreshDirOf (scratch => Ok (sweepIn programs scratch)) (m => Err m)
+
+-- # The assertions
+
+-- The sweep, or the one failure that stopped it.
+withSweep : (Sweep -> <e> Expectation) -> <Exec, FileRead, IO | e> Expectation
+withSweep check = match world
+  Err e => fail "the edge corpus sweep could not run: \{e}"
+  Ok sweep => check sweep
+
+admittedOf : Sweep -> List Probe
+admittedOf sweep = filter (p => p.edgeCode == 0) sweep.swept
+
+refusedOf : Sweep -> List Probe
+refusedOf sweep = filter (p => p.edgeCode > 0) sweep.swept
+
+count : List a -> String
+count xs = intToString (length xs)
+
+test "wasm edge corpus: the admitted set and the refused set are both non-empty, and every probe answered" = withSweep
+  (sweep =>
+    let _ =
+      println
+        "wasm edge corpus: \{count sweep.swept} swept, \{count (admittedOf sweep)} admitted, \{count (refusedOf sweep)} refused on the edge"
+    expectAll [
+      expectTrue (length (admittedOf sweep) > 0),
+      expectTrue (length (refusedOf sweep) > 0),
+      expectEqual [] sweep.unprobed,
+    ])
+
+test "wasm edge corpus: a program needing FileRead, FileWrite, Stdin or Env is refused at check, and only such a program" = withSweep
+  (sweep =>
+    let leaked =
+      map (p => p.key) (filter (p => needsGated p.nodeMain) (admittedOf sweep))
+    let unexplained =
+      map
+        (p => p.key)
+        (filter
+          (p => not (needsGated p.nodeMain && refusesGated p.edgeText))
+          (refusedOf sweep))
+    expectAll [expectEqual [] leaked, expectEqual [] unexplained])
+
+test "wasm edge corpus: no admitted program is refused by validateExterns at build" = withSweep
+  (sweep =>
+    expectEqual
+      []
+      (flatMap
+        (kv => match kv
+          (k, ExternRefused text) => ["\{k}: \{text}"]
+          _ => [])
+        sweep.verdicts))
+
+test "wasm edge corpus: every admitted program prints on the edge what native prints" = withSweep
+  (sweep =>
+    expectEqual
+      []
+      (flatMap
+        (kv => match kv
+          (k, Failed text) => ["\{k}: \{text}"]
+          _ => [])
+        sweep.verdicts))
+
+-- The wasm engine's own divergences are the engines gate's to ledger; here
+-- each must have its row, with the native-versus-wasm column saying `ne`.
+ledgered : List String -> String -> Bool
+ledgered rows key =
+  any
+    (row => match split " " row
+      k :: sig :: _ =>
+        k == key
+          && (match split ":" sig
+            _ :: nw :: _ => nw == "ne"
+            _ => False)
+      _ => False)
+    rows
+
+test "wasm edge corpus: a program whose wasm output is wrong off the edge too has its engine-divergence ledger row" = withSweep
+  (sweep => match readFile "\{medakaRoot}/test/engine_divergence.txt"
+    Err e => fail "test/engine_divergence.txt: \{e}"
+    Ok text =>
+      let rows = filter (l => not (startsWith "#" l)) (lines text)
+      expectEqual
+        []
+        (flatMap
+          (kv => match kv
+            (k, EngineDivergence) => if ledgered rows k then [] else [k]
+            _ => [])
+          sweep.verdicts))
+
+test "wasm edge corpus: a program the edge admits but cannot run withholds only exit or args (#4178)" = withSweep
+  (sweep =>
+    let slices =
+      flatMap
+        (kv => match kv
+          (k, WithheldSlice s) => [(k, s)]
+          _ => [])
+        sweep.verdicts
+    let _ =
+      println
+        "wasm edge corpus: \{count slices} admitted programs hit a withheld exit/args slice (#4178): \{join ", " (map (ks => fst ks) slices)}"
+    expectEqual [] (filter (ks => not (elem (snd ks) ["exit", "args"])) slices))
+
+-- A refused program that never executes the operation its row declares
+-- (a scoped file bound with no file call inside) runs to completion; the host
+-- tests (playground/medaka_host_test.mjs) cover that a withheld call throws.
+-- Here every other refused program must be stopped by the withheld slice, and
+-- at least one must have reached one.
+test "wasm edge corpus: a refused program built for node and run under the edge profile is stopped by a withheld slice" = withSweep
+  (sweep =>
+    let escaped =
+      flatMap
+        (kv => match kv
+          (k, Escaped text) => ["\{k}: \{text}"]
+          _ => [])
+        sweep.verdicts
+    let stopped =
+      filter
+        (kv => match kv
+          (_, Contained) => True
+          _ => False)
+        sweep.verdicts
+    expectAll [expectEqual [] escaped, expectTrue (length stopped > 0)])

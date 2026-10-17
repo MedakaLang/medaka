@@ -9,7 +9,10 @@
 // The import object, the shims behind it and the flush discipline are
 // playground/medaka_host.mjs (docs/spec/WASM-SEMANTICS.md WH3/WH4).  This file
 // supplies only the Node side of the profile: the real filesystem, process.env,
-// MDK_ARGS as argv, and process stdout/stderr.  Every byte the module writes is
+// MDK_ARGS as argv, and process stdout/stderr.  Each of those is handed to the host only
+// when the selected profile installs the slice it feeds, so a profile that withholds a
+// capability (wasmgc/edge: files, env, stdin, args) gets the host's CapabilityError, not
+// a Node-backed answer.  Every byte the module writes is
 // accumulated and written when the run ends, stdout before stderr.
 //
 // The node process's own flags choose the sleep: under `node --experimental-wasm-jspi`
@@ -22,6 +25,10 @@
 // Its named exports are the JS functions; a module that imports a binding it lacks
 // fails at the call.
 //
+// The profile is `--profile <name>` before the module path, else MEDAKA_WASM_PROFILE,
+// else wasmgc/node; a name the host does not know is a usage error.  JSPI is the node
+// process's own flag: `node --experimental-wasm-jspi run.js --profile wasmgc/edge x.wasm`.
+//
 // Exit codes: the program's `exit` code; 0 on completion; 1 on a trap, a failed
 // instantiation or a module built by an older compiler; 2 on a usage error.  A run
 // ends by setting `process.exitCode`, never `process.exit`: a write to a pipe past
@@ -29,8 +36,15 @@
 const fs = require('fs');
 const nodePath = require('path');
 const { pathToFileURL } = require('url');
-const path = process.argv[2];
-if (!path) { console.error('usage: run.js <module.wasm>'); process.exit(2); }
+const argv = process.argv.slice(2);
+let profile = process.env.MEDAKA_WASM_PROFILE || 'wasmgc/node';
+if (argv[0] === '--profile') {
+  if (argv.length < 2) { console.error('usage: run.js [--profile <name>] <module.wasm> [bindings.mjs]'); process.exit(2); }
+  profile = argv[1];
+  argv.splice(0, 2);
+}
+const path = argv[0];
+if (!path) { console.error('usage: run.js [--profile <name>] <module.wasm> [bindings.mjs]'); process.exit(2); }
 const bytes = fs.readFileSync(path);
 const hostUrl = pathToFileURL(nodePath.join(__dirname, '..', '..', 'playground', 'medaka_host.mjs')).href;
 
@@ -85,11 +99,20 @@ const sink = {
   },
 };
 
-const bindingsPath = process.argv[3] || process.env.MEDAKA_JSFFI_BINDINGS;
+const bindingsPath = argv[1] || process.env.MEDAKA_JSFFI_BINDINGS;
 
-import(hostUrl).then(async ({ createHost, runProgram, OldEntryShape }) => {
+import(hostUrl).then(async ({ createHost, runProgram, OldEntryShape, PROFILES, profileSlices }) => {
+  if (!PROFILES[profile]) {
+    console.error(`run.js: unknown profile \`${profile}\` (known: ${Object.keys(PROFILES).join(', ')})`);
+    process.exitCode = 2;
+    return;
+  }
+  const granted = profileSlices(profile);
+  const wired = { vfs, args, getEnv: (n) => process.env[n], stdin };
+  const wire = { vfs: 'fs', args: 'args', getEnv: 'env', stdin: 'stdin' };
+  const node = Object.fromEntries(Object.keys(wired).filter((k) => granted.includes(wire[k])).map((k) => [k, wired[k]]));
   const bindings = bindingsPath ? await import(pathToFileURL(nodePath.resolve(bindingsPath)).href) : {};
-  const host = createHost('wasmgc/node', { bindings, vfs, args, getEnv: (n) => process.env[n], executablePath: nodePath.resolve(path), stdin, sink });
+  const host = createHost(profile, { bindings, ...node, executablePath: nodePath.resolve(path), sink });
   const r = await runProgram(bytes, host);
   if (r.kind === 'exit') { process.exitCode = r.code; return; }
   if (r.kind === 'error') {
