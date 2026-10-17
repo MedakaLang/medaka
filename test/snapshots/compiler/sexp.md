@@ -170,7 +170,7 @@ exprSexp (ELit l) = node "ELit" [litSexp l]
 -- PLAN.md #11: render an `ENumLit` exactly as `(ELit (LInt n))` so the compiler
 -- sexp/astdump stays byte-identical to the OCaml side (whose astdump does the
 -- same) and the parse-fixture / OCaml↔compiler sexp diff gates keep passing.
-exprSexp (ENumLit n _ _ _) = node "ELit" [node "LInt" [intToString n]]
+exprSexp (ENumLit n _ _) = node "ELit" [node "LInt" [intToString n]]
 exprSexp (EWideLit hi lo _ _) = node "ELit" [litSexp (LU64 hi lo)]
 exprSexp (EVar x) = node "EVar" [escStr x]
 -- #837: EVarId renders as a bare EVar so every sexp/snapshot dump stays byte-identical.
@@ -487,7 +487,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "exprSexp" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "exprSexp") (EVar "e")))
 (DFunDef false "exprSexp" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "exprSexp") (EVar "e")))
 (DFunDef false "exprSexp" ((PCon "ELit" (PVar "l"))) (EApp (EApp (EVar "node") (ELit (LString "ELit"))) (EListLit (EApp (EVar "litSexp") (EVar "l")))))
-(DFunDef false "exprSexp" ((PCon "ENumLit" (PVar "n") PWild PWild PWild)) (EApp (EApp (EVar "node") (ELit (LString "ELit"))) (EListLit (EApp (EApp (EVar "node") (ELit (LString "LInt"))) (EListLit (EApp (EVar "intToString") (EVar "n")))))))
+(DFunDef false "exprSexp" ((PCon "ENumLit" (PVar "n") PWild PWild)) (EApp (EApp (EVar "node") (ELit (LString "ELit"))) (EListLit (EApp (EApp (EVar "node") (ELit (LString "LInt"))) (EListLit (EApp (EVar "intToString") (EVar "n")))))))
 (DFunDef false "exprSexp" ((PCon "EWideLit" (PVar "hi") (PVar "lo") PWild PWild)) (EApp (EApp (EVar "node") (ELit (LString "ELit"))) (EListLit (EApp (EVar "litSexp") (EApp (EApp (EVar "LU64") (EVar "hi")) (EVar "lo"))))))
 (DFunDef false "exprSexp" ((PCon "EVar" (PVar "x"))) (EApp (EApp (EVar "node") (ELit (LString "EVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")))))
 (DFunDef false "exprSexp" ((PCon "EVarId" (PVar "x") PWild)) (EApp (EApp (EVar "node") (ELit (LString "EVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")))))
@@ -687,7 +687,7 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "exprSexp" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "exprSexp") (EVar "e")))
 (DFunDef false "exprSexp" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "exprSexp") (EVar "e")))
 (DFunDef false "exprSexp" ((PCon "ELit" (PVar "l"))) (EApp (EApp (EVar "node") (ELit (LString "ELit"))) (EListLit (EApp (EVar "litSexp") (EVar "l")))))
-(DFunDef false "exprSexp" ((PCon "ENumLit" (PVar "n") PWild PWild PWild)) (EApp (EApp (EVar "node") (ELit (LString "ELit"))) (EListLit (EApp (EApp (EVar "node") (ELit (LString "LInt"))) (EListLit (EApp (EVar "intToString") (EVar "n")))))))
+(DFunDef false "exprSexp" ((PCon "ENumLit" (PVar "n") PWild PWild)) (EApp (EApp (EVar "node") (ELit (LString "ELit"))) (EListLit (EApp (EApp (EVar "node") (ELit (LString "LInt"))) (EListLit (EApp (EVar "intToString") (EVar "n")))))))
 (DFunDef false "exprSexp" ((PCon "EWideLit" (PVar "hi") (PVar "lo") PWild PWild)) (EApp (EApp (EVar "node") (ELit (LString "ELit"))) (EListLit (EApp (EVar "litSexp") (EApp (EApp (EVar "LU64") (EVar "hi")) (EVar "lo"))))))
 (DFunDef false "exprSexp" ((PCon "EVar" (PVar "x"))) (EApp (EApp (EVar "node") (ELit (LString "EVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")))))
 (DFunDef false "exprSexp" ((PCon "EVarId" (PVar "x") PWild)) (EApp (EApp (EVar "node") (ELit (LString "EVar"))) (EListLit (EApp (EVar "escStr") (EVar "x")))))

@@ -205,7 +205,7 @@ binOp op a b = EBinOp op a b unminted
 -- an integer literal in EXPRESSION position.  `ENumLit`, never `ELit (LInt)` —
 -- that is the shape the parser emits and the only one dictPass rewrites away.
 intLit : Int -> Expr
-intLit n = ENumLit n (Ref None) (Ref RNone) ""
+intLit n = ENumLit n unminted ""
 
 -- a derived impl head with the fixed pub / non-default / no-name shape;
 -- applyDeriveParams rewrites tys + reqs afterwards for the type's params.
@@ -1385,7 +1385,7 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DTypeSig false "binOp" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "binOp" ((PVar "op") (PVar "a") (PVar "b")) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "a")) (EVar "b")) (EVar "unminted")))
 (DTypeSig false "intLit" (TyFun (TyCon "Int") (TyCon "Expr")))
-(DFunDef false "intLit" ((PVar "n")) (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EVar "Ref") (EVar "None"))) (EApp (EVar "Ref") (EVar "RNone"))) (ELit (LString ""))))
+(DFunDef false "intLit" ((PVar "n")) (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EVar "unminted")) (ELit (LString ""))))
 (DTypeSig false "derivedImpl" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyCon "Decl")))))
 (DFunDef false "derivedImpl" ((PVar "iface") (PVar "tyName") (PVar "methods")) (EApp (EApp (EApp (EApp (EApp (EVar "dImplUnresolved") (EVar "True")) (EVar "iface")) (EListLit (EApp (EApp (EVar "tyConUnresolved") (EVar "tyName")) (EVar "None")))) (EListLit)) (EVar "methods")))
 (DTypeSig false "binMethod" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "ImplMethod"))))))
@@ -1861,7 +1861,7 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DTypeSig false "binOp" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "binOp" ((PVar "op") (PVar "a") (PVar "b")) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "a")) (EVar "b")) (EVar "unminted")))
 (DTypeSig false "intLit" (TyFun (TyCon "Int") (TyCon "Expr")))
-(DFunDef false "intLit" ((PVar "n")) (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EVar "Ref") (EVar "None"))) (EApp (EVar "Ref") (EVar "RNone"))) (ELit (LString ""))))
+(DFunDef false "intLit" ((PVar "n")) (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EVar "unminted")) (ELit (LString ""))))
 (DTypeSig false "derivedImpl" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyCon "Decl")))))
 (DFunDef false "derivedImpl" ((PVar "iface") (PVar "tyName") (PVar "methods")) (EApp (EApp (EApp (EApp (EApp (EVar "dImplUnresolved") (EVar "True")) (EVar "iface")) (EListLit (EApp (EApp (EVar "tyConUnresolved") (EVar "tyName")) (EVar "None")))) (EListLit)) (EVar "methods")))
 (DTypeSig false "binMethod" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyCon "ImplMethod"))))))

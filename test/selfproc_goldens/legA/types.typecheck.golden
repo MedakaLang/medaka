@@ -1697,7 +1697,7 @@ inferMethodAt : TcEnv -> String -> Ref String -> Ref (Option Int) -> Ref Route -
 inferMethodAtCell : TcEnv -> String -> EvCell -> Mono
 inferMethodBody : TcEnv -> IfaceRef -> MethodBodyKind -> (List String, Ty, List (String, List Kind)) -> String -> List Pat -> Expr -> Unit
 inferMethodCandidateAt : TcEnv -> String -> Ref String -> Ref (Option Int) -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Ref Inner -> Mono
-inferNumLit : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
+inferNumLit : TcEnv -> Int -> EvId -> Mono
 inferNumLitBare : Int -> Ref (Option Float) -> Mono
 inferNumLitMethod : MethodSchemeRow -> Ref Route -> Mono
 inferNumLitVar : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
@@ -1749,7 +1749,7 @@ inferVar : TcEnv -> String -> Mono
 inferVarId : TcEnv -> String -> Int -> Mono
 inferVarPlainId : TcEnv -> String -> Int -> Mono
 inferVariantUpdate : TcEnv -> String -> Expr -> List FieldAssign -> Mono
-inferWideLit : TcEnv -> Int -> Int -> Ref Route -> String -> Mono
+inferWideLit : TcEnv -> Int -> Int -> EvId -> String -> Mono
 inferredConstraintIds : String -> List Int -> List Int
 inferredIfacePairs : String -> List Int -> List (IfaceRef, Int)
 inferredPredLead : (IfaceRef, Int, List Mono) -> Int
@@ -2199,6 +2199,7 @@ methodsPerMidGo : List (String, List String) -> List (String, List Decl) -> List
 minLevelOf : List (Ref Effvar) -> Int
 mintDictAt : (String -> EvId -> Unit) -> String -> Expr
 mintGrantOnly : String -> Expr
+mintLitSite : Unit -> EvId
 mintMethodCell : String -> EvId
 mintMethodCellRaw : String -> Option Int -> Route -> List Route -> EvId
 mintMethodCellWith : String -> Int -> Route -> List Route -> EvId
@@ -3076,6 +3077,7 @@ siteCellEntriesFrom : Array (Option (EvId, SiteCell)) -> Int -> List EvEntry -> 
 siteCellOf : EvId -> SiteCell
 siteCellValue : SiteCell -> EvVal
 siteEntry : Obligation -> List PendingEntry
+siteFloatCell : EvId -> Ref (Option Float)
 siteKindMonos : SiteKind -> List Mono
 siteObligation : GoalKind -> Ref Inner -> PendingEntry -> Obligation
 siteRDictName : Ref Route -> List String

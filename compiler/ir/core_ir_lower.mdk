@@ -152,11 +152,8 @@ cmethodOf name (iface, arity, route, implRoutes, methodRoutes) =
 lower : Expr -> CExpr
 lower (ELit l) = CLit l
 -- PLAN.md #11: dictPass rewrites every ENumLit to ELit before lowering; this
--- arm is defensive (a non-rewritten path) — a Float-stamped ref lowers to a
--- float constant, else an int.
-lower (ENumLit n r _ _) = match !r
-  Some f => CLit (LFloat f)
-  None => CLit (LInt n)
+-- arm is defensive (a non-rewritten path) and lowers to an int constant.
+lower (ENumLit n _ _) = CLit (LInt n)
 -- defensive like the `ENumLit` arm: dictPass rewrites a wide literal to `LU64`.
 lower (EWideLit hi lo _ _) = CLit (LU64 hi lo)
 lower (EVar x) = CVar x AGlobal

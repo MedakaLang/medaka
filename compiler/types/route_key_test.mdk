@@ -9,6 +9,7 @@
 import test.{expectEqual, expectAll}
 import types.route_key.{
   evDictRoutes,
+  evSiteLit,
   evSiteRoute,
   installEvidence,
   installedEvidenceEntries,
@@ -78,3 +79,26 @@ test "an operator site answers the route published under its id" =
 test "an unminted operator site answers no route" =
   let _ = installEvidence [EvEntry (EvId "m" 7) (EvOne (RScalar "Float"))]
   expectEqual "none" (routeShape (evSiteRoute unminted))
+
+test "a published literal site answers its float and route" =
+  let _ = installEvidence [
+    EvEntry (EvId "m" 3) (EvLit (Some 2.0) RNone),
+    EvEntry (EvId "m" 4) (EvLit None (RScalar "Float")),
+  ]
+  let hit = evSiteLit (EvId "m" 3)
+  let other = evSiteLit (EvId "m" 4)
+  expectAll [
+    expectEqual (Some 2.0) (fst hit),
+    expectEqual "none" (routeShape (snd hit)),
+    expectEqual None (fst other),
+    expectEqual "scalar Float" (routeShape (snd other)),
+  ]
+
+-- A literal built after inference was never marked and answers a plain `Int`.
+test "an unminted literal site answers no float and no route" =
+  let _ = installEvidence [EvEntry (EvId "m" 3) (EvLit (Some 2.0) RNone)]
+  let r = evSiteLit unminted
+  expectAll [
+    expectEqual None (fst r),
+    expectEqual "none" (routeShape (snd r)),
+  ]

@@ -1808,7 +1808,7 @@ renameScoped rm _ (EMethodAt m seed ev) = EMethodAt m (renameDefName rm seed) ev
 --     `ESection` before elaboration.
 -- `EVarAt` is handled above, not here: it carries a renameable NAME (see its arm).
 renameScoped _ _ (e@(ELit _)) = e
-renameScoped _ _ (e@(ENumLit _ _ _ _)) = e
+renameScoped _ _ (e@(ENumLit _ _ _)) = e
 renameScoped _ _ (e@(EWideLit _ _ _ _)) = e
 renameScoped _ _ (e@(EMethodRef _)) = e
 renameScoped _ _ (e@(EDictApp _)) = e
@@ -2302,7 +2302,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EDictAt" (PVar "n") (PVar "ev"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EVar "ev")) (EIf (EVar "otherwise") (EApp (EApp (EVar "EDictAt") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EVar "ev")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "renameScoped" ((PVar "rm") PWild (PCon "EMethodAt" (PVar "m") (PVar "seed") (PVar "ev"))) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "m")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "seed"))) (EVar "ev")))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ELit" PWild))) (EVar "e"))
-(DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ENumLit" PWild PWild PWild PWild))) (EVar "e"))
+(DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ENumLit" PWild PWild PWild))) (EVar "e"))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "e"))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EMethodRef" PWild))) (EVar "e"))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EDictApp" PWild))) (EVar "e"))
@@ -2731,7 +2731,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EDictAt" (PVar "n") (PVar "ev"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EVar "ev")) (EIf (EVar "otherwise") (EApp (EApp (EVar "EDictAt") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EVar "ev")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "renameScoped" ((PVar "rm") PWild (PCon "EMethodAt" (PVar "m") (PVar "seed") (PVar "ev"))) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "m")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "seed"))) (EVar "ev")))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ELit" PWild))) (EVar "e"))
-(DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ENumLit" PWild PWild PWild PWild))) (EVar "e"))
+(DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ENumLit" PWild PWild PWild))) (EVar "e"))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "e"))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EMethodRef" PWild))) (EVar "e"))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EDictApp" PWild))) (EVar "e"))

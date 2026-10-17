@@ -273,6 +273,18 @@ evSiteRoute ev
     _ =>
       panic "evidence table: an operator site answered by another kind of entry"
 
+-- The defaulted float and `fromInt` route solved for numeric literal site [ev].
+-- A literal built after inference carries `unminted` and answers `(None, RNone)`,
+-- a plain `Int`.  Every other miss panics.
+export
+evSiteLit : EvId -> (Option Float, Route)
+evSiteLit ev
+  | isUnminted ev = (None, RNone)
+  | otherwise = match installedAnswer "literal site" ev
+    EvLit f r => (f, r)
+    _ =>
+      panic "evidence table: a literal site answered by another kind of entry"
+
 -- The answer published for a method occurrence: the interface identity it resolved
 -- to, its selected denotation's pre-use arrow arity, dispatch route, selected impl's
 -- `requires` dicts and the method's own `=>` dicts.  The arity is fixed from the selected scheme before application can

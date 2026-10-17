@@ -504,6 +504,7 @@ import types.route_key.{
   installEvidence,
   evDictRoutes,
   evSiteRoute,
+  evSiteLit,
 }
 import types.disposition.{
   InstId(..),
@@ -11745,6 +11746,11 @@ indexWithSlot index i =
 mintOpSite : Unit -> EvId
 mintOpSite _ = mintSite (OpSite (Ref RNone))
 
+-- Mint the cells for one numeric literal site: an unset float and an unrouted
+-- `fromInt` route.
+mintLitSite : Unit -> EvId
+mintLitSite _ = mintSite (LitSite (Ref None) (Ref RNone))
+
 mintSite : SiteCell -> EvId
 mintSite cell =
   let ev = freshEvId ()
@@ -11774,11 +11780,18 @@ siteCellOf (EvId m n) =
     Some (_, c) => c
     None => panic "site cell \{m}#\{intToString n} was never minted"
 
--- The route cell of operator site [ev].
+-- The route cell of operator or literal site [ev].
 siteRouteCell : EvId -> Ref Route
 siteRouteCell ev = match siteCellOf ev
   OpSite r => r
-  LitSite _ _ => notAnOpSite ev
+  LitSite _ r => r
+  HeadSite _ => notAnOpSite ev
+
+-- The defaulted-float cell of numeric literal site [ev].
+siteFloatCell : EvId -> Ref (Option Float)
+siteFloatCell ev = match siteCellOf ev
+  LitSite f _ => f
+  OpSite _ => notAnOpSite ev
   HeadSite _ => notAnOpSite ev
 
 notAnOpSite : EvId -> a
@@ -16716,8 +16729,8 @@ infer _ (ELit l) = litType l
 -- AND (when under `+`) in numArithOp is harmless: both unify the same var, both
 -- demand `Num`.  Without the prelude (bare-HM oracle, `builtinClassPresent BNum` False)
 -- `fromInt` is unbound: fall back to a plain fresh var, dref stays RNone (⇒ Int).
-infer env (ENumLit n fref dref _) = inferNumLit env n fref dref
-infer env (EWideLit hi lo dref lx) = inferWideLit env hi lo dref lx
+infer env (ENumLit n ev _) = inferNumLit env n ev
+infer env (EWideLit hi lo ev lx) = inferWideLit env hi lo ev lx
 infer env (EVar x) = inferVar env x
 -- #837: EVarId carries the resolve-minted binding id; thread it to
 -- instantiateVarTracked so obligation lookup keys by (name, id).
@@ -20765,11 +20778,10 @@ inferUnopE env op e dref =
 -- deliberate: any operand other than a (located) literal is ordinary arithmetic.
 recordNegatedLitRange : Mono -> Expr -> Unit
 recordNegatedLitRange t (ELoc _ e) = recordNegatedLitRange t e
-recordNegatedLitRange t (ENumLit n _ _ _) =
-  match perRun.value.numlitRanges.value
-    (_, m, loc) :: rest if m == n =>
-      perRun.value.numlitRanges := (t, negateLiteral n, loc) :: rest
-    _ => recordNumlitRange t (negateLiteral n)
+recordNegatedLitRange t (ENumLit n _ _) = match perRun.value.numlitRanges.value
+  (_, m, loc) :: rest if m == n =>
+    perRun.value.numlitRanges := (t, negateLiteral n, loc) :: rest
+  _ => recordNumlitRange t (negateLiteral n)
 recordNegatedLitRange t (EWideLit _ _ _ lx) =
   match perRun.value.wideLitRanges.value
     (_, l, hi, lo, _, loc) :: rest if l == lx =>
@@ -21126,9 +21138,9 @@ numArithOp lt rt =
 -- A binding spelled `fromInt` in the user's term scope is no longer consulted, so it can
 -- no longer re-anchor the literals around it (#259: `fromInt : Int -> Float` made
 -- `println (7 / 2)` print `3.5` under `run` and `3` from the built binary, exit 0).
-inferNumLit : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
-inferNumLit env n fref dref =
-  let a = inferNumLitVar env n fref dref
+inferNumLit : TcEnv -> Int -> EvId -> Mono
+inferNumLit env n ev =
+  let a = inferNumLitVar env n (siteFloatCell ev) (siteRouteCell ev)
   let _ = recordNumlitRange a n
   a
 
@@ -21138,9 +21150,9 @@ inferNumLit env n fref dref =
 -- it only where that type grounded to `U64`.  The `Int` the shared route carries is
 -- a stand-in (the low half) that nothing reads for a wide literal:
 -- `rewriteBinopExpr` builds its `LU64` from the node's own halves.
-inferWideLit : TcEnv -> Int -> Int -> Ref Route -> String -> Mono
-inferWideLit env hi lo dref lx =
-  let a = inferNumLitVar env lo (Ref None) dref
+inferWideLit : TcEnv -> Int -> Int -> EvId -> String -> Mono
+inferWideLit env hi lo ev lx =
+  let a = inferNumLitVar env lo (Ref None) (siteRouteCell ev)
   perRun.value.wideLitRanges :=
     (a, lx, hi, lo, False, !currentLoc) :: perRun.value.wideLitRanges.value
   a
@@ -24557,7 +24569,7 @@ domainIsTupleOfArity ft n = match normalize ft
 renderCallArg : Expr -> Option String
 renderCallArg (ELoc _ e) = renderCallArg e
 renderCallArg (EAnnot e _) = renderCallArg e
-renderCallArg (ENumLit n _ _ _) = Some (intToString n)
+renderCallArg (ENumLit n _ _) = Some (intToString n)
 renderCallArg (EWideLit _ _ _ lx) = Some lx
 renderCallArg (ELit (LInt n)) = Some (intToString n)
 renderCallArg (ELit (LBool True)) = Some "True"
@@ -28570,6 +28582,10 @@ rewriteArgScoped rw bound (ESetLit n es) =
 rewriteArgScoped rw bound (EAsPat x sub) =
   EAsPat x (rewriteArgScoped rw bound sub)
 -- leaves (ELit / EMethodRef / EDictApp / EVarAt / EMethodAt / EDictAt / SecBare)
+rewriteArgScoped _ _ (ENumLit n ev lx) =
+  ENumLit n (if isUnminted ev then mintLitSite () else ev) lx
+rewriteArgScoped _ _ (EWideLit hi lo ev lx) =
+  EWideLit hi lo (if isUnminted ev then mintOpSite () else ev) lx
 rewriteArgScoped _ _ e = e
 
 rewriteArgField : ArgRw -> OrdMap String -> FieldAssign -> FieldAssign
@@ -29993,11 +30009,9 @@ opDictVarOf request False _ m _ encl useScope =
 -- #156 S3c: a thin adapter over `entail` (EKOp kind).  `entail`'s ladder IS this
 -- resolver's ladder: assum = opDictVarOf → RDict; inst = stampOpRouteVal (builtin head →
 -- RNone; else RKey with the element reqs PACKED in, so `snd` is empty and no separate
--- implRef exists); fallback = RNone.  Op-site route refs are ALWAYS `Ref RNone`-seeded
--- (parser 480/512/537/541/545 + desugar 171; rewriteArgScoped 7472-7475 recurses into
--- EBinOp/EUnOp keeping the same ref, never re-seeding it), so the two do-nothing arms
--- (builtin-inst, fallback) both yield RNone and the RNone guard preserves that seed
--- byte-identically — reproducing the pre-S3c `()` arms.
+-- implRef exists); fallback = RNone.  Op-site route cells are minted `RNone`-seeded
+-- (`mintOpSite`), and the mark pass mints each site once, so the two do-nothing arms
+-- (builtin-inst, fallback) both yield RNone and the RNone guard preserves that seed.
 resolveOpSite : Bool ->
   String ->
   Ref Route ->
@@ -35897,9 +35911,9 @@ rewriteBinopExpr (EBinOp op l r ev) = match evSiteRoute ev
 -- routes are packed in [dref] and split onto the EMethodAt impl-dict carrier here.
 -- Done in the same mapProg walk that rewrites binops, so
 -- eval/lower never see ENumLit and eval_arith / the emitter get matching tags.
-rewriteBinopExpr (ENumLit n fref dref _) = match !fref
-  Some f => ELit (LFloat f)
-  None => match !dref
+rewriteBinopExpr (ENumLit n ev _) = match evSiteLit ev
+  (Some f, _) => ELit (LFloat f)
+  (None, dref) => match dref
     RNone => ELit (LInt n)
     route if fixedWidthLiteralFits route n => ELit (LInt n)
     route if u64LiteralFits route n =>
@@ -35937,7 +35951,7 @@ rewriteBinopExpr (EUnOp op e ev) = match evSiteRoute ev
 -- at any other type, so a program that reaches eval/emit only has it at those).
 -- At `I64` the halves are the pattern of the magnitude; a `-` around it is the
 -- wrapping negation that makes `-2^63` `minBound`.
-rewriteBinopExpr (EWideLit hi lo dref _) = match !dref
+rewriteBinopExpr (EWideLit hi lo ev _) = match evSiteRoute ev
   RKey word _ _ if isI64Head (literalRouteHead word) => ELit (LI64 hi lo)
   _ => ELit (LU64 hi lo)
 rewriteBinopExpr e = e
@@ -44799,7 +44813,7 @@ freeEVars bound (ESection (SecLeft e op)) =
 -- Leaves.  `EMethodRef` and `EVarAt` never reach the dependency graph (see
 -- `allEVars`'s catch-all), and are not counted there either.
 freeEVars _ (ELit _) = []
-freeEVars _ (ENumLit _ _ _ _) = []
+freeEVars _ (ENumLit _ _ _) = []
 freeEVars _ (EWideLit _ _ _ _) = []
 freeEVars _ (EDictApp _) = []
 freeEVars _ (EMethodRef _) = []
