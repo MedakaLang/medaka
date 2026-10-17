@@ -4356,7 +4356,8 @@ test "a leak past an <IO> bound names what IO joins on a narrowed target only" =
             "entry",
             2,
             "T-EFFECT-LEAK",
-            bare ++ "; `IO` on `wasmgc/edge` is <Clock, Rand, Stderr, Stdout>",
+            bare
+              ++ "; `IO` on `wasmgc/edge` is <Clock, Net, Rand, Stderr, Stdout>",
           ),
         ]
         (ioJoinCheck (Some "wasmgc/edge") [("entry", source)]),

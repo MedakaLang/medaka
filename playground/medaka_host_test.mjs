@@ -21,6 +21,7 @@ const root = dirname(here);
 const medaka = join(root, 'medaka');
 const emitter = process.env.MEDAKA_WASM_EMITTER || join(root, 'test', 'bin', 'wasm_emit_modules_main');
 const runJs = process.env.MEDAKA_HOST_TEST_RUNJS || join(root, 'test', 'wasm', 'run.js');
+const NO_JSPI = ['--import', pathToFileURL(join(root, 'test', 'async_jspi_fixtures', 'no_jspi.mjs')).href];
 const workerJs = process.env.MEDAKA_HOST_TEST_WORKER || join(here, 'worker.js');
 const compileMjs = process.env.MEDAKA_HOST_TEST_COMPILE || join(here, 'compile.mjs');
 for (const [what, p] of [['medaka binary', medaka], ['wasm emitter', emitter]])
@@ -731,7 +732,8 @@ function check(name, ok, detail) {
   check('(t1) jsffi: a thenable is refused for every result type; a non-thenable Unit result is ignored',
     bad.length === 0, bad.join('; '));
 }
-// The JSPI probes run in child processes, with and without `--experimental-wasm-jspi`, so
+// The JSPI probes run in child processes, with `--experimental-wasm-jspi` and with the
+// no_jspi preload (a flagless Node may have JSPI on by default), so
 // both modes are measured whichever this process has.  The child runs `deepsleep` on a
 // streaming host and records each delivery, plus `timer`: a timeout armed when `mid`
 // arrives, which fires inside the sleep only if the guest was suspended, not blocked.
@@ -766,7 +768,7 @@ console.log(JSON.stringify({ jspi: jspiAvailable(), kind: r.kind, code: r.code, 
     try { return JSON.parse(r.stdout); } catch (e) { return { raw: r.stdout + r.stderr, status: r.status }; }
   };
   const ordered = (events) => JSON.stringify(events);
-  const seam = runChild([], { MHT_SEAM: '1' });
+  const seam = runChild(NO_JSPI, { MHT_SEAM: '1' });
   check('(t2) no JSPI: a promise-answering import made through the seam is a CapabilityError naming JSPI',
     seam.jspi === false && seam.kind === 'error' && seam.error && seam.error.name === 'CapabilityError'
       && seam.error.capability === 'clock' && seam.error.message.includes('JSPI'),
@@ -778,7 +780,7 @@ console.log(JSON.stringify({ jspi: jspiAvailable(), kind: r.kind, code: r.code, 
     JSON.stringify(jspi));
   check('(t4) JSPI: mdk_exit after the resumed sleep is { kind: exit } with the program\'s code',
     jspi.kind === 'exit' && jspi.code === 4, JSON.stringify(jspi));
-  const plain = runChild([], {});
+  const plain = runChild(NO_JSPI, {});
   check('(t3) no JSPI: the same sleep blocks (Atomics.wait), so the timeout fires only after the run',
     plain.jspi === false && plain.kind === 'exit' && plain.code === 4 && ordered(plain.events)
       === ordered(['stdout:start\n', 'stdout:mid', 'stdout: after\n', 'stdout:depth 3000\n', 'timer']),
@@ -820,7 +822,7 @@ console.log(JSON.stringify({ jspi: jspiAvailable(), kind: r.kind, out: host.sink
     jspi.jspi === true && jspi.kind === 'done'
       && jspi.out === 'ok: hello\nerr: 404 Not Found\nerr: fetch failed\n',
     JSON.stringify(jspi));
-  const plain = runChild([]);
+  const plain = runChild(NO_JSPI);
   check('(u2) no JSPI: fetchText is a CapabilityError naming JSPI',
     plain.jspi === false && plain.kind === 'error' && plain.error && plain.error.name === 'CapabilityError'
       && plain.error.message.includes('JSPI'),

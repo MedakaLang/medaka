@@ -1,5 +1,5 @@
 -- A `bind js` name that is not a JavaScript identifier.
-extern fetchText : String -> <FFI "js"> String
+extern fetchPage : String -> <FFI "js"> String
   bind js "fetch-text"
 
 main : <IO> Unit
