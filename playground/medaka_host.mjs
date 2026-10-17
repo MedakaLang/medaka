@@ -21,7 +21,7 @@
 //   runProgram(wasm, host, opts) -> { kind: 'done' } | { kind: 'exit', code }
 //                                 | { kind: 'error', error, inProgram }
 //   profile = a name in PROFILES, or a host configuration such as COMPILER_HOST.
-//   opts = { vfs, args, getEnv, executablePath, stdin, sink, streaming, isolated, hostLabel, withheldHint }
+//   opts = { vfs, args, getEnv, executablePath, stdin, sink, streaming, isolated, hostLabel, withheldHint, fetch }
 
 // ── capability slices ────────────────────────────────────────────────────────
 // Each slice lists the import keys it implements.  A key may sit in several slices
@@ -76,6 +76,14 @@ export const SLICES = {
     externs: ['wallTimeSec', 'monotonicSec', 'sleepMs'],
   },
   entropy: { needs: ['Rand'], keys: ['mdk_os_entropy', ...RESULT_KEYS], externs: ['osEntropyBytes'] },
+  // fetchText: the url arrives on the path channel and the body (or the failure text)
+  // leaves on the result channel.  The import answers with a promise, so it is
+  // installed only through `host.importsFor(promising)`.
+  net: {
+    needs: ['Net'],
+    keys: ['mdk_fetch_text', ...PATH_KEYS, ...RESULT_KEYS],
+    externs: ['fetchText'],
+  },
   stdin: {
     needs: ['Stdin'],
     keys: ['mdk_read_line', 'mdk_read_all', 'mdk_read_exactly', ...RESULT_KEYS],
@@ -96,7 +104,7 @@ export const PROFILES = {
     grants: ['Stdout', 'Stderr', 'Clock', 'Rand', 'FileRead', 'FileWrite', 'FFI'],
     process: false,
   },
-  'wasmgc/edge': { grants: ['Stdout', 'Stderr', 'Clock', 'Rand', 'FFI'], process: false },
+  'wasmgc/edge': { grants: ['Stdout', 'Stderr', 'Clock', 'Rand', 'Net', 'FFI'], process: false },
   'wasmgc/wasi-p2': { grants: ['FFI'], process: false },
 };
 
@@ -154,6 +162,7 @@ export const KEY_EXTERN = {
   mdk_os_entropy: 'osEntropyBytes', mdk_executable_path: 'executablePath',
   mdk_args_count: 'args', mdk_arg_len: 'args', mdk_arg_byte: 'args', mdk_exit: 'exit',
   mdk_wall_time_sec: 'wallTimeSec', mdk_monotonic_sec: 'monotonicSec', mdk_sleep_ms: 'sleepMs',
+  mdk_fetch_text: 'fetchText',
   mdk_result_len: 'readFile/getEnv result', mdk_result_byte: 'readFile/getEnv result',
 };
 
@@ -657,6 +666,8 @@ export function createHost(profile, opts = {}) {
     sink: opts.sink || bufferSink(),
     streaming: !!opts.streaming,
     isolated: opts.isolated,
+    // The `fetch` the net slice calls: injectable so a gate can answer without a network.
+    fetch: opts.fetch,
     stdoutBuf: [], stderrBuf: [],
     pathBuf: [], resultBuf: new Uint8Array(0), writeBuf: [],
     floatFmtBuf: new Uint8Array(0), strToFloatOk: 0,
@@ -974,6 +985,8 @@ export function createHost(profile, opts = {}) {
       if (host.streaming) host.flush();
       Atomics.wait(host.waitCell, 0, 0, ms);
     },
+    // fetchText without a promising entry: there is no way to wait on the response.
+    mdk_fetch_text: () => promiseImport('net', 'mdk_fetch_text', null, false)(),
   };
   // The promise-answering forms of keys that `real` serves synchronously, installed by
   // runProgram under a promising entry.  Sleep there is a timer, so it needs no
@@ -987,6 +1000,23 @@ export function createHost(profile, opts = {}) {
       const step = (left) => new Promise((resolve) => setTimeout(resolve, Math.min(left, 0x7fffffff)))
         .then(() => (left > 0x7fffffff ? step(left - 0x7fffffff) : undefined));
       return step(ms);
+    },
+    // GET the url on the path channel: 1 with the body of a 2xx response on the result
+    // channel, 0 with "<status> <statusText>" for any other status or the failure's
+    // message when no response arrives.  The url is taken before the first await, so
+    // the channel is free again while the guest is suspended.
+    mdk_fetch_text: async () => {
+      const url = takePath();
+      if (host.streaming) host.flush();
+      try {
+        const res = await (host.fetch || globalThis.fetch)(url);
+        if (res.ok) { host.resultBuf = new Uint8Array(await res.arrayBuffer()); return 1; }
+        host.resultBuf = enc(`${res.status} ${res.statusText}`);
+        return 0;
+      } catch (e) {
+        host.resultBuf = enc(String((e && e.message) || e));
+        return 0;
+      }
     },
   };
   // Every key of every slice is a callable: real when an installed slice lists it,

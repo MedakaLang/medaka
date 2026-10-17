@@ -285,6 +285,10 @@ wasmHelperKeyRows = [
   ("readFile", grantChannelKeys ++ readChannelKeys),
   ("readFileBytes", grantChannelKeys ++ readChannelKeys),
   (
+    "fetchText",
+    ["mdk_path_reset", "mdk_path_push", "mdk_result_len", "mdk_result_byte"],
+  ),
+  (
     "writeFileBytes",
     grantChannelKeys
       ++ [
@@ -448,6 +452,7 @@ wasmUseRows = [
   ("wallTimeSec", [UseFloat, UseClock]),
   ("monotonicSec", [UseFloat, UseClock]),
   ("sleepMs", [UseClock]),
+  ("fetchText", [UseStr, UseList]),
   ("randomInt", [UseRng]),
   ("randomBool", [UseRng]),
   ("randomFloat", [UseRng, UseFloat, UseFloatRng]),
@@ -556,6 +561,10 @@ interpLlvmOnly = "implemented by llvm, missing from the interpreter"
 wasmNoSockets : String
 wasmNoSockets =
   "the `net` module is native-only: raw BSD sockets have no WasmGC equivalent — build for a native target instead"
+
+noHttpClient : String
+noHttpClient =
+  "`fetchText` is lowered only by the wasmgc/edge target: native has no HTTP client and no TLS — build for `wasmgc/edge`"
 
 -- In `stdlib/runtime.mdk` declaration order.
 export
@@ -964,6 +973,11 @@ catalogRows = [
     (CSymbol LlvmPerf "mdk_sleep_ms")
     (EnvImport WasmLeaf "mdk_sleep_ms")
     Interpreted,
+  ExternRow
+    "fetchText"
+    (NotProvided GapPermanent noHttpClient)
+    (EnvImport WasmLeaf "mdk_fetch_text")
+    (NotProvided GapPermanent noHttpClient),
   ExternRow
     "allocBytes"
     (CSymbol LlvmPerf "mdk_alloc_bytes")

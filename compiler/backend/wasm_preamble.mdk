@@ -1708,6 +1708,7 @@ hostImportSigOf "mdk_exit" = Some " (param i32)"
 hostImportSigOf "mdk_wall_time_sec" = Some " (result f64)"
 hostImportSigOf "mdk_monotonic_sec" = Some " (result f64)"
 hostImportSigOf "mdk_sleep_ms" = Some " (param i64)"
+hostImportSigOf "mdk_fetch_text" = Some " (result i32)"
 hostImportSigOf "mdk_cbrt" = Some unaryF64Sig
 hostImportSigOf "mdk_exp" = Some unaryF64Sig
 hostImportSigOf "mdk_log" = Some unaryF64Sig
@@ -1982,6 +1983,8 @@ randomFloatRuntimeLines = [
 --   no element: the whole domain.  The host confines the path against that grant
 --   and every enclosing declared bound of the same mode, as medaka_rt.c
 --   mdk_confine_bounds does, and a refusal is an Err of the extern's result.
+--   fetchText : push url, mdk_fetch_text() -> i32 (1=Ok body / 0=Err message), both on the
+--     result channel; wrap as readFile does.
 --   getEnv    : push name, mdk_get_env() -> i32 (1=Some / 0=None); rebuild $str and
 --     wrap Some (struct.new $C_Some, ord 0) / None (i31 ord 1).
 --   executablePath : mdk_executable_path() -> i32 (always 1); the path on the result channel.
@@ -2030,6 +2033,7 @@ ioHostRuntimeLines keys =
     else
       [])
     ++ gatedOn "mdk_read_file" keys ioReadFileLines
+    ++ gatedOn "mdk_fetch_text" keys ioFetchTextLines
     ++ gatedOn "mdk_file_exists" keys ioFileExistsLines
     ++ gatedOn "mdk_canonicalize_path" keys ioCanonicalizeLines
     ++ gatedOn "mdk_write_file" keys ioWriteFileLines
@@ -2447,6 +2451,17 @@ ioReadFileLines = [
   "    (if (result (ref eq)) (i32.ge_s (local.get $c) (i32.const 0))",
   "      (then (struct.new $C_Ok (i32.const 0) (struct.new $str (local.get $c) (local.get $buf))))",
   "      (else (struct.new $C_Err (i32.const 1) (call $mdk_str_not_utf8 (local.get $path))))))",
+]
+
+ioFetchTextLines : List String
+ioFetchTextLines = [
+  "  ;; fetchText : $str url -> Result String String.  1=Ok body / 0=Err message.",
+  "  ;; The host import answers with a promise, so under JSPI the guest suspends in the call.",
+  "  (func $mdk_fetch_text_io (param $url (ref $str)) (result (ref eq))",
+  "    (call $mdk_push_path (local.get $url))",
+  "    (if (result (ref eq)) (call $mdk_fetch_text)",
+  "      (then (struct.new $C_Ok (i32.const 0) (call $mdk_io_result_to_str)))",
+  "      (else (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))"
 ]
 
 ioFileExistsLines : List String

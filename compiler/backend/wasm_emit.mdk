@@ -1907,6 +1907,7 @@ externArityW name =
       "wallTimeSec",
       "monotonicSec",
       "sleepMs",
+      "fetchText",
       "bitNot",
       "intBitNot",
       "intBitsToFloat",
@@ -7284,6 +7285,12 @@ emitLeafExternRef prog env d "sleepMs" [n] =
     ++ ["call $mdk_unbox_int", "call $mdk_sleep_ms", "i32.const 0", "ref.i31"]
 emitLeafExternRef prog env d "sleepMs" _ =
   gapLP prog "wasm: sleepMs takes exactly one argument"
+-- fetchText pushes its url through the path channel and answers a Result through the
+-- result channel, as readFile does; Net carries no grant argument.
+emitLeafExternRef prog env d "fetchText" [u] =
+  emitRefExpr prog env d u ++ ["ref.cast (ref $str)", "call $mdk_fetch_text_io"]
+emitLeafExternRef prog env d "fetchText" _ =
+  gapLP prog "wasm: fetchText takes exactly one argument"
 -- ioPoll: no wasm host binds descriptor readiness, so a call stops with a coded
 -- runtime error.  It traps at run time, not at build time, because the async
 -- scheduler (`systemPoller`) names ioPoll and calls it only when a task waits on

@@ -469,6 +469,10 @@ extern monotonicSec : Unit -> <Clock> Float
 -- | Pauses the program for a number of milliseconds.
 extern sleepMs : Int -> <Clock> Unit
 
+-- | Fetches a URL with an HTTP GET and returns the body of a 2xx response, or
+-- the status line or the failure message.  Only the edge target lowers it.
+extern fetchText : (url : String) -> <Net url> Result String String
+
 -- | The total number of bytes the program has allocated.
 extern allocBytes : Unit -> <IO> Float
 
