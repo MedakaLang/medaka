@@ -459,6 +459,78 @@ The stop is at run time, not at build time, because the async scheduler names
 `wasm_poll_order` and `wasm_poll_stdin` fixtures of `test/diff_async_test.mdk`;
 ledgered as the wasm `ioPoll` `TrapStub` row of `compiler/backend/extern_catalog.mdk`.
 
+### 3.1 The `jsffi` import module: user `js` bindings
+
+A user `extern` with a `bind js "<name>"` clause, reached under a `wasmgc/*`
+target, is a function import from the module **`jsffi`**, never from `env`. A
+user name therefore cannot collide with a runtime `mdk_*` key, and
+`checkImportKeys` keeps judging `env` alone. The set of imports is one fact,
+the `jsImports` field of `EmitPlan` (`compiler/backend/emit_plan.mdk`), computed by the same
+walk that computes `hostKeys`: an extern named only in code the reach filter
+dropped imports nothing. The emitter transcribes the plan: one import per
+reached extern, in Medaka-name order.
+
+**The import name describes the signature.** The field name is
+`<jsName>:<P1>,…,<Pn>-><R>`, where each `P` and `R` is the declared head of a
+parameter or of the result: `Int`, `Float`, `Bool`, `Char`, `String`, `Array`
+(always `Array Int`), `Unit`, `U8`, `U16`, `U32`, `I32`, `U64` or `I64`. For
+example `extern upper : String -> <FFI "js"> String` with `bind js "jsUpper"`
+imports `jsffi` `"jsUpper:String->String"`. The host learns each binding's
+signature from the module (`WebAssembly.Module.imports`), so it needs no side
+table and cannot disagree with the guest about a signature. Two Medaka names
+bound to one JS name are two imports and may have different signatures.
+
+**What crosses, per declared head.** Arguments are evaluated left to right
+before anything crosses, as on native.
+
+| Head | Wasm parameter | Wasm result | What the JS function sees and returns |
+|---|---|---|---|
+| `Int` | `i64` | `i64` | a `BigInt`. The guest's arguments are in `-2^62 .. 2^62 - 1`. A result outside that range stops the program with `runtime error [E-PANIC]: foreign call '<jsName>' returned a value outside Int's range …` (native's rule, FFI-ABI §2.1a). So `2^63 - 1` and `-2^63` are refused, never wrapped |
+| `Float` | `f64` | `f64` | a `Number`. NaN, `-0` and the infinities cross unchanged; a NaN's payload is the engine's |
+| `Bool` | `i32` (0 or 1) | `i32` | a JS boolean. The host maps a result `true` to 1 and `false` to 0. The guest reads any non-zero `i32` as `True`, as native reads a C result |
+| `Char` | `i32` (the scalar value) | `i32` | a one-code-point string, so a character above the BMP is two UTF-16 units. The host returns `codePointAt(0)` of a one-code-point string. The guest refuses a result that is not a Unicode scalar value (above 1114111, or in `55296..57343`) with `runtime error [E-PANIC]: foreign call '<jsName>' returned a value that is not a valid Char …`, as native does |
+| `U8` `U16` `U32` `I32` | `i32` | `i32` | a `Number` (`U32` read unsigned). The host refuses a result that is not an integer `Number` in the type's range, with a `JsBindingError` such as ``js binding `f` returned the Number 300, not U8``; it never masks or wraps |
+| `U64` `I64` | `i64` | `i64` | a `BigInt` (`U64` read unsigned) |
+| `String` | `i32`: the byte length | none | a JS string. The guest resets the path channel once per call (`mdk_path_reset`), then appends each `String` and `Array` argument in parameter order (`$mdk_push_path_more`); the host splits the channel by the lengths in the parameters and decodes each `String` as UTF-8, which a Medaka `String` always is. A `String` result goes to the result channel (`mdk_result_len`/`mdk_result_byte`) after any copy-back words, encoded as UTF-8 |
+| `Array` | `i32`: the element count | refused | a `BigInt64Array` holding the elements, 8 bytes each, little-endian two's complement on the path channel. The binding may write to it. After the call the host writes every `Array` argument's elements back, in parameter order and at the same count, to the start of the result channel, and the guest copies them into the caller's array. The copy-back is unconditional, as native's is (FFI-ABI §2.4). Before it writes any element of an array, the guest checks that every element fits `Int`. If one does not, it stops with `runtime error [E-PANIC]: foreign call '<jsName>' wrote a value outside Int's range … into an Array Int argument`, as native does. An `Array Int` result is an emitter gap on wasm as it is on native: native has no length channel for it, and the two targets must not give one declaration two meanings |
+| `Unit` | none | none | nothing. A `Unit` argument is still evaluated, and the JS function receives no argument for it. The host ignores a `Unit` binding's return value |
+
+**A `String` argument is its bytes, NUL included.** A `String` containing U+0000
+reaches a `js` binding intact, because the host splits the path channel by the
+declared lengths. The same `String` reaches a `c` binding as a `const char*` and
+is truncated at the NUL (`compiler/FFI-ABI.md` §2.3), so the two hosts differ
+here by the design of the C ABI, not by a defect of either.
+
+**String results are strict.** A JS string is UTF-16 and can hold a lone
+surrogate, which has no UTF-8 encoding. The host refuses such a result (the
+`isWellFormed` test) with the binding error below. It is not replaced with
+U+FFFD. This matches native, where `mdk_ffi_str_in` refuses a C string that is
+not UTF-8. The guest decodes the result channel with `$mdk_u8_to_str_lossy`,
+the decoder every host byte channel uses. A host that keeps this rule only ever
+hands it well-formed UTF-8, so the decoder never substitutes.
+
+**When the binding throws, or answers the wrong type.** The host's wrapper
+catches the exception. It ends the program at that call with the error
+``js binding `<jsName>` threw: <message>``. A result of the wrong JS type ends
+it the same way, with ``js binding `<jsName>` returned <what>, not <head>``.
+Examples are a `Number` for an `Int`, an out-of-range `BigInt` for a `U64`, a
+non-string for a `String`, or a lone surrogate. Medaka code cannot catch either
+error, because a foreign call cannot fail into Medaka (FFI-ABI §4). The error
+unwinds the guest, and the host flushes stdout and then stderr (WH4).
+`test/wasm/run.js` reports it as `runtime error: <message>` and exits 1. No
+value is ever substituted.
+
+**A binding the host was not given.** The host supplies every `jsffi` import
+the module declares. An import that names a JS function the host was not given
+is a stub that throws ``CapabilityError('FFI', "js binding `<jsName>` is not
+supplied by this host")`` when it is called. It is not refused at
+instantiation. A program that never reaches the call runs, as it does when a
+host withholds an `env` slice (WH3).
+
+Pinned by `test/wasm_jsffi_test.mdk`. Its stub host is
+`test/wasm_jsffi_fixtures/stub_host.mjs`, which implements this section over
+`createHost`'s channels.
+
 ---
 
 ## 4. Conformance table — wasm against every shared law

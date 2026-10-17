@@ -1,0 +1,7 @@
+-- A function `helper` of this module's own, which `useHelper` calls.
+helper : Int -> Int
+helper n = n + 1
+
+export
+useHelper : Int -> Int
+useHelper n = helper n

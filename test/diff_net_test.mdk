@@ -12,7 +12,9 @@
    Runs under `medaka test --native`: it spawns subprocesses and reads
    fixtures, neither of which the interpreter binds. -}
 
-import compiler_cli_test_support.{boundedInTree, fixtureStems}
+import compiler_cli_test_support.{
+  boundedInTree, fixtureStems, wasmBuildArgv, wasmEmitter
+}
 import test_process.{
   boundedVerb, boundedVerbSeconds, medakaBin, medakaRoot, withScratchDir
 }
@@ -25,9 +27,6 @@ corpus = "\{medakaRoot}/test/net_fixtures"
 
 emitter : <IO> String
 emitter = "\{medakaRoot}/medaka_emitter"
-
-wasmEmitter : <IO> String
-wasmEmitter = "\{medakaRoot}/test/bin/wasm_emit_modules_main"
 
 -- Builds fixture `name` into `scratch`, runs it once, and compares its stdout
 -- with `<name>.expected`. The run's exit code is graded too: the shell gate
@@ -53,18 +52,17 @@ fixtureCheck scratch name =
 -- `medaka build --target wasm` with the native emitter and the wasm emitter
 -- oracle pinned through `env`, so the build sees the same tree the gate reads.
 wasmBuild : String -> <Exec, IO> Result String (Int, String, String)
-wasmBuild scratch = boundedVerbSeconds 120 "env" [
-  "MEDAKA_ROOT=\{medakaRoot}",
-  "MEDAKA_EMITTER=\{emitter}",
-  "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
-  medakaBin,
-  "build",
-  "--target",
-  "wasm",
-  "\{corpus}/net_loopback.mdk",
-  "-o",
-  "\{scratch}/net_loopback_wasm",
-]
+wasmBuild scratch =
+  boundedVerbSeconds
+    120
+    "env"
+    ([
+        "MEDAKA_ROOT=\{medakaRoot}",
+        "MEDAKA_EMITTER=\{emitter}",
+      ]
+      ++ wasmBuildArgv
+        "\{corpus}/net_loopback.mdk"
+        "\{scratch}/net_loopback_wasm")
 
 wasmReject : String -> <Exec, IO> Expectation
 wasmReject scratch =

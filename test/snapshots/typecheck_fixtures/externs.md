@@ -16,21 +16,21 @@ stages=TYPES
 -- `ffi_cross_poly_reject.mdk`).  ⚠️ THE PROPERTY THIS FILE LOSES is wrapper
 -- generalization over a POLYMORPHIC extern scheme (the old `boxIt x = wrapL x`);
 -- what remains is the monomorphic half plus the multi-argument spine.
-extern strLen : String -> <FFI> Int
-extern charAt : String -> Int -> <FFI> Char
-extern emit : String -> <FFI, IO> Unit
-extern rng : Unit -> <FFI, Rand> Int
+extern strLen : String -> <FFI "c"> Int
+extern charAt : String -> Int -> <FFI "c"> Char
+extern emit : String -> <FFI "c", IO> Unit
+extern rng : Unit -> <FFI "c", Rand> Int
 useLen s = strLen s
 firstOf s = charAt s 0
 combine a b = strLen a + strLen b
-shout : String -> <IO, FFI> Unit
+shout : String -> <IO, FFI "c*"> Unit
 shout s = emit s
 # TYPES
-strLen : String -> <FFI> Int
-charAt : String -> Int -> <FFI> Char
-emit : String -> <FFI, IO> Unit
-rng : Unit -> <FFI, Rand> Int
-useLen : String -> <FFI> Int
-firstOf : String -> <FFI> Char
-combine : String -> String -> <FFI> Int
-shout : String -> <FFI, IO> Unit
+strLen : String -> <FFI "c"> Int
+charAt : String -> Int -> <FFI "c"> Char
+emit : String -> <FFI "c", IO> Unit
+rng : Unit -> <FFI "c", Rand> Int
+useLen : String -> <FFI "c"> Int
+firstOf : String -> <FFI "c"> Char
+combine : String -> String -> <FFI "c"> Int
+shout : String -> <FFI "c*", IO> Unit

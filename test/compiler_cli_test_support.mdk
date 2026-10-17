@@ -57,6 +57,31 @@ export
 emitterBin : <IO> String
 emitterBin = getEnvOr "MEDAKA_EMITTER" "\{medakaRoot}/medaka_emitter"
 
+{- | The wasm emitter binary the CLI's `--target wasm` path execs, from
+   `MEDAKA_WASM_EMITTER`, defaulting to the one in `medakaRoot`; a gate shard
+   builds it but never exports the variable. -}
+export
+wasmEmitter : <IO> String
+wasmEmitter =
+  getEnvOr "MEDAKA_WASM_EMITTER" "\{medakaRoot}/test/bin/wasm_emit_modules_main"
+
+{- | The `env` argv of `medaka build --target wasm src -o out`, with the wasm
+   emitter named explicitly and `MEDAKA_STRICT=1` so a stale compiler fails
+   the build loudly. -}
+export
+wasmBuildArgv : String -> String -> <IO> List String
+wasmBuildArgv src out = [
+  "MEDAKA_STRICT=1",
+  "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
+  medakaBin,
+  "build",
+  "--target",
+  "wasm",
+  src,
+  "-o",
+  out,
+]
+
 {- | Runs `cmd` with `MEDAKA_ROOT` and `MEDAKA_EMITTER` named explicitly in its
    environment, killed after `secs` seconds.
 

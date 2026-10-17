@@ -1,0 +1,7 @@
+-- A binding that throws ends the program at the call.
+extern jsThrow : String -> <FFI "js"> String
+  bind js "jsThrow"
+
+main =
+  let _ = println "before"
+  println (jsThrow "x")

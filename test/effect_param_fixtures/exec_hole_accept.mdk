@@ -7,7 +7,7 @@
 
 extern runCommand : (program : String) -> List String -> <Exec program> Result String (Int, String, String)
 
-runLs : Unit -> <Exec "/usr/bin/*", FFI> Result String (Int, String, String)
+runLs : Unit -> <Exec "/usr/bin/*", FFI "c*"> Result String (Int, String, String)
 runLs _ = runCommand "/usr/bin/ls" []
 
 main : <IO> Unit

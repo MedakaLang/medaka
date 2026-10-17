@@ -1,0 +1,8 @@
+-- One declaration bound for both hosts: llvm/native-posix calls it through
+-- `c` and every wasmgc profile through `js`, so both admit it.
+extern dualAdd : Int -> Int -> <FFI "c"> Int
+  bind c "c_add"
+  bind js "add"
+
+main : <Stdout, FFI "c"> Unit
+main = println (dualAdd 20 22)

@@ -1,0 +1,7 @@
+exit=0
+--- stdout
+jsAdd : Int -> Int -> <FFI "js"> Int
+unused : Int -> <FFI "js"> Int
+main : <Stdout> Unit
+-- <fixtures>/ffi_js_unreached.mdk: ok (3 declaration(s) checked, 0 errors)
+--- stderr

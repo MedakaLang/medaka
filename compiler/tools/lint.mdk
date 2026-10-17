@@ -63,6 +63,7 @@ import frontend.ast.{
   FunClause(..),
   Expr(..),
   Decl(..),
+  ExternDecl(..),
   qualifierSource,
   authTermsSurface,
 }
@@ -1084,7 +1085,8 @@ stampModule modName pairs = map (p => (modName, fst p, snd p)) pairs
 -- it is here so the index does not silently need a second edit if that changes.
 exportedSigPair : Decl -> List (String, Ty)
 exportedSigPair (DTypeSig True name ty _) = [(name, ty)]
-exportedSigPair (DExtern True name ty) = [(name, ty)]
+exportedSigPair (DExtern (ExternDecl { edPub = True, edName = name, edTy = ty, ... })) =
+  [(name, ty)]
 exportedSigPair (DAttrib _ d) = exportedSigPair d
 exportedSigPair _ = []
 
@@ -1166,7 +1168,7 @@ testVerbScope prog declPos =
 
 topLevelBinders : Decl -> List String
 topLevelBinders (DFunDef _ n _ _ _ _) = [n]
-topLevelBinders (DExtern _ n _) = [n]
+topLevelBinders (DExtern (ExternDecl { edName = n, ... })) = [n]
 topLevelBinders (DLetGroup _ binds) = map letBindName binds
 topLevelBinders (DInterface { methods, ... }) = map ifaceMethodNameOf methods
 topLevelBinders (DAttrib _ d) = topLevelBinders d
@@ -5929,7 +5931,7 @@ nonDefRefL : Decl -> List String
 nonDefRefL (DAttrib _ dd) = nonDefRefL dd
 nonDefRefL (DFunDef _ _ _ _ _ _) = []
 nonDefRefL (DTypeSig _ _ _ _) = []
-nonDefRefL (DExtern _ _ _) = []
+nonDefRefL (DExtern _) = []
 nonDefRefL (DData { dataOrigin = _ }) = []
 nonDefRefL (DUse _ _ _) = []
 nonDefRefL (DEffect _ _ _ _ _ _) = []

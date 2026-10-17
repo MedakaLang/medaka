@@ -114,7 +114,7 @@ import ir.core_ir_lower.{
 }
 import ir.core_ir_sexp.{callModeSexp}
 import frontend.ast.{
-  Pat(..), Route(..), Decl(..), Ty(..), Lit(..), BinderId(..)
+  Pat(..), Route(..), Decl(..), ExternDecl(..), Ty(..), Lit(..), BinderId(..)
 }
 import types.target_profile.{TargetProfile, withheldLabels, profileName}
 import backend.extern_catalog.{
@@ -574,7 +574,7 @@ checkedTarget = Ref None
 export
 externLabels : List Decl -> List (String, List String)
 externLabels [] = []
-externLabels ((DExtern _ n ty) :: rest) =
+externLabels ((DExtern (ExternDecl { edName = n, edTy = ty, ... })) :: rest) =
   (n, resultLabels ty) :: externLabels rest
 externLabels ((DAttrib _ d) :: rest) = externLabels (d :: rest)
 externLabels (_ :: rest) = externLabels rest
@@ -1339,7 +1339,7 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DUse false (UseAlias ("map") "BM"))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "CallScope" false) (mem "bindGroupScope" false) (mem "bindLetScope" false) (mem "bindPatScope" false) (mem "bindPatsScope" false) (mem "callModeFor" false) (mem "definedArityOf" false) (mem "entryArityRow" false) (mem "programArities" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false) (mem "leadingDictParams" false))))
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "callModeSexp" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Decl" true) (mem "Ty" true) (mem "Lit" true) (mem "BinderId" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true) (mem "Lit" true) (mem "BinderId" true))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "withheldLabels" false) (mem "profileName" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "Disposition" true) (mem "GapKind" true) (mem "catalogRow" false) (mem "gapKindName" false) (mem "rowLlvm" false) (mem "rowWasm" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false))))
@@ -1450,7 +1450,7 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DFunDef false "checkedTarget" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "externLabels" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "externLabels" ((PList)) (EListLit))
-(DFunDef false "externLabels" ((PCons (PCon "DExtern" PWild (PVar "n") (PVar "ty")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "resultLabels") (EVar "ty"))) (EApp (EVar "externLabels") (EVar "rest"))))
+(DFunDef false "externLabels" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n")) (rf "edTy" (PVar "ty"))) true)) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "resultLabels") (EVar "ty"))) (EApp (EVar "externLabels") (EVar "rest"))))
 (DFunDef false "externLabels" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "externLabels") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "externLabels" ((PCons PWild (PVar "rest"))) (EApp (EVar "externLabels") (EVar "rest")))
 (DTypeSig false "resultLabels" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
@@ -1747,7 +1747,7 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DUse false (UseAlias ("map") "BM"))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "CallScope" false) (mem "bindGroupScope" false) (mem "bindLetScope" false) (mem "bindPatScope" false) (mem "bindPatsScope" false) (mem "callModeFor" false) (mem "definedArityOf" false) (mem "entryArityRow" false) (mem "programArities" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false) (mem "leadingDictParams" false))))
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "callModeSexp" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Decl" true) (mem "Ty" true) (mem "Lit" true) (mem "BinderId" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true) (mem "Lit" true) (mem "BinderId" true))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "withheldLabels" false) (mem "profileName" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "Disposition" true) (mem "GapKind" true) (mem "catalogRow" false) (mem "gapKindName" false) (mem "rowLlvm" false) (mem "rowWasm" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false))))
@@ -1858,7 +1858,7 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DFunDef false "checkedTarget" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "externLabels" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "externLabels" ((PList)) (EListLit))
-(DFunDef false "externLabels" ((PCons (PCon "DExtern" PWild (PVar "n") (PVar "ty")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "resultLabels") (EVar "ty"))) (EApp (EVar "externLabels") (EVar "rest"))))
+(DFunDef false "externLabels" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n")) (rf "edTy" (PVar "ty"))) true)) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "resultLabels") (EVar "ty"))) (EApp (EVar "externLabels") (EVar "rest"))))
 (DFunDef false "externLabels" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "externLabels") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "externLabels" ((PCons PWild (PVar "rest"))) (EApp (EVar "externLabels") (EVar "rest")))
 (DTypeSig false "resultLabels" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))

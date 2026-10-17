@@ -1,0 +1,5 @@
+-- The same extern reached through an import alias, `C.cAdd`.
+import cbind as C
+
+main : <Stdout, FFI "c"> Unit
+main = println (C.cAdd 20 22)

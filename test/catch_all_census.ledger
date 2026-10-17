@@ -14,7 +14,7 @@ argDispatchOfDecl	Decl	2/14
 argDispatchOfDeclById	Decl	2/14
 checkDeclAuthorityUsesDecl	Decl	1/14
 checkDeclaredKindsDecl	Decl	3/14
-checkEffectParamsDecl	Decl	3/14
+checkEffectParamsDecl	Decl	2/14
 checkGradedImplHeadDecl	Decl	1/14
 checkImplSuperContexts	Decl	1/14
 checkUndeterminedRetEffVarsDecl	Decl	3/14

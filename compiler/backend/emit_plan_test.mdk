@@ -42,6 +42,7 @@ import ir.core_ir.{
 import support.ordmap.{omLookup}
 import backend.emit_plan.{
   EmitPlan(..),
+  JsImport(..),
   ReachUnits(..),
   buildEmitPlan,
   buildEmitPlanReached,
@@ -50,6 +51,7 @@ import backend.emit_plan.{
 }
 import backend.core_validate.{Backend(..)}
 import backend.trmc_analysis.{ctorTailIsCons, dispMembersOf, dispRootOf}
+import backend.wasm_preamble.{jsImportField}
 
 val : String -> CExpr -> CBind
 val name rhs = synthBind name [CClause [] rhs]
@@ -234,7 +236,7 @@ bindNm : CBind -> String
 bindNm (CBind n _ _ _) = n
 
 test "wasm reach keeps a dispatch-only impl and its lazy global, drops the rest" =
-  let (plan, reached) = buildEmitPlanReached reachProgram
+  let (plan, reached) = buildEmitPlanReached [] reachProgram
   expectAll [
     labelFail
       "the m impl survives, the k impl does not"
@@ -987,4 +989,68 @@ test "a top-level definition named like an extern, as the emitter resolves it" =
           fn "args" ["u"] (int 0),
           val "main" (call "args" [unit]),
         ])),
+  ]
+
+-- ── the `jsffi` imports (docs/spec/WASM-SEMANTICS.md section 3.1) ──────────
+
+-- `jsUp` binds `js` (and `c`), `cNeg` binds only `c`.
+jsRows : List (String, (List (String, String), (List String, String)))
+jsRows = [
+  ("jsUp", ([("c", "c_up"), ("js", "jsUpper")], (["String"], "String"))),
+  ("cNeg", ([("c", "c_neg")], (["Int"], "Int"))),
+]
+
+-- the reached wasm plan's imports as (Medaka name, JS name, field), and its
+-- host keys
+jsPlanOf : List CBind -> (List (String, String, String), List String)
+jsPlanOf binds =
+  let (plan, _) = buildEmitPlanReached jsRows (program binds)
+  (
+    map (imp => (imp.medakaName, imp.jsName, jsImportField imp)) plan.jsImports,
+    plan.hostKeys,
+  )
+
+jsUpImport : List (String, String, String)
+jsUpImport = [("jsUp", "jsUpper", "jsUpper:String->String")]
+
+-- a `String` argument crosses on the path channel, a `String` result on the
+-- result channel
+jsUpKeys : List String
+jsUpKeys =
+  ["mdk_path_push", "mdk_path_reset", "mdk_result_byte", "mdk_result_len"]
+
+test "a wasm plan imports each reached js binding once, and only those" = expectAll
+  [
+    labelFail
+      "applied twice and named as a value: one import, with its channels"
+      (expectEqual
+        (jsUpImport, jsUpKeys)
+        (jsPlanOf [
+          val
+            "main"
+            (CTuple [
+              call "jsUp" [CLit (LString "a")],
+              call "jsUp" [CLit (LString "b")],
+              ref "jsUp",
+            ]),
+        ])),
+    labelFail
+      "named only in a function main never reaches: no import"
+      (expectEqual
+        ([], [])
+        (jsPlanOf [
+          fn "unused" ["s"] (call "jsUp" [ref "s"]),
+          val "main" (int 0),
+        ])),
+    labelFail
+      "a parameter named like the binding is the parameter"
+      (expectEqual
+        ([], [])
+        (jsPlanOf [
+          fn "apply" ["jsUp"] (call "jsUp" [int 1]),
+          val "main" (call "apply" [ref "apply"]),
+        ])),
+    labelFail
+      "an extern with no js binding imports nothing"
+      (expectEqual ([], []) (jsPlanOf [val "main" (call "cNeg" [int 1])])),
   ]

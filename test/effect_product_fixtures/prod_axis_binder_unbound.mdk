@@ -2,7 +2,7 @@
 -- whole parameter does: `method` is bound nowhere.
 effect Http Product (Host : Prefix, Method : Set)
 
-extern request : (host : String) -> <FFI, Http Host=host Method=method> Int
+extern request : (host : String) -> <FFI "c", Http Host=host Method=method> Int
 
 main : <IO> Unit
 main = println "should not typecheck"

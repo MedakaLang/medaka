@@ -219,13 +219,13 @@ arrow; an atom that names it charges the effect on whatever that argument is:
 
 ```medaka
 effect Store Prefix
-extern load : (path : String) -> <FFI, Store path> Int
+extern load : (path : String) -> <FFI "c", Store path> Int
 extern move : (src : String) ->
   (dst : String) ->
-  <FFI, Store src, Store dst> Unit
-under : (path : String) -> <FFI, Store path> Int  -- may read path, nothing else
+  <FFI "c", Store src, Store dst> Unit
+under : (path : String) -> <FFI "c*", Store path> Int  -- may read path, nothing else
 under path = load path
-config : String -> <FFI, Store "cfg/*"> Int  -- the caller extends the path
+config : String -> <FFI "c*", Store "cfg/*"> Int  -- the caller extends the path
 config name = under ("cfg/" ++ name)
 pathOf : (dir : String @Store) -> String @dir  -- a domain on the binder, no charge
 pathOf dir = dir
@@ -247,11 +247,11 @@ cannot fill a pattern slot, and neither can an exact literal
 
 ```medaka
 effect Store Prefix
-extern load : (path : String) -> <FFI, Store path> Int
-under : (dir : String @Store*) -> String -> <FFI, Store dir> Int
+extern load : (path : String) -> <FFI "c", Store path> Int
+under : (dir : String @Store*) -> String -> <FFI "c*", Store dir> Int
 under dir name = load (dir ++ name)  -- stays within `dir`
 data Dir (d : Authority Store*) = Dir (String @d)
-readIn : Dir d -> String -> <FFI, Store d> Int
+readIn : Dir d -> String -> <FFI "c*", Store d> Int
 readIn (Dir root) name = load (root ++ "blocks/" ++ name)
 cfg : Dir "cfg/*"
 cfg = Dir "cfg/"
@@ -1103,35 +1103,70 @@ effect row must name `FFI` — the compiler does not add the label for you, beca
 row it rewrote would no longer be the row you read.
 
 ```medaka
-extern foo : Int -> <FFI> String
-extern add2 : Int -> Int -> <FFI> Int
-extern cCurlVersion : Unit -> <FFI "libcurl"> String
+extern foo : Int -> <FFI "c"> String
+extern add2 : Int -> Int -> <FFI "c"> Int
+extern cCurlVersion : Unit -> <FFI "c/libcurl"> String
 ```
 
 The optional string parameter names the library, exactly as `<Exec "clang">` names a
 binary. It is a **statement about where the call goes, not an enforcement** — the
-linker decides what actually resolves.
+linker decides what actually resolves. The parameter is host-qualified: `"c"` is the
+C host and `"c/libcurl"` is a library on it. An extern's own row writes `"HOST"` or
+`"HOST/LIBRARY"` with HOST `c` or `js`; anything else, bare `<FFI>` included, is
+`T-FFI-NO-HOST`. A bound (a row on any other signature, or a policy) compares the
+parameter as text: `"c*"` admits both `"c"` and `"c/libcurl"`, `"c"` admits only
+`"c"`, and `"c/*"` does not admit `"c"`.
+
+### Host bindings: the `bind` clause
+
+By default an extern is a C function whose symbol is its own name. Indented
+`bind` clauses under the signature say otherwise, one per host:
+
+```text
+extern fetchText : (url : String) -> <FFI "c/libfetch", FFI "js/fetch"> String
+  bind c "fetch_text"
+  bind js "fetchText"
+```
+
+`bind c "sym"` names the C symbol the native target links the call to; the
+Medaka name is only the name the program uses. `bind js "name"` names the
+JavaScript function for a JavaScript host. With no clause at all the declaration
+is bound to `c` under its own name; a `js` binding is never implied, and a
+declaration with only a `js` clause has no C binding, so the native target emits
+no `declare` or call for it. Two Medaka names may bind one C symbol when their
+signatures agree; when they disagree, the build is refused naming the symbol and
+both Medaka names.
+
+Each `FFI` atom in the extern's own row must have a binding for its host
+(`T-FFI-UNBOUND-HOST`); a host bound twice is `T-FFI-DUPLICATE-HOST`; a host
+other than `c` or `js` is `T-FFI-UNKNOWN-HOST`. A C symbol is
+`[A-Za-z_][A-Za-z0-9_]*` (`T-FFI-C-SYMBOL`), a JavaScript name
+`[A-Za-z_$][A-Za-z0-9_$]*` (`T-FFI-JS-NAME`). A `bind` clause on a redeclared
+`stdlib/runtime.mdk` catalog name is `T-FFI-BUILTIN-BIND`, since the built-in
+always runs. A bound written `<FFI "c*", FFI "js*">` on a non-extern signature is
+unchanged.
 
 Rules, each a located error when broken:
 
 - The row must name `FFI`, joined with whatever else it names
-  (`String -> <FFI, Net "a.com/*"> String` is fine). Omitting it is
+  (`String -> <FFI "c", Net "a.com/*"> String` is fine). Omitting it is
   `T-FFI-UNLABELLED`.
 - Only the types in `compiler/FFI-ABI.md` §1 may cross: `Int`, `Float`, `Bool`,
   `Char`, `String`, `Array Int`, `Unit`. Anything else is `T-FFI-NONCROSSABLE`.
 - A **nullary** `extern k : Int` is refused (`T-FFI-NULLARY`) — an effect row lives
   on an arrow's result, so a signature with no arrow has nowhere to write `FFI`.
-  Write `extern k : Unit -> <FFI> Int` and call it as `k ()`.
-- Names beginning `mdk_` are reserved for the runtime's own C symbols
-  (`T-FFI-RESERVED-NAME`).
+  Write `extern k : Unit -> <FFI "c"> Int` and call it as `k ()`.
+- C symbols beginning `mdk_` are reserved for the runtime's own symbols
+  (`T-FFI-RESERVED-NAME`); the rule judges the bound symbol, so an extern named
+  `mdk_shim` may bind `shim_word`, and one named `nilWord` may not bind `mdk_nil`.
 - Redeclaring a `stdlib/runtime.mdk` catalog name may not **narrow** its effect
   row (`T-FFI-CATALOG-NARROW`). The declared row must cover the catalog's own;
   wider is fine, equal is fine, missing an atom the catalog names is not.
-- One C symbol has one signature program-wide; two modules declaring the same name
-  with different shapes is refused.
+- One C symbol has one signature program-wide; two declarations binding the same
+  symbol (by name or by a `bind c` clause) with different shapes is refused.
 
-`<FFI>` is **not** an `<IO>` alias member, deliberately: an `<IO>` bound does not
-admit `<FFI>`, so a boundary has to say `FFI` literally to let a foreign call
+`<FFI "c*">` is **not** an `<IO>` alias member, deliberately: an `<IO>` bound does not
+admit `<FFI "c*">`, so a boundary has to say `FFI` literally to let a foreign call
 through.
 
 The externs in `stdlib/runtime.mdk` are the compiler's own catalog and are exempt —
@@ -1193,11 +1228,13 @@ does not resolve is a `B-FFI-LIB-NOT-FOUND` diagnostic naming the library, the
 manifest key, and the manifest path — not a raw linker wall. A project with no
 `[foreign-libraries]` section links exactly as before.
 
-FFI is **native-build only**. `medaka run` (the tree-walking interpreter) and
-`build --target wasm` both reject a program with a user FFI extern, with a
-capability message — neither can make a foreign C call.
+A foreign call runs through the binding of the host the target calls foreign
+code through: `c` for a native build, `js` for `--target wasm`. A reached extern
+with no binding for that host is refused by `check --target`
+(`T-TARGET-NO-BINDING`), and `medaka run` (the tree-walking interpreter), which
+calls foreign code through no host, refuses every reached user FFI extern.
 
-⚠️ `<FFI>` tracks **authority, not memory safety**. A foreign function shares the
+⚠️ `<FFI "c*">` tracks **authority, not memory safety**. A foreign function shares the
 address space and the GC heap; nothing in the effect system detects or prevents a
 bad pointer. See `docs/KNOWN-GAPS.md`.
 

@@ -9,6 +9,7 @@ import frontend.ast.{
   noBinderId,
   Attr(..),
   Decl(..),
+  ExternDecl(..),
   Expr(..),
   FunClause(..),
   IfaceMethod(..),
@@ -17,11 +18,14 @@ import frontend.ast.{
   Lit(..),
   Loc(..),
   MethodDefault(..),
+  Pat(..),
   Ty(..),
+  UseMember(..),
+  UsePath(..),
   dImplUnresolved,
   dInterfaceUnresolved,
 }
-import ir.dce.{dceFilter}
+import ir.dce.{dceFilter, reachedExternChains}
 import support.util.{contains}
 
 names : List String
@@ -142,10 +146,22 @@ test "DCE retains a reachable cycle and removes a disconnected cycle" =
 test "DCE agrees with the independent oracle on every three-node call graph" =
   expectTrue (allThreeNodeGraphsSatisfy 0)
 
+testLoc : Loc
+testLoc = Loc "<test>" 1 1 1 1
+
+mkExtern : Bool -> String -> Ty -> Decl
+mkExtern pub n ty = DExtern ExternDecl {
+  edPub = pub,
+  edName = n,
+  edTy = ty,
+  edLoc = Loc "<test>" 1 1 1 1,
+  edBinds = [],
+}
+
 test "DCE preserves unrelated declarations but does not root prop or test bodies" =
   let decls = [
     DTypeSig False "declared" (TyVar "a") (Loc "<dce-test>" 1 1 1 1),
-    DExtern False "foreign" (TyVar "a"),
+    mkExtern False "foreign" (TyVar "a"),
     funDecl "main" [],
     funDecl "propOnly" [],
     funDecl "testOnly" [],
@@ -206,3 +222,62 @@ test "DCE resolves a bare synthesized prelude reference to its core-mangled defi
   let decls =
     [funDecl "main" ["not"], funDecl "core__not" [], funDecl "dead" []]
   expectEqual ["main", "core__not"] (functionNames (dceFilter decls))
+
+test "reached externs: each with the chain from its root, and none reached only from dead code" =
+  let implDecl =
+    dImplUnresolved False "I" [] [] [ImplMethod "method" [] (EVar "viaImpl")]
+  let main = [
+    mkExtern False "called" (TyVar "a"),
+    mkExtern False "valueOnly" (TyVar "a"),
+    mkExtern False "deadOnly" (TyVar "a"),
+    mkExtern False "viaImpl" (TyVar "a"),
+    funDecl "main" ["helper", "table"],
+    funDecl "helper" ["called"],
+    funDecl "table" ["valueOnly"],
+    funDecl "dead" ["deadOnly"],
+    implDecl,
+  ]
+  expectEqual
+    [
+      (("main", "called"), ["main", "helper", "called"]),
+      (("main", "valueOnly"), ["main", "table", "valueOnly"]),
+      (("main", "viaImpl"), ["viaImpl"]),
+    ]
+    (reachedExternChains [] [("main", main)])
+
+test "reached externs: a reference reaches the declaration it resolves to" =
+  let lib = [
+    mkExtern True "aliased" (TyVar "a"),
+    mkExtern True "qualified" (TyVar "a"),
+    mkExtern True "stat" (TyVar "a"),
+  ]
+  let other = [
+    DFunDef True "stat" [] (ELit LUnit) testLoc noBinderId,
+    DFunDef True "useStat" [] (EVar "stat") testLoc noBinderId,
+  ]
+  let main = [
+    DUse
+      False
+      (UseGroup ["lib"] [UseMember "aliased" False testLoc (Some "plus")])
+      testLoc,
+    DUse False (UseAlias ["lib"] "L") testLoc,
+    DUse
+      False
+      (UseGroup ["other"] [UseMember "useStat" False testLoc None])
+      testLoc,
+    mkExtern False "shadowed" (TyVar "a"),
+    funDecl "main" ["plus", "L.qualified", "useStat", "apply"],
+    DFunDef
+      False
+      "apply"
+      [PVar "shadowed" testLoc noBinderId]
+      (EVar "shadowed")
+      testLoc
+      noBinderId,
+  ]
+  expectEqual
+    [
+      (("lib", "aliased"), ["main", "aliased"]),
+      (("lib", "qualified"), ["main", "qualified"]),
+    ]
+    (reachedExternChains [] [("lib", lib), ("other", other), ("main", main)])

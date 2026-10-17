@@ -374,7 +374,16 @@ describeToken (TLexError s) = s
 -- `RNewline col off` carries the offset of the newline char that ended
 -- the preceding line, so synthetic NEWLINE/INDENT/DEDENT tokens inserted by the
 -- layout pass get a source line too.
-data RawTok = RTok Token Int Int | RNewline Int Int | RComment Int Int
+-- `RClauseNl col off` is an `RNewline` that `externClauseBreaks` found before an
+-- extern's second or later `bind` clause line.  `RClauseOpen col off base` is
+-- the one before its first: it also closes every layout context deeper than
+-- `base`, the column of the extern's own line.
+data RawTok =
+  | RTok Token Int Int
+  | RNewline Int Int
+  | RComment Int Int
+  | RClauseNl Int Int
+  | RClauseOpen Int Int Int
 
 -- ── Character classification: ASCII Char -> Bool predicates now live in
 -- support/char.mdk (imported at the top of this module).
@@ -2165,6 +2174,31 @@ layout ((RComment _ _) :: rest) stack frames prev opener =
   layout rest stack frames prev opener
 layout ((RNewline col off) :: rest) stack frames prev opener =
   applyNl col off rest stack frames prev opener
+layout ((RClauseNl col off) :: rest) stack frames _ opener =
+  applyNl col off rest stack frames None opener
+layout ((RClauseOpen col off base) :: rest) stack frames _ opener =
+  clauseOpen col off base rest stack frames opener
+
+-- The first `bind` clause line of an extern: close each context a wrapped
+-- signature opened (`NEWLINE DEDENT`, which ends the signature's trailing-`->`
+-- continuation in the parser), then open the clause block against the
+-- extern's own column.
+clauseOpen : Int ->
+  Int ->
+  Int ->
+  List RawTok ->
+  List Int ->
+  List BracketFrame ->
+  Bool ->
+  List (Token, Int)
+clauseOpen col off base rest [] frames opener =
+  applyNl col off rest [] frames None opener
+clauseOpen col off base rest (top :: tl) frames opener
+  | top > base =
+    (TNewline, off)
+      :: (TDedent, off)
+      :: clauseOpen col off base rest tl (dropFrame frames) opener
+  | otherwise = applyNl col off rest (top :: tl) frames None opener
 
 -- A bracket closer force-flushes every nested layout context opened in the
 -- innermost bracket frame (emitting `NEWLINE DEDENT` per context, popping the
@@ -2532,8 +2566,63 @@ elseFilter [] = []
 layoutWithOffsets : Array Char -> Int -> List (Token, Int)
 layoutWithOffsets src len =
   let _ = stageBump "lex.offsets"
-  elseFilter
-    (layout (dedentTripleInterp (scan src len 0 0 0)) [0] [] None False)
+  elseFilter (layout (rawStream src len) [0] [] None False)
+
+-- The scanner's output with the two raw-stream rewrites applied, the input of
+-- every layout pass.
+rawStream : Array Char -> Int -> List RawTok
+rawStream src len = externClauseBreaks (dedentTripleInterp (scan src len 0 0 0))
+
+-- An extern's `bind` clauses, one per line indented under its signature:
+--
+--   extern f : String -> <FFI "c"> String
+--     bind c "f_impl"
+--
+-- `bind` is an ordinary identifier, so by the continuation rule
+-- (LAYOUT-SEMANTICS §4, I.c) the deeper line would continue the signature as a
+-- type application.  The line break before the first such line becomes
+-- `RClauseOpen`, which closes whatever layout contexts a wrapped signature
+-- opened and then opens the clause block against the extern's own column, so
+-- the clause lines may sit at any column deeper than `extern` whatever the
+-- signature's continuation lines did (LAYOUT-SEMANTICS §5.5).  The breaks
+-- before later clause lines become `RClauseNl`, read as a break after a token
+-- that cannot end an expression.  The rewrite applies only inside an extern
+-- declaration, from its `extern` token to the first line no deeper than the
+-- extern's own line, so `bind` keeps its meaning everywhere else.  A stream
+-- with no line led by `bind` is returned without being rebuilt.
+externClauseBreaks : List RawTok -> List RawTok
+externClauseBreaks toks
+  | hasBindLine toks = clauseBreaksGo toks 0 (-1) False
+  | otherwise = toks
+
+hasBindLine : List RawTok -> Bool
+hasBindLine [] = False
+hasBindLine ((RNewline _ _) :: (RTok (TIdent "bind") _ _) :: _) = True
+hasBindLine (_ :: rest) = hasBindLine rest
+
+-- `lineCol` is the column of the current line; `externCol` the column of the
+-- line holding the enclosing `extern`, or -1 outside one; `opened` whether
+-- that extern's first clause line has been seen.
+clauseBreaksGo : List RawTok -> Int -> Int -> Bool -> List RawTok
+clauseBreaksGo [] _ _ _ = []
+clauseBreaksGo ((RTok TExtern s e) :: rest) lineCol _ _ =
+  RTok TExtern s e :: clauseBreaksGo rest lineCol lineCol False
+clauseBreaksGo ((RNewline col off) :: rest) _ externCol opened
+  | externCol >= 0 && col > externCol && startsWithBind rest =
+    clauseBreak col off externCol opened
+      :: clauseBreaksGo rest col externCol True
+  | col <= externCol = RNewline col off :: clauseBreaksGo rest col (-1) False
+  | otherwise = RNewline col off :: clauseBreaksGo rest col externCol opened
+clauseBreaksGo (t :: rest) lineCol externCol opened =
+  t :: clauseBreaksGo rest lineCol externCol opened
+
+clauseBreak : Int -> Int -> Int -> Bool -> RawTok
+clauseBreak col off _ True = RClauseNl col off
+clauseBreak col off externCol False = RClauseOpen col off externCol
+
+startsWithBind : List RawTok -> Bool
+startsWithBind ((RTok (TIdent "bind") _ _) :: _) = True
+startsWithBind _ = False
 
 -- Layout variant that threads both START and END offsets per token, used by
 -- `tokenizeWithOffsetPairs`.  Real tokens carry their RTok start+end; synthetic
@@ -2564,6 +2653,27 @@ layoutPairs ((RComment _ _) :: rest) stack frames prev opener =
   layoutPairs rest stack frames prev opener
 layoutPairs ((RNewline col off) :: rest) stack frames prev opener =
   applyNlPairs col off rest stack frames prev opener
+layoutPairs ((RClauseNl col off) :: rest) stack frames _ opener =
+  applyNlPairs col off rest stack frames None opener
+layoutPairs ((RClauseOpen col off base) :: rest) stack frames _ opener =
+  clauseOpenPairs col off base rest stack frames opener
+
+clauseOpenPairs : Int ->
+  Int ->
+  Int ->
+  List RawTok ->
+  List Int ->
+  List BracketFrame ->
+  Bool ->
+  List (Token, Int, Int)
+clauseOpenPairs col off base rest [] frames opener =
+  applyNlPairs col off rest [] frames None opener
+clauseOpenPairs col off base rest (top :: tl) frames opener
+  | top > base =
+    (TNewline, off, off)
+      :: (TDedent, off, off)
+      :: clauseOpenPairs col off base rest tl (dropFrame frames) opener
+  | otherwise = applyNlPairs col off rest (top :: tl) frames None opener
 
 flushSepPairs : Token ->
   Int ->
@@ -2762,8 +2872,7 @@ elseFilterPairs [] = []
 layoutWithOffsetPairs : Array Char -> Int -> List (Token, Int, Int)
 layoutWithOffsetPairs src len =
   let _ = stageBump "lex.pairs"
-  elseFilterPairs
-    (layoutPairs (dedentTripleInterp (scan src len 0 0 0)) [0] [] None False)
+  elseFilterPairs (layoutPairs (rawStream src len) [0] [] None False)
 
 export
 tokenize : String -> List Token
@@ -2771,8 +2880,7 @@ tokenize s =
   let _ = stageBump "lex.tokenize"
   let src = stringToChars s
   let len = arrayLength src
-  elseFilterToks
-    (layoutToks (dedentTripleInterp (scan src len 0 0 0)) [0] [] TNewline False)
+  elseFilterToks (layoutToks (rawStream src len) [0] [] TNewline False)
 
 -- `elseFilter` (the offset-carrying form used by `layoutWithOffsets`) with the
 -- offset projection fused in, so `tokenize` builds one list instead of two.
@@ -2820,6 +2928,26 @@ layoutToks ((RComment _ _) :: rest) stack frames prev opener =
   layoutToks rest stack frames prev opener
 layoutToks ((RNewline col _) :: rest) stack frames prev opener =
   applyNlToks col rest stack frames prev opener
+layoutToks ((RClauseNl col _) :: rest) stack frames _ opener =
+  applyNlToks col rest stack frames TNewline opener
+layoutToks ((RClauseOpen col _ base) :: rest) stack frames _ opener =
+  clauseOpenToks col base rest stack frames opener
+
+clauseOpenToks : Int ->
+  Int ->
+  List RawTok ->
+  List Int ->
+  List BracketFrame ->
+  Bool ->
+  List Token
+clauseOpenToks col base rest [] frames opener =
+  applyNlToks col rest [] frames TNewline opener
+clauseOpenToks col base rest (top :: tl) frames opener
+  | top > base =
+    TNewline
+      :: TDedent
+      :: clauseOpenToks col base rest tl (dropFrame frames) opener
+  | otherwise = applyNlToks col rest (top :: tl) frames TNewline opener
 
 closeAllToks : List Int -> List Token
 closeAllToks stack = TNewline :: closeDedentsToks stack

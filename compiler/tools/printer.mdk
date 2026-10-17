@@ -76,6 +76,8 @@ import frontend.ast.{
   ConPayload(..),
   Variant(..),
   Decl(..),
+  ExternDecl(..),
+  ExternBind(..),
   Attr(..),
   authTermsSurface,
 }
@@ -2399,14 +2401,25 @@ export
 setImportForced : Bool -> Unit
 setImportForced b = importForcedRef := b
 
+-- One `bind <host> "<symbol>"` clause, on its own line under the signature.
+externBindDoc : ExternBind -> Doc
+externBindDoc b =
+  Nest 2 (Cat Hardline (text "bind \{b.ebHost} \{escStringLit b.ebSymbol}"))
+
 export
 printDecl : Decl -> Doc
 printDecl (DTypeSig pub n t _) =
   Cat (valueExportPrefix pub) (Cat (text n) (Cat (text " : ") (sigTypeDoc t)))
-printDecl (DExtern pub n t) =
+printDecl (DExtern (ExternDecl { edPub = pub, edName = n, edTy = t, edBinds = bs, ... })) =
   Cat
     (valueExportPrefix pub)
-    (Cat (text "extern ") (Cat (text n) (Cat (text " : ") (sigTypeDoc t))))
+    (Cat
+      (text "extern ")
+      (Cat
+        (text n)
+        (Cat
+          (text " : ")
+          (Cat (sigTypeDoc t) (concatD (map externBindDoc bs))))))
 printDecl (DFunDef pub n pats body _ _) =
   Cat
     (if pub then text "export " else Nil)

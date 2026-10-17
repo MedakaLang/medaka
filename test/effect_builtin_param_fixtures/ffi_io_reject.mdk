@@ -1,9 +1,9 @@
 -- #2071/#2070 (epic, Layer 1, R1): `FFI` is a registered Prefix-domain label
 -- (seedEffectDomains) but is deliberately ABSENT from ioAliasLabels, so an
--- `<IO>` bound does NOT subsume an `<FFI>`-performing body.  `callLib`
--- performs <FFI "libcurl*">; `caller`'s declared bound is only `<IO>` ⇒
--- REJECT (performs <FFI "libcurl*">).
-extern callLib : String -> <FFI "libcurl*"> Int
+-- `<IO>` bound does NOT subsume an `<FFI "c*">`-performing body.  `callLib`
+-- performs <FFI "c/libcurl*">; `caller`'s declared bound is only `<IO>` ⇒
+-- REJECT (performs <FFI "c/libcurl*">).
+extern callLib : String -> <FFI "c/libcurl*"> Int
 
 caller : Unit -> <IO> Int
 caller _ = callLib "GET /"

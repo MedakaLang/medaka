@@ -10,10 +10,10 @@ type T (p : Authority Api) = H2 p
 
 type B (p : Authority Dir) = Unit -> <Dir p> Unit
 
-data E = E (q : Authority Dir) (Unit -> <FFI, Dir q> Unit)
+data E = E (q : Authority Dir) (Unit -> <FFI "c*", Dir q> Unit)
 
 newtype N (p : Authority Dir) = N (Unit -> <Dir p> Unit)
 
-newtype M = M (Unit -> <FFI, Web2 Host="a.com/*", Web2 Host="b.com/*"> Unit)
+newtype M = M (Unit -> <FFI "c*", Web2 Host="a.com/*", Web2 Host="b.com/*"> Unit)
 
 main = println 1

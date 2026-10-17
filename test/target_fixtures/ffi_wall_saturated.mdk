@@ -1,0 +1,4 @@
+extern cNegate : Int -> <FFI "c/x"> Int
+
+main : <FFI "c*"> Int
+main = cNegate 5

@@ -1,0 +1,7 @@
+-- The extern named only as a value, under a member alias (#4057's shape).
+import cbind.{cAdd as plus}
+
+fns : List (Int -> Int -> <FFI "c"> Int)
+fns = [plus]
+
+main = println (length fns)

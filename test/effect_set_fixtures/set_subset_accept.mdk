@@ -4,12 +4,12 @@
 -- More directly: bound {"a"} ⊑ {"a","b"} — a tighter demand under a wider grant.
 effect Foo Set
 
-extern grant : String -> <FFI, Foo {"a", "b"}> String
+extern grant : String -> <FFI "c", Foo {"a", "b"}> String
 
 -- declared bound is the SUBSET {"a"}; body uses the SUPERSET-granting extern.
 -- inferred row carries Foo {"a","b"} which is NOT ⊆ {"a"} ⇒ this would REJECT.
 -- Instead bound it at the superset to show the accept direction:
-useWide : String -> <Foo {"a", "b"}, FFI> String
+useWide : String -> <Foo {"a", "b"}, FFI "c*"> String
 useWide x = grant x
 
 main : <IO> Unit

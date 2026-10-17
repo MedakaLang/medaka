@@ -1,0 +1,4 @@
+extern cNegate : Int -> <FFI "c/x"> Int
+
+main : <FFI "c*"> List Int
+main = map cNegate [1, 2, 3]

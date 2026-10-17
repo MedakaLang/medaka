@@ -34,7 +34,7 @@ test "a body row inside the declared bound is accepted" =
 
 test "a body row outside the declared bound is rejected, naming the row" = expectCheckReject
   (fixture "set_subset_reject.mdk")
-  ["performs <FFI, Foo {\"a\", \"b\"}>"]
+  ["performs <FFI \"c\", Foo {\"a\", \"b\"}>"]
 
 test "an inferred union past the cardinality cap stays exact" =
   expectCheckAccept (fixture "set_cap_saturate.mdk")
@@ -42,5 +42,5 @@ test "an inferred union past the cardinality cap stays exact" =
 test "an exact union past the cap is still refused by a narrower bound" = expectCheckReject
   (fixture "set_cap_saturate_ctrl.mdk")
   [
-    "performs <FFI, Foo {\"a\", \"b\", \"c\", \"d\", \"e\", \"f\", \"g\", \"h\", \"i\", \"j\", \"k\", \"l\", \"m\", \"n\", \"o\", \"p\", \"q\", \"r\"}>",
+    "performs <FFI \"c\", Foo {\"a\", \"b\", \"c\", \"d\", \"e\", \"f\", \"g\", \"h\", \"i\", \"j\", \"k\", \"l\", \"m\", \"n\", \"o\", \"p\", \"q\", \"r\"}>",
   ]

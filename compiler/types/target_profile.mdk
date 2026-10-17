@@ -37,6 +37,16 @@ export
 profileGrants : TargetProfile -> List (String, EffParamTy)
 profileGrants (TargetProfile _ _ _ g) = g
 
+-- The host a foreign call is bound to under the profile, as an extern's `bind`
+-- clause names it: `c` on llvm, `js` on wasmgc.  The interpreter binds foreign
+-- calls to no host.
+export
+profileBindingHost : TargetProfile -> Option String
+profileBindingHost p = match profileBackend p
+  BackendLlvm => Some "c"
+  BackendWasmgc => Some "js"
+  BackendEval => None
+
 -- Does the profile grant any part of this label's domain?
 export
 grantsLabel : TargetProfile -> String -> Bool
@@ -96,7 +106,10 @@ ioJoinGrants (Some p) =
 
 -- `wasmgc/edge` does not grant `Net`: §8.1 routes it through a fetch binding,
 -- and no such binding exists until T3 (#3668).
--- `wasmgc/wasi-p2` is a seam with nothing built, so it grants nothing.
+-- `wasmgc/wasi-p2` is a seam with nothing built, so it grants no host label.
+-- Every profile with a host grants `FFI`, and `eval/run` does not: whether a
+-- foreign call can run is the extern's binding for the profile's host
+-- (`profileBindingHost`), judged by the target check.
 profileRows : List TargetProfile
 profileRows = [
   TargetProfile
@@ -118,20 +131,21 @@ profileRows = [
       "Rand",
       "FileRead",
       "FileWrite",
+      "FFI",
     ]),
   TargetProfile
     "wasmgc/browser-worker"
     BackendWasmgc
     "env"
     (wholeDomain [
-      "Stdout", "Stderr", "Clock", "Rand", "FileRead", "FileWrite"
+      "Stdout", "Stderr", "Clock", "Rand", "FileRead", "FileWrite", "FFI"
     ]),
   TargetProfile
     "wasmgc/edge"
     BackendWasmgc
     "env"
-    (wholeDomain ["Stdout", "Stderr", "Clock", "Rand"]),
-  TargetProfile "wasmgc/wasi-p2" BackendWasmgc "WIT" [],
+    (wholeDomain ["Stdout", "Stderr", "Clock", "Rand", "FFI"]),
+  TargetProfile "wasmgc/wasi-p2" BackendWasmgc "WIT" (wholeDomain ["FFI"]),
 ]
 
 evalRunProfile : TargetProfile

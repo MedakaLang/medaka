@@ -1,0 +1,10 @@
+-- Two modules' `helper`s, one signature, different symbols.
+--
+--   101    stub_a_helper 1 = 1 + 100
+--   201    stub_b_helper 1 = 1 + 200
+import moda.{useA}
+import modb.{useB}
+
+main =
+  let _ = println (useA 1)
+  println (useB 1)

@@ -1,5 +1,5 @@
 # META
-source_lines=7043
+source_lines=7046
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -67,6 +67,7 @@ import frontend.ast.{
   ConPayload(..),
   Variant(..),
   Decl(..),
+  ExternDecl(..),
   authTermNames,
   effParamNames,
 }
@@ -1826,7 +1827,7 @@ checkDecl env (DLetGroup _ binds) =
   -- (mutual recursion).
   flatMap (checkLetBind None env (mkScope (map letBindName binds))) binds
 checkDecl env (DTypeSig _ _ t _) = checkType None env t
-checkDecl env (DExtern _ _ t) = checkType None env t
+checkDecl env (DExtern (ExternDecl { edTy = t, ... })) = checkType None env t
 checkDecl env (DData { dataParams = ps, dataParamKinds = ks, dataCtors = vs, dataCtorBinders = bs }) =
   checkKindLabels env ks
     ++ checkVariants env (authorityParams ps ks) vs (padBinders vs bs)
@@ -2018,7 +2019,8 @@ primitiveConstructors = ["True", "False"]
 -- ── Name extractors (over runtime / prelude / user decls) ─────────────────
 externNames : List Decl -> List String
 externNames [] = []
-externNames ((DExtern _ n _) :: rest) = n :: externNames rest
+externNames ((DExtern (ExternDecl { edName = n, ... })) :: rest) =
+  n :: externNames rest
 externNames (_ :: rest) = externNames rest
 
 dataRecordNames : List Decl -> List String
@@ -2075,7 +2077,8 @@ userValueNames : List Decl -> List String
 userValueNames [] = []
 userValueNames ((DFunDef _ n _ _ _ _) :: rest) = n :: userValueNames rest
 userValueNames ((DTypeSig _ n _ _) :: rest) = n :: userValueNames rest
-userValueNames ((DExtern _ n _) :: rest) = n :: userValueNames rest
+userValueNames ((DExtern (ExternDecl { edName = n, ... })) :: rest) =
+  n :: userValueNames rest
 userValueNames ((DLetGroup _ bs) :: rest) =
   map letBindName bs ++ userValueNames rest
 userValueNames ((DInterface { methods, ... }) :: rest) =
@@ -2380,7 +2383,7 @@ sigEntryOf d = match dupSigOf d
 
 valueBinderNames : Decl -> List String
 valueBinderNames (DAttrib _ d) = valueBinderNames d
-valueBinderNames (DExtern _ n _) = [n]
+valueBinderNames (DExtern (ExternDecl { edName = n, ... })) = [n]
 valueBinderNames d = declBindNames d
 
 orphanSigError : OrdMap Unit ->
@@ -4527,7 +4530,7 @@ nsValues = ExpNs {
   nsDirectOf =
     d => match d
       DTypeSig True n _ _ => [n]
-      DExtern True n _ => [n]
+      DExtern (ExternDecl { edPub = True, edName = n, ... }) => [n]
       DFunDef True n _ _ _ _ => [n]
       _ => [],
   nsCarry = path src => carriedValuesFrom src (reexportBindings path src),
@@ -7047,7 +7050,7 @@ addOriginsProvenance acc n base (m :: rest) =
     rest
 # DESUGAR
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "patBindings" false) (mem "recFieldBindings" false) (mem "isHint" false) (mem "letBindName" false) (mem "propParamName" false) (mem "variantName" false) (mem "Loc" true) (mem "declNameLoc" false) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "authTermNames" false) (mem "effParamNames" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "patBindings" false) (mem "recFieldBindings" false) (mem "isHint" false) (mem "letBindName" false) (mem "propParamName" false) (mem "variantName" false) (mem "Loc" true) (mem "declNameLoc" false) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "authTermNames" false) (mem "effParamNames" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "editDistance" false) (mem "minI" false) (mem "maxI" false) (mem "listLen" false) (mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "initList" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "sortUniqS" false) (mem "isEmptyL" false) (mem "selfBinding" false))))
@@ -7447,7 +7450,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DFunDef" PWild PWild (PVar "pats") (PVar "body") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkPat") (EApp (EVar "firstExprLoc") (EVar "body"))) (EVar "env"))) (EVar "pats")) (EApp (EApp (EApp (EVar "patGroupDupErrors") (EApp (EVar "firstExprLoc") (EVar "body"))) (ELit (LString "parameter list"))) (EVar "pats"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EVar "patsBindings") (EVar "pats")))) (EVar "body"))))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "checkLetBind") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds"))))) (EVar "binds")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DTypeSig" PWild PWild (PVar "t") PWild)) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
-(DFunDef false "checkDecl" ((PVar "env") (PCon "DExtern" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
+(DFunDef false "checkDecl" ((PVar "env") (PCon "DExtern" (PRec "ExternDecl" ((rf "edTy" (PVar "t"))) true))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
 (DFunDef false "checkDecl" ((PVar "env") (PRec "DData" ((rf "dataParams" (PVar "ps")) (rf "dataParamKinds" (PVar "ks")) (rf "dataCtors" (PVar "vs")) (rf "dataCtorBinders" (PVar "bs"))) false)) (EBinOp "++" (EApp (EApp (EVar "checkKindLabels") (EVar "env")) (EVar "ks")) (EApp (EApp (EApp (EApp (EVar "checkVariants") (EVar "env")) (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))) (EVar "vs")) (EApp (EApp (EVar "padBinders") (EVar "vs")) (EVar "bs")))))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DProp" PWild PWild (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EVar "checkProp") (EVar "env")) (EVar "params")) (EVar "body")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DTest" PWild PWild (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EVar "emptyScope")) (EVar "body")))
@@ -7510,7 +7513,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "primitiveConstructors" () (EListLit (ELit (LString "True")) (ELit (LString "False"))))
 (DTypeSig false "externNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "externNames" ((PList)) (EListLit))
-(DFunDef false "externNames" ((PCons (PCon "DExtern" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "externNames") (EVar "rest"))))
+(DFunDef false "externNames" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n"))) true)) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "externNames") (EVar "rest"))))
 (DFunDef false "externNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "externNames") (EVar "rest")))
 (DTypeSig false "dataRecordNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "dataRecordNames" ((PList)) (EListLit))
@@ -7550,7 +7553,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "userValueNames" ((PList)) (EListLit))
 (DFunDef false "userValueNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "userValueNames") (EVar "rest"))))
 (DFunDef false "userValueNames" ((PCons (PCon "DTypeSig" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "userValueNames") (EVar "rest"))))
-(DFunDef false "userValueNames" ((PCons (PCon "DExtern" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "userValueNames") (EVar "rest"))))
+(DFunDef false "userValueNames" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n"))) true)) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "userValueNames") (EVar "rest"))))
 (DFunDef false "userValueNames" ((PCons (PCon "DLetGroup" PWild (PVar "bs")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "bs")) (EApp (EVar "userValueNames") (EVar "rest"))))
 (DFunDef false "userValueNames" ((PCons (PRec "DInterface" ((rf "methods" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "ifaceMethodNm")) (EVar "methods")) (EApp (EVar "userValueNames") (EVar "rest"))))
 (DFunDef false "userValueNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "userValueNames") (EBinOp "::" (EVar "d") (EVar "rest"))))
@@ -7649,7 +7652,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "sigEntryOf" ((PVar "d")) (EMatch (EApp (EVar "dupSigOf") (EVar "d")) (arm (PCon "Some" (PVar "entry")) () (EListLit (EVar "entry"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "valueBinderNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "valueBinderNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "valueBinderNames") (EVar "d")))
-(DFunDef false "valueBinderNames" ((PCon "DExtern" PWild (PVar "n") PWild)) (EListLit (EVar "n")))
+(DFunDef false "valueBinderNames" ((PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n"))) true))) (EListLit (EVar "n")))
 (DFunDef false "valueBinderNames" ((PVar "d")) (EApp (EVar "declBindNames") (EVar "d")))
 (DTypeSig false "orphanSigError" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "orphanSigError" ((PVar "bound") (PVar "unsigned") (PTuple (PVar "n") (PVar "loc"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")) (EListLit) (EIf (EBinOp "<" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 3))) (EListLit (EApp (EApp (EApp (EVar "OrphanSignature") (EVar "n")) (EVar "loc")) (EVar "None"))) (EIf (EVar "otherwise") (EListLit (EApp (EApp (EApp (EVar "OrphanSignature") (EVar "n")) (EVar "loc")) (EApp (EApp (EVar "bestOfNames") (EApp (EVar "sugQueryOf") (EVar "n"))) (EVar "unsigned")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
@@ -8142,7 +8145,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "typeCtorsAllOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "typeCtorsAllOf") (EVar "rest")))
 (DData Private "ExpNs" ("a") ((variant "ExpNs" (ConNamed (field "nsGet" (TyFun (TyCon "ModuleExports") (TyApp (TyCon "List") (TyVar "a")))) (field "nsDirectOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyVar "a")))) (field "nsCarry" (TyFun (TyCon "UsePath") (TyFun (TyCon "ModuleExports") (TyApp (TyCon "List") (TyVar "a")))))))) ())
 (DTypeSig false "nsValues" (TyApp (TyCon "ExpNs") (TyCon "String")))
-(DFunDef false "nsValues" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expValues"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "DTypeSig" (PCon "True") (PVar "n") PWild PWild) () (EListLit (EVar "n"))) (arm (PCon "DExtern" (PCon "True") (PVar "n") PWild) () (EListLit (EVar "n"))) (arm (PCon "DFunDef" (PCon "True") (PVar "n") PWild PWild PWild PWild) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "carriedValuesFrom") (EVar "src")) (EApp (EApp (EVar "reexportBindings") (EVar "path")) (EVar "src"))))))))
+(DFunDef false "nsValues" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expValues"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "DTypeSig" (PCon "True") (PVar "n") PWild PWild) () (EListLit (EVar "n"))) (arm (PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PCon "True")) (rf "edName" (PVar "n"))) true)) () (EListLit (EVar "n"))) (arm (PCon "DFunDef" (PCon "True") (PVar "n") PWild PWild PWild PWild) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "carriedValuesFrom") (EVar "src")) (EApp (EApp (EVar "reexportBindings") (EVar "path")) (EVar "src"))))))))
 (DTypeSig false "nsTypes" (TyApp (TyCon "ExpNs") (TyCon "String")))
 (DFunDef false "nsTypes" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expTypes"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm (PRec "DTypeAlias" ((rf "tyAliasPub" (PCon "True")) (rf "tyAliasName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "localsExportedFrom") (EFieldAccess (EVar "src") "expTypes")) (EApp (EApp (EVar "reexportBindings") (EVar "path")) (EVar "src"))))))))
 (DTypeSig false "nsAbstractData" (TyApp (TyCon "ExpNs") (TyCon "String")))
@@ -8687,7 +8690,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "addOriginsProvenance" ((PVar "acc") (PVar "n") (PVar "base") (PCons (PVar "m") (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "addOriginsProvenance") (EApp (EApp (EApp (EVar "addDeclProvenance") (EVar "acc")) (EVar "m")) (EListLit (ETuple (EVar "n") (EApp (EVar "declKey") (ETuple (EVar "m") (EVar "base"))))))) (EVar "n")) (EVar "base")) (EVar "rest")))
 # MARK
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "patBindings" false) (mem "recFieldBindings" false) (mem "isHint" false) (mem "letBindName" false) (mem "propParamName" false) (mem "variantName" false) (mem "Loc" true) (mem "declNameLoc" false) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "authTermNames" false) (mem "effParamNames" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "patBindings" false) (mem "recFieldBindings" false) (mem "isHint" false) (mem "letBindName" false) (mem "propParamName" false) (mem "variantName" false) (mem "Loc" true) (mem "declNameLoc" false) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "KindAnn" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "authTermNames" false) (mem "effParamNames" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "editDistance" false) (mem "minI" false) (mem "maxI" false) (mem "listLen" false) (mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "initList" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "sortUniqS" false) (mem "isEmptyL" false) (mem "selfBinding" false))))
@@ -9087,7 +9090,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DFunDef" PWild PWild (PVar "pats") (PVar "body") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkPat") (EApp (EVar "firstExprLoc") (EVar "body"))) (EVar "env"))) (EVar "pats")) (EApp (EApp (EApp (EVar "patGroupDupErrors") (EApp (EVar "firstExprLoc") (EVar "body"))) (ELit (LString "parameter list"))) (EVar "pats"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EVar "patsBindings") (EVar "pats")))) (EVar "body"))))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "checkLetBind") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds"))))) (EVar "binds")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DTypeSig" PWild PWild (PVar "t") PWild)) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
-(DFunDef false "checkDecl" ((PVar "env") (PCon "DExtern" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
+(DFunDef false "checkDecl" ((PVar "env") (PCon "DExtern" (PRec "ExternDecl" ((rf "edTy" (PVar "t"))) true))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
 (DFunDef false "checkDecl" ((PVar "env") (PRec "DData" ((rf "dataParams" (PVar "ps")) (rf "dataParamKinds" (PVar "ks")) (rf "dataCtors" (PVar "vs")) (rf "dataCtorBinders" (PVar "bs"))) false)) (EBinOp "++" (EApp (EApp (EVar "checkKindLabels") (EVar "env")) (EVar "ks")) (EApp (EApp (EApp (EApp (EVar "checkVariants") (EVar "env")) (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))) (EVar "vs")) (EApp (EApp (EVar "padBinders") (EVar "vs")) (EVar "bs")))))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DProp" PWild PWild (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EVar "checkProp") (EVar "env")) (EVar "params")) (EVar "body")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DTest" PWild PWild (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EVar "emptyScope")) (EVar "body")))
@@ -9150,7 +9153,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "primitiveConstructors" () (EListLit (ELit (LString "True")) (ELit (LString "False"))))
 (DTypeSig false "externNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "externNames" ((PList)) (EListLit))
-(DFunDef false "externNames" ((PCons (PCon "DExtern" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "externNames") (EVar "rest"))))
+(DFunDef false "externNames" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n"))) true)) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "externNames") (EVar "rest"))))
 (DFunDef false "externNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "externNames") (EVar "rest")))
 (DTypeSig false "dataRecordNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "dataRecordNames" ((PList)) (EListLit))
@@ -9190,7 +9193,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "userValueNames" ((PList)) (EListLit))
 (DFunDef false "userValueNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "userValueNames") (EVar "rest"))))
 (DFunDef false "userValueNames" ((PCons (PCon "DTypeSig" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "userValueNames") (EVar "rest"))))
-(DFunDef false "userValueNames" ((PCons (PCon "DExtern" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "userValueNames") (EVar "rest"))))
+(DFunDef false "userValueNames" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n"))) true)) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "userValueNames") (EVar "rest"))))
 (DFunDef false "userValueNames" ((PCons (PCon "DLetGroup" PWild (PVar "bs")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "bs")) (EApp (EVar "userValueNames") (EVar "rest"))))
 (DFunDef false "userValueNames" ((PCons (PRec "DInterface" ((rf "methods" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "ifaceMethodNm")) (EVar "methods")) (EApp (EVar "userValueNames") (EVar "rest"))))
 (DFunDef false "userValueNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "userValueNames") (EBinOp "::" (EVar "d") (EVar "rest"))))
@@ -9289,7 +9292,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "sigEntryOf" ((PVar "d")) (EMatch (EApp (EVar "dupSigOf") (EVar "d")) (arm (PCon "Some" (PVar "entry")) () (EListLit (EVar "entry"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "valueBinderNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "valueBinderNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "valueBinderNames") (EVar "d")))
-(DFunDef false "valueBinderNames" ((PCon "DExtern" PWild (PVar "n") PWild)) (EListLit (EVar "n")))
+(DFunDef false "valueBinderNames" ((PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n"))) true))) (EListLit (EVar "n")))
 (DFunDef false "valueBinderNames" ((PVar "d")) (EApp (EVar "declBindNames") (EVar "d")))
 (DTypeSig false "orphanSigError" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "orphanSigError" ((PVar "bound") (PVar "unsigned") (PTuple (PVar "n") (PVar "loc"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")) (EListLit) (EIf (EBinOp "<" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 3))) (EListLit (EApp (EApp (EApp (EVar "OrphanSignature") (EVar "n")) (EVar "loc")) (EVar "None"))) (EIf (EVar "otherwise") (EListLit (EApp (EApp (EApp (EVar "OrphanSignature") (EVar "n")) (EVar "loc")) (EApp (EApp (EVar "bestOfNames") (EApp (EVar "sugQueryOf") (EVar "n"))) (EVar "unsigned")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
@@ -9782,7 +9785,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "typeCtorsAllOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "typeCtorsAllOf") (EVar "rest")))
 (DData Private "ExpNs" ("a") ((variant "ExpNs" (ConNamed (field "nsGet" (TyFun (TyCon "ModuleExports") (TyApp (TyCon "List") (TyVar "a")))) (field "nsDirectOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyVar "a")))) (field "nsCarry" (TyFun (TyCon "UsePath") (TyFun (TyCon "ModuleExports") (TyApp (TyCon "List") (TyVar "a")))))))) ())
 (DTypeSig false "nsValues" (TyApp (TyCon "ExpNs") (TyCon "String")))
-(DFunDef false "nsValues" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expValues"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "DTypeSig" (PCon "True") (PVar "n") PWild PWild) () (EListLit (EVar "n"))) (arm (PCon "DExtern" (PCon "True") (PVar "n") PWild) () (EListLit (EVar "n"))) (arm (PCon "DFunDef" (PCon "True") (PVar "n") PWild PWild PWild PWild) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "carriedValuesFrom") (EVar "src")) (EApp (EApp (EVar "reexportBindings") (EVar "path")) (EVar "src"))))))))
+(DFunDef false "nsValues" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expValues"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "DTypeSig" (PCon "True") (PVar "n") PWild PWild) () (EListLit (EVar "n"))) (arm (PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PCon "True")) (rf "edName" (PVar "n"))) true)) () (EListLit (EVar "n"))) (arm (PCon "DFunDef" (PCon "True") (PVar "n") PWild PWild PWild PWild) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "carriedValuesFrom") (EVar "src")) (EApp (EApp (EVar "reexportBindings") (EVar "path")) (EVar "src"))))))))
 (DTypeSig false "nsTypes" (TyApp (TyCon "ExpNs") (TyCon "String")))
 (DFunDef false "nsTypes" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expTypes"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm (PRec "DTypeAlias" ((rf "tyAliasPub" (PCon "True")) (rf "tyAliasName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "localsExportedFrom") (EFieldAccess (EVar "src") "expTypes")) (EApp (EApp (EVar "reexportBindings") (EVar "path")) (EVar "src"))))))))
 (DTypeSig false "nsAbstractData" (TyApp (TyCon "ExpNs") (TyCon "String")))

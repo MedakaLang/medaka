@@ -88,6 +88,8 @@ emitTail mods runtimeDecls coreD modules1 =
     preludeReturnPosDictNames coreD allDecls
       ++ preludeArgPosDictNames coreD allDecls
       ++ constrainedSigNames allDecls
+  let ffiRows =
+    validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2)
   let input =
     withRuntimeExternsW
       (runtimeExternNames runtimeDecls)
@@ -97,10 +99,9 @@ emitTail mods runtimeDecls coreD modules1 =
         (mainTypeIsFloat ())
         (mainTypeIsUnit ())
         (declaredRecordFieldOrders allDecls)
-        (validateFfiExternTypeNames
-          (checkedFfiExternTypeNamesModules modules2)))
+        ffiRows)
   let lowered = lowerProgramEmit allDecls
-  let (plan, reached) = buildEmitPlanReached lowered
+  let (plan, reached) = buildEmitPlanReached ffiRows lowered
   -- MEDAKA_STATS reporting hook: the counts come from the plan, so the ratio is the
   -- reach filter's own notion of reachable.  Off by default, so ordinary emission
   -- stays byte-identical.

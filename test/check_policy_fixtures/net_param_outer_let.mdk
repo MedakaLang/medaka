@@ -11,7 +11,7 @@
 -- `--allow 'Net=idp.example.com/*'` must ACCEPT.
 effect Net Prefix
 
-extern netGet : (url : String) -> <FFI, Net url> String
+extern netGet : (url : String) -> <FFI "c", Net url> String
 
 transform req =
   let dest = "idp.example.com/api"

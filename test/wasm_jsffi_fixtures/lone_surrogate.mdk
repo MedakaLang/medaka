@@ -1,0 +1,5 @@
+-- A String result holding a lone surrogate has no UTF-8 encoding.
+extern jsLone : Unit -> <FFI "js"> String
+  bind js "jsLone"
+
+main = println (jsLone ())

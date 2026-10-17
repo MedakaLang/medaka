@@ -1,0 +1,5 @@
+-- A `js`-only extern reached under a member alias.
+import jsbind.{jsAdd as plus}
+
+main : <Stdout, FFI "js"> Unit
+main = println (plus 20 22)

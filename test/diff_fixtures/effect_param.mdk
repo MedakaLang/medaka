@@ -12,9 +12,9 @@
 effect Net Prefix
 effect Stdout
 
-extern netGet : String -> <FFI, Net "a.com/foo"> String
+extern netGet : String -> <FFI "c", Net "a.com/foo"> String
 
-fetch : String -> <Net "a.com/foo", FFI> String
+fetch : String -> <Net "a.com/foo", FFI "c*"> String
 fetch path = netGet path
 
 data Async (e : Effect) a = Done a | Suspend (Unit -> <e> Async e a)

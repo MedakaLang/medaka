@@ -1,0 +1,6 @@
+exit=0
+--- stdout
+stringLength : String -> Int
+main : <Stdout> Unit
+-- <fixtures>/ffi_catalog_redecl.mdk: ok (2 declaration(s) checked, 0 errors)
+--- stderr

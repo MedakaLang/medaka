@@ -1,0 +1,9 @@
+-- moda.mdk's `helper` name at another signature: its calls are marshalled by
+-- this declaration, a `String` in.
+extern helper : String -> <FFI "c", FFI "js"> Int
+  bind c "stub_byte_len"
+  bind js "jsByteLen"
+
+export
+useC : String -> <FFI "c", FFI "js"> Int
+useC s = helper s

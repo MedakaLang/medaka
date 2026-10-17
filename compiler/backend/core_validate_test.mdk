@@ -362,19 +362,21 @@ test "(y) under a checked target, a withheld label names what check admits and a
     ),
   ]
 
--- A user FFI extern named as a value and never applied: `check` admits it on
--- every profile, and wasm cannot lower even the name.
+-- A user FFI extern with only a `c` binding, named as a value.  `check
+-- --target` refuses it on every wasm profile (T-TARGET-NO-BINDING), so only a
+-- lowering that skipped the target check meets it.
 ffiValueSrc : String
 ffiValueSrc =
-  "extern ffiAddInts : Int -> Int -> <FFI> Int\n\nfns = [ffiAddInts]\n\nmain = 0"
+  "extern ffiAddInts : Int -> Int -> <FFI \"c\"> Int\n\nfns = [ffiAddInts]\n\nmain = 0"
 
 -- The wasm record-mode events of `ffiValueSrc` with `checked` published as
 -- the target `build` checked it against.  An emitter gap names no binding, so
 -- each event's binding column is `?`.
-ffiWallEvents : Option CheckedTarget -> <IO> List String
-ffiWallEvents checked =
+ffiNoJsEvents : Option CheckedTarget -> <IO> List String
+ffiNoJsEvents checked =
   let decls = grantWholeDomain (desugar (parse ffiValueSrc))
-  let ffiTypes = [("ffiAddInts", (["Int", "Int"], "Int"))]
+  let ffiTypes =
+    [("ffiAddInts", ([("c", "ffiAddInts")], (["Int", "Int"], "Int")))]
   let input =
     makeWasmEmitInputFull
       []
@@ -389,26 +391,16 @@ ffiWallEvents checked =
   checkedTarget := None
   events
 
-ffiWall : String
-ffiWall =
-  "wasm: FFI extern 'ffiAddInts' is native-only — foreign C calls have no WasmGC equivalent"
+ffiNoJs : String
+ffiNoJs =
+  "?\twasm: the extern 'ffiAddInts' has no `js` binding, so the module has nothing to import for it; `check --target` refuses a reached extern with no binding for its target's host (T-TARGET-NO-BINDING)"
 
-test "(z) an FFI extern named as a value reads as a withheld label under a checked target" =
+test "(z) an FFI extern with no js binding is a gap naming the missing binding, with or without a checked target" =
   match checkedUnder "wasmgc/node"
     Err e => expectEqual "" e
     Ok t => expectEach [
-      (
-        "under wasmgc/node",
-        expectEqual
-          ["?\t" ++ withheldLine ffiWall "ffiAddInts" "FFI" "wasmgc/node"]
-          (ffiWallEvents (Some t)),
-      ),
-      (
-        "with no checked target",
-        expectEqual
-          ["?\t\{ffiWall}. Build for a native target instead."]
-          (ffiWallEvents None),
-      ),
+      ("under wasmgc/node", expectEqual [ffiNoJs] (ffiNoJsEvents (Some t))),
+      ("with no checked target", expectEqual [ffiNoJs] (ffiNoJsEvents None)),
     ]
 
 -- ── record ordinals ──────────────────────────────────────────────────────────

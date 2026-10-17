@@ -1,5 +1,5 @@
 # META
-source_lines=2983
+source_lines=3241
 stages=DESUGAR,MARK
 # SOURCE
 -- WasmGC module PREAMBLE — the fixed lines that head every emitted WAT module
@@ -41,7 +41,8 @@ stages=DESUGAR,MARK
 -- section, function defs, `(start)`, and the trailing `)`), so this preamble
 -- deliberately leaves the `(module` paren OPEN.
 
-import support.util.{contains}
+import support.util.{anyList, contains, joinWith}
+import backend.emit_plan.{JsImport(..)}
 
 export
 preambleHeadLines : List String
@@ -2166,6 +2167,263 @@ ioResultLines = [
   "    (call $mdk_u8_to_str_lossy (call $mdk_io_result_bytes)))"
 ]
 
+-- ── user `js` bindings: the `jsffi` import module (WASM-SEMANTICS.md §3.1) ──
+-- One import per reached binding, named by its JS name and its declared heads,
+-- so the host reads each signature off the module.
+export
+jsffiImportLines : List JsImport -> List String
+jsffiImportLines imps = map jsffiImportLine imps
+
+jsffiImportLine : JsImport -> String
+jsffiImportLine imp =
+  let params = joinWith "" (map jsWireParam imp.params)
+  "  (import \"jsffi\" \"\{jsImportField imp}\" (func $\{jsffiImportId imp.medakaName}\{params}\{jsWireResult imp.result}))"
+
+-- The WAT identifiers of an extern's import and of its wrapper, without the
+-- `$`.  The two prefixes differ, so no import can share a wrapper's identifier
+-- whatever the names, and a Medaka name never holds a `.`, so no function the
+-- program defines under its own name can share either.
+export
+jsffiImportId : String -> String
+jsffiImportId name = "jsffi.import.\{name}"
+
+export
+jsffiWrapperId : String -> String
+jsffiWrapperId name = "jsffi.wrap.\{name}"
+
+-- `<jsName>:<P1>,...,<Pn>-><R>`, each head as declared.
+export
+jsImportField : JsImport -> String
+jsImportField imp = "\{imp.jsName}:\{joinWith "," imp.params}->\{imp.result}"
+
+-- The wasm parameter a head crosses as: a scalar by value, a `String` or `Array`
+-- as its length (its contents go on the path channel), a `Unit` as nothing.
+jsWireParam : String -> String
+jsWireParam "Unit" = ""
+jsWireParam head = " (param \{jsWireTy head})"
+
+-- The wasm result a head comes back as; a `String` comes back on the result
+-- channel and a `Unit` as nothing.
+jsWireResult : String -> String
+jsWireResult "Unit" = ""
+jsWireResult "String" = ""
+jsWireResult head = " (result \{jsWireTy head})"
+
+jsWireTy : String -> String
+jsWireTy "Int" = "i64"
+jsWireTy "U64" = "i64"
+jsWireTy "I64" = "i64"
+jsWireTy "Float" = "f64"
+jsWireTy _ = "i32"
+
+isChannelHead : String -> Bool
+isChannelHead head = head == "String" || head == "Array"
+
+-- The heads section 3.1 gives a crossing to: the FFI v1 crossable set
+-- (compiler/FFI-ABI.md section 1).  The wrapper's catch-all arms assume one.
+export
+jsCrossableHead : String -> Bool
+jsCrossableHead head = contains head [
+  "Int", "Float", "Bool", "Char", "String", "Array", "Unit", "U8", "U16", "U32",
+  "I32", "U64", "I64"
+]
+
+-- The wrapper (`jsffiWrapperId`): Medaka values in, the import called, a Medaka
+-- value out.  `intTrap` and `charTrap` stop the program for a result that is
+-- not an `Int` or not a `Char`, and `copyTrap` for an `Array` element written
+-- back outside `Int`'s range.  An `Array` result never reaches here: it is an
+-- emitter gap, as on native.
+export
+jsffiWrapperLines : JsImport ->
+  List String ->
+  List String ->
+  List String ->
+  List String
+jsffiWrapperLines imp intTrap charTrap copyTrap =
+  let ps = zipHeads imp.params 0
+  let params =
+    joinWith "" (map (p => " (param $p\{intToString (snd p)} (ref eq))") ps)
+  let held = jsWireResult imp.result /= ""
+  let rLocal = if held then " (local $r \{jsWireTy imp.result})" else ""
+  let push =
+    if anyList (p => isChannelHead (fst p)) ps then
+      "    (call $mdk_path_reset)" :: flatMap jsPushArg ps
+    else
+      []
+  [
+      "  (func $\{jsffiWrapperId imp.medakaName}\{params} (result (ref eq))",
+      "    (local $off i32)\{rLocal}",
+    ]
+    ++ push
+    ++ flatMap jsWireArg ps
+    ++ ["    call $\{jsffiImportId imp.medakaName}"]
+    ++ (if held then ["    local.set $r"] else [])
+    ++ flatMap (jsCopyBack copyTrap) ps
+    ++ jsUnwire imp.result intTrap charTrap
+    ++ ["  )"]
+
+zipHeads : List String -> Int -> List (String, Int)
+zipHeads [] _ = []
+zipHeads (h :: rest) i = (h, i) :: zipHeads rest (i + 1)
+
+-- a `String` or `Array` argument's contents, appended to the path channel
+jsPushArg : (String, Int) -> List String
+jsPushArg ("String", i) = [
+  "    (call $mdk_push_path_more (ref.cast (ref $str) (local.get $p\{intToString i})))",
+]
+jsPushArg ("Array", i) = [
+  "    (call $mdk_jsffi_push_ints (ref.cast (ref $arr) (local.get $p\{intToString i})))",
+]
+jsPushArg _ = []
+
+-- an argument's wasm value (`jsWireParam`)
+jsWireArg : (String, Int) -> List String
+jsWireArg (head, i) =
+  let p = "(local.get $p\{intToString i})"
+  match head
+    "Unit" => []
+    "Int" => ["    (call $mdk_unbox_int \{p})"]
+    "Float" => ["    (struct.get $float 0 (ref.cast (ref $float) \{p}))"]
+    "Bool" => ["    (i31.get_u (ref.cast (ref i31) \{p}))"]
+    "Char" => ["    (i31.get_u (ref.cast (ref i31) \{p}))"]
+    "U64" => ["    (struct.get $u64 0 (ref.cast (ref $u64) \{p}))"]
+    "I64" => ["    (struct.get $i64 0 (ref.cast (ref $i64) \{p}))"]
+    "String" =>
+      ["    (array.len (struct.get $str $bytes (ref.cast (ref $str) \{p})))"]
+    "Array" => ["    (array.len (ref.cast (ref $arr) \{p}))"]
+    _ => ["    (i32.wrap_i64 (call $mdk_unbox_int \{p}))"]
+
+-- an `Array` argument's copy-back from the result channel, at `$off`
+jsCopyBack : List String -> (String, Int) -> List String
+jsCopyBack trap ("Array", i) =
+  [
+      "    (local.set $off (call $mdk_jsffi_copy_back (ref.cast (ref $arr) (local.get $p\{intToString i})) (local.get $off)))",
+      "    (if (i32.lt_s (local.get $off) (i32.const 0)) (then",
+    ]
+    ++ map ("      " ++ _) trap
+    ++ ["    ))"]
+jsCopyBack _ _ = []
+
+-- the result as a Medaka value
+jsUnwire : String -> List String -> List String -> List String
+jsUnwire "Int" intTrap _ =
+  [
+      "    (if (i64.ne (i64.shr_s (i64.shl (local.get $r) (i64.const 1)) (i64.const 1)) (local.get $r)) (then",
+    ]
+    ++ map ("      " ++ _) intTrap
+    ++ ["    ))", "    (call $mdk_box_int (local.get $r))"]
+jsUnwire "Char" _ charTrap =
+  [
+      "    (if (i32.eqz (i32.and (i32.lt_u (local.get $r) (i32.const 1114112))",
+      "        (i32.or (i32.lt_u (local.get $r) (i32.const 55296)) (i32.gt_u (local.get $r) (i32.const 57343))))) (then",
+    ]
+    ++ map ("      " ++ _) charTrap
+    ++ ["    ))", "    (ref.i31 (local.get $r))"]
+jsUnwire "Float" _ _ = ["    (struct.new $float (local.get $r))"]
+jsUnwire "Bool" _ _ = ["    (ref.i31 (i32.ne (local.get $r) (i32.const 0)))"]
+jsUnwire "U8" _ _ = [
+  "    (call $mdk_box_int (i64.extend_i32_u (i32.and (local.get $r) (i32.const 255))))",
+]
+jsUnwire "U16" _ _ = [
+  "    (call $mdk_box_int (i64.extend_i32_u (i32.and (local.get $r) (i32.const 65535))))",
+]
+jsUnwire "U32" _ _ =
+  ["    (call $mdk_box_int (i64.extend_i32_u (local.get $r)))"]
+jsUnwire "I32" _ _ =
+  ["    (call $mdk_box_int (i64.extend_i32_s (local.get $r)))"]
+jsUnwire "U64" _ _ = ["    (struct.new $u64 (local.get $r))"]
+jsUnwire "I64" _ _ = ["    (struct.new $i64 (local.get $r))"]
+jsUnwire "String" _ _ = ["    (call $mdk_jsffi_result_str (local.get $off))"]
+jsUnwire _ _ _ = ["    (ref.i31 (i32.const 0))"]
+
+-- The helpers the reached bindings' wrappers call, each emitted when one of
+-- them needs it.  `keys` are the plan's host keys: `rename` already emits
+-- `$mdk_push_path_more`.
+export
+jsffiRuntimeLines : List String -> List JsImport -> List String
+jsffiRuntimeLines keys imps =
+  let heads = flatMap (imp => imp.params) imps
+  let pushMore =
+    if anyList isChannelHead heads && not (contains "mdk_rename" keys) then
+      ioPushPathMoreLines
+    else
+      []
+  let arrays = if contains "Array" heads then jsffiArrayLines else []
+  let strs =
+    if anyList (imp => imp.result == "String") imps then
+      jsffiResultStrLines
+    else
+      []
+  pushMore ++ arrays ++ strs
+
+-- An `Array Int` argument crosses as 8 little-endian bytes per element, and its
+-- copy-back is read the same way.  `$mdk_jsffi_copy_back` checks every word
+-- before it writes any, and answers -1 for a word outside `Int`'s 63 bits.
+jsffiArrayLines : List String
+jsffiArrayLines = [
+  "  ;; push an Array Int's elements to the host path buffer, 8 LE bytes each.",
+  "  (func $mdk_jsffi_push_ints (param $a (ref $arr))",
+  "    (local $i i32) (local $n i32) (local $w i64) (local $k i32)",
+  "    (local.set $n (array.len (local.get $a)))",
+  "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (local.set $w (call $mdk_unbox_int (array.get $arr (local.get $a) (local.get $i))))",
+  "      (local.set $k (i32.const 0))",
+  "      (block $bd (loop $bl",
+  "        (br_if $bd (i32.ge_s (local.get $k) (i32.const 8)))",
+  "        (call $mdk_path_push (i32.wrap_i64 (i64.and (local.get $w) (i64.const 255))))",
+  "        (local.set $w (i64.shr_u (local.get $w) (i64.const 8)))",
+  "        (local.set $k (i32.add (local.get $k) (i32.const 1))) (br $bl)))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    )",
+  "  ;; the 8 LE bytes at $at of the host result buffer, as an i64.",
+  "  (func $mdk_jsffi_result_i64 (param $at i32) (result i64)",
+  "    (local $k i32) (local $w i64)",
+  "    (local.set $k (i32.const 8))",
+  "    (block $d (loop $l",
+  "      (br_if $d (i32.eqz (local.get $k)))",
+  "      (local.set $k (i32.sub (local.get $k) (i32.const 1)))",
+  "      (local.set $w (i64.or (i64.shl (local.get $w) (i64.const 8))",
+  "        (i64.extend_i32_u (i32.and (call $mdk_result_byte (i32.add (local.get $at) (local.get $k))) (i32.const 255)))))",
+  "      (br $l)))",
+  "    (local.get $w))",
+  "  ;; copy an Array Int argument back from the result buffer at $off: the next",
+  "  ;; offset, or -1 with nothing written when a word is outside Int's 63 bits.",
+  "  (func $mdk_jsffi_copy_back (param $a (ref $arr)) (param $off i32) (result i32)",
+  "    (local $i i32) (local $n i32) (local $w i64)",
+  "    (local.set $n (array.len (local.get $a)))",
+  "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (local.set $w (call $mdk_jsffi_result_i64 (i32.add (local.get $off) (i32.shl (local.get $i) (i32.const 3)))))",
+  "      (if (i64.ne (i64.shr_s (i64.shl (local.get $w) (i64.const 1)) (i64.const 1)) (local.get $w))",
+  "        (then (return (i32.const -1))))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d2 (loop $l2",
+  "      (br_if $d2 (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (array.set $arr (local.get $a) (local.get $i)",
+  "        (call $mdk_box_int (call $mdk_jsffi_result_i64 (i32.add (local.get $off) (i32.shl (local.get $i) (i32.const 3))))))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l2)))",
+  "    (i32.add (local.get $off) (i32.shl (local.get $n) (i32.const 3))))",
+]
+
+-- A `String` result: the result buffer from `$off`, past any copy-back words,
+-- read as UTF-8 by `$mdk_u8_to_str_lossy`.
+jsffiResultStrLines : List String
+jsffiResultStrLines = [
+  "  ;; the host result buffer from $off to its end, as a $str.",
+  "  (func $mdk_jsffi_result_str (param $off i32) (result (ref $str))",
+  "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))",
+  "    (local.set $n (i32.sub (call $mdk_result_len) (local.get $off)))",
+  "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
+  "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (array.set $u8arr (local.get $buf) (local.get $i)",
+  "        (call $mdk_result_byte (i32.add (local.get $off) (local.get $i))))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (call $mdk_u8_to_str_lossy (local.get $buf)))",
+]
+
 ioReadFileLines : List String
 ioReadFileLines = [
   "  ;; readFile's Err for contents that are not UTF-8: the path, then a fixed ASCII",
@@ -2986,7 +3244,8 @@ charFromCodeRuntimeLines = [
   "    (ref.i31 (i32.const 1)))",
 ]
 # DESUGAR
-(DUse false (UseGroup ("support" "util") ((mem "contains" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("backend" "emit_plan") ((mem "JsImport" true))))
 (DTypeSig true "preambleHeadLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preambleHeadLines" () (EListLit (ELit (LString ";; Medaka WasmGC backend (Stage 2.4c) — emitted WAT.")) (ELit (LString ";; Value rep: WASMGC-DESIGN.md §3 / §8.6.  W2 = scalar i32; W3 = (ref eq) + i31/structs.")) (ELit (LString "(module"))))
 (DTypeSig true "importLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -3227,6 +3486,66 @@ charFromCodeRuntimeLines = [
 (DFunDef false "panicBannerWat" () (EApp (EVar "asciiU8arrWat") (ELit (LString "runtime error [E-PANIC]: "))))
 (DTypeSig false "ioResultLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "ioResultLines" () (EListLit (ELit (LString "  ;; copy the host result buffer (length + byte-at-index) into a fresh $u8arr.")) (ELit (LString "  (func $mdk_io_result_bytes (result (ref $u8arr))")) (ELit (LString "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))")) (ELit (LString "    (local.set $n (call $mdk_result_len))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $buf) (local.get $i) (call $mdk_result_byte (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $buf))")) (ELit (LString "  ;; the host result buffer as a $str, read as UTF-8 by $mdk_u8_to_str_lossy.")) (ELit (LString "  (func $mdk_io_result_to_str (result (ref $str))")) (ELit (LString "    (call $mdk_u8_to_str_lossy (call $mdk_io_result_bytes)))"))))
+(DTypeSig true "jsffiImportLines" (TyFun (TyApp (TyCon "List") (TyCon "JsImport")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "jsffiImportLines" ((PVar "imps")) (EApp (EApp (EVar "map") (EVar "jsffiImportLine")) (EVar "imps")))
+(DTypeSig false "jsffiImportLine" (TyFun (TyCon "JsImport") (TyCon "String")))
+(DFunDef false "jsffiImportLine" ((PVar "imp")) (EBlock (DoLet false false (PVar "params") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (EVar "jsWireParam")) (EFieldAccess (EVar "imp") "params")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (import \"jsffi\" \"")) (EApp (EVar "display") (EApp (EVar "jsImportField") (EVar "imp")))) (ELit (LString "\" (func $"))) (EApp (EVar "display") (EApp (EVar "jsffiImportId") (EFieldAccess (EVar "imp") "medakaName")))) (ELit (LString ""))) (EApp (EVar "display") (EVar "params"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "jsWireResult") (EFieldAccess (EVar "imp") "result")))) (ELit (LString "))"))))))
+(DTypeSig true "jsffiImportId" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "jsffiImportId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.import.")) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
+(DTypeSig true "jsffiWrapperId" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "jsffiWrapperId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.wrap.")) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
+(DTypeSig true "jsImportField" (TyFun (TyCon "JsImport") (TyCon "String")))
+(DFunDef false "jsImportField" ((PVar "imp")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "imp") "jsName"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "imp") "params")))) (ELit (LString "->"))) (EApp (EVar "display") (EFieldAccess (EVar "imp") "result"))) (ELit (LString ""))))
+(DTypeSig false "jsWireParam" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "jsWireParam" ((PLit (LString "Unit"))) (ELit (LString "")))
+(DFunDef false "jsWireParam" ((PVar "head")) (EBinOp "++" (EBinOp "++" (ELit (LString " (param ")) (EApp (EVar "display") (EApp (EVar "jsWireTy") (EVar "head")))) (ELit (LString ")"))))
+(DTypeSig false "jsWireResult" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "jsWireResult" ((PLit (LString "Unit"))) (ELit (LString "")))
+(DFunDef false "jsWireResult" ((PLit (LString "String"))) (ELit (LString "")))
+(DFunDef false "jsWireResult" ((PVar "head")) (EBinOp "++" (EBinOp "++" (ELit (LString " (result ")) (EApp (EVar "display") (EApp (EVar "jsWireTy") (EVar "head")))) (ELit (LString ")"))))
+(DTypeSig false "jsWireTy" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "jsWireTy" ((PLit (LString "Int"))) (ELit (LString "i64")))
+(DFunDef false "jsWireTy" ((PLit (LString "U64"))) (ELit (LString "i64")))
+(DFunDef false "jsWireTy" ((PLit (LString "I64"))) (ELit (LString "i64")))
+(DFunDef false "jsWireTy" ((PLit (LString "Float"))) (ELit (LString "f64")))
+(DFunDef false "jsWireTy" (PWild) (ELit (LString "i32")))
+(DTypeSig false "isChannelHead" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isChannelHead" ((PVar "head")) (EBinOp "||" (EBinOp "==" (EVar "head") (ELit (LString "String"))) (EBinOp "==" (EVar "head") (ELit (LString "Array")))))
+(DTypeSig true "jsCrossableHead" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "jsCrossableHead" ((PVar "head")) (EApp (EApp (EVar "contains") (EVar "head")) (EListLit (ELit (LString "Int")) (ELit (LString "Float")) (ELit (LString "Bool")) (ELit (LString "Char")) (ELit (LString "String")) (ELit (LString "Array")) (ELit (LString "Unit")) (ELit (LString "U8")) (ELit (LString "U16")) (ELit (LString "U32")) (ELit (LString "I32")) (ELit (LString "U64")) (ELit (LString "I64")))))
+(DTypeSig true "jsffiWrapperLines" (TyFun (TyCon "JsImport") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "jsffiWrapperLines" ((PVar "imp") (PVar "intTrap") (PVar "charTrap") (PVar "copyTrap")) (EBlock (DoLet false false (PVar "ps") (EApp (EApp (EVar "zipHeads") (EFieldAccess (EVar "imp") "params")) (ELit (LInt 0)))) (DoLet false false (PVar "params") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EBinOp "++" (EBinOp "++" (ELit (LString " (param $p")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "snd") (EVar "p"))))) (ELit (LString " (ref eq))"))))) (EVar "ps")))) (DoLet false false (PVar "held") (EBinOp "/=" (EApp (EVar "jsWireResult") (EFieldAccess (EVar "imp") "result")) (ELit (LString "")))) (DoLet false false (PVar "rLocal") (EIf (EVar "held") (EBinOp "++" (EBinOp "++" (ELit (LString " (local $r ")) (EApp (EVar "display") (EApp (EVar "jsWireTy") (EFieldAccess (EVar "imp") "result")))) (ELit (LString ")"))) (ELit (LString "")))) (DoLet false false (PVar "push") (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "p")) (EApp (EVar "isChannelHead") (EApp (EVar "fst") (EVar "p"))))) (EVar "ps")) (EBinOp "::" (ELit (LString "    (call $mdk_path_reset)")) (EApp (EApp (EVar "flatMap") (EVar "jsPushArg")) (EVar "ps"))) (EListLit))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (func $")) (EApp (EVar "display") (EApp (EVar "jsffiWrapperId") (EFieldAccess (EVar "imp") "medakaName")))) (ELit (LString ""))) (EApp (EVar "display") (EVar "params"))) (ELit (LString " (result (ref eq))"))) (EBinOp "++" (EBinOp "++" (ELit (LString "    (local $off i32)")) (EApp (EVar "display") (EVar "rLocal"))) (ELit (LString "")))) (EVar "push")) (EApp (EApp (EVar "flatMap") (EVar "jsWireArg")) (EVar "ps"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    call $")) (EApp (EVar "display") (EApp (EVar "jsffiImportId") (EFieldAccess (EVar "imp") "medakaName")))) (ELit (LString ""))))) (EIf (EVar "held") (EListLit (ELit (LString "    local.set $r"))) (EListLit))) (EApp (EApp (EVar "flatMap") (EApp (EVar "jsCopyBack") (EVar "copyTrap"))) (EVar "ps"))) (EApp (EApp (EApp (EVar "jsUnwire") (EFieldAccess (EVar "imp") "result")) (EVar "intTrap")) (EVar "charTrap"))) (EListLit (ELit (LString "  )")))))))
+(DTypeSig false "zipHeads" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
+(DFunDef false "zipHeads" ((PList) PWild) (EListLit))
+(DFunDef false "zipHeads" ((PCons (PVar "h") (PVar "rest")) (PVar "i")) (EBinOp "::" (ETuple (EVar "h") (EVar "i")) (EApp (EApp (EVar "zipHeads") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
+(DTypeSig false "jsPushArg" (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "jsPushArg" ((PTuple (PLit (LString "String")) (PVar "i"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (call $mdk_push_path_more (ref.cast (ref $str) (local.get $p")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")))")))))
+(DFunDef false "jsPushArg" ((PTuple (PLit (LString "Array")) (PVar "i"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (call $mdk_jsffi_push_ints (ref.cast (ref $arr) (local.get $p")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")))")))))
+(DFunDef false "jsPushArg" (PWild) (EListLit))
+(DTypeSig false "jsWireArg" (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "jsWireArg" ((PTuple (PVar "head") (PVar "i"))) (EBlock (DoLet false false (PVar "p") (EBinOp "++" (EBinOp "++" (ELit (LString "(local.get $p")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")")))) (DoExpr (EMatch (EVar "head") (arm (PLit (LString "Unit")) () (EListLit)) (arm (PLit (LString "Int")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (call $mdk_unbox_int ")) (EApp (EVar "display") (EVar "p"))) (ELit (LString ")"))))) (arm (PLit (LString "Float")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (struct.get $float 0 (ref.cast (ref $float) ")) (EApp (EVar "display") (EVar "p"))) (ELit (LString "))"))))) (arm (PLit (LString "Bool")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (i31.get_u (ref.cast (ref i31) ")) (EApp (EVar "display") (EVar "p"))) (ELit (LString "))"))))) (arm (PLit (LString "Char")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (i31.get_u (ref.cast (ref i31) ")) (EApp (EVar "display") (EVar "p"))) (ELit (LString "))"))))) (arm (PLit (LString "U64")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (struct.get $u64 0 (ref.cast (ref $u64) ")) (EApp (EVar "display") (EVar "p"))) (ELit (LString "))"))))) (arm (PLit (LString "I64")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (struct.get $i64 0 (ref.cast (ref $i64) ")) (EApp (EVar "display") (EVar "p"))) (ELit (LString "))"))))) (arm (PLit (LString "String")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (array.len (struct.get $str $bytes (ref.cast (ref $str) ")) (EApp (EVar "display") (EVar "p"))) (ELit (LString ")))"))))) (arm (PLit (LString "Array")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (array.len (ref.cast (ref $arr) ")) (EApp (EVar "display") (EVar "p"))) (ELit (LString "))"))))) (arm PWild () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (i32.wrap_i64 (call $mdk_unbox_int ")) (EApp (EVar "display") (EVar "p"))) (ELit (LString "))")))))))))
+(DTypeSig false "jsCopyBack" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "jsCopyBack" ((PVar "trap") (PTuple (PLit (LString "Array")) (PVar "i"))) (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (local.set $off (call $mdk_jsffi_copy_back (ref.cast (ref $arr) (local.get $p")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")) (local.get $off)))"))) (ELit (LString "    (if (i32.lt_s (local.get $off) (i32.const 0)) (then"))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString "      ")) (EVar "_s")))) (EVar "trap"))) (EListLit (ELit (LString "    ))")))))
+(DFunDef false "jsCopyBack" (PWild PWild) (EListLit))
+(DTypeSig false "jsUnwire" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "jsUnwire" ((PLit (LString "Int")) (PVar "intTrap") PWild) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "    (if (i64.ne (i64.shr_s (i64.shl (local.get $r) (i64.const 1)) (i64.const 1)) (local.get $r)) (then"))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString "      ")) (EVar "_s")))) (EVar "intTrap"))) (EListLit (ELit (LString "    ))")) (ELit (LString "    (call $mdk_box_int (local.get $r))")))))
+(DFunDef false "jsUnwire" ((PLit (LString "Char")) PWild (PVar "charTrap")) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "    (if (i32.eqz (i32.and (i32.lt_u (local.get $r) (i32.const 1114112))")) (ELit (LString "        (i32.or (i32.lt_u (local.get $r) (i32.const 55296)) (i32.gt_u (local.get $r) (i32.const 57343))))) (then"))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString "      ")) (EVar "_s")))) (EVar "charTrap"))) (EListLit (ELit (LString "    ))")) (ELit (LString "    (ref.i31 (local.get $r))")))))
+(DFunDef false "jsUnwire" ((PLit (LString "Float")) PWild PWild) (EListLit (ELit (LString "    (struct.new $float (local.get $r))"))))
+(DFunDef false "jsUnwire" ((PLit (LString "Bool")) PWild PWild) (EListLit (ELit (LString "    (ref.i31 (i32.ne (local.get $r) (i32.const 0)))"))))
+(DFunDef false "jsUnwire" ((PLit (LString "U8")) PWild PWild) (EListLit (ELit (LString "    (call $mdk_box_int (i64.extend_i32_u (i32.and (local.get $r) (i32.const 255))))"))))
+(DFunDef false "jsUnwire" ((PLit (LString "U16")) PWild PWild) (EListLit (ELit (LString "    (call $mdk_box_int (i64.extend_i32_u (i32.and (local.get $r) (i32.const 65535))))"))))
+(DFunDef false "jsUnwire" ((PLit (LString "U32")) PWild PWild) (EListLit (ELit (LString "    (call $mdk_box_int (i64.extend_i32_u (local.get $r)))"))))
+(DFunDef false "jsUnwire" ((PLit (LString "I32")) PWild PWild) (EListLit (ELit (LString "    (call $mdk_box_int (i64.extend_i32_s (local.get $r)))"))))
+(DFunDef false "jsUnwire" ((PLit (LString "U64")) PWild PWild) (EListLit (ELit (LString "    (struct.new $u64 (local.get $r))"))))
+(DFunDef false "jsUnwire" ((PLit (LString "I64")) PWild PWild) (EListLit (ELit (LString "    (struct.new $i64 (local.get $r))"))))
+(DFunDef false "jsUnwire" ((PLit (LString "String")) PWild PWild) (EListLit (ELit (LString "    (call $mdk_jsffi_result_str (local.get $off))"))))
+(DFunDef false "jsUnwire" (PWild PWild PWild) (EListLit (ELit (LString "    (ref.i31 (i32.const 0))"))))
+(DTypeSig true "jsffiRuntimeLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "JsImport")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "jsffiRuntimeLines" ((PVar "keys") (PVar "imps")) (EBlock (DoLet false false (PVar "heads") (EApp (EApp (EVar "flatMap") (ELam ((PVar "imp")) (EFieldAccess (EVar "imp") "params"))) (EVar "imps"))) (DoLet false false (PVar "pushMore") (EIf (EBinOp "&&" (EApp (EApp (EVar "anyList") (EVar "isChannelHead")) (EVar "heads")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (ELit (LString "mdk_rename"))) (EVar "keys")))) (EVar "ioPushPathMoreLines") (EListLit))) (DoLet false false (PVar "arrays") (EIf (EApp (EApp (EVar "contains") (ELit (LString "Array"))) (EVar "heads")) (EVar "jsffiArrayLines") (EListLit))) (DoLet false false (PVar "strs") (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "imp")) (EBinOp "==" (EFieldAccess (EVar "imp") "result") (ELit (LString "String"))))) (EVar "imps")) (EVar "jsffiResultStrLines") (EListLit))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "pushMore") (EVar "arrays")) (EVar "strs")))))
+(DTypeSig false "jsffiArrayLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "jsffiArrayLines" () (EListLit (ELit (LString "  ;; push an Array Int's elements to the host path buffer, 8 LE bytes each.")) (ELit (LString "  (func $mdk_jsffi_push_ints (param $a (ref $arr))")) (ELit (LString "    (local $i i32) (local $n i32) (local $w i64) (local $k i32)")) (ELit (LString "    (local.set $n (array.len (local.get $a)))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (local.set $w (call $mdk_unbox_int (array.get $arr (local.get $a) (local.get $i))))")) (ELit (LString "      (local.set $k (i32.const 0))")) (ELit (LString "      (block $bd (loop $bl")) (ELit (LString "        (br_if $bd (i32.ge_s (local.get $k) (i32.const 8)))")) (ELit (LString "        (call $mdk_path_push (i32.wrap_i64 (i64.and (local.get $w) (i64.const 255))))")) (ELit (LString "        (local.set $w (i64.shr_u (local.get $w) (i64.const 8)))")) (ELit (LString "        (local.set $k (i32.add (local.get $k) (i32.const 1))) (br $bl)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    )")) (ELit (LString "  ;; the 8 LE bytes at $at of the host result buffer, as an i64.")) (ELit (LString "  (func $mdk_jsffi_result_i64 (param $at i32) (result i64)")) (ELit (LString "    (local $k i32) (local $w i64)")) (ELit (LString "    (local.set $k (i32.const 8))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.eqz (local.get $k)))")) (ELit (LString "      (local.set $k (i32.sub (local.get $k) (i32.const 1)))")) (ELit (LString "      (local.set $w (i64.or (i64.shl (local.get $w) (i64.const 8))")) (ELit (LString "        (i64.extend_i32_u (i32.and (call $mdk_result_byte (i32.add (local.get $at) (local.get $k))) (i32.const 255)))))")) (ELit (LString "      (br $l)))")) (ELit (LString "    (local.get $w))")) (ELit (LString "  ;; copy an Array Int argument back from the result buffer at $off: the next")) (ELit (LString "  ;; offset, or -1 with nothing written when a word is outside Int's 63 bits.")) (ELit (LString "  (func $mdk_jsffi_copy_back (param $a (ref $arr)) (param $off i32) (result i32)")) (ELit (LString "    (local $i i32) (local $n i32) (local $w i64)")) (ELit (LString "    (local.set $n (array.len (local.get $a)))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (local.set $w (call $mdk_jsffi_result_i64 (i32.add (local.get $off) (i32.shl (local.get $i) (i32.const 3)))))")) (ELit (LString "      (if (i64.ne (i64.shr_s (i64.shl (local.get $w) (i64.const 1)) (i64.const 1)) (local.get $w))")) (ELit (LString "        (then (return (i32.const -1))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d2 (loop $l2")) (ELit (LString "      (br_if $d2 (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $arr (local.get $a) (local.get $i)")) (ELit (LString "        (call $mdk_box_int (call $mdk_jsffi_result_i64 (i32.add (local.get $off) (i32.shl (local.get $i) (i32.const 3))))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l2)))")) (ELit (LString "    (i32.add (local.get $off) (i32.shl (local.get $n) (i32.const 3))))"))))
+(DTypeSig false "jsffiResultStrLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "jsffiResultStrLines" () (EListLit (ELit (LString "  ;; the host result buffer from $off to its end, as a $str.")) (ELit (LString "  (func $mdk_jsffi_result_str (param $off i32) (result (ref $str))")) (ELit (LString "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))")) (ELit (LString "    (local.set $n (i32.sub (call $mdk_result_len) (local.get $off)))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $buf) (local.get $i)")) (ELit (LString "        (call $mdk_result_byte (i32.add (local.get $off) (local.get $i))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (call $mdk_u8_to_str_lossy (local.get $buf)))"))))
 (DTypeSig false "ioReadFileLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "ioReadFileLines" () (EListLit (ELit (LString "  ;; readFile's Err for contents that are not UTF-8: the path, then a fixed ASCII")) (ELit (LString "  ;; suffix, byte-identical to medaka_rt.c mdk_read_file.")) (ELit (LString "  (func $mdk_str_not_utf8 (param $path (ref $str)) (result (ref $str))")) (ELit (LString "    (local $pb (ref $u8arr)) (local $pl i32) (local $sfx (ref $u8arr)) (local $out (ref $u8arr))")) (ELit (LString "    (local.set $pb (struct.get $str $bytes (local.get $path)))")) (ELit (LString "    (local.set $pl (array.len (local.get $pb)))")) (EBinOp "++" (EBinOp "++" (ELit (LString "    (local.set $sfx ")) (EApp (EVar "display") (EVar "notUtf8SuffixWat"))) (ELit (LString ")"))) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (i32.add (local.get $pl) (array.len (local.get $sfx)))))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $pb) (i32.const 0) (local.get $pl))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (local.get $pl) (local.get $sfx) (i32.const 0) (array.len (local.get $sfx)))")) (ELit (LString "    (struct.new $str (i32.add (struct.get $str $cp_count (local.get $path)) (array.len (local.get $sfx))) (local.get $out)))")) (ELit (LString "  ;; readFile : $str path -> Result String String.  1=Ok contents / 0=Err message.")) (ELit (LString "  ;; Contents that are not UTF-8 are an Err naming the path (medaka_rt.c mdk_read_file).")) (ELit (LString "  (func $mdk_read_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (local $st i32) (local $buf (ref $u8arr)) (local $c i32)")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (local.set $st (call $mdk_read_file))")) (ELit (LString "    (if (i32.eqz (local.get $st))")) (ELit (LString "      (then (return (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))")) (ELit (LString "    (local.set $buf (call $mdk_io_result_bytes))")) (ELit (LString "    (local.set $c (call $mdk_utf8_valid_count (local.get $buf)))")) (ELit (LString "    (if (result (ref eq)) (i32.ge_s (local.get $c) (i32.const 0))")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (struct.new $str (local.get $c) (local.get $buf))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_str_not_utf8 (local.get $path))))))"))))
 (DTypeSig false "ioFileExistsLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -3288,7 +3607,8 @@ charFromCodeRuntimeLines = [
 (DTypeSig true "charFromCodeRuntimeLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "charFromCodeRuntimeLines" () (EListLit (ELit (LString "  ;; -- W11b charFromCode (byte-identical to medaka_rt.c mdk_char_from_code) --")) (ELit (LString "  (func $mdk_char_from_code (param $cp i32) (result (ref eq))")) (ELit (LString "    ;; valid: 0 <= cp <= 0x10FFFF and not (0xD800 <= cp <= 0xDFFF).")) (ELit (LString "    (if (i32.and (i32.and (i32.ge_s (local.get $cp) (i32.const 0)) (i32.le_s (local.get $cp) (i32.const 1114111)))")) (ELit (LString "                 (i32.eqz (i32.and (i32.ge_s (local.get $cp) (i32.const 55296)) (i32.le_s (local.get $cp) (i32.const 57343)))))")) (ELit (LString "      (then (return (struct.new $C_Some (i32.const 0) (ref.i31 (local.get $cp))))))")) (ELit (LString "    (ref.i31 (i32.const 1)))"))))
 # MARK
-(DUse false (UseGroup ("support" "util") ((mem "contains" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("backend" "emit_plan") ((mem "JsImport" true))))
 (DTypeSig true "preambleHeadLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "preambleHeadLines" () (EListLit (ELit (LString ";; Medaka WasmGC backend (Stage 2.4c) — emitted WAT.")) (ELit (LString ";; Value rep: WASMGC-DESIGN.md §3 / §8.6.  W2 = scalar i32; W3 = (ref eq) + i31/structs.")) (ELit (LString "(module"))))
 (DTypeSig true "importLines" (TyApp (TyCon "List") (TyCon "String")))
@@ -3529,6 +3849,66 @@ charFromCodeRuntimeLines = [
 (DFunDef false "panicBannerWat" () (EApp (EVar "asciiU8arrWat") (ELit (LString "runtime error [E-PANIC]: "))))
 (DTypeSig false "ioResultLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "ioResultLines" () (EListLit (ELit (LString "  ;; copy the host result buffer (length + byte-at-index) into a fresh $u8arr.")) (ELit (LString "  (func $mdk_io_result_bytes (result (ref $u8arr))")) (ELit (LString "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))")) (ELit (LString "    (local.set $n (call $mdk_result_len))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $buf) (local.get $i) (call $mdk_result_byte (local.get $i)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.get $buf))")) (ELit (LString "  ;; the host result buffer as a $str, read as UTF-8 by $mdk_u8_to_str_lossy.")) (ELit (LString "  (func $mdk_io_result_to_str (result (ref $str))")) (ELit (LString "    (call $mdk_u8_to_str_lossy (call $mdk_io_result_bytes)))"))))
+(DTypeSig true "jsffiImportLines" (TyFun (TyApp (TyCon "List") (TyCon "JsImport")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "jsffiImportLines" ((PVar "imps")) (EApp (EApp (EMethodRef "map") (EVar "jsffiImportLine")) (EVar "imps")))
+(DTypeSig false "jsffiImportLine" (TyFun (TyCon "JsImport") (TyCon "String")))
+(DFunDef false "jsffiImportLine" ((PVar "imp")) (EBlock (DoLet false false (PVar "params") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (EVar "jsWireParam")) (EFieldAccess (EVar "imp") "params")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (import \"jsffi\" \"")) (EApp (EMethodRef "display") (EApp (EVar "jsImportField") (EVar "imp")))) (ELit (LString "\" (func $"))) (EApp (EMethodRef "display") (EApp (EVar "jsffiImportId") (EFieldAccess (EVar "imp") "medakaName")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "params"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "jsWireResult") (EFieldAccess (EVar "imp") "result")))) (ELit (LString "))"))))))
+(DTypeSig true "jsffiImportId" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "jsffiImportId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.import.")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
+(DTypeSig true "jsffiWrapperId" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "jsffiWrapperId" ((PVar "name")) (EBinOp "++" (EBinOp "++" (ELit (LString "jsffi.wrap.")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
+(DTypeSig true "jsImportField" (TyFun (TyCon "JsImport") (TyCon "String")))
+(DFunDef false "jsImportField" ((PVar "imp")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "jsName"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EFieldAccess (EVar "imp") "params")))) (ELit (LString "->"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "imp") "result"))) (ELit (LString ""))))
+(DTypeSig false "jsWireParam" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "jsWireParam" ((PLit (LString "Unit"))) (ELit (LString "")))
+(DFunDef false "jsWireParam" ((PVar "head")) (EBinOp "++" (EBinOp "++" (ELit (LString " (param ")) (EApp (EMethodRef "display") (EApp (EVar "jsWireTy") (EVar "head")))) (ELit (LString ")"))))
+(DTypeSig false "jsWireResult" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "jsWireResult" ((PLit (LString "Unit"))) (ELit (LString "")))
+(DFunDef false "jsWireResult" ((PLit (LString "String"))) (ELit (LString "")))
+(DFunDef false "jsWireResult" ((PVar "head")) (EBinOp "++" (EBinOp "++" (ELit (LString " (result ")) (EApp (EMethodRef "display") (EApp (EVar "jsWireTy") (EVar "head")))) (ELit (LString ")"))))
+(DTypeSig false "jsWireTy" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "jsWireTy" ((PLit (LString "Int"))) (ELit (LString "i64")))
+(DFunDef false "jsWireTy" ((PLit (LString "U64"))) (ELit (LString "i64")))
+(DFunDef false "jsWireTy" ((PLit (LString "I64"))) (ELit (LString "i64")))
+(DFunDef false "jsWireTy" ((PLit (LString "Float"))) (ELit (LString "f64")))
+(DFunDef false "jsWireTy" (PWild) (ELit (LString "i32")))
+(DTypeSig false "isChannelHead" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isChannelHead" ((PVar "head")) (EBinOp "||" (EBinOp "==" (EVar "head") (ELit (LString "String"))) (EBinOp "==" (EVar "head") (ELit (LString "Array")))))
+(DTypeSig true "jsCrossableHead" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "jsCrossableHead" ((PVar "head")) (EApp (EApp (EVar "contains") (EVar "head")) (EListLit (ELit (LString "Int")) (ELit (LString "Float")) (ELit (LString "Bool")) (ELit (LString "Char")) (ELit (LString "String")) (ELit (LString "Array")) (ELit (LString "Unit")) (ELit (LString "U8")) (ELit (LString "U16")) (ELit (LString "U32")) (ELit (LString "I32")) (ELit (LString "U64")) (ELit (LString "I64")))))
+(DTypeSig true "jsffiWrapperLines" (TyFun (TyCon "JsImport") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "jsffiWrapperLines" ((PVar "imp") (PVar "intTrap") (PVar "charTrap") (PVar "copyTrap")) (EBlock (DoLet false false (PVar "ps") (EApp (EApp (EVar "zipHeads") (EFieldAccess (EVar "imp") "params")) (ELit (LInt 0)))) (DoLet false false (PVar "params") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EBinOp "++" (EBinOp "++" (ELit (LString " (param $p")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "snd") (EVar "p"))))) (ELit (LString " (ref eq))"))))) (EVar "ps")))) (DoLet false false (PVar "held") (EBinOp "/=" (EApp (EVar "jsWireResult") (EFieldAccess (EVar "imp") "result")) (ELit (LString "")))) (DoLet false false (PVar "rLocal") (EIf (EVar "held") (EBinOp "++" (EBinOp "++" (ELit (LString " (local $r ")) (EApp (EMethodRef "display") (EApp (EVar "jsWireTy") (EFieldAccess (EVar "imp") "result")))) (ELit (LString ")"))) (ELit (LString "")))) (DoLet false false (PVar "push") (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "p")) (EApp (EVar "isChannelHead") (EApp (EVar "fst") (EVar "p"))))) (EVar "ps")) (EBinOp "::" (ELit (LString "    (call $mdk_path_reset)")) (EApp (EApp (EDictApp "flatMap") (EVar "jsPushArg")) (EVar "ps"))) (EListLit))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  (func $")) (EApp (EMethodRef "display") (EApp (EVar "jsffiWrapperId") (EFieldAccess (EVar "imp") "medakaName")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "params"))) (ELit (LString " (result (ref eq))"))) (EBinOp "++" (EBinOp "++" (ELit (LString "    (local $off i32)")) (EApp (EMethodRef "display") (EVar "rLocal"))) (ELit (LString "")))) (EVar "push")) (EApp (EApp (EDictApp "flatMap") (EVar "jsWireArg")) (EVar "ps"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    call $")) (EApp (EMethodRef "display") (EApp (EVar "jsffiImportId") (EFieldAccess (EVar "imp") "medakaName")))) (ELit (LString ""))))) (EIf (EVar "held") (EListLit (ELit (LString "    local.set $r"))) (EListLit))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "jsCopyBack") (EVar "copyTrap"))) (EVar "ps"))) (EApp (EApp (EApp (EVar "jsUnwire") (EFieldAccess (EVar "imp") "result")) (EVar "intTrap")) (EVar "charTrap"))) (EListLit (ELit (LString "  )")))))))
+(DTypeSig false "zipHeads" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
+(DFunDef false "zipHeads" ((PList) PWild) (EListLit))
+(DFunDef false "zipHeads" ((PCons (PVar "h") (PVar "rest")) (PVar "i")) (EBinOp "::" (ETuple (EVar "h") (EVar "i")) (EApp (EApp (EVar "zipHeads") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
+(DTypeSig false "jsPushArg" (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "jsPushArg" ((PTuple (PLit (LString "String")) (PVar "i"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (call $mdk_push_path_more (ref.cast (ref $str) (local.get $p")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")))")))))
+(DFunDef false "jsPushArg" ((PTuple (PLit (LString "Array")) (PVar "i"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (call $mdk_jsffi_push_ints (ref.cast (ref $arr) (local.get $p")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")))")))))
+(DFunDef false "jsPushArg" (PWild) (EListLit))
+(DTypeSig false "jsWireArg" (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "jsWireArg" ((PTuple (PVar "head") (PVar "i"))) (EBlock (DoLet false false (PVar "p") (EBinOp "++" (EBinOp "++" (ELit (LString "(local.get $p")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")")))) (DoExpr (EMatch (EVar "head") (arm (PLit (LString "Unit")) () (EListLit)) (arm (PLit (LString "Int")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (call $mdk_unbox_int ")) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString ")"))))) (arm (PLit (LString "Float")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (struct.get $float 0 (ref.cast (ref $float) ")) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString "))"))))) (arm (PLit (LString "Bool")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (i31.get_u (ref.cast (ref i31) ")) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString "))"))))) (arm (PLit (LString "Char")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (i31.get_u (ref.cast (ref i31) ")) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString "))"))))) (arm (PLit (LString "U64")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (struct.get $u64 0 (ref.cast (ref $u64) ")) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString "))"))))) (arm (PLit (LString "I64")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (struct.get $i64 0 (ref.cast (ref $i64) ")) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString "))"))))) (arm (PLit (LString "String")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (array.len (struct.get $str $bytes (ref.cast (ref $str) ")) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString ")))"))))) (arm (PLit (LString "Array")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (array.len (ref.cast (ref $arr) ")) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString "))"))))) (arm PWild () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (i32.wrap_i64 (call $mdk_unbox_int ")) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString "))")))))))))
+(DTypeSig false "jsCopyBack" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "jsCopyBack" ((PVar "trap") (PTuple (PLit (LString "Array")) (PVar "i"))) (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "    (local.set $off (call $mdk_jsffi_copy_back (ref.cast (ref $arr) (local.get $p")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")) (local.get $off)))"))) (ELit (LString "    (if (i32.lt_s (local.get $off) (i32.const 0)) (then"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString "      ")) (EVar "_s")))) (EVar "trap"))) (EListLit (ELit (LString "    ))")))))
+(DFunDef false "jsCopyBack" (PWild PWild) (EListLit))
+(DTypeSig false "jsUnwire" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "jsUnwire" ((PLit (LString "Int")) (PVar "intTrap") PWild) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "    (if (i64.ne (i64.shr_s (i64.shl (local.get $r) (i64.const 1)) (i64.const 1)) (local.get $r)) (then"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString "      ")) (EVar "_s")))) (EVar "intTrap"))) (EListLit (ELit (LString "    ))")) (ELit (LString "    (call $mdk_box_int (local.get $r))")))))
+(DFunDef false "jsUnwire" ((PLit (LString "Char")) PWild (PVar "charTrap")) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "    (if (i32.eqz (i32.and (i32.lt_u (local.get $r) (i32.const 1114112))")) (ELit (LString "        (i32.or (i32.lt_u (local.get $r) (i32.const 55296)) (i32.gt_u (local.get $r) (i32.const 57343))))) (then"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString "      ")) (EVar "_s")))) (EVar "charTrap"))) (EListLit (ELit (LString "    ))")) (ELit (LString "    (ref.i31 (local.get $r))")))))
+(DFunDef false "jsUnwire" ((PLit (LString "Float")) PWild PWild) (EListLit (ELit (LString "    (struct.new $float (local.get $r))"))))
+(DFunDef false "jsUnwire" ((PLit (LString "Bool")) PWild PWild) (EListLit (ELit (LString "    (ref.i31 (i32.ne (local.get $r) (i32.const 0)))"))))
+(DFunDef false "jsUnwire" ((PLit (LString "U8")) PWild PWild) (EListLit (ELit (LString "    (call $mdk_box_int (i64.extend_i32_u (i32.and (local.get $r) (i32.const 255))))"))))
+(DFunDef false "jsUnwire" ((PLit (LString "U16")) PWild PWild) (EListLit (ELit (LString "    (call $mdk_box_int (i64.extend_i32_u (i32.and (local.get $r) (i32.const 65535))))"))))
+(DFunDef false "jsUnwire" ((PLit (LString "U32")) PWild PWild) (EListLit (ELit (LString "    (call $mdk_box_int (i64.extend_i32_u (local.get $r)))"))))
+(DFunDef false "jsUnwire" ((PLit (LString "I32")) PWild PWild) (EListLit (ELit (LString "    (call $mdk_box_int (i64.extend_i32_s (local.get $r)))"))))
+(DFunDef false "jsUnwire" ((PLit (LString "U64")) PWild PWild) (EListLit (ELit (LString "    (struct.new $u64 (local.get $r))"))))
+(DFunDef false "jsUnwire" ((PLit (LString "I64")) PWild PWild) (EListLit (ELit (LString "    (struct.new $i64 (local.get $r))"))))
+(DFunDef false "jsUnwire" ((PLit (LString "String")) PWild PWild) (EListLit (ELit (LString "    (call $mdk_jsffi_result_str (local.get $off))"))))
+(DFunDef false "jsUnwire" (PWild PWild PWild) (EListLit (ELit (LString "    (ref.i31 (i32.const 0))"))))
+(DTypeSig true "jsffiRuntimeLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "JsImport")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "jsffiRuntimeLines" ((PVar "keys") (PVar "imps")) (EBlock (DoLet false false (PVar "heads") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "imp")) (EFieldAccess (EVar "imp") "params"))) (EVar "imps"))) (DoLet false false (PVar "pushMore") (EIf (EBinOp "&&" (EApp (EApp (EVar "anyList") (EVar "isChannelHead")) (EVar "heads")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (ELit (LString "mdk_rename"))) (EVar "keys")))) (EVar "ioPushPathMoreLines") (EListLit))) (DoLet false false (PVar "arrays") (EIf (EApp (EApp (EVar "contains") (ELit (LString "Array"))) (EVar "heads")) (EVar "jsffiArrayLines") (EListLit))) (DoLet false false (PVar "strs") (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "imp")) (EBinOp "==" (EFieldAccess (EVar "imp") "result") (ELit (LString "String"))))) (EVar "imps")) (EVar "jsffiResultStrLines") (EListLit))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "pushMore") (EVar "arrays")) (EVar "strs")))))
+(DTypeSig false "jsffiArrayLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "jsffiArrayLines" () (EListLit (ELit (LString "  ;; push an Array Int's elements to the host path buffer, 8 LE bytes each.")) (ELit (LString "  (func $mdk_jsffi_push_ints (param $a (ref $arr))")) (ELit (LString "    (local $i i32) (local $n i32) (local $w i64) (local $k i32)")) (ELit (LString "    (local.set $n (array.len (local.get $a)))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (local.set $w (call $mdk_unbox_int (array.get $arr (local.get $a) (local.get $i))))")) (ELit (LString "      (local.set $k (i32.const 0))")) (ELit (LString "      (block $bd (loop $bl")) (ELit (LString "        (br_if $bd (i32.ge_s (local.get $k) (i32.const 8)))")) (ELit (LString "        (call $mdk_path_push (i32.wrap_i64 (i64.and (local.get $w) (i64.const 255))))")) (ELit (LString "        (local.set $w (i64.shr_u (local.get $w) (i64.const 8)))")) (ELit (LString "        (local.set $k (i32.add (local.get $k) (i32.const 1))) (br $bl)))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    )")) (ELit (LString "  ;; the 8 LE bytes at $at of the host result buffer, as an i64.")) (ELit (LString "  (func $mdk_jsffi_result_i64 (param $at i32) (result i64)")) (ELit (LString "    (local $k i32) (local $w i64)")) (ELit (LString "    (local.set $k (i32.const 8))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.eqz (local.get $k)))")) (ELit (LString "      (local.set $k (i32.sub (local.get $k) (i32.const 1)))")) (ELit (LString "      (local.set $w (i64.or (i64.shl (local.get $w) (i64.const 8))")) (ELit (LString "        (i64.extend_i32_u (i32.and (call $mdk_result_byte (i32.add (local.get $at) (local.get $k))) (i32.const 255)))))")) (ELit (LString "      (br $l)))")) (ELit (LString "    (local.get $w))")) (ELit (LString "  ;; copy an Array Int argument back from the result buffer at $off: the next")) (ELit (LString "  ;; offset, or -1 with nothing written when a word is outside Int's 63 bits.")) (ELit (LString "  (func $mdk_jsffi_copy_back (param $a (ref $arr)) (param $off i32) (result i32)")) (ELit (LString "    (local $i i32) (local $n i32) (local $w i64)")) (ELit (LString "    (local.set $n (array.len (local.get $a)))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (local.set $w (call $mdk_jsffi_result_i64 (i32.add (local.get $off) (i32.shl (local.get $i) (i32.const 3)))))")) (ELit (LString "      (if (i64.ne (i64.shr_s (i64.shl (local.get $w) (i64.const 1)) (i64.const 1)) (local.get $w))")) (ELit (LString "        (then (return (i32.const -1))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (local.set $i (i32.const 0))")) (ELit (LString "    (block $d2 (loop $l2")) (ELit (LString "      (br_if $d2 (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $arr (local.get $a) (local.get $i)")) (ELit (LString "        (call $mdk_box_int (call $mdk_jsffi_result_i64 (i32.add (local.get $off) (i32.shl (local.get $i) (i32.const 3))))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l2)))")) (ELit (LString "    (i32.add (local.get $off) (i32.shl (local.get $n) (i32.const 3))))"))))
+(DTypeSig false "jsffiResultStrLines" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "jsffiResultStrLines" () (EListLit (ELit (LString "  ;; the host result buffer from $off to its end, as a $str.")) (ELit (LString "  (func $mdk_jsffi_result_str (param $off i32) (result (ref $str))")) (ELit (LString "    (local $n i32) (local $i i32) (local $buf (ref $u8arr))")) (ELit (LString "    (local.set $n (i32.sub (call $mdk_result_len) (local.get $off)))")) (ELit (LString "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))")) (ELit (LString "    (block $d (loop $l")) (ELit (LString "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))")) (ELit (LString "      (array.set $u8arr (local.get $buf) (local.get $i)")) (ELit (LString "        (call $mdk_result_byte (i32.add (local.get $off) (local.get $i))))")) (ELit (LString "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))")) (ELit (LString "    (call $mdk_u8_to_str_lossy (local.get $buf)))"))))
 (DTypeSig false "ioReadFileLines" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "ioReadFileLines" () (EListLit (ELit (LString "  ;; readFile's Err for contents that are not UTF-8: the path, then a fixed ASCII")) (ELit (LString "  ;; suffix, byte-identical to medaka_rt.c mdk_read_file.")) (ELit (LString "  (func $mdk_str_not_utf8 (param $path (ref $str)) (result (ref $str))")) (ELit (LString "    (local $pb (ref $u8arr)) (local $pl i32) (local $sfx (ref $u8arr)) (local $out (ref $u8arr))")) (ELit (LString "    (local.set $pb (struct.get $str $bytes (local.get $path)))")) (ELit (LString "    (local.set $pl (array.len (local.get $pb)))")) (EBinOp "++" (EBinOp "++" (ELit (LString "    (local.set $sfx ")) (EApp (EMethodRef "display") (EVar "notUtf8SuffixWat"))) (ELit (LString ")"))) (ELit (LString "    (local.set $out (array.new $u8arr (i32.const 0) (i32.add (local.get $pl) (array.len (local.get $sfx)))))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $pb) (i32.const 0) (local.get $pl))")) (ELit (LString "    (array.copy $u8arr $u8arr (local.get $out) (local.get $pl) (local.get $sfx) (i32.const 0) (array.len (local.get $sfx)))")) (ELit (LString "    (struct.new $str (i32.add (struct.get $str $cp_count (local.get $path)) (array.len (local.get $sfx))) (local.get $out)))")) (ELit (LString "  ;; readFile : $str path -> Result String String.  1=Ok contents / 0=Err message.")) (ELit (LString "  ;; Contents that are not UTF-8 are an Err naming the path (medaka_rt.c mdk_read_file).")) (ELit (LString "  (func $mdk_read_file_io (param $path (ref $str)) (param $g (ref eq)) (result (ref eq))")) (ELit (LString "    (local $st i32) (local $buf (ref $u8arr)) (local $c i32)")) (ELit (LString "    (call $mdk_push_grant (local.get $g))")) (ELit (LString "    (call $mdk_push_path (local.get $path))")) (ELit (LString "    (local.set $st (call $mdk_read_file))")) (ELit (LString "    (if (i32.eqz (local.get $st))")) (ELit (LString "      (then (return (struct.new $C_Err (i32.const 1) (call $mdk_io_result_to_str)))))")) (ELit (LString "    (local.set $buf (call $mdk_io_result_bytes))")) (ELit (LString "    (local.set $c (call $mdk_utf8_valid_count (local.get $buf)))")) (ELit (LString "    (if (result (ref eq)) (i32.ge_s (local.get $c) (i32.const 0))")) (ELit (LString "      (then (struct.new $C_Ok (i32.const 0) (struct.new $str (local.get $c) (local.get $buf))))")) (ELit (LString "      (else (struct.new $C_Err (i32.const 1) (call $mdk_str_not_utf8 (local.get $path))))))"))))
 (DTypeSig false "ioFileExistsLines" (TyApp (TyCon "List") (TyCon "String")))

@@ -4,17 +4,17 @@
 -- Method={"a.com/x"}, outside its bound, like `direct`.
 effect Web2 Product (Method : Set, Host : Prefix)
 
-extern req2 : (u : String) -> <FFI, Web2 u> Unit
+extern req2 : (u : String) -> <FFI "c", Web2 u> Unit
 
 data H (p : Authority Web2) = H (String @p)
 
-apply : H p -> String @p -> <FFI, Web2 p> Unit
+apply : H p -> String @p -> <FFI "c*", Web2 p> Unit
 apply _ s = req2 s
 
-g : H (Host="a.com/*") -> <FFI, Web2 Host="a.com/*"> Unit
+g : H (Host="a.com/*") -> <FFI "c*", Web2 Host="a.com/*"> Unit
 g h = apply h "a.com/x"
 
-direct : Unit -> <FFI, Web2 Host="a.com/*"> Unit
+direct : Unit -> <FFI "c*", Web2 Host="a.com/*"> Unit
 direct _ = req2 "a.com/x"
 
 main = println 1

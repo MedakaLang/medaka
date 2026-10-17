@@ -1,0 +1,7 @@
+-- Declares a `c`-only extern `helper`, which the program never calls.
+export
+extern helper : Int -> <FFI "c"> Int
+
+export
+twice : Int -> Int
+twice n = n * 2

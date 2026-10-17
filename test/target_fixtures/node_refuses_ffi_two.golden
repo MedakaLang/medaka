@@ -1,0 +1,11 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/ffi_two.mdk:1:7: the extern `cA` is reached via `main → cA`, and has no binding for the host `js`, which the target `wasmgc/node` calls foreign code through (it binds `c`); add a `bind js` clause or build for a target whose host it binds
+  |
+1 | extern cA : Int -> <FFI "c"> Int
+  |        ^
+error: <fixtures>/ffi_two.mdk:2:7: the extern `cB` is reached via `main → cB`, and has no binding for the host `js`, which the target `wasmgc/node` calls foreign code through (it binds `c`); add a `bind js` clause or build for a target whose host it binds
+  |
+2 | extern cB : Int -> <FFI "c"> Int
+  |        ^

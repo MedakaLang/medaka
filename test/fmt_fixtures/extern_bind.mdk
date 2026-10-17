@@ -1,0 +1,12 @@
+-- extern declarations with host `bind` clauses
+extern fetchText : String -> <FFI "c/libfetch", FFI "js/fetch"> String
+    bind c   "fetch_text"
+    bind js "fetchText"
+
+extern cAdd : Int -> Int -> <FFI "c"> Int
+  bind c "stub_add"
+
+extern plain : Int -> <FFI "c"> Int
+
+main : <IO> Unit
+main = println "extern bind"
