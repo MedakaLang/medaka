@@ -18,17 +18,23 @@ import frontend.ast.{
   letBindName,
 }
 import frontend.marker.{declRefs}
-import backend.core_validate.{profileColumn, unprovidedOn, isUnprovidedOn}
+import backend.core_validate.{
+  Backend(..), profileColumn, unprovidedOn, isUnprovidedOn
+}
 import backend.extern_catalog.{GapKind(..), gapKindName}
 import types.target_profile.{
   TargetProfile,
+  buildable,
+  lookupProfile,
   profileName,
+  profileNames,
   profileGrants,
   profileBindingHost,
   isGatedLabel,
   reachesLabel,
+  runProfile,
 }
-import ir.dce.{reachedExternChains, reachedExternRoutes}
+import ir.dce.{ReachRoots(..), reachedExternChains, reachedExternRoutes}
 import types.effect_policy.{
   PolicyVerdict(..), policyRefusals, buildCallGraph, fnEffectsTable, viaChain
 }
@@ -228,9 +234,12 @@ noBindingDiag profile path (ed, chain) =
 -- built-in is an extern of `stdlib/runtime.mdk`, which every module sees
 -- without an import, or a module's declaration of one again, which runs it.
 -- The reach is the binding rule's, with the runtime as a module of its own,
--- so a local binder spelled like a built-in reaches nothing.  `stdlib/core.mdk`
--- names no built-in that any column leaves unprovided (`core_validate_test`),
--- so a program none of whose modules names one skips the reach.
+-- so a local binder spelled like a built-in reaches nothing.  An emitter's
+-- column is judged over what the emitter lowers, every impl among it; the
+-- interpreter's over what it evaluates, an impl only once a reached call can
+-- dispatch to it (`reachRootsOf`).  `stdlib/core.mdk` names no built-in that
+-- any column leaves unprovided (`core_validate_test`), so a program none of
+-- whose modules names one skips the reach.
 builtinRefusals : TargetProfile ->
   List (String, String) ->
   TargetInputs ->
@@ -245,6 +254,7 @@ builtinRefusals profile paths analysis =
   if named then
     let routes =
       reachedExternRoutes
+        (reachRootsOf column)
         (Some (runtimeUnit, analysis.tiRuntime))
         analysis.tiCore
         analysis.tiModules
@@ -254,9 +264,17 @@ builtinRefusals profile paths analysis =
   else
     []
 
--- The module id the runtime's declarations are scoped under in the reach.
+-- What a column's reach starts from: what its programs run.
+reachRootsOf : Backend -> ReachRoots
+reachRootsOf LlvmBackend = EmittedRoots
+reachRootsOf WasmBackend = EmittedRoots
+reachRootsOf EvalBackend = DispatchedRoots
+
+-- The module id the runtime's declarations are scoped under in the reach.  No
+-- import path spells it, so a user module named `runtime` keeps its own names
+-- apart from the built-ins.
 runtimeUnit : String
-runtimeUnit = "runtime"
+runtimeUnit = "<runtime>"
 
 unprovidedReached : TargetProfile ->
   List (String, String) ->
@@ -264,22 +282,71 @@ unprovidedReached : TargetProfile ->
   ((String, String), List (String, String)) ->
   Option Diag
 unprovidedReached profile paths analysis ((_, name), route) =
+  let column = profileColumn profile
   map
     ((kind, why) =>
       mkDiag
         SevError
         targetNotProvidedCode
-        "the built-in `\{name}` is reached\{reachRoute (map snd route)}, and the target `\{profileName profile}` does not provide it (\{gapKindName kind}: \{why}): \{gapCause kind}; choose a target that provides it"
+        "the built-in `\{name}` is reached\{reachRoute (map snd route)}, and the target `\{profileName profile}` does not provide it (\{gapKindName kind}: \{why}): \{gapCause kind}\{gapAdvice profile column kind name}"
         (namingBindingLoc paths analysis route))
-    (unprovidedOn (profileColumn profile) name)
+    (unprovidedOn column name)
 
 -- Whether the program or the compiler is at fault, by the row's gap kind.
 gapCause : GapKind -> String
 gapCause GapPermanent = "the target cannot provide it, by design"
-gapCause GapBug = "this is a bug in the compiler, not in the program"
+gapCause GapBug = "this is a gap in the compiler, not in the program"
 gapCause GapTodo = "no backend provides it yet"
 gapCause GapDead = "no backend lowers it"
 gapCause GapUnported = "its lowering for this backend is not written yet"
+
+-- What the user can do instead, when a target `medaka build` emits for
+-- provides the built-in.  The interpreter judges `medaka run` whatever its
+-- target, so its advice is to build.  An emitter's is to choose another
+-- target, except for a gap the compiler owes (`GapBug`), which no choice of
+-- target remedies.
+gapAdvice : TargetProfile -> Backend -> GapKind -> String -> String
+gapAdvice profile EvalBackend _ name = runAdvice profile name
+gapAdvice _ _ GapBug _ = ""
+gapAdvice _ _ _ name =
+  if emitterProvides name then "; choose a target that provides it" else ""
+
+runAdvice : TargetProfile -> String -> String
+runAdvice profile name =
+  if emitterProvides name then match runTargetOf profile
+    Some t =>
+      if isUnprovidedOn (profileColumn t) name then
+        runBuildAdvice
+      else
+        "; `medaka run` evaluates the program with the interpreter whatever its target, so `medaka build --target \{profileName t}` runs it on `\{profileName t}`"
+    None => runBuildAdvice
+  else
+    ""
+
+runBuildAdvice : String
+runBuildAdvice =
+  "; `medaka run` evaluates the program with the interpreter, so build it for a target that provides it"
+
+emitterProvides : String -> Bool
+emitterProvides name =
+  not (isUnprovidedOn LlvmBackend name && isUnprovidedOn WasmBackend name)
+
+-- The target `t` of `medaka run --target t` when `profile` is the
+-- interpreter's profile narrowed to it (`runProfile`).
+runTargetOf : TargetProfile -> Option TargetProfile
+runTargetOf profile =
+  match filter (narrowsTo profile) (filterMap profileNamed profileNames)
+    t :: _ => Some t
+    [] => None
+
+narrowsTo : TargetProfile -> TargetProfile -> Bool
+narrowsTo profile t =
+  buildable t && profileName (runProfile (Some t)) == profileName profile
+
+profileNamed : String -> Option TargetProfile
+profileNamed n = match lookupProfile n
+  Ok p => Some p
+  Err _ => None
 
 -- The definition of the last binding on the route before the built-in, in
 -- its module's file; the entry's when the route has no such binding.

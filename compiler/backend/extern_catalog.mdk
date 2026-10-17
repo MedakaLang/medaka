@@ -566,6 +566,10 @@ noHttpClient : String
 noHttpClient =
   "`fetchText` is lowered only by the wasmgc/edge target: native has no HTTP client and no TLS — build for `wasmgc/edge`"
 
+interpNoHttpClient : String
+interpNoHttpClient =
+  "the interpreter has no HTTP client; only the wasmgc/edge target lowers `fetchText`"
+
 -- In `stdlib/runtime.mdk` declaration order.
 export
 catalogRows : List ExternRow
@@ -977,7 +981,7 @@ catalogRows = [
     "fetchText"
     (NotProvided GapPermanent noHttpClient)
     (EnvImport WasmLeaf "mdk_fetch_text")
-    (NotProvided GapPermanent noHttpClient),
+    (NotProvided GapPermanent interpNoHttpClient),
   ExternRow
     "allocBytes"
     (CSymbol LlvmPerf "mdk_alloc_bytes")

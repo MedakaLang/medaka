@@ -289,11 +289,13 @@ withheldLine : String -> String -> String -> String -> String
 withheldLine line name labels profile =
   "\{line}; the target `\{profile}` does not grant \{labels}, which `\{name}` performs; `check` should have refused this program before the wasm backend saw it, so this is a bug in the compiler"
 
-owedLine : String -> String -> String
-owedLine line profile =
-  "\{line}; `\{profile}` grants its labels, so this is a lowering still owed (#3666)"
+-- What a build says of any other extern past the check: the same compiler
+-- bug, with no label to name.
+grantedLine : String -> String
+grantedLine line =
+  "\{line}; `check` should have refused this program before the wasm backend saw it, so this is a bug in the compiler"
 
-test "(y) under a checked target, a withheld label names what check admits and a ratchet row names #3666" = expectEach
+test "(y) under a checked target, every finding names a compiler bug, and a withheld label names the label" = expectEach
   [
     (
       "a Net extern named as a value on wasmgc/node",
@@ -332,16 +334,16 @@ test "(y) under a checked target, a withheld label names what check admits and a
       "an IO ratchet row on wasmgc/node, whose IO joins its host labels",
       expectEqual
         (Ok
-          (owedLine
-            "wasm: runtime extern 'allocBytes' is not available on the wasm backend (WASM-GAP: \{wasmReason "allocBytes"}) [in main]"
-            "wasmgc/node"))
+          (grantedLine
+            "wasm: runtime extern 'allocBytes' is not available on the wasm backend (WASM-GAP: \{wasmReason "allocBytes"}) [in main]"))
         (wasmRefusalUnder "wasmgc/node" "main = allocBytes ()"),
     ),
     (
-      "a label-less extern keeps its line",
+      "a label-less extern names the same bug",
       expectEqual
         (Ok
-          "wasm: runtime extern 'socketFd' is not available on the wasm backend (PERMANENT: \{wasmReason "socketFd"}) [in main]")
+          (grantedLine
+            "wasm: runtime extern 'socketFd' is not available on the wasm backend (PERMANENT: \{wasmReason "socketFd"}) [in main]"))
         (wasmRefusalUnder "wasmgc/node" "main = socketFd 3"),
     ),
     (

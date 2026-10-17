@@ -688,10 +688,15 @@ writeCells dir = do
 -- A profile that grants a label may reach an extern its backend does not lower
 -- only because the target check refuses the program that reaches it
 -- (`tools.target_check.builtinRefusals`, judged by `core_validate.unprovidedOn`
--- on the profile's column).  So a gap cell under a granted label is legal
--- exactly when that predicate sees it; one it cannot see would be reached with
--- no refusal.  The ratchet gaps (`GapUnported` on wasm, `GapBug` on eval) are
--- counted separately, and may only be drained.
+-- on the profile's column).  The coherence test below asks that predicate
+-- about each gap cell under a granted label.  A catalog row's cell exists only
+-- because the same row is `NotProvided` on that column, so for a catalog row
+-- the test checks only that `core_validate.profileColumn` reads the column
+-- `profileBackend` names; it can fire on a row the catalog does not hold, as
+-- its red twin shows.  That the check refuses every real row on every profile
+-- is pinned per (profile, row) pair by `compiler/tools/target_check_test.mdk`.
+-- The ratchet gaps (`GapUnported` on wasm, `GapBug` on eval) are counted
+-- separately, and may only be drained.
 
 gapOn : Backend -> ExternRow -> Option (GapKind, String)
 gapOn BackendLlvm r = notProvided (rowLlvm r)
@@ -786,7 +791,7 @@ okOpt : Result e a -> Option a
 okOpt (Ok x) = Some x
 okOpt (Err _) = None
 
-test "profiles: every gap cell under a granted label is one the target check refuses" =
+test "profiles: the target check's predicate reads every granted gap cell on the profile's own column" =
   match runtimeText
     Err e => expectEqual "read runtime.mdk" "failed: \{e}"
     Ok src => expectAll [

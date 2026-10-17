@@ -1,7 +1,7 @@
 exit=1
 --- stdout
 --- stderr
-error: <fixtures>/net_reached.mdk:5:0: the built-in `netResolve` is reached via `main → lookup → netResolve`, and the target `eval/run` does not provide it (BUG: implemented by llvm, missing from the interpreter): this is a bug in the compiler, not in the program; choose a target that provides it
+error: <fixtures>/net_reached.mdk:5:0: the built-in `netResolve` is reached via `main → lookup → netResolve`, and the target `eval/run` does not provide it (BUG: implemented by llvm, missing from the interpreter): this is a gap in the compiler, not in the program; `medaka run` evaluates the program with the interpreter, so build it for a target that provides it
   |
 5 | lookup h = netResolve h
   | ^

@@ -1,5 +1,5 @@
 # META
-source_lines=1352
+source_lines=1337
 stages=DESUGAR,MARK
 # SOURCE
 -- Checks a lowered program must pass before an emitter writes any of it.  Each
@@ -536,11 +536,8 @@ renderExternRefusal findings = renderExternRefusalUnder !checkedTarget findings
 
 -- A refusal here is a compiler bug: `check` refuses a program that reaches a
 -- built-in its target does not provide, so none arrives after an admitted
--- check.  It is partitioned by what `check` already judged against the target.
--- An extern behind a label the profile does not reach (`withheldLabels`) says so
--- (`withheldExternNote`).  An extern whose labels the profile reaches and whose
--- row is a ratchet gap is a lowering still owed, by #3666.  Any other finding,
--- a label-less extern among them, reads as it does with no target.
+-- check, and every finding says so (`checkMissedNote`).  An extern behind a
+-- label the profile does not reach (`withheldLabels`) also names that label.
 export
 renderExternRefusalUnder : Option CheckedTarget -> List ExternFinding -> String
 renderExternRefusalUnder None findings =
@@ -549,31 +546,19 @@ renderExternRefusalUnder (Some t) findings =
   joinWith "\n" (map (renderFindingUnder t) findings)
 
 renderFindingUnder : CheckedTarget -> ExternFinding -> String
-renderFindingUnder (t@(CheckedTarget profile labels)) (f@(ExternFinding name backend kind _ _)) =
+renderFindingUnder (CheckedTarget profile labels) (f@(ExternFinding name backend _ _ _)) =
   let declared = optionOr [] (omLookup name labels)
-  match withheldLabels profile declared
-    [] =>
-      if isRatchetGap backend kind then
-        "\{renderExternFinding f}; `\{profileName profile}` grants its labels, so this is a lowering still owed (#3666)"
-      else
-        renderExternFinding f
+  let withheldNote = match withheldLabels profile declared
+    [] => ""
     withheld =>
-      "\{renderExternFinding f}; \{withheldExternNote backend name withheld t}"
+      "; the target `\{profileName profile}` does not grant \{joinWith ", " withheld}, which `\{name}` performs"
+  "\{renderExternFinding f}\{withheldNote}; \{checkMissedNote backend}"
 
--- `eval` is absent because the validator never runs for it; the extern catalog
--- gate's own `isRatchet` deliberately adds eval GapBug rows to what it counts.
-isRatchetGap : Backend -> GapKind -> Bool
-isRatchetGap WasmBackend GapUnported = True
-isRatchetGap _ _ = False
-
--- Why an extern the profile withholds reached the lowering of a program that
--- passed the target check.  The check refuses a reached built-in the target
--- does not provide, so this arrival is a compiler bug by construction; the
--- note says so rather than blaming the program.
-export
-withheldExternNote : Backend -> String -> List String -> CheckedTarget -> String
-withheldExternNote backend name withheld (CheckedTarget profile _) =
-  "the target `\{profileName profile}` does not grant \{joinWith ", " withheld}, which `\{name}` performs; `check` should have refused this program before the \{backendName backend} backend saw it, so this is a bug in the compiler"
+-- Why a finding reached the lowering of a program that passed the target
+-- check: blamed on the compiler, never on the program.
+checkMissedNote : Backend -> String
+checkMissedNote backend =
+  "`check` should have refused this program before the \{backendName backend} backend saw it, so this is a bug in the compiler"
 
 -- What `medaka build` checked the program against before lowering: the
 -- selected profile, and each runtime extern's declared labels.
@@ -1463,12 +1448,9 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DFunDef false "renderExternRefusalUnder" ((PCon "None") (PVar "findings")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EVar "renderExternFinding")) (EVar "findings"))))
 (DFunDef false "renderExternRefusalUnder" ((PCon "Some" (PVar "t")) (PVar "findings")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EApp (EVar "renderFindingUnder") (EVar "t"))) (EVar "findings"))))
 (DTypeSig false "renderFindingUnder" (TyFun (TyCon "CheckedTarget") (TyFun (TyCon "ExternFinding") (TyCon "String"))))
-(DFunDef false "renderFindingUnder" ((PAs "t" (PCon "CheckedTarget" (PVar "profile") (PVar "labels"))) (PAs "f" (PCon "ExternFinding" (PVar "name") (PVar "backend") (PVar "kind") PWild PWild))) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "labels")))) (DoExpr (EMatch (EApp (EApp (EVar "withheldLabels") (EVar "profile")) (EVar "declared")) (arm (PList) () (EIf (EApp (EApp (EVar "isRatchetGap") (EVar "backend")) (EVar "kind")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; `"))) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` grants its labels, so this is a lowering still owed (#3666)"))) (EApp (EVar "renderExternFinding") (EVar "f")))) (arm (PVar "withheld") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; "))) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EVar "withheldExternNote") (EVar "backend")) (EVar "name")) (EVar "withheld")) (EVar "t")))) (ELit (LString ""))))))))
-(DTypeSig false "isRatchetGap" (TyFun (TyCon "Backend") (TyFun (TyCon "GapKind") (TyCon "Bool"))))
-(DFunDef false "isRatchetGap" ((PCon "WasmBackend") (PCon "GapUnported")) (EVar "True"))
-(DFunDef false "isRatchetGap" (PWild PWild) (EVar "False"))
-(DTypeSig true "withheldExternNote" (TyFun (TyCon "Backend") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CheckedTarget") (TyCon "String"))))))
-(DFunDef false "withheldExternNote" ((PVar "backend") (PVar "name") (PVar "withheld") (PCon "CheckedTarget" (PVar "profile") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the target `")) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not grant "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "withheld")))) (ELit (LString ", which `"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` performs; `check` should have refused this program before the "))) (EApp (EVar "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " backend saw it, so this is a bug in the compiler"))))
+(DFunDef false "renderFindingUnder" ((PCon "CheckedTarget" (PVar "profile") (PVar "labels")) (PAs "f" (PCon "ExternFinding" (PVar "name") (PVar "backend") PWild PWild PWild))) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "labels")))) (DoLet false false (PVar "withheldNote") (EMatch (EApp (EApp (EVar "withheldLabels") (EVar "profile")) (EVar "declared")) (arm (PList) () (ELit (LString ""))) (arm (PVar "withheld") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "; the target `")) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not grant "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "withheld")))) (ELit (LString ", which `"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` performs")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString ""))) (EApp (EVar "display") (EVar "withheldNote"))) (ELit (LString "; "))) (EApp (EVar "display") (EApp (EVar "checkMissedNote") (EVar "backend")))) (ELit (LString ""))))))
+(DTypeSig false "checkMissedNote" (TyFun (TyCon "Backend") (TyCon "String")))
+(DFunDef false "checkMissedNote" ((PVar "backend")) (EBinOp "++" (EBinOp "++" (ELit (LString "`check` should have refused this program before the ")) (EApp (EVar "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " backend saw it, so this is a bug in the compiler"))))
 (DData Public "CheckedTarget" () ((variant "CheckedTarget" (ConPos (TyCon "TargetProfile") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "checkedTargetOf" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CheckedTarget"))))
 (DFunDef false "checkedTargetOf" ((PVar "profile") (PVar "runtimeDecls")) (EApp (EApp (EVar "CheckedTarget") (EVar "profile")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "externLabels") (EVar "runtimeDecls"))) (EVar "omEmpty"))))
@@ -1876,12 +1858,9 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DFunDef false "renderExternRefusalUnder" ((PCon "None") (PVar "findings")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EVar "renderExternFinding")) (EVar "findings"))))
 (DFunDef false "renderExternRefusalUnder" ((PCon "Some" (PVar "t")) (PVar "findings")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "renderFindingUnder") (EVar "t"))) (EVar "findings"))))
 (DTypeSig false "renderFindingUnder" (TyFun (TyCon "CheckedTarget") (TyFun (TyCon "ExternFinding") (TyCon "String"))))
-(DFunDef false "renderFindingUnder" ((PAs "t" (PCon "CheckedTarget" (PVar "profile") (PVar "labels"))) (PAs "f" (PCon "ExternFinding" (PVar "name") (PVar "backend") (PVar "kind") PWild PWild))) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "labels")))) (DoExpr (EMatch (EApp (EApp (EVar "withheldLabels") (EVar "profile")) (EVar "declared")) (arm (PList) () (EIf (EApp (EApp (EVar "isRatchetGap") (EVar "backend")) (EVar "kind")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; `"))) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` grants its labels, so this is a lowering still owed (#3666)"))) (EApp (EVar "renderExternFinding") (EVar "f")))) (arm (PVar "withheld") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EVar "withheldExternNote") (EVar "backend")) (EVar "name")) (EVar "withheld")) (EVar "t")))) (ELit (LString ""))))))))
-(DTypeSig false "isRatchetGap" (TyFun (TyCon "Backend") (TyFun (TyCon "GapKind") (TyCon "Bool"))))
-(DFunDef false "isRatchetGap" ((PCon "WasmBackend") (PCon "GapUnported")) (EVar "True"))
-(DFunDef false "isRatchetGap" (PWild PWild) (EVar "False"))
-(DTypeSig true "withheldExternNote" (TyFun (TyCon "Backend") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CheckedTarget") (TyCon "String"))))))
-(DFunDef false "withheldExternNote" ((PVar "backend") (PVar "name") (PVar "withheld") (PCon "CheckedTarget" (PVar "profile") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the target `")) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not grant "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "withheld")))) (ELit (LString ", which `"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` performs; `check` should have refused this program before the "))) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " backend saw it, so this is a bug in the compiler"))))
+(DFunDef false "renderFindingUnder" ((PCon "CheckedTarget" (PVar "profile") (PVar "labels")) (PAs "f" (PCon "ExternFinding" (PVar "name") (PVar "backend") PWild PWild PWild))) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "labels")))) (DoLet false false (PVar "withheldNote") (EMatch (EApp (EApp (EVar "withheldLabels") (EVar "profile")) (EVar "declared")) (arm (PList) () (ELit (LString ""))) (arm (PVar "withheld") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "; the target `")) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not grant "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "withheld")))) (ELit (LString ", which `"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` performs")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "withheldNote"))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EApp (EVar "checkMissedNote") (EVar "backend")))) (ELit (LString ""))))))
+(DTypeSig false "checkMissedNote" (TyFun (TyCon "Backend") (TyCon "String")))
+(DFunDef false "checkMissedNote" ((PVar "backend")) (EBinOp "++" (EBinOp "++" (ELit (LString "`check` should have refused this program before the ")) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " backend saw it, so this is a bug in the compiler"))))
 (DData Public "CheckedTarget" () ((variant "CheckedTarget" (ConPos (TyCon "TargetProfile") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "checkedTargetOf" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CheckedTarget"))))
 (DFunDef false "checkedTargetOf" ((PVar "profile") (PVar "runtimeDecls")) (EApp (EApp (EVar "CheckedTarget") (EVar "profile")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "externLabels") (EVar "runtimeDecls"))) (EVar "omEmpty"))))
