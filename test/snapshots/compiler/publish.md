@@ -1,5 +1,5 @@
 # META
-source_lines=389
+source_lines=481
 stages=DESUGAR,MARK
 # SOURCE
 -- The shapes the typechecker publishes, and the pure functions that freeze a
@@ -78,12 +78,13 @@ pubSchemes = map (b => (fst b, (snd b).psScheme))
 public export data VarKind = TyVarK | EffVarK | AuthVarK deriving (Eq, Debug)
 
 -- A cell the validator found in a frozen value.  `LinkCell` is a link left after
--- freezing (a bug).  `FreeMeta` is an unquantified cell found anywhere but at
--- graph end (a bug there).  `WeakVar` is the same cell at graph end, where
--- nothing in the graph fixed it (allowed, listed).  `OpenSummary` is an effect
--- summary still unsolved at graph end.
+-- freezing (a bug); a type variable's `Link` carries no id, so its id is `None`.
+-- `FreeMeta` is an unquantified cell found anywhere but at graph end (a bug
+-- there).  `WeakVar` is the same cell at graph end, where nothing in the graph
+-- fixed it (allowed, listed).  `OpenSummary` is an effect summary still unsolved
+-- at graph end.
 public export data LiveCell =
-  | LinkCell String VarKind Int
+  | LinkCell String VarKind (Option Int)
   | FreeMeta String VarKind Int
   | WeakVar String VarKind Int
   | OpenSummary String Int
@@ -272,6 +273,97 @@ freezePub s ctx =
   let (_, ctx1) = zonkList zonkVecObl z1 ctx
   PubScheme { psScheme = s1, psContext = ctx1 }
 
+-- Each row frozen on its own.  A weak cell two schemes share becomes one copy
+-- per scheme: a frozen value is never unified again, and a scheme's variables are
+-- named within that scheme, so the copies render as the shared cell did.
+export
+freezeRows : List (String, PubScheme) -> List (String, PubScheme)
+freezeRows = map (b => (fst b, freezePub (snd b).psScheme (snd b).psContext))
+
+export
+freezeModDiags : ModDiags -> ModDiags
+freezeModDiags (mid, (schemes, errs, warns)) =
+  (mid, (freezeRows schemes, errs, warns))
+
+-- The first [n] rows frozen and the rest kept: for a list whose tail an earlier
+-- point already froze.
+export
+freezeNewest : Int -> List ModDiags -> List ModDiags
+freezeNewest n rows
+  | n <= 0 = rows
+  | otherwise = match rows
+    [] => []
+    m :: rest => freezeModDiags m :: freezeNewest (n - 1) rest
+
+-- ── the report of one graph drive ──────────────────────────────────────────
+
+-- The report over a drive's frozen outputs.  `trChecked` is withheld on any
+-- error, any link left after freezing, and any effect summary still unsolved;
+-- the weak variables it allows are listed in `cpWeak`.
+export
+graphReport : List ModDiags ->
+  List (String, PubScheme) ->
+  List (String, TcDiag) ->
+  EvTable ->
+  DispositionTable ->
+  Option (List Decl, List (String, List Decl)) ->
+  TcReport
+graphReport perMod core residual evidence dispositions trees =
+  let schemes = map (m => (fst m, modSchemes (snd m))) perMod
+  let cells = graphCells (core :: map snd schemes)
+  let checked =
+    if isEmptyL residual && noModErrors perMod && allWeak cells then
+      Some CheckedProgram {
+        cpSchemes = schemes,
+        cpCore = core,
+        cpEvidence = evidence,
+        cpDispositions = dispositions,
+        cpTrees = trees,
+        cpWeak = cells,
+      }
+    else
+      None
+  TcReport {
+    trPartial = PartialAnalysis {
+      paSchemes = schemes,
+      paCore = core,
+      paLocals = [],
+      paSeed = [],
+    },
+    trDiagnostics = perMod,
+    trResidual = residual,
+    trChecked = checked,
+  }
+
+-- Every live cell of every row, read at graph end.
+export
+graphCells : List (List (String, PubScheme)) -> List LiveCell
+graphCells [] = []
+graphCells (rows :: rest) = rowCells rows (graphCells rest)
+
+rowCells : List (String, PubScheme) -> List LiveCell -> List LiveCell
+rowCells [] acc = acc
+rowCells ((name, p) :: rest) acc =
+  atGraphEnd (liveCells name p) ++ rowCells rest acc
+
+modSchemes : (List (String, PubScheme), List TcDiag, List TcDiag) ->
+  List (String, PubScheme)
+modSchemes (s, _, _) = s
+
+isEmptyL : List a -> Bool
+isEmptyL [] = True
+isEmptyL _ = False
+
+noModErrors : List ModDiags -> Bool
+noModErrors [] = True
+noModErrors ((_, (_, [], _)) :: rest) = noModErrors rest
+noModErrors _ = False
+
+allWeak : List LiveCell -> Bool
+allWeak [] = True
+allWeak ((WeakVar _ _ _) :: rest) = allWeak rest
+allWeak _ = False
+
 -- ── live-cell validator ────────────────────────────────────────────────────
 
 -- Seen effect ids (a shared row is walked once) and the cells found, newest first.
@@ -327,7 +419,7 @@ walkResiduals name authIds rs w =
 
 walkMono : String -> List Int -> List Int -> List Int -> Mono -> Walk -> Walk
 walkMono name ids effIds authIds (TVar cell) w = match !cell
-  Link _ => push (LinkCell name TyVarK (-1)) w
+  Link _ => push (LinkCell name TyVarK None) w
   Unbound id _ => if hasId id ids then w else push (FreeMeta name TyVarK id) w
 walkMono name ids effIds authIds (TApp a b) w =
   walkMono name ids effIds authIds b (walkMono name ids effIds authIds a w)
@@ -343,7 +435,7 @@ walkMono _ _ _ _ _ w = w
 
 walkAuth : String -> List Int -> Authority -> Walk -> Walk
 walkAuth name authIds (AVar cell) w = match !cell
-  ALink id _ _ => push (LinkCell name AuthVarK id) w
+  ALink id _ _ => push (LinkCell name AuthVarK (Some id)) w
   AUnbound id _ _ _ _ =>
     if hasId id authIds then w else push (FreeMeta name AuthVarK id) w
 walkAuth name authIds (AJoin ms) w = foldWalk (walkAuth name authIds) ms w
@@ -381,7 +473,7 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
       w
     else
       let w1 = Walk (IdMap.set id () seen) found
-      let w2 = if member then w1 else push (LinkCell name EffVarK id) w1
+      let w2 = if member then w1 else push (LinkCell name EffVarK (Some id)) w1
       walkRow name effIds authIds row w2
   EJoin id _ members =>
     if IdMap.has id seen then
@@ -414,7 +506,7 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
 (DData Public "VarKind" () ((variant "TyVarK" (ConPos)) (variant "EffVarK" (ConPos)) (variant "AuthVarK" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "VarKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "TyVarK") (PCon "TyVarK")) () (EVar "True")) (arm (PTuple (PCon "EffVarK") (PCon "EffVarK")) () (EVar "True")) (arm (PTuple (PCon "AuthVarK") (PCon "AuthVarK")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "VarKind")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "TyVarK") () (ELit (LString "TyVarK"))) (arm (PCon "EffVarK") () (ELit (LString "EffVarK"))) (arm (PCon "AuthVarK") () (ELit (LString "AuthVarK")))))))
-(DData Public "LiveCell" () ((variant "LinkCell" (ConPos (TyCon "String") (TyCon "VarKind") (TyCon "Int"))) (variant "FreeMeta" (ConPos (TyCon "String") (TyCon "VarKind") (TyCon "Int"))) (variant "WeakVar" (ConPos (TyCon "String") (TyCon "VarKind") (TyCon "Int"))) (variant "OpenSummary" (ConPos (TyCon "String") (TyCon "Int")))) ())
+(DData Public "LiveCell" () ((variant "LinkCell" (ConPos (TyCon "String") (TyCon "VarKind") (TyApp (TyCon "Option") (TyCon "Int")))) (variant "FreeMeta" (ConPos (TyCon "String") (TyCon "VarKind") (TyCon "Int"))) (variant "WeakVar" (ConPos (TyCon "String") (TyCon "VarKind") (TyCon "Int"))) (variant "OpenSummary" (ConPos (TyCon "String") (TyCon "Int")))) ())
 (DImpl true "Eq" ((TyCon "LiveCell")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "LinkCell" (PVar "__a0") (PVar "__a1") (PVar "__a2")) (PCon "LinkCell" (PVar "__b0") (PVar "__b1") (PVar "__b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2")))) (arm (PTuple (PCon "FreeMeta" (PVar "__a0") (PVar "__a1") (PVar "__a2")) (PCon "FreeMeta" (PVar "__b0") (PVar "__b1") (PVar "__b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2")))) (arm (PTuple (PCon "WeakVar" (PVar "__a0") (PVar "__a1") (PVar "__a2")) (PCon "WeakVar" (PVar "__b0") (PVar "__b1") (PVar "__b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2")))) (arm (PTuple (PCon "OpenSummary" (PVar "__a0") (PVar "__a1")) (PCon "OpenSummary" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "LiveCell")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "LinkCell" (PVar "__a0") (PVar "__a1") (PVar "__a2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "LinkCell ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a2"))))) (arm (PCon "FreeMeta" (PVar "__a0") (PVar "__a1") (PVar "__a2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FreeMeta ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a2"))))) (arm (PCon "WeakVar" (PVar "__a0") (PVar "__a1") (PVar "__a2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "WeakVar ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a2"))))) (arm (PCon "OpenSummary" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "OpenSummary ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1")))))))))
 (DData Public "PartialAnalysis" () ((variant "PartialAnalysis" (ConNamed (field "paSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))) (field "paCore" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "paLocals" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme") (TyCon "Loc")))) (field "paSeed" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))))))) ())
@@ -459,6 +551,33 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
 (DFunDef false "zonkScheme" ((PVar "z") (PCon "Forall" (PVar "ids") (PVar "effIds") (PVar "authIds") (PVar "residuals") (PVar "row") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "z1") (PVar "residuals1")) (EApp (EApp (EApp (EVar "zonkList") (EVar "zonkResidual")) (EVar "z")) (EVar "residuals"))) (DoLet false false (PTuple (PVar "z2") (PVar "row1")) (EApp (EApp (EVar "zonkRow") (EVar "z1")) (EVar "row"))) (DoLet false false (PTuple (PVar "z3") (PVar "t1")) (EApp (EApp (EVar "zonkMono") (EVar "z2")) (EVar "t"))) (DoExpr (ETuple (EVar "z3") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Forall") (EVar "ids")) (EVar "effIds")) (EVar "authIds")) (EVar "residuals1")) (EVar "row1")) (EVar "t1"))))))
 (DTypeSig true "freezePub" (TyFun (TyCon "Scheme") (TyFun (TyApp (TyCon "List") (TyCon "VecObl")) (TyCon "PubScheme"))))
 (DFunDef false "freezePub" ((PVar "s") (PVar "ctx")) (EBlock (DoLet false false (PTuple (PVar "z1") (PVar "s1")) (EApp (EApp (EVar "zonkScheme") (EVar "emptyZonk")) (EVar "s"))) (DoLet false false (PTuple PWild (PVar "ctx1")) (EApp (EApp (EApp (EVar "zonkList") (EVar "zonkVecObl")) (EVar "z1")) (EVar "ctx"))) (DoExpr (ERecordCreate "PubScheme" ((fa "psScheme" (EVar "s1")) (fa "psContext" (EVar "ctx1")))))))
+(DTypeSig true "freezeRows" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))
+(DFunDef false "freezeRows" () (EApp (EVar "map") (ELam ((PVar "b")) (ETuple (EApp (EVar "fst") (EVar "b")) (EApp (EApp (EVar "freezePub") (EFieldAccess (EApp (EVar "snd") (EVar "b")) "psScheme")) (EFieldAccess (EApp (EVar "snd") (EVar "b")) "psContext"))))))
+(DTypeSig true "freezeModDiags" (TyFun (TyCon "ModDiags") (TyCon "ModDiags")))
+(DFunDef false "freezeModDiags" ((PTuple (PVar "mid") (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")))) (ETuple (EVar "mid") (ETuple (EApp (EVar "freezeRows") (EVar "schemes")) (EVar "errs") (EVar "warns"))))
+(DTypeSig true "freezeNewest" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyCon "ModDiags")))))
+(DFunDef false "freezeNewest" ((PVar "n") (PVar "rows")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EVar "rows") (EIf (EVar "otherwise") (EMatch (EVar "rows") (arm (PList) () (EListLit)) (arm (PCons (PVar "m") (PVar "rest")) () (EBinOp "::" (EApp (EVar "freezeModDiags") (EVar "m")) (EApp (EApp (EVar "freezeNewest") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "graphReport" (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyFun (TyCon "EvTable") (TyFun (TyCon "DispositionTable") (TyFun (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyCon "TcReport"))))))))
+(DFunDef false "graphReport" ((PVar "perMod") (PVar "core") (PVar "residual") (PVar "evidence") (PVar "dispositions") (PVar "trees")) (EBlock (DoLet false false (PVar "schemes") (EApp (EApp (EVar "map") (ELam ((PVar "m")) (ETuple (EApp (EVar "fst") (EVar "m")) (EApp (EVar "modSchemes") (EApp (EVar "snd") (EVar "m")))))) (EVar "perMod"))) (DoLet false false (PVar "cells") (EApp (EVar "graphCells") (EBinOp "::" (EVar "core") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "schemes"))))) (DoLet false false (PVar "checked") (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "residual")) (EApp (EVar "noModErrors") (EVar "perMod"))) (EApp (EVar "allWeak") (EVar "cells"))) (EApp (EVar "Some") (ERecordCreate "CheckedProgram" ((fa "cpSchemes" (EVar "schemes")) (fa "cpCore" (EVar "core")) (fa "cpEvidence" (EVar "evidence")) (fa "cpDispositions" (EVar "dispositions")) (fa "cpTrees" (EVar "trees")) (fa "cpWeak" (EVar "cells"))))) (EVar "None"))) (DoExpr (ERecordCreate "TcReport" ((fa "trPartial" (ERecordCreate "PartialAnalysis" ((fa "paSchemes" (EVar "schemes")) (fa "paCore" (EVar "core")) (fa "paLocals" (EListLit)) (fa "paSeed" (EListLit))))) (fa "trDiagnostics" (EVar "perMod")) (fa "trResidual" (EVar "residual")) (fa "trChecked" (EVar "checked")))))))
+(DTypeSig true "graphCells" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (TyApp (TyCon "List") (TyCon "LiveCell"))))
+(DFunDef false "graphCells" ((PList)) (EListLit))
+(DFunDef false "graphCells" ((PCons (PVar "rows") (PVar "rest"))) (EApp (EApp (EVar "rowCells") (EVar "rows")) (EApp (EVar "graphCells") (EVar "rest"))))
+(DTypeSig false "rowCells" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyFun (TyApp (TyCon "List") (TyCon "LiveCell")) (TyApp (TyCon "List") (TyCon "LiveCell")))))
+(DFunDef false "rowCells" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "rowCells" ((PCons (PTuple (PVar "name") (PVar "p")) (PVar "rest")) (PVar "acc")) (EBinOp "++" (EApp (EVar "atGraphEnd") (EApp (EApp (EVar "liveCells") (EVar "name")) (EVar "p"))) (EApp (EApp (EVar "rowCells") (EVar "rest")) (EVar "acc"))))
+(DTypeSig false "modSchemes" (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))
+(DFunDef false "modSchemes" ((PTuple (PVar "s") PWild PWild)) (EVar "s"))
+(DTypeSig false "isEmptyL" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
+(DFunDef false "isEmptyL" ((PList)) (EVar "True"))
+(DFunDef false "isEmptyL" (PWild) (EVar "False"))
+(DTypeSig false "noModErrors" (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyCon "Bool")))
+(DFunDef false "noModErrors" ((PList)) (EVar "True"))
+(DFunDef false "noModErrors" ((PCons (PTuple PWild (PTuple PWild (PList) PWild)) (PVar "rest"))) (EApp (EVar "noModErrors") (EVar "rest")))
+(DFunDef false "noModErrors" (PWild) (EVar "False"))
+(DTypeSig false "allWeak" (TyFun (TyApp (TyCon "List") (TyCon "LiveCell")) (TyCon "Bool")))
+(DFunDef false "allWeak" ((PList)) (EVar "True"))
+(DFunDef false "allWeak" ((PCons (PCon "WeakVar" PWild PWild PWild) (PVar "rest"))) (EApp (EVar "allWeak") (EVar "rest")))
+(DFunDef false "allWeak" (PWild) (EVar "False"))
 (DData Private "Walk" () ((variant "Walk" (ConPos (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "LiveCell"))))) ())
 (DTypeSig true "liveCells" (TyFun (TyCon "String") (TyFun (TyCon "PubScheme") (TyApp (TyCon "List") (TyCon "LiveCell")))))
 (DFunDef false "liveCells" ((PVar "name") (PRec "PubScheme" ((rf "psScheme" (PCon "Forall" (PVar "ids") (PVar "effIds") (PVar "authIds") (PVar "residuals") (PVar "row") (PVar "t"))) (rf "psContext" (PVar "ctx"))) false)) (EBlock (DoLet false false (PVar "w0") (EApp (EApp (EVar "Walk") (EVar "Tip")) (EListLit))) (DoLet false false (PVar "w1") (EApp (EApp (EApp (EApp (EVar "walkResiduals") (EVar "name")) (EVar "authIds")) (EVar "residuals")) (EVar "w0"))) (DoLet false false (PVar "w2") (EApp (EApp (EApp (EApp (EApp (EVar "walkRow") (EVar "name")) (EVar "effIds")) (EVar "authIds")) (EVar "row")) (EVar "w1"))) (DoLet false false (PVar "w3") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkMono") (EVar "name")) (EVar "ids")) (EVar "effIds")) (EVar "authIds")) (EVar "t")) (EVar "w2"))) (DoLet false false (PVar "w4") (EApp (EApp (EApp (EVar "foldWalk") (EApp (EApp (EApp (EApp (EVar "walkObl") (EVar "name")) (EVar "ids")) (EVar "effIds")) (EVar "authIds"))) (EVar "ctx")) (EVar "w3"))) (DoExpr (EMatch (EVar "w4") (arm (PCon "Walk" PWild (PVar "found")) () (EApp (EVar "nub") (EApp (EVar "reverse") (EVar "found"))))))))
@@ -480,7 +599,7 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
 (DTypeSig false "walkResiduals" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "AuthResidual")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "walkResiduals" ((PVar "name") (PVar "authIds") (PVar "rs") (PVar "w")) (EApp (EApp (EApp (EVar "foldWalk") (ELam ((PVar "r") (PVar "acc")) (EMatch (EVar "r") (arm (PRec "AuthResidual" ((rf "arLower" (PVar "lo")) (rf "arUpper" (PVar "hi"))) false) () (EApp (EApp (EApp (EApp (EVar "walkAuth") (EVar "name")) (EVar "authIds")) (EVar "hi")) (EApp (EApp (EApp (EApp (EVar "walkAuth") (EVar "name")) (EVar "authIds")) (EVar "lo")) (EVar "acc"))))))) (EVar "rs")) (EVar "w")))
 (DTypeSig false "walkMono" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Mono") (TyFun (TyCon "Walk") (TyCon "Walk"))))))))
-(DFunDef false "walkMono" ((PVar "name") (PVar "ids") (PVar "effIds") (PVar "authIds") (PCon "TVar" (PVar "cell")) (PVar "w")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Link" PWild) () (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "LinkCell") (EVar "name")) (EVar "TyVarK")) (EUnOp "-" (ELit (LInt 1))))) (EVar "w"))) (arm (PCon "Unbound" (PVar "id") PWild) () (EIf (EApp (EApp (EVar "hasId") (EVar "id")) (EVar "ids")) (EVar "w") (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "FreeMeta") (EVar "name")) (EVar "TyVarK")) (EVar "id"))) (EVar "w"))))))
+(DFunDef false "walkMono" ((PVar "name") (PVar "ids") (PVar "effIds") (PVar "authIds") (PCon "TVar" (PVar "cell")) (PVar "w")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Link" PWild) () (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "LinkCell") (EVar "name")) (EVar "TyVarK")) (EVar "None"))) (EVar "w"))) (arm (PCon "Unbound" (PVar "id") PWild) () (EIf (EApp (EApp (EVar "hasId") (EVar "id")) (EVar "ids")) (EVar "w") (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "FreeMeta") (EVar "name")) (EVar "TyVarK")) (EVar "id"))) (EVar "w"))))))
 (DFunDef false "walkMono" ((PVar "name") (PVar "ids") (PVar "effIds") (PVar "authIds") (PCon "TApp" (PVar "a") (PVar "b")) (PVar "w")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkMono") (EVar "name")) (EVar "ids")) (EVar "effIds")) (EVar "authIds")) (EVar "b")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkMono") (EVar "name")) (EVar "ids")) (EVar "effIds")) (EVar "authIds")) (EVar "a")) (EVar "w"))))
 (DFunDef false "walkMono" ((PVar "name") (PVar "ids") (PVar "effIds") (PVar "authIds") (PCon "TFun" (PVar "a") (PVar "row") (PVar "b")) (PVar "w")) (EBlock (DoLet false false (PVar "w1") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkMono") (EVar "name")) (EVar "ids")) (EVar "effIds")) (EVar "authIds")) (EVar "a")) (EVar "w"))) (DoLet false false (PVar "w2") (EApp (EApp (EApp (EApp (EApp (EVar "walkRow") (EVar "name")) (EVar "effIds")) (EVar "authIds")) (EVar "row")) (EVar "w1"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkMono") (EVar "name")) (EVar "ids")) (EVar "effIds")) (EVar "authIds")) (EVar "b")) (EVar "w2")))))
 (DFunDef false "walkMono" ((PVar "name") PWild (PVar "effIds") (PVar "authIds") (PCon "TEff" (PVar "row")) (PVar "w")) (EApp (EApp (EApp (EApp (EApp (EVar "walkRow") (EVar "name")) (EVar "effIds")) (EVar "authIds")) (EVar "row")) (EVar "w")))
@@ -488,14 +607,14 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
 (DFunDef false "walkMono" ((PVar "name") PWild PWild (PVar "authIds") (PCon "TAuth" (PVar "auth")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkAuth") (EVar "name")) (EVar "authIds")) (EVar "auth")) (EVar "w")))
 (DFunDef false "walkMono" (PWild PWild PWild PWild PWild (PVar "w")) (EVar "w"))
 (DTypeSig false "walkAuth" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Authority") (TyFun (TyCon "Walk") (TyCon "Walk"))))))
-(DFunDef false "walkAuth" ((PVar "name") (PVar "authIds") (PCon "AVar" (PVar "cell")) (PVar "w")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "ALink" (PVar "id") PWild PWild) () (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "LinkCell") (EVar "name")) (EVar "AuthVarK")) (EVar "id"))) (EVar "w"))) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild PWild) () (EIf (EApp (EApp (EVar "hasId") (EVar "id")) (EVar "authIds")) (EVar "w") (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "FreeMeta") (EVar "name")) (EVar "AuthVarK")) (EVar "id"))) (EVar "w"))))))
+(DFunDef false "walkAuth" ((PVar "name") (PVar "authIds") (PCon "AVar" (PVar "cell")) (PVar "w")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "ALink" (PVar "id") PWild PWild) () (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "LinkCell") (EVar "name")) (EVar "AuthVarK")) (EApp (EVar "Some") (EVar "id")))) (EVar "w"))) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild PWild) () (EIf (EApp (EApp (EVar "hasId") (EVar "id")) (EVar "authIds")) (EVar "w") (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "FreeMeta") (EVar "name")) (EVar "AuthVarK")) (EVar "id"))) (EVar "w"))))))
 (DFunDef false "walkAuth" ((PVar "name") (PVar "authIds") (PCon "AJoin" (PVar "ms")) (PVar "w")) (EApp (EApp (EApp (EVar "foldWalk") (EApp (EApp (EVar "walkAuth") (EVar "name")) (EVar "authIds"))) (EVar "ms")) (EVar "w")))
 (DFunDef false "walkAuth" ((PVar "name") (PVar "authIds") (PCon "AProduct" (PVar "axes")) (PVar "w")) (EApp (EApp (EApp (EVar "foldWalk") (ELam ((PVar "axis") (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "walkAuth") (EVar "name")) (EVar "authIds")) (EApp (EVar "snd") (EVar "axis"))) (EVar "acc")))) (EVar "axes")) (EVar "w")))
 (DFunDef false "walkAuth" (PWild PWild PWild (PVar "w")) (EVar "w"))
 (DTypeSig false "walkRow" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "EffRow") (TyFun (TyCon "Walk") (TyCon "Walk")))))))
 (DFunDef false "walkRow" ((PVar "name") (PVar "effIds") (PVar "authIds") (PCon "EffRow" (PVar "atoms") (PVar "tail")) (PVar "w")) (EBlock (DoLet false false (PVar "w1") (EApp (EApp (EApp (EVar "foldWalk") (ELam ((PVar "atom") (PVar "acc")) (EMatch (EVar "atom") (arm (PCon "Atom" PWild (PVar "auth")) () (EApp (EApp (EApp (EApp (EVar "walkAuth") (EVar "name")) (EVar "authIds")) (EVar "auth")) (EVar "acc")))))) (EVar "atoms")) (EVar "w"))) (DoExpr (EMatch (EVar "tail") (arm (PCon "None") () (EVar "w1")) (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkEffCell") (EVar "name")) (EVar "effIds")) (EVar "authIds")) (EVar "False")) (EVar "cell")) (EVar "w1")))))))
 (DTypeSig false "walkEffCell" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))))
-(DFunDef false "walkEffCell" ((PVar "name") (PVar "effIds") (PVar "authIds") (PVar "member") (PVar "cell") (PAs "w" (PCon "Walk" (PVar "seen") (PVar "found")))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "EUnbound" (PVar "id") PWild) () (EIf (EApp (EApp (EVar "hasId") (EVar "id")) (EVar "effIds")) (EVar "w") (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "FreeMeta") (EVar "name")) (EVar "EffVarK")) (EVar "id"))) (EVar "w")))) (arm (PCon "ESummary" (PVar "id") PWild PWild) () (EApp (EApp (EVar "push") (EApp (EApp (EVar "OpenSummary") (EVar "name")) (EVar "id"))) (EVar "w"))) (arm (PCon "ELink" (PVar "id") (PVar "row")) () (EIf (EApp (EApp (EVar "IdMap.has") (EVar "id")) (EVar "seen")) (EVar "w") (EBlock (DoLet false false (PVar "w1") (EApp (EApp (EVar "Walk") (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (ELit LUnit)) (EVar "seen"))) (EVar "found"))) (DoLet false false (PVar "w2") (EIf (EVar "member") (EVar "w1") (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "LinkCell") (EVar "name")) (EVar "EffVarK")) (EVar "id"))) (EVar "w1")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "walkRow") (EVar "name")) (EVar "effIds")) (EVar "authIds")) (EVar "row")) (EVar "w2")))))) (arm (PCon "EJoin" (PVar "id") PWild (PVar "members")) () (EIf (EApp (EApp (EVar "IdMap.has") (EVar "id")) (EVar "seen")) (EVar "w") (EApp (EApp (EApp (EVar "foldWalk") (EApp (EApp (EApp (EApp (EVar "walkEffCell") (EVar "name")) (EVar "effIds")) (EVar "authIds")) (EVar "True"))) (EVar "members")) (EApp (EApp (EVar "Walk") (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (ELit LUnit)) (EVar "seen"))) (EVar "found")))))))
+(DFunDef false "walkEffCell" ((PVar "name") (PVar "effIds") (PVar "authIds") (PVar "member") (PVar "cell") (PAs "w" (PCon "Walk" (PVar "seen") (PVar "found")))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "EUnbound" (PVar "id") PWild) () (EIf (EApp (EApp (EVar "hasId") (EVar "id")) (EVar "effIds")) (EVar "w") (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "FreeMeta") (EVar "name")) (EVar "EffVarK")) (EVar "id"))) (EVar "w")))) (arm (PCon "ESummary" (PVar "id") PWild PWild) () (EApp (EApp (EVar "push") (EApp (EApp (EVar "OpenSummary") (EVar "name")) (EVar "id"))) (EVar "w"))) (arm (PCon "ELink" (PVar "id") (PVar "row")) () (EIf (EApp (EApp (EVar "IdMap.has") (EVar "id")) (EVar "seen")) (EVar "w") (EBlock (DoLet false false (PVar "w1") (EApp (EApp (EVar "Walk") (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (ELit LUnit)) (EVar "seen"))) (EVar "found"))) (DoLet false false (PVar "w2") (EIf (EVar "member") (EVar "w1") (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "LinkCell") (EVar "name")) (EVar "EffVarK")) (EApp (EVar "Some") (EVar "id")))) (EVar "w1")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "walkRow") (EVar "name")) (EVar "effIds")) (EVar "authIds")) (EVar "row")) (EVar "w2")))))) (arm (PCon "EJoin" (PVar "id") PWild (PVar "members")) () (EIf (EApp (EApp (EVar "IdMap.has") (EVar "id")) (EVar "seen")) (EVar "w") (EApp (EApp (EApp (EVar "foldWalk") (EApp (EApp (EApp (EApp (EVar "walkEffCell") (EVar "name")) (EVar "effIds")) (EVar "authIds")) (EVar "True"))) (EVar "members")) (EApp (EApp (EVar "Walk") (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (ELit LUnit)) (EVar "seen"))) (EVar "found")))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" false) (mem "Decl" false) (mem "EvTable" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "Tyvar" true) (mem "Scheme" true) (mem "AuthResidual" true) (mem "VecObl" true))))
@@ -519,7 +638,7 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
 (DData Public "VarKind" () ((variant "TyVarK" (ConPos)) (variant "EffVarK" (ConPos)) (variant "AuthVarK" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "VarKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "TyVarK") (PCon "TyVarK")) () (EVar "True")) (arm (PTuple (PCon "EffVarK") (PCon "EffVarK")) () (EVar "True")) (arm (PTuple (PCon "AuthVarK") (PCon "AuthVarK")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "VarKind")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "TyVarK") () (ELit (LString "TyVarK"))) (arm (PCon "EffVarK") () (ELit (LString "EffVarK"))) (arm (PCon "AuthVarK") () (ELit (LString "AuthVarK")))))))
-(DData Public "LiveCell" () ((variant "LinkCell" (ConPos (TyCon "String") (TyCon "VarKind") (TyCon "Int"))) (variant "FreeMeta" (ConPos (TyCon "String") (TyCon "VarKind") (TyCon "Int"))) (variant "WeakVar" (ConPos (TyCon "String") (TyCon "VarKind") (TyCon "Int"))) (variant "OpenSummary" (ConPos (TyCon "String") (TyCon "Int")))) ())
+(DData Public "LiveCell" () ((variant "LinkCell" (ConPos (TyCon "String") (TyCon "VarKind") (TyApp (TyCon "Option") (TyCon "Int")))) (variant "FreeMeta" (ConPos (TyCon "String") (TyCon "VarKind") (TyCon "Int"))) (variant "WeakVar" (ConPos (TyCon "String") (TyCon "VarKind") (TyCon "Int"))) (variant "OpenSummary" (ConPos (TyCon "String") (TyCon "Int")))) ())
 (DImpl true "Eq" ((TyCon "LiveCell")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "LinkCell" (PVar "__a0") (PVar "__a1") (PVar "__a2")) (PCon "LinkCell" (PVar "__b0") (PVar "__b1") (PVar "__b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2")))) (arm (PTuple (PCon "FreeMeta" (PVar "__a0") (PVar "__a1") (PVar "__a2")) (PCon "FreeMeta" (PVar "__b0") (PVar "__b1") (PVar "__b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2")))) (arm (PTuple (PCon "WeakVar" (PVar "__a0") (PVar "__a1") (PVar "__a2")) (PCon "WeakVar" (PVar "__b0") (PVar "__b1") (PVar "__b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2")))) (arm (PTuple (PCon "OpenSummary" (PVar "__a0") (PVar "__a1")) (PCon "OpenSummary" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "LiveCell")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "LinkCell" (PVar "__a0") (PVar "__a1") (PVar "__a2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "LinkCell ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a2"))))) (arm (PCon "FreeMeta" (PVar "__a0") (PVar "__a1") (PVar "__a2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FreeMeta ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a2"))))) (arm (PCon "WeakVar" (PVar "__a0") (PVar "__a1") (PVar "__a2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "WeakVar ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a2"))))) (arm (PCon "OpenSummary" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "OpenSummary ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1")))))))))
 (DData Public "PartialAnalysis" () ((variant "PartialAnalysis" (ConNamed (field "paSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))) (field "paCore" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "paLocals" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme") (TyCon "Loc")))) (field "paSeed" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))))))) ())
@@ -564,6 +683,33 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
 (DFunDef false "zonkScheme" ((PVar "z") (PCon "Forall" (PVar "ids") (PVar "effIds") (PVar "authIds") (PVar "residuals") (PVar "row") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "z1") (PVar "residuals1")) (EApp (EApp (EApp (EVar "zonkList") (EVar "zonkResidual")) (EVar "z")) (EVar "residuals"))) (DoLet false false (PTuple (PVar "z2") (PVar "row1")) (EApp (EApp (EVar "zonkRow") (EVar "z1")) (EVar "row"))) (DoLet false false (PTuple (PVar "z3") (PVar "t1")) (EApp (EApp (EVar "zonkMono") (EVar "z2")) (EVar "t"))) (DoExpr (ETuple (EVar "z3") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Forall") (EVar "ids")) (EVar "effIds")) (EVar "authIds")) (EVar "residuals1")) (EVar "row1")) (EVar "t1"))))))
 (DTypeSig true "freezePub" (TyFun (TyCon "Scheme") (TyFun (TyApp (TyCon "List") (TyCon "VecObl")) (TyCon "PubScheme"))))
 (DFunDef false "freezePub" ((PVar "s") (PVar "ctx")) (EBlock (DoLet false false (PTuple (PVar "z1") (PVar "s1")) (EApp (EApp (EVar "zonkScheme") (EVar "emptyZonk")) (EVar "s"))) (DoLet false false (PTuple PWild (PVar "ctx1")) (EApp (EApp (EApp (EVar "zonkList") (EVar "zonkVecObl")) (EVar "z1")) (EVar "ctx"))) (DoExpr (ERecordCreate "PubScheme" ((fa "psScheme" (EVar "s1")) (fa "psContext" (EVar "ctx1")))))))
+(DTypeSig true "freezeRows" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))
+(DFunDef false "freezeRows" () (EApp (EMethodRef "map") (ELam ((PVar "b")) (ETuple (EApp (EVar "fst") (EVar "b")) (EApp (EApp (EVar "freezePub") (EFieldAccess (EApp (EVar "snd") (EVar "b")) "psScheme")) (EFieldAccess (EApp (EVar "snd") (EVar "b")) "psContext"))))))
+(DTypeSig true "freezeModDiags" (TyFun (TyCon "ModDiags") (TyCon "ModDiags")))
+(DFunDef false "freezeModDiags" ((PTuple (PVar "mid") (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")))) (ETuple (EVar "mid") (ETuple (EApp (EVar "freezeRows") (EVar "schemes")) (EVar "errs") (EVar "warns"))))
+(DTypeSig true "freezeNewest" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyCon "ModDiags")))))
+(DFunDef false "freezeNewest" ((PVar "n") (PVar "rows")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EVar "rows") (EIf (EVar "otherwise") (EMatch (EVar "rows") (arm (PList) () (EListLit)) (arm (PCons (PVar "m") (PVar "rest")) () (EBinOp "::" (EApp (EVar "freezeModDiags") (EVar "m")) (EApp (EApp (EVar "freezeNewest") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "graphReport" (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyFun (TyCon "EvTable") (TyFun (TyCon "DispositionTable") (TyFun (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyCon "TcReport"))))))))
+(DFunDef false "graphReport" ((PVar "perMod") (PVar "core") (PVar "residual") (PVar "evidence") (PVar "dispositions") (PVar "trees")) (EBlock (DoLet false false (PVar "schemes") (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (ETuple (EApp (EVar "fst") (EVar "m")) (EApp (EVar "modSchemes") (EApp (EVar "snd") (EVar "m")))))) (EVar "perMod"))) (DoLet false false (PVar "cells") (EApp (EVar "graphCells") (EBinOp "::" (EVar "core") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "schemes"))))) (DoLet false false (PVar "checked") (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "residual")) (EApp (EVar "noModErrors") (EVar "perMod"))) (EApp (EVar "allWeak") (EVar "cells"))) (EApp (EVar "Some") (ERecordCreate "CheckedProgram" ((fa "cpSchemes" (EVar "schemes")) (fa "cpCore" (EVar "core")) (fa "cpEvidence" (EVar "evidence")) (fa "cpDispositions" (EVar "dispositions")) (fa "cpTrees" (EVar "trees")) (fa "cpWeak" (EVar "cells"))))) (EVar "None"))) (DoExpr (ERecordCreate "TcReport" ((fa "trPartial" (ERecordCreate "PartialAnalysis" ((fa "paSchemes" (EVar "schemes")) (fa "paCore" (EVar "core")) (fa "paLocals" (EListLit)) (fa "paSeed" (EListLit))))) (fa "trDiagnostics" (EVar "perMod")) (fa "trResidual" (EVar "residual")) (fa "trChecked" (EVar "checked")))))))
+(DTypeSig true "graphCells" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (TyApp (TyCon "List") (TyCon "LiveCell"))))
+(DFunDef false "graphCells" ((PList)) (EListLit))
+(DFunDef false "graphCells" ((PCons (PVar "rows") (PVar "rest"))) (EApp (EApp (EVar "rowCells") (EVar "rows")) (EApp (EVar "graphCells") (EVar "rest"))))
+(DTypeSig false "rowCells" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyFun (TyApp (TyCon "List") (TyCon "LiveCell")) (TyApp (TyCon "List") (TyCon "LiveCell")))))
+(DFunDef false "rowCells" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "rowCells" ((PCons (PTuple (PVar "name") (PVar "p")) (PVar "rest")) (PVar "acc")) (EBinOp "++" (EApp (EVar "atGraphEnd") (EApp (EApp (EVar "liveCells") (EVar "name")) (EVar "p"))) (EApp (EApp (EVar "rowCells") (EVar "rest")) (EVar "acc"))))
+(DTypeSig false "modSchemes" (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))
+(DFunDef false "modSchemes" ((PTuple (PVar "s") PWild PWild)) (EVar "s"))
+(DTypeSig false "isEmptyL" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))
+(DFunDef false "isEmptyL" ((PList)) (EVar "True"))
+(DFunDef false "isEmptyL" (PWild) (EVar "False"))
+(DTypeSig false "noModErrors" (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyCon "Bool")))
+(DFunDef false "noModErrors" ((PList)) (EVar "True"))
+(DFunDef false "noModErrors" ((PCons (PTuple PWild (PTuple PWild (PList) PWild)) (PVar "rest"))) (EApp (EVar "noModErrors") (EVar "rest")))
+(DFunDef false "noModErrors" (PWild) (EVar "False"))
+(DTypeSig false "allWeak" (TyFun (TyApp (TyCon "List") (TyCon "LiveCell")) (TyCon "Bool")))
+(DFunDef false "allWeak" ((PList)) (EVar "True"))
+(DFunDef false "allWeak" ((PCons (PCon "WeakVar" PWild PWild PWild) (PVar "rest"))) (EApp (EVar "allWeak") (EVar "rest")))
+(DFunDef false "allWeak" (PWild) (EVar "False"))
 (DData Private "Walk" () ((variant "Walk" (ConPos (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "LiveCell"))))) ())
 (DTypeSig true "liveCells" (TyFun (TyCon "String") (TyFun (TyCon "PubScheme") (TyApp (TyCon "List") (TyCon "LiveCell")))))
 (DFunDef false "liveCells" ((PVar "name") (PRec "PubScheme" ((rf "psScheme" (PCon "Forall" (PVar "ids") (PVar "effIds") (PVar "authIds") (PVar "residuals") (PVar "row") (PVar "t"))) (rf "psContext" (PVar "ctx"))) false)) (EBlock (DoLet false false (PVar "w0") (EApp (EApp (EVar "Walk") (EVar "Tip")) (EListLit))) (DoLet false false (PVar "w1") (EApp (EApp (EApp (EApp (EVar "walkResiduals") (EVar "name")) (EVar "authIds")) (EVar "residuals")) (EVar "w0"))) (DoLet false false (PVar "w2") (EApp (EApp (EApp (EApp (EApp (EVar "walkRow") (EVar "name")) (EVar "effIds")) (EVar "authIds")) (EVar "row")) (EVar "w1"))) (DoLet false false (PVar "w3") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkMono") (EVar "name")) (EVar "ids")) (EVar "effIds")) (EVar "authIds")) (EVar "t")) (EVar "w2"))) (DoLet false false (PVar "w4") (EApp (EApp (EApp (EVar "foldWalk") (EApp (EApp (EApp (EApp (EVar "walkObl") (EVar "name")) (EVar "ids")) (EVar "effIds")) (EVar "authIds"))) (EVar "ctx")) (EVar "w3"))) (DoExpr (EMatch (EVar "w4") (arm (PCon "Walk" PWild (PVar "found")) () (EApp (EVar "nub") (EApp (EVar "reverse") (EVar "found"))))))))
@@ -585,7 +731,7 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
 (DTypeSig false "walkResiduals" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "AuthResidual")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "walkResiduals" ((PVar "name") (PVar "authIds") (PVar "rs") (PVar "w")) (EApp (EApp (EApp (EVar "foldWalk") (ELam ((PVar "r") (PVar "acc")) (EMatch (EVar "r") (arm (PRec "AuthResidual" ((rf "arLower" (PVar "lo")) (rf "arUpper" (PVar "hi"))) false) () (EApp (EApp (EApp (EApp (EVar "walkAuth") (EVar "name")) (EVar "authIds")) (EVar "hi")) (EApp (EApp (EApp (EApp (EVar "walkAuth") (EVar "name")) (EVar "authIds")) (EVar "lo")) (EVar "acc"))))))) (EVar "rs")) (EVar "w")))
 (DTypeSig false "walkMono" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Mono") (TyFun (TyCon "Walk") (TyCon "Walk"))))))))
-(DFunDef false "walkMono" ((PVar "name") (PVar "ids") (PVar "effIds") (PVar "authIds") (PCon "TVar" (PVar "cell")) (PVar "w")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Link" PWild) () (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "LinkCell") (EVar "name")) (EVar "TyVarK")) (EUnOp "-" (ELit (LInt 1))))) (EVar "w"))) (arm (PCon "Unbound" (PVar "id") PWild) () (EIf (EApp (EApp (EVar "hasId") (EVar "id")) (EVar "ids")) (EVar "w") (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "FreeMeta") (EVar "name")) (EVar "TyVarK")) (EVar "id"))) (EVar "w"))))))
+(DFunDef false "walkMono" ((PVar "name") (PVar "ids") (PVar "effIds") (PVar "authIds") (PCon "TVar" (PVar "cell")) (PVar "w")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Link" PWild) () (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "LinkCell") (EVar "name")) (EVar "TyVarK")) (EVar "None"))) (EVar "w"))) (arm (PCon "Unbound" (PVar "id") PWild) () (EIf (EApp (EApp (EVar "hasId") (EVar "id")) (EVar "ids")) (EVar "w") (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "FreeMeta") (EVar "name")) (EVar "TyVarK")) (EVar "id"))) (EVar "w"))))))
 (DFunDef false "walkMono" ((PVar "name") (PVar "ids") (PVar "effIds") (PVar "authIds") (PCon "TApp" (PVar "a") (PVar "b")) (PVar "w")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkMono") (EVar "name")) (EVar "ids")) (EVar "effIds")) (EVar "authIds")) (EVar "b")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkMono") (EVar "name")) (EVar "ids")) (EVar "effIds")) (EVar "authIds")) (EVar "a")) (EVar "w"))))
 (DFunDef false "walkMono" ((PVar "name") (PVar "ids") (PVar "effIds") (PVar "authIds") (PCon "TFun" (PVar "a") (PVar "row") (PVar "b")) (PVar "w")) (EBlock (DoLet false false (PVar "w1") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkMono") (EVar "name")) (EVar "ids")) (EVar "effIds")) (EVar "authIds")) (EVar "a")) (EVar "w"))) (DoLet false false (PVar "w2") (EApp (EApp (EApp (EApp (EApp (EVar "walkRow") (EVar "name")) (EVar "effIds")) (EVar "authIds")) (EVar "row")) (EVar "w1"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkMono") (EVar "name")) (EVar "ids")) (EVar "effIds")) (EVar "authIds")) (EVar "b")) (EVar "w2")))))
 (DFunDef false "walkMono" ((PVar "name") PWild (PVar "effIds") (PVar "authIds") (PCon "TEff" (PVar "row")) (PVar "w")) (EApp (EApp (EApp (EApp (EApp (EVar "walkRow") (EVar "name")) (EVar "effIds")) (EVar "authIds")) (EVar "row")) (EVar "w")))
@@ -593,11 +739,11 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
 (DFunDef false "walkMono" ((PVar "name") PWild PWild (PVar "authIds") (PCon "TAuth" (PVar "auth")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkAuth") (EVar "name")) (EVar "authIds")) (EVar "auth")) (EVar "w")))
 (DFunDef false "walkMono" (PWild PWild PWild PWild PWild (PVar "w")) (EVar "w"))
 (DTypeSig false "walkAuth" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Authority") (TyFun (TyCon "Walk") (TyCon "Walk"))))))
-(DFunDef false "walkAuth" ((PVar "name") (PVar "authIds") (PCon "AVar" (PVar "cell")) (PVar "w")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "ALink" (PVar "id") PWild PWild) () (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "LinkCell") (EVar "name")) (EVar "AuthVarK")) (EVar "id"))) (EVar "w"))) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild PWild) () (EIf (EApp (EApp (EVar "hasId") (EVar "id")) (EVar "authIds")) (EVar "w") (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "FreeMeta") (EVar "name")) (EVar "AuthVarK")) (EVar "id"))) (EVar "w"))))))
+(DFunDef false "walkAuth" ((PVar "name") (PVar "authIds") (PCon "AVar" (PVar "cell")) (PVar "w")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "ALink" (PVar "id") PWild PWild) () (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "LinkCell") (EVar "name")) (EVar "AuthVarK")) (EApp (EVar "Some") (EVar "id")))) (EVar "w"))) (arm (PCon "AUnbound" (PVar "id") PWild PWild PWild PWild) () (EIf (EApp (EApp (EVar "hasId") (EVar "id")) (EVar "authIds")) (EVar "w") (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "FreeMeta") (EVar "name")) (EVar "AuthVarK")) (EVar "id"))) (EVar "w"))))))
 (DFunDef false "walkAuth" ((PVar "name") (PVar "authIds") (PCon "AJoin" (PVar "ms")) (PVar "w")) (EApp (EApp (EApp (EVar "foldWalk") (EApp (EApp (EVar "walkAuth") (EVar "name")) (EVar "authIds"))) (EVar "ms")) (EVar "w")))
 (DFunDef false "walkAuth" ((PVar "name") (PVar "authIds") (PCon "AProduct" (PVar "axes")) (PVar "w")) (EApp (EApp (EApp (EVar "foldWalk") (ELam ((PVar "axis") (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "walkAuth") (EVar "name")) (EVar "authIds")) (EApp (EVar "snd") (EVar "axis"))) (EVar "acc")))) (EVar "axes")) (EVar "w")))
 (DFunDef false "walkAuth" (PWild PWild PWild (PVar "w")) (EVar "w"))
 (DTypeSig false "walkRow" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "EffRow") (TyFun (TyCon "Walk") (TyCon "Walk")))))))
 (DFunDef false "walkRow" ((PVar "name") (PVar "effIds") (PVar "authIds") (PCon "EffRow" (PVar "atoms") (PVar "tail")) (PVar "w")) (EBlock (DoLet false false (PVar "w1") (EApp (EApp (EApp (EVar "foldWalk") (ELam ((PVar "atom") (PVar "acc")) (EMatch (EVar "atom") (arm (PCon "Atom" PWild (PVar "auth")) () (EApp (EApp (EApp (EApp (EVar "walkAuth") (EVar "name")) (EVar "authIds")) (EVar "auth")) (EVar "acc")))))) (EVar "atoms")) (EVar "w"))) (DoExpr (EMatch (EVar "tail") (arm (PCon "None") () (EVar "w1")) (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkEffCell") (EVar "name")) (EVar "effIds")) (EVar "authIds")) (EVar "False")) (EVar "cell")) (EVar "w1")))))))
 (DTypeSig false "walkEffCell" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))))
-(DFunDef false "walkEffCell" ((PVar "name") (PVar "effIds") (PVar "authIds") (PVar "member") (PVar "cell") (PAs "w" (PCon "Walk" (PVar "seen") (PVar "found")))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "EUnbound" (PVar "id") PWild) () (EIf (EApp (EApp (EVar "hasId") (EVar "id")) (EVar "effIds")) (EVar "w") (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "FreeMeta") (EVar "name")) (EVar "EffVarK")) (EVar "id"))) (EVar "w")))) (arm (PCon "ESummary" (PVar "id") PWild PWild) () (EApp (EApp (EVar "push") (EApp (EApp (EVar "OpenSummary") (EVar "name")) (EVar "id"))) (EVar "w"))) (arm (PCon "ELink" (PVar "id") (PVar "row")) () (EIf (EApp (EApp (EVar "IdMap.has") (EVar "id")) (EVar "seen")) (EVar "w") (EBlock (DoLet false false (PVar "w1") (EApp (EApp (EVar "Walk") (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (ELit LUnit)) (EVar "seen"))) (EVar "found"))) (DoLet false false (PVar "w2") (EIf (EVar "member") (EVar "w1") (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "LinkCell") (EVar "name")) (EVar "EffVarK")) (EVar "id"))) (EVar "w1")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "walkRow") (EVar "name")) (EVar "effIds")) (EVar "authIds")) (EVar "row")) (EVar "w2")))))) (arm (PCon "EJoin" (PVar "id") PWild (PVar "members")) () (EIf (EApp (EApp (EVar "IdMap.has") (EVar "id")) (EVar "seen")) (EVar "w") (EApp (EApp (EApp (EVar "foldWalk") (EApp (EApp (EApp (EApp (EVar "walkEffCell") (EVar "name")) (EVar "effIds")) (EVar "authIds")) (EVar "True"))) (EVar "members")) (EApp (EApp (EVar "Walk") (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (ELit LUnit)) (EVar "seen"))) (EVar "found")))))))
+(DFunDef false "walkEffCell" ((PVar "name") (PVar "effIds") (PVar "authIds") (PVar "member") (PVar "cell") (PAs "w" (PCon "Walk" (PVar "seen") (PVar "found")))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "EUnbound" (PVar "id") PWild) () (EIf (EApp (EApp (EVar "hasId") (EVar "id")) (EVar "effIds")) (EVar "w") (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "FreeMeta") (EVar "name")) (EVar "EffVarK")) (EVar "id"))) (EVar "w")))) (arm (PCon "ESummary" (PVar "id") PWild PWild) () (EApp (EApp (EVar "push") (EApp (EApp (EVar "OpenSummary") (EVar "name")) (EVar "id"))) (EVar "w"))) (arm (PCon "ELink" (PVar "id") (PVar "row")) () (EIf (EApp (EApp (EVar "IdMap.has") (EVar "id")) (EVar "seen")) (EVar "w") (EBlock (DoLet false false (PVar "w1") (EApp (EApp (EVar "Walk") (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (ELit LUnit)) (EVar "seen"))) (EVar "found"))) (DoLet false false (PVar "w2") (EIf (EVar "member") (EVar "w1") (EApp (EApp (EVar "push") (EApp (EApp (EApp (EVar "LinkCell") (EVar "name")) (EVar "EffVarK")) (EApp (EVar "Some") (EVar "id")))) (EVar "w1")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "walkRow") (EVar "name")) (EVar "effIds")) (EVar "authIds")) (EVar "row")) (EVar "w2")))))) (arm (PCon "EJoin" (PVar "id") PWild (PVar "members")) () (EIf (EApp (EApp (EVar "IdMap.has") (EVar "id")) (EVar "seen")) (EVar "w") (EApp (EApp (EApp (EVar "foldWalk") (EApp (EApp (EApp (EApp (EVar "walkEffCell") (EVar "name")) (EVar "effIds")) (EVar "authIds")) (EVar "True"))) (EVar "members")) (EApp (EApp (EVar "Walk") (EApp (EApp (EApp (EVar "IdMap.set") (EVar "id")) (ELit LUnit)) (EVar "seen"))) (EVar "found")))))))

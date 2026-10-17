@@ -177,12 +177,3 @@ issue = 1134
 seed = 20261009
 cases = 500
 failure = "false"
-
-[[pin]]
-file = "types/publish_test.mdk"
-kind = "test"
-name = "published schemes hold no Link"
-engine = "native"
-issue = 2549
-detail_lines = ["expected 0 but got 8"]
-failure = "assertion"
