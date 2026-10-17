@@ -181,15 +181,6 @@ failure = "false"
 [[pin]]
 file = "types/publish_test.mdk"
 kind = "test"
-name = "#4053: P's scheme renders the same after Q's drive"
-engine = "native"
-issue = 4053
-detail_lines = ["expected 0 but got 2"]
-failure = "assertion"
-
-[[pin]]
-file = "types/publish_test.mdk"
-kind = "test"
 name = "published schemes hold no Link"
 engine = "native"
 issue = 2549

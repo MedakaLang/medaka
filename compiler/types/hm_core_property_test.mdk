@@ -499,7 +499,7 @@ schemeOf name source =
   ]
   let codes = flatMap ((_, (_, errors, _)) => map tcCode errors) results
   let schemes = match reverse results
-    (_, (own, _, _)) :: _ => map ((n, s) => (n, ppScheme s)) own
+    (_, (own, _, _)) :: _ => map ((n, p) => (n, ppScheme p.psScheme)) own
     [] => []
   (
     codes,

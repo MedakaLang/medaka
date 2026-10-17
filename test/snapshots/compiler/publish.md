@@ -1,5 +1,5 @@
 # META
-source_lines=381
+source_lines=389
 stages=DESUGAR,MARK
 # SOURCE
 -- The shapes the typechecker publishes, and the pure functions that freeze a
@@ -52,11 +52,14 @@ tcLoc : TcDiag -> Option Loc
 tcLoc (TcDiag _ _ l _ _ _) = l
 
 -- One module's row in a graph drive's per-module diagnostics: its own value
--- schemes, its isolated errors and its isolated warnings, under its module id.
+-- schemes, each with the context its module recorded for it, its isolated errors
+-- and its isolated warnings, under its module id.  The context is taken when the
+-- module closes, because the table it is read from is overwritten by the next
+-- module's check.
 -- The schemes half is what lets the ENTRY REPORT be a projection of the same list
 -- rather than a second pass (`checkModulesEntryFromDiags`); `dropModSchemes` is the
 -- narrower `(errs, warns)` view the bucketing fold consumes.
-export type ModDiags = (String, (List (String, Scheme), List TcDiag, List TcDiag))
+export type ModDiags = (String, (List (String, PubScheme), List TcDiag, List TcDiag))
 
 -- ── published shapes ───────────────────────────────────────────────────────
 
@@ -65,6 +68,11 @@ public export data PubScheme = PubScheme {
   psScheme : Scheme,
   psContext : List VecObl,
 }
+
+-- The schemes alone, for a reader that renders no context.
+export
+pubSchemes : List (String, PubScheme) -> List (String, Scheme)
+pubSchemes = map (b => (fst b, (snd b).psScheme))
 
 -- The three variable kinds count ids separately.
 public export data VarKind = TyVarK | EffVarK | AuthVarK deriving (Eq, Debug)
@@ -399,8 +407,10 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
 (DFunDef false "tcMsg" ((PCon "TcDiag" PWild PWild PWild (PVar "m") PWild PWild)) (EVar "m"))
 (DTypeSig true "tcLoc" (TyFun (TyCon "TcDiag") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "tcLoc" ((PCon "TcDiag" PWild PWild (PVar "l") PWild PWild PWild)) (EVar "l"))
-(DTypeAlias true "ModDiags" () (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))
+(DTypeAlias true "ModDiags" () (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))
 (DData Public "PubScheme" () ((variant "PubScheme" (ConNamed (field "psScheme" (TyCon "Scheme")) (field "psContext" (TyApp (TyCon "List") (TyCon "VecObl")))))) ())
+(DTypeSig true "pubSchemes" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))
+(DFunDef false "pubSchemes" () (EApp (EVar "map") (ELam ((PVar "b")) (ETuple (EApp (EVar "fst") (EVar "b")) (EFieldAccess (EApp (EVar "snd") (EVar "b")) "psScheme")))))
 (DData Public "VarKind" () ((variant "TyVarK" (ConPos)) (variant "EffVarK" (ConPos)) (variant "AuthVarK" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "VarKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "TyVarK") (PCon "TyVarK")) () (EVar "True")) (arm (PTuple (PCon "EffVarK") (PCon "EffVarK")) () (EVar "True")) (arm (PTuple (PCon "AuthVarK") (PCon "AuthVarK")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "VarKind")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "TyVarK") () (ELit (LString "TyVarK"))) (arm (PCon "EffVarK") () (ELit (LString "EffVarK"))) (arm (PCon "AuthVarK") () (ELit (LString "AuthVarK")))))))
@@ -502,8 +512,10 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
 (DFunDef false "tcMsg" ((PCon "TcDiag" PWild PWild PWild (PVar "m") PWild PWild)) (EVar "m"))
 (DTypeSig true "tcLoc" (TyFun (TyCon "TcDiag") (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "tcLoc" ((PCon "TcDiag" PWild PWild (PVar "l") PWild PWild PWild)) (EVar "l"))
-(DTypeAlias true "ModDiags" () (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))
+(DTypeAlias true "ModDiags" () (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))
 (DData Public "PubScheme" () ((variant "PubScheme" (ConNamed (field "psScheme" (TyCon "Scheme")) (field "psContext" (TyApp (TyCon "List") (TyCon "VecObl")))))) ())
+(DTypeSig true "pubSchemes" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))
+(DFunDef false "pubSchemes" () (EApp (EMethodRef "map") (ELam ((PVar "b")) (ETuple (EApp (EVar "fst") (EVar "b")) (EFieldAccess (EApp (EVar "snd") (EVar "b")) "psScheme")))))
 (DData Public "VarKind" () ((variant "TyVarK" (ConPos)) (variant "EffVarK" (ConPos)) (variant "AuthVarK" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "VarKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "TyVarK") (PCon "TyVarK")) () (EVar "True")) (arm (PTuple (PCon "EffVarK") (PCon "EffVarK")) () (EVar "True")) (arm (PTuple (PCon "AuthVarK") (PCon "AuthVarK")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "VarKind")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "TyVarK") () (ELit (LString "TyVarK"))) (arm (PCon "EffVarK") () (ELit (LString "EffVarK"))) (arm (PCon "AuthVarK") () (ELit (LString "AuthVarK")))))))
