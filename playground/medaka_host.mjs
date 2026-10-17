@@ -9,7 +9,9 @@
 // Consumers: test/wasm/run.js (every wasm gate, profile wasmgc/node),
 // playground/worker.js (the user's program, wasmgc/browser-worker),
 // playground/compile.mjs (the compiler itself, COMPILER_HOST), and the runner stubs in
-// playground/roundtrip_test.mjs and playground/client_flow_test.mjs.  The import
+// playground/roundtrip_test.mjs and playground/client_flow_test.mjs, and the loader
+// `medaka build --target wasmgc/edge` writes beside the wasm (compiler/backend/
+// wasm_loader.mdk: `run` and `fetch` over runToResult and textResponse).  The import
 // surface is docs/spec/WASM-SEMANTICS.md §3; WH3 and WH4 hold here, once.
 //
 // API:
@@ -20,6 +22,10 @@
 //   promiseImport(capability, key, fn, promising) -> import   a promise-answering key
 //   runProgram(wasm, host, opts) -> { kind: 'done' } | { kind: 'exit', code }
 //                                 | { kind: 'error', error, inProgram }
+//   runToResult(module, profile, opts) -> Promise<{ stdout, stderr, exitCode }>
+//                                           one buffered run: done is 0, exit is its code,
+//                                           an error is 1 with its message appended to stderr
+//   textResponse(result) -> Response        stdout as text/plain; 200 on exit 0, else 500
 //   profile = a name in PROFILES, or a host configuration such as COMPILER_HOST.
 //   opts = { vfs, args, getEnv, executablePath, stdin, sink, streaming, isolated, hostLabel, withheldHint, fetch }
 
@@ -1249,4 +1255,28 @@ export async function runProgram(wasm, host, opts = {}) {
     if (e instanceof ExitSignal) return { kind: 'exit', code: e.code };
     return { kind: 'error', error: e, inProgram };
   }
+}
+
+// One run with both streams buffered.  An error ends in exit code 1 and its message
+// follows whatever the program wrote to stderr.
+export async function runToResult(module, profile, opts = {}) {
+  const sink = bufferSink();
+  const host = createHost(profile, { ...opts, sink });
+  const r = await runProgram(module, host, opts);
+  let stderr = sink.text('stderr');
+  let exitCode = 0;
+  if (r.kind === 'exit') exitCode = r.code;
+  else if (r.kind === 'error') {
+    exitCode = 1;
+    stderr += `${r.error && r.error.message !== undefined ? r.error.message : String(r.error)}\n`;
+  }
+  return { stdout: sink.text('stdout'), stderr, exitCode };
+}
+
+// The HTTP answer for a result: its stdout, 200 on a clean exit and 500 otherwise.
+export function textResponse(result) {
+  return new Response(result.stdout, {
+    status: result.exitCode === 0 ? 200 : 500,
+    headers: { 'content-type': 'text/plain; charset=utf-8' },
+  });
 }

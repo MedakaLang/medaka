@@ -251,6 +251,10 @@ inlang-backend-wasm-emit-paramname-test:
 inlang-backend-wasm-emit-strseg-test:
 	./medaka test compiler/backend/wasm_emit_strseg_test.mdk
 
+## The edge loader text of wasm_loader.mdk; no entry imports the sibling.
+inlang-backend-wasm-loader-test:
+	./medaka test compiler/backend/wasm_loader_test.mdk
+
 ## #3908: match-arm self tail calls must lower to musttail. The sibling is
 ## native-only (the claim is about emitted code) and has no other runner.
 inlang-backend-llvm-emit-tail-call-test:

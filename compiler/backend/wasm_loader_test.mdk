@@ -1,0 +1,49 @@
+{- | The text `edgeLoader` and `edgeBytesLoader` produce: only the edge profile
+   gets one, both export `run` and a default `fetch`, and the wasm file name is
+   a JS string literal. -}
+
+import backend.wasm_loader.{edgeLoader, edgeBytesLoader}
+import string.{contains}
+import test.{Expectation, expectAll, expectEqual, expectNone, expectTrue}
+import types.target_profile.{TargetProfile, lookupProfile}
+
+withProfile : String -> (TargetProfile -> Expectation) -> Expectation
+withProfile name k = match lookupProfile name
+  Ok p => k p
+  Err e => expectEqual "a known profile" e
+
+test "only wasmgc/edge has a loader" =
+  expectAll
+    (map
+      (n => withProfile n (p => expectAll [
+        expectNone (edgeLoader p "a.wasm"),
+        expectNone (edgeBytesLoader p "a.wasm"),
+      ]))
+      ["wasmgc/node", "wasmgc/browser-worker", "llvm/native-posix"])
+
+test "the source loader imports the module by source and exports run and fetch" = withProfile
+  "wasmgc/edge"
+  (p => match edgeLoader p "hello.wasm"
+    None => expectEqual "a loader" "none"
+    Some t => expectAll [
+      expectTrue (contains "import source wasmModule from \"./hello.wasm\";" t),
+      expectTrue (contains "export const run" t),
+      expectTrue (contains "export default" t),
+      expectTrue (contains "async fetch(" t),
+    ])
+
+test "the bytes loader reads the sibling file and exports run and fetch" = withProfile
+  "wasmgc/edge"
+  (p => match edgeBytesLoader p "hello.wasm"
+    None => expectEqual "a loader" "none"
+    Some t => expectAll [
+      expectTrue (contains "new URL(\"./hello.wasm\", import.meta.url)" t),
+      expectTrue (contains "export const run" t),
+      expectTrue (contains "export default" t),
+    ])
+
+test "a quote, backslash and newline in the file name are escaped" = withProfile
+  "wasmgc/edge"
+  (p => match edgeLoader p "a\"b\\c\nd.wasm"
+    None => expectEqual "a loader" "none"
+    Some t => expectTrue (contains "\"./a\\\"b\\\\c\\nd.wasm\"" t))

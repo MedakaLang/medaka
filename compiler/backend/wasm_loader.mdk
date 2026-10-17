@@ -1,0 +1,68 @@
+-- The ES-module loader `medaka build --target wasmgc/edge` writes beside the wasm.
+-- Its text is small on purpose: running the program and shaping the response live
+-- in playground/medaka_host.mjs (`runToResult`, `textResponse`), so the only thing
+-- spliced in here is the wasm file name, as a JS string literal.
+--
+-- Two forms, one per way a runtime hands over a `WebAssembly.Module`: `import
+-- source` (workerd, Node 24, Deno; wrangler bundles it) and a read-and-compile of
+-- the sibling file (Bun, which cannot parse `import source`; workerd refuses
+-- runtime compilation).  Both install exactly the edge slice set, never by user
+-- agent, and export `run` and a default `{ fetch }`.
+
+import types.target_profile.{TargetProfile, profileName}
+
+edgeProfileName : String
+edgeProfileName = "wasmgc/edge"
+
+-- A JS string literal for the wasm file name, relative to the loader.
+wasmPathLiteral : String -> String
+wasmPathLiteral wasmFile =
+  let arr = stringToChars ("./" ++ wasmFile)
+  stringConcat (["\""] ++ escapeFrom arr 0 ++ ["\""])
+
+escapeFrom : Array Char -> Int -> List String
+escapeFrom arr i
+  | i >= arrayLength arr = []
+  | otherwise = escapeChar (arrayGetUnsafe i arr) :: escapeFrom arr (i + 1)
+
+escapeChar : Char -> String
+escapeChar c
+  | charCode c == 34 = "\\\""
+  | charCode c == 92 = "\\\\"
+  | charCode c == 10 = "\\n"
+  | charCode c == 13 = "\\r"
+  | charCode c < 32 = stringConcat [
+    "\\u00",
+    stringSlice (charCode c / 16) (charCode c / 16 + 1) "0123456789abcdef",
+    stringSlice (charCode c % 16) (charCode c % 16 + 1) "0123456789abcdef",
+  ]
+  | otherwise = charToStr c
+
+-- The part of the loader both forms share: the profile and the two exports.
+loaderBody : String
+loaderBody =
+  "import { runToResult, textResponse } from \"./medaka_host.mjs\";\n"
+    ++ "const profile = \"\{edgeProfileName}\";\n"
+    ++ "export const run = (opts = {}) => runToResult(wasmModule, profile, opts);\n"
+    ++ "export default {\n"
+    ++ "  async fetch(request) { return textResponse(await run()); },\n"
+    ++ "};\n"
+
+-- The `import source` loader for `wasmFile` (a file name beside the loader), or
+-- `None` for a profile that has no edge loader.
+export
+edgeLoader : TargetProfile -> String -> Option String
+edgeLoader p wasmFile
+  | profileName p == edgeProfileName =
+    Some
+      "import source wasmModule from \{wasmPathLiteral wasmFile};\n\{loaderBody}"
+  | otherwise = None
+
+-- The read-and-compile twin, for runtimes that cannot parse `import source`.
+export
+edgeBytesLoader : TargetProfile -> String -> Option String
+edgeBytesLoader p wasmFile
+  | profileName p == edgeProfileName =
+    Some
+      "import { readFile } from \"node:fs/promises\";\nconst wasmModule = await WebAssembly.compile(await readFile(new URL(\{wasmPathLiteral wasmFile}, import.meta.url)));\n\{loaderBody}"
+  | otherwise = None

@@ -267,12 +267,16 @@ import object from capability slices (`stdout stderr floatfmt math strtod fs fil
 args exit clock entropy stdin`), installs the slices a profile grants
 (`wasmgc/node`, `wasmgc/browser-worker`, `wasmgc/edge`, `wasmgc/wasi-p2`, the
 labels of `compiler/types/target_profile.mdk`), and owns the shims and the flush
-discipline. Three hosts consume it and add only their side of the boundary:
+discipline. Four hosts consume it and add only their side of the boundary:
 `test/wasm/run.js` (Node runner: gates, CLI users; `wasmgc/node` over the real
 filesystem), `playground/worker.js` (runs the USER's compiled program;
 `wasmgc/browser-worker` over a per-run in-memory vfs) and `playground/compile.mjs`
 (runs the COMPILER itself, i.e. `playground.wasm`, on the module's
-`COMPILER_HOST` configuration, which is not a profile). Each used to carry its own
+`COMPILER_HOST` configuration, which is not a profile) and the loader
+`medaka build --target wasmgc/edge` writes beside the wasm (`x.mjs`, plus `x.bytes.mjs` for
+Bun and a copy of the host module; text from `compiler/backend/wasm_loader.mdk`), which exports `run(opts)`
+and a default `{ fetch }` over the host's `runToResult` and `textResponse`: the edge slice set, 200 with
+stdout on exit 0 and 500 otherwise. Each used to carry its own
 copy of the shims; #543 landed where a fix reached two copies of three. The
 copies are gone, and `checkImportKeys` in `playground/medaka_host.mjs` refuses a module whose `env`
 imports name a key no slice lists, and `compiler/types/target_profile_host_test.mdk` checks the host's grants against `target_profile.mdk`. Parts of the
