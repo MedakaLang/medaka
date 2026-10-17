@@ -1,5 +1,5 @@
 # META
-source_lines=1351
+source_lines=1352
 stages=DESUGAR,MARK
 # SOURCE
 -- Checks a lowered program must pass before an emitter writes any of it.  Each
@@ -534,7 +534,9 @@ export
 renderExternRefusal : List ExternFinding -> String
 renderExternRefusal findings = renderExternRefusalUnder !checkedTarget findings
 
--- A refusal is partitioned by what `check` already judged against the target.
+-- A refusal here is a compiler bug: `check` refuses a program that reaches a
+-- built-in its target does not provide, so none arrives after an admitted
+-- check.  It is partitioned by what `check` already judged against the target.
 -- An extern behind a label the profile does not reach (`withheldLabels`) says so
 -- (`withheldExternNote`).  An extern whose labels the profile reaches and whose
 -- row is a ratchet gap is a lowering still owed, by #3666.  Any other finding,
@@ -565,14 +567,13 @@ isRatchetGap WasmBackend GapUnported = True
 isRatchetGap _ _ = False
 
 -- Why an extern the profile withholds reached the lowering of a program that
--- passed the target check.  `check` judges what `main` performs, so it admits
--- a program that names the extern without performing it (a value never
--- applied); a call it failed to see would arrive here the same way, and the
--- lowering cannot tell the two apart, so the note claims neither.
+-- passed the target check.  The check refuses a reached built-in the target
+-- does not provide, so this arrival is a compiler bug by construction; the
+-- note says so rather than blaming the program.
 export
 withheldExternNote : Backend -> String -> List String -> CheckedTarget -> String
 withheldExternNote backend name withheld (CheckedTarget profile _) =
-  "the target `\{profileName profile}` does not grant \{joinWith ", " withheld}, which `\{name}` performs; `check` admits a program that names it without performing it, but the \{backendName backend} backend cannot lower even the name"
+  "the target `\{profileName profile}` does not grant \{joinWith ", " withheld}, which `\{name}` performs; `check` should have refused this program before the \{backendName backend} backend saw it, so this is a bug in the compiler"
 
 -- What `medaka build` checked the program against before lowering: the
 -- selected profile, and each runtime extern's declared labels.
@@ -1467,7 +1468,7 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DFunDef false "isRatchetGap" ((PCon "WasmBackend") (PCon "GapUnported")) (EVar "True"))
 (DFunDef false "isRatchetGap" (PWild PWild) (EVar "False"))
 (DTypeSig true "withheldExternNote" (TyFun (TyCon "Backend") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CheckedTarget") (TyCon "String"))))))
-(DFunDef false "withheldExternNote" ((PVar "backend") (PVar "name") (PVar "withheld") (PCon "CheckedTarget" (PVar "profile") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the target `")) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not grant "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "withheld")))) (ELit (LString ", which `"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` performs; `check` admits a program that names it without performing it, but the "))) (EApp (EVar "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " backend cannot lower even the name"))))
+(DFunDef false "withheldExternNote" ((PVar "backend") (PVar "name") (PVar "withheld") (PCon "CheckedTarget" (PVar "profile") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the target `")) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not grant "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "withheld")))) (ELit (LString ", which `"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` performs; `check` should have refused this program before the "))) (EApp (EVar "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " backend saw it, so this is a bug in the compiler"))))
 (DData Public "CheckedTarget" () ((variant "CheckedTarget" (ConPos (TyCon "TargetProfile") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "checkedTargetOf" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CheckedTarget"))))
 (DFunDef false "checkedTargetOf" ((PVar "profile") (PVar "runtimeDecls")) (EApp (EApp (EVar "CheckedTarget") (EVar "profile")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "externLabels") (EVar "runtimeDecls"))) (EVar "omEmpty"))))
@@ -1880,7 +1881,7 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DFunDef false "isRatchetGap" ((PCon "WasmBackend") (PCon "GapUnported")) (EVar "True"))
 (DFunDef false "isRatchetGap" (PWild PWild) (EVar "False"))
 (DTypeSig true "withheldExternNote" (TyFun (TyCon "Backend") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CheckedTarget") (TyCon "String"))))))
-(DFunDef false "withheldExternNote" ((PVar "backend") (PVar "name") (PVar "withheld") (PCon "CheckedTarget" (PVar "profile") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the target `")) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not grant "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "withheld")))) (ELit (LString ", which `"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` performs; `check` admits a program that names it without performing it, but the "))) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " backend cannot lower even the name"))))
+(DFunDef false "withheldExternNote" ((PVar "backend") (PVar "name") (PVar "withheld") (PCon "CheckedTarget" (PVar "profile") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the target `")) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not grant "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "withheld")))) (ELit (LString ", which `"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` performs; `check` should have refused this program before the "))) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " backend saw it, so this is a bug in the compiler"))))
 (DData Public "CheckedTarget" () ((variant "CheckedTarget" (ConPos (TyCon "TargetProfile") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "checkedTargetOf" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CheckedTarget"))))
 (DFunDef false "checkedTargetOf" ((PVar "profile") (PVar "runtimeDecls")) (EApp (EApp (EVar "CheckedTarget") (EVar "profile")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "externLabels") (EVar "runtimeDecls"))) (EVar "omEmpty"))))

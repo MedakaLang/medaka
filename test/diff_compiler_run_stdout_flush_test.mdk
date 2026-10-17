@@ -26,15 +26,15 @@
    read as separate streams for the same reason — merged, the diagnostic the
    abort path prints would stand in for the program's own output.
 
-   Four fixtures are graded on one engine only, and each has its reason in
+   Two fixtures are graded on one engine only, and each has its reason in
    its own file header. `stack_overflow_depth_guard` and
    `stack_overflow_build` are the same source: under `run` it trips the
    interpreter's synthetic depth guard, and built it exhausts a real stack
    and faults, so each is asked about the engine whose abort path it was
-   written for. `raw_panic_site` calls `assertSnapshot`, a forward-declared
-   primitive no engine implements, to reach one of the interpreter's ~20 raw
-   `panic` call sites; the emitter rejects the same program outright, so
-   there is no binary to compare against.
+   written for. No program `check` admits reaches a raw `panic` site of the
+   interpreter that is not the native `panic` extern, because a name no
+   engine provides is refused at check; that class stays covered through the
+   same `panic` extern by `index_oob`, `panic` and `nonexhaustive_match`.
 
    Why this is not `diff_compiler_run_check_agreement`: that gate pins each
    fixture to one `check` verdict its runtime must agree with, and cannot
@@ -70,7 +70,7 @@ sentinel = "SENTINEL\n"
 -- | The size of the corpus, written down so that a corpus which silently
 -- shrank is red. Growing it is expected: add the row and raise this.
 declaredFixtureCount : Int
-declaredFixtureCount = 8
+declaredFixtureCount = 7
 
 -- Both engines reach the same coded abort and must both still show the
 -- sentinel.
@@ -89,7 +89,6 @@ rows = [
     "stack_overflow_depth_guard",
     Dies (Coded "E-STACK-OVERFLOW") Unexercised sentinel,
   ),
-  ("raw_panic_site", Dies (Coded "E-PANIC") Unexercised sentinel),
   (
     "stack_overflow_build",
     Dies Unexercised (Coded "E-STACK-OVERFLOW") sentinel,

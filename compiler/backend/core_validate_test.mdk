@@ -283,12 +283,11 @@ wasmRefusalUnder profile src =
         (validateExterns WasmBackend [] (lowered src)))
     (checkedUnder profile)
 
--- What a build says of an extern the profile withholds.  `check` admits a
--- program that names it without performing it, and the lowering cannot tell
--- that program from one whose call `check` missed, so the line claims neither.
+-- What a build says of an extern the profile withholds: `check` should have
+-- refused the program, so the line names a compiler bug.
 withheldLine : String -> String -> String -> String -> String
 withheldLine line name labels profile =
-  "\{line}; the target `\{profile}` does not grant \{labels}, which `\{name}` performs; `check` admits a program that names it without performing it, but the wasm backend cannot lower even the name"
+  "\{line}; the target `\{profile}` does not grant \{labels}, which `\{name}` performs; `check` should have refused this program before the wasm backend saw it, so this is a bug in the compiler"
 
 owedLine : String -> String -> String
 owedLine line profile =
