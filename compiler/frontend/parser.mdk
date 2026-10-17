@@ -78,6 +78,8 @@ import frontend.ast.{
   ConPayload(..),
   Variant(..),
   Decl(..),
+  ExternDecl(..),
+  ExternBind(..),
   Attr(..),
   Route(..),
 }
@@ -3140,11 +3142,63 @@ parseExternFor pub TData = defer
   d <- externDataEnd pub name ps t
   deferPure (setDeclNameLoc nameLoc d)
 parseExternFor pub _ = defer
+  s <- getPos
   name <- externName
   expectTok TColon
   ty <- parseTy
+  e <- getPos
+  t <- peekP
+  u <- peek2P
+  binds <- externBindsFor t u
   skipNewlines
-  deferPure (DExtern pub name ty)
+  deferPure
+    (DExtern ExternDecl {
+      edPub = pub,
+      edName = name,
+      edTy = ty,
+      edLoc = locOfSpan s e,
+      edBinds = binds,
+    })
+
+-- The indented `bind` clause lines under an extern's signature, which the
+-- lexer opens as a block of their own (`externClauseBreaks`).
+externBindsFor : Token -> Token -> Parser (List ExternBind)
+externBindsFor TIndent (TIdent "bind") = defer
+  advance
+  binds <- externBindLines
+  expectTok TDedent
+  deferPure binds
+externBindsFor _ _ = deferPure []
+
+externBindLines : Parser (List ExternBind)
+externBindLines = defer
+  b <- externBindP
+  skipNewlines
+  t <- peekP
+  rest <- if t == TDedent then deferPure [] else externBindLines
+  deferPure (b :: rest)
+
+-- `bind <host> "<symbol>"`.  Which hosts and symbols are valid is the
+-- typechecker's question (`types/ffi_bindings.mdk`), so any lowercase host
+-- parses.
+externBindP : Parser ExternBind
+externBindP = defer
+  s <- getPos
+  t <- peekP
+  _ <- if t == TIdent "bind" then advance else failP "expected `bind`"
+  h <- peekP
+  host <- bindHostFor h
+  symbol <- stringLitP
+  e <- getPos
+  deferPure ExternBind {
+    ebHost = host,
+    ebSymbol = symbol,
+    ebLoc = locOfSpan s e,
+  }
+
+bindHostFor : Token -> Parser String
+bindHostFor (TIdent x) = emit x
+bindHostFor _ = failP "expected a host after `bind`, such as `c` or `js`"
 
 -- An extern type has no body: its values come from externs, so a
 -- constructor list or a derived instance has nothing to describe.
@@ -5218,7 +5272,7 @@ declNameTokIdxAt toks (DAttrib _ inner) i =
   declNameTokIdx toks inner i3
 declNameTokIdxAt toks (DTypeSig _ _ _ _) i = tokIdxOrNone toks i
 declNameTokIdxAt toks (DFunDef _ _ _ _ _ _) i = tokIdxOrNone toks i
-declNameTokIdxAt toks (DExtern _ _ _) i =
+declNameTokIdxAt toks (DExtern _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
 declNameTokIdxAt toks (DData { dataOrigin = _ }) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))

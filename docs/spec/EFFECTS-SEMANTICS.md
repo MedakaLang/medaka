@@ -315,6 +315,13 @@ directory as the bare label. Every other `Prefix` label keeps the textual order
 above, the built-in ones without path confinement (`Net`, `Exec`, `FFI`) and
 every user label (`effect Store Prefix`): there `..` is two characters.
 
+The `FFI` parameter has a grammar of its own at a declaration: in an extern's
+own row it is `"HOST"` or `"HOST/LIBRARY"` with HOST `c` or `js` and a non-empty
+LIBRARY, and each atom must have a `bind` clause for its host. On any other
+signature, and in a policy, the parameter remains a `Prefix` element compared as
+text, so `"c*"` admits `"c"` and `"c/lib"`, `"c"` admits only `"c"`, and `"c/*"`
+does not admit `"c"`.
+
 The runtime confines each call against its own grant, the element the checker
 derived at the call site, and every enclosing closed declared file row. These
 are separate checks: both the call's grant and each declared bound must admit
@@ -1329,9 +1336,9 @@ order: a performed `<IO>` fits a bound that names every label of the join (and, 
 join is empty, only a bound that names `IO` itself), and a policy given to `check-policy`,
 which has no target, admits an `<IO>` entry when it allows all eleven. Because the
 typechecker already bounds `IO` by the selected profile, a profile's target check gates
-only the host labels and `FFI`. `IO` is admitted exactly when the selected profile's `IO` join is non-empty; on `wasmgc/wasi-p2`, which grants nothing, an `IO` atom is refused ("does not grant any host label"). `FFI` ([#2071](https://github.com/MedakaLang/medaka/issues/2071))
+only the host labels and `FFI`. `IO` is admitted exactly when the selected profile's `IO` join is non-empty; on `wasmgc/wasi-p2`, which grants no host label (only `FFI`), an `IO` atom is refused ("does not grant any host label"). `FFI` ([#2071](https://github.com/MedakaLang/medaka/issues/2071))
 is deliberately EXCLUDED from this join by design — `<IO>` does not subsume
-`<FFI>` — because FFI crosses a trust boundary the IO alias is not meant to
+`<FFI "c*">` — because FFI crosses a trust boundary the IO alias is not meant to
 paper over; see [`CAPABILITY-PLATFORM.md`](../design/CAPABILITY-PLATFORM.md) §8
 and [`KNOWN-GAPS.md`](../KNOWN-GAPS.md) for why that boundary matters.
 

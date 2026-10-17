@@ -1,5 +1,5 @@
 # META
-source_lines=345
+source_lines=346
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/types/effect_policy.mdk — does an entry's invocation summary fit a
@@ -11,6 +11,7 @@ import frontend.ast.{
   EffParamTy(..),
   TyConOrigin(..),
   Decl(..),
+  ExternDecl(..),
   Expr(..),
   Arm(..),
   Guard(..),
@@ -255,7 +256,7 @@ concatMapCP f (x :: xs) = f x ++ concatMapCP f xs
 -- A top-level name (DFunDef or DExtern), peeling DAttrib.
 topName : Decl -> Option String
 topName (DFunDef _ n _ _ _ _) = Some n
-topName (DExtern _ n _) = Some n
+topName (DExtern (ExternDecl { edName = n, ... })) = Some n
 topName (DAttrib _ d) = topName d
 topName _ = None
 
@@ -348,7 +349,7 @@ firstWithEffect effTable label (c :: rest) =
   else
     firstWithEffect effTable label rest
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true) (mem "TyConOrigin" true) (mem "Decl" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "LetBind" true) (mem "FunClause" true) (mem "FieldAssign" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true) (mem "TyConOrigin" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "LetBind" true) (mem "FunClause" true) (mem "FieldAssign" true))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authSub" false) (mem "authVars" false) (mem "authHasVars" false) (mem "authvarDefaultName" false) (mem "authJoinAll" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "effLabelOrigin" false) (mem "atomLabelOf" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "atomsUnion" false) (mem "renderAtom" false) (mem "Atom" true) (mem "effrowLabels" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "normalize" false))))
@@ -443,7 +444,7 @@ firstWithEffect effTable label (c :: rest) =
 (DFunDef false "concatMapCP" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "concatMapCP") (EVar "f")) (EVar "xs"))))
 (DTypeSig false "topName" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "topName" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild)) (EApp (EVar "Some") (EVar "n")))
-(DFunDef false "topName" ((PCon "DExtern" PWild (PVar "n") PWild)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "topName" ((PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n"))) true))) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "topName" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topName") (EVar "d")))
 (DFunDef false "topName" (PWild) (EVar "None"))
 (DTypeSig false "fnBody" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -477,7 +478,7 @@ firstWithEffect effTable label (c :: rest) =
 (DFunDef false "firstWithEffect" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "firstWithEffect" ((PVar "effTable") (PVar "label") (PCons (PVar "c") (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "fnHasEffect") (EVar "effTable")) (EVar "c")) (EVar "label")) (EApp (EVar "Some") (EVar "c")) (EApp (EApp (EApp (EVar "firstWithEffect") (EVar "effTable")) (EVar "label")) (EVar "rest"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true) (mem "TyConOrigin" true) (mem "Decl" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "LetBind" true) (mem "FunClause" true) (mem "FieldAssign" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true) (mem "TyConOrigin" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "LetBind" true) (mem "FunClause" true) (mem "FieldAssign" true))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authSub" false) (mem "authVars" false) (mem "authHasVars" false) (mem "authvarDefaultName" false) (mem "authJoinAll" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "effLabelOrigin" false) (mem "atomLabelOf" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "atomsUnion" false) (mem "renderAtom" false) (mem "Atom" true) (mem "effrowLabels" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "normalize" false))))
@@ -572,7 +573,7 @@ firstWithEffect effTable label (c :: rest) =
 (DFunDef false "concatMapCP" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "concatMapCP") (EVar "f")) (EVar "xs"))))
 (DTypeSig false "topName" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "topName" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild)) (EApp (EVar "Some") (EVar "n")))
-(DFunDef false "topName" ((PCon "DExtern" PWild (PVar "n") PWild)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "topName" ((PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n"))) true))) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "topName" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topName") (EVar "d")))
 (DFunDef false "topName" (PWild) (EVar "None"))
 (DTypeSig false "fnBody" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))

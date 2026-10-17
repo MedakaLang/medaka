@@ -198,7 +198,7 @@ test "check-policy rejects an Env Set token missing HOME" =
 
 test "IO does not subsume an FFI-performing body" = expectCheckReject (fixture
   "ffi_io_reject.mdk") [
-  "performs <FFI \"libcurl*\">",
+  "performs <FFI \"c/libcurl*\">",
 ]
 
 test "IO still subsumes an Exec-performing body" =
@@ -259,8 +259,9 @@ test "an extern row missing FFI is rejected even when the row is non-empty" = ex
     "foreign declaration `ffiFetch` does not name the `FFI` effect in its result row",
   ]
 
-test "an empty caller row does not subsume a declared FFI row" =
-  expectCheckReject (fixture "ffi_stamp_bare_reject.mdk") ["performs <FFI>"]
+test "an empty caller row does not subsume a declared FFI row" = expectCheckReject
+  (fixture "ffi_stamp_bare_reject.mdk")
+  ["performs <FFI \"c\">"]
 
 test "a caller explicitly naming FFI accepts a declared FFI row" =
   expectCheckAccept (fixture "ffi_stamp_bare_accept.mdk")
@@ -353,9 +354,7 @@ test "a nullary extern is rejected because it has no row for FFI" = expectCheckR
 
 test "a builtin name with an incompatible signature is rejected" = expectCheckReject
   (fixture "ffi_builtin_shadow_reject.mdk")
-  [
-    "foreign declaration `log` redeclares a built-in at a type it does not have",
-  ]
+  ["foreign declaration `log` redeclares a built-in at a type it does not have"]
 
 test "an extern cannot claim the runtime's mdk_ symbol namespace" = expectCheckReject
   (fixture "ffi_reserved_prefix_reject.mdk")
@@ -390,6 +389,100 @@ test "an alias's Effect argument is the row an extern declares" = expectAll [
     "foreign declaration `cCall` does not name the `FFI` effect in its result row",
   ],
 ]
+
+-- A declaration refusal pinned by its line, its message and its code.
+expectFfiRefusal : String -> Int -> String -> String -> <Exec, IO> Expectation
+expectFfiRefusal name line code msg = expectAll [
+  expectCheckRejectLine (fixture name) ["\{name}:\{intToString line}:", msg],
+  expectVerbExitStartsWithAndContains
+    "check"
+    ["--json", fixture name]
+    1
+    "{"
+    ["\"code\":\"\{code}\""],
+]
+
+test "a declaration bound to both hosts names one row atom per host" =
+  expectCheckAccept (fixture "ffi_bind_dual_accept.mdk")
+
+test "a js row on a declaration bound only to C is refused" =
+  expectFfiRefusal
+    "ffi_bind_js_unbound_reject.mdk"
+    3
+    "T-FFI-UNBOUND-HOST"
+    "names the `js` host in its result row but has no `js` binding"
+
+test "a host bound twice is refused at the second clause" =
+  expectFfiRefusal
+    "ffi_bind_duplicate_host_reject.mdk"
+    5
+    "T-FFI-DUPLICATE-HOST"
+    "binds the `c` host more than once"
+
+test "a binding to an unknown host is refused" =
+  expectFfiRefusal
+    "ffi_bind_unknown_host_reject.mdk"
+    4
+    "T-FFI-UNKNOWN-HOST"
+    "binds the unknown host `rust`"
+
+test "a bare FFI row is refused with a fix-it naming the c host" =
+  expectFfiRefusal
+    "ffi_host_bare_reject.mdk"
+    3
+    "T-FFI-NO-HOST"
+    "write `<FFI \"c\">` for a C function"
+
+test "an FFI library with no host is refused with a fix-it under c" =
+  expectFfiRefusal
+    "ffi_host_library_only_reject.mdk"
+    2
+    "T-FFI-NO-HOST"
+    "write `<FFI \"c/libm\">` for a C library"
+
+test "a bound C symbol must be a C identifier" =
+  expectFfiRefusal
+    "ffi_bind_c_symbol_reject.mdk"
+    3
+    "T-FFI-C-SYMBOL"
+    "binds the C symbol `2fast`, which is not a C identifier"
+
+test "a bound JavaScript name must be a JavaScript identifier" =
+  expectFfiRefusal
+    "ffi_bind_js_name_reject.mdk"
+    3
+    "T-FFI-JS-NAME"
+    "binds the JavaScript name `fetch-text`"
+
+test "a clean name bound to an mdk_ C symbol is refused" =
+  expectFfiRefusal
+    "ffi_bind_reserved_symbol_reject.mdk"
+    5
+    "T-FFI-RESERVED-NAME"
+    "its C symbol `mdk_nil` is in the `mdk_` prefix"
+
+test "an mdk_ name bound to a clean C symbol is accepted" =
+  expectCheckAccept (fixture "ffi_bind_reserved_name_accept.mdk")
+
+test "a built-in redeclaration takes no bind clause" =
+  expectFfiRefusal
+    "ffi_bind_builtin_reject.mdk"
+    4
+    "T-FFI-BUILTIN-BIND"
+    "redeclares a built-in, which always runs the built-in's own implementation"
+
+test "a c row on a declaration bound only to js is refused" =
+  expectFfiRefusal
+    "ffi_bind_c_unbound_reject.mdk"
+    3
+    "T-FFI-UNBOUND-HOST"
+    "names the `c` host in its result row but has no `c` binding"
+
+test "a declaration bound to both hosts may name only c in its row" =
+  expectCheckAccept (fixture "ffi_bind_dual_row_c_only_accept.mdk")
+
+test "a return-position alias row names the FFI host (#3638)" =
+  expectCheckAccept (fixture "ffi_alias_row_accept.mdk")
 
 -- #3463/#3468: the invocation summary.  An entry is charged for what the host
 -- can reach through it, read by variance; each charged entry has a control
@@ -545,7 +638,7 @@ test "the manifest renders a set as an array of its elements" = expectAll [
   expectManifest
     "product_set_accept.mdk"
     "both"
-    "[package.capabilities]\nFFI = true\nWeb = [{ host = \"a.com/*\", method = [\"GET\"] }, { host = \"b.com/*\", method = [\"POST\"] }]",
+    "[package.capabilities]\nFFI = \"c*\"\nWeb = [{ host = \"a.com/*\", method = [\"GET\"] }, { host = \"b.com/*\", method = [\"POST\"] }]",
 ]
 
 test "check-policy reads every entry of a label, in either order" = expectAll [

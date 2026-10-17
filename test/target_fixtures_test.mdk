@@ -257,6 +257,157 @@ test "target_fixtures: a project's target is found from any directory and read o
     targetCase "profile_not_string_run" "run" [] "profile_not_string/main.mdk",
   ]
 
+-- `T-TARGET-NO-BINDING`: an extern the program reaches, with no binding for
+-- the host the profile calls foreign code through, is refused at its
+-- declaration, whether it is called, only named as a value, or declared in an
+-- imported module.  Under `run` the binding refusal is the verdict, and the
+-- entry's capability refusal is not reported beside it (`run_refuses_ffi`).
+test "target_fixtures: a reached extern needs a binding for the target's host" = expectEach
+  [
+    targetCase
+      "node_refuses_ffi_c_only"
+      "check"
+      ["--target", "wasmgc/node"]
+      "ffi_entry.mdk",
+    targetCase
+      "native_refuses_ffi_js_only"
+      "check"
+      ["--target", "native"]
+      "ffi_js_only.mdk",
+    targetCase "run_refuses_ffi_value_only" "run" [] "ffi_value_only.mdk",
+    targetCase
+      "native_accepts_ffi_dual"
+      "check"
+      ["--target", "native"]
+      "ffi_dual.mdk",
+    targetCase
+      "node_accepts_ffi_dual"
+      "check"
+      ["--target", "wasmgc/node"]
+      "ffi_dual.mdk",
+    targetCase
+      "native_accepts_ffi_js_unreached"
+      "check"
+      ["--target", "native"]
+      "ffi_js_unreached.mdk",
+    targetCase
+      "wasm_refuses_ffi_imported"
+      "check"
+      ["--target", "wasm"]
+      "ffi_imported/main.mdk",
+    targetCase
+      "wasm_refuses_ffi_imported_qualified"
+      "check"
+      ["--target", "wasm"]
+      "ffi_imported/qualified.mdk",
+    targetCase
+      "wasm_json_refuses_ffi_imported"
+      "check"
+      ["--json", "--target", "wasm"]
+      "ffi_imported/main.mdk",
+    targetCase
+      "wasm_refuses_ffi_member_alias"
+      "check"
+      ["--target", "wasm"]
+      "ffi_imported/member_alias.mdk",
+    targetCase
+      "native_refuses_ffi_member_alias_js"
+      "check"
+      ["--target", "native"]
+      "ffi_imported/member_alias_js.mdk",
+    targetCase
+      "run_refuses_ffi_member_alias_value"
+      "run"
+      []
+      "ffi_imported/member_alias_value.mdk",
+    targetCase
+      "wasm_refuses_ffi_reexport_alias"
+      "check"
+      ["--target", "wasm"]
+      "ffi_imported/reexport_alias.mdk",
+    targetCase
+      "wasm_refuses_ffi_wild"
+      "check"
+      ["--target", "wasm"]
+      "ffi_imported/wild.mdk",
+    targetCase
+      "native_accepts_ffi_shadow_param"
+      "check"
+      ["--target", "native"]
+      "ffi_shadow_param.mdk",
+    targetCase
+      "node_accepts_ffi_shadow_local"
+      "check"
+      ["--target", "wasmgc/node"]
+      "ffi_shadow_local.mdk",
+    targetCase
+      "node_accepts_ffi_same_name"
+      "check"
+      ["--target", "wasmgc/node"]
+      "ffi_same_name/main.mdk",
+    targetCase
+      "node_refuses_ffi_impl"
+      "check"
+      ["--target", "wasmgc/node"]
+      "ffi_impl.mdk",
+    targetCase
+      "node_refuses_ffi_default"
+      "check"
+      ["--target", "wasmgc/node"]
+      "ffi_default.mdk",
+    targetCase
+      "node_refuses_ffi_letgroup"
+      "check"
+      ["--target", "wasmgc/node"]
+      "ffi_letgroup.mdk",
+    targetCase
+      "node_refuses_ffi_two"
+      "check"
+      ["--target", "wasmgc/node"]
+      "ffi_two.mdk",
+    targetCase
+      "run_accepts_catalog_redecl"
+      "run"
+      ["--allow-internal"]
+      "ffi_catalog_redecl.mdk",
+    targetCase
+      "node_accepts_catalog_redecl"
+      "check"
+      ["--allow-internal", "--target", "wasmgc/node"]
+      "ffi_catalog_redecl.mdk",
+    targetCase
+      "browser_accepts_ffi_dual"
+      "check"
+      ["--target", "wasmgc/browser-worker"]
+      "ffi_dual.mdk",
+    targetCase
+      "edge_accepts_ffi_dual"
+      "check"
+      ["--target", "wasmgc/edge"]
+      "ffi_dual.mdk",
+    targetCase
+      "run_node_refuses_ffi_js_only"
+      "run"
+      ["--target", "wasmgc/node"]
+      "ffi_js_only.mdk",
+    emitterCase "seam_refuses_ffi_c_only" "wasmgc/node" "ffi_entry.mdk",
+    targetCase
+      "wall_saturated"
+      "check"
+      ["--target", "wasm"]
+      "ffi_wall_saturated.mdk",
+    targetCase
+      "wall_value_position_hof"
+      "check"
+      ["--target", "wasm"]
+      "ffi_wall_hof.mdk",
+    targetCase
+      "wall_bare_toplevel_reference"
+      "check"
+      ["--target", "wasm"]
+      "ffi_wall_bare.mdk",
+  ]
+
 test "target_fixtures: a module label spelled FFI does not label a foreign call" = expectEach
   [
     targetCase

@@ -13,6 +13,6 @@
 -- bare `--allow Net` (⊤) must admit.
 effect Net Prefix
 
-extern netGet : (url : String) -> <FFI, Net url> String
+extern netGet : (url : String) -> <FFI "c", Net url> String
 
 transform req = (u => netGet "idp.example.com/api")

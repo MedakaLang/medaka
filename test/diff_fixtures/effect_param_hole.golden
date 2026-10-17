@@ -15,6 +15,7 @@ RPAREN
 ARROW
 LT
 UPPER "FFI"
+STRING "c"
 COMMA
 UPPER "Net"
 IDENT "url"
@@ -30,6 +31,7 @@ UPPER "Net"
 STRING "a.com/*"
 COMMA
 UPPER "FFI"
+STRING "c*"
 GT
 UPPER "String"
 NEWLINE
@@ -55,8 +57,8 @@ NEWLINE
 EOF
 === AST ===
 effect Net Prefix
-extern netGet : (url : String) -> <FFI, Net url> String
-fetch : Unit -> <Net "a.com/*", FFI> String
+extern netGet : (url : String) -> <FFI "c", Net url> String
+fetch : Unit -> <Net "a.com/*", FFI "c*"> String
 fetch _ = netGet "a.com/foo"
 main : <IO> Unit
 main = println "effect hole ok"

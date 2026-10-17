@@ -1,0 +1,8 @@
+-- moda.mdk's `helper` name, bound to other symbols at the same signature.
+extern helper : Int -> <FFI "c", FFI "js"> Int
+  bind c "stub_b_helper"
+  bind js "jsBHelper"
+
+export
+useB : Int -> <FFI "c", FFI "js"> Int
+useB x = helper x

@@ -1,0 +1,9 @@
+-- A `js`-only extern called only from a helper nothing calls: it is not
+-- reached, so a native target admits the program.
+extern jsAdd : Int -> Int -> <FFI "js"> Int
+  bind js "add"
+
+unused : Int -> <FFI "js"> Int
+unused x = jsAdd x 1
+
+main = println 42

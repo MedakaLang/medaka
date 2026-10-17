@@ -124,7 +124,7 @@ cell2 w combined = graded (writeFile
 
 builtinNameSrc : String
 builtinNameSrc =
-  "extern bitAnd : Int -> Int -> <> Int\n\nmain : <IO, FFI> Unit\nmain = println (bitAnd 255 240)\n"
+  "extern bitAnd : Int -> Int -> <> Int\n\nmain : <IO, FFI \"c*\"> Unit\nmain = println (bitAnd 255 240)\n"
 
 -- # Cell 3: real library linkage via medaka.toml [foreign-libraries]. The
 -- library is a genuine static archive named only by the manifest; the search
@@ -262,15 +262,15 @@ dupFiles = [
   ("medaka.toml", "[package]\nname = \"ffi_dup_extern\"\n"),
   (
     "libx.mdk",
-    "export\nextern cDouble : Int -> <FFI> Int\nexport\nuseX : Int -> <FFI> Int\nuseX x = cDouble x\n",
+    "export\nextern cDouble : Int -> <FFI \"c\"> Int\nexport\nuseX : Int -> <FFI \"c*\"> Int\nuseX x = cDouble x\n",
   ),
   (
     "liby.mdk",
-    "export\nextern cDouble : Float -> <FFI> Int\nexport\nuseY : Float -> <FFI> Int\nuseY x = cDouble x\n",
+    "export\nextern cDouble : Float -> <FFI \"c\"> Int\nexport\nuseY : Float -> <FFI \"c*\"> Int\nuseY x = cDouble x\n",
   ),
   (
     "main.mdk",
-    "import libx.{useX}\nimport liby.{useY}\n\nmain : <IO, FFI> Unit\nmain =\n  let _ = println (useX 21)\n  println (useY 4.0)\n",
+    "import libx.{useX}\nimport liby.{useY}\n\nmain : <IO, FFI \"c*\"> Unit\nmain =\n  let _ = println (useX 21)\n  println (useY 4.0)\n",
   ),
 ]
 
@@ -297,15 +297,15 @@ shareFiles = [
   ("medaka.toml", "[package]\nname = \"ffi_share_extern\"\n"),
   (
     "libp.mdk",
-    "export\nextern ffiCharNext : Int -> <FFI> Int\nexport\nuseP : Int -> <FFI> Int\nuseP x = ffiCharNext x\n",
+    "export\nextern ffiCharNext : Int -> <FFI \"c\"> Int\nexport\nuseP : Int -> <FFI \"c*\"> Int\nuseP x = ffiCharNext x\n",
   ),
   (
     "libq.mdk",
-    "export\nextern ffiCharNext : Int -> <FFI> Int\nexport\nuseQ : Int -> <FFI> Int\nuseQ x = ffiCharNext x\n",
+    "export\nextern ffiCharNext : Int -> <FFI \"c\"> Int\nexport\nuseQ : Int -> <FFI \"c*\"> Int\nuseQ x = ffiCharNext x\n",
   ),
   (
     "main.mdk",
-    "import libp.{useP}\nimport libq.{useQ}\n\nmain : <IO, FFI> Unit\nmain =\n  let _ = println (useP 21)\n  println (useQ 5)\n",
+    "import libp.{useP}\nimport libq.{useQ}\n\nmain : <IO, FFI \"c*\"> Unit\nmain =\n  let _ = println (useP 21)\n  println (useQ 5)\n",
   ),
 ]
 
@@ -348,7 +348,7 @@ ffiBuildRun dir name src combined = do
 
 boolInSrc : String
 boolInSrc =
-  "extern cTruthy : Unit -> <FFI> Bool\nextern cFalsy : Unit -> <FFI> Bool\nextern cOne : Unit -> <FFI> Bool\n\nviaMatch : Bool -> String\nviaMatch b = match b\n  True => \"match:True\"\n  False => \"match:False\"\n\nmain : <IO, FFI> Unit\nmain =\n  let _ = println (if cTruthy () then \"if:True\" else \"if:False\")\n  let _ = println (viaMatch (cTruthy ()))\n  let _ = println (cTruthy ())\n  let _ = println (if cFalsy () then \"if:True\" else \"if:False\")\n  let _ = println (viaMatch (cFalsy ()))\n  let _ = println (if cOne () then \"if:True\" else \"if:False\")\n  println (viaMatch (cOne ()))\n"
+  "extern cTruthy : Unit -> <FFI \"c\"> Bool\nextern cFalsy : Unit -> <FFI \"c\"> Bool\nextern cOne : Unit -> <FFI \"c\"> Bool\n\nviaMatch : Bool -> String\nviaMatch b = match b\n  True => \"match:True\"\n  False => \"match:False\"\n\nmain : <IO, FFI \"c*\"> Unit\nmain =\n  let _ = println (if cTruthy () then \"if:True\" else \"if:False\")\n  let _ = println (viaMatch (cTruthy ()))\n  let _ = println (cTruthy ())\n  let _ = println (if cFalsy () then \"if:True\" else \"if:False\")\n  let _ = println (viaMatch (cFalsy ()))\n  let _ = println (if cOne () then \"if:True\" else \"if:False\")\n  println (viaMatch (cOne ()))\n"
 
 cell7 : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
 cell7 w combined = graded (ffiBuildRun
@@ -365,7 +365,7 @@ cell7 w combined = graded (ffiBuildRun
 
 charInSrc : String
 charInSrc =
-  "extern cCharA : Unit -> <FFI> Char\n\nviaMatch : Char -> String\nviaMatch c = match c\n  'A' => \"match:A\"\n  _ => \"match:other\"\n\nmain : <IO, FFI> Unit\nmain =\n  let _ = println (if cCharA () == 'A' then \"if:A\" else \"if:other\")\n  let _ = println (viaMatch (cCharA ()))\n  println (cCharA ())\n"
+  "extern cCharA : Unit -> <FFI \"c\"> Char\n\nviaMatch : Char -> String\nviaMatch c = match c\n  'A' => \"match:A\"\n  _ => \"match:other\"\n\nmain : <IO, FFI \"c*\"> Unit\nmain =\n  let _ = println (if cCharA () == 'A' then \"if:A\" else \"if:other\")\n  let _ = println (viaMatch (cCharA ()))\n  println (cCharA ())\n"
 
 cell8 : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
 cell8 w combined = graded (ffiBuildRun
@@ -393,7 +393,7 @@ test "diff_compiler_llvm_ffi cells 5-8: one C symbol one signature, identical sh
 
 charOobSrc : String -> String
 charOobSrc cfn =
-  "extern \{cfn} : Unit -> <FFI> Char\n\nmain : <IO, FFI> Unit\nmain = println (\{cfn} ())\n"
+  "extern \{cfn} : Unit -> <FFI \"c\"> Char\n\nmain : <IO, FFI \"c*\"> Unit\nmain = println (\{cfn} ())\n"
 
 charOobExpect : String -> Int -> String -> String -> Expectation
 charOobExpect cfn code out err =
@@ -439,7 +439,7 @@ charOobCheck w combined cfn = graded (writeFile
 
 copybackSrc : String
 copybackSrc =
-  "import array.{get}\n\nextern ffiFill99 : Array Int -> Int -> <FFI> Unit\nextern ffiSumInts : Array Int -> Int -> <FFI> Int\n\nshow0 : Array Int -> String\nshow0 a = match get 0 a\n  Some v => intToString v\n  None => \"none\"\n\nmain : <IO, FFI> Unit\nmain =\n  let a = [|1, 2, 3|]\n  let _ = println (ffiSumInts a 3)\n  let _ = println (show0 a)\n  let _ = println (ffiSumInts a 3)\n  let _ = ffiFill99 a 3\n  let _ = println (show0 a)\n  println (ffiSumInts a 3)\n"
+  "import array.{get}\n\nextern ffiFill99 : Array Int -> Int -> <FFI \"c\"> Unit\nextern ffiSumInts : Array Int -> Int -> <FFI \"c\"> Int\n\nshow0 : Array Int -> String\nshow0 a = match get 0 a\n  Some v => intToString v\n  None => \"none\"\n\nmain : <IO, FFI \"c*\"> Unit\nmain =\n  let a = [|1, 2, 3|]\n  let _ = println (ffiSumInts a 3)\n  let _ = println (show0 a)\n  let _ = println (ffiSumInts a 3)\n  let _ = ffiFill99 a 3\n  let _ = println (show0 a)\n  println (ffiSumInts a 3)\n"
 
 copybackExpect : String
 copybackExpect = "6\n1\n6\n99\n297"
@@ -467,15 +467,15 @@ copybackCheck w combined = graded (writeFile
 
 aliasParamSrc : String
 aliasParamSrc =
-  "type FfiCharArg = Char\n\nextern ffiCharNext : FfiCharArg -> <FFI> Char\n\nmain : <IO, FFI> Unit\nmain = println (ffiCharNext 'a')\n"
+  "type FfiCharArg = Char\n\nextern ffiCharNext : FfiCharArg -> <FFI \"c\"> Char\n\nmain : <IO, FFI \"c*\"> Unit\nmain = println (ffiCharNext 'a')\n"
 
 aliasReturnSrc : String
 aliasReturnSrc =
-  "type FfiCharRet = Char\n\nextern ffiCharNext : Char -> <FFI> FfiCharRet\n\nmain : <IO, FFI> Unit\nmain = println (ffiCharNext 'a')\n"
+  "type FfiCharRet = Char\n\nextern ffiCharNext : Char -> <FFI \"c\"> FfiCharRet\n\nmain : <IO, FFI \"c*\"> Unit\nmain = println (ffiCharNext 'a')\n"
 
 aliasWholeSrc : String
 aliasWholeSrc =
-  "type FfiCharCall = Char -> <FFI> Char\n\nextern ffiCharNext : FfiCharCall\n\nmain : <IO, FFI> Unit\nmain = println (ffiCharNext 'a')\n"
+  "type FfiCharCall = Char -> <FFI \"c\"> Char\n\nextern ffiCharNext : FfiCharCall\n\nmain : <IO, FFI \"c*\"> Unit\nmain = println (ffiCharNext 'a')\n"
 
 aliasCase : String ->
   String ->
@@ -505,7 +505,7 @@ aliasCase w combined kind src = graded (writeFile
 
 catalogSrc : String
 catalogSrc =
-  "type FfiWord = Int\n\nextern bitAnd : FfiWord -> FfiWord -> <> FfiWord\n\nmain : <IO, FFI> Unit\nmain = println (bitAnd 255 240)\n"
+  "type FfiWord = Int\n\nextern bitAnd : FfiWord -> FfiWord -> <> FfiWord\n\nmain : <IO, FFI \"c*\"> Unit\nmain = println (bitAnd 255 240)\n"
 
 ffiDeclares : String -> String -> Bool
 ffiDeclares ir sym =
@@ -585,7 +585,7 @@ ffiBuildBin w combined name src = do
 
 stringValidSrc : String
 stringValidSrc =
-  "extern ffiStringNull : Unit -> <FFI> String\nextern ffiStringAscii : Unit -> <FFI> String\nextern ffiStringTwo : Unit -> <FFI> String\nextern ffiStringThree : Unit -> <FFI> String\nextern ffiStringFour : Unit -> <FFI> String\n\nmain : <IO, FFI> Unit\nmain =\n  let _ = println (\"null:\" ++ ffiStringNull ())\n  let _ = println (ffiStringAscii ())\n  let _ = println (ffiStringTwo ())\n  let _ = println (ffiStringThree ())\n  println (ffiStringFour ())\n"
+  "extern ffiStringNull : Unit -> <FFI \"c\"> String\nextern ffiStringAscii : Unit -> <FFI \"c\"> String\nextern ffiStringTwo : Unit -> <FFI \"c\"> String\nextern ffiStringThree : Unit -> <FFI \"c\"> String\nextern ffiStringFour : Unit -> <FFI \"c\"> String\n\nmain : <IO, FFI \"c*\"> Unit\nmain =\n  let _ = println (\"null:\" ++ ffiStringNull ())\n  let _ = println (ffiStringAscii ())\n  let _ = println (ffiStringTwo ())\n  let _ = println (ffiStringThree ())\n  println (ffiStringFour ())\n"
 
 stringValidExpect : String
 stringValidExpect = "null:\nASCII\n¢\n€\n😀"
@@ -602,7 +602,7 @@ cell13Valid w combined = graded (ffiBuildBin
 
 stringBadSrc : String -> String
 stringBadSrc sfn =
-  "extern \{sfn} : Unit -> <FFI> String\n\nmain : <IO, FFI> Unit\nmain = println (\{sfn} ())\n"
+  "extern \{sfn} : Unit -> <FFI \"c\"> String\n\nmain : <IO, FFI \"c*\"> Unit\nmain = println (\{sfn} ())\n"
 
 stringBadNeedles : List String
 stringBadNeedles = [
@@ -639,7 +639,7 @@ cell13Bad w combined sfn = graded (ffiBuildBin
 
 fixedWidthSrc : String
 fixedWidthSrc =
-  "import u8\nimport u16\nimport u32\nimport u64\nimport i32\nimport i64\n\nextern ffiFwU8 : U8 -> <FFI> U8\nextern ffiFwU16 : U16 -> <FFI> U16\nextern ffiFwU32 : U32 -> <FFI> U32\nextern ffiFwI32 : I32 -> <FFI> I32\nextern ffiFwU64 : U64 -> <FFI> U64\nextern ffiFwI64 : I64 -> <FFI> I64\nextern ffiFwU32Max : Unit -> <FFI> U32\nextern ffiFwI32Min : Unit -> <FFI> I32\nextern ffiFwU64Max : Unit -> <FFI> U64\nextern ffiFwI64Min : Unit -> <FFI> I64\n\nmain : <IO, FFI> Unit\nmain =\n  let _ = println (ffiFwU8 255)\n  let _ = println (ffiFwU16 65535)\n  let _ = println (ffiFwU32 4294967295)\n  let _ = println (ffiFwI32 (-2147483648))\n  let _ = println (ffiFwI32 2147483647)\n  let _ = println (ffiFwI32 (-1))\n  let _ = println (ffiFwU64 18446744073709551615)\n  let _ = println (ffiFwI64 (-9223372036854775808))\n  let _ = println (ffiFwI64 9223372036854775807)\n  let _ = println (ffiFwU32Max ())\n  let _ = println (ffiFwI32Min ())\n  let _ = println (ffiFwU64Max ())\n  let _ = println (ffiFwI64Min ())\n  println (ffiFwI64Min () < 0)\n"
+  "import u8\nimport u16\nimport u32\nimport u64\nimport i32\nimport i64\n\nextern ffiFwU8 : U8 -> <FFI \"c\"> U8\nextern ffiFwU16 : U16 -> <FFI \"c\"> U16\nextern ffiFwU32 : U32 -> <FFI \"c\"> U32\nextern ffiFwI32 : I32 -> <FFI \"c\"> I32\nextern ffiFwU64 : U64 -> <FFI \"c\"> U64\nextern ffiFwI64 : I64 -> <FFI \"c\"> I64\nextern ffiFwU32Max : Unit -> <FFI \"c\"> U32\nextern ffiFwI32Min : Unit -> <FFI \"c\"> I32\nextern ffiFwU64Max : Unit -> <FFI \"c\"> U64\nextern ffiFwI64Min : Unit -> <FFI \"c\"> I64\n\nmain : <IO, FFI \"c*\"> Unit\nmain =\n  let _ = println (ffiFwU8 255)\n  let _ = println (ffiFwU16 65535)\n  let _ = println (ffiFwU32 4294967295)\n  let _ = println (ffiFwI32 (-2147483648))\n  let _ = println (ffiFwI32 2147483647)\n  let _ = println (ffiFwI32 (-1))\n  let _ = println (ffiFwU64 18446744073709551615)\n  let _ = println (ffiFwI64 (-9223372036854775808))\n  let _ = println (ffiFwI64 9223372036854775807)\n  let _ = println (ffiFwU32Max ())\n  let _ = println (ffiFwI32Min ())\n  let _ = println (ffiFwU64Max ())\n  let _ = println (ffiFwI64Min ())\n  println (ffiFwI64Min () < 0)\n"
 
 fixedWidthExpect : String
 fixedWidthExpect =
@@ -690,7 +690,7 @@ test "diff_compiler_llvm_ffi cells 13-14: inbound String valid and malformed UTF
 
 intRangeSrc : String
 intRangeSrc =
-  "extern ffiIntLowest : Unit -> <FFI> Int\nextern ffiIntTooBig : Unit -> <FFI> Int\n\nmain : <IO, FFI> Unit\nmain =\n  let _ = println (ffiIntLowest ())\n  println (ffiIntTooBig ())\n"
+  "extern ffiIntLowest : Unit -> <FFI \"c\"> Int\nextern ffiIntTooBig : Unit -> <FFI \"c\"> Int\n\nmain : <IO, FFI \"c*\"> Unit\nmain =\n  let _ = println (ffiIntLowest ())\n  println (ffiIntTooBig ())\n"
 
 intRangeNeedles : List String
 intRangeNeedles = [
@@ -722,7 +722,7 @@ cell15 w combined = graded (ffiBuildBin
 
 arrayRangeSrc : String
 arrayRangeSrc =
-  "extern ffiFillBig : Array Int -> Int -> <FFI> Unit\n\nmain : <IO, FFI> Unit\nmain =\n  let xs = [|1, 2, 3|]\n  let _ = ffiFillBig xs 3\n  println xs\n"
+  "extern ffiFillBig : Array Int -> Int -> <FFI \"c\"> Unit\n\nmain : <IO, FFI \"c*\"> Unit\nmain =\n  let xs = [|1, 2, 3|]\n  let _ = ffiFillBig xs 3\n  println xs\n"
 
 arrayRangeNeedles : List String
 arrayRangeNeedles = [
@@ -754,3 +754,125 @@ test "diff_compiler_llvm_ffi cells 15-16: int64 outside 63 bits traps, Array Int
     ("cell 15 ffi_inbound_int_range", cell15 w combined),
     ("cell 16 ffi_array_int_range", cell16 w combined),
   ]))
+
+-- # Cells 17-18: a `bind c "sym"` clause names the C symbol the call links to;
+-- the Medaka name is only the name the program uses.
+
+bindStubC : String
+bindStubC =
+  "#include <stdint.h>\nint64_t stub_add(int64_t a, int64_t b) { return a + b; }\n"
+
+-- `combined` plus a C object defining `stub_add`.
+buildBindStub : String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Result String String
+buildBindStub w combined = do
+  _ <- writeFile "\{w}/bind_stub.c" bindStubC
+  _ <- okOutput
+    "compile bind_stub.c"
+    (boundedVerb "clang" [
+      "-O2",
+      "-c",
+      "\{w}/bind_stub.c",
+      "-o",
+      "\{w}/bind_stub.o",
+    ])
+  _ <- okOutput
+    "ld -r bind stub"
+    (boundedVerb "ld" [
+      "-r",
+      combined,
+      "\{w}/bind_stub.o",
+      "-o",
+      "\{w}/bound.o",
+    ])
+  Ok "\{w}/bound.o"
+
+-- `medaka build --keep-ir`, then the emitted IR text on success.
+bindBuildIr : String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Result String String
+bindBuildIr dir name src obj = do
+  _ <- writeFile "\{dir}/\{name}.mdk" src
+  _ <- okOutput
+    "build \{name}"
+    (medakaEnv
+      ["MEDAKA_RT_OBJ=\{obj}"]
+      [
+        "build",
+        "--keep-ir",
+        "\{dir}/\{name}.mdk",
+        "-o",
+        "\{dir}/\{name}.bin",
+      ])
+  readFile "\{dir}/\{name}.bin.ll"
+
+bindCountLines : String -> String -> Int
+bindCountLines ir part = length (filter (l => contains part l) (lines ir))
+
+bindSrc : String
+bindSrc =
+  "extern cAdd : Int -> Int -> <FFI \"c\"> Int\n  bind c \"stub_add\"\n\nextern jsOnly : Int -> <FFI \"js\"> Int\n  bind js \"jsOnly\"\n\nmain : <IO, FFI \"c*\"> Unit\nmain = println (cAdd 40 2)\n"
+
+cell17 : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+cell17 w obj = graded (bindBuildIr
+  w
+  "ffi_bind_sym"
+  bindSrc
+  obj) (ir => graded (okOutput
+  "run ffi_bind_sym.bin"
+  (boundedVerb "\{w}/ffi_bind_sym.bin" [])) (got => expectAll [
+  expectEqualText "42" (trimRight got),
+  expectEqualText
+    "1"
+    (intToString (bindCountLines ir "declare i64 @stub_add(")),
+  expectEqualText "0" (intToString (bindCountLines ir "@cAdd")),
+  expectEqualText "0" (intToString (bindCountLines ir "jsOnly")),
+]))
+
+sharedSymSrc : String -> String -> String
+sharedSymSrc second call =
+  "extern cAdd : Int -> Int -> <FFI \"c\"> Int\n  bind c \"stub_add\"\n\nextern \{second}\n  bind c \"stub_add\"\n\nmain : <IO, FFI \"c*\"> Unit\nmain =\n  let _ = println (cAdd 40 2)\n  println (\{call})\n"
+
+cell18Same : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+cell18Same w obj = graded (bindBuildIr
+  w
+  "ffi_bind_same"
+  (sharedSymSrc "cSum : Int -> Int -> <FFI \"c\"> Int" "cSum 1 2")
+  obj) (ir => graded (okOutput
+  "run ffi_bind_same.bin"
+  (boundedVerb "\{w}/ffi_bind_same.bin" [])) (got => expectAll [
+  expectEqualText "42\n3" (trimRight got),
+  expectEqualText "1" (intToString (bindCountLines ir "declare i64 @stub_add(")),
+]))
+
+cell18Diff : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+cell18Diff w obj = graded (writeFile
+  "\{w}/ffi_bind_diff.mdk"
+  (sharedSymSrc "cSum : Int -> <FFI \"c\"> Int" "cSum 1")) (_ =>
+  bindCollisionExpect
+    (medakaEnv
+      ["MEDAKA_RT_OBJ=\{obj}"]
+      ["build", "\{w}/ffi_bind_diff.mdk", "-o", "\{w}/ffi_bind_diff.bin"]))
+
+bindCollisionExpect : Result String (Int, String, String) -> Expectation
+bindCollisionExpect (Err e) = fail "could not spawn build: \{e}"
+bindCollisionExpect (Ok (code, out, err)) =
+  if code == 0 then
+    fail "built despite two signatures bound to one C symbol"
+  else
+    expectAll [
+      ffiLineExpect (out ++ err) "colliding symbol: stub_add",
+      ffiLineExpect (out ++ err) "Medaka names: cAdd, cSum",
+    ]
+
+test "diff_compiler_llvm_ffi cells 17-18: a bind clause names the linked symbol, shared symbols agree" = withScratchDir
+  (w => graded (buildCombined w) (combined => graded (buildBindStub
+    w
+    combined) (obj => expectEach [
+    ("cell 17 ffi_bind_symbol", cell17 w obj),
+    ("cell 18 ffi_bind_same_symbol", cell18Same w obj),
+    ("cell 18 ffi_bind_symbol_collision", cell18Diff w obj),
+  ])))

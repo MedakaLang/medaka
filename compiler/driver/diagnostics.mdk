@@ -97,6 +97,7 @@ import driver.loader.{
   availableModuleIds,
   fileOfModuleId,
   importModId,
+  modIdToPath,
 }
 import support.path.{dirOf}
 import driver.main_autoprint.{valueMainCandidate}
@@ -917,13 +918,15 @@ analyzeFrom exportsFor modName runtimeSrc coreSrc raw internalGuard =
 -- What a check drive leaves for the target verdict, taken straight off it so no
 -- second elaboration is needed: the entry's own schemes and the prelude's
 -- (separate, so the caller picks the lookup order), the invocation ops
--- `lastInvocationOps` describes for THAT drive, and the desugared graph it read
--- (the entry last).
+-- `lastInvocationOps` describes for THAT drive, the desugared graph it read
+-- (the entry last), and each module's file as the loader named it (`[]` for a
+-- single-file drive, whose one module is the entry file).
 public export data CheckDrive = CheckDrive {
   cdEntrySchemes : List (String, Scheme),
   cdCoreSchemes : List (String, Scheme),
   cdOps : InvocationOps,
   cdMods : List (String, List Decl),
+  cdPaths : List (String, String),
 }
 
 -- The single-file drive's report lines and its `CheckDrive`.
@@ -933,14 +936,19 @@ public export data CheckDump = CheckDump {
 }
 
 -- The drive of a multi-module check, read right after it ran: `perMod` is what
--- the graph drive returned and `modPairs` the desugared graph it read.
+-- the graph drive returned, `modPairs` the desugared graph it read and `paths`
+-- the loader's module-to-file map.
 export
-graphCheckDrive : List ModDiags -> List (String, List Decl) -> CheckDrive
-graphCheckDrive perMod modPairs = CheckDrive {
+graphCheckDrive : List ModDiags ->
+  List (String, List Decl) ->
+  List (String, String) ->
+  CheckDrive
+graphCheckDrive perMod modPairs paths = CheckDrive {
   cdEntrySchemes = entryOwnSchemes (map modOwnSchemes perMod),
   cdCoreSchemes = lastCoreSchemes (),
   cdOps = lastInvocationOps (),
   cdMods = modPairs,
+  cdPaths = paths,
 }
 
 modOwnSchemes : ModDiags -> (String, List (String, Scheme))
@@ -963,6 +971,7 @@ driveOneFile valueMain preludeKey rt core (mid, decls) =
       cdCoreSchemes = coreSchemes,
       cdOps = lastInvocationOps (),
       cdMods = [(mid, decls)],
+      cdPaths = [],
     },
     schemes,
     errs,
@@ -3140,7 +3149,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
           csrc
           modsWithPath
           modPairs
-      let drive = graphCheckDrive perMod modPairs
+      let drive = graphCheckDrive perMod modPairs (map modIdToPath modsWithPath)
       let (cj, hasErr) = cjGraphParts target stdlibDir mods results
       (cj, hasErr, Some drive)
 

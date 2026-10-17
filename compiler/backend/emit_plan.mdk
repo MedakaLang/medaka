@@ -2,7 +2,7 @@
 -- and neither recomputes.  Built once, right after lowering, from the program an
 -- emitter is about to receive.
 
-import frontend.ast.{Lit(..), Pat(..)}
+import frontend.ast.{Lit(..), Pat(..), hostRows}
 import ir.core_ir.{
   CProgram(..),
   CArm(..),
@@ -70,8 +70,10 @@ import backend.trmc_analysis.{
 -- group's members are emitted as one destination-passing loop rooted at its root.
 -- `wasmDemand` is what the program demands of a WasmGC module, and `hostKeys` the
 -- `env` host imports its externs' wasm lowerings call (`wasmHostKeys`), sorted
--- and distinct; the wasm emitter declares exactly these imports.  Both are empty
--- on an LLVM plan.
+-- and distinct; the wasm emitter declares exactly these imports.  `jsImports` are
+-- the user externs with a `js` binding that the program reaches, one each, in
+-- Medaka-name order; the wasm emitter imports exactly these from `jsffi`.  All
+-- three are empty on an LLVM plan.
 public export data EmitPlan = EmitPlan {
   target : Backend,
   wasmOnlyReach : Option ReachUnits,
@@ -81,6 +83,17 @@ public export data EmitPlan = EmitPlan {
   dispGroups : List DispGroup,
   wasmDemand : WasmDemand,
   hostKeys : List String,
+  jsImports : List JsImport,
+}
+
+-- A reached user extern's `js` binding (docs/spec/WASM-SEMANTICS.md section
+-- 3.1): its Medaka name, the JS name it binds, and its declared parameter and
+-- result heads (`Array` is `Array Int`).
+public export data JsImport = JsImport {
+  medakaName : String,
+  jsName : String,
+  params : List String,
+  result : String,
 }
 
 public export data ReachUnits = ReachUnits { total : Int, kept : Int }
@@ -126,32 +139,44 @@ public export data TrmcVerdicts = TrmcVerdicts {
 
 export
 buildEmitPlan : Backend -> CProgram -> EmitPlan
-buildEmitPlan target prog = planOver target None prog
+buildEmitPlan target prog = planOver target None [] prog
 
 -- The wasm modules entries' builder: reach first, then every plan field over the
--- reached program, which is also the program the emitter must receive.
+-- reached program, which is also the program the emitter must receive.  `ffiRows`
+-- are the program's user FFI externs, each with its bindings and signature heads
+-- (`types.typecheck.checkedFfiExternTypeNamesModules`).
 export
-buildEmitPlanReached : CProgram -> (EmitPlan, CProgram)
-buildEmitPlanReached prog =
+buildEmitPlanReached : List (String, (List (String, String), (List String, String))) ->
+  CProgram ->
+  (EmitPlan, CProgram)
+buildEmitPlanReached ffiRows prog =
   let reached = wasmReachFilter prog
   let units = ReachUnits {
     total = programUnitCount prog,
     kept = programUnitCount reached,
   }
-  (planOver WasmBackend (Some units) reached, reached)
+  (planOver WasmBackend (Some units) ffiRows reached, reached)
 
 programUnitCount : CProgram -> Int
 programUnitCount (CProgram groups _ _ impls _ _) =
   listLen groups + listLen impls
 
-planOver : Backend -> Option ReachUnits -> CProgram -> EmitPlan
-planOver target reach (CProgram groups ctorArs _ impls _ _) =
+planOver : Backend ->
+  Option ReachUnits ->
+  List (String, (List (String, String), (List String, String))) ->
+  CProgram ->
+  EmitPlan
+planOver target reach ffiRows (CProgram groups ctorArs _ impls _ _) =
   -- first entry wins on a repeated constructor name, as in both emitters' tables
   let ctors = omFromPairs (reverseL ctorArs) omEmpty
   let fns = filterList isTopFn groups
-  let (demand, keys) = match target
-    WasmBackend => wasmDemandOf groups impls
-    LlvmBackend => (noDemand, [])
+  let (demand, keys, js) = match target
+    WasmBackend =>
+      wasmDemandOf
+        (omFromPairs (reverseL (hostRows "js" ffiRows)) omEmpty)
+        groups
+        impls
+    LlvmBackend => (noDemand, [], [])
   EmitPlan {
     target = target,
     wasmOnlyReach = reach,
@@ -167,6 +192,7 @@ planOver target reach (CProgram groups ctorArs _ impls _ _) =
     dispGroups = planDispatchGroups ctors fns groups impls,
     wasmDemand = demand,
     hostKeys = keys,
+    jsImports = js,
   }
 
 -- does the TRMC verdict hold for top-level function [name]?
@@ -306,10 +332,12 @@ noDemand = WasmDemand {
   tupleArities = [],
 }
 
--- the walk's state: the demand so far, newest first, and the host keys seen
+-- the walk's state: the demand so far, newest first, and the host keys and `js`
+-- imports seen
 data DemandAcc = DemandAcc {
   seenUses : List WasmUse,
   seenKeys : OrdMap Unit,
+  seenJs : OrdMap JsImport,
   seenRefBox : Bool,
   seenDivGuard : Bool,
   seenArities : List Int,
@@ -322,18 +350,25 @@ data DemandAcc = DemandAcc {
 -- function a bare prelude name stands for, before it is an extern; an applied
 -- name is an extern before it is a top-level function, unless only its
 -- `core__` function exists.  `topFns` and `topVals` partition the top-level
--- bindings other than `main` as the emitter's own indexes do.
+-- bindings other than `main` as the emitter's own indexes do.  An extern is a
+-- user extern with a `js` binding (`jsBinds`: name -> (JS name, heads)) before
+-- it is a catalog extern, as in the emitter.
 data DemandScope = DemandScope {
   locals : OrdMap Unit,
   topFns : OrdMap Unit,
   topVals : OrdMap Unit,
+  jsBinds : OrdMap (String, (List String, String)),
 }
 
-wasmDemandOf : List CBind -> List CImplEntry -> (WasmDemand, List String)
-wasmDemandOf groups impls =
+wasmDemandOf : OrdMap (String, (List String, String)) ->
+  List CBind ->
+  List CImplEntry ->
+  (WasmDemand, List String, List JsImport)
+wasmDemandOf jsBinds groups impls =
   let start = DemandAcc {
     seenUses = [],
     seenKeys = omEmpty,
+    seenJs = omEmpty,
     seenRefBox = False,
     seenDivGuard = False,
     seenArities = [],
@@ -346,6 +381,7 @@ wasmDemandOf groups impls =
         (map bindName (filterList (b => not (isValBind b)) tops))
         omEmpty,
     topVals = omFromNames (map bindName (filterList isValBind tops)) omEmpty,
+    jsBinds = jsBinds,
   }
   let acc = walkEach (dImpl sc) (walkEach (dBind sc) start groups) impls
   (
@@ -356,6 +392,7 @@ wasmDemandOf groups impls =
       tupleArities = reverseL acc.seenArities,
     },
     omKeys acc.seenKeys,
+    filterMap (k => omLookup k acc.seenJs) (omKeys acc.seenJs),
   )
 
 walkEach : (DemandAcc -> a -> DemandAcc) -> DemandAcc -> List a -> DemandAcc
@@ -402,6 +439,55 @@ noteName acc name =
       (wasmHostKeys name))
     (wasmTupleArities name)
 
+-- a name the emitter lowers as an extern: a user `js` binding, else a catalog
+-- extern
+noteExtern : DemandScope -> DemandAcc -> String -> DemandAcc
+noteExtern sc acc name = match omLookup name sc.jsBinds
+  None => noteName acc name
+  Some (js, (params, result)) =>
+    if omHasKey name acc.seenJs then
+      acc
+    else
+      let imp = JsImport {
+        medakaName = name,
+        jsName = js,
+        params = params,
+        result = result,
+      }
+      noteJsResult
+        (walkEach
+          noteJsParam
+          { acc | seenJs = omInsert name imp acc.seenJs }
+          params)
+        result
+
+-- What one parameter head of a `js` import needs (WASM-SEMANTICS section 3.1): a
+-- `String` or `Array` crosses on the path channel, an `Array` comes back on the
+-- result channel, and a boxed head needs its type.
+noteJsParam : DemandAcc -> String -> DemandAcc
+noteJsParam acc "String" = walkEach noteKey (noteUse acc UseStr) jsPathKeys
+noteJsParam acc "Array" =
+  walkEach noteKey (noteUse acc UseArray) (jsPathKeys ++ jsResultKeys)
+noteJsParam acc head = noteJsBoxed acc head
+
+-- What a `js` import's result head needs: a `String` comes back on the result
+-- channel.
+noteJsResult : DemandAcc -> String -> DemandAcc
+noteJsResult acc "String" = walkEach noteKey (noteUse acc UseStr) jsResultKeys
+noteJsResult acc head = noteJsBoxed acc head
+
+noteJsBoxed : DemandAcc -> String -> DemandAcc
+noteJsBoxed acc "Float" = noteUse acc UseFloat
+noteJsBoxed acc "U64" = noteUse acc UseU64
+noteJsBoxed acc "I64" = noteUse acc UseI64
+noteJsBoxed acc _ = acc
+
+jsPathKeys : List String
+jsPathKeys = ["mdk_path_reset", "mdk_path_push"]
+
+jsResultKeys : List String
+jsResultKeys = ["mdk_result_len", "mdk_result_byte"]
+
 -- a declared file bound pushes its grant, a cons list of $str elements
 noteFileBound : DemandAcc -> DemandAcc
 noteFileBound acc =
@@ -446,7 +532,7 @@ dVar sc acc x =
     || isCoreFn sc x then
     acc
   else
-    noteName acc x
+    noteExtern sc acc x
 
 dBind : DemandScope -> DemandAcc -> CBind -> DemandAcc
 dBind sc acc (CBind _ clauses _ _) = walkEach (dClause sc) acc clauses
@@ -513,7 +599,7 @@ dAppHead sc acc (CVar f _) =
   else if f == "setRef" then
     noteRefBox acc
   else
-    noteName acc f
+    noteExtern sc acc f
 dAppHead sc acc h = dExpr sc acc h
 
 dField : DemandScope -> DemandAcc -> CField -> DemandAcc

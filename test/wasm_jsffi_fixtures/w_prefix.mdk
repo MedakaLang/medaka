@@ -1,0 +1,15 @@
+-- Extern names whose spellings differ by a `w_` prefix, here (`foo`, `w_foo`)
+-- and across modules (this module is `w_prefix`, and prefix.mdk declares a
+-- `foo` too): every one is its own function.
+import prefix.{useFoo}
+
+extern foo : Int -> <FFI "js"> Int
+  bind js "jsPlus10"
+
+extern w_foo : Int -> <FFI "js"> Int
+  bind js "jsPlus20"
+
+main =
+  let _ = println (foo 1)
+  let _ = println (w_foo 1)
+  println (useFoo 1)

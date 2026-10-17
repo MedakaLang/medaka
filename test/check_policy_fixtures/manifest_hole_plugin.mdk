@@ -7,7 +7,7 @@
 -- matching every other ⊤ atom, never a placeholder string.
 effect Net Prefix
 
-extern netGet : (url : String) -> <FFI, Net url> String
+extern netGet : (url : String) -> <FFI "c", Net url> String
 
-entry : String -> <FFI, Net> String
+entry : String -> <FFI "c*", Net> String
 entry req = netGet req

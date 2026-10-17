@@ -84,6 +84,7 @@ import frontend.ast.{
   ConPayload(..),
   Variant(..),
   Decl(..),
+  ExternDecl(..),
 }
 import frontend.parser.{
   parseWithPositionsOpt,
@@ -810,7 +811,7 @@ collectExpValGo ctx s ((DTypeSig True n _ _) :: rest) =
 collectExpValGo ctx s ((DFunDef True n _ _ _ _) :: rest) =
   let _ = hmSetC ctx s n ()
   collectExpValGo ctx s rest
-collectExpValGo ctx s ((DExtern True n _) :: rest) =
+collectExpValGo ctx s ((DExtern (ExternDecl { edPub = True, edName = n, ... })) :: rest) =
   let _ = hmSetC ctx s n ()
   collectExpValGo ctx s rest
 collectExpValGo ctx s ((DLetGroup True binds) :: rest) =
@@ -856,7 +857,7 @@ defsOfDecl ctx expSet mid uri (DFunDef pub n _ _ _ _) loc _ = [
     uri
     (DefEntry nsVal n (mkKey mid nsVal n) loc (valuePub ctx expSet pub n)),
 ]
-defsOfDecl ctx expSet mid uri (DExtern pub n _) loc _ = [
+defsOfDecl ctx expSet mid uri (DExtern (ExternDecl { edPub = pub, edName = n, ... })) loc _ = [
   emitDef
     ctx
     uri
@@ -1099,7 +1100,7 @@ walkDeclBody w (DFunDef _ _ pats body _ _) loc =
   let frame = mkNamedFrame w (flatMap (patBinders loc) pats)
   walkExpr w [frame] loc body
 walkDeclBody w (DTypeSig _ _ ty _) loc = walkTy w loc ty
-walkDeclBody w (DExtern _ _ ty) loc = walkTy w loc ty
+walkDeclBody w (DExtern (ExternDecl { edTy = ty, ... })) loc = walkTy w loc ty
 walkDeclBody w (DData { dataCtors = variants }) loc =
   walkVariants w loc variants
 walkDeclBody w (DNewtype { newtypeFieldTy = fieldTy }) loc =
@@ -1394,7 +1395,8 @@ preludeDefsOfDecl : HashMap String Unit ->
   Decl ->
   List (String, String, String)
 preludeDefsOfDecl expSet mid (DFunDef pub n _ _ _ _) = valEntry expSet mid pub n
-preludeDefsOfDecl expSet mid (DExtern pub n _) = valEntry expSet mid pub n
+preludeDefsOfDecl expSet mid (DExtern (ExternDecl { edPub = pub, edName = n, ... })) =
+  valEntry expSet mid pub n
 preludeDefsOfDecl _ mid (DData { dataVis = vis, dataName = n, dataCtors = variants }) =
   consIf
     (dataIsPub vis)

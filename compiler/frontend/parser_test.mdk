@@ -26,6 +26,7 @@ import test.{
   Expectation
 }
 import frontend.parser as P
+import support.util.{joinWith}
 
 -- The rendered message of a recoverable failure, or the marker text for any
 -- other outcome so a wrong outcome shows up in the assertion's diff.
@@ -377,3 +378,49 @@ test "a second authority qualifier after a type is refused at that @" =
 
 test "a single authority qualifier before an attribute line still parses" =
   expectTrue (parsesOk "f : (p : String) -> String @p\n@inline\nf s = s\n")
+
+-- ── extern `bind` clauses under a wrapped signature ─────────────────────────
+-- The clauses of the first declaration, if it is an extern, as `host symbol`
+-- pairs, plus how many declarations parsed; or the located parse error.
+externBindsText : String -> String
+externBindsText src = match parseResult src
+  Err e =>
+    "error at \{parseErrorLine e}:\{parseErrorCol e}: \{parseErrorMessage e}"
+  Ok ((DExtern d) :: rest) =>
+    let binds = map (b => "\{b.ebHost} \{b.ebSymbol}") d.edBinds
+    "\{joinWith ", " binds}; \{intToString (1 + length rest)} decls"
+  Ok _ => "the first declaration is not an extern"
+
+test "clauses parse under a signature wrapped at any continuation column" = expectAll
+  [
+    expectEqual
+      "c f_impl; 2 decls"
+      (externBindsText
+        "extern f : (u : String) ->\n  (r : Int) ->\n  <FFI \"c\"> String\n  bind c \"f_impl\"\n\nmain = 1\n"),
+    expectEqual
+      "c f_impl; 2 decls"
+      (externBindsText
+        "extern f : (u : String) ->\n    (r : Int) ->\n    <FFI \"c\"> String\n  bind c \"f_impl\"\n\nmain = 1\n"),
+    expectEqual
+      "c f_impl, js fImpl; 2 decls"
+      (externBindsText
+        "extern f : (u : String) ->\n    (r : Int) ->\n    <FFI \"c\"> String\n  bind c \"f_impl\"\n  bind js \"fImpl\"\n\nmain = 1\n"),
+    expectEqual
+      "c f_impl; 2 decls"
+      (externBindsText
+        "extern f : (u : String) ->\n  (r : Int) ->\n  <FFI \"c\"> String\n    bind c \"f_impl\"\n\nmain = 1\n"),
+    expectEqual
+      "c f_impl; 2 decls"
+      (externBindsText
+        "extern f : String ->\n  Int -> <FFI \"c\"> String\n  bind c \"f_impl\"\n\nmain = 1\n"),
+    expectEqual
+      "c f_impl; 2 decls"
+      (externBindsText
+        "extern f : String ->\n  Int ->\n    Bool ->\n      <FFI \"c\"> String\n  bind c \"f_impl\"\n\nmain = 1\n"),
+  ]
+
+test "a top-level `bind` after a wrapped extern's clauses is its own declaration" =
+  expectEqual
+    "c f_impl; 3 decls"
+    (externBindsText
+      "extern f : String ->\n  Int ->\n  <FFI \"c\"> String\n  bind c \"f_impl\"\n\nbind : Int -> Int\nbind x = x\n")

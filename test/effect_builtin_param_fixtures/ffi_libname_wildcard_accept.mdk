@@ -3,9 +3,9 @@
 -- names the exact library and the `caller` is bounded at the pattern, so
 -- this cell pins the one direction the Prefix order admits: an exact element
 -- lies within the pattern that starts with it, never the reverse.
-extern callLib : String -> <FFI "libcurl"> Int
+extern callLib : String -> <FFI "c/libcurl"> Int
 
-caller : Unit -> <FFI "libcurl*"> Int
+caller : Unit -> <FFI "c/libcurl*"> Int
 caller _ = callLib "GET /"
 
 main : <IO> Unit

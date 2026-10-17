@@ -22,11 +22,15 @@ effParamNames : EffParamTy -> List String
 effParamSurface : (String -> String) -> EffParamTy -> String
 effSetSurface : (String -> String) -> List String -> String
 effectDeclUnstamped : Bool -> String -> Option String -> List (String, String) -> Option Loc -> Decl
+externBindings : ExternDecl -> List ExternBind
 externDataUnresolved : Bool -> String -> List String -> List (Option KindAnn) -> Decl
+externRowCons : Bool -> ExternDecl -> a -> List (String, (List (String, String), a)) -> List (String, (List (String, String), a))
 fieldName : Field -> String
 firstTyLoc : Ty -> Option Loc
 firstTyLocList : List Ty -> Option Loc
 fixedWidthMask : String -> Option Int
+hostRows : String -> List (String, (List (String, String), a)) -> List (String, (String, a))
+hostSymbol : String -> List (String, String) -> Option String
 identOriginBuiltin : IdentOrigin
 identOriginFold : a -> (String -> a) -> IdentOrigin -> a
 identOriginOf : TyConOrigin -> Option IdentOrigin

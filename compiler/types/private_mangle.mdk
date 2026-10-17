@@ -56,7 +56,8 @@
 --   • externs / runtime C symbols (`@mdk_<externName>` → runtime/medaka_rt.c) —
 --     they are declared in runtime.mdk (NOT in core/modules), so they never appear
 --     as a definition here; a reference to one is excluded by rule 4 (not in any
---     unit's defined-fn set nor import scope).
+--     unit's defined-fn set nor import scope).  A module's OWN extern keeps its
+--     spelling too unless it has `bind` clauses (`externSymbolName`).
 --   • interface/impl method names, dict names — they have their own naming in the
 --     emitter (impl keys), and are not DFunDef/DData binders this pass touches.
 --   • RESERVED constructors (Cons/Nil/Some/None/Ok/Err/Lt/Eq/Gt/True/False) — the
@@ -101,6 +102,7 @@
 import frontend.ast.{
   letBindName,
   Decl(..),
+  ExternDecl(..),
   Expr(..),
   Pat(..),
   Arm(..),
@@ -174,23 +176,50 @@ mangleUnits : List Decl ->
   (List Decl, List (String, List Decl))
 mangleUnits coreDecls modules =
   let allUnits = ("core", coreDecls) :: modules
+  let _ = symbolInjectivityGuard (entryUnitMid allUnits) allUnits
+  renameUnits externSymbolName coreDecls modules
+
+-- The same rename for the target check's reach (`ir.dce.reachedExternChains`),
+-- which must tell which declaration each reference denotes.  Every extern takes
+-- its module-scoped name, with `bind` clauses or without, so a reference
+-- reaches exactly the declaration it resolves to, and a local binder, which
+-- the rename leaves alone, reaches none.  No injectivity guard: two module ids
+-- that sanitize alike merge their names, which only widens the reach.
+export
+scopeUnitNames : List Decl ->
+  List (String, List Decl) ->
+  (List Decl, List (String, List Decl))
+scopeUnitNames = renameUnits (mid ed => mangledName mid ed.edName)
+
+-- `externName` names an extern program-wide from its module and declaration.
+renameUnits : (String -> ExternDecl -> String) ->
+  List Decl ->
+  List (String, List Decl) ->
+  (List Decl, List (String, List Decl))
+renameUnits externName coreDecls modules =
+  let allUnits = ("core", coreDecls) :: modules
   let entryMid = entryUnitMid allUnits
-  let _ = symbolInjectivityGuard entryMid allUnits
   let exportsPerUnit =
     withPreludeDefs
       (dedup (unitDefNames ("", coreDecls)))
       (buildExportsPerUnit [] allUnits)
   let ctorExportsPerUnit = buildCtorExportsPerUnit [] allUnits
-  let externExports = buildExternExports omEmpty allUnits
+  let externExports = buildExternExports externName omEmpty allUnits
   let coreOut = mangleUnitU
     entryMid
     exportsPerUnit
     ctorExportsPerUnit
+    externName
     externExports
     ("core", coreDecls)
   let modsOut =
     map
-      (mangleModule entryMid exportsPerUnit ctorExportsPerUnit externExports)
+      (mangleModule
+        entryMid
+        exportsPerUnit
+        ctorExportsPerUnit
+        externName
+        externExports)
       modules
   (coreOut, modsOut)
 
@@ -224,7 +253,7 @@ mangleUnitsEv coreDecls modules =
       (dedup (unitDefNames ("", coreDecls)))
       (buildExportsPerUnit [] allUnits)
   let ctorExportsPerUnit = buildCtorExportsPerUnit [] allUnits
-  let externExports = buildExternExports omEmpty allUnits
+  let externExports = buildExternExports externSymbolName omEmpty allUnits
   -- ONE map per unit, threaded to both readers: the decl rename and the evidence
   -- remap name the same symbols, and building the map twice was measured at +0.99%
   -- Ir on the emitter child over the compiler's own graph.
@@ -259,7 +288,13 @@ unitRenameMapEntry : String ->
   (String, (OrdMap String, Bool, List Decl))
 unitRenameMapEntry entryMid exportsPerUnit ctorExportsPerUnit externExports (mid, decls) =
   let rmList =
-    buildUnitRenameMap entryMid mid exportsPerUnit externExports decls
+    buildUnitRenameMap
+        entryMid
+        mid
+        exportsPerUnit
+        externSymbolName
+        externExports
+        decls
       ++ buildUnitCtorRenameMap mid ctorExportsPerUnit decls
   (mid, (omFromPairs (reverseL rmList) omEmpty, isEmptyL rmList, decls))
 
@@ -948,15 +983,19 @@ lookupCtorExports k ((m, es) :: rest) =
 mangleModule : String ->
   List (String, List (String, String)) ->
   List (String, List (String, String, List String)) ->
+  (String -> ExternDecl -> String) ->
   OrdMap (OrdMap String) ->
   (String, List Decl) ->
   (String, List Decl)
-mangleModule entryMid exportsPerUnit ctorExportsPerUnit externExports (mid, decls) = (
+mangleModule entryMid exportsPerUnit ctorExportsPerUnit externName externExports (mid, decls) = (
   mid,
-  mangleUnitU entryMid exportsPerUnit ctorExportsPerUnit externExports (
-    mid,
-    decls,
-  ),
+  mangleUnitU
+    entryMid
+    exportsPerUnit
+    ctorExportsPerUnit
+    externName
+    externExports
+    (mid, decls),
 )
 
 -- ── per-unit universal rename ────────────────────────────────────────────────
@@ -966,11 +1005,19 @@ mangleModule entryMid exportsPerUnit ctorExportsPerUnit externExports (mid, decl
 mangleUnitU : String ->
   List (String, List (String, String)) ->
   List (String, List (String, String, List String)) ->
+  (String -> ExternDecl -> String) ->
   OrdMap (OrdMap String) ->
   (String, List Decl) ->
   List Decl
-mangleUnitU entryMid exportsPerUnit ctorExportsPerUnit externExports (mid, decls) =
-  let rmFn = buildUnitRenameMap entryMid mid exportsPerUnit externExports decls
+mangleUnitU entryMid exportsPerUnit ctorExportsPerUnit externName externExports (mid, decls) =
+  let rmFn =
+    buildUnitRenameMap
+      entryMid
+      mid
+      exportsPerUnit
+      externName
+      externExports
+      decls
   let rmCtor = buildUnitCtorRenameMap mid ctorExportsPerUnit decls
   let rmList = rmFn ++ rmCtor
   -- omFromPairs over the REVERSED list so the FIRST list entry wins on a duplicate
@@ -990,13 +1037,15 @@ mangleUnitU entryMid exportsPerUnit ctorExportsPerUnit externExports (mid, decls
 buildUnitRenameMap : String ->
   String ->
   List (String, List (String, String)) ->
+  (String -> ExternDecl -> String) ->
   OrdMap (OrdMap String) ->
   List Decl ->
   List (String, String)
-buildUnitRenameMap entryMid mid exportsPerUnit externExports decls =
+buildUnitRenameMap entryMid mid exportsPerUnit externName externExports decls =
   let localFns = dedup (unitDefNames (mid, decls))
   let localEntries =
-    map (n => (n, mangledName mid n)) localFns ++ externDeclEntries False decls
+    map (n => (n, mangledName mid n)) localFns
+      ++ externDeclEntries (externName mid) False decls
   let importEntries = importRenameEntries mid exportsPerUnit decls
   let entries =
     localEntries
@@ -1010,28 +1059,62 @@ buildUnitRenameMap entryMid mid exportsPerUnit externExports decls =
 
 -- Extern declarations name host symbols. Their imported spellings must be
 -- erased without adding a module prefix, including through re-export chains.
-buildExternExports : OrdMap (OrdMap String) ->
+buildExternExports : (String -> ExternDecl -> String) ->
+  OrdMap (OrdMap String) ->
   List (String, List Decl) ->
   OrdMap (OrdMap String)
-buildExternExports exports [] = exports
-buildExternExports exports ((mid, decls) :: rest) =
+buildExternExports _ exports [] = exports
+buildExternExports externName exports ((mid, decls) :: rest) =
   let entries =
-    externDeclEntries True decls
+    externDeclEntries (externName mid) True decls
       ++ flatMap (externImportEntries exports True) decls
   buildExternExports
+    externName
     (omInsert mid (omFromPairs (reverseL entries) omEmpty) exports)
     rest
 
-externDeclEntries : Bool -> List Decl -> List (String, String)
-externDeclEntries _ [] = []
-externDeclEntries publicOnly ((DExtern pub name _) :: rest) =
-  if pub || not publicOnly then
-    (name, name) :: externDeclEntries publicOnly rest
+-- `name` is the extern-naming function, applied to the unit's module already.
+externDeclEntries : (ExternDecl -> String) ->
+  Bool ->
+  List Decl ->
+  List (String, String)
+externDeclEntries _ _ [] = []
+externDeclEntries name publicOnly ((DExtern ed) :: rest) =
+  if ed.edPub || not publicOnly then
+    (ed.edName, name ed) :: externDeclEntries name publicOnly rest
   else
-    externDeclEntries publicOnly rest
-externDeclEntries publicOnly ((DAttrib _ decl) :: rest) =
-  externDeclEntries publicOnly [decl] ++ externDeclEntries publicOnly rest
-externDeclEntries publicOnly (_ :: rest) = externDeclEntries publicOnly rest
+    externDeclEntries name publicOnly rest
+externDeclEntries name publicOnly ((DAttrib _ decl) :: rest) =
+  externDeclEntries name publicOnly [decl]
+    ++ externDeclEntries name publicOnly rest
+externDeclEntries name publicOnly (_ :: rest) =
+  externDeclEntries name publicOnly rest
+
+-- The program-wide name of an extern declared in module `mid`.  One with `bind`
+-- clauses names whatever its clauses bind, which another module may bind
+-- differently under the same Medaka name, so like a function it takes the
+-- module-scoped name and both emitters key its foreign call by that.  One with
+-- none binds the C symbol it is spelled as (`frontend.ast.externBindings`), the
+-- one function every module spelling it shares; a `stdlib/runtime.mdk` catalog
+-- name is always of this kind (T-FFI-BUILTIN-BIND refuses its clauses) and the
+-- emitters dispatch it by that spelling, so it keeps it.
+externSymbolName : String -> ExternDecl -> String
+externSymbolName mid ed = match ed.edBinds
+  [] => ed.edName
+  _ => mangledName mid ed.edName
+
+-- The name an extern's declaration wrote, for a message, from its program-wide
+-- name and its (host, symbol) bindings.  A declaration without clauses has the
+-- implied C binding of its own spelling as its only one and was not renamed;
+-- any other was, so its module prefix comes off through the first `__`.  A
+-- module id whose sanitized form holds `__` keeps the rest of that prefix.
+export
+externDeclaredName : String -> List (String, String) -> String
+externDeclaredName n binds
+  | binds == [("c", n)] = n
+  | otherwise = match stringIndexOf "__" n
+    Some i => stringSlice (i + 2) (stringLength n) n
+    None => n
 
 externImportEntries : OrdMap (OrdMap String) ->
   Bool ->
@@ -1353,7 +1436,8 @@ declDefNames _ = []
 pubSigNames : List Decl -> List String
 pubSigNames [] = []
 pubSigNames ((DTypeSig True n _ _) :: rest) = n :: pubSigNames rest
-pubSigNames ((DExtern True n _) :: rest) = n :: pubSigNames rest
+pubSigNames ((DExtern (ExternDecl { edPub = True, edName = n, ... })) :: rest) =
+  n :: pubSigNames rest
 pubSigNames ((DAttrib _ d) :: rest) = pubSigNames [d] ++ pubSigNames rest
 pubSigNames (_ :: rest) = pubSigNames rest
 
@@ -1571,6 +1655,10 @@ renameDecl rm (d@(DData { dataCtors = variants })) =
 renameDecl rm (d@(DNewtype { newtypeCtor = con })) =
   DNewtype { d | newtypeCtor = renameDefName rm con }
 renameDecl rm (DAttrib attrs d) = DAttrib attrs (renameDecl rm d)
+-- An extern's declaration takes the name its references do (`externSymbolName`):
+-- the emitters read its foreign-call row from the declaration, under that name.
+renameDecl rm (DExtern ed) =
+  DExtern ({ ed | edName = renameDefName rm ed.edName })
 -- ── LEAVES, AS AN EXPLICIT LIST ───────────────────────────────────────────────
 -- Not a `_ => d` catch-all, for the reason `renameScoped`'s leaf list gives: a new
 -- name-carrying `Decl` constructor would be a SILENT leaf ([T-GLOBAL-TABLE]).  Listed,
@@ -1578,17 +1666,12 @@ renameDecl rm (DAttrib attrs d) = DAttrib attrs (renameDecl rm d)
 --   `grep -n '^  | D' compiler/frontend/ast.mdk` minus its five `Do*` rows (`DoStmt`,
 --   a different type) is the constructor total, and every one of them appears exactly
 --   once either above or here.
---   * `DExtern` names a RUNTIME symbol, not a Medaka top-level binding — the mangle
---     domain is `unitDefNames` ∪ `unitLocalCtorNames`, and `buildUnitRenameMap` never
---     enters an extern.  Renaming one would emit a call to a `@mdk_<mid>__…` the C
---     runtime does not define.
 --   * `DUse` is an import FORM; its module path and member names are resolved before
 --     this pass and the rename is import-aware through `rm` at the reference sites.
 --   * `DEffect` names an effect, which is neither a value nor a constructor.
 --   * `DTypeAlias` names a TYPE.  `renameDecl`'s `DData` arm renames `dataCtors` and
 --     leaves `dataName` alone for the same reason — an alias arm here would rename half
 --     of that split.
-renameDecl _ (d@(DExtern _ _ _)) = d
 renameDecl _ (d@(DUse _ _ _)) = d
 renameDecl _ (d@(DEffect _ _ _ _ _ _)) = d
 renameDecl _ (d@(DTypeAlias { tyAliasName = _, ... })) = d

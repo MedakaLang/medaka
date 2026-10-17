@@ -1,0 +1,9 @@
+-- A parameter named like a `js`-only extern shadows it, so `apply` reaches
+-- no extern and a native target admits the program.
+extern jsLog : Int -> <FFI "js"> Int
+  bind js "jsLog"
+
+apply : (Int -> Int) -> Int
+apply jsLog = jsLog 1
+
+main = println (apply (x => x + 1))

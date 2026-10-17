@@ -1,0 +1,4 @@
+@noinline
+extern cNeg : Int -> <FFI "c"> Int
+
+main = println (cNeg 5)

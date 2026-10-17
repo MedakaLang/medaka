@@ -33,6 +33,7 @@ import driver.diagnostics.{
   cjSingleParts,
   ppCheckJson,
   readFileSafe,
+  relDiagPath,
   resolveLoadedBuckets,
   tcHalfOfPerModule,
   typecheckDiagsFold,
@@ -65,6 +66,7 @@ import driver.loader.{
 import support.path.{dirOf}
 import support.util.{contains, joinNl, splitLast}
 import support.stage_count.{stageExit}
+import tools.target_check.{foldTargetDiags}
 
 -- The import hint's reader for `check`/`run`/`build`: `stdlibDir` is the stdlib
 -- directory every verb resolves `stdlib/` against, supplied by the caller.
@@ -440,10 +442,12 @@ frontGateJson allowInternal stdlibDir rsrc csrc entry =
             Ok (graph, JsonGraph entry stdlibDir buckets)
 
 -- The `--json` route's verdict once the build's drive has run: the envelope
--- with its errors, else the `main` refusal, else the target refusal folded
--- into the clean envelope, in the order `build --json` reports them.  `Ok` is
--- the clean envelope.  `perMod` is the drive's per-module diagnostics, read
--- with the surface ones as `check` reads them.
+-- with its errors, else the `main` refusal, else the target refusals folded
+-- into the clean envelope, each into its own file's entry, in the order
+-- `build --json` reports them.  `Ok` is the clean envelope.  `perMod` is the
+-- drive's per-module diagnostics, read with the surface ones as `check` reads
+-- them.  The refusals' files must be spelled as the envelope spells them
+-- (`jsonFrontKey`).
 export
 frontJsonAfterDrive : JsonFront ->
   List Decl ->
@@ -451,7 +455,7 @@ frontJsonAfterDrive : JsonFront ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
   List (String, (List TcDiag, List TcDiag)) ->
-  Option Diag ->
+  List Diag ->
   <IO> Result CheckJson CheckJson
 frontJsonAfterDrive front rtD coreD mods modsD perMod refusal =
   let (cj, hasErr) = match front
@@ -469,9 +473,18 @@ frontJsonAfterDrive front rtD coreD mods modsD perMod refusal =
   else match mainRefusalJson entry mods
     Some refused => Err refused
     None => match (refusal, cj)
-      (Some d, CjParts key triples) =>
-        Err (CjParts key (cjFoldIntoFile key [d] triples))
+      ([], _) => Ok cj
+      (ds, CjParts key triples) =>
+        Err (CjParts key (foldTargetDiags key (readFileSafe key) ds triples))
       _ => Ok cj
+
+-- A loaded module's file as the `--json` envelope spells it: the entry's
+-- spelling for a single module, else relative to the root a graph's envelope
+-- strips (`cjGraphParts`).
+export
+jsonFrontKey : JsonFront -> String -> String
+jsonFrontKey (JsonSingle target _ _ _) _ = target
+jsonFrontKey (JsonGraph _ stdlibDir _) path = relDiagPath (dirOf stdlibDir) path
 
 jsonFrontEntry : JsonFront -> String
 jsonFrontEntry (JsonSingle target _ _ _) = target

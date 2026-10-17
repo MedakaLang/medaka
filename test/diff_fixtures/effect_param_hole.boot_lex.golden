@@ -14,6 +14,7 @@ RPAREN
 ARROW
 LT
 UPPER "FFI"
+STRING "c"
 COMMA
 UPPER "Net"
 IDENT "url"
@@ -29,6 +30,7 @@ UPPER "Net"
 STRING "a.com/*"
 COMMA
 UPPER "FFI"
+STRING "c*"
 GT
 UPPER "String"
 NEWLINE

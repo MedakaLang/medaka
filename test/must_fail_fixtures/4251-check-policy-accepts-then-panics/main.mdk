@@ -1,0 +1,4 @@
+extern cUpper : String -> <FFI "c"> String
+
+shout : String -> <FFI "c"> String
+shout s = cUpper s

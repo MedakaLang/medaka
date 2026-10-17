@@ -1,0 +1,7 @@
+-- A binding names a host the language has no lowering for.
+extern fetchText : String -> <FFI "c"> String
+  bind c "fetch_text"
+  bind rust "fetch_text"
+
+main : <IO> Unit
+main = println "unreached"

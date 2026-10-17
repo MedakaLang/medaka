@@ -4,9 +4,9 @@
 -- names only a.com.
 effect Web1 Product (Host : Prefix, Method : Set)
 
-extern req : Unit -> <FFI, Web1 Host="a.com/*" Host="b.com/*"> Unit
+extern req : Unit -> <FFI "c", Web1 Host="a.com/*" Host="b.com/*"> Unit
 
-f : Unit -> <FFI, Web1 Host="a.com/*"> Unit
+f : Unit -> <FFI "c*", Web1 Host="a.com/*"> Unit
 f _ = req ()
 
 main = println 1

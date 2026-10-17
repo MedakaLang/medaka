@@ -1,0 +1,7 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/ffi_wall_bare.mdk:1:7: the extern `gNullary` is reached via `main → useIt → gNullary`, and has no binding for the host `js`, which the target `wasmgc/node` calls foreign code through (it binds `c`); add a `bind js` clause or build for a target whose host it binds
+  |
+1 | extern gNullary : Unit -> <FFI "c/x"> Int
+  |        ^

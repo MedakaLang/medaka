@@ -1,0 +1,12 @@
+-- A c-only extern reached only through an interface default.
+extern cNeg : Int -> <FFI "c"> Int
+
+interface Negate a where
+  negate : a -> <FFI "c"> Int
+  negate _ = cNeg 1
+
+impl Negate Int where
+  negate _ = 0
+
+main : <Stdout> Unit
+main = println "ok"

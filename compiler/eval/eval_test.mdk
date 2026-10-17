@@ -11,6 +11,7 @@ import frontend.ast.{
   UsePath(..),
   ImplMethod(..),
   Decl(..),
+  ExternDecl(..),
   Loc(..),
 }
 import types.route_key.{implRouteKeyWord}
@@ -92,9 +93,18 @@ test "ppValue parenthesizes nested negative and compound payloads" = expectAll [
   expectEqual "Some [1, 2]" (ppValue (VCon "Some" [VList [VInt 1, VInt 2]])),
 ]
 
+mkExtern : Bool -> String -> Ty -> Decl
+mkExtern pub n ty = DExtern ExternDecl {
+  edPub = pub,
+  edName = n,
+  edTy = ty,
+  edLoc = Loc "<test>" 1 1 1 1,
+  edBinds = [],
+}
+
 runtimeAliasModules : List (String, List Decl)
 runtimeAliasModules = [
-  ("runtime", [DExtern True "Ref" (TyVar "a")]),
+  ("runtime", [mkExtern True "Ref" (TyVar "a")]),
   (
     "root",
     [

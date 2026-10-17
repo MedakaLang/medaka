@@ -1,0 +1,5 @@
+-- A binding that returns 2^63 - 1, which is an i64 but not an Int.
+extern jsIntMax : Unit -> <FFI "js"> Int
+  bind js "jsIntMax"
+
+main = println (jsIntMax ())

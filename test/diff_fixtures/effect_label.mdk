@@ -5,12 +5,12 @@
 effect KV
 effect Log
 
-extern kvGet : String -> <FFI, KV> String
+extern kvGet : String -> <FFI "c", KV> String
 
-get : String -> <KV, FFI> String
+get : String -> <KV, FFI "c*"> String
 get k = kvGet k
 
-handler : String -> <KV, Log, FFI> String
+handler : String -> <KV, Log, FFI "c*"> String
 handler k = get k
 
 main : <IO> Unit

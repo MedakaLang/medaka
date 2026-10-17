@@ -34,7 +34,7 @@ and from then on every caller is charged with it. `check` prints
 `main : <Audit, Stdout> Unit`.
 
 In a real system the function behind a label is usually a host import, an `extern`
-the platform provides (`extern kvGet : String -> <FFI, KV> String`, with the
+the platform provides (`extern kvGet : String -> <FFI "c", KV> String`, with the
 `FFI` every foreign declaration must carry, see below), and the label is the
 platform's name for that capability. But nothing about a label depends on
 that. `Audit` above is pure Medaka, and it still tracks: a function that calls
@@ -248,28 +248,53 @@ An `extern` you declare yourself is a call into C, and the compiler makes you sa
 so. The row must name `FFI`:
 
 ```
-error: ffi.mdk:1:14: foreign declaration `cAbs` does not name the `FFI` effect in its result row; write `<FFI>` joined with whatever else the row names, such as `<FFI, Net "a.com/*">`
+error: ffi.mdk:1:14: foreign declaration `cAbs` does not name the `FFI` effect in its result row; write `<FFI "c">` joined with whatever else the row names, such as `<FFI "c", Net "a.com/*">`
   |
 1 | extern cAbs : Int -> Int
   |               ^
 ```
 
 The parameter names the library. The compiler checks it like any other parameter,
-so a function bounded to `<FFI "libc">` cannot call a `<FFI "libm">` extern; what
+so a function bounded to `<FFI "c/libc">` cannot call a `<FFI "c/libm">` extern; what
 it cannot check is where the call really goes, since the linker decides that:
 
 ```medaka
-extern cSqrt : Float -> <FFI "libm"> Float
+extern cSqrt : Float -> <FFI "c/libm"> Float
 
-root : Float -> <FFI "libm"> Float
+root : Float -> <FFI "c/libm"> Float
 root x = cSqrt x
 ```
+
+The parameter is host-qualified: `"c"` or `"c/libm"` for C, `"js"` or
+`"js/fetch"` for JavaScript. A bare `<FFI>` is refused on an extern declaration row (a bound, and any row that is not an extern, is unaffected; `"c*"` is the bound spelling). A declaration that runs
+on both hosts names one atom per host and says which symbol each one calls, with
+an indented `bind` clause per host:
+
+```medaka-nocheck: needs a C library and a JS bindings module, so it is quoted rather than run
+extern fetchText : String -> <FFI "c/libfetch", FFI "js/fetch"> String
+  bind c "fetch_text"
+  bind js "fetchText"
+```
+
+`bind c` is the C symbol the native build links (the Medaka name is not the
+symbol once a clause says otherwise); with no clause the declaration is bound to
+`c` under its own name. Every host the row names needs a binding, and a `js`
+binding is never implied.
+
+That is one declaration run on two hosts. Built native, `fetchText` calls the C
+symbol `fetch_text`; built with `--target wasmgc/node`, it calls the function named
+`fetchText` in the bindings module the host was given (`node test/wasm/run.js
+prog.wasm bindings.mjs`, or `createHost(profile, { bindings })` in a page). The
+program is the same and prints the same bytes on both. A `js` binding the host
+does not supply is a `CapabilityError` when the call happens, not when the module
+loads. `test/two_host_fixtures/` is a runnable example covering every crossable
+type.
 
 `FFI` is not part of `IO`. A function declared `<IO>` cannot call a foreign
 function:
 
 ```
-error: ffi.mdk:4:17: performs <FFI> where only <IO> is allowed
+error: ffi.mdk:4:17: performs <FFI "c"> where only <IO> is allowed
   |
 4 | wrapped n = cAbs n
   |                  ^

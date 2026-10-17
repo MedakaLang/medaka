@@ -54,9 +54,8 @@
    Runs under `medaka test --native`: it spawns subprocesses and reads the
    corpus, neither of which the interpreter binds. -}
 
-import compiler_cli_test_support.{chompNewlines, fixtureStems}
+import compiler_cli_test_support.{chompNewlines, fixtureStems, wasmBuildArgv}
 import fs.{expectUnitCount}
-import io.{getEnvOr}
 import list.{somes, sort}
 import string.{
   contains, lines, split, stripSuffix, toFloat, trim, unlines, words
@@ -154,25 +153,10 @@ buildAndRun scratch name =
             Err e => Err "\{name}: could not run the built binary: \{e}"
             Ok r => Ok r
 
--- The wasm emitter binary the CLI's `--target wasm` path execs.
-wasmEmitter : <IO> String
-wasmEmitter =
-  getEnvOr "MEDAKA_WASM_EMITTER" "\{medakaRoot}/test/bin/wasm_emit_modules_main"
-
 -- Builds the .mdk file `entry` for wasm into `out`.
 buildWasmFile : String -> String -> <Exec, IO> Result String Unit
 buildWasmFile entry out =
-  let args = [
-    "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
-    medakaBin,
-    "build",
-    "--target",
-    "wasm",
-    entry,
-    "-o",
-    out,
-  ]
-  match boundedVerbSeconds 120 "env" args
+  match boundedVerbSeconds 120 "env" (wasmBuildArgv entry out)
     Err e => Err "could not run `medaka build --target wasm`: \{e}"
     Ok (0, _, _) => Ok ()
     Ok (code, o, err) =>

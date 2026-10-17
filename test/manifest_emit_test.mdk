@@ -159,7 +159,7 @@ test "manifest_emit: golden TOML renderings" = expectEach [
     golden
       "net_param_plugin.mdk"
       "transform"
-      "[package.capabilities]\nFFI = true\nNet = \"idp.example.com/api\"",
+      "[package.capabilities]\nFFI = \"c\"\nNet = \"idp.example.com/api\"",
   ),
   (
     "mixed-golden (multi-label row, sorted ascending)",
@@ -182,14 +182,14 @@ test "manifest_emit: golden TOML renderings" = expectEach [
     golden
       "manifest_hole_plugin.mdk"
       "entry"
-      "[package.capabilities]\nFFI = true\nNet = true",
+      "[package.capabilities]\nFFI = \"c*\"\nNet = true",
   ),
 ]
 
 test "manifest_emit: manifest round trip through check-policy" = expectEach [
   (
     "round-trip-accept",
-    roundTrip "net_param_plugin.mdk" "transform" "FFI,Net=idp.example.com/api",
+    roundTrip "net_param_plugin.mdk" "transform" "FFI=c,Net=idp.example.com/api",
   ),
   (
     "round-trip-xmod-helper-effect",
@@ -214,7 +214,7 @@ test "manifest_emit: manifest round trip through check-policy" = expectEach [
 test "manifest_emit: narrowed policy is rejected" = expectEach [
   (
     "tightened-reject (narrowed param -> check-policy rc=1)",
-    rejects "net_param_plugin.mdk" "FFI,Net=other.com/api" "transform",
+    rejects "net_param_plugin.mdk" "FFI=c,Net=other.com/api" "transform",
   ),
 ]
 

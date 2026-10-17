@@ -22,10 +22,11 @@ import driver.front_gate.{
   frontGateOfEnv,
   writeGateAck,
   frontJsonAfterDrive,
+  jsonFrontKey,
   writeDiagJson,
 }
 export import support.util.{rootsOrDefault}
-import support.util.{splitLast, startsWith}
+import support.util.{splitLast, startsWith, joinNl}
 import types.typecheck.{
   ElabResult,
   elaborateOne,
@@ -43,16 +44,14 @@ import driver.diagnostics.{
   Diag,
   emitDiagExitCode,
   emitGateDiags,
-  ppDiagCliLines,
   renderTcDiags,
   residualOrGeneric,
-  srcLinesArr,
 }
 import types.target_profile.{
   TargetProfile, selectProfile, selectedProfile, targetProfileEnv
 }
 import tools.check_policy.{EntryAnalysis(..), analyzeProgram}
-import tools.target_check.{targetRefusal}
+import tools.target_check.{targetRefusal, ppTargetDiag}
 import backend.core_validate.{checkedTarget, checkedTargetOf}
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp}
 import driver.loader.{
@@ -448,21 +447,23 @@ selectTargetProfileOfEnv _ = match selectProfile (getEnv targetProfileEnv) None
 -- the same drive `elaborateModules` runs with the entry's schemes and
 -- invocation table kept, so the refusal costs no second drive.  It is the
 -- build's checking drive, so it poses a value `main`'s auto-print obligation.
+-- `paths` spells each module's file as the refusal is reported.
 elaborateForTarget : Option TargetProfile ->
   List (String, String, List Decl) ->
+  List (String, String) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (ElabResult, Option Diag)
-elaborateForTarget None _ runtimeDecls coreDecls modules =
+  (ElabResult, List Diag)
+elaborateForTarget None _ _ runtimeDecls coreDecls modules =
   let (elaborated, _, _) =
     elaborateModulesWithSchemes
       (valueMainCandidate coreDecls modules)
       runtimeDecls
       coreDecls
       modules
-  (elaborated, None)
-elaborateForTarget (Some p) modsWithPath runtimeDecls coreDecls modules =
+  (elaborated, [])
+elaborateForTarget (Some p) modsWithPath paths runtimeDecls coreDecls modules =
   let analysis =
     analyzeProgram
       (valueMainCandidate coreDecls modules)
@@ -471,7 +472,7 @@ elaborateForTarget (Some p) modsWithPath runtimeDecls coreDecls modules =
       modules
   (
     analysis.eaElab,
-    targetRefusal p (entryPathOf modsWithPath) analysis.eaTarget,
+    targetRefusal p (entryPathOf modsWithPath) paths analysis.eaTarget,
   )
 
 -- The refusal `check --target` gives, located in the entry file, under the
@@ -480,18 +481,18 @@ elaborateForTarget (Some p) modsWithPath runtimeDecls coreDecls modules =
 emitTargetGate : List (String, String, List Decl) ->
   List Decl ->
   Option TargetProfile ->
-  Option Diag ->
+  List Diag ->
   <IO> Unit
 emitTargetGate _ _ None _ = ()
-emitTargetGate modsWithPath _ (Some _) (Some d) =
+emitTargetGate _ runtimeDecls (Some p) [] =
+  checkedTarget := Some (checkedTargetOf p runtimeDecls)
+emitTargetGate modsWithPath _ (Some _) ds =
   let file = entryPathOf modsWithPath
   let src = match readFile file
     Ok text => text
     Err _ => ""
-  let _ = ePutStrLn (ppDiagCliLines (srcLinesArr src) file d)
+  let _ = ePutStrLn (joinNl (map (ppTargetDiag file src) ds))
   stageExit emitDiagExitCode
-emitTargetGate _ runtimeDecls (Some p) None =
-  checkedTarget := Some (checkedTargetOf p runtimeDecls)
 
 -- `emitFullGate` and `emitTargetGate` for the `--json` route: the drive's
 -- verdict is written as `check --json`'s envelope instead of rendered, with
@@ -507,7 +508,7 @@ emitJsonGate : String ->
   List (String, (List TcDiag, List TcDiag)) ->
   List (String, TcDiag) ->
   Option TargetProfile ->
-  Option Diag ->
+  List Diag ->
   <IO> CheckJson
 emitJsonGate path front modsWithPath runtimeDecls coreDecls modules perMod residual profile refusal =
   let verdict =
@@ -529,7 +530,7 @@ emitJsonGate path front modsWithPath runtimeDecls coreDecls modules perMod resid
           (map modIdToPath modsWithPath)
           (entryPathOf modsWithPath)
           residual
-      let _ = emitTargetGate modsWithPath runtimeDecls profile None
+      let _ = emitTargetGate modsWithPath runtimeDecls profile []
       cj
 
 export
@@ -577,8 +578,18 @@ runEmitAsked ask asyncDriver emitTail modsWithPath runtimeDecls coreDecls module
   -- program whose errors must not be read as that second elaboration's residual.
   let _ = resetTypeErrorsSticky ()
   let profile = selectTargetProfileOfEnv ()
+  let paths = map modIdToPath modsWithPath
+  let reported = match ask
+    None => paths
+    Some (_, front) => map ((mid, path) => (mid, jsonFrontKey front path)) paths
   let (elaborated, refusal) =
-    elaborateForTarget profile modsWithPath runtimeDecls coreDecls modules
+    elaborateForTarget
+      profile
+      modsWithPath
+      reported
+      runtimeDecls
+      coreDecls
+      modules
   let (coreE, modulesE, perMod, residual, _, _) = elaborated
   -- Both halves of the fold now read the trees the loader parsed: the elaboration
   -- above is the user's own program, so a diagnostic names the constructors and

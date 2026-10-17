@@ -1,9 +1,9 @@
 -- F1 (epic #2070): companion accept to ffi_stamp_bare_reject.mdk — same
--- explicitly-`<FFI>` extern, but the caller names `FFI` in its declared bound
+-- explicitly-`<FFI "c*">` extern, but the caller names `FFI` in its declared bound
 -- too, which the extern's written row satisfies ⇒ ACCEPT.
-extern ffiCall : Int -> <FFI> Int
+extern ffiCall : Int -> <FFI "c"> Int
 
-wrapFFI : Int -> <FFI> Int
+wrapFFI : Int -> <FFI "c*"> Int
 wrapFFI x = ffiCall x
 
 main : <IO> Unit

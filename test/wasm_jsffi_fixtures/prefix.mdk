@@ -1,0 +1,7 @@
+-- Imported by w_prefix.mdk; not a fixture of its own.
+extern foo : Int -> <FFI "js"> Int
+  bind js "jsPlus30"
+
+export
+useFoo : Int -> <FFI "js"> Int
+useFoo x = foo x

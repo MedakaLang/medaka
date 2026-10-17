@@ -12,6 +12,11 @@
 // MDK_ARGS as argv, and process stdout/stderr.  Every byte the module writes is
 // accumulated and written when the run ends, stdout before stderr.
 //
+// A `js` binding (docs/spec/WASM-SEMANTICS.md section 3.1) is supplied by a bindings
+// module: `node run.js <module.wasm> [bindings.mjs]`, or MEDAKA_JSFFI_BINDINGS=<path>.
+// Its named exports are the JS functions; a module that imports a binding it lacks
+// fails at the call.
+//
 // Exit codes: the program's `exit` code; 0 on completion; 1 on a trap, a failed
 // instantiation or a module built by an older compiler; 2 on a usage error.  A run
 // ends by setting `process.exitCode`, never `process.exit`: a write to a pipe past
@@ -75,8 +80,11 @@ const sink = {
   },
 };
 
+const bindingsPath = process.argv[3] || process.env.MEDAKA_JSFFI_BINDINGS;
+
 import(hostUrl).then(async ({ createHost, runProgram, OldEntryShape }) => {
-  const host = createHost('wasmgc/node', { vfs, args, getEnv: (n) => process.env[n], executablePath: nodePath.resolve(path), stdin, sink });
+  const bindings = bindingsPath ? await import(pathToFileURL(nodePath.resolve(bindingsPath)).href) : {};
+  const host = createHost('wasmgc/node', { bindings, vfs, args, getEnv: (n) => process.env[n], executablePath: nodePath.resolve(path), stdin, sink });
   const r = await runProgram(bytes, host);
   if (r.kind === 'exit') { process.exitCode = r.code; return; }
   if (r.kind === 'error') {

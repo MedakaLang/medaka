@@ -57,6 +57,7 @@ binRhs : Int -> Array Token -> Expr -> Int -> Token -> PR Expr -> PR Expr
 binRhsLevel : Int -> Int
 binTry : Int -> Array Token -> PR Expr -> Expr -> Int -> Token -> PR Expr
 bindAnnot : Expr -> Ty -> Expr -> List DoStmt
+bindHostFor : Token -> ParserE <> String
 bindPR : ParserE a b -> (b -> <a> ParserE a c) -> Array Token -> Int -> <a> PR c
 bindStmts : Expr -> Expr -> List DoStmt
 binderDomainP : Token -> Token -> ParserE <> (Option EffAtomTy)
@@ -170,6 +171,9 @@ expectedTokenMsg : Token -> String
 exprStmtFor : Int -> Expr -> Token -> ParserE <> (List DoStmt)
 exprToParams : Expr -> List Pat
 exprToPat : Expr -> Pat
+externBindLines : ParserE <> (List ExternBind)
+externBindP : ParserE <> ExternBind
+externBindsFor : Token -> Token -> ParserE <> (List ExternBind)
 externDataEnd : Bool -> String -> List (String, Option KindAnn) -> Token -> ParserE <> Decl
 externName : ParserE <> String
 externNameFor : Token -> ParserE <> String

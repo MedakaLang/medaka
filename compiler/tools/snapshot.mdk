@@ -136,7 +136,7 @@
 -- render (a diagnostic that just *disappeared*) is equally unblessable.  That direction
 -- matters — it is the one where a stage silently stops reporting an error.
 
-import frontend.ast.{Decl(..)}
+import frontend.ast.{Decl(..), ExternDecl(..)}
 import frontend.lexer.{
   tokenize,
   tokenToString,
@@ -554,7 +554,7 @@ externNamesOf : List Decl -> List String
 externNamesOf decls = flatMap externName decls
 
 externName : Decl -> List String
-externName (DExtern _ nm _) = [nm]
+externName (DExtern (ExternDecl { edName = nm, ... })) = [nm]
 externName _ = []
 
 -- Keep a `# TYPES_USER` line iff it is diagnostic prose (a `Warning:` / `TYPE ERROR:` line,

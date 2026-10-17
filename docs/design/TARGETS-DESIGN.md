@@ -1,6 +1,8 @@
 # Targets and host profiles
 
-**Status:** OPEN — ratified 2026-10-01, nothing built. Epic #3661; milestones
+**Status:** ratified 2026-10-01; the host-binding half (§7) and the profile
+table (§8.1) are built, the edge's fetch binding (§8.2) and the WASI seam (§8.4)
+are not. Epic #3661; milestones
 T1–T5 (`Targets: T1 (the catalog is data)` … `Targets: T5 (the edge profile)`).
 Every ruling in this document was taken by Val on 2026-10-01. Child issues cite
 its sections rather than restating them.
@@ -47,9 +49,10 @@ That ruling stands. None of it is implemented. Measured on 2026-10-01:
 - **The playground decides which stdlib modules ship by a hand list** in
   `playground/main.js`, and the "stubbed capability" regex is copied into
   `playground/render_docs.mjs` and `playground/guide_wasm_differential.mjs`.
-- **User code cannot call JavaScript.** `extern f : … -> <FFI "lib"> …` binds a
-  C symbol; `wasm_emit` refuses it (pinned by `test/wasm/diff_wasm_ffi_wall.sh`).
-  No issue tracked a JavaScript binding, a WASI target, or an edge profile.
+- **A user extern binds one function per host.** A `bind c` clause names a C
+  symbol and a `bind js` clause names a function the wasm host supplies (§7); a
+  reached extern with no binding for the target's host is refused by `check
+  --target` (`T-TARGET-NO-BINDING`).
 - **Some divergences are not capability gaps.** `canonicalizePath` lowered to
   identity on wasm until the host received the grant (§6.5); it now answers the
   host's `realpath`, and `test/native_fixtures/confinement/canonicalize_dots.mdk`
@@ -381,11 +384,17 @@ Issue: #3670 (fs slice receives the grant). Closes #3590.
 
 ## 7. Host bindings (T4)
 
+**Status of this section:** shipped. The per-host `bind` clause is accepted syntax
+(#3671), a `js` binding lowers to a `jsffi` import that the host supplies
+(#3672, `docs/spec/WASM-SEMANTICS.md` section 3.1), and one declaration with both
+a `bind c` and a `bind js` clause prints the same bytes built native and built
+for `wasmgc/node` (`test/two_host_fixtures/`, run by `test/wasm_jsffi_test.mdk`).
+
 ### 7.1 Why
 
-A user can call C (`extern f : … -> <FFI "lib"> …`, #2070) and cannot call
-JavaScript. A library that wants `fetch` on wasm and libcurl on native has no way
-to say so from one source. This is the one divergence §3.2 permits — the binding
+A user can call C (`extern f : … -> <FFI "c/lib"> …`, #2070) and, with a `bind js`
+clause, JavaScript. A library that wants `fetch` on wasm and libcurl on native
+says so from one source. This is the one divergence §3.2 permits — the binding
 of an extern — made available to users.
 
 ### 7.2 The shape
@@ -396,16 +405,21 @@ There is one rule, one `T-FFI-UNLABELLED` check, and symmetric walls (§7.5). A
 second label would double each of those.
 
 A declaration carries one binding per host ABI. The spelling is a parser
-decision inside #3671 (per-host bindings surface); the shape, with a placeholder
-syntax, is:
+decision inside #3671 (per-host bindings surface); the shape is below. Every
+type in the signature is crossable (§7.4), so `Bytes` is out and the result is a
+`String`:
 
-```medaka-nocheck: the binding form is not yet accepted syntax; this illustrates one declaration with two host bindings and a fallback body
-extern fetchText : (url : String) -> <Net url, FFI "js/fetch"> Result String String
-  bind c  "mdk_fetch_text"      -- llvm/native-posix: a C symbol, linked per [foreign-libraries]
-  bind js "env.fetchText"       -- wasmgc/*: an import the host's `jsffi` slice supplies
+```medaka-nocheck: needs libfetch at link time and a fetchText binding at run time
+extern fetchText : String -> <FFI "c/libfetch", FFI "js/fetch"> String
+  bind c  "fetch_text"          -- llvm/native-posix: a C symbol, linked per [foreign-libraries]
+  bind js "fetchText"           -- wasmgc/*: a function the host's bindings module supplies
 ```
 
-- A Medaka body may stand in for a host with no binding (the Gleam fallback).
+- The `js` string is a JavaScript name, not a module path: the host looks it up in
+  the bindings it was given. It must be written; a `js` binding is never implied
+  from the Medaka name or the `c` symbol.
+- A Medaka fallback body for a host with no binding (the Gleam fallback): not yet;
+  tracked in #4247.
 - The terminal row must name `FFI` with a prefix matching a host the declaration
   binds; `<>` is refused as today. The parameter stays in the `Prefix` domain;
   the first path element is the host ABI, which is what the walls key on.
@@ -414,7 +428,7 @@ extern fetchText : (url : String) -> <Net url, FFI "js/fetch"> Result String Str
 
 ### 7.3 Reached-means-error
 
-A declaration with no binding for the selected target and no fallback body is a
+A declaration with no binding for the selected target's host is a
 located error only when it survives dead-code elimination for that target. That
 is the Gleam and MoonBit rule, and it is what lets one library serve native and
 wasm from one source: the `js/` binding is simply not reached under
@@ -424,29 +438,42 @@ Issue: #3671 (per-host bindings surface).
 
 ### 7.4 Lowering a `js/` binding
 
-- The emitter turns a bound declaration into an `env` import named by its
-  binding, marshalled over the existing byte channel (WH5: GC references never
-  cross). The crossable surface is FFI v1's (#2073): `Int`, `Float`, `Bool`,
-  `Char`, `String`, `Bytes`, `Array Int`. A signature outside it is a located
-  refusal at the declaration with the same text the C side gives.
-- The host module gains a `jsffi` slice: `makeImports(profile, { bindings })`
-  installs each user binding under its import name. A binding the host did not
-  supply is a named `CapabilityError` at call time.
-- `test/wasm/run.js` accepts a bindings module so a gate can exercise a binding
-  end to end. The one-fixture-two-hosts probe — the same declaration bound to a
-  stub C library on native and a bindings module on wasm, returning the same
-  values — is the law's "never change a meaning" check for this feature.
+- The emitter turns a bound declaration into an import from the `jsffi` module
+  (not `env`, whose keys stay a closed catalog), named
+  `<jsName>:<P1>,...,<Pn>-><R>`: the signature is in the field name, so the host
+  learns it from `WebAssembly.Module.imports` and needs no side table.
+  `String` and `Array Int` cross over the existing path and result channels (WH5:
+  GC references never cross). The crossable surface is FFI v1's (#2073) less
+  `Bytes`: `Int`, `Float`, `Bool`, `Char`, `String`, `Array Int`, and the
+  fixed-width integers. A signature outside it is a located refusal at the
+  declaration with the same text the C side gives.
+- The host gains a `jsffi` slice: `createHost(profile, { bindings })` and
+  `makeImports(profile, { bindings })` put `host.imports.jsffi`, built from the
+  field name on first use. A binding the host did not supply is a named
+  `CapabilityError` at call time, never at instantiation; one that throws ends
+  the program with a `JsBindingError`, both streams flushed.
+- `test/wasm/run.js` accepts a bindings module (third argument or
+  `MEDAKA_JSFFI_BINDINGS`). The one-declaration-two-hosts fixture, `bind c` to a
+  stub C library on native and `bind js` to a bindings module on wasm, prints the
+  same bytes: the law's "never change a meaning" check for this feature.
+- The binding wall: an `Int` result outside 63 bits traps on both hosts, and an
+  `Array Int` result is a gap on both, so the two targets never give one
+  declaration two meanings.
 
 Issue: #3672 (js binding lowering).
 
 ### 7.5 Symmetric walls
 
-Today the wall is one-sided: `wasm_emit` refuses `FFI`, and LLVM has nothing to
-refuse. With prefixes both walls are `check`-time profile refusals (§5.4):
-`c/` reached under a `wasmgc/*` profile, `js/` reached under `llvm/native-posix`,
-and either under `medaka run`, which grants no `FFI` prefix. The emitter-side FFI
-refusals are deleted as unreachable; `test/wasm/diff_wasm_ffi_wall.sh` is
-generalized or migrated to a native test.
+The wasm emitter no longer refuses `FFI`: a `js`-bound extern lowers to a `jsffi`
+import (§7.4). The wall is on bindings, not on prefixes. `check --target` judges
+each extern the program reaches against the selected profile's host: a reached
+declaration with no binding for that host is refused at the declaration, naming
+how `main` reaches it (`T-TARGET-NO-BINDING`). A `js` binding that is not reached
+under `llvm/native-posix`, and a `c` binding not reached under a `wasmgc/*`
+profile, cost nothing. `medaka run` calls foreign code through no host, so any
+reached extern is refused there. The emitter keeps one backstop, a gap naming
+the extern, for a reached declaration that arrives with no `js` binding.
+`test/wasm/diff_wasm_ffi_wall.sh` pins the wall.
 
 Issue: #3673 (symmetric walls).
 
@@ -469,12 +496,12 @@ Issue: #3673 (symmetric walls).
 
 | Profile | Backend | Host ABI | Grants |
 |---|---|---|---|
-| `llvm/native-posix` | `llvm` | C symbols | every label; `FFI "c/*"` |
-| `eval/run` | interpreter | `ioExternBindings` | what `medaka run` installs today: `Stdout Stderr Stdin Clock Env Exec Rand FileRead FileWrite Net Signal`; no `FFI` |
-| `wasmgc/node` | `wasmgc` | `env` | `Stdout Stderr Stdin Clock Env Rand FileRead FileWrite`; `FFI "js/*"` with a bindings module |
-| `wasmgc/browser-worker` | `wasmgc` | `env` | `Stdout Stderr Clock Rand FileRead FileWrite` (vfs); `FFI "js/*"` through the playground's bindings |
-| `wasmgc/edge` | `wasmgc` | `env` | `Stdout Stderr Clock Rand`; `Net` through a fetch binding; `FFI "js/*"` |
-| `wasmgc/wasi-p2` | `wasmgc` | WIT | per world — a seam only, §8.4 |
+| `llvm/native-posix` | `llvm` | C symbols | every label; `FFI` (whole domain; the `c` binding host) |
+| `eval/run` | interpreter | `ioExternBindings` | what `medaka run` installs today: `Stdout Stderr Stdin Clock Env Exec Rand FileRead FileWrite Net Signal`; no `FFI`: an `eval/run` program reaches no foreign call |
+| `wasmgc/node` | `wasmgc` | `env` | `Stdout Stderr Stdin Clock Env Rand FileRead FileWrite FFI`; `js` bindings with a bindings module |
+| `wasmgc/browser-worker` | `wasmgc` | `env` | `Stdout Stderr Clock Rand FileRead FileWrite FFI` (vfs); `js` bindings through the playground's bindings |
+| `wasmgc/edge` | `wasmgc` | `env` | `Stdout Stderr Clock Rand FFI`; `Net` through a fetch binding (not yet granted, T3 #3668); `FFI` through `js` bindings |
+| `wasmgc/wasi-p2` | `wasmgc` | WIT | per world — a seam only, §8.4; grants `FFI` as implemented, with host `js` (an open ruling) |
 
 `Exec` is granted on native and `run` only. `Net` as raw sockets is granted on
 native and `run` only. `Signal` is native and `run` only.

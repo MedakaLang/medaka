@@ -1,0 +1,8 @@
+-- Bound to both hosts, with a row naming only `c`: the `js` binding is
+-- unused, which is legal.
+extern fetchText : String -> <FFI "c/libfetch"> String
+  bind c "fetch_text"
+  bind js "fetchText"
+
+main : <IO> Unit
+main = println "c-only row accept"

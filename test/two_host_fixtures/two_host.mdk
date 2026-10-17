@@ -1,0 +1,105 @@
+-- #3672 one declaration, two hosts: every extern here binds a C symbol (stub.c,
+-- linked into the native build) and a JS function (bindings.mjs, supplied to the
+-- wasmgc/node build).  Built either way the program prints the same bytes.
+--
+-- The lines below are decided from the C and JS bodies, not captured from a run;
+-- NaN and the infinities are tested, never printed, because their rendering is a
+-- float-formatting question this fixture is not about.
+--
+--   42                          hostAdd 20 22
+--   4611686018427387903         hostAdd at Int's top edge
+--   -4611686018427387904        hostAdd at Int's bottom edge
+--   6.0                         hostScale 1.5 4.0
+--   True                        NaN survives the crossing (nan /= nan)
+--   True                        -0.0 survives (1.0 / z < 0.0)
+--   True                        +0.0 stays +0.0
+--   True                        +infinity survives
+--   True                        -infinity survives
+--   False                       hostNot True
+--   True                        hostNot False
+--   b                           hostCharNext 'a'
+--   𝄞                           hostCharId of a char above the BMP
+--   [!]                         hostEcho "" appends "!"
+--   [héllo ✓ 𝄞!]                hostEcho of a non-ASCII string
+--   0                           hostByteLen ""
+--   15                          1+2+1+1+1+1+3+1+4 UTF-8 bytes
+--   6                           hostDouble returns the sum before doubling
+--   [|2, 4, 6|]                 the array copied back
+--   9                           notes "abc" (3 bytes) + "héllo" (6 bytes)
+--   5.5                         hostMix 2 0.5 "abc"
+extern hostAdd : Int -> Int -> <FFI "c", FFI "js"> Int
+  bind c "stub_add"
+  bind js "jsAdd"
+
+extern hostScale : Float -> Float -> <FFI "c", FFI "js"> Float
+  bind c "stub_scale"
+  bind js "jsScale"
+
+extern hostFloatId : Float -> <FFI "c", FFI "js"> Float
+  bind c "stub_float_id"
+  bind js "jsFloatId"
+
+extern hostNot : Bool -> <FFI "c", FFI "js"> Bool
+  bind c "stub_not"
+  bind js "jsNot"
+
+extern hostCharNext : Char -> <FFI "c", FFI "js"> Char
+  bind c "stub_char_next"
+  bind js "jsCharNext"
+
+extern hostCharId : Char -> <FFI "c", FFI "js"> Char
+  bind c "stub_char_id"
+  bind js "jsCharId"
+
+extern hostEcho : String -> <FFI "c", FFI "js"> String
+  bind c "stub_echo"
+  bind js "jsEcho"
+
+extern hostByteLen : String -> <FFI "c", FFI "js"> Int
+  bind c "stub_byte_len"
+  bind js "jsByteLen"
+
+extern hostDouble : Array Int -> Int -> <FFI "c", FFI "js"> Int
+  bind c "stub_double"
+  bind js "jsDouble"
+
+extern hostNote : String -> <FFI "c", FFI "js"> Unit
+  bind c "stub_note"
+  bind js "jsNote"
+
+extern hostNotesLen : Unit -> <FFI "c", FFI "js"> Int
+  bind c "stub_notes_len"
+  bind js "jsNotesLen"
+
+extern hostMix : Int -> Float -> String -> <FFI "c", FFI "js"> Float
+  bind c "stub_mix"
+  bind js "jsMix"
+
+main =
+  let _ = println (hostAdd 20 22)
+  let _ = println (hostAdd 4611686018427387903 0)
+  let _ = println (hostAdd (-4611686018427387904) 0)
+  let _ = println (hostScale 1.5 4.0)
+  let nan = hostFloatId (0.0 / 0.0)
+  let _ = println (nan /= nan)
+  let negZero = hostFloatId ((-1.0) * 0.0)
+  let _ = println (1.0 / negZero < 0.0)
+  let posZero = hostFloatId 0.0
+  let _ = println (1.0 / posZero > 0.0)
+  let _ = println (hostFloatId (1.0 / 0.0) > 1.0e308)
+  let _ = println (hostFloatId ((-1.0) / 0.0) < (-1.0e308))
+  let _ = println (hostNot True)
+  let _ = println (hostNot False)
+  let _ = println (hostCharNext 'a')
+  let _ = println (hostCharId '𝄞')
+  let _ = println "[\{hostEcho ""}]"
+  let _ = println "[\{hostEcho "héllo ✓ 𝄞"}]"
+  let _ = println (hostByteLen "")
+  let _ = println (hostByteLen "héllo ✓ 𝄞")
+  let xs = [|1, 2, 3|]
+  let _ = println (hostDouble xs 3)
+  let _ = println xs
+  let _ = hostNote "abc"
+  let _ = hostNote "héllo"
+  let _ = println (hostNotesLen ())
+  println (hostMix 2 0.5 "abc")

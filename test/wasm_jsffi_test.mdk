@@ -1,0 +1,233 @@
+{- | #3672 (js binding lowers to a host import): a user extern's `js` binding,
+   reached under `wasmgc/*`, is an import from the `jsffi` module, and a host
+   that supplies it runs the program.
+
+   Each fixture in `test/wasm_jsffi_fixtures` is built for wasm and run by
+   `stub_host.mjs` with the functions `bindings.mjs` exports.  The stub host is
+   test-local: it supplies `jsffi` itself, implementing
+   docs/spec/WASM-SEMANTICS.md section 3.1 over `createHost`'s channels.  Every
+   expected triple below is that section's answer: a `String` round trip
+   (empty and non-ASCII included), `Int` at both ends of its range, a binding
+   called directly, as a value and in tail position, the two `i64` results an
+   `Int` cannot hold, a binding that throws, a binding the host was not given,
+   a `String` result with a lone surrogate, and externs whose names differ by
+   a `w_` prefix.  The last two tests build the programs in
+   `test/two_host_fixtures` native and for wasm and check both outputs.
+
+   Runs under `medaka test --native`: it spawns the compiler and node. -}
+
+import compiler_cli_test_support.{inFreshDirOf, wasmBuildArgv}
+import test.{Expectation, expectAll, expectEqual, fail}
+import test_process.{boundedVerbSeconds, medakaBin, medakaRoot}
+
+corpus : <IO> String
+corpus = "\{medakaRoot}/test/wasm_jsffi_fixtures"
+
+-- `name`.mdk built for wasm into `scratch`, then run by the stub host: the
+-- exit code, stdout and stderr.  A stale compiler fails the build loudly
+-- (`MEDAKA_STRICT=1`).
+stubRun : String -> String -> <Exec, IO> Result String (Int, String, String)
+stubRun scratch name =
+  let wasm = "\{scratch}/\{name}.wasm"
+  match boundedVerbSeconds 60 "env" (wasmBuildArgv "\{corpus}/\{name}.mdk" wasm)
+    Err e => Err "medaka build --target wasm \{name}: \{e}"
+    Ok (code, out, err) =>
+      if code /= 0 then
+        Err
+          "medaka build --target wasm \{name} failed: exit=\{intToString code} \{debug (out ++ err)}"
+      else
+        boundedVerbSeconds 60 "node" [
+          "\{corpus}/stub_host.mjs",
+          wasm,
+          "\{corpus}/bindings.mjs",
+        ]
+
+runsAs : String -> String -> (Int, String, String) -> <Exec, IO> Expectation
+runsAs scratch name want = match stubRun scratch name
+  Err e => fail e
+  Ok got => expectEqual want got
+
+intRangeMsg : String -> String
+intRangeMsg binding =
+  "runtime error [E-PANIC]: foreign call '\{binding}' returned a value outside Int's range -4611686018427387904..4611686018427387903 (docs/spec/WASM-SEMANTICS.md section 3.1); declare the result I64 to receive the full 64-bit range\n"
+
+test "jsffi: each fixture under the stub host prints what WASM-SEMANTICS section 3.1 says" =
+  inFreshDirOf
+    (scratch => expectAll [
+      runsAs scratch "roundtrip" (
+        0,
+        "HELLO\n\nHÉLLO WÖRLD ✓ 𝄞\n[VALUE]\n4611686018427387903\n-4611686018427387904\n42\n[42]\n",
+        "",
+      ),
+      runsAs scratch "int_max" (1, "", intRangeMsg "jsIntMax"),
+      runsAs scratch "int_min" (1, "", intRangeMsg "jsIntMin"),
+      runsAs scratch "throws" (
+        1,
+        "before\n",
+        "runtime error: js binding `jsThrow` threw: boom: x\n",
+      ),
+      runsAs scratch "missing" (
+        1,
+        "before\n",
+        "runtime error: js binding `jsMissing` is not supplied by this host\n",
+      ),
+      runsAs scratch "lone_surrogate" (
+        1,
+        "",
+        "runtime error: js binding `jsLone` returned a string with a lone surrogate, not String\n",
+      ),
+      runsAs scratch "w_prefix" (0, "11\n21\n31\n", ""),
+    ])
+    (msg => fail msg)
+
+-- # The two-host cell: one declaration set, `bind c` and `bind js`.
+--
+-- test/two_host_fixtures/two_host.mdk built native (stub.c linked in) and built
+-- for wasmgc/node (run.js with bindings.mjs) must print the same bytes, and
+-- those bytes are the ones the fixture's header derives from the C and JS bodies.
+
+twoHostDir : <IO> String
+twoHostDir = "\{medakaRoot}/test/two_host_fixtures"
+
+expectTwoHost : String
+expectTwoHost =
+  "42\n4611686018427387903\n-4611686018427387904\n6.0\nTrue\nTrue\nTrue\nTrue\nTrue\nFalse\nTrue\nb\n𝄞\n[!]\n[héllo ✓ 𝄞!]\n0\n15\n6\n[|2, 4, 6|]\n9\n5.5\n"
+
+-- A spawn that must exit 0: its stdout, else the failure.
+mustRun : String -> Result String (Int, String, String) -> Result String String
+mustRun what (Err e) = Err "\{what}: could not spawn: \{e}"
+mustRun what (Ok (code, out, err)) =
+  if code /= 0 then
+    Err "\{what}: exit=\{intToString code} \{debug (out ++ err)}"
+  else
+    Ok out
+
+-- The runtime built without LTO (`ld -r` cannot merge ThinLTO bitcode) merged
+-- with stub.c: the object a native build links in through MEDAKA_RT_OBJ.
+twoHostObject : String -> <Exec, IO> Result String String
+twoHostObject scratch = do
+  _ <- mustRun
+    "emit-rt-obj"
+    (boundedVerbSeconds 600 "env" [
+      "MEDAKA_STRICT=1",
+      "MEDAKA_NO_LTO=1",
+      medakaBin,
+      "build",
+      "--emit-rt-obj",
+      "\{scratch}/rt.o",
+    ])
+  _ <- mustRun
+    "compile stub.c"
+    (boundedVerbSeconds 120 "clang" [
+      "-O2",
+      "-c",
+      "\{twoHostDir}/stub.c",
+      "-o",
+      "\{scratch}/stub.o",
+    ])
+  _ <- mustRun
+    "ld -r"
+    (boundedVerbSeconds 120 "ld" [
+      "-r",
+      "\{scratch}/rt.o",
+      "\{scratch}/stub.o",
+      "-o",
+      "\{scratch}/combined.o",
+    ])
+  Ok "\{scratch}/combined.o"
+
+-- The native build of `test/two_host_fixtures/<entry>.mdk`, linked with `obj`
+-- into `scratch/<out>.bin`, then run.
+nativeTwoHost : String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO> Result String String
+nativeTwoHost scratch obj entry out = do
+  _ <- mustRun
+    "build native \{entry}"
+    (boundedVerbSeconds 600 "env" [
+      "MEDAKA_STRICT=1",
+      "MEDAKA_RT_OBJ=\{obj}",
+      medakaBin,
+      "build",
+      "\{twoHostDir}/\{entry}.mdk",
+      "-o",
+      "\{scratch}/\{out}.bin",
+    ])
+  mustRun
+    "run native \{entry}"
+    (boundedVerbSeconds 60 "\{scratch}/\{out}.bin" [])
+
+-- The wasmgc/node build of the same program, run by run.js with the bindings
+-- module.
+wasmTwoHost : String -> String -> String -> <Exec, IO> Result String String
+wasmTwoHost scratch entry out =
+  match (mustRun
+    "build wasm \{entry}"
+    (boundedVerbSeconds
+      120
+      "env"
+      (wasmBuildArgv "\{twoHostDir}/\{entry}.mdk" "\{scratch}/\{out}.wasm")))
+    Err e => Err e
+    Ok _ =>
+      mustRun
+        "run wasm \{entry}"
+        (boundedVerbSeconds 60 "node" [
+          "\{medakaRoot}/test/wasm/run.js",
+          "\{scratch}/\{out}.wasm",
+          "\{twoHostDir}/bindings.mjs",
+        ])
+
+-- `entry` prints `want` built native and built for wasmgc/node.
+printsOnBothHosts : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO> Expectation
+printsOnBothHosts scratch obj entry out want = match (
+  nativeTwoHost scratch obj entry out,
+  wasmTwoHost scratch entry out,
+)
+  (Err e, _) => fail e
+  (_, Err e) => fail e
+  (Ok native, Ok wasm) => expectAll [
+    expectEqual want native,
+    expectEqual want wasm,
+  ]
+
+test "two hosts: one declaration with bind c and bind js prints the same bytes native and wasmgc/node" =
+  inFreshDirOf
+    (scratch => match twoHostObject scratch
+      Err e => fail e
+      Ok obj =>
+        printsOnBothHosts scratch obj "two_host" "two_host" expectTwoHost)
+    (msg => fail msg)
+
+-- # Extern identity on both hosts.
+--
+-- Each module's extern is its own declaration whatever another module names
+-- its own (`same_name/`), and a name a prelude interface method also has, or a
+-- primed one, denotes the extern (`method_names.mdk`).  Every expected line is
+-- derived in its fixture's header.
+test "two hosts: each extern is its own module's declaration, whatever its name" =
+  inFreshDirOf
+    (scratch => match twoHostObject scratch
+      Err e => fail e
+      Ok obj => expectAll [
+        printsOnBothHosts scratch obj "same_name/main" "same_name" "101\n201\n",
+        printsOnBothHosts
+          scratch
+          obj
+          "same_name/sig_main"
+          "same_sig"
+          "101\n6\n",
+        printsOnBothHosts
+          scratch
+          obj
+          "method_names"
+          "method_names"
+          "2022\n2022\n11\n[12]\n",
+      ])
+    (msg => fail msg)

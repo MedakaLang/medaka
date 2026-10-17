@@ -102,11 +102,11 @@ if [ -f "$PLAYGROUND" ] && node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGR
 # "compiler trap: unreachable" either way.  Both products must refuse, and refuse
 # by name; the second grep is the fall-through control.  The playground compiles
 # for wasmgc/browser-worker, so its refusal is the target check's, which names
-# the label and the extern the entry reaches it through, before the emitter runs.
+# the extern, the `js` binding it lacks and how `main` reaches it, before the emitter runs.
 cat > "$WORK/input.mdk" <<'EOF2'
-extern cNegate : Int -> <FFI "x"> Int
+extern cNegate : Int -> <FFI "c/x"> Int
 
-main : <FFI> Int
+main : <FFI "c*"> Int
 main = cNegate 5
 EOF2
 check_ffi_wall() {
@@ -116,11 +116,11 @@ check_ffi_wall() {
 }
 if [ -x "$MODULES" ]; then
   "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" >"$WORK/modules-ffi.out" 2>"$WORK/modules-ffi.err" && bad "modules emitter accepted an FFI extern"
-  check_ffi_wall modules-ffi "$WORK/modules-ffi.out" "$WORK/modules-ffi.err" "FFI extern 'cNegate' is native-only"
+  check_ffi_wall modules-ffi "$WORK/modules-ffi.out" "$WORK/modules-ffi.err" "the extern 'cNegate' has no \`js\` binding"
 else bad "modules emitter missing for the FFI-wall case"; fi
 if [ -f "$PLAYGROUND" ]; then
   node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground-ffi.out" 2>"$WORK/playground-ffi.err" && bad "playground compiler accepted an FFI extern"
-  check_ffi_wall playground-ffi "$WORK/playground-ffi.out" "$WORK/playground-ffi.err" 'via `main → cNegate`, and the target `wasmgc/browser-worker` does not grant FFI'
+  check_ffi_wall playground-ffi "$WORK/playground-ffi.out" "$WORK/playground-ffi.err" 'via `main → cNegate`, and has no binding for the host `js`, which the target `wasmgc/browser-worker`'
 else bad "playground compiler missing for the FFI-wall case"; fi
 # A declared bound builds in both products and is enforced when the program
 # runs: the host refuses the callback's read outside `cfg/*`, with the native

@@ -19,10 +19,9 @@
    source files, neither of which the interpreter binds. -}
 
 import fs.{expectUnitCount, fixtureFiles}
-import io.{getEnvOr}
 import list.{dropWhile, takeWhile}
 import string.{contains, endsWith, lines, startsWith, unlines}
-import compiler_cli_test_support.{inFreshDirOf}
+import compiler_cli_test_support.{inFreshDirOf, wasmBuildArgv}
 import test.{Expectation, expectAll, fail, pass}
 import test_process.{
   boundedVerb,
@@ -155,28 +154,12 @@ buildRejected scratch name fixture wantSubstring =
       else
         pass
 
--- The wasm emitter binary the CLI's `--target wasm` path execs; the gate
--- shard builds it but never exports the variable.
-wasmEmitter : <IO> String
-wasmEmitter =
-  getEnvOr "MEDAKA_WASM_EMITTER" "\{medakaRoot}/test/bin/wasm_emit_modules_main"
-
 -- The wasm arm: `fixture` built for `wasm` into `scratch` as `name.wasm`, which is
 -- run under node by test/wasm/run.js (the wasmgc/node profile, which grants Rand).
 wasmBuild : String -> String -> String -> <Exec, IO> Result String String
 wasmBuild scratch name fixture =
   let binPath = "\{scratch}/\{name}.wasm"
-  match boundedVerbSeconds 60 "env" [
-    "MEDAKA_STRICT=1",
-    "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
-    medakaBin,
-    "build",
-    "--target",
-    "wasm",
-    fixture,
-    "-o",
-    binPath,
-  ]
+  match boundedVerbSeconds 60 "env" (wasmBuildArgv fixture binPath)
     Err e => Err "medaka build --target wasm \{name}: \{e}"
     Ok (code, bo, be) =>
       if code /= 0 then
