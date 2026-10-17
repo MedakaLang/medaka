@@ -867,7 +867,7 @@ unaryFor TMinusTight = negUnary
 unaryFor TBang = defer
   advance
   e <- parseUnary
-  deferPure (EUnOp "!" e (Ref RNone))
+  deferPure (EUnOp "!" e unminted)
 unaryFor _ = parseInfix
 
 -- `-` in operand position.  A directly-following 2^62 literal is FUSED into a
@@ -890,7 +890,7 @@ negUnaryFor (TInt n lx)
 negUnaryFor _ = defer
   advance
   e <- parseUnary
-  deferPure (EUnOp "-" e (Ref RNone))
+  deferPure (EUnOp "-" e unminted)
 
 -- backtick infix application (``a `div` b``) has been removed.  The lexer still
 -- produces `TBacktickIdent` as a sentinel; a pre-grammar scan surfaces a located
@@ -959,7 +959,7 @@ derefArgFor : Token -> Parser Expr
 derefArgFor TBang = defer
   advance
   e <- parseAspat
-  deferPure (EUnOp "!" e (Ref RNone))
+  deferPure (EUnOp "!" e unminted)
 derefArgFor _ = failP "not a tight deref argument"
 
 -- The numeric-head test (`headIsNumeric`) walks the head's ELoc chain, so it runs
@@ -990,7 +990,7 @@ negLitArgFor TMinusTight (TInt n lx) = defer
 negLitArgFor TMinusTight (TWideInt hi lo lx) = defer
   advance
   advance
-  deferPure (EUnOp "-" (EWideLit hi lo (Ref RNone) lx) (Ref RNone))
+  deferPure (EUnOp "-" (EWideLit hi lo (Ref RNone) lx) unminted)
 negLitArgFor TMinusTight (TFloat f) = defer
   advance
   advance
@@ -7079,13 +7079,13 @@ parseResultWith src tokList offList =
 (DTypeSig false "unaryFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "unaryFor" ((PCon "TMinus")) (EVar "negUnary"))
 (DFunDef false "unaryFor" ((PCon "TMinusTight")) (EVar "negUnary"))
-(DFunDef false "unaryFor" ((PCon "TBang")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseUnary")) (ELam ((PVar "e")) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "EUnOp") (ELit (LString "!"))) (EVar "e")) (EApp (EVar "Ref") (EVar "RNone")))))))))
+(DFunDef false "unaryFor" ((PCon "TBang")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseUnary")) (ELam ((PVar "e")) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "EUnOp") (ELit (LString "!"))) (EVar "e")) (EVar "unminted"))))))))
 (DFunDef false "unaryFor" (PWild) (EVar "parseInfix"))
 (DTypeSig false "negUnary" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "negUnary" () (EApp (EApp (EVar "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EVar "negUnaryFor") (EVar "t2")))))
 (DTypeSig false "negUnaryFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "negUnaryFor" ((PCon "TInt" (PVar "n") (PVar "lx"))) (EIf (EApp (EVar "isIntMinLit") (EVar "n")) (EApp (EVar "located") (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EVar "Ref") (EVar "None"))) (EApp (EVar "Ref") (EVar "RNone"))) (EBinOp "++" (ELit (LString "-")) (EVar "lx"))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "negUnaryFor" (PWild) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseUnary")) (ELam ((PVar "e")) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "EUnOp") (ELit (LString "-"))) (EVar "e")) (EApp (EVar "Ref") (EVar "RNone")))))))))
+(DFunDef false "negUnaryFor" (PWild) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseUnary")) (ELam ((PVar "e")) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "EUnOp") (ELit (LString "-"))) (EVar "e")) (EVar "unminted"))))))))
 (DTypeSig false "parseInfix" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseInfix" () (EVar "parseApp"))
 (DTypeSig false "parseApp" (TyApp (TyCon "Parser") (TyCon "Expr")))
@@ -7106,7 +7106,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "derefArg" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "derefArg" () (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "derefArgFor") (EVar "t")))))
 (DTypeSig false "derefArgFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr"))))
-(DFunDef false "derefArgFor" ((PCon "TBang")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseAspat")) (ELam ((PVar "e")) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "EUnOp") (ELit (LString "!"))) (EVar "e")) (EApp (EVar "Ref") (EVar "RNone")))))))))
+(DFunDef false "derefArgFor" ((PCon "TBang")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseAspat")) (ELam ((PVar "e")) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "EUnOp") (ELit (LString "!"))) (EVar "e")) (EVar "unminted"))))))))
 (DFunDef false "derefArgFor" (PWild) (EApp (EVar "failP") (ELit (LString "not a tight deref argument"))))
 (DTypeSig false "negLitArg" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "negLitArg" ((PVar "head")) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "negLitArgGate") (EVar "head")) (EVar "t")))))
@@ -7117,7 +7117,7 @@ parseResultWith src tokList offList =
 (DFunDef false "negLitArgTight" () (EApp (EApp (EVar "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EVar "negLitArgFor") (EVar "TMinusTight")) (EVar "t2")))))
 (DTypeSig false "negLitArgFor" (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr")))))
 (DFunDef false "negLitArgFor" ((PCon "TMinusTight") (PCon "TInt" (PVar "n") (PVar "lx"))) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EApp (EApp (EVar "ENumLit") (EApp (EVar "negateLiteral") (EVar "n"))) (EApp (EVar "Ref") (EVar "None"))) (EApp (EVar "Ref") (EVar "RNone"))) (EBinOp "++" (ELit (LString "-")) (EVar "lx")))))))))
-(DFunDef false "negLitArgFor" ((PCon "TMinusTight") (PCon "TWideInt" (PVar "hi") (PVar "lo") (PVar "lx"))) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "EUnOp") (ELit (LString "-"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EApp (EVar "Ref") (EVar "RNone"))) (EVar "lx"))) (EApp (EVar "Ref") (EVar "RNone")))))))))
+(DFunDef false "negLitArgFor" ((PCon "TMinusTight") (PCon "TWideInt" (PVar "hi") (PVar "lo") (PVar "lx"))) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EApp (EApp (EVar "EUnOp") (ELit (LString "-"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EApp (EVar "Ref") (EVar "RNone"))) (EVar "lx"))) (EVar "unminted"))))))))
 (DFunDef false "negLitArgFor" ((PCon "TMinusTight") (PCon "TFloat" (PVar "f"))) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "deferPure") (EApp (EVar "ELit") (EApp (EVar "LFloat") (EApp (EVar "negate") (EVar "f"))))))))))
 (DFunDef false "negLitArgFor" (PWild PWild) (EApp (EVar "failP") (ELit (LString "not a tight negative literal argument"))))
 (DTypeSig false "headIsNumeric" (TyFun (TyCon "Expr") (TyCon "Bool")))
@@ -9045,13 +9045,13 @@ parseResultWith src tokList offList =
 (DTypeSig false "unaryFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "unaryFor" ((PCon "TMinus")) (EVar "negUnary"))
 (DFunDef false "unaryFor" ((PCon "TMinusTight")) (EVar "negUnary"))
-(DFunDef false "unaryFor" ((PCon "TBang")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseUnary")) (ELam ((PVar "e")) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "EUnOp") (ELit (LString "!"))) (EVar "e")) (EApp (EVar "Ref") (EVar "RNone")))))))))
+(DFunDef false "unaryFor" ((PCon "TBang")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseUnary")) (ELam ((PVar "e")) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "EUnOp") (ELit (LString "!"))) (EVar "e")) (EVar "unminted"))))))))
 (DFunDef false "unaryFor" (PWild) (EVar "parseInfix"))
 (DTypeSig false "negUnary" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "negUnary" () (EApp (EApp (EMethodRef "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EVar "negUnaryFor") (EVar "t2")))))
 (DTypeSig false "negUnaryFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "negUnaryFor" ((PCon "TInt" (PVar "n") (PVar "lx"))) (EIf (EApp (EVar "isIntMinLit") (EVar "n")) (EApp (EVar "located") (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EVar "Ref") (EVar "None"))) (EApp (EVar "Ref") (EVar "RNone"))) (EBinOp "++" (ELit (LString "-")) (EVar "lx"))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "negUnaryFor" (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseUnary")) (ELam ((PVar "e")) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "EUnOp") (ELit (LString "-"))) (EVar "e")) (EApp (EVar "Ref") (EVar "RNone")))))))))
+(DFunDef false "negUnaryFor" (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseUnary")) (ELam ((PVar "e")) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "EUnOp") (ELit (LString "-"))) (EVar "e")) (EVar "unminted"))))))))
 (DTypeSig false "parseInfix" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseInfix" () (EVar "parseApp"))
 (DTypeSig false "parseApp" (TyApp (TyCon "Parser") (TyCon "Expr")))
@@ -9072,7 +9072,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "derefArg" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "derefArg" () (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "derefArgFor") (EVar "t")))))
 (DTypeSig false "derefArgFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr"))))
-(DFunDef false "derefArgFor" ((PCon "TBang")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseAspat")) (ELam ((PVar "e")) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "EUnOp") (ELit (LString "!"))) (EVar "e")) (EApp (EVar "Ref") (EVar "RNone")))))))))
+(DFunDef false "derefArgFor" ((PCon "TBang")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseAspat")) (ELam ((PVar "e")) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "EUnOp") (ELit (LString "!"))) (EVar "e")) (EVar "unminted"))))))))
 (DFunDef false "derefArgFor" (PWild) (EApp (EVar "failP") (ELit (LString "not a tight deref argument"))))
 (DTypeSig false "negLitArg" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "negLitArg" ((PVar "head")) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "negLitArgGate") (EVar "head")) (EVar "t")))))
@@ -9083,7 +9083,7 @@ parseResultWith src tokList offList =
 (DFunDef false "negLitArgTight" () (EApp (EApp (EMethodRef "deferThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EVar "negLitArgFor") (EVar "TMinusTight")) (EVar "t2")))))
 (DTypeSig false "negLitArgFor" (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr")))))
 (DFunDef false "negLitArgFor" ((PCon "TMinusTight") (PCon "TInt" (PVar "n") (PVar "lx"))) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EApp (EVar "ENumLit") (EApp (EVar "negateLiteral") (EVar "n"))) (EApp (EVar "Ref") (EVar "None"))) (EApp (EVar "Ref") (EVar "RNone"))) (EBinOp "++" (ELit (LString "-")) (EVar "lx")))))))))
-(DFunDef false "negLitArgFor" ((PCon "TMinusTight") (PCon "TWideInt" (PVar "hi") (PVar "lo") (PVar "lx"))) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "EUnOp") (ELit (LString "-"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EApp (EVar "Ref") (EVar "RNone"))) (EVar "lx"))) (EApp (EVar "Ref") (EVar "RNone")))))))))
+(DFunDef false "negLitArgFor" ((PCon "TMinusTight") (PCon "TWideInt" (PVar "hi") (PVar "lo") (PVar "lx"))) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EVar "EUnOp") (ELit (LString "-"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EApp (EVar "Ref") (EVar "RNone"))) (EVar "lx"))) (EVar "unminted"))))))))
 (DFunDef false "negLitArgFor" ((PCon "TMinusTight") (PCon "TFloat" (PVar "f"))) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EMethodRef "deferPure") (EApp (EVar "ELit") (EApp (EVar "LFloat") (EApp (EMethodRef "negate") (EVar "f"))))))))))
 (DFunDef false "negLitArgFor" (PWild PWild) (EApp (EVar "failP") (ELit (LString "not a tight negative literal argument"))))
 (DTypeSig false "headIsNumeric" (TyFun (TyCon "Expr") (TyCon "Bool")))

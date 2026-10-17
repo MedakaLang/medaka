@@ -1547,14 +1547,13 @@ public export data Expr =
   -- operand gets `RNone` or a scalar tag, and the node stays the builtin operator.
   -- An `unminted` site answers `RNone`.  sexp/astdump ignore the id.
   | EBinOp String Expr Expr EvId
-  -- Roadmap #18c: the trailing route ref is filled by
-  -- resolveUnopSites for `-` (Num's `negate`) when the operand grounds to a
-  -- NON-primitive Num type; dictPass then rewrites such a stamped node into
-  -- `EMethodAt "negate"` so eval dispatches to the user impl.  RNone for
-  -- Int/Float → the structural-builtin EUnOp eval path (unchanged). `!` never
-  -- routes (unopMethod "!" = None). The parser always builds a fresh
-  -- `Ref RNone`; sexp/astdump ignore the ref.
-  | EUnOp String Expr (Ref Route)
+  -- A unary operator.  The trailing `EvId` names the operator's site, minted as
+  -- for `EBinOp`.  For `-` (Num's `negate`) whose operand grounds to a non-primitive
+  -- Num type the solver publishes a dispatch route under that id, and dictPass
+  -- rewrites the node into `EMethodAt "negate"`; a primitive operand answers `RNone`
+  -- or a scalar tag and the node stays the builtin operator.  `!` never routes
+  -- (`unopMethod "!"` = None).  sexp/astdump ignore the id.
+  | EUnOp String Expr EvId
   | EInfix String Expr Expr
   -- field access `r.f`.  The trailing `Ref String` is the resolved record head
   -- (stamped by typecheck's inferFieldAccess; "" = unknown).  The emitter reads
@@ -2479,8 +2478,8 @@ mapFunClausesB f ((FunClause ps e) :: rest) =
 -- constructor-for-constructor (kept in lockstep with the AST — a new Expr node
 -- there makes THIS match non-exhaustive — a WARNING at exit 0, see the section
 -- header above; NOT a build error), but threads the
--- change flag purely.  Site fields, the cells of EUnOp/EFieldAccess/ESlice/EIndex/
--- ERecordUpdate/ENumLit/EWideLit and the ids of EBinOp/EMethodAt/EDictAt, are
+-- change flag purely.  Site fields, the cells of EFieldAccess/ESlice/EIndex/
+-- ERecordUpdate/ENumLit/EWideLit and the ids of EBinOp/EUnOp/EMethodAt/EDictAt, are
 -- carried through unchanged.
 export
 mapTyInExpr : (Ty -> (Ty, Bool)) -> Expr -> (Expr, Bool)

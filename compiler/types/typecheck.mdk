@@ -16732,7 +16732,7 @@ infer env (ETuple es) = tupleMono (inferEach env es)
 infer env (EListLit es) = inferListLit env es
 infer env (EAnnot e ty) = inferAnnot env e ty
 infer env (EBinOp op l r ev) = inferBinopE env op l r (siteRouteCell ev)
-infer env (EUnOp op e dref) = inferUnopE env op e dref
+infer env (EUnOp op e ev) = inferUnopE env op e (siteRouteCell ev)
 infer env (EInfix op l r) = inferInfix env op l r
 infer env (ERecordCreate name fields) = inferRecordCreate env name fields
 infer env (EFieldAccess e fname r) = inferFieldAccess env e fname r
@@ -28509,8 +28509,13 @@ rewriteArgScoped rw bound (EBinOp op l r ev) = EBinOp op (rewriteArgScoped
   mintOpSite ()
 else
   ev)
-rewriteArgScoped rw bound (EUnOp op x dr) =
-  EUnOp op (rewriteArgScoped rw bound x) dr
+rewriteArgScoped rw bound (EUnOp op x ev) = EUnOp op (rewriteArgScoped
+  rw
+  bound
+  x) (if isUnminted ev then
+  mintOpSite ()
+else
+  ev)
 rewriteArgScoped rw bound (EInfix op l r) =
   EInfix op (rewriteArgScoped rw bound l) (rewriteArgScoped rw bound r)
 rewriteArgScoped rw bound (EFieldAccess e0 n r) =
@@ -35920,14 +35925,14 @@ rewriteBinopExpr (ENumLit n fref dref _) = match !fref
 -- route; Int/Float (RNone or a scalar tag) stay the literal EUnOp the eval builtin handles
 -- structurally (no recursion — Int's own `negate` body uses the BINOP `0 - a`, and
 -- Float's unary minus has a scalar operand).  `!` never routes (stays RNone).
-rewriteBinopExpr (EUnOp op e routeRef) = match !routeRef
-  RNone => EUnOp op e routeRef
+rewriteBinopExpr (EUnOp op e ev) = match evSiteRoute ev
+  RNone => EUnOp op e ev
   -- a primitive operand's scalar tag: the builtin negation, as for an unrouted site
-  RScalar _ => EUnOp op e routeRef
+  RScalar _ => EUnOp op e ev
   RKey word _ _ if op == "-"
     && isI32Head (literalRouteHead word)
     && isSome (negatedI32Lit e) => ELit (LInt (optionOr 0 (negatedI32Lit e)))
-  _ => unopMethodApp op e routeRef
+  route => unopMethodApp op e route
 -- A wide literal is a `U64` or `I64` constant (`checkWideLiterals` has refused it
 -- at any other type, so a program that reaches eval/emit only has it at those).
 -- At `I64` the halves are the pattern of the magnitude; a `-` around it is the
@@ -36016,10 +36021,10 @@ binopDispatchMethod op = match arithDispatchMethod op
 -- The EUnOp analogue of binopMethodApp: one operand, no `/=`-style postfix
 -- (unopMethod only ever routes `-`).  Reuses binopRouteSplit (a generic
 -- Route-ripping helper — nothing about it is binop-specific).
-unopMethodApp : String -> Expr -> Ref Route -> Expr
-unopMethodApp op e routeRef =
+unopMethodApp : String -> Expr -> Route -> Expr
+unopMethodApp op e route =
   let method = optionOr "negate" (unopMethod op)
-  let split = binopRouteSplit !routeRef
+  let split = binopRouteSplit route
   EApp
     (EMethodAt
       method

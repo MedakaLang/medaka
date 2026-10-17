@@ -3325,7 +3325,7 @@ unknownRecordFresh : String -> Mono
 unknownRecordMsg : String -> String
 unmarkGrantOnly : EvId -> Unit
 unopMethod : String -> Option String
-unopMethodApp : String -> Expr -> Ref Route -> Expr
+unopMethodApp : String -> Expr -> Route -> Expr
 unprotectedNumCandidates : Map String Unit -> List UObligation -> List Int
 unquantifiedAuthIds : Scheme -> Map Int Unit
 unreachableArmWarning : String

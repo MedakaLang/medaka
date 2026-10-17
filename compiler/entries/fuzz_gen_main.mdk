@@ -520,7 +520,7 @@ invOrd ctx a =
   let y = genData ctx (adtName a) 2
   [
     binop "==" (binop "<" x y) (EApp (EApp (EVar "lt") x) y),
-    EUnOp "not" (binop "&&" (binop "<" x y) (binop "<" y x)) (Ref RNone),
+    EUnOp "not" (binop "&&" (binop "<" x y) (binop "<" y x)) unminted,
     binop "<=" x x,
   ]
 
@@ -531,7 +531,7 @@ invOrdTrans ctx =
   let c = genExpr ctx GInt 1
   binop
     "||"
-    (EUnOp "not" (binop "&&" (binop "<=" a b) (binop "<=" b c)) (Ref RNone))
+    (EUnOp "not" (binop "&&" (binop "<=" a b) (binop "<=" b c)) unminted)
     (binop "<=" a c)
 
 -- ── program assembly ────────────────────────────────────────────────────────
