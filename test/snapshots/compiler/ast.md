@@ -1,5 +1,5 @@
 # META
-source_lines=2757
+source_lines=2759
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -1362,9 +1362,11 @@ intMinLiteralHelp =
 -- half.  The module half is a TRIPWIRE: it is what lets that lookup panic instead of
 -- answering when an entry comes back stamped by a module the node did not ask for.
 --
--- The tripwire cannot fire for today's sole consumer, because an `EDictAt` carries
--- the very id `freshEvId` stamped into its goal, so the comparison is a tautology at
--- every live site.  It is still not dead weight, and a reader must not conclude from
+-- The tripwire cannot fire for today's readers (`evSiteRoute`, `evSiteLit`,
+-- `evSiteHead`, `evMethodRoutes` and `evDictRoutes` in `types/route_key.mdk`),
+-- because each reads with the id its own node carries, the very id `freshEvId`
+-- stamped into the goal, so the comparison is a tautology at every live site.  It is
+-- still not dead weight, and a reader must not conclude from
 -- the ordinals' present uniqueness that the module half can be dropped: a memo layer
 -- that swapped a whole cell rather than rewinding it, or any change that made
 -- ordinals per-module, resurrects a stale or colliding ordinal — and a per-module
