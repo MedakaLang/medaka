@@ -211,6 +211,7 @@ import support.util.{
   filterList,
 }
 import support.path.{chopExt, baseOf}
+import driver.profile_select.{carryProjectProfile}
 import regex.{Regex, Match, Group, mustCompile, isFullMatch, find}
 import string.{
   split,
@@ -756,6 +757,9 @@ workerOne : String ->
   <IO> Unit
 workerOne root sel runtimeDecls coreDecls path =
   let _ = putLineFlush "BEGIN \{path}"
+  let _ = match carryProjectProfile None path
+    Err msg => emitDiagSection root "CRASH" "\{msg}\n"
+    Ok _ => ()
   let _ = workerRender root sel runtimeDecls coreDecls path
   putLineFlush "END \{path}"
 

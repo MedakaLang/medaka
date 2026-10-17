@@ -37,6 +37,12 @@ import support.path.{dirOf, chopExt, joinPath}
 import frontend.parser.{parseResult}
 import frontend.parse_cache.{notePreludeParse}
 import types.target_profile.{selectedProfile, profileName, targetProfileEnv}
+import driver.front_gate.{
+  GateAsk,
+  gateAssignments,
+  noGateAssignments,
+  readDiagJson,
+}
 import driver.diagnostics.{
   Diag,
   Severity(..),
@@ -56,11 +62,15 @@ import driver.diagnostics.{
 --   keptIr        = where --keep-ir copied the IR, when the copy succeeded
 --   emitterStderr = the emitter subprocess's own stderr, verbatim ("" = none)
 --   notes         = build-STAGE diagnostics (a failed keep-IR copy today)
+--   diagEnvelope  = the `--json` route's (entry key, `check --json` envelope)
+--                   the emitter child wrote, when it is the build's answer: a
+--                   front-end refusal, or a build that went on to succeed
 public export data BuildReport = BuildReport {
   status : String,
   keptIr : Option String,
   emitterStderr : String,
   notes : List Diag,
+  diagEnvelope : Option (String, String),
 }
 
 -- A build either succeeds (writing the binary) or fails; both arms report the
@@ -74,6 +84,7 @@ buildOk status = Ok BuildReport {
   keptIr = None,
   emitterStderr = "",
   notes = [],
+  diagEnvelope = None,
 }
 
 export
@@ -83,6 +94,7 @@ buildErr status = Err BuildReport {
   keptIr = None,
   emitterStderr = "",
   notes = [],
+  diagEnvelope = None,
 }
 
 -- Backend target: TNative = the LLVM/clang native binary (default); TWasm =
@@ -97,18 +109,36 @@ withBuildNotes : Option String ->
   List Diag ->
   Result BuildReport BuildReport ->
   Result BuildReport BuildReport
-withBuildNotes kept emitErr ns (Ok r) = Ok BuildReport {
-  status = r.status,
-  keptIr = kept,
-  emitterStderr = emitErr,
-  notes = ns,
+withBuildNotes kept emitErr ns (Ok r) =
+  Ok ({ r | keptIr = kept, emitterStderr = emitErr, notes = ns })
+withBuildNotes kept emitErr ns (Err r) =
+  Err ({ r | keptIr = kept, emitterStderr = emitErr, notes = ns })
+
+-- The child's envelope rides on the report only when it is the build's
+-- answer: a build that went on to succeed, or (`refusedWith`) the child's own
+-- refusal.  A later failure (clang, wasm-tools) is reported as itself.
+withEnvelopeOk : Option (String, String) ->
+  Result BuildReport BuildReport ->
+  Result BuildReport BuildReport
+withEnvelopeOk env (Ok r) = Ok ({ r | diagEnvelope = env })
+withEnvelopeOk _ err = err
+
+refusedWith : Option (String, String) ->
+  String ->
+  Result BuildReport BuildReport
+refusedWith env status = Err BuildReport {
+  status = status,
+  keptIr = None,
+  emitterStderr = "",
+  notes = [],
+  diagEnvelope = env,
 }
-withBuildNotes kept emitErr ns (Err r) = Err BuildReport {
-  status = r.status,
-  keptIr = kept,
-  emitterStderr = emitErr,
-  notes = ns,
-}
+
+-- The envelope the child wrote, when this build asked for one.
+askedEnvelope : Option GateAsk -> String -> <IO> Option (String, String)
+askedEnvelope (Some ask) path =
+  if ask.askDiagJson then readDiagJson path else None
+askedEnvelope None _ = None
 
 -- The plain-CLI rendering of a report: byte-for-byte what `medaka build`
 -- printed when these three facts were string-concatenated onto the status
@@ -736,19 +766,23 @@ keepIrOutcome path contents = match writeFile path contents
 -- outPath  = output binary path
 -- keepIrCli = True iff `--keep-ir` was passed on the command line (OR'd with
 --             MEDAKA_KEEP_IR inside effectiveKeepIr)
--- quietEmitStderr = True on the `--json` route only.  The child's stderr is the
---             build's diagnostics, and on that route this process has ALREADY
---             rendered the same diagnostics into the stdout envelope through
---             `checkJsonFileParts`, so forwarding the human copy reports one
---             diagnostic twice on two channels — which no other verb does, and
---             which docs/ops/CLI-CONFORMANCE.md exemplar X9 pins as empty stderr
---             for the `--json` route.  This suppresses the DUPLICATE only: a
---             failing emit still carries the child's text, through the report's
---             `status` and into `cjBuildFailedJson`, so nothing goes silent.
+-- quietEmitStderr = True on the `--json` route only.  On that route the
+--             child's verdict reaches stdout as the envelope it writes
+--             (`diagEnvelope`), so its stderr is not forwarded:
+--             docs/ops/CLI-CONFORMANCE.md exemplar X9 pins empty stderr for the
+--             `--json` route.  A failing emit still carries the child's text,
+--             through the report's `status` and into `cjBuildFailedJson`, so
+--             nothing goes silent.
 -- stampBuild = True iff `--stamp-build` was passed: link a provenance object so
 --             the binary's own `buildCommit`/`buildFingerprint`/`buildDate` read
 --             real strings instead of "" (see provenanceObject).  The wasm target
 --             has no such object and ignores it.
+-- frontGate = `Some ask` when the emitter child runs the program's front-end
+--             gate (`driver/front_gate.frontGate`): the `build` verb, whose
+--             process does no front-end work of its own.  `askDiagJson` (the
+--             `--json` route) also has the child write its verdict as
+--             `check --json`'s envelope, read back into `diagEnvelope`.  `None`
+--             starts the child ungated, as every other caller does.
 export
 runBuild : String ->
   String ->
@@ -759,8 +793,9 @@ runBuild : String ->
   Bool ->
   Bool ->
   Bool ->
+  Option GateAsk ->
   <IO> Result BuildReport BuildReport
-runBuild root medaka cc TNative inputAbs outPath keepIrCli quietEmitStderr stampBuild =
+runBuild root medaka cc TNative inputAbs outPath keepIrCli quietEmitStderr stampBuild frontGate =
   let _ = sweepStaleTempDirs ()
   runBuildNative
     root
@@ -771,9 +806,10 @@ runBuild root medaka cc TNative inputAbs outPath keepIrCli quietEmitStderr stamp
     keepIrCli
     quietEmitStderr
     stampBuild
-runBuild root medaka cc TWasm inputAbs outPath keepIrCli quietEmitStderr _ =
+    frontGate
+runBuild root medaka cc TWasm inputAbs outPath keepIrCli quietEmitStderr _ frontGate =
   let _ = sweepStaleTempDirs ()
-  runBuildWasm root medaka inputAbs outPath keepIrCli quietEmitStderr
+  runBuildWasm root medaka inputAbs outPath keepIrCli quietEmitStderr frontGate
 
 -- ---- native (LLVM/clang) target — the original path ----
 -- Wrapper: allocate the per-invocation scratch dir (see makeTempDir), run the
@@ -788,8 +824,9 @@ runBuildNative : String ->
   Bool ->
   Bool ->
   Bool ->
+  Option GateAsk ->
   <IO> Result BuildReport BuildReport
-runBuildNative root medaka cc inputAbs outPath keepIrCli quietEmitStderr stampBuild =
+runBuildNative root medaka cc inputAbs outPath keepIrCli quietEmitStderr stampBuild frontGate =
   match makeTempDir ()
     Err e =>
       buildErr "error: could not create a scratch directory for the build: \{e}"
@@ -805,12 +842,11 @@ runBuildNative root medaka cc inputAbs outPath keepIrCli quietEmitStderr stampBu
           keepIrCli
           quietEmitStderr
           stampBuild
+          frontGate
       let _ = cleanupTempDir tmpDir
       res
 
--- Thin compatibility wrapper: every existing caller wants the plain P0-13 root
--- set with nothing extra appended. Delegates to runBuildNativeRoots with
--- extraRoots = [] — byte-identical behavior to the pre-Stage-0 function.
+-- The build verb's root set: the plain P0-13 roots with nothing extra appended.
 runBuildNativeIn : String ->
   String ->
   String ->
@@ -820,9 +856,10 @@ runBuildNativeIn : String ->
   Bool ->
   Bool ->
   Bool ->
+  Option GateAsk ->
   <IO> Result BuildReport BuildReport
-runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli quietEmitStderr stampBuild =
-  runBuildNativeRoots
+runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli quietEmitStderr stampBuild frontGate =
+  runBuildNativeRootsGo
     root
     medaka
     cc
@@ -835,12 +872,14 @@ runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli quietEmitStder
     quietEmitStderr
     stampBuild
     BuildNormal
+    frontGate
 
--- Probe the C compiler up front — the native analogue of probeWasmTools
--- below, run BEFORE the emitter/link path so a missing/misconfigured `cc`
--- (respects CC — never hardcodes "clang") is diagnosed immediately instead
--- of surfacing as an opaque "clang failed linking" from deep inside the
--- link step (issue #2514).
+-- Probe the C compiler before the link, so a missing/misconfigured `cc`
+-- (respects CC — never hardcodes "clang") is diagnosed as such instead of
+-- surfacing as an opaque "clang failed linking" from deep inside the link step
+-- (issue #2514).  It runs after a successful emit, not before it: the emitter
+-- child may be the build's front end, and a diagnostic about the program comes
+-- before a complaint about a tool.
 probeClang : String -> <IO> Option Unit
 probeClang cc = match runCommand cc ["--version"]
   -- fail-open-by-design: any non-clean version check reports "missing"
@@ -892,25 +931,31 @@ runBuildNativeRoots : String ->
   BuildProfile ->
   <IO> Result BuildReport BuildReport
 runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr stampBuild profile =
-  match probeClang cc
-    None => buildErr (clangMissingError cc)
-    Some _ =>
-      runBuildNativeRootsGo
-        root
-        medaka
-        cc
-        inputAbs
-        outPath
-        tmpDir
-        keepIrCli
-        extraRoots
-        strictEmit
-        quietEmitStderr
-        stampBuild
-        profile
+  -- The callers are `medaka test`'s native engines: the project profile gates
+  -- the test verb's own typecheck, and these synthesized entries are an engine
+  -- detail that runs under no profile, so the child is handed none.
+  let held = !selectedProfile
+  selectedProfile := None
+  let res =
+    runBuildNativeRootsGo
+      root
+      medaka
+      cc
+      inputAbs
+      outPath
+      tmpDir
+      keepIrCli
+      extraRoots
+      strictEmit
+      quietEmitStderr
+      stampBuild
+      profile
+      None
+  selectedProfile := held
+  res
 
--- The original body, unmoved — split out only so the up-front probe above
--- doesn't force reindenting this whole function under a match arm.
+-- `runBuildNativeRoots` with the emitter child's front-end gate selectable
+-- (`runBuild`'s `frontGate`); the exported entry never selects it.
 runBuildNativeRootsGo : String ->
   String ->
   String ->
@@ -923,8 +968,9 @@ runBuildNativeRootsGo : String ->
   Bool ->
   Bool ->
   BuildProfile ->
+  Option GateAsk ->
   <IO> Result BuildReport BuildReport
-runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr stampBuild profile =
+runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr stampBuild profile frontGate =
   let emitter = joinPath root "compiler/entries/llvm_emit_modules_main.mdk"
   let runtimeP = joinPath root "stdlib/runtime.mdk"
   let preludeP = joinPath root "stdlib/core.mdk"
@@ -971,15 +1017,17 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
   -- names its own culprit instead of reporting one opaque 1.4 s number.
   let perfOn = perfEnabled ()
   let tEmit0 = now ()
-  let emitRes = runEmitterFor emitProg emitArgs
+  let diagPath = joinPath tmpDir "diag.json"
+  let emitRes = runEmitterFor frontGate diagPath emitProg emitArgs
   let tEmit1 = now ()
   let _ = emitPhase perfOn "emit-ir" (tEmit1 - tEmit0) inputAbs
   match emitRes
     Err e => buildErr "error: could not run the emitter `\{emitProg}`: \{e}"
     Ok (code, irRaw, emitRaw) =>
       let emitErr = forwardEmitterStageLines emitRaw
+      let envelope = askedEnvelope frontGate diagPath
       if code == emitDiagExitCode then
-        buildErr (dropTrailingNewline emitErr)
+        refusedWith envelope (dropTrailingNewline emitErr)
       else if code /= 0 then
         buildErr "error: emitter failed compiling \{inputAbs}\n\{emitErr}"
       else
@@ -992,6 +1040,8 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
         if stringLength ir == 0 then
           buildErr
             "error: emitter produced empty IR for \{inputAbs}\n\{emitErr}"
+        else if isNone (probeClang cc) then
+          buildErr (clangMissingError cc)
         else match writeFile llPath (programModuleName ++ ir)
           Err e => buildErr ("error: could not write IR: " ++ e)
           Ok _ =>
@@ -1036,7 +1086,7 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
                 keepIrOutcome (outPath ++ ".ll") ir
               else
                 (None, [])
-            withBuildNotes keptIr "" keepNotes res
+            withEnvelopeOk envelope (withBuildNotes keptIr "" keepNotes res)
 
 -- ---- wasm (WasmGC + wasm-tools) target ----
 -- Structurally identical to runBuildNative: run the emitter (here the WasmGC
@@ -1076,8 +1126,9 @@ runBuildWasm : String ->
   String ->
   Bool ->
   Bool ->
+  Option GateAsk ->
   <IO> Result BuildReport BuildReport
-runBuildWasm root medaka inputAbs outPath keepIrCli quietEmitStderr =
+runBuildWasm root medaka inputAbs outPath keepIrCli quietEmitStderr frontGate =
   match makeTempDir ()
     Err e =>
       buildErr "error: could not create a scratch directory for the build: \{e}"
@@ -1091,9 +1142,13 @@ runBuildWasm root medaka inputAbs outPath keepIrCli quietEmitStderr =
           tmpDir
           keepIrCli
           quietEmitStderr
+          frontGate
       let _ = cleanupTempDir tmpDir
       res
 
+-- The front-end gate runs in the wasm emitter child, so an unset or missing
+-- `MEDAKA_WASM_EMITTER`, or a missing `wasm-tools`, is reported before any
+-- diagnostic about the program: without the emitter there is no gate.
 runBuildWasmIn : String ->
   String ->
   String ->
@@ -1101,8 +1156,9 @@ runBuildWasmIn : String ->
   String ->
   Bool ->
   Bool ->
+  Option GateAsk ->
   <IO> Result BuildReport BuildReport
-runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr =
+runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr frontGate =
   let runtimeP = joinPath root "stdlib/runtime.mdk"
   let preludeP = joinPath root "stdlib/core.mdk"
   let compilerDir = joinPath root "compiler"
@@ -1113,6 +1169,7 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr =
   -- invocation's private mktemp dir, not at a globally-shared
   -- /tmp/medaka_build_<output basename>.wat that a concurrent build can clobber.
   let watPath = joinPath tmpDir "program.wat"
+  let diagPath = joinPath tmpDir "diag.json"
   let emitArgsBase =
     [runtimeP, preludeP, inputAbs] ++ inputRoots ++ [compilerDir, stdlibDir]
   let wasmEmitter = envOr "MEDAKA_WASM_EMITTER" ""
@@ -1129,13 +1186,14 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr =
     None =>
       buildErr
         "error: wasm-tools not found on PATH; install it with `cargo install wasm-tools`"
-    Some _ => match runEmitterFor wasmEmitter emitArgsBase
+    Some _ => match runEmitterFor frontGate diagPath wasmEmitter emitArgsBase
       Err e =>
         buildErr "error: could not run the wasm emitter `\{wasmEmitter}`: \{e}"
       Ok (code, watRaw, emitRaw) =>
         let emitErr = forwardEmitterStageLines emitRaw
+        let envelope = askedEnvelope frontGate diagPath
         if code == emitDiagExitCode then
-          buildErr (dropTrailingNewline emitErr)
+          refusedWith envelope (dropTrailingNewline emitErr)
         else if code /= 0 then
           buildErr
             "error: wasm emitter failed compiling \{inputAbs}\n\{emitErr}"
@@ -1157,7 +1215,7 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr =
                   keepIrOutcome (outPath ++ ".wat") wat
                 else
                   (None, [])
-              withBuildNotes keptIr "" keepNotes res
+              withEnvelopeOk envelope (withBuildNotes keptIr "" keepNotes res)
 
 -- The emitter child writes the build's diagnostics to its own stderr.  On a
 -- clean emit that stream carries the WARNINGS `medaka build` prints, so it must
@@ -1955,18 +2013,34 @@ withEmitHalf half prog args =
 withStrictEmit : String -> List String -> (String, List String)
 withStrictEmit prog args = ("env", ["MEDAKA_STRICT=1", prog] ++ args)
 
--- Run the emitter child, handing it the selected target profile by the same
--- `env` idiom.  The child checks the program against that profile before it
--- lowers anything (`entries/entry_support.runEmitWith`), so a program `check`
--- would refuse never reaches an emitter.  With no profile selected (a caller
--- other than the `build` verb) the child checks nothing.
-runEmitterFor : String ->
+-- Run the emitter child, handing it the selected target profile and the
+-- front-end gate request by the same `env` idiom.  The child checks the program
+-- against that profile before it lowers anything
+-- (`entries/entry_support.runEmitWith`), so a program `check` would refuse
+-- never reaches an emitter.  With no profile selected (a caller other than the
+-- `build` verb) the child checks nothing.
+runEmitterFor : Option GateAsk ->
+  String ->
+  String ->
   List String ->
   <IO> Result String (Int, String, String)
-runEmitterFor prog args = match !selectedProfile
-  Some p =>
-    runCommand "env" (["\{targetProfileEnv}=\{profileName p}", prog] ++ args)
-  None => runCommand prog args
+runEmitterFor frontGate diagPath prog args =
+  let profileSet = match !selectedProfile
+    Some p => ["\{targetProfileEnv}=\{profileName p}"]
+    None => []
+  let ackPath = joinPath (dirOf diagPath) "gate.ack"
+  let gateSet = match frontGate
+    Some ask => gateAssignments ask diagPath ackPath
+    None => noGateAssignments
+  let res = runCommand "env" (profileSet ++ gateSet ++ [prog] ++ args)
+  match (frontGate, res)
+    (Some _, Ok (0, _, _)) =>
+      if fileExists ackPath then
+        res
+      else
+        Err
+          "emitter did not run the front-end gate; rebuild it with `make medaka`"
+    _ => res
 
 -- `medaka build --emit-prelude-obj <path>`: emit stdlib/core.mdk ALONE as a
 -- library (MEDAKA_EMIT_HALF=prelude) and compile it to a reusable object with

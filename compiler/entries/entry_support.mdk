@@ -13,6 +13,18 @@ import frontend.ast.{Decl(..), Expr(..), DoStmt(..), LetBind(..), Loc(..)}
 import types.typecheck.{TcDiag}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar, desugarIn, mapProg}
+import frontend.desugar_cache.{desugaredPrelude}
+import driver.front_gate.{
+  JsonFront,
+  diagJsonPathOfEnv,
+  frontGate,
+  frontGateJson,
+  frontGateOfEnv,
+  writeGateAck,
+  frontJsonAfterDrive,
+  jsonFrontKey,
+  writeDiagJson,
+}
 export import support.util.{rootsOrDefault}
 import support.util.{splitLast, startsWith, joinNl}
 import types.typecheck.{
@@ -28,6 +40,7 @@ import support.path.{dirOf, joinPath}
 import support.stage_count.{stageExit}
 import support.ordmap.{OrdMap, omFromPairs, omLookup, omEmpty}
 import driver.diagnostics.{
+  CheckJson,
   Diag,
   emitDiagExitCode,
   emitGateDiags,
@@ -183,7 +196,14 @@ driveModules runEmit = driveModulesLocated (_ => runEmit)
 export
 driveModulesLocated : (List (String, String, List Decl) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   <IO> Unit
-driveModulesLocated runEmit = match args ()
+driveModulesLocated runEmit = driveModulesAsked (_ => runEmit)
+
+-- `driveModulesLocated` for a terminal that also takes the `--json` route's
+-- ask (`runEmitAsked`): the envelope file and what the gate kept for it, or
+-- `None` on every other route.
+driveModulesAsked : (Option (String, JsonFront) -> List (String, String, List Decl) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+  <IO> Unit
+driveModulesAsked runEmit = match args ()
   runtimeP :: coreP :: entry :: roots =>
     driveModulesGo runEmit runtimeP coreP entry (rootsOrDefault entry roots)
   _ => failWith usageModules
@@ -202,7 +222,7 @@ desugarPair (mid, p) = (mid, desugarIn mid p)
 -- diagnostics itself, and placeholder 1:0 spans with no path render them as
 -- `(module <mid>)` with no caret.  `ELoc` is transparent to every backend, so
 -- the emitted IR is unchanged by the swap.
-driveModulesGo : (List (String, String, List Decl) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+driveModulesGo : (Option (String, JsonFront) -> List (String, String, List Decl) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   String ->
   String ->
   String ->
@@ -215,37 +235,94 @@ driveModulesGo runEmit runtimeP coreP entry roots =
     Ok (rsrc, csrc)
   match r
     Err e => failWith e
-    Ok (rsrc, csrc) => match loadProgramFilesLocatedE (_ => None) entry roots
-      Err e => failWith (moduleLoadHint (loadErrorMessage e))
-      Ok mods =>
-        -- #2072: publish the FFI-stamp discriminator before anything elaborates.
-        -- `ffiStampModeOwned` DEFAULTS to "apply the `extern` declaration rules",
-        -- so a driver that never publishes this rejects a stdlib-root-owned module
-        -- whose externs the stdlib itself wrote — which `medaka check` accepts.
-        -- The parent derives it in `medaka_cli.typecheckGate`; since ruling 3 this
-        -- process owns the type verdict for a build, so it must derive the same
-        -- fact from the same inputs or the two verdicts differ on that one class.
-        -- The stdlib root is `dirOf coreP`: this driver's CLI shape hands it the
-        -- stdlib's own `core.mdk`, which is the file the parent spells
-        -- `<root>/stdlib/core.mdk`.
-        let pairs = map dropPathTriple mods
-        let (flatStdlib, ownedStdlib) =
-          stdlibOwnership entry roots (dirOf coreP) pairs
-        let _ = setStdlibOwnership flatStdlib ownedStdlib
-        runEmit
-          mods
-          (desugar (parse rsrc))
-          (desugar (parse csrc))
-          (map desugarPair pairs)
+    Ok (rsrc, csrc) => match (frontGateOfEnv (), diagJsonPathOfEnv ())
+      -- `medaka build --json` asked for the gate's verdict as `check --json`'s
+      -- envelope, written to `path` (`driver/front_gate.mdk`).
+      (Some allowInternal, Some path) =>
+        let verdict = frontGateJson allowInternal (dirOf coreP) rsrc csrc entry
+        let _ = writeGateAck ()
+        match verdict
+          Err cj => refuseJson path cj
+          Ok (g, front) =>
+            emitLoaded
+              (runEmit (Some (path, front)))
+              coreP
+              entry
+              g.fgRoots
+              g.fgMods
+              g.fgRuntimeD
+              g.fgCoreD
+              g.fgModsD
+      -- `medaka build` asked for its front-end gate, whose verdict is final and
+      -- whose graph is the one elaborated (`driver/front_gate.mdk`).
+      (Some allowInternal, None) =>
+        let verdict = frontGate allowInternal (dirOf coreP) rsrc csrc entry
+        let _ = writeGateAck ()
+        match verdict
+          Err msg =>
+            let _ = ePutStrLn msg
+            stageExit emitDiagExitCode
+          Ok g =>
+            emitLoaded
+              (runEmit None)
+              coreP
+              entry
+              g.fgRoots
+              g.fgMods
+              g.fgRuntimeD
+              g.fgCoreD
+              g.fgModsD
+      (None, _) => match loadProgramFilesLocatedE (_ => None) entry roots
+        Err e => failWith (moduleLoadHint (loadErrorMessage e))
+        Ok mods =>
+          emitLoaded
+            (runEmit None)
+            coreP
+            entry
+            roots
+            mods
+            (desugaredPrelude rsrc)
+            (desugaredPrelude csrc)
+            (map desugarPair (map dropPathTriple mods))
+
+-- A `--json` refusal: the envelope goes to the file, nothing to stderr, under
+-- the code that tells `build` the child's verdict is a diagnostic.
+refuseJson : String -> CheckJson -> <IO> Unit
+refuseJson path cj =
+  let _ = writeDiagJson path cj
+  stageExit emitDiagExitCode
+
+-- #2072: publish the FFI-stamp discriminator before anything elaborates.
+-- `ffiStampModeOwned` DEFAULTS to "apply the `extern` declaration rules", so a
+-- driver that never publishes this rejects a stdlib-root-owned module whose
+-- externs the stdlib itself wrote — which `medaka check` accepts.  This process
+-- owns the type verdict for a build, so it derives the fact `check` derives,
+-- from the roots the graph was loaded with.  The stdlib root is `dirOf coreP`:
+-- this driver's CLI shape hands it the stdlib's own `core.mdk`, which is the
+-- file the parent spells `<root>/stdlib/core.mdk`.
+emitLoaded : (List (String, String, List Decl) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+  String ->
+  String ->
+  List String ->
+  List (String, String, List Decl) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  <IO> Unit
+emitLoaded runEmit coreP entry roots mods runtimeD coreD modsD =
+  let (flatStdlib, ownedStdlib) =
+    stdlibOwnership entry roots (dirOf coreP) (map dropPathTriple mods)
+  let _ = setStdlibOwnership flatStdlib ownedStdlib
+  runEmit mods runtimeD coreD modsD
 
 -- #1796: `usageModules`' `[root ...]` bracket notation reads as "root args are
 -- optional" — they aren't, the moment the entry graph spans more than one root
 -- directory (e.g. both `compiler` and `stdlib`).  Omitting them degrades to a
 -- bare loader `unknown module: X` with no hint that ROOT arguments are the
 -- fix.  Same gate + suffix convention as `moduleLoadErrText`'s
--- `availableModulesHint` (medaka_cli.mdk): `unknownModuleIdOf` recognizes the
--- one loader message shape this applies to, and every other loader error
--- (cycle / unreadable file) passes through unchanged.
+-- `availableModulesHint` (compiler/driver/front_gate.mdk): `unknownModuleIdOf`
+-- recognizes the one loader message shape this applies to, and every other
+-- loader error (cycle / unreadable file) passes through unchanged.
 moduleLoadHint : String -> String
 moduleLoadHint e = match unknownModuleIdOf e
   None => e
@@ -370,13 +447,15 @@ selectTargetProfileOfEnv _ = match selectProfile (getEnv targetProfileEnv) None
 -- the same drive `elaborateModules` runs with the entry's schemes and
 -- invocation table kept, so the refusal costs no second drive.  It is the
 -- build's checking drive, so it poses a value `main`'s auto-print obligation.
+-- `paths` spells each module's file as the refusal is reported.
 elaborateForTarget : Option TargetProfile ->
   List (String, String, List Decl) ->
+  List (String, String) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   (ElabResult, List Diag)
-elaborateForTarget None _ runtimeDecls coreDecls modules =
+elaborateForTarget None _ _ runtimeDecls coreDecls modules =
   let (elaborated, _, _) =
     elaborateModulesWithSchemes
       (valueMainCandidate coreDecls modules)
@@ -384,7 +463,7 @@ elaborateForTarget None _ runtimeDecls coreDecls modules =
       coreDecls
       modules
   (elaborated, [])
-elaborateForTarget (Some p) modsWithPath runtimeDecls coreDecls modules =
+elaborateForTarget (Some p) modsWithPath paths runtimeDecls coreDecls modules =
   let analysis =
     analyzeProgram
       (valueMainCandidate coreDecls modules)
@@ -393,11 +472,7 @@ elaborateForTarget (Some p) modsWithPath runtimeDecls coreDecls modules =
       modules
   (
     analysis.eaElab,
-    targetRefusal
-      p
-      (entryPathOf modsWithPath)
-      (map modIdToPath modsWithPath)
-      analysis.eaTarget,
+    targetRefusal p (entryPathOf modsWithPath) paths analysis.eaTarget,
   )
 
 -- The refusal `check --target` gives, located in the entry file, under the
@@ -419,6 +494,45 @@ emitTargetGate modsWithPath _ (Some _) ds =
   let _ = ePutStrLn (joinNl (map (ppTargetDiag file src) ds))
   stageExit emitDiagExitCode
 
+-- `emitFullGate` and `emitTargetGate` for the `--json` route: the drive's
+-- verdict is written as `check --json`'s envelope instead of rendered, with
+-- `check`'s full warning set.  The graph-end residual, which `check` does not
+-- read, still stops the build as on every route.  An admitted program's clean
+-- envelope is returned, to be written once the emit has returned.
+emitJsonGate : String ->
+  JsonFront ->
+  List (String, String, List Decl) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List (String, (List TcDiag, List TcDiag)) ->
+  List (String, TcDiag) ->
+  Option TargetProfile ->
+  List Diag ->
+  <IO> CheckJson
+emitJsonGate path front modsWithPath runtimeDecls coreDecls modules perMod residual profile refusal =
+  let verdict =
+    frontJsonAfterDrive
+      front
+      runtimeDecls
+      coreDecls
+      modsWithPath
+      modules
+      perMod
+      refusal
+  match verdict
+    Err refused =>
+      let _ = refuseJson path refused
+      refused
+    Ok cj =>
+      let _ =
+        emitResidualGate
+          (map modIdToPath modsWithPath)
+          (entryPathOf modsWithPath)
+          residual
+      let _ = emitTargetGate modsWithPath runtimeDecls profile []
+      cj
+
 export
 runEmitWith : String ->
   (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
@@ -428,6 +542,27 @@ runEmitWith : String ->
   List (String, List Decl) ->
   <IO> Unit
 runEmitWith asyncDriver emitTail modsWithPath runtimeDecls coreDecls modules =
+  runEmitAsked
+    None
+    asyncDriver
+    emitTail
+    modsWithPath
+    runtimeDecls
+    coreDecls
+    modules
+
+-- `runEmitWith` on the route `ask` names: on the `--json` route the verdict is
+-- the envelope file's, and a clean one is written after the emit returns, so
+-- the file holds a clean envelope only for a program that was emitted.
+runEmitAsked : Option (String, JsonFront) ->
+  String ->
+  (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+  List (String, String, List Decl) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  <IO> Unit
+runEmitAsked ask asyncDriver emitTail modsWithPath runtimeDecls coreDecls modules =
   -- #2809: ELABORATE THE PROGRAM THE USER WROTE, then mangle its elaborated trees.
   -- Elaboration reads the import structure (`DUse` member spellings, alias locals) and
   -- groups denotations by name, and the mangler rewrites definitions and references but
@@ -443,20 +578,71 @@ runEmitWith asyncDriver emitTail modsWithPath runtimeDecls coreDecls modules =
   -- program whose errors must not be read as that second elaboration's residual.
   let _ = resetTypeErrorsSticky ()
   let profile = selectTargetProfileOfEnv ()
+  let paths = map modIdToPath modsWithPath
+  let reported = match ask
+    None => paths
+    Some (_, front) => map ((mid, path) => (mid, jsonFrontKey front path)) paths
   let (elaborated, refusal) =
-    elaborateForTarget profile modsWithPath runtimeDecls coreDecls modules
+    elaborateForTarget
+      profile
+      modsWithPath
+      reported
+      runtimeDecls
+      coreDecls
+      modules
   let (coreE, modulesE, perMod, residual, _, _) = elaborated
   -- Both halves of the fold now read the trees the loader parsed: the elaboration
   -- above is the user's own program, so a diagnostic names the constructors and
   -- imports the user wrote (#2809).
-  let _ =
-    emitFullGate modsWithPath runtimeDecls coreDecls modules perMod residual
-  let _ = emitTargetGate modsWithPath runtimeDecls profile refusal
+  let clean = match ask
+    None =>
+      let _ =
+        emitFullGate modsWithPath runtimeDecls coreDecls modules perMod residual
+      let _ = emitTargetGate modsWithPath runtimeDecls profile refusal
+      None
+    Some (path, front) =>
+      let cj =
+        emitJsonGate
+          path
+          front
+          modsWithPath
+          runtimeDecls
+          coreDecls
+          modules
+          perMod
+          residual
+          profile
+          refusal
+      Some (path, cj)
+  let _ = emitElaborated
+    asyncDriver
+    emitTail
+    modsWithPath
+    runtimeDecls
+    coreDecls
+    modules
+    (coreE, modulesE)
+  match clean
+    Some (path, cj) => writeDiagJson path cj
+    None => ()
+
+-- The emit of a program the gate admitted, from the elaboration that judged it
+-- (`elaborated`); a wrapped `main` is elaborated again, wrapped.
+emitElaborated : String ->
+  (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+  List (String, String, List Decl) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  (List Decl, List (String, List Decl)) ->
+  <IO> Unit
+emitElaborated asyncDriver emitTail modsWithPath runtimeDecls coreDecls modules elaborated =
+  let (coreE, modulesE) = elaborated
   if shouldAutoPrintMain coreDecls modules then
     -- the wrap's callee is a PRELUDE re-binding, so the core decl list has to
     -- carry it — see main_autoprint.autoPrintPinCore (#2185 / F1 / F2).  The
-    -- elaboration above already judged the wrap's `Display` obligation, and
-    -- `emitFullGate` stopped the build on it.
+    -- elaboration that judged the program already judged the wrap's `Display`
+    -- obligation, and the caller's gate stopped the build on it.
     emitModulesWith
       emitTail
       modsWithPath
@@ -491,8 +677,8 @@ runEmitWith asyncDriver emitTail modsWithPath runtimeDecls coreDecls modules =
 export
 driveEmitLocated : (List (String, String, List Decl) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   <IO> Unit
-driveEmitLocated emitTail =
-  driveModulesLocated (mods => runEmitWith "runAsyncMain" (emitTail mods) mods)
+driveEmitLocated emitTail = driveModulesAsked (ask mods =>
+  runEmitAsked ask "runAsyncMain" (emitTail mods) mods)
 
 -- Elaborate + mangle + emit a (possibly wrapped) module list from scratch.
 export

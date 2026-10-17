@@ -1221,9 +1221,9 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    `rearch4-build-child`, off main `69107a07c`; not merged). Item 16's refutation had one
    stated prerequisite — make the emit elaboration's verdict agree with the front end's —
    and item 20 is that prerequisite. Re-running item 16's eight acceptance items against
-   the same change, ported rather than cherry-picked (`typecheckGateRoute` had become
-   `Result String Unit` over `analyzeSurface` / `resolveModulesErrorsByFile`, and the
-   elaborate-then-mangle order had to survive the port), **all eight pass.**
+   the same change, ported rather than cherry-picked (the front-end verdict is `frontGate` in
+   `compiler/driver/front_gate.mdk`, a `Result String FrontGraph` over `analyzeSurface` /
+   `resolveModulesErrorsByFile`, and the elaborate-then-mangle order had to survive the port), **all eight pass.**
    - **The five lost rejections are recovered.** `reject_845_xmod_inferred_{alias,reexport,
      reexport_2hop,selective}` and `reject_ambiguous_reexport_inside_map_literal` all reject
      through the child at exit 1 with `check`'s text, byte-identical modulo `check`'s absent
