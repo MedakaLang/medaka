@@ -12,6 +12,11 @@
 // MDK_ARGS as argv, and process stdout/stderr.  Every byte the module writes is
 // accumulated and written when the run ends, stdout before stderr.
 //
+// The node process's own flags choose the sleep: under `node --experimental-wasm-jspi`
+// (or any engine with JSPI) the host runs `mdk_main` as a promising entry and a sleep
+// suspends it on a timer; without JSPI a sleep blocks in `Atomics.wait`.  The host
+// detects which (`jspiAvailable`), so this file takes no option for it.
+//
 // A `js` binding (docs/spec/WASM-SEMANTICS.md section 3.1) is supplied by a bindings
 // module: `node run.js <module.wasm> [bindings.mjs]`, or MEDAKA_JSFFI_BINDINGS=<path>.
 // Its named exports are the JS functions; a module that imports a binding it lacks

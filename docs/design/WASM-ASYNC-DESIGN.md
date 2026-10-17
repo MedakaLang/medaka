@@ -1,7 +1,9 @@
 # Async on the WasmGC target
 
 **Status:** PARTIAL — WA-1 to WA-4 are implemented by sprint the-browser-can-wait
-(#3851); WA-5 remains open. Ruling 2's mechanism was reversed on 2026-10-05
+(#3851). WA-5's host half (the `promising` entry and the `Suspending` sleep in
+`playground/medaka_host.mjs`) is implemented by sprint the-edge-runs-it
+(#4259); its gate row, `diff_async`'s wasm arm under JSPI, remains open. Ruling 2's mechanism was reversed on 2026-10-05
 (§10 item 2). Written 2026-10-05 for the
 HN-readiness epic #3700 (item 8) against `main` at `b5fbcfbe`. Every claim
 below is marked **measured** (with the command, on a binary built from that
@@ -540,7 +542,7 @@ is one packet, one PR, acceptance stated as a check.
 | **WA-2 the async gate has a wasm arm** | `diff_async` runs `overlap_sleeps` and `no_starvation` on wasm with the CPU-time assertion; `engine_fixtures/async_deadlock.mdk`; the gate's native-only declaration narrowed to the net fixtures. | `test/diff_async_test.mdk`, `test/async_fixtures/`, `test/engine_fixtures/`, `test/gates.toml` (then `medaka gate balance && make gen-ci`). | `diff_async` reports the wasm arm per fixture; a host whose `mdk_sleep_ms` returns at once reds it; `ci-gen-drift` green. |
 | **WA-3 the playground runs async** | Ship `time`, `math`, `regex`; COOP/COEP on the playground route; `crossOriginIsolated` check with the named error; `compile.mjs` lists trimmed; the two e2e cases; deploy and verify on the live origin. | `playground/main.js`, `playground/build_playground_wasm.sh`, `playground/_headers`, `playground/compile.mjs`, `playground/worker.js`, `playground/e2e/`, `playground/README.md` § Deploying. | `64_async_defer` prints `3` on https://medaka-lang.dev; the 200 ms and 15 s e2e cases pass; `curl -sI https://medaka-lang.dev/` shows both headers; `/blog/` shows neither. |
 | **WA-4 the entry is `mdk_main`** | `$__init` initializes only; every host calls `exports.mdk_main()`; the `compile.mjs` session caveat removed; WH1 text updated. | `compiler/backend/wasm_emit.mdk` `emitRefInit`, the three hosts (`test/visitor_battery/tools/pg_compile.mjs` and the e2e drivers enter through `compile.mjs`, **read**), `docs/spec/WASM-SEMANTICS.md`. | Every wasm gate green with no fixture change; a module instantiated without calling `mdk_main` prints nothing (pinned). |
-| **WA-5 sleep suspends under JSPI** | Host feature-detects `WebAssembly.Suspending`; binds `mdk_sleep_ms` to the `Suspending` form and calls the entry through `promising`; `run.js` honours the flag; a gate row runs `diff_async`'s wasm arm under `node --experimental-wasm-jspi` on Node 24 (or without it on 26). | the hosts (or the T3 host module), `test/diff_async_test.mdk`, `.github/actions/setup-medaka/action.yml` if the pin moves. | Both bindings print the same `.expected`; the e2e cases pass in Chrome with and without isolation. |
+| **WA-5 sleep suspends under JSPI** | Host feature-detects `WebAssembly.Suspending`; binds `mdk_sleep_ms` to the `Suspending` form and calls the entry through `promising`; `run.js` honours the flag (host half done: `jspiAvailable`, `promiseImport` and `host.importsFor` in `playground/medaka_host.mjs`; only `runProgram`'s entry is promising, since V8 traps a `Suspending` import called from any other entry); a gate row runs `diff_async`'s wasm arm under `node --experimental-wasm-jspi` on Node 24 (or without it on 26). | the hosts (or the T3 host module), `test/diff_async_test.mdk`, `.github/actions/setup-medaka/action.yml` if the pin moves. | Both bindings print the same `.expected`; the e2e cases pass in Chrome with and without isolation. |
 
 WA-1 → WA-2 → WA-3 is the HN-week path; WA-3 is the slice a visitor sees.
 WA-4 is independent of WA-1–3 and can run alongside. WA-5 needs WA-4 and

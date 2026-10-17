@@ -14,7 +14,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import os from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createHost, runProgram, confine, CapabilityError, JsBindingError, HostKeyError, MemoryVfs, SLICES, KEY_EXTERN } from './medaka_host.mjs';
+import { createHost, runProgram, confine, jspiAvailable, CapabilityError, JsBindingError, HostKeyError, MemoryVfs, SLICES, KEY_EXTERN } from './medaka_host.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = dirname(here);
@@ -137,6 +137,23 @@ main =
     + 'main =\n  let _ = println "before"\n  println (jsThrow "x")\n',
   jsupper: 'extern jsUpper : String -> <FFI "js"> String\n  bind js "jsUpper"\n\n'
     + 'main =\n  let _ = println (jsUpper "abc")\n  exit 3\n',
+  jsunitpromise: 'extern jsTick : Unit -> <FFI "js"> Unit\n  bind js "jsTick"\n\n'
+    + 'main =\n  let _ = println "before"\n  let _ = jsTick ()\n  println "after"\n',
+  // The sleep is 3000 frames deep, after a partial line, and `exit` follows it.
+  deepsleep: String.raw`deep n =
+  if n == 0 then
+    let _ = putStr "mid"
+    let _ = sleepMs 30
+    let _ = putStrLn " after"
+    0
+  else
+    1 + deep (n - 1)
+
+main =
+  let _ = putStrLn "start"
+  let _ = putStrLn "depth \{deep 3000}"
+  exit 4
+`,
   bigexit: BIG_LOOP + 'main =\n  let _ = loop 1\n  exit 3\n',
   bigtrap: BIG_LOOP + 'main =\n  let _ = loop 1\n  let z = length [1] - 1\n  println (10 / z)\n',
 };
@@ -647,6 +664,98 @@ function check(name, ok, detail) {
     JSON.stringify({ kind: r4.kind, code: r4.code, error: r4.error && r4.error.message }));
 }
 
+// (t) JSPI (docs/design/WASM-ASYNC-DESIGN.md WA-5) and the synchronous jsffi rule.
+// A js binding's thenable is a JsBindingError for every result type, `Unit` included.
+{
+  const h = createHost('wasmgc/node', { bindings: { jsTick: () => Promise.resolve() } });
+  const r = await runProgram(readFileSync(build('jsunitpromise', 'wasmgc/node')), h);
+  check('(t1) jsffi: a Unit binding that returns a promise is a JsBindingError at the call',
+    r.kind === 'error' && r.error instanceof JsBindingError && r.error.binding === 'jsTick'
+      && r.error.message.includes('returned a thenable') && h.sink.text('stdout') === 'before\n',
+    JSON.stringify({ kind: r.kind, error: r.error && r.error.message, out: h.sink.text('stdout') }));
+  const results = ['Unit', 'String', 'Int', 'Float', 'Bool', 'Char', 'U8', 'U16', 'U32', 'I32', 'U64', 'I64'];
+  const thenables = [Promise.resolve(1), { then() {} }, Object.assign(() => 0, { then: () => {} })];
+  let answer;
+  const hs = createHost('wasmgc/node', { bindings: { jsT: () => answer } });
+  const bad = [];
+  for (const res of results)
+    for (const [i, t] of thenables.entries()) {
+      answer = t;
+      const want = `js binding \`jsT\` returned a thenable (a promise, or a value with a \`then\` method), not ${res}: `
+        + 'a js binding must answer synchronously';
+      try {
+        hs.imports.jsffi[`jsT:->${res}`]();
+        bad.push(`${res} thenable ${i}: accepted`);
+      } catch (e) {
+        if (!(e instanceof JsBindingError) || e.message !== want) bad.push(`${res} thenable ${i}: ${e && e.message}`);
+      }
+    }
+  // a `then` that is not a function makes no thenable: a Unit result still ignores it
+  for (const v of [{ then: 1 }, {}, null]) {
+    answer = v;
+    try { hs.imports.jsffi['jsT:->Unit'](); } catch (e) { bad.push(`Unit ${JSON.stringify(v)}: ${e.message}`); }
+  }
+  check('(t1) jsffi: a thenable is refused for every result type; a non-thenable Unit result is ignored',
+    bad.length === 0, bad.join('; '));
+}
+// The JSPI probes run in child processes, with and without `--experimental-wasm-jspi`, so
+// both modes are measured whichever this process has.  The child runs `deepsleep` on a
+// streaming host and records each delivery, plus `timer`: a timeout armed when `mid`
+// arrives, which fires inside the sleep only if the guest was suspended, not blocked.
+// MHT_SEAM replaces the sleep with a promise-answering import made through the seam.
+{
+  const child = String.raw`
+const { createHost, runProgram, promiseImport, jspiAvailable } = await import(process.env.MHT_HOST);
+const { readFileSync } = await import('node:fs');
+const events = [];
+let armed = false;
+const sink = { write(stream, b) {
+  const t = Buffer.from(b).toString('utf8');
+  events.push(stream + ':' + t);
+  if (!armed && t.includes('mid')) { armed = true; setTimeout(() => events.push('timer'), 0); }
+} };
+const host = createHost('wasmgc/node', { sink, streaming: true });
+if (process.env.MHT_SEAM)
+  host.imports.env.mdk_sleep_ms = promiseImport('clock', 'mdk_sleep_ms',
+    () => new Promise((resolve) => setTimeout(resolve, 1)), jspiAvailable());
+const r = await runProgram(readFileSync(process.env.MHT_WASM), host);
+await new Promise((resolve) => setTimeout(resolve, 20));
+const e = r.error;
+console.log(JSON.stringify({ jspi: jspiAvailable(), kind: r.kind, code: r.code, events,
+  error: e && { name: e.name, capability: e.capability, message: e.message } }));
+`;
+  const wasm = build('deepsleep', 'wasmgc/node');
+  const hostUrl = pathToFileURL(join(here, 'medaka_host.mjs')).href;
+  const runChild = (flags, extra) => {
+    const r = spawnSync(process.execPath, [...flags, '--input-type=module', '-e', child], {
+      env: { ...process.env, MHT_HOST: hostUrl, MHT_WASM: wasm, ...extra }, encoding: 'utf8',
+    });
+    try { return JSON.parse(r.stdout); } catch (e) { return { raw: r.stdout + r.stderr, status: r.status }; }
+  };
+  const ordered = (events) => JSON.stringify(events);
+  const seam = runChild([], { MHT_SEAM: '1' });
+  check('(t2) no JSPI: a promise-answering import made through the seam is a CapabilityError naming JSPI',
+    seam.jspi === false && seam.kind === 'error' && seam.error && seam.error.name === 'CapabilityError'
+      && seam.error.capability === 'clock' && seam.error.message.includes('JSPI'),
+    JSON.stringify(seam));
+  const jspi = runChild(['--experimental-wasm-jspi'], {});
+  check('(t3) JSPI: a sleep 3000 calls deep suspends after flushing the partial line, and output keeps its order',
+    jspi.jspi === true && ordered(jspi.events)
+      === ordered(['stdout:start\n', 'stdout:mid', 'timer', 'stdout: after\n', 'stdout:depth 3000\n']),
+    JSON.stringify(jspi));
+  check('(t4) JSPI: mdk_exit after the resumed sleep is { kind: exit } with the program\'s code',
+    jspi.kind === 'exit' && jspi.code === 4, JSON.stringify(jspi));
+  const plain = runChild([], {});
+  check('(t3) no JSPI: the same sleep blocks (Atomics.wait), so the timeout fires only after the run',
+    plain.jspi === false && plain.kind === 'exit' && plain.code === 4 && ordered(plain.events)
+      === ordered(['stdout:start\n', 'stdout:mid', 'stdout: after\n', 'stdout:depth 3000\n', 'timer']),
+    JSON.stringify(plain));
+  const viaRunJs = spawnSync(process.execPath, ['--experimental-wasm-jspi', runJs, wasm], { encoding: 'utf8' });
+  check('(t4) run.js under JSPI: the program\'s exit code and every line',
+    viaRunJs.status === 4 && viaRunJs.stdout === 'start\nmid after\ndepth 3000\n' && viaRunJs.stderr === '',
+    JSON.stringify({ stdout: viaRunJs.stdout, stderr: viaRunJs.stderr, status: viaRunJs.status }));
+}
+
 // Report only: slices no module built above imports a key of.
 {
   const imported = new Set();
@@ -656,6 +765,7 @@ function check(name, ok, detail) {
   const unused = Object.entries(SLICES)
     .filter(([, s]) => !s.keys.some((k) => imported.has(k))).map(([n]) => n);
   console.log(`unused slices (no probe module imports a key): ${unused.join(', ') || 'none'}`);
+  console.log(`JSPI in this process (in-process runs use a promising entry): ${jspiAvailable()}`);
 }
 
 rmSync(work, { recursive: true, force: true });

@@ -14,9 +14,9 @@ import { createHost, runProgram, MemoryVfs, CapabilityError, OldEntryShape, Host
 const STACK_OVERFLOW_MSG =
   'stack overflow: recursion too deep for the browser; the native compiler has a larger stack';
 
-// The guest runs synchronously, so a timer can never fire inside it. Per-line
-// posts from a print loop would flood the main thread's queue and starve its kill
-// timer. Each POST_EVERY_MS window therefore allows BURST_POSTS immediate posts, so a
+// The guest runs synchronously except while a JSPI sleep suspends it, so a timer
+// cannot fire inside a print loop. Per-line posts from one would flood the main
+// thread's queue and starve its kill timer. Each POST_EVERY_MS window therefore allows BURST_POSTS immediate posts, so a
 // quiet program never holds a line back (a kill during a later hang still shows all
 // of it); past that, lines coalesce until the window rolls over. `force` drains what
 // is left at exit.

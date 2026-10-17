@@ -493,7 +493,7 @@ before anything crosses, as on native.
 | `U64` `I64` | `i64` | `i64` | a `BigInt` (`U64` read unsigned) |
 | `String` | `i32`: the byte length | none | a JS string. The guest resets the path channel once per call (`mdk_path_reset`), then appends each `String` and `Array` argument in parameter order (`$mdk_push_path_more`); the host splits the channel by the lengths in the parameters and decodes each `String` as UTF-8, which a Medaka `String` always is. A `String` result goes to the result channel (`mdk_result_len`/`mdk_result_byte`) after any copy-back words, encoded as UTF-8 |
 | `Array` | `i32`: the element count | refused | a `BigInt64Array` holding the elements, 8 bytes each, little-endian two's complement on the path channel. The binding may write to it. After the call the host writes every `Array` argument's elements back, in parameter order and at the same count, to the start of the result channel, and the guest copies them into the caller's array. The copy-back is unconditional, as native's is (FFI-ABI §2.4). Before it writes any element of an array, the guest checks that every element fits `Int`. If one does not, it stops with `runtime error [E-PANIC]: foreign call '<jsName>' wrote a value outside Int's range … into an Array Int argument`, as native does. An `Array Int` result is an emitter gap on wasm as it is on native: native has no length channel for it, and the two targets must not give one declaration two meanings |
-| `Unit` | none | none | nothing. A `Unit` argument is still evaluated, and the JS function receives no argument for it. The host ignores a `Unit` binding's return value |
+| `Unit` | none | none | nothing. A `Unit` argument is still evaluated, and the JS function receives no argument for it. The host ignores a `Unit` binding's return value when it is not a thenable. A thenable result (any non-null object or function with a function-valued `then`) is refused with a `JsBindingError`, for every result type, `Unit` included: a binding answers synchronously (TARGETS-DESIGN §7.6), and the guest cannot wait on a promise |
 
 **A `String` argument is its bytes, NUL included.** A `String` containing U+0000
 reaches a `js` binding intact, because the host splits the path channel by the
@@ -514,9 +514,11 @@ catches the exception. It ends the program at that call with the error
 ``js binding `<jsName>` threw: <message>``. A result of the wrong JS type ends
 it the same way, with ``js binding `<jsName>` returned <what>, not <head>``.
 Examples are a `Number` for an `Int`, an out-of-range `BigInt` for a `U64`, a
-non-string for a `String`, or a lone surrogate. Medaka code cannot catch either
-error, because a foreign call cannot fail into Medaka (FFI-ABI §4). The error
-unwinds the guest, and the host flushes stdout and then stderr (WH4).
+non-string for a `String`, or a lone surrogate. A thenable, whatever the head,
+ends it with ``js binding `<jsName>` returned a thenable (a promise, or a value
+with a `then` method), not <head>: a js binding must answer synchronously``.
+Medaka code cannot catch any of these errors, because a foreign call cannot
+fail into Medaka (FFI-ABI §4). The error unwinds the guest, and the host flushes stdout and then stderr (WH4).
 `test/wasm/run.js` reports it as `runtime error: <message>` and exits 1. No
 value is ever substituted.
 

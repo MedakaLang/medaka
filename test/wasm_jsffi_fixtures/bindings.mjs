@@ -9,3 +9,4 @@ export const jsLone = () => '\uD800';
 export const jsPlus10 = (x) => x + 10n;
 export const jsPlus20 = (x) => x + 20n;
 export const jsPlus30 = (x) => x + 30n;
+export const jsTick = () => Promise.resolve();

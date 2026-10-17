@@ -14,7 +14,10 @@
 //
 // API:
 //   createHost(profile, opts) -> host       host.imports is the import object
+//                                           host.importsFor(promising) is one run's
 //   makeImports(profile, opts) -> imports   createHost(profile, opts).imports
+//   jspiAvailable() -> boolean              the engine has JSPI
+//   promiseImport(capability, key, fn, promising) -> import   a promise-answering key
 //   runProgram(wasm, host, opts) -> { kind: 'done' } | { kind: 'exit', code }
 //                                 | { kind: 'error', error, inProgram }
 //   profile = a name in PROFILES, or a host configuration such as COMPILER_HOST.
@@ -189,6 +192,35 @@ export class HostKeyError extends Error {
 export class ExitSignal extends Error {
   constructor(code) { super('exit ' + code); this.code = code; }
 }
+
+// ── JSPI: host imports that wait on a promise (WASM-ASYNC-DESIGN WA-5) ──────
+// With JS Promise Integration, a `WebAssembly.Suspending` import may answer with a
+// promise: the guest's stack is suspended until it settles, and the event loop runs
+// meanwhile.  That needs both halves of the API, and an entry called through
+// `WebAssembly.promising`: V8 traps (SuspendError) on any call to a Suspending import
+// from an entry that was not, whatever the import returns.  So only runProgram, whose
+// entry is promising whenever JSPI is present, installs the Suspending forms
+// (`host.importsFor`); every other caller of `mdk_main` gets the synchronous ones.
+export function jspiAvailable() {
+  return typeof WebAssembly.Suspending === 'function' && typeof WebAssembly.promising === 'function';
+}
+
+// The import for host key `key` of slice `capability` whose JS side `fn` answers with a
+// promise.  `promising` says whether the run's entry is promising (runProgram's, with
+// JSPI present); otherwise the import raises a CapabilityError naming JSPI, since
+// there is no way to wait on the promise and answering at once would be wrong.
+export function promiseImport(capability, key, fn, promising) {
+  if (promising) return new WebAssembly.Suspending(fn);
+  return () => {
+    throw new CapabilityError(capability,
+      `${KEY_EXTERN[key] || key} waits on the host, which needs JSPI (WebAssembly.Suspending and `
+      + 'WebAssembly.promising) and a promising entry; this engine or entry does not provide it');
+  };
+}
+
+// A thenable is any object or function with a callable `then`: what `await` would wait on.
+const isThenable = (v) =>
+  v !== null && (typeof v === 'object' || typeof v === 'function') && typeof v.then === 'function';
 
 // ── float formatting (WH2: ≡ medaka_rt.c mdk_float_lexeme) ───────────────────
 // SHORTEST-ROUND-TRIP since issue #57. `toExponential()` (no arg) is JS's shortest
@@ -943,6 +975,20 @@ export function createHost(profile, opts = {}) {
       Atomics.wait(host.waitCell, 0, 0, ms);
     },
   };
+  // The promise-answering forms of keys that `real` serves synchronously, installed by
+  // runProgram under a promising entry.  Sleep there is a timer, so it needs no
+  // cross-origin isolation and the event loop (a page's timers and messages) runs
+  // during it.  A timer's delay is capped at 2^31-1 ms, so a longer sleep takes steps.
+  const suspending = {
+    mdk_sleep_ms: (ms) => {
+      ms = Number(ms);
+      if (ms <= 0) return undefined;
+      if (host.streaming) host.flush();
+      const step = (left) => new Promise((resolve) => setTimeout(resolve, Math.min(left, 0x7fffffff)))
+        .then(() => (left > 0x7fffffff ? step(left - 0x7fffffff) : undefined));
+      return step(ms);
+    },
+  };
   // Every key of every slice is a callable: real when an installed slice lists it,
   // otherwise one that throws the CapabilityError naming the withheld slice (WH3: never
   // a LinkError on a module the compiler legally emitted).
@@ -957,6 +1003,17 @@ export function createHost(profile, opts = {}) {
     }
   host.bindings = opts.bindings || {};
   host.imports = { env, jsffi: jsffiImports(host, host.bindings) };
+  // The import object for one run: `host.imports` unless the entry is promising, when
+  // each installed key with a promise-answering form takes it.  A withheld key keeps
+  // its CapabilityError stub either way.
+  host.importsFor = (promising) => {
+    if (!promising) return host.imports;
+    const penv = { ...host.imports.env };
+    for (const [k, fn] of Object.entries(suspending))
+      if (installed.has(k))
+        penv[k] = promiseImport(Object.keys(SLICES).find((s) => SLICES[s].keys.includes(k)), k, fn, true);
+    return { ...host.imports, env: penv };
+  };
   return host;
 }
 
@@ -1067,11 +1124,20 @@ function jsffiCallable(host, bindings, field) {
     const { args, arrays } = decodeJsArgs(params, wire, Uint8Array.from(host.pathBuf));
     host.pathBuf = [];
     let v;
+    let thenable;
     try {
       v = fn(...args);
+      thenable = isThenable(v);
     } catch (e) {
       throw new JsBindingError(name, `js binding \`${name}\` threw: ${e && e.message !== undefined ? e.message : String(e)}`);
     }
+    // A js binding is synchronous (docs/design/TARGETS-DESIGN.md section 7.6), whatever
+    // its result type: the guest cannot wait on a thenable, and a `Unit` result would
+    // otherwise drop it unseen.
+    if (thenable)
+      throw new JsBindingError(name,
+        `js binding \`${name}\` returned a thenable (a promise, or a value with a \`then\` method), not ${result}: `
+        + 'a js binding must answer synchronously');
     const r = encodeJsResult(name, result, v);
     const back = arrays.map((a) => {
       const b = new Uint8Array(a.length * 8);
@@ -1123,6 +1189,12 @@ export function makeImports(profile, opts) { return createHost(profile, opts).im
 // Compile (unless given a Module), refuse an old entry shape, instantiate, call
 // `mdk_main`, and flush on every way out.  `inProgram` says whether `mdk_main` had
 // started: a failure after that is the program's, not the instantiation's.
+// With JSPI present the entry is `WebAssembly.promising(mdk_main)`, awaited, so the
+// imports from `host.importsFor(true)` may suspend it.  A suspended run settles the
+// same ways a synchronous one ends: an `exit` after a resumption rejects with its
+// ExitSignal and a trap with its RuntimeError, both caught below after a flush.  The
+// start function runs during instantiation and is never promising: a Suspending import
+// it reached would trap with a SuspendError.
 export async function runProgram(wasm, host, opts = {}) {
   let inProgram = false;
   try {
@@ -1132,9 +1204,14 @@ export async function runProgram(wasm, host, opts = {}) {
       throw new OldEntryShape(opts.oldEntryMessage
         || 'this module was built by an older compiler: its start function runs main itself; rebuild it');
     checkImportKeys(module, host);
-    const instance = await WebAssembly.instantiate(module, host.imports);
+    const promising = jspiAvailable();
+    const instance = await WebAssembly.instantiate(module, host.importsFor(promising));
     inProgram = true;
-    if (typeof instance.exports.mdk_main === 'function') instance.exports.mdk_main();
+    const main = instance.exports.mdk_main;
+    if (typeof main === 'function') {
+      if (promising) await WebAssembly.promising(main)();
+      else main();
+    }
     host.flush();
     return { kind: 'done' };
   } catch (e) {
