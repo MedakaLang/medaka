@@ -33,11 +33,13 @@ buildArgv target src out = [
 
 -- The files in `dir`, byte-ordered, one per line.
 listing : String -> <Exec, IO> Result String String
-listing dir =
-  map (r => snd3 r) (boundedVerbSeconds 30 "env" ["LC_ALL=C", "ls", dir])
-
-snd3 : (Int, String, String) -> String
-snd3 (_, out, _) = out
+listing dir = match boundedVerbSeconds 30 "env" ["LC_ALL=C", "ls", dir]
+  Err e => Err e
+  Ok (code, out, err) =>
+    if code /= 0 || err /= "" then
+      Err "ls exited \{intToString code}: stderr=\{debug err}"
+    else
+      Ok out
 
 built : String ->
   String ->
@@ -51,10 +53,16 @@ driven =
   "exports default,run\ndefault.fetch: function\nrun {\"stdout\":\"hello from the edge\\n\",\"stderr\":\"\",\"exitCode\":0}\nfetch 200 text/plain; charset=utf-8 \"hello from the edge\\n\"\n"
 
 drive : String -> String -> <Exec, IO> Result String (Int, String, String)
-drive scratch loader = boundedVerbSeconds 60 "node" [
+drive scratch loader = match boundedVerbSeconds 60 "node" [
   "\{corpus}/driver.mjs",
   "\{scratch}/\{loader}",
 ]
+  Err e => Err e
+  Ok (code, out, err) =>
+    if code /= 0 || err /= "" then
+      Err "node exited \{intToString code}: stderr=\{debug err}"
+    else
+      Ok (code, out, err)
 
 test "edge build: the output directory is the wasm, both loaders and the host" =
   inFreshDirOf

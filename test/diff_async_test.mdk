@@ -275,15 +275,28 @@ jspiAvailable u = match boundedVerbSeconds 20 "node" [
   Ok (0, _, _) => True
   _ => False
 
--- Runs a built module under the JSPI flag with the tracer preloaded.
+-- Runs a built module under the JSPI flag with the tracer preloaded. The
+-- program must exit 0, and stderr must be exactly the tracer's one line.
 runJspiTraced : String -> <Exec, IO> Result String (Int, String, String)
-runJspiTraced wasmPath = boundedVerbSeconds 30 "node" [
+runJspiTraced wasmPath = match boundedVerbSeconds 30 "node" [
   "--experimental-wasm-jspi",
   "--import",
   jspiTracer,
   "\{medakaRoot}/test/wasm/run.js",
   wasmPath,
 ]
+  Err e => Err e
+  Ok (code, out, err) =>
+    if code /= 0 then
+      Err
+        "node exited \{intToString code}, want 0: stdout=\{debug out} stderr=\{debug err}"
+    else match lines (trim err)
+      [line] =>
+        if contains "TRACE suspending-imports=" line then
+          Ok (code, out, err)
+        else
+          Err "stderr is not the tracer line: \{debug err}"
+      _ => Err "stderr is not exactly the tracer line: \{debug err}"
 
 -- The stdout grade of `gradeRun`, plus: the tracer saw the sleep go through a
 -- Suspending import.
