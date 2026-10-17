@@ -407,7 +407,7 @@ censusSuperCloseVec : List VecObl -> List VecObl
 censusSuperStep : List String -> Int -> Super -> Option Int
 censusVecSuperStep : List String -> (List Int, List Mono) -> Super -> Option (List Int, List Mono)
 chainFullKey : Int -> Int -> String -> String
-chainGo : List (String, Scheme) -> List (String, ExportBinding) -> List (String, List (String, ExportBinding)) -> List Decl -> List Decl -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List (Option String) -> List (String, List Decl) -> (List (String, (List (String, PubScheme), List TcDiag, List TcDiag)), List ChainStep)
+chainGo : List (String, Scheme) -> List (String, ExportBinding) -> List (String, List (String, ExportBinding)) -> List Decl -> List Decl -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> Int -> List (Option String) -> List (String, List Decl) -> (List (String, (List (String, PubScheme), List TcDiag, List TcDiag)), Int, List ChainStep)
 changesFileRow : EffRow -> EffRow -> Bool
 changesPackedFileBound : Bool -> Mono -> Mono -> Bool
 checkAdmittedOccObl : ImplEnv -> (String, Mono, Option Loc) -> Unit
@@ -424,7 +424,7 @@ checkBodyImpl : ModuleSeed -> String -> List Decl -> List Decl -> (ModuleBinding
 checkCallObligationsU : Bool -> ImplUniverse -> List UObligation -> Unit
 checkClausesNonFunctionLocated : List String -> String -> List FunClause -> Unit
 checkCoherence : ImplEnv -> Int -> Unit
-checkCoreMemoized : Option (Int, Int) -> List Decl -> List (String, Scheme) -> ModuleBindings
+checkCoreMemoized : Option (Int, Int) -> List Decl -> List (String, Scheme) -> (ModuleBindings, List (String, PubScheme))
 checkDeclAuthorityDomains : List (String, Param) -> List (String, KindAnn) -> List Ty -> Unit
 checkDeclAuthorityUses : List Decl -> Unit
 checkDeclAuthorityUsesDecl : Decl -> Unit
@@ -1375,7 +1375,7 @@ graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
 graphCollect : GraphOut -> Bool -> String -> (List Decl, List (String, PubScheme), List TcDiag, List TcDiag) -> (List (String, List Decl), List (String, (List (String, PubScheme), List TcDiag, List TcDiag))) -> (List (String, List Decl), List (String, (List (String, PubScheme), List TcDiag, List TcDiag)))
 graphMarksNow : Unit -> GraphMarks
 graphModuleWorker : GraphOut -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag))
-graphPreamble : GraphOut -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), ModuleBindings, List Decl, MarkSets)
+graphPreamble : GraphOut -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), List Decl, MarkSets)
 graphPubDefiners : String -> List (String, (String, String))
 graphRun : Ref GraphRun
 groundAdmittedGo : TcEnv -> String -> List IfaceRef -> List Mono -> Option Loc -> Unit

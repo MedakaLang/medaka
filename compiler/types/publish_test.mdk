@@ -117,7 +117,11 @@ test "an ELink tail is followed to the unbound cell" =
 test "an unlinked ELink in tail position is a LinkCell" =
   let link = Ref (ELink 3 (EffRow [] None))
   let p = pub (plainScheme (TFun int (EffRow [] (Some link)) int))
-  expectEqual [LinkCell "f" EffVarK 3] (liveCells "f" p)
+  expectEqual [LinkCell "f" EffVarK (Some 3)] (liveCells "f" p)
+
+test "a type-variable Link left in a scheme is a LinkCell with no id" =
+  let p = pub (plainScheme (TFun (TVar (Ref (Link int))) pureRow int))
+  expectEqual [LinkCell "f" TyVarK None] (liveCells "f" p)
 
 test "a rebuilt EJoin keeps one frozen cell per member id" =
   let m1 = Ref (EUnbound 1 1)

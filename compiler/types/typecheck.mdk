@@ -357,6 +357,13 @@ export import types.publish.{
   PubScheme(..),
   pubSchemes,
 }
+import types.publish.{
+  TcReport,
+  freezeRows,
+  freezeModDiags,
+  freezeNewest,
+  graphReport,
+}
 import types.registry.{
   RegKey,
   Registry,
@@ -53037,6 +53044,8 @@ foldModules wantData wantAll worker collect base baseSeed coreV depEnv accData a
 data CoreCheckMemo = CoreCheckMemo {
   ccmKey : ((Int, Int), String),
   ccmCoreSchemes : ModuleBindings,
+  -- The prelude's published rows, frozen once when the entry is stored.
+  ccmCorePub : List (String, PubScheme),
   ccmCrossRun : CrossRun,
   ccmGraphRun : GraphRun,
   ccmDriver : DriverState,
@@ -53050,7 +53059,7 @@ coreCheckMemoRef = Ref None
 export
 lastCoreSchemes : Unit -> List (String, Scheme)
 lastCoreSchemes _ = match !coreCheckMemoRef
-  Some m => m.ccmCoreSchemes.mbSchemes
+  Some m => pubSchemes m.ccmCorePub
   None => []
 
 coreCheckMemoHit : Option (Int, Int) -> Option CoreCheckMemo
@@ -53139,18 +53148,20 @@ restoreCoreDriverFields d =
   driverState.value.matchWarnings := d.matchWarnings.value
 
 -- The core pass proper, memoized.  Runs `checkModuleFull` over core and snapshots
--- `coreSchemeObligationsRef` on a miss; installs the snapshot on a hit.
+-- `coreSchemeObligationsRef` on a miss; installs the snapshot on a hit.  Beside the
+-- bindings inference reads, it returns the prelude's published rows, frozen once
+-- after the drain closed core; a hit returns the stored frozen copy.
 checkCoreMemoized : Option (Int, Int) ->
   List Decl ->
   List (String, Scheme) ->
-  ModuleBindings
+  (ModuleBindings, List (String, PubScheme))
 checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
   Some m =>
     crossRun := copyCrossRun m.ccmCrossRun
     graphRun := copyGraphRun m.ccmGraphRun
     perRun := freshPerRun ()
     let _ = restoreCoreDriverFields m.ccmDriver
-    m.ccmCoreSchemes
+    (m.ccmCoreSchemes, m.ccmCorePub)
   None =>
     -- #2705: core is marked inside the pass, on the miss, with the unsplit set
     -- (`moduleMarkCtx`'s core arm) — so its cells are minted into the graph the
@@ -53176,17 +53187,19 @@ checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
           (kv => (fst (fst kv), snd kv))
           perRun.value.schemeObligationsRef.value)
         omEmpty
+    let corePub = freezeRows (publishCore coreSchemes.mbSchemes)
     let _ = match key
       None => ()
       Some k =>
         coreCheckMemoRef := Some CoreCheckMemo {
           ccmKey = (k, driverState.value.ioJoinProfile.value),
           ccmCoreSchemes = coreSchemes,
+          ccmCorePub = corePub,
           ccmCrossRun = copyCrossRun crossRun.value,
           ccmGraphRun = copyGraphRunForMemo graphRun.value,
           ccmDriver = copyDriverState driverState.value,
         }
-    coreSchemes
+    (coreSchemes, corePub)
 
 -- ── prelude-preamble memo ────────────────────────────────────────────────────
 -- The whole-graph derivations below run on every analyze, and on an LSP keystroke
@@ -53292,7 +53305,7 @@ graphPreamble : GraphOut ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List (String, Scheme), ModuleBindings, List Decl, MarkSets)
+  (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), List Decl, MarkSets)
 graphPreamble sel preludeKey runtimeDecls coreDecls modules =
   -- S-emit-interleave-leak (#2049), TREES only: THE EMIT DRIVER OWNS ITS OWN
   -- (EMPTY) CTOR ORACLE.  `matchOracle` lives on `driverState`, which
@@ -53417,10 +53430,18 @@ graphPreamble sel preludeKey runtimeDecls coreDecls modules =
   -- restores an empty queue).  The tree arm cannot: it needs core's MARKED decls
   -- back for `dictPassModulesIfEnabled`, and a memo may hold no `Decl` (see
   -- `PreludePreamble`), so it runs the pass outright and drains only at graph end.
-  let (coreSchemes, coreTree) = match sel
-    GOutDiags => (checkCoreMemoized preludeKey coreDecls runtimeSeed, [])
-    GOutTrees => elabModuleStamp "" runtimeSeed [] coreDecls coreDecls
-  (runtimeSeed, coreSchemes, coreTree, ms)
+  -- The prelude's published rows come back here only when this pass closed core
+  -- (the diags arm); the tree arm publishes them after its graph-end drain.
+  let (coreSchemes, corePub, coreTree) = match sel
+    GOutDiags =>
+      let (bindings, published) =
+        checkCoreMemoized preludeKey coreDecls runtimeSeed
+      (bindings, Some published, [])
+    GOutTrees =>
+      let (bindings, tree) =
+        elabModuleStamp "" runtimeSeed [] coreDecls coreDecls
+      (bindings, None, tree)
+  (runtimeSeed, coreSchemes, corePub, coreTree, ms)
 
 -- `graphPreamble`'s `(runtimeSeed, coreSchemes)` projection, for the schemes-only
 -- driver (`checkModulesK`), which neither marks trees nor reads the mark sets back.
@@ -53430,7 +53451,7 @@ checkModulesPreambleK : Option (Int, Int) ->
   List (String, List Decl) ->
   (List (String, Scheme), ModuleBindings)
 checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =
-  let (runtimeSeed, coreSchemes, _, _) =
+  let (runtimeSeed, coreSchemes, _, _, _) =
     graphPreamble GOutDiags preludeKey runtimeDecls coreDecls modules
   (runtimeSeed, coreSchemes)
 
@@ -54112,7 +54133,8 @@ checkModulesDiagsChainFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDec
       let _ = restoreCoreDriverFields st.csDriver
       (st.csDepEnv, st.csAccData, st.csAccAll, st.csResults)
   let n = listLen kept
-  let (finalResults, newSteps) =
+  -- A restored step's rows were frozen when it was recorded, so nothing is open.
+  let (finalResults, open, newSteps) =
     chainGo
       (runtimeSeed ++ coreSchemes.mbSchemes)
       (tagModuleExports coreSchemes.mbStandaloneSchemes coreSchemes.mbSchemes)
@@ -54120,6 +54142,7 @@ checkModulesDiagsChainFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDec
       accData
       accAll
       results
+      0
       (drop n stepKeys)
       -- #2705: each suffix module is marked as it is checked (`checkBodyImpl`), i.e.
       -- after the prefix restore above replaced `graphRun` — a cell minted before
@@ -54141,8 +54164,11 @@ checkModulesDiagsChainFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDec
       (driveErrs findings finalResults)
       coreDecls
       modules
+  -- `driveGraphK`'s freeze point: the rows no recorded step froze.
   attachCoherenceConflict
-    (attachDrainFindings (findings ++ wanted) (reverseL finalResults))
+    (attachDrainFindings
+      (findings ++ wanted)
+      (reverseL (freezeNewest open finalResults)))
 
 -- The fold itself, iterative, recording a step after each non-entry module while
 -- keys are available.  Mirrors `driveGraphK GOutDiags`'s `foldModules` exactly:
@@ -54150,24 +54176,28 @@ checkModulesDiagsChainFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDec
 -- entry-only `mainSchemeRef` write.  It drops the marked-tree half of the payload —
 -- the memo may capture no `Decl` (see `ChainStep`), which is why the memo wraps the
 -- DIAGS selection only.  `results` and the returned steps are newest first.
+-- `open` counts the newest rows of `results` not yet frozen: a recorded step
+-- freezes them, since its prefix is closed, and the caller freezes the rest at
+-- graph end.
 chainGo : List (String, Scheme) ->
   List (String, ExportBinding) ->
   List (String, List (String, ExportBinding)) ->
   List Decl ->
   List Decl ->
   List ModDiags ->
+  Int ->
   List (Option String) ->
   List (String, List Decl) ->
-  (List ModDiags, List ChainStep)
-chainGo _ _ _ _ _ results _ [] = (results, [])
-chainGo baseSeed coreV depEnv accData accAll results _ [(mid, prog)] =
+  (List ModDiags, Int, List ChainStep)
+chainGo _ _ _ _ _ results open _ [] = (results, open, [])
+chainGo baseSeed coreV depEnv accData accAll results open _ [(mid, prog)] =
   let seed =
     moduleImportSeed baseSeed (importSeed coreV (admittedIn mid) prog depEnv)
   let (_, (_, published, errs, warns)) =
     graphModuleWorker GOutDiags mid seed accData accAll prog
   let _ = setMainSchemeIfEntry True published
-  ((mid, (published, errs, warns)) :: results, [])
-chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) =
+  ((mid, (published, errs, warns)) :: results, open + 1, [])
+chainGo baseSeed coreV depEnv accData accAll results open keys ((mid, prog) :: rest) =
   let seed =
     moduleImportSeed baseSeed (importSeed coreV (admittedIn mid) prog depEnv)
   let (schemes, (_, published, errs, warns)) =
@@ -54177,6 +54207,7 @@ chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) 
   let accData2 = accData ++ publicDataDecls prog
   let accAll2 = accAll ++ prog
   let results2 = (mid, (published, errs, warns)) :: results
+  let open2 = open + 1
   let (key, keys2) = match keys
     k :: ks => (k, ks)
     [] => (None, [])
@@ -54188,7 +54219,7 @@ chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) 
       -- No key for this module: nothing after it can be resumed either, so the rest
       -- records no step and this is a tail call.  A frame waiting on the rest would
       -- keep its own `accAll2`/`accData2` copies reachable from the stack.
-      chainGo baseSeed coreV depEnv2 accData2 accAll2 results2 [] rest
+      chainGo baseSeed coreV depEnv2 accData2 accAll2 results2 open2 [] rest
     Some k =>
       -- #2705: drain what is queued (this module's context, and the contexts of
       -- any un-keyed modules before it) BEFORE the snapshot, so a hit restores a
@@ -54199,7 +54230,9 @@ chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) 
       -- snapshotting its solution here — and it is a second resolution schedule
       -- beside the graph-end one; folding the two back into one is #2719's.
       -- The drain's holes join the results the step records, so a hit replays them.
-      let results3 = attachDrainFindings (checkGraphFinish ()) results2
+      -- The closed prefix's rows are frozen here, once, and a hit replays the copy.
+      let results3 =
+        freezeNewest open2 (attachDrainFindings (checkGraphFinish ()) results2)
       let step = ChainStep {
         csKey = k,
         csDepEnv = depEnv2,
@@ -54210,9 +54243,9 @@ chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) 
         csGraphRun = copyGraphRunForMemo graphRun.value,
         csDriver = copyDriverState driverState.value,
       }
-      let (finalResults, moreSteps) =
-        chainGo baseSeed coreV depEnv2 accData2 accAll2 results3 keys2 rest
-      (finalResults, moreSteps ++ [step])
+      let (finalResults, finalOpen, moreSteps) =
+        chainGo baseSeed coreV depEnv2 accData2 accAll2 results3 0 keys2 rest
+      (finalResults, finalOpen, moreSteps ++ [step])
 
 -- #1112 A-3: the disposition producer.  For every accepted instance
 -- (`ieRowsAll` — every impl row in the whole-graph `IE`, prelude included) and
@@ -54348,6 +54381,8 @@ data GraphDrive = GraphDrive {
   -- (`declEnvsRef`) is complete by the graph preamble above, before either
   -- arm's own work begins.
   gdDispositions : DispositionTable,
+  -- The drive's frozen outputs as one value (`types/publish.mdk`'s `TcReport`).
+  gdReport : TcReport,
 }
 
 -- Drive the whole module graph ONCE: stamp type-constructor identity, run the
@@ -54403,7 +54438,7 @@ driveGraphK sel valueMain preludeKey runtimeDecls coreDecls0 modulesIn =
   -- rewrite on VALUES and cannot move a type head, so the graph reaches identity
   -- minting in its final shape and no later pass has to re-mint.
   let (coreDecls, modules) = stampGraphDecls coreDecls0 modulesAliased
-  let (runtimeSeed, coreSchemes, coreTree, ms) =
+  let (runtimeSeed, coreSchemes, coreClosed, coreTree, ms) =
     graphPreamble sel preludeKey runtimeDecls coreDecls modules
   -- #154 PR-C: the worker reads BOTH accData (buildOracle `prog ++ accData`) and
   -- accAll (checkModuleFullImpl implDecls), and
@@ -54438,8 +54473,14 @@ driveGraphK sel valueMain preludeKey runtimeDecls coreDecls0 modulesIn =
   -- writes, so attaching once here serves both selections.
   let wanted =
     autoPrintWanted valueMain (driveErrs findings perModRaw) coreDecls modules
+  -- The graph is closed: the drain, its defaulting and the auto-print verdict
+  -- have run, so the published rows are frozen now, once.
   let perMod =
-    attachCoherenceConflict (attachDrainFindings (findings ++ wanted) perModRaw)
+    attachCoherenceConflict
+      (attachDrainFindings (findings ++ wanted) (map freezeModDiags perModRaw))
+  let corePub = match coreClosed
+    Some rows => rows
+    None => freezeRows (publishCore coreSchemes.mbSchemes)
   -- #1112 A-3: the whole-graph IE/CE `buildDeclEnvs` filled in the preamble
   -- above is already complete at this point — installed here, once per
   -- elaboration, on both arms alike (mirroring `installEvidence`'s own
@@ -54449,12 +54490,20 @@ driveGraphK sel valueMain preludeKey runtimeDecls coreDecls0 modulesIn =
   match sel
     GOutDiags => GraphDrive {
       gdPerMod = perMod,
-      gdCoreSchemes = publishCore coreSchemes.mbSchemes,
+      gdCoreSchemes = corePub,
       gdCore = [],
       gdModules = [],
       gdResidual = [],
       gdEvTable = graphRun.value.evTable.value,
       gdDispositions = dispositions,
+      gdReport =
+        graphReport
+          perMod
+          corePub
+          []
+          graphRun.value.evTable.value
+          dispositions
+          None,
     }
     GOutTrees =>
       -- The set `dictPass` prepends dict params for: the bare set plus every
@@ -54473,18 +54522,28 @@ driveGraphK sel valueMain preludeKey runtimeDecls coreDecls0 modulesIn =
       -- and a check-only drive therefore never replaces a table a lowering is
       -- still reading.
       let _ = installBinderTypes graphRun.value.binderRows.value
+      -- `resolveAliasMethodSpellings` restores the origin name behind every
+      -- alias-qualified method occurrence (`A.mth` -> `mth`) that inference kept.
+      -- Only the user modules go through it: core imports nothing, so it holds no
+      -- alias-qualified spelling to restore.
+      let modulesOut = map resolveAliasMethodSpellings modules3
+      let residual = stickyTypeErrorDiagsSince stickyBefore
       GraphDrive {
         gdPerMod = perMod,
-        gdCoreSchemes = publishCore coreSchemes.mbSchemes,
+        gdCoreSchemes = corePub,
         gdCore = coreD,
-        -- `resolveAliasMethodSpellings` restores the origin name behind every
-        -- alias-qualified method occurrence (`A.mth` -> `mth`) that inference kept.
-        -- Only the user modules go through it: core imports nothing, so it holds no
-        -- alias-qualified spelling to restore.
-        gdModules = map resolveAliasMethodSpellings modules3,
-        gdResidual = stickyTypeErrorDiagsSince stickyBefore,
+        gdModules = modulesOut,
+        gdResidual = residual,
         gdEvTable = graphRun.value.evTable.value,
         gdDispositions = dispositions,
+        gdReport =
+          graphReport
+            perMod
+            corePub
+            residual
+            graphRun.value.evTable.value
+            dispositions
+            (Some (coreD, modulesOut)),
       }
 
 -- The whole-graph coherence verdict, attached to the entry module's diagnostics —

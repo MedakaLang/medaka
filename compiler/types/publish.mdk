@@ -74,12 +74,13 @@ pubSchemes = map (b => (fst b, (snd b).psScheme))
 public export data VarKind = TyVarK | EffVarK | AuthVarK deriving (Eq, Debug)
 
 -- A cell the validator found in a frozen value.  `LinkCell` is a link left after
--- freezing (a bug).  `FreeMeta` is an unquantified cell found anywhere but at
--- graph end (a bug there).  `WeakVar` is the same cell at graph end, where
--- nothing in the graph fixed it (allowed, listed).  `OpenSummary` is an effect
--- summary still unsolved at graph end.
+-- freezing (a bug); a type variable's `Link` carries no id, so its id is `None`.
+-- `FreeMeta` is an unquantified cell found anywhere but at graph end (a bug
+-- there).  `WeakVar` is the same cell at graph end, where nothing in the graph
+-- fixed it (allowed, listed).  `OpenSummary` is an effect summary still unsolved
+-- at graph end.
 public export data LiveCell =
-  | LinkCell String VarKind Int
+  | LinkCell String VarKind (Option Int)
   | FreeMeta String VarKind Int
   | WeakVar String VarKind Int
   | OpenSummary String Int
@@ -268,6 +269,97 @@ freezePub s ctx =
   let (_, ctx1) = zonkList zonkVecObl z1 ctx
   PubScheme { psScheme = s1, psContext = ctx1 }
 
+-- Each row frozen on its own.  A weak cell two schemes share becomes one copy
+-- per scheme: a frozen value is never unified again, and a scheme's variables are
+-- named within that scheme, so the copies render as the shared cell did.
+export
+freezeRows : List (String, PubScheme) -> List (String, PubScheme)
+freezeRows = map (b => (fst b, freezePub (snd b).psScheme (snd b).psContext))
+
+export
+freezeModDiags : ModDiags -> ModDiags
+freezeModDiags (mid, (schemes, errs, warns)) =
+  (mid, (freezeRows schemes, errs, warns))
+
+-- The first [n] rows frozen and the rest kept: for a list whose tail an earlier
+-- point already froze.
+export
+freezeNewest : Int -> List ModDiags -> List ModDiags
+freezeNewest n rows
+  | n <= 0 = rows
+  | otherwise = match rows
+    [] => []
+    m :: rest => freezeModDiags m :: freezeNewest (n - 1) rest
+
+-- ── the report of one graph drive ──────────────────────────────────────────
+
+-- The report over a drive's frozen outputs.  `trChecked` is withheld on any
+-- error, any link left after freezing, and any effect summary still unsolved;
+-- the weak variables it allows are listed in `cpWeak`.
+export
+graphReport : List ModDiags ->
+  List (String, PubScheme) ->
+  List (String, TcDiag) ->
+  EvTable ->
+  DispositionTable ->
+  Option (List Decl, List (String, List Decl)) ->
+  TcReport
+graphReport perMod core residual evidence dispositions trees =
+  let schemes = map (m => (fst m, modSchemes (snd m))) perMod
+  let cells = graphCells (core :: map snd schemes)
+  let checked =
+    if isEmptyL residual && noModErrors perMod && allWeak cells then
+      Some CheckedProgram {
+        cpSchemes = schemes,
+        cpCore = core,
+        cpEvidence = evidence,
+        cpDispositions = dispositions,
+        cpTrees = trees,
+        cpWeak = cells,
+      }
+    else
+      None
+  TcReport {
+    trPartial = PartialAnalysis {
+      paSchemes = schemes,
+      paCore = core,
+      paLocals = [],
+      paSeed = [],
+    },
+    trDiagnostics = perMod,
+    trResidual = residual,
+    trChecked = checked,
+  }
+
+-- Every live cell of every row, read at graph end.
+export
+graphCells : List (List (String, PubScheme)) -> List LiveCell
+graphCells [] = []
+graphCells (rows :: rest) = rowCells rows (graphCells rest)
+
+rowCells : List (String, PubScheme) -> List LiveCell -> List LiveCell
+rowCells [] acc = acc
+rowCells ((name, p) :: rest) acc =
+  atGraphEnd (liveCells name p) ++ rowCells rest acc
+
+modSchemes : (List (String, PubScheme), List TcDiag, List TcDiag) ->
+  List (String, PubScheme)
+modSchemes (s, _, _) = s
+
+isEmptyL : List a -> Bool
+isEmptyL [] = True
+isEmptyL _ = False
+
+noModErrors : List ModDiags -> Bool
+noModErrors [] = True
+noModErrors ((_, (_, [], _)) :: rest) = noModErrors rest
+noModErrors _ = False
+
+allWeak : List LiveCell -> Bool
+allWeak [] = True
+allWeak ((WeakVar _ _ _) :: rest) = allWeak rest
+allWeak _ = False
+
 -- ── live-cell validator ────────────────────────────────────────────────────
 
 -- Seen effect ids (a shared row is walked once) and the cells found, newest first.
@@ -323,7 +415,7 @@ walkResiduals name authIds rs w =
 
 walkMono : String -> List Int -> List Int -> List Int -> Mono -> Walk -> Walk
 walkMono name ids effIds authIds (TVar cell) w = match !cell
-  Link _ => push (LinkCell name TyVarK (-1)) w
+  Link _ => push (LinkCell name TyVarK None) w
   Unbound id _ => if hasId id ids then w else push (FreeMeta name TyVarK id) w
 walkMono name ids effIds authIds (TApp a b) w =
   walkMono name ids effIds authIds b (walkMono name ids effIds authIds a w)
@@ -339,7 +431,7 @@ walkMono _ _ _ _ _ w = w
 
 walkAuth : String -> List Int -> Authority -> Walk -> Walk
 walkAuth name authIds (AVar cell) w = match !cell
-  ALink id _ _ => push (LinkCell name AuthVarK id) w
+  ALink id _ _ => push (LinkCell name AuthVarK (Some id)) w
   AUnbound id _ _ _ _ =>
     if hasId id authIds then w else push (FreeMeta name AuthVarK id) w
 walkAuth name authIds (AJoin ms) w = foldWalk (walkAuth name authIds) ms w
@@ -377,7 +469,7 @@ walkEffCell name effIds authIds member cell (w@(Walk seen found)) = match !cell
       w
     else
       let w1 = Walk (IdMap.set id () seen) found
-      let w2 = if member then w1 else push (LinkCell name EffVarK id) w1
+      let w2 = if member then w1 else push (LinkCell name EffVarK (Some id)) w1
       walkRow name effIds authIds row w2
   EJoin id _ members =>
     if IdMap.has id seen then
