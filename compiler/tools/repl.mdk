@@ -34,6 +34,7 @@ import types.repr.{ppScheme, Scheme(..)}
 import types.typecheck.{
   checkOneScheme,
   elaborateModulesWithSchemes,
+  pubSchemes,
   tcMsg,
 }
 import types.private_mangle.{mangleCtorCollisionsPair}
@@ -244,7 +245,7 @@ runPipeline combined =
             "__repl__",
             flatMap snd modulesM,
           )
-          ([], allSchemes, bindings)
+          ([], pubSchemes allSchemes, bindings)
 -- DRIVER-COLLAPSE Phase 3/4: eval via the 1-module wrapper (evalOneRootEnv
 -- = evalModulesRootEnv over [("__repl__", combined)]) instead of the flat
 -- evalProgram (preludeDecls ++ combined).  The prelude is installed

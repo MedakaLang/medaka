@@ -49,6 +49,7 @@ import types.private_mangle.{mangleCtorCollisionsPair}
 import types.typecheck.{
   ElabResult,
   elaborateModulesWithSchemes,
+  pubSchemes,
   lastInvocationOps,
   decodeSetParam,
   bindingGrantArity,
@@ -348,8 +349,9 @@ analyzeProgram : Bool ->
   List (String, List Decl) ->
   EntryAnalysis
 analyzeProgram valueMain rtD coreD modsD =
-  let (elaborated, preludeSchemes, ownSchemes) =
+  let (elaborated, preludePub, ownPub) =
     elaborateModulesWithSchemes valueMain rtD coreD modsD
+  let preludeSchemes = pubSchemes preludePub
   let ops = lastInvocationOps ()
   let autoPrintCall =
     if shouldAutoPrintMain coreD modsD then
@@ -359,7 +361,7 @@ analyzeProgram valueMain rtD coreD modsD =
   EntryAnalysis {
     eaElab = elaborated,
     eaTarget = TargetInputs {
-      tiSchemes = ownSchemes ++ preludeSchemes,
+      tiSchemes = pubSchemes ownPub ++ preludeSchemes,
       tiOps = ops,
       tiEntryDecls = entryModuleDecls modsD,
       tiAutoPrintCall = autoPrintCall,

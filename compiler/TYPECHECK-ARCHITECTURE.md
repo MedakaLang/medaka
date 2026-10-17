@@ -142,8 +142,9 @@ Checking and stamping still select independently. The carrier is not a productio
 `Wanted` or `SolverOutcome`, and does not complete the shared solver or return-family
 migration. All three legacy caches remain enabled; they can replay live cells and
 already-drained graphs. The carrier introduces no cached result or proof. The finalized scheme query
-`checkOneSchemeFullK` drains the graph, but its current Scheme payload still contains
-live inference cells. Cache replacement and immutable publication remain with
+`checkOneSchemeFullK` drains the graph and returns frozen published schemes that hold no
+live inference cell; the LSP's locals and import seed still hand out live schemes.
+Cache replacement remains with
 [#2549](https://github.com/MedakaLang/medaka/issues/2549).
 
 Inferred dictionary slots retain complete predicate vectors and their `IfaceRef`

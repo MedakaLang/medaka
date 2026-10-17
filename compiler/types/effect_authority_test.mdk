@@ -45,7 +45,7 @@ schemeOf source name =
     desugar (parseLocated (prelude ++ source)),
   )
   match lookupAssoc name schemes
-    Some s => ppScheme s
+    Some p => ppScheme p.psScheme
     None => "<missing>"
 
 rejects : String -> Bool
