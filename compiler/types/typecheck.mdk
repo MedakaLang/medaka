@@ -48,6 +48,8 @@
 import frontend.ast.{
   variantName, letBindName, propParamName, implMethodName,
   noBinderId,
+  unminted,
+  isUnminted,
   BinderId(..),
   defaultReceiverDict,
   qualifierSource,
@@ -501,6 +503,7 @@ import types.route_key.{
   funHeadTag,
   installEvidence,
   evDictRoutes,
+  evSiteRoute,
 }
 import types.disposition.{
   InstId(..),
@@ -10988,7 +10991,8 @@ beginMethodReturnTrace _ =
 export
 finishMethodReturnTrace : Unit -> List MethodReturnTraceEntry
 finishMethodReturnTrace _ =
-  let evidence = methodCellEntries () ++ graphRun.value.evTable.value
+  let evidence =
+    methodCellEntries () ++ siteCellEntries () ++ graphRun.value.evTable.value
   let entries =
     map
       (publishMethodReturnTrace evidence)
@@ -11529,6 +11533,18 @@ data EvCell = EvCell {
   ecInner : Ref Inner,
 }
 
+-- The solver's working cell for one site node, keyed by the `EvId` the mark pass
+-- minted into it (`mintOpSite`).  The writers obtain the same `Ref` the node
+-- carried before it carried an id; `siteCellEntries` reads each back into the
+-- published table, under the node's id, for the readers in `types/route_key.mdk`.
+data SiteCell =
+  -- an operator or wide literal: its dispatch route
+  | OpSite (Ref Route)
+  -- a numeric literal: its defaulted float and its `fromInt` route
+  | LitSite (Ref (Option Float)) (Ref Route)
+  -- a field access or record update: its resolved record head
+  | HeadSite (Ref String)
+
 data GraphRun = GraphRun {
   tyvarCounter : Ref Int,
   effvarCounter : Ref Int,
@@ -11597,6 +11613,10 @@ data GraphRun = GraphRun {
   -- `evBase`, so a stamper's lookup is O(1) and the array spans one lineage, not the
   -- process.  Sized by doubling as ids are minted.  `resetGraphState` starts it empty.
   evCells : Ref (Array (Option EvCell)),
+  -- The operator, literal and record-head site cells with the id each was minted
+  -- under, indexed exactly as `evCells` is (ordinal less `evBase`, doubled as ids
+  -- are minted, empty after a reset).
+  siteCells : Ref (Array (Option (EvId, SiteCell))),
   scopeStore : ScopeStore,
   -- Dictionary-abstracted local bindings (`registerLocalAbs`).  Graph-owned so a
   -- renamed binder's spelling depends only on this elaboration; `resetGraphState`
@@ -11650,6 +11670,7 @@ freshGraphRun _ = GraphRun {
   evTable = Ref [],
   memoMethodReturns = Ref [],
   evCells = Ref (arrayMake 0 None),
+  siteCells = Ref (arrayMake 0 None),
   scopeStore = Scopes.freshScopeStore (),
   localAbs = freshLocalAbsState (),
   grants = freshGrantState (),
@@ -11680,15 +11701,7 @@ mintMethodCellRaw iface arity tag impls =
   let ev = freshEvId ()
   let g = graphRun.value
   let i = evOrdinal ev - g.evBase
-  let arr0 = g.evCells.value
-  let arr =
-    if i < arrayLength arr0 then
-      arr0
-    else
-      let grown = arrayMake (max 16 (2 * (i + 1))) None
-      let _ = arrayBlit arr0 0 grown 0 (arrayLength arr0)
-      g.evCells := grown
-      grown
+  let arr = indexWithSlot g.evCells i
   -- An occupied slot would mean two nodes minted under one ordinal — the same
   -- collision `fillEvidence` refuses at publish time — and a memo restore that
   -- rewound the counter without rewinding this index is the one way to reach it.
@@ -11715,6 +11728,85 @@ mintMethodCellRaw iface arity tag impls =
 
 evOrdinal : EvId -> Int
 evOrdinal (EvId _ i) = i
+
+-- The array [index] holds, grown by doubling until slot [i] exists.
+indexWithSlot : Ref (Array (Option a)) -> Int -> Array (Option a)
+indexWithSlot index i =
+  let arr0 = index.value
+  if i < arrayLength arr0 then
+    arr0
+  else
+    let grown = arrayMake (max 16 (2 * (i + 1))) None
+    let _ = arrayBlit arr0 0 grown 0 (arrayLength arr0)
+    index := grown
+    grown
+
+-- Mint the cell for one operator site, starting unrouted, and return its id.
+mintOpSite : Unit -> EvId
+mintOpSite _ = mintSite (OpSite (Ref RNone))
+
+mintSite : SiteCell -> EvId
+mintSite cell =
+  let ev = freshEvId ()
+  let g = graphRun.value
+  let i = evOrdinal ev - g.evBase
+  let arr = indexWithSlot g.siteCells i
+  let _ = match arrayGetUnsafe i arr
+    None => arraySetUnsafe i (Some (ev, cell)) arr
+    Some _ => panic "site cell #\{intToString (evOrdinal ev)} minted twice"
+  ev
+
+-- The cell minted for site [ev].  Inference reaching a site the mark pass never
+-- visited is a gap in marking coverage, so it panics rather than writing a cell no
+-- reader would find.
+siteCellOf : EvId -> SiteCell
+siteCellOf (EvId m n) =
+  let g = graphRun.value
+  let i = n - g.evBase
+  let arr = g.siteCells.value
+  if isUnminted (EvId m n) then
+    panic "site reached inference unminted"
+  else if i < 0 then
+    panic "site cell \{m}#\{intToString n} is from an earlier graph"
+  else if i >= arrayLength arr then
+    panic "site cell \{m}#\{intToString n} was never minted"
+  else match arrayGetUnsafe i arr
+    Some (_, c) => c
+    None => panic "site cell \{m}#\{intToString n} was never minted"
+
+-- The route cell of operator site [ev].
+siteRouteCell : EvId -> Ref Route
+siteRouteCell ev = match siteCellOf ev
+  OpSite r => r
+  LitSite _ _ => notAnOpSite ev
+  HeadSite _ => notAnOpSite ev
+
+notAnOpSite : EvId -> a
+notAnOpSite ev =
+  panic
+    "site cell \{evIdModule ev}#\{intToString (evOrdinal ev)} is not an operator site"
+
+-- Every minted site cell as a published entry, under the id its node carries.
+siteCellEntries : Unit -> EvTable
+siteCellEntries _ =
+  let arr = graphRun.value.siteCells.value
+  siteCellEntriesFrom arr (arrayLength arr - 1) []
+
+siteCellEntriesFrom : Array (Option (EvId, SiteCell)) ->
+  Int ->
+  EvTable ->
+  EvTable
+siteCellEntriesFrom arr i acc
+  | i < 0 = acc
+  | otherwise = match arrayGetUnsafe i arr
+    None => siteCellEntriesFrom arr (i - 1) acc
+    Some (ev, c) =>
+      siteCellEntriesFrom arr (i - 1) (EvEntry ev (siteCellValue c) :: acc)
+
+siteCellValue : SiteCell -> EvVal
+siteCellValue (OpSite r) = EvOne r.value
+siteCellValue (LitSite f r) = EvLit f.value r.value
+siteCellValue (HeadSite h) = EvHead h.value
 
 -- The cells minted for [ev].  A miss is a bug in this file (every `EMethodAt` is
 -- minted through `mintMethodCell`), so it panics rather than answering unrouted.
@@ -11767,12 +11859,13 @@ methodCellEntriesFrom arr i acc
           :: acc)
 
 -- Install the table the readers below this file consult: the per-goal entries the
--- drain recorded plus one entry per method occurrence.  Called before `dictPass`
+-- drain recorded plus one entry per method occurrence and per minted site.  Called before `dictPass`
 -- (which reads `EDictAt` routes) and again after it (which mints `EMethodAt`
 -- nodes of its own), on both arms.
 publishEvidence : Unit -> Unit
 publishEvidence _ =
-  installEvidence (methodCellEntries () ++ graphRun.value.evTable.value)
+  installEvidence
+    (methodCellEntries () ++ siteCellEntries () ++ graphRun.value.evTable.value)
 
 graphRun : Ref GraphRun
 graphRun = Ref (freshGraphRun ())
@@ -11857,6 +11950,7 @@ copyGraphRun g = GraphRun {
   -- the ids of the cells minted for it, and its nodes must keep answering.  Only
   -- the INDEX is copied, so a mint on one side cannot grow the other's array.
   evCells = Ref (arrayCopy g.evCells.value),
+  siteCells = Ref (arrayCopy g.siteCells.value),
   scopeStore = Scopes.copyScopeStore g.scopeStore,
   localAbs = copyLocalAbsState g.localAbs,
   grants = copyGrantState g.grants,
@@ -11960,6 +12054,8 @@ methodReturnMemoEvidence : EvId -> EvTable -> String
 methodReturnMemoEvidence goal evidence = match lookupTraceEvidence goal evidence
   Some (EvOne route) => methodReturnMemoRoute route
   Some (EvMany routes) => joinWith "," (map methodReturnMemoRoute routes)
+  Some (EvLit _ route) => methodReturnMemoRoute route
+  Some (EvHead head) => "head:\{head}"
   None => "unpublished"
 
 methodReturnMemoRoute : Route -> String
@@ -16635,7 +16731,7 @@ infer env (EMatch scrut arms) = inferMatch env (infer env scrut) arms
 infer env (ETuple es) = tupleMono (inferEach env es)
 infer env (EListLit es) = inferListLit env es
 infer env (EAnnot e ty) = inferAnnot env e ty
-infer env (EBinOp op l r dref) = inferBinopE env op l r dref
+infer env (EBinOp op l r ev) = inferBinopE env op l r (siteRouteCell ev)
 infer env (EUnOp op e dref) = inferUnopE env op e dref
 infer env (EInfix op l r) = inferInfix env op l r
 infer env (ERecordCreate name fields) = inferRecordCreate env name fields
@@ -28404,8 +28500,15 @@ rewriteArgScoped rw bound (EIf c t e) =
     (rewriteArgScoped rw bound c)
     (rewriteArgScoped rw bound t)
     (rewriteArgScoped rw bound e)
-rewriteArgScoped rw bound (EBinOp op l r dr) =
-  EBinOp op (rewriteArgScoped rw bound l) (rewriteArgScoped rw bound r) dr
+-- An operator site is minted once: `markRecursiveOccurrences` re-marks bodies
+-- inference already wrote through these ids, so a minted id passes through.
+rewriteArgScoped rw bound (EBinOp op l r ev) = EBinOp op (rewriteArgScoped
+  rw
+  bound
+  l) (rewriteArgScoped rw bound r) (if isUnminted ev then
+  mintOpSite ()
+else
+  ev)
 rewriteArgScoped rw bound (EUnOp op x dr) =
   EUnOp op (rewriteArgScoped rw bound x) dr
 rewriteArgScoped rw bound (EInfix op l r) =
@@ -35705,7 +35808,7 @@ grantTerm chain a = match authGrantShape a
             -- Generated after inference: the list identity supplies the operand
             -- representation that a hidden grant parameter alone cannot carry.
             (fold
-              (acc q => EBinOp "++" acc q (Ref RNone))
+              (acc q => EBinOp "++" acc q unminted)
               (EListLit [])
               (p :: rest))
             (dedup params)
@@ -35753,13 +35856,12 @@ grantParamFor (b :: rest) i =
 -- routes. RNone and scalar routes preserve primitive operations, so primitive
 -- Num method bodies do not recursively call their own dictionary methods.
 rewriteBinopExpr : Expr -> Expr
-rewriteBinopExpr (EBinOp op l r routeRef) = match !routeRef
-  RNone => EBinOp op l r routeRef
+rewriteBinopExpr (EBinOp op l r ev) = match evSiteRoute ev
+  RNone => EBinOp op l r ev
   -- SHARED-FLOAT-RESIDUAL §3(C): an RScalar route is NOT a typeclass dispatch — it
   -- is the scalar-type tag typecheck stamped on a monomorphic binop
-  -- ("Float" on arithmetic, "Int" on comparison). The EBinOp's own route ref does
-  -- not survive the dict-pass→lower boundary (only NODE values do — verified: an op-string change in
-  -- this arm reaches lower but a setRef on routeRef does not), so we carry the scalar
+  -- ("Float" on arithmetic, "Int" on comparison). Lowering does not read the
+  -- EBinOp's site id, so we carry the scalar
   -- type in a NODE by wrapping the binop in `EAnnot … (TyCon tag)`.  Eval ignores the
   -- annotation (`eval (EAnnot e _) = eval e`) and evaluates the binop dynamically
   -- (Float-correct); lowering reads the annotation to stamp CBinPrim's scalar tag so
@@ -35777,8 +35879,8 @@ rewriteBinopExpr (EBinOp op l r routeRef) = match !routeRef
   -- nothing else, so the origin is unobserved either way — but `OriginBuiltin` is
   -- the TRUE identity of a scalar tag, and leaving `OriginUnresolved` on a
   -- post-resolve node would keep the §8 I6.3 sentinel alive for no reason.
-  RScalar tag => EAnnot (EBinOp op l r routeRef) (tyConBuiltin tag None)
-  _ => binopMethodApp op l r routeRef
+  RScalar tag => EAnnot (EBinOp op l r ev) (tyConBuiltin tag None)
+  route => binopMethodApp op l r route
 -- PLAN.md #11: re-tag a source integer literal to its inferred runtime rep, a 3-way
 -- decision.  setNumlitFloats already
 -- decided: float cell `Some f` ⇒ concrete Float ⇒ `ELit (LFloat f)`; otherwise the
@@ -35887,10 +35989,10 @@ binopRouteSplit : Route -> (Route, List Route)
 binopRouteSplit (RKey tag reqs sups) = (RKey tag [] sups, reqs)
 binopRouteSplit r = (r, [])
 
-binopMethodApp : String -> Expr -> Expr -> Ref Route -> Expr
-binopMethodApp op l r routeRef =
+binopMethodApp : String -> Expr -> Expr -> Route -> Expr
+binopMethodApp op l r route =
   let method = optionOr "eq" (binopDispatchMethod op)
-  let split = binopRouteSplit !routeRef
+  let split = binopRouteSplit route
   let call =
     EApp
       (EApp

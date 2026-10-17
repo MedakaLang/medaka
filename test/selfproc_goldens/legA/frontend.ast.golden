@@ -44,6 +44,7 @@ isI32Head : String -> Bool
 isI64Head : String -> Bool
 isTaggedFixedHead : String -> Bool
 isU64Head : String -> Bool
+isUnminted : EvId -> Bool
 isUnsignedHead : String -> Bool
 isWildPat : Pat -> Bool
 kindAnnArg : KindAnn -> String
@@ -105,6 +106,7 @@ tyConIdsConflict : TyConOrigin -> TyConOrigin -> Bool
 tyConUnresolved : String -> Option Loc -> Ty
 tyParamSource : String -> Option KindAnn -> String
 tyParamSources : List String -> List (Option KindAnn) -> List String
+unminted : EvId
 useMemberAlias : UseMember -> Option String
 useMemberLocal : UseMember -> String
 useMemberOrigin : UseMember -> String

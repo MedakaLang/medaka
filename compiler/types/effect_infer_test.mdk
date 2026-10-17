@@ -8,7 +8,7 @@ import types.effect_authority.{Authority(..), authIsTop}
 import types.repr.{Mono(..), ppAuthority}
 import frontend.ast.{
   noBinderId, Expr(..), Lit(..), Pat(..), DoStmt(..), Loc(..), TyConOrigin(..),
-  Route(..)
+  unminted
 }
 import support.util.{listLen}
 
@@ -53,7 +53,7 @@ str : String -> Expr
 str s = ELit (LString s)
 
 cat : Expr -> Expr -> Expr
-cat a b = EBinOp "++" a b (Ref RNone)
+cat a b = EBinOp "++" a b unminted
 
 at : Loc
 at = Loc "t.mdk" 1 0 1 0

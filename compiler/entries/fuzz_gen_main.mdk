@@ -43,6 +43,7 @@
 
 import frontend.ast.{
   noBinderId,
+  unminted,
   Lit(..),
   Loc(..),
   noDeclLoc,
@@ -214,7 +215,7 @@ ordOps : List String
 ordOps = ["<", ">", "<=", ">="]
 
 binop : String -> Expr -> Expr -> Expr
-binop op l r = EBinOp op l r (Ref RNone)
+binop op l r = EBinOp op l r unminted
 
 filterScopeTy : Gty -> List (String, Gty) -> List (String, Gty)
 filterScopeTy _ [] = []

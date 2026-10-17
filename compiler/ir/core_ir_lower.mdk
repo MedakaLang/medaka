@@ -171,7 +171,7 @@ lower (ELet _ recFlag pat e1 e2) = CLet recFlag pat (lower e1) (lower e2)
 lower (ELetGroup binds body) = CLetGroup (map lowerBind binds) (lower body)
 lower (EMatch scrut arms) = lowerMatch noDeclLoc (lower scrut) arms
 lower (EIf c t e) = CIf (lower c) (lower t) (lower e)
-lower (EBinOp op l r route) = lowerBinop op l r (scalarTagOfRoute !route)
+lower (EBinOp op l r _) = lowerBinop op l r ""
 lower (EInfix op l r) = mkApp (CVar op AGlobal) [lower l, lower r]
 -- #1739 half A: `!x` lowers to the SAME Core IR node `x.value` does, rather than a
 -- `CUnOp "!"` both backends would then need a new arm for.  `CFieldAccess _ "value"`
@@ -208,8 +208,8 @@ lower (EVariantUpdate con base fields) =
   CVariantUpdate con (lower base) (map lowerField fields)
 lower (EBlock stmts) = CBlock (lowerStmts stmts)
 -- SHARED-FLOAT-RESIDUAL §3(C): dictPass wraps a scalar-tagged binop (arithmetic
--- "Float" or comparison "Int") in `EAnnot (EBinOp …) (TyCon tag)` (the ref-cell
--- route does not survive to here, a node does).  Read the tag into CBinPrim's
+-- "Float" or comparison "Int") in `EAnnot (EBinOp …) (TyCon tag)`; a bare EBinOp
+-- carries no tag.  Read the tag into CBinPrim's
 -- scalar field so the emitter picks that type's primitive.  Must precede the
 -- transparent `EAnnot e _` strip below.
 lower (EAnnot (EBinOp op l r _) (TyCon { tyConName = tag })) =
@@ -237,14 +237,6 @@ lower other = panic ("core_ir lower: unsupported node " ++ nodeTag other)
 
 -- surface binops that are really sugar are lowered to primitive control flow /
 -- application here; only the genuinely-primitive ops survive as CBinPrim.
--- the scalar-type tag carried on an EBinOp's route: "Float" for a stamped
--- monomorphic arithmetic operand, "Int" for a stamped monomorphic comparison
--- operand, "" otherwise.  Only RScalar carries it; every dispatch route
--- (RKey/RDict/…) means "unstamped".
-scalarTagOfRoute : Route -> String
-scalarTagOfRoute (RScalar s) = s
-scalarTagOfRoute _ = ""
-
 lowerBinop : String -> Expr -> Expr -> String -> CExpr
 lowerBinop "&&" l r _ = CIf (lower l) (lower r) (CLit (LBool False))
 lowerBinop "||" l r _ = CIf (lower l) (CLit (LBool True)) (lower r)

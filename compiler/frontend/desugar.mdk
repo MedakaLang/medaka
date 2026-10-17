@@ -12,6 +12,8 @@ import support.stage_count.{stageBump}
 import frontend.ast.{
   stripLocE,
   noBinderId,
+  unminted,
+  EvId,
   BinderId(..),
   KindAnn(..),
   Lit(..),
@@ -194,7 +196,7 @@ callBin fn a b = EApp (EApp (EVar fn) a) b
 
 -- binary operator, not yet resolved: `a <op> b`
 binOp : String -> Expr -> Expr -> Expr
-binOp op a b = EBinOp op a b (Ref RNone)
+binOp op a b = EBinOp op a b unminted
 
 -- an integer literal in EXPRESSION position.  `ENumLit`, never `ELit (LInt)` —
 -- that is the shape the parser emits and the only one dictPass rewrites away.
@@ -254,7 +256,7 @@ rewriteAssignIndex (EBinOp ":=" lhs v r) =
   assignIndexLhs (stripLocE lhs) lhs v r
 rewriteAssignIndex e = e
 
-assignIndexLhs : Expr -> Expr -> Expr -> Ref Route -> Expr
+assignIndexLhs : Expr -> Expr -> Expr -> EvId -> Expr
 assignIndexLhs (EIndex a i _) _ v _ = EApp (callBin "setIndex" a i) v
 assignIndexLhs _ lhs v r = EBinOp ":=" lhs v r
 

@@ -1,5 +1,5 @@
 # META
-source_lines=7225
+source_lines=7223
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -41,11 +41,9 @@ import frontend.ast.{
   binderDomainSurface,
   authTermSurface,
   Constraint(..),
-  -- `rule-prefer-assign-op` MINTS an `EBinOp ":="` node, and every EBinOp carries
-  -- a `Ref Route` the parser seeds as `Ref RNone` — so unlike every other rule
-  -- here (which only ever rebuilds an EBinOp around a ref it already has) this
-  -- one needs the Route constructors in scope.
-  Route(..),
+  -- `rule-prefer-assign-op` MINTS an `EBinOp ":="` node, which carries the
+  -- unminted site id the parser gives every operator.
+  unminted,
   Pat(..),
   UsePath(..),
   UseMember(..),
@@ -4391,7 +4389,7 @@ fixImplMethodConcat (ImplMethod nm ps body) =
 -- ONLY `==`/`/=` — they are TOTAL, so De Morgan applies unconditionally.  `<`/`>`
 -- &c. are deliberately excluded: their complement is unsound for `Float` (NaN
 -- makes `not (a < b)` ≠ `a >= b`).  The flipped `EBinOp` reuses the original's
--- route ref (an unresolved parse-time placeholder; re-resolved downstream).
+-- site id (the parser's `unminted`; lint output is never typechecked).
 notEqOf : Expr -> Option Expr
 notEqOf e = match notArgOf e
   Some inner => match unwrapLoc inner
@@ -4603,7 +4601,7 @@ preferAssignOf _ = None
 -- the saturated `setRef r v` spine (head already loc-unwrapped by the caller).
 setRefWriteOf : Expr -> Expr -> Option Expr
 setRefWriteOf (EApp hd r) v =
-  if isEVarNamed "setRef" hd then Some (EBinOp ":=" r v (Ref RNone)) else None
+  if isEVarNamed "setRef" hd then Some (EBinOp ":=" r v unminted) else None
 setRefWriteOf _ _ = None
 
 -- `let _ = <write>` → a bare `<write>` statement, for every statement in a block.
@@ -7228,7 +7226,7 @@ preludeShadowFinding name loc = Finding {
   loc = loc,
 }
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "noBinderId" false) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "IfaceMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "noBinderId" false) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "unminted" false) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "IfaceMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
@@ -8641,7 +8639,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "preferAssignOf" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "collapsedBlockOf") (EVar "stmts")))
 (DFunDef false "preferAssignOf" (PWild) (EVar "None"))
 (DTypeSig false "setRefWriteOf" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
-(DFunDef false "setRefWriteOf" ((PCon "EApp" (PVar "hd") (PVar "r")) (PVar "v")) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "setRef"))) (EVar "hd")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "r")) (EVar "v")) (EApp (EVar "Ref") (EVar "RNone")))) (EVar "None")))
+(DFunDef false "setRefWriteOf" ((PCon "EApp" (PVar "hd") (PVar "r")) (PVar "v")) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "setRef"))) (EVar "hd")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "r")) (EVar "v")) (EVar "unminted"))) (EVar "None")))
 (DFunDef false "setRefWriteOf" (PWild PWild) (EVar "None"))
 (DTypeSig false "collapsedBlockOf" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "collapsedBlockOf" ((PVar "stmts")) (EBlock (DoLet false false (PVar "stmts2") (EApp (EApp (EVar "map") (EVar "collapseWildWrite")) (EVar "stmts"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "exprSexp") (EApp (EVar "EBlock") (EVar "stmts2"))) (EApp (EVar "exprSexp") (EApp (EVar "EBlock") (EVar "stmts")))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "EBlock") (EVar "stmts2")))))))
@@ -9313,7 +9311,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "preludeShadowFinding" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding"))))
 (DFunDef false "preludeShadowFinding" ((PVar "name") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestPreludeShadow")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` shadows the prelude function of that name for this file only; other modules, and any `deriving` impl, keep calling the prelude one. Remove the local declaration")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "noBinderId" false) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "IfaceMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "noBinderId" false) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "unminted" false) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "IfaceMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
@@ -10726,7 +10724,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "preferAssignOf" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "collapsedBlockOf") (EVar "stmts")))
 (DFunDef false "preferAssignOf" (PWild) (EVar "None"))
 (DTypeSig false "setRefWriteOf" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
-(DFunDef false "setRefWriteOf" ((PCon "EApp" (PVar "hd") (PVar "r")) (PVar "v")) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "setRef"))) (EVar "hd")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "r")) (EVar "v")) (EApp (EVar "Ref") (EVar "RNone")))) (EVar "None")))
+(DFunDef false "setRefWriteOf" ((PCon "EApp" (PVar "hd") (PVar "r")) (PVar "v")) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "setRef"))) (EVar "hd")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "r")) (EVar "v")) (EVar "unminted"))) (EVar "None")))
 (DFunDef false "setRefWriteOf" (PWild PWild) (EVar "None"))
 (DTypeSig false "collapsedBlockOf" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "collapsedBlockOf" ((PVar "stmts")) (EBlock (DoLet false false (PVar "stmts2") (EApp (EApp (EMethodRef "map") (EVar "collapseWildWrite")) (EVar "stmts"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "exprSexp") (EApp (EVar "EBlock") (EVar "stmts2"))) (EApp (EVar "exprSexp") (EApp (EVar "EBlock") (EVar "stmts")))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "EBlock") (EVar "stmts2")))))))

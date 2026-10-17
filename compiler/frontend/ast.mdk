@@ -1367,6 +1367,18 @@ intMinLiteralHelp =
 -- there to turn into a panic.
 public export data EvId = EvId String Int
 
+-- The id of a site no mark pass has visited.  The parser, desugar and every node
+-- built after inference carry it; the typechecker's mark pass replaces it with a
+-- minted id.  It is recognised by its negative ordinal alone (`isUnminted`), never
+-- by its module half, because the prelude's real ids carry `""` too.
+export
+unminted : EvId
+unminted = EvId "" (0 - 1)
+
+export
+isUnminted : EvId -> Bool
+isUnminted (EvId _ n) = n < 0
+
 -- ── binder identity ───────────────────────────────────────────────────────────
 -- The key under which the typechecker publishes what a source binder holds at run
 -- time (`compiler/types/runtime_types.mdk`).  A binder's `Loc` cannot be that key:
@@ -1418,11 +1430,17 @@ noBinderId = BinderId "" (0 - 1)
 -- are evidence SHAPES, not a success and a failure, and an empty `EvMany` (a
 -- dictionary application with no slots) is a legitimate solution rather than an
 -- error.  `EvOne`/`EvMany` mirror `EvDest`, whose arms they answer.
+-- The site arms are published one per site node, under the id the node carries: an
+-- operator site's route is an `EvOne`, a numeric literal's default float and
+-- `fromInt` route are an `EvLit`, and a field access's or record update's resolved
+-- record head is an `EvHead`.
 -- lint-disable-next-line rule-clone-type
 public export data EvVal =
   | EvOne Route
   | EvMany (List Route)
   | EvMethod String Int Route (List Route) (List Route)
+  | EvLit (Option Float) Route
+  | EvHead String
 
 public export data EvEntry = EvEntry EvId EvVal
 
@@ -1519,15 +1537,17 @@ public export data Expr =
   | ELet Loc Bool Pat Expr Expr
   | EMatch Expr (List Arm)
   | EIf Expr Expr Expr
-  -- Phase 151 / Gap G: the trailing route ref is filled by the typed pipeline
-  -- (resolveBinopSites) for comparison/equality operators (== /= < > <= >=) whose
-  -- operand grounds to a NON-primitive Eq/Ord type; dictPass then rewrites such a
-  -- stamped node into the method application (==→eq, /=→not(eq …), <→lt, …) so eval
-  -- dispatches to the user/derived impl.  RNone for primitives / arithmetic / other
-  -- operators → the structural-builtin EBinOp eval path (unchanged, no recursion).
-  -- The parser always builds a fresh `Ref RNone`; sexp/astdump ignore the ref.
-  | EBinOp String Expr Expr (Ref Route)
-  -- Roadmap #18c: the trailing route ref mirrors EBinOp's — filled by
+  -- A binary operator.  The trailing `EvId` names the operator's site: the parser
+  -- and every node built after inference carry `unminted`, and the typechecker's
+  -- mark pass mints it.  The route the solver decides for the site is published
+  -- under that id and read back with `evSiteRoute` (`types/route_key.mdk`).  A
+  -- comparison, equality or arithmetic operator whose operand grounds to a
+  -- non-primitive type gets a dispatch route, and dictPass rewrites the node into
+  -- the method application (==→eq, /=→not(eq …), <→lt, +→add, …); a primitive
+  -- operand gets `RNone` or a scalar tag, and the node stays the builtin operator.
+  -- An `unminted` site answers `RNone`.  sexp/astdump ignore the id.
+  | EBinOp String Expr Expr EvId
+  -- Roadmap #18c: the trailing route ref is filled by
   -- resolveUnopSites for `-` (Num's `negate`) when the operand grounds to a
   -- NON-primitive Num type; dictPass then rewrites such a stamped node into
   -- `EMethodAt "negate"` so eval dispatches to the user impl.  RNone for
@@ -2459,8 +2479,9 @@ mapFunClausesB f ((FunClause ps e) :: rest) =
 -- constructor-for-constructor (kept in lockstep with the AST — a new Expr node
 -- there makes THIS match non-exhaustive — a WARNING at exit 0, see the section
 -- header above; NOT a build error), but threads the
--- change flag purely.  Ref-typed fields (EBinOp/EUnOp/EFieldAccess/ESlice/EIndex
--- /ERecordUpdate/EMethodAt/EDictAt/ENumLit) are carried through unchanged.
+-- change flag purely.  Site fields, the cells of EUnOp/EFieldAccess/ESlice/EIndex/
+-- ERecordUpdate/ENumLit/EWideLit and the ids of EBinOp/EMethodAt/EDictAt, are
+-- carried through unchanged.
 export
 mapTyInExpr : (Ty -> (Ty, Bool)) -> Expr -> (Expr, Bool)
 mapTyInExpr _ (ELit l) = (ELit l, False)

@@ -288,7 +288,7 @@ bindsRename : List LetBind -> Map String String -> (List LetBind, Map String Str
 binopBuiltinHead : String -> String -> Bool
 binopDispatchMethod : String -> Option String
 binopMethod : String -> Option String
-binopMethodApp : String -> Expr -> Expr -> Ref Route -> Expr
+binopMethodApp : String -> Expr -> Expr -> Route -> Expr
 binopPrimitiveHead : String -> Bool
 binopRouteSplit : Route -> (Route, List Route)
 binopSpanLoc : Expr -> Expr -> Option Loc
@@ -1634,6 +1634,7 @@ indexOutsidePatterns : Authority -> List Authority
 indexRowEqCheck : List Atom -> List Atom -> List Atom -> List Atom -> Unit
 indexRowEquate : List Atom -> List Atom -> Unit
 indexRowMismatchMsg : List Atom -> List Atom -> String
+indexWithSlot : Ref (Array (Option a)) -> Int -> Array (Option a)
 infer : TcEnv -> Expr -> Mono
 inferAnnot : TcEnv -> Expr -> Ty -> Mono
 inferApp : TcEnv -> Expr -> Mono -> Mono -> Mono
@@ -2201,7 +2202,9 @@ mintGrantOnly : String -> Expr
 mintMethodCell : String -> EvId
 mintMethodCellRaw : String -> Option Int -> Route -> List Route -> EvId
 mintMethodCellWith : String -> Int -> Route -> List Route -> EvId
+mintOpSite : Unit -> EvId
 mintParamReprs : List String -> List Kind -> List Mono
+mintSite : SiteCell -> EvId
 missingConstraintMsg : String -> String -> String -> String
 missingConstraintVecMsg : String -> String -> List String -> String
 missingFieldMsg : String -> String -> String
@@ -2292,6 +2295,7 @@ nonGuardedRows : List Arm -> List (List Pat)
 notAFunctionHint : Option String -> String
 notAFunctionMsg : String -> String
 notAFunctionMsgFor : Option String -> String -> String
+notAnOpSite : EvId -> a
 noteArgumentShape : TcEnv -> Param -> Bool -> Authority -> Expr -> Mono -> Unit
 noteAssumption : ScopeId -> AssumAnswer -> Unit
 noteBuiltinExternNames : List Decl -> Unit
@@ -3067,11 +3071,16 @@ sigVarsWithRows : List (String, Ref Effvar) -> SigVars -> SigVars
 signedTopNames : List Decl -> Map String Unit -> Map String Unit
 sigsOf : List Decl -> List (String, Ty)
 singleTyparamIfaceMethod : String -> Bool
+siteCellEntries : Unit -> List EvEntry
+siteCellEntriesFrom : Array (Option (EvId, SiteCell)) -> Int -> List EvEntry -> List EvEntry
+siteCellOf : EvId -> SiteCell
+siteCellValue : SiteCell -> EvVal
 siteEntry : Obligation -> List PendingEntry
 siteKindMonos : SiteKind -> List Mono
 siteObligation : GoalKind -> Ref Inner -> PendingEntry -> Obligation
 siteRDictName : Ref Route -> List String
 siteRDictNamesL : List Route -> List String
+siteRouteCell : EvId -> Ref Route
 sitesFor : String -> Map String (List a) -> List a
 slotLabelsNaming : String -> List Kind -> List Ty -> List String
 slotOtherThan : Int -> List (String, Int, RecordInfo) -> Option (String, Int)

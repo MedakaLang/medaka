@@ -1,5 +1,5 @@
 # META
-source_lines=6778
+source_lines=6779
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -26,6 +26,7 @@ stages=DESUGAR,MARK
 import support.stage_count.{stageBump}
 import frontend.ast.{
   noBinderId,
+  unminted,
   intMinLiteralMsg,
   negateLiteral,
   DeriveRef(..),
@@ -515,7 +516,7 @@ assignTailRaw : Expr -> Parser Expr
 assignTailRaw lhs = defer
   expectTok TColonEq
   rhs <- parseRhsExpr
-  deferPure (EBinOp ":=" lhs rhs (Ref RNone))
+  deferPure (EBinOp ":=" lhs rhs unminted)
 
 -- Each optional tail is taken only when its introducing token is next.  Any
 -- other next token makes the tail fail without consuming (at this same pos), so
@@ -783,7 +784,7 @@ binRhsLevel lvl
 -- of the chain.
 binRhs : Int -> Array Token -> Expr -> Int -> Token -> PR Expr -> PR Expr
 binRhs lvl toks x _ t (POk y q) =
-  binNext lvl toks (POk (EBinOp (binOpName t) x y (Ref RNone)) q)
+  binNext lvl toks (POk (EBinOp (binOpName t) x y unminted) q)
 binRhs _ _ x pos _ (PErr _ _) = POk x pos
 binRhs _ _ _ _ _ ry = ry
 
@@ -6782,7 +6783,7 @@ parseResultWith src tokList offList =
         (runP parseProgram toks 0)
 # DESUGAR
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "intMinLiteralMsg" false) (mem "negateLiteral" false) (mem "DeriveRef" true) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "effAtomAt" false) (mem "effectDeclUnstamped" false) (mem "KindAnn" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "tyConBuiltin" false) (mem "dDataUnresolved" false) (mem "externDataUnresolved" false) (mem "kindAnnSource" false) (mem "kindAuthorityUnstamped" false) (mem "dTypeAliasUnresolved" false) (mem "dNewtypeUnresolved" false) (mem "dInterfaceUnresolved" false) (mem "setDeclNameLoc" false) (mem "dImplUnresolved" false) (mem "constraintUnresolved" false) (mem "superUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true) (mem "Route" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "unminted" false) (mem "intMinLiteralMsg" false) (mem "negateLiteral" false) (mem "DeriveRef" true) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "effAtomAt" false) (mem "effectDeclUnstamped" false) (mem "KindAnn" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "tyConBuiltin" false) (mem "dDataUnresolved" false) (mem "externDataUnresolved" false) (mem "kindAnnSource" false) (mem "kindAuthorityUnstamped" false) (mem "dTypeAliasUnresolved" false) (mem "dNewtypeUnresolved" false) (mem "dInterfaceUnresolved" false) (mem "setDeclNameLoc" false) (mem "dImplUnresolved" false) (mem "constraintUnresolved" false) (mem "superUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true) (mem "Route" true))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false) (mem "tokenizeWithOffsets" false) (mem "tokenizeWithOffsetPairs" false) (mem "offsetToLineCol" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false) (mem "describeToken" false) (mem "isCommaTok" false) (mem "isElseTok" false) (mem "isThenTok" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("list") ((mem "last" false))))
@@ -6922,7 +6923,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "assignTail" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "assignTail" ((PVar "lhs")) (EApp (EVar "located") (EApp (EVar "assignTailRaw") (EVar "lhs"))))
 (DTypeSig false "assignTailRaw" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
-(DFunDef false "assignTailRaw" ((PVar "lhs")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TColonEq"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseRhsExpr")) (ELam ((PVar "rhs")) (EApp (EVar "deferPure") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "lhs")) (EVar "rhs")) (EApp (EVar "Ref") (EVar "RNone")))))))))
+(DFunDef false "assignTailRaw" ((PVar "lhs")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TColonEq"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseRhsExpr")) (ELam ((PVar "rhs")) (EApp (EVar "deferPure") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "lhs")) (EVar "rhs")) (EVar "unminted"))))))))
 (DTypeSig false "annotOpt" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "annotOpt" ((PVar "e")) (EApp (EVar "ParserE") (ELam ((PVar "toks") (PVar "pos")) (EMatch (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos")) (arm (PCon "TColon") () (EApp (EApp (EApp (EVar "runP") (EApp (EApp (EVar "orElse") (EApp (EVar "annotTail") (EVar "e"))) (EApp (EVar "deferPure") (EVar "e")))) (EVar "toks")) (EVar "pos"))) (arm PWild () (EApp (EApp (EVar "POk") (EVar "e")) (EVar "pos")))))))
 (DTypeSig false "assignOpt" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
@@ -7058,7 +7059,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "binRhsLevel" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "binRhsLevel" ((PVar "lvl")) (EIf (EBinOp "==" (EVar "lvl") (EVar "consLevel")) (EVar "lvl") (EIf (EVar "otherwise") (EBinOp "+" (EVar "lvl") (ELit (LInt 1))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "binRhs" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Expr") (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyFun (TyApp (TyCon "PR") (TyCon "Expr")) (TyApp (TyCon "PR") (TyCon "Expr")))))))))
-(DFunDef false "binRhs" ((PVar "lvl") (PVar "toks") (PVar "x") PWild (PVar "t") (PCon "POk" (PVar "y") (PVar "q"))) (EApp (EApp (EApp (EVar "binNext") (EVar "lvl")) (EVar "toks")) (EApp (EApp (EVar "POk") (EApp (EApp (EApp (EApp (EVar "EBinOp") (EApp (EVar "binOpName") (EVar "t"))) (EVar "x")) (EVar "y")) (EApp (EVar "Ref") (EVar "RNone")))) (EVar "q"))))
+(DFunDef false "binRhs" ((PVar "lvl") (PVar "toks") (PVar "x") PWild (PVar "t") (PCon "POk" (PVar "y") (PVar "q"))) (EApp (EApp (EApp (EVar "binNext") (EVar "lvl")) (EVar "toks")) (EApp (EApp (EVar "POk") (EApp (EApp (EApp (EApp (EVar "EBinOp") (EApp (EVar "binOpName") (EVar "t"))) (EVar "x")) (EVar "y")) (EVar "unminted"))) (EVar "q"))))
 (DFunDef false "binRhs" (PWild PWild (PVar "x") (PVar "pos") PWild (PCon "PErr" PWild PWild)) (EApp (EApp (EVar "POk") (EVar "x")) (EVar "pos")))
 (DFunDef false "binRhs" (PWild PWild PWild PWild PWild (PVar "ry")) (EVar "ry"))
 (DTypeSig false "binNext" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "PR") (TyCon "Expr")) (TyApp (TyCon "PR") (TyCon "Expr"))))))
@@ -8748,7 +8749,7 @@ parseResultWith src tokList offList =
 (DFunDef false "parseResultWith" ((PVar "src") (PVar "tokList") (PVar "offList")) (EBlock (DoLet false false (PVar "toks") (EApp (EVar "arrayFromList") (EVar "tokList"))) (DoLet false false (PVar "offs") (EApp (EVar "arrayFromList") (EVar "offList"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "prescanError") (EVar "src")) (EVar "toks")) (EVar "offs")) (arm (PCon "Some" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "primeGuardPos") (EVar "src")) (EVar "offs"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "resultDeclsResult") (EVar "src")) (EVar "toks")) (EVar "offs")) (EApp (EVar "stringLength") (EVar "src"))) (EApp (EApp (EApp (EVar "runP") (EVar "parseProgram")) (EVar "toks")) (ELit (LInt 0)))))))))))
 # MARK
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "intMinLiteralMsg" false) (mem "negateLiteral" false) (mem "DeriveRef" true) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "effAtomAt" false) (mem "effectDeclUnstamped" false) (mem "KindAnn" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "tyConBuiltin" false) (mem "dDataUnresolved" false) (mem "externDataUnresolved" false) (mem "kindAnnSource" false) (mem "kindAuthorityUnstamped" false) (mem "dTypeAliasUnresolved" false) (mem "dNewtypeUnresolved" false) (mem "dInterfaceUnresolved" false) (mem "setDeclNameLoc" false) (mem "dImplUnresolved" false) (mem "constraintUnresolved" false) (mem "superUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true) (mem "Route" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "unminted" false) (mem "intMinLiteralMsg" false) (mem "negateLiteral" false) (mem "DeriveRef" true) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "effAtomAt" false) (mem "effectDeclUnstamped" false) (mem "KindAnn" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberOrigin" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "tyConBuiltin" false) (mem "dDataUnresolved" false) (mem "externDataUnresolved" false) (mem "kindAnnSource" false) (mem "kindAuthorityUnstamped" false) (mem "dTypeAliasUnresolved" false) (mem "dNewtypeUnresolved" false) (mem "dInterfaceUnresolved" false) (mem "setDeclNameLoc" false) (mem "dImplUnresolved" false) (mem "constraintUnresolved" false) (mem "superUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true) (mem "Route" true))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false) (mem "tokenizeWithOffsets" false) (mem "tokenizeWithOffsetPairs" false) (mem "offsetToLineCol" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false) (mem "describeToken" false) (mem "isCommaTok" false) (mem "isElseTok" false) (mem "isThenTok" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("list") ((mem "last" false))))
@@ -8888,7 +8889,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "assignTail" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "assignTail" ((PVar "lhs")) (EApp (EVar "located") (EApp (EVar "assignTailRaw") (EVar "lhs"))))
 (DTypeSig false "assignTailRaw" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
-(DFunDef false "assignTailRaw" ((PVar "lhs")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TColonEq"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseRhsExpr")) (ELam ((PVar "rhs")) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "lhs")) (EVar "rhs")) (EApp (EVar "Ref") (EVar "RNone")))))))))
+(DFunDef false "assignTailRaw" ((PVar "lhs")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TColonEq"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseRhsExpr")) (ELam ((PVar "rhs")) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "lhs")) (EVar "rhs")) (EVar "unminted"))))))))
 (DTypeSig false "annotOpt" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "annotOpt" ((PVar "e")) (EApp (EVar "ParserE") (ELam ((PVar "toks") (PVar "pos")) (EMatch (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos")) (arm (PCon "TColon") () (EApp (EApp (EApp (EVar "runP") (EApp (EApp (EVar "orElse#shadow") (EApp (EVar "annotTail") (EVar "e"))) (EApp (EMethodRef "deferPure") (EVar "e")))) (EVar "toks")) (EVar "pos"))) (arm PWild () (EApp (EApp (EVar "POk") (EVar "e")) (EVar "pos")))))))
 (DTypeSig false "assignOpt" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
@@ -9024,7 +9025,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "binRhsLevel" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "binRhsLevel" ((PVar "lvl")) (EIf (EBinOp "==" (EVar "lvl") (EVar "consLevel")) (EVar "lvl") (EIf (EVar "otherwise") (EBinOp "+" (EVar "lvl") (ELit (LInt 1))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "binRhs" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Expr") (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyFun (TyApp (TyCon "PR") (TyCon "Expr")) (TyApp (TyCon "PR") (TyCon "Expr")))))))))
-(DFunDef false "binRhs" ((PVar "lvl") (PVar "toks") (PVar "x") PWild (PVar "t") (PCon "POk" (PVar "y") (PVar "q"))) (EApp (EApp (EApp (EVar "binNext") (EVar "lvl")) (EVar "toks")) (EApp (EApp (EVar "POk") (EApp (EApp (EApp (EApp (EVar "EBinOp") (EApp (EVar "binOpName") (EVar "t"))) (EVar "x")) (EVar "y")) (EApp (EVar "Ref") (EVar "RNone")))) (EVar "q"))))
+(DFunDef false "binRhs" ((PVar "lvl") (PVar "toks") (PVar "x") PWild (PVar "t") (PCon "POk" (PVar "y") (PVar "q"))) (EApp (EApp (EApp (EVar "binNext") (EVar "lvl")) (EVar "toks")) (EApp (EApp (EVar "POk") (EApp (EApp (EApp (EApp (EVar "EBinOp") (EApp (EVar "binOpName") (EVar "t"))) (EVar "x")) (EVar "y")) (EVar "unminted"))) (EVar "q"))))
 (DFunDef false "binRhs" (PWild PWild (PVar "x") (PVar "pos") PWild (PCon "PErr" PWild PWild)) (EApp (EApp (EVar "POk") (EVar "x")) (EVar "pos")))
 (DFunDef false "binRhs" (PWild PWild PWild PWild PWild (PVar "ry")) (EVar "ry"))
 (DTypeSig false "binNext" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "PR") (TyCon "Expr")) (TyApp (TyCon "PR") (TyCon "Expr"))))))

@@ -49,8 +49,9 @@ import frontend.ast.{
   authTermSurface,
   effAtomBare,
   effAtomWith,
-  Route,
+  Route(..),
   EvId(..),
+  isUnminted,
   EvVal(..),
   EvEntry(..),
   EvTable,
@@ -254,6 +255,23 @@ evRoutesOf (EvOne _) =
 evRoutesOf (EvMethod _ _ _ _ _) =
   panic
     "evidence table: a dictionary application answered by a method occurrence"
+evRoutesOf (EvLit _ _) =
+  panic "evidence table: a dictionary application answered by a literal site"
+evRoutesOf (EvHead _) =
+  panic
+    "evidence table: a dictionary application answered by a record-head site"
+
+-- The route solved for operator site [ev].  A site built after inference carries
+-- `unminted`: no route was ever decided for it, and it answers `RNone`, the
+-- builtin operator.  Every other miss panics, as `evDictRoutes` does.
+export
+evSiteRoute : EvId -> Route
+evSiteRoute ev
+  | isUnminted ev = RNone
+  | otherwise = match installedAnswer "operator site" ev
+    EvOne r => r
+    _ =>
+      panic "evidence table: an operator site answered by another kind of entry"
 
 -- The answer published for a method occurrence: the interface identity it resolved
 -- to, its selected denotation's pre-use arrow arity, dispatch route, selected impl's

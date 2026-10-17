@@ -37,11 +37,9 @@ import frontend.ast.{
   binderDomainSurface,
   authTermSurface,
   Constraint(..),
-  -- `rule-prefer-assign-op` MINTS an `EBinOp ":="` node, and every EBinOp carries
-  -- a `Ref Route` the parser seeds as `Ref RNone` — so unlike every other rule
-  -- here (which only ever rebuilds an EBinOp around a ref it already has) this
-  -- one needs the Route constructors in scope.
-  Route(..),
+  -- `rule-prefer-assign-op` MINTS an `EBinOp ":="` node, which carries the
+  -- unminted site id the parser gives every operator.
+  unminted,
   Pat(..),
   UsePath(..),
   UseMember(..),
@@ -4387,7 +4385,7 @@ fixImplMethodConcat (ImplMethod nm ps body) =
 -- ONLY `==`/`/=` — they are TOTAL, so De Morgan applies unconditionally.  `<`/`>`
 -- &c. are deliberately excluded: their complement is unsound for `Float` (NaN
 -- makes `not (a < b)` ≠ `a >= b`).  The flipped `EBinOp` reuses the original's
--- route ref (an unresolved parse-time placeholder; re-resolved downstream).
+-- site id (the parser's `unminted`; lint output is never typechecked).
 notEqOf : Expr -> Option Expr
 notEqOf e = match notArgOf e
   Some inner => match unwrapLoc inner
@@ -4599,7 +4597,7 @@ preferAssignOf _ = None
 -- the saturated `setRef r v` spine (head already loc-unwrapped by the caller).
 setRefWriteOf : Expr -> Expr -> Option Expr
 setRefWriteOf (EApp hd r) v =
-  if isEVarNamed "setRef" hd then Some (EBinOp ":=" r v (Ref RNone)) else None
+  if isEVarNamed "setRef" hd then Some (EBinOp ":=" r v unminted) else None
 setRefWriteOf _ _ = None
 
 -- `let _ = <write>` → a bare `<write>` statement, for every statement in a block.

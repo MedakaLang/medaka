@@ -22,6 +22,7 @@
 import support.stage_count.{stageBump}
 import frontend.ast.{
   noBinderId,
+  unminted,
   intMinLiteralMsg,
   negateLiteral,
   DeriveRef(..),
@@ -511,7 +512,7 @@ assignTailRaw : Expr -> Parser Expr
 assignTailRaw lhs = defer
   expectTok TColonEq
   rhs <- parseRhsExpr
-  deferPure (EBinOp ":=" lhs rhs (Ref RNone))
+  deferPure (EBinOp ":=" lhs rhs unminted)
 
 -- Each optional tail is taken only when its introducing token is next.  Any
 -- other next token makes the tail fail without consuming (at this same pos), so
@@ -779,7 +780,7 @@ binRhsLevel lvl
 -- of the chain.
 binRhs : Int -> Array Token -> Expr -> Int -> Token -> PR Expr -> PR Expr
 binRhs lvl toks x _ t (POk y q) =
-  binNext lvl toks (POk (EBinOp (binOpName t) x y (Ref RNone)) q)
+  binNext lvl toks (POk (EBinOp (binOpName t) x y unminted) q)
 binRhs _ _ x pos _ (PErr _ _) = POk x pos
 binRhs _ _ _ _ _ ry = ry
 

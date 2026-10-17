@@ -1,5 +1,5 @@
 # META
-source_lines=646
+source_lines=664
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
@@ -53,8 +53,9 @@ import frontend.ast.{
   authTermSurface,
   effAtomBare,
   effAtomWith,
-  Route,
+  Route(..),
   EvId(..),
+  isUnminted,
   EvVal(..),
   EvEntry(..),
   EvTable,
@@ -258,6 +259,23 @@ evRoutesOf (EvOne _) =
 evRoutesOf (EvMethod _ _ _ _ _) =
   panic
     "evidence table: a dictionary application answered by a method occurrence"
+evRoutesOf (EvLit _ _) =
+  panic "evidence table: a dictionary application answered by a literal site"
+evRoutesOf (EvHead _) =
+  panic
+    "evidence table: a dictionary application answered by a record-head site"
+
+-- The route solved for operator site [ev].  A site built after inference carries
+-- `unminted`: no route was ever decided for it, and it answers `RNone`, the
+-- builtin operator.  Every other miss panics, as `evDictRoutes` does.
+export
+evSiteRoute : EvId -> Route
+evSiteRoute ev
+  | isUnminted ev = RNone
+  | otherwise = match installedAnswer "operator site" ev
+    EvOne r => r
+    _ =>
+      panic "evidence table: an operator site answered by another kind of entry"
 
 -- The answer published for a method occurrence: the interface identity it resolved
 -- to, its selected denotation's pre-use arrow arity, dispatch route, selected impl's
@@ -649,7 +667,7 @@ rkTyList =
 -- > implRouteKeyWord OriginUnresolved "A" [TyEffect [effAtomBare "Stdout"] [] rkTyInt] None == implRouteKeyWord OriginUnresolved "A" [TyEffect [effAtomBare "Rand"] [] rkTyInt] None
 -- False
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "EffParamTy" true) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "effAtomBare" false) (mem "effAtomWith" false) (mem "Route" false) (mem "EvId" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "constraintUnresolved" false) (mem "tyConBuiltin" false) (mem "ifaceIdentity" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "EffParamTy" true) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "effAtomBare" false) (mem "effAtomWith" false) (mem "Route" true) (mem "EvId" true) (mem "isUnminted" false) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "constraintUnresolved" false) (mem "tyConBuiltin" false) (mem "ifaceIdentity" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "escStr" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "installedBinderTable" false) (mem "restoreBinderTable" false))))
 (DTypeSig false "evidenceRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry")))))))
@@ -690,6 +708,10 @@ rkTyList =
 (DFunDef false "evRoutesOf" ((PCon "EvMany" (PVar "rs"))) (EVar "rs"))
 (DFunDef false "evRoutesOf" ((PCon "EvOne" PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application solved to a single route"))))
 (DFunDef false "evRoutesOf" ((PCon "EvMethod" PWild PWild PWild PWild PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application answered by a method occurrence"))))
+(DFunDef false "evRoutesOf" ((PCon "EvLit" PWild PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application answered by a literal site"))))
+(DFunDef false "evRoutesOf" ((PCon "EvHead" PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application answered by a record-head site"))))
+(DTypeSig true "evSiteRoute" (TyFun (TyCon "EvId") (TyCon "Route")))
+(DFunDef false "evSiteRoute" ((PVar "ev")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EVar "RNone") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "installedAnswer") (ELit (LString "operator site"))) (EVar "ev")) (arm (PCon "EvOne" (PVar "r")) () (EVar "r")) (arm PWild () (EApp (EVar "panic") (ELit (LString "evidence table: an operator site answered by another kind of entry"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "evMethodRoutes" (TyFun (TyCon "EvId") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
 (DFunDef false "evMethodRoutes" ((PVar "ev")) (EApp (EVar "evMethodOf") (EApp (EApp (EVar "installedAnswer") (ELit (LString "method occurrence"))) (EVar "ev"))))
 (DTypeSig false "evMethodOf" (TyFun (TyCon "EvVal") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
@@ -755,7 +777,7 @@ rkTyList =
 (DTypeSig false "rkTyList" (TyCon "Ty"))
 (DFunDef false "rkTyList" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "List"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "EffParamTy" true) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "effAtomBare" false) (mem "effAtomWith" false) (mem "Route" false) (mem "EvId" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "constraintUnresolved" false) (mem "tyConBuiltin" false) (mem "ifaceIdentity" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "EffParamTy" true) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "effAtomBare" false) (mem "effAtomWith" false) (mem "Route" true) (mem "EvId" true) (mem "isUnminted" false) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "constraintUnresolved" false) (mem "tyConBuiltin" false) (mem "ifaceIdentity" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "escStr" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "installedBinderTable" false) (mem "restoreBinderTable" false))))
 (DTypeSig false "evidenceRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry")))))))
@@ -796,6 +818,10 @@ rkTyList =
 (DFunDef false "evRoutesOf" ((PCon "EvMany" (PVar "rs"))) (EVar "rs"))
 (DFunDef false "evRoutesOf" ((PCon "EvOne" PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application solved to a single route"))))
 (DFunDef false "evRoutesOf" ((PCon "EvMethod" PWild PWild PWild PWild PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application answered by a method occurrence"))))
+(DFunDef false "evRoutesOf" ((PCon "EvLit" PWild PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application answered by a literal site"))))
+(DFunDef false "evRoutesOf" ((PCon "EvHead" PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application answered by a record-head site"))))
+(DTypeSig true "evSiteRoute" (TyFun (TyCon "EvId") (TyCon "Route")))
+(DFunDef false "evSiteRoute" ((PVar "ev")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EVar "RNone") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "installedAnswer") (ELit (LString "operator site"))) (EVar "ev")) (arm (PCon "EvOne" (PVar "r")) () (EVar "r")) (arm PWild () (EApp (EVar "panic") (ELit (LString "evidence table: an operator site answered by another kind of entry"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "evMethodRoutes" (TyFun (TyCon "EvId") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
 (DFunDef false "evMethodRoutes" ((PVar "ev")) (EApp (EVar "evMethodOf") (EApp (EApp (EVar "installedAnswer") (ELit (LString "method occurrence"))) (EVar "ev"))))
 (DTypeSig false "evMethodOf" (TyFun (TyCon "EvVal") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))

@@ -1,5 +1,5 @@
 # META
-source_lines=1294
+source_lines=1296
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -16,6 +16,8 @@ import support.stage_count.{stageBump}
 import frontend.ast.{
   stripLocE,
   noBinderId,
+  unminted,
+  EvId,
   BinderId(..),
   KindAnn(..),
   Lit(..),
@@ -198,7 +200,7 @@ callBin fn a b = EApp (EApp (EVar fn) a) b
 
 -- binary operator, not yet resolved: `a <op> b`
 binOp : String -> Expr -> Expr -> Expr
-binOp op a b = EBinOp op a b (Ref RNone)
+binOp op a b = EBinOp op a b unminted
 
 -- an integer literal in EXPRESSION position.  `ENumLit`, never `ELit (LInt)` —
 -- that is the shape the parser emits and the only one dictPass rewrites away.
@@ -258,7 +260,7 @@ rewriteAssignIndex (EBinOp ":=" lhs v r) =
   assignIndexLhs (stripLocE lhs) lhs v r
 rewriteAssignIndex e = e
 
-assignIndexLhs : Expr -> Expr -> Expr -> Ref Route -> Expr
+assignIndexLhs : Expr -> Expr -> Expr -> EvId -> Expr
 assignIndexLhs (EIndex a i _) _ v _ = EApp (callBin "setIndex" a i) v
 assignIndexLhs _ lhs v r = EBinOp ":=" lhs v r
 
@@ -1298,7 +1300,7 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
   RecPatField l loc noBinderId (Some (stampPat mid p))
 # DESUGAR
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "noBinderId" false) (mem "unminted" false) (mem "EvId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DTypeSig true "mapExpr" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
@@ -1381,7 +1383,7 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DTypeSig false "callBin" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "callBin" ((PVar "fn") (PVar "a") (PVar "b")) (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "fn"))) (EVar "a"))) (EVar "b")))
 (DTypeSig false "binOp" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "binOp" ((PVar "op") (PVar "a") (PVar "b")) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "a")) (EVar "b")) (EApp (EVar "Ref") (EVar "RNone"))))
+(DFunDef false "binOp" ((PVar "op") (PVar "a") (PVar "b")) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "a")) (EVar "b")) (EVar "unminted")))
 (DTypeSig false "intLit" (TyFun (TyCon "Int") (TyCon "Expr")))
 (DFunDef false "intLit" ((PVar "n")) (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EVar "Ref") (EVar "None"))) (EApp (EVar "Ref") (EVar "RNone"))) (ELit (LString ""))))
 (DTypeSig false "derivedImpl" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyCon "Decl")))))
@@ -1399,7 +1401,7 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DTypeSig false "rewriteAssignIndex" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "rewriteAssignIndex" ((PCon "EBinOp" (PLit (LString ":=")) (PVar "lhs") (PVar "v") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "assignIndexLhs") (EApp (EVar "stripLocE") (EVar "lhs"))) (EVar "lhs")) (EVar "v")) (EVar "r")))
 (DFunDef false "rewriteAssignIndex" ((PVar "e")) (EVar "e"))
-(DTypeSig false "assignIndexLhs" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Expr"))))))
+(DTypeSig false "assignIndexLhs" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "EvId") (TyCon "Expr"))))))
 (DFunDef false "assignIndexLhs" ((PCon "EIndex" (PVar "a") (PVar "i") PWild) PWild (PVar "v") PWild) (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "callBin") (ELit (LString "setIndex"))) (EVar "a")) (EVar "i"))) (EVar "v")))
 (DFunDef false "assignIndexLhs" (PWild (PVar "lhs") (PVar "v") (PVar "r")) (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "lhs")) (EVar "v")) (EVar "r")))
 (DTypeSig false "guardsToCore" (TyFun (TyApp (TyCon "List") (TyCon "GuardArm")) (TyCon "Expr")))
@@ -1774,7 +1776,7 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DFunDef false "stampRecField" ((PVar "mid") (PCon "RecPatField" (PVar "l") (PVar "loc") PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "l")) (EVar "loc")) (EVar "noBinderId")) (EApp (EVar "Some") (EApp (EApp (EVar "stampPat") (EVar "mid")) (EVar "p")))))
 # MARK
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "noBinderId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "stripLocE" false) (mem "noBinderId" false) (mem "unminted" false) (mem "EvId" false) (mem "BinderId" true) (mem "KindAnn" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DTypeSig true "mapExpr" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
@@ -1857,7 +1859,7 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DTypeSig false "callBin" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "callBin" ((PVar "fn") (PVar "a") (PVar "b")) (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "fn"))) (EVar "a"))) (EVar "b")))
 (DTypeSig false "binOp" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "binOp" ((PVar "op") (PVar "a") (PVar "b")) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "a")) (EVar "b")) (EApp (EVar "Ref") (EVar "RNone"))))
+(DFunDef false "binOp" ((PVar "op") (PVar "a") (PVar "b")) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "a")) (EVar "b")) (EVar "unminted")))
 (DTypeSig false "intLit" (TyFun (TyCon "Int") (TyCon "Expr")))
 (DFunDef false "intLit" ((PVar "n")) (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EVar "Ref") (EVar "None"))) (EApp (EVar "Ref") (EVar "RNone"))) (ELit (LString ""))))
 (DTypeSig false "derivedImpl" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyCon "Decl")))))
@@ -1875,7 +1877,7 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DTypeSig false "rewriteAssignIndex" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "rewriteAssignIndex" ((PCon "EBinOp" (PLit (LString ":=")) (PVar "lhs") (PVar "v") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "assignIndexLhs") (EApp (EVar "stripLocE") (EVar "lhs"))) (EVar "lhs")) (EVar "v")) (EVar "r")))
 (DFunDef false "rewriteAssignIndex" ((PVar "e")) (EVar "e"))
-(DTypeSig false "assignIndexLhs" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Expr"))))))
+(DTypeSig false "assignIndexLhs" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "EvId") (TyCon "Expr"))))))
 (DFunDef false "assignIndexLhs" ((PCon "EIndex" (PVar "a") (PVar "i") PWild) PWild (PVar "v") PWild) (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "callBin") (ELit (LString "setIndex"))) (EVar "a")) (EVar "i"))) (EVar "v")))
 (DFunDef false "assignIndexLhs" (PWild (PVar "lhs") (PVar "v") (PVar "r")) (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "lhs")) (EVar "v")) (EVar "r")))
 (DTypeSig false "guardsToCore" (TyFun (TyApp (TyCon "List") (TyCon "GuardArm")) (TyCon "Expr")))
