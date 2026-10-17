@@ -13,14 +13,14 @@
 -- accepts exactly that and nothing else.
 import frontend.ast.{Loc, Decl, EvTable}
 import types.repr.{
-  Mono(..), Tyvar(..), Scheme(..), AuthResidual(..), VecObl(..)
+  Mono(..), Tyvar(..), Scheme(..), AuthResidual(..), VecObl(..), ppSchemeCon
 }
 import types.effect_rows.{EffRow(..), Effvar(..), Atom(..)}
 import types.effect_authority.{Authority(..), Authvar(..)}
 import types.disposition.{DispositionTable}
 import map as IdMap
 import map.{Map(..)}
-import list.{nub, reverse}
+import list.{nub, reverse, mapAccumL}
 
 -- ── structured typecheck diagnostic (TcDiag) ───────────────────────────────
 -- ONE structured record per accumulated diagnostic (errors AND match warnings):
@@ -64,6 +64,11 @@ public export data PubScheme = PubScheme {
   psScheme : Scheme,
   psContext : List VecObl,
 }
+
+-- A scheme rendered with the context it was published with.
+export
+ppPubScheme : PubScheme -> String
+ppPubScheme p = ppSchemeCon p.psContext p.psScheme
 
 -- The schemes alone, for a reader that renders no context.
 export
@@ -124,13 +129,6 @@ export
 emptyZonk : ZState
 emptyZonk = ZState { zTys = Tip, zEffs = Tip, zAuths = Tip, zLinks = Tip }
 
-zonkList : (ZState -> a -> (ZState, b)) -> ZState -> List a -> (ZState, List b)
-zonkList _ z [] = (z, [])
-zonkList f z (x :: xs) =
-  let (z1, y) = f z x
-  let (z2, ys) = zonkList f z1 xs
-  (z2, y :: ys)
-
 export
 zonkMono : ZState -> Mono -> (ZState, Mono)
 zonkMono z (TVar cell) = match !cell
@@ -171,10 +169,10 @@ zonkAuthority z (AVar cell) = match !cell
       let c = Ref (AUnbound id lvl top pat name)
       ({ z | zAuths = IdMap.set id c z.zAuths }, AVar c)
 zonkAuthority z (AJoin ms) =
-  let (z1, ms1) = zonkList zonkAuthority z ms
+  let (z1, ms1) = mapAccumL zonkAuthority z ms
   (z1, AJoin ms1)
 zonkAuthority z (AProduct axes) =
-  let (z1, axes1) = zonkList zonkAxis z axes
+  let (z1, axes1) = mapAccumL zonkAxis z axes
   (z1, AProduct axes1)
 zonkAuthority z a = (z, a)
 
@@ -193,7 +191,7 @@ zonkAtom z (Atom lbl auth) =
 export
 zonkRow : ZState -> EffRow -> (ZState, EffRow)
 zonkRow z (EffRow atoms tail) =
-  let (z1, atoms1) = zonkList zonkAtom z atoms
+  let (z1, atoms1) = mapAccumL zonkAtom z atoms
   match tail
     None => (z1, EffRow atoms1 None)
     Some cell => match !cell
@@ -220,7 +218,7 @@ zonkEffCell z cell = match !cell
   EJoin id lvl members => match IdMap.get id z.zEffs
     Some c => (z, c)
     None =>
-      let (z1, ms) = zonkList zonkEffCell z members
+      let (z1, ms) = mapAccumL zonkEffCell z members
       let c = Ref (EJoin id lvl ms)
       ({ z1 | zEffs = IdMap.set id c z1.zEffs }, c)
   ELink id row => match IdMap.get id z.zEffs
@@ -243,7 +241,7 @@ memoEff z id v = match IdMap.get id z.zEffs
 export
 zonkVecObl : ZState -> VecObl -> (ZState, VecObl)
 zonkVecObl z (VecObl { voIface = iface, voIds = ids, voArgs = args }) =
-  let (z1, args1) = zonkList zonkMono z args
+  let (z1, args1) = mapAccumL zonkMono z args
   (z1, VecObl { voIface = iface, voIds = ids, voArgs = args1 })
 
 zonkResidual : ZState -> AuthResidual -> (ZState, AuthResidual)
@@ -255,7 +253,7 @@ zonkResidual z (AuthResidual { arLower = lo, arUpper = hi, arExact = ex }) =
 export
 zonkScheme : ZState -> Scheme -> (ZState, Scheme)
 zonkScheme z (Forall ids effIds authIds residuals row t) =
-  let (z1, residuals1) = zonkList zonkResidual z residuals
+  let (z1, residuals1) = mapAccumL zonkResidual z residuals
   let (z2, row1) = zonkRow z1 row
   let (z3, t1) = zonkMono z2 t
   (z3, Forall ids effIds authIds residuals1 row1 t1)
@@ -266,7 +264,7 @@ export
 freezePub : Scheme -> List VecObl -> PubScheme
 freezePub s ctx =
   let (z1, s1) = zonkScheme emptyZonk s
-  let (_, ctx1) = zonkList zonkVecObl z1 ctx
+  let (_, ctx1) = mapAccumL zonkVecObl z1 ctx
   PubScheme { psScheme = s1, psContext = ctx1 }
 
 -- Each row frozen on its own.  A weak cell two schemes share becomes one copy
@@ -308,7 +306,7 @@ graphReport perMod core residual evidence dispositions trees =
   let schemes = map (m => (fst m, modSchemes (snd m))) perMod
   let cells = graphCells (core :: map snd schemes)
   let checked =
-    if isEmptyL residual && noModErrors perMod && allWeak cells then
+    if isEmpty residual && noModErrors perMod && all isWeak cells then
       Some CheckedProgram {
         cpSchemes = schemes,
         cpCore = core,
@@ -346,19 +344,14 @@ modSchemes : (List (String, PubScheme), List TcDiag, List TcDiag) ->
   List (String, PubScheme)
 modSchemes (s, _, _) = s
 
-isEmptyL : List a -> Bool
-isEmptyL [] = True
-isEmptyL _ = False
-
 noModErrors : List ModDiags -> Bool
 noModErrors [] = True
 noModErrors ((_, (_, [], _)) :: rest) = noModErrors rest
 noModErrors _ = False
 
-allWeak : List LiveCell -> Bool
-allWeak [] = True
-allWeak ((WeakVar _ _ _) :: rest) = allWeak rest
-allWeak _ = False
+isWeak : LiveCell -> Bool
+isWeak (WeakVar _ _ _) = True
+isWeak _ = False
 
 -- ── live-cell validator ────────────────────────────────────────────────────
 

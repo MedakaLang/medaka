@@ -73,8 +73,8 @@ import support.util.{maxI, utf8Len, joinWith, startsWith, contains}
 import string.{stripCR, toInt}
 import regex.{Regex, Match, mustCompile, escape, findAll, find}
 import frontend.desugar.{desugar}
-import types.repr.{Scheme(..), ppSchemeCon}
-import types.publish.{PubScheme(..), pubSchemes}
+import types.repr.{Scheme(..)}
+import types.publish.{PubScheme(..), pubSchemes, ppPubScheme}
 import types.typecheck.{
   checkOneSchemeFullK, ppSchemeNamed, ppSchemeNamedFull, currentLocalSchemes,
   currentLocalSchemesLoc, currentSeedSchemes
@@ -964,7 +964,7 @@ latestLocal (Some (pl, pc, ps)) ((bl, bc, bs) :: rest)
 -- last checked's own tables — where a local constrained binding does register its
 -- obligations (#816) — and never the prelude store.
 ppHoverScheme : String -> HoverHit -> String
-ppHoverScheme _ (EnvHit p) = ppSchemeCon p.psContext p.psScheme
+ppHoverScheme _ (EnvHit p) = ppPubScheme p
 ppHoverScheme n (LocalHit s) = ppSchemeNamed n s
 ppHoverScheme n (SeedHit s) = ppSchemeNamedFull n s
 
@@ -2244,8 +2244,8 @@ unit = ()
 (DUse false (UseGroup ("string") ((mem "stripCR" false) (mem "toInt" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "escape" false) (mem "findAll" false) (mem "find" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
-(DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "ppSchemeCon" false))))
-(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "pubSchemes" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "Scheme" true))))
+(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "pubSchemes" false) (mem "ppPubScheme" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFullK" false) (mem "ppSchemeNamed" false) (mem "ppSchemeNamedFull" false) (mem "currentLocalSchemes" false) (mem "currentLocalSchemesLoc" false) (mem "currentSeedSchemes" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSourceChecked" false))))
 (DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProject" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false))))
@@ -2419,7 +2419,7 @@ unit = ()
 (DFunDef false "latestLocal" ((PCon "None") (PCons (PVar "c") (PVar "rest"))) (EApp (EApp (EVar "latestLocal") (EApp (EVar "Some") (EVar "c"))) (EVar "rest")))
 (DFunDef false "latestLocal" ((PCon "Some" (PTuple (PVar "pl") (PVar "pc") (PVar "ps"))) (PCons (PTuple (PVar "bl") (PVar "bc") (PVar "bs")) (PVar "rest"))) (EIf (EApp (EApp (EApp (EApp (EVar "locAtOrBefore") (EVar "pl")) (EVar "pc")) (EVar "bl")) (EVar "bc")) (EApp (EApp (EVar "latestLocal") (EApp (EVar "Some") (ETuple (EVar "bl") (EVar "bc") (EVar "bs")))) (EVar "rest")) (EIf (EVar "otherwise") (EApp (EApp (EVar "latestLocal") (EApp (EVar "Some") (ETuple (EVar "pl") (EVar "pc") (EVar "ps")))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "ppHoverScheme" (TyFun (TyCon "String") (TyFun (TyCon "HoverHit") (TyCon "String"))))
-(DFunDef false "ppHoverScheme" (PWild (PCon "EnvHit" (PVar "p"))) (EApp (EApp (EVar "ppSchemeCon") (EFieldAccess (EVar "p") "psContext")) (EFieldAccess (EVar "p") "psScheme")))
+(DFunDef false "ppHoverScheme" (PWild (PCon "EnvHit" (PVar "p"))) (EApp (EVar "ppPubScheme") (EVar "p")))
 (DFunDef false "ppHoverScheme" ((PVar "n") (PCon "LocalHit" (PVar "s"))) (EApp (EApp (EVar "ppSchemeNamed") (EVar "n")) (EVar "s")))
 (DFunDef false "ppHoverScheme" ((PVar "n") (PCon "SeedHit" (PVar "s"))) (EApp (EApp (EVar "ppSchemeNamedFull") (EVar "n")) (EVar "s")))
 (DTypeSig false "jHover" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Json"))))
@@ -2705,8 +2705,8 @@ unit = ()
 (DUse false (UseGroup ("string") ((mem "stripCR" false) (mem "toInt" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "escape" false) (mem "findAll" false) (mem "find" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
-(DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "ppSchemeCon" false))))
-(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "pubSchemes" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "Scheme" true))))
+(DUse false (UseGroup ("types" "publish") ((mem "PubScheme" true) (mem "pubSchemes" false) (mem "ppPubScheme" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFullK" false) (mem "ppSchemeNamed" false) (mem "ppSchemeNamedFull" false) (mem "currentLocalSchemes" false) (mem "currentLocalSchemesLoc" false) (mem "currentSeedSchemes" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSourceChecked" false))))
 (DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProject" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false))))
@@ -2880,7 +2880,7 @@ unit = ()
 (DFunDef false "latestLocal" ((PCon "None") (PCons (PVar "c") (PVar "rest"))) (EApp (EApp (EVar "latestLocal") (EApp (EVar "Some") (EVar "c"))) (EVar "rest")))
 (DFunDef false "latestLocal" ((PCon "Some" (PTuple (PVar "pl") (PVar "pc") (PVar "ps"))) (PCons (PTuple (PVar "bl") (PVar "bc") (PVar "bs")) (PVar "rest"))) (EIf (EApp (EApp (EApp (EApp (EVar "locAtOrBefore") (EVar "pl")) (EVar "pc")) (EVar "bl")) (EVar "bc")) (EApp (EApp (EVar "latestLocal") (EApp (EVar "Some") (ETuple (EVar "bl") (EVar "bc") (EVar "bs")))) (EVar "rest")) (EIf (EVar "otherwise") (EApp (EApp (EVar "latestLocal") (EApp (EVar "Some") (ETuple (EVar "pl") (EVar "pc") (EVar "ps")))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "ppHoverScheme" (TyFun (TyCon "String") (TyFun (TyCon "HoverHit") (TyCon "String"))))
-(DFunDef false "ppHoverScheme" (PWild (PCon "EnvHit" (PVar "p"))) (EApp (EApp (EVar "ppSchemeCon") (EFieldAccess (EVar "p") "psContext")) (EFieldAccess (EVar "p") "psScheme")))
+(DFunDef false "ppHoverScheme" (PWild (PCon "EnvHit" (PVar "p"))) (EApp (EVar "ppPubScheme") (EVar "p")))
 (DFunDef false "ppHoverScheme" ((PVar "n") (PCon "LocalHit" (PVar "s"))) (EApp (EApp (EVar "ppSchemeNamed") (EVar "n")) (EVar "s")))
 (DFunDef false "ppHoverScheme" ((PVar "n") (PCon "SeedHit" (PVar "s"))) (EApp (EApp (EVar "ppSchemeNamedFull") (EVar "n")) (EVar "s")))
 (DTypeSig false "jHover" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Json"))))

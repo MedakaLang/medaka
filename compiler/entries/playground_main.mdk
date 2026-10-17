@@ -140,8 +140,7 @@ import entries.entry_support.{
   stampModulePaths,
 }
 import support.util.{startsWith, lookupAssoc, splitOnChar, filterList}
-import types.repr.{ppSchemeCon}
-import types.publish.{PubScheme(..)}
+import types.publish.{PubScheme(..), ppPubScheme}
 import types.typecheck.{
   ElabResult, constrainedSigNames, preludeReturnPosDictNames,
   preludeArgPosDictNames, mainTypeIsFloat, mainTypeIsUnit,
@@ -861,7 +860,7 @@ hoverResult src line col env = match identifierAt src line col
   None => JNull
   Some name => match lookupSchemeL name env
     None => JNull
-    Some p => jHover name (ppPub p)
+    Some p => jHover name (ppPubScheme p)
 
 -- Parse a non-negative decimal from argv (digits only; non-digits skipped).
 parseNat : String -> Int
@@ -958,10 +957,6 @@ anyName : List String -> String -> Bool
 anyName [] _ = False
 anyName (x :: xs) name = x == name || anyName xs name
 
--- A binding's scheme with the context it was published with.
-ppPub : PubScheme -> String
-ppPub p = ppSchemeCon p.psContext p.psScheme
-
 filterCompletions : String ->
   List String ->
   List (String, PubScheme) ->
@@ -969,7 +964,8 @@ filterCompletions : String ->
 filterCompletions _ _ [] = []
 filterCompletions prefix seen ((n, p) :: rest)
   | startsWith prefix n && not (anyName seen n) =
-    jCompletionItem n (ppPub p) :: filterCompletions prefix (n :: seen) rest
+    jCompletionItem n (ppPubScheme p)
+      :: filterCompletions prefix (n :: seen) rest
   | otherwise = filterCompletions prefix seen rest
 
 jCompletionItem : String -> String -> Json
