@@ -2987,7 +2987,7 @@ migration = "done"
 run = "test/diff_async_test.mdk"
 oracles = ["wasm_emit_modules_main"]
 sources = ["runtime/medaka_rt.c", "compiler/backend/llvm_emit.mdk", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_preamble.mdk", "test/wasm/run.js", "compiler/eval/eval.mdk", "stdlib/runtime.mdk", "stdlib/async.mdk", "stdlib/net_async.mdk", "stdlib/net.mdk", "test/compiler_cli_test_support.mdk", "playground/medaka_host.mjs"]
-corpus = ["test/async_fixtures"]
+corpus = ["test/async_fixtures", "test/async_jspi_fixtures"]
 toolchain = ["clang", "wasm-tools", "node>=24"]
 link = "production"
 
