@@ -1,5 +1,5 @@
 # META
-source_lines=57186
+source_lines=57197
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -11770,6 +11770,11 @@ mintOpSite _ = mintSite (OpSite (Ref RNone))
 mintLitSite : Unit -> EvId
 mintLitSite _ = mintSite (LitSite (Ref None) (Ref RNone))
 
+-- Mint the cell for one field access or record update, starting with the unknown
+-- head "".
+mintHeadSite : Unit -> EvId
+mintHeadSite _ = mintSite (HeadSite (Ref ""))
+
 -- [ev] if it already has a site, else a freshly minted one: a body re-marked after
 -- inference keeps the ids inference wrote through.
 mintedOr : (Unit -> EvId) -> EvId -> EvId
@@ -11817,6 +11822,13 @@ siteRouteCell ev = match siteCellOf ev
   OpSite r => r
   LitSite _ r => r
   HeadSite _ => notAnOpSite ev
+
+-- The resolved-record-head cell of field access or record update site [ev].
+siteHeadCell : EvId -> Ref String
+siteHeadCell ev = match siteCellOf ev
+  HeadSite h => h
+  OpSite _ => notAnOpSite ev
+  LitSite _ _ => notAnOpSite ev
 
 -- The defaulted-float cell of numeric literal site [ev].
 siteFloatCell : EvId -> Ref (Option Float)
@@ -16814,8 +16826,8 @@ infer env (EBinOp op l r ev) = inferBinopE env op l r (siteRouteCell ev)
 infer env (EUnOp op e ev) = inferUnopE env op e (siteRouteCell ev)
 infer env (EInfix op l r) = inferInfix env op l r
 infer env (ERecordCreate name fields) = inferRecordCreate env name fields
-infer env (EFieldAccess e fname r) = inferFieldAccess env e fname r
-infer env (ERecordUpdate base fields r) = inferRecordUpdate env base fields r
+infer env (EFieldAccess e fname ev) = inferFieldAccess env e fname ev
+infer env (ERecordUpdate base fields ev) = inferRecordUpdate env base fields ev
 infer env (EVariantUpdate cname base fields) =
   inferVariantUpdate env cname base fields
 infer env (EBlock stmts) = inferBlock env stmts
@@ -19393,15 +19405,15 @@ checkMissingFields rname (fname :: rest) supplied
 -- records, the access is ambiguous.  `value` keeps the Ref-projection special case (no
 -- record in compiler/stdlib declares a `value` field, so this matches the
 -- oracle's structural `(Ref a).value → a`).
-inferFieldAccess : TcEnv -> Expr -> String -> Ref String -> Mono
-inferFieldAccess env e fname r
+inferFieldAccess : TcEnv -> Expr -> String -> EvId -> Mono
+inferFieldAccess env e fname ev
   | fname == "value" = inferValueField env e
   | otherwise =
     let te = normalize (infer env e)
     match resolveFieldRecord te fname
       None => freshVar ()
       Some (rname, ri) =>
-        r := stampedRecordHead rname ri
+        siteHeadCell ev := stampedRecordHead rname ri
         let ft = inferFieldOfRecord te rname ri fname
         -- #1468: the WELL-TYPEDNESS half, and it runs AFTER `inferFieldOfRecord`
         -- on purpose — that call is what unifies `te` with the record's result
@@ -19430,8 +19442,8 @@ inferFieldAccess env e fname r
 --
 -- THE QUALIFICATION HAPPENS EXACTLY ONCE, AND HERE IS WHERE.  This is the only
 -- writer of the head a downstream reader sees: `types/private_mangle.mdk`'s
--- `renameScoped` deliberately leaves the `EFieldAccess`/`ERecordUpdate` cells
--- alone (see its note there).  A second application would have to guess whether
+-- `renameScoped` deliberately passes the `EFieldAccess`/`ERecordUpdate` site ids
+-- through (see its note there).  A second application would have to guess whether
 -- the first had already run, and a prefix test is not that fact: a record whose
 -- SOURCE name already carries its own module's prefix (`data Mm__Cfg` beside
 -- `data Cfg` in module `Mm`) reads as "already qualified" and collides with its
@@ -20605,10 +20617,10 @@ unboundVarFresh name =
   let _ = pushTypeError "T-UNBOUND" (unboundVarMsg name)
   freshVar ()
 
-inferRecordUpdate : TcEnv -> Expr -> List FieldAssign -> Ref String -> Mono
-inferRecordUpdate env base fields r = match firstFieldName fields
+inferRecordUpdate : TcEnv -> Expr -> List FieldAssign -> EvId -> Mono
+inferRecordUpdate env base fields ev = match firstFieldName fields
   None => panic "empty record update"
-  Some fn => inferRecordUpdateField env base fields fn r
+  Some fn => inferRecordUpdateField env base fields fn ev
 
 -- `Con { base | f = v, … }` — a named-field-variant update (e.g. desugar's
 -- `DInterface { d | methods = … }`).  Resolve the variant's field layout by the
@@ -20630,9 +20642,9 @@ inferRecordUpdateField : TcEnv ->
   Expr ->
   List FieldAssign ->
   String ->
-  Ref String ->
+  EvId ->
   Mono
-inferRecordUpdateField env base fields fn r =
+inferRecordUpdateField env base fields fn ev =
   let bt = normalize (infer env base)
   match resolveFieldRecord bt fn
     None => freshVar ()
@@ -20641,7 +20653,7 @@ inferRecordUpdateField env base fields fn r =
       -- read it to pick the record by name, instead of guessing from the first
       -- update label (which picks the wrong record — and so the wrong slot — when
       -- two records share a field name at different indices).
-      r := stampedRecordHead rname ri
+      siteHeadCell ev := stampedRecordHead rname ri
       inferRecordUpdatePicked rname bt env fields ri
 
 inferRecordUpdatePicked : String ->
@@ -27174,10 +27186,10 @@ eagerRefs (EVariantUpdate _ e0 fs) =
 eagerRefs (EArrayLit es) = flatMap eagerRefs es
 eagerRefs (EListLit es) = flatMap eagerRefs es
 eagerRefs (ETuple es) = flatMap eagerRefs es
-eagerRefs (EIndex e0 i _) = eagerRefs e0 ++ eagerRefs i
+eagerRefs (EIndex e0 i) = eagerRefs e0 ++ eagerRefs i
 eagerRefs (ERangeList lo hi _) = eagerRefs lo ++ eagerRefs hi
 eagerRefs (ERangeArray lo hi _) = eagerRefs lo ++ eagerRefs hi
-eagerRefs (ESlice e0 lo hi _ _) = eagerRefs e0 ++ eagerRefs lo ++ eagerRefs hi
+eagerRefs (ESlice e0 lo hi _) = eagerRefs e0 ++ eagerRefs lo ++ eagerRefs hi
 eagerRefs (EBlock stmts) = flatMap eagerRefsDoStmt stmts
 eagerRefs (EDo _ stmts) = flatMap eagerRefsDoStmt stmts
 eagerRefs (EAnnot e0 _) = eagerRefs e0
@@ -28589,8 +28601,8 @@ rewriteArgScoped rw bound (EUnOp op x ev) =
   EUnOp op x2 (mintedOr mintOpSite ev)
 rewriteArgScoped rw bound (EInfix op l r) =
   EInfix op (rewriteArgScoped rw bound l) (rewriteArgScoped rw bound r)
-rewriteArgScoped rw bound (EFieldAccess e0 n r) =
-  EFieldAccess (rewriteArgScoped rw bound e0) n r
+rewriteArgScoped rw bound (EFieldAccess e0 n ev) =
+  EFieldAccess (rewriteArgScoped rw bound e0) n (mintedOr mintHeadSite ev)
 rewriteArgScoped rw bound (ETuple es) =
   ETuple (map (rewriteArgScoped rw bound) es)
 rewriteArgScoped rw bound (EListLit es) =
@@ -28601,26 +28613,25 @@ rewriteArgScoped rw bound (ERangeList lo hi i) =
   ERangeList (rewriteArgScoped rw bound lo) (rewriteArgScoped rw bound hi) i
 rewriteArgScoped rw bound (ERangeArray lo hi i) =
   ERangeArray (rewriteArgScoped rw bound lo) (rewriteArgScoped rw bound hi) i
-rewriteArgScoped rw bound (ESlice e0 lo hi i r) =
+rewriteArgScoped rw bound (ESlice e0 lo hi i) =
   ESlice
     (rewriteArgScoped rw bound e0)
     (rewriteArgScoped rw bound lo)
     (rewriteArgScoped rw bound hi)
     i
-    r
-rewriteArgScoped rw bound (EIndex e0 i r) =
-  EIndex (rewriteArgScoped rw bound e0) (rewriteArgScoped rw bound i) r
+rewriteArgScoped rw bound (EIndex e0 i) =
+  EIndex (rewriteArgScoped rw bound e0) (rewriteArgScoped rw bound i)
 rewriteArgScoped rw bound (EAnnot e0 t) =
   EAnnot (rewriteArgScoped rw bound e0) t
 rewriteArgScoped rw bound (EHeadAnnot e0 t) =
   EHeadAnnot (rewriteArgScoped rw bound e0) t
 rewriteArgScoped rw bound (ERecordCreate n fs) =
   ERecordCreate n (map (rewriteArgField rw bound) fs)
-rewriteArgScoped rw bound (ERecordUpdate e0 fs r) =
+rewriteArgScoped rw bound (ERecordUpdate e0 fs ev) =
   ERecordUpdate
     (rewriteArgScoped rw bound e0)
     (map (rewriteArgField rw bound) fs)
-    r
+    (mintedOr mintHeadSite ev)
 rewriteArgScoped rw bound (EVariantUpdate c e0 fs) =
   EVariantUpdate
     c
@@ -36334,9 +36345,9 @@ collectMethodSites (ERangeList a b _) =
   collectMethodSites a ++ collectMethodSites b
 collectMethodSites (ERangeArray a b _) =
   collectMethodSites a ++ collectMethodSites b
-collectMethodSites (ESlice e a b _ _) =
+collectMethodSites (ESlice e a b _) =
   collectMethodSites e ++ collectMethodSites a ++ collectMethodSites b
-collectMethodSites (EIndex e i _) = collectMethodSites e ++ collectMethodSites i
+collectMethodSites (EIndex e i) = collectMethodSites e ++ collectMethodSites i
 collectMethodSites (EAnnot e _) = collectMethodSites e
 collectMethodSites (EBlock stmts) = flatMap doStmtSites stmts
 collectMethodSites (ERecordCreate _ fs) = flatMap fieldAssignSites fs
@@ -36406,9 +36417,9 @@ collectDictSites (EListLit es) = flatMap collectDictSites es
 collectDictSites (EArrayLit es) = flatMap collectDictSites es
 collectDictSites (ERangeList a b _) = collectDictSites a ++ collectDictSites b
 collectDictSites (ERangeArray a b _) = collectDictSites a ++ collectDictSites b
-collectDictSites (ESlice e a b _ _) =
+collectDictSites (ESlice e a b _) =
   collectDictSites e ++ collectDictSites a ++ collectDictSites b
-collectDictSites (EIndex e i _) = collectDictSites e ++ collectDictSites i
+collectDictSites (EIndex e i) = collectDictSites e ++ collectDictSites i
 collectDictSites (EAnnot e _) = collectDictSites e
 collectDictSites (EBlock stmts) = flatMap doStmtDictSites stmts
 collectDictSites (ERecordCreate _ fs) = flatMap fieldAssignDictSites fs
@@ -44548,8 +44559,8 @@ allEVars (EListLit es) = flatMap allEVars es
 allEVars (EArrayLit es) = flatMap allEVars es
 allEVars (ERangeList a b _) = allEVars a ++ allEVars b
 allEVars (ERangeArray a b _) = allEVars a ++ allEVars b
-allEVars (ESlice e a b _ _) = allEVars e ++ allEVars a ++ allEVars b
-allEVars (EIndex e i _) = allEVars e ++ allEVars i
+allEVars (ESlice e a b _) = allEVars e ++ allEVars a ++ allEVars b
+allEVars (EIndex e i) = allEVars e ++ allEVars i
 allEVars (EAnnot e _) = allEVars e
 allEVars (EBlock stmts) = flatMap doStmtEVars stmts
 allEVars (ERecordCreate _ fs) = flatMap fieldAssignEVars fs
@@ -44653,9 +44664,9 @@ freeEVars bound (EListLit es) = flatMap (freeEVars bound) es
 freeEVars bound (EArrayLit es) = flatMap (freeEVars bound) es
 freeEVars bound (ERangeList a b _) = freeEVars bound a ++ freeEVars bound b
 freeEVars bound (ERangeArray a b _) = freeEVars bound a ++ freeEVars bound b
-freeEVars bound (ESlice e a b _ _) =
+freeEVars bound (ESlice e a b _) =
   freeEVars bound e ++ freeEVars bound a ++ freeEVars bound b
-freeEVars bound (EIndex e i _) = freeEVars bound e ++ freeEVars bound i
+freeEVars bound (EIndex e i) = freeEVars bound e ++ freeEVars bound i
 freeEVars bound (EAnnot e _) = freeEVars bound e
 freeEVars bound (EBlock stmts) = freeStmtsEVars bound stmts
 freeEVars bound (ERecordCreate _ fs) = flatMap (freeFieldEVars bound) fs
@@ -59010,6 +59021,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "mintOpSite" (PWild) (EApp (EVar "mintSite") (EApp (EVar "OpSite") (EApp (EVar "Ref") (EVar "RNone")))))
 (DTypeSig false "mintLitSite" (TyFun (TyCon "Unit") (TyCon "EvId")))
 (DFunDef false "mintLitSite" (PWild) (EApp (EVar "mintSite") (EApp (EApp (EVar "LitSite") (EApp (EVar "Ref") (EVar "None"))) (EApp (EVar "Ref") (EVar "RNone")))))
+(DTypeSig false "mintHeadSite" (TyFun (TyCon "Unit") (TyCon "EvId")))
+(DFunDef false "mintHeadSite" (PWild) (EApp (EVar "mintSite") (EApp (EVar "HeadSite") (EApp (EVar "Ref") (ELit (LString ""))))))
 (DTypeSig false "mintedOr" (TyFun (TyFun (TyCon "Unit") (TyCon "EvId")) (TyFun (TyCon "EvId") (TyCon "EvId"))))
 (DFunDef false "mintedOr" ((PVar "mint") (PVar "ev")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "mint") (ELit LUnit)) (EVar "ev")))
 (DTypeSig false "mintSite" (TyFun (TyCon "SiteCell") (TyCon "EvId")))
@@ -59020,6 +59033,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "siteCellLookup" ((PVar "ev")) (EBlock (DoLet false false (PCon "EvId" (PVar "m") (PVar "n")) (EVar "ev")) (DoLet false false (PVar "g") (EFieldAccess (EVar "graphRun") "value")) (DoLet false false (PVar "i") (EBinOp "-" (EVar "n") (EFieldAccess (EVar "g") "evBase"))) (DoLet false false (PVar "arr") (EFieldAccess (EFieldAccess (EVar "g") "siteCells") "value")) (DoExpr (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "Err") (ELit (LString "site reached inference unminted"))) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "site cell ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " is from an earlier graph")))) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "site cell ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " was never minted")))) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PTuple PWild (PVar "c"))) () (EApp (EVar "Ok") (EVar "c"))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "site cell ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " was never minted"))))))))))))
 (DTypeSig false "siteRouteCell" (TyFun (TyCon "EvId") (TyApp (TyCon "Ref") (TyCon "Route"))))
 (DFunDef false "siteRouteCell" ((PVar "ev")) (EMatch (EApp (EVar "siteCellOf") (EVar "ev")) (arm (PCon "OpSite" (PVar "r")) () (EVar "r")) (arm (PCon "LitSite" PWild (PVar "r")) () (EVar "r")) (arm (PCon "HeadSite" PWild) () (EApp (EVar "notAnOpSite") (EVar "ev")))))
+(DTypeSig false "siteHeadCell" (TyFun (TyCon "EvId") (TyApp (TyCon "Ref") (TyCon "String"))))
+(DFunDef false "siteHeadCell" ((PVar "ev")) (EMatch (EApp (EVar "siteCellOf") (EVar "ev")) (arm (PCon "HeadSite" (PVar "h")) () (EVar "h")) (arm (PCon "OpSite" PWild) () (EApp (EVar "notAnOpSite") (EVar "ev"))) (arm (PCon "LitSite" PWild PWild) () (EApp (EVar "notAnOpSite") (EVar "ev")))))
 (DTypeSig false "siteFloatCell" (TyFun (TyCon "EvId") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float")))))
 (DFunDef false "siteFloatCell" ((PVar "ev")) (EMatch (EApp (EVar "siteCellOf") (EVar "ev")) (arm (PCon "LitSite" (PVar "f") PWild) () (EVar "f")) (arm (PCon "OpSite" PWild) () (EApp (EVar "notAnOpSite") (EVar "ev"))) (arm (PCon "HeadSite" PWild) () (EApp (EVar "notAnOpSite") (EVar "ev")))))
 (DTypeSig false "notAnOpSite" (TyFun (TyCon "EvId") (TyVar "a")))
@@ -60125,8 +60140,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "infer" ((PVar "env") (PCon "EUnOp" (PVar "op") (PVar "e") (PVar "ev"))) (EApp (EApp (EApp (EApp (EVar "inferUnopE") (EVar "env")) (EVar "op")) (EVar "e")) (EApp (EVar "siteRouteCell") (EVar "ev"))))
 (DFunDef false "infer" ((PVar "env") (PCon "EInfix" (PVar "op") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "inferInfix") (EVar "env")) (EVar "op")) (EVar "l")) (EVar "r")))
 (DFunDef false "infer" ((PVar "env") (PCon "ERecordCreate" (PVar "name") (PVar "fields"))) (EApp (EApp (EApp (EVar "inferRecordCreate") (EVar "env")) (EVar "name")) (EVar "fields")))
-(DFunDef false "infer" ((PVar "env") (PCon "EFieldAccess" (PVar "e") (PVar "fname") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "inferFieldAccess") (EVar "env")) (EVar "e")) (EVar "fname")) (EVar "r")))
-(DFunDef false "infer" ((PVar "env") (PCon "ERecordUpdate" (PVar "base") (PVar "fields") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "inferRecordUpdate") (EVar "env")) (EVar "base")) (EVar "fields")) (EVar "r")))
+(DFunDef false "infer" ((PVar "env") (PCon "EFieldAccess" (PVar "e") (PVar "fname") (PVar "ev"))) (EApp (EApp (EApp (EApp (EVar "inferFieldAccess") (EVar "env")) (EVar "e")) (EVar "fname")) (EVar "ev")))
+(DFunDef false "infer" ((PVar "env") (PCon "ERecordUpdate" (PVar "base") (PVar "fields") (PVar "ev"))) (EApp (EApp (EApp (EApp (EVar "inferRecordUpdate") (EVar "env")) (EVar "base")) (EVar "fields")) (EVar "ev")))
 (DFunDef false "infer" ((PVar "env") (PCon "EVariantUpdate" (PVar "cname") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EApp (EVar "inferVariantUpdate") (EVar "env")) (EVar "cname")) (EVar "base")) (EVar "fields")))
 (DFunDef false "infer" ((PVar "env") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "inferBlock") (EVar "env")) (EVar "stmts")))
 (DFunDef false "infer" ((PVar "env") (PCon "EMethodAt" (PVar "name") PWild (PVar "ev"))) (EApp (EApp (EApp (EVar "inferMethodAtCell") (EVar "env")) (EVar "name")) (EApp (EVar "methodCellOf") (EVar "ev"))))
@@ -60554,8 +60569,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "checkMissingFields" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "Unit")))))
 (DFunDef false "checkMissingFields" (PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "checkMissingFields" ((PVar "rname") (PCons (PVar "fname") (PVar "rest")) (PVar "supplied")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "fname")) (EVar "supplied")) (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EVar "rest")) (EVar "supplied")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-MISSING-FIELD"))) (EApp (EApp (EVar "missingFieldMsg") (EVar "fname")) (EVar "rname")))) (DoExpr (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EVar "rest")) (EVar "supplied")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "inferFieldAccess" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "String")) (TyCon "Mono"))))))
-(DFunDef false "inferFieldAccess" ((PVar "env") (PVar "e") (PVar "fname") (PVar "r")) (EIf (EBinOp "==" (EVar "fname") (ELit (LString "value"))) (EApp (EApp (EVar "inferValueField") (EVar "env")) (EVar "e")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "te") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "te")) (EVar "fname")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EApp (EApp (EVar "stampedRecordHead") (EVar "rname")) (EVar "ri")))) (DoLet false false (PVar "ft") (EApp (EApp (EApp (EApp (EVar "inferFieldOfRecord") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "fieldSelectionWellTyped") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")) (EVar "ft")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "inferFieldAccess" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "Mono"))))))
+(DFunDef false "inferFieldAccess" ((PVar "env") (PVar "e") (PVar "fname") (PVar "ev")) (EIf (EBinOp "==" (EVar "fname") (ELit (LString "value"))) (EApp (EApp (EVar "inferValueField") (EVar "env")) (EVar "e")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "te") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "te")) (EVar "fname")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "siteHeadCell") (EVar "ev"))) (EApp (EApp (EVar "stampedRecordHead") (EVar "rname")) (EVar "ri")))) (DoLet false false (PVar "ft") (EApp (EApp (EApp (EApp (EVar "inferFieldOfRecord") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "fieldSelectionWellTyped") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")) (EVar "ft")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "stampedRecordHead" (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyCon "String"))))
 (DFunDef false "stampedRecordHead" ((PVar "rname") (PVar "ri")) (EMatch (EApp (EVar "recordOwnerModule") (EVar "ri")) (arm (PCon "None") () (EVar "rname")) (arm (PCon "Some" (PVar "mid")) () (EApp (EApp (EVar "ownerQualifiedHead") (EVar "mid")) (EVar "rname")))))
 (DTypeSig false "recordOwnerModule" (TyFun (TyCon "RecordInfo") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -60748,15 +60763,15 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "unknownRecordFresh" ((PVar "name")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-UNKNOWN-RECORD"))) (EApp (EVar "unknownRecordMsg") (EVar "name")))) (DoExpr (EApp (EVar "freshVar") (ELit LUnit)))))
 (DTypeSig false "unboundVarFresh" (TyFun (TyCon "String") (TyCon "Mono")))
 (DFunDef false "unboundVarFresh" ((PVar "name")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-UNBOUND"))) (EApp (EVar "unboundVarMsg") (EVar "name")))) (DoExpr (EApp (EVar "freshVar") (ELit LUnit)))))
-(DTypeSig false "inferRecordUpdate" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyApp (TyCon "Ref") (TyCon "String")) (TyCon "Mono"))))))
-(DFunDef false "inferRecordUpdate" ((PVar "env") (PVar "base") (PVar "fields") (PVar "r")) (EMatch (EApp (EVar "firstFieldName") (EVar "fields")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "empty record update")))) (arm (PCon "Some" (PVar "fn")) () (EApp (EApp (EApp (EApp (EApp (EVar "inferRecordUpdateField") (EVar "env")) (EVar "base")) (EVar "fields")) (EVar "fn")) (EVar "r")))))
+(DTypeSig false "inferRecordUpdate" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "EvId") (TyCon "Mono"))))))
+(DFunDef false "inferRecordUpdate" ((PVar "env") (PVar "base") (PVar "fields") (PVar "ev")) (EMatch (EApp (EVar "firstFieldName") (EVar "fields")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "empty record update")))) (arm (PCon "Some" (PVar "fn")) () (EApp (EApp (EApp (EApp (EApp (EVar "inferRecordUpdateField") (EVar "env")) (EVar "base")) (EVar "fields")) (EVar "fn")) (EVar "ev")))))
 (DTypeSig false "inferVariantUpdate" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyCon "Mono"))))))
 (DFunDef false "inferVariantUpdate" ((PVar "env") (PVar "cname") (PVar "base") (PVar "fields")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "cname")) (arm (PCon "None") () (EApp (EVar "unknownRecordFresh") (EVar "cname"))) (arm (PCon "Some" (PVar "ri")) () (EApp (EApp (EApp (EApp (EApp (EVar "inferRecordUpdateWith") (EVar "env")) (EVar "cname")) (EVar "base")) (EVar "fields")) (EVar "ri")))))
 (DTypeSig false "firstFieldName" (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "firstFieldName" ((PList)) (EVar "None"))
 (DFunDef false "firstFieldName" ((PCons (PCon "FieldAssign" (PVar "fn") PWild) PWild)) (EApp (EVar "Some") (EVar "fn")))
-(DTypeSig false "inferRecordUpdateField" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "String")) (TyCon "Mono")))))))
-(DFunDef false "inferRecordUpdateField" ((PVar "env") (PVar "base") (PVar "fields") (PVar "fn") (PVar "r")) (EBlock (DoLet false false (PVar "bt") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "base")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "bt")) (EVar "fn")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EApp (EApp (EVar "stampedRecordHead") (EVar "rname")) (EVar "ri")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferRecordUpdatePicked") (EVar "rname")) (EVar "bt")) (EVar "env")) (EVar "fields")) (EVar "ri")))))))))
+(DTypeSig false "inferRecordUpdateField" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "Mono")))))))
+(DFunDef false "inferRecordUpdateField" ((PVar "env") (PVar "base") (PVar "fields") (PVar "fn") (PVar "ev")) (EBlock (DoLet false false (PVar "bt") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "base")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "bt")) (EVar "fn")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "siteHeadCell") (EVar "ev"))) (EApp (EApp (EVar "stampedRecordHead") (EVar "rname")) (EVar "ri")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferRecordUpdatePicked") (EVar "rname")) (EVar "bt")) (EVar "env")) (EVar "fields")) (EVar "ri")))))))))
 (DTypeSig false "inferRecordUpdatePicked" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "RecordInfo") (TyCon "Mono")))))))
 (DFunDef false "inferRecordUpdatePicked" ((PVar "rname") (PVar "bt") (PVar "env") (PVar "fields") (PVar "ri")) (EBlock (DoLet false false (PVar "sr") (EApp (EApp (EApp (EVar "instantiateRecordUpdate") (EVar "rname")) (EVar "ri")) (EApp (EVar "assignedFieldNames") (EVar "fields")))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "bt")) (EApp (EVar "snd") (EVar "sr")))) (DoLet false false PWild (EMatch (EApp (EVar "firstFieldName") (EVar "fields")) (arm (PCon "Some" (PVar "fn")) () (EApp (EApp (EApp (EApp (EVar "recordUpdateWellTyped") (EVar "bt")) (EVar "rname")) (EVar "ri")) (EVar "fn"))) (arm (PCon "None") () (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssignsIdx") (EVar "env")) (EVar "rname")) (EVar "ri")) (EApp (EVar "fst") (EVar "sr"))) (EVar "fields"))) (DoExpr (EApp (EVar "snd") (EVar "sr")))))
 (DTypeSig false "inferRecordUpdateWith" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "RecordInfo") (TyCon "Mono")))))))
@@ -61980,10 +61995,10 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "eagerRefs" ((PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "eagerRefs")) (EVar "es")))
 (DFunDef false "eagerRefs" ((PCon "EListLit" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "eagerRefs")) (EVar "es")))
 (DFunDef false "eagerRefs" ((PCon "ETuple" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "eagerRefs")) (EVar "es")))
-(DFunDef false "eagerRefs" ((PCon "EIndex" (PVar "e0") (PVar "i") PWild)) (EBinOp "++" (EApp (EVar "eagerRefs") (EVar "e0")) (EApp (EVar "eagerRefs") (EVar "i"))))
+(DFunDef false "eagerRefs" ((PCon "EIndex" (PVar "e0") (PVar "i"))) (EBinOp "++" (EApp (EVar "eagerRefs") (EVar "e0")) (EApp (EVar "eagerRefs") (EVar "i"))))
 (DFunDef false "eagerRefs" ((PCon "ERangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "eagerRefs") (EVar "lo")) (EApp (EVar "eagerRefs") (EVar "hi"))))
 (DFunDef false "eagerRefs" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "eagerRefs") (EVar "lo")) (EApp (EVar "eagerRefs") (EVar "hi"))))
-(DFunDef false "eagerRefs" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "eagerRefs") (EVar "e0")) (EApp (EVar "eagerRefs") (EVar "lo"))) (EApp (EVar "eagerRefs") (EVar "hi"))))
+(DFunDef false "eagerRefs" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "eagerRefs") (EVar "e0")) (EApp (EVar "eagerRefs") (EVar "lo"))) (EApp (EVar "eagerRefs") (EVar "hi"))))
 (DFunDef false "eagerRefs" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "eagerRefsDoStmt")) (EVar "stmts")))
 (DFunDef false "eagerRefs" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "eagerRefsDoStmt")) (EVar "stmts")))
 (DFunDef false "eagerRefs" ((PCon "EAnnot" (PVar "e0") PWild)) (EApp (EVar "eagerRefs") (EVar "e0")))
@@ -62292,18 +62307,18 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "ev"))) (EBlock (DoLet false false (PVar "l2") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "l"))) (DoLet false false (PVar "r2") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "r"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l2")) (EVar "r2")) (EApp (EApp (EVar "mintedOr") (EVar "mintOpSite")) (EVar "ev"))))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EUnOp" (PVar "op") (PVar "x") (PVar "ev"))) (EBlock (DoLet false false (PVar "x2") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "x"))) (DoExpr (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "x2")) (EApp (EApp (EVar "mintedOr") (EVar "mintOpSite")) (EVar "ev"))))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EInfix" (PVar "op") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "EInfix") (EVar "op")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "l"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "r"))))
-(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EFieldAccess" (PVar "e0") (PVar "n") (PVar "r"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EVar "n")) (EVar "r")))
+(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EFieldAccess" (PVar "e0") (PVar "n") (PVar "ev"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EVar "n")) (EApp (EApp (EVar "mintedOr") (EVar "mintHeadSite")) (EVar "ev"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ETuple" (PVar "es"))) (EApp (EVar "ETuple") (EApp (EApp (EVar "map") (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EListLit" (PVar "es"))) (EApp (EVar "EListLit") (EApp (EApp (EVar "map") (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EVar "map") (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "lo"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "hi"))) (EVar "i")))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "lo"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "hi"))) (EVar "i")))
-(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "lo"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "hi"))) (EVar "i")) (EVar "r")))
-(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EIndex" (PVar "e0") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "i"))) (EVar "r")))
+(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "lo"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "hi"))) (EVar "i")))
+(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EIndex" (PVar "e0") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "i"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "rewriteArgField") (EVar "rw")) (EVar "bound"))) (EVar "fs"))))
-(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ERecordUpdate" (PVar "e0") (PVar "fs") (PVar "r"))) (EApp (EApp (EApp (EVar "ERecordUpdate") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "rewriteArgField") (EVar "rw")) (EVar "bound"))) (EVar "fs"))) (EVar "r")))
+(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ERecordUpdate" (PVar "e0") (PVar "fs") (PVar "ev"))) (EApp (EApp (EApp (EVar "ERecordUpdate") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "rewriteArgField") (EVar "rw")) (EVar "bound"))) (EVar "fs"))) (EApp (EApp (EVar "mintedOr") (EVar "mintHeadSite")) (EVar "ev"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EVariantUpdate" (PVar "c") (PVar "e0") (PVar "fs"))) (EApp (EApp (EApp (EVar "EVariantUpdate") (EVar "c")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "rewriteArgField") (EVar "rw")) (EVar "bound"))) (EVar "fs"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EVar "map") (EApp (EApp (EVar "rewriteArgInterp") (EVar "rw")) (EVar "bound"))) (EVar "parts"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EVar "map") (EApp (EApp (EVar "rewriteArgGuardArm") (EVar "rw")) (EVar "bound"))) (EVar "arms"))))
@@ -63588,8 +63603,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "collectMethodSites" ((PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "collectMethodSites")) (EVar "es")))
 (DFunDef false "collectMethodSites" ((PCon "ERangeList" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "collectMethodSites") (EVar "a")) (EApp (EVar "collectMethodSites") (EVar "b"))))
 (DFunDef false "collectMethodSites" ((PCon "ERangeArray" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "collectMethodSites") (EVar "a")) (EApp (EVar "collectMethodSites") (EVar "b"))))
-(DFunDef false "collectMethodSites" ((PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectMethodSites") (EVar "e")) (EApp (EVar "collectMethodSites") (EVar "a"))) (EApp (EVar "collectMethodSites") (EVar "b"))))
-(DFunDef false "collectMethodSites" ((PCon "EIndex" (PVar "e") (PVar "i") PWild)) (EBinOp "++" (EApp (EVar "collectMethodSites") (EVar "e")) (EApp (EVar "collectMethodSites") (EVar "i"))))
+(DFunDef false "collectMethodSites" ((PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectMethodSites") (EVar "e")) (EApp (EVar "collectMethodSites") (EVar "a"))) (EApp (EVar "collectMethodSites") (EVar "b"))))
+(DFunDef false "collectMethodSites" ((PCon "EIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EVar "collectMethodSites") (EVar "e")) (EApp (EVar "collectMethodSites") (EVar "i"))))
 (DFunDef false "collectMethodSites" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "collectMethodSites") (EVar "e")))
 (DFunDef false "collectMethodSites" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "doStmtSites")) (EVar "stmts")))
 (DFunDef false "collectMethodSites" ((PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EVar "flatMap") (EVar "fieldAssignSites")) (EVar "fs")))
@@ -63633,8 +63648,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "collectDictSites" ((PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "collectDictSites")) (EVar "es")))
 (DFunDef false "collectDictSites" ((PCon "ERangeList" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "collectDictSites") (EVar "a")) (EApp (EVar "collectDictSites") (EVar "b"))))
 (DFunDef false "collectDictSites" ((PCon "ERangeArray" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "collectDictSites") (EVar "a")) (EApp (EVar "collectDictSites") (EVar "b"))))
-(DFunDef false "collectDictSites" ((PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectDictSites") (EVar "e")) (EApp (EVar "collectDictSites") (EVar "a"))) (EApp (EVar "collectDictSites") (EVar "b"))))
-(DFunDef false "collectDictSites" ((PCon "EIndex" (PVar "e") (PVar "i") PWild)) (EBinOp "++" (EApp (EVar "collectDictSites") (EVar "e")) (EApp (EVar "collectDictSites") (EVar "i"))))
+(DFunDef false "collectDictSites" ((PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectDictSites") (EVar "e")) (EApp (EVar "collectDictSites") (EVar "a"))) (EApp (EVar "collectDictSites") (EVar "b"))))
+(DFunDef false "collectDictSites" ((PCon "EIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EVar "collectDictSites") (EVar "e")) (EApp (EVar "collectDictSites") (EVar "i"))))
 (DFunDef false "collectDictSites" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "collectDictSites") (EVar "e")))
 (DFunDef false "collectDictSites" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "doStmtDictSites")) (EVar "stmts")))
 (DFunDef false "collectDictSites" ((PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EVar "flatMap") (EVar "fieldAssignDictSites")) (EVar "fs")))
@@ -64813,8 +64828,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "allEVars" ((PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "allEVars")) (EVar "es")))
 (DFunDef false "allEVars" ((PCon "ERangeList" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "allEVars") (EVar "a")) (EApp (EVar "allEVars") (EVar "b"))))
 (DFunDef false "allEVars" ((PCon "ERangeArray" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "allEVars") (EVar "a")) (EApp (EVar "allEVars") (EVar "b"))))
-(DFunDef false "allEVars" ((PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "allEVars") (EVar "e")) (EApp (EVar "allEVars") (EVar "a"))) (EApp (EVar "allEVars") (EVar "b"))))
-(DFunDef false "allEVars" ((PCon "EIndex" (PVar "e") (PVar "i") PWild)) (EBinOp "++" (EApp (EVar "allEVars") (EVar "e")) (EApp (EVar "allEVars") (EVar "i"))))
+(DFunDef false "allEVars" ((PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "allEVars") (EVar "e")) (EApp (EVar "allEVars") (EVar "a"))) (EApp (EVar "allEVars") (EVar "b"))))
+(DFunDef false "allEVars" ((PCon "EIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EVar "allEVars") (EVar "e")) (EApp (EVar "allEVars") (EVar "i"))))
 (DFunDef false "allEVars" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "allEVars") (EVar "e")))
 (DFunDef false "allEVars" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "doStmtEVars")) (EVar "stmts")))
 (DFunDef false "allEVars" ((PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EVar "flatMap") (EVar "fieldAssignEVars")) (EVar "fs")))
@@ -64879,8 +64894,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "freeEVars") (EVar "bound"))) (EVar "es")))
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "ERangeList" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "a")) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "b"))))
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "ERangeArray" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "a")) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "b"))))
-(DFunDef false "freeEVars" ((PVar "bound") (PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "a"))) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "b"))))
-(DFunDef false "freeEVars" ((PVar "bound") (PCon "EIndex" (PVar "e") (PVar "i") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "i"))))
+(DFunDef false "freeEVars" ((PVar "bound") (PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "a"))) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "b"))))
+(DFunDef false "freeEVars" ((PVar "bound") (PCon "EIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "i"))))
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "EAnnot" (PVar "e") PWild)) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "e")))
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "freeStmtsEVars") (EVar "bound")) (EVar "stmts")))
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "freeFieldEVars") (EVar "bound"))) (EVar "fs")))
@@ -68480,6 +68495,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "mintOpSite" (PWild) (EApp (EVar "mintSite") (EApp (EVar "OpSite") (EApp (EVar "Ref") (EVar "RNone")))))
 (DTypeSig false "mintLitSite" (TyFun (TyCon "Unit") (TyCon "EvId")))
 (DFunDef false "mintLitSite" (PWild) (EApp (EVar "mintSite") (EApp (EApp (EVar "LitSite") (EApp (EVar "Ref") (EVar "None"))) (EApp (EVar "Ref") (EVar "RNone")))))
+(DTypeSig false "mintHeadSite" (TyFun (TyCon "Unit") (TyCon "EvId")))
+(DFunDef false "mintHeadSite" (PWild) (EApp (EVar "mintSite") (EApp (EVar "HeadSite") (EApp (EVar "Ref") (ELit (LString ""))))))
 (DTypeSig false "mintedOr" (TyFun (TyFun (TyCon "Unit") (TyCon "EvId")) (TyFun (TyCon "EvId") (TyCon "EvId"))))
 (DFunDef false "mintedOr" ((PVar "mint") (PVar "ev")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "mint") (ELit LUnit)) (EVar "ev")))
 (DTypeSig false "mintSite" (TyFun (TyCon "SiteCell") (TyCon "EvId")))
@@ -68490,6 +68507,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "siteCellLookup" ((PVar "ev")) (EBlock (DoLet false false (PCon "EvId" (PVar "m") (PVar "n")) (EVar "ev")) (DoLet false false (PVar "g") (EFieldAccess (EVar "graphRun") "value")) (DoLet false false (PVar "i") (EBinOp "-" (EVar "n") (EFieldAccess (EVar "g") "evBase"))) (DoLet false false (PVar "arr") (EFieldAccess (EFieldAccess (EVar "g") "siteCells") "value")) (DoExpr (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "Err") (ELit (LString "site reached inference unminted"))) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "site cell ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " is from an earlier graph")))) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "site cell ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " was never minted")))) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PTuple PWild (PVar "c"))) () (EApp (EVar "Ok") (EVar "c"))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "site cell ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " was never minted"))))))))))))
 (DTypeSig false "siteRouteCell" (TyFun (TyCon "EvId") (TyApp (TyCon "Ref") (TyCon "Route"))))
 (DFunDef false "siteRouteCell" ((PVar "ev")) (EMatch (EApp (EVar "siteCellOf") (EVar "ev")) (arm (PCon "OpSite" (PVar "r")) () (EVar "r")) (arm (PCon "LitSite" PWild (PVar "r")) () (EVar "r")) (arm (PCon "HeadSite" PWild) () (EApp (EVar "notAnOpSite") (EVar "ev")))))
+(DTypeSig false "siteHeadCell" (TyFun (TyCon "EvId") (TyApp (TyCon "Ref") (TyCon "String"))))
+(DFunDef false "siteHeadCell" ((PVar "ev")) (EMatch (EApp (EVar "siteCellOf") (EVar "ev")) (arm (PCon "HeadSite" (PVar "h")) () (EVar "h")) (arm (PCon "OpSite" PWild) () (EApp (EVar "notAnOpSite") (EVar "ev"))) (arm (PCon "LitSite" PWild PWild) () (EApp (EVar "notAnOpSite") (EVar "ev")))))
 (DTypeSig false "siteFloatCell" (TyFun (TyCon "EvId") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float")))))
 (DFunDef false "siteFloatCell" ((PVar "ev")) (EMatch (EApp (EVar "siteCellOf") (EVar "ev")) (arm (PCon "LitSite" (PVar "f") PWild) () (EVar "f")) (arm (PCon "OpSite" PWild) () (EApp (EVar "notAnOpSite") (EVar "ev"))) (arm (PCon "HeadSite" PWild) () (EApp (EVar "notAnOpSite") (EVar "ev")))))
 (DTypeSig false "notAnOpSite" (TyFun (TyCon "EvId") (TyVar "a")))
@@ -69595,8 +69614,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "infer" ((PVar "env") (PCon "EUnOp" (PVar "op") (PVar "e") (PVar "ev"))) (EApp (EApp (EApp (EApp (EVar "inferUnopE") (EVar "env")) (EVar "op")) (EVar "e")) (EApp (EVar "siteRouteCell") (EVar "ev"))))
 (DFunDef false "infer" ((PVar "env") (PCon "EInfix" (PVar "op") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "inferInfix") (EVar "env")) (EVar "op")) (EVar "l")) (EVar "r")))
 (DFunDef false "infer" ((PVar "env") (PCon "ERecordCreate" (PVar "name") (PVar "fields"))) (EApp (EApp (EApp (EVar "inferRecordCreate") (EVar "env")) (EVar "name")) (EVar "fields")))
-(DFunDef false "infer" ((PVar "env") (PCon "EFieldAccess" (PVar "e") (PVar "fname") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "inferFieldAccess") (EVar "env")) (EVar "e")) (EVar "fname")) (EVar "r")))
-(DFunDef false "infer" ((PVar "env") (PCon "ERecordUpdate" (PVar "base") (PVar "fields") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "inferRecordUpdate") (EVar "env")) (EVar "base")) (EVar "fields")) (EVar "r")))
+(DFunDef false "infer" ((PVar "env") (PCon "EFieldAccess" (PVar "e") (PVar "fname") (PVar "ev"))) (EApp (EApp (EApp (EApp (EVar "inferFieldAccess") (EVar "env")) (EVar "e")) (EVar "fname")) (EVar "ev")))
+(DFunDef false "infer" ((PVar "env") (PCon "ERecordUpdate" (PVar "base") (PVar "fields") (PVar "ev"))) (EApp (EApp (EApp (EApp (EVar "inferRecordUpdate") (EVar "env")) (EVar "base")) (EVar "fields")) (EVar "ev")))
 (DFunDef false "infer" ((PVar "env") (PCon "EVariantUpdate" (PVar "cname") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EApp (EVar "inferVariantUpdate") (EVar "env")) (EVar "cname")) (EVar "base")) (EVar "fields")))
 (DFunDef false "infer" ((PVar "env") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "inferBlock") (EVar "env")) (EVar "stmts")))
 (DFunDef false "infer" ((PVar "env") (PCon "EMethodAt" (PVar "name") PWild (PVar "ev"))) (EApp (EApp (EApp (EVar "inferMethodAtCell") (EVar "env")) (EVar "name")) (EApp (EVar "methodCellOf") (EVar "ev"))))
@@ -70024,8 +70043,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "checkMissingFields" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "Unit")))))
 (DFunDef false "checkMissingFields" (PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "checkMissingFields" ((PVar "rname") (PCons (PVar "fname") (PVar "rest")) (PVar "supplied")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "fname")) (EVar "supplied")) (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EVar "rest")) (EVar "supplied")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-MISSING-FIELD"))) (EApp (EApp (EVar "missingFieldMsg") (EVar "fname")) (EVar "rname")))) (DoExpr (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EVar "rest")) (EVar "supplied")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "inferFieldAccess" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "String")) (TyCon "Mono"))))))
-(DFunDef false "inferFieldAccess" ((PVar "env") (PVar "e") (PVar "fname") (PVar "r")) (EIf (EBinOp "==" (EVar "fname") (ELit (LString "value"))) (EApp (EApp (EVar "inferValueField") (EVar "env")) (EVar "e")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "te") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "te")) (EVar "fname")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EApp (EApp (EVar "stampedRecordHead") (EVar "rname")) (EVar "ri")))) (DoLet false false (PVar "ft") (EApp (EApp (EApp (EApp (EVar "inferFieldOfRecord") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "fieldSelectionWellTyped") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")) (EVar "ft")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "inferFieldAccess" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "Mono"))))))
+(DFunDef false "inferFieldAccess" ((PVar "env") (PVar "e") (PVar "fname") (PVar "ev")) (EIf (EBinOp "==" (EVar "fname") (ELit (LString "value"))) (EApp (EApp (EVar "inferValueField") (EVar "env")) (EVar "e")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "te") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "te")) (EVar "fname")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "siteHeadCell") (EVar "ev"))) (EApp (EApp (EVar "stampedRecordHead") (EVar "rname")) (EVar "ri")))) (DoLet false false (PVar "ft") (EApp (EApp (EApp (EApp (EVar "inferFieldOfRecord") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "fieldSelectionWellTyped") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")) (EVar "ft")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "stampedRecordHead" (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyCon "String"))))
 (DFunDef false "stampedRecordHead" ((PVar "rname") (PVar "ri")) (EMatch (EApp (EVar "recordOwnerModule") (EVar "ri")) (arm (PCon "None") () (EVar "rname")) (arm (PCon "Some" (PVar "mid")) () (EApp (EApp (EVar "ownerQualifiedHead") (EVar "mid")) (EVar "rname")))))
 (DTypeSig false "recordOwnerModule" (TyFun (TyCon "RecordInfo") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -70218,15 +70237,15 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "unknownRecordFresh" ((PVar "name")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-UNKNOWN-RECORD"))) (EApp (EVar "unknownRecordMsg") (EVar "name")))) (DoExpr (EApp (EVar "freshVar") (ELit LUnit)))))
 (DTypeSig false "unboundVarFresh" (TyFun (TyCon "String") (TyCon "Mono")))
 (DFunDef false "unboundVarFresh" ((PVar "name")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-UNBOUND"))) (EApp (EVar "unboundVarMsg") (EVar "name")))) (DoExpr (EApp (EVar "freshVar") (ELit LUnit)))))
-(DTypeSig false "inferRecordUpdate" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyApp (TyCon "Ref") (TyCon "String")) (TyCon "Mono"))))))
-(DFunDef false "inferRecordUpdate" ((PVar "env") (PVar "base") (PVar "fields") (PVar "r")) (EMatch (EApp (EVar "firstFieldName") (EVar "fields")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "empty record update")))) (arm (PCon "Some" (PVar "fn")) () (EApp (EApp (EApp (EApp (EApp (EVar "inferRecordUpdateField") (EVar "env")) (EVar "base")) (EVar "fields")) (EVar "fn")) (EVar "r")))))
+(DTypeSig false "inferRecordUpdate" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "EvId") (TyCon "Mono"))))))
+(DFunDef false "inferRecordUpdate" ((PVar "env") (PVar "base") (PVar "fields") (PVar "ev")) (EMatch (EApp (EVar "firstFieldName") (EVar "fields")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "empty record update")))) (arm (PCon "Some" (PVar "fn")) () (EApp (EApp (EApp (EApp (EApp (EVar "inferRecordUpdateField") (EVar "env")) (EVar "base")) (EVar "fields")) (EVar "fn")) (EVar "ev")))))
 (DTypeSig false "inferVariantUpdate" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyCon "Mono"))))))
 (DFunDef false "inferVariantUpdate" ((PVar "env") (PVar "cname") (PVar "base") (PVar "fields")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "cname")) (arm (PCon "None") () (EApp (EVar "unknownRecordFresh") (EVar "cname"))) (arm (PCon "Some" (PVar "ri")) () (EApp (EApp (EApp (EApp (EApp (EVar "inferRecordUpdateWith") (EVar "env")) (EVar "cname")) (EVar "base")) (EVar "fields")) (EVar "ri")))))
 (DTypeSig false "firstFieldName" (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "firstFieldName" ((PList)) (EVar "None"))
 (DFunDef false "firstFieldName" ((PCons (PCon "FieldAssign" (PVar "fn") PWild) PWild)) (EApp (EVar "Some") (EVar "fn")))
-(DTypeSig false "inferRecordUpdateField" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "String")) (TyCon "Mono")))))))
-(DFunDef false "inferRecordUpdateField" ((PVar "env") (PVar "base") (PVar "fields") (PVar "fn") (PVar "r")) (EBlock (DoLet false false (PVar "bt") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "base")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "bt")) (EVar "fn")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EApp (EApp (EVar "stampedRecordHead") (EVar "rname")) (EVar "ri")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferRecordUpdatePicked") (EVar "rname")) (EVar "bt")) (EVar "env")) (EVar "fields")) (EVar "ri")))))))))
+(DTypeSig false "inferRecordUpdateField" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "Mono")))))))
+(DFunDef false "inferRecordUpdateField" ((PVar "env") (PVar "base") (PVar "fields") (PVar "fn") (PVar "ev")) (EBlock (DoLet false false (PVar "bt") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "base")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "bt")) (EVar "fn")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "siteHeadCell") (EVar "ev"))) (EApp (EApp (EVar "stampedRecordHead") (EVar "rname")) (EVar "ri")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferRecordUpdatePicked") (EVar "rname")) (EVar "bt")) (EVar "env")) (EVar "fields")) (EVar "ri")))))))))
 (DTypeSig false "inferRecordUpdatePicked" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "RecordInfo") (TyCon "Mono")))))))
 (DFunDef false "inferRecordUpdatePicked" ((PVar "rname") (PVar "bt") (PVar "env") (PVar "fields") (PVar "ri")) (EBlock (DoLet false false (PVar "sr") (EApp (EApp (EApp (EVar "instantiateRecordUpdate") (EVar "rname")) (EVar "ri")) (EApp (EVar "assignedFieldNames") (EVar "fields")))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "bt")) (EApp (EVar "snd") (EVar "sr")))) (DoLet false false PWild (EMatch (EApp (EVar "firstFieldName") (EVar "fields")) (arm (PCon "Some" (PVar "fn")) () (EApp (EApp (EApp (EApp (EVar "recordUpdateWellTyped") (EVar "bt")) (EVar "rname")) (EVar "ri")) (EVar "fn"))) (arm (PCon "None") () (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "unifyFieldAssignsIdx") (EVar "env")) (EVar "rname")) (EVar "ri")) (EApp (EVar "fst") (EVar "sr"))) (EVar "fields"))) (DoExpr (EApp (EVar "snd") (EVar "sr")))))
 (DTypeSig false "inferRecordUpdateWith" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyFun (TyCon "RecordInfo") (TyCon "Mono")))))))
@@ -71450,10 +71469,10 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "eagerRefs" ((PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "eagerRefs")) (EVar "es")))
 (DFunDef false "eagerRefs" ((PCon "EListLit" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "eagerRefs")) (EVar "es")))
 (DFunDef false "eagerRefs" ((PCon "ETuple" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "eagerRefs")) (EVar "es")))
-(DFunDef false "eagerRefs" ((PCon "EIndex" (PVar "e0") (PVar "i") PWild)) (EBinOp "++" (EApp (EVar "eagerRefs") (EVar "e0")) (EApp (EVar "eagerRefs") (EVar "i"))))
+(DFunDef false "eagerRefs" ((PCon "EIndex" (PVar "e0") (PVar "i"))) (EBinOp "++" (EApp (EVar "eagerRefs") (EVar "e0")) (EApp (EVar "eagerRefs") (EVar "i"))))
 (DFunDef false "eagerRefs" ((PCon "ERangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "eagerRefs") (EVar "lo")) (EApp (EVar "eagerRefs") (EVar "hi"))))
 (DFunDef false "eagerRefs" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "eagerRefs") (EVar "lo")) (EApp (EVar "eagerRefs") (EVar "hi"))))
-(DFunDef false "eagerRefs" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "eagerRefs") (EVar "e0")) (EApp (EVar "eagerRefs") (EVar "lo"))) (EApp (EVar "eagerRefs") (EVar "hi"))))
+(DFunDef false "eagerRefs" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "eagerRefs") (EVar "e0")) (EApp (EVar "eagerRefs") (EVar "lo"))) (EApp (EVar "eagerRefs") (EVar "hi"))))
 (DFunDef false "eagerRefs" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "eagerRefsDoStmt")) (EVar "stmts")))
 (DFunDef false "eagerRefs" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "eagerRefsDoStmt")) (EVar "stmts")))
 (DFunDef false "eagerRefs" ((PCon "EAnnot" (PVar "e0") PWild)) (EApp (EVar "eagerRefs") (EVar "e0")))
@@ -71762,18 +71781,18 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "ev"))) (EBlock (DoLet false false (PVar "l2") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "l"))) (DoLet false false (PVar "r2") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "r"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l2")) (EVar "r2")) (EApp (EApp (EVar "mintedOr") (EVar "mintOpSite")) (EVar "ev"))))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EUnOp" (PVar "op") (PVar "x") (PVar "ev"))) (EBlock (DoLet false false (PVar "x2") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "x"))) (DoExpr (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EVar "x2")) (EApp (EApp (EVar "mintedOr") (EVar "mintOpSite")) (EVar "ev"))))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EInfix" (PVar "op") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "EInfix") (EVar "op")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "l"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "r"))))
-(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EFieldAccess" (PVar "e0") (PVar "n") (PVar "r"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EVar "n")) (EVar "r")))
+(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EFieldAccess" (PVar "e0") (PVar "n") (PVar "ev"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EVar "n")) (EApp (EApp (EVar "mintedOr") (EVar "mintHeadSite")) (EVar "ev"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ETuple" (PVar "es"))) (EApp (EVar "ETuple") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EListLit" (PVar "es"))) (EApp (EVar "EListLit") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "lo"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "hi"))) (EVar "i")))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "lo"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "hi"))) (EVar "i")))
-(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "lo"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "hi"))) (EVar "i")) (EVar "r")))
-(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EIndex" (PVar "e0") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "i"))) (EVar "r")))
+(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "lo"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "hi"))) (EVar "i")))
+(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EIndex" (PVar "e0") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "i"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "rewriteArgField") (EVar "rw")) (EVar "bound"))) (EVar "fs"))))
-(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ERecordUpdate" (PVar "e0") (PVar "fs") (PVar "r"))) (EApp (EApp (EApp (EVar "ERecordUpdate") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "rewriteArgField") (EVar "rw")) (EVar "bound"))) (EVar "fs"))) (EVar "r")))
+(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ERecordUpdate" (PVar "e0") (PVar "fs") (PVar "ev"))) (EApp (EApp (EApp (EVar "ERecordUpdate") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "rewriteArgField") (EVar "rw")) (EVar "bound"))) (EVar "fs"))) (EApp (EApp (EVar "mintedOr") (EVar "mintHeadSite")) (EVar "ev"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EVariantUpdate" (PVar "c") (PVar "e0") (PVar "fs"))) (EApp (EApp (EApp (EVar "EVariantUpdate") (EVar "c")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "rewriteArgField") (EVar "rw")) (EVar "bound"))) (EVar "fs"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "rewriteArgInterp") (EVar "rw")) (EVar "bound"))) (EVar "parts"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "rewriteArgGuardArm") (EVar "rw")) (EVar "bound"))) (EVar "arms"))))
@@ -73058,8 +73077,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "collectMethodSites" ((PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "collectMethodSites")) (EVar "es")))
 (DFunDef false "collectMethodSites" ((PCon "ERangeList" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "collectMethodSites") (EVar "a")) (EApp (EVar "collectMethodSites") (EVar "b"))))
 (DFunDef false "collectMethodSites" ((PCon "ERangeArray" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "collectMethodSites") (EVar "a")) (EApp (EVar "collectMethodSites") (EVar "b"))))
-(DFunDef false "collectMethodSites" ((PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectMethodSites") (EVar "e")) (EApp (EVar "collectMethodSites") (EVar "a"))) (EApp (EVar "collectMethodSites") (EVar "b"))))
-(DFunDef false "collectMethodSites" ((PCon "EIndex" (PVar "e") (PVar "i") PWild)) (EBinOp "++" (EApp (EVar "collectMethodSites") (EVar "e")) (EApp (EVar "collectMethodSites") (EVar "i"))))
+(DFunDef false "collectMethodSites" ((PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectMethodSites") (EVar "e")) (EApp (EVar "collectMethodSites") (EVar "a"))) (EApp (EVar "collectMethodSites") (EVar "b"))))
+(DFunDef false "collectMethodSites" ((PCon "EIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EVar "collectMethodSites") (EVar "e")) (EApp (EVar "collectMethodSites") (EVar "i"))))
 (DFunDef false "collectMethodSites" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "collectMethodSites") (EVar "e")))
 (DFunDef false "collectMethodSites" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "doStmtSites")) (EVar "stmts")))
 (DFunDef false "collectMethodSites" ((PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EDictApp "flatMap") (EVar "fieldAssignSites")) (EVar "fs")))
@@ -73103,8 +73122,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "collectDictSites" ((PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "collectDictSites")) (EVar "es")))
 (DFunDef false "collectDictSites" ((PCon "ERangeList" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "collectDictSites") (EVar "a")) (EApp (EVar "collectDictSites") (EVar "b"))))
 (DFunDef false "collectDictSites" ((PCon "ERangeArray" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "collectDictSites") (EVar "a")) (EApp (EVar "collectDictSites") (EVar "b"))))
-(DFunDef false "collectDictSites" ((PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectDictSites") (EVar "e")) (EApp (EVar "collectDictSites") (EVar "a"))) (EApp (EVar "collectDictSites") (EVar "b"))))
-(DFunDef false "collectDictSites" ((PCon "EIndex" (PVar "e") (PVar "i") PWild)) (EBinOp "++" (EApp (EVar "collectDictSites") (EVar "e")) (EApp (EVar "collectDictSites") (EVar "i"))))
+(DFunDef false "collectDictSites" ((PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectDictSites") (EVar "e")) (EApp (EVar "collectDictSites") (EVar "a"))) (EApp (EVar "collectDictSites") (EVar "b"))))
+(DFunDef false "collectDictSites" ((PCon "EIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EVar "collectDictSites") (EVar "e")) (EApp (EVar "collectDictSites") (EVar "i"))))
 (DFunDef false "collectDictSites" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "collectDictSites") (EVar "e")))
 (DFunDef false "collectDictSites" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "doStmtDictSites")) (EVar "stmts")))
 (DFunDef false "collectDictSites" ((PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EDictApp "flatMap") (EVar "fieldAssignDictSites")) (EVar "fs")))
@@ -74283,8 +74302,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "allEVars" ((PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "allEVars")) (EVar "es")))
 (DFunDef false "allEVars" ((PCon "ERangeList" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "allEVars") (EVar "a")) (EApp (EVar "allEVars") (EVar "b"))))
 (DFunDef false "allEVars" ((PCon "ERangeArray" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "allEVars") (EVar "a")) (EApp (EVar "allEVars") (EVar "b"))))
-(DFunDef false "allEVars" ((PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "allEVars") (EVar "e")) (EApp (EVar "allEVars") (EVar "a"))) (EApp (EVar "allEVars") (EVar "b"))))
-(DFunDef false "allEVars" ((PCon "EIndex" (PVar "e") (PVar "i") PWild)) (EBinOp "++" (EApp (EVar "allEVars") (EVar "e")) (EApp (EVar "allEVars") (EVar "i"))))
+(DFunDef false "allEVars" ((PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "allEVars") (EVar "e")) (EApp (EVar "allEVars") (EVar "a"))) (EApp (EVar "allEVars") (EVar "b"))))
+(DFunDef false "allEVars" ((PCon "EIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EVar "allEVars") (EVar "e")) (EApp (EVar "allEVars") (EVar "i"))))
 (DFunDef false "allEVars" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "allEVars") (EVar "e")))
 (DFunDef false "allEVars" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "doStmtEVars")) (EVar "stmts")))
 (DFunDef false "allEVars" ((PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EDictApp "flatMap") (EVar "fieldAssignEVars")) (EVar "fs")))
@@ -74349,8 +74368,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "freeEVars") (EVar "bound"))) (EVar "es")))
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "ERangeList" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "a")) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "b"))))
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "ERangeArray" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "a")) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "b"))))
-(DFunDef false "freeEVars" ((PVar "bound") (PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "a"))) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "b"))))
-(DFunDef false "freeEVars" ((PVar "bound") (PCon "EIndex" (PVar "e") (PVar "i") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "i"))))
+(DFunDef false "freeEVars" ((PVar "bound") (PCon "ESlice" (PVar "e") (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "a"))) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "b"))))
+(DFunDef false "freeEVars" ((PVar "bound") (PCon "EIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "i"))))
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "EAnnot" (PVar "e") PWild)) (EApp (EApp (EVar "freeEVars") (EVar "bound")) (EVar "e")))
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "freeStmtsEVars") (EVar "bound")) (EVar "stmts")))
 (DFunDef false "freeEVars" ((PVar "bound") (PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "freeFieldEVars") (EVar "bound"))) (EVar "fs")))

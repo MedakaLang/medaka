@@ -79,10 +79,11 @@ inference variables, and they are resolved (zonked) before a result is published
 live cell escapes `CheckedProgram`, and no later request can change the meaning of a
 published one.
 
-- *Today:* the typechecker writes dispatch routes into 9 `Ref` cells carried by 8
-  constructors of `frontend/ast.mdk` from a post-inference stamper whose 9-step order is
-  semantic; `checkOneSchemeFullK` returns live cells; `run` and `build` typecheck twice
-  because the evaluator and the lowering read a tree that may be half-stamped.
+- *Today:* the AST carries no cells. Dispatch routes, literal answers and record heads are
+  answers keyed by an `EvId` the mark pass mints; the typechecker writes them during
+  inference and they are published in the evidence table. `checkOneSchemeFullK` returns
+  live cells; `run` and `build` typecheck twice because the evaluator and the lowering
+  read a tree that may be half-stamped.
 - *Check:* `frontend/ast.mdk` declares no `Ref` field (Phase 1); a published scheme
   contains no unresolved cell (Phase 1 validator).
 

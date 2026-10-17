@@ -208,12 +208,12 @@ exprSexp (ERangeList lo hi incl) =
   node "ERangeList" [exprSexp lo, exprSexp hi, boolStr incl]
 exprSexp (ERangeArray lo hi incl) =
   node "ERangeArray" [exprSexp lo, exprSexp hi, boolStr incl]
-exprSexp (ESlice e lo hi incl _) =
+exprSexp (ESlice e lo hi incl) =
   node "ESlice" [exprSexp e, exprSexp lo, exprSexp hi, boolStr incl]
 exprSexp (ELetGroup binds body) =
   node "ELetGroup" [slist (map letBindSexp binds), exprSexp body]
 exprSexp (ESection s) = node "ESection" [sectionSexp s]
-exprSexp (EIndex a i _) = node "EIndex" [exprSexp a, exprSexp i]
+exprSexp (EIndex a i) = node "EIndex" [exprSexp a, exprSexp i]
 exprSexp (EAnnot e t) = node "EAnnot" [exprSexp e, tySexp t]
 exprSexp (EHeadAnnot e t) = node "EHeadAnnot" [exprSexp e, tySexp t]
 exprSexp (EBlock stmts) = node "EBlock" (map doStmtSexp stmts)
@@ -521,10 +521,10 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "exprSexp" ((PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EVar "node") (ELit (LString "EArrayLit"))) (EApp (EApp (EVar "map") (EVar "exprSexp")) (EVar "es"))))
 (DFunDef false "exprSexp" ((PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "node") (ELit (LString "ERangeList"))) (EListLit (EApp (EVar "exprSexp") (EVar "lo")) (EApp (EVar "exprSexp") (EVar "hi")) (EApp (EVar "boolStr") (EVar "incl")))))
 (DFunDef false "exprSexp" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "node") (ELit (LString "ERangeArray"))) (EListLit (EApp (EVar "exprSexp") (EVar "lo")) (EApp (EVar "exprSexp") (EVar "hi")) (EApp (EVar "boolStr") (EVar "incl")))))
-(DFunDef false "exprSexp" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "incl") PWild)) (EApp (EApp (EVar "node") (ELit (LString "ESlice"))) (EListLit (EApp (EVar "exprSexp") (EVar "e")) (EApp (EVar "exprSexp") (EVar "lo")) (EApp (EVar "exprSexp") (EVar "hi")) (EApp (EVar "boolStr") (EVar "incl")))))
+(DFunDef false "exprSexp" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "node") (ELit (LString "ESlice"))) (EListLit (EApp (EVar "exprSexp") (EVar "e")) (EApp (EVar "exprSexp") (EVar "lo")) (EApp (EVar "exprSexp") (EVar "hi")) (EApp (EVar "boolStr") (EVar "incl")))))
 (DFunDef false "exprSexp" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "ELetGroup"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "letBindSexp")) (EVar "binds"))) (EApp (EVar "exprSexp") (EVar "body")))))
 (DFunDef false "exprSexp" ((PCon "ESection" (PVar "s"))) (EApp (EApp (EVar "node") (ELit (LString "ESection"))) (EListLit (EApp (EVar "sectionSexp") (EVar "s")))))
-(DFunDef false "exprSexp" ((PCon "EIndex" (PVar "a") (PVar "i") PWild)) (EApp (EApp (EVar "node") (ELit (LString "EIndex"))) (EListLit (EApp (EVar "exprSexp") (EVar "a")) (EApp (EVar "exprSexp") (EVar "i")))))
+(DFunDef false "exprSexp" ((PCon "EIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "node") (ELit (LString "EIndex"))) (EListLit (EApp (EVar "exprSexp") (EVar "a")) (EApp (EVar "exprSexp") (EVar "i")))))
 (DFunDef false "exprSexp" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "EAnnot"))) (EListLit (EApp (EVar "exprSexp") (EVar "e")) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "exprSexp" ((PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "EHeadAnnot"))) (EListLit (EApp (EVar "exprSexp") (EVar "e")) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "exprSexp" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "node") (ELit (LString "EBlock"))) (EApp (EApp (EVar "map") (EVar "doStmtSexp")) (EVar "stmts"))))
@@ -724,10 +724,10 @@ axisSexp (name, dom) = node "axis" [escStr name, escStr dom]
 (DFunDef false "exprSexp" ((PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EVar "node") (ELit (LString "EArrayLit"))) (EApp (EApp (EMethodRef "map") (EVar "exprSexp")) (EVar "es"))))
 (DFunDef false "exprSexp" ((PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "node") (ELit (LString "ERangeList"))) (EListLit (EApp (EVar "exprSexp") (EVar "lo")) (EApp (EVar "exprSexp") (EVar "hi")) (EApp (EVar "boolStr") (EVar "incl")))))
 (DFunDef false "exprSexp" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "node") (ELit (LString "ERangeArray"))) (EListLit (EApp (EVar "exprSexp") (EVar "lo")) (EApp (EVar "exprSexp") (EVar "hi")) (EApp (EVar "boolStr") (EVar "incl")))))
-(DFunDef false "exprSexp" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "incl") PWild)) (EApp (EApp (EVar "node") (ELit (LString "ESlice"))) (EListLit (EApp (EVar "exprSexp") (EVar "e")) (EApp (EVar "exprSexp") (EVar "lo")) (EApp (EVar "exprSexp") (EVar "hi")) (EApp (EVar "boolStr") (EVar "incl")))))
+(DFunDef false "exprSexp" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "node") (ELit (LString "ESlice"))) (EListLit (EApp (EVar "exprSexp") (EVar "e")) (EApp (EVar "exprSexp") (EVar "lo")) (EApp (EVar "exprSexp") (EVar "hi")) (EApp (EVar "boolStr") (EVar "incl")))))
 (DFunDef false "exprSexp" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "ELetGroup"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "letBindSexp")) (EVar "binds"))) (EApp (EVar "exprSexp") (EVar "body")))))
 (DFunDef false "exprSexp" ((PCon "ESection" (PVar "s"))) (EApp (EApp (EVar "node") (ELit (LString "ESection"))) (EListLit (EApp (EVar "sectionSexp") (EVar "s")))))
-(DFunDef false "exprSexp" ((PCon "EIndex" (PVar "a") (PVar "i") PWild)) (EApp (EApp (EVar "node") (ELit (LString "EIndex"))) (EListLit (EApp (EVar "exprSexp") (EVar "a")) (EApp (EVar "exprSexp") (EVar "i")))))
+(DFunDef false "exprSexp" ((PCon "EIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "node") (ELit (LString "EIndex"))) (EListLit (EApp (EVar "exprSexp") (EVar "a")) (EApp (EVar "exprSexp") (EVar "i")))))
 (DFunDef false "exprSexp" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "EAnnot"))) (EListLit (EApp (EVar "exprSexp") (EVar "e")) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "exprSexp" ((PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "EHeadAnnot"))) (EListLit (EApp (EVar "exprSexp") (EVar "e")) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "exprSexp" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "node") (ELit (LString "EBlock"))) (EApp (EApp (EMethodRef "map") (EVar "doStmtSexp")) (EVar "stmts"))))

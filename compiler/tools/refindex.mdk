@@ -542,11 +542,11 @@ walkExpr w scope curLoc (ERangeList lo hi _) =
 walkExpr w scope curLoc (ERangeArray lo hi _) =
   let _ = walkExpr w scope curLoc lo
   walkExpr w scope curLoc hi
-walkExpr w scope curLoc (ESlice e0 lo hi _ _) =
+walkExpr w scope curLoc (ESlice e0 lo hi _) =
   let _ = walkExpr w scope curLoc e0
   let _ = walkExpr w scope curLoc lo
   walkExpr w scope curLoc hi
-walkExpr w scope curLoc (EIndex e0 i _) =
+walkExpr w scope curLoc (EIndex e0 i) =
   let _ = walkExpr w scope curLoc e0
   walkExpr w scope curLoc i
 walkExpr w scope curLoc (EAnnot e0 t) =

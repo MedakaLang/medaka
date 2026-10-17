@@ -1069,7 +1069,7 @@ bracketIndexRest _ _ _ = failP "expected `]` to close the index"
 finishBracketIndex : Expr -> Expr -> Parser Expr
 finishBracketIndex e lo = defer
   advance
-  postfixTail (EIndex e lo (Ref "Array"))
+  postfixTail (EIndex e lo)
 
 -- after a `.`: a field access `.field`, an index `.[i]`, or a slice `.[lo..hi]`
 dotTail : Expr -> Parser Expr
@@ -1082,7 +1082,7 @@ dotFor : Expr -> Token -> Parser Expr
 dotFor e TLBracket = indexOrSlice e
 dotFor e _ = defer
   f <- identNameP
-  postfixTail (EFieldAccess e f (Ref ""))
+  postfixTail (EFieldAccess e f unminted)
 
 indexOrSlice : Expr -> Parser Expr
 indexOrSlice e = defer
@@ -1102,7 +1102,7 @@ sliceHi e lo incl = defer
   advance
   hi <- parseExpr
   expectTok TRBracket
-  postfixTail (ESlice e lo hi incl (Ref "Array"))
+  postfixTail (ESlice e lo hi incl)
 
 -- #77: bound recursion depth so a pathologically deep input fails with a
 -- clean, located diagnostic instead of exhausting the native call stack (a
@@ -1327,7 +1327,7 @@ parseRecordUpdate = defer
   fields <- sepBy1 recordFieldExpr (expectTok TComma)
   optTrailingComma
   expectTok TRBrace
-  deferPure (ERecordUpdate e (map (desugarDottedField e) fields) (Ref ""))
+  deferPure (ERecordUpdate e (map (desugarDottedField e) fields) unminted)
 
 -- a record-update field `path = expr` (dotted path) or a pun `name`
 -- (a dotted-path update field).
@@ -1352,16 +1352,16 @@ desugarDottedField : Expr -> (List String, Expr) -> FieldAssign
 desugarDottedField base (path, value) = match path
   [field] => FieldAssign field value
   field :: rest =>
-    FieldAssign field (dottedGo (EFieldAccess base field (Ref "")) rest value)
+    FieldAssign field (dottedGo (EFieldAccess base field unminted) rest value)
   [] => FieldAssign "_" value
 
 dottedGo : Expr -> List String -> Expr -> Expr
-dottedGo cur [f] value = ERecordUpdate cur [FieldAssign f value] (Ref "")
+dottedGo cur [f] value = ERecordUpdate cur [FieldAssign f value] unminted
 dottedGo cur (f :: fs) value =
   ERecordUpdate
     cur
-    [FieldAssign f (dottedGo (EFieldAccess cur f (Ref "")) fs value)]
-    (Ref "")
+    [FieldAssign f (dottedGo (EFieldAccess cur f unminted) fs value)]
+    unminted
 dottedGo cur [] value = value
 
 -- interpolated string: INTERP_OPEN <expr> (INTERP_MID <expr>)* INTERP_END,

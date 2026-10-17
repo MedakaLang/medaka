@@ -1,5 +1,5 @@
 # META
-source_lines=2017
+source_lines=2013
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -1802,21 +1802,18 @@ renameScoped rm bound (EBinOp op l r dr) =
 renameScoped rm bound (EUnOp op x dr) = EUnOp op (renameScoped rm bound x) dr
 renameScoped rm bound (EInfix op l r) =
   EInfix op (renameScoped rm bound l) (renameScoped rm bound r)
--- THE RECORD-NAME CELL IS NOT RENAMED HERE, AND THAT IS THE POINT.
--- `typecheck.inferFieldAccess` stamps this `Ref` with the resolved record's
--- OWNER-QUALIFIED name (`stampedRecordHead`, derived from the record's own declaring
+-- The record-head site id is passed through, not renamed.
+-- `typecheck.inferFieldAccess` publishes under this id the resolved record's
+-- owner-qualified name (`stampedRecordHead`, derived from the record's own declaring
 -- module), which is already the spelling this pass gives that record's `DData`.  A
--- `renameDefName rm !r` on top would qualify it a SECOND time whenever the importing
+-- `renameDefName` on top would qualify it a second time whenever the importing
 -- unit's map happens to hold the stamped string as a key -- which it does exactly when
--- a record's SOURCE name already carries its own module's prefix (`data Mm__Cfg`
+-- a record's source name already carries its own module's prefix (`data Mm__Cfg`
 -- beside `data Cfg` in module `Mm`): measured, the two collapsed onto one head and the
 -- built binary projected the wrong slot at exit 0, on a program the parent commit
 -- refused outright.  One qualifier, at the stamp.
--- `EIndex`/`ESlice` keep their cells untouched for a different reason: both are
--- desugared to `index`/`slice` calls before typecheck and nothing stamps or reads
--- those cells (see `frontend/ast.mdk`).
-renameScoped rm bound (EFieldAccess e0 n r) =
-  EFieldAccess (renameScoped rm bound e0) n r
+renameScoped rm bound (EFieldAccess e0 n ev) =
+  EFieldAccess (renameScoped rm bound e0) n ev
 renameScoped rm bound (ETuple es) = ETuple (map (renameScoped rm bound) es)
 renameScoped rm bound (EListLit es) = EListLit (map (renameScoped rm bound) es)
 renameScoped rm bound (EArrayLit es) =
@@ -1825,24 +1822,23 @@ renameScoped rm bound (ERangeList lo hi i) =
   ERangeList (renameScoped rm bound lo) (renameScoped rm bound hi) i
 renameScoped rm bound (ERangeArray lo hi i) =
   ERangeArray (renameScoped rm bound lo) (renameScoped rm bound hi) i
-renameScoped rm bound (ESlice e0 lo hi i r) =
+renameScoped rm bound (ESlice e0 lo hi i) =
   ESlice
     (renameScoped rm bound e0)
     (renameScoped rm bound lo)
     (renameScoped rm bound hi)
     i
-    r
-renameScoped rm bound (EIndex e0 i r) =
-  EIndex (renameScoped rm bound e0) (renameScoped rm bound i) r
+renameScoped rm bound (EIndex e0 i) =
+  EIndex (renameScoped rm bound e0) (renameScoped rm bound i)
 renameScoped rm bound (EAnnot e0 t) = EAnnot (renameScoped rm bound e0) t
 renameScoped rm bound (EHeadAnnot e0 t) =
   EHeadAnnot (renameScoped rm bound e0) t
 renameScoped rm bound (ERecordCreate n fs) =
   ERecordCreate (renameDefName rm n) (map (renameField rm bound) fs)
--- the receiver's resolved RECORD name, stamped by `inferRecordUpdate` and left alone
--- for the same reason -- see `EFieldAccess` above.
-renameScoped rm bound (ERecordUpdate e0 fs r) =
-  ERecordUpdate (renameScoped rm bound e0) (map (renameField rm bound) fs) r
+-- the receiver's resolved record name, published by `inferRecordUpdate` under this id
+-- and passed through for the same reason -- see `EFieldAccess` above.
+renameScoped rm bound (ERecordUpdate e0 fs ev) =
+  ERecordUpdate (renameScoped rm bound e0) (map (renameField rm bound) fs) ev
 renameScoped rm bound (EVariantUpdate c e0 fs) =
   EVariantUpdate
     (renameDefName rm c)
@@ -2370,18 +2366,18 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "dr"))) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "l"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "r"))) (EVar "dr")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EUnOp" (PVar "op") (PVar "x") (PVar "dr"))) (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "x"))) (EVar "dr")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EInfix" (PVar "op") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "EInfix") (EVar "op")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "l"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "r"))))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EFieldAccess" (PVar "e0") (PVar "n") (PVar "r"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EVar "n")) (EVar "r")))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EFieldAccess" (PVar "e0") (PVar "n") (PVar "ev"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EVar "n")) (EVar "ev")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ETuple" (PVar "es"))) (EApp (EVar "ETuple") (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EListLit" (PVar "es"))) (EApp (EVar "EListLit") (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "lo"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "hi"))) (EVar "i")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "lo"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "hi"))) (EVar "i")))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "lo"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "hi"))) (EVar "i")) (EVar "r")))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EIndex" (PVar "e0") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "i"))) (EVar "r")))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "lo"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "hi"))) (EVar "i")))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EIndex" (PVar "e0") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "i"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameField") (EVar "rm")) (EVar "bound"))) (EVar "fs"))))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ERecordUpdate" (PVar "e0") (PVar "fs") (PVar "r"))) (EApp (EApp (EApp (EVar "ERecordUpdate") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameField") (EVar "rm")) (EVar "bound"))) (EVar "fs"))) (EVar "r")))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ERecordUpdate" (PVar "e0") (PVar "fs") (PVar "ev"))) (EApp (EApp (EApp (EVar "ERecordUpdate") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameField") (EVar "rm")) (EVar "bound"))) (EVar "fs"))) (EVar "ev")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EVariantUpdate" (PVar "c") (PVar "e0") (PVar "fs"))) (EApp (EApp (EApp (EVar "EVariantUpdate") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "c"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameField") (EVar "rm")) (EVar "bound"))) (EVar "fs"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameInterp") (EVar "rm")) (EVar "bound"))) (EVar "parts"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameGuardArm") (EVar "rm")) (EVar "bound"))) (EVar "arms"))))
@@ -2807,18 +2803,18 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "dr"))) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "l"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "r"))) (EVar "dr")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EUnOp" (PVar "op") (PVar "x") (PVar "dr"))) (EApp (EApp (EApp (EVar "EUnOp") (EVar "op")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "x"))) (EVar "dr")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EInfix" (PVar "op") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "EInfix") (EVar "op")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "l"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "r"))))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EFieldAccess" (PVar "e0") (PVar "n") (PVar "r"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EVar "n")) (EVar "r")))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EFieldAccess" (PVar "e0") (PVar "n") (PVar "ev"))) (EApp (EApp (EApp (EVar "EFieldAccess") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EVar "n")) (EVar "ev")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ETuple" (PVar "es"))) (EApp (EVar "ETuple") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EListLit" (PVar "es"))) (EApp (EVar "EListLit") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "lo"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "hi"))) (EVar "i")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "lo"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "hi"))) (EVar "i")))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "lo"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "hi"))) (EVar "i")) (EVar "r")))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EIndex" (PVar "e0") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "i"))) (EVar "r")))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "lo"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "hi"))) (EVar "i")))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EIndex" (PVar "e0") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "i"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameField") (EVar "rm")) (EVar "bound"))) (EVar "fs"))))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ERecordUpdate" (PVar "e0") (PVar "fs") (PVar "r"))) (EApp (EApp (EApp (EVar "ERecordUpdate") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameField") (EVar "rm")) (EVar "bound"))) (EVar "fs"))) (EVar "r")))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ERecordUpdate" (PVar "e0") (PVar "fs") (PVar "ev"))) (EApp (EApp (EApp (EVar "ERecordUpdate") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameField") (EVar "rm")) (EVar "bound"))) (EVar "fs"))) (EVar "ev")))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EVariantUpdate" (PVar "c") (PVar "e0") (PVar "fs"))) (EApp (EApp (EApp (EVar "EVariantUpdate") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "c"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameField") (EVar "rm")) (EVar "bound"))) (EVar "fs"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameInterp") (EVar "rm")) (EVar "bound"))) (EVar "parts"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameGuardArm") (EVar "rm")) (EVar "bound"))) (EVar "arms"))))

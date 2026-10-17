@@ -591,14 +591,14 @@ exprSpan (EListLit es) = spansOf exprSpan es
 exprSpan (EArrayLit es) = spansOf exprSpan es
 exprSpan (ERangeList lo hi _) = mergeSpan (exprSpan lo) (exprSpan hi)
 exprSpan (ERangeArray lo hi _) = mergeSpan (exprSpan lo) (exprSpan hi)
-exprSpan (ESlice e lo hi _ _) =
+exprSpan (ESlice e lo hi _) =
   mergeSpan (exprSpan e) (mergeSpan (exprSpan lo) (exprSpan hi))
 exprSpan (ELetGroup binds body) =
   mergeSpan (spansOf letBindSpan binds) (exprSpan body)
 exprSpan (ESection (SecRight _ e)) = exprSpan e
 exprSpan (ESection (SecLeft e _)) = exprSpan e
 exprSpan (ESection _) = noSpan
-exprSpan (EIndex e i _) = mergeSpan (exprSpan e) (exprSpan i)
+exprSpan (EIndex e i) = mergeSpan (exprSpan e) (exprSpan i)
 exprSpan (EAnnot e _) = exprSpan e
 exprSpan (EHeadAnnot e _) = exprSpan e
 exprSpan (EBlock stmts) = spansOf stmtSpan stmts
@@ -1232,9 +1232,9 @@ exprPrec (ERecordUpdate _ _ _) = precAtom
 exprPrec (EVariantUpdate _ _ _) = precAtom
 exprPrec (ERangeList _ _ _) = precAtom
 exprPrec (ERangeArray _ _ _) = precAtom
-exprPrec (ESlice _ _ _ _ _) = precAtom
+exprPrec (ESlice _ _ _ _) = precAtom
 exprPrec (EFieldAccess _ _ _) = precPostfix
-exprPrec (EIndex _ _ _) = precPostfix
+exprPrec (EIndex _ _) = precPostfix
 exprPrec (EUnOp _ _ _) = precUnary
 exprPrec (EApp _ _) = precApp
 exprPrec (EInfix _ _ _) = precInfix
@@ -1425,7 +1425,7 @@ printExprRaw loc (ESetLit n es) =
       (bracedPieces "{" (literalForced loc es) (map exprPiece es)))
 printExprRaw loc (ETuple es) =
   delimitedPieces "(" ")" (literalForced loc es) (map exprPiece es)
-printExprRaw _ (EIndex e i _) =
+printExprRaw _ (EIndex e i) =
   Cat
     (printExpr precPostfix e)
     (Cat (text "[") (Cat (printExpr precTop i) (text "]")))
@@ -1472,7 +1472,7 @@ printExprRaw _ (ERangeArray lo hi incl) =
       (Cat
         (text (if incl then "..=" else ".."))
         (Cat (printExpr precTop hi) (text "|]"))))
-printExprRaw _ (ESlice e lo hi incl _) =
+printExprRaw _ (ESlice e lo hi incl) =
   Cat
     (printExpr precPostfix e)
     (Cat
@@ -2908,12 +2908,12 @@ effAxesDoc axes =
 (DFunDef false "exprSpan" ((PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EVar "spansOf") (EVar "exprSpan")) (EVar "es")))
 (DFunDef false "exprSpan" ((PCon "ERangeList" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "mergeSpan") (EApp (EVar "exprSpan") (EVar "lo"))) (EApp (EVar "exprSpan") (EVar "hi"))))
 (DFunDef false "exprSpan" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "mergeSpan") (EApp (EVar "exprSpan") (EVar "lo"))) (EApp (EVar "exprSpan") (EVar "hi"))))
-(DFunDef false "exprSpan" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") PWild PWild)) (EApp (EApp (EVar "mergeSpan") (EApp (EVar "exprSpan") (EVar "e"))) (EApp (EApp (EVar "mergeSpan") (EApp (EVar "exprSpan") (EVar "lo"))) (EApp (EVar "exprSpan") (EVar "hi")))))
+(DFunDef false "exprSpan" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "mergeSpan") (EApp (EVar "exprSpan") (EVar "e"))) (EApp (EApp (EVar "mergeSpan") (EApp (EVar "exprSpan") (EVar "lo"))) (EApp (EVar "exprSpan") (EVar "hi")))))
 (DFunDef false "exprSpan" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "mergeSpan") (EApp (EApp (EVar "spansOf") (EVar "letBindSpan")) (EVar "binds"))) (EApp (EVar "exprSpan") (EVar "body"))))
 (DFunDef false "exprSpan" ((PCon "ESection" (PCon "SecRight" PWild (PVar "e")))) (EApp (EVar "exprSpan") (EVar "e")))
 (DFunDef false "exprSpan" ((PCon "ESection" (PCon "SecLeft" (PVar "e") PWild))) (EApp (EVar "exprSpan") (EVar "e")))
 (DFunDef false "exprSpan" ((PCon "ESection" PWild)) (EVar "noSpan"))
-(DFunDef false "exprSpan" ((PCon "EIndex" (PVar "e") (PVar "i") PWild)) (EApp (EApp (EVar "mergeSpan") (EApp (EVar "exprSpan") (EVar "e"))) (EApp (EVar "exprSpan") (EVar "i"))))
+(DFunDef false "exprSpan" ((PCon "EIndex" (PVar "e") (PVar "i"))) (EApp (EApp (EVar "mergeSpan") (EApp (EVar "exprSpan") (EVar "e"))) (EApp (EVar "exprSpan") (EVar "i"))))
 (DFunDef false "exprSpan" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "exprSpan") (EVar "e")))
 (DFunDef false "exprSpan" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "exprSpan") (EVar "e")))
 (DFunDef false "exprSpan" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "spansOf") (EVar "stmtSpan")) (EVar "stmts")))
@@ -3203,9 +3203,9 @@ effAxesDoc axes =
 (DFunDef false "exprPrec" ((PCon "EVariantUpdate" PWild PWild PWild)) (EVar "precAtom"))
 (DFunDef false "exprPrec" ((PCon "ERangeList" PWild PWild PWild)) (EVar "precAtom"))
 (DFunDef false "exprPrec" ((PCon "ERangeArray" PWild PWild PWild)) (EVar "precAtom"))
-(DFunDef false "exprPrec" ((PCon "ESlice" PWild PWild PWild PWild PWild)) (EVar "precAtom"))
+(DFunDef false "exprPrec" ((PCon "ESlice" PWild PWild PWild PWild)) (EVar "precAtom"))
 (DFunDef false "exprPrec" ((PCon "EFieldAccess" PWild PWild PWild)) (EVar "precPostfix"))
-(DFunDef false "exprPrec" ((PCon "EIndex" PWild PWild PWild)) (EVar "precPostfix"))
+(DFunDef false "exprPrec" ((PCon "EIndex" PWild PWild)) (EVar "precPostfix"))
 (DFunDef false "exprPrec" ((PCon "EUnOp" PWild PWild PWild)) (EVar "precUnary"))
 (DFunDef false "exprPrec" ((PCon "EApp" PWild PWild)) (EVar "precApp"))
 (DFunDef false "exprPrec" ((PCon "EInfix" PWild PWild PWild)) (EVar "precInfix"))
@@ -3281,7 +3281,7 @@ effAxesDoc axes =
 (DFunDef false "printExprRaw" ((PVar "loc") (PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EApp (EApp (EVar "bracedPieces") (ELit (LString "{"))) (EApp (EApp (EVar "kvForced") (EVar "loc")) (EVar "kvs"))) (EApp (EApp (EVar "map") (EVar "mapKvPiece")) (EVar "kvs"))))))
 (DFunDef false "printExprRaw" ((PVar "loc") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EApp (EApp (EVar "bracedPieces") (ELit (LString "{"))) (EApp (EApp (EVar "literalForced") (EVar "loc")) (EVar "es"))) (EApp (EApp (EVar "map") (EVar "exprPiece")) (EVar "es"))))))
 (DFunDef false "printExprRaw" ((PVar "loc") (PCon "ETuple" (PVar "es"))) (EApp (EApp (EApp (EApp (EVar "delimitedPieces") (ELit (LString "("))) (ELit (LString ")"))) (EApp (EApp (EVar "literalForced") (EVar "loc")) (EVar "es"))) (EApp (EApp (EVar "map") (EVar "exprPiece")) (EVar "es"))))
-(DFunDef false "printExprRaw" (PWild (PCon "EIndex" (PVar "e") (PVar "i") PWild)) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "[")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "i"))) (EApp (EVar "text") (ELit (LString "]")))))))
+(DFunDef false "printExprRaw" (PWild (PCon "EIndex" (PVar "e") (PVar "i"))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "[")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "i"))) (EApp (EVar "text") (ELit (LString "]")))))))
 (DFunDef false "printExprRaw" (PWild (PCon "EMatch" (PVar "sc") (PVar "arms"))) (EApp (EApp (EVar "printMatch") (EVar "sc")) (EVar "arms")))
 (DFunDef false "printExprRaw" (PWild (PCon "EGuards" (PVar "arms"))) (EApp (EVar "printGuardArms") (EVar "arms")))
 (DFunDef false "printExprRaw" (PWild (PCon "ESection" (PCon "SecBare" (PVar "op")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "op"))) (EApp (EVar "text") (ELit (LString ")"))))))
@@ -3296,7 +3296,7 @@ effAxesDoc axes =
 (DFunDef false "printExprRaw" (PWild (PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "\"")))) (EApp (EApp (EVar "Cat") (EApp (EVar "concatD") (EApp (EApp (EVar "map") (EVar "interpPartDoc")) (EVar "parts")))) (EApp (EVar "text") (ELit (LString "\""))))))
 (DFunDef false "printExprRaw" (PWild (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "[")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "lo"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EIf (EVar "incl") (ELit (LString "..=")) (ELit (LString ".."))))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "hi"))) (EApp (EVar "text") (ELit (LString "]"))))))))
 (DFunDef false "printExprRaw" (PWild (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "[|")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "lo"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EIf (EVar "incl") (ELit (LString "..=")) (ELit (LString ".."))))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "hi"))) (EApp (EVar "text") (ELit (LString "|]"))))))))
-(DFunDef false "printExprRaw" (PWild (PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "incl") PWild)) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString ".[")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "lo"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EIf (EVar "incl") (ELit (LString "..=")) (ELit (LString ".."))))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "hi"))) (EApp (EVar "text") (ELit (LString "]")))))))))
+(DFunDef false "printExprRaw" (PWild (PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString ".[")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "lo"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EIf (EVar "incl") (ELit (LString "..=")) (ELit (LString ".."))))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "hi"))) (EApp (EVar "text") (ELit (LString "]")))))))))
 (DFunDef false "printExprRaw" (PWild (PCon "EVarAt" (PVar "n") PWild)) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" (PWild (PCon "EMethodAt" (PVar "n") PWild PWild)) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" (PWild (PCon "EDictAt" (PVar "n") PWild)) (EApp (EVar "text") (EVar "n")))
@@ -3862,12 +3862,12 @@ effAxesDoc axes =
 (DFunDef false "exprSpan" ((PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EVar "spansOf") (EVar "exprSpan")) (EVar "es")))
 (DFunDef false "exprSpan" ((PCon "ERangeList" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "mergeSpan") (EApp (EVar "exprSpan") (EVar "lo"))) (EApp (EVar "exprSpan") (EVar "hi"))))
 (DFunDef false "exprSpan" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "mergeSpan") (EApp (EVar "exprSpan") (EVar "lo"))) (EApp (EVar "exprSpan") (EVar "hi"))))
-(DFunDef false "exprSpan" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") PWild PWild)) (EApp (EApp (EVar "mergeSpan") (EApp (EVar "exprSpan") (EVar "e"))) (EApp (EApp (EVar "mergeSpan") (EApp (EVar "exprSpan") (EVar "lo"))) (EApp (EVar "exprSpan") (EVar "hi")))))
+(DFunDef false "exprSpan" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "mergeSpan") (EApp (EVar "exprSpan") (EVar "e"))) (EApp (EApp (EVar "mergeSpan") (EApp (EVar "exprSpan") (EVar "lo"))) (EApp (EVar "exprSpan") (EVar "hi")))))
 (DFunDef false "exprSpan" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "mergeSpan") (EApp (EApp (EVar "spansOf") (EVar "letBindSpan")) (EVar "binds"))) (EApp (EVar "exprSpan") (EVar "body"))))
 (DFunDef false "exprSpan" ((PCon "ESection" (PCon "SecRight" PWild (PVar "e")))) (EApp (EVar "exprSpan") (EVar "e")))
 (DFunDef false "exprSpan" ((PCon "ESection" (PCon "SecLeft" (PVar "e") PWild))) (EApp (EVar "exprSpan") (EVar "e")))
 (DFunDef false "exprSpan" ((PCon "ESection" PWild)) (EVar "noSpan"))
-(DFunDef false "exprSpan" ((PCon "EIndex" (PVar "e") (PVar "i") PWild)) (EApp (EApp (EVar "mergeSpan") (EApp (EVar "exprSpan") (EVar "e"))) (EApp (EVar "exprSpan") (EVar "i"))))
+(DFunDef false "exprSpan" ((PCon "EIndex" (PVar "e") (PVar "i"))) (EApp (EApp (EVar "mergeSpan") (EApp (EVar "exprSpan") (EVar "e"))) (EApp (EVar "exprSpan") (EVar "i"))))
 (DFunDef false "exprSpan" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "exprSpan") (EVar "e")))
 (DFunDef false "exprSpan" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "exprSpan") (EVar "e")))
 (DFunDef false "exprSpan" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "spansOf") (EVar "stmtSpan")) (EVar "stmts")))
@@ -4157,9 +4157,9 @@ effAxesDoc axes =
 (DFunDef false "exprPrec" ((PCon "EVariantUpdate" PWild PWild PWild)) (EVar "precAtom"))
 (DFunDef false "exprPrec" ((PCon "ERangeList" PWild PWild PWild)) (EVar "precAtom"))
 (DFunDef false "exprPrec" ((PCon "ERangeArray" PWild PWild PWild)) (EVar "precAtom"))
-(DFunDef false "exprPrec" ((PCon "ESlice" PWild PWild PWild PWild PWild)) (EVar "precAtom"))
+(DFunDef false "exprPrec" ((PCon "ESlice" PWild PWild PWild PWild)) (EVar "precAtom"))
 (DFunDef false "exprPrec" ((PCon "EFieldAccess" PWild PWild PWild)) (EVar "precPostfix"))
-(DFunDef false "exprPrec" ((PCon "EIndex" PWild PWild PWild)) (EVar "precPostfix"))
+(DFunDef false "exprPrec" ((PCon "EIndex" PWild PWild)) (EVar "precPostfix"))
 (DFunDef false "exprPrec" ((PCon "EUnOp" PWild PWild PWild)) (EVar "precUnary"))
 (DFunDef false "exprPrec" ((PCon "EApp" PWild PWild)) (EVar "precApp"))
 (DFunDef false "exprPrec" ((PCon "EInfix" PWild PWild PWild)) (EVar "precInfix"))
@@ -4235,7 +4235,7 @@ effAxesDoc axes =
 (DFunDef false "printExprRaw" ((PVar "loc") (PCon "EMapLit" (PVar "n") (PVar "kvs"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EApp (EApp (EVar "bracedPieces") (ELit (LString "{"))) (EApp (EApp (EVar "kvForced") (EVar "loc")) (EVar "kvs"))) (EApp (EApp (EMethodRef "map") (EVar "mapKvPiece")) (EVar "kvs"))))))
 (DFunDef false "printExprRaw" ((PVar "loc") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EApp (EApp (EVar "bracedPieces") (ELit (LString "{"))) (EApp (EApp (EVar "literalForced") (EVar "loc")) (EVar "es"))) (EApp (EApp (EMethodRef "map") (EVar "exprPiece")) (EVar "es"))))))
 (DFunDef false "printExprRaw" ((PVar "loc") (PCon "ETuple" (PVar "es"))) (EApp (EApp (EApp (EApp (EVar "delimitedPieces") (ELit (LString "("))) (ELit (LString ")"))) (EApp (EApp (EVar "literalForced") (EVar "loc")) (EVar "es"))) (EApp (EApp (EMethodRef "map") (EVar "exprPiece")) (EVar "es"))))
-(DFunDef false "printExprRaw" (PWild (PCon "EIndex" (PVar "e") (PVar "i") PWild)) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "[")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "i"))) (EApp (EVar "text") (ELit (LString "]")))))))
+(DFunDef false "printExprRaw" (PWild (PCon "EIndex" (PVar "e") (PVar "i"))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "[")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "i"))) (EApp (EVar "text") (ELit (LString "]")))))))
 (DFunDef false "printExprRaw" (PWild (PCon "EMatch" (PVar "sc") (PVar "arms"))) (EApp (EApp (EVar "printMatch") (EVar "sc")) (EVar "arms")))
 (DFunDef false "printExprRaw" (PWild (PCon "EGuards" (PVar "arms"))) (EApp (EVar "printGuardArms") (EVar "arms")))
 (DFunDef false "printExprRaw" (PWild (PCon "ESection" (PCon "SecBare" (PVar "op")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "op"))) (EApp (EVar "text") (ELit (LString ")"))))))
@@ -4250,7 +4250,7 @@ effAxesDoc axes =
 (DFunDef false "printExprRaw" (PWild (PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "\"")))) (EApp (EApp (EVar "Cat") (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (EVar "interpPartDoc")) (EVar "parts")))) (EApp (EVar "text") (ELit (LString "\""))))))
 (DFunDef false "printExprRaw" (PWild (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "[")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "lo"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EIf (EVar "incl") (ELit (LString "..=")) (ELit (LString ".."))))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "hi"))) (EApp (EVar "text") (ELit (LString "]"))))))))
 (DFunDef false "printExprRaw" (PWild (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "[|")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "lo"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EIf (EVar "incl") (ELit (LString "..=")) (ELit (LString ".."))))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "hi"))) (EApp (EVar "text") (ELit (LString "|]"))))))))
-(DFunDef false "printExprRaw" (PWild (PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "incl") PWild)) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString ".[")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "lo"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EIf (EVar "incl") (ELit (LString "..=")) (ELit (LString ".."))))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "hi"))) (EApp (EVar "text") (ELit (LString "]")))))))))
+(DFunDef false "printExprRaw" (PWild (PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precPostfix")) (EVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString ".[")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "lo"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EIf (EVar "incl") (ELit (LString "..=")) (ELit (LString ".."))))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "hi"))) (EApp (EVar "text") (ELit (LString "]")))))))))
 (DFunDef false "printExprRaw" (PWild (PCon "EVarAt" (PVar "n") PWild)) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" (PWild (PCon "EMethodAt" (PVar "n") PWild PWild)) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" (PWild (PCon "EDictAt" (PVar "n") PWild)) (EApp (EVar "text") (EVar "n")))

@@ -1358,9 +1358,11 @@ intMinLiteralHelp =
 -- half.  The module half is a TRIPWIRE: it is what lets that lookup panic instead of
 -- answering when an entry comes back stamped by a module the node did not ask for.
 --
--- The tripwire cannot fire for today's sole consumer, because an `EDictAt` carries
--- the very id `freshEvId` stamped into its goal, so the comparison is a tautology at
--- every live site.  It is still not dead weight, and a reader must not conclude from
+-- The tripwire cannot fire for today's readers (`evSiteRoute`, `evSiteLit`,
+-- `evSiteHead`, `evMethodRoutes` and `evDictRoutes` in `types/route_key.mdk`),
+-- because each reads with the id its own node carries, the very id `freshEvId`
+-- stamped into the goal, so the comparison is a tautology at every live site.  It is
+-- still not dead weight, and a reader must not conclude from
 -- the ordinals' present uniqueness that the module half can be dropped: a memo layer
 -- that swapped a whole cell rather than rewinding it, or any change that made
 -- ordinals per-module, resurrects a stale or colliding ordinal — and a per-module
@@ -1556,34 +1558,31 @@ public export data Expr =
   -- (`unopMethod "!"` = None).  sexp/astdump ignore the id.
   | EUnOp String Expr EvId
   | EInfix String Expr Expr
-  -- field access `r.f`.  The trailing `Ref String` is the resolved record head
-  -- (stamped by typecheck's inferFieldAccess; "" = unknown).  The emitter reads
-  -- it to pick the record by (recHead, label) so two records sharing a field
-  -- name at different indices resolve to the correct offset.  The head is the
-  -- record's OWNER-QUALIFIED name, derived at the stamp from the declaring
-  -- module the selected record carries in its own result type (#2839,
-  -- `stampedRecordHead` in `types/typecheck.mdk`), so its cross-module identity
-  -- does not depend on the mangler having run before elaboration.  Same
-  -- Ref-stamp idiom as EIndex/ESlice; sexp/printer ignore the ref.
-  | EFieldAccess Expr String (Ref String)
+  -- field access `r.f`.  The trailing `EvId` names the access's site: the parser
+  -- carries `unminted` and the typechecker's mark pass mints it.  Inference
+  -- publishes the resolved record head under that id (`evSiteHead`,
+  -- `types/route_key.mdk`); "" means unknown, and an `unminted` site answers "".
+  -- The emitter reads the head to pick the record by (recHead, label), so two
+  -- records sharing a field name at different indices resolve to the correct
+  -- offset.  The head is the record's owner-qualified name, derived at the stamp
+  -- from the declaring module the selected record carries in its own result type
+  -- (`stampedRecordHead` in `types/typecheck.mdk`), so its cross-module identity
+  -- does not depend on the mangler having run before elaboration.  sexp and the
+  -- printer ignore the id.
+  | EFieldAccess Expr String EvId
   | ETuple (List Expr)
   | EListLit (List Expr)
   | EArrayLit (List Expr)
   | ERangeList Expr Expr Bool
   | ERangeArray Expr Expr Bool
-  -- index/slice sugar.  `a.[lo..hi]` / `a.[lo..=hi]`; the trailing `Bool` is the
-  -- inclusive flag.  The trailing `Ref String` is now VESTIGIAL: ESlice is
-  -- desugared to a `slice` method call (the `Slice` interface, #670) BEFORE
-  -- resolve/typecheck/lower, so nothing stamps or reads the ref any more (the old
-  -- `inferSlice`/`indexKind` typecheck arm and the static-tag `CStringSlice`/
-  -- `CListSlice`/`CSlice` lowering are dead — tracked for removal in #700).  The
-  -- field is kept only so the node's AST/printer shape is unchanged and
-  -- `.[lo..hi]` round-trips; sexp/printer ignore the ref.  (`EIndex`'s ref is
-  -- likewise vestigial — it desugars to `index`.)
-  | ESlice Expr Expr Expr Bool (Ref String)
+  -- index/slice sugar.  `a.[i]` is `EIndex`; `a.[lo..hi]` / `a.[lo..=hi]` is
+  -- `ESlice`, whose trailing `Bool` is the inclusive flag.  `rewriteSugar`
+  -- (`frontend/desugar.mdk`) rewrites both to `index` / `slice` method calls, so
+  -- no stage after desugar expects either node.
+  | ESlice Expr Expr Expr Bool
   | ELetGroup (List LetBind) Expr
   | ESection Section
-  | EIndex Expr Expr (Ref String)
+  | EIndex Expr Expr
   | EAnnot Expr Ty
   -- Head-pinned type annotation (`e :~ T`).  The parser never produces this, but
   -- desugar's container-literal lowering does: `Map { … }`/`Set { … }` become
@@ -1599,15 +1598,14 @@ public export data Expr =
   | EStringInterp (List InterpPart)
   | EGuards (List GuardArm)
   | ERecordCreate String (List FieldAssign)
-  -- functional record update `{ base | f = v … }`.  The trailing `Ref String` is
-  -- the resolved record head of the RECEIVER (stamped by typecheck's
-  -- inferRecordUpdate; "" = unknown), owner-qualified and read exactly as
-  -- EFieldAccess carries it — and
-  -- for the same reason: two records sharing a field name at DIFFERENT slot
-  -- indices are indistinguishable from the field label alone, so an emitter that
-  -- guesses the record from the first update label writes the wrong slot (bug
-  -- #38, a silent miscompile on both backends).  sexp/printer ignore the ref.
-  | ERecordUpdate Expr (List FieldAssign) (Ref String)
+  -- functional record update `{ base | f = v … }`.  The trailing `EvId` names
+  -- the site whose published head is the resolved record head of the receiver
+  -- (stamped by inferRecordUpdate; "" = unknown), owner-qualified and read exactly
+  -- as EFieldAccess carries it, for the same reason: two records sharing a field
+  -- name at different slot indices are indistinguishable from the field label
+  -- alone, so an emitter that guesses the record from the first update label
+  -- writes the wrong slot.  sexp and the printer ignore the id.
+  | ERecordUpdate Expr (List FieldAssign) EvId
   | EVariantUpdate String Expr (List FieldAssign)
   | EMapLit String (List (Expr, Expr))
   | ESetLit String (List Expr)
@@ -2535,8 +2533,8 @@ mapFunClausesB f ((FunClause ps e) :: rest) =
 -- constructor-for-constructor (kept in lockstep with the AST — a new Expr node
 -- there makes THIS match non-exhaustive — a WARNING at exit 0, see the section
 -- header above; NOT a build error), but threads the
--- change flag purely.  Site fields, the cells of EFieldAccess/ESlice/EIndex/
--- ERecordUpdate and the ids of EBinOp/EUnOp/ENumLit/EWideLit/EMethodAt/EDictAt, are
+-- change flag purely.  Site fields and the ids of
+-- EBinOp/EUnOp/ENumLit/EWideLit/EFieldAccess/ERecordUpdate/EMethodAt/EDictAt, are
 -- carried through unchanged.
 export
 mapTyInExpr : (Ty -> (Ty, Bool)) -> Expr -> (Expr, Bool)
@@ -2593,11 +2591,11 @@ mapTyInExpr f (ERangeArray lo hi incl) =
   let (lo2, c1) = mapTyInExpr f lo
   let (hi2, c2) = mapTyInExpr f hi
   (ERangeArray lo2 hi2 incl, c1 || c2)
-mapTyInExpr f (ESlice e0 lo hi incl r) =
+mapTyInExpr f (ESlice e0 lo hi incl) =
   let (e0b, c1) = mapTyInExpr f e0
   let (lo2, c2) = mapTyInExpr f lo
   let (hi2, c3) = mapTyInExpr f hi
-  (ESlice e0b lo2 hi2 incl r, c1 || c2 || c3)
+  (ESlice e0b lo2 hi2 incl, c1 || c2 || c3)
 mapTyInExpr f (ELetGroup binds e2) =
   let (bs2, c1) = mapLetBindsB f binds
   let (e2b, c2) = mapTyInExpr f e2
@@ -2609,10 +2607,10 @@ mapTyInExpr f (ESection (SecRight op e0)) =
 mapTyInExpr f (ESection (SecLeft e0 op)) =
   let (e0b, c) = mapTyInExpr f e0
   (ESection (SecLeft e0b op), c)
-mapTyInExpr f (EIndex e0 i r) =
+mapTyInExpr f (EIndex e0 i) =
   let (e0b, c1) = mapTyInExpr f e0
   let (i2, c2) = mapTyInExpr f i
-  (EIndex e0b i2 r, c1 || c2)
+  (EIndex e0b i2, c1 || c2)
 mapTyInExpr f (EAnnot e0 t) =
   let (e0b, c1) = mapTyInExpr f e0
   let (t2, c2) = mapTyFull f t
