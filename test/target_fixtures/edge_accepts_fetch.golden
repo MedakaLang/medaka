@@ -1,0 +1,6 @@
+exit=0
+--- stdout
+get : (url : String) -> <Net url> Result String String
+main : <Net "https://example.com/ok", Stdout> Unit
+-- <fixtures>/fetch_reached.mdk: ok (2 declaration(s) checked, 0 errors)
+--- stderr

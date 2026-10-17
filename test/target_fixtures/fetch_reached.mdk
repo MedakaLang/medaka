@@ -1,0 +1,9 @@
+-- `main` fetches a page through a helper: `main → get → fetchText`. The edge
+-- grants `Net` and serves `fetchText`, so `wasmgc/edge` admits it; `llvm/native-posix`
+-- and `eval/run` refuse it as an unprovided built-in, with the via-chain.
+get : (url : String) -> <Net url> Result String String
+get url = fetchText url
+
+main = match get "https://example.com/ok"
+  Ok body => println body
+  Err e => println e
