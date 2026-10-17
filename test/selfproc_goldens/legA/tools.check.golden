@@ -1,5 +1,5 @@
 checkHasErrors : String -> String -> String -> Bool
-checkModulesReport : String -> List (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> String
+checkModulesReport : String -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> String
 cleanReport : String -> String -> List Decl -> List Decl -> List Decl -> List Decl -> String
 entryExhaust : List Decl -> List Decl -> List (String, List Decl) -> String
 entryExhaustGo : List Decl -> List (String, List Decl) -> List (String, List Decl) -> String

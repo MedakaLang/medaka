@@ -69,7 +69,8 @@ import support.util.{maxI, utf8Len, joinWith, startsWith, contains}
 import string.{stripCR, toInt}
 import regex.{Regex, Match, mustCompile, escape, findAll, find}
 import frontend.desugar.{desugar}
-import types.repr.{Scheme(..)}
+import types.repr.{Scheme(..), ppSchemeCon}
+import types.publish.{PubScheme(..), pubSchemes}
 import types.typecheck.{
   checkOneSchemeFullK, ppSchemeNamed, ppSchemeNamedFull, currentLocalSchemes,
   currentLocalSchemesLoc, currentSeedSchemes
@@ -686,7 +687,7 @@ defZipLocOr None p = jRange (declPosLine p - 1) 0 (declPosEndLine p) 0
 -- uses `parseLocatedResult`).  Prelude sources go through the S-1 memoized
 -- `parsePrelude` (the cheap unlocated entry, cached) and are parsed FIRST, so
 -- the live loc-state at typecheck time is this buffer's.
-docSchemes : String -> String -> String -> Option (List (String, Scheme))
+docSchemes : String -> String -> String -> Option (List (String, PubScheme))
 docSchemes runtimeSrc coreSrc src =
   let runtimeDecls = desugaredPrelude runtimeSrc
   let coreDecls = desugaredPrelude coreSrc
@@ -705,7 +706,7 @@ docSchemes runtimeSrc coreSrc src =
 
 -- Lookup a name's Scheme in the env (mirror repl.mdk lookupScheme / OCaml
 -- List.assoc_opt).
-lookupSchemeL : String -> List (String, Scheme) -> Option Scheme
+lookupSchemeL : String -> List (String, a) -> Option a
 lookupSchemeL _ [] = None
 lookupSchemeL name ((n, s) :: rest)
   | name == n = Some s
@@ -736,7 +737,7 @@ hoverFor runtimeSrc coreSrc uri src params docs = match (
       None => JNull
       Some env => match hoverSchemeAt name src line col env
         None => JNull
-        Some (sch, isLocal) => jHover name (ppHoverScheme isLocal name sch)
+        Some hit => jHover name (ppHoverScheme name hit)
   _ => JNull
 
 -- Stateless type-at-point for the `medaka mcp` `medaka_type_at` tool (#251) — and
@@ -777,8 +778,7 @@ typeAtPoint runtimeSrc coreSrc filePath src line col =
         None => None
         Some env =>
           map
-            ((sch, isLocal) =>
-              stringConcat [name, " : ", ppHoverScheme isLocal name sch])
+            (hit => stringConcat [name, " : ", ppHoverScheme name hit])
             (hoverSchemeAt name src line col env)
 
 -- The hover lookup env for the buffer.  A buffer with a non-core sibling import
@@ -791,7 +791,7 @@ hoverEnvFor : String ->
   String ->
   String ->
   Docs ->
-  <IO> Option (List (String, Scheme))
+  <IO> Option (List (String, PubScheme))
 hoverEnvFor runtimeSrc coreSrc uri src docs
   | bufferHasImports src = projectEntryEnv runtimeSrc coreSrc uri docs
   | otherwise = docSchemes runtimeSrc coreSrc src
@@ -804,7 +804,7 @@ projectEntryEnv : String ->
   String ->
   String ->
   Docs ->
-  <IO> Option (List (String, Scheme))
+  <IO> Option (List (String, PubScheme))
 projectEntryEnv runtimeSrc coreSrc uri docs =
   let rootFile = pathOfUri uri
   let projectDir = findProjectRootOrSelf (dirOfPath rootFile)
@@ -819,21 +819,24 @@ projectEntryEnv runtimeSrc coreSrc uri docs =
     runtimeSrc
     coreSrc
 
+-- A hover or completion hit, tagged by the tier that answered it.  An env hit
+-- carries the context its binding was published with.  A local or seed hit is a
+-- bare scheme, rendered from the tables the last drive left (see `ppHoverScheme`).
+-- The tag is the only place in the pipeline that knows which tier a name came
+-- from (F2, the #2054 family): once collapsed to a bare `Option Scheme` the tiers
+-- are indistinguishable, and losing it is what let a local's rendering reach
+-- `ppSchemeNamedFull`'s bare-name prelude store.
+data HoverHit = EnvHit PubScheme | LocalHit Scheme | SeedHit Scheme
+
 -- Resolve a hovered name's scheme: the returned typecheck env (globals +
 -- top-level) first, then the hover-only side-channels — locals (let/param/match
 -- binders) and the seed (runtime.mdk externs) — neither of which the env carries.
--- The Bool is the LOCAL-TIER tag (F2, the #2054 family): True iff the hit came
--- from `currentLocalSchemes ()`, i.e. it is a genuine local binder.  That tag is
--- the only place in the pipeline that knows a name is local — the tiers are
--- otherwise indistinguishable once collapsed to a bare `Option Scheme`, and
--- throwing it away is what let a local's rendering reach `ppSchemeNamedFull`'s
--- bare-name prelude store (see `ppHoverScheme`).
-hoverScheme : String -> List (String, Scheme) -> Option (Scheme, Bool)
+hoverScheme : String -> List (String, PubScheme) -> Option HoverHit
 hoverScheme name env = match lookupSchemeL name env
-  Some s => Some (s, False)
+  Some p => Some (EnvHit p)
   None => match lookupSchemeL name (currentLocalSchemes ())
-    Some s => Some (s, True)
-    None => map (s => (s, False)) (lookupSchemeL name (currentSeedSchemes ()))
+    Some s => Some (LocalHit s)
+    None => map SeedHit (lookupSchemeL name (currentSeedSchemes ()))
 
 -- POSITION-AWARE hoverScheme (#2092).  `hoverScheme`'s tier order asks `env`
 -- (own top-level ++ the WHOLE prelude) first, so a local binder whose bare name
@@ -853,10 +856,10 @@ hoverSchemeAt : String ->
   String ->
   Int ->
   Int ->
-  List (String, Scheme) ->
-  Option (Scheme, Bool)
+  List (String, PubScheme) ->
+  Option HoverHit
 hoverSchemeAt name src line col env = match localSchemeAt name line col src
-  Some s => Some (s, True)
+  Some s => Some (LocalHit s)
   None => hoverScheme name env
 
 -- The scheme of the local binding of `name` that is in scope at the (0-based,
@@ -950,15 +953,16 @@ latestLocal (Some (pl, pc, ps)) ((bl, bc, bs) :: rest)
 -- silently wrong, no error.  MEASURED on an import-bearing buffer whose entry
 -- module has `let count = 5`: `count : Foldable a => Int`, for `count : Int`.
 --
--- Every NON-local tier keeps `ppSchemeNamedFull`: the env's own/prelude names and
--- the import-scoped seed are exactly the names arm 3 is right for, and it is what
--- makes a Module-arm `println` render `Display a => a -> <IO> Unit` at all
--- (#1116, S-full-env-scheme-entry).  A local drops to `ppSchemeNamed`, which
--- consults only the module last checked's own tables — where a local constrained
--- binding does register its obligations (#816) — and never the prelude store.
-ppHoverScheme : Bool -> String -> Scheme -> String
-ppHoverScheme isLocal n s =
-  if isLocal then ppSchemeNamed n s else ppSchemeNamedFull n s
+-- An env hit renders the context its binding was published with, so an own
+-- binding never consults the prelude's and a prelude binding renders its own.
+-- The import-scoped seed keeps `ppSchemeNamedFull`: those are the names arm 3 is
+-- right for.  A local drops to `ppSchemeNamed`, which consults only the module
+-- last checked's own tables — where a local constrained binding does register its
+-- obligations (#816) — and never the prelude store.
+ppHoverScheme : String -> HoverHit -> String
+ppHoverScheme _ (EnvHit p) = ppSchemeCon p.psContext p.psScheme
+ppHoverScheme n (LocalHit s) = ppSchemeNamed n s
+ppHoverScheme n (SeedHit s) = ppSchemeNamedFull n s
 
 -- Build the Hover { contents: MarkupContent{ kind:"markdown", value } } object.
 jHover : String -> String -> Json
@@ -1027,18 +1031,17 @@ prefixStart arr lineStart i
 
 -- Filter env to names matching the prefix, deduplicating (first occurrence
 -- wins).  Mirror filter_completions.
--- The third component is the LOCAL-TIER tag `completionEnvFor` stamped on each
--- slice before concatenating them (see `ppHoverScheme` for why a local may not be
--- rendered through `ppSchemeNamedFull`).  Tagging happens at the slice, not here,
+-- Each entry carries the tier tag `completionEnvFor` stamped on its slice before
+-- concatenating them (see `HoverHit`).  Tagging happens at the slice, not here,
 -- because by the time the slices are one flat list the tiers are indistinguishable.
 filterCompletions : String ->
   List String ->
-  List (String, Scheme, Bool) ->
+  List (String, HoverHit) ->
   List Json
 filterCompletions _ _ [] = []
-filterCompletions prefix seen ((n, s, isLocal) :: rest)
+filterCompletions prefix seen ((n, hit) :: rest)
   | startsWith prefix n && not (anyName seen n) =
-    jCompletionItem n (ppHoverScheme isLocal n s)
+    jCompletionItem n (ppHoverScheme n hit)
       :: filterCompletions prefix (n :: seen) rest
   | otherwise = filterCompletions prefix seen rest
 
@@ -1079,23 +1082,22 @@ completionEnvFor : String ->
   String ->
   String ->
   Docs ->
-  <IO> Option (List (String, Scheme, Bool))
+  <IO> Option (List (String, HoverHit))
 completionEnvFor runtimeSrc coreSrc uri src docs
   | bufferHasImports src =
     map
       (own =>
-        tagTier False own
-          ++ tagTier True (currentLocalSchemes ())
-          ++ tagTier False (currentSeedSchemes ()))
+        tagTier EnvHit own
+          ++ tagTier LocalHit (currentLocalSchemes ())
+          ++ tagTier SeedHit (currentSeedSchemes ()))
       (projectEntryEnv runtimeSrc coreSrc uri docs)
-  | otherwise = map (tagTier False) (docSchemes runtimeSrc coreSrc src)
+  | otherwise = map (tagTier EnvHit) (docSchemes runtimeSrc coreSrc src)
 
--- Stamp one completion-env slice with its tier (True = a genuine local binder).
--- Order across the slices is unchanged, so `filterCompletions`' first-occurrence-
--- wins dedup still resolves a shadowed name to exactly the entry it did before.
-tagTier : Bool -> List (String, Scheme) -> List (String, Scheme, Bool)
-tagTier _ [] = []
-tagTier isLocal ((n, s) :: rest) = (n, s, isLocal) :: tagTier isLocal rest
+-- Stamp one completion-env slice with its tier.  Order across the slices is
+-- unchanged, so `filterCompletions`' first-occurrence-wins dedup still resolves a
+-- shadowed name to exactly the entry it did before.
+tagTier : (s -> HoverHit) -> List (String, s) -> List (String, HoverHit)
+tagTier tag = map (b => (fst b, tag (snd b)))
 
 handleCompletion : String -> String -> Json -> Json -> Docs -> <IO> Unit
 handleCompletion runtimeSrc coreSrc idJson params docs =
@@ -1162,7 +1164,7 @@ inlayHints runtimeSrc coreSrc src = match docSchemes runtimeSrc coreSrc src
   Some env => match parseWithPositionsOpt src
     None => []
     Some (decls, positions) =>
-      inlayZip src decls decls (positionsDecls positions) env
+      inlayZip src decls decls (positionsDecls positions) (pubSchemes env)
 
 -- The (0-based line, col) right after a decl's name: the real name `Loc`'s end
 -- position (#331) when there is one, else the old `columnAfterName` heuristic

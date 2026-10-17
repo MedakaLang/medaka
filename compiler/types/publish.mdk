@@ -48,11 +48,14 @@ tcLoc : TcDiag -> Option Loc
 tcLoc (TcDiag _ _ l _ _ _) = l
 
 -- One module's row in a graph drive's per-module diagnostics: its own value
--- schemes, its isolated errors and its isolated warnings, under its module id.
+-- schemes, each with the context its module recorded for it, its isolated errors
+-- and its isolated warnings, under its module id.  The context is taken when the
+-- module closes, because the table it is read from is overwritten by the next
+-- module's check.
 -- The schemes half is what lets the ENTRY REPORT be a projection of the same list
 -- rather than a second pass (`checkModulesEntryFromDiags`); `dropModSchemes` is the
 -- narrower `(errs, warns)` view the bucketing fold consumes.
-export type ModDiags = (String, (List (String, Scheme), List TcDiag, List TcDiag))
+export type ModDiags = (String, (List (String, PubScheme), List TcDiag, List TcDiag))
 
 -- ── published shapes ───────────────────────────────────────────────────────
 
@@ -61,6 +64,11 @@ public export data PubScheme = PubScheme {
   psScheme : Scheme,
   psContext : List VecObl,
 }
+
+-- The schemes alone, for a reader that renders no context.
+export
+pubSchemes : List (String, PubScheme) -> List (String, Scheme)
+pubSchemes = map (b => (fst b, (snd b).psScheme))
 
 -- The three variable kinds count ids separately.
 public export data VarKind = TyVarK | EffVarK | AuthVarK deriving (Eq, Debug)

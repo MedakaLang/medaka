@@ -12,10 +12,10 @@ import types.typecheck.{
   ModDiags,
   checkModulesDiagsChain,
   checkOneDiags,
-  ppSchemeNamed,
   tcCode,
   tcMsg,
 }
+import types.repr.{ppSchemeCon}
 
 {- The law-owned prelude every law program is checked under, passed in the
    prelude position of both checker routes.
@@ -97,9 +97,8 @@ checkGraph modules = verdictOf (graphDiagnostics modules)
 
 {- The error codes of a module graph and the rendered schemes of its entry
    module's bindings, contexts included, from one check. A name can carry two
-   schemes. `ppSchemeNamed` reads the checker's tables for the module checked
-   last, so the schemes are rendered before any other check runs. Every module
-   must be resolve-clean; see `graphResults`. -}
+   schemes. Each scheme is rendered with the context its module published for
+   it. Every module must be resolve-clean; see `graphResults`. -}
 export
 graphCodesAndSchemes : List (String, String) ->
   (List String, List (String, String))
@@ -107,7 +106,8 @@ graphCodesAndSchemes modules =
   let results = graphResults modules
   let codes = flatMap ((_, (_, errors, _)) => map tcCode errors) results
   let schemes = match reverse results
-    (_, (own, _, _)) :: _ => map ((n, s) => (n, ppSchemeNamed n s)) own
+    (_, (own, _, _)) :: _ =>
+      map ((n, p) => (n, ppSchemeCon p.psContext p.psScheme)) own
     [] => []
   (codes, schemes)
 

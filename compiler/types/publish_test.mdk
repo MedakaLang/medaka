@@ -1,11 +1,11 @@
 -- Unit tests for the published shapes' zonk, freeze and validator over
--- hand-built values, plus two pins for defects the later V2 slices fix:
--- a scheme's context lost after a later drive (#4053) and published schemes
--- holding live Links (#2549).
+-- hand-built values; a scheme's context surviving a later drive (#4053) and a
+-- shadowing binding's context (#2054); and a pin for published schemes holding
+-- live Links (#2549), which a later V2 slice fixes.
 import test.{expectEqual, expectEach, expectTrue}
 import frontend.ast.{TyConOrigin(..)}
 import frontend.desugar.{desugar}
-import frontend.parser.{parseLocated}
+import frontend.parser.{parse, parseLocated}
 import list.{zip, filter}
 import support.util.{joinNl}
 import types.repr.{
@@ -19,7 +19,7 @@ import types.publish.{
   PubScheme(..), VarKind(..), LiveCell(..), emptyZonk, zonkMono, zonkScheme,
   freezePub, liveCells, atGraphEnd
 }
-import types.typecheck.{checkOneSchemeFullK, ppSchemeNamed}
+import types.typecheck.{checkOneSchemeFullK}
 
 int : Mono
 int = TCon "Int" OriginBuiltin
@@ -218,18 +218,18 @@ qSrc = joinNl [
   "other = 1",
 ]
 
-drive : String -> String -> List (String, Scheme)
+drive : String -> String -> List (String, PubScheme)
 drive mid src =
   let (_, own) =
     checkOneSchemeFullK None [] [] (mid, desugar (parseLocated src))
   own
 
--- Renders a scheme with the context the current code can find for it.
-renderWithContext : String -> Scheme -> String
-renderWithContext = ppSchemeNamed
+-- Renders a scheme with the context it was published with.
+renderWithContext : PubScheme -> String
+renderWithContext p = ppSchemeCon p.psContext p.psScheme
 
-rendered : List (String, Scheme) -> List String
-rendered ss = map (e => "\{fst e} : \{renderWithContext (fst e) (snd e)}") ss
+rendered : List (String, PubScheme) -> List String
+rendered ss = map (e => "\{fst e} : \{renderWithContext (snd e)}") ss
 
 linkCount : Scheme -> Int
 linkCount (Forall _ _ _ _ _ t) = monoLinks t
@@ -253,4 +253,24 @@ test "#4053: P's scheme renders the same after Q's drive" =
 
 test "published schemes hold no Link" =
   let p = drive "p" pSrc
-  expectEqual 0 (fold (acc e => acc + linkCount (snd e)) 0 p)
+  expectEqual 0 (fold (acc e => acc + linkCount (snd e).psScheme) 0 p)
+
+-- A prelude binding with a declared context, shadowed by a buffer binding.
+shadowedPrelude : String
+shadowedPrelude = joinNl [
+  "interface Speak a where",
+  "  speak : a -> String",
+  "isEven : Speak a => a -> String",
+  "isEven x = speak x",
+]
+
+test "#2054: a shadowing buffer binding carries its own context, not the prelude's" =
+  let (core, own) = checkOneSchemeFullK None [] (desugar
+    (parse shadowedPrelude)) (
+    "buffer",
+    desugar (parseLocated "isEven x = \"s\""),
+  )
+  let named = ss => rendered (filter (e => fst e == "isEven") ss)
+  expectEqual
+    (["isEven : a -> String"], ["isEven : Speak a => a -> String"])
+    (named own, named core)

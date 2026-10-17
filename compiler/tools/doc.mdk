@@ -61,6 +61,7 @@ import frontend.ast.{
   authTermsSurface,
 }
 import types.repr.{Scheme(..), ppScheme}
+import types.publish.{pubSchemes}
 import frontend.resolve.{internalExterns}
 import support.util.{
   zipL, joinWith, reverseL, escStr, stringTrim, splitNl, contains, lookupAssoc,
@@ -860,7 +861,7 @@ originModuleSchemes runtimeSrc coreSrc roots path =
         runtimeSrc
         coreSrc)
         None => []
-        Some ss => ss
+        Some ss => pubSchemes ss
 
 findOriginFile : List String -> String -> <IO> Option String
 findOriginFile [] _ = None
@@ -1854,4 +1855,4 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
           "medaka doc: '\{filename}' has an unresolved import graph (missing or cyclic import) — signatures unavailable"
       let _ = stageExit 1
       []
-    Some schemes => schemes
+    Some schemes => pubSchemes schemes
