@@ -10,10 +10,10 @@ break it. This pass is the other half — **craft**: duplication, comment
 register, test vehicle, placement, diagnostics, docs, CLI shape. It never
 builds anything and never fixes anything; it reports findings.
 
-**Every section below is a POINTER.** If you find yourself explaining a rule
-here instead of citing where it lives, the rule has been forked and this skill
-has become the fifth copy of something with four consumers — the drift this
-repo has already paid for twice. Cite the source; let the reader open it.
+**The rule source for a craft finding is `docs/design/STYLE-RUBRIC.md`.** Cite
+its class (`data.sentinel`, `comment.provenance`, …); its controls are findings
+you must not make. Every section below is a pointer: if you find yourself
+explaining a rule here, it has been forked. Cite the source.
 
 ## Scope — read this before the first finding
 
@@ -21,6 +21,9 @@ repo has already paid for twice. Cite the source; let the reader open it.
   in code the diff did not touch is at most **one line in the report** as a
   neighbour observation, never a finding the sprint must fix. Reviewing the
   whole tree through a diff's keyhole is how a style pass becomes a stop-work.
+- **Tests are in scope.** `*_test.mdk`, test row labels and shell gates meet the
+  same rules as source (rubric R27); only a fixture that deliberately exhibits
+  a pattern (a must-fail pin, a lint rule's own fixture) is exempt.
 - **Cheap and once.** One dispatch in the sprint's END round, alongside
   `sprint-reviewer`, at the same pinned SHA. Not per-slice, not per-PR, not a
   required CI check — v8's cost discipline is a design constraint, not an
@@ -32,15 +35,12 @@ repo has already paid for twice. Cite the source; let the reader open it.
 
 ### 1. Duplication — did this diff rewrite something that exists?
 
-Source: the generated stdlib reference **`docs/stdlib/index.md`** (name-by-name,
-regenerated from source — the answer to "does the stdlib have X"),
-`compiler/support/` for compiler-private helpers, and the lint rule
-**`rule-stdlib-reimpl`** in `compiler/tools/lint.mdk`. Epic #2246; #2248
-(closed) records the two classes the rule structurally misses — stdlib
-consumers behind a blanket path skip, and *renamed* reimplementations, since
-the match is name-exact. **So the lint rule is a floor, not the check**: a
-helper renamed away from its stdlib twin is exactly what the rule cannot see
-and you can.
+Source: the rubric's `dup.existing`; the generated stdlib reference
+**`docs/stdlib/index.md`** (until #4269 lands it omits interface methods such
+as `orElse` and `traverse`: check the module page, e.g. `docs/stdlib/core.md`);
+`compiler/support/`; and the lint rule **`rule-stdlib-reimpl`**. The rule
+matches names exactly, so it is a floor, not the check: a helper renamed away
+from its stdlib twin is what it cannot see and you can.
 
 The author was asked to name what they looked for (the `sprint-packet` report
 self-check). If a new helper arrived with "none needed", that answer is the
@@ -50,10 +50,10 @@ thing to test.
 
 Source: **`[T-COMMENT-REGISTER]`** in `AGENTS.md` (the norms) and
 **`make comment-census`** (`test/comment_register_census.sh`, #2281) for the
-current derived per-class counts. Provenance and litigation belong on the
-issue or in `.claude/dossier/`, linked; a comment that narrates the PR
-(`earlier cut`, `this PR`, `refuted`, `ratified`) rots the moment the PR
-merges. No emoji shouts in source comments.
+current derived per-class counts; the rubric's "Comments and documentation"
+table for the classes. An issue number is fine only when it points at a live
+constraint or an open issue (`until #1115 lands`); a provenance tag recording
+which work item introduced the code is a finding (R4).
 
 ⚠️ The census reports **line classifications, not disjoint defects** — do not
 add its class counts together, and do not quote a count into your report as a
@@ -90,19 +90,16 @@ that mismatch is the finding — not your own preferred filing.
 
 Source: **`compiler/ERROR-QUALITY.md`** (the rubric — read before writing a
 diagnostic) and **`compiler/DIAGNOSTIC-CODES-DESIGN.md`** (the code taxonomy
-and the `Diag` JSON contract).
-
-*Pending:* #2302 builds `make diag-census`, the rubric-conformance census
-ranked by first-hour reachability; it is already reserved as a
-`make slop-census` row. When it lands, run it and cite it here instead of
-reading messages by eye.
+and the `Diag` JSON contract). Cite **`make diag-census`** rather than reading
+messages by eye.
 
 ### 6. Doc register — is new prose live-and-gated, or is it new rot?
 
 For a `stdlib/*.mdk` doc comment the source is **`stdlib/README.md` §
 "Writing documentation"**: a marked `{- | -}` block whose first sentence
 stands alone, no history/issue numbers/implementation notes/maintainer
-warnings inside the block, no em-dashes, one or two examples. A finding
+warnings inside the block, no em-dashes, one or two examples. A cost contract
+a caller relies on ("O(1) average lookup") is allowed (rubric `doc.register`). A finding
 against a stdlib doc comment cites that section or it is not a finding.
 
 For every other markdown file the source today is: **`make docs-links`** (every cited path must exist),
@@ -110,11 +107,8 @@ For every other markdown file the source today is: **`make docs-links`** (every 
 **`make docs-index`** (`docs/README.md` is GENERATED — never hand-edited).
 A number hand-typed into prose that the repo can derive is the failure mode
 these exist to kill: `make fmt-clean-census` (#1794), `make arch-census`
-(#2289), `make cli-conformance-census`.
-
-*Pending:* #2300 is the doc census and disposition — every markdown file
-live-and-gated, archived-with-a-date, or deleted. Reserved as a
-`make slop-census` row, expected MISSING until it lands.
+(#2289), `make cli-conformance-census`, and `make doc-census` for a doc's
+disposition (#2300).
 
 ### 7. CLI conformance — does a new verb or flag match the ratified shape?
 
@@ -130,10 +124,10 @@ settled; do not reopen it inside a sprint.
 
 | Declined demand | Why |
 |---|---|
-| **Pipe-density / idiom quotas** — "use `\|>` here", "this should be a section", "convert this to a fold" | `[DG-IDIOMS]` licenses idioms *where they genuinely improve readability*, verified on the binary. A density target is not readability, and it is unfalsifiable. |
+| **Idiom density quotas** — pipes per file, "this should be a section", "convert this to a fold" | A density target is not readability, and it is unfalsifiable. A concrete pipeline of 3+ stages written inside-out is a finding (`idiom.inside-out-pipeline`, R17). |
 | **Mass-conversion sweeps** — "convert every `X` in this file / this subsystem" | Out of diff scope by construction, and `lint --fix` reprints WHOLE declarations and bails on comment-bearing ones, so a sweep silently corrupts unrelated syntax in the same decl. If a sweep is genuinely owed, it is a filed issue with its own PR. |
 | **Findings about untouched code** | Diff-scoped only (see Scope). At most one neighbour line. |
-| **"Remove this suppression"** where the suppression carries a rationale | A `-- lint-disable-next-line <rule>` with a stated reason is the **correct** outcome, not debt. A suppression with no rationale is the finding; the suppression itself is not. |
+| **"Remove this suppression"** where the reason is one of the four valid kinds: a semantic difference, an independence requirement, a measured cost, a verified language limitation | That suppression is the correct outcome. Any other reason (a norm cited without evidence, deferred work, bare "intentional") is the finding (`suppress.invalid-reason`, R19). |
 | **"Add a lint rule for this"** | Not this reviewer's to implement — see the shrink rule below. It lands through its own filed issue and PR, gated either by the max ratchet (`GATED_LINT_RULES`, a rule the tree is already clean of) or, when it is not, by the per-(file, rule) count baseline (`BASELINED_LINT_RULES` + `test/lint_baseline.toml`, #2619 (lint count baseline)). |
 | **Reopening a standing architecture decision** | The `architecture` skill's DECLINED register — hard size ratchets, the `typecheck.mdk` split's sequencing (#2586 (typecheck refactor), which superseded the closed #2284), the `driver`/`tools` de-grab-bag's ownership (#2282), skill-tree mirroring (#2313). |
 | **A comment-length or comment-count ratchet** | Declined on record (#2281): a length ratchet teaches agents to write short bad comments. |

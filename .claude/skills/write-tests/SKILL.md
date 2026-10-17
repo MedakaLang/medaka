@@ -6,25 +6,22 @@ description: Pick the test vehicle (doctest, prop, `test` block in a `*_test.mdk
 # Write tests — pick the vehicle first
 
 **Route by what the check is actually checking, not by what's nearby.** The
-concrete failure mode this skill exists to stop: 277 doctest input lines in
-`compiler/types/{registry,typecheck,route_key}.mdk` were unit tests wearing a
-documentation costume, because no other in-language vehicle existed
-(#2296/#2290, epic #2276 leg 5). The vehicle now exists — use it.
+failure this skill exists to stop is a unit test wearing a doctest's costume.
 
 ## The dispatch table
 
 | Vehicle | When | Lives |
 |---|---|---|
-| **Doctest** | A short (1-3 line), *exported* function's real return value, shown as documentation a reader benefits from. | In-file, in the doc comment. |
-| **Property (`prop`)** | An algebraic law that should hold over many generated inputs (`reverse (reverse xs) == xs`), not one fixed case. | In-file, `prop "name" (x : T) … = body`. |
-| **`test` block, in a `*_test.mdk` sibling** | Unit/regression assertion against a specific case, especially one touching unexported/internal machinery. | `<module>_test.mdk` beside `<module>.mdk` — see `compiler/types/registry_test.mdk` for the worked example. |
+| **Doctest** | A short (1-3 line) example of a function's real return value that reads as usage documentation, in `compiler/` as in `stdlib/`. One that needs fixture bindings or asserts `… == x` giving `True` is a test in costume (rubric `test.doctest-costume`, R34): use a `test` block. | In-file, in the doc comment. |
+| **Property (`prop`)** | An algebraic law that should hold over many generated inputs, not one fixed case. | In-file only when the law documents the API, like a doctest (`reverse (reverse xs) == xs` beside `reverse`); every other `prop` goes in the `*_test.mdk` sibling (rubric R33). |
+| **`test` block, in a `*_test.mdk` sibling** | Unit/regression assertion against a specific case. | `<module>_test.mdk` beside `<module>.mdk`; worked example `compiler/types/registry_test.mdk`. A sibling sees only its subject's exported names (a proposal to lift that is pending, rubric R35); fixtures duplicated into the sibling until then are accepted debt. |
 | **Gate-test — a `*_test.mdk` with `kind = "native"`** | The subject is the compiled binary: a CLI contract, a golden, a fixture corpus swept per row. The test is still native Medaka; it spawns `./medaka` through `stdlib/test_process.mdk` and grades exit status, stdout AND stderr. | `test/<name>_test.mdk`, registered in `test/gates.toml` with `kind = "native"`. `test/compiler_cli_test_support.mdk` is the shared support module; `pds/test/vector_runner.mdk` is the runner-plus-data template. |
-| **Shell gate** | A trust anchor (something that must not depend on the binary under test), an external harness (node, clang, sqlite3), or Callgrind-class instrumentation. | `test/diff_compiler_*.sh`, carrying a `shell-because:` header. **Load the `gates` skill** for authoring — this table does not duplicate its fixture/golden steps or CI shard rules. |
+| **Shell gate** | A trust anchor (something that must not depend on the binary under test), Callgrind-class instrumentation, or an external harness: the subject IS a shell script or external tool. Needing node, clang or sqlite3 is not a reason; a gate-test spawns them through `stdlib/test_process.mdk` as it spawns `./medaka` (rubric R36). | `test/diff_compiler_*.sh`, carrying a `shell-because:` header that names the specific subject, not a generic line. **Load the `gates` skill** for authoring — this table does not duplicate its fixture/golden steps or CI shard rules. |
 
 **#2298's criterion, as epic #2600 settled it:** a new check defaults to native
 Medaka (doctest / `prop` / `test` block) over a shell script. "The subject is
 the compiled binary" is NOT a reason to write shell — that is what the
-gate-test row above is for, and 43 registry rows are already written that way.
+gate-test row above is for.
 Shell is reserved for the three cases in its row. A shell gate written because
 the vehicle genuinely cannot express the check yet is debt with a name:
 register it `migration = "native-wrap"` so the epic can find it again.
@@ -144,6 +141,23 @@ Debug` to that type is usually a larger change than the conversion was worth.
 **Converting an existing shell gate** (a `migration = "native-wrap"` row)? Load
 the `convert-shell-gate` skill: it carries the recipe, a verified skeleton and
 the helper cheat sheet, so the vocabulary above is not needed to do it.
+
+## Test style
+
+The rule source is the Tests table of `docs/design/STYLE-RUBRIC.md`; every
+other rubric rule applies to test code and row labels too (R27). In brief:
+
+- A rejection test names the expected diagnostic, a code or a message fragment (R37).
+- A test helper returns an `Expectation`, never a `Bool` (R38).
+- Compare contents, not lengths, unless the count is the property (R39).
+- A test program of two or more lines is a triple-quoted string, closing `"""`
+  on its own line, or a fixture file (R40). `fmt --write` collapses one that
+  interpolates (#4268).
+- No exact hand-maintained row count: derive it, and guard shrinkage with a
+  coarse `expectAtLeast` floor (R41).
+- A test probe belongs in the sibling and never returns a positional `Bool`
+  tuple (R42).
+- A table states the shared default once and overrides it where a row differs (R43).
 
 ## Negative space — NOT a doctest
 
