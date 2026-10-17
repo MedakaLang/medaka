@@ -1,5 +1,5 @@
 # META
-source_lines=2760
+source_lines=2761
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -1347,18 +1347,19 @@ intMinLiteralHelp =
   "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the negative -4611686018427387904, so write it with its `-`"
 
 -- ── evidence identity (#2549 M2) ──────────────────────────────────────────────
--- A site and the goal that solves it are associated today by `Ref` cell IDENTITY:
--- the marked node holds the cell, the goal's destination holds the same cell, and
--- the solver writes through it.  An `EvId` names that same association BY VALUE, so
--- a solved route can be published as data rather than reached through a pointer —
--- `compiler/eval/eval.mdk` cannot import a typechecker-private cell, and a table it
--- can read is the only shape that crosses that boundary.
+-- A site and the goal that solves it are associated BY VALUE: the marked node
+-- carries an `EvId`, the typechecker keeps the cell the solver writes through under
+-- that id (`mintMethodCell`, `mintSite` in `types/typecheck.mdk`), and a reader looks
+-- the solved route up by id in the published table.  `compiler/eval/eval.mdk` cannot
+-- import a typechecker-private cell, and a table it can read is the only shape that
+-- crosses that boundary.
 --
 -- The `String` is the module the site was recorded in, the `Int` its ordinal within
 -- the graph run.  UNIQUENESS RESTS ON THE ORDINAL ALONE, not on the pair: `freshEvId`
 -- draws it from a graph-global monotone counter that `resetGraphState` deliberately
--- carries across resets, and `evDictRoutes` indexes its array by that ordinal on its
--- own.  The module half is a TRIPWIRE: it is what lets that lookup panic instead of
+-- carries across resets, and the published table (`types/route_key.mdk`) indexes its
+-- array by that ordinal less the table's lowest one, never consulting the module
+-- half.  The module half is a TRIPWIRE: it is what lets that lookup panic instead of
 -- answering when an entry comes back stamped by a module the node did not ask for.
 --
 -- The tripwire cannot fire for today's sole consumer, because an `EDictAt` carries

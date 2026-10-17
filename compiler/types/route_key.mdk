@@ -77,7 +77,9 @@ import types.runtime_types.{installedBinderTable, restoreBinderTable}
 -- before the next elaboration installs: `test_cmd`'s `prepareMulti` / `prepareSingle` /
 -- `runChosen` phases, `elaborateRun`'s async and plain arms, `runEmitWith`,
 -- `emitModulesWith`, `eval_autoprint_main.runElab` and `playground_main.runEmit` each
--- elaborate, install, and finish reading before the next elaboration begins.  A lookup
+-- elaborate, install, and finish reading before the next elaboration begins; a
+-- diagnostics-only elaboration that runs between them (`test_cmd`'s helper validation)
+-- runs inside `withEvidencePreserved`, which reinstalls the table it found.  A lookup
 -- that cannot be answered is a panic on every arm:
 --
 --   no table installed  -> panic.  `evidenceRef` holding `None` means no elaboration
@@ -214,29 +216,43 @@ fillEvidence lo arr ((e@(EvEntry (EvId m i) _)) :: rest) =
       panic "evidence table: two goals published under \{m}#\{intToString i}"
   fillEvidence lo arr rest
 
-neverPublished : String -> String -> Int -> a
+neverPublished : String -> String -> Int -> Result String a
 neverPublished what m i =
-  panic "evidence table: \{what} \{m}#\{intToString i} was never published"
+  Err "evidence table: \{what} \{m}#\{intToString i} was never published"
 
 -- The installed entry's answer for [ev], looked up as [what]; every miss panics.
 installedAnswer : String -> EvId -> EvVal
-installedAnswer what (EvId m i) = match !evidenceRef
-  None =>
-    panic
-      "evidence table: no elaboration has published one (looking up \{what} \{m}#\{intToString i})"
-  Some (lo, arr) =>
-    if i < lo then
-      panic
-        "evidence table: \{what} \{m}#\{intToString i} is from an earlier graph"
-    else if i - lo >= arrayLength arr then
-      neverPublished what m i
-    else match arrayGetUnsafe (i - lo) arr
-      None => neverPublished what m i
-      Some (EvEntry (EvId m2 _) v) =>
-        if m2 == m then
-          v
-        else
-          panic "evidence table: \{m}#\{intToString i} answered by module \{m2}"
+installedAnswer what ev = match installedLookup what ev
+  Ok v => v
+  Err message => panic message
+
+-- `installedAnswer`'s answer, or the reason the installed table has none.
+export
+installedLookup : String -> EvId -> Result String EvVal
+installedLookup what ev = evidenceLookup !evidenceRef what ev
+
+-- The lookup over [table], the shape `evidenceRef` holds: `None` when no
+-- elaboration has published one, else the lowest ordinal and the slots from it.
+export
+evidenceLookup : Option (Int, Array (Option EvEntry)) ->
+  String ->
+  EvId ->
+  Result String EvVal
+evidenceLookup None what (EvId m i) =
+  Err
+    "evidence table: no elaboration has published one (looking up \{what} \{m}#\{intToString i})"
+evidenceLookup (Some (lo, arr)) what (EvId m i) =
+  if i < lo then
+    Err "evidence table: \{what} \{m}#\{intToString i} is from an earlier graph"
+  else if i - lo >= arrayLength arr then
+    neverPublished what m i
+  else match arrayGetUnsafe (i - lo) arr
+    None => neverPublished what m i
+    Some (EvEntry (EvId m2 _) v) =>
+      if m2 == m then
+        Ok v
+      else
+        Err "evidence table: \{m}#\{intToString i} answered by module \{m2}"
 
 -- The dictionary routes solved for [ev], slot-ordered.
 --
@@ -266,24 +282,40 @@ evRoutesOf (EvHead _) =
 -- builtin operator.  Every other miss panics, as `evDictRoutes` does.
 export
 evSiteRoute : EvId -> Route
-evSiteRoute ev
-  | isUnminted ev = RNone
-  | otherwise = match installedAnswer "operator site" ev
-    EvOne r => r
-    _ =>
-      panic "evidence table: an operator site answered by another kind of entry"
+evSiteRoute ev = match evSiteRouteResult ev
+  Ok r => r
+  Err message => panic message
+
+-- `evSiteRoute`'s answer, or the reason the installed table has none.
+export
+evSiteRouteResult : EvId -> Result String Route
+evSiteRouteResult ev
+  | isUnminted ev = Ok RNone
+  | otherwise = match installedLookup "operator site" ev
+    Ok (EvOne r) => Ok r
+    Ok _ =>
+      Err "evidence table: an operator site answered by another kind of entry"
+    Err message => Err message
 
 -- The defaulted float and `fromInt` route solved for numeric literal site [ev].
 -- A literal built after inference carries `unminted` and answers `(None, RNone)`,
 -- a plain `Int`.  Every other miss panics.
 export
 evSiteLit : EvId -> (Option Float, Route)
-evSiteLit ev
-  | isUnminted ev = (None, RNone)
-  | otherwise = match installedAnswer "literal site" ev
-    EvLit f r => (f, r)
-    _ =>
-      panic "evidence table: a literal site answered by another kind of entry"
+evSiteLit ev = match evSiteLitResult ev
+  Ok answer => answer
+  Err message => panic message
+
+-- `evSiteLit`'s answer, or the reason the installed table has none.
+export
+evSiteLitResult : EvId -> Result String (Option Float, Route)
+evSiteLitResult ev
+  | isUnminted ev = Ok (None, RNone)
+  | otherwise = match installedLookup "literal site" ev
+    Ok (EvLit f r) => Ok (f, r)
+    Ok _ =>
+      Err "evidence table: a literal site answered by another kind of entry"
+    Err message => Err message
 
 -- The answer published for a method occurrence: the interface identity it resolved
 -- to, its selected denotation's pre-use arrow arity, dispatch route, selected impl's

@@ -399,6 +399,7 @@ cellHeadKey : String -> TyConOrigin -> String
 cellIdSet : List (Ref Effvar) -> Map Int Unit
 cellIdSetGo : List (Ref Effvar) -> Map Int Unit -> Map Int Unit
 cellOfGoal : List EvCell -> Obligation -> Option EvCell
+cellStoreMisses : EvId -> (String, String)
 cellTypeHeads : List Decl -> Map String Unit
 cellsFrom : Array (Option EvCell) -> Int -> List EvCell -> List EvCell
 censusSuperClose : List (IfaceRef, Int) -> List (IfaceRef, Int)
@@ -2046,6 +2047,7 @@ methodCandsAt : String -> Int -> MethodEnv -> List MethodRow
 methodCellDicts : EvCell -> List (List Route)
 methodCellEntries : Unit -> List EvEntry
 methodCellEntriesFrom : Array (Option EvCell) -> Int -> List EvEntry -> List EvEntry
+methodCellLookup : EvId -> Result String EvCell
 methodCellOf : EvId -> EvCell
 methodConstraintNameOf : List String -> IfaceMethod -> List String
 methodConstraintNames : List Decl -> List String
@@ -2191,6 +2193,7 @@ mintMethodCellWith : String -> Int -> Route -> List Route -> EvId
 mintOpSite : Unit -> EvId
 mintParamReprs : List String -> List Kind -> List Mono
 mintSite : SiteCell -> EvId
+missText : Result String a -> String
 missingConstraintMsg : String -> String -> String -> String
 missingConstraintVecMsg : String -> String -> List String -> String
 missingFieldMsg : String -> String -> String
@@ -2826,6 +2829,7 @@ requiresRouteWalkCut : ReqStep -> List Route
 requiresUnroutedMsg : IfaceRef -> List Mono -> String
 requiringImplLabel : IfaceRef -> List Mono -> String
 resetCrossModuleState : Unit -> Unit
+resetGraphLineage : Bool -> Unit
 resetGraphState : Unit -> Unit
 resetState : Unit -> Unit
 resetTypeErrorsSticky : Unit -> Unit
@@ -3059,6 +3063,7 @@ sigsOf : List Decl -> List (String, Ty)
 singleTyparamIfaceMethod : String -> Bool
 siteCellEntries : Unit -> List EvEntry
 siteCellEntriesFrom : Array (Option (EvId, SiteCell)) -> Int -> List EvEntry -> List EvEntry
+siteCellLookup : EvId -> Result String SiteCell
 siteCellOf : EvId -> SiteCell
 siteCellValue : SiteCell -> EvVal
 siteEntry : Obligation -> List PendingEntry

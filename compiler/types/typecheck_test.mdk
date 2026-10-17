@@ -25,6 +25,7 @@ import frontend.ast.{
   TyConOrigin(..),
   noDeclLoc,
   noBinderId,
+  unminted,
 }
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
@@ -80,6 +81,8 @@ import types.typecheck.{
   beginMethodReturnTrace,
   cellGoalInnerAliasing,
   beginNumericPredicateTrace,
+  cellStoreMisses,
+  checkModules,
   checkModulesDiagsChain,
   checkModulesEntryReport,
   checkOneDiags,
@@ -93,6 +96,7 @@ import types.typecheck.{
   finishMethodReturnTrace,
   finishNumericPredicateTrace,
   isLiveSpan,
+  markModules,
   methodReturnResolutionMutationProbe,
   methodReturnMemoCurrentViews,
   methodReturnMemoFenceMutationProbe,
@@ -5707,3 +5711,49 @@ test "twenty unkeyed elaborateModules drives keep the evidence arrays one graph 
 test "twenty unkeyed checkOneDiags drives keep the method-cell index one graph wide" =
   let (first, twentieth) = firstAndNth 20 diagsSpan
   expectAll [expectGreaterThan 0 first, expectEqual first twentieth]
+
+-- A cell store miss names its reason: a site inference reached without marking, and
+-- an id minted before the current graph lineage began.
+test "the cell stores report an unminted site and an id from an earlier graph" =
+  let _ = elaborateSpans ()
+  let _ = elaborateSpans ()
+  expectAll [
+    expectEqual
+      "site reached inference unminted"
+      (fst (cellStoreMisses unminted)),
+    expectEqual
+      (
+        "site cell span_probe#0 is from an earlier graph",
+        "method cell span_probe#0 is from an earlier graph",
+      )
+      (cellStoreMisses (EvId "span_probe" 0)),
+  ]
+
+-- Two modules whose return-position method occurrences the mark pre-pass mints.
+preMarkedModules : List (String, List Decl)
+preMarkedModules = [
+  (
+    "pre_a",
+    desugar
+      (parseLocated
+        (joinNl [
+          "interface Def a where", "  def : a", "impl Def Int where",
+          "  def = 7", "seven : Int", "seven = def"
+        ])),
+  ),
+  (
+    "pre_b",
+    desugar
+      (parseLocated
+        (joinNl [
+          "interface Zero a where", "  zero : a", "impl Zero Int where",
+          "  zero = 0", "nought : Int", "nought = zero"
+        ])),
+  ),
+]
+
+-- The profiler's order: the mark pre-pass on its own, then the typecheck of the
+-- marked trees, whose preamble resets the graph.
+test "checkModules completes over modules markModules marked first" =
+  let (core2, mods2) = markModules [] preMarkedModules
+  expectEqual ["pre_a", "pre_b"] (map fst (checkModules [] core2 mods2))

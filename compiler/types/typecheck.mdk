@@ -11608,6 +11608,9 @@ data GraphRun = GraphRun {
   -- from an earlier graph.  It travels with `evCells` through `copyGraphRun`, so a
   -- memo snapshot keeps answering for the ids it was taken with.
   evBase : Int,
+  -- Set by `markModules`, whose marking mints this lineage's cells before the
+  -- driver it feeds resets the graph; that reset keeps them (`resetGraphState`).
+  markedAhead : Bool,
   -- The ordinal below which every method cell has been judged complete
   -- (`judgeEvidence`).  Each drain judges the cells minted since the last one and
   -- raises it to `evCounter`; it rides `copyGraphRun`, so a memo hit restores a
@@ -11678,6 +11681,7 @@ freshGraphRun _ = GraphRun {
   goalsN = Ref 0,
   evCounter = Ref 0,
   evBase = 0,
+  markedAhead = False,
   evJudged = Ref 0,
   evTable = Ref [],
   memoMethodReturns = Ref [],
@@ -11777,19 +11781,25 @@ mintSite cell =
 -- visited is a gap in marking coverage, so it panics rather than writing a cell no
 -- reader would find.
 siteCellOf : EvId -> SiteCell
-siteCellOf (EvId m n) =
+siteCellOf ev = match siteCellLookup ev
+  Ok c => c
+  Err message => panic message
+
+-- `siteCellOf`'s answer, or the reason it has none.
+siteCellLookup : EvId -> Result String SiteCell
+siteCellLookup (EvId m n) =
   let g = graphRun.value
   let i = n - g.evBase
   let arr = g.siteCells.value
   if isUnminted (EvId m n) then
-    panic "site reached inference unminted"
+    Err "site reached inference unminted"
   else if i < 0 then
-    panic "site cell \{m}#\{intToString n} is from an earlier graph"
+    Err "site cell \{m}#\{intToString n} is from an earlier graph"
   else if i >= arrayLength arr then
-    panic "site cell \{m}#\{intToString n} was never minted"
+    Err "site cell \{m}#\{intToString n} was never minted"
   else match arrayGetUnsafe i arr
-    Some (_, c) => c
-    None => panic "site cell \{m}#\{intToString n} was never minted"
+    Some (_, c) => Ok c
+    None => Err "site cell \{m}#\{intToString n} was never minted"
 
 -- The route cell of operator or literal site [ev].
 siteRouteCell : EvId -> Ref Route
@@ -11835,17 +11845,34 @@ siteCellValue (HeadSite h) = EvHead h.value
 -- The cells minted for [ev].  A miss is a bug in this file (every `EMethodAt` is
 -- minted through `mintMethodCell`), so it panics rather than answering unrouted.
 methodCellOf : EvId -> EvCell
-methodCellOf (EvId m n) =
+methodCellOf ev = match methodCellLookup ev
+  Ok c => c
+  Err message => panic message
+
+-- `methodCellOf`'s answer, or the reason it has none.
+methodCellLookup : EvId -> Result String EvCell
+methodCellLookup (EvId m n) =
   let g = graphRun.value
   let i = n - g.evBase
   let arr = g.evCells.value
   if i < 0 then
-    panic "method cell \{m}#\{intToString n} is from an earlier graph"
+    Err "method cell \{m}#\{intToString n} is from an earlier graph"
   else if i >= arrayLength arr then
-    panic "method cell \{m}#\{intToString n} was never minted"
+    Err "method cell \{m}#\{intToString n} was never minted"
   else match arrayGetUnsafe i arr
-    Some c => c
-    None => panic "method cell \{m}#\{intToString n} was never minted"
+    Some c => Ok c
+    None => Err "method cell \{m}#\{intToString n} was never minted"
+
+-- Test visibility (`typecheck_test.mdk`): why the site and the method cell stores
+-- hold no cell for [ev], each "" where one does.
+export
+cellStoreMisses : EvId -> (String, String)
+cellStoreMisses ev =
+  (missText (siteCellLookup ev), missText (methodCellLookup ev))
+
+missText : Result String a -> String
+missText (Ok _) = ""
+missText (Err message) = message
 
 -- The two dict-route lists a method occurrence carries, impl dicts first.
 methodCellDicts : EvCell -> List (List Route)
@@ -11924,17 +11951,32 @@ freshEvId _ =
 -- of such an id fails loudly instead of answering for another node.  What is indexed
 -- by ordinal is not carried: `evBase` moves up to the counter and `evCells` starts
 -- empty, so a long-lived process's arrays span one graph rather than its whole life.
--- The one caller, `resetCrossModuleState`, runs before any marking.
+--
+-- Nothing reads the cell arrays across a reset.  Every driver calls this (through
+-- `resetCrossModuleState`) before it marks, except a caller of `markModules`, which
+-- marks first and then hands the trees to a driver whose preamble lands here: that
+-- lineage is `markedAhead`, and this reset keeps its base and cells.  Trees outlive
+-- their drive only through the installed table in `types/route_key.mdk`, so a caller
+-- that runs a second elaboration before it reads the first's trees restores the
+-- first's table around the second (`withEvidencePreserved`).
 resetGraphState : Unit -> Unit
-resetGraphState _ =
-  let n = graphRun.value.evCounter.value
-  let localAbs = graphRun.value.localAbs
-  let grants = graphRun.value.grants
-  graphRun := freshGraphRun ()
-  graphRun.value.evCounter := n
-  -- The cells below the carried ordinal belong to an earlier drive, which judged
-  -- them or never solved them; this drive judges only the cells it mints.
-  graphRun.value.evJudged := n
+resetGraphState _ = resetGraphLineage graphRun.value.markedAhead
+
+-- [keepMarked]: keep the current lineage's base and cell arrays rather than starting
+-- them empty at the counter.
+resetGraphLineage : Bool -> Unit
+resetGraphLineage keepMarked =
+  let prior = graphRun.value
+  let n = prior.evCounter.value
+  let base = if keepMarked then prior.evBase else n
+  let localAbs = prior.localAbs
+  let grants = prior.grants
+  let fresh = freshGraphRun ()
+  let kept = if keepMarked then prior else fresh
+  fresh.evCounter := n
+  -- The cells below the base belong to an earlier drive, which judged them or never
+  -- solved them; this drive judges only the cells of its own lineage.
+  fresh.evJudged := base
   -- The binder names survive; the quantified ids do not: they are type-variable
   -- ids, and the fresh run restarts the counter that minted them.
   localAbs.lasQuantified := omEmpty
@@ -11942,10 +11984,12 @@ resetGraphState _ =
   -- inference that follows registers them under ids the restarted counter mints
   -- again.
   grants.gsSourceless := Tip
-  graphRun := GraphRun { graphRun.value |
+  graphRun := GraphRun { fresh |
     localAbs = localAbs,
     grants = grants,
-    evBase = n,
+    evBase = base,
+    evCells = kept.evCells,
+    siteCells = kept.siteCells,
   }
 
 -- A detached copy for the two memo layers, like `copyCrossRun`: every cell re-minted
@@ -11967,6 +12011,7 @@ copyGraphRun g = GraphRun {
   goalsN = Ref g.goalsN.value,
   evCounter = Ref g.evCounter.value,
   evBase = g.evBase,
+  markedAhead = g.markedAhead,
   evJudged = Ref g.evJudged.value,
   evTable = Ref g.evTable.value,
   memoMethodReturns = Ref g.memoMethodReturns.value,
@@ -56184,15 +56229,19 @@ shadowBareName sm n = match lookupAssoc n sm
 
 -- The mark sub-phase of elaborateModules (RKey-only): compute rpNames over the
 -- full module graph and prePassDict each module.  Exported so profiling drivers
--- can bracket the mark phase vs the typecheck phase separately.
+-- can bracket the mark phase vs the typecheck phase separately.  It opens the graph
+-- lineage the cells it mints belong to and leaves it `markedAhead`, so the driver
+-- it feeds (`checkModules`) keeps those cells when its preamble resets the graph.
 export
 markModules : List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl))
 markModules coreDecls modules =
+  let _ = resetGraphLineage False
   let rpNames = returnPosMethodNames (coreDecls ++ flatMap snd modules)
   let core2 = prePassDict rpNames [] coreDecls
   let modules2 = map (prePassModulePair rpNames) modules
+  graphRun := GraphRun { graphRun.value | markedAhead = True }
   (core2, modules2)
 
 -- typecheck one module (seeded like checkModuleFull) AND immediately stamp the

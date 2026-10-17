@@ -1,16 +1,19 @@
 -- Sibling tests for the published evidence table in `route_key.mdk`.
 --
--- Only the answering arms are covered here.  A lookup that finds no entry panics, and
--- `stdlib/test.mdk` has no verb that observes a panic in-process, so the three miss arms
--- of `evDictRoutes` and `evSiteRoute` (no table, ordinal below or past the span,
--- in-span hole) are not pinned by this file.  Pinning them needs a shell gate that runs an entry calling `evDictRoutes`
--- on an empty table and expects the panic text, enrolled in `test/gates.toml`.
+-- A lookup that finds no entry panics, and `stdlib/test.mdk` has no verb that observes
+-- a panic in-process, so the miss arms are pinned through the `Result` twins the
+-- panicking readers wrap (`installedLookup`, `evidenceLookup`, `evSiteRouteResult`,
+-- `evSiteLitResult`): each wrapper is one `match` that panics with the `Err` text.
 
 import test.{expectEqual, expectAll}
 import types.route_key.{
   evDictRoutes,
   evSiteLit,
+  evSiteLitResult,
   evSiteRoute,
+  evSiteRouteResult,
+  evidenceLookup,
+  installedLookup,
   installEvidence,
   installedEvidenceEntries,
   installedEvidenceSlots,
@@ -101,4 +104,53 @@ test "an unminted literal site answers no float and no route" =
   expectAll [
     expectEqual None (fst r),
     expectEqual "none" (routeShape (snd r)),
+  ]
+
+-- The miss text of a lookup, "ok" when it answered.
+missOf : Result String a -> String
+missOf (Ok _) = "ok"
+missOf (Err message) = message
+
+test "a lookup with no table installed names what it looked up" =
+  expectEqual
+    "evidence table: no elaboration has published one (looking up operator site m#3)"
+    (missOf (evidenceLookup None "operator site" (EvId "m" 3)))
+
+test "each miss of the installed table says why it has no answer" =
+  let _ = installEvidence [
+    EvEntry (EvId "m" 10) (EvOne RNone),
+    EvEntry (EvId "m" 12) (EvMany []),
+  ]
+  expectAll [
+    expectEqual
+      "evidence table: operator site m#9 is from an earlier graph"
+      (missOf (installedLookup "operator site" (EvId "m" 9))),
+    expectEqual
+      "evidence table: operator site m#13 was never published"
+      (missOf (installedLookup "operator site" (EvId "m" 13))),
+    expectEqual
+      "evidence table: operator site m#11 was never published"
+      (missOf (installedLookup "operator site" (EvId "m" 11))),
+    expectEqual
+      "evidence table: n#10 answered by module m"
+      (missOf (installedLookup "operator site" (EvId "n" 10))),
+    expectEqual "ok" (missOf (installedLookup "operator site" (EvId "m" 10))),
+  ]
+
+test "a site reader refuses an entry of another kind and passes a miss through" =
+  let _ = installEvidence [
+    EvEntry (EvId "m" 10) (EvOne RNone),
+    EvEntry (EvId "m" 12) (EvMany []),
+  ]
+  expectAll [
+    expectEqual
+      "evidence table: an operator site answered by another kind of entry"
+      (missOf (evSiteRouteResult (EvId "m" 12))),
+    expectEqual
+      "evidence table: a literal site answered by another kind of entry"
+      (missOf (evSiteLitResult (EvId "m" 10))),
+    expectEqual
+      "evidence table: literal site m#9 is from an earlier graph"
+      (missOf (evSiteLitResult (EvId "m" 9))),
+    expectEqual "ok" (missOf (evSiteRouteResult (EvId "m" 10))),
   ]
