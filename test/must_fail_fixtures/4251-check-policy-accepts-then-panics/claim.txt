@@ -1,0 +1,11 @@
+issue: 4251
+what: `check-policy --allow FFI --fn shout` prints `accepted. shout requires only <FFI "c">`
+what: on stdout, then its sample run reaches the interpreter, which panics on the user FFI
+what: extern (E-PANIC on stderr) and the exit code is 1: "accepted." with a failing exit.
+cmd: check-policy main.mdk --allow FFI --fn shout
+exit: 1
+stdout-line: accepted. shout requires only <FFI "c">
+control: check-policy control.mdk --allow FFI --fn shout
+why-control: control.mdk is an extern-free `shout`; it is accepted with exit 0.
+why-note: stderr (the E-PANIC) is not graded by this harness; the exit-1-with-accepted
+why-note: pairing is the defect.

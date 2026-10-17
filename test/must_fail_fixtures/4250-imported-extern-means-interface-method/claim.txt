@@ -1,0 +1,15 @@
+issue: 4250
+what: An IMPORTED extern named like an interface method (`add`) silently means the
+what: method: `import moda.{add}` then `println (add 20 22)` runs `Num.add` and prints 42;
+what: the extern's `c_add` is never called, and (unlike an imported FUNCTION `add`) no
+what: W-IMPORT-METHOD-SHADOW is emitted. Pinned on the native binary because `run` refuses
+what: a reached FFI extern (T-TARGET-NO-BINDING) and `check` prints nothing useful. Expected:
+what: the extern is called (the link would then need c_add) or a warning is emitted.
+cmd: build-run main.mdk
+exit: 0
+stdout: 42
+control: build-run control.mdk
+why-fixture: Measured on the current binary: `build` exits 0 with c_add UNDEFINED and
+why-fixture: the binary prints 42, which is only possible if the method was called.
+why-control: control.mdk imports a plain function `plus` from the same module and prints 42
+why-control: through the same import path.
