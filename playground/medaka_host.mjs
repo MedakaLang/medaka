@@ -226,11 +226,13 @@ export function jspiAvailable() {
 // there is no way to wait on the promise and answering at once would be wrong.
 export function promiseImport(capability, key, fn, promising) {
   if (promising) return new WebAssembly.Suspending(fn);
-  return () => {
-    throw new CapabilityError(capability,
-      `${KEY_EXTERN[key] || key} waits on the host, which needs JSPI (WebAssembly.Suspending and `
-      + 'WebAssembly.promising) and a promising entry; this engine or entry does not provide it');
-  };
+  return () => noJspi(capability, key);
+}
+
+function noJspi(capability, key) {
+  throw new CapabilityError(capability,
+    `${KEY_EXTERN[key] || key} waits on the host, which needs JSPI (WebAssembly.Suspending and `
+    + 'WebAssembly.promising) and a promising entry; this engine or entry does not provide it');
 }
 
 // A thenable is any object or function with a callable `then`: what `await` would wait on.
@@ -992,7 +994,7 @@ export function createHost(profile, opts = {}) {
       Atomics.wait(host.waitCell, 0, 0, ms);
     },
     // fetchText without a promising entry: there is no way to wait on the response.
-    mdk_fetch_text: () => promiseImport('net', 'mdk_fetch_text', null, false)(),
+    mdk_fetch_text: () => noJspi('net', 'mdk_fetch_text'),
   };
   // The promise-answering forms of keys that `real` serves synchronously, installed by
   // runProgram under a promising entry.  Sleep there is a timer, so it needs no
@@ -1008,16 +1010,26 @@ export function createHost(profile, opts = {}) {
       return step(ms);
     },
     // GET the url on the path channel: 1 with the body of a 2xx response on the result
-    // channel, 0 with "<status> <statusText>" for any other status or the failure's
-    // message when no response arrives.  The url is taken before the first await, so
-    // the channel is free again while the guest is suspended.
+    // channel, 0 with "<status> <statusText>" (just the status when the text is empty)
+    // for any other status or the failure's message when no response arrives.  Only
+    // http and https URLs are fetched: other schemes (file: on Bun and Deno reads local
+    // files) fail before `fetch` is called.  The url is taken before the first await,
+    // so the channel is free again while the guest is suspended.
     mdk_fetch_text: async () => {
       const url = takePath();
       if (host.streaming) host.flush();
+      let scheme;
+      try { scheme = new URL(url).protocol; } catch (_) { scheme = null; }
+      if (scheme !== 'http:' && scheme !== 'https:') {
+        host.resultBuf = enc(scheme === null
+          ? `fetchText: unsupported URL ${JSON.stringify(url)} (only absolute http and https URLs)`
+          : `fetchText: unsupported URL scheme "${scheme}" (only http and https)`);
+        return 0;
+      }
       try {
         const res = await (host.fetch || globalThis.fetch)(url);
         if (res.ok) { host.resultBuf = new Uint8Array(await res.arrayBuffer()); return 1; }
-        host.resultBuf = enc(`${res.status} ${res.statusText}`);
+        host.resultBuf = enc(res.statusText ? `${res.status} ${res.statusText}` : String(res.status));
         return 0;
       } catch (e) {
         host.resultBuf = enc(String((e && e.message) || e));
@@ -1253,6 +1265,9 @@ export async function runProgram(wasm, host, opts = {}) {
   } catch (e) {
     host.flush();
     if (e instanceof ExitSignal) return { kind: 'exit', code: e.code };
+    if (!inProgram && e && (e.name === 'SuspendError' || /suspend without WebAssembly\.promising/.test(e.message)))
+      e.message += ': a top-level value called fetchText or sleepMs during initialization; '
+        + 'JSPI cannot suspend there: move the call into main';
     return { kind: 'error', error: e, inProgram };
   }
 }

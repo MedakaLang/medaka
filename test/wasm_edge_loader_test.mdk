@@ -12,7 +12,9 @@
 
 import compiler_cli_test_support.{inFreshDirOf, wasmEmitter}
 import string.{contains}
-import test.{expectAll, expectEqual, expectNotEqual, expectTrue, fail}
+import test.{
+  Expectation, expectAll, expectEqual, expectNotEqual, expectTrue, fail
+}
 import test_process.{boundedVerbSeconds, medakaBin, medakaRoot}
 
 corpus : <IO> String
@@ -108,5 +110,36 @@ test "edge build: an -o that does not end in .wasm is a build error" =
         Ok (code, out, err) => expectAll [
           expectNotEqual 0 code,
           expectTrue (contains "needs `-o` to end in `.wasm`" (out ++ err)),
+          expectEqual (Ok "") (listing scratch),
         ])
     (msg => fail msg)
+
+test "edge build: an -o that would collide with a companion file leaves nothing behind" =
+  inFreshDirOf
+    (scratch =>
+      expectAll (map (collides scratch) ["medaka_host.wasm", "x.bytes.wasm"]))
+    (msg => fail msg)
+
+collides : String -> String -> <Exec, IO> Expectation
+collides scratch name =
+  match built "wasmgc/edge" "\{corpus}/hello.mdk" "\{scratch}/\{name}"
+    Err e => fail e
+    Ok (code, out, err) => expectAll [
+      expectNotEqual 0 code,
+      expectTrue (contains "would collide" (out ++ err)),
+      expectEqual (Ok "") (listing scratch),
+    ]
+
+test "edge build: a # or % in the wasm name loads through both loaders" =
+  inFreshDirOf
+    (scratch => expectAll (map (loads scratch) ["a#b", "c%41"]))
+    (msg => fail msg)
+
+loads : String -> String -> <Exec, IO> Expectation
+loads scratch stem =
+  match built "wasmgc/edge" "\{corpus}/hello.mdk" "\{scratch}/\{stem}.wasm"
+    Err e => fail e
+    Ok _ => expectAll [
+      expectEqual (Ok (0, driven, "")) (drive scratch "\{stem}.mjs"),
+      expectEqual (Ok (0, driven, "")) (drive scratch "\{stem}.bytes.mjs"),
+    ]

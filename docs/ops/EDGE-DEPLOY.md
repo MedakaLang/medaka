@@ -105,7 +105,9 @@ To check the loader without workerd, `node hello.mjs`-style use works through
 `import('./hello.mjs')` then `run()`, which returns
 `{stdout, stderr, exitCode}`. `fetchText` there needs
 `node --experimental-wasm-jspi` and `run({fetch})` to supply the fetch function;
-without JSPI it fails with a message naming JSPI.
+without JSPI it fails with a message naming JSPI. A top-level value that calls
+`fetchText` or `sleepMs` cannot suspend during initialization: the run ends in exit
+code 1 with a message saying so; call them from `main`.
 
 ## Deploy
 
@@ -172,7 +174,8 @@ body; probe `/` and one other path to confirm the route table is what you meant.
   ships neither `playground/medaka_host.mjs` nor a wasm emitter; build from a
   repository checkout.
 - **Panic text carries the build machine's source path** on stderr (reaches
-  `run()` and logs, not the response body).
+  `run()` and the runtime log, which the default `fetch` writes with `console.error`; it is not
+  in the response body).
 - **Unmeasured:** production Workers; the lowest Node 24 minor accepting
   `import source` unflagged; whether Workers' coarse clock makes `monotonicSec`
   deltas zero.

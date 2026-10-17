@@ -42,8 +42,34 @@ test "the bytes loader reads the sibling file and exports run and fetch" = withP
       expectTrue (contains "export default" t),
     ])
 
-test "a quote, backslash and newline in the file name are escaped" = withProfile
+test "a quote, backslash and newline in the file name are percent-encoded" = withProfile
   "wasmgc/edge"
   (p => match edgeLoader p "a\"b\\c\nd.wasm"
     None => expectEqual "a loader" "none"
-    Some t => expectTrue (contains "\"./a\\\"b\\\\c\\nd.wasm\"" t))
+    Some t => expectTrue (contains "\"./a%22b%5cc%0ad.wasm\"" t))
+
+test "#, ? and % in the file name are percent-encoded in both loaders" = withProfile
+  "wasmgc/edge"
+  (p => expectAll [
+    hasLiteral "\"./a%23b%3f%25c.wasm\"" (edgeLoader p "a#b?%c.wasm"),
+    hasLiteral "\"./a%23b%3f%25c.wasm\"" (edgeBytesLoader p "a#b?%c.wasm"),
+  ])
+
+test "a NUL followed by a digit never reaches the JS string as an octal escape" = withProfile
+  "wasmgc/edge"
+  (p => expectAll [
+    hasLiteral "\"./a%001%20.wasm\"" (edgeLoader p ("a\0" ++ "1 .wasm")),
+  ])
+
+test "the default fetch logs non-empty stderr and answers stdout only" = withProfile
+  "wasmgc/edge"
+  (p => expectAll [
+    hasLiteral
+      "if (result.stderr) console.error(result.stderr);"
+      (edgeLoader p "a.wasm"),
+    hasLiteral "return textResponse(result);" (edgeBytesLoader p "a.wasm"),
+  ])
+
+hasLiteral : String -> Option String -> Expectation
+hasLiteral needle None = expectEqual "a loader" "none"
+hasLiteral needle (Some t) = expectTrue (contains needle t)

@@ -40,7 +40,7 @@ import compiler_cli_test_support.{
   wasmEmitter,
 }
 import fs.{fixtureDirs, fixtureFiles}
-import list.{sort}
+import list.{sort, zipWith}
 import path.{basename, dirname, stem}
 import string.{contains, endsWith, join, lines, sliceClamped, split, startsWith}
 import test.{Expectation, expectAll, expectEqual, expectTrue, fail, pass}
@@ -115,6 +115,8 @@ data Ran = Ran {
   nativeOut : String,
   edgeOut : String,
   edgeErr : String,
+  nativeExit : Int,
+  edgeExit : Int,
 }
 
 data Sweep = Sweep {
@@ -250,8 +252,8 @@ runSpawns js scratch p = [
   ),
 ]
 
-nodeSpawns : String -> String -> Ran -> List (String, List String)
-nodeSpawns js _ r = [("node", [js, "\{r.base}.wasm"])]
+nodeSpawns : String -> Ran -> List (String, List String)
+nodeSpawns js r = [("node", [js, "\{r.base}.wasm"])]
 
 -- A program the edge check refuses, built for the node profile and run under
 -- the edge profile: the host must stop it at its first withheld call.
@@ -331,12 +333,20 @@ gradeBuild p ((Ok (code, out, err)) :: _) =
     settled p.key (Failed "edge build exited \{intToString code}: \{clip text}")
 gradeBuild p _ = settled p.key (Failed "a build could not be spawned")
 
+-- A run on the edge agrees with the native run when stdout and exit code are
+-- equal and the edge wrote nothing to stderr, or exactly what native wrote.
+runAgrees : (Int, String, String) -> (Int, String, String) -> Bool
+runAgrees (nc, nout, nerr) (ec, eout, eerr) =
+  nout == eout && nc == ec && (eerr == "" || eerr == nerr)
+
 gradeRun : String ->
   Probe ->
   List (Result String (Int, String, String)) ->
   Result (String, Verdict) Ran
-gradeRun scratch p [Ok (_, nout, _), Ok (_, eout, eerr)] =
-  if nout == eout then
+gradeRun scratch p [Ok native, Ok edge] =
+  let (nc, nout, _) = native
+  let (ec, eout, eerr) = edge
+  if runAgrees native edge then
     settled p.key Passed
   else
     Ok Ran {
@@ -345,6 +355,8 @@ gradeRun scratch p [Ok (_, nout, _), Ok (_, eout, eerr)] =
       nativeOut = nout,
       edgeOut = eout,
       edgeErr = eerr,
+      nativeExit = nc,
+      edgeExit = ec,
     }
 gradeRun _ p _ = settled p.key (Failed "a run could not be spawned")
 
@@ -365,7 +377,14 @@ gradeNode : Ran ->
   Result (String, Verdict) Verdict
 gradeNode r [Ok (_, xout, _)] =
   let key = r.probe.key
-  if xout == r.edgeOut then
+  if r.edgeOut == r.nativeOut then match withheldSlice r.edgeErr
+    Some slice => settled key (WithheldSlice slice)
+    None =>
+      settled
+        key
+        (Failed
+          "edge printed the native stdout but exited \{intToString r.edgeExit} (native \{intToString r.nativeExit}), stderr \{debug (clip r.edgeErr)}")
+  else if xout == r.edgeOut then
     settled key EngineDivergence
   else if xout == r.nativeOut then match withheldSlice r.edgeErr
     Some slice => settled key (WithheldSlice slice)
@@ -391,7 +410,8 @@ sweepIn : List (String, String) -> String -> <Exec, FileRead, IO> Sweep
 sweepIn programs scratch =
   let env = envBase
   let js = runJs
-  let probes = map2 probeOf programs (spawnEach 120 (checkSpawns env) programs)
+  let probes =
+    zipWith probeOf programs (spawnEach 120 (checkSpawns env) programs)
   let unprobed =
     map (p => p.key) (filter (p => p.nodeCode < 0 || p.edgeCode < 0) probes)
   let swept = filter (p => p.nodeCode == 0) probes
@@ -416,11 +436,7 @@ sweepIn programs scratch =
       (gradeRun scratch)
       built
   let graded =
-    stageRun
-      (spawnEach 120 (nodeSpawns js scratch))
-      (m => internal m)
-      gradeNode
-      ran
+    stageRun (spawnEach 120 (nodeSpawns js)) (m => internal m) gradeNode ran
   let containBuilt =
     stageRun
       (spawnEach 300 (containSpawns env scratch))
@@ -438,10 +454,6 @@ sweepIn programs scratch =
     unprobed = unprobed,
     verdicts = map finish graded ++ map finish contained,
   }
-
-map2 : (a -> b -> c) -> List a -> List b -> List c
-map2 f (a :: xs) (b :: ys) = f a b :: map2 f xs ys
-map2 _ _ _ = []
 
 -- Computed once per process; the scratch directory is gone before it returns.
 world : <Exec, FileRead, IO> Result String Sweep
@@ -570,3 +582,23 @@ test "wasm edge corpus: a refused program built for node and run under the edge 
           _ => False)
         sweep.verdicts
     expectAll [expectEqual [] escaped, expectTrue (length stopped > 0)])
+
+-- A program that prints all its output, then dies on the edge (a deep non-tail
+-- recursion the native stack holds) agrees on stdout alone.
+test "wasm edge corpus: equal stdout with a different exit code or stray edge stderr is not agreement" =
+  let native = (0, "all output\n", "")
+  expectAll [
+    expectTrue (runAgrees native (0, "all output\n", "")),
+    expectTrue
+      (not
+        (runAgrees native (
+          1,
+          "all output\n",
+          "RangeError: Maximum call stack size exceeded\n",
+        ))),
+    expectTrue (not (runAgrees native (1, "all output\n", ""))),
+    expectTrue (not (runAgrees native (0, "all output\n", "warning\n"))),
+    expectTrue (runAgrees (2, "x", "boom\n") (2, "x", "boom\n")),
+    expectTrue (not (runAgrees (2, "x", "boom\n") (2, "x", "other\n"))),
+    expectTrue (not (runAgrees native (0, "less\n", ""))),
+  ]

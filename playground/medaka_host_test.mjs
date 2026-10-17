@@ -163,6 +163,30 @@ main =
   let _ = println (show (fetchText "https://stub.test/missing"))
   println (show (fetchText "https://stub.test/down"))
 `,
+  fetchschemes: String.raw`show r = match r
+  Ok body => "ok: " ++ body
+  Err e => "err: " ++ e
+
+try u = println (u ++ " -> " ++ show (fetchText u))
+
+main =
+  let _ = try "file:///etc/hostname"
+  let _ = try "data:text/plain,hi"
+  let _ = try "ftp://stub.test/x"
+  let _ = try "blob:http://stub.test/x"
+  let _ = try "javascript:alert(1)"
+  let _ = try "not a url"
+  let _ = try "/relative/path"
+  let _ = try "http://stub.test/ok"
+  let _ = try "https://stub.test/ok"
+  try "https://stub.test/bare500"
+`,
+  toplevelfetch: String.raw`page = fetchText "http://127.0.0.1:1/x"
+
+main = match page
+  Ok b => println b
+  Err e => println e
+`,
   bigexit: BIG_LOOP + 'main =\n  let _ = loop 1\n  exit 3\n',
   bigtrap: BIG_LOOP + 'main =\n  let _ = loop 1\n  let z = length [1] - 1\n  println (10 / z)\n',
 };
@@ -801,6 +825,63 @@ console.log(JSON.stringify({ jspi: jspiAvailable(), kind: r.kind, out: host.sink
     plain.jspi === false && plain.kind === 'error' && plain.error && plain.error.name === 'CapabilityError'
       && plain.error.message.includes('JSPI'),
     JSON.stringify(plain));
+}
+
+// (v) fetchText refuses every scheme but http and https before `fetch` is called, and an
+// empty statusText leaves the bare status.  The stub records each call it receives.
+{
+  const child = String.raw`
+const { createHost, runProgram } = await import(process.env.MHT_HOST);
+const { readFileSync } = await import('node:fs');
+const calls = [];
+const fetch = async (url) => {
+  calls.push(url);
+  if (url.endsWith('/bare500')) return { ok: false, status: 500, statusText: '' };
+  return { ok: true, status: 200, statusText: 'OK', arrayBuffer: async () => new TextEncoder().encode('hello').buffer };
+};
+const host = createHost('wasmgc/edge', { fetch });
+const r = await runProgram(readFileSync(process.env.MHT_WASM), host);
+console.log(JSON.stringify({ kind: r.kind, out: host.sink.text('stdout'), calls }));
+`;
+  const wasm = build('fetchschemes', 'wasmgc/edge');
+  const hostUrl = pathToFileURL(join(here, 'medaka_host.mjs')).href;
+  const r = spawnSync(process.execPath, ['--experimental-wasm-jspi', '--input-type=module', '-e', child], {
+    env: { ...process.env, MHT_HOST: hostUrl, MHT_WASM: wasm }, encoding: 'utf8',
+  });
+  let got;
+  try { got = JSON.parse(r.stdout); } catch (e) { got = { raw: r.stdout + r.stderr }; }
+  const refused = (u, why) => `${u} -> err: fetchText: unsupported URL ${why}\n`;
+  const want = refused('file:///etc/hostname', 'scheme "file:" (only http and https)')
+    + refused('data:text/plain,hi', 'scheme "data:" (only http and https)')
+    + refused('ftp://stub.test/x', 'scheme "ftp:" (only http and https)')
+    + refused('blob:http://stub.test/x', 'scheme "blob:" (only http and https)')
+    + refused('javascript:alert(1)', 'scheme "javascript:" (only http and https)')
+    + refused('not a url', '"not a url" (only absolute http and https URLs)')
+    + refused('/relative/path', '"/relative/path" (only absolute http and https URLs)')
+    + 'http://stub.test/ok -> ok: hello\nhttps://stub.test/ok -> ok: hello\n'
+    + 'https://stub.test/bare500 -> err: 500\n';
+  check('(v1) fetchText: only http(s) URLs reach fetch; others are Err naming the scheme; empty statusText gives the bare status',
+    got.kind === 'done' && got.out === want
+      && JSON.stringify(got.calls) === JSON.stringify(['http://stub.test/ok', 'https://stub.test/ok', 'https://stub.test/bare500']),
+    JSON.stringify(got));
+}
+
+// (w) a top-level value that suspends traps at instantiation; the error names the cause.
+{
+  const wasm = build('toplevelfetch', 'wasmgc/edge');
+  const runner = join(work, 'toplevel_runner.mjs');
+  writeFileSync(runner, `
+import { createHost, runToResult } from ${JSON.stringify(pathToFileURL(join(here, 'medaka_host.mjs')).href)};
+import { readFileSync } from 'node:fs';
+const r = await runToResult(readFileSync(process.argv[2]), 'wasmgc/edge', { fetch: async () => { throw new TypeError('no net'); } });
+process.stderr.write(r.stderr);
+process.exit(r.exitCode);
+`);
+  const r = spawnSync(process.execPath, ['--experimental-wasm-jspi', runner, wasm], { encoding: 'utf8' });
+  check('(w) a top-level fetchText exits 1 with a message naming the top-level value and main',
+    r.status === 1 && r.stderr.includes('a top-level value called fetchText or sleepMs during initialization')
+      && r.stderr.includes('move the call into main'),
+    JSON.stringify({ status: r.status, stderr: r.stderr }));
 }
 
 // Report only: slices no module built above imports a key of.

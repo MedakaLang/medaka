@@ -1179,7 +1179,10 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr fro
   -- Surface a missing/unset/mistyped MEDAKA_WASM_EMITTER as an actionable error
   -- here; without this, runCommand fails with a bare "No such file or directory"
   -- that names neither the variable nor the fix.
-  if wasmEmitter == "" then
+  let edgeOutErr = edgeOutPathError outPath
+  if isSome edgeOutErr then
+    buildErr (optionOr "" edgeOutErr)
+  else if wasmEmitter == "" then
     buildErr
       "error: --target wasm needs a wasm emitter; build one with `sh test/wasm/build_wasm_oracle.sh` and set MEDAKA_WASM_EMITTER to its path"
   else if not (fileExists wasmEmitter) then
@@ -1288,6 +1291,28 @@ wasmAssemble watPath outPath inputAbs =
             Err e => buildErr "error: stripping \{outPath} failed\n\{e}"
             Ok _ => buildOk "built \{inputAbs} -> \{outPath}"
 
+-- An edge build's `-o` is judged before anything is emitted: the loader files are
+-- named from it, so a name that is not `.wasm`, or whose loaders would overwrite
+-- the host module copy (`medaka_host.mjs`) or the other loader form (`<x>.bytes.mjs`),
+-- must leave nothing behind.  `None` is also what every other profile gets.
+edgeOutPathError : String -> <IO> Option String
+edgeOutPathError outPath = match !selectedProfile
+  None => None
+  Some p =>
+    if isNone (edgeLoader p "") then None else edgeOutNameError p outPath
+
+edgeOutNameError : TargetProfile -> String -> Option String
+edgeOutNameError p outPath =
+  let stem = chopExt (baseOf outPath)
+  if not (endsWith ".wasm" outPath) then
+    Some
+      "error: --target \{profileName p} writes a loader beside the wasm and needs `-o` to end in `.wasm`, got `\{outPath}`"
+  else if stem == "medaka_host" || endsWith ".bytes" stem then
+    Some
+      "error: --target \{profileName p} writes `\{stem}.mjs` and `\{stem}.bytes.mjs` beside the wasm, which would collide with the host module copy or the other loader form; choose a `-o` name other than `medaka_host` or one ending in `.bytes`, got `\{outPath}`"
+  else
+    None
+
 -- An edge build also writes the loader beside the wasm (compiler/backend/
 -- wasm_loader.mdk): `<base>.mjs`, `<base>.bytes.mjs`, and a copy of the host
 -- module they import.  `None` is success, and also what every other profile gets.
@@ -1310,10 +1335,7 @@ writeEdgeFiles : String ->
   <IO> Option String
 writeEdgeFiles root outPath p (sourceForm, bytesForm) =
   let hostSrc = joinPath root "playground/medaka_host.mjs"
-  if not (endsWith ".wasm" outPath) then
-    Some
-      "error: --target \{profileName p} writes a loader beside the wasm and needs `-o` to end in `.wasm`, got `\{outPath}`"
-  else match readFile hostSrc
+  match readFile hostSrc
     Err e =>
       Some
         "error: cannot read the wasm host module at `\{hostSrc}`: \{e}; set MEDAKA_ROOT to your medaka checkout"
