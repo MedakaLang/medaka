@@ -348,6 +348,7 @@ import types.solver_contract.{
   SolverOutcome(..),
   Wanted(..),
 }
+export import types.publish.{TcDiag(..), tcCode, tcMsg, tcLoc, ModDiags}
 import types.registry.{
   RegKey,
   Registry,
@@ -10231,33 +10232,6 @@ resolveArgStamp name tagRef implRef am fullMono omitted encl origin scope =
 -- `compare` (whose impl carries them).  emitDefaultDefine eta-prepends matching
 -- dict params; emitDefaultRKey forwards these words.  Concrete head / a method
 -- with its own impl ⇒ same key as before (empty for non-parametric), unchanged.
-
--- ── structured typecheck diagnostic (TcDiag) ───────────────────────────────
--- #159: ONE structured record replaces the old flat (code, msg, Option Loc)
--- triple PLUS its parallel message-keyed side channels — `typeErrorHelpFix` for
--- errors, and `matchWarningLocs` / `matchWarningHelp` for the non-exhaustive-match
--- warnings.  Every accumulated diagnostic (errors AND match warnings) now carries
--- its code, severity, span, message, and optional help/fix INLINE, so nothing
--- downstream has to zip parallel lists or look help up by message text.  The
--- observable output is unchanged: `driver/diagnostics.mdk` maps a TcDiag to its
--- `Diag` and thence to the `--json` shape (DIAGNOSTIC-CODES-DESIGN.md), byte for
--- byte as before.  `severity` is an Int (1 = error, 2 = warning — the same codes
--- `--json` emits) because the real `Severity` type lives in `driver/diagnostics.mdk`,
--- which imports THIS module, so importing it back would cycle.  `fix` is a plain
--- (Loc span, replacement) pair, converted to a real `Fix` on the diagnostics side.
-public export data TcDiag =
-  | TcDiag String Int (Option Loc) String (Option String) (Option (Loc, String))
-
-export
-tcCode : TcDiag -> String
-tcCode (TcDiag c _ _ _ _ _) = c
-
-export
-tcMsg : TcDiag -> String
-tcMsg (TcDiag _ _ _ m _ _) = m
-
-tcLoc : TcDiag -> Option Loc
-tcLoc (TcDiag _ _ l _ _ _) = l
 
 -- ── type-error accumulator ─────────────────────────────────────────────────
 -- Unification failures record diagnostics here instead of panicking, so
@@ -53777,13 +53751,6 @@ checkModuleFullDiags mid seedVars accData accAll prog =
 -- that tree as far as `graphCollect` and `graphCollect` drops it there, rather than
 -- consing it: that selection returns `gdModules = []`, so accumulating the tree would
 -- hold every module's marked forms live for the whole drive.
--- One module's row in a graph drive's per-module diagnostics: its own value
--- schemes, its isolated errors and its isolated warnings, under its module id.
--- The schemes half is what lets the ENTRY REPORT be a projection of the same list
--- rather than a second pass (`checkModulesEntryFromDiags`); `dropModSchemes` is the
--- narrower `(errs, warns)` view the bucketing fold consumes.
-export type ModDiags = (String, (List (String, Scheme), List TcDiag, List TcDiag))
-
 graphModuleWorker : GraphOut ->
   String ->
   ModuleSeed ->

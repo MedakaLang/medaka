@@ -3193,10 +3193,7 @@ takeOpenedExistentials : Unit -> List (Ref Authvar)
 takePatLits : Unit -> List (Mono, Int, Option Loc)
 takeUntilInclusiveS : String -> List String -> List String
 tcClauseDef : String -> FunClause -> (String, (List Pat, Expr))
-tcCode : TcDiag -> String
 tcDiagGoalKey : (String, TcDiag) -> String
-tcLoc : TcDiag -> Option Loc
-tcMsg : TcDiag -> String
 tconBuiltin : String -> Mono
 tconFrom : TyConOrigin -> String -> Mono
 tconIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
