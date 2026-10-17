@@ -123,6 +123,7 @@ Cross-cutting process docs: how the test suite is organized, how a build ships, 
 | [`CLI-CONFORMANCE.md`](ops/CLI-CONFORMANCE.md) | CLI-CONFORMANCE.md — the ratified `medaka` command-line contract | RATIFIED |
 | [`COMPILER-PROPERTY-TESTING.md`](ops/COMPILER-PROPERTY-TESTING.md) | Compiler property testing | — |
 | [`DISTRIBUTION-DESIGN.md`](ops/DISTRIBUTION-DESIGN.md) | DISTRIBUTION-DESIGN.md — shipping a native `medaka` binary to strangers | PARTIAL |
+| [`EDGE-DEPLOY.md`](ops/EDGE-DEPLOY.md) | Deploying a Medaka program to Cloudflare Workers | — |
 | [`EFFECTS-REARCHITECTURE-HANDOFF.md`](ops/EFFECTS-REARCHITECTURE-HANDOFF.md) | Effects rearchitecture session handoff | The arrow half |
 | [`GATE-REGISTRY-DESIGN.md`](ops/GATE-REGISTRY-DESIGN.md) | GATE-REGISTRY-DESIGN.md — the gate registry format and `medaka gate` driver | LANDED |
 | [`MCP.md`](ops/MCP.md) | MCP.md — `medaka mcp`, the LSP-for-agents | IMPLEMENTED |
