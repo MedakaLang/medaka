@@ -53581,18 +53581,20 @@ checkModulesK preludeKey runtimeDecls coreDecls0 modules0 =
   -- the dead values empty → the whole perf-gate `checkModules` path is O(N).  #2705: this
   -- driver marks but does not solve — see `cmCheckWorker` — so it queues nothing and
   -- drains nothing.
-  foldModules
-    False
-    False
-    cmCheckWorker
-    (_last mid schemes rest => (mid, schemes) :: rest)
-    []
-    (runtimeSeed ++ coreSchemes.mbSchemes)
-    (tagModuleExports coreSchemes.mbStandaloneSchemes coreSchemes.mbSchemes)
-    []
-    []
-    []
-    modules
+  map
+    (m => (fst m, freezeRows (snd m)))
+    (foldModules
+      False
+      False
+      cmCheckWorker
+      (_last mid schemes rest => (mid, schemes) :: rest)
+      []
+      (runtimeSeed ++ coreSchemes.mbSchemes)
+      (tagModuleExports coreSchemes.mbStandaloneSchemes coreSchemes.mbSchemes)
+      []
+      []
+      []
+      modules)
 
 -- ── per-module ISOLATED diagnostics (the analyzeProject typecheck stage) ────
 -- Like checkModuleFull but ALSO harvests THIS module's type diagnostics: it shares the
