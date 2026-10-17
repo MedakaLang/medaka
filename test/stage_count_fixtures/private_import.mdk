@@ -1,0 +1,3 @@
+import support.path.{dirOf}
+
+main = println (dirOf "a/b")

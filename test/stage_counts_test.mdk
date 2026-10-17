@@ -38,7 +38,14 @@ import string.{
   byteLength, contains, lines, split, startsWith, toInt, unlines, words
 }
 import test.{
-  Expectation, expectAll, expectEqual, expectFalse, expectGolden, fail, pass
+  Expectation,
+  expectAll,
+  expectEqual,
+  expectFalse,
+  expectGolden,
+  expectTrue,
+  fail,
+  pass,
 }
 import test_process.{
   boundedVerbSeconds, medakaBin, spawnTimeoutSeconds, underRoot, withScratchDir
@@ -401,3 +408,43 @@ exitCallIn [] = False
 exitCallIn ("exit" :: arg :: rest) =
   contains (stringSlice 0 1 arg) argStarts || exitCallIn (arg :: rest)
 exitCallIn (_ :: rest) = exitCallIn rest
+
+-- Spawns `medaka <args>` with `extraEnv` assignments and without stage
+-- counting, so stdout and stderr are the verb's own bytes.
+spawnPlain : List String ->
+  List String ->
+  <Exec, Env "MEDAKA_ROOT", Env "MEDAKA"> (Int, String, String)
+spawnPlain extraEnv args =
+  spawnResult
+    (boundedVerbSeconds
+      (spawnTimeoutSeconds * 3)
+      "env"
+      (extraEnv ++ [medakaBin] ++ args))
+
+-- `build` refuses a compiler-private import in the emitter child's gate; the
+-- diagnostic reaches the user on both routes, and a `MEDAKA_DIAG_JSON` inherited
+-- from the caller's environment does not redirect it.
+test "stage_counts: build refuses a private import on every route" = withScratchDir
+  (dir =>
+    let entry = fixture "private_import.mdk"
+    let (plainCode, plainOut, plainErr) =
+      spawnPlain [] ["build", entry, "-o", "\{dir}/p"]
+    let (jsonCode, jsonOut, jsonErr) =
+      spawnPlain [] ["build", "--json", entry, "-o", "\{dir}/j"]
+    let (strayCode, _, strayErr) =
+      spawnPlain
+        ["MEDAKA_DIAG_JSON=\{dir}/stray.json"]
+        ["build", entry, "-o", "\{dir}/s"]
+    expectAll [
+      if plainCode == 1 then pass else fail "plain build exited \{plainCode}",
+      expectTrue (contains "unknown module: support.path" plainErr),
+      expectEqual "" plainOut,
+      if jsonCode == 1 then pass else fail "build --json exited \{jsonCode}",
+      expectTrue (contains "unknown module: support.path" jsonOut),
+      expectEqual "" jsonErr,
+      if strayCode == 1 then
+        pass
+      else
+        fail "build with a stray MEDAKA_DIAG_JSON exited \{strayCode}",
+      expectTrue (contains "unknown module: support.path" strayErr),
+    ])

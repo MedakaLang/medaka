@@ -499,7 +499,7 @@ mainShapeError decls = match findMainFunDef decls
 -- front end from source here: a SECOND `loadProgramE` (which has no memo — it
 -- re-reads and re-parses every user module), plus `desugar (parse rsrc)` /
 -- `desugar (parse csrc)` over runtime.mdk + core.mdk.  Both are now what
--- `medaka_cli.mdk`'s `typecheckGate`/`typecheckGateRoute` already do: the loader's
+-- `build`'s front-end gate (`driver/front_gate.frontGate`) does: the loader's
 -- module list is THREADED in from `run` (the caller that loaded it), and the two
 -- prelude halves go through the content-keyed
 -- `desugaredPrelude` memo that `analyzeFrom` / `analyzeProject`

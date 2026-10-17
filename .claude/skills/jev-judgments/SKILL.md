@@ -151,8 +151,8 @@ What moved the numbers in the first experiment, and what did not.
 - **Supply the fact the judgment depends on.** The register policy sentence
   sits in the state, not in the instructions, so every comment question
   reads the same rule. The do-syntax notes carry the desugaring, the
-  uniform-handler equivalence, and the `typecheckGate` exemplar from
-  `compiler/driver/medaka_cli.mdk`. Stripping them is the control run, and
+  uniform-handler equivalence, and the nested-match gate exemplar (a
+  former `medaka_cli` function). Stripping them is the control run, and
   it is what showed the scale depends on them.
 - **Give the smallest unit that decides the question, and all of it.** A
   declaration for a rewrite question. A comment plus the code directly below

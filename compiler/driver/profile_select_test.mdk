@@ -1,0 +1,87 @@
+{- | The profile a verb typechecks under follows the project holding its entry,
+   chosen afresh on every analysis.
+
+   One process analyzes three scratch projects through `analyzeProject`, the
+   memoized entry the language server uses: one whose manifest selects
+   `wasmgc/edge`, one with no `[target]`, one whose `[target]` is unreadable.
+   The same program is clean under no profile and refused under `wasmgc/edge`,
+   and the refusal is the one `medaka check` prints. -}
+
+import driver.build_cmd.{makeTempDir, cleanupTempDir}
+import driver.diagnostics.{analyzeProject, stdlibExportsReader, Diag(..)}
+import driver.profile_select.{carryProjectProfile}
+import test.{Expectation, expectAll, expectEqual, fail}
+
+-- Reads a file the program never reads under the profile `wasmgc/edge`.
+program : String
+program =
+  "main : <IO> Unit\nmain = match readFile \"x\"\n  Ok s => println s\n  Err e => println e\n"
+
+manifest : String -> String
+manifest target = "[package]\nname = \"p\"\nversion = \"0.1.0\"\n" ++ target
+
+edgeTarget : String
+edgeTarget = "\n[target]\nprofile = \"wasmgc/edge\"\n"
+
+badTarget : String
+badTarget = "\n[target]\nprofile = 5\n"
+
+diagMessage : Diag -> String
+diagMessage (Diag _ _ msg _ _ _) = msg
+
+-- The messages `analyzeProject` reports for a project holding `program`, after
+-- selecting that project's profile the way the language server does.
+analyzedIn : String -> String -> String -> <IO> Result String (List String)
+analyzedIn rsrc csrc manifestText = match makeTempDir ()
+  Err e => Err e
+  Ok dir =>
+    let entry = dir ++ "/main.mdk"
+    let _ = writeFile (dir ++ "/medaka.toml") manifestText
+    let _ = writeFile entry program
+    let stdlibDir = "stdlib"
+    let selected = carryProjectProfile None entry
+    let results =
+      analyzeProject
+        (stdlibExportsReader stdlibDir)
+        True
+        []
+        (Ref [])
+        (Ref [])
+        (_ => None)
+        entry
+        [dir, stdlibDir]
+        rsrc
+        csrc
+    let msgs = flatMap (r => map diagMessage (snd r)) results
+    let _ = cleanupTempDir dir
+    map (_ => msgs) selected
+
+edgeRefusal : String
+edgeRefusal =
+  "performs <FileRead \"x\"> where only <IO> is allowed; `IO` on `wasmgc/edge` is <Clock, Rand, Stderr, Stdout>"
+
+check : <IO> Expectation
+check = match readFile "stdlib/runtime.mdk"
+  Err e => fail "could not read stdlib/runtime.mdk: \{e}"
+  Ok rsrc => match readFile "stdlib/core.mdk"
+    Err e => fail "could not read stdlib/core.mdk: \{e}"
+    Ok csrc =>
+      -- The edge project is analyzed first and again last: a stale profile
+      -- left by the project between them would show.
+      expectAll [
+        expectEqual
+          (Ok [edgeRefusal])
+          (analyzedIn rsrc csrc (manifest edgeTarget)),
+        expectEqual (Ok []) (analyzedIn rsrc csrc (manifest "")),
+        expectEqual
+          (Err "unreadable")
+          (mapErr
+            (_ => "unreadable")
+            (analyzedIn rsrc csrc (manifest badTarget))),
+        expectEqual (Ok []) (analyzedIn rsrc csrc (manifest "")),
+        expectEqual
+          (Ok [edgeRefusal])
+          (analyzedIn rsrc csrc (manifest edgeTarget)),
+      ]
+
+test "the memoized project check follows each project's own [target]" = check

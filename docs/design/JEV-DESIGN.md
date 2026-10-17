@@ -388,7 +388,7 @@ sentence, the file, the block, and the code directly below it):
 
 Declarations (every top-level declaration with two or more nested matches on
 Result or Option constructor arms and no `do`; state is the file, the
-declaration source, and the language notes with the `typecheckGate`
+declaration source, and the language notes with the former typecheckGate
 exemplar):
 
 - `uniform_chain` (Noul): two or more successive levels over one monad whose

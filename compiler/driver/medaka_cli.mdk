@@ -70,16 +70,14 @@ import support.timer.{
   perfSinkOn,
   flushPerfSinkProse,
 }
-import list.{sortOn}
-import toml.{parse as parseToml}
-import support.manifest.{targetProfile, statesTargetSection}
+import list.{sortOn, head}
+import driver.profile_select.{manifestProfileOf, carryProjectProfile}
 import types.target_profile.{
   Backend(..),
   buildableNames,
   lookupProfile,
   profileBackend,
   runProfile,
-  selectProfile,
   selectedProfile,
 }
 import tools.target_check.{targetRefusal}
@@ -108,15 +106,10 @@ import frontend.ast.{
   letBindName, Decl(..), Expr(..), Loc(..), Pat, LetBind(..), EvTable
 }
 import frontend.parser.{
-  parseLocated,
   parseWithPositions,
   parseWithPositionsLocated,
   parseResult,
   parseLocatedResult,
-  ParseError,
-  parseErrorLine,
-  parseErrorCol,
-  parseErrorMessage,
   Positions,
 }
 import frontend.lexer.{tokenizeWithOffsetPairs}
@@ -125,7 +118,6 @@ import frontend.desugar.{desugarIn}
 import tools.target_parse.{targetDesugared}
 import frontend.resolve.{resolveModulesErrorsByFile, internalGuardFor, ResError}
 import driver.loader.{
-  LoadError(..),
   loadProgramFilesLocatedE,
   readSource,
   readSourceE,
@@ -137,10 +129,13 @@ import driver.loader.{
   entrySearchRoots,
   projectTrustedMods,
   stdlibOwnership,
-  unknownModuleIdOf,
-  findImportLoc,
-  availableModulesHint,
-  availableModulesText,
+}
+import driver.front_gate.{
+  GateAsk(..),
+  cliStdlibExports,
+  envelopeWithNotes,
+  moduleLoadErrText,
+  ppParseError,
 }
 import driver.diagnostics.{
   analyzeLoadedResolvedClean,
@@ -157,7 +152,6 @@ import driver.diagnostics.{
   tcHalfOfPerModule,
   SurfaceAnalysis(..),
   ppDiagCli,
-  ppDiagCliSrc,
   ppDiagCliLines,
   renderTcDiags,
   ppResolveErrorsByFile,
@@ -182,8 +176,6 @@ import driver.diagnostics.{
   typecheckDiagsFold,
   seedAll,
   midPath,
-  parseErrCode,
-  parseErrHelpFix,
   codeKind,
   optField,
   cjFixJson,
@@ -655,38 +647,11 @@ unknownSubcommand sub =
 
 -- ── check ─────────────────────────────────────────────────────────────────
 
--- The import hint's reader for `check`/`run`/`build`: the stdlib under the same
--- root every verb resolves `stdlib/` against.  Called only once resolve has
--- reported an unbound name (`hintResErrors`).
-cliStdlibExports : List String -> <IO> List (String, List String)
-cliStdlibExports names =
-  stdlibExportsReader (envOr "MEDAKA_ROOT" defaultMedakaRoot ++ "/stdlib") names
--- PARSE-ERROR-LOCATION Stage 1: render a located `ParseError` through the SAME
--- caret-aware `ppDiagCliSrc` + `Diag` machinery the typecheck/resolve text paths
--- use, so EVERY CLI-text parse error gets `file:L:C:` + a source snippet + caret
--- + the stable `P-*`/`L-*` code (and, for the clean single-token hints, a `help`).
--- `parseErrorLine` is 1-based, `parseErrorCol` 0-based — the exact convention
--- `ppDiagCliSrc`/`parseErrHelpFix` expect (matching the `--json` inline build).
-ppParseError : String -> String -> ParseError -> String
-ppParseError src file e =
-  let ploc =
-    Loc
-      file
-      (parseErrorLine e)
-      (parseErrorCol e)
-      (parseErrorLine e)
-      (parseErrorCol e + 1)
-  let (h, fx) = parseErrHelpFix (parseErrorMessage e) ploc
-  ppDiagCliSrc
-    src
-    file
-    (Diag
-      SevError
-      (parseErrCode (parseErrorMessage e))
-      (parseErrorMessage e)
-      (Some ploc)
-      h
-      fx)
+-- The CLI's import-hint reader: `cliStdlibExports` (compiler/driver/front_gate.mdk)
+-- under the stdlib root every verb resolves `stdlib/` against, read at each call.
+cliStdlibExportsEnv : List String -> <IO> List (String, List String)
+cliStdlibExportsEnv names =
+  cliStdlibExports (envOr "MEDAKA_ROOT" defaultMedakaRoot ++ "/stdlib") names
 
 -- Reads <MEDAKA_ROOT>/stdlib/{runtime,core}.mdk + the target, runs
 -- check.runCheck, prints schemes/diagnostics.  Mirrors check_main.mdk; exit 0
@@ -828,52 +793,6 @@ runCheckCmd argv =
 
 -- A load error (missing/cyclic import) is reported verbatim, like
 -- build/run; exit 1.  No-fixture single-file files never error here.
-
--- F3 Chunk B (R-MODULE-LOAD): the loader's `Err "unknown module: X"` carries no
--- location (see loader.mdk's entry-scan doc comment).  `tsrc` is already known
--- to parse (the caller re-checks `parseResult` in its loader-failure arm), so
--- re-parse it with `parseLocated` (real ELoc/DUse spans) and look up the failing modId's own
--- `import` statement; render through the shared carat formatter when found,
--- else fall back to the bare message (unchanged behaviour).
--- F: an `unknown module` message additionally carries an "available modules:
--- ..." suffix (enumerated from `roots` via loader's `availableModulesHint`) so
--- the CLI-text path — which does not render structured `help` — still surfaces
--- an actionable fix.  Other loader errors (cycle / unreadable file) are
--- unaffected: `unknownModuleIdOf` gates the hint to the one message shape it
--- applies to.
--- A parse/lex error inside an IMPORTED module (#100) renders exactly as though
--- that module had been checked directly: `ppParseError` against the module's OWN
--- source and path, so the file, line/col, caret and `P-*`/`L-*` code all name the
--- module that is actually broken rather than the entry that imported it.
--- #2400 F2b: `mpath` is LOADER-MINTED (`./bad.mdk` for a module beside an entry
--- named with no directory part), unlike every other `ppParseError` call site,
--- which passes the CLI's own target string.  Same one-file-two-spellings defect
--- the resolve and type-error channels had; `ppDiagCliLines` (which `ppParseError`
--- renders through) applies the `displayPath` answer for every arm, so nothing is
--- normalised here.  `msrc` is deliberately the module's OWN source, so the caret
--- keeps naming the module that is actually broken (#100).
-moduleLoadErrText : String -> String -> String -> LoadError -> <IO> String
-moduleLoadErrText _ _ _ (LoadParseFailed mpath msrc e) =
-  ppParseError msrc mpath e
-moduleLoadErrText _ _ _ (LoadCycle lmsg cpath csite) = match csite
-  None => lmsg
-  Some (csrc, loc) =>
-    ppDiagCliSrc
-      csrc
-      cpath
-      (Diag SevError "R-MODULE-LOAD" lmsg (Some loc) None None)
-moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) =
-  match unknownModuleIdOf lmsg
-    None => lmsg
-    Some mid =>
-      let msg = lmsg ++ availableModulesHint stdlibDir
-      match findImportLoc mid (parseLocated tsrc)
-        None => msg
-        Some loc =>
-          ppDiagCliSrc
-            tsrc
-            target
-            (Diag SevError "R-MODULE-LOAD" msg (Some loc) None None)
 
 -- BOTH halves of the project analysis from ONE `analyzeProject` pass: the rendered
 -- errors (exactly what `locatedProjectErrors` returns) AND the COHERENCE warnings.
@@ -1086,7 +1005,7 @@ elaboratedProjectDiags rtD coreD modsWithPath modsD perMod =
 -- `elaborateRun` already produced, not a second typecheck (see
 -- `typecheckDiagsFold`'s own note) — kept as `Diag`s instead of rendered
 -- lines. A sibling of `elaboratedProjectDiags` rather than a widened return
--- tuple on it, so `typecheckGateRoute`'s existing 3-tuple match is untouched.
+-- tuple on it, so its callers' existing 3-tuple match is untouched.
 --
 -- Unlike `renderTripleErrors` (the prose path, errors-only by design — the
 -- human `run` has always dropped warnings once any error is present),
@@ -1153,7 +1072,7 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _, d
   -- that re-parse.  Every OTHER `analyzeLocatedG` caller is untouched.
   let (diags, dumped) =
     analyzeFromDump
-      cliStdlibExports
+      cliStdlibExportsEnv
       mid
       rsrc
       csrc
@@ -1279,7 +1198,7 @@ checkFrontPass allowInternal trusted pathMap rsrc csrc modsD =
   let resDiags =
     ppResolveErrorsByFile
       (hintResErrorPairs
-        cliStdlibExports
+        cliStdlibExportsEnv
         (resolveModulesErrorsByFile
           pathMap
           allowInternal
@@ -1357,21 +1276,6 @@ checkTargetJson csrc target cj drive = match !selectedProfile
         Some (CjParts entry (cjFoldIntoFile entry [d] triples))
       _ => None
 
--- `build --json`'s copy of `check --json`'s target refusal: the envelope is
--- printed here, and the answer is whether it was.  The emitter child checks
--- the same program again; this copy only puts the code in the envelope.
-printedTargetRefusal : String ->
-  String ->
-  CheckJson ->
-  Option CheckDrive ->
-  <IO> Bool
-printedTargetRefusal csrc target cj drive =
-  match checkTargetJson csrc target cj drive
-    Some refusedCj =>
-      let _ = println (ppCheckJson refusedCj)
-      True
-    None => False
-
 -- `run`'s refusal, against `eval/run` and the selected profile together.  An
 -- entry `run` cannot start at all is left to `finishRunEval`'s own refusal.
 runTargetGate : Bool ->
@@ -1446,38 +1350,12 @@ runTargetGo acc (x :: rest)
   | otherwise = acc
 runTargetGo acc [] = acc
 
--- The manifest's `[target] profile` for the project holding `entry`; `Err`
--- when a manifest exists but its `[target]` cannot be read.  The walk-up
--- starts from the entry's absolute directory: a relative entry's `dirOf2` is
--- `.`, whose parent is itself.  A manifest the TOML reader rejects with no
--- `[target]` header reads as no target: its other readers judge it.
-manifestProfileOf : String -> <IO> Result String (Option String)
-manifestProfileOf entry =
-  match findProjectRoot (canonicalizePath (dirOf2 entry))
-    None => Ok None
-    Some root =>
-      let path = root ++ "/medaka.toml"
-      let read = match readFile path
-        Err e => Err e
-        Ok text => match parseToml text
-          Err e =>
-            if statesTargetSection text then
-              Err "not valid TOML: \{e}"
-            else
-              Ok None
-          Ok doc => targetProfile doc
-      mapErr (why => "cannot read `[target]` in \{path}: \{why}") read
-
 -- Resolve `--target` (over the manifest) and carry the profile; a name the
 -- table does not know aborts.
 carryTargetProfile : Option String -> String -> <IO> Unit
-carryTargetProfile flagValue entry =
-  let fromManifest = match flagValue
-    Some _ => Ok None
-    None => manifestProfileOf entry
-  match andThen fromManifest (selectProfile flagValue)
-    Ok p => selectedProfile := p
-    Err m => dieMsg ("error: " ++ m)
+carryTargetProfile flagValue entry = match carryProjectProfile flagValue entry
+  Ok _ => ()
+  Err m => dieMsg ("error: " ++ m)
 
 -- True if the flag appears in `run`'s PRE-positional prefix ONLY — the same
 -- prefix `runArgvFilter` consumes, program passthrough args (after the first
@@ -1597,9 +1475,9 @@ runCheckJsonCmd allowInternal rsrc csrc target stdlibDir =
           if hasErr then stageExit 1
 
 -- #1078: `medaka build --json`'s envelope for a build-STAGE failure — the
--- emitter/clang step itself, AFTER the front-end gate (checkJsonFile, reused
--- unchanged) has already passed. Same `{"files":[...]}` shape as every other
--- `--json` path (`cjAllToJson`), one span-less `Diag` carrying the emitter's
+-- emitter/clang step itself, AFTER the front-end gate has already passed.
+-- Same `{"files":[...]}` shape as every other `--json` path (`cjAllToJson`),
+-- one span-less `Diag` carrying the emitter's
 -- own message verbatim, so a caller keying off `code` (AGENTS.md) can
 -- distinguish this from a front-end R-*/T-* diagnostic. Registered in
 -- compiler/DIAGNOSTIC-CODES-DESIGN.md.
@@ -1608,26 +1486,14 @@ cjBuildFailedJson target msg = cjAllToJson [
   (target, "", [Diag SevError "R-BUILD-FAILED" msg None None None]),
 ]
 
--- The `main` refusal of the entry file's own declarations, if any (the entry
--- is the last module `typecheckGate` consults).  A file that does not parse
--- never reaches here: the check gate has already rejected it.  The located
--- parse primes the parser's position state with this source, so a refusal at an
--- import member carries this file's line and column.
-entryMainRefusal : String -> List Diag
-entryMainRefusal src = match parseLocatedResult src
-  Ok decls => match mainEntryError decls
-    Some d => [d]
-    None => []
-  Err _ => []
-
--- `medaka build --json`: front-end gate via `checkJsonFile` (BYTE-IDENTICAL
--- structured diagnostics to `check --json` on the same file — same code, same
--- envelope), then, only if clean, the real emit+clang build. A build-stage
+-- `medaka build --json`: one typecheck, in the emitter child, whose front-end
+-- gate writes the envelope `check --json` prints for the program (the same
+-- builders, so the bytes are the same): a refusal ends the build with it, and
+-- a clean build prints it as its success marker, with the build's own notes
+-- folded in — no separate "built X -> Y" prose on this channel, so a machine
+-- consumer sees exactly one shape regardless of outcome.  A build-stage
 -- failure (emitter/clang) becomes a `cjBuildFailedJson` envelope instead of the
--- plain rendered error text; a clean build prints the (empty-diagnostics)
--- gate JSON as its success marker, mirroring `check --json`'s clean output —
--- no separate "built X -> Y" prose on this channel, so a machine consumer sees
--- exactly one shape regardless of outcome.
+-- plain rendered error text.
 runBuildJsonCmd : Args ->
   Bool ->
   String ->
@@ -1648,63 +1514,55 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
         Err msg =>
           let _ = println (cjBuildFailedJson input msg)
           stageExit 1
-        Ok rsrc => match readPreludeFile corePath
+        Ok _ => match readPreludeFile corePath
           Err msg =>
             let _ = println (cjBuildFailedJson input msg)
             stageExit 1
-          Ok csrc =>
-            let (cj, hasErr, drive) =
-              checkJsonFileParts allowInternal rsrc csrc input stdlibDir
-            if hasErr then
-              let _ = println (ppCheckJson cj)
-              stageExit 1
-            else if not (isEmpty (entryMainRefusal entrySrc)) then
-              -- The same refusal `typecheckGate` gives the plain `build`: one
-              -- located diagnostic, never the emitter's panic wrapped in
-              -- R-BUILD-FAILED.
-              let _ =
-                println
-                  (cjAllToJson [(input, entrySrc, entryMainRefusal entrySrc)])
-              stageExit 1
-            else if printedTargetRefusal csrc input cj drive then
-              stageExit 1
-            else
-              let medaka = envOr "MEDAKA" "medaka"
-              let cc = envOr "CC" "clang"
-              let keepIrCli = flag "--keep-ir" a
-              let stampBuild = flag "--stamp-build" a
-              let outPath = match outOpt
-                Some o => o
-                None => defaultOutPath target input
-              -- `quietEmitStderr = True`: this route has already rendered every
-              -- diagnostic into the stdout envelope above (`checkJsonFileParts`),
-              -- so forwarding the child's human copy would report one diagnostic
-              -- twice on two channels. A FAILING emit still carries the child's
-              -- text, through `ppBuildReport rep` into `cjBuildFailedJson` below.
-              match (runBuild
-                root
-                medaka
-                cc
-                target
-                input
-                outPath
-                keepIrCli
-                True
-                stampBuild)
-                -- #2243: the build's own notes (a failed `--keep-ir` copy)
-                -- join the entry file's `diagnostics` array rather than
-                -- vanishing with the status line this channel never prints.
-                -- `CjRendered` is the hand-built parse-error envelope, which
-                -- only ever arrives with `hasErr` set — unreachable here.
-                Ok rep => match cj
-                  CjRendered json => println json
-                  CjParts entry triples =>
+          Ok _ =>
+            let medaka = envOr "MEDAKA" "medaka"
+            let cc = envOr "CC" "clang"
+            let keepIrCli = flag "--keep-ir" a
+            let stampBuild = flag "--stamp-build" a
+            let outPath = match outOpt
+              Some o => o
+              None => defaultOutPath target input
+            let ask =
+              GateAsk { askAllowInternal = allowInternal, askDiagJson = True }
+            -- `quietEmitStderr = True`: the child's verdict arrives as the
+            -- envelope (`diagEnvelope`), so its human copy is not forwarded.
+            match (runBuild
+              root
+              medaka
+              cc
+              target
+              input
+              outPath
+              keepIrCli
+              True
+              stampBuild
+              (Some ask))
+              -- #2243: the build's own notes (a failed `--keep-ir` copy) join
+              -- the entry file's `diagnostics` array rather than vanishing
+              -- with the status line this channel never prints.
+              Ok rep => match rep.diagEnvelope
+                Some (entry, envelope) =>
+                  println (envelopeWithNotes entry rep.notes envelope)
+                None =>
+                  let _ =
                     println
-                      (cjAllToJson (cjFoldIntoFile entry rep.notes triples))
+                      (cjBuildFailedJson
+                        input
+                        "error: the emitter wrote no diagnostics envelope; an emitter built from an older medaka does not write one")
+                  stageExit 1
+              Err rep => match rep.diagEnvelope
+                -- The front end refused the program.
+                Some (_, envelope) =>
+                  let _ = println envelope
+                  stageExit 1
                 -- A build-stage FAILURE already carried its notes: they are
                 -- part of the rendered message, exactly as the plain CLI
                 -- prints them, inside the one R-BUILD-FAILED diagnostic.
-                Err rep =>
+                None =>
                   let _ = println (cjBuildFailedJson input (ppBuildReport rep))
                   stageExit 1
 
@@ -1838,9 +1696,9 @@ emitHiddenDiagNote n =
 --
 -- #2400 / F4.  This USED TO BE `cohWarnTriples`, filtering `isCoherenceWarn`; it now
 -- filters `diagIsWarn`, and it is the ONLY place `run`/`build` widen past
--- `runBuildWarnCodes`.  (Its two call sites — `run`'s single-file arm and
--- `typecheckGateRoute`'s single-module arm — were its ONLY callers, so nothing on
--- the multi-module path lost a filter; those arms carry `projWarns` from
+-- `runBuildWarnCodes`.  (Its call site — `run`'s single-file arm — is
+-- single-module, so nothing on the multi-module path lost a filter; those arms
+-- carry `projWarns` from
 -- `locatedProjectDiags` and still go through `cohWarnsOfTriple`/`isCoherenceWarn`.)
 -- Read `isCoherenceWarn`'s 🚨 block first: it records why widening the WHOLE channel
 -- to `diagIsWarn` was tried and reverted.  Every one of its three measured
@@ -2518,16 +2376,21 @@ runBuildModes a = match flagValue "--emit-rt-obj" a
     -- #1078: `--json` is now a recognized flag (claimed by `buildArgSpec`,
     -- above) rather than a phantom second positional. Dispatch to a
     -- dedicated function per mode rather than inlining the branch here —
-    -- `runBuildJsonCmd` reuses `checkJsonFile` (the SAME structured pass
-    -- `check --json` runs) for the front-end gate and wraps a genuine
+    -- `runBuildJsonCmd` prints the envelope `check --json` prints for the
+    -- program (written by the emitter child's gate) and wraps a genuine
     -- emit/clang failure in the same `{"files":[...]}` `Diag` envelope, so
     -- one JSON shape covers every failure mode, front-end or backend; the
     -- plain-text arm (`runBuildPlainCmd`) is the pre-#1078 body, unchanged.
     None => if flag "--json" a then runBuildJsonEntry a else runBuildPlainCmd a
 
--- The plain-text `medaka build` body (parse args -> typecheck gate ->
+-- The plain-text `medaka build` body (parse args -> prelude check ->
 -- emit+clang), kept separate from `runBuildJsonEntry` to avoid interleaving
--- argument-parsing dispatch at the same indent level.
+-- argument-parsing dispatch at the same indent level.  This process reads the
+-- two prelude files, for `readPreludeFile`'s missing-stdlib and prelude
+-- parse-error messages, and does no other front-end work: the `medaka_emitter`
+-- child loads, parses, resolves and typechecks the program once, under the
+-- front-end gate `runBuild` asks it for (`driver/front_gate.frontGate`), and a
+-- refusal reaches this process as the child's diagnostic.
 runBuildPlainCmd : Args -> <IO> Unit
 runBuildPlainCmd a =
   let perfOn = perfEnabled ()
@@ -2550,27 +2413,31 @@ runBuildPlainCmd a =
         let outPath = match outOpt
           Some o => o
           None => defaultOutPath target input
-        match typecheckGate allowInternal root inputAbs
+        let prelude = do
+          _ <- readPreludeFile (root ++ "/stdlib/runtime.mdk")
+          readPreludeFile (root ++ "/stdlib/core.mdk")
+        match prelude
           Err msg => dieMsg msg
-          Ok _ =>
-            let perfTTc = now ()
-            let _ = emitPhase perfOn "typecheck" (perfTTc - perfT0) input
-            match (runBuild
-              root
-              medaka
-              cc
-              target
-              inputAbs
-              outPath
-              keepIrCli
-              False
-              stampBuild)
-              Ok rep =>
-                let perfTEmit = now ()
-                let _ = emitPhase perfOn "emit" (perfTEmit - perfTTc) input
-                let _ = emitTotal perfOn (perfTEmit - perfT0)
-                println (ppBuildReport rep)
-              Err rep => dieMsg (ppBuildReport rep)
+          Ok _ => match (runBuild
+            root
+            medaka
+            cc
+            target
+            inputAbs
+            outPath
+            keepIrCli
+            False
+            stampBuild
+            (Some GateAsk {
+              askAllowInternal = allowInternal,
+              askDiagJson = False,
+            }))
+            Ok rep =>
+              let perfTEmit = now ()
+              let _ = emitPhase perfOn "emit" (perfTEmit - perfT0) input
+              let _ = emitTotal perfOn (perfTEmit - perfT0)
+              println (ppBuildReport rep)
+            Err rep => dieMsg (ppBuildReport rep)
 
 -- `medaka build --json`'s own argument-parsing arm: a flag error still goes
 -- through `parseBuildArgs`, but a bad-args message is now the JSON envelope
@@ -2660,154 +2527,6 @@ buildUsage _ =
 defaultOutPath : BuildTarget -> String -> String
 defaultOutPath TNative input = chopExt (baseOf input)
 defaultOutPath TWasm input = chopExt (baseOf input) ++ ".wasm"
--- G1 (SOUNDNESS): nothing downstream of this gate re-checks the program, so a
--- graph that reaches `runBuild` must already have a verdict.  Resolve is that
--- verdict here; the TYPE verdict belongs to the `medaka_emitter` child, whose
--- own elaboration gate is hard and whose diagnostics `runBuild` forwards.  What
--- must never happen is the G1 bug — `runBuild` emitting and clanging garbage for
--- a program no pass rejected.
---
--- G1 typecheck gate result, a `Result String Unit`: `Err diagnostic` (a resolve
--- error, or a pre-typecheck read/load failure) whose message we surface
--- verbatim, or `Ok ()` — a clean-enough-to-emit verdict, not a clean-program
--- one.  The payload is Unit because this process no longer typechecks: the
--- `medaka_emitter` child does, once, and every diagnostic that pass produces —
--- errors and warnings alike — reaches the user through the child's own stderr,
--- which `runBuild` forwards verbatim whichever way the build goes, except on the
--- `--json` route, where this process still renders them into the envelope and
--- the human copy would be a second report of the same diagnostic.
---
--- Load the entry + transitive imports, resolve them, and abort BEFORE the
--- emitter/clang on a naming error, rendering it exactly as `check` renders it.
--- Read/load failures become Err (surfaced as-is) so the caller mirrors
--- runBuild/loadProgram's own diagnostics.
-typecheckGate : Bool -> String -> String -> <IO> Result String Unit
-typecheckGate allowInternal root input =
-  let rtPath = root ++ "/stdlib/runtime.mdk"
-  let corePath = root ++ "/stdlib/core.mdk"
-  let stdlibDir = root ++ "/stdlib"
-  let roots = entrySearchRoots (dirOf2 input) ++ [stdlibDir]
-  do
-    rsrc <- readPreludeFile rtPath
-    csrc <- readPreludeFile corePath
-    tsrc <- readSource input
-    -- PARSE-ERROR-LOCATION Stage 1: a located parse diagnostic for the ENTRY.
-    -- An IMPORTED module's parse error is located by the loader itself (#100)
-    -- and rendered by moduleLoadErrText.  The entry is parsed again only when
-    -- the loader fails, so a valid entry is parsed once; both error arms
-    -- RE-RENDER against the entry source, so they stay explicit `match`es
-    -- rather than joining the chain.
-    -- #186/#1360: load with `loadProgramFilesLocatedE`, exactly as
-    -- `runCheckCmd` and `runRunCmd` already do.  Plain `loadProgramE`
-    -- gave this gate BOTH halves of the misattribution at once: it parses
-    -- with placeholder-loc `parse` (every span collapses to 1:0) AND carries
-    -- no per-module path, so an imported module's resolve error printed as
-    -- `<entry>:1:0:` — wrong file AND wrong position.  The located loader
-    -- carries real spans and the modId → path map `pathMap` threads below.
-    match loadProgramFilesLocatedE (_ => None) input roots
-      Err lerr => match parseResult tsrc
-        Err e => Err (ppParseError tsrc input e)
-        Ok _ => Err (moduleLoadErrText tsrc input stdlibDir lerr)
-      Ok modsWithPath =>
-        let mods = map dropPathTriple modsWithPath
-        let pathMap = map modIdToPath modsWithPath
-        let trusted = projectTrustedMods input roots stdlibDir mods
-        -- #2072: the FFI-stamp discriminator, published to typecheck alongside the
-        -- #1713 reference-trust set above.  DIFFERENT predicate, deliberately: this
-        -- one is stdlib-root ownership with NO `allow-internal` opt-out.
-        let (flatStdlib, ownedStdlib) =
-          stdlibOwnership input roots stdlibDir mods
-        let _ = setStdlibOwnership flatStdlib ownedStdlib
-        match (typecheckGateRoute
-          allowInternal
-          trusted
-          pathMap
-          roots
-          rsrc
-          csrc
-          tsrc
-          input
-          modsWithPath)
-          Err e => Err e
-          -- A program `build` cannot start is refused here, as `run`
-          -- refuses it, rather than reaching the backend's own `main`
-          -- lookup (`mainEntryError`).
-          Ok _ => match lastModPair mods
-            Some (_, edecls) => match mainEntryError edecls
-              Some d => Err (ppMainEntryError tsrc input d)
-              None => Ok ()
-            None => Ok ()
-
--- Route by module count.  Both arms run the RAW-TREE passes only and hand the
--- program to the `medaka_emitter` child, which owns the type verdict for a build
--- (ruling 3 on #2705): one process typechecks the graph, and it is the one whose
--- tree the backend actually consumes.  So `Ok` no longer carries warnings —
--- every warning `build` prints is rendered by the child, against the per-module
--- diagnostics of its own elaboration of the program the user wrote (#2809), and
--- reaches the user through the child's stderr (`emitGateDiags`,
--- driver/diagnostics.mdk).
---
--- WHAT STAYS HERE, and why it is not a second pass.  Resolve is the one verdict
--- the child cannot deliver usefully: a graph that does not resolve produces
--- cascade noise from the elaboration rather than the naming error the user
--- needs, and the emitter would be spawned only to fail.  The single-module arm
--- takes it from `analyzeSurface` (resolve + `deriving` + guard exhaustiveness
--- over one raw tree); the multi-module arm from `resolveModulesErrorsByFile`,
--- the SAME seam `checkRoute` has used since #41, so `build` still rejects
--- exactly the graphs `check` rejects on that channel.
-typecheckGateRoute : Bool ->
-  List String ->
-  List (String, String) ->
-  List String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  List (String, String, List Decl) ->
-  <IO> Result String Unit
-typecheckGateRoute allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _path, decls)] =
-  -- Resolve and the other RAW-TREE passes, and nothing else: since ruling 3 the
-  -- `medaka_emitter` child owns the whole type verdict for a build, warnings
-  -- included, so this process must not typecheck the program a second time.
-  -- What stays here is what the child cannot report — a graph that does not
-  -- resolve never reaches the emitter at all.
-  let surface =
-    analyzeSurface
-      cliStdlibExports
-      mid
-      rsrc
-      csrc
-      decls
-      (internalGuardFor (allowInternal || contains mid trusted))
-  match filter diagIsError surface.surfaceDiags
-    [] => Ok ()
-    errs => Err (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
-typecheckGateRoute allowInternal trusted pathMap _roots rsrc csrc tsrc target modsWithPath =
-  -- S-1/#2234 (F-converge): live use (they feed `resolveModulesErrorsByFile`
-  -- below), so this is a cache hit, not a deletion — `desugaredPrelude` is the
-  -- content-keyed memo of exactly `desugar (parsePrelude src)`.
-  let rtD = desugaredPrelude rsrc
-  let coreD = desugaredPrelude csrc
-  let modsD = map desugarPair (map dropPathTriple modsWithPath)
-  -- #186/#1360: attribute each module's resolve errors to its OWN file, via the
-  -- loader's modId → path map — the SAME `resolveModulesErrorsByFile` seam
-  -- `checkRoute` has used since #41.  The single `target` fallback this replaced
-  -- stamped EVERY imported module's error with the entry file's path.
-  let resDiags =
-    ppResolveErrorsByFile
-      (hintResErrorPairs
-        cliStdlibExports
-        (resolveModulesErrorsByFile
-          pathMap
-          allowInternal
-          trusted
-          (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
-          rtD
-          coreD
-          modsD))
-  match resDiags
-    "" => Ok ()
-    _ => Err resDiags
 
 -- Read `[-o <out>] [--target <native|wasm>]` off the parsed argv; the
 -- positionals are the input.  Default target is TNative (the LLVM/clang path).
@@ -3155,13 +2874,14 @@ runRunCmd argv =
           -- eval rather than from a second, check-only pass over the same
           -- program.  `analyzeFinish` re-assembles them in `analyzeFrom`'s
           -- result order, so `check` and `run` still render the same set.
-          -- ⚠️ Predicate preserved EXACTLY: unlike `typecheckGateRoute`'s
-          -- single-module arm, `run`'s never consulted the `trusted` set —
+          -- The predicate is kept as it was: unlike `build`'s single-module
+          -- gate (`driver/front_gate.frontGate`), `run`'s never consulted the
+          -- `trusted` set —
           -- only the bare `--allow-internal` flag.  That asymmetry is
           -- pre-existing; this parity slice does not change it.
           let surface =
             analyzeSurface
-              cliStdlibExports
+              cliStdlibExportsEnv
               runMid
               rsrc
               csrc
@@ -3238,13 +2958,12 @@ runRunCmd argv =
           -- as sound as the obligations the elaborate driver checks (both
           -- channels since #2705) and renders nothing located; `check`'s
           -- predicate prints the real located `No impl of Display for Foo`
-          -- for `println "\{Foo 1}"` with no Display impl.  See
-          -- typecheckGateRoute for why this is not an over-rejection.
+          -- for `println "\{Foo 1}"` with no Display impl.
           -- #186/#1360: per-module attribution via the loader's
           -- `pathMap`, the same seam `checkRoute` uses (#41).
           let resolvePairs =
             hintResErrorPairs
-              cliStdlibExports
+              cliStdlibExportsEnv
               (resolveModulesErrorsByFile
                 pathMap
                 allowInternal
@@ -3708,6 +3427,7 @@ runDocTargets [] = dieMsg "usage: medaka doc <file.mdk>"
 runDocTargets (_ :: _ :: _) =
   dieMsg "usage: medaka doc <file.mdk> (doc takes exactly one file)"
 runDocTargets (target :: _) =
+  let _ = carryTargetProfile None target
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
@@ -3729,6 +3449,7 @@ runDocLibraryTargets : String -> List String -> <IO> Unit
 runDocLibraryTargets _ [] =
   dieMsg "usage: medaka doc --out DIR <file.mdk> [<file.mdk> ...]"
 runDocLibraryTargets outDir targets =
+  let _ = carryTargetProfile None (optionOr "." (head targets))
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
@@ -3932,6 +3653,7 @@ runCheckPolicyArgs (PolicyArgs (Some target) allow fn) =
 -- manifest's claim is one `check-policy` can verify.
 analyzeTarget : String -> <IO> Result String EntryAnalysis
 analyzeTarget target =
+  let _ = carryTargetProfile None target
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let stdlibDir = root ++ "/stdlib"
   let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
@@ -4617,6 +4339,7 @@ replUsageLine = stringConcat [
 -- explicit/unknown arg needs handling before the loop starts.
 runReplCmd : List String -> <IO> Unit
 runReplCmd [] =
+  let _ = carryTargetProfile None (canonicalizePath "." ++ "/repl")
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
