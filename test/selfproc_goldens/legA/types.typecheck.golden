@@ -1655,7 +1655,7 @@ inferDictAt : TcEnv -> String -> EvId -> Mono
 inferDictAtFound : String -> EvId -> (Mono, List (Int, Mono)) -> Mono
 inferEach : TcEnv -> List Expr -> List Mono
 inferExpected : TcEnv -> Expr -> Mono -> Mono
-inferFieldAccess : TcEnv -> Expr -> String -> Ref String -> Mono
+inferFieldAccess : TcEnv -> Expr -> String -> EvId -> Mono
 inferFieldOfRecord : Mono -> String -> RecordInfo -> String -> Mono
 inferGlobalDictAt : TcEnv -> String -> EvId -> Mono
 inferGrantedAt : TcEnv -> String -> EvId -> Mono
@@ -1713,8 +1713,8 @@ inferRecPatFieldWith : TcEnv -> Mono -> String -> BinderId -> Option Pat -> List
 inferRecPatFields : TcEnv -> String -> List (String, Mono) -> List RecPatField -> List (String, Scheme)
 inferRecordCreate : TcEnv -> String -> List FieldAssign -> Mono
 inferRecordCreateWith : TcEnv -> String -> RecordInfo -> List FieldAssign -> Mono
-inferRecordUpdate : TcEnv -> Expr -> List FieldAssign -> Ref String -> Mono
-inferRecordUpdateField : TcEnv -> Expr -> List FieldAssign -> String -> Ref String -> Mono
+inferRecordUpdate : TcEnv -> Expr -> List FieldAssign -> EvId -> Mono
+inferRecordUpdateField : TcEnv -> Expr -> List FieldAssign -> String -> EvId -> Mono
 inferRecordUpdatePicked : String -> Mono -> TcEnv -> List FieldAssign -> RecordInfo -> Mono
 inferRecordUpdateWith : TcEnv -> String -> Expr -> List FieldAssign -> RecordInfo -> Mono
 inferRecursiveValue : TcEnv -> String -> Expr -> (Mono, List (Int, AuthResidual))
@@ -2186,6 +2186,7 @@ methodsPerMidGo : List (String, List String) -> List (String, List Decl) -> List
 minLevelOf : List (Ref Effvar) -> Int
 mintDictAt : (String -> EvId -> Unit) -> String -> Expr
 mintGrantOnly : String -> Expr
+mintHeadSite : Unit -> EvId
 mintLitSite : Unit -> EvId
 mintMethodCell : String -> EvId
 mintMethodCellRaw : String -> Option Int -> Route -> List Route -> EvId
@@ -3069,6 +3070,7 @@ siteCellOf : EvId -> SiteCell
 siteCellValue : SiteCell -> EvVal
 siteEntry : Obligation -> List PendingEntry
 siteFloatCell : EvId -> Ref (Option Float)
+siteHeadCell : EvId -> Ref String
 siteKindMonos : SiteKind -> List Mono
 siteObligation : GoalKind -> Ref Inner -> PendingEntry -> Obligation
 siteRDictName : Ref Route -> List String

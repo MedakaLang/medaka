@@ -11766,6 +11766,11 @@ mintOpSite _ = mintSite (OpSite (Ref RNone))
 mintLitSite : Unit -> EvId
 mintLitSite _ = mintSite (LitSite (Ref None) (Ref RNone))
 
+-- Mint the cell for one field access or record update, starting with the unknown
+-- head "".
+mintHeadSite : Unit -> EvId
+mintHeadSite _ = mintSite (HeadSite (Ref ""))
+
 -- [ev] if it already has a site, else a freshly minted one: a body re-marked after
 -- inference keeps the ids inference wrote through.
 mintedOr : (Unit -> EvId) -> EvId -> EvId
@@ -11813,6 +11818,13 @@ siteRouteCell ev = match siteCellOf ev
   OpSite r => r
   LitSite _ r => r
   HeadSite _ => notAnOpSite ev
+
+-- The resolved-record-head cell of field access or record update site [ev].
+siteHeadCell : EvId -> Ref String
+siteHeadCell ev = match siteCellOf ev
+  HeadSite h => h
+  OpSite _ => notAnOpSite ev
+  LitSite _ _ => notAnOpSite ev
 
 -- The defaulted-float cell of numeric literal site [ev].
 siteFloatCell : EvId -> Ref (Option Float)
@@ -16810,8 +16822,8 @@ infer env (EBinOp op l r ev) = inferBinopE env op l r (siteRouteCell ev)
 infer env (EUnOp op e ev) = inferUnopE env op e (siteRouteCell ev)
 infer env (EInfix op l r) = inferInfix env op l r
 infer env (ERecordCreate name fields) = inferRecordCreate env name fields
-infer env (EFieldAccess e fname r) = inferFieldAccess env e fname r
-infer env (ERecordUpdate base fields r) = inferRecordUpdate env base fields r
+infer env (EFieldAccess e fname ev) = inferFieldAccess env e fname ev
+infer env (ERecordUpdate base fields ev) = inferRecordUpdate env base fields ev
 infer env (EVariantUpdate cname base fields) =
   inferVariantUpdate env cname base fields
 infer env (EBlock stmts) = inferBlock env stmts
@@ -19389,15 +19401,15 @@ checkMissingFields rname (fname :: rest) supplied
 -- records, the access is ambiguous.  `value` keeps the Ref-projection special case (no
 -- record in compiler/stdlib declares a `value` field, so this matches the
 -- oracle's structural `(Ref a).value → a`).
-inferFieldAccess : TcEnv -> Expr -> String -> Ref String -> Mono
-inferFieldAccess env e fname r
+inferFieldAccess : TcEnv -> Expr -> String -> EvId -> Mono
+inferFieldAccess env e fname ev
   | fname == "value" = inferValueField env e
   | otherwise =
     let te = normalize (infer env e)
     match resolveFieldRecord te fname
       None => freshVar ()
       Some (rname, ri) =>
-        r := stampedRecordHead rname ri
+        siteHeadCell ev := stampedRecordHead rname ri
         let ft = inferFieldOfRecord te rname ri fname
         -- #1468: the WELL-TYPEDNESS half, and it runs AFTER `inferFieldOfRecord`
         -- on purpose — that call is what unifies `te` with the record's result
@@ -19426,8 +19438,8 @@ inferFieldAccess env e fname r
 --
 -- THE QUALIFICATION HAPPENS EXACTLY ONCE, AND HERE IS WHERE.  This is the only
 -- writer of the head a downstream reader sees: `types/private_mangle.mdk`'s
--- `renameScoped` deliberately leaves the `EFieldAccess`/`ERecordUpdate` cells
--- alone (see its note there).  A second application would have to guess whether
+-- `renameScoped` deliberately passes the `EFieldAccess`/`ERecordUpdate` site ids
+-- through (see its note there).  A second application would have to guess whether
 -- the first had already run, and a prefix test is not that fact: a record whose
 -- SOURCE name already carries its own module's prefix (`data Mm__Cfg` beside
 -- `data Cfg` in module `Mm`) reads as "already qualified" and collides with its
@@ -20601,10 +20613,10 @@ unboundVarFresh name =
   let _ = pushTypeError "T-UNBOUND" (unboundVarMsg name)
   freshVar ()
 
-inferRecordUpdate : TcEnv -> Expr -> List FieldAssign -> Ref String -> Mono
-inferRecordUpdate env base fields r = match firstFieldName fields
+inferRecordUpdate : TcEnv -> Expr -> List FieldAssign -> EvId -> Mono
+inferRecordUpdate env base fields ev = match firstFieldName fields
   None => panic "empty record update"
-  Some fn => inferRecordUpdateField env base fields fn r
+  Some fn => inferRecordUpdateField env base fields fn ev
 
 -- `Con { base | f = v, … }` — a named-field-variant update (e.g. desugar's
 -- `DInterface { d | methods = … }`).  Resolve the variant's field layout by the
@@ -20626,9 +20638,9 @@ inferRecordUpdateField : TcEnv ->
   Expr ->
   List FieldAssign ->
   String ->
-  Ref String ->
+  EvId ->
   Mono
-inferRecordUpdateField env base fields fn r =
+inferRecordUpdateField env base fields fn ev =
   let bt = normalize (infer env base)
   match resolveFieldRecord bt fn
     None => freshVar ()
@@ -20637,7 +20649,7 @@ inferRecordUpdateField env base fields fn r =
       -- read it to pick the record by name, instead of guessing from the first
       -- update label (which picks the wrong record — and so the wrong slot — when
       -- two records share a field name at different indices).
-      r := stampedRecordHead rname ri
+      siteHeadCell ev := stampedRecordHead rname ri
       inferRecordUpdatePicked rname bt env fields ri
 
 inferRecordUpdatePicked : String ->
@@ -28585,8 +28597,8 @@ rewriteArgScoped rw bound (EUnOp op x ev) =
   EUnOp op x2 (mintedOr mintOpSite ev)
 rewriteArgScoped rw bound (EInfix op l r) =
   EInfix op (rewriteArgScoped rw bound l) (rewriteArgScoped rw bound r)
-rewriteArgScoped rw bound (EFieldAccess e0 n r) =
-  EFieldAccess (rewriteArgScoped rw bound e0) n r
+rewriteArgScoped rw bound (EFieldAccess e0 n ev) =
+  EFieldAccess (rewriteArgScoped rw bound e0) n (mintedOr mintHeadSite ev)
 rewriteArgScoped rw bound (ETuple es) =
   ETuple (map (rewriteArgScoped rw bound) es)
 rewriteArgScoped rw bound (EListLit es) =
@@ -28612,11 +28624,11 @@ rewriteArgScoped rw bound (EHeadAnnot e0 t) =
   EHeadAnnot (rewriteArgScoped rw bound e0) t
 rewriteArgScoped rw bound (ERecordCreate n fs) =
   ERecordCreate n (map (rewriteArgField rw bound) fs)
-rewriteArgScoped rw bound (ERecordUpdate e0 fs r) =
+rewriteArgScoped rw bound (ERecordUpdate e0 fs ev) =
   ERecordUpdate
     (rewriteArgScoped rw bound e0)
     (map (rewriteArgField rw bound) fs)
-    r
+    (mintedOr mintHeadSite ev)
 rewriteArgScoped rw bound (EVariantUpdate c e0 fs) =
   EVariantUpdate
     c

@@ -3,12 +3,14 @@
 -- A lookup that finds no entry panics, and `stdlib/test.mdk` has no verb that
 -- observes a panic in-process, so the miss arms are pinned through the `Result`
 -- twins the panicking readers wrap (`installedLookup`, `evidenceLookup`,
--- `evSiteRouteResult`, `evSiteLitResult`): each wrapper is one `match` that
+-- `evSiteRouteResult`, `evSiteLitResult`, `evSiteHeadResult`): each wrapper is one `match` that
 -- panics with the `Err` text.
 
 import test.{expectEqual, expectAll}
 import types.route_key.{
   evDictRoutes,
+  evSiteHead,
+  evSiteHeadResult,
   evSiteLit,
   evSiteLitResult,
   evSiteRoute,
@@ -107,6 +109,21 @@ test "an unminted literal site answers no float and no route" =
     expectEqual "none" (routeShape (snd r)),
   ]
 
+test "a published record-head site answers its head" =
+  let _ = installEvidence [
+    EvEntry (EvId "m" 3) (EvHead "Mm__Cfg"),
+    EvEntry (EvId "m" 4) (EvHead ""),
+  ]
+  expectAll [
+    expectEqual "Mm__Cfg" (evSiteHead (EvId "m" 3)),
+    expectEqual "" (evSiteHead (EvId "m" 4)),
+  ]
+
+-- A record access built after inference was never marked and carries no head.
+test "an unminted record-head site answers no head" =
+  let _ = installEvidence [EvEntry (EvId "m" 3) (EvHead "Mm__Cfg")]
+  expectEqual "" (evSiteHead unminted)
+
 -- The miss text of a lookup, "ok" when it answered.
 missOf : Result String a -> String
 missOf (Ok _) = "ok"
@@ -153,5 +170,11 @@ test "a site reader refuses an entry of another kind and passes a miss through" 
     expectEqual
       "evidence table: literal site m#9 is from an earlier graph"
       (missOf (evSiteLitResult (EvId "m" 9))),
+    expectEqual
+      "evidence table: a record-head site answered by another kind of entry"
+      (missOf (evSiteHeadResult (EvId "m" 10))),
+    expectEqual
+      "evidence table: record-head site m#9 is from an earlier graph"
+      (missOf (evSiteHeadResult (EvId "m" 9))),
     expectEqual "ok" (missOf (evSiteRouteResult (EvId "m" 10))),
   ]

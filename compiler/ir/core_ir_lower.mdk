@@ -54,6 +54,7 @@ import types.route_key.{
   ifaceWordOf,
   evDictRoutes,
   evMethodRoutes,
+  evSiteHead,
   numIntWord,
   numFloatWord,
 }
@@ -179,7 +180,7 @@ lower (EInfix op l r) = mkApp (CVar op AGlobal) [lower l, lower r]
 -- already carries Ref-read end-to-end (core_ir_eval, llvm_emit, wasm_emit), so the
 -- repurpose costs zero emitter work — and cannot make the two spellings diverge.
 -- The empty record-name stamp matches what `EFieldAccess e "value"` lowers with:
--- `inferValueField` never stamps the ref, because a Ref is not a record.
+-- `inferValueField` never stamps a head, because a Ref is not a record.
 lower (EUnOp "!" e _) = CFieldAccess (lower e) "value" "" (-1)
 lower (EUnOp op e _) = CUnOp op (lower e)
 lower (ETuple es) = CTuple (map lower es)
@@ -201,10 +202,10 @@ lower (ESlice a lo hi incl r) =
     CListSlice (lower a) (lower lo) (lower hi) incl
   else
     CSlice (lower a) (lower lo) (lower hi) incl
-lower (EFieldAccess e f r) = CFieldAccess (lower e) f !r (-1)
+lower (EFieldAccess e f ev) = CFieldAccess (lower e) f (evSiteHead ev) (-1)
 lower (ERecordCreate name fields) = CRecord name (map lowerField fields)
-lower (ERecordUpdate base fields r) =
-  CRecordUpdate !r (lower base) (map lowerField fields)
+lower (ERecordUpdate base fields ev) =
+  CRecordUpdate (evSiteHead ev) (lower base) (map lowerField fields)
 lower (EVariantUpdate con base fields) =
   CVariantUpdate con (lower base) (map lowerField fields)
 lower (EBlock stmts) = CBlock (lowerStmts stmts)
