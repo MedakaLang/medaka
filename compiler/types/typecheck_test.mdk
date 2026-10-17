@@ -87,6 +87,7 @@ import types.typecheck.{
   constrainedSigNames,
   elaborateModules,
   elaborateOne,
+  evCellsSpanProbe,
   finishAssumptionTrace,
   finishEvidenceObservation,
   finishMethodReturnTrace,
@@ -109,6 +110,7 @@ import types.typecheck.{
   walkGoalSameProbe,
 }
 import types.target_profile.{selectProfile, selectedProfile}
+import types.route_key.{installedEvidenceSlots}
 import support.ordmap.{omEmpty, omFromNames}
 import support.util.{
   contains, endsWith, isEmptyL, joinNl, joinWith, listLen, lookupAssoc, splitNl,
@@ -5653,3 +5655,55 @@ test "a closed numeric, nested or operator goal with no instance keeps no route"
         ]),
     ),
   ]
+
+-- #2705 (P1-D16): every array indexed by evidence ordinals spans one graph lineage,
+-- so repeating an unkeyed drive in one process leaves it the size the first drive
+-- left it, however many ordinals the earlier drives minted.
+spanProgramModule : (String, List Decl)
+spanProgramModule = (
+  "span_probe",
+  desugar
+    (parseLocated
+      (joinNl [
+        "value : Int", "value = fromInt 3", "other : Int",
+        "other = fromInt value"
+      ])),
+)
+
+-- The method-cell index's length and the installed table's slot count after one
+-- unkeyed `elaborateModules` drive.
+elaborateSpans : Unit -> (Int, Int)
+elaborateSpans _ =
+  let _ = elaborateModules [] (desugar (parse numericPreludeSource)) [
+    spanProgramModule,
+  ]
+  (evCellsSpanProbe (), installedEvidenceSlots ())
+
+-- The method-cell index's length after one unkeyed `checkOneDiags` drive.
+diagsSpan : Unit -> Int
+diagsSpan _ =
+  let _ =
+    checkOneDiags [] (desugar (parse numericPreludeSource)) spanProgramModule
+  evCellsSpanProbe ()
+
+-- [drive]'s reading after the first and after the [n]th of [n] drives.
+firstAndNth : Int -> (Unit -> a) -> (a, a)
+firstAndNth n drive =
+  let first = drive ()
+  (first, driveAgain (n - 1) drive first)
+
+driveAgain : Int -> (Unit -> a) -> a -> a
+driveAgain k drive seen =
+  if k <= 0 then seen else driveAgain (k - 1) drive (drive ())
+
+test "twenty unkeyed elaborateModules drives keep the evidence arrays one graph wide" =
+  let (first, twentieth) = firstAndNth 20 elaborateSpans
+  expectAll [
+    expectGreaterThan 0 (fst first),
+    expectGreaterThan 0 (snd first),
+    expectEqual first twentieth,
+  ]
+
+test "twenty unkeyed checkOneDiags drives keep the method-cell index one graph wide" =
+  let (first, twentieth) = firstAndNth 20 diagsSpan
+  expectAll [expectGreaterThan 0 first, expectEqual first twentieth]

@@ -1046,6 +1046,7 @@ eqInt : Int -> Int -> Bool
 eqIntList : List Int -> List Int -> Bool
 erredDuring : (Unit -> a) -> (Bool, a)
 evCell : EvDest -> Ref Route
+evCellsSpanProbe : Unit -> Int
 evEntriesOf : List Obligation -> List EvEntry
 evIdModule : EvId -> String
 evOrdinal : EvId -> Int

@@ -81,16 +81,17 @@ import types.runtime_types.{installedBinderTable, restoreBinderTable}
 --
 --   no table installed  -> panic.  `evidenceRef` holding `None` means no elaboration
 --                          has run.
---   ordinal >= length   -> panic.
---   in-bounds `None`    -> panic.
+--   ordinal below span  -> panic: the id is from an earlier graph.
+--   ordinal above span  -> panic.
+--   in-span `None`      -> panic.
 --
 -- This holds because the typechecker publishes an entry for EVERY `EDictAt` it mints,
 -- including an application of zero dictionaries (`EvMany []`, the #739 arm of
 -- `inferDictAtFound`), so "no entry" can only mean a missing or stale table.
 --
 -- What the panic does NOT catch: a read that escaped the install ordering and landed
--- on an in-range ordinal.  Ordinals are monotone across the whole process while each
--- install sizes the array to the CURRENT maximum, so such a read can land on ANOTHER
+-- on an ordinal inside the installed span.  A memo hit rewinds the counter, so two
+-- elaborations can publish overlapping spans, and such a read can land on ANOTHER
 -- GOAL'S ROUTES — silently wrong, at exit 0.  The module half of the id, compared on
 -- every hit, is the only tripwire for that, and it cannot fire for today's consumer.
 -- The install ordering above is the protection.
@@ -98,11 +99,13 @@ import types.runtime_types.{installedBinderTable, restoreBinderTable}
 -- The index is an ARRAY over the id's ordinal, not a scan of the spine: the table
 -- has one entry per solver goal (838 on a four-file fixture), so a per-site linear
 -- scan would be the List-as-a-map quadratic `compiler/AGENTS.md` records thirteen
--- instances of.  Ordinals are graph-global (see `freshEvId`), so the ordinal IS the
--- index and carries uniqueness by itself.  The id's MODULE half is compared on every
--- hit as a tripwire, not as part of the key — see `EvId` in `frontend/ast.mdk` for why
--- it cannot fire for today's consumer and must be kept anyway.
-evidenceRef : Ref (Option (Array (Option EvEntry)))
+-- instances of.  Ordinals are graph-global (see `freshEvId`), so the ordinal less the
+-- table's smallest one IS the index and carries uniqueness by itself; the array spans
+-- the installed entries' ordinals, not every ordinal the process has minted.  The
+-- id's MODULE half is compared on every hit as a tripwire, not as part of the key —
+-- see `EvId` in `frontend/ast.mdk` for why it cannot fire for today's consumer and
+-- must be kept anyway.
+evidenceRef : Ref (Option (Int, Array (Option EvEntry)))
 evidenceRef = Ref None
 
 -- Replace the installed evidence with this elaboration's.  Called once per
@@ -110,9 +113,18 @@ evidenceRef = Ref None
 export
 installEvidence : EvTable -> Unit
 installEvidence entries =
-  let arr = arrayMake (evSlotCount entries 0) None
-  let _ = fillEvidence arr entries
-  evidenceRef := Some arr
+  let lo = evMinOrdinal entries
+  let arr = arrayMake (evSlotCount entries lo - lo) None
+  let _ = fillEvidence lo arr entries
+  evidenceRef := Some (lo, arr)
+
+-- Test visibility (`typecheck_test.mdk`): the installed table's slot count, 0 when
+-- none is installed.
+export
+installedEvidenceSlots : Unit -> Int
+installedEvidenceSlots _ = match !evidenceRef
+  None => 0
+  Some (_, arr) => arrayLength arr
 
 -- Rewrite every installed entry in place (#2809).  The emit path renames its top-level
 -- symbols AFTER elaboration, and an `RLocal` route carries one -- but the table
@@ -124,7 +136,7 @@ export
 remapEvidence : (EvEntry -> EvEntry) -> Unit
 remapEvidence f = match !evidenceRef
   None => ()
-  Some arr => remapEvidenceGo f arr 0 (arrayLength arr)
+  Some (_, arr) => remapEvidenceGo f arr 0 (arrayLength arr)
 
 remapEvidenceGo : (EvEntry -> EvEntry) ->
   Array (Option EvEntry) ->
@@ -145,7 +157,7 @@ export
 installedEvidenceEntries : Unit -> List EvEntry
 installedEvidenceEntries _ = match !evidenceRef
   None => []
-  Some arr => evidenceEntriesFrom arr (arrayLength arr - 1) []
+  Some (_, arr) => evidenceEntriesFrom arr (arrayLength arr - 1) []
 
 -- Helper elaboration temporarily replaces the process-global evidence table.
 -- Restore the complete installed table afterward, including method-occurrence
@@ -172,29 +184,58 @@ evidenceEntriesFrom arr i acc =
     None => evidenceEntriesFrom arr (i - 1) acc
     Some e => evidenceEntriesFrom arr (i - 1) (e :: acc)
 
--- one past the largest ordinal in [entries]
+-- one past the largest ordinal in [entries], at least [acc]
 evSlotCount : EvTable -> Int -> Int
 evSlotCount [] acc = acc
 evSlotCount ((EvEntry (EvId _ i) _) :: rest) acc =
   evSlotCount rest (max (i + 1) acc)
+
+-- the smallest ordinal in [entries], 0 when there are none
+evMinOrdinal : EvTable -> Int
+evMinOrdinal [] = 0
+evMinOrdinal ((EvEntry (EvId _ i) _) :: rest) = evMinFrom rest i
+
+evMinFrom : EvTable -> Int -> Int
+evMinFrom [] acc = acc
+evMinFrom ((EvEntry (EvId _ i) _) :: rest) acc = evMinFrom rest (min i acc)
 
 -- Two entries under one ordinal would mean two goals published under one name,
 -- and the reader below could then answer with either.  The cell scheme this
 -- replaces could not express that (one node, one cell), so it is a tripwire
 -- rather than a case with a policy: no program in the gate corpus, the 59-fixture
 -- module arm, or the compiler's own self-compile reaches it.
-fillEvidence : Array (Option EvEntry) -> EvTable -> Unit
-fillEvidence _ [] = ()
-fillEvidence arr ((e@(EvEntry (EvId m i) _)) :: rest) =
-  let _ = match arrayGetUnsafe i arr
-    None => arraySetUnsafe i (Some e) arr
+fillEvidence : Int -> Array (Option EvEntry) -> EvTable -> Unit
+fillEvidence _ _ [] = ()
+fillEvidence lo arr ((e@(EvEntry (EvId m i) _)) :: rest) =
+  let _ = match arrayGetUnsafe (i - lo) arr
+    None => arraySetUnsafe (i - lo) (Some e) arr
     Some _ =>
       panic "evidence table: two goals published under \{m}#\{intToString i}"
-  fillEvidence arr rest
+  fillEvidence lo arr rest
 
 neverPublished : String -> String -> Int -> a
 neverPublished what m i =
   panic "evidence table: \{what} \{m}#\{intToString i} was never published"
+
+-- The installed entry's answer for [ev], looked up as [what]; every miss panics.
+installedAnswer : String -> EvId -> EvVal
+installedAnswer what (EvId m i) = match !evidenceRef
+  None =>
+    panic
+      "evidence table: no elaboration has published one (looking up \{what} \{m}#\{intToString i})"
+  Some (lo, arr) =>
+    if i < lo then
+      panic
+        "evidence table: \{what} \{m}#\{intToString i} is from an earlier graph"
+    else if i - lo >= arrayLength arr then
+      neverPublished what m i
+    else match arrayGetUnsafe (i - lo) arr
+      None => neverPublished what m i
+      Some (EvEntry (EvId m2 _) v) =>
+        if m2 == m then
+          v
+        else
+          panic "evidence table: \{m}#\{intToString i} answered by module \{m2}"
 
 -- The dictionary routes solved for [ev], slot-ordered.
 --
@@ -204,20 +245,7 @@ neverPublished what m i =
 -- elaboration published, and it panics, as `evMethodRoutes` does.
 export
 evDictRoutes : EvId -> List Route
-evDictRoutes (EvId m i) = match !evidenceRef
-  None =>
-    panic
-      "evidence table: no elaboration has published one (looking up \{m}#\{intToString i})"
-  Some arr =>
-    if i >= arrayLength arr then
-      neverPublished "dictionary application" m i
-    else match arrayGetUnsafe i arr
-      None => neverPublished "dictionary application" m i
-      Some (EvEntry (EvId m2 _) v) =>
-        if m2 == m then
-          evRoutesOf v
-        else
-          panic "evidence table: \{m}#\{intToString i} answered by module \{m2}"
+evDictRoutes ev = evRoutesOf (installedAnswer "dictionary application" ev)
 
 evRoutesOf : EvVal -> List Route
 evRoutesOf (EvMany rs) = rs
@@ -240,20 +268,7 @@ evRoutesOf (EvMethod _ _ _ _ _) =
 -- an unrouted dispatch.
 export
 evMethodRoutes : EvId -> (String, Int, Route, List Route, List Route)
-evMethodRoutes (EvId m i) = match !evidenceRef
-  None =>
-    panic
-      "evidence table: no elaboration has published one (looking up method \{m}#\{intToString i})"
-  Some arr =>
-    if i >= arrayLength arr then
-      neverPublished "method occurrence" m i
-    else match arrayGetUnsafe i arr
-      None => neverPublished "method occurrence" m i
-      Some (EvEntry (EvId m2 _) v) =>
-        if m2 == m then
-          evMethodOf v
-        else
-          panic "evidence table: \{m}#\{intToString i} answered by module \{m2}"
+evMethodRoutes ev = evMethodOf (installedAnswer "method occurrence" ev)
 
 evMethodOf : EvVal -> (String, Int, Route, List Route, List Route)
 evMethodOf (EvMethod iface arity r impls meths) =
