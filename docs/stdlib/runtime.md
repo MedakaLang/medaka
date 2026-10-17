@@ -638,6 +638,18 @@ sleepMs : Int -> <Clock> Unit
 
 Pauses the program for a number of milliseconds.
 
+### `fetchText`
+
+```
+fetchText : (url : String) -> <Net url> Result String String
+```
+
+Fetches a URL with an HTTP GET. A 2xx response gives `Ok body`; any other
+status gives `Err "<status> <statusText>"`, and a request that fails to
+complete gives `Err <message>`. Available only on the `wasmgc/edge` target,
+under a host with JSPI; every other target refuses it at check time.
+It is in scope without an import, like `readFile`.
+
 ### `allocBytes`
 
 ```

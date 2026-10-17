@@ -16,7 +16,11 @@ const own = (slice) => SLICES[slice].keys.find((k) =>
 
 const observe = (profile, slice) => {
   const f = createHost(profile, { stdin: () => new Uint8Array(0) }).imports.env[own(slice)];
-  try { f(0); } catch (e) { if (e instanceof CapabilityError) return 'withheld'; }
+  // A promise-answering key installed without a promising entry raises the JSPI
+  // CapabilityError: the slice is real, only this engine cannot wait.
+  try { f(0); } catch (e) {
+    if (e instanceof CapabilityError && !e.message.includes('needs JSPI')) return 'withheld';
+  }
   return 'real';
 };
 

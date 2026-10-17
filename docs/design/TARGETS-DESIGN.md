@@ -1,8 +1,8 @@
 # Targets and host profiles
 
 **Status:** ratified 2026-10-01; the host-binding half (§7) and the profile
-table (§8.1) are built, the edge's fetch binding (§8.2) and the WASI seam (§8.4)
-are not. Epic #3661; milestones
+table (§8.1) and the edge's `fetchText` (§8.2) are built, the WASI seam (§8.4)
+is not. Epic #3661; milestones
 T1–T5 (`Targets: T1 (the catalog is data)` … `Targets: T5 (the edge profile)`).
 Every ruling in this document was taken by Val on 2026-10-01. Child issues cite
 its sections rather than restating them.
@@ -508,7 +508,7 @@ Issue: #3673 (symmetric walls).
 | `eval/run` | interpreter | `ioExternBindings` | what `medaka run` installs today: `Stdout Stderr Stdin Clock Env Exec Rand FileRead FileWrite Net Signal`; no `FFI`: an `eval/run` program reaches no foreign call |
 | `wasmgc/node` | `wasmgc` | `env` | `Stdout Stderr Stdin Clock Env Rand FileRead FileWrite FFI`; `js` bindings with a bindings module |
 | `wasmgc/browser-worker` | `wasmgc` | `env` | `Stdout Stderr Clock Rand FileRead FileWrite FFI` (vfs); `js` bindings through the playground's bindings |
-| `wasmgc/edge` | `wasmgc` | `env` | `Stdout Stderr Clock Rand FFI`; `Net` through a fetch binding (not yet granted, T3 #3668); `FFI` through `js` bindings |
+| `wasmgc/edge` | `wasmgc` | `env` | `Stdout Stderr Clock Rand Net FFI`; `Net` through the `fetchText` extern (a catalog row, not a `bind js` binding); `FFI` through `js` bindings |
 | `wasmgc/wasi-p2` | `wasmgc` | WIT | per world — a seam only, §8.4; grants `FFI` as implemented, with host `js` (an open ruling) |
 
 `Exec` is granted on native and `run` only. `Net` as raw sockets is granted on
@@ -520,10 +520,13 @@ The first profile that is neither the playground nor Node, at the WinterTC
 minimum common API that Cloudflare Workers, Deno, Bun and Node all satisfy, so
 one loader runs on every one of them.
 
-- `Net` is granted **through a fetch binding only**: a stdlib capability module
-  binds `js/fetch` under `<Net url>` so a program writes `<Net url>` and never
-  names `FFI` itself. That module is the one place the prefix is written, and it
-  goes through the stdlib proposal path.
+- `Net` is granted **through `fetchText` only**: `fetchText : (url : String) ->
+  <Net url> Result String String` is a catalog row whose wasm disposition is the
+  host import `mdk_fetch_text`, in scope without an import like `readFile`, and
+  `llvm` and `eval` do not provide it. It is not a `bind js` extern, so a program
+  writes `<Net url>` and never names `FFI`. The host's `net` slice does a GET with
+  its `fetch` (injectable, default `globalThis.fetch`): `Ok body` on 2xx,
+  `Err "<status> <statusText>"` otherwise, `Err <message>` when the request fails.
 - `medaka build --target wasmgc/edge` emits the module and an ES-module loader
   that imports the host module with the `edge` slice set. The loader never
   branches on `navigator.userAgent`; runtime detection is the host's business.
@@ -536,10 +539,13 @@ Issue: #3674 (edge profile).
 
 ### 8.3 Async on the edge
 
-A request handler on the edge is itself a promise. v1 runs a binding
-synchronously on a worker where the host allows `Atomics.wait` and documents the
-hosts where it does not; the async binding is §7.6's open item, not T5's.
-The waiting model is in `docs/design/WASM-ASYNC-DESIGN.md`.
+A request handler on the edge is itself a promise, and `fetch` answers one. The
+edge waits on it through JSPI: the host wraps the entry with
+`WebAssembly.promising` and the promise-answering imports with
+`WebAssembly.Suspending`, so the guest suspends inside the call. A host without
+JSPI raises the named JSPI `CapabilityError` when `fetchText` runs. The waiting
+model is in `docs/design/WASM-ASYNC-DESIGN.md`; user `bind js` bindings stay
+synchronous (§7.6).
 
 ### 8.4 The WASI seam
 

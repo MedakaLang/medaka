@@ -469,8 +469,11 @@ extern monotonicSec : Unit -> <Clock> Float
 -- | Pauses the program for a number of milliseconds.
 extern sleepMs : Int -> <Clock> Unit
 
--- | Fetches a URL with an HTTP GET and returns the body of a 2xx response, or
--- the status line or the failure message.  Only the edge target lowers it.
+-- | Fetches a URL with an HTTP GET. A 2xx response gives `Ok body`; any other
+-- status gives `Err "<status> <statusText>"`, and a request that fails to
+-- complete gives `Err <message>`. Available only on the `wasmgc/edge` target,
+-- under a host with JSPI; every other target refuses it at check time.
+-- It is in scope without an import, like `readFile`.
 extern fetchText : (url : String) -> <Net url> Result String String
 
 -- | The total number of bytes the program has allocated.

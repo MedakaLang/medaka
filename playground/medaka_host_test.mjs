@@ -154,6 +154,15 @@ main =
   let _ = putStrLn "depth \{deep 3000}"
   exit 4
 `,
+  fetchtext: String.raw`show r = match r
+  Ok body => "ok: " ++ body
+  Err e => "err: " ++ e
+
+main =
+  let _ = println (show (fetchText "https://stub.test/ok"))
+  let _ = println (show (fetchText "https://stub.test/missing"))
+  println (show (fetchText "https://stub.test/down"))
+`,
   bigexit: BIG_LOOP + 'main =\n  let _ = loop 1\n  exit 3\n',
   bigtrap: BIG_LOOP + 'main =\n  let _ = loop 1\n  let z = length [1] - 1\n  println (10 / z)\n',
 };
@@ -754,6 +763,44 @@ console.log(JSON.stringify({ jspi: jspiAvailable(), kind: r.kind, code: r.code, 
   check('(t4) run.js under JSPI: the program\'s exit code and every line',
     viaRunJs.status === 4 && viaRunJs.stdout === 'start\nmid after\ndepth 3000\n' && viaRunJs.stderr === '',
     JSON.stringify({ stdout: viaRunJs.stdout, stderr: viaRunJs.stderr, status: viaRunJs.status }));
+}
+
+// (u) fetchText on the edge profile: the host's `fetch` is an injected stub, so no network
+// is touched.  The edge host needs JSPI to wait on the promise, so the run is a child with
+// and without `--experimental-wasm-jspi`.
+{
+  const child = String.raw`
+const { createHost, runProgram, jspiAvailable } = await import(process.env.MHT_HOST);
+const { readFileSync } = await import('node:fs');
+const fetch = async (url) => {
+  if (url.endsWith('/ok')) return { ok: true, status: 200, statusText: 'OK', arrayBuffer: async () => new TextEncoder().encode('hello').buffer };
+  if (url.endsWith('/missing')) return { ok: false, status: 404, statusText: 'Not Found' };
+  throw new TypeError('fetch failed');
+};
+const host = createHost('wasmgc/edge', { fetch });
+const r = await runProgram(readFileSync(process.env.MHT_WASM), host);
+const e = r.error;
+console.log(JSON.stringify({ jspi: jspiAvailable(), kind: r.kind, out: host.sink.text('stdout'),
+  error: e && { name: e.name, message: e.message } }));
+`;
+  const wasm = build('fetchtext', 'wasmgc/edge');
+  const hostUrl = pathToFileURL(join(here, 'medaka_host.mjs')).href;
+  const runChild = (flags) => {
+    const r = spawnSync(process.execPath, [...flags, '--input-type=module', '-e', child], {
+      env: { ...process.env, MHT_HOST: hostUrl, MHT_WASM: wasm }, encoding: 'utf8',
+    });
+    try { return JSON.parse(r.stdout); } catch (e) { return { raw: r.stdout + r.stderr, status: r.status }; }
+  };
+  const jspi = runChild(['--experimental-wasm-jspi']);
+  check('(u1) JSPI: fetchText answers Ok body for a 200, Err "404 Not Found" for a 404 and Err message for a rejection',
+    jspi.jspi === true && jspi.kind === 'done'
+      && jspi.out === 'ok: hello\nerr: 404 Not Found\nerr: fetch failed\n',
+    JSON.stringify(jspi));
+  const plain = runChild([]);
+  check('(u2) no JSPI: fetchText is a CapabilityError naming JSPI',
+    plain.jspi === false && plain.kind === 'error' && plain.error && plain.error.name === 'CapabilityError'
+      && plain.error.message.includes('JSPI'),
+    JSON.stringify(plain));
 }
 
 // Report only: slices no module built above imports a key of.
