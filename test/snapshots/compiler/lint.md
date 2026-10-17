@@ -1,5 +1,5 @@
 # META
-source_lines=7223
+source_lines=7225
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -65,6 +65,7 @@ import frontend.ast.{
   FunClause(..),
   Expr(..),
   Decl(..),
+  ExternDecl(..),
   qualifierSource,
   authTermsSurface,
 }
@@ -1086,7 +1087,8 @@ stampModule modName pairs = map (p => (modName, fst p, snd p)) pairs
 -- it is here so the index does not silently need a second edit if that changes.
 exportedSigPair : Decl -> List (String, Ty)
 exportedSigPair (DTypeSig True name ty _) = [(name, ty)]
-exportedSigPair (DExtern True name ty) = [(name, ty)]
+exportedSigPair (DExtern (ExternDecl { edPub = True, edName = name, edTy = ty, ... })) =
+  [(name, ty)]
 exportedSigPair (DAttrib _ d) = exportedSigPair d
 exportedSigPair _ = []
 
@@ -1168,7 +1170,7 @@ testVerbScope prog declPos =
 
 topLevelBinders : Decl -> List String
 topLevelBinders (DFunDef _ n _ _ _ _) = [n]
-topLevelBinders (DExtern _ n _) = [n]
+topLevelBinders (DExtern (ExternDecl { edName = n, ... })) = [n]
 topLevelBinders (DLetGroup _ binds) = map letBindName binds
 topLevelBinders (DInterface { methods, ... }) = map ifaceMethodNameOf methods
 topLevelBinders (DAttrib _ d) = topLevelBinders d
@@ -5931,7 +5933,7 @@ nonDefRefL : Decl -> List String
 nonDefRefL (DAttrib _ dd) = nonDefRefL dd
 nonDefRefL (DFunDef _ _ _ _ _ _) = []
 nonDefRefL (DTypeSig _ _ _ _) = []
-nonDefRefL (DExtern _ _ _) = []
+nonDefRefL (DExtern _) = []
 nonDefRefL (DData { dataOrigin = _ }) = []
 nonDefRefL (DUse _ _ _) = []
 nonDefRefL (DEffect _ _ _ _ _ _) = []
@@ -7226,7 +7228,7 @@ preludeShadowFinding name loc = Finding {
   loc = loc,
 }
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "noBinderId" false) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "unminted" false) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "IfaceMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "noBinderId" false) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "unminted" false) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "IfaceMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
@@ -7464,7 +7466,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "stampModule" ((PVar "modName") (PVar "pairs")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EVar "modName") (EApp (EVar "fst") (EVar "p")) (EApp (EVar "snd") (EVar "p"))))) (EVar "pairs")))
 (DTypeSig false "exportedSigPair" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))))
 (DFunDef false "exportedSigPair" ((PCon "DTypeSig" (PCon "True") (PVar "name") (PVar "ty") PWild)) (EListLit (ETuple (EVar "name") (EVar "ty"))))
-(DFunDef false "exportedSigPair" ((PCon "DExtern" (PCon "True") (PVar "name") (PVar "ty"))) (EListLit (ETuple (EVar "name") (EVar "ty"))))
+(DFunDef false "exportedSigPair" ((PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PCon "True")) (rf "edName" (PVar "name")) (rf "edTy" (PVar "ty"))) true))) (EListLit (ETuple (EVar "name") (EVar "ty"))))
 (DFunDef false "exportedSigPair" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "exportedSigPair") (EVar "d")))
 (DFunDef false "exportedSigPair" (PWild) (EListLit))
 (DTypeSig true "applyFixes" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyTuple (TyCon "String") (TyCon "Int"))))))))
@@ -7480,7 +7482,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "testVerbScope" ((PVar "prog") (PVar "declPos")) (EBlock (DoLet false false (PVar "bound") (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "topLevelBinders")) (EVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "foreignImportNames")) (EVar "prog"))) (EApp (EVar "localBoundNames") (EVar "prog")))) (DoLet false false (PVar "blocked") (EApp (EApp (EVar "filterList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "bound")))) (EVar "testVerbNames"))) (DoLet false false (PVar "wild") (EApp (EApp (EVar "anyList") (EVar "isTestWild")) (EVar "prog"))) (DoLet false false (PVar "listed") (EApp (EApp (EVar "flatMap") (ELam ((PVar "g")) (EApp (EApp (EVar "map") (EVar "useMemberLocal")) (EApp (EVar "fst") (EVar "g"))))) (EApp (EVar "testGroups") (EVar "declPos")))) (DoLet false false (PVar "resolved") (EIf (EVar "wild") (EVar "testVerbNames") (EApp (EApp (EVar "filterList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "listed")))) (EVar "testVerbNames")))) (DoExpr (ETuple (EVar "blocked") (EVar "resolved")))))
 (DTypeSig false "topLevelBinders" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "topLevelBinders" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild)) (EListLit (EVar "n")))
-(DFunDef false "topLevelBinders" ((PCon "DExtern" PWild (PVar "n") PWild)) (EListLit (EVar "n")))
+(DFunDef false "topLevelBinders" ((PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n"))) true))) (EListLit (EVar "n")))
 (DFunDef false "topLevelBinders" ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds")))
 (DFunDef false "topLevelBinders" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EVar "map") (EVar "ifaceMethodNameOf")) (EVar "methods")))
 (DFunDef false "topLevelBinders" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topLevelBinders") (EVar "d")))
@@ -8993,7 +8995,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "nonDefRefL" ((PCon "DAttrib" PWild (PVar "dd"))) (EApp (EVar "nonDefRefL") (EVar "dd")))
 (DFunDef false "nonDefRefL" ((PCon "DFunDef" PWild PWild PWild PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DTypeSig" PWild PWild PWild PWild)) (EListLit))
-(DFunDef false "nonDefRefL" ((PCon "DExtern" PWild PWild PWild)) (EListLit))
+(DFunDef false "nonDefRefL" ((PCon "DExtern" PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PRec "DData" ((rf "dataOrigin" PWild)) false)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DUse" PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DEffect" PWild PWild PWild PWild PWild PWild)) (EListLit))
@@ -9311,7 +9313,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "preludeShadowFinding" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding"))))
 (DFunDef false "preludeShadowFinding" ((PVar "name") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestPreludeShadow")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` shadows the prelude function of that name for this file only; other modules, and any `deriving` impl, keep calling the prelude one. Remove the local declaration")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "noBinderId" false) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "unminted" false) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "IfaceMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "noBinderId" false) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "unminted" false) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "IfaceMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
@@ -9549,7 +9551,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "stampModule" ((PVar "modName") (PVar "pairs")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EVar "modName") (EApp (EVar "fst") (EVar "p")) (EApp (EVar "snd") (EVar "p"))))) (EVar "pairs")))
 (DTypeSig false "exportedSigPair" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))))
 (DFunDef false "exportedSigPair" ((PCon "DTypeSig" (PCon "True") (PVar "name") (PVar "ty") PWild)) (EListLit (ETuple (EVar "name") (EVar "ty"))))
-(DFunDef false "exportedSigPair" ((PCon "DExtern" (PCon "True") (PVar "name") (PVar "ty"))) (EListLit (ETuple (EVar "name") (EVar "ty"))))
+(DFunDef false "exportedSigPair" ((PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PCon "True")) (rf "edName" (PVar "name")) (rf "edTy" (PVar "ty"))) true))) (EListLit (ETuple (EVar "name") (EVar "ty"))))
 (DFunDef false "exportedSigPair" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "exportedSigPair") (EVar "d")))
 (DFunDef false "exportedSigPair" (PWild) (EListLit))
 (DTypeSig true "applyFixes" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyTuple (TyCon "String") (TyCon "Int"))))))))
@@ -9565,7 +9567,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "testVerbScope" ((PVar "prog") (PVar "declPos")) (EBlock (DoLet false false (PVar "bound") (EBinOp "++" (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "topLevelBinders")) (EVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "foreignImportNames")) (EVar "prog"))) (EApp (EVar "localBoundNames") (EVar "prog")))) (DoLet false false (PVar "blocked") (EApp (EApp (EVar "filterList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "bound")))) (EVar "testVerbNames"))) (DoLet false false (PVar "wild") (EApp (EApp (EVar "anyList") (EVar "isTestWild")) (EVar "prog"))) (DoLet false false (PVar "listed") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "g")) (EApp (EApp (EMethodRef "map") (EVar "useMemberLocal")) (EApp (EVar "fst") (EVar "g"))))) (EApp (EVar "testGroups") (EVar "declPos")))) (DoLet false false (PVar "resolved") (EIf (EVar "wild") (EVar "testVerbNames") (EApp (EApp (EVar "filterList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "listed")))) (EVar "testVerbNames")))) (DoExpr (ETuple (EVar "blocked") (EVar "resolved")))))
 (DTypeSig false "topLevelBinders" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "topLevelBinders" ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild PWild)) (EListLit (EVar "n")))
-(DFunDef false "topLevelBinders" ((PCon "DExtern" PWild (PVar "n") PWild)) (EListLit (EVar "n")))
+(DFunDef false "topLevelBinders" ((PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n"))) true))) (EListLit (EVar "n")))
 (DFunDef false "topLevelBinders" ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds")))
 (DFunDef false "topLevelBinders" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (EVar "ifaceMethodNameOf")) (EVar "methods")))
 (DFunDef false "topLevelBinders" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topLevelBinders") (EVar "d")))
@@ -11078,7 +11080,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "nonDefRefL" ((PCon "DAttrib" PWild (PVar "dd"))) (EApp (EVar "nonDefRefL") (EVar "dd")))
 (DFunDef false "nonDefRefL" ((PCon "DFunDef" PWild PWild PWild PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DTypeSig" PWild PWild PWild PWild)) (EListLit))
-(DFunDef false "nonDefRefL" ((PCon "DExtern" PWild PWild PWild)) (EListLit))
+(DFunDef false "nonDefRefL" ((PCon "DExtern" PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PRec "DData" ((rf "dataOrigin" PWild)) false)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DUse" PWild PWild PWild)) (EListLit))
 (DFunDef false "nonDefRefL" ((PCon "DEffect" PWild PWild PWild PWild PWild PWild)) (EListLit))

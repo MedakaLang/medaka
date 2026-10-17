@@ -1,5 +1,5 @@
 # META
-source_lines=5512
+source_lines=5516
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -48,6 +48,7 @@ import frontend.ast.{
   useMemberAlias,
   qualifiedLocal,
   Decl(..),
+  ExternDecl(..),
   DataVis(..),
   TyConOrigin,
   ifaceIdentity,
@@ -362,9 +363,12 @@ ctorTypeEntries _ = []
 -- `ctorToTypeRef` immediately above) — evalModulesWith seeds it before any
 -- lookup, same as ctorToTypeRef.  Consulted ONLY by `lookupFrames`'s failure
 -- arm, to upgrade the generic "unbound identifier" panic into one that names
--- the identifier as a declared FFI extern `medaka run` cannot call (no C-ABI
+-- the identifier as a declared FFI extern the interpreter cannot call (no C-ABI
 -- capability under the tree-walking interpreter — that is the emitter's job,
--- not eval's).  Intentional local duplicate of
+-- not eval's).  `medaka run` never gets here: its target check refuses every
+-- user extern the program reaches (`T-TARGET-NO-BINDING`).  A driver that
+-- evaluates without that check still can, such as `check-policy`'s sample
+-- run, so the arm stays.  Intentional local duplicate of
 -- `ir.core_ir_lower.externDeclNamesOf` rather than an import: `core_ir_lower`
 -- already imports `eval.eval`, so the reverse import would cycle.
 export
@@ -374,7 +378,7 @@ ffiExternNamesRef = Ref []
 export
 externDeclNamesOfDecls : List Decl -> List String
 externDeclNamesOfDecls [] = []
-externDeclNamesOfDecls ((DExtern _ n _) :: rest) =
+externDeclNamesOfDecls ((DExtern (ExternDecl { edName = n, ... })) :: rest) =
   n :: externDeclNamesOfDecls rest
 externDeclNamesOfDecls ((DAttrib _ inner) :: rest) =
   externDeclNamesOfDecls [inner] ++ externDeclNamesOfDecls rest
@@ -748,7 +752,7 @@ lookupFrames [] name =
     panic
       ("capability error: `"
         ++ name
-        ++ "` is a user-declared FFI extern and `medaka run` cannot make a foreign C call; build a native binary with `medaka build`")
+        ++ "` is a user-declared FFI extern and the interpreter cannot make a foreign C call; build a native binary with `medaka build`")
   else
     panic ("unbound identifier: " ++ name)
 lookupFrames (frame :: rest) name = match lookupFrameCell frame name
@@ -4623,7 +4627,7 @@ publicExternNames decls = reverseL (publicExternNamesRev decls [])
 
 publicExternNamesRev : List Decl -> List String -> List String
 publicExternNamesRev [] names = names
-publicExternNamesRev ((DExtern True n _) :: rest) names =
+publicExternNamesRev ((DExtern (ExternDecl { edPub = True, edName = n, ... })) :: rest) names =
   publicExternNamesRev rest (n :: names)
 publicExternNamesRev ((DAttrib _ decl) :: rest) names =
   publicExternNamesRev rest (publicExternNamesRev [decl] names)
@@ -5515,7 +5519,7 @@ evalOneRootEnvWith : List (String, Value e) ->
 evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
   evalModulesRootEnvWith extraExterns preludeDecls [(rootId, prog)]
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "variantName" false) (mem "ifaceMethodName" false) (mem "fieldName" false) (mem "implMethodName" false) (mem "noBinderId" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false) (mem "defaultReceiverDict" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "variantName" false) (mem "ifaceMethodName" false) (mem "fieldName" false) (mem "implMethodName" false) (mem "noBinderId" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "typeTagOf" false) (mem "typeTagName" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "inheritorsOf" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "endsWith" false) (mem "zipL" false))))
@@ -5602,7 +5606,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ffiExternNamesRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig true "externDeclNamesOfDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "externDeclNamesOfDecls" ((PList)) (EListLit))
-(DFunDef false "externDeclNamesOfDecls" ((PCons (PCon "DExtern" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "externDeclNamesOfDecls") (EVar "rest"))))
+(DFunDef false "externDeclNamesOfDecls" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n"))) true)) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "externDeclNamesOfDecls") (EVar "rest"))))
 (DFunDef false "externDeclNamesOfDecls" ((PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "externDeclNamesOfDecls") (EListLit (EVar "inner"))) (EApp (EVar "externDeclNamesOfDecls") (EVar "rest"))))
 (DFunDef false "externDeclNamesOfDecls" ((PCons PWild (PVar "rest"))) (EApp (EVar "externDeclNamesOfDecls") (EVar "rest")))
 (DTypeSig true "ctorFieldOrdersRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -5738,7 +5742,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "lookupFramesOpt" ((PList) PWild) (EVar "None"))
 (DFunDef false "lookupFramesOpt" ((PCons (PVar "frame") (PVar "rest")) (PVar "name")) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EApp (EVar "Some") (EApp (EApp (EVar "forceCell") (EVar "cell")) (EVar "name")))) (arm (PCon "None") () (EApp (EApp (EVar "lookupFramesOpt") (EVar "rest")) (EVar "name")))))
 (DTypeSig false "lookupFrames" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "lookupFrames" ((PList) (PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EUnOp "!" (EVar "ffiExternNamesRef"))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "capability error: `")) (EVar "name")) (ELit (LString "` is a user-declared FFI extern and `medaka run` cannot make a foreign C call; build a native binary with `medaka build`")))) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "unbound identifier: ")) (EVar "name")))))
+(DFunDef false "lookupFrames" ((PList) (PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EUnOp "!" (EVar "ffiExternNamesRef"))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "capability error: `")) (EVar "name")) (ELit (LString "` is a user-declared FFI extern and the interpreter cannot make a foreign C call; build a native binary with `medaka build`")))) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "unbound identifier: ")) (EVar "name")))))
 (DFunDef false "lookupFrames" ((PCons (PVar "frame") (PVar "rest")) (PVar "name")) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EVar "forceCell") (EVar "cell")) (EVar "name"))) (arm (PCon "None") () (EApp (EApp (EVar "lookupFrames") (EVar "rest")) (EVar "name")))))
 (DTypeSig true "lookupMethod" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupMethod" ((PCon "EvalEnv" (PVar "frames")) (PVar "name")) (EApp (EApp (EApp (EVar "lookupMethodFrames") (EVar "frames")) (EVar "frames")) (EVar "name")))
@@ -7098,7 +7102,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "publicExternNames" ((PVar "decls")) (EApp (EVar "reverseL") (EApp (EApp (EVar "publicExternNamesRev") (EVar "decls")) (EListLit))))
 (DTypeSig false "publicExternNamesRev" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "publicExternNamesRev" ((PList) (PVar "names")) (EVar "names"))
-(DFunDef false "publicExternNamesRev" ((PCons (PCon "DExtern" (PCon "True") (PVar "n") PWild) (PVar "rest")) (PVar "names")) (EApp (EApp (EVar "publicExternNamesRev") (EVar "rest")) (EBinOp "::" (EVar "n") (EVar "names"))))
+(DFunDef false "publicExternNamesRev" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PCon "True")) (rf "edName" (PVar "n"))) true)) (PVar "rest")) (PVar "names")) (EApp (EApp (EVar "publicExternNamesRev") (EVar "rest")) (EBinOp "::" (EVar "n") (EVar "names"))))
 (DFunDef false "publicExternNamesRev" ((PCons (PCon "DAttrib" PWild (PVar "decl")) (PVar "rest")) (PVar "names")) (EApp (EApp (EVar "publicExternNamesRev") (EVar "rest")) (EApp (EApp (EVar "publicExternNamesRev") (EListLit (EVar "decl"))) (EVar "names"))))
 (DFunDef false "publicExternNamesRev" ((PCons PWild (PVar "rest")) (PVar "names")) (EApp (EApp (EVar "publicExternNamesRev") (EVar "rest")) (EVar "names")))
 (DTypeSig true "methodCellsOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))))))
@@ -7335,7 +7339,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "evalOneRootEnvWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "evalOneRootEnvWith" ((PVar "extraExterns") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EVar "extraExterns")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "variantName" false) (mem "ifaceMethodName" false) (mem "fieldName" false) (mem "implMethodName" false) (mem "noBinderId" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false) (mem "defaultReceiverDict" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "variantName" false) (mem "ifaceMethodName" false) (mem "fieldName" false) (mem "implMethodName" false) (mem "noBinderId" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "typeTagOf" false) (mem "typeTagName" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "inheritorsOf" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false) (mem "endsWith" false) (mem "zipL" false))))
@@ -7422,7 +7426,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ffiExternNamesRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig true "externDeclNamesOfDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "externDeclNamesOfDecls" ((PList)) (EListLit))
-(DFunDef false "externDeclNamesOfDecls" ((PCons (PCon "DExtern" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "externDeclNamesOfDecls") (EVar "rest"))))
+(DFunDef false "externDeclNamesOfDecls" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edName" (PVar "n"))) true)) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "externDeclNamesOfDecls") (EVar "rest"))))
 (DFunDef false "externDeclNamesOfDecls" ((PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "externDeclNamesOfDecls") (EListLit (EVar "inner"))) (EApp (EVar "externDeclNamesOfDecls") (EVar "rest"))))
 (DFunDef false "externDeclNamesOfDecls" ((PCons PWild (PVar "rest"))) (EApp (EVar "externDeclNamesOfDecls") (EVar "rest")))
 (DTypeSig true "ctorFieldOrdersRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -7558,7 +7562,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "lookupFramesOpt" ((PList) PWild) (EVar "None"))
 (DFunDef false "lookupFramesOpt" ((PCons (PVar "frame") (PVar "rest")) (PVar "name")) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EApp (EVar "Some") (EApp (EApp (EVar "forceCell") (EVar "cell")) (EVar "name")))) (arm (PCon "None") () (EApp (EApp (EVar "lookupFramesOpt") (EVar "rest")) (EVar "name")))))
 (DTypeSig false "lookupFrames" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "lookupFrames" ((PList) (PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EUnOp "!" (EVar "ffiExternNamesRef"))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "capability error: `")) (EVar "name")) (ELit (LString "` is a user-declared FFI extern and `medaka run` cannot make a foreign C call; build a native binary with `medaka build`")))) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "unbound identifier: ")) (EVar "name")))))
+(DFunDef false "lookupFrames" ((PList) (PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EUnOp "!" (EVar "ffiExternNamesRef"))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "capability error: `")) (EVar "name")) (ELit (LString "` is a user-declared FFI extern and the interpreter cannot make a foreign C call; build a native binary with `medaka build`")))) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "unbound identifier: ")) (EVar "name")))))
 (DFunDef false "lookupFrames" ((PCons (PVar "frame") (PVar "rest")) (PVar "name")) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EVar "forceCell") (EVar "cell")) (EVar "name"))) (arm (PCon "None") () (EApp (EApp (EVar "lookupFrames") (EVar "rest")) (EVar "name")))))
 (DTypeSig true "lookupMethod" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupMethod" ((PCon "EvalEnv" (PVar "frames")) (PVar "name")) (EApp (EApp (EApp (EVar "lookupMethodFrames") (EVar "frames")) (EVar "frames")) (EVar "name")))
@@ -8918,7 +8922,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "publicExternNames" ((PVar "decls")) (EApp (EVar "reverseL") (EApp (EApp (EVar "publicExternNamesRev") (EVar "decls")) (EListLit))))
 (DTypeSig false "publicExternNamesRev" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "publicExternNamesRev" ((PList) (PVar "names")) (EVar "names"))
-(DFunDef false "publicExternNamesRev" ((PCons (PCon "DExtern" (PCon "True") (PVar "n") PWild) (PVar "rest")) (PVar "names")) (EApp (EApp (EVar "publicExternNamesRev") (EVar "rest")) (EBinOp "::" (EVar "n") (EVar "names"))))
+(DFunDef false "publicExternNamesRev" ((PCons (PCon "DExtern" (PRec "ExternDecl" ((rf "edPub" (PCon "True")) (rf "edName" (PVar "n"))) true)) (PVar "rest")) (PVar "names")) (EApp (EApp (EVar "publicExternNamesRev") (EVar "rest")) (EBinOp "::" (EVar "n") (EVar "names"))))
 (DFunDef false "publicExternNamesRev" ((PCons (PCon "DAttrib" PWild (PVar "decl")) (PVar "rest")) (PVar "names")) (EApp (EApp (EVar "publicExternNamesRev") (EVar "rest")) (EApp (EApp (EVar "publicExternNamesRev") (EListLit (EVar "decl"))) (EVar "names"))))
 (DFunDef false "publicExternNamesRev" ((PCons PWild (PVar "rest")) (PVar "names")) (EApp (EApp (EVar "publicExternNamesRev") (EVar "rest")) (EVar "names")))
 (DTypeSig true "methodCellsOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))))))
