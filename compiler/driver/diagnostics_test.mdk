@@ -4,15 +4,26 @@
 
    Each fixture's diagnostic lines are sorted and compared with its
    `.analyze.golden`, with `stdlib/runtime.mdk` and `stdlib/core.mdk` as the
-   prelude pair. Does NOT cover the project-level analysis
-   (`diagnostics_project_main`). -}
+   prelude pair. Does NOT cover the project-level diagnostics
+   (`diagnostics_project_main`).
 
-import driver.diagnostics.{analyzeToLines}
+   The second half drives graphs through the loader (`analyzeProjectFull`)
+   and reads the schemes they publish at graph end: every `stdlib/*.mdk`
+   module and every `ACCEPT` fixture of `test/run_check_agreement_fixtures`
+   publishes no link and no unsolved effect summary, and a value-restricted
+   binding publishes its weak variable. -}
+
+import driver.diagnostics.{analyzeToLines, analyzeProjectFull, noStdlibExports}
 import fs.{fixtureFiles}
 import list.{sort, somes}
 import path.{dirname, stem}
 import string.{endsWith, lines, trim, unlines}
-import test.{Expectation, expectAll, expectEqual, expectNoFindings, fail}
+import test.{
+  Expectation, expectAll, expectEach, expectEqual, expectNoFindings, fail
+}
+import types.publish.{PubScheme(..), LiveCell(..), graphCells}
+import types.repr.{ppSchemeCon}
+import test_process.{withScratchDir}
 
 sortedLines : String -> String
 sortedLines text = trim (unlines (sort (lines text)))
@@ -64,3 +75,175 @@ check = match readFile "stdlib/runtime.mdk"
 
 test "diagnostics: analyze output matches each fixture's .analyze.golden" =
   check
+
+-- ── published schemes at graph end ─────────────────────────────────────────
+
+-- Each module's published rows for the graph rooted at [entry].
+graphRows : String ->
+  String ->
+  (String -> Option String) ->
+  String ->
+  List String ->
+  <IO> List (String, List (String, PubScheme))
+graphRows rsrc csrc read entry roots =
+  let (full, _) =
+    analyzeProjectFull
+      noStdlibExports
+      True
+      []
+      (Ref [])
+      (Ref [])
+      read
+      entry
+      roots
+      rsrc
+      csrc
+  map
+    (m => match m
+      (mid, (schemes, _, _)) => (mid, schemes))
+    full
+
+onDisk : String -> Option String
+onDisk _ = None
+
+isLink : LiveCell -> Bool
+isLink (LinkCell _ _ _) = True
+isLink _ = False
+
+isWeak : LiveCell -> Bool
+isWeak (WeakVar _ _ _) = True
+isWeak _ = False
+
+isSummary : LiveCell -> Bool
+isSummary (OpenSummary _ _) = True
+isSummary _ = False
+
+-- The top-level `.mdk` files of [dir] the predicate keeps, each as a graph
+-- entry with its roots.
+entriesIn : String ->
+  List String ->
+  (String -> <FileRead> Bool) ->
+  <FileRead> Result String (List (String, List String))
+entriesIn dir roots keep = match fixtureFiles dir
+  Err e => Err "\{dir}: \{e}"
+  Ok files =>
+    let direct = filter (f => endsWith ".mdk" f && dirname f == dir) files
+    Ok (map (f => (f, roots)) (filter keep (sort direct)))
+
+isAccept : String -> <FileRead> Bool
+isAccept path = match readFile "\{dirname path}/\{stem path}.expected"
+  Ok v => trim v == "ACCEPT"
+  Err _ => False
+
+agreementDir : String
+agreementDir = "test/run_check_agreement_fixtures"
+
+-- One row per corpus graph: its entry, how many modules it published, and the
+-- graph-end cells they hold.
+corpusCells : String ->
+  String ->
+  List (String, List String) ->
+  <IO> List (String, Int, List LiveCell)
+corpusCells rsrc csrc entries =
+  map
+    (e =>
+      let rows = graphRows rsrc csrc onDisk (fst e) (snd e)
+      (fst e, length rows, graphCells (map snd rows)))
+    entries
+
+-- The cells [keep] selects, each under the entry of the graph that holds it.
+cellsWhere : (LiveCell -> Bool) ->
+  List (String, Int, List LiveCell) ->
+  List String
+cellsWhere keep rows =
+  flatMap
+    ((entry, _, cs) => map (c => "\{entry}: \{debug c}") (filter keep cs))
+    rows
+
+corpusCheck : <IO> Expectation
+corpusCheck = match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
+  (Ok rsrc, Ok csrc) => match (
+    entriesIn "stdlib" ["stdlib"] (_ => True),
+    entriesIn agreementDir [agreementDir, "stdlib"] isAccept,
+  )
+    (Ok stdlibEs, Ok acceptEs) =>
+      let rows = corpusCells rsrc csrc (stdlibEs ++ acceptEs)
+      let unloaded =
+        flatMap ((entry, n, _) => if n == 0 then [entry] else []) rows
+      -- Weak variables are allowed, so they are not asserted on.  An open summary
+      -- withholds the checked program, so an accepted fixture holding one is a
+      -- finding.
+      expectEach [
+        ("no published Link", expectEqual [] (cellsWhere isLink rows)),
+        ("no open effect summary", expectEqual [] (cellsWhere isSummary rows)),
+        ("every graph published its modules", expectEqual [] unloaded),
+        ("stdlib modules driven", expectEqual 47 (length stdlibEs)),
+      ]
+    (Err e, _) => fail e
+    (_, Err e) => fail e
+  _ => fail "could not read the prelude pair"
+
+test "graph end: the stdlib and ACCEPT corpus publishes no Link" = corpusCheck
+
+-- A binding the value restriction leaves ungeneralized, and a second module
+-- that imports and names it.
+weakModule : String
+weakModule = unlines [
+  "export data Box a = Empty | Full a",
+  "idf : a -> a",
+  "idf x = x",
+  "export",
+  "held = idf Empty",
+]
+
+weakImporter : String
+weakImporter = unlines ["import weakp.{held}", "again = held"]
+
+renderedIn : String ->
+  String ->
+  List (String, List (String, PubScheme)) ->
+  List String
+renderedIn mid name rows =
+  flatMap
+    (r =>
+      if fst r == mid then
+        map
+          (b => "\{fst b} : \{ppSchemeCon (snd b).psContext (snd b).psScheme}")
+          (filter (b => fst b == name) (snd r))
+      else
+        [])
+    rows
+
+weakCheck : String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+weakCheck rsrc csrc dir =
+  let p = "\{dir}/weakp.mdk"
+  let q = "\{dir}/weakq.mdk"
+  match (writeFile p weakModule, writeFile q weakImporter)
+    (Ok _, Ok _) =>
+      let one = graphRows rsrc csrc onDisk p [dir, "stdlib"]
+      let two = graphRows rsrc csrc onDisk q [dir, "stdlib"]
+      expectEach [
+        (
+          "one WeakVar",
+          expectEqual 1 (length (filter isWeak (graphCells (map snd one)))),
+        ),
+        (
+          "renders as before",
+          expectEqual ["held : Box a"] (renderedIn "weakp" "held" one),
+        ),
+        (
+          "a copy per scheme renders as the shared cell did",
+          expectEqual
+            (["held : Box a"], ["again : Box a"])
+            (renderedIn "weakp" "held" two, renderedIn "weakq" "again" two),
+        ),
+      ]
+    _ => fail "could not write the weak-variable modules"
+
+test "graph end: held = idf Empty publishes one WeakVar and renders as Box a" =
+  match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
+    (Ok rsrc, Ok csrc) => withScratchDir (weakCheck rsrc csrc)
+    _ => fail "could not read the prelude pair"

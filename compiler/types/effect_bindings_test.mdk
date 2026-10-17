@@ -431,7 +431,7 @@ forcingFor source name =
     "binding_effects",
     desugar (parseLocated (effectPrelude ++ source)),
   )
-  match lookupAssoc name schemes
+  match map (p => p.psScheme) (lookupAssoc name schemes)
     Some (Forall _ _ _ _ force _) => renderAtoms (effrowLabels force)
     None => "<missing binding>"
 
@@ -441,7 +441,7 @@ renderedFor source name =
     "binding_effects",
     desugar (parseLocated (effectPrelude ++ source)),
   )
-  match lookupAssoc name schemes
+  match map (p => p.psScheme) (lookupAssoc name schemes)
     Some scheme => ppScheme scheme
     None => "<missing binding>"
 
@@ -451,7 +451,7 @@ forcingTailCount source name =
     "binding_effects",
     desugar (parseLocated (effectPrelude ++ source)),
   )
-  match lookupAssoc name schemes
+  match map (p => p.psScheme) (lookupAssoc name schemes)
     Some (Forall _ _ _ _ force _) => length (snd (rowFlat force))
     None => -1
 

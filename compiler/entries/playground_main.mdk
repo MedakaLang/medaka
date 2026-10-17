@@ -140,11 +140,11 @@ import entries.entry_support.{
   stampModulePaths,
 }
 import support.util.{startsWith, lookupAssoc, splitOnChar, filterList}
-import types.repr.{Scheme}
+import types.publish.{PubScheme(..), ppPubScheme}
 import types.typecheck.{
   ElabResult, constrainedSigNames, preludeReturnPosDictNames,
   preludeArgPosDictNames, mainTypeIsFloat, mainTypeIsUnit,
-  checkedFfiExternTypeNamesModules, ppSchemeNamedFull, checkOneSchemeFullK
+  checkedFfiExternTypeNamesModules, checkOneSchemeFullK
 }
 import ir.core_ir_lower.{
   lowerProgramEmit,
@@ -855,12 +855,12 @@ queryResult isHover rsrc csrc tsrc line col = match parseResult tsrc
     else
       jArray (filterCompletions (prefixBefore tsrc line col) [] env)
 
-hoverResult : String -> Int -> Int -> List (String, Scheme) -> Json
+hoverResult : String -> Int -> Int -> List (String, PubScheme) -> Json
 hoverResult src line col env = match identifierAt src line col
   None => JNull
   Some name => match lookupSchemeL name env
     None => JNull
-    Some sch => jHover name (ppSchemeNamedFull name sch)
+    Some p => jHover name (ppPubScheme p)
 
 -- Parse a non-negative decimal from argv (digits only; non-digits skipped).
 parseNat : String -> Int
@@ -947,7 +947,7 @@ prefixStart arr lineStart i
   | otherwise = i
 
 -- ── env lookup + JSON shaping (ported from lsp.mdk) ───────────────────────────
-lookupSchemeL : String -> List (String, Scheme) -> Option Scheme
+lookupSchemeL : String -> List (String, a) -> Option a
 lookupSchemeL _ [] = None
 lookupSchemeL name ((n, s) :: rest)
   | name == n = Some s
@@ -957,11 +957,14 @@ anyName : List String -> String -> Bool
 anyName [] _ = False
 anyName (x :: xs) name = x == name || anyName xs name
 
-filterCompletions : String -> List String -> List (String, Scheme) -> List Json
+filterCompletions : String ->
+  List String ->
+  List (String, PubScheme) ->
+  List Json
 filterCompletions _ _ [] = []
-filterCompletions prefix seen ((n, s) :: rest)
+filterCompletions prefix seen ((n, p) :: rest)
   | startsWith prefix n && not (anyName seen n) =
-    jCompletionItem n (ppSchemeNamedFull n s)
+    jCompletionItem n (ppPubScheme p)
       :: filterCompletions prefix (n :: seen) rest
   | otherwise = filterCompletions prefix seen rest
 

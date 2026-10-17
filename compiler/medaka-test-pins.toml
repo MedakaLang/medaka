@@ -177,3 +177,12 @@ issue = 1134
 seed = 20261009
 cases = 500
 failure = "false"
+
+[[pin]]
+file = "types/publish_test.mdk"
+kind = "test"
+name = "a graph-visible instance dropped from a later prefix module: warm equals cold"
+engine = "native"
+issue = 4266
+detail_lines = ["warm run reports as many errors as cold: expected 1 but got 0"]
+failure = "assertion"

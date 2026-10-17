@@ -466,7 +466,7 @@ numericSchemeObserved key source =
   )
   let values =
     map
-      (entry => ppScheme (snd entry))
+      (entry => ppScheme (snd entry).psScheme)
       (filter (entry => fst entry == "value") schemes)
   let trace = map numericTraceView (finishNumericPredicateTrace ())
   (values, trace)
@@ -731,8 +731,8 @@ arithmeticSchemeObserved key source =
     map
       (entry => (
         fst entry,
-        schemeVariableCount (snd entry),
-        ppScheme (snd entry),
+        schemeVariableCount (snd entry).psScheme,
+        ppScheme (snd entry).psScheme,
       ))
       (filter (entry => isArithmeticFunction (fst entry)) schemes)
   let assumptions =
@@ -1109,7 +1109,10 @@ declaredNumMemberSchemeObserved key member source =
   )
   let values =
     map
-      (entry => (schemeVariableCount (snd entry), ppScheme (snd entry)))
+      (entry => (
+        schemeVariableCount (snd entry).psScheme,
+        ppScheme (snd entry).psScheme,
+      ))
       (filter (entry => fst entry == member) schemes)
   let assumptions =
     map
@@ -2260,7 +2263,7 @@ returnMemoModuleView : ModDiags ->
   (String, List (String, String), List (String, String))
 returnMemoModuleView (moduleId, (schemes, errors, warnings)) = (
   moduleId,
-  map (entry => (fst entry, ppScheme (snd entry))) schemes,
+  map (entry => (fst entry, ppScheme (snd entry).psScheme)) schemes,
   map (diag => (tcCode diag, tcMsg diag)) (errors ++ warnings),
 )
 
@@ -2715,7 +2718,8 @@ test "each local boundary defaults its own numeric root to Int" =
     "local_numeric_own",
     desugar (parseLocated localNumOwnSource),
   )
-  let observed = map (entry => (fst entry, ppScheme (snd entry))) schemes
+  let observed =
+    map (entry => (fst entry, ppScheme (snd entry).psScheme)) schemes
   expectEqual
     [
       ("blockRec", "a -> Int"),
@@ -3767,7 +3771,7 @@ binderShadowObserved name body =
   let program = desugar (parseLocated (binderShadowSource body))
   let (errors, _) = checkOneDiags [] core ("binder_shadow", program)
   let (_, schemes) = checkOneSchemeFullK None [] core ("binder_shadow", program)
-  (map tcMsg errors, map ppScheme (lookupAssoc name schemes))
+  (map tcMsg errors, map (p => ppScheme p.psScheme) (lookupAssoc name schemes))
 
 test "a let binder shadowing a top-level name keeps the enclosing scheme its own" =
   expectEqual
