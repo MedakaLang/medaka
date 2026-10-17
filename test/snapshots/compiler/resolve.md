@@ -868,7 +868,7 @@ scopeAdd n (Scope names mem) = Scope (n :: names) (omInsert n () mem)
 -- below.  `None` until the first ELoc.
 checkExpr : Option Loc -> Env -> Scope -> Expr -> List ResError
 checkExpr _ _ _ (ELit _) = []
-checkExpr _ _ _ (ENumLit _ _ _ _) = []  -- PLAN.md #11: a literal, nothing to bind
+checkExpr _ _ _ (ENumLit _ _ _) = []  -- PLAN.md #11: a literal, nothing to bind
 checkExpr _ _ _ (EWideLit _ _ _ _) = []
 checkExpr _ _ _ (EMethodRef _) = []
 checkExpr _ _ _ (EDictApp _) = []
@@ -5315,7 +5315,7 @@ numberFrom i (n :: rest) = (n, i) :: numberFrom (i + 1) rest
 -- ── the walk ────────────────────────────────────────────────────────────────
 stampExpr : OrdMap Int -> Expr -> Expr
 stampExpr _ (ELit l) = ELit l
-stampExpr _ (ENumLit n r d lx) = ENumLit n r d lx
+stampExpr _ (ENumLit n d lx) = ENumLit n d lx
 stampExpr _ (EWideLit hi lo d lx) = EWideLit hi lo d lx
 stampExpr _ (EMethodRef m) = EMethodRef m
 stampExpr _ (EDictApp d) = EDictApp d
@@ -6269,7 +6269,7 @@ unqualRecPatField ctx (RecPatField f l bid (Some p)) =
 
 unqualExpr : AliasCtx -> Expr -> Expr
 unqualExpr _ (ELit l) = ELit l
-unqualExpr _ (ENumLit n r d lx) = ENumLit n r d lx
+unqualExpr _ (ENumLit n d lx) = ENumLit n d lx
 unqualExpr _ (EWideLit hi lo d lx) = EWideLit hi lo d lx
 unqualExpr _ (EMethodRef m) = EMethodRef m
 unqualExpr _ (EDictApp d) = EDictApp d
@@ -7212,7 +7212,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "scopeAdd" ((PVar "n") (PCon "Scope" (PVar "names") (PVar "mem"))) (EApp (EApp (EVar "Scope") (EBinOp "::" (EVar "n") (EVar "names"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "mem"))))
 (DTypeSig false "checkExpr" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "ResError")))))))
 (DFunDef false "checkExpr" (PWild PWild PWild (PCon "ELit" PWild)) (EListLit))
-(DFunDef false "checkExpr" (PWild PWild PWild (PCon "ENumLit" PWild PWild PWild PWild)) (EListLit))
+(DFunDef false "checkExpr" (PWild PWild PWild (PCon "ENumLit" PWild PWild PWild)) (EListLit))
 (DFunDef false "checkExpr" (PWild PWild PWild (PCon "EWideLit" PWild PWild PWild PWild)) (EListLit))
 (DFunDef false "checkExpr" (PWild PWild PWild (PCon "EMethodRef" PWild)) (EListLit))
 (DFunDef false "checkExpr" (PWild PWild PWild (PCon "EDictApp" PWild)) (EListLit))
@@ -8276,7 +8276,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "numberFrom" ((PVar "i") (PCons (PVar "n") (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EVar "i")) (EApp (EApp (EVar "numberFrom") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "stampExpr" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "stampExpr" (PWild (PCon "ELit" (PVar "l"))) (EApp (EVar "ELit") (EVar "l")))
-(DFunDef false "stampExpr" (PWild (PCon "ENumLit" (PVar "n") (PVar "r") (PVar "d") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EVar "r")) (EVar "d")) (EVar "lx")))
+(DFunDef false "stampExpr" (PWild (PCon "ENumLit" (PVar "n") (PVar "d") (PVar "lx"))) (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EVar "d")) (EVar "lx")))
 (DFunDef false "stampExpr" (PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "d") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EVar "d")) (EVar "lx")))
 (DFunDef false "stampExpr" (PWild (PCon "EMethodRef" (PVar "m"))) (EApp (EVar "EMethodRef") (EVar "m")))
 (DFunDef false "stampExpr" (PWild (PCon "EDictApp" (PVar "d"))) (EApp (EVar "EDictApp") (EVar "d")))
@@ -8536,7 +8536,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "unqualRecPatField" ((PVar "ctx") (PCon "RecPatField" (PVar "f") (PVar "l") (PVar "bid") (PCon "Some" (PVar "p")))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "f")) (EVar "l")) (EVar "bid")) (EApp (EVar "Some") (EApp (EApp (EVar "unqualPat") (EVar "ctx")) (EVar "p")))))
 (DTypeSig false "unqualExpr" (TyFun (TyCon "AliasCtx") (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "unqualExpr" (PWild (PCon "ELit" (PVar "l"))) (EApp (EVar "ELit") (EVar "l")))
-(DFunDef false "unqualExpr" (PWild (PCon "ENumLit" (PVar "n") (PVar "r") (PVar "d") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EVar "r")) (EVar "d")) (EVar "lx")))
+(DFunDef false "unqualExpr" (PWild (PCon "ENumLit" (PVar "n") (PVar "d") (PVar "lx"))) (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EVar "d")) (EVar "lx")))
 (DFunDef false "unqualExpr" (PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "d") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EVar "d")) (EVar "lx")))
 (DFunDef false "unqualExpr" (PWild (PCon "EMethodRef" (PVar "m"))) (EApp (EVar "EMethodRef") (EVar "m")))
 (DFunDef false "unqualExpr" (PWild (PCon "EDictApp" (PVar "d"))) (EApp (EVar "EDictApp") (EVar "d")))
@@ -8852,7 +8852,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "scopeAdd" ((PVar "n") (PCon "Scope" (PVar "names") (PVar "mem"))) (EApp (EApp (EVar "Scope") (EBinOp "::" (EVar "n") (EVar "names"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "mem"))))
 (DTypeSig false "checkExpr" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Env") (TyFun (TyCon "Scope") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "ResError")))))))
 (DFunDef false "checkExpr" (PWild PWild PWild (PCon "ELit" PWild)) (EListLit))
-(DFunDef false "checkExpr" (PWild PWild PWild (PCon "ENumLit" PWild PWild PWild PWild)) (EListLit))
+(DFunDef false "checkExpr" (PWild PWild PWild (PCon "ENumLit" PWild PWild PWild)) (EListLit))
 (DFunDef false "checkExpr" (PWild PWild PWild (PCon "EWideLit" PWild PWild PWild PWild)) (EListLit))
 (DFunDef false "checkExpr" (PWild PWild PWild (PCon "EMethodRef" PWild)) (EListLit))
 (DFunDef false "checkExpr" (PWild PWild PWild (PCon "EDictApp" PWild)) (EListLit))
@@ -9916,7 +9916,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "numberFrom" ((PVar "i") (PCons (PVar "n") (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EVar "i")) (EApp (EApp (EVar "numberFrom") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "stampExpr" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "stampExpr" (PWild (PCon "ELit" (PVar "l"))) (EApp (EVar "ELit") (EVar "l")))
-(DFunDef false "stampExpr" (PWild (PCon "ENumLit" (PVar "n") (PVar "r") (PVar "d") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EVar "r")) (EVar "d")) (EVar "lx")))
+(DFunDef false "stampExpr" (PWild (PCon "ENumLit" (PVar "n") (PVar "d") (PVar "lx"))) (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EVar "d")) (EVar "lx")))
 (DFunDef false "stampExpr" (PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "d") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EVar "d")) (EVar "lx")))
 (DFunDef false "stampExpr" (PWild (PCon "EMethodRef" (PVar "m"))) (EApp (EVar "EMethodRef") (EVar "m")))
 (DFunDef false "stampExpr" (PWild (PCon "EDictApp" (PVar "d"))) (EApp (EVar "EDictApp") (EVar "d")))
@@ -10176,7 +10176,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "unqualRecPatField" ((PVar "ctx") (PCon "RecPatField" (PVar "f") (PVar "l") (PVar "bid") (PCon "Some" (PVar "p")))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "f")) (EVar "l")) (EVar "bid")) (EApp (EVar "Some") (EApp (EApp (EVar "unqualPat") (EVar "ctx")) (EVar "p")))))
 (DTypeSig false "unqualExpr" (TyFun (TyCon "AliasCtx") (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "unqualExpr" (PWild (PCon "ELit" (PVar "l"))) (EApp (EVar "ELit") (EVar "l")))
-(DFunDef false "unqualExpr" (PWild (PCon "ENumLit" (PVar "n") (PVar "r") (PVar "d") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EVar "r")) (EVar "d")) (EVar "lx")))
+(DFunDef false "unqualExpr" (PWild (PCon "ENumLit" (PVar "n") (PVar "d") (PVar "lx"))) (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EVar "d")) (EVar "lx")))
 (DFunDef false "unqualExpr" (PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "d") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EVar "d")) (EVar "lx")))
 (DFunDef false "unqualExpr" (PWild (PCon "EMethodRef" (PVar "m"))) (EApp (EVar "EMethodRef") (EVar "m")))
 (DFunDef false "unqualExpr" (PWild (PCon "EDictApp" (PVar "d"))) (EApp (EVar "EDictApp") (EVar "d")))

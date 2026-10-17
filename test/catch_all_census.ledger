@@ -101,7 +101,7 @@ reexportedOriginsOf	Decl	2/14
 registerData	Decl	1/14
 renderCallArg	Expr	10/42
 returnPosOfDecl	Decl	1/14
-rewriteArgScoped	Expr	34/42
+rewriteArgScoped	Expr	36/42
 rewriteBinopExpr	Expr	4/42
 rewriteLocalDictExpr	Expr	4/42
 rewriteRPDict	Expr	1/42

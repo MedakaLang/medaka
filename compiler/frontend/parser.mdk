@@ -22,6 +22,7 @@
 import support.stage_count.{stageBump}
 import frontend.ast.{
   noBinderId,
+  unminted,
   intMinLiteralMsg,
   negateLiteral,
   DeriveRef(..),
@@ -513,7 +514,7 @@ assignTailRaw : Expr -> Parser Expr
 assignTailRaw lhs = defer
   expectTok TColonEq
   rhs <- parseRhsExpr
-  deferPure (EBinOp ":=" lhs rhs (Ref RNone))
+  deferPure (EBinOp ":=" lhs rhs unminted)
 
 -- Each optional tail is taken only when its introducing token is next.  Any
 -- other next token makes the tail fail without consuming (at this same pos), so
@@ -604,7 +605,7 @@ exprToPat (EVar x) = ctorOrVar x
 exprToPat (ELit l) = PLit l
 -- PLAN.md #11 §0.4: an integer in pattern (binding-LHS) position stays a
 -- monomorphic `Int` pattern; only EXPRESSION-position integers go polymorphic.
-exprToPat (ENumLit n _ _ _) = PLit (LInt n)
+exprToPat (ENumLit n _ _) = PLit (LInt n)
 exprToPat (EWideLit hi lo _ _) = PLit (LU64 hi lo)
 exprToPat (ETuple es) = PTuple (map exprToPat es)
 exprToPat (EListLit es) = PList (map exprToPat es)
@@ -781,7 +782,7 @@ binRhsLevel lvl
 -- of the chain.
 binRhs : Int -> Array Token -> Expr -> Int -> Token -> PR Expr -> PR Expr
 binRhs lvl toks x _ t (POk y q) =
-  binNext lvl toks (POk (EBinOp (binOpName t) x y (Ref RNone)) q)
+  binNext lvl toks (POk (EBinOp (binOpName t) x y unminted) q)
 binRhs _ _ x pos _ (PErr _ _) = POk x pos
 binRhs _ _ _ _ _ ry = ry
 
@@ -850,7 +851,7 @@ widePatMsg lx =
 -- the lexer admits it for `-4611686018427387904`'s sake and it has wrapped to
 -- `intMinLit`, so the positive position rebuilds it as the halves of 2^62.
 intMinAsWide : String -> Expr
-intMinAsWide lx = EWideLit 1073741824 0 (Ref RNone) lx
+intMinAsWide lx = EWideLit 1073741824 0 unminted lx
 
 -- unary minus, tighter than `*` (a leading `-` in operand position)
 parseUnary : Parser Expr
@@ -864,7 +865,7 @@ unaryFor TMinusTight = negUnary
 unaryFor TBang = defer
   advance
   e <- parseUnary
-  deferPure (EUnOp "!" e (Ref RNone))
+  deferPure (EUnOp "!" e unminted)
 unaryFor _ = parseInfix
 
 -- `-` in operand position.  A directly-following 2^62 literal is FUSED into a
@@ -883,11 +884,11 @@ negUnaryFor (TInt n lx)
   | isIntMinLit n = located (defer
     advance
     advance
-    deferPure (ENumLit n (Ref None) (Ref RNone) ("-" ++ lx)))
+    deferPure (ENumLit n unminted ("-" ++ lx)))
 negUnaryFor _ = defer
   advance
   e <- parseUnary
-  deferPure (EUnOp "-" e (Ref RNone))
+  deferPure (EUnOp "-" e unminted)
 
 -- backtick infix application (``a `div` b``) has been removed.  The lexer still
 -- produces `TBacktickIdent` as a sentinel; a pre-grammar scan surfaces a located
@@ -956,7 +957,7 @@ derefArgFor : Token -> Parser Expr
 derefArgFor TBang = defer
   advance
   e <- parseAspat
-  deferPure (EUnOp "!" e (Ref RNone))
+  deferPure (EUnOp "!" e unminted)
 derefArgFor _ = failP "not a tight deref argument"
 
 -- The numeric-head test (`headIsNumeric`) walks the head's ELoc chain, so it runs
@@ -983,11 +984,11 @@ negLitArgFor : Token -> Token -> Parser Expr
 negLitArgFor TMinusTight (TInt n lx) = defer
   advance
   advance
-  deferPure (ENumLit (negateLiteral n) (Ref None) (Ref RNone) ("-" ++ lx))
+  deferPure (ENumLit (negateLiteral n) unminted ("-" ++ lx))
 negLitArgFor TMinusTight (TWideInt hi lo lx) = defer
   advance
   advance
-  deferPure (EUnOp "-" (EWideLit hi lo (Ref RNone) lx) (Ref RNone))
+  deferPure (EUnOp "-" (EWideLit hi lo unminted lx) unminted)
 negLitArgFor TMinusTight (TFloat f) = defer
   advance
   advance
@@ -998,7 +999,7 @@ negLitArgFor _ _ = failP "not a tight negative literal argument"
 -- not a negative argument)?  Strip the transparent ELoc wrapper first.
 headIsNumeric : Expr -> Bool
 headIsNumeric (ELoc _ e) = headIsNumeric e
-headIsNumeric (ENumLit _ _ _ _) = True
+headIsNumeric (ENumLit _ _ _) = True
 headIsNumeric (EWideLit _ _ _ _) = True
 headIsNumeric (ELit (LInt _)) = True
 headIsNumeric (ELit (LFloat _)) = True
@@ -1173,8 +1174,8 @@ parseAtomRaw = defer
   t <- peekP
   match t
     TInt n lx if isIntMinLit n => emit (intMinAsWide lx)
-    TInt n lx => emit (ENumLit n (Ref None) (Ref RNone) lx)
-    TWideInt hi lo lx => emit (EWideLit hi lo (Ref RNone) lx)
+    TInt n lx => emit (ENumLit n unminted lx)
+    TWideInt hi lo lx => emit (EWideLit hi lo unminted lx)
     TFloat f => emit (ELit (LFloat f))
     TString s => emit (ELit (LString s))
     TChar s => emit (ELit (LChar s))

@@ -1,5 +1,5 @@
 # META
-source_lines=2014
+source_lines=2017
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -333,6 +333,9 @@ mangleEvVal rm (EvMethod iface arity r reqs mds) =
     (mangleRoute rm r)
     (map (mangleRoute rm) reqs)
     (map (mangleRoute rm) mds)
+mangleEvVal rm (EvLit f r) = EvLit f (mangleRoute rm r)
+-- A record head is owner-qualified where it is stamped and never renamed.
+mangleEvVal _ (EvHead h) = EvHead h
 
 -- Only `RLocal`'s symbol is a top-level function name.  `RKey` carries an impl head TYPE
 -- tag or a canonical impl key (types are not mangled), `RDict`/`RDictFwd` a dict PARAMETER
@@ -1888,7 +1891,7 @@ renameScoped rm _ (EMethodAt m seed ev) = EMethodAt m (renameDefName rm seed) ev
 --     `ESection` before elaboration.
 -- `EVarAt` is handled above, not here: it carries a renameable NAME (see its arm).
 renameScoped _ _ (e@(ELit _)) = e
-renameScoped _ _ (e@(ENumLit _ _ _ _)) = e
+renameScoped _ _ (e@(ENumLit _ _ _)) = e
 renameScoped _ _ (e@(EWideLit _ _ _ _)) = e
 renameScoped _ _ (e@(EMethodRef _)) = e
 renameScoped _ _ (e@(EDictApp _)) = e
@@ -2045,6 +2048,8 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "mangleEvVal" ((PVar "rm") (PCon "EvOne" (PVar "r"))) (EApp (EVar "EvOne") (EApp (EApp (EVar "mangleRoute") (EVar "rm")) (EVar "r"))))
 (DFunDef false "mangleEvVal" ((PVar "rm") (PCon "EvMany" (PVar "rs"))) (EApp (EVar "EvMany") (EApp (EApp (EVar "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "rs"))))
 (DFunDef false "mangleEvVal" ((PVar "rm") (PCon "EvMethod" (PVar "iface") (PVar "arity") (PVar "r") (PVar "reqs") (PVar "mds"))) (EApp (EApp (EApp (EApp (EApp (EVar "EvMethod") (EVar "iface")) (EVar "arity")) (EApp (EApp (EVar "mangleRoute") (EVar "rm")) (EVar "r"))) (EApp (EApp (EVar "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "reqs"))) (EApp (EApp (EVar "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "mds"))))
+(DFunDef false "mangleEvVal" ((PVar "rm") (PCon "EvLit" (PVar "f") (PVar "r"))) (EApp (EApp (EVar "EvLit") (EVar "f")) (EApp (EApp (EVar "mangleRoute") (EVar "rm")) (EVar "r"))))
+(DFunDef false "mangleEvVal" (PWild (PCon "EvHead" (PVar "h"))) (EApp (EVar "EvHead") (EVar "h")))
 (DTypeSig false "mangleRoute" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Route") (TyCon "Route"))))
 (DFunDef false "mangleRoute" ((PVar "rm") (PCon "RLocal" (PVar "sym") (PVar "ds"))) (EApp (EApp (EVar "RLocal") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "sym"))) (EApp (EApp (EVar "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "ds"))))
 (DFunDef false "mangleRoute" ((PVar "rm") (PCon "RKey" (PVar "k") (PVar "ds") (PVar "sups"))) (EApp (EApp (EApp (EVar "RKey") (EVar "k")) (EApp (EApp (EVar "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "ds"))) (EApp (EApp (EVar "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "sups"))))
@@ -2388,7 +2393,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EDictAt" (PVar "n") (PVar "ev"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EVar "ev")) (EIf (EVar "otherwise") (EApp (EApp (EVar "EDictAt") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EVar "ev")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "renameScoped" ((PVar "rm") PWild (PCon "EMethodAt" (PVar "m") (PVar "seed") (PVar "ev"))) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "m")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "seed"))) (EVar "ev")))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ELit" PWild))) (EVar "e"))
-(DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ENumLit" PWild PWild PWild PWild))) (EVar "e"))
+(DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ENumLit" PWild PWild PWild))) (EVar "e"))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "e"))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EMethodRef" PWild))) (EVar "e"))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EDictApp" PWild))) (EVar "e"))
@@ -2480,6 +2485,8 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "mangleEvVal" ((PVar "rm") (PCon "EvOne" (PVar "r"))) (EApp (EVar "EvOne") (EApp (EApp (EVar "mangleRoute") (EVar "rm")) (EVar "r"))))
 (DFunDef false "mangleEvVal" ((PVar "rm") (PCon "EvMany" (PVar "rs"))) (EApp (EVar "EvMany") (EApp (EApp (EMethodRef "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "rs"))))
 (DFunDef false "mangleEvVal" ((PVar "rm") (PCon "EvMethod" (PVar "iface") (PVar "arity") (PVar "r") (PVar "reqs") (PVar "mds"))) (EApp (EApp (EApp (EApp (EApp (EVar "EvMethod") (EVar "iface")) (EVar "arity")) (EApp (EApp (EVar "mangleRoute") (EVar "rm")) (EVar "r"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "reqs"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "mds"))))
+(DFunDef false "mangleEvVal" ((PVar "rm") (PCon "EvLit" (PVar "f") (PVar "r"))) (EApp (EApp (EVar "EvLit") (EVar "f")) (EApp (EApp (EVar "mangleRoute") (EVar "rm")) (EVar "r"))))
+(DFunDef false "mangleEvVal" (PWild (PCon "EvHead" (PVar "h"))) (EApp (EVar "EvHead") (EVar "h")))
 (DTypeSig false "mangleRoute" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Route") (TyCon "Route"))))
 (DFunDef false "mangleRoute" ((PVar "rm") (PCon "RLocal" (PVar "sym") (PVar "ds"))) (EApp (EApp (EVar "RLocal") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "sym"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "ds"))))
 (DFunDef false "mangleRoute" ((PVar "rm") (PCon "RKey" (PVar "k") (PVar "ds") (PVar "sups"))) (EApp (EApp (EApp (EVar "RKey") (EVar "k")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "ds"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "mangleRoute") (EVar "rm"))) (EVar "sups"))))
@@ -2823,7 +2830,7 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EDictAt" (PVar "n") (PVar "ev"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EVar "ev")) (EIf (EVar "otherwise") (EApp (EApp (EVar "EDictAt") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EVar "ev")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "renameScoped" ((PVar "rm") PWild (PCon "EMethodAt" (PVar "m") (PVar "seed") (PVar "ev"))) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "m")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "seed"))) (EVar "ev")))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ELit" PWild))) (EVar "e"))
-(DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ENumLit" PWild PWild PWild PWild))) (EVar "e"))
+(DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "ENumLit" PWild PWild PWild))) (EVar "e"))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "e"))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EMethodRef" PWild))) (EVar "e"))
 (DFunDef false "renameScoped" (PWild PWild (PAs "e" (PCon "EDictApp" PWild))) (EVar "e"))

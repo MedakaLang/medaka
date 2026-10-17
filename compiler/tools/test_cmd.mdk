@@ -2886,6 +2886,9 @@ helperPair runtimeM rawCoreM rawM decls =
       let (coreM, modsM) = mangleCtorCollisionsPair (coreE, modulesE)
       TestPair runtimeM rawCoreM coreM injected modsM
 
+-- The program's own elaboration diagnostics: the baseline a helper pass is
+-- measured against.
+export
 helperElabDiags : List Decl ->
   List Decl ->
   List (String, List Decl) ->
@@ -2893,13 +2896,17 @@ helperElabDiags : List Decl ->
 helperElabDiags runtimeM rawCoreM rawM =
   helperElabDiagsWith runtimeM rawCoreM rawM []
 
+-- A diagnostics-only drive.  The trees evaluated after it are the candidate
+-- `helperPair` elaborated before it, so it leaves that drive's evidence table
+-- installed.
 helperElabDiagsWith : List Decl ->
   List Decl ->
   List (String, List Decl) ->
   List Decl ->
   List (String, TcDiag)
 helperElabDiagsWith runtimeM rawCoreM rawM decls =
-  match elaborateModules runtimeM rawCoreM (injectIntoLast decls rawM)
+  match (withEvidencePreserved (_ =>
+    elaborateModules runtimeM rawCoreM (injectIntoLast decls rawM)))
     (_, _, perModule, residual, _, _) =>
       residual ++ perModuleErrors perModule []
 

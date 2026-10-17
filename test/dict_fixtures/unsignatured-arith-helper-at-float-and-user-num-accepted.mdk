@@ -1,0 +1,34 @@
+-- An unsignatured arithmetic helper used at `Float` and at a user `Num` type.
+--
+-- EXPECTED VALUE HAND-DERIVED FROM THE SPEC, NOT CAPTURED. `double` has no
+-- signature, so its type is inferred and generalized with the predicate its `+`
+-- poses: `double : Num a => a -> a`. At `double 1.25` the predicate is `Num Float`,
+-- the prelude's instance, so the result is 2.5. At `double (V 21)` it is `Num V`,
+-- the one `impl Num V` below, whose `add` gives `V 42`. ACCEPT on every verb, and
+-- every engine prints `2.5` then `42`.
+--
+-- Why the corpus carries it: a group that promotes a member to a constrained one
+-- is marked a second time after inference (`markRecursiveOccurrences` in
+-- `compiler/types/typecheck.mdk`), so the operator inside `double` is a site that
+-- pass visits after inference has already written through it.
+data V = V Int deriving (Eq)
+
+impl Num V where
+  add (V a) (V b) = V (a + b)
+  sub (V a) (V b) = V (a - b)
+  mul (V a) (V b) = V (a * b)
+  div (V a) (V b) = V (a / b)
+  negate (V a) = V (0 - a)
+  abs (V a) = V a
+  signum (V a) = V 1
+  fromInt n = V n
+  rem (V a) (V b) = V (a % b)
+
+double x = x + x
+
+unV : V -> Int
+unV (V n) = n
+
+main =
+  let _ = println (floatToString (double 1.25))
+  println (intToString (unV (double (V 21))))

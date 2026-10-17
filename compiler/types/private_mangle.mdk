@@ -329,6 +329,9 @@ mangleEvVal rm (EvMethod iface arity r reqs mds) =
     (mangleRoute rm r)
     (map (mangleRoute rm) reqs)
     (map (mangleRoute rm) mds)
+mangleEvVal rm (EvLit f r) = EvLit f (mangleRoute rm r)
+-- A record head is owner-qualified where it is stamped and never renamed.
+mangleEvVal _ (EvHead h) = EvHead h
 
 -- Only `RLocal`'s symbol is a top-level function name.  `RKey` carries an impl head TYPE
 -- tag or a canonical impl key (types are not mangled), `RDict`/`RDictFwd` a dict PARAMETER
@@ -1884,7 +1887,7 @@ renameScoped rm _ (EMethodAt m seed ev) = EMethodAt m (renameDefName rm seed) ev
 --     `ESection` before elaboration.
 -- `EVarAt` is handled above, not here: it carries a renameable NAME (see its arm).
 renameScoped _ _ (e@(ELit _)) = e
-renameScoped _ _ (e@(ENumLit _ _ _ _)) = e
+renameScoped _ _ (e@(ENumLit _ _ _)) = e
 renameScoped _ _ (e@(EWideLit _ _ _ _)) = e
 renameScoped _ _ (e@(EMethodRef _)) = e
 renameScoped _ _ (e@(EDictApp _)) = e

@@ -1,5 +1,5 @@
 # META
-source_lines=2691
+source_lines=2690
 stages=DESUGAR,MARK
 # SOURCE
 -- Pretty printer for Medaka, producing parseable source from the AST
@@ -1215,7 +1215,7 @@ isRightAssoc _ = False
 
 exprPrec : Expr -> Int
 exprPrec (ELit l) = if isNegLit l then precUnary else precAtom
-exprPrec (ENumLit n _ _ _) = if n < 0 then precUnary else precAtom
+exprPrec (ENumLit n _ _) = if n < 0 then precUnary else precAtom
 exprPrec (EWideLit _ _ _ _) = precAtom
 exprPrec (EVar _) = precAtom
 exprPrec (EVarId _ _) = precAtom
@@ -1340,7 +1340,7 @@ isSimpleArg e = not (isHuggableArg e)
 -- list of them packs to the width instead of going one-per-line.
 isFillAtom : Expr -> Bool
 isFillAtom e = match stripLocE e
-  ENumLit _ _ _ _ => True
+  ENumLit _ _ _ => True
   EWideLit _ _ _ _ => True
   ELit _ => True
   EVar _ => True
@@ -1380,8 +1380,7 @@ printExprRaw : Option Loc -> Expr -> Doc
 printExprRaw _ (ELit l) = printLit l
 -- ENumLit renders the ORIGINAL SOURCE LEXEME so the author's radix and
 -- separators survive (`0xD800`, `1_000`); a synthesized literal carries "".
-printExprRaw _ (ENumLit n _ _ lx) =
-  text (if lx == "" then intToString n else lx)
+printExprRaw _ (ENumLit n _ lx) = text (if lx == "" then intToString n else lx)
 printExprRaw _ (EWideLit hi lo _ lx) =
   text (if lx == "" then "0x" ++ u64HalvesHex hi lo else lx)
 printExprRaw _ (EVar n) = text n
@@ -2071,11 +2070,11 @@ isTightDerefArg e = match stripLocE e
 isTightNegLitArg : Expr -> Bool
 isTightNegLitArg e = match stripLocE e
   ELit l => isNegLit l
-  ENumLit n _ _ _ => n < 0
+  ENumLit n _ _ => n < 0
   _ => False
 
 headIsNumericHead : Expr -> Bool
-headIsNumericHead (ENumLit _ _ _ _) = True
+headIsNumericHead (ENumLit _ _ _) = True
 headIsNumericHead (EWideLit _ _ _ _) = True
 headIsNumericHead (ELit (LInt _)) = True
 headIsNumericHead (ELit (LFloat _)) = True
@@ -3187,7 +3186,7 @@ effAxesDoc axes =
 (DFunDef false "isRightAssoc" (PWild) (EVar "False"))
 (DTypeSig false "exprPrec" (TyFun (TyCon "Expr") (TyCon "Int")))
 (DFunDef false "exprPrec" ((PCon "ELit" (PVar "l"))) (EIf (EApp (EVar "isNegLit") (EVar "l")) (EVar "precUnary") (EVar "precAtom")))
-(DFunDef false "exprPrec" ((PCon "ENumLit" (PVar "n") PWild PWild PWild)) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EVar "precUnary") (EVar "precAtom")))
+(DFunDef false "exprPrec" ((PCon "ENumLit" (PVar "n") PWild PWild)) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EVar "precUnary") (EVar "precAtom")))
 (DFunDef false "exprPrec" ((PCon "EWideLit" PWild PWild PWild PWild)) (EVar "precAtom"))
 (DFunDef false "exprPrec" ((PCon "EVar" PWild)) (EVar "precAtom"))
 (DFunDef false "exprPrec" ((PCon "EVarId" PWild PWild)) (EVar "precAtom"))
@@ -3248,7 +3247,7 @@ effAxesDoc axes =
 (DTypeSig false "isSimpleArg" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "isSimpleArg" ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isHuggableArg") (EVar "e"))))
 (DTypeSig false "isFillAtom" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "isFillAtom" ((PVar "e")) (EMatch (EApp (EVar "stripLocE") (EVar "e")) (arm (PCon "ENumLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "EWideLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "EVar" PWild) () (EVar "True")) (arm (PCon "EVarId" PWild PWild) () (EVar "True")) (arm (PCon "EMethodRef" PWild) () (EVar "True")) (arm (PCon "EDictApp" PWild) () (EVar "True")) (arm (PCon "EUnOp" (PVar "op") (PVar "inner") PWild) () (EBinOp "&&" (EBinOp "==" (EVar "op") (ELit (LString "-"))) (EApp (EVar "isFillAtom") (EVar "inner")))) (arm PWild () (EVar "False"))))
+(DFunDef false "isFillAtom" ((PVar "e")) (EMatch (EApp (EVar "stripLocE") (EVar "e")) (arm (PCon "ENumLit" PWild PWild PWild) () (EVar "True")) (arm (PCon "EWideLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "EVar" PWild) () (EVar "True")) (arm (PCon "EVarId" PWild PWild) () (EVar "True")) (arm (PCon "EMethodRef" PWild) () (EVar "True")) (arm (PCon "EDictApp" PWild) () (EVar "True")) (arm (PCon "EUnOp" (PVar "op") (PVar "inner") PWild) () (EBinOp "&&" (EBinOp "==" (EVar "op") (ELit (LString "-"))) (EApp (EVar "isFillAtom") (EVar "inner")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "isFillable" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool")))
 (DFunDef false "isFillable" ((PVar "es")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "es")) (ELit (LInt 2))) (EApp (EApp (EVar "allList") (EVar "isFillAtom")) (EVar "es"))))
 (DTypeSig false "collectionDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Doc"))))))
@@ -3260,7 +3259,7 @@ effAxesDoc axes =
 (DFunDef false "doKeyword" ((PCon "False")) (ELit (LString "do")))
 (DTypeSig false "printExprRaw" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Doc"))))
 (DFunDef false "printExprRaw" (PWild (PCon "ELit" (PVar "l"))) (EApp (EVar "printLit") (EVar "l")))
-(DFunDef false "printExprRaw" (PWild (PCon "ENumLit" (PVar "n") PWild PWild (PVar "lx"))) (EApp (EVar "text") (EIf (EBinOp "==" (EVar "lx") (ELit (LString ""))) (EApp (EVar "intToString") (EVar "n")) (EVar "lx"))))
+(DFunDef false "printExprRaw" (PWild (PCon "ENumLit" (PVar "n") PWild (PVar "lx"))) (EApp (EVar "text") (EIf (EBinOp "==" (EVar "lx") (ELit (LString ""))) (EApp (EVar "intToString") (EVar "n")) (EVar "lx"))))
 (DFunDef false "printExprRaw" (PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") PWild (PVar "lx"))) (EApp (EVar "text") (EIf (EBinOp "==" (EVar "lx") (ELit (LString ""))) (EBinOp "++" (ELit (LString "0x")) (EApp (EApp (EVar "u64HalvesHex") (EVar "hi")) (EVar "lo"))) (EVar "lx"))))
 (DFunDef false "printExprRaw" (PWild (PCon "EVar" (PVar "n"))) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" (PWild (PCon "EVarId" (PVar "n") PWild)) (EApp (EVar "text") (EVar "n")))
@@ -3453,9 +3452,9 @@ effAxesDoc axes =
 (DTypeSig false "isTightDerefArg" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "isTightDerefArg" ((PVar "e")) (EMatch (EApp (EVar "stripLocE") (EVar "e")) (arm (PCon "EUnOp" (PLit (LString "!")) PWild PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "isTightNegLitArg" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "isTightNegLitArg" ((PVar "e")) (EMatch (EApp (EVar "stripLocE") (EVar "e")) (arm (PCon "ELit" (PVar "l")) () (EApp (EVar "isNegLit") (EVar "l"))) (arm (PCon "ENumLit" (PVar "n") PWild PWild PWild) () (EBinOp "<" (EVar "n") (ELit (LInt 0)))) (arm PWild () (EVar "False"))))
+(DFunDef false "isTightNegLitArg" ((PVar "e")) (EMatch (EApp (EVar "stripLocE") (EVar "e")) (arm (PCon "ELit" (PVar "l")) () (EApp (EVar "isNegLit") (EVar "l"))) (arm (PCon "ENumLit" (PVar "n") PWild PWild) () (EBinOp "<" (EVar "n") (ELit (LInt 0)))) (arm PWild () (EVar "False"))))
 (DTypeSig false "headIsNumericHead" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "headIsNumericHead" ((PCon "ENumLit" PWild PWild PWild PWild)) (EVar "True"))
+(DFunDef false "headIsNumericHead" ((PCon "ENumLit" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "headIsNumericHead" ((PCon "EWideLit" PWild PWild PWild PWild)) (EVar "True"))
 (DFunDef false "headIsNumericHead" ((PCon "ELit" (PCon "LInt" PWild))) (EVar "True"))
 (DFunDef false "headIsNumericHead" ((PCon "ELit" (PCon "LFloat" PWild))) (EVar "True"))
@@ -4141,7 +4140,7 @@ effAxesDoc axes =
 (DFunDef false "isRightAssoc" (PWild) (EVar "False"))
 (DTypeSig false "exprPrec" (TyFun (TyCon "Expr") (TyCon "Int")))
 (DFunDef false "exprPrec" ((PCon "ELit" (PVar "l"))) (EIf (EApp (EVar "isNegLit") (EVar "l")) (EVar "precUnary") (EVar "precAtom")))
-(DFunDef false "exprPrec" ((PCon "ENumLit" (PVar "n") PWild PWild PWild)) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EVar "precUnary") (EVar "precAtom")))
+(DFunDef false "exprPrec" ((PCon "ENumLit" (PVar "n") PWild PWild)) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EVar "precUnary") (EVar "precAtom")))
 (DFunDef false "exprPrec" ((PCon "EWideLit" PWild PWild PWild PWild)) (EVar "precAtom"))
 (DFunDef false "exprPrec" ((PCon "EVar" PWild)) (EVar "precAtom"))
 (DFunDef false "exprPrec" ((PCon "EVarId" PWild PWild)) (EVar "precAtom"))
@@ -4202,7 +4201,7 @@ effAxesDoc axes =
 (DTypeSig false "isSimpleArg" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "isSimpleArg" ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isHuggableArg") (EVar "e"))))
 (DTypeSig false "isFillAtom" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "isFillAtom" ((PVar "e")) (EMatch (EApp (EVar "stripLocE") (EVar "e")) (arm (PCon "ENumLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "EWideLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "EVar" PWild) () (EVar "True")) (arm (PCon "EVarId" PWild PWild) () (EVar "True")) (arm (PCon "EMethodRef" PWild) () (EVar "True")) (arm (PCon "EDictApp" PWild) () (EVar "True")) (arm (PCon "EUnOp" (PVar "op") (PVar "inner") PWild) () (EBinOp "&&" (EBinOp "==" (EVar "op") (ELit (LString "-"))) (EApp (EVar "isFillAtom") (EVar "inner")))) (arm PWild () (EVar "False"))))
+(DFunDef false "isFillAtom" ((PVar "e")) (EMatch (EApp (EVar "stripLocE") (EVar "e")) (arm (PCon "ENumLit" PWild PWild PWild) () (EVar "True")) (arm (PCon "EWideLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "EVar" PWild) () (EVar "True")) (arm (PCon "EVarId" PWild PWild) () (EVar "True")) (arm (PCon "EMethodRef" PWild) () (EVar "True")) (arm (PCon "EDictApp" PWild) () (EVar "True")) (arm (PCon "EUnOp" (PVar "op") (PVar "inner") PWild) () (EBinOp "&&" (EBinOp "==" (EVar "op") (ELit (LString "-"))) (EApp (EVar "isFillAtom") (EVar "inner")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "isFillable" (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool")))
 (DFunDef false "isFillable" ((PVar "es")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "es")) (ELit (LInt 2))) (EApp (EApp (EVar "allList") (EVar "isFillAtom")) (EVar "es"))))
 (DTypeSig false "collectionDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Doc"))))))
@@ -4214,7 +4213,7 @@ effAxesDoc axes =
 (DFunDef false "doKeyword" ((PCon "False")) (ELit (LString "do")))
 (DTypeSig false "printExprRaw" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Doc"))))
 (DFunDef false "printExprRaw" (PWild (PCon "ELit" (PVar "l"))) (EApp (EVar "printLit") (EVar "l")))
-(DFunDef false "printExprRaw" (PWild (PCon "ENumLit" (PVar "n") PWild PWild (PVar "lx"))) (EApp (EVar "text") (EIf (EBinOp "==" (EVar "lx") (ELit (LString ""))) (EApp (EVar "intToString") (EVar "n")) (EVar "lx"))))
+(DFunDef false "printExprRaw" (PWild (PCon "ENumLit" (PVar "n") PWild (PVar "lx"))) (EApp (EVar "text") (EIf (EBinOp "==" (EVar "lx") (ELit (LString ""))) (EApp (EVar "intToString") (EVar "n")) (EVar "lx"))))
 (DFunDef false "printExprRaw" (PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") PWild (PVar "lx"))) (EApp (EVar "text") (EIf (EBinOp "==" (EVar "lx") (ELit (LString ""))) (EBinOp "++" (ELit (LString "0x")) (EApp (EApp (EVar "u64HalvesHex") (EVar "hi")) (EVar "lo"))) (EVar "lx"))))
 (DFunDef false "printExprRaw" (PWild (PCon "EVar" (PVar "n"))) (EApp (EVar "text") (EVar "n")))
 (DFunDef false "printExprRaw" (PWild (PCon "EVarId" (PVar "n") PWild)) (EApp (EVar "text") (EVar "n")))
@@ -4407,9 +4406,9 @@ effAxesDoc axes =
 (DTypeSig false "isTightDerefArg" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "isTightDerefArg" ((PVar "e")) (EMatch (EApp (EVar "stripLocE") (EVar "e")) (arm (PCon "EUnOp" (PLit (LString "!")) PWild PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "isTightNegLitArg" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "isTightNegLitArg" ((PVar "e")) (EMatch (EApp (EVar "stripLocE") (EVar "e")) (arm (PCon "ELit" (PVar "l")) () (EApp (EVar "isNegLit") (EVar "l"))) (arm (PCon "ENumLit" (PVar "n") PWild PWild PWild) () (EBinOp "<" (EVar "n") (ELit (LInt 0)))) (arm PWild () (EVar "False"))))
+(DFunDef false "isTightNegLitArg" ((PVar "e")) (EMatch (EApp (EVar "stripLocE") (EVar "e")) (arm (PCon "ELit" (PVar "l")) () (EApp (EVar "isNegLit") (EVar "l"))) (arm (PCon "ENumLit" (PVar "n") PWild PWild) () (EBinOp "<" (EVar "n") (ELit (LInt 0)))) (arm PWild () (EVar "False"))))
 (DTypeSig false "headIsNumericHead" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "headIsNumericHead" ((PCon "ENumLit" PWild PWild PWild PWild)) (EVar "True"))
+(DFunDef false "headIsNumericHead" ((PCon "ENumLit" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "headIsNumericHead" ((PCon "EWideLit" PWild PWild PWild PWild)) (EVar "True"))
 (DFunDef false "headIsNumericHead" ((PCon "ELit" (PCon "LInt" PWild))) (EVar "True"))
 (DFunDef false "headIsNumericHead" ((PCon "ELit" (PCon "LFloat" PWild))) (EVar "True"))

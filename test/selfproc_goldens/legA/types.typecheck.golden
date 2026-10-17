@@ -287,7 +287,7 @@ bindsRename : List LetBind -> Map String String -> (List LetBind, Map String Str
 binopBuiltinHead : String -> String -> Bool
 binopDispatchMethod : String -> Option String
 binopMethod : String -> Option String
-binopMethodApp : String -> Expr -> Expr -> Ref Route -> Expr
+binopMethodApp : String -> Expr -> Expr -> Route -> Expr
 binopPrimitiveHead : String -> Bool
 binopRouteSplit : Route -> (Route, List Route)
 binopSpanLoc : Expr -> Expr -> Option Loc
@@ -399,6 +399,7 @@ cellHeadKey : String -> TyConOrigin -> String
 cellIdSet : List (Ref Effvar) -> Map Int Unit
 cellIdSetGo : List (Ref Effvar) -> Map Int Unit -> Map Int Unit
 cellOfGoal : List EvCell -> Obligation -> Option EvCell
+cellStoreMisses : EvId -> (String, String)
 cellTypeHeads : List Decl -> Map String Unit
 cellsFrom : Array (Option EvCell) -> Int -> List EvCell -> List EvCell
 censusSuperClose : List (IfaceRef, Int) -> List (IfaceRef, Int)
@@ -1046,6 +1047,7 @@ eqInt : Int -> Int -> Bool
 eqIntList : List Int -> List Int -> Bool
 erredDuring : (Unit -> a) -> (Bool, a)
 evCell : EvDest -> Ref Route
+evCellsSpanProbe : Unit -> Int
 evEntriesOf : List Obligation -> List EvEntry
 evIdModule : EvId -> String
 evOrdinal : EvId -> Int
@@ -1619,6 +1621,7 @@ indexOutsidePatterns : Authority -> List Authority
 indexRowEqCheck : List Atom -> List Atom -> List Atom -> List Atom -> Unit
 indexRowEquate : List Atom -> List Atom -> Unit
 indexRowMismatchMsg : List Atom -> List Atom -> String
+indexWithSlot : Ref (Array (Option a)) -> Int -> Array (Option a)
 infer : TcEnv -> Expr -> Mono
 inferAnnot : TcEnv -> Expr -> Ty -> Mono
 inferApp : TcEnv -> Expr -> Mono -> Mono -> Mono
@@ -1681,7 +1684,7 @@ inferMethodAt : TcEnv -> String -> Ref String -> Ref (Option Int) -> Ref Route -
 inferMethodAtCell : TcEnv -> String -> EvCell -> Mono
 inferMethodBody : TcEnv -> IfaceRef -> MethodBodyKind -> (List String, Ty, List (String, List Kind)) -> String -> List Pat -> Expr -> Unit
 inferMethodCandidateAt : TcEnv -> String -> Ref String -> Ref (Option Int) -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Ref Inner -> Mono
-inferNumLit : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
+inferNumLit : TcEnv -> Int -> EvId -> Mono
 inferNumLitBare : Int -> Ref (Option Float) -> Mono
 inferNumLitMethod : MethodSchemeRow -> Ref Route -> Mono
 inferNumLitVar : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
@@ -1733,7 +1736,7 @@ inferVar : TcEnv -> String -> Mono
 inferVarId : TcEnv -> String -> Int -> Mono
 inferVarPlainId : TcEnv -> String -> Int -> Mono
 inferVariantUpdate : TcEnv -> String -> Expr -> List FieldAssign -> Mono
-inferWideLit : TcEnv -> Int -> Int -> Ref Route -> String -> Mono
+inferWideLit : TcEnv -> Int -> Int -> EvId -> String -> Mono
 inferredConstraintIds : String -> List Int -> List Int
 inferredIfacePairs : String -> List Int -> List (IfaceRef, Int)
 inferredPredLead : (IfaceRef, Int, List Mono) -> Int
@@ -2044,6 +2047,7 @@ methodCandsAt : String -> Int -> MethodEnv -> List MethodRow
 methodCellDicts : EvCell -> List (List Route)
 methodCellEntries : Unit -> List EvEntry
 methodCellEntriesFrom : Array (Option EvCell) -> Int -> List EvEntry -> List EvEntry
+methodCellLookup : EvId -> Result String EvCell
 methodCellOf : EvId -> EvCell
 methodConstraintNameOf : List String -> IfaceMethod -> List String
 methodConstraintNames : List Decl -> List String
@@ -2182,10 +2186,15 @@ methodsPerMidGo : List (String, List String) -> List (String, List Decl) -> List
 minLevelOf : List (Ref Effvar) -> Int
 mintDictAt : (String -> EvId -> Unit) -> String -> Expr
 mintGrantOnly : String -> Expr
+mintLitSite : Unit -> EvId
 mintMethodCell : String -> EvId
 mintMethodCellRaw : String -> Option Int -> Route -> List Route -> EvId
 mintMethodCellWith : String -> Int -> Route -> List Route -> EvId
+mintOpSite : Unit -> EvId
 mintParamReprs : List String -> List Kind -> List Mono
+mintSite : SiteCell -> EvId
+mintedOr : (Unit -> EvId) -> EvId -> EvId
+missText : Result String a -> String
 missingConstraintMsg : String -> String -> String -> String
 missingConstraintVecMsg : String -> String -> List String -> String
 missingFieldMsg : String -> String -> String
@@ -2276,6 +2285,7 @@ nonGuardedRows : List Arm -> List (List Pat)
 notAFunctionHint : Option String -> String
 notAFunctionMsg : String -> String
 notAFunctionMsgFor : Option String -> String -> String
+notAnOpSite : EvId -> a
 noteArgumentShape : TcEnv -> Param -> Bool -> Authority -> Expr -> Mono -> Unit
 noteAssumption : ScopeId -> AssumAnswer -> Unit
 noteBuiltinExternNames : List Decl -> Unit
@@ -2820,6 +2830,7 @@ requiresRouteWalkCut : ReqStep -> List Route
 requiresUnroutedMsg : IfaceRef -> List Mono -> String
 requiringImplLabel : IfaceRef -> List Mono -> String
 resetCrossModuleState : Unit -> Unit
+resetGraphLineage : Bool -> Unit
 resetGraphState : Unit -> Unit
 resetState : Unit -> Unit
 resetTypeErrorsSticky : Unit -> Unit
@@ -3051,11 +3062,18 @@ sigVarsWithRows : List (String, Ref Effvar) -> SigVars -> SigVars
 signedTopNames : List Decl -> Map String Unit -> Map String Unit
 sigsOf : List Decl -> List (String, Ty)
 singleTyparamIfaceMethod : String -> Bool
+siteCellEntries : Unit -> List EvEntry
+siteCellEntriesFrom : Array (Option (EvId, SiteCell)) -> Int -> List EvEntry -> List EvEntry
+siteCellLookup : EvId -> Result String SiteCell
+siteCellOf : EvId -> SiteCell
+siteCellValue : SiteCell -> EvVal
 siteEntry : Obligation -> List PendingEntry
+siteFloatCell : EvId -> Ref (Option Float)
 siteKindMonos : SiteKind -> List Mono
 siteObligation : GoalKind -> Ref Inner -> PendingEntry -> Obligation
 siteRDictName : Ref Route -> List String
 siteRDictNamesL : List Route -> List String
+siteRouteCell : EvId -> Ref Route
 sitesFor : String -> Map String (List a) -> List a
 slotLabelsNaming : String -> List Kind -> List Ty -> List String
 slotOtherThan : Int -> List (String, Int, RecordInfo) -> Option (String, Int)
@@ -3300,7 +3318,7 @@ unknownRecordFresh : String -> Mono
 unknownRecordMsg : String -> String
 unmarkGrantOnly : EvId -> Unit
 unopMethod : String -> Option String
-unopMethodApp : String -> Expr -> Ref Route -> Expr
+unopMethodApp : String -> Expr -> Route -> Expr
 unprotectedNumCandidates : Map String Unit -> List UObligation -> List Int
 unquantifiedAuthIds : Scheme -> Map Int Unit
 unreachableArmWarning : String

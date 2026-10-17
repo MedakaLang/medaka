@@ -5,7 +5,14 @@
 import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import tools.doctest.{Engine(..)}
-import tools.test_cmd.{treesUnread, childJobsPrefix, childGcMarkersPrefix}
+import tools.test_cmd.{
+  treesUnread, childJobsPrefix, childGcMarkersPrefix, helperElabDiags
+}
+import frontend.desugar.{desugar}
+import frontend.parser.{parseLocated}
+import types.typecheck.{elaborateModules}
+import eval.eval.{Value(..), evalOne, force}
+import support.util.{lookupAssoc}
 import io.{runVerb}
 import string.{contains, indexOf, toInt, trim}
 import test.{
@@ -31,6 +38,33 @@ test "any interpreter engine reads the trees" = expectAll [
 
 test "a target with props reads the trees, even native-only" =
   expectFalse (treesUnread [EngNative] withProp)
+
+-- A program whose value reads a method occurrence's published evidence.
+methodProgram : List (String, List Decl)
+methodProgram = [
+  (
+    "helper_probe",
+    desugar
+      (parseLocated
+        "interface Def a where\n  def : a\nimpl Def Int where\n  def = 7\nmain : Int\nmain = def\n"),
+  ),
+]
+
+-- `main` of the trees one drive elaborated, evaluated after the helper validation's
+-- diagnostics-only drive has run, as the property worker does.
+mainAfterHelperDiags : Unit -> Int
+mainAfterHelperDiags _ =
+  let (coreE, modulesE, _, _, _, _) = elaborateModules [] [] methodProgram
+  let _ = helperElabDiags [] [] methodProgram
+  let bindings = evalOne coreE ("helper_probe", flatMap snd modulesE)
+  match lookupAssoc "main" bindings
+    Some value => match force value
+      VInt n => n
+      _ => -1
+    None => -2
+
+test "trees elaborated before a helper diagnostics drive still evaluate" =
+  expectEqual 7 (mainAfterHelperDiags ())
 
 dirWithPassFailBroken : String -> <FileWrite> Result String Unit
 dirWithPassFailBroken dir = do

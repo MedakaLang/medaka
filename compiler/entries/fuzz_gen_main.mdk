@@ -43,6 +43,7 @@
 
 import frontend.ast.{
   noBinderId,
+  unminted,
   Lit(..),
   Loc(..),
   noDeclLoc,
@@ -214,7 +215,7 @@ ordOps : List String
 ordOps = ["<", ">", "<=", ">="]
 
 binop : String -> Expr -> Expr -> Expr
-binop op l r = EBinOp op l r (Ref RNone)
+binop op l r = EBinOp op l r unminted
 
 filterScopeTy : Gty -> List (String, Gty) -> List (String, Gty)
 filterScopeTy _ [] = []
@@ -519,7 +520,7 @@ invOrd ctx a =
   let y = genData ctx (adtName a) 2
   [
     binop "==" (binop "<" x y) (EApp (EApp (EVar "lt") x) y),
-    EUnOp "not" (binop "&&" (binop "<" x y) (binop "<" y x)) (Ref RNone),
+    EUnOp "not" (binop "&&" (binop "<" x y) (binop "<" y x)) unminted,
     binop "<=" x x,
   ]
 
@@ -530,7 +531,7 @@ invOrdTrans ctx =
   let c = genExpr ctx GInt 1
   binop
     "||"
-    (EUnOp "not" (binop "&&" (binop "<=" a b) (binop "<=" b c)) (Ref RNone))
+    (EUnOp "not" (binop "&&" (binop "<=" a b) (binop "<=" b c)) unminted)
     (binop "<=" a c)
 
 -- ── program assembly ────────────────────────────────────────────────────────

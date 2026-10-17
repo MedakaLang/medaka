@@ -1,5 +1,5 @@
 # META
-source_lines=3994
+source_lines=3983
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -159,11 +159,8 @@ cmethodOf name (iface, arity, route, implRoutes, methodRoutes) =
 lower : Expr -> CExpr
 lower (ELit l) = CLit l
 -- PLAN.md #11: dictPass rewrites every ENumLit to ELit before lowering; this
--- arm is defensive (a non-rewritten path) — a Float-stamped ref lowers to a
--- float constant, else an int.
-lower (ENumLit n r _ _) = match !r
-  Some f => CLit (LFloat f)
-  None => CLit (LInt n)
+-- arm is defensive (a non-rewritten path) and lowers to an int constant.
+lower (ENumLit n _ _) = CLit (LInt n)
 -- defensive like the `ENumLit` arm: dictPass rewrites a wide literal to `LU64`.
 lower (EWideLit hi lo _ _) = CLit (LU64 hi lo)
 lower (EVar x) = CVar x AGlobal
@@ -178,7 +175,8 @@ lower (ELet _ recFlag pat e1 e2) = CLet recFlag pat (lower e1) (lower e2)
 lower (ELetGroup binds body) = CLetGroup (map lowerBind binds) (lower body)
 lower (EMatch scrut arms) = lowerMatch noDeclLoc (lower scrut) arms
 lower (EIf c t e) = CIf (lower c) (lower t) (lower e)
-lower (EBinOp op l r route) = lowerBinop op l r (scalarTagOfRoute !route)
+-- The empty tag means "no scalar tag"; only the `EAnnot (EBinOp …)` arm below sets one.
+lower (EBinOp op l r _) = lowerBinop op l r ""
 lower (EInfix op l r) = mkApp (CVar op AGlobal) [lower l, lower r]
 -- #1739 half A: `!x` lowers to the SAME Core IR node `x.value` does, rather than a
 -- `CUnOp "!"` both backends would then need a new arm for.  `CFieldAccess _ "value"`
@@ -215,10 +213,9 @@ lower (EVariantUpdate con base fields) =
   CVariantUpdate con (lower base) (map lowerField fields)
 lower (EBlock stmts) = CBlock (lowerStmts stmts)
 -- SHARED-FLOAT-RESIDUAL §3(C): dictPass wraps a scalar-tagged binop (arithmetic
--- "Float" or comparison "Int") in `EAnnot (EBinOp …) (TyCon tag)` (the ref-cell
--- route does not survive to here, a node does).  Read the tag into CBinPrim's
--- scalar field so the emitter picks that type's primitive.  Must precede the
--- transparent `EAnnot e _` strip below.
+-- "Float" or comparison "Int") in `EAnnot (EBinOp …) (TyCon tag)`; a bare EBinOp
+-- carries no tag.  Read the tag into CBinPrim's scalar field so the emitter picks
+-- that type's primitive.  Must precede the transparent `EAnnot e _` strip below.
 lower (EAnnot (EBinOp op l r _) (TyCon { tyConName = tag })) =
   lowerBinop op l r tag
 lower (EAnnot e _) = lower e
@@ -244,14 +241,6 @@ lower other = panic ("core_ir lower: unsupported node " ++ nodeTag other)
 
 -- surface binops that are really sugar are lowered to primitive control flow /
 -- application here; only the genuinely-primitive ops survive as CBinPrim.
--- the scalar-type tag carried on an EBinOp's route: "Float" for a stamped
--- monomorphic arithmetic operand, "Int" for a stamped monomorphic comparison
--- operand, "" otherwise.  Only RScalar carries it; every dispatch route
--- (RKey/RDict/…) means "unstamped".
-scalarTagOfRoute : Route -> String
-scalarTagOfRoute (RScalar s) = s
-scalarTagOfRoute _ = ""
-
 lowerBinop : String -> Expr -> Expr -> String -> CExpr
 lowerBinop "&&" l r _ = CIf (lower l) (lower r) (CLit (LBool False))
 lowerBinop "||" l r _ = CIf (lower l) (CLit (LBool True)) (lower r)
@@ -4016,7 +4005,7 @@ nodeTag _ = "?"
 (DFunDef false "cmethodOf" ((PVar "name") (PTuple (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methodRoutes"))) (EApp (EApp (EVar "CMethod") (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EVar "MethodEvidence") (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methodRoutes"))))
 (DTypeSig false "lower" (TyFun (TyCon "Expr") (TyCon "CExpr")))
 (DFunDef false "lower" ((PCon "ELit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
-(DFunDef false "lower" ((PCon "ENumLit" (PVar "n") (PVar "r") PWild PWild)) (EMatch (EUnOp "!" (EVar "r")) (arm (PCon "Some" (PVar "f")) () (EApp (EVar "CLit") (EApp (EVar "LFloat") (EVar "f")))) (arm (PCon "None") () (EApp (EVar "CLit") (EApp (EVar "LInt") (EVar "n"))))))
+(DFunDef false "lower" ((PCon "ENumLit" (PVar "n") PWild PWild)) (EApp (EVar "CLit") (EApp (EVar "LInt") (EVar "n"))))
 (DFunDef false "lower" ((PCon "EWideLit" (PVar "hi") (PVar "lo") PWild PWild)) (EApp (EVar "CLit") (EApp (EApp (EVar "LU64") (EVar "hi")) (EVar "lo"))))
 (DFunDef false "lower" ((PCon "EVar" (PVar "x"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "AGlobal")))
 (DFunDef false "lower" ((PCon "EVarId" (PVar "x") PWild)) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "AGlobal")))
@@ -4028,7 +4017,7 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EVar "map") (EVar "lowerBind")) (EVar "binds"))) (EApp (EVar "lower") (EVar "body"))))
 (DFunDef false "lower" ((PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "lowerMatch") (EVar "noDeclLoc")) (EApp (EVar "lower") (EVar "scrut"))) (EVar "arms")))
 (DFunDef false "lower" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "CIf") (EApp (EVar "lower") (EVar "c"))) (EApp (EVar "lower") (EVar "t"))) (EApp (EVar "lower") (EVar "e"))))
-(DFunDef false "lower" ((PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "route"))) (EApp (EApp (EApp (EApp (EVar "lowerBinop") (EVar "op")) (EVar "l")) (EVar "r")) (EApp (EVar "scalarTagOfRoute") (EUnOp "!" (EVar "route")))))
+(DFunDef false "lower" ((PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") PWild)) (EApp (EApp (EApp (EApp (EVar "lowerBinop") (EVar "op")) (EVar "l")) (EVar "r")) (ELit (LString ""))))
 (DFunDef false "lower" ((PCon "EInfix" (PVar "op") (PVar "l") (PVar "r"))) (EApp (EApp (EVar "mkApp") (EApp (EApp (EVar "CVar") (EVar "op")) (EVar "AGlobal"))) (EListLit (EApp (EVar "lower") (EVar "l")) (EApp (EVar "lower") (EVar "r")))))
 (DFunDef false "lower" ((PCon "EUnOp" (PLit (LString "!")) (PVar "e") PWild)) (EApp (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EVar "lower") (EVar "e"))) (ELit (LString "value"))) (ELit (LString ""))) (EUnOp "-" (ELit (LInt 1)))))
 (DFunDef false "lower" ((PCon "EUnOp" (PVar "op") (PVar "e") PWild)) (EApp (EApp (EVar "CUnOp") (EVar "op")) (EApp (EVar "lower") (EVar "e"))))
@@ -4053,9 +4042,6 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir lower: unsupported node ")) (EApp (EVar "nodeTag") (EVar "other")))))
-(DTypeSig false "scalarTagOfRoute" (TyFun (TyCon "Route") (TyCon "String")))
-(DFunDef false "scalarTagOfRoute" ((PCon "RScalar" (PVar "s"))) (EVar "s"))
-(DFunDef false "scalarTagOfRoute" (PWild) (ELit (LString "")))
 (DTypeSig false "lowerBinop" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyCon "CExpr"))))))
 (DFunDef false "lowerBinop" ((PLit (LString "&&")) (PVar "l") (PVar "r") PWild) (EApp (EApp (EApp (EVar "CIf") (EApp (EVar "lower") (EVar "l"))) (EApp (EVar "lower") (EVar "r"))) (EApp (EVar "CLit") (EApp (EVar "LBool") (EVar "False")))))
 (DFunDef false "lowerBinop" ((PLit (LString "||")) (PVar "l") (PVar "r") PWild) (EApp (EApp (EApp (EVar "CIf") (EApp (EVar "lower") (EVar "l"))) (EApp (EVar "CLit") (EApp (EVar "LBool") (EVar "True")))) (EApp (EVar "lower") (EVar "r"))))
@@ -5337,7 +5323,7 @@ nodeTag _ = "?"
 (DFunDef false "cmethodOf" ((PVar "name") (PTuple (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methodRoutes"))) (EApp (EApp (EVar "CMethod") (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EVar "MethodEvidence") (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methodRoutes"))))
 (DTypeSig false "lower" (TyFun (TyCon "Expr") (TyCon "CExpr")))
 (DFunDef false "lower" ((PCon "ELit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
-(DFunDef false "lower" ((PCon "ENumLit" (PVar "n") (PVar "r") PWild PWild)) (EMatch (EUnOp "!" (EVar "r")) (arm (PCon "Some" (PVar "f")) () (EApp (EVar "CLit") (EApp (EVar "LFloat") (EVar "f")))) (arm (PCon "None") () (EApp (EVar "CLit") (EApp (EVar "LInt") (EVar "n"))))))
+(DFunDef false "lower" ((PCon "ENumLit" (PVar "n") PWild PWild)) (EApp (EVar "CLit") (EApp (EVar "LInt") (EVar "n"))))
 (DFunDef false "lower" ((PCon "EWideLit" (PVar "hi") (PVar "lo") PWild PWild)) (EApp (EVar "CLit") (EApp (EApp (EVar "LU64") (EVar "hi")) (EVar "lo"))))
 (DFunDef false "lower" ((PCon "EVar" (PVar "x"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "AGlobal")))
 (DFunDef false "lower" ((PCon "EVarId" (PVar "x") PWild)) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "AGlobal")))
@@ -5349,7 +5335,7 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EMethodRef "map") (EVar "lowerBind")) (EVar "binds"))) (EApp (EVar "lower") (EVar "body"))))
 (DFunDef false "lower" ((PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EVar "lowerMatch") (EVar "noDeclLoc")) (EApp (EVar "lower") (EVar "scrut"))) (EVar "arms")))
 (DFunDef false "lower" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "CIf") (EApp (EVar "lower") (EVar "c"))) (EApp (EVar "lower") (EVar "t"))) (EApp (EVar "lower") (EVar "e"))))
-(DFunDef false "lower" ((PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "route"))) (EApp (EApp (EApp (EApp (EVar "lowerBinop") (EVar "op")) (EVar "l")) (EVar "r")) (EApp (EVar "scalarTagOfRoute") (EUnOp "!" (EVar "route")))))
+(DFunDef false "lower" ((PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") PWild)) (EApp (EApp (EApp (EApp (EVar "lowerBinop") (EVar "op")) (EVar "l")) (EVar "r")) (ELit (LString ""))))
 (DFunDef false "lower" ((PCon "EInfix" (PVar "op") (PVar "l") (PVar "r"))) (EApp (EApp (EVar "mkApp") (EApp (EApp (EVar "CVar") (EVar "op")) (EVar "AGlobal"))) (EListLit (EApp (EVar "lower") (EVar "l")) (EApp (EVar "lower") (EVar "r")))))
 (DFunDef false "lower" ((PCon "EUnOp" (PLit (LString "!")) (PVar "e") PWild)) (EApp (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EVar "lower") (EVar "e"))) (ELit (LString "value"))) (ELit (LString ""))) (EUnOp "-" (ELit (LInt 1)))))
 (DFunDef false "lower" ((PCon "EUnOp" (PVar "op") (PVar "e") PWild)) (EApp (EApp (EVar "CUnOp") (EVar "op")) (EApp (EVar "lower") (EVar "e"))))
@@ -5374,9 +5360,6 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir lower: unsupported node ")) (EApp (EVar "nodeTag") (EVar "other")))))
-(DTypeSig false "scalarTagOfRoute" (TyFun (TyCon "Route") (TyCon "String")))
-(DFunDef false "scalarTagOfRoute" ((PCon "RScalar" (PVar "s"))) (EVar "s"))
-(DFunDef false "scalarTagOfRoute" (PWild) (ELit (LString "")))
 (DTypeSig false "lowerBinop" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyCon "CExpr"))))))
 (DFunDef false "lowerBinop" ((PLit (LString "&&")) (PVar "l") (PVar "r") PWild) (EApp (EApp (EApp (EVar "CIf") (EApp (EVar "lower") (EVar "l"))) (EApp (EVar "lower") (EVar "r"))) (EApp (EVar "CLit") (EApp (EVar "LBool") (EVar "False")))))
 (DFunDef false "lowerBinop" ((PLit (LString "||")) (PVar "l") (PVar "r") PWild) (EApp (EApp (EApp (EVar "CIf") (EApp (EVar "lower") (EVar "l"))) (EApp (EVar "CLit") (EApp (EVar "LBool") (EVar "True")))) (EApp (EVar "lower") (EVar "r"))))

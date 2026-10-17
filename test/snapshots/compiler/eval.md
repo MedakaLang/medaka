@@ -1,5 +1,5 @@
 # META
-source_lines=5519
+source_lines=5516
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -1638,11 +1638,8 @@ export
 eval : EvalEnv (Value e) -> Expr -> <e> Value e
 eval _ (ELit (LInt n)) = VInt n
 -- PLAN.md #11: dictPass rewrites every ENumLit to ELit before eval; these arms
--- are defensive for an untyped/non-elaborate eval path (a bare int → VInt; a
--- Float-stamped ref → VFloat, matching eval_arith's value tags).
-eval _ (ENumLit n r _ _) = match !r
-  Some f => VFloat f
-  None => VInt n
+-- are defensive for an untyped/non-elaborate eval path (a bare int → VInt).
+eval _ (ENumLit n _ _) = VInt n
 eval _ (ELit (LFloat f)) = VFloat f
 eval _ (ELit (LU64 hi lo)) = VU64 hi lo
 eval _ (ELit (LI64 hi lo)) = VI64 hi lo
@@ -6088,7 +6085,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "isPartial" (PWild) (EVar "False"))
 (DTypeSig true "eval" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LInt" (PVar "n")))) (EApp (EVar "VInt") (EVar "n")))
-(DFunDef false "eval" (PWild (PCon "ENumLit" (PVar "n") (PVar "r") PWild PWild)) (EMatch (EUnOp "!" (EVar "r")) (arm (PCon "Some" (PVar "f")) () (EApp (EVar "VFloat") (EVar "f"))) (arm (PCon "None") () (EApp (EVar "VInt") (EVar "n")))))
+(DFunDef false "eval" (PWild (PCon "ENumLit" (PVar "n") PWild PWild)) (EApp (EVar "VInt") (EVar "n")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LFloat" (PVar "f")))) (EApp (EVar "VFloat") (EVar "f")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LU64" (PVar "hi") (PVar "lo")))) (EApp (EApp (EVar "VU64") (EVar "hi")) (EVar "lo")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LI64" (PVar "hi") (PVar "lo")))) (EApp (EApp (EVar "VI64") (EVar "hi")) (EVar "lo")))
@@ -7908,7 +7905,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "isPartial" (PWild) (EVar "False"))
 (DTypeSig true "eval" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LInt" (PVar "n")))) (EApp (EVar "VInt") (EVar "n")))
-(DFunDef false "eval" (PWild (PCon "ENumLit" (PVar "n") (PVar "r") PWild PWild)) (EMatch (EUnOp "!" (EVar "r")) (arm (PCon "Some" (PVar "f")) () (EApp (EVar "VFloat") (EVar "f"))) (arm (PCon "None") () (EApp (EVar "VInt") (EVar "n")))))
+(DFunDef false "eval" (PWild (PCon "ENumLit" (PVar "n") PWild PWild)) (EApp (EVar "VInt") (EVar "n")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LFloat" (PVar "f")))) (EApp (EVar "VFloat") (EVar "f")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LU64" (PVar "hi") (PVar "lo")))) (EApp (EApp (EVar "VU64") (EVar "hi")) (EVar "lo")))
 (DFunDef false "eval" (PWild (PCon "ELit" (PCon "LI64" (PVar "hi") (PVar "lo")))) (EApp (EApp (EVar "VI64") (EVar "hi")) (EVar "lo")))

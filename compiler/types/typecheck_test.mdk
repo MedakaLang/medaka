@@ -25,6 +25,7 @@ import frontend.ast.{
   TyConOrigin(..),
   noDeclLoc,
   noBinderId,
+  unminted,
 }
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
@@ -80,6 +81,8 @@ import types.typecheck.{
   beginMethodReturnTrace,
   cellGoalInnerAliasing,
   beginNumericPredicateTrace,
+  cellStoreMisses,
+  checkModules,
   checkModulesDiagsChain,
   checkModulesEntryReport,
   checkOneDiags,
@@ -87,11 +90,13 @@ import types.typecheck.{
   constrainedSigNames,
   elaborateModules,
   elaborateOne,
+  evCellsSpanProbe,
   finishAssumptionTrace,
   finishEvidenceObservation,
   finishMethodReturnTrace,
   finishNumericPredicateTrace,
   isLiveSpan,
+  markModules,
   methodReturnResolutionMutationProbe,
   methodReturnMemoCurrentViews,
   methodReturnMemoFenceMutationProbe,
@@ -109,6 +114,7 @@ import types.typecheck.{
   walkGoalSameProbe,
 }
 import types.target_profile.{selectProfile, selectedProfile}
+import types.route_key.{installedEvidenceSlots}
 import support.ordmap.{omEmpty, omFromNames}
 import support.util.{
   contains, endsWith, isEmptyL, joinNl, joinWith, listLen, lookupAssoc, splitNl,
@@ -5653,3 +5659,101 @@ test "a closed numeric, nested or operator goal with no instance keeps no route"
         ]),
     ),
   ]
+
+-- #2705: every array indexed by evidence ordinals spans one graph lineage,
+-- so repeating an unkeyed drive in one process leaves it the size the first drive
+-- left it, however many ordinals the earlier drives minted.
+spanProgramModule : (String, List Decl)
+spanProgramModule = (
+  "span_probe",
+  desugar
+    (parseLocated
+      (joinNl [
+        "value : Int", "value = fromInt 3", "other : Int",
+        "other = fromInt value"
+      ])),
+)
+
+-- The method-cell index's length and the installed table's slot count after one
+-- unkeyed `elaborateModules` drive.
+elaborateSpans : Unit -> (Int, Int)
+elaborateSpans _ =
+  let _ = elaborateModules [] (desugar (parse numericPreludeSource)) [
+    spanProgramModule,
+  ]
+  (evCellsSpanProbe (), installedEvidenceSlots ())
+
+-- The method-cell index's length after one unkeyed `checkOneDiags` drive.
+diagsSpan : Unit -> Int
+diagsSpan _ =
+  let _ =
+    checkOneDiags [] (desugar (parse numericPreludeSource)) spanProgramModule
+  evCellsSpanProbe ()
+
+-- [drive]'s reading after the first and after the [n]th of [n] drives.
+firstAndNth : Int -> (Unit -> a) -> (a, a)
+firstAndNth n drive =
+  let first = drive ()
+  (first, driveAgain (n - 1) drive first)
+
+driveAgain : Int -> (Unit -> a) -> a -> a
+driveAgain k drive seen =
+  if k <= 0 then seen else driveAgain (k - 1) drive (drive ())
+
+test "twenty unkeyed elaborateModules drives keep the evidence arrays one graph wide" =
+  let (first, twentieth) = firstAndNth 20 elaborateSpans
+  expectAll [
+    expectGreaterThan 0 (fst first),
+    expectGreaterThan 0 (snd first),
+    expectEqual first twentieth,
+  ]
+
+test "twenty unkeyed checkOneDiags drives keep the method-cell index one graph wide" =
+  let (first, twentieth) = firstAndNth 20 diagsSpan
+  expectAll [expectGreaterThan 0 first, expectEqual first twentieth]
+
+-- A cell store miss names its reason: a site inference reached without marking, and
+-- an id minted before the current graph lineage began.
+test "the cell stores report an unminted site and an id from an earlier graph" =
+  let _ = elaborateSpans ()
+  let _ = elaborateSpans ()
+  expectAll [
+    expectEqual
+      "site reached inference unminted"
+      (fst (cellStoreMisses unminted)),
+    expectEqual
+      (
+        "site cell span_probe#0 is from an earlier graph",
+        "method cell span_probe#0 is from an earlier graph",
+      )
+      (cellStoreMisses (EvId "span_probe" 0)),
+  ]
+
+-- Two modules whose return-position method occurrences the mark pre-pass mints.
+preMarkedModules : List (String, List Decl)
+preMarkedModules = [
+  (
+    "pre_a",
+    desugar
+      (parseLocated
+        (joinNl [
+          "interface Def a where", "  def : a", "impl Def Int where",
+          "  def = 7", "seven : Int", "seven = def"
+        ])),
+  ),
+  (
+    "pre_b",
+    desugar
+      (parseLocated
+        (joinNl [
+          "interface Zero a where", "  zero : a", "impl Zero Int where",
+          "  zero = 0", "nought : Int", "nought = zero"
+        ])),
+  ),
+]
+
+-- The profiler's order: the mark pre-pass on its own, then the typecheck of the
+-- marked trees, whose preamble resets the graph.
+test "checkModules completes over modules markModules marked first" =
+  let (core2, mods2) = markModules [] preMarkedModules
+  expectEqual ["pre_a", "pre_b"] (map fst (checkModules [] core2 mods2))

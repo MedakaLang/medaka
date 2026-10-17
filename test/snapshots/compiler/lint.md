@@ -1,5 +1,5 @@
 # META
-source_lines=7227
+source_lines=7225
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -41,11 +41,9 @@ import frontend.ast.{
   binderDomainSurface,
   authTermSurface,
   Constraint(..),
-  -- `rule-prefer-assign-op` MINTS an `EBinOp ":="` node, and every EBinOp carries
-  -- a `Ref Route` the parser seeds as `Ref RNone` — so unlike every other rule
-  -- here (which only ever rebuilds an EBinOp around a ref it already has) this
-  -- one needs the Route constructors in scope.
-  Route(..),
+  -- `rule-prefer-assign-op` MINTS an `EBinOp ":="` node, which carries the
+  -- unminted site id the parser gives every operator.
+  unminted,
   Pat(..),
   UsePath(..),
   UseMember(..),
@@ -3474,7 +3472,7 @@ ifMaxMinFnReversed op
 isLiteralExpr : Expr -> Bool
 isLiteralExpr e = match unwrapLoc e
   ELit _ => True
-  ENumLit _ _ _ _ => True
+  ENumLit _ _ _ => True
   EWideLit _ _ _ _ => True
   _ => False
 
@@ -4215,7 +4213,7 @@ isBoolLit e = isTrueLit e || isFalseLit e
 isIntLit : Int -> Expr -> Bool
 isIntLit k e = match unwrapLoc e
   ELit (LInt n) => n == k
-  ENumLit n _ _ _ => n == k
+  ENumLit n _ _ => n == k
   _ => False
 
 -- ── rule: concat-to-interp ────────────────────────────────────────────────────
@@ -4393,7 +4391,7 @@ fixImplMethodConcat (ImplMethod nm ps body) =
 -- ONLY `==`/`/=` — they are TOTAL, so De Morgan applies unconditionally.  `<`/`>`
 -- &c. are deliberately excluded: their complement is unsound for `Float` (NaN
 -- makes `not (a < b)` ≠ `a >= b`).  The flipped `EBinOp` reuses the original's
--- route ref (an unresolved parse-time placeholder; re-resolved downstream).
+-- site id (the parser's `unminted`; lint output is never typechecked).
 notEqOf : Expr -> Option Expr
 notEqOf e = match notArgOf e
   Some inner => match unwrapLoc inner
@@ -4605,7 +4603,7 @@ preferAssignOf _ = None
 -- the saturated `setRef r v` spine (head already loc-unwrapped by the caller).
 setRefWriteOf : Expr -> Expr -> Option Expr
 setRefWriteOf (EApp hd r) v =
-  if isEVarNamed "setRef" hd then Some (EBinOp ":=" r v (Ref RNone)) else None
+  if isEVarNamed "setRef" hd then Some (EBinOp ":=" r v unminted) else None
 setRefWriteOf _ _ = None
 
 -- `let _ = <write>` → a bare `<write>` statement, for every statement in a block.
@@ -6228,7 +6226,7 @@ isPureDataExpr e =
   let e2 = unwrapLoc e
   match e2
     ELit _ => True
-    ENumLit _ _ _ _ => True
+    ENumLit _ _ _ => True
     EWideLit _ _ _ _ => True
     EVar _ => True
     ETuple es => allList isPureDataExpr es
@@ -7230,7 +7228,7 @@ preludeShadowFinding name loc = Finding {
   loc = loc,
 }
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "noBinderId" false) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "IfaceMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "noBinderId" false) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "unminted" false) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "IfaceMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
@@ -8269,7 +8267,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "ifMaxMinFnReversed" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ifMaxMinFnReversed" ((PVar "op")) (EIf (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString ">"))) (EBinOp "==" (EVar "op") (ELit (LString ">=")))) (ELit (LString "min")) (EIf (EVar "otherwise") (ELit (LString "max")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isLiteralExpr" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "isLiteralExpr" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "ENumLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "EWideLit" PWild PWild PWild PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
+(DFunDef false "isLiteralExpr" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "ENumLit" PWild PWild PWild) () (EVar "True")) (arm (PCon "EWideLit" PWild PWild PWild PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "ifMaxMinOf" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Expr") (TyCon "Expr")))))))
 (DFunDef false "ifMaxMinOf" ((PVar "cond") (PVar "t") (PVar "el")) (EMatch (EApp (EVar "unwrapLoc") (EVar "cond")) (arm (PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild) ((GBool (EApp (EVar "ifMaxMinCompareOp") (EVar "op")))) (EBlock (DoLet false false (PVar "aK") (EApp (EVar "exprSexp") (EVar "a"))) (DoLet false false (PVar "bK") (EApp (EVar "exprSexp") (EVar "b"))) (DoLet false false (PVar "tK") (EApp (EVar "exprSexp") (EVar "t"))) (DoLet false false (PVar "eK") (EApp (EVar "exprSexp") (EVar "el"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "aK") (EVar "bK")) (EApp (EVar "isLiteralExpr") (EVar "a"))) (EApp (EVar "isLiteralExpr") (EVar "b"))) (EVar "None") (EIf (EBinOp "&&" (EBinOp "==" (EVar "tK") (EVar "aK")) (EBinOp "==" (EVar "eK") (EVar "bK"))) (EApp (EVar "Some") (ETuple (EApp (EVar "ifMaxMinFnNormal") (EVar "op")) (EVar "a") (EVar "b"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "tK") (EVar "bK")) (EBinOp "==" (EVar "eK") (EVar "aK"))) (EApp (EVar "Some") (ETuple (EApp (EVar "ifMaxMinFnReversed") (EVar "op")) (EVar "a") (EVar "b"))) (EVar "None"))))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "ruleIfMaxMin" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
@@ -8537,7 +8535,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "isBoolLit" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "isBoolLit" ((PVar "e")) (EBinOp "||" (EApp (EVar "isTrueLit") (EVar "e")) (EApp (EVar "isFalseLit") (EVar "e"))))
 (DTypeSig false "isIntLit" (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyCon "Bool"))))
-(DFunDef false "isIntLit" ((PVar "k") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELit" (PCon "LInt" (PVar "n"))) () (EBinOp "==" (EVar "n") (EVar "k"))) (arm (PCon "ENumLit" (PVar "n") PWild PWild PWild) () (EBinOp "==" (EVar "n") (EVar "k"))) (arm PWild () (EVar "False"))))
+(DFunDef false "isIntLit" ((PVar "k") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELit" (PCon "LInt" (PVar "n"))) () (EBinOp "==" (EVar "n") (EVar "k"))) (arm (PCon "ENumLit" (PVar "n") PWild PWild) () (EBinOp "==" (EVar "n") (EVar "k"))) (arm PWild () (EVar "False"))))
 (DTypeSig false "concatOperands" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
 (DFunDef false "concatOperands" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EBinOp" (PLit (LString "++")) (PVar "l") (PVar "r") PWild) () (EBinOp "++" (EApp (EVar "concatOperands") (EVar "l")) (EListLit (EVar "r")))) (arm PWild () (EListLit (EVar "e")))))
 (DTypeSig false "strLitValueOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -8643,7 +8641,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "preferAssignOf" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "collapsedBlockOf") (EVar "stmts")))
 (DFunDef false "preferAssignOf" (PWild) (EVar "None"))
 (DTypeSig false "setRefWriteOf" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
-(DFunDef false "setRefWriteOf" ((PCon "EApp" (PVar "hd") (PVar "r")) (PVar "v")) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "setRef"))) (EVar "hd")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "r")) (EVar "v")) (EApp (EVar "Ref") (EVar "RNone")))) (EVar "None")))
+(DFunDef false "setRefWriteOf" ((PCon "EApp" (PVar "hd") (PVar "r")) (PVar "v")) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "setRef"))) (EVar "hd")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "r")) (EVar "v")) (EVar "unminted"))) (EVar "None")))
 (DFunDef false "setRefWriteOf" (PWild PWild) (EVar "None"))
 (DTypeSig false "collapsedBlockOf" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "collapsedBlockOf" ((PVar "stmts")) (EBlock (DoLet false false (PVar "stmts2") (EApp (EApp (EVar "map") (EVar "collapseWildWrite")) (EVar "stmts"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "exprSexp") (EApp (EVar "EBlock") (EVar "stmts2"))) (EApp (EVar "exprSexp") (EApp (EVar "EBlock") (EVar "stmts")))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "EBlock") (EVar "stmts2")))))))
@@ -9064,7 +9062,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "countOpenParens" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "countOpenParens" ((PVar "cs") (PVar "n") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "("))) (EApp (EApp (EApp (EApp (EVar "countOpenParens") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "acc") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "countOpenParens") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "isPureDataExpr" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "isPureDataExpr" ((PVar "e")) (EBlock (DoLet false false (PVar "e2") (EApp (EVar "unwrapLoc") (EVar "e"))) (DoExpr (EMatch (EVar "e2") (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "ENumLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "EWideLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "EVar" PWild) () (EVar "True")) (arm (PCon "ETuple" (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "EListLit" (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "EArrayLit" (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "ERecordCreate" PWild (PVar "fields")) () (EApp (EApp (EVar "allList") (EVar "isPureDataField")) (EVar "fields"))) (arm (PCon "EMapLit" PWild (PVar "kvs")) () (EApp (EApp (EVar "allList") (EVar "isPureDataKv")) (EVar "kvs"))) (arm (PCon "ESetLit" PWild (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "EAnnot" (PVar "inner") PWild) () (EApp (EVar "isPureDataExpr") (EVar "inner"))) (arm (PCon "EUnOp" PWild (PVar "inner") PWild) () (EApp (EVar "isPureDataExpr") (EVar "inner"))) (arm (PCon "EApp" PWild PWild) ((GBool (EApp (EVar "appHeadIsCtor") (EVar "e2")))) (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EApp (EVar "appArgs") (EVar "e2")))) (arm PWild () (EVar "False"))))))
+(DFunDef false "isPureDataExpr" ((PVar "e")) (EBlock (DoLet false false (PVar "e2") (EApp (EVar "unwrapLoc") (EVar "e"))) (DoExpr (EMatch (EVar "e2") (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "ENumLit" PWild PWild PWild) () (EVar "True")) (arm (PCon "EWideLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "EVar" PWild) () (EVar "True")) (arm (PCon "ETuple" (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "EListLit" (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "EArrayLit" (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "ERecordCreate" PWild (PVar "fields")) () (EApp (EApp (EVar "allList") (EVar "isPureDataField")) (EVar "fields"))) (arm (PCon "EMapLit" PWild (PVar "kvs")) () (EApp (EApp (EVar "allList") (EVar "isPureDataKv")) (EVar "kvs"))) (arm (PCon "ESetLit" PWild (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "EAnnot" (PVar "inner") PWild) () (EApp (EVar "isPureDataExpr") (EVar "inner"))) (arm (PCon "EUnOp" PWild (PVar "inner") PWild) () (EApp (EVar "isPureDataExpr") (EVar "inner"))) (arm (PCon "EApp" PWild PWild) ((GBool (EApp (EVar "appHeadIsCtor") (EVar "e2")))) (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EApp (EVar "appArgs") (EVar "e2")))) (arm PWild () (EVar "False"))))))
 (DTypeSig false "isPureDataField" (TyFun (TyCon "FieldAssign") (TyCon "Bool")))
 (DFunDef false "isPureDataField" ((PCon "FieldAssign" PWild (PVar "e"))) (EApp (EVar "isPureDataExpr") (EVar "e")))
 (DTypeSig false "isPureDataKv" (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyCon "Bool")))
@@ -9315,7 +9313,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "preludeShadowFinding" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding"))))
 (DFunDef false "preludeShadowFinding" ((PVar "name") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestPreludeShadow")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` shadows the prelude function of that name for this file only; other modules, and any `deriving` impl, keep calling the prelude one. Remove the local declaration")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "noBinderId" false) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "IfaceMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "letBindName" false) (mem "noBinderId" false) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "EffAtomTy" true) (mem "effAtomSurface" false) (mem "binderDomainSurface" false) (mem "authTermSurface" false) (mem "Constraint" true) (mem "unminted" false) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "IfaceMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "qualifierSource" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapChildren" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
@@ -10354,7 +10352,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "ifMaxMinFnReversed" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ifMaxMinFnReversed" ((PVar "op")) (EIf (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString ">"))) (EBinOp "==" (EVar "op") (ELit (LString ">=")))) (ELit (LString "min")) (EIf (EVar "otherwise") (ELit (LString "max")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isLiteralExpr" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "isLiteralExpr" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "ENumLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "EWideLit" PWild PWild PWild PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
+(DFunDef false "isLiteralExpr" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "ENumLit" PWild PWild PWild) () (EVar "True")) (arm (PCon "EWideLit" PWild PWild PWild PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "ifMaxMinOf" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Expr") (TyCon "Expr")))))))
 (DFunDef false "ifMaxMinOf" ((PVar "cond") (PVar "t") (PVar "el")) (EMatch (EApp (EVar "unwrapLoc") (EVar "cond")) (arm (PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild) ((GBool (EApp (EVar "ifMaxMinCompareOp") (EVar "op")))) (EBlock (DoLet false false (PVar "aK") (EApp (EVar "exprSexp") (EVar "a"))) (DoLet false false (PVar "bK") (EApp (EVar "exprSexp") (EVar "b"))) (DoLet false false (PVar "tK") (EApp (EVar "exprSexp") (EVar "t"))) (DoLet false false (PVar "eK") (EApp (EVar "exprSexp") (EVar "el"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "aK") (EVar "bK")) (EApp (EVar "isLiteralExpr") (EVar "a"))) (EApp (EVar "isLiteralExpr") (EVar "b"))) (EVar "None") (EIf (EBinOp "&&" (EBinOp "==" (EVar "tK") (EVar "aK")) (EBinOp "==" (EVar "eK") (EVar "bK"))) (EApp (EVar "Some") (ETuple (EApp (EVar "ifMaxMinFnNormal") (EVar "op")) (EVar "a") (EVar "b"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "tK") (EVar "bK")) (EBinOp "==" (EVar "eK") (EVar "aK"))) (EApp (EVar "Some") (ETuple (EApp (EVar "ifMaxMinFnReversed") (EVar "op")) (EVar "a") (EVar "b"))) (EVar "None"))))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "ruleIfMaxMin" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
@@ -10622,7 +10620,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "isBoolLit" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "isBoolLit" ((PVar "e")) (EBinOp "||" (EApp (EVar "isTrueLit") (EVar "e")) (EApp (EVar "isFalseLit") (EVar "e"))))
 (DTypeSig false "isIntLit" (TyFun (TyCon "Int") (TyFun (TyCon "Expr") (TyCon "Bool"))))
-(DFunDef false "isIntLit" ((PVar "k") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELit" (PCon "LInt" (PVar "n"))) () (EBinOp "==" (EVar "n") (EVar "k"))) (arm (PCon "ENumLit" (PVar "n") PWild PWild PWild) () (EBinOp "==" (EVar "n") (EVar "k"))) (arm PWild () (EVar "False"))))
+(DFunDef false "isIntLit" ((PVar "k") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELit" (PCon "LInt" (PVar "n"))) () (EBinOp "==" (EVar "n") (EVar "k"))) (arm (PCon "ENumLit" (PVar "n") PWild PWild) () (EBinOp "==" (EVar "n") (EVar "k"))) (arm PWild () (EVar "False"))))
 (DTypeSig false "concatOperands" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))
 (DFunDef false "concatOperands" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EBinOp" (PLit (LString "++")) (PVar "l") (PVar "r") PWild) () (EBinOp "++" (EApp (EVar "concatOperands") (EVar "l")) (EListLit (EVar "r")))) (arm PWild () (EListLit (EVar "e")))))
 (DTypeSig false "strLitValueOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -10728,7 +10726,7 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "preferAssignOf" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "collapsedBlockOf") (EVar "stmts")))
 (DFunDef false "preferAssignOf" (PWild) (EVar "None"))
 (DTypeSig false "setRefWriteOf" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
-(DFunDef false "setRefWriteOf" ((PCon "EApp" (PVar "hd") (PVar "r")) (PVar "v")) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "setRef"))) (EVar "hd")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "r")) (EVar "v")) (EApp (EVar "Ref") (EVar "RNone")))) (EVar "None")))
+(DFunDef false "setRefWriteOf" ((PCon "EApp" (PVar "hd") (PVar "r")) (PVar "v")) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "setRef"))) (EVar "hd")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "r")) (EVar "v")) (EVar "unminted"))) (EVar "None")))
 (DFunDef false "setRefWriteOf" (PWild PWild) (EVar "None"))
 (DTypeSig false "collapsedBlockOf" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "collapsedBlockOf" ((PVar "stmts")) (EBlock (DoLet false false (PVar "stmts2") (EApp (EApp (EMethodRef "map") (EVar "collapseWildWrite")) (EVar "stmts"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "exprSexp") (EApp (EVar "EBlock") (EVar "stmts2"))) (EApp (EVar "exprSexp") (EApp (EVar "EBlock") (EVar "stmts")))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "EBlock") (EVar "stmts2")))))))
@@ -11149,7 +11147,7 @@ preludeShadowFinding name loc = Finding {
 (DTypeSig false "countOpenParens" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "countOpenParens" ((PVar "cs") (PVar "n") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "("))) (EApp (EApp (EApp (EApp (EVar "countOpenParens") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "acc") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "countOpenParens") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "isPureDataExpr" (TyFun (TyCon "Expr") (TyCon "Bool")))
-(DFunDef false "isPureDataExpr" ((PVar "e")) (EBlock (DoLet false false (PVar "e2") (EApp (EVar "unwrapLoc") (EVar "e"))) (DoExpr (EMatch (EVar "e2") (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "ENumLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "EWideLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "EVar" PWild) () (EVar "True")) (arm (PCon "ETuple" (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "EListLit" (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "EArrayLit" (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "ERecordCreate" PWild (PVar "fields")) () (EApp (EApp (EVar "allList") (EVar "isPureDataField")) (EVar "fields"))) (arm (PCon "EMapLit" PWild (PVar "kvs")) () (EApp (EApp (EVar "allList") (EVar "isPureDataKv")) (EVar "kvs"))) (arm (PCon "ESetLit" PWild (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "EAnnot" (PVar "inner") PWild) () (EApp (EVar "isPureDataExpr") (EVar "inner"))) (arm (PCon "EUnOp" PWild (PVar "inner") PWild) () (EApp (EVar "isPureDataExpr") (EVar "inner"))) (arm (PCon "EApp" PWild PWild) ((GBool (EApp (EVar "appHeadIsCtor") (EVar "e2")))) (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EApp (EVar "appArgs") (EVar "e2")))) (arm PWild () (EVar "False"))))))
+(DFunDef false "isPureDataExpr" ((PVar "e")) (EBlock (DoLet false false (PVar "e2") (EApp (EVar "unwrapLoc") (EVar "e"))) (DoExpr (EMatch (EVar "e2") (arm (PCon "ELit" PWild) () (EVar "True")) (arm (PCon "ENumLit" PWild PWild PWild) () (EVar "True")) (arm (PCon "EWideLit" PWild PWild PWild PWild) () (EVar "True")) (arm (PCon "EVar" PWild) () (EVar "True")) (arm (PCon "ETuple" (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "EListLit" (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "EArrayLit" (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "ERecordCreate" PWild (PVar "fields")) () (EApp (EApp (EVar "allList") (EVar "isPureDataField")) (EVar "fields"))) (arm (PCon "EMapLit" PWild (PVar "kvs")) () (EApp (EApp (EVar "allList") (EVar "isPureDataKv")) (EVar "kvs"))) (arm (PCon "ESetLit" PWild (PVar "es")) () (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EVar "es"))) (arm (PCon "EAnnot" (PVar "inner") PWild) () (EApp (EVar "isPureDataExpr") (EVar "inner"))) (arm (PCon "EUnOp" PWild (PVar "inner") PWild) () (EApp (EVar "isPureDataExpr") (EVar "inner"))) (arm (PCon "EApp" PWild PWild) ((GBool (EApp (EVar "appHeadIsCtor") (EVar "e2")))) (EApp (EApp (EVar "allList") (EVar "isPureDataExpr")) (EApp (EVar "appArgs") (EVar "e2")))) (arm PWild () (EVar "False"))))))
 (DTypeSig false "isPureDataField" (TyFun (TyCon "FieldAssign") (TyCon "Bool")))
 (DFunDef false "isPureDataField" ((PCon "FieldAssign" PWild (PVar "e"))) (EApp (EVar "isPureDataExpr") (EVar "e")))
 (DTypeSig false "isPureDataKv" (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyCon "Bool")))

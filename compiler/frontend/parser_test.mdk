@@ -136,7 +136,7 @@ shape (ELoc _ e) = shape e
 shape (EBinOp op l r _) = "(\{shape l} \{op} \{shape r})"
 shape (EApp f a) = "(\{shape f} \{shape a})"
 shape (EVar v) = v
-shape (ENumLit _ _ _ lx) = lx
+shape (ENumLit _ _ lx) = lx
 shape _ = "?"
 
 bodyShape : String -> String

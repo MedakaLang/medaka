@@ -858,6 +858,17 @@ table = [
     codes = [],
   },
   Row {
+    entry = "unsignatured-arith-helper-at-float-and-user-num-accepted.mdk",
+    label =
+      "§4 generalization: an unsignatured `double x = x + x` is `Num a => a -> a` and dispatches its `+` through the prelude `Num Float` at 1.25 and through the user `impl Num V` at `V 21`; the group is re-marked after inference (`markRecursiveOccurrences`)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2.5\n42\n",
+    codes = [],
+  },
+  Row {
     entry = "method-omitted-param-determined-accepted.mdk",
     label =
       "§5 + §3 Determination (#4072): a method whose type omits `b` poses `K (Box Int) ?b`, and the one unifying instance determines `?b`; the route was a bare head tag and the built binary panicked",
@@ -5949,7 +5960,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 527
+tableRows = 528
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

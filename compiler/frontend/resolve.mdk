@@ -864,7 +864,7 @@ scopeAdd n (Scope names mem) = Scope (n :: names) (omInsert n () mem)
 -- below.  `None` until the first ELoc.
 checkExpr : Option Loc -> Env -> Scope -> Expr -> List ResError
 checkExpr _ _ _ (ELit _) = []
-checkExpr _ _ _ (ENumLit _ _ _ _) = []  -- PLAN.md #11: a literal, nothing to bind
+checkExpr _ _ _ (ENumLit _ _ _) = []  -- PLAN.md #11: a literal, nothing to bind
 checkExpr _ _ _ (EWideLit _ _ _ _) = []
 checkExpr _ _ _ (EMethodRef _) = []
 checkExpr _ _ _ (EDictApp _) = []
@@ -5311,7 +5311,7 @@ numberFrom i (n :: rest) = (n, i) :: numberFrom (i + 1) rest
 -- ── the walk ────────────────────────────────────────────────────────────────
 stampExpr : OrdMap Int -> Expr -> Expr
 stampExpr _ (ELit l) = ELit l
-stampExpr _ (ENumLit n r d lx) = ENumLit n r d lx
+stampExpr _ (ENumLit n d lx) = ENumLit n d lx
 stampExpr _ (EWideLit hi lo d lx) = EWideLit hi lo d lx
 stampExpr _ (EMethodRef m) = EMethodRef m
 stampExpr _ (EDictApp d) = EDictApp d
@@ -6265,7 +6265,7 @@ unqualRecPatField ctx (RecPatField f l bid (Some p)) =
 
 unqualExpr : AliasCtx -> Expr -> Expr
 unqualExpr _ (ELit l) = ELit l
-unqualExpr _ (ENumLit n r d lx) = ENumLit n r d lx
+unqualExpr _ (ENumLit n d lx) = ENumLit n d lx
 unqualExpr _ (EWideLit hi lo d lx) = EWideLit hi lo d lx
 unqualExpr _ (EMethodRef m) = EMethodRef m
 unqualExpr _ (EDictApp d) = EDictApp d
