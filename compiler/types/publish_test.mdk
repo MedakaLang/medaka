@@ -2,11 +2,14 @@
 -- hand-built values; a scheme's context surviving a later drive (#4053) and a
 -- shadowing binding's context (#2054); and a pin for published schemes holding
 -- live Links (#2549), which a later V2 slice fixes.
-import test.{expectEqual, expectEach, expectTrue}
+import test.{
+  expectEqual, expectEach, expectTrue, expectGreaterThan, Expectation
+}
 import frontend.ast.{TyConOrigin(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
-import list.{zip, filter}
+import list.{zip, filter, takeWhile, dropWhile}
+import string.{lines}
 import support.util.{joinNl}
 import types.repr.{
   Mono(..), Tyvar(..), Scheme(..), IfaceRef(..), VecObl(..), ppScheme,
@@ -19,7 +22,12 @@ import types.publish.{
   PubScheme(..), VarKind(..), LiveCell(..), emptyZonk, zonkMono, zonkScheme,
   freezePub, liveCells, atGraphEnd
 }
-import types.typecheck.{checkOneSchemeFullK}
+import types.publish.{ModDiags}
+import types.typecheck.{
+  checkOneSchemeFullK, checkModulesDiagsChain, checkModulesAllLines,
+  methodReturnMemoCurrentViews, methodReturnMemoRetentionStats, tcCode, tcMsg,
+  MethodReturnMemoView(..)
+}
 
 int : Mono
 int = TCon "Int" OriginBuiltin
@@ -278,3 +286,211 @@ test "#2054: a shadowing buffer binding carries its own context, not the prelude
   expectEqual
     (["isEven : a -> String"], ["isEven : Speak a => a -> String"])
     (named own, named core)
+
+-- ── same-process P -> Q -> P (the V2 acceptance) ───────────────────────────
+
+numPrelude : String
+numPrelude = joinNl [
+  "interface Num a where",
+  "  fromInt : Int -> a",
+  "impl Num Int where",
+  "  fromInt _ = 0",
+]
+
+-- Exports a ground value, a declared-context binding and an inferred-context
+-- binding, so the published context rides three routes.
+accPrefix : Bool -> String
+accPrefix useBool =
+  let head = if useBool then "Bool" else "Int"
+  let value = if useBool then "True" else "41"
+  joinNl [
+    "export interface Need a where",
+    "  need : a -> Int",
+    "impl Need \{head} where",
+    "  need _ = 1",
+    "export interface CachedChoice a where",
+    "  cachedChoose : Unit -> a",
+    "impl CachedChoice \{head} requires Need \{head} where",
+    "  cachedChoose _ = \{value}",
+    "export cached : \{head}",
+    "cached = cachedChoose ()",
+    "export interface Hidden a b where",
+    "  hidden : Unit -> a",
+    "export useHidden : Hidden a b => b -> a",
+    "useHidden witness = hidden ()",
+    "export useNeed x = need x",
+  ]
+
+accEntry : String
+accEntry = "import acc_prefix.{cached, useHidden, useNeed}\nentry = cached\n"
+
+accConflict : String
+accConflict = joinNl [
+  accPrefix False,
+  "impl CachedChoice Int requires Need Int where",
+  "  cachedChoose _ = 99",
+]
+
+-- (published modules, memo views taken right after the drive)
+accDrive : String ->
+  String ->
+  String ->
+  String ->
+  (List ModDiags, List MethodReturnMemoView)
+accDrive chainKey prefixSource entrySource stepKey =
+  let results =
+    checkModulesDiagsChain
+      (Some (4053, 4055))
+      chainKey
+      [Some stepKey, None]
+      []
+      (desugar (parse numPrelude))
+      [
+        ("acc_prefix", desugar (parseLocated prefixSource)),
+        ("acc_entry", desugar (parseLocated entrySource)),
+      ]
+  (results, methodReturnMemoCurrentViews ())
+
+-- Schemes WITH their context, diagnostics and the evidence/disposition views,
+-- rendered at the moment of the call.
+accRender : (List ModDiags, List MethodReturnMemoView) -> List String
+accRender (mods, views) = flatMap accRenderMod mods ++ map debug views
+
+accRenderMod : ModDiags -> List String
+accRenderMod (mid, (ss, errs, warns)) =
+  ["module \{mid}"]
+    ++ rendered ss
+    ++ map (d => "diag \{tcCode d}: \{tcMsg d}") (errs ++ warns)
+
+accLinks : (List ModDiags, List MethodReturnMemoView) -> Int
+accLinks (mods, _) =
+  fold
+    (acc (_, (ss, _, _)) =>
+      acc + fold (a e => a + linkCount (snd e).psScheme) 0 ss)
+    0
+    mods
+
+accRetainedSteps : Unit -> Int
+accRetainedSteps _ =
+  let (_, _, n) = methodReturnMemoRetentionStats ()
+  n
+
+data QKind = QKind String (Unit -> Int)
+
+accQs : List QKind
+accQs = [
+  QKind "clean" (_ =>
+    let _ = accDrive "acc-q" (accPrefix False) "entry = 1\n" (accPrefix False)
+    0),
+  QKind "failing" (_ =>
+    let _ =
+      accDrive
+        "acc-q"
+        (accPrefix False)
+        "entry : Int\nentry = \"wrong\"\n"
+        (accPrefix False)
+    0),
+  QKind "conflicting" (_ =>
+    let _ = accDrive "acc-q" accConflict accEntry accConflict
+    0),
+  QKind "keyed hit over a ground prefix" (_ =>
+    let _ = accDrive "acc-p" (accPrefix False) accEntry (accPrefix False)
+    accRetainedSteps ()),
+  QKind "keyed miss" (_ =>
+    let _ = accDrive "acc-p" (accPrefix True) accEntry (accPrefix True)
+    0),
+]
+
+accCheck : QKind -> (String, Expectation)
+accCheck (QKind name run) =
+  let pSrc2 = accPrefix False
+  let held = accDrive "acc-p" pSrc2 accEntry pSrc2
+  let cold = accRender held
+  let steps = run ()
+  let after = accRender held
+  let warm = accRender (accDrive "acc-p" pSrc2 accEntry pSrc2)
+  let hitRetained =
+    if name == "keyed hit over a ground prefix" then
+      expectGreaterThan 0 steps
+    else
+      expectEqual 0 0
+  (
+    name,
+    expectEach [
+      ("held P renders as it did", expectEqual cold after),
+      ("re-driven P equals cold P", expectEqual cold warm),
+      (
+        "P carries an inferred context",
+        expectEqual
+          ["useNeed : Need a => a -> Int"]
+          (filter (== "useNeed : Need a => a -> Int") cold),
+      ),
+      ("a hit really retained a chain step", hitRetained),
+      ("held P publishes no Link", expectEqual 0 (accLinks held)),
+    ],
+  )
+
+test "P -> Q -> P: P rendered after Q equals cold P, for every kind of Q" =
+  expectEach (map accCheck accQs)
+
+weakChainSteps : String -> Int
+weakChainSteps held =
+  let src = joinNl [
+    "public export data Box a = Box a | Empty",
+    "idf x = x",
+    held,
+  ]
+  let mainSrc = joinNl [
+    "import weak_a.{Box(..), held}",
+    "use : Box Int -> Int",
+    "use b = match b",
+    "  Box _ => 1",
+    "  Empty => 0",
+    "entry = use held",
+  ]
+  let _ =
+    checkModulesDiagsChain
+      (Some (4053, 4056))
+      "acc-weak-\{held}"
+      [Some src, None]
+      []
+      []
+      [
+        ("weak_a", desugar (parseLocated src)),
+        ("weak_main", desugar (parseLocated mainSrc)),
+      ]
+  accRetainedSteps ()
+
+test "a weak-variable prefix records no chain step; the ground twin records one" = expectEach
+  [
+    ("weak: none", expectEqual 0 (weakChainSteps "export held = idf Empty")),
+    ("ground: one", expectEqual 1 (weakChainSteps "export held = Box 1")),
+  ]
+
+-- Contract section 7: an instance that becomes graph-visible in a prefix module.
+test "a graph-visible instance added to the prefix: warm P' equals cold P'" =
+  let noInst = joinNl [
+    "export interface Speak a where",
+    "  speak : a -> String",
+    "export useSpeak x = speak x",
+  ]
+  let withInst = joinNl [noInst, "impl Speak Int where", "  speak _ = \"int\""]
+  let entry = "import acc_prefix.{useSpeak}\nentry = useSpeak 1\n"
+  let _ = accDrive "acc-inst" noInst entry noInst
+  let warm = accRender (accDrive "acc-inst" withInst entry withInst)
+  let _ = accDrive "acc-inst-other" (accPrefix False) accEntry (accPrefix False)
+  let cold = accRender (accDrive "acc-inst-cold" withInst entry withInst)
+  expectEqual cold warm
+
+test "checkModulesAllLines shows useSpeak's context under its module" =
+  let ls =
+    lines
+      (checkModulesAllLines [] [] [
+        ("p", desugar (parseLocated pSrc)),
+        ("q", desugar (parseLocated "other = 1")),
+      ])
+  let inP =
+    takeWhile (l => l /= "## MODULE q") (dropWhile (l => l /= "## MODULE p") ls)
+  expectEqual
+    ["useSpeak : Speak a => a -> String"]
+    (filter (== "useSpeak : Speak a => a -> String") inP)
