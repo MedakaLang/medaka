@@ -254,6 +254,71 @@ test "diff_async: build+exec matches the committed stdout for every native fixtu
 test "diff_async: wasm build+run matches the same committed stdout for every wasm fixture" =
   gradeAll "wasm" gradeWasmFixture wasmRoster
 
+-- # The JSPI arm
+--
+-- The flagless wasm arm above reaches `sleep` through Atomics.wait. Under
+-- `--experimental-wasm-jspi` the host binds a `WebAssembly.Suspending` sleep
+-- instead, and the same module must print the same stdout. The stdout is
+-- identical either way, so the run is preloaded with a tracer that reports how
+-- many Suspending imports were built and called.
+
+jspiTracer : <IO> String
+jspiTracer = "\{medakaRoot}/test/async_jspi_fixtures/suspending_trace.mjs"
+
+-- True when this node, given the JSPI flag, exposes `WebAssembly.Suspending`.
+jspiAvailable : Unit -> <Exec> Bool
+jspiAvailable u = match boundedVerbSeconds 20 "node" [
+  "--experimental-wasm-jspi",
+  "-e",
+  "process.exit(typeof WebAssembly.Suspending === 'function' ? 0 : 1)",
+]
+  Ok (0, _, _) => True
+  _ => False
+
+-- Runs a built module under the JSPI flag with the tracer preloaded.
+runJspiTraced : String -> <Exec, IO> Result String (Int, String, String)
+runJspiTraced wasmPath = boundedVerbSeconds 30 "node" [
+  "--experimental-wasm-jspi",
+  "--import",
+  jspiTracer,
+  "\{medakaRoot}/test/wasm/run.js",
+  wasmPath,
+]
+
+-- The stdout grade of `gradeRun`, plus: the tracer saw the sleep go through a
+-- Suspending import.
+gradeJspi : String -> Result String (Int, String, String) -> Option String
+gradeJspi want result = match gradeRun "wasm-jspi" "overlap_sleeps" want result
+  Some e => Some e
+  None => match result
+    Ok (_, _, err) =>
+      if contains "suspending-imports=0" err
+        || not (contains "suspending-calls=" err) then
+        Some
+          "  wasm-jspi overlap_sleeps: no Suspending import was used: \{debug err}"
+      else
+        None
+    Err e => Some e
+
+test "diff_async: overlap_sleeps under JSPI prints the same stdout through a Suspending sleep" =
+  if not (jspiAvailable ()) then
+    let _ =
+      println
+        "SKIP diff_async JSPI arm: node --experimental-wasm-jspi exposes no WebAssembly.Suspending"
+    pass
+  else match (freshDir (), wantOutput "overlap_sleeps")
+    (Err e, _) => fail "could not make a scratch directory: \{e}"
+    (_, Err e) => fail "overlap_sleeps: \{e}"
+    (Ok scratch, Ok want) =>
+      let wasmPath = "\{scratch}/overlap_sleeps.wasm"
+      let verdict = match buildWasmFile "\{corpus}/overlap_sleeps.mdk" wasmPath
+        Err e => fail "overlap_sleeps: \{e}"
+        Ok _ => match gradeJspi want (runJspiTraced wasmPath)
+          Some e => fail e
+          None => pass
+      let _ = boundedVerbSeconds 10 "rm" ["-rf", scratch]
+      verdict
+
 -- # The wasm progress detector
 --
 -- `overlap_sleeps` prints "overlapped" on a host whose sleep returns at once,
