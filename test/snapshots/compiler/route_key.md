@@ -1,5 +1,5 @@
 # META
-source_lines=708
+source_lines=728
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
@@ -319,6 +319,26 @@ evSiteLitResult ev
     Ok (EvLit f r) => Ok (f, r)
     Ok _ =>
       Err "evidence table: a literal site answered by another kind of entry"
+    Err message => Err message
+
+-- The resolved record head published for field access or record update site [ev],
+-- "" when inference never resolved one.  A site built after inference carries
+-- `unminted` and answers "".  Every other miss panics.
+export
+evSiteHead : EvId -> String
+evSiteHead ev = match evSiteHeadResult ev
+  Ok head => head
+  Err message => panic message
+
+-- `evSiteHead`'s answer, or the reason the installed table has none.
+export
+evSiteHeadResult : EvId -> Result String String
+evSiteHeadResult ev
+  | isUnminted ev = Ok ""
+  | otherwise = match installedLookup "record-head site" ev
+    Ok (EvHead h) => Ok h
+    Ok _ =>
+      Err "evidence table: a record-head site answered by another kind of entry"
     Err message => Err message
 
 -- The answer published for a method occurrence: the interface identity it resolved
@@ -767,6 +787,10 @@ rkTyList =
 (DFunDef false "evSiteLit" ((PVar "ev")) (EMatch (EApp (EVar "evSiteLitResult") (EVar "ev")) (arm (PCon "Ok" (PVar "answer")) () (EVar "answer")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
 (DTypeSig true "evSiteLitResult" (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "Option") (TyCon "Float")) (TyCon "Route")))))
 (DFunDef false "evSiteLitResult" ((PVar "ev")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "Ok") (ETuple (EVar "None") (EVar "RNone"))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "installedLookup") (ELit (LString "literal site"))) (EVar "ev")) (arm (PCon "Ok" (PCon "EvLit" (PVar "f") (PVar "r"))) () (EApp (EVar "Ok") (ETuple (EVar "f") (EVar "r")))) (arm (PCon "Ok" PWild) () (EApp (EVar "Err") (ELit (LString "evidence table: a literal site answered by another kind of entry")))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Err") (EVar "message")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "evSiteHead" (TyFun (TyCon "EvId") (TyCon "String")))
+(DFunDef false "evSiteHead" ((PVar "ev")) (EMatch (EApp (EVar "evSiteHeadResult") (EVar "ev")) (arm (PCon "Ok" (PVar "head")) () (EVar "head")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
+(DTypeSig true "evSiteHeadResult" (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "evSiteHeadResult" ((PVar "ev")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "Ok") (ELit (LString ""))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "installedLookup") (ELit (LString "record-head site"))) (EVar "ev")) (arm (PCon "Ok" (PCon "EvHead" (PVar "h"))) () (EApp (EVar "Ok") (EVar "h"))) (arm (PCon "Ok" PWild) () (EApp (EVar "Err") (ELit (LString "evidence table: a record-head site answered by another kind of entry")))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Err") (EVar "message")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "evMethodRoutes" (TyFun (TyCon "EvId") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
 (DFunDef false "evMethodRoutes" ((PVar "ev")) (EApp (EVar "evMethodOf") (EApp (EApp (EVar "installedAnswer") (ELit (LString "method occurrence"))) (EVar "ev"))))
 (DTypeSig false "evMethodOf" (TyFun (TyCon "EvVal") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
@@ -888,6 +912,10 @@ rkTyList =
 (DFunDef false "evSiteLit" ((PVar "ev")) (EMatch (EApp (EVar "evSiteLitResult") (EVar "ev")) (arm (PCon "Ok" (PVar "answer")) () (EVar "answer")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
 (DTypeSig true "evSiteLitResult" (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "Option") (TyCon "Float")) (TyCon "Route")))))
 (DFunDef false "evSiteLitResult" ((PVar "ev")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "Ok") (ETuple (EVar "None") (EVar "RNone"))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "installedLookup") (ELit (LString "literal site"))) (EVar "ev")) (arm (PCon "Ok" (PCon "EvLit" (PVar "f") (PVar "r"))) () (EApp (EVar "Ok") (ETuple (EVar "f") (EVar "r")))) (arm (PCon "Ok" PWild) () (EApp (EVar "Err") (ELit (LString "evidence table: a literal site answered by another kind of entry")))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Err") (EVar "message")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "evSiteHead" (TyFun (TyCon "EvId") (TyCon "String")))
+(DFunDef false "evSiteHead" ((PVar "ev")) (EMatch (EApp (EVar "evSiteHeadResult") (EVar "ev")) (arm (PCon "Ok" (PVar "head")) () (EVar "head")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
+(DTypeSig true "evSiteHeadResult" (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "evSiteHeadResult" ((PVar "ev")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "Ok") (ELit (LString ""))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "installedLookup") (ELit (LString "record-head site"))) (EVar "ev")) (arm (PCon "Ok" (PCon "EvHead" (PVar "h"))) () (EApp (EVar "Ok") (EVar "h"))) (arm (PCon "Ok" PWild) () (EApp (EVar "Err") (ELit (LString "evidence table: a record-head site answered by another kind of entry")))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Err") (EVar "message")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "evMethodRoutes" (TyFun (TyCon "EvId") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
 (DFunDef false "evMethodRoutes" ((PVar "ev")) (EApp (EVar "evMethodOf") (EApp (EApp (EVar "installedAnswer") (ELit (LString "method occurrence"))) (EVar "ev"))))
 (DTypeSig false "evMethodOf" (TyFun (TyCon "EvVal") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))

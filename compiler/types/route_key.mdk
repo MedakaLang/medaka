@@ -317,6 +317,26 @@ evSiteLitResult ev
       Err "evidence table: a literal site answered by another kind of entry"
     Err message => Err message
 
+-- The resolved record head published for field access or record update site [ev],
+-- "" when inference never resolved one.  A site built after inference carries
+-- `unminted` and answers "".  Every other miss panics.
+export
+evSiteHead : EvId -> String
+evSiteHead ev = match evSiteHeadResult ev
+  Ok head => head
+  Err message => panic message
+
+-- `evSiteHead`'s answer, or the reason the installed table has none.
+export
+evSiteHeadResult : EvId -> Result String String
+evSiteHeadResult ev
+  | isUnminted ev = Ok ""
+  | otherwise = match installedLookup "record-head site" ev
+    Ok (EvHead h) => Ok h
+    Ok _ =>
+      Err "evidence table: a record-head site answered by another kind of entry"
+    Err message => Err message
+
 -- The answer published for a method occurrence: the interface identity it resolved
 -- to, its selected denotation's pre-use arrow arity, dispatch route, selected impl's
 -- `requires` dicts and the method's own `=>` dicts.  The arity is fixed from the selected scheme before application can

@@ -1,5 +1,5 @@
 # META
-source_lines=2761
+source_lines=2759
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -1362,9 +1362,11 @@ intMinLiteralHelp =
 -- half.  The module half is a TRIPWIRE: it is what lets that lookup panic instead of
 -- answering when an entry comes back stamped by a module the node did not ask for.
 --
--- The tripwire cannot fire for today's sole consumer, because an `EDictAt` carries
--- the very id `freshEvId` stamped into its goal, so the comparison is a tautology at
--- every live site.  It is still not dead weight, and a reader must not conclude from
+-- The tripwire cannot fire for today's readers (`evSiteRoute`, `evSiteLit`,
+-- `evSiteHead`, `evMethodRoutes` and `evDictRoutes` in `types/route_key.mdk`),
+-- because each reads with the id its own node carries, the very id `freshEvId`
+-- stamped into the goal, so the comparison is a tautology at every live site.  It is
+-- still not dead weight, and a reader must not conclude from
 -- the ordinals' present uniqueness that the module half can be dropped: a memo layer
 -- that swapped a whole cell rather than rewinding it, or any change that made
 -- ordinals per-module, resurrects a stale or colliding ordinal — and a per-module
@@ -1560,34 +1562,31 @@ public export data Expr =
   -- (`unopMethod "!"` = None).  sexp/astdump ignore the id.
   | EUnOp String Expr EvId
   | EInfix String Expr Expr
-  -- field access `r.f`.  The trailing `Ref String` is the resolved record head
-  -- (stamped by typecheck's inferFieldAccess; "" = unknown).  The emitter reads
-  -- it to pick the record by (recHead, label) so two records sharing a field
-  -- name at different indices resolve to the correct offset.  The head is the
-  -- record's OWNER-QUALIFIED name, derived at the stamp from the declaring
-  -- module the selected record carries in its own result type (#2839,
-  -- `stampedRecordHead` in `types/typecheck.mdk`), so its cross-module identity
-  -- does not depend on the mangler having run before elaboration.  Same
-  -- Ref-stamp idiom as EIndex/ESlice; sexp/printer ignore the ref.
-  | EFieldAccess Expr String (Ref String)
+  -- field access `r.f`.  The trailing `EvId` names the access's site: the parser
+  -- carries `unminted` and the typechecker's mark pass mints it.  Inference
+  -- publishes the resolved record head under that id (`evSiteHead`,
+  -- `types/route_key.mdk`); "" means unknown, and an `unminted` site answers "".
+  -- The emitter reads the head to pick the record by (recHead, label), so two
+  -- records sharing a field name at different indices resolve to the correct
+  -- offset.  The head is the record's owner-qualified name, derived at the stamp
+  -- from the declaring module the selected record carries in its own result type
+  -- (`stampedRecordHead` in `types/typecheck.mdk`), so its cross-module identity
+  -- does not depend on the mangler having run before elaboration.  sexp and the
+  -- printer ignore the id.
+  | EFieldAccess Expr String EvId
   | ETuple (List Expr)
   | EListLit (List Expr)
   | EArrayLit (List Expr)
   | ERangeList Expr Expr Bool
   | ERangeArray Expr Expr Bool
-  -- index/slice sugar.  `a.[lo..hi]` / `a.[lo..=hi]`; the trailing `Bool` is the
-  -- inclusive flag.  The trailing `Ref String` is now VESTIGIAL: ESlice is
-  -- desugared to a `slice` method call (the `Slice` interface, #670) BEFORE
-  -- resolve/typecheck/lower, so nothing stamps or reads the ref any more (the old
-  -- `inferSlice`/`indexKind` typecheck arm and the static-tag `CStringSlice`/
-  -- `CListSlice`/`CSlice` lowering are dead — tracked for removal in #700).  The
-  -- field is kept only so the node's AST/printer shape is unchanged and
-  -- `.[lo..hi]` round-trips; sexp/printer ignore the ref.  (`EIndex`'s ref is
-  -- likewise vestigial — it desugars to `index`.)
-  | ESlice Expr Expr Expr Bool (Ref String)
+  -- index/slice sugar.  `a.[i]` is `EIndex`; `a.[lo..hi]` / `a.[lo..=hi]` is
+  -- `ESlice`, whose trailing `Bool` is the inclusive flag.  `rewriteSugar`
+  -- (`frontend/desugar.mdk`) rewrites both to `index` / `slice` method calls, so
+  -- no stage after desugar expects either node.
+  | ESlice Expr Expr Expr Bool
   | ELetGroup (List LetBind) Expr
   | ESection Section
-  | EIndex Expr Expr (Ref String)
+  | EIndex Expr Expr
   | EAnnot Expr Ty
   -- Head-pinned type annotation (`e :~ T`).  The parser never produces this, but
   -- desugar's container-literal lowering does: `Map { … }`/`Set { … }` become
@@ -1603,15 +1602,14 @@ public export data Expr =
   | EStringInterp (List InterpPart)
   | EGuards (List GuardArm)
   | ERecordCreate String (List FieldAssign)
-  -- functional record update `{ base | f = v … }`.  The trailing `Ref String` is
-  -- the resolved record head of the RECEIVER (stamped by typecheck's
-  -- inferRecordUpdate; "" = unknown), owner-qualified and read exactly as
-  -- EFieldAccess carries it — and
-  -- for the same reason: two records sharing a field name at DIFFERENT slot
-  -- indices are indistinguishable from the field label alone, so an emitter that
-  -- guesses the record from the first update label writes the wrong slot (bug
-  -- #38, a silent miscompile on both backends).  sexp/printer ignore the ref.
-  | ERecordUpdate Expr (List FieldAssign) (Ref String)
+  -- functional record update `{ base | f = v … }`.  The trailing `EvId` names
+  -- the site whose published head is the resolved record head of the receiver
+  -- (stamped by inferRecordUpdate; "" = unknown), owner-qualified and read exactly
+  -- as EFieldAccess carries it, for the same reason: two records sharing a field
+  -- name at different slot indices are indistinguishable from the field label
+  -- alone, so an emitter that guesses the record from the first update label
+  -- writes the wrong slot.  sexp and the printer ignore the id.
+  | ERecordUpdate Expr (List FieldAssign) EvId
   | EVariantUpdate String Expr (List FieldAssign)
   | EMapLit String (List (Expr, Expr))
   | ESetLit String (List Expr)
@@ -2539,8 +2537,8 @@ mapFunClausesB f ((FunClause ps e) :: rest) =
 -- constructor-for-constructor (kept in lockstep with the AST — a new Expr node
 -- there makes THIS match non-exhaustive — a WARNING at exit 0, see the section
 -- header above; NOT a build error), but threads the
--- change flag purely.  Site fields, the cells of EFieldAccess/ESlice/EIndex/
--- ERecordUpdate and the ids of EBinOp/EUnOp/ENumLit/EWideLit/EMethodAt/EDictAt, are
+-- change flag purely.  Site fields and the ids of
+-- EBinOp/EUnOp/ENumLit/EWideLit/EFieldAccess/ERecordUpdate/EMethodAt/EDictAt, are
 -- carried through unchanged.
 export
 mapTyInExpr : (Ty -> (Ty, Bool)) -> Expr -> (Expr, Bool)
@@ -2597,11 +2595,11 @@ mapTyInExpr f (ERangeArray lo hi incl) =
   let (lo2, c1) = mapTyInExpr f lo
   let (hi2, c2) = mapTyInExpr f hi
   (ERangeArray lo2 hi2 incl, c1 || c2)
-mapTyInExpr f (ESlice e0 lo hi incl r) =
+mapTyInExpr f (ESlice e0 lo hi incl) =
   let (e0b, c1) = mapTyInExpr f e0
   let (lo2, c2) = mapTyInExpr f lo
   let (hi2, c3) = mapTyInExpr f hi
-  (ESlice e0b lo2 hi2 incl r, c1 || c2 || c3)
+  (ESlice e0b lo2 hi2 incl, c1 || c2 || c3)
 mapTyInExpr f (ELetGroup binds e2) =
   let (bs2, c1) = mapLetBindsB f binds
   let (e2b, c2) = mapTyInExpr f e2
@@ -2613,10 +2611,10 @@ mapTyInExpr f (ESection (SecRight op e0)) =
 mapTyInExpr f (ESection (SecLeft e0 op)) =
   let (e0b, c) = mapTyInExpr f e0
   (ESection (SecLeft e0b op), c)
-mapTyInExpr f (EIndex e0 i r) =
+mapTyInExpr f (EIndex e0 i) =
   let (e0b, c1) = mapTyInExpr f e0
   let (i2, c2) = mapTyInExpr f i
-  (EIndex e0b i2 r, c1 || c2)
+  (EIndex e0b i2, c1 || c2)
 mapTyInExpr f (EAnnot e0 t) =
   let (e0b, c1) = mapTyInExpr f e0
   let (t2, c2) = mapTyFull f t
@@ -3022,7 +3020,7 @@ mapKvsB f ((k, v) :: rest) =
 (DData Public "Section" () ((variant "SecBare" (ConPos (TyCon "String"))) (variant "SecRight" (ConPos (TyCon "String") (TyCon "Expr"))) (variant "SecLeft" (ConPos (TyCon "Expr") (TyCon "String")))) ())
 (DData Public "FunClause" () ((variant "FunClause" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) ())
 (DData Public "LetBind" () ((variant "LetBind" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "FunClause")) (TyCon "Loc") (TyCon "BinderId")))) ())
-(DData Public "Expr" () ((variant "ELit" (ConPos (TyCon "Lit"))) (variant "EVar" (ConPos (TyCon "String"))) (variant "EApp" (ConPos (TyCon "Expr") (TyCon "Expr"))) (variant "ELam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "ELet" (ConPos (TyCon "Loc") (TyCon "Bool") (TyCon "Pat") (TyCon "Expr") (TyCon "Expr"))) (variant "EMatch" (ConPos (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Arm")))) (variant "EIf" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Expr"))) (variant "EBinOp" (ConPos (TyCon "String") (TyCon "Expr") (TyCon "Expr") (TyCon "EvId"))) (variant "EUnOp" (ConPos (TyCon "String") (TyCon "Expr") (TyCon "EvId"))) (variant "EInfix" (ConPos (TyCon "String") (TyCon "Expr") (TyCon "Expr"))) (variant "EFieldAccess" (ConPos (TyCon "Expr") (TyCon "String") (TyApp (TyCon "Ref") (TyCon "String")))) (variant "ETuple" (ConPos (TyApp (TyCon "List") (TyCon "Expr")))) (variant "EListLit" (ConPos (TyApp (TyCon "List") (TyCon "Expr")))) (variant "EArrayLit" (ConPos (TyApp (TyCon "List") (TyCon "Expr")))) (variant "ERangeList" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Bool"))) (variant "ERangeArray" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Bool"))) (variant "ESlice" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Expr") (TyCon "Bool") (TyApp (TyCon "Ref") (TyCon "String")))) (variant "ELetGroup" (ConPos (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "Expr"))) (variant "ESection" (ConPos (TyCon "Section"))) (variant "EIndex" (ConPos (TyCon "Expr") (TyCon "Expr") (TyApp (TyCon "Ref") (TyCon "String")))) (variant "EAnnot" (ConPos (TyCon "Expr") (TyCon "Ty"))) (variant "EHeadAnnot" (ConPos (TyCon "Expr") (TyCon "Ty"))) (variant "EBlock" (ConPos (TyApp (TyCon "List") (TyCon "DoStmt")))) (variant "EDo" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "DoStmt")))) (variant "EStringInterp" (ConPos (TyApp (TyCon "List") (TyCon "InterpPart")))) (variant "EGuards" (ConPos (TyApp (TyCon "List") (TyCon "GuardArm")))) (variant "ERecordCreate" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "FieldAssign")))) (variant "ERecordUpdate" (ConPos (TyCon "Expr") (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyApp (TyCon "Ref") (TyCon "String")))) (variant "EVariantUpdate" (ConPos (TyCon "String") (TyCon "Expr") (TyApp (TyCon "List") (TyCon "FieldAssign")))) (variant "EMapLit" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "Expr") (TyCon "Expr"))))) (variant "ESetLit" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Expr")))) (variant "EAsPat" (ConPos (TyCon "String") (TyCon "Expr"))) (variant "EMethodRef" (ConPos (TyCon "String"))) (variant "EDictApp" (ConPos (TyCon "String"))) (variant "EVarAt" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "EVarId" (ConPos (TyCon "String") (TyCon "Int"))) (variant "EMethodAt" (ConPos (TyCon "String") (TyCon "String") (TyCon "EvId"))) (variant "EDictAt" (ConPos (TyCon "String") (TyCon "EvId"))) (variant "ELoc" (ConPos (TyCon "Loc") (TyCon "Expr"))) (variant "EDoOrigin" (ConPos (TyCon "Loc") (TyCon "Expr"))) (variant "ENumLit" (ConPos (TyCon "Int") (TyCon "EvId") (TyCon "String"))) (variant "EWideLit" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "EvId") (TyCon "String")))) ())
+(DData Public "Expr" () ((variant "ELit" (ConPos (TyCon "Lit"))) (variant "EVar" (ConPos (TyCon "String"))) (variant "EApp" (ConPos (TyCon "Expr") (TyCon "Expr"))) (variant "ELam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "ELet" (ConPos (TyCon "Loc") (TyCon "Bool") (TyCon "Pat") (TyCon "Expr") (TyCon "Expr"))) (variant "EMatch" (ConPos (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Arm")))) (variant "EIf" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Expr"))) (variant "EBinOp" (ConPos (TyCon "String") (TyCon "Expr") (TyCon "Expr") (TyCon "EvId"))) (variant "EUnOp" (ConPos (TyCon "String") (TyCon "Expr") (TyCon "EvId"))) (variant "EInfix" (ConPos (TyCon "String") (TyCon "Expr") (TyCon "Expr"))) (variant "EFieldAccess" (ConPos (TyCon "Expr") (TyCon "String") (TyCon "EvId"))) (variant "ETuple" (ConPos (TyApp (TyCon "List") (TyCon "Expr")))) (variant "EListLit" (ConPos (TyApp (TyCon "List") (TyCon "Expr")))) (variant "EArrayLit" (ConPos (TyApp (TyCon "List") (TyCon "Expr")))) (variant "ERangeList" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Bool"))) (variant "ERangeArray" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Bool"))) (variant "ESlice" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Expr") (TyCon "Bool"))) (variant "ELetGroup" (ConPos (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "Expr"))) (variant "ESection" (ConPos (TyCon "Section"))) (variant "EIndex" (ConPos (TyCon "Expr") (TyCon "Expr"))) (variant "EAnnot" (ConPos (TyCon "Expr") (TyCon "Ty"))) (variant "EHeadAnnot" (ConPos (TyCon "Expr") (TyCon "Ty"))) (variant "EBlock" (ConPos (TyApp (TyCon "List") (TyCon "DoStmt")))) (variant "EDo" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "DoStmt")))) (variant "EStringInterp" (ConPos (TyApp (TyCon "List") (TyCon "InterpPart")))) (variant "EGuards" (ConPos (TyApp (TyCon "List") (TyCon "GuardArm")))) (variant "ERecordCreate" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "FieldAssign")))) (variant "ERecordUpdate" (ConPos (TyCon "Expr") (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyCon "EvId"))) (variant "EVariantUpdate" (ConPos (TyCon "String") (TyCon "Expr") (TyApp (TyCon "List") (TyCon "FieldAssign")))) (variant "EMapLit" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "Expr") (TyCon "Expr"))))) (variant "ESetLit" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Expr")))) (variant "EAsPat" (ConPos (TyCon "String") (TyCon "Expr"))) (variant "EMethodRef" (ConPos (TyCon "String"))) (variant "EDictApp" (ConPos (TyCon "String"))) (variant "EVarAt" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "EVarId" (ConPos (TyCon "String") (TyCon "Int"))) (variant "EMethodAt" (ConPos (TyCon "String") (TyCon "String") (TyCon "EvId"))) (variant "EDictAt" (ConPos (TyCon "String") (TyCon "EvId"))) (variant "ELoc" (ConPos (TyCon "Loc") (TyCon "Expr"))) (variant "EDoOrigin" (ConPos (TyCon "Loc") (TyCon "Expr"))) (variant "ENumLit" (ConPos (TyCon "Int") (TyCon "EvId") (TyCon "String"))) (variant "EWideLit" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "EvId") (TyCon "String")))) ())
 (DData Public "UseMember" () ((variant "UseMember" (ConPos (TyCon "String") (TyCon "Bool") (TyCon "Loc") (TyApp (TyCon "Option") (TyCon "String"))))) ())
 (DData Public "UsePath" () ((variant "UseName" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "UseGroup" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "UseMember")))) (variant "UseWild" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "UseAlias" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) ())
 (DTypeSig true "useMemberOrigin" (TyFun (TyCon "UseMember") (TyCon "String")))
@@ -3173,12 +3171,12 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "EArrayLit" (PVar "es"))) (EBlock (DoLet false false (PTuple (PVar "es2") (PVar "c")) (EApp (EApp (EVar "mapExprsB") (EVar "f")) (EVar "es"))) (DoExpr (ETuple (EApp (EVar "EArrayLit") (EVar "es2")) (EVar "c")))))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PTuple (PVar "lo2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "lo"))) (DoLet false false (PTuple (PVar "hi2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "hi"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "ERangeList") (EVar "lo2")) (EVar "hi2")) (EVar "incl")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PTuple (PVar "lo2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "lo"))) (DoLet false false (PTuple (PVar "hi2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "hi"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "ERangeArray") (EVar "lo2")) (EVar "hi2")) (EVar "incl")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
-(DFunDef false "mapTyInExpr" ((PVar "f") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EBlock (DoLet false false (PTuple (PVar "e0b") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e0"))) (DoLet false false (PTuple (PVar "lo2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "lo"))) (DoLet false false (PTuple (PVar "hi2") (PVar "c3")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "hi"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "e0b")) (EVar "lo2")) (EVar "hi2")) (EVar "incl")) (EVar "r")) (EBinOp "||" (EBinOp "||" (EVar "c1") (EVar "c2")) (EVar "c3"))))))
+(DFunDef false "mapTyInExpr" ((PVar "f") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PTuple (PVar "e0b") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e0"))) (DoLet false false (PTuple (PVar "lo2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "lo"))) (DoLet false false (PTuple (PVar "hi2") (PVar "c3")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "hi"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "e0b")) (EVar "lo2")) (EVar "hi2")) (EVar "incl")) (EBinOp "||" (EBinOp "||" (EVar "c1") (EVar "c2")) (EVar "c3"))))))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "ELetGroup" (PVar "binds") (PVar "e2"))) (EBlock (DoLet false false (PTuple (PVar "bs2") (PVar "c1")) (EApp (EApp (EVar "mapLetBindsB") (EVar "f")) (EVar "binds"))) (DoLet false false (PTuple (PVar "e2b") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e2"))) (DoExpr (ETuple (EApp (EApp (EVar "ELetGroup") (EVar "bs2")) (EVar "e2b")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInExpr" (PWild (PCon "ESection" (PCon "SecBare" (PVar "op")))) (ETuple (EApp (EVar "ESection") (EApp (EVar "SecBare") (EVar "op"))) (EVar "False")))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "ESection" (PCon "SecRight" (PVar "op") (PVar "e0")))) (EBlock (DoLet false false (PTuple (PVar "e0b") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e0"))) (DoExpr (ETuple (EApp (EVar "ESection") (EApp (EApp (EVar "SecRight") (EVar "op")) (EVar "e0b"))) (EVar "c")))))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "ESection" (PCon "SecLeft" (PVar "e0") (PVar "op")))) (EBlock (DoLet false false (PTuple (PVar "e0b") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e0"))) (DoExpr (ETuple (EApp (EVar "ESection") (EApp (EApp (EVar "SecLeft") (EVar "e0b")) (EVar "op"))) (EVar "c")))))
-(DFunDef false "mapTyInExpr" ((PVar "f") (PCon "EIndex" (PVar "e0") (PVar "i") (PVar "r"))) (EBlock (DoLet false false (PTuple (PVar "e0b") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e0"))) (DoLet false false (PTuple (PVar "i2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "i"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "EIndex") (EVar "e0b")) (EVar "i2")) (EVar "r")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
+(DFunDef false "mapTyInExpr" ((PVar "f") (PCon "EIndex" (PVar "e0") (PVar "i"))) (EBlock (DoLet false false (PTuple (PVar "e0b") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e0"))) (DoLet false false (PTuple (PVar "i2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "i"))) (DoExpr (ETuple (EApp (EApp (EVar "EIndex") (EVar "e0b")) (EVar "i2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "e0b") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e0"))) (DoLet false false (PTuple (PVar "t2") (PVar "c2")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EVar "EAnnot") (EVar "e0b")) (EVar "t2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "e0b") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e0"))) (DoLet false false (PTuple (PVar "t2") (PVar "c2")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EVar "EHeadAnnot") (EVar "e0b")) (EVar "t2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "EBlock" (PVar "stmts"))) (EBlock (DoLet false false (PTuple (PVar "ss2") (PVar "c")) (EApp (EApp (EVar "mapDoStmtsB") (EVar "f")) (EVar "stmts"))) (DoExpr (ETuple (EApp (EVar "EBlock") (EVar "ss2")) (EVar "c")))))
@@ -3492,7 +3490,7 @@ mapKvsB f ((k, v) :: rest) =
 (DData Public "Section" () ((variant "SecBare" (ConPos (TyCon "String"))) (variant "SecRight" (ConPos (TyCon "String") (TyCon "Expr"))) (variant "SecLeft" (ConPos (TyCon "Expr") (TyCon "String")))) ())
 (DData Public "FunClause" () ((variant "FunClause" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) ())
 (DData Public "LetBind" () ((variant "LetBind" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "FunClause")) (TyCon "Loc") (TyCon "BinderId")))) ())
-(DData Public "Expr" () ((variant "ELit" (ConPos (TyCon "Lit"))) (variant "EVar" (ConPos (TyCon "String"))) (variant "EApp" (ConPos (TyCon "Expr") (TyCon "Expr"))) (variant "ELam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "ELet" (ConPos (TyCon "Loc") (TyCon "Bool") (TyCon "Pat") (TyCon "Expr") (TyCon "Expr"))) (variant "EMatch" (ConPos (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Arm")))) (variant "EIf" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Expr"))) (variant "EBinOp" (ConPos (TyCon "String") (TyCon "Expr") (TyCon "Expr") (TyCon "EvId"))) (variant "EUnOp" (ConPos (TyCon "String") (TyCon "Expr") (TyCon "EvId"))) (variant "EInfix" (ConPos (TyCon "String") (TyCon "Expr") (TyCon "Expr"))) (variant "EFieldAccess" (ConPos (TyCon "Expr") (TyCon "String") (TyApp (TyCon "Ref") (TyCon "String")))) (variant "ETuple" (ConPos (TyApp (TyCon "List") (TyCon "Expr")))) (variant "EListLit" (ConPos (TyApp (TyCon "List") (TyCon "Expr")))) (variant "EArrayLit" (ConPos (TyApp (TyCon "List") (TyCon "Expr")))) (variant "ERangeList" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Bool"))) (variant "ERangeArray" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Bool"))) (variant "ESlice" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Expr") (TyCon "Bool") (TyApp (TyCon "Ref") (TyCon "String")))) (variant "ELetGroup" (ConPos (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "Expr"))) (variant "ESection" (ConPos (TyCon "Section"))) (variant "EIndex" (ConPos (TyCon "Expr") (TyCon "Expr") (TyApp (TyCon "Ref") (TyCon "String")))) (variant "EAnnot" (ConPos (TyCon "Expr") (TyCon "Ty"))) (variant "EHeadAnnot" (ConPos (TyCon "Expr") (TyCon "Ty"))) (variant "EBlock" (ConPos (TyApp (TyCon "List") (TyCon "DoStmt")))) (variant "EDo" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "DoStmt")))) (variant "EStringInterp" (ConPos (TyApp (TyCon "List") (TyCon "InterpPart")))) (variant "EGuards" (ConPos (TyApp (TyCon "List") (TyCon "GuardArm")))) (variant "ERecordCreate" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "FieldAssign")))) (variant "ERecordUpdate" (ConPos (TyCon "Expr") (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyApp (TyCon "Ref") (TyCon "String")))) (variant "EVariantUpdate" (ConPos (TyCon "String") (TyCon "Expr") (TyApp (TyCon "List") (TyCon "FieldAssign")))) (variant "EMapLit" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "Expr") (TyCon "Expr"))))) (variant "ESetLit" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Expr")))) (variant "EAsPat" (ConPos (TyCon "String") (TyCon "Expr"))) (variant "EMethodRef" (ConPos (TyCon "String"))) (variant "EDictApp" (ConPos (TyCon "String"))) (variant "EVarAt" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "EVarId" (ConPos (TyCon "String") (TyCon "Int"))) (variant "EMethodAt" (ConPos (TyCon "String") (TyCon "String") (TyCon "EvId"))) (variant "EDictAt" (ConPos (TyCon "String") (TyCon "EvId"))) (variant "ELoc" (ConPos (TyCon "Loc") (TyCon "Expr"))) (variant "EDoOrigin" (ConPos (TyCon "Loc") (TyCon "Expr"))) (variant "ENumLit" (ConPos (TyCon "Int") (TyCon "EvId") (TyCon "String"))) (variant "EWideLit" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "EvId") (TyCon "String")))) ())
+(DData Public "Expr" () ((variant "ELit" (ConPos (TyCon "Lit"))) (variant "EVar" (ConPos (TyCon "String"))) (variant "EApp" (ConPos (TyCon "Expr") (TyCon "Expr"))) (variant "ELam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "ELet" (ConPos (TyCon "Loc") (TyCon "Bool") (TyCon "Pat") (TyCon "Expr") (TyCon "Expr"))) (variant "EMatch" (ConPos (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Arm")))) (variant "EIf" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Expr"))) (variant "EBinOp" (ConPos (TyCon "String") (TyCon "Expr") (TyCon "Expr") (TyCon "EvId"))) (variant "EUnOp" (ConPos (TyCon "String") (TyCon "Expr") (TyCon "EvId"))) (variant "EInfix" (ConPos (TyCon "String") (TyCon "Expr") (TyCon "Expr"))) (variant "EFieldAccess" (ConPos (TyCon "Expr") (TyCon "String") (TyCon "EvId"))) (variant "ETuple" (ConPos (TyApp (TyCon "List") (TyCon "Expr")))) (variant "EListLit" (ConPos (TyApp (TyCon "List") (TyCon "Expr")))) (variant "EArrayLit" (ConPos (TyApp (TyCon "List") (TyCon "Expr")))) (variant "ERangeList" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Bool"))) (variant "ERangeArray" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Bool"))) (variant "ESlice" (ConPos (TyCon "Expr") (TyCon "Expr") (TyCon "Expr") (TyCon "Bool"))) (variant "ELetGroup" (ConPos (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "Expr"))) (variant "ESection" (ConPos (TyCon "Section"))) (variant "EIndex" (ConPos (TyCon "Expr") (TyCon "Expr"))) (variant "EAnnot" (ConPos (TyCon "Expr") (TyCon "Ty"))) (variant "EHeadAnnot" (ConPos (TyCon "Expr") (TyCon "Ty"))) (variant "EBlock" (ConPos (TyApp (TyCon "List") (TyCon "DoStmt")))) (variant "EDo" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "DoStmt")))) (variant "EStringInterp" (ConPos (TyApp (TyCon "List") (TyCon "InterpPart")))) (variant "EGuards" (ConPos (TyApp (TyCon "List") (TyCon "GuardArm")))) (variant "ERecordCreate" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "FieldAssign")))) (variant "ERecordUpdate" (ConPos (TyCon "Expr") (TyApp (TyCon "List") (TyCon "FieldAssign")) (TyCon "EvId"))) (variant "EVariantUpdate" (ConPos (TyCon "String") (TyCon "Expr") (TyApp (TyCon "List") (TyCon "FieldAssign")))) (variant "EMapLit" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "Expr") (TyCon "Expr"))))) (variant "ESetLit" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Expr")))) (variant "EAsPat" (ConPos (TyCon "String") (TyCon "Expr"))) (variant "EMethodRef" (ConPos (TyCon "String"))) (variant "EDictApp" (ConPos (TyCon "String"))) (variant "EVarAt" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "EVarId" (ConPos (TyCon "String") (TyCon "Int"))) (variant "EMethodAt" (ConPos (TyCon "String") (TyCon "String") (TyCon "EvId"))) (variant "EDictAt" (ConPos (TyCon "String") (TyCon "EvId"))) (variant "ELoc" (ConPos (TyCon "Loc") (TyCon "Expr"))) (variant "EDoOrigin" (ConPos (TyCon "Loc") (TyCon "Expr"))) (variant "ENumLit" (ConPos (TyCon "Int") (TyCon "EvId") (TyCon "String"))) (variant "EWideLit" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "EvId") (TyCon "String")))) ())
 (DData Public "UseMember" () ((variant "UseMember" (ConPos (TyCon "String") (TyCon "Bool") (TyCon "Loc") (TyApp (TyCon "Option") (TyCon "String"))))) ())
 (DData Public "UsePath" () ((variant "UseName" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "UseGroup" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "UseMember")))) (variant "UseWild" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "UseAlias" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) ())
 (DTypeSig true "useMemberOrigin" (TyFun (TyCon "UseMember") (TyCon "String")))
@@ -3643,12 +3641,12 @@ mapKvsB f ((k, v) :: rest) =
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "EArrayLit" (PVar "es"))) (EBlock (DoLet false false (PTuple (PVar "es2") (PVar "c")) (EApp (EApp (EVar "mapExprsB") (EVar "f")) (EVar "es"))) (DoExpr (ETuple (EApp (EVar "EArrayLit") (EVar "es2")) (EVar "c")))))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PTuple (PVar "lo2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "lo"))) (DoLet false false (PTuple (PVar "hi2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "hi"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "ERangeList") (EVar "lo2")) (EVar "hi2")) (EVar "incl")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PTuple (PVar "lo2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "lo"))) (DoLet false false (PTuple (PVar "hi2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "hi"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "ERangeArray") (EVar "lo2")) (EVar "hi2")) (EVar "incl")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
-(DFunDef false "mapTyInExpr" ((PVar "f") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EBlock (DoLet false false (PTuple (PVar "e0b") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e0"))) (DoLet false false (PTuple (PVar "lo2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "lo"))) (DoLet false false (PTuple (PVar "hi2") (PVar "c3")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "hi"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "e0b")) (EVar "lo2")) (EVar "hi2")) (EVar "incl")) (EVar "r")) (EBinOp "||" (EBinOp "||" (EVar "c1") (EVar "c2")) (EVar "c3"))))))
+(DFunDef false "mapTyInExpr" ((PVar "f") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PTuple (PVar "e0b") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e0"))) (DoLet false false (PTuple (PVar "lo2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "lo"))) (DoLet false false (PTuple (PVar "hi2") (PVar "c3")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "hi"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "e0b")) (EVar "lo2")) (EVar "hi2")) (EVar "incl")) (EBinOp "||" (EBinOp "||" (EVar "c1") (EVar "c2")) (EVar "c3"))))))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "ELetGroup" (PVar "binds") (PVar "e2"))) (EBlock (DoLet false false (PTuple (PVar "bs2") (PVar "c1")) (EApp (EApp (EVar "mapLetBindsB") (EVar "f")) (EVar "binds"))) (DoLet false false (PTuple (PVar "e2b") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e2"))) (DoExpr (ETuple (EApp (EApp (EVar "ELetGroup") (EVar "bs2")) (EVar "e2b")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInExpr" (PWild (PCon "ESection" (PCon "SecBare" (PVar "op")))) (ETuple (EApp (EVar "ESection") (EApp (EVar "SecBare") (EVar "op"))) (EVar "False")))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "ESection" (PCon "SecRight" (PVar "op") (PVar "e0")))) (EBlock (DoLet false false (PTuple (PVar "e0b") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e0"))) (DoExpr (ETuple (EApp (EVar "ESection") (EApp (EApp (EVar "SecRight") (EVar "op")) (EVar "e0b"))) (EVar "c")))))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "ESection" (PCon "SecLeft" (PVar "e0") (PVar "op")))) (EBlock (DoLet false false (PTuple (PVar "e0b") (PVar "c")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e0"))) (DoExpr (ETuple (EApp (EVar "ESection") (EApp (EApp (EVar "SecLeft") (EVar "e0b")) (EVar "op"))) (EVar "c")))))
-(DFunDef false "mapTyInExpr" ((PVar "f") (PCon "EIndex" (PVar "e0") (PVar "i") (PVar "r"))) (EBlock (DoLet false false (PTuple (PVar "e0b") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e0"))) (DoLet false false (PTuple (PVar "i2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "i"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "EIndex") (EVar "e0b")) (EVar "i2")) (EVar "r")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
+(DFunDef false "mapTyInExpr" ((PVar "f") (PCon "EIndex" (PVar "e0") (PVar "i"))) (EBlock (DoLet false false (PTuple (PVar "e0b") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e0"))) (DoLet false false (PTuple (PVar "i2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "i"))) (DoExpr (ETuple (EApp (EApp (EVar "EIndex") (EVar "e0b")) (EVar "i2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "e0b") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e0"))) (DoLet false false (PTuple (PVar "t2") (PVar "c2")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EVar "EAnnot") (EVar "e0b")) (EVar "t2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "e0b") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e0"))) (DoLet false false (PTuple (PVar "t2") (PVar "c2")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EVar "EHeadAnnot") (EVar "e0b")) (EVar "t2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DFunDef false "mapTyInExpr" ((PVar "f") (PCon "EBlock" (PVar "stmts"))) (EBlock (DoLet false false (PTuple (PVar "ss2") (PVar "c")) (EApp (EApp (EVar "mapDoStmtsB") (EVar "f")) (EVar "stmts"))) (DoExpr (ETuple (EApp (EVar "EBlock") (EVar "ss2")) (EVar "c")))))

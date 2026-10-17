@@ -2827,8 +2827,8 @@ mainBodyLoc (EApp f _) = mainBodyLoc f
 mainBodyLoc (EBinOp _ a _ _) = mainBodyLoc a
 mainBodyLoc (EUnOp _ a _) = mainBodyLoc a
 mainBodyLoc (EFieldAccess a _ _) = mainBodyLoc a
-mainBodyLoc (EIndex a _ _) = mainBodyLoc a
-mainBodyLoc (ESlice a _ _ _ _) = mainBodyLoc a
+mainBodyLoc (EIndex a _) = mainBodyLoc a
+mainBodyLoc (ESlice a _ _ _) = mainBodyLoc a
 mainBodyLoc _ = None
 
 export
@@ -3619,8 +3619,8 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DFunDef false "mainBodyLoc" ((PCon "EBinOp" PWild (PVar "a") PWild PWild)) (EApp (EVar "mainBodyLoc") (EVar "a")))
 (DFunDef false "mainBodyLoc" ((PCon "EUnOp" PWild (PVar "a") PWild)) (EApp (EVar "mainBodyLoc") (EVar "a")))
 (DFunDef false "mainBodyLoc" ((PCon "EFieldAccess" (PVar "a") PWild PWild)) (EApp (EVar "mainBodyLoc") (EVar "a")))
-(DFunDef false "mainBodyLoc" ((PCon "EIndex" (PVar "a") PWild PWild)) (EApp (EVar "mainBodyLoc") (EVar "a")))
-(DFunDef false "mainBodyLoc" ((PCon "ESlice" (PVar "a") PWild PWild PWild PWild)) (EApp (EVar "mainBodyLoc") (EVar "a")))
+(DFunDef false "mainBodyLoc" ((PCon "EIndex" (PVar "a") PWild)) (EApp (EVar "mainBodyLoc") (EVar "a")))
+(DFunDef false "mainBodyLoc" ((PCon "ESlice" (PVar "a") PWild PWild PWild)) (EApp (EVar "mainBodyLoc") (EVar "a")))
 (DFunDef false "mainBodyLoc" (PWild) (EVar "None"))
 (DTypeSig true "mainArityMsg" (TyCon "String"))
 (DFunDef false "mainArityMsg" () (ELit (LString "`main` must be a value, not a function; write `main = ...`, not `main () = ...`")))
@@ -4062,8 +4062,8 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DFunDef false "mainBodyLoc" ((PCon "EBinOp" PWild (PVar "a") PWild PWild)) (EApp (EVar "mainBodyLoc") (EVar "a")))
 (DFunDef false "mainBodyLoc" ((PCon "EUnOp" PWild (PVar "a") PWild)) (EApp (EVar "mainBodyLoc") (EVar "a")))
 (DFunDef false "mainBodyLoc" ((PCon "EFieldAccess" (PVar "a") PWild PWild)) (EApp (EVar "mainBodyLoc") (EVar "a")))
-(DFunDef false "mainBodyLoc" ((PCon "EIndex" (PVar "a") PWild PWild)) (EApp (EVar "mainBodyLoc") (EVar "a")))
-(DFunDef false "mainBodyLoc" ((PCon "ESlice" (PVar "a") PWild PWild PWild PWild)) (EApp (EVar "mainBodyLoc") (EVar "a")))
+(DFunDef false "mainBodyLoc" ((PCon "EIndex" (PVar "a") PWild)) (EApp (EVar "mainBodyLoc") (EVar "a")))
+(DFunDef false "mainBodyLoc" ((PCon "ESlice" (PVar "a") PWild PWild PWild)) (EApp (EVar "mainBodyLoc") (EVar "a")))
 (DFunDef false "mainBodyLoc" (PWild) (EVar "None"))
 (DTypeSig true "mainArityMsg" (TyCon "String"))
 (DFunDef false "mainArityMsg" () (ELit (LString "`main` must be a value, not a function; write `main = ...`, not `main () = ...`")))

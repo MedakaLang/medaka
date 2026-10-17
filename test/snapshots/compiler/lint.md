@@ -1,5 +1,5 @@
 # META
-source_lines=7225
+source_lines=7222
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -2964,10 +2964,10 @@ childExprs (EListLit es) = es
 childExprs (EArrayLit es) = es
 childExprs (ERangeList lo hi _) = [lo, hi]
 childExprs (ERangeArray lo hi _) = [lo, hi]
-childExprs (ESlice e lo hi _ _) = [e, lo, hi]
+childExprs (ESlice e lo hi _) = [e, lo, hi]
 childExprs (ELetGroup binds body) = flatMap letBindExprs binds ++ [body]
 childExprs (ESection s) = sectionExprs s
-childExprs (EIndex a i _) = [a, i]
+childExprs (EIndex a i) = [a, i]
 childExprs (EAnnot e _) = [e]
 childExprs (EHeadAnnot e _) = [e]
 childExprs (EBlock stmts) = flatMap stmtExprs stmts
@@ -3064,18 +3064,17 @@ rewriteBindExpr orc (ERangeList lo hi i) =
   ERangeList (rewriteBindExpr orc lo) (rewriteBindExpr orc hi) i
 rewriteBindExpr orc (ERangeArray lo hi i) =
   ERangeArray (rewriteBindExpr orc lo) (rewriteBindExpr orc hi) i
-rewriteBindExpr orc (ESlice e lo hi i r) =
+rewriteBindExpr orc (ESlice e lo hi i) =
   ESlice
     (rewriteBindExpr orc e)
     (rewriteBindExpr orc lo)
     (rewriteBindExpr orc hi)
     i
-    r
 rewriteBindExpr orc (ELetGroup binds body) =
   ELetGroup (map (rewriteBindLet orc) binds) (rewriteBindExpr orc body)
 rewriteBindExpr orc (ESection s) = ESection (rewriteBindSection orc s)
-rewriteBindExpr orc (EIndex a i r) =
-  EIndex (rewriteBindExpr orc a) (rewriteBindExpr orc i) r
+rewriteBindExpr orc (EIndex a i) =
+  EIndex (rewriteBindExpr orc a) (rewriteBindExpr orc i)
 rewriteBindExpr orc (EAnnot e t) = EAnnot (rewriteBindExpr orc e) t
 rewriteBindExpr orc (EHeadAnnot e t) = EHeadAnnot (rewriteBindExpr orc e) t
 rewriteBindExpr orc (EBlock stmts) =
@@ -3362,12 +3361,12 @@ rewriteLamExpr (ERangeList lo hi i) =
   ERangeList (rewriteLamExpr lo) (rewriteLamExpr hi) i
 rewriteLamExpr (ERangeArray lo hi i) =
   ERangeArray (rewriteLamExpr lo) (rewriteLamExpr hi) i
-rewriteLamExpr (ESlice e lo hi i r) =
-  ESlice (rewriteLamExpr e) (rewriteLamExpr lo) (rewriteLamExpr hi) i r
+rewriteLamExpr (ESlice e lo hi i) =
+  ESlice (rewriteLamExpr e) (rewriteLamExpr lo) (rewriteLamExpr hi) i
 rewriteLamExpr (ELetGroup binds body) =
   ELetGroup (map rewriteLamLet binds) (rewriteLamExpr body)
 rewriteLamExpr (ESection s) = ESection (rewriteLamSection s)
-rewriteLamExpr (EIndex a i r) = EIndex (rewriteLamExpr a) (rewriteLamExpr i) r
+rewriteLamExpr (EIndex a i) = EIndex (rewriteLamExpr a) (rewriteLamExpr i)
 rewriteLamExpr (EAnnot e t) = EAnnot (rewriteLamExpr e) t
 rewriteLamExpr (EHeadAnnot e t) = EHeadAnnot (rewriteLamExpr e) t
 rewriteLamExpr (EBlock stmts) = EBlock (map rewriteLamStmt stmts)
@@ -3603,18 +3602,17 @@ rewriteIfMaxMinExpr (ERangeList lo hi i) =
   ERangeList (rewriteIfMaxMinExpr lo) (rewriteIfMaxMinExpr hi) i
 rewriteIfMaxMinExpr (ERangeArray lo hi i) =
   ERangeArray (rewriteIfMaxMinExpr lo) (rewriteIfMaxMinExpr hi) i
-rewriteIfMaxMinExpr (ESlice e lo hi i r) =
+rewriteIfMaxMinExpr (ESlice e lo hi i) =
   ESlice
     (rewriteIfMaxMinExpr e)
     (rewriteIfMaxMinExpr lo)
     (rewriteIfMaxMinExpr hi)
     i
-    r
 rewriteIfMaxMinExpr (ELetGroup binds body) =
   ELetGroup (map rewriteIfMaxMinLet binds) (rewriteIfMaxMinExpr body)
 rewriteIfMaxMinExpr (ESection s) = ESection (rewriteIfMaxMinSection s)
-rewriteIfMaxMinExpr (EIndex a i r) =
-  EIndex (rewriteIfMaxMinExpr a) (rewriteIfMaxMinExpr i) r
+rewriteIfMaxMinExpr (EIndex a i) =
+  EIndex (rewriteIfMaxMinExpr a) (rewriteIfMaxMinExpr i)
 rewriteIfMaxMinExpr (EAnnot e t) = EAnnot (rewriteIfMaxMinExpr e) t
 rewriteIfMaxMinExpr (EHeadAnnot e t) = EHeadAnnot (rewriteIfMaxMinExpr e) t
 rewriteIfMaxMinExpr (EBlock stmts) = EBlock (map rewriteIfMaxMinStmt stmts)
@@ -3874,21 +3872,20 @@ rewriteAndThenPureMapExpr (ERangeList lo hi i) =
   ERangeList (rewriteAndThenPureMapExpr lo) (rewriteAndThenPureMapExpr hi) i
 rewriteAndThenPureMapExpr (ERangeArray lo hi i) =
   ERangeArray (rewriteAndThenPureMapExpr lo) (rewriteAndThenPureMapExpr hi) i
-rewriteAndThenPureMapExpr (ESlice e lo hi i r) =
+rewriteAndThenPureMapExpr (ESlice e lo hi i) =
   ESlice
     (rewriteAndThenPureMapExpr e)
     (rewriteAndThenPureMapExpr lo)
     (rewriteAndThenPureMapExpr hi)
     i
-    r
 rewriteAndThenPureMapExpr (ELetGroup binds body) =
   ELetGroup
     (map rewriteAndThenPureMapLet binds)
     (rewriteAndThenPureMapExpr body)
 rewriteAndThenPureMapExpr (ESection s) =
   ESection (rewriteAndThenPureMapSection s)
-rewriteAndThenPureMapExpr (EIndex a i r) =
-  EIndex (rewriteAndThenPureMapExpr a) (rewriteAndThenPureMapExpr i) r
+rewriteAndThenPureMapExpr (EIndex a i) =
+  EIndex (rewriteAndThenPureMapExpr a) (rewriteAndThenPureMapExpr i)
 rewriteAndThenPureMapExpr (EAnnot e t) = EAnnot (rewriteAndThenPureMapExpr e) t
 rewriteAndThenPureMapExpr (EHeadAnnot e t) =
   EHeadAnnot (rewriteAndThenPureMapExpr e) t
@@ -8025,10 +8022,10 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "childExprs" ((PCon "EArrayLit" (PVar "es"))) (EVar "es"))
 (DFunDef false "childExprs" ((PCon "ERangeList" (PVar "lo") (PVar "hi") PWild)) (EListLit (EVar "lo") (EVar "hi")))
 (DFunDef false "childExprs" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EListLit (EVar "lo") (EVar "hi")))
-(DFunDef false "childExprs" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") PWild PWild)) (EListLit (EVar "e") (EVar "lo") (EVar "hi")))
+(DFunDef false "childExprs" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") PWild)) (EListLit (EVar "e") (EVar "lo") (EVar "hi")))
 (DFunDef false "childExprs" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "letBindExprs")) (EVar "binds")) (EListLit (EVar "body"))))
 (DFunDef false "childExprs" ((PCon "ESection" (PVar "s"))) (EApp (EVar "sectionExprs") (EVar "s")))
-(DFunDef false "childExprs" ((PCon "EIndex" (PVar "a") (PVar "i") PWild)) (EListLit (EVar "a") (EVar "i")))
+(DFunDef false "childExprs" ((PCon "EIndex" (PVar "a") (PVar "i"))) (EListLit (EVar "a") (EVar "i")))
 (DFunDef false "childExprs" ((PCon "EAnnot" (PVar "e") PWild)) (EListLit (EVar "e")))
 (DFunDef false "childExprs" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EListLit (EVar "e")))
 (DFunDef false "childExprs" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "stmtExprs")) (EVar "stmts")))
@@ -8091,10 +8088,10 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EVar "map") (EApp (EVar "rewriteBindExpr") (EVar "orc"))) (EVar "es"))))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "lo"))) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "hi"))) (EVar "i")))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "lo"))) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "hi"))) (EVar "i")))
-(DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "e"))) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "lo"))) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "hi"))) (EVar "i")) (EVar "r")))
+(DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "e"))) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "lo"))) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "hi"))) (EVar "i")))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EVar "map") (EApp (EVar "rewriteBindLet") (EVar "orc"))) (EVar "binds"))) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "body"))))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "ESection" (PVar "s"))) (EApp (EVar "ESection") (EApp (EApp (EVar "rewriteBindSection") (EVar "orc")) (EVar "s"))))
-(DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EIndex" (PVar "a") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "a"))) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "i"))) (EVar "r")))
+(DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "a"))) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "i"))))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EApp (EVar "collapseBindTail") (EVar "orc")) (EVar "False")) (EApp (EApp (EVar "map") (EApp (EVar "rewriteBindStmt") (EVar "orc"))) (EVar "stmts")))))
@@ -8215,10 +8212,10 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "rewriteLamExpr" ((PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EVar "map") (EVar "rewriteLamExpr")) (EVar "es"))))
 (DFunDef false "rewriteLamExpr" ((PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EVar "rewriteLamExpr") (EVar "lo"))) (EApp (EVar "rewriteLamExpr") (EVar "hi"))) (EVar "i")))
 (DFunDef false "rewriteLamExpr" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EVar "rewriteLamExpr") (EVar "lo"))) (EApp (EVar "rewriteLamExpr") (EVar "hi"))) (EVar "i")))
-(DFunDef false "rewriteLamExpr" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EVar "rewriteLamExpr") (EVar "e"))) (EApp (EVar "rewriteLamExpr") (EVar "lo"))) (EApp (EVar "rewriteLamExpr") (EVar "hi"))) (EVar "i")) (EVar "r")))
+(DFunDef false "rewriteLamExpr" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EVar "rewriteLamExpr") (EVar "e"))) (EApp (EVar "rewriteLamExpr") (EVar "lo"))) (EApp (EVar "rewriteLamExpr") (EVar "hi"))) (EVar "i")))
 (DFunDef false "rewriteLamExpr" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EVar "map") (EVar "rewriteLamLet")) (EVar "binds"))) (EApp (EVar "rewriteLamExpr") (EVar "body"))))
 (DFunDef false "rewriteLamExpr" ((PCon "ESection" (PVar "s"))) (EApp (EVar "ESection") (EApp (EVar "rewriteLamSection") (EVar "s"))))
-(DFunDef false "rewriteLamExpr" ((PCon "EIndex" (PVar "a") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EVar "rewriteLamExpr") (EVar "a"))) (EApp (EVar "rewriteLamExpr") (EVar "i"))) (EVar "r")))
+(DFunDef false "rewriteLamExpr" ((PCon "EIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EVar "rewriteLamExpr") (EVar "a"))) (EApp (EVar "rewriteLamExpr") (EVar "i"))))
 (DFunDef false "rewriteLamExpr" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "rewriteLamExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteLamExpr" ((PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EVar "rewriteLamExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteLamExpr" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "map") (EVar "rewriteLamStmt")) (EVar "stmts"))))
@@ -8317,10 +8314,10 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EVar "map") (EVar "rewriteIfMaxMinExpr")) (EVar "es"))))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "lo"))) (EApp (EVar "rewriteIfMaxMinExpr") (EVar "hi"))) (EVar "i")))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "lo"))) (EApp (EVar "rewriteIfMaxMinExpr") (EVar "hi"))) (EVar "i")))
-(DFunDef false "rewriteIfMaxMinExpr" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "e"))) (EApp (EVar "rewriteIfMaxMinExpr") (EVar "lo"))) (EApp (EVar "rewriteIfMaxMinExpr") (EVar "hi"))) (EVar "i")) (EVar "r")))
+(DFunDef false "rewriteIfMaxMinExpr" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "e"))) (EApp (EVar "rewriteIfMaxMinExpr") (EVar "lo"))) (EApp (EVar "rewriteIfMaxMinExpr") (EVar "hi"))) (EVar "i")))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EVar "map") (EVar "rewriteIfMaxMinLet")) (EVar "binds"))) (EApp (EVar "rewriteIfMaxMinExpr") (EVar "body"))))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "ESection" (PVar "s"))) (EApp (EVar "ESection") (EApp (EVar "rewriteIfMaxMinSection") (EVar "s"))))
-(DFunDef false "rewriteIfMaxMinExpr" ((PCon "EIndex" (PVar "a") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "a"))) (EApp (EVar "rewriteIfMaxMinExpr") (EVar "i"))) (EVar "r")))
+(DFunDef false "rewriteIfMaxMinExpr" ((PCon "EIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "a"))) (EApp (EVar "rewriteIfMaxMinExpr") (EVar "i"))))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "map") (EVar "rewriteIfMaxMinStmt")) (EVar "stmts"))))
@@ -8429,10 +8426,10 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EVar "map") (EVar "rewriteAndThenPureMapExpr")) (EVar "es"))))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "lo"))) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "hi"))) (EVar "i")))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "lo"))) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "hi"))) (EVar "i")))
-(DFunDef false "rewriteAndThenPureMapExpr" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "e"))) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "lo"))) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "hi"))) (EVar "i")) (EVar "r")))
+(DFunDef false "rewriteAndThenPureMapExpr" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "e"))) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "lo"))) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "hi"))) (EVar "i")))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EVar "map") (EVar "rewriteAndThenPureMapLet")) (EVar "binds"))) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "body"))))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "ESection" (PVar "s"))) (EApp (EVar "ESection") (EApp (EVar "rewriteAndThenPureMapSection") (EVar "s"))))
-(DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EIndex" (PVar "a") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "a"))) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "i"))) (EVar "r")))
+(DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "a"))) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "i"))))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "map") (EVar "rewriteAndThenPureMapStmt")) (EVar "stmts"))))
@@ -10110,10 +10107,10 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "childExprs" ((PCon "EArrayLit" (PVar "es"))) (EVar "es"))
 (DFunDef false "childExprs" ((PCon "ERangeList" (PVar "lo") (PVar "hi") PWild)) (EListLit (EVar "lo") (EVar "hi")))
 (DFunDef false "childExprs" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EListLit (EVar "lo") (EVar "hi")))
-(DFunDef false "childExprs" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") PWild PWild)) (EListLit (EVar "e") (EVar "lo") (EVar "hi")))
+(DFunDef false "childExprs" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") PWild)) (EListLit (EVar "e") (EVar "lo") (EVar "hi")))
 (DFunDef false "childExprs" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "letBindExprs")) (EVar "binds")) (EListLit (EVar "body"))))
 (DFunDef false "childExprs" ((PCon "ESection" (PVar "s"))) (EApp (EVar "sectionExprs") (EVar "s")))
-(DFunDef false "childExprs" ((PCon "EIndex" (PVar "a") (PVar "i") PWild)) (EListLit (EVar "a") (EVar "i")))
+(DFunDef false "childExprs" ((PCon "EIndex" (PVar "a") (PVar "i"))) (EListLit (EVar "a") (EVar "i")))
 (DFunDef false "childExprs" ((PCon "EAnnot" (PVar "e") PWild)) (EListLit (EVar "e")))
 (DFunDef false "childExprs" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EListLit (EVar "e")))
 (DFunDef false "childExprs" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "stmtExprs")) (EVar "stmts")))
@@ -10176,10 +10173,10 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteBindExpr") (EVar "orc"))) (EVar "es"))))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "lo"))) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "hi"))) (EVar "i")))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "lo"))) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "hi"))) (EVar "i")))
-(DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "e"))) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "lo"))) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "hi"))) (EVar "i")) (EVar "r")))
+(DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "e"))) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "lo"))) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "hi"))) (EVar "i")))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteBindLet") (EVar "orc"))) (EVar "binds"))) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "body"))))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "ESection" (PVar "s"))) (EApp (EVar "ESection") (EApp (EApp (EVar "rewriteBindSection") (EVar "orc")) (EVar "s"))))
-(DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EIndex" (PVar "a") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "a"))) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "i"))) (EVar "r")))
+(DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "a"))) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "i"))))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EApp (EVar "collapseBindTail") (EVar "orc")) (EVar "False")) (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteBindStmt") (EVar "orc"))) (EVar "stmts")))))
@@ -10300,10 +10297,10 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "rewriteLamExpr" ((PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EMethodRef "map") (EVar "rewriteLamExpr")) (EVar "es"))))
 (DFunDef false "rewriteLamExpr" ((PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EVar "rewriteLamExpr") (EVar "lo"))) (EApp (EVar "rewriteLamExpr") (EVar "hi"))) (EVar "i")))
 (DFunDef false "rewriteLamExpr" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EVar "rewriteLamExpr") (EVar "lo"))) (EApp (EVar "rewriteLamExpr") (EVar "hi"))) (EVar "i")))
-(DFunDef false "rewriteLamExpr" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EVar "rewriteLamExpr") (EVar "e"))) (EApp (EVar "rewriteLamExpr") (EVar "lo"))) (EApp (EVar "rewriteLamExpr") (EVar "hi"))) (EVar "i")) (EVar "r")))
+(DFunDef false "rewriteLamExpr" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EVar "rewriteLamExpr") (EVar "e"))) (EApp (EVar "rewriteLamExpr") (EVar "lo"))) (EApp (EVar "rewriteLamExpr") (EVar "hi"))) (EVar "i")))
 (DFunDef false "rewriteLamExpr" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EMethodRef "map") (EVar "rewriteLamLet")) (EVar "binds"))) (EApp (EVar "rewriteLamExpr") (EVar "body"))))
 (DFunDef false "rewriteLamExpr" ((PCon "ESection" (PVar "s"))) (EApp (EVar "ESection") (EApp (EVar "rewriteLamSection") (EVar "s"))))
-(DFunDef false "rewriteLamExpr" ((PCon "EIndex" (PVar "a") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EVar "rewriteLamExpr") (EVar "a"))) (EApp (EVar "rewriteLamExpr") (EVar "i"))) (EVar "r")))
+(DFunDef false "rewriteLamExpr" ((PCon "EIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EVar "rewriteLamExpr") (EVar "a"))) (EApp (EVar "rewriteLamExpr") (EVar "i"))))
 (DFunDef false "rewriteLamExpr" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "rewriteLamExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteLamExpr" ((PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EVar "rewriteLamExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteLamExpr" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EMethodRef "map") (EVar "rewriteLamStmt")) (EVar "stmts"))))
@@ -10402,10 +10399,10 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EMethodRef "map") (EVar "rewriteIfMaxMinExpr")) (EVar "es"))))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "lo"))) (EApp (EVar "rewriteIfMaxMinExpr") (EVar "hi"))) (EVar "i")))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "lo"))) (EApp (EVar "rewriteIfMaxMinExpr") (EVar "hi"))) (EVar "i")))
-(DFunDef false "rewriteIfMaxMinExpr" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "e"))) (EApp (EVar "rewriteIfMaxMinExpr") (EVar "lo"))) (EApp (EVar "rewriteIfMaxMinExpr") (EVar "hi"))) (EVar "i")) (EVar "r")))
+(DFunDef false "rewriteIfMaxMinExpr" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "e"))) (EApp (EVar "rewriteIfMaxMinExpr") (EVar "lo"))) (EApp (EVar "rewriteIfMaxMinExpr") (EVar "hi"))) (EVar "i")))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EMethodRef "map") (EVar "rewriteIfMaxMinLet")) (EVar "binds"))) (EApp (EVar "rewriteIfMaxMinExpr") (EVar "body"))))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "ESection" (PVar "s"))) (EApp (EVar "ESection") (EApp (EVar "rewriteIfMaxMinSection") (EVar "s"))))
-(DFunDef false "rewriteIfMaxMinExpr" ((PCon "EIndex" (PVar "a") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "a"))) (EApp (EVar "rewriteIfMaxMinExpr") (EVar "i"))) (EVar "r")))
+(DFunDef false "rewriteIfMaxMinExpr" ((PCon "EIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "a"))) (EApp (EVar "rewriteIfMaxMinExpr") (EVar "i"))))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EMethodRef "map") (EVar "rewriteIfMaxMinStmt")) (EVar "stmts"))))
@@ -10514,10 +10511,10 @@ preludeShadowFinding name loc = Finding {
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EMethodRef "map") (EVar "rewriteAndThenPureMapExpr")) (EVar "es"))))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "lo"))) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "hi"))) (EVar "i")))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "lo"))) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "hi"))) (EVar "i")))
-(DFunDef false "rewriteAndThenPureMapExpr" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "e"))) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "lo"))) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "hi"))) (EVar "i")) (EVar "r")))
+(DFunDef false "rewriteAndThenPureMapExpr" ((PCon "ESlice" (PVar "e") (PVar "lo") (PVar "hi") (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "e"))) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "lo"))) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "hi"))) (EVar "i")))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EMethodRef "map") (EVar "rewriteAndThenPureMapLet")) (EVar "binds"))) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "body"))))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "ESection" (PVar "s"))) (EApp (EVar "ESection") (EApp (EVar "rewriteAndThenPureMapSection") (EVar "s"))))
-(DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EIndex" (PVar "a") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "a"))) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "i"))) (EVar "r")))
+(DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "a"))) (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "i"))))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EMethodRef "map") (EVar "rewriteAndThenPureMapStmt")) (EVar "stmts"))))

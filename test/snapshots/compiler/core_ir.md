@@ -133,15 +133,15 @@ public export data CExpr =
   | CRangeArray CExpr CExpr Bool
   | CIndex CExpr CExpr
   | CSlice CExpr CExpr CExpr Bool
-  -- String-receiver index/slice (lowered from EIndex/ESlice whose receiver-kind
-  -- discriminator is "String").  The String runtime rep is a packed UTF-8 cell,
+  -- String-receiver index/slice.  No lowering produces these any more (#4261).
+  -- The String runtime rep is a packed UTF-8 cell,
   -- NOT an i64-element array, so these emit codepoint-indexed char extract /
   -- substring (via @mdk_string_to_chars / @mdk_string_slice) instead of the
   -- array GEP path.  CIndex/CSlice stay array-only (byte-identical emit).
   | CStringIndex CExpr CExpr
   | CStringSlice CExpr CExpr CExpr Bool
-  -- List-receiver index/slice (lowered from EIndex/ESlice whose receiver-kind
-  -- discriminator is "List").  A List is a chain of Cons cells ([tag|head@8|
+  -- List-receiver index/slice; likewise produced by no lowering (#4261).
+  -- A List is a chain of Cons cells ([tag|head@8|
   -- tail@16], Nil = odd immediate), NOT a contiguous i64-element array, so these
   -- emit a cons-cell walk (via @mdk_list_index / @mdk_list_slice) instead of the
   -- array GEP path.  CIndex/CSlice stay array-only (byte-identical emit).

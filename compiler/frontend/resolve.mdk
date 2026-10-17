@@ -919,11 +919,11 @@ checkExpr cur env scope (ERangeList lo hi _) =
   checkExpr cur env scope lo ++ checkExpr cur env scope hi
 checkExpr cur env scope (ERangeArray lo hi _) =
   checkExpr cur env scope lo ++ checkExpr cur env scope hi
-checkExpr cur env scope (ESlice e0 lo hi _ _) =
+checkExpr cur env scope (ESlice e0 lo hi _) =
   checkExpr cur env scope e0
     ++ checkExpr cur env scope lo
     ++ checkExpr cur env scope hi
-checkExpr cur env scope (EIndex e0 i _) =
+checkExpr cur env scope (EIndex e0 i) =
   checkExpr cur env scope e0 ++ checkExpr cur env scope i
 checkExpr cur env scope (EAnnot e0 t) =
   checkExpr cur env scope e0 ++ checkType cur env t
@@ -2541,8 +2541,8 @@ firstExprLoc (ERangeList lo hi _) =
   orElseLoc (firstExprLoc lo) (firstExprLoc hi)
 firstExprLoc (ERangeArray lo hi _) =
   orElseLoc (firstExprLoc lo) (firstExprLoc hi)
-firstExprLoc (EIndex e0 i _) = orElseLoc (firstExprLoc e0) (firstExprLoc i)
-firstExprLoc (ESlice e0 lo hi _ _) =
+firstExprLoc (EIndex e0 i) = orElseLoc (firstExprLoc e0) (firstExprLoc i)
+firstExprLoc (ESlice e0 lo hi _) =
   orElseLoc (firstExprLoc e0) (orElseLoc (firstExprLoc lo) (firstExprLoc hi))
 firstExprLoc (EBlock stmts) = firstStmtLoc stmts
 firstExprLoc (EDo _ stmts) = firstStmtLoc stmts
@@ -5343,9 +5343,9 @@ stampExpr env (ERangeList lo hi incl) =
   ERangeList (stampExpr env lo) (stampExpr env hi) incl
 stampExpr env (ERangeArray lo hi incl) =
   ERangeArray (stampExpr env lo) (stampExpr env hi) incl
-stampExpr env (ESlice e0 lo hi incl r) =
-  ESlice (stampExpr env e0) (stampExpr env lo) (stampExpr env hi) incl r
-stampExpr env (EIndex e0 i r) = EIndex (stampExpr env e0) (stampExpr env i) r
+stampExpr env (ESlice e0 lo hi incl) =
+  ESlice (stampExpr env e0) (stampExpr env lo) (stampExpr env hi) incl
+stampExpr env (EIndex e0 i) = EIndex (stampExpr env e0) (stampExpr env i)
 stampExpr env (EAnnot e0 t) = EAnnot (stampExpr env e0) t
 stampExpr env (EHeadAnnot e0 t) = EHeadAnnot (stampExpr env e0) t
 stampExpr env (EBlock stmts) = EBlock (stampStmts env stmts)
@@ -6297,9 +6297,9 @@ unqualExpr ctx (ERangeList lo hi incl) =
   ERangeList (unqualExpr ctx lo) (unqualExpr ctx hi) incl
 unqualExpr ctx (ERangeArray lo hi incl) =
   ERangeArray (unqualExpr ctx lo) (unqualExpr ctx hi) incl
-unqualExpr ctx (ESlice e0 lo hi incl r) =
-  ESlice (unqualExpr ctx e0) (unqualExpr ctx lo) (unqualExpr ctx hi) incl r
-unqualExpr ctx (EIndex e0 i r) = EIndex (unqualExpr ctx e0) (unqualExpr ctx i) r
+unqualExpr ctx (ESlice e0 lo hi incl) =
+  ESlice (unqualExpr ctx e0) (unqualExpr ctx lo) (unqualExpr ctx hi) incl
+unqualExpr ctx (EIndex e0 i) = EIndex (unqualExpr ctx e0) (unqualExpr ctx i)
 unqualExpr ctx (EAnnot e0 t) = EAnnot (unqualExpr ctx e0) t
 unqualExpr ctx (EHeadAnnot e0 t) = EHeadAnnot (unqualExpr ctx e0) t
 unqualExpr ctx (EBlock stmts) = EBlock (unqualStmts ctx stmts)

@@ -1,6 +1,6 @@
 {- | Architecture boundary pins: layering, module-level cells, the hooks record,
-   and the import closures of the leaf modules (law A6, G3 of the architecture
-   playbook).
+   the AST's cell-free shape, and the import closures of the leaf modules (law
+   A6, G3 of the architecture playbook).
 
    Scope is every `compiler/**/*.mdk` except `*_test.mdk`; a module id is the
    path under `compiler/` without `.mdk`, `/` read as `.`. Only column-0 import
@@ -191,6 +191,28 @@ cellRows mods =
         if n > 0 then Some "\{m}\t\{n}" else None)
       mods)
 
+-- Lines of `frontend.ast` that hold the word `Ref` (as `grep -nw`) outside a
+-- `--` comment. Zero means the AST carries no mutable cell on any node; -1 when
+-- the module is absent, so a rename cannot satisfy the pin vacuously.
+astRefFields : List (String, List String) -> Int
+astRefFields mods = match filter (p => fst p == "frontend.ast") mods
+  [] => -1
+  (_, ls) :: _ => length (filter hasRefLine ls)
+
+hasRefLine : String -> Bool
+hasRefLine l =
+  not (startsWith "--" (trimLeft l)) && refWordAt False (toList (toChars l))
+
+-- `Ref` at a word boundary: no word character before it (`prevWord`) and none
+-- after it (`refHead`).
+refWordAt : Bool -> List Char -> Bool
+refWordAt _ [] = False
+refWordAt prevWord (c :: cs) =
+  if not prevWord && refHead "Ref" (fromChars (c :: cs)) then
+    True
+  else
+    refWordAt (isAlphaNum c || c == '_') cs
+
 -- Fields of the `data Hooks` extent of support/hooks.mdk: ` : ` annotations of
 -- a record, else the constructor arguments of a positional declaration. Zero
 -- while the type is absent.
@@ -278,6 +300,9 @@ test "arch_boundaries: module-level cells match cells.golden" =
 
 test "arch_boundaries: hook field count matches hooks.golden" =
   pin "hooks.golden" ["hooks.fields\t\{hooksFieldCount loadModules}"]
+
+test "arch_boundaries: ast.mdk declares no Ref field matches ast_cells.golden" =
+  pin "ast_cells.golden" ["ast_ref_fields\t\{astRefFields loadModules}"]
 
 test "arch_boundaries: no types/ module outside the allowlist reaches support.hooks" =
   let g = buildGraph loadModules

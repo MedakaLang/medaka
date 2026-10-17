@@ -923,11 +923,11 @@ checkExpr cur env scope (ERangeList lo hi _) =
   checkExpr cur env scope lo ++ checkExpr cur env scope hi
 checkExpr cur env scope (ERangeArray lo hi _) =
   checkExpr cur env scope lo ++ checkExpr cur env scope hi
-checkExpr cur env scope (ESlice e0 lo hi _ _) =
+checkExpr cur env scope (ESlice e0 lo hi _) =
   checkExpr cur env scope e0
     ++ checkExpr cur env scope lo
     ++ checkExpr cur env scope hi
-checkExpr cur env scope (EIndex e0 i _) =
+checkExpr cur env scope (EIndex e0 i) =
   checkExpr cur env scope e0 ++ checkExpr cur env scope i
 checkExpr cur env scope (EAnnot e0 t) =
   checkExpr cur env scope e0 ++ checkType cur env t
@@ -2545,8 +2545,8 @@ firstExprLoc (ERangeList lo hi _) =
   orElseLoc (firstExprLoc lo) (firstExprLoc hi)
 firstExprLoc (ERangeArray lo hi _) =
   orElseLoc (firstExprLoc lo) (firstExprLoc hi)
-firstExprLoc (EIndex e0 i _) = orElseLoc (firstExprLoc e0) (firstExprLoc i)
-firstExprLoc (ESlice e0 lo hi _ _) =
+firstExprLoc (EIndex e0 i) = orElseLoc (firstExprLoc e0) (firstExprLoc i)
+firstExprLoc (ESlice e0 lo hi _) =
   orElseLoc (firstExprLoc e0) (orElseLoc (firstExprLoc lo) (firstExprLoc hi))
 firstExprLoc (EBlock stmts) = firstStmtLoc stmts
 firstExprLoc (EDo _ stmts) = firstStmtLoc stmts
@@ -5347,9 +5347,9 @@ stampExpr env (ERangeList lo hi incl) =
   ERangeList (stampExpr env lo) (stampExpr env hi) incl
 stampExpr env (ERangeArray lo hi incl) =
   ERangeArray (stampExpr env lo) (stampExpr env hi) incl
-stampExpr env (ESlice e0 lo hi incl r) =
-  ESlice (stampExpr env e0) (stampExpr env lo) (stampExpr env hi) incl r
-stampExpr env (EIndex e0 i r) = EIndex (stampExpr env e0) (stampExpr env i) r
+stampExpr env (ESlice e0 lo hi incl) =
+  ESlice (stampExpr env e0) (stampExpr env lo) (stampExpr env hi) incl
+stampExpr env (EIndex e0 i) = EIndex (stampExpr env e0) (stampExpr env i)
 stampExpr env (EAnnot e0 t) = EAnnot (stampExpr env e0) t
 stampExpr env (EHeadAnnot e0 t) = EHeadAnnot (stampExpr env e0) t
 stampExpr env (EBlock stmts) = EBlock (stampStmts env stmts)
@@ -6301,9 +6301,9 @@ unqualExpr ctx (ERangeList lo hi incl) =
   ERangeList (unqualExpr ctx lo) (unqualExpr ctx hi) incl
 unqualExpr ctx (ERangeArray lo hi incl) =
   ERangeArray (unqualExpr ctx lo) (unqualExpr ctx hi) incl
-unqualExpr ctx (ESlice e0 lo hi incl r) =
-  ESlice (unqualExpr ctx e0) (unqualExpr ctx lo) (unqualExpr ctx hi) incl r
-unqualExpr ctx (EIndex e0 i r) = EIndex (unqualExpr ctx e0) (unqualExpr ctx i) r
+unqualExpr ctx (ESlice e0 lo hi incl) =
+  ESlice (unqualExpr ctx e0) (unqualExpr ctx lo) (unqualExpr ctx hi) incl
+unqualExpr ctx (EIndex e0 i) = EIndex (unqualExpr ctx e0) (unqualExpr ctx i)
 unqualExpr ctx (EAnnot e0 t) = EAnnot (unqualExpr ctx e0) t
 unqualExpr ctx (EHeadAnnot e0 t) = EHeadAnnot (unqualExpr ctx e0) t
 unqualExpr ctx (EBlock stmts) = EBlock (unqualStmts ctx stmts)
@@ -7237,8 +7237,8 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope"))) (EVar "es")))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "ERangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "lo")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "hi"))))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "lo")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "hi"))))
-(DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e0")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "lo"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "hi"))))
-(DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EIndex" (PVar "e0") (PVar "i") PWild)) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e0")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "i"))))
+(DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e0")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "lo"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "hi"))))
+(DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EIndex" (PVar "e0") (PVar "i"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e0")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "i"))))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e0")) (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "t"))))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e0")) (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "t"))))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "checkStmts") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "stmts")))
@@ -7714,8 +7714,8 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "firstExprLoc" ((PCon "EHeadAnnot" (PVar "e0") PWild)) (EApp (EVar "firstExprLoc") (EVar "e0")))
 (DFunDef false "firstExprLoc" ((PCon "ERangeList" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "lo"))) (EApp (EVar "firstExprLoc") (EVar "hi"))))
 (DFunDef false "firstExprLoc" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "lo"))) (EApp (EVar "firstExprLoc") (EVar "hi"))))
-(DFunDef false "firstExprLoc" ((PCon "EIndex" (PVar "e0") (PVar "i") PWild)) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "e0"))) (EApp (EVar "firstExprLoc") (EVar "i"))))
-(DFunDef false "firstExprLoc" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") PWild PWild)) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "e0"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "lo"))) (EApp (EVar "firstExprLoc") (EVar "hi")))))
+(DFunDef false "firstExprLoc" ((PCon "EIndex" (PVar "e0") (PVar "i"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "e0"))) (EApp (EVar "firstExprLoc") (EVar "i"))))
+(DFunDef false "firstExprLoc" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "e0"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "lo"))) (EApp (EVar "firstExprLoc") (EVar "hi")))))
 (DFunDef false "firstExprLoc" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "firstStmtLoc") (EVar "stmts")))
 (DFunDef false "firstExprLoc" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EVar "firstStmtLoc") (EVar "stmts")))
 (DFunDef false "firstExprLoc" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "firstExprLoc") (EVar "e")))
@@ -8300,8 +8300,8 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EVar "map") (EApp (EVar "stampExpr") (EVar "env"))) (EVar "es"))))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "hi"))) (EVar "incl")))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "stampExpr" ((PVar "env") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e0"))) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "hi"))) (EVar "incl")) (EVar "r")))
-(DFunDef false "stampExpr" ((PVar "env") (PCon "EIndex" (PVar "e0") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e0"))) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "i"))) (EVar "r")))
+(DFunDef false "stampExpr" ((PVar "env") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e0"))) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "stampExpr" ((PVar "env") (PCon "EIndex" (PVar "e0") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e0"))) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "i"))))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "stampStmts") (EVar "env")) (EVar "stmts"))))
@@ -8560,8 +8560,8 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "unqualExpr" ((PVar "ctx") (PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EVar "map") (EApp (EVar "unqualExpr") (EVar "ctx"))) (EVar "es"))))
 (DFunDef false "unqualExpr" ((PVar "ctx") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "lo"))) (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "hi"))) (EVar "incl")))
 (DFunDef false "unqualExpr" ((PVar "ctx") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "lo"))) (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "unqualExpr" ((PVar "ctx") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "e0"))) (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "lo"))) (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "hi"))) (EVar "incl")) (EVar "r")))
-(DFunDef false "unqualExpr" ((PVar "ctx") (PCon "EIndex" (PVar "e0") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "e0"))) (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "i"))) (EVar "r")))
+(DFunDef false "unqualExpr" ((PVar "ctx") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "e0"))) (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "lo"))) (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "unqualExpr" ((PVar "ctx") (PCon "EIndex" (PVar "e0") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "e0"))) (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "i"))))
 (DFunDef false "unqualExpr" ((PVar "ctx") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "unqualExpr" ((PVar "ctx") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "unqualExpr" ((PVar "ctx") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "unqualStmts") (EVar "ctx")) (EVar "stmts"))))
@@ -8877,8 +8877,8 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope"))) (EVar "es")))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "ERangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "lo")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "hi"))))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "lo")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "hi"))))
-(DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e0")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "lo"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "hi"))))
-(DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EIndex" (PVar "e0") (PVar "i") PWild)) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e0")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "i"))))
+(DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e0")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "lo"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "hi"))))
+(DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EIndex" (PVar "e0") (PVar "i"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e0")) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "i"))))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e0")) (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "t"))))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e0")) (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "t"))))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "checkStmts") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "stmts")))
@@ -9354,8 +9354,8 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "firstExprLoc" ((PCon "EHeadAnnot" (PVar "e0") PWild)) (EApp (EVar "firstExprLoc") (EVar "e0")))
 (DFunDef false "firstExprLoc" ((PCon "ERangeList" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "lo"))) (EApp (EVar "firstExprLoc") (EVar "hi"))))
 (DFunDef false "firstExprLoc" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "lo"))) (EApp (EVar "firstExprLoc") (EVar "hi"))))
-(DFunDef false "firstExprLoc" ((PCon "EIndex" (PVar "e0") (PVar "i") PWild)) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "e0"))) (EApp (EVar "firstExprLoc") (EVar "i"))))
-(DFunDef false "firstExprLoc" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") PWild PWild)) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "e0"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "lo"))) (EApp (EVar "firstExprLoc") (EVar "hi")))))
+(DFunDef false "firstExprLoc" ((PCon "EIndex" (PVar "e0") (PVar "i"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "e0"))) (EApp (EVar "firstExprLoc") (EVar "i"))))
+(DFunDef false "firstExprLoc" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "e0"))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstExprLoc") (EVar "lo"))) (EApp (EVar "firstExprLoc") (EVar "hi")))))
 (DFunDef false "firstExprLoc" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "firstStmtLoc") (EVar "stmts")))
 (DFunDef false "firstExprLoc" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EVar "firstStmtLoc") (EVar "stmts")))
 (DFunDef false "firstExprLoc" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "firstExprLoc") (EVar "e")))
@@ -9940,8 +9940,8 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EMethodRef "map") (EApp (EVar "stampExpr") (EVar "env"))) (EVar "es"))))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "hi"))) (EVar "incl")))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "stampExpr" ((PVar "env") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e0"))) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "hi"))) (EVar "incl")) (EVar "r")))
-(DFunDef false "stampExpr" ((PVar "env") (PCon "EIndex" (PVar "e0") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e0"))) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "i"))) (EVar "r")))
+(DFunDef false "stampExpr" ((PVar "env") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e0"))) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "stampExpr" ((PVar "env") (PCon "EIndex" (PVar "e0") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e0"))) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "i"))))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "stampStmts") (EVar "env")) (EVar "stmts"))))
@@ -10200,8 +10200,8 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "unqualExpr" ((PVar "ctx") (PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EMethodRef "map") (EApp (EVar "unqualExpr") (EVar "ctx"))) (EVar "es"))))
 (DFunDef false "unqualExpr" ((PVar "ctx") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "lo"))) (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "hi"))) (EVar "incl")))
 (DFunDef false "unqualExpr" ((PVar "ctx") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "lo"))) (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "unqualExpr" ((PVar "ctx") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "e0"))) (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "lo"))) (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "hi"))) (EVar "incl")) (EVar "r")))
-(DFunDef false "unqualExpr" ((PVar "ctx") (PCon "EIndex" (PVar "e0") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "e0"))) (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "i"))) (EVar "r")))
+(DFunDef false "unqualExpr" ((PVar "ctx") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "e0"))) (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "lo"))) (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "unqualExpr" ((PVar "ctx") (PCon "EIndex" (PVar "e0") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "e0"))) (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "i"))))
 (DFunDef false "unqualExpr" ((PVar "ctx") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "unqualExpr" ((PVar "ctx") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EVar "unqualExpr") (EVar "ctx")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "unqualExpr" ((PVar "ctx") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "unqualStmts") (EVar "ctx")) (EVar "stmts"))))

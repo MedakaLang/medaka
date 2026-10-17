@@ -112,10 +112,10 @@ mapChildren g (EVariantUpdate c e0 fs) =
 mapChildren g (EArrayLit es) = EArrayLit (map g es)
 mapChildren g (EListLit es) = EListLit (map g es)
 mapChildren g (ETuple es) = ETuple (map g es)
-mapChildren g (EIndex e0 i r) = EIndex (g e0) (g i) r
+mapChildren g (EIndex e0 i) = EIndex (g e0) (g i)
 mapChildren g (ERangeList lo hi incl) = ERangeList (g lo) (g hi) incl
 mapChildren g (ERangeArray lo hi incl) = ERangeArray (g lo) (g hi) incl
-mapChildren g (ESlice e0 lo hi incl r) = ESlice (g e0) (g lo) (g hi) incl r
+mapChildren g (ESlice e0 lo hi incl) = ESlice (g e0) (g lo) (g hi) incl
 mapChildren g (EBlock stmts) = EBlock (map (mapDoStmt g) stmts)
 mapChildren g (EDo d stmts) = EDo d (map (mapDoStmt g) stmts)
 mapChildren g (EAnnot e0 t) = EAnnot (g e0) t
@@ -233,7 +233,7 @@ rewriteSugar (EStringInterp parts) = interpToCore parts
 -- is a type error at the call site.
 rewriteSugar (EBinOp ":=" lhs rhs _) = callBin "setRef" lhs rhs
 -- `a[i]` / `a.[i]` (read position) → `index a i` (Index interface dispatch).
-rewriteSugar (EIndex a i _) = callBin "index" a i
+rewriteSugar (EIndex a i) = callBin "index" a i
 -- `a.[lo..hi]` / `a.[lo..=hi]` (slice) → `slice a lo hi'` (Slice interface
 -- dispatch, #670), half-open: the inclusive `..=` form normalizes here to
 -- `slice a lo (sliceInclusiveEnd hi)` (the prelude's `hi + 1`, which stops at
@@ -244,7 +244,7 @@ rewriteSugar (EIndex a i _) = callBin "index" a i
 -- lowering read a String/Int/[] through the Array rep (an S0 run≠build memory
 -- fault).  Pure surface sugar: no dedicated typecheck/eval/lower arm survives
 -- (they become dead — a stray post-desugar ESlice is a loud guard).
-rewriteSugar (ESlice a lo hi incl _) =
+rewriteSugar (ESlice a lo hi incl) =
   let hiEx = if incl then EApp (EVar "sliceInclusiveEnd") hi else hi
   EApp (EApp (EApp (EVar "slice") a) lo) hiEx
 rewriteSugar e = e
@@ -261,7 +261,7 @@ rewriteAssignIndex (EBinOp ":=" lhs v r) =
 rewriteAssignIndex e = e
 
 assignIndexLhs : Expr -> Expr -> Expr -> EvId -> Expr
-assignIndexLhs (EIndex a i _) _ v _ = EApp (callBin "setIndex" a i) v
+assignIndexLhs (EIndex a i) _ v _ = EApp (callBin "setIndex" a i) v
 assignIndexLhs _ lhs v r = EBinOp ":=" lhs v r
 
 -- guard arms → nested if/match, terminated by `__fallthrough__ ()` (fold_right)
@@ -1326,10 +1326,10 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DFunDef false "mapChildren" ((PVar "g") (PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EVar "map") (EVar "g")) (EVar "es"))))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "EListLit" (PVar "es"))) (EApp (EVar "EListLit") (EApp (EApp (EVar "map") (EVar "g")) (EVar "es"))))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "ETuple" (PVar "es"))) (EApp (EVar "ETuple") (EApp (EApp (EVar "map") (EVar "g")) (EVar "es"))))
-(DFunDef false "mapChildren" ((PVar "g") (PCon "EIndex" (PVar "e0") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EVar "g") (EVar "e0"))) (EApp (EVar "g") (EVar "i"))) (EVar "r")))
+(DFunDef false "mapChildren" ((PVar "g") (PCon "EIndex" (PVar "e0") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EVar "g") (EVar "e0"))) (EApp (EVar "g") (EVar "i"))))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EVar "g") (EVar "lo"))) (EApp (EVar "g") (EVar "hi"))) (EVar "incl")))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EVar "g") (EVar "lo"))) (EApp (EVar "g") (EVar "hi"))) (EVar "incl")))
-(DFunDef false "mapChildren" ((PVar "g") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EVar "g") (EVar "e0"))) (EApp (EVar "g") (EVar "lo"))) (EApp (EVar "g") (EVar "hi"))) (EVar "incl")) (EVar "r")))
+(DFunDef false "mapChildren" ((PVar "g") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EVar "g") (EVar "e0"))) (EApp (EVar "g") (EVar "lo"))) (EApp (EVar "g") (EVar "hi"))) (EVar "incl")))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "map") (EApp (EVar "mapDoStmt") (EVar "g"))) (EVar "stmts"))))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EVar "map") (EApp (EVar "mapDoStmt") (EVar "g"))) (EVar "stmts"))))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "g") (EVar "e0"))) (EVar "t")))
@@ -1395,14 +1395,14 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DFunDef false "rewriteSugar" ((PCon "ESection" (PVar "s"))) (EApp (EVar "sectionToCore") (EVar "s")))
 (DFunDef false "rewriteSugar" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "interpToCore") (EVar "parts")))
 (DFunDef false "rewriteSugar" ((PCon "EBinOp" (PLit (LString ":=")) (PVar "lhs") (PVar "rhs") PWild)) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "setRef"))) (EVar "lhs")) (EVar "rhs")))
-(DFunDef false "rewriteSugar" ((PCon "EIndex" (PVar "a") (PVar "i") PWild)) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "index"))) (EVar "a")) (EVar "i")))
-(DFunDef false "rewriteSugar" ((PCon "ESlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl") PWild)) (EBlock (DoLet false false (PVar "hiEx") (EIf (EVar "incl") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "sliceInclusiveEnd")))) (EVar "hi")) (EVar "hi"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "slice")))) (EVar "a"))) (EVar "lo"))) (EVar "hiEx")))))
+(DFunDef false "rewriteSugar" ((PCon "EIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "index"))) (EVar "a")) (EVar "i")))
+(DFunDef false "rewriteSugar" ((PCon "ESlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PVar "hiEx") (EIf (EVar "incl") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "sliceInclusiveEnd")))) (EVar "hi")) (EVar "hi"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "slice")))) (EVar "a"))) (EVar "lo"))) (EVar "hiEx")))))
 (DFunDef false "rewriteSugar" ((PVar "e")) (EVar "e"))
 (DTypeSig false "rewriteAssignIndex" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "rewriteAssignIndex" ((PCon "EBinOp" (PLit (LString ":=")) (PVar "lhs") (PVar "v") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "assignIndexLhs") (EApp (EVar "stripLocE") (EVar "lhs"))) (EVar "lhs")) (EVar "v")) (EVar "r")))
 (DFunDef false "rewriteAssignIndex" ((PVar "e")) (EVar "e"))
 (DTypeSig false "assignIndexLhs" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "EvId") (TyCon "Expr"))))))
-(DFunDef false "assignIndexLhs" ((PCon "EIndex" (PVar "a") (PVar "i") PWild) PWild (PVar "v") PWild) (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "callBin") (ELit (LString "setIndex"))) (EVar "a")) (EVar "i"))) (EVar "v")))
+(DFunDef false "assignIndexLhs" ((PCon "EIndex" (PVar "a") (PVar "i")) PWild (PVar "v") PWild) (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "callBin") (ELit (LString "setIndex"))) (EVar "a")) (EVar "i"))) (EVar "v")))
 (DFunDef false "assignIndexLhs" (PWild (PVar "lhs") (PVar "v") (PVar "r")) (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "lhs")) (EVar "v")) (EVar "r")))
 (DTypeSig false "guardsToCore" (TyFun (TyApp (TyCon "List") (TyCon "GuardArm")) (TyCon "Expr")))
 (DFunDef false "guardsToCore" ((PList)) (EVar "fallthrough"))
@@ -1802,10 +1802,10 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DFunDef false "mapChildren" ((PVar "g") (PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EMethodRef "map") (EVar "g")) (EVar "es"))))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "EListLit" (PVar "es"))) (EApp (EVar "EListLit") (EApp (EApp (EMethodRef "map") (EVar "g")) (EVar "es"))))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "ETuple" (PVar "es"))) (EApp (EVar "ETuple") (EApp (EApp (EMethodRef "map") (EVar "g")) (EVar "es"))))
-(DFunDef false "mapChildren" ((PVar "g") (PCon "EIndex" (PVar "e0") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EVar "g") (EVar "e0"))) (EApp (EVar "g") (EVar "i"))) (EVar "r")))
+(DFunDef false "mapChildren" ((PVar "g") (PCon "EIndex" (PVar "e0") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EVar "g") (EVar "e0"))) (EApp (EVar "g") (EVar "i"))))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EVar "g") (EVar "lo"))) (EApp (EVar "g") (EVar "hi"))) (EVar "incl")))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EVar "g") (EVar "lo"))) (EApp (EVar "g") (EVar "hi"))) (EVar "incl")))
-(DFunDef false "mapChildren" ((PVar "g") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EVar "g") (EVar "e0"))) (EApp (EVar "g") (EVar "lo"))) (EApp (EVar "g") (EVar "hi"))) (EVar "incl")) (EVar "r")))
+(DFunDef false "mapChildren" ((PVar "g") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EVar "g") (EVar "e0"))) (EApp (EVar "g") (EVar "lo"))) (EApp (EVar "g") (EVar "hi"))) (EVar "incl")))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapDoStmt") (EVar "g"))) (EVar "stmts"))))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapDoStmt") (EVar "g"))) (EVar "stmts"))))
 (DFunDef false "mapChildren" ((PVar "g") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "g") (EVar "e0"))) (EVar "t")))
@@ -1871,14 +1871,14 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DFunDef false "rewriteSugar" ((PCon "ESection" (PVar "s"))) (EApp (EVar "sectionToCore") (EVar "s")))
 (DFunDef false "rewriteSugar" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "interpToCore") (EVar "parts")))
 (DFunDef false "rewriteSugar" ((PCon "EBinOp" (PLit (LString ":=")) (PVar "lhs") (PVar "rhs") PWild)) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "setRef"))) (EVar "lhs")) (EVar "rhs")))
-(DFunDef false "rewriteSugar" ((PCon "EIndex" (PVar "a") (PVar "i") PWild)) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "index"))) (EVar "a")) (EVar "i")))
-(DFunDef false "rewriteSugar" ((PCon "ESlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl") PWild)) (EBlock (DoLet false false (PVar "hiEx") (EIf (EVar "incl") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "sliceInclusiveEnd")))) (EVar "hi")) (EVar "hi"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "slice")))) (EVar "a"))) (EVar "lo"))) (EVar "hiEx")))))
+(DFunDef false "rewriteSugar" ((PCon "EIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "index"))) (EVar "a")) (EVar "i")))
+(DFunDef false "rewriteSugar" ((PCon "ESlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoLet false false (PVar "hiEx") (EIf (EVar "incl") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "sliceInclusiveEnd")))) (EVar "hi")) (EVar "hi"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "slice")))) (EVar "a"))) (EVar "lo"))) (EVar "hiEx")))))
 (DFunDef false "rewriteSugar" ((PVar "e")) (EVar "e"))
 (DTypeSig false "rewriteAssignIndex" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "rewriteAssignIndex" ((PCon "EBinOp" (PLit (LString ":=")) (PVar "lhs") (PVar "v") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "assignIndexLhs") (EApp (EVar "stripLocE") (EVar "lhs"))) (EVar "lhs")) (EVar "v")) (EVar "r")))
 (DFunDef false "rewriteAssignIndex" ((PVar "e")) (EVar "e"))
 (DTypeSig false "assignIndexLhs" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "EvId") (TyCon "Expr"))))))
-(DFunDef false "assignIndexLhs" ((PCon "EIndex" (PVar "a") (PVar "i") PWild) PWild (PVar "v") PWild) (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "callBin") (ELit (LString "setIndex"))) (EVar "a")) (EVar "i"))) (EVar "v")))
+(DFunDef false "assignIndexLhs" ((PCon "EIndex" (PVar "a") (PVar "i")) PWild (PVar "v") PWild) (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "callBin") (ELit (LString "setIndex"))) (EVar "a")) (EVar "i"))) (EVar "v")))
 (DFunDef false "assignIndexLhs" (PWild (PVar "lhs") (PVar "v") (PVar "r")) (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "lhs")) (EVar "v")) (EVar "r")))
 (DTypeSig false "guardsToCore" (TyFun (TyApp (TyCon "List") (TyCon "GuardArm")) (TyCon "Expr")))
 (DFunDef false "guardsToCore" ((PList)) (EVar "fallthrough"))

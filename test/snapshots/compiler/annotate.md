@@ -1,5 +1,5 @@
 # META
-source_lines=297
+source_lines=296
 stages=DESUGAR,MARK
 # SOURCE
 -- annotate.mdk — Lexical-addressing EMISSION pass (STAGE2-DESIGN §2.0).
@@ -129,10 +129,9 @@ annotateExpr fr (ERangeList lo hi incl) =
   ERangeList (annotateExpr fr lo) (annotateExpr fr hi) incl
 annotateExpr fr (ERangeArray lo hi incl) =
   ERangeArray (annotateExpr fr lo) (annotateExpr fr hi) incl
-annotateExpr fr (ESlice e0 lo hi incl r) =
-  ESlice (annotateExpr fr e0) (annotateExpr fr lo) (annotateExpr fr hi) incl r
-annotateExpr fr (EIndex e0 i r) =
-  EIndex (annotateExpr fr e0) (annotateExpr fr i) r
+annotateExpr fr (ESlice e0 lo hi incl) =
+  ESlice (annotateExpr fr e0) (annotateExpr fr lo) (annotateExpr fr hi) incl
+annotateExpr fr (EIndex e0 i) = EIndex (annotateExpr fr e0) (annotateExpr fr i)
 annotateExpr fr (EAnnot e0 t) = EAnnot (annotateExpr fr e0) t
 annotateExpr fr (EHeadAnnot e0 t) = EHeadAnnot (annotateExpr fr e0) t
 annotateExpr fr (EBlock stmts) = EBlock (annotateStmts fr stmts)
@@ -337,8 +336,8 @@ annotateProgram prog = map annotateDecl prog
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EVar "map") (EApp (EVar "annotateExpr") (EVar "fr"))) (EVar "es"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "lo"))) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "hi"))) (EVar "incl")))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "lo"))) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "annotateExpr" ((PVar "fr") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e0"))) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "lo"))) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "hi"))) (EVar "incl")) (EVar "r")))
-(DFunDef false "annotateExpr" ((PVar "fr") (PCon "EIndex" (PVar "e0") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e0"))) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "i"))) (EVar "r")))
+(DFunDef false "annotateExpr" ((PVar "fr") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e0"))) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "lo"))) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "annotateExpr" ((PVar "fr") (PCon "EIndex" (PVar "e0") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e0"))) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "i"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "annotateStmts") (EVar "fr")) (EVar "stmts"))))
@@ -443,8 +442,8 @@ annotateProgram prog = map annotateDecl prog
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EArrayLit" (PVar "es"))) (EApp (EVar "EArrayLit") (EApp (EApp (EMethodRef "map") (EApp (EVar "annotateExpr") (EVar "fr"))) (EVar "es"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeList") (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "lo"))) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "hi"))) (EVar "incl")))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "lo"))) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "annotateExpr" ((PVar "fr") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e0"))) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "lo"))) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "hi"))) (EVar "incl")) (EVar "r")))
-(DFunDef false "annotateExpr" ((PVar "fr") (PCon "EIndex" (PVar "e0") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e0"))) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "i"))) (EVar "r")))
+(DFunDef false "annotateExpr" ((PVar "fr") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e0"))) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "lo"))) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "annotateExpr" ((PVar "fr") (PCon "EIndex" (PVar "e0") (PVar "i"))) (EApp (EApp (EVar "EIndex") (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e0"))) (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "i"))))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EVar "annotateExpr") (EVar "fr")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "annotateExpr" ((PVar "fr") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "annotateStmts") (EVar "fr")) (EVar "stmts"))))
