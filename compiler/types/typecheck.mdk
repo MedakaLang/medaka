@@ -363,6 +363,7 @@ import types.publish.{
   freezeModDiags,
   freezeNewest,
   graphReport,
+  ppPubScheme,
 }
 import types.registry.{
   RegKey,
@@ -14598,7 +14599,7 @@ ownContext n =
 
 -- A module's own schemes, each with its context, taken when the module closes:
 -- `perRun` still holds that module's tables, and the next module's check
--- overwrites them (#4053).
+-- overwrites them.
 publishOwn : List (String, Scheme) -> List (String, PubScheme)
 publishOwn = map (b => (
   fst b,
@@ -57260,5 +57261,4 @@ popMarkedClause grouped pending n =
 export
 schemeLines : List (String, PubScheme) -> List String
 schemeLines [] = []
-schemeLines ((n, p) :: rest) =
-  "\{n} : \{ppSchemeCon p.psContext p.psScheme}" :: schemeLines rest
+schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest

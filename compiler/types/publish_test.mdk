@@ -1,7 +1,6 @@
--- Unit tests for the published shapes' zonk, freeze and validator over
--- hand-built values; a scheme's context surviving a later drive (#4053) and a
--- shadowing binding's context (#2054); and a pin for published schemes holding
--- live Links (#2549), which a later V2 slice fixes.
+-- Unit tests for the published shapes' zonk, freeze, validator and graph report
+-- over hand-built values; a scheme's context surviving a later drive and a
+-- shadowing binding's context (#2054); and published schemes holding no Link.
 import test.{
   expectEqual, expectEach, expectTrue, expectGreaterThan, Expectation
 }
@@ -12,21 +11,21 @@ import list.{zip, filter, takeWhile, dropWhile}
 import string.{lines}
 import support.util.{joinNl}
 import types.repr.{
-  Mono(..), Tyvar(..), Scheme(..), IfaceRef(..), VecObl(..), ppScheme,
-  ppSchemeCon
+  Mono(..), Tyvar(..), Scheme(..), IfaceRef(..), VecObl(..), ppScheme
 }
 import types.effect_domain.{Param(..)}
 import types.effect_rows.{EffRow(..), Effvar(..), effvarId, pureRow}
 import types.effect_authority.{Authority(..), Authvar(..), authvarId}
 import types.publish.{
   PubScheme(..), VarKind(..), LiveCell(..), emptyZonk, zonkMono, zonkScheme,
-  freezePub, liveCells, atGraphEnd
+  freezePub, liveCells, atGraphEnd, graphReport, ppPubScheme, TcReport(..),
+  CheckedProgram(..), ModDiags, TcDiag(..)
 }
-import types.publish.{ModDiags}
+import types.disposition.{emptyDispositionTable}
 import types.typecheck.{
   checkOneSchemeFullK, checkModulesDiagsChain, checkModulesAllLines,
-  methodReturnMemoCurrentViews, methodReturnMemoRetentionStats, tcCode, tcMsg,
-  MethodReturnMemoView(..)
+  checkModules, methodReturnMemoCurrentViews, methodReturnMemoRetentionStats,
+  tcCode, tcMsg, MethodReturnMemoView(..)
 }
 
 int : Mono
@@ -51,7 +50,7 @@ pub s = PubScheme { psScheme = s, psContext = [] }
 
 speakObl : List Int -> List Mono -> VecObl
 speakObl ids args = VecObl {
-  voIface = IfaceRef { irName = "Speak", irOrigin = OriginUnresolved },
+  voIface = IfaceRef { irName = "Speak", irOrigin = OriginBuiltin },
   voIds = ids,
   voArgs = args,
 }
@@ -66,9 +65,9 @@ joinMembers (EffRow _ (Some cell)) = match !cell
   _ => []
 joinMembers _ = []
 
-tailId : EffRow -> Int
-tailId (EffRow _ (Some cell)) = effvarId cell
-tailId _ = -1
+tailId : EffRow -> Option Int
+tailId (EffRow _ (Some cell)) = Some (effvarId cell)
+tailId _ = None
 
 frozenBody : PubScheme -> Mono
 frozenBody (PubScheme { psScheme = (Forall _ _ _ _ _ t) }) = t
@@ -118,7 +117,7 @@ test "an ELink tail is followed to the unbound cell" =
   let (_, Forall _ _ _ _ _ t) = zonkScheme emptyZonk (plainScheme body)
   let p = freezePub (scheme [] [4] [] pureRow body) []
   expectEach [
-    ("tail is the leaf id", expectEqual 4 (tailId (arrowRow t))),
+    ("tail is the leaf id", expectEqual (Some 4) (tailId (arrowRow t))),
     ("no live cell", expectEqual [] (liveCells "f" p)),
   ]
 
@@ -204,7 +203,7 @@ test "freeze shares one cell per id between a scheme and its context" =
     ("context shares the scheme's cell", expectTrue seen),
     (
       "context renders against the scheme's variable",
-      expectEqual "Speak Int => Int -> Int" (ppSchemeCon p.psContext p.psScheme),
+      expectEqual "Speak Int => Int -> Int" (ppPubScheme p),
     ),
   ]
 
@@ -236,12 +235,8 @@ drive mid src =
     checkOneSchemeFullK None [] [] (mid, desugar (parseLocated src))
   own
 
--- Renders a scheme with the context it was published with.
-renderWithContext : PubScheme -> String
-renderWithContext p = ppSchemeCon p.psContext p.psScheme
-
 rendered : List (String, PubScheme) -> List String
-rendered ss = map (e => "\{fst e} : \{renderWithContext (snd e)}") ss
+rendered ss = map (e => "\{fst e} : \{ppPubScheme (snd e)}") ss
 
 linkCount : Scheme -> Int
 linkCount (Forall _ _ _ _ _ t) = monoLinks t
@@ -404,8 +399,8 @@ accQs = [
 accCheck : QKind -> (String, Expectation)
 accCheck (QKind name run) =
   let pSrc2 = accPrefix False
+  let cold = accRender (accDrive "acc-cold-\{name}" pSrc2 accEntry pSrc2)
   let held = accDrive "acc-p" pSrc2 accEntry pSrc2
-  let cold = accRender held
   let steps = run ()
   let after = accRender held
   let warm = accRender (accDrive "acc-p" pSrc2 accEntry pSrc2)
@@ -467,7 +462,68 @@ test "a weak-variable prefix records no chain step; the ground twin records one"
     ("ground: one", expectEqual 1 (weakChainSteps "export held = Box 1")),
   ]
 
--- Contract section 7: an instance that becomes graph-visible in a prefix module.
+-- Contract section 7: an instance that becomes graph-visible in a prefix module
+-- LATER than the module that resolves against it.  `a` uses `speak` at `Int`,
+-- `b` holds (or drops) the `impl`, `e` imports both, so `a`'s own step key never
+-- changes while its verdict depends on `b`.  #4266: a warm drive replays `a`'s
+-- verdict from the memo.
+instIface : String
+instIface = "export interface Speak a where\n  speak : a -> String\n"
+
+instUse : String
+instUse =
+  "import i.{Speak, speak}\nexport useA : Int -> String\nuseA n = speak n\n"
+
+instHolder : Bool -> String
+instHolder withImpl =
+  let implSrc =
+    if withImpl then
+      "export impl Speak Int where\n  speak _ = \"int\"\n"
+    else
+      ""
+  "import i.{Speak, speak}\n\{implSrc}export bval = 1\n"
+
+instEntry : String
+instEntry = "import a.{useA}\nimport b.{bval}\nentry = useA bval\n"
+
+instErrors : String -> Bool -> List String
+instErrors key withImpl =
+  let bSrc = instHolder withImpl
+  let mods =
+    checkModulesDiagsChain
+      (Some (4266, 4267))
+      key
+      [Some instIface, Some instUse, Some bSrc, None]
+      []
+      (desugar (parse ""))
+      [
+        ("i", desugar (parseLocated instIface)),
+        ("a", desugar (parseLocated instUse)),
+        ("b", desugar (parseLocated bSrc)),
+        ("e", desugar (parseLocated instEntry)),
+      ]
+  flatMap
+    (m => match m
+      (mid, (_, errs, _)) => map (d => "\{mid}: \{tcMsg d}") errs)
+    mods
+
+test "a graph-visible instance dropped from a later prefix module: warm equals cold" =
+  let _ = instErrors "inst-k" True
+  let warm = instErrors "inst-k" False
+  let cold = instErrors "inst-cold" False
+  expectEach [
+    (
+      "cold run reports the missing instance",
+      expectGreaterThan 0 (length cold),
+    ),
+    (
+      "warm run reports as many errors as cold",
+      expectEqual (length cold) (length warm),
+    ),
+  ]
+
+-- The same-module variant: the instance sits in the prefix module whose own step
+-- key changes, so its step misses.  This is a different case from the one above.
 test "a graph-visible instance added to the prefix: warm P' equals cold P'" =
   let noInst = joinNl [
     "export interface Speak a where",
@@ -481,6 +537,56 @@ test "a graph-visible instance added to the prefix: warm P' equals cold P'" =
   let _ = accDrive "acc-inst-other" (accPrefix False) accEntry (accPrefix False)
   let cold = accRender (accDrive "acc-inst-cold" withInst entry withInst)
   expectEqual cold warm
+
+-- ── graphReport ────────────────────────────────────────────────────────────
+
+modOf : List (String, PubScheme) -> List TcDiag -> ModDiags
+modOf ss errs = ("m", (ss, errs, []))
+
+-- The weak variables of the checked program, or None when it is withheld.
+checkedWeak : List ModDiags -> List (String, TcDiag) -> Option (List LiveCell)
+checkedWeak mods residual =
+  map
+    (c => c.cpWeak)
+    (graphReport mods [] residual [] emptyDispositionTable None).trChecked
+
+weakScheme : PubScheme
+weakScheme = pub (plainScheme (TFun (tvar 7) pureRow int))
+
+someDiag : TcDiag
+someDiag = TcDiag "E0001" 1 None "boom" None None
+
+test "graphReport: a clean graph is checked and lists its weak variables" =
+  expectEqual
+    (Some [WeakVar "f" TyVarK 7])
+    (checkedWeak [modOf [("f", weakScheme)] []] [])
+
+test "graphReport: a module error withholds the checked program" =
+  expectEqual None (checkedWeak [modOf [("f", weakScheme)] [someDiag]] [])
+
+test "graphReport: a residual diagnostic withholds the checked program" =
+  expectEqual None (checkedWeak [modOf [] []] [("m", someDiag)])
+
+test "graphReport: a left LinkCell withholds the checked program" =
+  let linked = pub (plainScheme (TFun (TVar (Ref (Link int))) pureRow int))
+  expectEqual None (checkedWeak [modOf [("f", linked)] []] [])
+
+test "graphReport: an open summary withholds the checked program" =
+  let unsolved =
+    pub (plainScheme (TFun int (EffRow [] (Some (Ref (ESummary 12 0 0)))) int))
+  expectEqual None (checkedWeak [modOf [("f", unsolved)] []] [])
+
+-- ── checkModules freezes its result ────────────────────────────────────────
+
+isLinkCell : LiveCell -> Bool
+isLinkCell (LinkCell _ _ _) = True
+isLinkCell _ = False
+
+test "checkModules publishes no live Link" =
+  let mods = checkModules [] [] [("p", desugar (parseLocated pSrc))]
+  let found =
+    flatMap (m => flatMap (e => liveCells (fst e) (snd e)) (snd m)) mods
+  expectEqual [] (filter isLinkCell found)
 
 test "checkModulesAllLines shows useSpeak's context under its module" =
   let ls =

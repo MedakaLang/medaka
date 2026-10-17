@@ -69,8 +69,8 @@ import support.util.{maxI, utf8Len, joinWith, startsWith, contains}
 import string.{stripCR, toInt}
 import regex.{Regex, Match, mustCompile, escape, findAll, find}
 import frontend.desugar.{desugar}
-import types.repr.{Scheme(..), ppSchemeCon}
-import types.publish.{PubScheme(..), pubSchemes}
+import types.repr.{Scheme(..)}
+import types.publish.{PubScheme(..), pubSchemes, ppPubScheme}
 import types.typecheck.{
   checkOneSchemeFullK, ppSchemeNamed, ppSchemeNamedFull, currentLocalSchemes,
   currentLocalSchemesLoc, currentSeedSchemes
@@ -960,7 +960,7 @@ latestLocal (Some (pl, pc, ps)) ((bl, bc, bs) :: rest)
 -- last checked's own tables — where a local constrained binding does register its
 -- obligations (#816) — and never the prelude store.
 ppHoverScheme : String -> HoverHit -> String
-ppHoverScheme _ (EnvHit p) = ppSchemeCon p.psContext p.psScheme
+ppHoverScheme _ (EnvHit p) = ppPubScheme p
 ppHoverScheme n (LocalHit s) = ppSchemeNamed n s
 ppHoverScheme n (SeedHit s) = ppSchemeNamedFull n s
 
