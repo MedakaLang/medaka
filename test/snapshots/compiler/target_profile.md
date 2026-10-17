@@ -109,7 +109,7 @@ ioJoinGrants (Some p) =
   filter (g => any (== fst g) hostLabels) (profileGrants p)
 
 -- `wasmgc/edge` grants `Net` over its whole domain, so its `IO` join carries it:
--- the host's `fetch` slice serves `fetchText`, and the socket externs stay
+-- the host's `net` slice serves `fetchText`, and the socket externs stay
 -- unprovided on wasm. `wasmgc/node` and `wasmgc/browser-worker` do not grant it.
 -- `wasmgc/wasi-p2` is a seam with nothing built, so it grants no host label.
 -- Every profile with a host grants `FFI`, and `eval/run` does not: whether a

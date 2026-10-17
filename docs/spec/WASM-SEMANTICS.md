@@ -264,7 +264,7 @@ above Core IR; these laws are the wasm peers of EMITTER-SEMANTICS §2 (V1–V6).
 Native's TCB below the emitted IR is `runtime/medaka_rt.c`. Wasm's is **one JS
 module**, `playground/medaka_host.mjs`, plus the engine. It builds the `env`
 import object from capability slices (`stdout stderr floatfmt math strtod fs filebound env
-args exit clock entropy stdin`), installs the slices a profile grants
+args exit clock entropy net stdin`; `net` grants `fetchText`, an HTTP(S) GET that answers with a promise), installs the slices a profile grants
 (`wasmgc/node`, `wasmgc/browser-worker`, `wasmgc/edge`, `wasmgc/wasi-p2`, the
 labels of `compiler/types/target_profile.mdk`), and owns the shims and the flush
 discipline. Four hosts consume it and add only their side of the boundary:
@@ -292,7 +292,10 @@ import surface part of the semantics, with laws:
   `NotProvided` row in `compiler/backend/extern_catalog.mdk` if any engine withholds it.
   The entry is closed the same way: an emitted module's `(start $__init)` runs
   only the eager value-global initializers, and the program runs when the host
-  calls the `mdk_main` export. Every host calls `exports.mdk_main()` after
+  calls the `mdk_main` export. When the engine has JSPI, `runProgram` calls `mdk_main` through
+  `WebAssembly.promising` and awaits it, so the imports that wait on a promise (`mdk_sleep_ms`,
+  `mdk_fetch_text`) are `WebAssembly.Suspending`; the start function is never promising, so a
+  top-level value that reaches one fails with a named error. Every host calls `exports.mdk_main()` after
   `instantiate`, inside the same exit and trap handling as the instantiation,
   so a value init that panics still fails at instantiate time, before any
   `main` output. A module instantiated without that call runs no program code
@@ -386,7 +389,7 @@ import surface part of the semantics, with laws:
 | `mdk_executable_path` | `hostImportSig` | `executablePath` reached | real (`createHost`'s `executablePath`, which `test/wasm/run.js` sets to the absolute path of the module) | withheld (`Env` is not granted) | the empty path (the `env` host answers no module path) | 1 + the path on the result channel; `""` when the host was given none | capability |
 | `mdk_result_len` / `mdk_result_byte` | ~1114–1115 | `readFile`, `readFileBytes`, `writeFile`, `writeFileBytes`, `rename`, `listDir`, `statFile`, `fileExists`, `canonicalizePath`, `getEnv`, `readLine`, `readLineOpt`, `readAll`, `readExactly`, `osEntropyBytes`, `executablePath` reached | real | real (the `fs` slice's result channel) | real | read cached result | — |
 | `mdk_exit` | `hostImportSig` | `exit` use (its plan host key) | real (`ExitSignal` unwind, flush stdout then stderr, exit) | capability error (`exit` withheld; a clean `exit 0` reports an error — deliberate, UX-noteworthy) | real (`ExitSignal` unwind) | flush + exit | T1/WH4 ✅ (#376) |
-| `mdk_wall_time_sec` / `mdk_monotonic_sec` / `mdk_sleep_ms` | `hostImportSig` | `wallTimeSec` / `monotonicSec` / `sleepMs` use, each its own plan host key | real (the host's wall clock, its monotonic clock, a blocking wait on a shared cell) | wall and monotonic reads real; sleep real only when the page is cross-origin isolated, else a named capability error | real (same keys; never sleeps, present to avoid a LinkError) | f64 seconds; f64 seconds; sleep `i64` ms, non-positive returns at once | — |
+| `mdk_wall_time_sec` / `mdk_monotonic_sec` / `mdk_sleep_ms` | `hostImportSig` | `wallTimeSec` / `monotonicSec` / `sleepMs` use, each its own plan host key | real (the host's wall clock, its monotonic clock; sleep is a `Suspending` timer under JSPI, else a blocking wait on a shared cell) | wall and monotonic reads real; sleep is a `Suspending` timer under JSPI (no isolation needed), else real only when the page is cross-origin isolated, else a named capability error | real (same keys; never sleeps, present to avoid a LinkError) | f64 seconds; f64 seconds; sleep `i64` ms, non-positive returns at once | — |
 | `mdk_write_file_reset` / `_push` / `_commit` | ~1223–1225 | `writeFileBytes` reached (`writeFile` reaches `_reset` and `_push` too) | real | real over the per-run vfs (`fs` slice) | real over the source vfs (`fs` slice) | streamed file write; the commit confines the path in write mode first | WH3 ✅ (#375) |
 | `mdk_write_file` | `hostImportSig` | `writeFile` reached | real (Node fs) | real over the per-run vfs | real over the source vfs | `writeFile`'s commit: the bytes streamed with `mdk_write_file_push` go to the path on the path channel, confined `(entry 0, write 1)`; 1, or 0 + the error text as the result. A file the write creates reads `0o644` on `MemoryVfs` | confinement |
 | `mdk_append_file` | `hostImportSig` | `appendFile` reached | real (`fs.appendFileSync`) | real over the per-run vfs (the file is created when absent, at `0o644`; an existing file keeps its mode) | real over the source vfs | `appendFile`'s commit: the bytes streamed with `mdk_write_file_push` are appended to the path on the path channel, confined `(entry 0, write 1)`; 1, or 0 + the error text as the result | confinement |

@@ -16,10 +16,10 @@ const STACK_OVERFLOW_MSG =
 
 // The guest runs synchronously except while a JSPI sleep suspends it, so a timer
 // cannot fire inside a print loop. Per-line posts from one would flood the main
-// thread's queue and starve its kill timer. Each POST_EVERY_MS window therefore allows BURST_POSTS immediate posts, so a
-// quiet program never holds a line back (a kill during a later hang still shows all
-// of it); past that, lines coalesce until the window rolls over. `force` drains what
-// is left at exit.
+// thread's queue and starve its kill timer. Each POST_EVERY_MS window therefore
+// allows BURST_POSTS immediate posts, so a quiet program never holds a line back
+// (a kill during a later hang still shows all of it); past that, lines coalesce
+// until the window rolls over. `force` drains what is left at exit.
 const POST_EVERY_MS = 50;
 const BURST_POSTS = 200;
 const pending = [];   // [{ type, text }] in print order, adjacent same-type runs merged

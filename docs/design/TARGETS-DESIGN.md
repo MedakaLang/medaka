@@ -294,7 +294,10 @@ meets the emitter's validator: a `validateExterns` hit at build is a compiler
 bug by construction. `eval` and `run` judge the interpreter's column the same
 way, so a program that names a built-in the interpreter lacks is refused before
 it runs, not by a panic in `eval.mdk`. The refusal text points at the target:
-it names the profile and says to choose a target that provides the extern.
+it names the profile, says whether the program or the compiler is at fault
+(by the row's gap kind), and, when another backend provides the extern, what to
+do instead: build it (on the interpreter's column) or choose a target that
+provides it (on an emitter's, unless the gap is a compiler bug).
 The worded net and FFI rejections and the `unbound variable`
 fallthrough for catalog names in `compiler/backend/wasm_emit.mdk`, and the
 `unsupported extern` arm in `compiler/backend/llvm_emit.mdk`, are replaced by one
@@ -517,8 +520,9 @@ native and `run` only. `Signal` is native and `run` only.
 ### 8.2 The edge
 
 The first profile that is neither the playground nor Node, at the WinterTC
-minimum common API that Cloudflare Workers, Deno, Bun and Node all satisfy, so
-one loader runs on every one of them.
+minimum common API that Cloudflare Workers, Deno, Bun and Node all satisfy.
+Two loader forms ship: `<base>.mjs`, which loads the wasm with `import source`,
+and `<base>.bytes.mjs`, which reads the bytes with `node:fs/promises` for Bun.
 
 - `Net` is granted **through `fetchText` only**: `fetchText : (url : String) ->
   <Net url> Result String String` is a catalog row whose wasm disposition is the

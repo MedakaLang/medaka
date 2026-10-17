@@ -3,12 +3,12 @@
 `medaka build --target wasmgc/edge` turns a program into a WasmGC module plus a
 loader that exposes it as a Workers `fetch` handler. This page is the procedure
 from source to a verified live origin. The target and its capability set are
-defined in `docs/spec/TARGETS.md`; the host contract in
+defined in `docs/design/TARGETS-DESIGN.md`; the host contract in
 `docs/spec/WASM-SEMANTICS.md`.
 
-Each command below is tagged at the end of the page with whether it was run for
-this document. Nothing here deploys or authenticates: the deploy and origin-probe
-steps are written from wrangler's documented behavior and are **not run here**.
+The page ends with which commands were verified and which were not. Nothing here
+deploys or authenticates: the deploy and origin-probe steps follow wrangler's
+documented behavior.
 
 ## Prerequisites
 
@@ -20,7 +20,7 @@ steps are written from wrangler's documented behavior and are **not run here**.
   stops with an actionable error otherwise.
 - `wasm-tools` on `PATH` (assembles the emitted WAT).
 - `node` 24 or later for local checks of the loader; `wrangler` 4.x for the
-  Workers steps (`npm install wrangler`). Measured with wrangler 4.151.1 and
+  Workers steps (`npm install wrangler`). As tested with wrangler 4.151.1 and
   workerd 2026-10-12.
 - For the deploy only: a Cloudflare account and an API token scoped to Workers
   edit. Keep it outside the repository, as `playground/README.md` §
@@ -51,8 +51,8 @@ The default `fetch` handler runs the program once per request, answers `200`
 with the program's stdout as `text/plain; charset=utf-8` when it finishes
 normally, and `500` with the stdout produced so far when it exits non-zero or
 traps. The request path, method and body are not visible to the program. Stderr
-goes to neither the response nor the caller; a panic message reaches only
-`run()`'s result.
+is not part of the response: the handler writes it to the worker's log with
+`console.error`, and `run()` returns it in its result.
 
 ## Wrangler configuration
 
@@ -77,8 +77,7 @@ compatibility_date = "2026-10-01"
   `fetchText` program suspended and resumed under it. This was measured on local
   workerd only (through `workerd` and `wrangler dev --local`). **Whether
   production Workers behaves the same is unconfirmed until the first deploy.**
-- `wrangler deploy --dry-run --outdir` accepted the config and bundle
-  (87 KiB, 22 KiB gzipped) with exit 0.
+- `wrangler deploy --dry-run --outdir` accepts the config and bundle.
 
 ## Local check
 
@@ -98,8 +97,8 @@ after sleep
 status=200 type=text/plain; charset=utf-8
 ```
 
-A `fetchText` program run this way reaches the network from the local worker; the
-spike pointed it at a local HTTP server on `127.0.0.1` and got the body back.
+A `fetchText` program run this way reaches the network from the local worker; it
+can be pointed at a local HTTP server on `127.0.0.1`.
 
 To check the loader without workerd, `node hello.mjs`-style use works through
 `import('./hello.mjs')` then `run()`, which returns
@@ -134,7 +133,7 @@ the program's stdout (`hello from the edge\nafter sleep\n`). A program that
 calls `fetchText` is probed the same way against a route whose content you know:
 with `main` printing `ok: ` and the body of `fetchText "https://<known-host>/data.txt"`,
 the response body must be `ok: <that file's content>`. A `500` with an empty body
-means the program trapped before printing (see F1 below); `status=200` with an
+means the program trapped before printing (see the limit on top-level values below); `status=200` with an
 `err: ...` line means `fetchText` ran and the fetch failed, which is the
 program's result, not a deploy fault.
 
@@ -152,25 +151,24 @@ body; probe `/` and one other path to confirm the route table is what you meant.
 
 ## Limits and known gaps
 
-- **FFI is granted, bindings are not supplied (F2).** `wasmgc/edge` grants the
+- **FFI is granted, bindings are not supplied.** `wasmgc/edge` grants the
   `FFI` label, but the default `fetch` handler passes no `bindings`. A `bind js`
   program passes `medaka check` and fails at the call with `CapabilityError: js
   binding ... is not supplied by this host`. `run(opts)` forwards `opts.bindings`;
   `fetch` has no source for them.
 - **A top-level value that reaches `fetchText` or `sleepMs` traps at
-  instantiation (F1).** `page = fetchText "..."` at top level passes `check`,
+  instantiation.** `page = fetchText "..."` at top level passes `check`,
   builds, and fails under JSPI with `trying to suspend without WebAssembly.promising`
   because top-level values run in the wasm start function, which is never
   promising. On the edge this is a `500` with an empty body. Call `fetchText` and
-  `sleepMs` from inside `main` or functions it calls. `sleepMs` at top level was
-  not probed; treat it the same.
+  `sleepMs` from inside `main` or functions it calls. Treat `sleepMs` at top level the same.
 - **Sockets are refused.** The `net` module's socket externs are refused by
   `medaka check` on the edge target; only `fetchText` does network I/O.
 - **Withheld or inert:** stdin, environment, files, argv and `exit` are withheld
   or inert on the edge. A program that calls `exit` or reads args can pass
   `check` (those carry no capability label, #4178) and die at run with a
   withheld-slice error.
-- **The distributed `medaka` cannot build wasm yet (F3).** `scripts/make_dist.sh`
+- **The distributed `medaka` cannot build wasm yet.** `scripts/make_dist.sh`
   ships neither `playground/medaka_host.mjs` nor a wasm emitter; build from a
   repository checkout.
 - **Panic text carries the build machine's source path** on stderr (reaches
@@ -180,17 +178,19 @@ body; probe `/` and one other path to confirm the route table is what you meant.
   `import source` unflagged; whether Workers' coarse clock makes `monotonicSec`
   deltas zero.
 
-## Provenance of the commands
+## Verified here / Not verified here
 
-| Command | Status |
-|---|---|
-| `sh test/wasm/build_wasm_oracle.sh --modules-only` | ran |
-| `medaka build --target wasmgc/edge -o <dir>/hello.wasm hello.mdk` (four files listed above) | ran |
-| `import('./hello.mjs')` then `run()` under node 24 | ran |
-| `wrangler deploy --dry-run --outdir`, bundle size and `import source` kept | from spike report |
-| `wrangler dev --local --port 8790` plus `curl` | from spike report |
-| JSPI present across compatibility dates | from spike report |
-| `deno serve`, `bun hello.bytes.mjs`, `node --experimental-wasm-jspi` | from spike report |
-| `wrangler deploy` | not run here |
-| origin probe `curl` against `*.workers.dev` | not run here |
-| `npm install wrangler` | from spike report |
+Verified here:
+
+- `sh test/wasm/build_wasm_oracle.sh --modules-only`
+- `medaka build --target wasmgc/edge -o <dir>/hello.wasm hello.mdk` (the four files above)
+- `import('./hello.mjs')` then `run()` under Node 24
+- `wrangler deploy --dry-run --outdir`, with the `import source` form kept
+- `wrangler dev --local --port 8790` plus `curl`
+- JSPI present across the compatibility dates listed above
+- `deno serve`, `bun hello.bytes.mjs`, `node --experimental-wasm-jspi`
+
+Not verified here:
+
+- `wrangler deploy`
+- the origin probe `curl` against `*.workers.dev`
