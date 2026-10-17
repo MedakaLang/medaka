@@ -1,0 +1,8 @@
+export
+extern add : Int -> Int -> <FFI "c", FFI "js"> Int
+  bind c "c_add"
+  bind js "jsAdd"
+
+export
+plus : Int -> Int -> Int
+plus a b = a + b

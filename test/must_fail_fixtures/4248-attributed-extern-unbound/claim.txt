@@ -1,0 +1,16 @@
+issue: 4248
+what: An attribute on an `extern` parses but the extern is then unusable. `@noinline`
+what: above `extern cNeg : Int -> <FFI "c"> Int` makes the first use fail with
+what: `unbound variable 'cNeg'` (resolve's extern tables do not peel `DAttrib`), plus a
+what: knock-on ambiguous-Display error. The ONLY difference from control.mdk is the
+what: attribute line. Expected: exit 0 (an attribute is metadata). Actual: exit 1.
+cmd: check-json main.mdk
+exit: 1
+diag-code: T-UNBOUND 3:16-3:20
+diag-code: T-AMBIGUOUS-INSTANCE 3:7-3:14
+why-diag-code: `diag-code:` because the prose may be reworded; the unbound name is the defect.
+why-diag-code: The knock-on T-AMBIGUOUS-INSTANCE is pinned too: a fix that makes the extern
+why-diag-code: resolve removes both, so only exit 0 drains the row. A change that LOCATES or
+why-diag-code: reorders diagnostics is not a fix; update the ranges and keep the row open.
+control: check-json control.mdk
+why-control: control.mdk is main.mdk with the `@noinline` line deleted; it checks clean.

@@ -1,0 +1,14 @@
+issue: 4249
+what: A primed top-level function fails the NATIVE build: the name is spelled into the LLVM
+what: symbol unquoted (`@mdk_main__f'`) and clang rejects the IR (`expected '(' in call`).
+what: `run` and the wasm build work. The ONLY difference from control.mdk is the prime in
+what: the function name. Expected: builds (exit 0). Actual: exit 1.
+cmd: build main.mdk
+exit: 1
+stdout-line: 1 error generated.
+why-stdout-line: the full clang line embeds a per-run temp path and the IR line number
+why-stdout-line: (`program.ll:219:30: error: expected '(' in call`), so it cannot be pinned
+why-stdout-line: whole. `1 error generated.` is the stable clang tail; it is an EXACT line
+why-stdout-line: only a link-stage clang rejection produces, and a fix that builds drops it.
+control: build control.mdk
+why-control: control.mdk renames `f'` to `f`; it builds clean (exit 0).
