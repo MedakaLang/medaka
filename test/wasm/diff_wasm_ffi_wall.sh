@@ -72,11 +72,12 @@ check_refused() {
 
 # ── The runtime-extern wall (compiler/backend/core_validate.mdk) ────────────
 # A program reaching a runtime extern whose catalog row gives wasm no lowering
-# is refused before any WAT is emitted, naming the extern, the gap kind and
-# the row's reason.  The two cases at the end of this file show what it does
-# not refuse.  An extern behind a label the profile does not grant (`Net`
-# here) never gets that far: the target check refuses the program first.
-RUNTIME_EXPECT="wasm: runtime extern '%s' is not available on the wasm backend (%s: "
+# is refused at check, before any WAT is emitted, naming the extern, the route
+# that reaches it, the gap kind and the row's reason.  The two cases at the end
+# of this file show what it does not refuse.  An extern behind a label the
+# profile does not grant (`Net` here) never gets that far: the capability rule
+# refuses the program first.
+RUNTIME_EXPECT="the built-in \`%s\` is reached via \`%s\`, and the target \`wasmgc/node\` does not provide it (%s: "
 
 check_refused "net_extern_refused" \
 'import net.{resolve}
@@ -88,13 +89,13 @@ main = match resolve "localhost"
 
 check_refused "wasm_gap_extern_refused" \
 'main = println (allocBytes ())' \
-  "$(printf "$RUNTIME_EXPECT" allocBytes WASM-GAP)"
+  "$(printf "$RUNTIME_EXPECT" allocBytes 'main → allocBytes' WASM-GAP)"
 
-# The same refusal under the profile `build` checked: `wasmgc/node` grants
-# `FileWrite`, so the program passed the check and the lowering is owed.
+# The same refusal names the owed lowering: `wasmgc/node` grants every label
+# the program performs, so only the missing lowering refuses it.
 check_refused "wasm_gap_extern_owed" \
 'main = println (allocBytes ())' \
-  "\`wasmgc/node\` grants its labels, so this is a lowering still owed (#3666)"
+  "its lowering for this backend is not written yet"
 
 # A gap extern reached through an imported module is refused the same way: no stdlib
 # module reaches one now, so the module is a local one.
@@ -102,7 +103,7 @@ check_refused "module_extern_reached_refused" \
 'import gaplib.{reach}
 
 main = println (reach ())' \
-  "$(printf "$RUNTIME_EXPECT" allocBytes WASM-GAP)" \
+  "$(printf "$RUNTIME_EXPECT" allocBytes 'main → reach → allocBytes' WASM-GAP)" \
 'export reach : Unit -> <IO> Float
 reach () = allocBytes ()'
 rm -f "$WORK/gaplib.mdk"

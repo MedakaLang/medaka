@@ -177,6 +177,7 @@ planOver target reach ffiRows (CProgram groups ctorArs _ impls _ _) =
         groups
         impls
     LlvmBackend => (noDemand, [], [])
+    EvalBackend => (noDemand, [], [])
   EmitPlan {
     target = target,
     wasmOnlyReach = reach,

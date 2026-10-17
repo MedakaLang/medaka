@@ -102,10 +102,15 @@ test "target_fixtures: one admitted and one refused program per profile" = expec
       ["--target", "native"]
       "no_main.mdk",
     targetCase
-      "evalrun_accepts_net"
+      "evalrun_refuses_net"
       "check"
       ["--target", "eval/run"]
       "net_reached.mdk",
+    targetCase
+      "evalrun_accepts_builtin_unreached"
+      "check"
+      ["--target", "eval/run"]
+      "builtin_unreached.mdk",
     targetCase
       "evalrun_refuses_ffi"
       "check"

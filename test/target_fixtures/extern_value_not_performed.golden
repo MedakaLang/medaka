@@ -1,6 +1,7 @@
-exit=0
+exit=1
 --- stdout
-fns : List (String -> <Net> Result String (List String))
-main : <Stdout> Unit
--- <fixtures>/extern_value_not_performed.mdk: ok (2 declaration(s) checked, 0 errors)
 --- stderr
+error: <fixtures>/extern_value_not_performed.mdk:4:0: the built-in `netResolve` is reached via `main → fns → netResolve`, and the target `wasmgc/node` does not provide it (PERMANENT: the `net` module is native-only: raw BSD sockets have no WasmGC equivalent — build for a native target instead): the target cannot provide it, by design; choose a target that provides it
+  |
+4 | fns = [netResolve]
+  | ^

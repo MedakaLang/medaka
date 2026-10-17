@@ -18,7 +18,8 @@ import test.{
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import list.{take}
-import support.util.{listLen, joinNl, reverseL}
+import support.util.{dedup, listLen, joinNl, reverseL}
+import frontend.marker.{declRefs}
 import map as BM
 import types.annotate.{annotateProgram}
 import types.typecheck.{elaborateOne, grantWholeDomain}
@@ -56,6 +57,7 @@ import backend.core_validate.{
   checkedTarget,
   checkedTargetOf,
   findingExtern,
+  isUnprovidedOn,
   missingCatalogRows,
   missingRowsMessage,
   renderExternFinding,
@@ -88,16 +90,12 @@ lowered src =
 
 -- The extern names `backend` refuses in `src`, in order of first reference.
 refused : Backend -> String -> List String
-refused LlvmBackend src =
-  map findingExtern (validateExterns LlvmBackend [] (lowered src))
-refused WasmBackend src =
-  map findingExtern (validateExterns WasmBackend [] (lowered src))
+refused backend src =
+  map findingExtern (validateExterns backend [] (lowered src))
 
 refusalLines : Backend -> String -> List String
-refusalLines LlvmBackend src =
-  map renderExternFinding (validateExterns LlvmBackend [] (lowered src))
-refusalLines WasmBackend src =
-  map renderExternFinding (validateExterns WasmBackend [] (lowered src))
+refusalLines backend src =
+  map renderExternFinding (validateExterns backend [] (lowered src))
 
 -- The reason the extern's wasm or llvm row gives, as the row states it.
 wasmReason : String -> String
@@ -285,12 +283,11 @@ wasmRefusalUnder profile src =
         (validateExterns WasmBackend [] (lowered src)))
     (checkedUnder profile)
 
--- What a build says of an extern the profile withholds.  `check` admits a
--- program that names it without performing it, and the lowering cannot tell
--- that program from one whose call `check` missed, so the line claims neither.
+-- What a build says of an extern the profile withholds: `check` should have
+-- refused the program, so the line names a compiler bug.
 withheldLine : String -> String -> String -> String -> String
 withheldLine line name labels profile =
-  "\{line}; the target `\{profile}` does not grant \{labels}, which `\{name}` performs; `check` admits a program that names it without performing it, but the wasm backend cannot lower even the name"
+  "\{line}; the target `\{profile}` does not grant \{labels}, which `\{name}` performs; `check` should have refused this program before the wasm backend saw it, so this is a bug in the compiler"
 
 owedLine : String -> String -> String
 owedLine line profile =
@@ -1788,3 +1785,20 @@ test "(ae) two functions of one name each return what their own body returns" =
         ("the two r are two binders", expectNotEqual g1Ids g2Ids),
       ]
     Err e => fail e
+
+-- `tools/target_check` skips the built-in rule's reach when no module of the
+-- program but the prelude names a built-in the profile's column leaves
+-- unprovided, which is sound only while the prelude names none on any column.
+test "(ag) the prelude names no built-in that any column leaves unprovided" =
+  match readFile (underRoot "stdlib/core.mdk")
+    Err e => fail e
+    Ok src =>
+      expectEqual
+        []
+        (filter
+          unprovidedOnAnyColumn
+          (dedup (flatMap declRefs (desugar (parse src)))))
+
+unprovidedOnAnyColumn : String -> Bool
+unprovidedOnAnyColumn name =
+  any (b => isUnprovidedOn b name) [LlvmBackend, WasmBackend, EvalBackend]

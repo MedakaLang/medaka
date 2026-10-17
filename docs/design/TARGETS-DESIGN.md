@@ -212,15 +212,18 @@ contents.
 
 ### 5.2 Label grain
 
-**Ruling.** Availability is at **label** grain, not extern grain. A backend that
-claims a label for a profile implements every catalog extern under it.
+**Ruling.** A profile grants authority at **label** grain; availability is at
+**extern** grain. Claiming a label grants the authority to perform it, and
+each extern's availability is its row in the catalog, judged at `check`: a
+program that reaches a built-in whose row is `NotProvided` on the profile's
+column is refused there (`T-TARGET-NOT-PROVIDED`), naming the extern, the route
+that reaches it and the row's reason.
 
-The alternative — profiles granting per extern — is honest about today but makes
-the manifest no longer the single truth, and turns each profile into a 196-row
-table. Label grain is what "effects make multi-target honest" literally means.
-
-The cost is a ratchet. The 22 `WASM-GAP` rows each get a host import or force a
-label split:
+The manifest stays the single truth about authority, and the catalog stays the
+single truth about what each backend implements; a profile is not a 196-row
+table. The label claim is a ratchet: the 22 `WASM-GAP` rows each get a host
+import or force a label split, and a row that gains its lowering stops being
+refused with no change to any profile:
 
 | Label | Missing on wasm | Disposition |
 |---|---|---|
@@ -284,10 +287,15 @@ Issue: #3665 (check refuses on profile).
 ### 5.5 What this retires
 
 After §4 and §5.4, an extern with no lowering reaches an emitter only through a
-compiler bug, or when a program names an extern as a value without ever
-performing it: `check` judges what `main` performs and admits that program,
-and the emitter's validator then refuses it with a user-facing line (`run` of
-it still panics at `eval.mdk:748`). The worded net and FFI rejections and the `unbound variable`
+compiler bug. `check` judges what `main` performs against the profile's grants,
+and judges every built-in the program reaches (named or performed) against the
+profile's column of the catalog, so a program that passes the check never
+meets the emitter's validator: a `validateExterns` hit at build is a compiler
+bug by construction. `eval` and `run` judge the interpreter's column the same
+way, so a program that names a built-in the interpreter lacks is refused before
+it runs, not by a panic in `eval.mdk`. The refusal text points at the target:
+it names the profile and says to choose a target that provides the extern.
+The worded net and FFI rejections and the `unbound variable`
 fallthrough for catalog names in `compiler/backend/wasm_emit.mdk`, and the
 `unsupported extern` arm in `compiler/backend/llvm_emit.mdk`, are replaced by one
 validator refusal that names the extern and the profile and says that `check`

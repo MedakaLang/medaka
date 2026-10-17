@@ -1,5 +1,5 @@
--- `netResolve` is named but never applied, so `main` performs only `Stdout`
--- and every profile that grants `Stdout` admits the program.
+-- `netResolve` is named but never applied, so `main` performs only `Stdout`;
+-- a profile whose backend cannot lower even the name still refuses it.
 fns : List (String -> <Net> Result String (List String))
 fns = [netResolve]
 
