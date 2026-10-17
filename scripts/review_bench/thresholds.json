@@ -1,0 +1,274 @@
+{
+ "_about": "Per-class Jev bands for `bench.py run --stage cascade`: below low is dismissed, at or above high is reported without Haiku (only where dev precision was measured), the rest goes to Haiku. Fit on the dev split only by `bench.py cascade`; never edit by hand and never refit on test.",
+ "jev_model": "jev-latest",
+ "params": {
+  "max_miss": 0.05,
+  "min_precision": 0.9,
+  "min_support": 3,
+  "min_controls": 2
+ },
+ "classes": {
+  "comment.ephemeral": {
+   "low": 0.95,
+   "high": null,
+   "n_pos": 1,
+   "n_ctrl": 0
+  },
+  "comment.history": {
+   "low": 0.05,
+   "high": 0.25,
+   "n_pos": 14,
+   "n_ctrl": 6
+  },
+  "comment.layout": {
+   "low": 0.1,
+   "high": null,
+   "n_pos": 4,
+   "n_ctrl": 3
+  },
+  "comment.measurement": {
+   "low": 0.35,
+   "high": 0.95,
+   "n_pos": 7,
+   "n_ctrl": 3
+  },
+  "comment.provenance": {
+   "low": 0.2,
+   "high": 0.25,
+   "n_pos": 7,
+   "n_ctrl": 2
+  },
+  "comment.restates": {
+   "low": 0.2,
+   "high": null,
+   "n_pos": 2,
+   "n_ctrl": 1
+  },
+  "comment.shout": {
+   "low": 0.4,
+   "high": null,
+   "n_pos": 3,
+   "n_ctrl": 1
+  },
+  "comment.speculative": {
+   "low": 0.4,
+   "high": null,
+   "n_pos": 1,
+   "n_ctrl": 0
+  },
+  "comment.stale": {
+   "low": 0.0,
+   "high": null,
+   "note": "cross-snippet: always to Haiku"
+  },
+  "data.bool-blind": {
+   "low": 0.95,
+   "high": null,
+   "n_pos": 3,
+   "n_ctrl": 1
+  },
+  "data.clone-type": {
+   "low": 0.1,
+   "high": null,
+   "n_pos": 1,
+   "n_ctrl": 2
+  },
+  "data.container": {
+   "low": 0.4,
+   "high": null,
+   "n_pos": 3,
+   "n_ctrl": 0
+  },
+  "data.param-clump": {
+   "low": 0.65,
+   "high": null,
+   "n_pos": 1,
+   "n_ctrl": 0
+  },
+  "data.sentinel": {
+   "low": 0.65,
+   "high": null,
+   "n_pos": 6,
+   "n_ctrl": 0
+  },
+  "data.string-enum": {
+   "low": 0.0,
+   "high": null,
+   "n_pos": 1,
+   "n_ctrl": 2
+  },
+  "data.string-key": {
+   "low": 0.0,
+   "high": null,
+   "n_pos": 1,
+   "n_ctrl": 1
+  },
+  "data.stringly-error": {
+   "low": 0.85,
+   "high": null,
+   "n_pos": 3,
+   "n_ctrl": 3
+  },
+  "data.tuple-as-record": {
+   "low": 0.1,
+   "high": null,
+   "n_pos": 3,
+   "n_ctrl": 3
+  },
+  "dead.code": {
+   "low": 0.1,
+   "high": null,
+   "n_pos": 2,
+   "n_ctrl": 2
+  },
+  "defensive.discarded-result": {
+   "low": 0.35,
+   "high": null,
+   "n_pos": 5,
+   "n_ctrl": 0
+  },
+  "defensive.silent-default": {
+   "low": 0.0,
+   "high": 0.05,
+   "n_pos": 4,
+   "n_ctrl": 2
+  },
+  "diag.quality": {
+   "low": 0.05,
+   "high": null,
+   "n_pos": 1,
+   "n_ctrl": 0
+  },
+  "doc.register": {
+   "low": 0.0,
+   "high": null,
+   "n_pos": 0,
+   "n_ctrl": 4,
+   "note": "no dev positives"
+  },
+  "dup.cross-file": {
+   "low": 0.0,
+   "high": null,
+   "note": "cross-snippet: always to Haiku"
+  },
+  "dup.existing": {
+   "low": 0.0,
+   "high": null,
+   "note": "cross-snippet: always to Haiku"
+  },
+  "dup.in-diff": {
+   "low": 0.0,
+   "high": null,
+   "n_pos": 8,
+   "n_ctrl": 5
+  },
+  "idiom.inside-out-pipeline": {
+   "low": 0.15,
+   "high": null,
+   "n_pos": 3,
+   "n_ctrl": 1
+  },
+  "idiom.let-underscore-unit": {
+   "low": 0.5,
+   "high": null,
+   "n_pos": 1,
+   "n_ctrl": 0
+  },
+  "iface.underused": {
+   "low": 0.75,
+   "high": null,
+   "n_pos": 3,
+   "n_ctrl": 0
+  },
+  "magic-literal": {
+   "low": 0.1,
+   "high": null,
+   "n_pos": 4,
+   "n_ctrl": 0
+  },
+  "naming.misleading": {
+   "low": 0.35,
+   "high": null,
+   "n_pos": 2,
+   "n_ctrl": 1
+  },
+  "shape.do-cascade": {
+   "low": 0.85,
+   "high": null,
+   "n_pos": 2,
+   "n_ctrl": 1
+  },
+  "shape.nested-match": {
+   "low": 0.85,
+   "high": null,
+   "n_pos": 2,
+   "n_ctrl": 0
+  },
+  "shape.threaded-invariants": {
+   "low": 0.95,
+   "high": null,
+   "n_pos": 1,
+   "n_ctrl": 1
+  },
+  "suppress.invalid-reason": {
+   "low": 0.7,
+   "high": 0.75,
+   "n_pos": 5,
+   "n_ctrl": 3
+  },
+  "test.bool-helper": {
+   "low": 0.35,
+   "high": null,
+   "n_pos": 3,
+   "n_ctrl": 0
+  },
+  "test.doctest-costume": {
+   "low": 0.15,
+   "high": null,
+   "n_pos": 3,
+   "n_ctrl": 2
+  },
+  "test.escaped-program": {
+   "low": 0.65,
+   "high": null,
+   "n_pos": 1,
+   "n_ctrl": 0
+  },
+  "test.hand-count": {
+   "low": 0.95,
+   "high": null,
+   "n_pos": 3,
+   "n_ctrl": 1
+  },
+  "test.length-not-contents": {
+   "low": 0.6,
+   "high": null,
+   "n_pos": 3,
+   "n_ctrl": 2
+  },
+  "test.probe-in-production": {
+   "low": 0.6,
+   "high": null,
+   "n_pos": 2,
+   "n_ctrl": 1
+  },
+  "test.repeated-columns": {
+   "low": 0.9,
+   "high": null,
+   "n_pos": 1,
+   "n_ctrl": 0
+  },
+  "test.vehicle": {
+   "low": 0.05,
+   "high": null,
+   "n_pos": 3,
+   "n_ctrl": 2
+  },
+  "test.weak-reject": {
+   "low": 0.1,
+   "high": null,
+   "n_pos": 3,
+   "n_ctrl": 1
+  }
+ }
+}
