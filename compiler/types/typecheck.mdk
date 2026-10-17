@@ -348,6 +348,15 @@ import types.solver_contract.{
   SolverOutcome(..),
   Wanted(..),
 }
+export import types.publish.{
+  TcDiag(..),
+  tcCode,
+  tcMsg,
+  tcLoc,
+  ModDiags,
+  PubScheme(..),
+  pubSchemes,
+}
 import types.registry.{
   RegKey,
   Registry,
@@ -10232,33 +10241,6 @@ resolveArgStamp name tagRef implRef am fullMono omitted encl origin scope =
 -- dict params; emitDefaultRKey forwards these words.  Concrete head / a method
 -- with its own impl ⇒ same key as before (empty for non-parametric), unchanged.
 
--- ── structured typecheck diagnostic (TcDiag) ───────────────────────────────
--- #159: ONE structured record replaces the old flat (code, msg, Option Loc)
--- triple PLUS its parallel message-keyed side channels — `typeErrorHelpFix` for
--- errors, and `matchWarningLocs` / `matchWarningHelp` for the non-exhaustive-match
--- warnings.  Every accumulated diagnostic (errors AND match warnings) now carries
--- its code, severity, span, message, and optional help/fix INLINE, so nothing
--- downstream has to zip parallel lists or look help up by message text.  The
--- observable output is unchanged: `driver/diagnostics.mdk` maps a TcDiag to its
--- `Diag` and thence to the `--json` shape (DIAGNOSTIC-CODES-DESIGN.md), byte for
--- byte as before.  `severity` is an Int (1 = error, 2 = warning — the same codes
--- `--json` emits) because the real `Severity` type lives in `driver/diagnostics.mdk`,
--- which imports THIS module, so importing it back would cycle.  `fix` is a plain
--- (Loc span, replacement) pair, converted to a real `Fix` on the diagnostics side.
-public export data TcDiag =
-  | TcDiag String Int (Option Loc) String (Option String) (Option (Loc, String))
-
-export
-tcCode : TcDiag -> String
-tcCode (TcDiag c _ _ _ _ _) = c
-
-export
-tcMsg : TcDiag -> String
-tcMsg (TcDiag _ _ _ m _ _) = m
-
-tcLoc : TcDiag -> Option Loc
-tcLoc (TcDiag _ _ l _ _ _) = l
-
 -- ── type-error accumulator ─────────────────────────────────────────────────
 -- Unification failures record diagnostics here instead of panicking, so
 -- ill-typed programs emit matching `TYPE ERROR: …` lines.  occursCheckFailed
@@ -14589,27 +14571,55 @@ substMono subst esub asub t = match normalize t
 -- Render a binding's scheme WITH its inferred/declared constraint context, looked
 -- up by NAME from schemeObligationsRef (the always-on obligation side-channel the
 -- most-recent typecheck left populated).  A name with no recorded obligations
--- renders as plain ppScheme.  Used by schemeLines (`check --types`) and the LSP
--- hover/completion/inlay renderers so all display surfaces show `Num a => …`.
+-- renders as plain ppScheme.  A published scheme carries its own context
+-- (`publishOwn`); this renders a bare scheme of the module last checked, as the
+-- LSP's local-binder hover and inlay hints do.
 export
 ppSchemeNamed : String -> Scheme -> String
-ppSchemeNamed n s =
+ppSchemeNamed n s = ppSchemeCon (ownContext n) s
+
+-- The context the module last checked recorded for its binding [n].
+ownContext : String -> List VecObl
+ownContext n =
   -- #837: key the obligation lookup by (name, binding-id), exactly as the check-path
   -- reader does — recovering the id from schemeDefIdsRef (top-level binders of the
   -- module last checked).  With the leak-guard windows retired this is what stops a
   -- where-helper `g`'s obligation rendering on an unrelated top-level `g`; a binder
   -- absent from schemeDefIdsRef (id 0) falls to the bare-name scan (today's path).
   let id = optionOr 0 (omLookup n perRun.value.schemeDefIdsRef.value)
-  ppSchemeCon
-    (optionOr
-      []
-      (lookupSchemeObls n id perRun.value.schemeObligationsRef.value))
-    s
+  optionOr [] (lookupSchemeObls n id perRun.value.schemeObligationsRef.value)
+
+-- A module's own schemes, each with its context, taken when the module closes:
+-- `perRun` still holds that module's tables, and the next module's check
+-- overwrites them (#4053).
+publishOwn : List (String, Scheme) -> List (String, PubScheme)
+publishOwn = map (b => (
+  fst b,
+  PubScheme {
+    psScheme = snd b,
+    psContext = ownContext (fst b),
+  },
+))
+
+-- The prelude's schemes, each with the context the core pass snapshotted for it.
+-- A drive that does not run the snapshotting core pass (the tree arm) publishes
+-- them with no context.
+publishCore : List (String, Scheme) -> List (String, PubScheme)
+publishCore = map (b => (
+  fst b,
+  PubScheme {
+    psScheme = snd b,
+    psContext =
+      optionOr
+        []
+        (omLookup (fst b) crossRun.value.coreSchemeObligationsRef.value),
+  },
+))
 
 -- S-full-env-scheme-entry (#1116): `ppSchemeNamed` for a display surface whose env
--- spans MORE THAN THE MODULE LAST CHECKED — the LSP / playground hover+completion
--- envs built by `checkOneSchemeFull`, which are the buffer's own schemes PLUS the
--- prelude's.
+-- spans more than the module last checked — the LSP's import-scoped seed tier.
+-- The hover and completion envs `checkOneSchemeFull` returns carry their contexts
+-- (`publishOwn`, `publishCore`) and do not come here.
 --
 -- 🚨 The gap this closes is in the OBLIGATION SIDE-CHANNEL, not in the scheme list.
 -- A `Scheme` is `Forall _ _ Mono` — it carries no context — so every `=>` on every
@@ -53461,7 +53471,7 @@ cmCheckWorker : String ->
   List Decl ->
   List Decl ->
   List Decl ->
-  (ModuleBindings, List (String, Scheme))
+  (ModuleBindings, List (String, PubScheme))
 cmCheckWorker mid seed _accData _accAll prog =
   -- #2705: this is the SCHEMES-ONLY query driver — LSP hover/completion
   -- (`projectEntrySchemes`) and the linear-time perf gate — and it does NOT solve:
@@ -53472,7 +53482,7 @@ cmCheckWorker mid seed _accData _accAll prog =
   -- ceiling) and would re-solve the whole graph per hover.  The memoized solve that
   -- makes this path one driver with the others is #2719.
   let (schemes, _) = checkBodyImpl seed mid [] prog
-  (schemes, schemes.mbSchemes)
+  (schemes, publishOwn schemes.mbSchemes)
 
 -- The graph every Module-mode driver typechecks: type-constructor identity
 -- acquired over the whole graph (`stampGraphTyOrigins`), then every impl head in
@@ -53515,7 +53525,7 @@ export
 checkModules : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  List (String, List (String, Scheme))
+  List (String, List (String, PubScheme))
 checkModules runtimeDecls coreDecls0 modules0 =
   checkModulesK None runtimeDecls coreDecls0 modules0
 
@@ -53535,7 +53545,7 @@ checkModulesK : Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  List (String, List (String, Scheme))
+  List (String, List (String, PubScheme))
 checkModulesK preludeKey runtimeDecls coreDecls0 modules0 =
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
@@ -53777,20 +53787,13 @@ checkModuleFullDiags mid seedVars accData accAll prog =
 -- that tree as far as `graphCollect` and `graphCollect` drops it there, rather than
 -- consing it: that selection returns `gdModules = []`, so accumulating the tree would
 -- hold every module's marked forms live for the whole drive.
--- One module's row in a graph drive's per-module diagnostics: its own value
--- schemes, its isolated errors and its isolated warnings, under its module id.
--- The schemes half is what lets the ENTRY REPORT be a projection of the same list
--- rather than a second pass (`checkModulesEntryFromDiags`); `dropModSchemes` is the
--- narrower `(errs, warns)` view the bucketing fold consumes.
-export type ModDiags = (String, (List (String, Scheme), List TcDiag, List TcDiag))
-
 graphModuleWorker : GraphOut ->
   String ->
   ModuleSeed ->
   List Decl ->
   List Decl ->
   List Decl ->
-  (ModuleBindings, (List Decl, List (String, Scheme), List TcDiag, List TcDiag))
+  (ModuleBindings, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag))
 graphModuleWorker sel mid seed accData accAll prog =
   let implDecls = accAll ++ prog
   let _ = match sel
@@ -53798,6 +53801,7 @@ graphModuleWorker sel mid seed accData accAll prog =
     GOutDiags => ()
   let (schemes, marked, errs, warns) =
     checkModuleFullDiags mid seed accData implDecls prog
+  let published = publishOwn schemes.mbSchemes
   let _ = match sel
     GOutTrees =>
       let _ = match lookupAssoc "main" schemes.mbSchemes
@@ -53809,7 +53813,7 @@ graphModuleWorker sel mid seed accData accAll prog =
             ++ perRun.value.promotedRef.value)
       ()
     GOutDiags => ()
-  (schemes, (marked, schemes.mbSchemes, errs, warns))
+  (schemes, (marked, published, errs, warns))
 
 -- collect: keeps the worker's marked tree and its `(schemes, errs, warns)` payload
 -- per module in load order, and on the DIAGS selection's TERMINAL module records
@@ -53845,7 +53849,7 @@ graphModuleWorker sel mid seed accData accAll prog =
 graphCollect : GraphOut ->
   Bool ->
   String ->
-  (List Decl, List (String, Scheme), List TcDiag, List TcDiag) ->
+  (List Decl, List (String, PubScheme), List TcDiag, List TcDiag) ->
   (List (String, List Decl), List ModDiags) ->
   (List (String, List Decl), List ModDiags)
 graphCollect sel isLast mid (marked, schemes, errs, warns) (markedRest, diagsRest) =
@@ -53882,7 +53886,7 @@ dropModSchemes (mid, (_, errs, warns)) = (mid, (errs, warns))
 -- reported errors and exited.
 export
 checkModulesEntryFromDiags : List ModDiags ->
-  (List (String, Scheme), List TcDiag, List TcDiag)
+  (List (String, PubScheme), List TcDiag, List TcDiag)
 checkModulesEntryFromDiags [] = ([], [], [])
 checkModulesEntryFromDiags [(_, (s, e, w))] = (s, e, w)
 checkModulesEntryFromDiags ((_, (_, e, _)) :: rest) =
@@ -53901,10 +53905,11 @@ entryReportFromDiags perMod = match checkModulesEntryFromDiags perMod
 -- The SET-OR-CLEAR write itself, on the terminal (entry) module only.  Split out of
 -- `graphCollect` so the "never a partial write" property is one two-clause
 -- function rather than an inline conditional.
-setMainSchemeIfEntry : Bool -> List (String, Scheme) -> Unit
+setMainSchemeIfEntry : Bool -> List (String, PubScheme) -> Unit
 setMainSchemeIfEntry False _ = ()
 setMainSchemeIfEntry True schemes =
-  driverState.value.mainSchemeRef := lookupAssoc "main" schemes
+  driverState.value.mainSchemeRef :=
+    map (p => p.psScheme) (lookupAssoc "main" schemes)
 
 -- ── module-chain memo ─────────────────────────────────────────────────────────
 -- The diagnostics fold (`driveGraphK GOutDiags`) checks modules dependency-first and
@@ -54158,20 +54163,20 @@ chainGo _ _ _ _ _ results _ [] = (results, [])
 chainGo baseSeed coreV depEnv accData accAll results _ [(mid, prog)] =
   let seed =
     moduleImportSeed baseSeed (importSeed coreV (admittedIn mid) prog depEnv)
-  let (schemes, (_, _, errs, warns)) =
+  let (_, (_, published, errs, warns)) =
     graphModuleWorker GOutDiags mid seed accData accAll prog
-  let _ = setMainSchemeIfEntry True schemes.mbSchemes
-  ((mid, (schemes.mbSchemes, errs, warns)) :: results, [])
+  let _ = setMainSchemeIfEntry True published
+  ((mid, (published, errs, warns)) :: results, [])
 chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) =
   let seed =
     moduleImportSeed baseSeed (importSeed coreV (admittedIn mid) prog depEnv)
-  let (schemes, (_, _, errs, warns)) =
+  let (schemes, (_, published, errs, warns)) =
     graphModuleWorker GOutDiags mid seed accData accAll prog
   let pubV = publicModuleExports prog schemes ++ reexportSeed coreV prog depEnv
   let depEnv2 = (mid, pubV) :: depEnv
   let accData2 = accData ++ publicDataDecls prog
   let accAll2 = accAll ++ prog
-  let results2 = (mid, (schemes.mbSchemes, errs, warns)) :: results
+  let results2 = (mid, (published, errs, warns)) :: results
   let (key, keys2) = match keys
     k :: ks => (k, ks)
     [] => (None, [])
@@ -54333,7 +54338,7 @@ dispositionRowsOfMethods inst iface supplied required (m :: rest) =
 -- diags arm publishes nothing into it, so reading it costs a field access).
 data GraphDrive = GraphDrive {
   gdPerMod : List ModDiags,
-  gdCoreSchemes : List (String, Scheme),
+  gdCoreSchemes : List (String, PubScheme),
   gdCore : List Decl,
   gdModules : List (String, List Decl),
   gdResidual : List (String, TcDiag),
@@ -54444,7 +54449,7 @@ driveGraphK sel valueMain preludeKey runtimeDecls coreDecls0 modulesIn =
   match sel
     GOutDiags => GraphDrive {
       gdPerMod = perMod,
-      gdCoreSchemes = coreSchemes.mbSchemes,
+      gdCoreSchemes = publishCore coreSchemes.mbSchemes,
       gdCore = [],
       gdModules = [],
       gdResidual = [],
@@ -54470,7 +54475,7 @@ driveGraphK sel valueMain preludeKey runtimeDecls coreDecls0 modulesIn =
       let _ = installBinderTypes graphRun.value.binderRows.value
       GraphDrive {
         gdPerMod = perMod,
-        gdCoreSchemes = coreSchemes.mbSchemes,
+        gdCoreSchemes = publishCore coreSchemes.mbSchemes,
         gdCore = coreD,
         -- `resolveAliasMethodSpellings` restores the origin name behind every
         -- alias-qualified method occurrence (`A.mth` -> `mth`) that inference kept.
@@ -54495,8 +54500,8 @@ attachCoherenceConflict perMod =
 
 cohOntoFull : Option String ->
   Option String ->
-  (List (String, Scheme), List TcDiag, List TcDiag) ->
-  (List (String, Scheme), List TcDiag, List TcDiag)
+  (List (String, PubScheme), List TcDiag, List TcDiag) ->
+  (List (String, PubScheme), List TcDiag, List TcDiag)
 cohOntoFull hard soft (schemes, errs, warns) =
   (schemes, cohHardOnto hard errs, cohSoftOnto soft warns)
 
@@ -54625,7 +54630,7 @@ mainBodySpan (_ :: rest) = mainBodySpan rest
 
 -- the entry module is last in dependency-first order
 export
-entryOwnSchemes : List (String, List (String, Scheme)) -> List (String, Scheme)
+entryOwnSchemes : List (String, List (String, a)) -> List (String, a)
 entryOwnSchemes [] = []
 entryOwnSchemes [(_, ss)] = ss
 entryOwnSchemes (_ :: rest) = entryOwnSchemes rest
@@ -54653,7 +54658,7 @@ entryOwnSchemes (_ :: rest) = entryOwnSchemes rest
 checkModulesEntryFull : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List (String, Scheme), List TcDiag, List TcDiag)
+  (List (String, PubScheme), List TcDiag, List TcDiag)
 checkModulesEntryFull runtimeDecls coreDecls modules =
   checkModulesEntryFullK None runtimeDecls coreDecls modules
 
@@ -54661,7 +54666,7 @@ checkModulesEntryFullK : Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List (String, Scheme), List TcDiag, List TcDiag)
+  (List (String, PubScheme), List TcDiag, List TcDiag)
 checkModulesEntryFullK preludeKey runtimeDecls coreDecls modules =
   let (_, schemes, errs, warns) =
     checkModulesEntryFullSplitK False preludeKey runtimeDecls coreDecls modules
@@ -54693,7 +54698,7 @@ checkModulesEntryFullSplitK : Bool ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List (String, Scheme), List (String, Scheme), List TcDiag, List TcDiag)
+  (List (String, PubScheme), List (String, PubScheme), List TcDiag, List TcDiag)
 checkModulesEntryFullSplitK valueMain preludeKey runtimeDecls coreDecls0 modules0 =
   -- The single-file front door loads stdlib/core.mdk twice: once as its prelude and
   -- once as the singleton `__user__` module.  Resolve already owns the syntactic
@@ -54788,7 +54793,7 @@ checkOneScheme : List Decl ->
 checkOneScheme runtimeDecls coreDecls (rootId, prog) =
   let (schemes, _, _) =
     checkModulesEntryFull runtimeDecls coreDecls [(rootId, prog)]
-  schemes
+  pubSchemes schemes
 
 -- FULL-ENVIRONMENT sibling of `checkOneScheme` (S-full-env-scheme-entry, #1116):
 -- `(preludeSchemes, ownSchemes)` for a ONE-MODULE program, the Module-arm
@@ -54808,7 +54813,7 @@ export
 checkOneSchemeFull : List Decl ->
   List Decl ->
   (String, List Decl) ->
-  (List (String, Scheme), List (String, Scheme))
+  (List (String, PubScheme), List (String, PubScheme))
 checkOneSchemeFull runtimeDecls coreDecls prog =
   checkOneSchemeFullK None runtimeDecls coreDecls prog
 
@@ -54821,7 +54826,7 @@ checkOneSchemeFullK : Option (Int, Int) ->
   List Decl ->
   List Decl ->
   (String, List Decl) ->
-  (List (String, Scheme), List (String, Scheme))
+  (List (String, PubScheme), List (String, PubScheme))
 checkOneSchemeFullK preludeKey runtimeDecls coreDecls (rootId, prog) =
   let (coreSchemes, schemes, _, _) = checkModulesEntryFullSplitK
     False
@@ -54991,7 +54996,7 @@ checkModulesAllLines : List Decl ->
 checkModulesAllLines runtimeDecls coreDecls modules =
   joinNl (allModuleLines (checkModules runtimeDecls coreDecls modules))
 
-allModuleLines : List (String, List (String, Scheme)) -> List String
+allModuleLines : List (String, List (String, PubScheme)) -> List String
 allModuleLines [] = []
 allModuleLines ((mid, ss) :: rest) =
   "## MODULE " ++ mid :: schemeLines ss ++ allModuleLines rest
@@ -55074,7 +55079,7 @@ elaborateModulesWithSchemes : Bool ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (ElabResult, List (String, Scheme), List (String, Scheme))
+  (ElabResult, List (String, PubScheme), List (String, PubScheme))
 elaborateModulesWithSchemes valueMain runtimeDecls coreDecls0 modulesIn =
   let g = driveGraphK GOutTrees valueMain None runtimeDecls coreDecls0 modulesIn
   let (entrySchemes, _, _) = checkModulesEntryFromDiags g.gdPerMod
@@ -57192,6 +57197,7 @@ popMarkedClause grouped pending n =
     [] => panic "rebuildGroupDecls: no marked clause left for \{n}"
 
 export
-schemeLines : List (String, Scheme) -> List String
+schemeLines : List (String, PubScheme) -> List String
 schemeLines [] = []
-schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
+schemeLines ((n, p) :: rest) =
+  "\{n} : \{ppSchemeCon p.psContext p.psScheme}" :: schemeLines rest

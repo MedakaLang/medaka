@@ -64,6 +64,7 @@ import frontend.marker.{
   preludeStandaloneShadowsWith,
 }
 import types.repr.{Scheme}
+import types.publish.{PubScheme(..), pubSchemes}
 import types.effect_invocation.{InvocationOps}
 import types.typecheck.{
   checkOneDiagsK, checkModulesEntryFullSplitK, schemeLines, checkModulesDiagsChainFor, chainFullKey, checkModulesK,
@@ -944,14 +945,14 @@ graphCheckDrive : List ModDiags ->
   List (String, String) ->
   CheckDrive
 graphCheckDrive perMod modPairs paths = CheckDrive {
-  cdEntrySchemes = entryOwnSchemes (map modOwnSchemes perMod),
+  cdEntrySchemes = pubSchemes (entryOwnSchemes (map modOwnSchemes perMod)),
   cdCoreSchemes = lastCoreSchemes (),
   cdOps = lastInvocationOps (),
   cdMods = modPairs,
   cdPaths = paths,
 }
 
-modOwnSchemes : ModDiags -> (String, List (String, Scheme))
+modOwnSchemes : ModDiags -> (String, List (String, PubScheme))
 modOwnSchemes (mid, (schemes, _, _)) = (mid, schemes)
 
 -- One typecheck drive of a single-file program, with the parts a target verdict
@@ -961,14 +962,14 @@ driveOneFile : Bool ->
   List Decl ->
   List Decl ->
   (String, List Decl) ->
-  (CheckDrive, List (String, Scheme), List TcDiag, List TcDiag)
+  (CheckDrive, List (String, PubScheme), List TcDiag, List TcDiag)
 driveOneFile valueMain preludeKey rt core (mid, decls) =
   let (coreSchemes, schemes, errs, warns) =
     checkModulesEntryFullSplitK valueMain preludeKey rt core [(mid, decls)]
   (
     CheckDrive {
-      cdEntrySchemes = schemes,
-      cdCoreSchemes = coreSchemes,
+      cdEntrySchemes = pubSchemes schemes,
+      cdCoreSchemes = pubSchemes coreSchemes,
       cdOps = lastInvocationOps (),
       cdMods = [(mid, decls)],
       cdPaths = [],
@@ -1743,7 +1744,7 @@ projectEntrySchemes : Ref (List (String, String)) ->
   List String ->
   String ->
   String ->
-  <IO> Option (List (String, Scheme))
+  <IO> Option (List (String, PubScheme))
 projectEntrySchemes cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let staleRef = newStale ()
   let wread = p => wrappedRead cacheRef staleRef parseCacheRef read p

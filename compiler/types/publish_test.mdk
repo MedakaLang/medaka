@@ -1,0 +1,276 @@
+-- Unit tests for the published shapes' zonk, freeze and validator over
+-- hand-built values; a scheme's context surviving a later drive (#4053) and a
+-- shadowing binding's context (#2054); and a pin for published schemes holding
+-- live Links (#2549), which a later V2 slice fixes.
+import test.{expectEqual, expectEach, expectTrue}
+import frontend.ast.{TyConOrigin(..)}
+import frontend.desugar.{desugar}
+import frontend.parser.{parse, parseLocated}
+import list.{zip, filter}
+import support.util.{joinNl}
+import types.repr.{
+  Mono(..), Tyvar(..), Scheme(..), IfaceRef(..), VecObl(..), ppScheme,
+  ppSchemeCon
+}
+import types.effect_domain.{Param(..)}
+import types.effect_rows.{EffRow(..), Effvar(..), effvarId, pureRow}
+import types.effect_authority.{Authority(..), Authvar(..), authvarId}
+import types.publish.{
+  PubScheme(..), VarKind(..), LiveCell(..), emptyZonk, zonkMono, zonkScheme,
+  freezePub, liveCells, atGraphEnd
+}
+import types.typecheck.{checkOneSchemeFullK}
+
+int : Mono
+int = TCon "Int" OriginBuiltin
+
+untouched : (Int, Int) -> Ref Tyvar -> Bool
+untouched (id, lvl) cell = match !cell
+  Unbound i l => i == id && l == lvl
+  Link _ => False
+
+tvar : Int -> Mono
+tvar id = TVar (Ref (Unbound id 1))
+
+scheme : List Int -> List Int -> List Int -> EffRow -> Mono -> Scheme
+scheme ids effIds authIds row t = Forall ids effIds authIds [] row t
+
+plainScheme : Mono -> Scheme
+plainScheme t = scheme [] [] [] pureRow t
+
+pub : Scheme -> PubScheme
+pub s = PubScheme { psScheme = s, psContext = [] }
+
+speakObl : List Int -> List Mono -> VecObl
+speakObl ids args = VecObl {
+  voIface = IfaceRef { irName = "Speak", irOrigin = OriginUnresolved },
+  voIds = ids,
+  voArgs = args,
+}
+
+arrowRow : Mono -> EffRow
+arrowRow (TFun _ row _) = row
+arrowRow _ = pureRow
+
+joinMembers : EffRow -> List (Ref Effvar)
+joinMembers (EffRow _ (Some cell)) = match !cell
+  EJoin _ _ ms => ms
+  _ => []
+joinMembers _ = []
+
+tailId : EffRow -> Int
+tailId (EffRow _ (Some cell)) = effvarId cell
+tailId _ = -1
+
+frozenBody : PubScheme -> Mono
+frozenBody (PubScheme { psScheme = (Forall _ _ _ _ _ t) }) = t
+
+test "a Link chain is followed and no live cell remains" =
+  let inner = Ref (Link int)
+  let outer = Ref (Link (TVar inner))
+  let (_, s) = zonkScheme emptyZonk (plainScheme (TVar outer))
+  expectEach [
+    ("renders as the target", expectEqual "Int" (ppScheme s)),
+    (
+      "the source chain is untouched",
+      expectEqual "Int" (ppScheme (plainScheme (TVar outer))),
+    ),
+    ("no live cell", expectEqual [] (liveCells "f" (pub s))),
+  ]
+
+test "a free Unbound is re-minted with its id and reported as FreeMeta" =
+  let src = Ref (Unbound 7 3)
+  let p = freezePub (plainScheme (TFun (TVar src) pureRow int)) []
+  let reminted = match frozenBody p
+    TFun (TVar c) _ _ => c
+    _ => src
+  let found = liveCells "f" p
+  let _ = reminted := Link int
+  expectEach [
+    (
+      "source cell not written",
+      expectTrue (untouched (7, 3) src),
+    ),
+    ("reported", expectEqual [FreeMeta "f" TyVarK 7] found),
+    (
+      "weak at graph end",
+      expectEqual [WeakVar "f" TyVarK 7] (atGraphEnd found),
+    ),
+  ]
+
+test "a quantified id is not a live cell" =
+  let p =
+    freezePub (scheme [7] [] [] pureRow (TFun (tvar 7) pureRow (tvar 7))) []
+  expectEqual [] (liveCells "f" p)
+
+test "an ELink tail is followed to the unbound cell" =
+  let leaf = Ref (EUnbound 4 1)
+  let link = Ref (ELink 3 (EffRow [] (Some leaf)))
+  let body = TFun int (EffRow [] (Some link)) int
+  let (_, Forall _ _ _ _ _ t) = zonkScheme emptyZonk (plainScheme body)
+  let p = freezePub (scheme [] [4] [] pureRow body) []
+  expectEach [
+    ("tail is the leaf id", expectEqual 4 (tailId (arrowRow t))),
+    ("no live cell", expectEqual [] (liveCells "f" p)),
+  ]
+
+test "an unlinked ELink in tail position is a LinkCell" =
+  let link = Ref (ELink 3 (EffRow [] None))
+  let p = pub (plainScheme (TFun int (EffRow [] (Some link)) int))
+  expectEqual [LinkCell "f" EffVarK 3] (liveCells "f" p)
+
+test "a rebuilt EJoin keeps one frozen cell per member id" =
+  let m1 = Ref (EUnbound 1 1)
+  let m2 = Ref (EUnbound 2 1)
+  let j1 = Ref (EJoin 10 1 [m1, m2])
+  let j2 = Ref (EJoin 11 1 [m2, m1])
+  let body = TFun int (EffRow [] (Some j1)) (TFun int (EffRow [] (Some j2)) int)
+  let p = freezePub (scheme [] [1, 2] [] pureRow body) []
+  let (r1, r2) = match frozenBody p
+    TFun _ a (TFun _ b _) => (a, b)
+    _ => (pureRow, pureRow)
+  let first = joinMembers r1
+  let second = joinMembers r2
+  let _ = match first
+    c :: _ => c := EUnbound 1 99
+    [] => ()
+  let seenThroughOther = match second
+    [_, c] => match !c
+      EUnbound _ lvl => lvl
+      _ => 0 - 1
+    _ => 0 - 2
+  expectEach [
+    ("two members each", expectEqual (2, 2) (length first, length second)),
+    ("member 1 is one cell across joins", expectEqual 99 seenThroughOther),
+    ("source member untouched", expectEqual 1 (effvarId m1)),
+    ("no live cell", expectEqual [] (liveCells "f" p)),
+  ]
+
+test "an AVar link is followed and an unbound AVar is re-minted" =
+  let inner = Ref (AUnbound 6 1 PUnit False None)
+  let linked = Ref (ALink 5 PUnit (AVar inner))
+  let body = TQual int (AVar linked)
+  let (_, Forall _ _ _ _ _ t) = zonkScheme emptyZonk (plainScheme body)
+  let id = match t
+    TQual _ (AVar c) => authvarId c
+    _ => 0 - 1
+  expectEach [
+    ("follows to the unbound id", expectEqual 6 id),
+    (
+      "reported",
+      expectEqual
+        [FreeMeta "f" AuthVarK 6]
+        (liveCells "f" (freezePub (plainScheme body) [])),
+    ),
+  ]
+
+test "an unsolved ESummary is an OpenSummary" =
+  let sum = Ref (ESummary 12 0 0)
+  let p = freezePub (plainScheme (TFun int (EffRow [] (Some sum)) int)) []
+  expectEqual [OpenSummary "f" 12] (liveCells "f" p)
+
+test "freeze shares one cell per id between a scheme and its context" =
+  let src = tvar 3
+  let p = freezePub (scheme [3] [] [] pureRow (TFun src pureRow src)) [
+    speakObl [3] [src],
+  ]
+  let schemeCell = match frozenBody p
+    TFun (TVar c) _ _ => Some c
+    _ => None
+  let ctxCell = match p.psContext
+    [VecObl { voArgs = [TVar c] }] => Some c
+    _ => None
+  let _ = match schemeCell
+    Some c => c := Link int
+    None => ()
+  let seen = match ctxCell
+    Some c => match !c
+      Link _ => True
+      _ => False
+    None => False
+  expectEach [
+    ("context shares the scheme's cell", expectTrue seen),
+    (
+      "context renders against the scheme's variable",
+      expectEqual "Speak Int => Int -> Int" (ppSchemeCon p.psContext p.psScheme),
+    ),
+  ]
+
+-- ── pins ───────────────────────────────────────────────────────────────────
+
+pSrc : String
+pSrc = joinNl [
+  "interface Speak a where",
+  "  speak : a -> String",
+  "impl Speak Int where",
+  "  speak _ = \"int\"",
+  "useSpeak x = speak x",
+  "pairUp x y = (speak x, y)",
+]
+
+-- Q also binds `useSpeak`, with a different shape, so the obligation table
+-- the second drive leaves holds a same-named entry over other tyvar ids.
+qSrc : String
+qSrc = joinNl [
+  "interface Speak a where",
+  "  speak : a -> String",
+  "useSpeak f y x = speak x",
+  "other = 1",
+]
+
+drive : String -> String -> List (String, PubScheme)
+drive mid src =
+  let (_, own) =
+    checkOneSchemeFullK None [] [] (mid, desugar (parseLocated src))
+  own
+
+-- Renders a scheme with the context it was published with.
+renderWithContext : PubScheme -> String
+renderWithContext p = ppSchemeCon p.psContext p.psScheme
+
+rendered : List (String, PubScheme) -> List String
+rendered ss = map (e => "\{fst e} : \{renderWithContext (snd e)}") ss
+
+linkCount : Scheme -> Int
+linkCount (Forall _ _ _ _ _ t) = monoLinks t
+
+monoLinks : Mono -> Int
+monoLinks (TVar cell) = match !cell
+  Link t2 => 1 + monoLinks t2
+  Unbound _ _ => 0
+monoLinks (TApp a b) = monoLinks a + monoLinks b
+monoLinks (TFun a _ b) = monoLinks a + monoLinks b
+monoLinks (TQual a _) = monoLinks a
+monoLinks _ = 0
+
+test "#4053: P's scheme renders the same after Q's drive" =
+  let p = drive "p" pSrc
+  let before = rendered p
+  let _ = drive "q" qSrc
+  expectEqual
+    0
+    (length (filter (pr => fst pr /= snd pr) (zip before (rendered p))))
+
+test "published schemes hold no Link" =
+  let p = drive "p" pSrc
+  expectEqual 0 (fold (acc e => acc + linkCount (snd e).psScheme) 0 p)
+
+-- A prelude binding with a declared context, shadowed by a buffer binding.
+shadowedPrelude : String
+shadowedPrelude = joinNl [
+  "interface Speak a where",
+  "  speak : a -> String",
+  "isEven : Speak a => a -> String",
+  "isEven x = speak x",
+]
+
+test "#2054: a shadowing buffer binding carries its own context, not the prelude's" =
+  let (core, own) = checkOneSchemeFullK None [] (desugar
+    (parse shadowedPrelude)) (
+    "buffer",
+    desugar (parseLocated "isEven x = \"s\""),
+  )
+  let named = ss => rendered (filter (e => fst e == "isEven") ss)
+  expectEqual
+    (["isEven : a -> String"], ["isEven : Speak a => a -> String"])
+    (named own, named core)
