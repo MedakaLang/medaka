@@ -8,10 +8,11 @@
 // (a) two 200 ms sleeps under `concurrent`: every line shows, in order, with the
 //     "compiled & ran" footer.
 // (b) a 15 s sleep hits the 10 s limit; the pre-sleep output survives and the page
-//     stays responsive while the worker is blocked in Atomics.wait.
+//     stays responsive while the worker waits (Atomics.wait, or suspended under JSPI).
 // (b2) 300 lines printed before a 15 s sleep all show after the stop.
 // (b3) a partial line (no newline) printed before a 15 s sleep survives the stop.
-// (c) without isolation the first sleep is a named CapabilityError, not a hang.
+// (c) without isolation the first sleep is a named CapabilityError, not a hang, where the
+//     engine lacks JSPI; with JSPI the sleep is a timer and needs no isolation, so it runs.
 import { chromium } from 'playwright';
 
 const [, , BASE_URL, SCREENSHOT_DIR, NOISO_URL] = process.argv;
@@ -154,7 +155,12 @@ async function main() {
       await p2.waitForSelector('#run-btn:not([disabled])', { timeout: 15000 });
       await sleep(300);
       const c = await consoleText(p2);
-      check('CapabilityError names the missing isolation, no hang', c.includes(ISOLATION_MSG) && !c.includes('after\n'), JSON.stringify(c.slice(-250)));
+      const jspi = await p2.evaluate(() => typeof WebAssembly.Suspending === 'function' && typeof WebAssembly.promising === 'function');
+      if (jspi) {
+        check('JSPI: the sleep runs without isolation', c.includes('before\n') && c.includes('after\n') && !c.includes(ISOLATION_MSG), JSON.stringify(c.slice(-250)));
+      } else {
+        check('CapabilityError names the missing isolation, no hang', c.includes(ISOLATION_MSG) && !c.includes('after\n'), JSON.stringify(c.slice(-250)));
+      }
       console.log('  (c) console: ' + JSON.stringify(c));
     } else {
       console.log('Test: no-isolation case skipped (no third URL)');
