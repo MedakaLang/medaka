@@ -2960,10 +2960,10 @@ childExprs (EListLit es) = es
 childExprs (EArrayLit es) = es
 childExprs (ERangeList lo hi _) = [lo, hi]
 childExprs (ERangeArray lo hi _) = [lo, hi]
-childExprs (ESlice e lo hi _ _) = [e, lo, hi]
+childExprs (ESlice e lo hi _) = [e, lo, hi]
 childExprs (ELetGroup binds body) = flatMap letBindExprs binds ++ [body]
 childExprs (ESection s) = sectionExprs s
-childExprs (EIndex a i _) = [a, i]
+childExprs (EIndex a i) = [a, i]
 childExprs (EAnnot e _) = [e]
 childExprs (EHeadAnnot e _) = [e]
 childExprs (EBlock stmts) = flatMap stmtExprs stmts
@@ -3060,18 +3060,17 @@ rewriteBindExpr orc (ERangeList lo hi i) =
   ERangeList (rewriteBindExpr orc lo) (rewriteBindExpr orc hi) i
 rewriteBindExpr orc (ERangeArray lo hi i) =
   ERangeArray (rewriteBindExpr orc lo) (rewriteBindExpr orc hi) i
-rewriteBindExpr orc (ESlice e lo hi i r) =
+rewriteBindExpr orc (ESlice e lo hi i) =
   ESlice
     (rewriteBindExpr orc e)
     (rewriteBindExpr orc lo)
     (rewriteBindExpr orc hi)
     i
-    r
 rewriteBindExpr orc (ELetGroup binds body) =
   ELetGroup (map (rewriteBindLet orc) binds) (rewriteBindExpr orc body)
 rewriteBindExpr orc (ESection s) = ESection (rewriteBindSection orc s)
-rewriteBindExpr orc (EIndex a i r) =
-  EIndex (rewriteBindExpr orc a) (rewriteBindExpr orc i) r
+rewriteBindExpr orc (EIndex a i) =
+  EIndex (rewriteBindExpr orc a) (rewriteBindExpr orc i)
 rewriteBindExpr orc (EAnnot e t) = EAnnot (rewriteBindExpr orc e) t
 rewriteBindExpr orc (EHeadAnnot e t) = EHeadAnnot (rewriteBindExpr orc e) t
 rewriteBindExpr orc (EBlock stmts) =
@@ -3358,12 +3357,12 @@ rewriteLamExpr (ERangeList lo hi i) =
   ERangeList (rewriteLamExpr lo) (rewriteLamExpr hi) i
 rewriteLamExpr (ERangeArray lo hi i) =
   ERangeArray (rewriteLamExpr lo) (rewriteLamExpr hi) i
-rewriteLamExpr (ESlice e lo hi i r) =
-  ESlice (rewriteLamExpr e) (rewriteLamExpr lo) (rewriteLamExpr hi) i r
+rewriteLamExpr (ESlice e lo hi i) =
+  ESlice (rewriteLamExpr e) (rewriteLamExpr lo) (rewriteLamExpr hi) i
 rewriteLamExpr (ELetGroup binds body) =
   ELetGroup (map rewriteLamLet binds) (rewriteLamExpr body)
 rewriteLamExpr (ESection s) = ESection (rewriteLamSection s)
-rewriteLamExpr (EIndex a i r) = EIndex (rewriteLamExpr a) (rewriteLamExpr i) r
+rewriteLamExpr (EIndex a i) = EIndex (rewriteLamExpr a) (rewriteLamExpr i)
 rewriteLamExpr (EAnnot e t) = EAnnot (rewriteLamExpr e) t
 rewriteLamExpr (EHeadAnnot e t) = EHeadAnnot (rewriteLamExpr e) t
 rewriteLamExpr (EBlock stmts) = EBlock (map rewriteLamStmt stmts)
@@ -3599,18 +3598,17 @@ rewriteIfMaxMinExpr (ERangeList lo hi i) =
   ERangeList (rewriteIfMaxMinExpr lo) (rewriteIfMaxMinExpr hi) i
 rewriteIfMaxMinExpr (ERangeArray lo hi i) =
   ERangeArray (rewriteIfMaxMinExpr lo) (rewriteIfMaxMinExpr hi) i
-rewriteIfMaxMinExpr (ESlice e lo hi i r) =
+rewriteIfMaxMinExpr (ESlice e lo hi i) =
   ESlice
     (rewriteIfMaxMinExpr e)
     (rewriteIfMaxMinExpr lo)
     (rewriteIfMaxMinExpr hi)
     i
-    r
 rewriteIfMaxMinExpr (ELetGroup binds body) =
   ELetGroup (map rewriteIfMaxMinLet binds) (rewriteIfMaxMinExpr body)
 rewriteIfMaxMinExpr (ESection s) = ESection (rewriteIfMaxMinSection s)
-rewriteIfMaxMinExpr (EIndex a i r) =
-  EIndex (rewriteIfMaxMinExpr a) (rewriteIfMaxMinExpr i) r
+rewriteIfMaxMinExpr (EIndex a i) =
+  EIndex (rewriteIfMaxMinExpr a) (rewriteIfMaxMinExpr i)
 rewriteIfMaxMinExpr (EAnnot e t) = EAnnot (rewriteIfMaxMinExpr e) t
 rewriteIfMaxMinExpr (EHeadAnnot e t) = EHeadAnnot (rewriteIfMaxMinExpr e) t
 rewriteIfMaxMinExpr (EBlock stmts) = EBlock (map rewriteIfMaxMinStmt stmts)
@@ -3870,21 +3868,20 @@ rewriteAndThenPureMapExpr (ERangeList lo hi i) =
   ERangeList (rewriteAndThenPureMapExpr lo) (rewriteAndThenPureMapExpr hi) i
 rewriteAndThenPureMapExpr (ERangeArray lo hi i) =
   ERangeArray (rewriteAndThenPureMapExpr lo) (rewriteAndThenPureMapExpr hi) i
-rewriteAndThenPureMapExpr (ESlice e lo hi i r) =
+rewriteAndThenPureMapExpr (ESlice e lo hi i) =
   ESlice
     (rewriteAndThenPureMapExpr e)
     (rewriteAndThenPureMapExpr lo)
     (rewriteAndThenPureMapExpr hi)
     i
-    r
 rewriteAndThenPureMapExpr (ELetGroup binds body) =
   ELetGroup
     (map rewriteAndThenPureMapLet binds)
     (rewriteAndThenPureMapExpr body)
 rewriteAndThenPureMapExpr (ESection s) =
   ESection (rewriteAndThenPureMapSection s)
-rewriteAndThenPureMapExpr (EIndex a i r) =
-  EIndex (rewriteAndThenPureMapExpr a) (rewriteAndThenPureMapExpr i) r
+rewriteAndThenPureMapExpr (EIndex a i) =
+  EIndex (rewriteAndThenPureMapExpr a) (rewriteAndThenPureMapExpr i)
 rewriteAndThenPureMapExpr (EAnnot e t) = EAnnot (rewriteAndThenPureMapExpr e) t
 rewriteAndThenPureMapExpr (EHeadAnnot e t) =
   EHeadAnnot (rewriteAndThenPureMapExpr e) t

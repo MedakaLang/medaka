@@ -1069,7 +1069,7 @@ bracketIndexRest _ _ _ = failP "expected `]` to close the index"
 finishBracketIndex : Expr -> Expr -> Parser Expr
 finishBracketIndex e lo = defer
   advance
-  postfixTail (EIndex e lo (Ref "Array"))
+  postfixTail (EIndex e lo)
 
 -- after a `.`: a field access `.field`, an index `.[i]`, or a slice `.[lo..hi]`
 dotTail : Expr -> Parser Expr
@@ -1102,7 +1102,7 @@ sliceHi e lo incl = defer
   advance
   hi <- parseExpr
   expectTok TRBracket
-  postfixTail (ESlice e lo hi incl (Ref "Array"))
+  postfixTail (ESlice e lo hi incl)
 
 -- #77: bound recursion depth so a pathologically deep input fails with a
 -- clean, located diagnostic instead of exhausting the native call stack (a

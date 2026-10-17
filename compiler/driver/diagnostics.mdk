@@ -2823,8 +2823,8 @@ mainBodyLoc (EApp f _) = mainBodyLoc f
 mainBodyLoc (EBinOp _ a _ _) = mainBodyLoc a
 mainBodyLoc (EUnOp _ a _) = mainBodyLoc a
 mainBodyLoc (EFieldAccess a _ _) = mainBodyLoc a
-mainBodyLoc (EIndex a _ _) = mainBodyLoc a
-mainBodyLoc (ESlice a _ _ _ _) = mainBodyLoc a
+mainBodyLoc (EIndex a _) = mainBodyLoc a
+mainBodyLoc (ESlice a _ _ _) = mainBodyLoc a
 mainBodyLoc _ = None
 
 export

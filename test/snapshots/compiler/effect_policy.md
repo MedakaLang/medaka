@@ -218,9 +218,9 @@ collectEVars (EListLit es) = concatMapCP collectEVars es
 collectEVars (EArrayLit es) = concatMapCP collectEVars es
 collectEVars (ERangeList a b _) = collectEVars a ++ collectEVars b
 collectEVars (ERangeArray a b _) = collectEVars a ++ collectEVars b
-collectEVars (ESlice a b c _ _) =
+collectEVars (ESlice a b c _) =
   collectEVars a ++ collectEVars b ++ collectEVars c
-collectEVars (EIndex a b _) = collectEVars a ++ collectEVars b
+collectEVars (EIndex a b) = collectEVars a ++ collectEVars b
 collectEVars (EBlock stmts) = concatMapCP collectStmt stmts
 collectEVars (EDo _ stmts) = concatMapCP collectStmt stmts
 collectEVars _ = []
@@ -417,8 +417,8 @@ firstWithEffect effTable label (c :: rest) =
 (DFunDef false "collectEVars" ((PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EVar "concatMapCP") (EVar "collectEVars")) (EVar "es")))
 (DFunDef false "collectEVars" ((PCon "ERangeList" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "collectEVars") (EVar "a")) (EApp (EVar "collectEVars") (EVar "b"))))
 (DFunDef false "collectEVars" ((PCon "ERangeArray" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "collectEVars") (EVar "a")) (EApp (EVar "collectEVars") (EVar "b"))))
-(DFunDef false "collectEVars" ((PCon "ESlice" (PVar "a") (PVar "b") (PVar "c") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectEVars") (EVar "a")) (EApp (EVar "collectEVars") (EVar "b"))) (EApp (EVar "collectEVars") (EVar "c"))))
-(DFunDef false "collectEVars" ((PCon "EIndex" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "collectEVars") (EVar "a")) (EApp (EVar "collectEVars") (EVar "b"))))
+(DFunDef false "collectEVars" ((PCon "ESlice" (PVar "a") (PVar "b") (PVar "c") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectEVars") (EVar "a")) (EApp (EVar "collectEVars") (EVar "b"))) (EApp (EVar "collectEVars") (EVar "c"))))
+(DFunDef false "collectEVars" ((PCon "EIndex" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "collectEVars") (EVar "a")) (EApp (EVar "collectEVars") (EVar "b"))))
 (DFunDef false "collectEVars" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "concatMapCP") (EVar "collectStmt")) (EVar "stmts")))
 (DFunDef false "collectEVars" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EVar "concatMapCP") (EVar "collectStmt")) (EVar "stmts")))
 (DFunDef false "collectEVars" (PWild) (EListLit))
@@ -546,8 +546,8 @@ firstWithEffect effTable label (c :: rest) =
 (DFunDef false "collectEVars" ((PCon "EArrayLit" (PVar "es"))) (EApp (EApp (EVar "concatMapCP") (EVar "collectEVars")) (EVar "es")))
 (DFunDef false "collectEVars" ((PCon "ERangeList" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "collectEVars") (EVar "a")) (EApp (EVar "collectEVars") (EVar "b"))))
 (DFunDef false "collectEVars" ((PCon "ERangeArray" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "collectEVars") (EVar "a")) (EApp (EVar "collectEVars") (EVar "b"))))
-(DFunDef false "collectEVars" ((PCon "ESlice" (PVar "a") (PVar "b") (PVar "c") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectEVars") (EVar "a")) (EApp (EVar "collectEVars") (EVar "b"))) (EApp (EVar "collectEVars") (EVar "c"))))
-(DFunDef false "collectEVars" ((PCon "EIndex" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "collectEVars") (EVar "a")) (EApp (EVar "collectEVars") (EVar "b"))))
+(DFunDef false "collectEVars" ((PCon "ESlice" (PVar "a") (PVar "b") (PVar "c") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectEVars") (EVar "a")) (EApp (EVar "collectEVars") (EVar "b"))) (EApp (EVar "collectEVars") (EVar "c"))))
+(DFunDef false "collectEVars" ((PCon "EIndex" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "collectEVars") (EVar "a")) (EApp (EVar "collectEVars") (EVar "b"))))
 (DFunDef false "collectEVars" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "concatMapCP") (EVar "collectStmt")) (EVar "stmts")))
 (DFunDef false "collectEVars" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EVar "concatMapCP") (EVar "collectStmt")) (EVar "stmts")))
 (DFunDef false "collectEVars" (PWild) (EListLit))

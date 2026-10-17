@@ -27182,10 +27182,10 @@ eagerRefs (EVariantUpdate _ e0 fs) =
 eagerRefs (EArrayLit es) = flatMap eagerRefs es
 eagerRefs (EListLit es) = flatMap eagerRefs es
 eagerRefs (ETuple es) = flatMap eagerRefs es
-eagerRefs (EIndex e0 i _) = eagerRefs e0 ++ eagerRefs i
+eagerRefs (EIndex e0 i) = eagerRefs e0 ++ eagerRefs i
 eagerRefs (ERangeList lo hi _) = eagerRefs lo ++ eagerRefs hi
 eagerRefs (ERangeArray lo hi _) = eagerRefs lo ++ eagerRefs hi
-eagerRefs (ESlice e0 lo hi _ _) = eagerRefs e0 ++ eagerRefs lo ++ eagerRefs hi
+eagerRefs (ESlice e0 lo hi _) = eagerRefs e0 ++ eagerRefs lo ++ eagerRefs hi
 eagerRefs (EBlock stmts) = flatMap eagerRefsDoStmt stmts
 eagerRefs (EDo _ stmts) = flatMap eagerRefsDoStmt stmts
 eagerRefs (EAnnot e0 _) = eagerRefs e0
@@ -28609,15 +28609,14 @@ rewriteArgScoped rw bound (ERangeList lo hi i) =
   ERangeList (rewriteArgScoped rw bound lo) (rewriteArgScoped rw bound hi) i
 rewriteArgScoped rw bound (ERangeArray lo hi i) =
   ERangeArray (rewriteArgScoped rw bound lo) (rewriteArgScoped rw bound hi) i
-rewriteArgScoped rw bound (ESlice e0 lo hi i r) =
+rewriteArgScoped rw bound (ESlice e0 lo hi i) =
   ESlice
     (rewriteArgScoped rw bound e0)
     (rewriteArgScoped rw bound lo)
     (rewriteArgScoped rw bound hi)
     i
-    r
-rewriteArgScoped rw bound (EIndex e0 i r) =
-  EIndex (rewriteArgScoped rw bound e0) (rewriteArgScoped rw bound i) r
+rewriteArgScoped rw bound (EIndex e0 i) =
+  EIndex (rewriteArgScoped rw bound e0) (rewriteArgScoped rw bound i)
 rewriteArgScoped rw bound (EAnnot e0 t) =
   EAnnot (rewriteArgScoped rw bound e0) t
 rewriteArgScoped rw bound (EHeadAnnot e0 t) =
@@ -36342,9 +36341,9 @@ collectMethodSites (ERangeList a b _) =
   collectMethodSites a ++ collectMethodSites b
 collectMethodSites (ERangeArray a b _) =
   collectMethodSites a ++ collectMethodSites b
-collectMethodSites (ESlice e a b _ _) =
+collectMethodSites (ESlice e a b _) =
   collectMethodSites e ++ collectMethodSites a ++ collectMethodSites b
-collectMethodSites (EIndex e i _) = collectMethodSites e ++ collectMethodSites i
+collectMethodSites (EIndex e i) = collectMethodSites e ++ collectMethodSites i
 collectMethodSites (EAnnot e _) = collectMethodSites e
 collectMethodSites (EBlock stmts) = flatMap doStmtSites stmts
 collectMethodSites (ERecordCreate _ fs) = flatMap fieldAssignSites fs
@@ -36414,9 +36413,9 @@ collectDictSites (EListLit es) = flatMap collectDictSites es
 collectDictSites (EArrayLit es) = flatMap collectDictSites es
 collectDictSites (ERangeList a b _) = collectDictSites a ++ collectDictSites b
 collectDictSites (ERangeArray a b _) = collectDictSites a ++ collectDictSites b
-collectDictSites (ESlice e a b _ _) =
+collectDictSites (ESlice e a b _) =
   collectDictSites e ++ collectDictSites a ++ collectDictSites b
-collectDictSites (EIndex e i _) = collectDictSites e ++ collectDictSites i
+collectDictSites (EIndex e i) = collectDictSites e ++ collectDictSites i
 collectDictSites (EAnnot e _) = collectDictSites e
 collectDictSites (EBlock stmts) = flatMap doStmtDictSites stmts
 collectDictSites (ERecordCreate _ fs) = flatMap fieldAssignDictSites fs
@@ -44556,8 +44555,8 @@ allEVars (EListLit es) = flatMap allEVars es
 allEVars (EArrayLit es) = flatMap allEVars es
 allEVars (ERangeList a b _) = allEVars a ++ allEVars b
 allEVars (ERangeArray a b _) = allEVars a ++ allEVars b
-allEVars (ESlice e a b _ _) = allEVars e ++ allEVars a ++ allEVars b
-allEVars (EIndex e i _) = allEVars e ++ allEVars i
+allEVars (ESlice e a b _) = allEVars e ++ allEVars a ++ allEVars b
+allEVars (EIndex e i) = allEVars e ++ allEVars i
 allEVars (EAnnot e _) = allEVars e
 allEVars (EBlock stmts) = flatMap doStmtEVars stmts
 allEVars (ERecordCreate _ fs) = flatMap fieldAssignEVars fs
@@ -44661,9 +44660,9 @@ freeEVars bound (EListLit es) = flatMap (freeEVars bound) es
 freeEVars bound (EArrayLit es) = flatMap (freeEVars bound) es
 freeEVars bound (ERangeList a b _) = freeEVars bound a ++ freeEVars bound b
 freeEVars bound (ERangeArray a b _) = freeEVars bound a ++ freeEVars bound b
-freeEVars bound (ESlice e a b _ _) =
+freeEVars bound (ESlice e a b _) =
   freeEVars bound e ++ freeEVars bound a ++ freeEVars bound b
-freeEVars bound (EIndex e i _) = freeEVars bound e ++ freeEVars bound i
+freeEVars bound (EIndex e i) = freeEVars bound e ++ freeEVars bound i
 freeEVars bound (EAnnot e _) = freeEVars bound e
 freeEVars bound (EBlock stmts) = freeStmtsEVars bound stmts
 freeEVars bound (ERecordCreate _ fs) = flatMap (freeFieldEVars bound) fs

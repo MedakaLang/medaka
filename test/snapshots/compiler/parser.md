@@ -1073,7 +1073,7 @@ bracketIndexRest _ _ _ = failP "expected `]` to close the index"
 finishBracketIndex : Expr -> Expr -> Parser Expr
 finishBracketIndex e lo = defer
   advance
-  postfixTail (EIndex e lo (Ref "Array"))
+  postfixTail (EIndex e lo)
 
 -- after a `.`: a field access `.field`, an index `.[i]`, or a slice `.[lo..hi]`
 dotTail : Expr -> Parser Expr
@@ -1106,7 +1106,7 @@ sliceHi e lo incl = defer
   advance
   hi <- parseExpr
   expectTok TRBracket
-  postfixTail (ESlice e lo hi incl (Ref "Array"))
+  postfixTail (ESlice e lo hi incl)
 
 -- #77: bound recursion depth so a pathologically deep input fails with a
 -- clean, located diagnostic instead of exhausting the native call stack (a
@@ -7206,7 +7206,7 @@ parseResultWith src tokList offList =
 (DFunDef false "bracketIndexRest" ((PVar "e") (PVar "lo") (PCon "TRBracket")) (EApp (EApp (EVar "finishBracketIndex") (EVar "e")) (EVar "lo")))
 (DFunDef false "bracketIndexRest" (PWild PWild PWild) (EApp (EVar "failP") (ELit (LString "expected `]` to close the index"))))
 (DTypeSig false "finishBracketIndex" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr")))))
-(DFunDef false "finishBracketIndex" ((PVar "e") (PVar "lo")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "postfixTail") (EApp (EApp (EApp (EVar "EIndex") (EVar "e")) (EVar "lo")) (EApp (EVar "Ref") (ELit (LString "Array"))))))))
+(DFunDef false "finishBracketIndex" ((PVar "e") (PVar "lo")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "postfixTail") (EApp (EApp (EVar "EIndex") (EVar "e")) (EVar "lo"))))))
 (DTypeSig false "dotTail" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "dotTail" ((PVar "e")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TDot"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "dotFor") (EVar "e")) (EVar "t")))))))
 (DTypeSig false "dotFor" (TyFun (TyCon "Expr") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr")))))
@@ -7220,7 +7220,7 @@ parseResultWith src tokList offList =
 (DFunDef false "indexOrSliceRest" ((PVar "e") (PVar "lo") (PCon "TRBracket")) (EApp (EApp (EVar "finishBracketIndex") (EVar "e")) (EVar "lo")))
 (DFunDef false "indexOrSliceRest" (PWild PWild PWild) (EApp (EVar "failP") (ELit (LString "expected `..`, `..=` or `]` in the index"))))
 (DTypeSig false "sliceHi" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Expr"))))))
-(DFunDef false "sliceHi" ((PVar "e") (PVar "lo") (PVar "incl")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseExpr")) (ELam ((PVar "hi")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TRBracket"))) (ELam (PWild) (EApp (EVar "postfixTail") (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "e")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Ref") (ELit (LString "Array"))))))))))))
+(DFunDef false "sliceHi" ((PVar "e") (PVar "lo") (PVar "incl")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseExpr")) (ELam ((PVar "hi")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TRBracket"))) (ELam (PWild) (EApp (EVar "postfixTail") (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "e")) (EVar "lo")) (EVar "hi")) (EVar "incl"))))))))))
 (DTypeSig false "nestDepthRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "nestDepthRef" () (EApp (EVar "Ref") (ELit (LInt 0))))
 (DTypeSig false "maxNestDepth" (TyCon "Int"))
@@ -9182,7 +9182,7 @@ parseResultWith src tokList offList =
 (DFunDef false "bracketIndexRest" ((PVar "e") (PVar "lo") (PCon "TRBracket")) (EApp (EApp (EVar "finishBracketIndex") (EVar "e")) (EVar "lo")))
 (DFunDef false "bracketIndexRest" (PWild PWild PWild) (EApp (EVar "failP") (ELit (LString "expected `]` to close the index"))))
 (DTypeSig false "finishBracketIndex" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr")))))
-(DFunDef false "finishBracketIndex" ((PVar "e") (PVar "lo")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "postfixTail") (EApp (EApp (EApp (EVar "EIndex") (EVar "e")) (EVar "lo")) (EApp (EVar "Ref") (ELit (LString "Array"))))))))
+(DFunDef false "finishBracketIndex" ((PVar "e") (PVar "lo")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "postfixTail") (EApp (EApp (EVar "EIndex") (EVar "e")) (EVar "lo"))))))
 (DTypeSig false "dotTail" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "dotTail" ((PVar "e")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TDot"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "dotFor") (EVar "e")) (EVar "t")))))))
 (DTypeSig false "dotFor" (TyFun (TyCon "Expr") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr")))))
@@ -9196,7 +9196,7 @@ parseResultWith src tokList offList =
 (DFunDef false "indexOrSliceRest" ((PVar "e") (PVar "lo") (PCon "TRBracket")) (EApp (EApp (EVar "finishBracketIndex") (EVar "e")) (EVar "lo")))
 (DFunDef false "indexOrSliceRest" (PWild PWild PWild) (EApp (EVar "failP") (ELit (LString "expected `..`, `..=` or `]` in the index"))))
 (DTypeSig false "sliceHi" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Expr"))))))
-(DFunDef false "sliceHi" ((PVar "e") (PVar "lo") (PVar "incl")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseExpr")) (ELam ((PVar "hi")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TRBracket"))) (ELam (PWild) (EApp (EVar "postfixTail") (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "e")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Ref") (ELit (LString "Array"))))))))))))
+(DFunDef false "sliceHi" ((PVar "e") (PVar "lo") (PVar "incl")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseExpr")) (ELam ((PVar "hi")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TRBracket"))) (ELam (PWild) (EApp (EVar "postfixTail") (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "e")) (EVar "lo")) (EVar "hi")) (EVar "incl"))))))))))
 (DTypeSig false "nestDepthRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "nestDepthRef" () (EApp (EVar "Ref") (ELit (LInt 0))))
 (DTypeSig false "maxNestDepth" (TyCon "Int"))

@@ -1,5 +1,5 @@
 # META
-source_lines=3984
+source_lines=3972
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -192,20 +192,8 @@ lower (EListLit es) = CList (map lower es)
 lower (EArrayLit es) = CArray (map lower es)
 lower (ERangeList lo hi incl) = CRangeList (lower lo) (lower hi) incl
 lower (ERangeArray lo hi incl) = CRangeArray (lower lo) (lower hi) incl
-lower (EIndex a i r) =
-  if !r == "String" then
-    CStringIndex (lower a) (lower i)
-  else if !r == "List" then
-    CListIndex (lower a) (lower i)
-  else
-    CIndex (lower a) (lower i)
-lower (ESlice a lo hi incl r) =
-  if !r == "String" then
-    CStringSlice (lower a) (lower lo) (lower hi) incl
-  else if !r == "List" then
-    CListSlice (lower a) (lower lo) (lower hi) incl
-  else
-    CSlice (lower a) (lower lo) (lower hi) incl
+lower (EIndex _ _) = panic "EIndex is desugared to index before lowering"
+lower (ESlice _ _ _ _) = panic "ESlice is desugared to slice before lowering"
 lower (EFieldAccess e f ev) = CFieldAccess (lower e) f (evSiteHead ev) (-1)
 lower (ERecordCreate name fields) = CRecord name (map lowerField fields)
 lower (ERecordUpdate base fields ev) =
@@ -4027,8 +4015,8 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PCon "EArrayLit" (PVar "es"))) (EApp (EVar "CArray") (EApp (EApp (EVar "map") (EVar "lower")) (EVar "es"))))
 (DFunDef false "lower" ((PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeList") (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")))
 (DFunDef false "lower" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeArray") (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")))
-(DFunDef false "lower" ((PCon "EIndex" (PVar "a") (PVar "i") (PVar "r"))) (EIf (EBinOp "==" (EUnOp "!" (EVar "r")) (ELit (LString "String"))) (EApp (EApp (EVar "CStringIndex") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "i"))) (EIf (EBinOp "==" (EUnOp "!" (EVar "r")) (ELit (LString "List"))) (EApp (EApp (EVar "CListIndex") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "i"))) (EApp (EApp (EVar "CIndex") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "i"))))))
-(DFunDef false "lower" ((PCon "ESlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EIf (EBinOp "==" (EUnOp "!" (EVar "r")) (ELit (LString "String"))) (EApp (EApp (EApp (EApp (EVar "CStringSlice") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")) (EIf (EBinOp "==" (EUnOp "!" (EVar "r")) (ELit (LString "List"))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")) (EApp (EApp (EApp (EApp (EVar "CSlice") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")))))
+(DFunDef false "lower" ((PCon "EIndex" PWild PWild)) (EApp (EVar "panic") (ELit (LString "EIndex is desugared to index before lowering"))))
+(DFunDef false "lower" ((PCon "ESlice" PWild PWild PWild PWild)) (EApp (EVar "panic") (ELit (LString "ESlice is desugared to slice before lowering"))))
 (DFunDef false "lower" ((PCon "EFieldAccess" (PVar "e") (PVar "f") (PVar "ev"))) (EApp (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EVar "lower") (EVar "e"))) (EVar "f")) (EApp (EVar "evSiteHead") (EVar "ev"))) (EUnOp "-" (ELit (LInt 1)))))
 (DFunDef false "lower" ((PCon "ERecordCreate" (PVar "name") (PVar "fields"))) (EApp (EApp (EVar "CRecord") (EVar "name")) (EApp (EApp (EVar "map") (EVar "lowerField")) (EVar "fields"))))
 (DFunDef false "lower" ((PCon "ERecordUpdate" (PVar "base") (PVar "fields") (PVar "ev"))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EApp (EVar "evSiteHead") (EVar "ev"))) (EApp (EVar "lower") (EVar "base"))) (EApp (EApp (EVar "map") (EVar "lowerField")) (EVar "fields"))))
@@ -5345,8 +5333,8 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PCon "EArrayLit" (PVar "es"))) (EApp (EVar "CArray") (EApp (EApp (EMethodRef "map") (EVar "lower")) (EVar "es"))))
 (DFunDef false "lower" ((PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeList") (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")))
 (DFunDef false "lower" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeArray") (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")))
-(DFunDef false "lower" ((PCon "EIndex" (PVar "a") (PVar "i") (PVar "r"))) (EIf (EBinOp "==" (EUnOp "!" (EVar "r")) (ELit (LString "String"))) (EApp (EApp (EVar "CStringIndex") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "i"))) (EIf (EBinOp "==" (EUnOp "!" (EVar "r")) (ELit (LString "List"))) (EApp (EApp (EVar "CListIndex") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "i"))) (EApp (EApp (EVar "CIndex") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "i"))))))
-(DFunDef false "lower" ((PCon "ESlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EIf (EBinOp "==" (EUnOp "!" (EVar "r")) (ELit (LString "String"))) (EApp (EApp (EApp (EApp (EVar "CStringSlice") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")) (EIf (EBinOp "==" (EUnOp "!" (EVar "r")) (ELit (LString "List"))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")) (EApp (EApp (EApp (EApp (EVar "CSlice") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")))))
+(DFunDef false "lower" ((PCon "EIndex" PWild PWild)) (EApp (EVar "panic") (ELit (LString "EIndex is desugared to index before lowering"))))
+(DFunDef false "lower" ((PCon "ESlice" PWild PWild PWild PWild)) (EApp (EVar "panic") (ELit (LString "ESlice is desugared to slice before lowering"))))
 (DFunDef false "lower" ((PCon "EFieldAccess" (PVar "e") (PVar "f") (PVar "ev"))) (EApp (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EVar "lower") (EVar "e"))) (EVar "f")) (EApp (EVar "evSiteHead") (EVar "ev"))) (EUnOp "-" (ELit (LInt 1)))))
 (DFunDef false "lower" ((PCon "ERecordCreate" (PVar "name") (PVar "fields"))) (EApp (EApp (EVar "CRecord") (EVar "name")) (EApp (EApp (EMethodRef "map") (EVar "lowerField")) (EVar "fields"))))
 (DFunDef false "lower" ((PCon "ERecordUpdate" (PVar "base") (PVar "fields") (PVar "ev"))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EApp (EVar "evSiteHead") (EVar "ev"))) (EApp (EVar "lower") (EVar "base"))) (EApp (EApp (EMethodRef "map") (EVar "lowerField")) (EVar "fields"))))

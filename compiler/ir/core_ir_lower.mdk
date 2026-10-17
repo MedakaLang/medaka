@@ -188,20 +188,8 @@ lower (EListLit es) = CList (map lower es)
 lower (EArrayLit es) = CArray (map lower es)
 lower (ERangeList lo hi incl) = CRangeList (lower lo) (lower hi) incl
 lower (ERangeArray lo hi incl) = CRangeArray (lower lo) (lower hi) incl
-lower (EIndex a i r) =
-  if !r == "String" then
-    CStringIndex (lower a) (lower i)
-  else if !r == "List" then
-    CListIndex (lower a) (lower i)
-  else
-    CIndex (lower a) (lower i)
-lower (ESlice a lo hi incl r) =
-  if !r == "String" then
-    CStringSlice (lower a) (lower lo) (lower hi) incl
-  else if !r == "List" then
-    CListSlice (lower a) (lower lo) (lower hi) incl
-  else
-    CSlice (lower a) (lower lo) (lower hi) incl
+lower (EIndex _ _) = panic "EIndex is desugared to index before lowering"
+lower (ESlice _ _ _ _) = panic "ESlice is desugared to slice before lowering"
 lower (EFieldAccess e f ev) = CFieldAccess (lower e) f (evSiteHead ev) (-1)
 lower (ERecordCreate name fields) = CRecord name (map lowerField fields)
 lower (ERecordUpdate base fields ev) =

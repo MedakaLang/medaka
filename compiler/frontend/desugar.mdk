@@ -108,10 +108,10 @@ mapChildren g (EVariantUpdate c e0 fs) =
 mapChildren g (EArrayLit es) = EArrayLit (map g es)
 mapChildren g (EListLit es) = EListLit (map g es)
 mapChildren g (ETuple es) = ETuple (map g es)
-mapChildren g (EIndex e0 i r) = EIndex (g e0) (g i) r
+mapChildren g (EIndex e0 i) = EIndex (g e0) (g i)
 mapChildren g (ERangeList lo hi incl) = ERangeList (g lo) (g hi) incl
 mapChildren g (ERangeArray lo hi incl) = ERangeArray (g lo) (g hi) incl
-mapChildren g (ESlice e0 lo hi incl r) = ESlice (g e0) (g lo) (g hi) incl r
+mapChildren g (ESlice e0 lo hi incl) = ESlice (g e0) (g lo) (g hi) incl
 mapChildren g (EBlock stmts) = EBlock (map (mapDoStmt g) stmts)
 mapChildren g (EDo d stmts) = EDo d (map (mapDoStmt g) stmts)
 mapChildren g (EAnnot e0 t) = EAnnot (g e0) t
@@ -229,7 +229,7 @@ rewriteSugar (EStringInterp parts) = interpToCore parts
 -- is a type error at the call site.
 rewriteSugar (EBinOp ":=" lhs rhs _) = callBin "setRef" lhs rhs
 -- `a[i]` / `a.[i]` (read position) → `index a i` (Index interface dispatch).
-rewriteSugar (EIndex a i _) = callBin "index" a i
+rewriteSugar (EIndex a i) = callBin "index" a i
 -- `a.[lo..hi]` / `a.[lo..=hi]` (slice) → `slice a lo hi'` (Slice interface
 -- dispatch, #670), half-open: the inclusive `..=` form normalizes here to
 -- `slice a lo (sliceInclusiveEnd hi)` (the prelude's `hi + 1`, which stops at
@@ -240,7 +240,7 @@ rewriteSugar (EIndex a i _) = callBin "index" a i
 -- lowering read a String/Int/[] through the Array rep (an S0 run≠build memory
 -- fault).  Pure surface sugar: no dedicated typecheck/eval/lower arm survives
 -- (they become dead — a stray post-desugar ESlice is a loud guard).
-rewriteSugar (ESlice a lo hi incl _) =
+rewriteSugar (ESlice a lo hi incl) =
   let hiEx = if incl then EApp (EVar "sliceInclusiveEnd") hi else hi
   EApp (EApp (EApp (EVar "slice") a) lo) hiEx
 rewriteSugar e = e
@@ -257,7 +257,7 @@ rewriteAssignIndex (EBinOp ":=" lhs v r) =
 rewriteAssignIndex e = e
 
 assignIndexLhs : Expr -> Expr -> Expr -> EvId -> Expr
-assignIndexLhs (EIndex a i _) _ v _ = EApp (callBin "setIndex" a i) v
+assignIndexLhs (EIndex a i) _ v _ = EApp (callBin "setIndex" a i) v
 assignIndexLhs _ lhs v r = EBinOp ":=" lhs v r
 
 -- guard arms → nested if/match, terminated by `__fallthrough__ ()` (fold_right)
