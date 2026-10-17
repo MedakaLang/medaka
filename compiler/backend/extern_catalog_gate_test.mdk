@@ -56,7 +56,7 @@ import types.target_profile.{
   withheldLabels,
 }
 import backend.extern_catalog_test.{externDeclNames, minus}
-import backend.core_validate.{externLabels}
+import backend.core_validate.{externLabels, isUnprovidedOn, profileColumn}
 import backend.extern_catalog.{
   Disposition(..),
   ExternRow(..),
@@ -685,42 +685,13 @@ writeCells dir = do
 
 -- # Profiles against the catalog
 --
--- A profile that grants a label promises its backend lowers every extern whose
--- declared result row names that label.  An extern with no label is gated by
--- no grant, so it applies to every profile.  The only dispositions left over
--- are the ratchet gaps (`GapUnported` on wasm, `GapBug` on eval), which may
--- only be drained, and the reasoned exceptions below.
-
--- Externs that a backend does not lower although every profile on it that
--- reaches them must: those with no label, which no grant gates, and those
--- whose only label is `IO`, which every profile granting a host label reaches.
--- Each with why.
-labellessExceptions : List (String, String)
-labellessExceptions = [
-  (
-    "assertSnapshot",
-    "a forward-declared snapshot-testing primitive no backend lowers and no stdlib code calls; its only label is IO, so every profile granting a host label reaches it",
-  ),
-  (
-    "buildFingerprint",
-    "build provenance is stamped into a native link; no WasmGC module carries one",
-  ),
-  ("buildCommit", "a sibling provenance stamp of buildFingerprint"),
-  ("buildDate", "a sibling provenance stamp of buildFingerprint"),
-  (
-    "stashRunStdout",
-    "interpreter-only `medaka run` plumbing, never reached by a WasmGC program",
-  ),
-  (
-    "enableRunStdoutFlush",
-    "interpreter-only `medaka run` plumbing, never reached by a WasmGC program",
-  ),
-  ("socketFd", "raw BSD sockets are native-only; WasmGC has no equivalent"),
-  (
-    "listenSocketFd",
-    "raw BSD sockets are native-only; WasmGC has no equivalent",
-  ),
-]
+-- A profile that grants a label may reach an extern its backend does not lower
+-- only because the target check refuses the program that reaches it
+-- (`tools.target_check.builtinRefusals`, judged by `core_validate.unprovidedOn`
+-- on the profile's column).  So a gap cell under a granted label is legal
+-- exactly when that predicate sees it; one it cannot see would be reached with
+-- no refusal.  The ratchet gaps (`GapUnported` on wasm, `GapBug` on eval) are
+-- counted separately, and may only be drained.
 
 gapOn : Backend -> ExternRow -> Option (GapKind, String)
 gapOn BackendLlvm r = notProvided (rowLlvm r)
@@ -767,7 +738,8 @@ unboundCells profiles labelsOf rows =
 lookupLabels : String -> List (String, List String) -> Option (List String)
 lookupLabels n labelsOf = map snd (find (e => fst e == n) labelsOf)
 
--- A granted extern that is neither bound, a ratchet gap, nor excepted.
+-- A gap cell under a granted label that the target check's own predicate does
+-- not see, so a program reaching it is admitted.
 coherenceFindings : List TargetProfile ->
   List (String, List String) ->
   List ExternRow ->
@@ -777,12 +749,11 @@ coherenceFindings profiles labelsOf rows =
     (c => match c
       (pn, ext, k, why) => match find (p => profileName p == pn) profiles
         Some p =>
-          if isRatchet (profileBackend p) k
-            || any (e => fst e == ext) labellessExceptions then
+          if isUnprovidedOn (profileColumn p) ext then
             None
           else
             Some
-              "`\{ext}` on \{pn}: \{gapKindName k} (\{why}) under a granted label"
+              "`\{ext}` on \{pn}: \{gapKindName k} (\{why}) under a granted label, and the target check does not refuse it"
         None => None)
     (unboundCells profiles labelsOf rows)
 
@@ -815,7 +786,7 @@ okOpt : Result e a -> Option a
 okOpt (Ok x) = Some x
 okOpt (Err _) = None
 
-test "profiles: every extern a granted label reaches is bound, a ratchet gap or excepted" =
+test "profiles: every gap cell under a granted label is one the target check refuses" =
   match runtimeText
     Err e => expectEqual "read runtime.mdk" "failed: \{e}"
     Ok src => expectAll [
@@ -831,7 +802,7 @@ test "profiles: every extern a granted label reaches is bound, a ratchet gap or 
             catalogRows)),
     ]
 
-test "red: a PERMANENT row under a granted label is named with extern and profile" =
+test "red: a gap row under a granted label that the target check cannot see is named with extern and profile" =
   let scratch =
     ExternRow
       "zzGrantedExtern"
@@ -840,42 +811,12 @@ test "red: a PERMANENT row under a granted label is named with extern and profil
       Interpreted
   expectEqual
     [
-      "`zzGrantedExtern` on llvm/native-posix: PERMANENT (scratch) under a granted label",
-      "`zzGrantedExtern` on wasmgc/node: PERMANENT (scratch) under a granted label",
-      "`zzGrantedExtern` on wasmgc/browser-worker: PERMANENT (scratch) under a granted label",
-      "`zzGrantedExtern` on wasmgc/edge: PERMANENT (scratch) under a granted label",
+      "`zzGrantedExtern` on llvm/native-posix: PERMANENT (scratch) under a granted label, and the target check does not refuse it",
+      "`zzGrantedExtern` on wasmgc/node: PERMANENT (scratch) under a granted label, and the target check does not refuse it",
+      "`zzGrantedExtern` on wasmgc/browser-worker: PERMANENT (scratch) under a granted label, and the target check does not refuse it",
+      "`zzGrantedExtern` on wasmgc/edge: PERMANENT (scratch) under a granted label, and the target check does not refuse it",
     ]
     (coherenceFindings allProfiles [("zzGrantedExtern", ["Stdout"])] [scratch])
-
--- An exception must still describe an ungated extern that some backend does
--- not lower, so the list cannot outlive the gap it excuses.
-test "profiles: every exception names an ungated extern with a gap" =
-  match runtimeText
-    Err e => expectEqual "read runtime.mdk" "failed: \{e}"
-    Ok src =>
-      let labelsOf = externLabels (parse src)
-      expectNoFindings
-        "stale exceptions"
-        (Ok
-          (flatMap
-            (e =>
-              if isUngated (lookupLabels (fst e) labelsOf)
-                && hasGap (fst e) then
-                []
-              else
-                ["exception `\{fst e}` is not an ungated extern with a gap"])
-            labellessExceptions))
-
-hasGap : String -> Bool
-hasGap n = match catalogRow n
-  None => False
-  Some r =>
-    any (b => isSome (gapOn b r)) [BackendLlvm, BackendWasmgc, BackendEval]
-
-isUngated : Option (List String) -> Bool
-isUngated (Some []) = True
-isUngated (Some ["IO"]) = True
-isUngated _ = False
 
 -- The ratchet may only fall: draining a row lowers this ceiling in the same
 -- change.
