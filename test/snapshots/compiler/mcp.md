@@ -1,5 +1,5 @@
 # META
-source_lines=1848
+source_lines=1843
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/mcp.mdk — the `medaka mcp` MCP (Model Context Protocol) server.
@@ -48,6 +48,7 @@ import driver.diagnostics.{
 }
 import tools.lsp.{
   typeAtPoint,
+  typeAtPoints,
   documentSymbols,
   definitionResult,
   referencesResult,
@@ -124,6 +125,7 @@ import tools.test_pins_report.{
   knownRedCountProps,
 }
 import support.util.{joinWith}
+import list.{zipWith}
 import regex.{Regex, Match, mustCompile, findAll}
 
 -- ── protocol / server identity ──────────────────────────────────────────────
@@ -734,31 +736,24 @@ typeAtManyCols : String ->
   List Int ->
   <IO> Json
 typeAtManyCols runtimeSrc coreSrc path src line symbol cols =
-  let header = stringConcat [
-    "'",
-    symbol,
-    "' is ambiguous on line ",
-    intToString line,
-    " — ",
-    intToString (length cols),
-    " matches:",
-  ]
-  let bodies = typeAtColLines runtimeSrc coreSrc path src line cols
+  let header = stringConcat
+    [
+      "'",
+      symbol,
+      "' is ambiguous on line ",
+      intToString line,
+      " — ",
+      intToString (length cols),
+      " matches:",
+    ]
+  -- Every match is answered from one analysis of the file.
+  let answers = typeAtPoints runtimeSrc coreSrc path src line cols
+  let bodies = zipWith typeAtColLine cols answers
   toolTextResult (joinWith "\n" (header :: bodies)) False
 
-typeAtColLines : String ->
-  String ->
-  String ->
-  String ->
-  Int ->
-  List Int ->
-  <IO> List String
-typeAtColLines _runtimeSrc _coreSrc _path _src _line [] = []
-typeAtColLines runtimeSrc coreSrc path src line (col :: rest) =
-  let here = match typeAtPoint runtimeSrc coreSrc path src line col
-    Some ty => stringConcat ["  col ", intToString col, ": ", ty]
-    None => stringConcat ["  col ", intToString col, ": no symbol"]
-  here :: typeAtColLines runtimeSrc coreSrc path src line rest
+typeAtColLine : Int -> Option String -> String
+typeAtColLine col (Some ty) = stringConcat ["  col ", intToString col, ": ", ty]
+typeAtColLine col None = stringConcat ["  col ", intToString col, ": no symbol"]
 
 -- ── medaka_symbols tool ───────────────────────────────────────────────────────
 
@@ -1854,7 +1849,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "stdlibExportsReader" false) (mem "checkJsonSingle" false) (mem "checkJsonFile" false) (mem "cjAllToJson" false) (mem "diagIsError" false) (mem "Diag" false))))
-(DUse false (UseGroup ("tools" "lsp") ((mem "typeAtPoint" false) (mem "documentSymbols" false) (mem "definitionResult" false) (mem "referencesResult" false) (mem "emptyDocs" false) (mem "docsPut" false) (mem "uriOfPath" false) (mem "responseMsg" false) (mem "fieldOr" false) (mem "fieldStr" false) (mem "methodOf" false) (mem "unit" false))))
+(DUse false (UseGroup ("tools" "lsp") ((mem "typeAtPoint" false) (mem "typeAtPoints" false) (mem "documentSymbols" false) (mem "definitionResult" false) (mem "referencesResult" false) (mem "emptyDocs" false) (mem "docsPut" false) (mem "uriOfPath" false) (mem "responseMsg" false) (mem "fieldOr" false) (mem "fieldStr" false) (mem "methodOf" false) (mem "unit" false))))
 (DUse false (UseGroup ("tools" "lint_cmd") ((mem "quadToParseTriple" false) (mem "quadToSrc" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
@@ -1871,6 +1866,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DUse false (UseGroup ("tools" "eval_props") ((mem "propFailureKindJson" false))))
 (DUse false (UseGroup ("tools" "test_pins_report") ((mem "GradedProp" false) (mem "gradedPropRaw" false) (mem "gradedPropPassed" false) (mem "gradedPropStatus" false) (mem "gradedPropRawStatus" false) (mem "gradedPropIssue" false) (mem "gradedPropPinDetail" false) (mem "knownRedCountProps" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
+(DUse false (UseGroup ("list") ((mem "zipWith" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "findAll" false))))
 (DTypeSig false "mcpSupportedVersions" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "mcpSupportedVersions" () (EListLit (ELit (LString "2024-11-05")) (ELit (LString "2025-03-26")) (ELit (LString "2025-06-18")) (ELit (LString "2025-11-25"))))
@@ -1954,10 +1950,10 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig false "typeAtMissNote" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "typeAtMissNote" ((PVar "src") (PVar "line") (PVar "col")) (EMatch (EApp (EApp (EVar "lineTextAt") (EVar "src")) (EVar "line")) (arm (PCon "None") () (EApp (EVar "stringConcat") (EListLit (ELit (LString "no symbol at line ")) (EApp (EVar "intToString") (EVar "line")) (ELit (LString " col ")) (EApp (EVar "intToString") (EVar "col"))))) (arm (PCon "Some" (PVar "lineText")) () (EApp (EVar "stringConcat") (EListLit (ELit (LString "no symbol at line ")) (EApp (EVar "intToString") (EVar "line")) (ELit (LString " col ")) (EApp (EVar "intToString") (EVar "col")) (ELit (LString " — identifiers on this line: ")) (EApp (EVar "describeIdentifiers") (EApp (EVar "identifiersInLine") (EVar "lineText"))))))))
 (DTypeSig false "typeAtManyCols" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyEffect ("IO") None (TyCon "Json"))))))))))
-(DFunDef false "typeAtManyCols" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "path") (PVar "src") (PVar "line") (PVar "symbol") (PVar "cols")) (EBlock (DoLet false false (PVar "header") (EApp (EVar "stringConcat") (EListLit (ELit (LString "'")) (EVar "symbol") (ELit (LString "' is ambiguous on line ")) (EApp (EVar "intToString") (EVar "line")) (ELit (LString " — ")) (EApp (EVar "intToString") (EApp (EVar "length") (EVar "cols"))) (ELit (LString " matches:"))))) (DoLet false false (PVar "bodies") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typeAtColLines") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "src")) (EVar "line")) (EVar "cols"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EBinOp "::" (EVar "header") (EVar "bodies")))) (EVar "False")))))
-(DTypeSig false "typeAtColLines" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))))
-(DFunDef false "typeAtColLines" ((PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "_path") (PVar "_src") (PVar "_line") (PList)) (EListLit))
-(DFunDef false "typeAtColLines" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "path") (PVar "src") (PVar "line") (PCons (PVar "col") (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typeAtPoint") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "src")) (EVar "line")) (EVar "col")) (arm (PCon "Some" (PVar "ty")) () (EApp (EVar "stringConcat") (EListLit (ELit (LString "  col ")) (EApp (EVar "intToString") (EVar "col")) (ELit (LString ": ")) (EVar "ty")))) (arm (PCon "None") () (EApp (EVar "stringConcat") (EListLit (ELit (LString "  col ")) (EApp (EVar "intToString") (EVar "col")) (ELit (LString ": no symbol"))))))) (DoExpr (EBinOp "::" (EVar "here") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typeAtColLines") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "src")) (EVar "line")) (EVar "rest"))))))
+(DFunDef false "typeAtManyCols" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "path") (PVar "src") (PVar "line") (PVar "symbol") (PVar "cols")) (EBlock (DoLet false false (PVar "header") (EApp (EVar "stringConcat") (EListLit (ELit (LString "'")) (EVar "symbol") (ELit (LString "' is ambiguous on line ")) (EApp (EVar "intToString") (EVar "line")) (ELit (LString " — ")) (EApp (EVar "intToString") (EApp (EVar "length") (EVar "cols"))) (ELit (LString " matches:"))))) (DoLet false false (PVar "answers") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typeAtPoints") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "src")) (EVar "line")) (EVar "cols"))) (DoLet false false (PVar "bodies") (EApp (EApp (EApp (EVar "zipWith") (EVar "typeAtColLine")) (EVar "cols")) (EVar "answers"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EBinOp "::" (EVar "header") (EVar "bodies")))) (EVar "False")))))
+(DTypeSig false "typeAtColLine" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "typeAtColLine" ((PVar "col") (PCon "Some" (PVar "ty"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "  col ")) (EApp (EVar "intToString") (EVar "col")) (ELit (LString ": ")) (EVar "ty"))))
+(DFunDef false "typeAtColLine" ((PVar "col") (PCon "None")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "  col ")) (EApp (EVar "intToString") (EVar "col")) (ELit (LString ": no symbol")))))
 (DTypeSig false "medakaSymbolsSchema" (TyCon "Json"))
 (DFunDef false "medakaSymbolsSchema" () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "object")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "string")))) (ETuple (ELit (LString "description")) (EApp (EVar "JString") (ELit (LString "Path to the .mdk file to list symbols for.")))))))))) (ETuple (ELit (LString "required")) (EApp (EVar "jArray") (EListLit (EApp (EVar "JString") (ELit (LString "file")))))))))
 (DTypeSig false "symbolsResult" (TyFun (TyCon "String") (TyCon "Json")))
@@ -2098,7 +2094,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "stdlibExportsReader" false) (mem "checkJsonSingle" false) (mem "checkJsonFile" false) (mem "cjAllToJson" false) (mem "diagIsError" false) (mem "Diag" false))))
-(DUse false (UseGroup ("tools" "lsp") ((mem "typeAtPoint" false) (mem "documentSymbols" false) (mem "definitionResult" false) (mem "referencesResult" false) (mem "emptyDocs" false) (mem "docsPut" false) (mem "uriOfPath" false) (mem "responseMsg" false) (mem "fieldOr" false) (mem "fieldStr" false) (mem "methodOf" false) (mem "unit" false))))
+(DUse false (UseGroup ("tools" "lsp") ((mem "typeAtPoint" false) (mem "typeAtPoints" false) (mem "documentSymbols" false) (mem "definitionResult" false) (mem "referencesResult" false) (mem "emptyDocs" false) (mem "docsPut" false) (mem "uriOfPath" false) (mem "responseMsg" false) (mem "fieldOr" false) (mem "fieldStr" false) (mem "methodOf" false) (mem "unit" false))))
 (DUse false (UseGroup ("tools" "lint_cmd") ((mem "quadToParseTriple" false) (mem "quadToSrc" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
@@ -2115,6 +2111,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DUse false (UseGroup ("tools" "eval_props") ((mem "propFailureKindJson" false))))
 (DUse false (UseGroup ("tools" "test_pins_report") ((mem "GradedProp" false) (mem "gradedPropRaw" false) (mem "gradedPropPassed" false) (mem "gradedPropStatus" false) (mem "gradedPropRawStatus" false) (mem "gradedPropIssue" false) (mem "gradedPropPinDetail" false) (mem "knownRedCountProps" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
+(DUse false (UseGroup ("list") ((mem "zipWith" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "findAll" false))))
 (DTypeSig false "mcpSupportedVersions" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "mcpSupportedVersions" () (EListLit (ELit (LString "2024-11-05")) (ELit (LString "2025-03-26")) (ELit (LString "2025-06-18")) (ELit (LString "2025-11-25"))))
@@ -2198,10 +2195,10 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 (DTypeSig false "typeAtMissNote" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "typeAtMissNote" ((PVar "src") (PVar "line") (PVar "col")) (EMatch (EApp (EApp (EVar "lineTextAt") (EVar "src")) (EVar "line")) (arm (PCon "None") () (EApp (EVar "stringConcat") (EListLit (ELit (LString "no symbol at line ")) (EApp (EVar "intToString") (EVar "line")) (ELit (LString " col ")) (EApp (EVar "intToString") (EVar "col"))))) (arm (PCon "Some" (PVar "lineText")) () (EApp (EVar "stringConcat") (EListLit (ELit (LString "no symbol at line ")) (EApp (EVar "intToString") (EVar "line")) (ELit (LString " col ")) (EApp (EVar "intToString") (EVar "col")) (ELit (LString " — identifiers on this line: ")) (EApp (EVar "describeIdentifiers") (EApp (EVar "identifiersInLine") (EVar "lineText"))))))))
 (DTypeSig false "typeAtManyCols" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyEffect ("IO") None (TyCon "Json"))))))))))
-(DFunDef false "typeAtManyCols" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "path") (PVar "src") (PVar "line") (PVar "symbol") (PVar "cols")) (EBlock (DoLet false false (PVar "header") (EApp (EVar "stringConcat") (EListLit (ELit (LString "'")) (EVar "symbol") (ELit (LString "' is ambiguous on line ")) (EApp (EVar "intToString") (EVar "line")) (ELit (LString " — ")) (EApp (EVar "intToString") (EApp (EMethodRef "length") (EVar "cols"))) (ELit (LString " matches:"))))) (DoLet false false (PVar "bodies") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typeAtColLines") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "src")) (EVar "line")) (EVar "cols"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EBinOp "::" (EVar "header") (EVar "bodies")))) (EVar "False")))))
-(DTypeSig false "typeAtColLines" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))))
-(DFunDef false "typeAtColLines" ((PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "_path") (PVar "_src") (PVar "_line") (PList)) (EListLit))
-(DFunDef false "typeAtColLines" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "path") (PVar "src") (PVar "line") (PCons (PVar "col") (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typeAtPoint") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "src")) (EVar "line")) (EVar "col")) (arm (PCon "Some" (PVar "ty")) () (EApp (EVar "stringConcat") (EListLit (ELit (LString "  col ")) (EApp (EVar "intToString") (EVar "col")) (ELit (LString ": ")) (EVar "ty")))) (arm (PCon "None") () (EApp (EVar "stringConcat") (EListLit (ELit (LString "  col ")) (EApp (EVar "intToString") (EVar "col")) (ELit (LString ": no symbol"))))))) (DoExpr (EBinOp "::" (EVar "here") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typeAtColLines") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "src")) (EVar "line")) (EVar "rest"))))))
+(DFunDef false "typeAtManyCols" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "path") (PVar "src") (PVar "line") (PVar "symbol") (PVar "cols")) (EBlock (DoLet false false (PVar "header") (EApp (EVar "stringConcat") (EListLit (ELit (LString "'")) (EVar "symbol") (ELit (LString "' is ambiguous on line ")) (EApp (EVar "intToString") (EVar "line")) (ELit (LString " — ")) (EApp (EVar "intToString") (EApp (EMethodRef "length") (EVar "cols"))) (ELit (LString " matches:"))))) (DoLet false false (PVar "answers") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typeAtPoints") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "src")) (EVar "line")) (EVar "cols"))) (DoLet false false (PVar "bodies") (EApp (EApp (EApp (EVar "zipWith") (EVar "typeAtColLine")) (EVar "cols")) (EVar "answers"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EBinOp "::" (EVar "header") (EVar "bodies")))) (EVar "False")))))
+(DTypeSig false "typeAtColLine" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "typeAtColLine" ((PVar "col") (PCon "Some" (PVar "ty"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "  col ")) (EApp (EVar "intToString") (EVar "col")) (ELit (LString ": ")) (EVar "ty"))))
+(DFunDef false "typeAtColLine" ((PVar "col") (PCon "None")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "  col ")) (EApp (EVar "intToString") (EVar "col")) (ELit (LString ": no symbol")))))
 (DTypeSig false "medakaSymbolsSchema" (TyCon "Json"))
 (DFunDef false "medakaSymbolsSchema" () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "object")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "type")) (EApp (EVar "JString") (ELit (LString "string")))) (ETuple (ELit (LString "description")) (EApp (EVar "JString") (ELit (LString "Path to the .mdk file to list symbols for.")))))))))) (ETuple (ELit (LString "required")) (EApp (EVar "jArray") (EListLit (EApp (EVar "JString") (ELit (LString "file")))))))))
 (DTypeSig false "symbolsResult" (TyFun (TyCon "String") (TyCon "Json")))

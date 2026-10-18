@@ -40,8 +40,10 @@ import driver.diagnostics.{
   Severity(..),
   mkDiag,
   analyzeFromReport,
-  analyzeProjectReport,
-  projectEntryAnalysis,
+  analyzeProjectKeyed,
+  projectEntryAnalysisOr,
+  GraphId,
+  graphIdSame,
   stdlibExportsReader,
 }
 import driver.loader.{findProjectRootOrSelf, parseCachedLocated}
@@ -65,7 +67,7 @@ import frontend.parser.{
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
 import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
 import support.char.{isIdentChar}
-import support.util.{maxI, utf8Len, joinWith, startsWith, contains}
+import support.util.{maxI, utf8Len, joinWith, startsWith, contains, allList}
 import string.{stripCR, toInt}
 import regex.{Regex, Match, mustCompile, escape, findAll, find}
 import frontend.desugar.{desugar}
@@ -80,7 +82,7 @@ import types.publish.{
 import types.typecheck.{checkOneReportK, entrySplit, entryOwnSchemes}
 import tools.fmt.{formatSourceChecked}
 import tools.refindex.{RefIndex, buildRefIndexProject, binderAt, usesOf, defsOf}
-import list.{sortBy}
+import list.{sortBy, zipWith}
 import frontend.ast.{
   fieldName,
   ifaceMethodName,
@@ -103,23 +105,46 @@ import frontend.ast.{
 -- uri → source text.  A plain association list; LSP sessions open a handful of
 -- files, so linear scan is fine.  The second field is the project manifests
 -- whose `[target]` diagnostic is currently published, so a repaired manifest
--- gets it cleared.
+-- gets it cleared.  The third is what each buffer's last publish kept for
+-- hover, completion and inlay to answer from (`Kept`).
 
-public export data Docs = Docs (List (String, String)) (List String)
+public export data Docs =
+  | Docs (List (String, String)) (List String) (List (String, Kept))
+
+-- What the last publish of a buffer kept, with the buffer source it analyzed.
+-- A single-document publish keeps the env its drive gave.  A project publish
+-- keeps the entry's analysis and the identity of the graph its load read; a
+-- request answers from it only while a fresh load reads the same graph, so a
+-- sibling edited in another buffer or on disk makes it a miss.
+export data Kept =
+  | KeptOne String HoverEnv
+  | KeptGraph String GraphId PartialAnalysis
 
 -- Exported alongside `Docs`/`uriOfPath` so `medaka_references` (mcp.mdk) can
 -- build a single-buffer table and reuse `referencesResult` verbatim — the
 -- SAME code path the LSP handler runs, per #254's "one code path" design.
 export
 emptyDocs : Docs
-emptyDocs = Docs [] []
+emptyDocs = Docs [] [] []
 
 export
 docsPut : String -> String -> Docs -> Docs
-docsPut uri src (Docs xs flagged) =
-  Docs ((uri, src) :: docsRemove uri xs) flagged
+docsPut uri src (Docs xs flagged kept) =
+  Docs ((uri, src) :: docsRemove uri xs) flagged kept
 
-docsRemove : String -> List (String, String) -> List (String, String)
+-- Replace what `uri`'s publish kept; `None` drops the previous entry.
+docsKeep : String -> Option Kept -> Docs -> Docs
+docsKeep uri k (Docs xs flagged kept) =
+  let rest = docsRemove uri kept
+  let kept2 = match k
+    Some v => (uri, v) :: rest
+    None => rest
+  Docs xs flagged kept2
+
+docsKept : String -> Docs -> Option Kept
+docsKept uri (Docs _ _ kept) = docsLookup uri kept
+
+docsRemove : String -> List (String, a) -> List (String, a)
 docsRemove _ [] = []
 docsRemove uri ((k, v) :: rest)
   | k == uri = docsRemove uri rest
@@ -199,9 +224,9 @@ diagToJson src (Diag sev _ msg loc _ _) =
 -- Look up an open document's source by uri.  Request handlers (formatting/
 -- documentSymbol/definition/highlight) read the buffer the client last sent.
 docsGet : String -> Docs -> Option String
-docsGet uri (Docs xs _) = docsLookup uri xs
+docsGet uri (Docs xs _ _) = docsLookup uri xs
 
-docsLookup : String -> List (String, String) -> Option String
+docsLookup : String -> List (String, a) -> Option a
 docsLookup _ [] = None
 docsLookup uri ((k, v) :: rest)
   | k == uri = Some v
@@ -704,8 +729,22 @@ docEnv runtimeSrc coreSrc src =
         "__user__",
         userDecls,
       )
-      let (preludeSchemes, ownSchemes, _, _) = entrySplit report
-      Some (hoverEnvOf (ownSchemes ++ preludeSchemes) report.trPartial)
+      Some (reportEnv report)
+
+-- The single-document env of a drive's report: own schemes first, then the
+-- prelude's (see `docEnv`), with the locals and seed of its partial analysis.
+reportEnv : TcReport -> HoverEnv
+reportEnv report =
+  let (preludeSchemes, ownSchemes, _, _) = entrySplit report
+  hoverEnvOf (ownSchemes ++ preludeSchemes) report.trPartial
+
+-- `docEnv` answered from what the buffer's last publish kept, when that
+-- publish analyzed exactly `src`; otherwise a fresh drive.
+docEnvFor : String -> String -> String -> String -> Docs -> Option HoverEnv
+docEnvFor runtimeSrc coreSrc uri src docs = match docsKept uri docs
+  Some (KeptOne keptSrc env) =>
+    if keptSrc == src then Some env else docEnv runtimeSrc coreSrc src
+  _ => docEnv runtimeSrc coreSrc src
 
 -- The lookup tiers one drive gave a document: the entry's schemes (own first),
 -- then the locals and the import seed its `PartialAnalysis` holds.
@@ -779,22 +818,38 @@ typeAtPoint : String ->
   Int ->
   Int ->
   <IO> Option String
--- Not a single-monad passthrough bind: identifierAt/hoverScheme are pure Option
--- while hoverEnvFor is <IO> Option, and the nesting deliberately mirrors hoverFor's
--- load-bearing order — a `do` block cannot express the mixed pure/IO steps.
--- lint-disable-next-line rule-bind-chain-to-do
 typeAtPoint runtimeSrc coreSrc filePath src line col =
-  match identifierAt src line col
-    None => None
-    Some name =>
-      let uri = uriOfPath filePath
-      let docs = docsPut uri src emptyDocs
-      match hoverEnvFor runtimeSrc coreSrc uri src docs
-        None => None
-        Some env =>
-          map
-            (hit => stringConcat [name, " : ", ppHoverScheme hit])
-            (hoverSchemeAt name src line col env)
+  match typeAtPoints runtimeSrc coreSrc filePath src line [col]
+    [answer] => answer
+    _ => None
+
+-- `typeAtPoint` at each of `cols` on `line`, all answered from ONE env: the
+-- env is built once, and only when some column is on an identifier.
+export
+typeAtPoints : String ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  List Int ->
+  <IO> List (Option String)
+typeAtPoints runtimeSrc coreSrc filePath src line cols =
+  let names = map (col => identifierAt src line col) cols
+  if allList isNone names then
+    map (_ => None) cols
+  else
+    let uri = uriOfPath filePath
+    let docs = docsPut uri src emptyDocs
+    match hoverEnvFor runtimeSrc coreSrc uri src docs
+      None => map (_ => None) cols
+      Some env => zipWith (typeAtIn src line env) names cols
+
+typeAtIn : String -> Int -> HoverEnv -> Option String -> Int -> Option String
+typeAtIn _ _ _ None _ = None
+typeAtIn src line env (Some name) col =
+  map
+    (hit => stringConcat [name, " : ", ppHoverScheme hit])
+    (hoverSchemeAt name src line col env)
 
 -- The hover lookup env for the buffer.  A buffer with a non-core sibling import
 -- goes through the multi-module project pipeline (`projectEntryEnv`: it loads the
@@ -809,22 +864,30 @@ hoverEnvFor : String ->
   Docs ->
   <IO> Option HoverEnv
 hoverEnvFor runtimeSrc coreSrc uri src docs
-  | bufferHasImports src = projectEntryEnv runtimeSrc coreSrc uri docs
-  | otherwise = docEnv runtimeSrc coreSrc src
+  | bufferHasImports src = projectEntryEnv runtimeSrc coreSrc uri src docs
+  | otherwise = docEnvFor runtimeSrc coreSrc uri src docs
 
 -- Load the import graph rooted at this buffer (same loader/cache/read disk-
 -- fallback as publishProjectDiagnostics) and return the ENTRY module's own
 -- schemes, with the entry's locals + import-scoped seed (runtime + core +
--- imported names) from the drive's `PartialAnalysis`.
-projectEntryEnv : String -> String -> String -> Docs -> <IO> Option HoverEnv
-projectEntryEnv runtimeSrc coreSrc uri docs =
+-- imported names) from the drive's `PartialAnalysis`.  The analysis the
+-- buffer's last publish kept answers when that publish read `src` and the
+-- graph this load read; otherwise the load is driven.
+projectEntryEnv : String ->
+  String ->
+  String ->
+  String ->
+  Docs ->
+  <IO> Option HoverEnv
+projectEntryEnv runtimeSrc coreSrc uri src docs =
   let rootFile = pathOfUri uri
   let projectDir = findProjectRootOrSelf (dirOfPath rootFile)
   let stdlibDir = lspMedakaRoot "." ++ "/stdlib"
   let read = path => docsGet (uriOfPath path) docs
   map
     (pa => hoverEnvOf (entryOwnSchemes pa.paSchemes) pa)
-    (projectEntryAnalysis
+    (projectEntryAnalysisOr
+      (keptGraph uri src docs)
       projectCache
       projectParseCache
       read
@@ -832,6 +895,14 @@ projectEntryEnv runtimeSrc coreSrc uri docs =
       [projectDir, stdlibDir]
       runtimeSrc
       coreSrc)
+
+-- The entry analysis `uri`'s last publish kept, if it analyzed `src` over the
+-- graph `current` names.
+keptGraph : String -> String -> Docs -> GraphId -> Option PartialAnalysis
+keptGraph uri src docs current = match docsKept uri docs
+  Some (KeptGraph keptSrc keptId pa) =>
+    if keptSrc == src && graphIdSame keptId current then Some pa else None
+  _ => None
 
 -- A hover or completion hit, tagged by the tier that answered it.  An env hit
 -- carries the context its binding was published with, and so do a local and a
@@ -1086,9 +1157,11 @@ completionEnvFor runtimeSrc coreSrc uri src docs
         tagTier EnvHit env.heSchemes
           ++ tagTier LocalHit (localSchemes env.heLocals)
           ++ tagTier SeedHit env.heSeed)
-      (projectEntryEnv runtimeSrc coreSrc uri docs)
+      (projectEntryEnv runtimeSrc coreSrc uri src docs)
   | otherwise =
-    map (env => tagTier EnvHit env.heSchemes) (docEnv runtimeSrc coreSrc src)
+    map
+      (env => tagTier EnvHit env.heSchemes)
+      (docEnvFor runtimeSrc coreSrc uri src docs)
 
 -- Stamp one completion-env slice with its tier.  Order across the slices is
 -- unchanged, so `filterCompletions`' first-occurrence-wins dedup still resolves a
@@ -1154,14 +1227,17 @@ identRunLen arr len i acc
   | otherwise = acc
 
 -- inlay hints for a buffer: zip parse decls with positions, filter to
--- unsignatured value bindings present in the env, place one hint each.
-inlayHints : String -> String -> String -> List Json
-inlayHints runtimeSrc coreSrc src = match docEnv runtimeSrc coreSrc src
-  None => []
-  Some env => match parseWithPositionsOpt src
+-- unsignatured value bindings present in the env, place one hint each.  The
+-- env is hover's (`hoverEnvFor`), so an import-bearing buffer's hints come
+-- from its project analysis, not from the buffer typechecked alone.
+inlayHints : String -> String -> String -> String -> Docs -> <IO> List Json
+inlayHints runtimeSrc coreSrc uri src docs =
+  match hoverEnvFor runtimeSrc coreSrc uri src docs
     None => []
-    Some (decls, positions) =>
-      inlayZip src decls decls (positionsDecls positions) env.heSchemes
+    Some env => match parseWithPositionsOpt src
+      None => []
+      Some (decls, positions) =>
+        inlayZip src decls decls (positionsDecls positions) env.heSchemes
 
 -- The (0-based line, col) right after a decl's name: the real name `Loc`'s end
 -- position (#331) when there is one, else the old `columnAfterName` heuristic
@@ -1212,7 +1288,7 @@ handleInlayHint runtimeSrc coreSrc idJson params docs =
     None => JNull
     Some uri => match docsGet uri docs
       None => JNull
-      Some src => jArray (inlayHints runtimeSrc coreSrc src)
+      Some src => jArray (inlayHints runtimeSrc coreSrc uri src docs)
   writeMessage (responseMsg idJson result)
 
 -- ── request-position helpers ────────────────────────────────────────────────
@@ -1732,9 +1808,10 @@ headOr _ (x :: _) = x
 publishProjectDiagnostics : String ->
   String ->
   String ->
+  String ->
   Docs ->
-  <IO> Option TcReport
-publishProjectDiagnostics runtimeSrc coreSrc uri docs =
+  <IO> Option Kept
+publishProjectDiagnostics runtimeSrc coreSrc uri text docs =
   let rootFile = pathOfUri uri
   let projectDir = findProjectRootOrSelf (dirOfPath rootFile)
   let stdlibDir = lspMedakaRoot "." ++ "/stdlib"
@@ -1743,8 +1820,8 @@ publishProjectDiagnostics runtimeSrc coreSrc uri docs =
   -- (no internal-extern restriction, no `--allow-internal` concept in the
   -- LSP); kept unguarded here too (`allowInternal = True`, `trustedMods = []`)
   -- so a live-edit session never flags what a build-time `check` wouldn't.
-  let (report, results) =
-    analyzeProjectReport
+  let (keyed, results) =
+    analyzeProjectKeyed
       (stdlibExportsReader stdlibDir)
       True
       []
@@ -1756,7 +1833,15 @@ publishProjectDiagnostics runtimeSrc coreSrc uri docs =
       runtimeSrc
       coreSrc
   let _ = publishEach results
-  report
+  -- A resolve-blocked entry is not the last module the drive checked, so its
+  -- report holds another module's locals and seed: nothing is kept.
+  match keyed
+    Some (report, graph) =>
+      if report.trPartial.paModule == graph.giEntry then
+        Some (KeptGraph text graph report.trPartial)
+      else
+        None
+    None => None
 -- Module root = nearest ancestor with medaka.toml (NOT the file's own dir), so
 -- a nested module's imports (rooted at the project dir) resolve.  Falls back to
 -- the file's dir when there's no medaka.toml.
@@ -1786,8 +1871,8 @@ publishEach ((file, ds) :: rest) =
 publishFor : String -> String -> String -> String -> Docs -> <IO> Docs
 publishFor runtimeSrc coreSrc uri text docs =
   let docs2 = selectProjectProfileFor (pathOfUri uri) docs
-  let _ = publishForSelected runtimeSrc coreSrc uri text docs2
-  docs2
+  let kept = publishForSelected runtimeSrc coreSrc uri text docs2
+  docsKeep uri kept docs2
 
 -- The profile this analysis typechecks under is the one of the project holding
 -- `file`, chosen afresh per analysis because one server serves many projects.
@@ -1818,21 +1903,24 @@ clearFlaggedManifest file docs = match manifestPathOf file
       docs
 
 docsFlagged : String -> Docs -> Bool
-docsFlagged path (Docs _ flagged) = contains path flagged
+docsFlagged path (Docs _ flagged _) = contains path flagged
 
 docsFlag : String -> Docs -> Docs
-docsFlag path (Docs xs flagged) =
-  if contains path flagged then Docs xs flagged else Docs xs (path :: flagged)
+docsFlag path (Docs xs flagged kept) =
+  if contains path flagged then
+    Docs xs flagged kept
+  else
+    Docs xs (path :: flagged) kept
 
 docsUnflag : String -> Docs -> Docs
-docsUnflag path (Docs xs flagged) = Docs xs (filter (/= path) flagged)
+docsUnflag path (Docs xs flagged kept) = Docs xs (filter (/= path) flagged) kept
 
 publishForSelected : String ->
   String ->
   String ->
   String ->
   Docs ->
-  <IO> Option TcReport
+  <IO> Option Kept
 publishForSelected runtimeSrc coreSrc uri text docs =
   match parseCachedLocated projectParseCache text
     Err e =>
@@ -1840,9 +1928,14 @@ publishForSelected runtimeSrc coreSrc uri text docs =
       None
     Ok decls =>
       if anyImport decls then
-        publishProjectDiagnostics runtimeSrc coreSrc uri docs
-      else
-        publishDiagnosticsFrom runtimeSrc coreSrc uri text decls
+        publishProjectDiagnostics runtimeSrc coreSrc uri text docs
+      else match publishDiagnosticsFrom runtimeSrc coreSrc uri text decls
+        Some report =>
+          if report.trPartial.paModule == "__user__" then
+            Some (KeptOne text (reportEnv report))
+          else
+            None
+        None => None
 
 -- Extract a textDocument/{didOpen,didChange} uri + text and publish.
 -- didOpen:   params.textDocument.{uri,text}

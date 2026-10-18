@@ -333,5 +333,5 @@ lsp.d_hover.parse.positions	1
 lsp.d_hover.parse.prescan	5
 lsp.d_hover.read.source	2
 lsp.d_hover.resolve	2
-lsp.d_hover.typecheck.drive	2
-lsp.d_hover.typecheck.module	5
+lsp.d_hover.typecheck.drive	1
+lsp.d_hover.typecheck.module	3
