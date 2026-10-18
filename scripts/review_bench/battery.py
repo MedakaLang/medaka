@@ -11,17 +11,25 @@ lines). Its labelled classes are its items' classes (positive or control);
 class is unlabelled: a flag on one is counted as volume and cost, and scored
 only through the Opus audit.
 
-Arms:
-  A   `battery`   one Haiku call per excerpt, the whole rubric in the system prompt
-  B   `jev`       one Jev router pass per excerpt (state layout: shared, family,
-                  perclass), then Haiku per class on the classes it forwards
-  B'  `restricted` one Haiku battery call per excerpt over the forwarded classes only
-  C   `perclass`  Haiku per class on every class, on a fixed-seed sample
+Arms (subcommand that asks, then the name `report --arms` scores it by):
+  A   `battery`     one Haiku call per excerpt, the whole rubric in the system
+                    prompt; `battery` or `battery-pc` (with --prompt-cache)
+  B   `jev`+`route` one Jev pass per excerpt over every class (state layouts
+                    shared, shared1, family, perclass), then per-class Haiku on
+                    the classes it forwards; `route:<layout>:fit95`
+  B'  `restricted`  one Haiku battery call over the forwarded classes only;
+                    `restricted:<layout>:fit95`
+  C   `perclass`    per-class Haiku on every class; `perclass`
+  computed from the above without new calls: `jev:<router>` (the router alone),
+  `filter:<battery>:<router>` (battery findings the router would forward),
+  `verify:<battery>` (battery findings per-class Haiku confirms)
 
-Every Haiku finding is verified as in bench.py: its quote must occur.
+A router `<layout>:fit95` takes the global threshold at which the layout keeps
+95% of dev's labelled positives; `:cross` also forwards the cross-snippet
+classes. Every Haiku finding is verified as in bench.py: its quote must occur.
 
 Subcommands (`python3 -I scripts/review_bench/battery.py <cmd> -h`):
-  jev, battery, perclass, restricted, audit, report
+  jev, battery, perclass, route, restricted, audit, report
 """
 from __future__ import annotations
 
@@ -59,6 +67,40 @@ def _h(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()
 
 
+EVIDENCE = "curated"  # set from --evidence: curated | generated | none
+# A whole-rubric prompt gets the union of every generator's refs for the excerpt,
+# one generator's best ref first in turn, cut off at this many characters.
+UNION_CAP_CHARS = 8000
+
+
+def _generated_refs(sha, file, lines, excerpt) -> dict[str, list[dict]]:
+    import evidence as EV
+    out = {}
+    for c in EV.GENERATED_CLASSES:
+        refs = EV.generate({"class": c, "file": file, "sha": sha, "lines": lines, "excerpt": excerpt})
+        out[c] = [{"file": r["file"], "anchor": r["anchor"], "excerpt": r["excerpt"],
+                   "fact": r.get("fact", "")} for r in refs]
+    return out
+
+
+def _union_capped(by_class: dict[str, list[dict]], cap: int) -> list[dict]:
+    queues = [list(v) for v in by_class.values()]
+    out, seen, used = [], set(), 0
+    while any(queues):
+        for q in queues:
+            if not q:
+                continue
+            r = q.pop(0)
+            k = json.dumps(r, sort_keys=True)
+            size = len(r["excerpt"]) + len(r["fact"])
+            if k in seen or used + size > cap:
+                continue
+            seen.add(k)
+            out.append(r)
+            used += size
+    return out
+
+
 def units(fx: list[dict], split: str, known: set[str]) -> list[dict]:
     by: dict[tuple, list[dict]] = {}
     for it in fx:
@@ -67,13 +109,17 @@ def units(fx: list[dict], split: str, known: set[str]) -> list[dict]:
         by.setdefault((it.get("sha"), it.get("file"), it.get("lines")), []).append(it)
     out = []
     for (sha, file, lines), its in by.items():
-        refs, seen = [], set()
-        for it in its:
-            for r in it["_refs"]:
-                k = json.dumps(r, sort_keys=True)
-                if k not in seen:
-                    seen.add(k)
-                    refs.append(r)
+        refs, seen, by_class = [], set(), {}
+        if EVIDENCE == "curated":
+            for it in its:
+                for r in I.evidence_refs(it):
+                    k = json.dumps(r, sort_keys=True)
+                    if k not in seen:
+                        seen.add(k)
+                        refs.append(r)
+        elif EVIDENCE == "generated":
+            by_class = _generated_refs(sha, file, lines, its[0]["excerpt"])
+            refs = _union_capped(by_class, UNION_CAP_CHARS)
         labels, allowed = {}, set()
         for it in its:
             if it["class"] not in known:
@@ -87,7 +133,9 @@ def units(fx: list[dict], split: str, known: set[str]) -> list[dict]:
         first = its[0]
         out.append({"_key": "U" + _h(f"{sha}|{file}|{lines}")[:12], "sha": sha, "file": file,
                     "lines": lines, "anchor": first.get("anchor", ""), "excerpt": first["excerpt"],
-                    "_refs": refs, "_split": first["_split"], "_group": first["_group"],
+                    "_refs": refs, "_refs_by_class": by_class,
+                    "evidence_chars": sum(len(r["excerpt"]) + len(r.get("fact", "")) for r in refs),
+                    "_split": first["_split"], "_group": first["_group"],
                     "groups": sorted({it["_group"] for it in its}),
                     "item_keys": sorted(it["_key"] for it in its),
                     "evidence_scope": sorted({it.get("evidence_scope") or "?" for it in its}),
@@ -106,8 +154,11 @@ def sample(us: list[dict], n: int, seed: int = SAMPLE_SEED) -> list[dict]:
 
 
 def pseudo_item(u: dict, cls: str) -> dict:
+    """One class asked of one excerpt. With generated evidence a per-class prompt gets
+    that class's generator only, as bench.py gives it."""
+    refs = u["_refs_by_class"].get(cls, []) if EVIDENCE == "generated" else u["_refs"]
     return {"_key": f"{u['_key']}#{cls}", "class": cls, "excerpt": u["excerpt"], "file": u["file"],
-            "anchor": u["anchor"], "_refs": u["_refs"], "_group": u["_group"], "_split": u["_split"],
+            "anchor": u["anchor"], "_refs": refs, "_group": u["_group"], "_split": u["_split"],
             "polarity": u["labels"].get(cls, "unlabelled")}
 
 
@@ -521,7 +572,8 @@ def cmd_route(a) -> int:
     us = _select_units(fx, a, known)
     dev = units(fx, "dev", known)
     name, fwd = router_rule(a.router, dev)
-    pairs = [(u, c) for u in us for c in sorted(known) if fwd(u, c)]
+    pairs = [(u, c) for u in us for c in sorted(known) if fwd(u, c)
+             and (not a.labelled_only or c in u["labels"])]
     print(f"route {name}: {len(pairs)} pairs ({len(pairs) / max(len(us), 1):.1f}/excerpt)", file=sys.stderr)
     if a.dry_run:
         return 0
@@ -610,7 +662,8 @@ def cmd_audit(a) -> int:
 # ---------------------------------------------------------------------------
 def arm_flags(arm: str, us: list[dict], dev: list[dict]) -> tuple[dict, dict]:
     """Returns ({unit key: flagged classes}, {(unit, class): finding}) and per-unit cost via ARM_COST.
-    arm: `battery` | `battery-pc` | `perclass` | `route:<router>` | `restricted:<router>` | `jev:<router>`."""
+    arm: `battery` | `battery-pc` | `perclass` | `route:<router>` | `restricted:<router>` | `jev:<router>`
+    | `filter:<battery>:<router>` | `verify:<battery>`."""
     ARM_COST.clear()
     flags, det = {}, {}
     if arm.startswith("filter:"):
@@ -628,6 +681,33 @@ def arm_flags(arm: str, us: list[dict], dev: list[dict]) -> tuple[dict, dict]:
             c0, d0, n0 = bcost[u["_key"]]
             ARM_COST[u["_key"]] = (c0 + jcost.get(u["_key"], 0.0), d0, n0)
         return flags, {k: v for k, v in bdet.items() if k[1] in flags.get(k[0], ())}
+    if arm.startswith("verify:"):
+        # Per-class Haiku after the battery: a battery finding survives only if the
+        # per-class prompt for its class also flags it. Complete only where every
+        # battery-flagged class has a per-class answer.
+        base = arm.split(":", 1)[1]
+        bflags, _ = arm_flags(base, us, dev)
+        bcost = dict(ARM_COST)
+        pc = _load("battery-perclass")
+        ARM_COST.clear()
+        for u in us:
+            if u["_key"] not in bflags:
+                continue
+            kept, cost, dur, complete = set(), bcost[u["_key"]][0], bcost[u["_key"]][1], True
+            for c in bflags[u["_key"]]:
+                r = pc.get(f"{u['_key']}#{c}")
+                if r is None:
+                    complete = False
+                    continue
+                cost += r["cost_usd"]
+                dur += r.get("duration_ms") or 0
+                if r.get("flag"):
+                    kept.add(c)
+                    det[(u["_key"], c)] = r
+            flags[u["_key"]] = kept
+            if complete:
+                ARM_COST[u["_key"]] = (cost, dur, len(bflags[u["_key"]]))
+        return flags, det
     if arm in ("battery", "battery-pc") or arm.startswith("restricted:"):
         stage = arm if not arm.startswith("restricted:") else f"battery-restricted-{_tag(arm.split(':', 1)[1])}"
         res = _load(stage)
@@ -731,7 +811,9 @@ def cmd_report(a) -> int:
     rub, known, fx = _setup()
     us = _select_units(fx, a, known)
     dev = units(fx, "dev", known)
-    lines = [f"## Split `{a.split}`: {len(us)} excerpts", ""]
+    ev = sum(u["evidence_chars"] for u in us) / max(1, len(us))
+    lines = [f"## Split `{a.split}`, evidence `{EVIDENCE}`: {len(us)} excerpts, "
+             f"evidence {ev / E.CHARS_PER_TOKEN:.0f} tokens per excerpt (characters / 4)", ""]
     lines += ["### Jev router alone (P(flag) over every class of every excerpt)", "",
               "| state | excerpts | AUC pos vs ctl | AUC pos vs unlabelled | t (95% dev recall) | "
               "recall at t | controls forwarded | classes forwarded / excerpt | $/excerpt |",
@@ -766,7 +848,7 @@ def cmd_report(a) -> int:
         lines.append(f"| {arm} | {m['n']} | {_f(m['recall'])} ({m['tp']}/{m['npos']}) | {_f(m['fpr'])} "
                      f"({m['fp']}/{m['nctl']}) | {_f(m['unl_per'])} ({m['nc']}) | {_f(asked, '{:.1f}')} | "
                      f"{_f(cost, '${:.5f}')} ({len(costed)}) | {_f(dur, '{:.1f}')} |")
-    for f in sorted(RESULTS.glob(f"audit-*-{a.split}.json")) if RESULTS.exists() else []:
+    for f in sorted(RESULTS.glob(f"audit-*-{a.split}{_suffix()}.json")) if RESULTS.exists() else []:
         from collections import Counter
         v = json.loads(f.read_text())
         c = Counter(x["verdict"] for x in v.values())
@@ -788,7 +870,15 @@ def cmd_report(a) -> int:
 def _setup():
     rub = R.load_rubric()
     known = set(rub) & set(R.SUBJECTS)
-    return rub, known, I.load(None)
+    fx = I.load(None)
+    # Few-shot examples render with the same kind of evidence as the scored prompt;
+    # they come from dev only, so only dev items need generating.
+    I.set_evidence([it for it in fx if it["_split"] == "dev"], EVIDENCE)
+    return rub, known, fx
+
+
+def _suffix() -> str:
+    return "" if EVIDENCE == "curated" else f"@{EVIDENCE}"
 
 
 def _rubric_order(rub: dict, known: set[str]) -> list[str]:
@@ -813,21 +903,21 @@ def _tag(s: str) -> str:
 
 
 def _save(stage: str, recs: dict) -> None:
-    f = E.ensure_cache(RESULTS.name) / f"{stage}.json"
+    f = E.ensure_cache(RESULTS.name) / f"{stage}{_suffix()}.json"
     cur = json.loads(f.read_text()) if f.exists() else {}
     cur.update(recs)
     f.write_text(json.dumps(cur, indent=1))
 
 
 def _load(stage: str) -> dict:
-    f = RESULTS / f"{stage}.json"
+    f = RESULTS / f"{stage}{_suffix()}.json"
     return json.loads(f.read_text()) if f.exists() else {}
 
 
 def _log_run(stage, split, n, asked, wall, jobs) -> None:
     f = E.ensure_cache(RESULTS.name) / "battery-runs.jsonl"
     with f.open("a") as fh:
-        fh.write(json.dumps({"stage": stage, "split": split, "excerpts": n, "asked": asked,
+        fh.write(json.dumps({"stage": stage + _suffix(), "split": split, "excerpts": n, "asked": asked,
                              "wall_s": round(wall, 1), "jobs": jobs, "at": time.time()}) + "\n")
 
 
@@ -879,6 +969,8 @@ def main() -> int:
     p = sub.add_parser("route", help="arm B: per-class Haiku on the classes a router forwards")
     common(p)
     p.add_argument("--router", required=True, help="<layout>:<t>|fit95[:cross]")
+    p.add_argument("--labelled-only", action="store_true",
+                   help="ask only forwarded pairs that carry a label: recall and FPR, not volume or cost")
     p.add_argument("--shots", type=int, default=2)
     p.set_defaults(fn=cmd_route)
 
@@ -902,7 +994,13 @@ def main() -> int:
     p.add_argument("--out")
     p.set_defaults(fn=cmd_report)
 
+    for p in sub.choices.values():
+        p.add_argument("--evidence", choices=I.EVIDENCE_MODES, default="curated",
+                       help="evidence blocks: fixture-curated refs, evidence.py output (unioned and capped "
+                            f"at {UNION_CAP_CHARS} characters for a whole-rubric prompt), or none")
     a = ap.parse_args()
+    global EVIDENCE
+    EVIDENCE = a.evidence
     return a.fn(a)
 
 

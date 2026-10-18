@@ -156,5 +156,9 @@ token count, the Jev cost is estimated from characters and the report says so.
 - `evidence.py`: stage-1 evidence generators; cached under `.cache/evidence/`
   by a hash of its own source and the item's code fields.
 - `engines.py`: the Jev and headless-Claude callers and the cache.
+- `battery.py`: the hunk-level measurement, every class asked of every
+  excerpt: a whole-rubric Haiku call, a Jev router in front of per-class Haiku,
+  per-class Haiku on every class, and an Opus audit of unlabelled flags. Its
+  docstring lists the arms; `RESULTS-battery-2026-10-17.md` is its first run.
 - `thresholds.json`: per-class Jev bands written by `bench.py cascade`.
 - `RESULTS-*.md`: frozen measurements, one per pass; rerun rather than quote.
