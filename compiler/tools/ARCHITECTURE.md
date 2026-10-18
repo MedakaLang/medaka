@@ -36,6 +36,7 @@ set of entries (#4141).
 | `native_doctest.mdk` | The native doctest engine: compile the module plus examples, run, report | native engine |
 | `native_test_decls.mdk` | The native engine for `test "…"` declarations (`medaka test --native`); named to avoid the `_test.mdk` sibling suffix | `runNativeTests` |
 | `native_props.mdk` | The native property runner: one probe per target | native engine |
+| `native_probe.mdk` | One probe build for all the native arms of a file, run once per arm, with per-arm fallbacks | `runMergedNativeArms` |
 | `probe_transcript.mdk` | The sentinel-delimited stdout format both native engines read back | transcript format |
 | `prop_plan.mdk` | Engine-neutral property planning: parameter types, constructors, shrink order | plan layer |
 | `prop_helpers.mdk` | Typed bridge bindings for custom `Arbitrary` parameters | bridge bindings |

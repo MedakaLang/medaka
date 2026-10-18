@@ -68,29 +68,101 @@ runNativePlannedPropRequests : String ->
   List PropRequest ->
   <IO> List PropResult
 runNativePlannedPropRequests target tsrc modules requests =
+  runNativePropPlan
+    target
+    tsrc
+    modules
+    (planNativePropRequests tsrc modules requests)
+
+-- The planning half of `runNativePlannedPropRequests`: either every requested
+-- result is already decided (no probe is needed), or the planned laws that a
+-- probe must run beside the outcomes their rows are merged into.
+export data NativePropPlan =
+  | NativePropsSettled (List PropResult)
+  | NativePropsToRun PlanEnv (List NativePlanOutcome) (List NativePlanOutcome)
+
+export
+planNativePropRequests : String ->
+  List PlanModule ->
+  List PropRequest ->
+  NativePropPlan
+planNativePropRequests tsrc modules requests =
   let props = filterProps (desugarProps tsrc)
   match requestIndex requests omEmpty
-    Err duplicate => nativeProtocolErrors duplicate requests
+    Err duplicate =>
+      NativePropsSettled (nativeProtocolErrors duplicate requests)
     Ok index => match duplicateSelectedPropName props index omEmpty
       Some duplicate =>
-        nativeProtocolErrors
-          "duplicate property declaration name \"{duplicate}\""
-          requests
+        NativePropsSettled
+          (nativeProtocolErrors
+            "duplicate property declaration name \"{duplicate}\""
+            requests)
       None => match buildPlanEnvModules (plannedRoot modules) modules
         Err e =>
-          plannedResults (planCapabilities props index (planErrorText e)) []
+          NativePropsSettled
+            (plannedResults (planCapabilities props index (planErrorText e)) [])
         Ok env =>
           let outcomes = plannedOutcomes env modules props index
-          let runnable = plannedRunnable outcomes
-          match runnable
-            [] => plannedResults outcomes []
-            _ => match nativeRenderedPlanned target tsrc modules env runnable
-              Err failure =>
-                plannedResults
-                  outcomes
-                  (map (nativePlannedFailure failure) runnable)
-              Ok rows => plannedResults outcomes rows
+          match plannedRunnable outcomes
+            [] => NativePropsSettled (plannedResults outcomes [])
+            runnable => NativePropsToRun env outcomes runnable
 
+-- The rows of a plan that needs no probe.
+export
+nativePropsSettled : NativePropPlan -> Option (List PropResult)
+nativePropsSettled (NativePropsSettled rows) = Some rows
+nativePropsSettled (NativePropsToRun _ _ _) = None
+
+-- The plan run through this engine's own probe.
+export
+runNativePropPlan : String ->
+  String ->
+  List PlanModule ->
+  NativePropPlan ->
+  <IO> List PropResult
+runNativePropPlan _ _ _ (NativePropsSettled rows) = rows
+runNativePropPlan target tsrc modules (NativePropsToRun env outcomes runnable) =
+  plannedRowsFrom
+    outcomes
+    runnable
+    (nativeRenderedPlanned target tsrc modules env runnable)
+
+plannedRowsFrom : List NativePlanOutcome ->
+  List NativePlanOutcome ->
+  Result NativeFailure (List PropResult) ->
+  List PropResult
+plannedRowsFrom outcomes runnable (Err failure) =
+  plannedResults outcomes (map (nativePlannedFailure failure) runnable)
+plannedRowsFrom outcomes _ (Ok rows) = plannedResults outcomes rows
+
+-- This engine's part of a probe, as `tools/native_probe.mdk` merges it with
+-- the other native arms of the same file: the sentinel prefix, the import
+-- lines, the generator, shrinker and law bindings, and the body that prints
+-- the transcript.  A settled plan contributes nothing.
+export
+propSection : String ->
+  List PlanModule ->
+  NativePropPlan ->
+  (String, List String, List String, List String)
+propSection nonce _ (NativePropsSettled _) =
+  (noncedPrefix sentinelBase nonce, [], [], [])
+propSection nonce modules (NativePropsToRun env _ jobs) =
+  plannedSection nonce modules env jobs
+
+-- One probe run's exit code, stdout and stderr, read back as the plan's rows.
+export
+propResultsFromRun : String ->
+  NativePropPlan ->
+  Int ->
+  String ->
+  String ->
+  List PropResult
+propResultsFromRun _ (NativePropsSettled rows) _ _ _ = rows
+propResultsFromRun nonce (NativePropsToRun _ outcomes runnable) code stdout stderr =
+  plannedRowsFrom
+    outcomes
+    runnable
+    (plannedRendered nonce runnable code stdout stderr)
 -- Expose the rendered probe without compiling it so the registry shape can be
 -- checked directly.  The execution path above and this renderer share the
 -- same planning and closed-graph construction.
@@ -114,8 +186,7 @@ renderNativePlannedProbe target tsrc modules requests =
           if listLen jobs == 0 then
             Err "native property runner: no selected property could be rendered"
           else
-            let nonce =
-              freshProbeNonce "source_check" probeNamespacePrefixes tsrc
+            let nonce = freshProbeNonce "source_check" propProbePrefixes tsrc
             Ok (plannedProbeSource nonce target tsrc modules env jobs)
 
 plannedRoot : List PlanModule -> String
@@ -336,7 +407,7 @@ nativeRenderedPlanned target tsrc modules env jobs = match makeTempDir ()
       (NativeRuntimeFailure
         "native property runner: could not create a scratch directory: \{e}")
   Ok tmp =>
-    let nonce = freshProbeNonce (mintNonce ()) probeNamespacePrefixes tsrc
+    let nonce = freshProbeNonce (mintNonce ()) propProbePrefixes tsrc
     let rendered = runInTmpPlanned target tsrc modules env jobs tmp nonce
     let _ = cleanupTempDir tmp
     rendered
@@ -414,15 +485,23 @@ buildAndRunPlanned target entry out tmp jobs nonce =
         Err
           (NativeRuntimeFailure
             "native property runner: could not run the compiled probe: \{e}")
-      Ok (code, stdout, stderr) =>
-        let props = plannedDeclRequests jobs
-        let chunks = chunksOf (noncedPrefix sentinelBase nonce) (splitNl stdout)
-        if tagsInOrder (expectedTags 0 props) chunks then
-          Ok (renderAll chunks (abortNote code stderr) 0 props)
-        else
-          Err
-            (NativeProtocolFailure
-              "native property runner: the probe printed a forged or malformed transcript; no property result was trusted")
+      Ok (code, stdout, stderr) => plannedRendered nonce jobs code stdout stderr
+
+plannedRendered : String ->
+  List NativePlanOutcome ->
+  Int ->
+  String ->
+  String ->
+  Result NativeFailure (List PropResult)
+plannedRendered nonce jobs code stdout stderr =
+  let props = plannedDeclRequests jobs
+  let chunks = chunksOf (noncedPrefix sentinelBase nonce) (splitNl stdout)
+  if tagsInOrder (expectedTags 0 props) chunks then
+    Ok (renderAll chunks (abortNote code stderr) 0 props)
+  else
+    Err
+      (NativeProtocolFailure
+        "native property runner: the probe printed a forged or malformed transcript; no property result was trusted")
 
 plannedDeclRequests : List NativePlanOutcome -> List (Decl, PropRequest)
 plannedDeclRequests [] = []
@@ -533,8 +612,10 @@ classifyNativeFields chunks note request i =
 
 -- Probe source ---------------------------------------------------------------
 
-probeNamespacePrefixes : List String
-probeNamespacePrefixes = [
+-- The generated names this engine's probe uses, which a nonce must avoid.
+export
+propProbePrefixes : List String
+propProbePrefixes = [
   "__np_",
   "NpCore_",
   "NpRuntime_",
@@ -550,12 +631,27 @@ plannedProbeSource : String ->
   List NativePlanOutcome ->
   String
 plannedProbeSource nonce target tsrc modules env jobs =
+  let (_, imports, decls, entry) = plannedSection nonce modules env jobs
+  joinNl
+    (imports
+      ++ [probeTargetSource target tsrc, ""]
+      ++ decls
+      ++ ["main ="]
+      ++ entry
+      ++ [""])
+
+plannedSection : String ->
+  List PlanModule ->
+  PlanEnv ->
+  List NativePlanOutcome ->
+  (String, List String, List String, List String)
+plannedSection nonce modules env jobs =
   let graph = sharedGraph env jobs
   let prefix = genNodePrefix nonce
-  joinNl
-    (plannedImports nonce modules graph
-      ++ [probeTargetSource target tsrc, ""]
-      ++ [
+  (
+    noncedPrefix sentinelBase nonce,
+    plannedImports nonce modules graph,
+    [
         "\{generatedPrefix nonce}state : Ref Int",
         "\{generatedPrefix nonce}state = \{runtimeAlias nonce}.Ref 0",
         "",
@@ -608,13 +704,12 @@ plannedProbeSource nonce target tsrc modules env jobs =
       ]
       ++ plannedPropLines nonce modules env graph jobs 0
       ++ graphLines nonce modules env (coreAlias nonce) prefix graph
-      ++ graphAuxLines nonce modules env (coreAlias nonce) prefix graph
-      ++ ["main ="]
-      ++ plannedMainLines nonce jobs 0
+      ++ graphAuxLines nonce modules env (coreAlias nonce) prefix graph,
+    plannedMainLines nonce jobs 0
       ++ [
         "  \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) endTag}\"",
-        "",
-      ])
+      ],
+  )
 
 -- Each imported module gets a probe-local alias. Constructor selection is by
 -- the TypeKey owner, never by a bare source spelling.

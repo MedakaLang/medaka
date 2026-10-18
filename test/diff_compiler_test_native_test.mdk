@@ -11,9 +11,11 @@ import test_process.{
   medakaBin, medakaRoot, underRoot, boundedVerbSeconds, withScratchDir
 }
 import test.{
-  Expectation, expectAll, expectEach, expectTextContainsAll, fail, pass
+  Expectation, expectAll, expectEach, expectEqual, expectTextContainsAll, fail,
+  pass
 }
 import regex as R
+import json as J
 
 -- Best-effort prebuild of the prelude object (cost control only; a failed build
 -- just falls back to inline compilation, as the script did).  No runtime
@@ -512,24 +514,99 @@ envProbeRow : String -> <Exec, IO, FileRead, FileWrite> Expectation
 envProbeRow dir =
   match writeFile "\{dir}/env_probe.mdk" (envProbeSrc "\{medakaRoot}/medaka")
     Err e => fail "could not write env_probe.mdk: \{e}"
-    Ok _ =>
-      match (boundedVerbSeconds 120 "sh" [
-        "-c",
-        unsetMedakaScript,
-        "medaka",
-        medakaRoot,
-        medakaBin,
-        "test",
-        "--native",
-        "\{dir}/env_probe.mdk",
-      ])
-        Err e => fail "env_probe.mdk: could not spawn: \{e}"
-        Ok (code, out, err) =>
-          if code /= 0 then
-            fail
-              "env_probe.mdk: 'medaka test --native' exited \{intToString code} (expected 0): \{out ++ err}"
-          else
-            requireText "env_probe.mdk" (out ++ err) "1/1 passed"
+    Ok _ => match boundedVerbSeconds 120 "sh" [
+      "-c",
+      unsetMedakaScript,
+      "medaka",
+      medakaRoot,
+      medakaBin,
+      "test",
+      "--native",
+      "\{dir}/env_probe.mdk",
+    ]
+      Err e => fail "env_probe.mdk: could not spawn: \{e}"
+      Ok (code, out, err) =>
+        if code /= 0 then
+          fail
+            "env_probe.mdk: 'medaka test --native' exited \{intToString code} (expected 0): \{out ++ err}"
+        else
+          requireText "env_probe.mdk" (out ++ err) "1/1 passed"
 
 test "native doctest probe: MEDAKA reaches the probe as the test probes set it (check 19)" =
   withScratchDir envProbeRow
+
+-- ── the merged native probe falls back to one probe per arm ───────────────────
+-- `compiler/tools/native_probe.mdk` builds every native arm of a file into one
+-- probe.  When that probe cannot build, or a section of it dies before printing
+-- anything, the arm runs on its own probe, whose path (`dt_<file>`) its error
+-- detail names; the other arms are graded exactly as on their own probes.
+
+-- The doctest example does not type-check, so the merged probe cannot build;
+-- the test and the property still pass on their own probes.
+mergedBuildFailSrc : String
+mergedBuildFailSrc =
+  "import test.{expectEqual}\n\n-- > double \"x\"\n-- 0\nexport\ndouble : Int -> Int\ndouble x = x * 2\n\ntest \"double one\" =\n  expectEqual (double 1) 2\n\nprop \"double is even\" (n : Int) =\n  double n % 2 == 0\n"
+
+-- A smoke example that panics is a nullary binding the native backend forces
+-- before `main`, so every section of the merged probe dies at startup; the
+-- tests still pass on their own probe.
+mergedStartupSrc : String
+mergedStartupSrc =
+  "import test.{expectEqual}\n\n-- > double 2\n-- 4\n-- > panic \"startup boom\"\nexport\ndouble : Int -> Int\ndouble x = x * 2\n\ntest \"double one\" =\n  expectEqual (double 1) 2\n"
+
+-- One line per graded row of a `--json` report: the phase, the row's name (a
+-- doctest's line) and its status.
+reportRows : J.Json -> List String
+reportRows report =
+  map
+      (row => "doctest \{jsonText "line" row} \{jsonText "status" row}")
+      (jsonRowsAt ["doctests", "examples"] report)
+    ++ map
+      (row => "prop \{jsonText "name" row} \{jsonText "status" row}")
+      (jsonRowsAt ["properties"] report)
+    ++ map
+      (row => "test \{jsonText "name" row} \{jsonText "status" row}")
+      (jsonRowsAt ["tests"] report)
+
+jsonRowsAt : List String -> J.Json -> List J.Json
+jsonRowsAt [] value = match J.asArray value
+  Some rows => toList rows
+  None => []
+jsonRowsAt (key :: rest) value = match J.get key value
+  Some inner => jsonRowsAt rest inner
+  None => []
+
+jsonText : String -> J.Json -> String
+jsonText key row = match J.get key row
+  Some (J.JString text) => text
+  Some (J.JInt n) => intToString n
+  _ => "<missing \{key}>"
+
+mergedFallbackRow : String ->
+  String ->
+  String ->
+  List String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+mergedFallbackRow dir name src expected =
+  let path = "\{dir}/\{name}.mdk"
+  match writeFile path src
+    Err e => fail "could not write \{name}.mdk: \{e}"
+    Ok _ => match runVerb 300 ["test", "--json", path]
+      Err e => fail "\{name}.mdk: could not spawn: \{e}"
+      Ok (code, out, _) => match J.parse out
+        Err e => fail "\{name}.mdk: the --json report did not parse: \{e}"
+        Ok report => expectAll [
+          expectEqual 1 code,
+          expectEqual expected (reportRows report),
+          requireText "\{name}.mdk" out "/dt_\{name}.mdk:",
+        ]
+
+test "merged native probe: a build failure falls back to one probe per arm" = withScratchDir
+  (dir => mergedFallbackRow dir "merged_build_fail" mergedBuildFailSrc [
+    "doctest 3 error", "prop double is even pass", "test double one pass"
+  ])
+
+test "merged native probe: a section that dies at startup reruns on its own probe" = withScratchDir
+  (dir => mergedFallbackRow dir "merged_startup" mergedStartupSrc [
+    "doctest 3 error", "doctest 5 error", "test double one pass"
+  ])
