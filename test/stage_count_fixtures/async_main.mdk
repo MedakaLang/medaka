@@ -1,0 +1,4 @@
+import async.{Async, yield}
+
+main : Async e Unit
+main = yield

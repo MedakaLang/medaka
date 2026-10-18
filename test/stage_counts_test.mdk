@@ -294,6 +294,18 @@ driveProbes dir = [
   probeRows "check_vmm" ["check", fixture "vmm/main.mdk"],
   probeRows "run_vmm" ["run", fixture "vmm/main.mdk"],
   probeRows "build_vmm" ["build", fixture "vmm/main.mdk", "-o", "\{dir}/vmm"],
+  probeRows "run_async" ["run", fixture "async_main.mdk"],
+  probeRows
+    "build_async"
+    [
+      "build",
+      fixture "async_main.mdk",
+      "-o",
+      "\{dir}/am",
+    ],
+  -- check-policy and manifest judge the auto-print but execute nothing
+  probeRowsExit "checkpolicy_hello" 1 ["check-policy", fixture "hello.mdk"],
+  probeRows "manifest_hello" ["manifest", fixture "hello.mdk"],
   -- #4154 check --target re-elaboration
   probeRows
     "check_target_three"
