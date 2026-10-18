@@ -195,7 +195,7 @@ different slug, that is noted.
 ### R29: cost statements in stdlib docs, contracts allowed and narration not
 
 - **Instance:** `stdlib/http.mdk:1444`, "A resumed scan costs time proportional to the bytes that arrived since the state was produced."
-- **Ruling:** "a". A cost contract, a bound a caller relies on to choose or use the API ("O(1) average lookup", "push amortized O(1)", the resumable-scan bound), is allowed in a doc comment and is a control. Implementation narration ("copied per element", "this used to allocate", rewrite history) is a positive under the 2026-10-11 rule that docs carry no performance minutiae.
+- **Ruling:** "a". A cost contract, a bound a caller relies on to choose or use the API ("O(1) average lookup", "push amortized O(1)", the resumable-scan bound), is allowed in a doc comment and is a control. Implementation narration ("copied per element", "this used to allocate", rewrite history) is a positive under the doc-comment rules in `stdlib/README.md` § "Writing documentation" (2026-10-11: no implementation notes; state the consequence, not the mechanism).
 - **Class:** `doc.register` (perf-narration arm).
 
 ### R30: a constant's value repeated as a literal

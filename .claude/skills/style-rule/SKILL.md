@@ -33,7 +33,7 @@ idiomatic, never clever for its own sake.
   before/after pair (the code as it is, the rewrite). Give the options,
   including "fine as it is", and your recommendation with the reason.
 - **Probe every language claim before it goes in a question or a rule.**
-  `withDefault` and `foldl` do not exist (`optionOr`, `fold`); interface
+  Haskell's withDefault and foldl do not exist here (`optionOr`, `fold`); interface
   methods such as `orElse` are missing from `docs/stdlib/index.md` (#4269), so
   read `stdlib/core.mdk`. A wrong premise in a question gets a wrong ruling.
 - A threshold you choose to make a ruling checkable (three caps words, two
