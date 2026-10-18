@@ -193,6 +193,8 @@ assumptionTraceEnabled : Ref Bool
 assumptionTraceEntries : Ref (List AssumptionTraceEntry)
 astEffrowE : SigVars -> Ty -> EffRow
 astTypeFreshTbl : Ty -> (Mono, List (String, Mono))
+asyncDriverFindings : Option String -> String -> List Decl -> Scheme -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List DrainFinding
+asyncDriverUse : PubScheme -> Mono -> Unit
 atSignature : Ty -> (Unit -> a) -> a
 atomAuthorityName : EffAtomTy -> List (String, Option Loc)
 atomBindersIn : (EffAtomTy -> List a) -> Ty -> List a
@@ -245,7 +247,7 @@ authorityTermTextIn : Ref (List (Int, String)) -> Ref Int -> Authority -> String
 authorityUsesOf : Ty -> List (String, Param)
 authvarIdOf : (String, Ref Authvar) -> Int
 autoPrintEvidence : String -> ScopeId -> IfaceRef -> Mono -> EvId
-autoPrintWanted : Bool -> Bool -> List TcDiag -> List Decl -> List (String, List Decl) -> (List DrainFinding, Option EvId)
+autoPrintWanted : Bool -> Option String -> List DrainFinding -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List Decl -> List (String, List Decl) -> (List DrainFinding, Option EvId)
 axisAtomBinders : EffAtomTy -> List (String, Param)
 axisNamesArgument : List (String, EffParamTy) -> Bool
 axisProblems : List (String, Param) -> String -> Param -> List String
@@ -952,7 +954,7 @@ domainParam : Option String -> Param
 domainParamWith : Option String -> List (String, String) -> Param
 drainStampQueue : Unit -> List DrainFinding
 driveErrs : List DrainFinding -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List TcDiag
-driveGraphK : GraphOut -> Bool -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> GraphDrive
+driveGraphK : GraphOut -> Bool -> Option String -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> GraphDrive
 drivenEvidence : Unit -> List EvEntry
 driverState : Ref DriverState
 dropFirst : Int -> List a -> List a
@@ -999,7 +1001,7 @@ effvarLevel : Ref Effvar -> Int
 elabModuleStamp : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List Decl)
 elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable)
 elaborateModulesReport : List Decl -> List Decl -> List (String, List Decl) -> TcReport
-elaborateModulesWithReport : Bool -> Bool -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable), TcReport)
+elaborateModulesWithReport : Bool -> Option String -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable), TcReport)
 elaborateModulesWithSchemes : Bool -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable), List (String, PubScheme), List (String, PubScheme))
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 elselessIfHelp : String
@@ -1868,6 +1870,7 @@ judgeEvidence : List StampCtx -> List (String, TcDiag)
 judgeGoal : String -> Obligation -> List (String, TcDiag)
 judgeLiveGoal : Map String StampCtx -> (List DrainFinding, Map String Unit) -> LiveGoal -> (List DrainFinding, Map String Unit)
 judgeLiveGoals : List StampCtx -> List DrainFinding
+judgeMainUse : (Mono -> Unit) -> Scheme -> Mono
 judgeQuiescentGoals : Unit -> Unit
 kauthArgVarNames : List Kind -> List Ty -> List (String, Param)
 kauthCells : List String -> List Kind -> List Mono -> List (String, Ref Authvar)

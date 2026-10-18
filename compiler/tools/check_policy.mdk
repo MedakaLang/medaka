@@ -343,11 +343,11 @@ public export data EntryAnalysis = EntryAnalysis {
 
 -- [valueMain] is the drive's value-main candidate: a caller that reports the
 -- analysis' diagnostics passes `valueMainCandidate`, so they carry a value
--- `main`'s auto-print obligation.  [executes] is True for a caller that runs or
--- emits the elaborated program (`elaborateModulesWithReport`).
+-- `main`'s auto-print obligation.  [executes] names the `async` driver of a
+-- caller that runs or emits the elaborated program (`elaborateModulesWithReport`).
 export
 analyzeProgram : Bool ->
-  Bool ->
+  Option String ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
@@ -358,7 +358,7 @@ analyzeProgram valueMain executes rtD coreD modsD =
 -- `analyzeProgram` handing back its drive's whole report beside the analysis.
 export
 analyzeProgramReport : Bool ->
-  Bool ->
+  Option String ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->

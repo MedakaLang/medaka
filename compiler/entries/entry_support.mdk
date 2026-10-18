@@ -426,29 +426,31 @@ selectTargetProfileOfEnv _ = match selectProfile (getEnv targetProfileEnv) None
 -- the same drive `elaborateModules` runs with the entry's schemes and
 -- invocation table kept, so the refusal costs no second drive.  It is the
 -- build's checking drive, so it poses a value `main`'s auto-print obligation,
--- and the drive whose trees are emitted, so it returns that print's evidence.
--- `paths` spells each module's file as the refusal is reported.
-elaborateForTarget : Option TargetProfile ->
+-- and the drive whose trees are emitted, so it returns that print's evidence
+-- and judges an `Async` main's application to `asyncDriver`.  `paths` spells
+-- each module's file as the refusal is reported.
+elaborateForTarget : String ->
+  Option TargetProfile ->
   List (String, String, List Decl) ->
   List (String, String) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   (ElabResult, TcReport, List Diag)
-elaborateForTarget None _ _ runtimeDecls coreDecls modules =
+elaborateForTarget asyncDriver None _ _ runtimeDecls coreDecls modules =
   let (elaborated, report) =
     elaborateModulesWithReport
       (valueMainCandidate coreDecls modules)
-      True
+      (Some asyncDriver)
       runtimeDecls
       coreDecls
       modules
   (elaborated, report, [])
-elaborateForTarget (Some p) modsWithPath paths runtimeDecls coreDecls modules =
+elaborateForTarget asyncDriver (Some p) modsWithPath paths runtimeDecls coreDecls modules =
   let (analysis, report) =
     analyzeProgramReport
       (valueMainCandidate coreDecls modules)
-      True
+      (Some asyncDriver)
       runtimeDecls
       coreDecls
       modules
@@ -568,6 +570,7 @@ runEmitAsked ask asyncDriver emitTail modsWithPath runtimeDecls coreDecls module
       let profile = selectTargetProfileOfEnv ()
       let (_, report, refusal) =
         elaborateForTarget
+          asyncDriver
           profile
           modsWithPath
           reported

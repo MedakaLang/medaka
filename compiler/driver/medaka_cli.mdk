@@ -2958,7 +2958,12 @@ elaborateRun : List Decl ->
   <IO> (EntryAnalysis, TcReport)
 elaborateRun rtD coreD modsD =
   let (analysis, report) =
-    analyzeProgramReport (valueMainCandidate coreD modsD) True rtD coreD modsD
+    analyzeProgramReport
+      (valueMainCandidate coreD modsD)
+      (Some "runAsyncMain")
+      rtD
+      coreD
+      modsD
   let _ = match asyncMainShapeError modsD
     Some msg => runAbort msg
     None => ()
@@ -3537,7 +3542,7 @@ analyzeLoaded rsrc csrc target roots stdlibDir modsWithPath =
       (_ =>
         analyzeProgramReport
           (valueMainCandidate coreD modsD)
-          False
+          None
           rtD
           coreD
           modsD)

@@ -54124,7 +54124,7 @@ checkModulesChainReportFor valueMain None _ _ runtimeDecls coreDecls0 modules0 =
   (driveGraphK
     GOutDiags
     valueMain
-    False
+    None
     None
     runtimeDecls
     coreDecls0
@@ -54183,12 +54183,7 @@ checkModulesChainReportFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDe
   -- module, and any module after the last recorded step) — see `chainGo`.
   let findings = checkGraphFinish ()
   let (wanted, _) =
-    autoPrintWanted
-      valueMain
-      False
-      (driveErrs findings finalResults)
-      coreDecls
-      modules
+    autoPrintWanted valueMain None findings finalResults coreDecls modules
   -- `driveGraphK`'s freeze point: the rows no recorded step froze.
   let perMod =
     attachCoherenceConflict
@@ -54449,11 +54444,11 @@ data GraphDrive = GraphDrive {
 -- `preludeKey` is the desugar-cache generation pair for the core-check memo (see
 -- `checkCoreMemoized`); the tree arm ignores it, because it needs core's marked
 -- decls back and a memo may hold no `Decl`.  `valueMain` is the caller's
--- value-main candidate and `executes` says the caller runs the trees
--- (`autoPrintWanted`).
+-- value-main candidate and `executes` names the `async` driver of a caller that
+-- runs the trees, `None` for one that does not (`autoPrintWanted`).
 driveGraphK : GraphOut ->
   Bool ->
-  Bool ->
+  Option String ->
   Option (Int, Int) ->
   List Decl ->
   List Decl ->
@@ -54515,12 +54510,7 @@ driveGraphK sel valueMain executes preludeKey runtimeDecls coreDecls0 modulesIn 
   -- It reads `deImpls` only, which nothing between here and the tree arm's return
   -- writes, so attaching once here serves both selections.
   let (wanted, autoPrint) =
-    autoPrintWanted
-      valueMain
-      executes
-      (driveErrs findings perModRaw)
-      coreDecls
-      modules
+    autoPrintWanted valueMain executes findings perModRaw coreDecls modules
   -- The graph is closed: the drain, its defaulting and the auto-print verdict
   -- have run, so the published rows are frozen now, once.
   let perMod =
@@ -54647,15 +54637,18 @@ attachEntryPayload f (m :: rest) = m :: attachEntryPayload f rest
 -- that error already explains the undetermined type.  It runs after the drain, which can still default a numeric `main`, and before anything later
 -- reads `main`'s variables, since the verdict can ground them.  An [executes]
 -- drive, whose trees the driver wraps and runs, also returns the evidence of a
--- use judged clean (`autoPrintEvidence`); a check-only drive mints none.
+-- use judged clean (`autoPrintEvidence`); a check-only drive mints none.  Such a
+-- drive judges an `Async` main's application to the driver it names instead
+-- (`asyncDriverFindings`).
 autoPrintWanted : Bool ->
-  Bool ->
-  List TcDiag ->
+  Option String ->
+  List DrainFinding ->
+  List ModDiags ->
   List Decl ->
   List (String, List Decl) ->
   (List DrainFinding, Option EvId)
-autoPrintWanted False _ _ _ _ = ([], None)
-autoPrintWanted True executes reported coreDecls modules =
+autoPrintWanted False _ _ _ _ _ = ([], None)
+autoPrintWanted True executes findings perMod coreDecls modules =
   let decls = coreDecls ++ flatMap snd modules
   match (
     driverState.value.mainSchemeRef.value,
@@ -54663,8 +54656,10 @@ autoPrintWanted True executes reported coreDecls modules =
     printlnIface decls,
   )
     (Some scheme, Some (mid, entry), Some iface) =>
-      if mainTypeIsUnit () || mainTypeIsAsync () then
+      if mainTypeIsUnit () then
         ([], None)
+      else if mainTypeIsAsync () then
+        (asyncDriverFindings executes mid entry scheme perMod, None)
       else
         -- A top-level `main` has no givens: the use is judged in a module scope
         -- of its own.
@@ -54678,10 +54673,11 @@ autoPrintWanted True executes reported coreDecls modules =
         let diags = captureTypeErrors (_ =>
           posed := Some (judgeAutoPrintUse iface scheme loc))
         let ev = match (executes, diags, posed.value)
-          (True, [], Some tau) => Some (autoPrintEvidence mid scope iface tau)
+          (Some _, [], Some tau) => Some (autoPrintEvidence mid scope iface tau)
           _ => None
         currentLoc := savedLoc
         let _ = closeScope ()
+        let reported = driveErrs findings perMod
         let kept =
           if anyList (d => inMainBinding entry (tcLoc d)) reported then
             filterList (d => tcCode d /= "T-AMBIGUOUS-INSTANCE") diags
@@ -54711,6 +54707,53 @@ mainUseDiags (Some site) entry = match mainUseSite site entry
 -- included.  The instance the goal was posed at is returned.
 judgeAutoPrintUse : IfaceRef -> Scheme -> Option Loc -> Mono
 judgeAutoPrintUse iface scheme loc =
+  judgeMainUse
+    (tau => recordObl Predicate { iface = iface, args = [tau] } 0 PCallSlot loc)
+    scheme
+
+-- The `async` driver [executes] names applied to an `Async` main, judged as the
+-- printing use is (`judgeMainUse`) against the driver's scheme as the `async`
+-- module published it: the drivers wrap exactly this application
+-- (driver/main_autoprint.mdk's `shouldAsyncWrapMain`), after the drive.
+asyncDriverFindings : Option String ->
+  String ->
+  List Decl ->
+  Scheme ->
+  List ModDiags ->
+  List DrainFinding
+asyncDriverFindings executes mid entry scheme perMod =
+  let published = match lookupAssoc "async" perMod
+    Some (rows, _, _) => rows
+    None => []
+  match option None (d => lookupAssoc d published) executes
+    Some driver if mainAsyncPayloadIsUnit () =>
+      let scope =
+        Scopes.freshScope (currentScopeStore ()) None 0 mid ModuleOwner
+      let _ = openScope scope
+      let savedLoc = !currentLoc
+      currentLoc := mainBodySpan entry
+      let diags = captureTypeErrors (_ =>
+        let _ = judgeMainUse (asyncDriverUse driver) scheme
+        ())
+      currentLoc := savedLoc
+      let _ = closeScope ()
+      map (verdictFinding mid False) diags
+    _ => []
+
+-- The driver's parameter unified with `main`'s instance, the driver's context
+-- posed at its own.
+asyncDriverUse : PubScheme -> Mono -> Unit
+asyncDriverUse driver tau =
+  let (driverTy, subst) = instantiateTracked driver.psScheme
+  let _ = recordSchemeCallObligations 0 driver.psContext subst
+  match normalize driverTy
+    TFun param _ _ => unify param tau
+    _ => ()
+
+-- A use of `main` judged as a closed boundary: [pose] states the use's goal at
+-- `main`'s instance before `main`'s own context is posed there.
+judgeMainUse : (Mono -> Unit) -> Scheme -> Mono
+judgeMainUse pose scheme =
   let _ = enterLevel ()
   let oblMark = wMark perRun.value.implObls
   let callMark = wMark perRun.value.obls
@@ -54726,7 +54769,7 @@ judgeAutoPrintUse iface scheme loc =
   let id = optionOr 0 (omLookup "main" perRun.value.schemeDefIdsRef.value)
   let context =
     lookupSchemeObls "main" id perRun.value.schemeObligationsRef.value
-  let _ = recordObl Predicate { iface = iface, args = [tau] } 0 PCallSlot loc
+  let _ = pose tau
   let _ = recordSchemeCallObligations id (optionOr [] context) subst
   let _ = exitLevel ()
   let _ = settleClosedBody (tconBuiltin "Unit") oblMark callMark dictMark
@@ -54881,7 +54924,7 @@ checkModulesEntryFullReportK valueMain preludeKey runtimeDecls coreDecls0 module
   (driveGraphK
     GOutDiags
     valueMain
-    False
+    None
     effectivePreludeKey
     runtimeDecls
     effectiveCoreDecls0
@@ -55212,16 +55255,16 @@ elaborateModulesWithSchemes : Bool ->
   (ElabResult, List (String, PubScheme), List (String, PubScheme))
 elaborateModulesWithSchemes valueMain runtimeDecls coreDecls0 modulesIn =
   let (result, r) =
-    elaborateModulesWithReport valueMain False runtimeDecls coreDecls0 modulesIn
+    elaborateModulesWithReport valueMain None runtimeDecls coreDecls0 modulesIn
   let (core, entrySchemes, _, _) = entrySplit r
   (result, core, entrySchemes)
 
 -- `elaborateModulesWithSchemes` returning its drive's whole report beside the
--- elaboration.  `executes` is True for a caller that runs or emits the trees:
--- its report then carries the auto-print evidence (`trAutoPrint`).
+-- elaboration.  `executes` names the `async` driver of a caller that runs or
+-- emits the trees: its report then carries the auto-print evidence (`trAutoPrint`).
 export
 elaborateModulesWithReport : Bool ->
-  Bool ->
+  Option String ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
@@ -55255,7 +55298,7 @@ elaborateModulesReport : List Decl ->
   List (String, List Decl) ->
   TcReport
 elaborateModulesReport runtimeDecls coreDecls0 modulesIn =
-  snd (elaborateModulesWithReport False False runtimeDecls coreDecls0 modulesIn)
+  snd (elaborateModulesWithReport False None runtimeDecls coreDecls0 modulesIn)
 -- arg-position interface-method names whose route resolveArgStamps may stamp
 -- (populated on every path; an empty set would degenerate prePassDictArg to prePassDict)
 

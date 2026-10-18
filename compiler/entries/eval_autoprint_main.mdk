@@ -33,7 +33,7 @@ runElab runtimeDecls coreDecls modules =
   let ((coreE, modulesE, _, _, _, _), report) =
     elaborateModulesWithReport
       (valueMainCandidate coreDecls modules)
-      True
+      (Some "runAsyncMain")
       runtimeDecls
       coreDecls
       modules

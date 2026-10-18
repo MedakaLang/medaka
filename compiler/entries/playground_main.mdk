@@ -603,7 +603,12 @@ finishClean : Bool ->
   <IO> Unit
 finishClean emit written paths warnTriples runtimeDecls coreDecls modules =
   let (analysis, report) =
-    analyzeProgramReport True True runtimeDecls coreDecls modules
+    analyzeProgramReport
+      True
+      (Some "runAsyncMain")
+      runtimeDecls
+      coreDecls
+      modules
   match targetRefusalOf written paths analysis
     [] =>
       if emit then
