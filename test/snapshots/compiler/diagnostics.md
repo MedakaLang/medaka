@@ -52,7 +52,7 @@ import frontend.resolve.{
   hintableUnboundNames,
   exportedValueNames,
 }
-import list.{drop}
+import list.{drop, last}
 import support.ordmap.{
   OrdMap,
   omEmpty,
@@ -1636,9 +1636,9 @@ graphIdOf mods = GraphId {
 }
 
 lastModId : List (String, String, List Decl) -> String
-lastModId [] = ""
-lastModId [(mid, _, _)] = mid
-lastModId (_ :: rest) = lastModId rest
+lastModId mods = match last mods
+  Some (mid, _, _) => mid
+  None => ""
 
 export
 graphIdSame : GraphId -> GraphId -> Bool
@@ -3510,7 +3510,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DUse false (UseGroup ("frontend" "parse_cache") ((mem "takeFirstN" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "checkDerives" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "ResError" false) (mem "resolveProgram" false) (mem "resolveProgramG2" false) (mem "internalGuardFor" false) (mem "ppResError" false) (mem "resErrorLoc" false) (mem "resErrorCode" false) (mem "resErrorDidYouMean" false) (mem "resErrorIsPrivateName" false) (mem "resolveModuleG" false) (mem "importedCtorDecls" false) (mem "ModuleExports" false) (mem "withStdlibExports" false) (mem "hintableUnboundNames" false) (mem "exportedValueNames" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "last" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false) (mem "omFromPairs" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
@@ -3714,9 +3714,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig true "graphIdOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "GraphId")))
 (DFunDef false "graphIdOf" ((PVar "mods")) (ERecordCreate "GraphId" ((fa "giEntry" (EApp (EVar "lastModId") (EVar "mods"))) (fa "giSteps" (EApp (EApp (EVar "map") (EVar "moduleStepKey")) (EVar "mods"))))))
 (DTypeSig false "lastModId" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))
-(DFunDef false "lastModId" ((PList)) (ELit (LString "")))
-(DFunDef false "lastModId" ((PList (PTuple (PVar "mid") PWild PWild))) (EVar "mid"))
-(DFunDef false "lastModId" ((PCons PWild (PVar "rest"))) (EApp (EVar "lastModId") (EVar "rest")))
+(DFunDef false "lastModId" ((PVar "mods")) (EMatch (EApp (EVar "last") (EVar "mods")) (arm (PCon "Some" (PTuple (PVar "mid") PWild PWild)) () (EVar "mid")) (arm (PCon "None") () (ELit (LString "")))))
 (DTypeSig true "graphIdSame" (TyFun (TyCon "GraphId") (TyFun (TyCon "GraphId") (TyCon "Bool"))))
 (DFunDef false "graphIdSame" ((PVar "a") (PVar "b")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "a") "giEntry") (EFieldAccess (EVar "b") "giEntry")) (EApp (EApp (EVar "allList") (EVar "isSome")) (EFieldAccess (EVar "a") "giSteps"))) (EBinOp "==" (EFieldAccess (EVar "a") "giSteps") (EFieldAccess (EVar "b") "giSteps"))))
 (DTypeSig true "analyzeProjectKeyed" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyTuple (TyCon "TcReport") (TyCon "GraphId"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))))))
@@ -3985,7 +3983,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DUse false (UseGroup ("frontend" "parse_cache") ((mem "takeFirstN" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "checkDerives" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "ResError" false) (mem "resolveProgram" false) (mem "resolveProgramG2" false) (mem "internalGuardFor" false) (mem "ppResError" false) (mem "resErrorLoc" false) (mem "resErrorCode" false) (mem "resErrorDidYouMean" false) (mem "resErrorIsPrivateName" false) (mem "resolveModuleG" false) (mem "importedCtorDecls" false) (mem "ModuleExports" false) (mem "withStdlibExports" false) (mem "hintableUnboundNames" false) (mem "exportedValueNames" false))))
-(DUse false (UseGroup ("list") ((mem "drop" false))))
+(DUse false (UseGroup ("list") ((mem "drop" false) (mem "last" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false) (mem "omFromPairs" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
@@ -4189,9 +4187,7 @@ checkJsonLoadErr target src stdlibDir (LoadMsg lmsg) =
 (DTypeSig true "graphIdOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "GraphId")))
 (DFunDef false "graphIdOf" ((PVar "mods")) (ERecordCreate "GraphId" ((fa "giEntry" (EApp (EVar "lastModId") (EVar "mods"))) (fa "giSteps" (EApp (EApp (EMethodRef "map") (EVar "moduleStepKey")) (EVar "mods"))))))
 (DTypeSig false "lastModId" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))
-(DFunDef false "lastModId" ((PList)) (ELit (LString "")))
-(DFunDef false "lastModId" ((PList (PTuple (PVar "mid") PWild PWild))) (EVar "mid"))
-(DFunDef false "lastModId" ((PCons PWild (PVar "rest"))) (EApp (EVar "lastModId") (EVar "rest")))
+(DFunDef false "lastModId" ((PVar "mods")) (EMatch (EApp (EVar "last") (EVar "mods")) (arm (PCon "Some" (PTuple (PVar "mid") PWild PWild)) () (EVar "mid")) (arm (PCon "None") () (ELit (LString "")))))
 (DTypeSig true "graphIdSame" (TyFun (TyCon "GraphId") (TyFun (TyCon "GraphId") (TyCon "Bool"))))
 (DFunDef false "graphIdSame" ((PVar "a") (PVar "b")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "a") "giEntry") (EFieldAccess (EVar "b") "giEntry")) (EApp (EApp (EVar "allList") (EVar "isSome")) (EFieldAccess (EVar "a") "giSteps"))) (EBinOp "==" (EFieldAccess (EVar "a") "giSteps") (EFieldAccess (EVar "b") "giSteps"))))
 (DTypeSig true "analyzeProjectKeyed" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") (Some "e") (TyTuple (TyApp (TyCon "Option") (TyTuple (TyCon "TcReport") (TyCon "GraphId"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))))))))

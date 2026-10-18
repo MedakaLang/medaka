@@ -1,5 +1,5 @@
 # META
-source_lines=374
+source_lines=384
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/probe_transcript.mdk — the sentinel-delimited stdout format
@@ -71,6 +71,16 @@ import frontend.lexer.{
 import support.util.{joinNl, reverseL, splitNl, startsWith, stringTrim}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert}
 import string.{replaceAll, toInt}
+
+-- One native arm's part of a merged probe (`tools/native_probe.mdk`): the
+-- sentinel prefix its transcript is read under, its import lines, its
+-- top-level bindings, and the body that prints the transcript.
+public export data Section = Section {
+  secPrefix : String,
+  secImports : List String,
+  secDecls : List String,
+  secEntry : List String,
+}
 
 -- The tag of a sentinel line under `prefix`, or None for an ordinary output
 -- line.
@@ -381,6 +391,7 @@ renameHeads n (h :: hs) (l :: ls)
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "reverseL" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("string") ((mem "replaceAll" false) (mem "toInt" false))))
+(DData Public "Section" () ((variant "Section" (ConNamed (field "secPrefix" (TyCon "String")) (field "secImports" (TyApp (TyCon "List") (TyCon "String"))) (field "secDecls" (TyApp (TyCon "List") (TyCon "String"))) (field "secEntry" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "sentTagOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "sentTagOf" ((PVar "prefix") (PVar "line")) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "line")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "prefix"))) (EApp (EVar "stringLength") (EVar "line"))) (EVar "line"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "sentinelLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -477,6 +488,7 @@ renameHeads n (h :: hs) (l :: ls)
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "reverseL" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("string") ((mem "replaceAll" false) (mem "toInt" false))))
+(DData Public "Section" () ((variant "Section" (ConNamed (field "secPrefix" (TyCon "String")) (field "secImports" (TyApp (TyCon "List") (TyCon "String"))) (field "secDecls" (TyApp (TyCon "List") (TyCon "String"))) (field "secEntry" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "sentTagOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "sentTagOf" ((PVar "prefix") (PVar "line")) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "line")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "prefix"))) (EApp (EVar "stringLength") (EVar "line"))) (EVar "line"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "sentinelLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))

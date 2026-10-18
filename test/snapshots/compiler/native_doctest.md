@@ -1,5 +1,5 @@
 # META
-source_lines=483
+source_lines=486
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/native_doctest.mdk — the NATIVE doctest execution engine
@@ -63,6 +63,7 @@ import support.path.{joinPath, baseOf, dirOf}
 import support.util.{joinNl, splitNl}
 import tools.probe_transcript.{
   Chunk(..),
+  Section(..),
   chunksOf,
   decodeValue,
   endTag,
@@ -361,13 +362,13 @@ probeSource : String ->
   List (Result String (List Decl)) ->
   String
 probeSource nonce tsrc examples synthResults =
-  let (_, imports, decls, entry) = doctestSection nonce examples synthResults
+  let section = doctestSection nonce examples synthResults
   joinNl
-    (imports
+    (section.secImports
       ++ ["", renameUserMain tsrc, ""]
-      ++ decls
+      ++ section.secDecls
       ++ ["", "main ="]
-      ++ entry
+      ++ section.secEntry
       ++ [""])
 
 -- This engine's part of a probe, as `tools/native_probe.mdk` merges it with
@@ -379,16 +380,18 @@ export
 doctestSection : String ->
   List Example ->
   List (Result String (List Decl)) ->
-  (String, List String, List String, List String)
-doctestSection nonce examples synthResults = (
-  noncedPrefix sentinelBase nonce,
-  ["import \{runtimeDependencyName nonce}.runtime as \{runtimeAlias nonce}"],
-  synthLines nonce 0 examples synthResults,
-  mainLines nonce 0 examples synthResults
-    ++ [
-      "  \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) endTag}\"",
-    ],
-)
+  Section
+doctestSection nonce examples synthResults = Section {
+  secPrefix = noncedPrefix sentinelBase nonce,
+  secImports =
+    ["import \{runtimeDependencyName nonce}.runtime as \{runtimeAlias nonce}"],
+  secDecls = synthLines nonce 0 examples synthResults,
+  secEntry =
+    mainLines nonce 0 examples synthResults
+      ++ [
+        "  \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) endTag}\"",
+      ],
+}
 
 -- The generated names this engine's probe uses, which a nonce must avoid.
 export
@@ -491,7 +494,7 @@ renderOne chunks note i (Ok _) = match lookupChunk (intToString i) chunks
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "splitNl" false))))
-(DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "freshProbeNonce" false) (mem "firstNonEmptyLine" false) (mem "lookupChunk" false) (mem "mintNonce" false) (mem "noncedPrefix" false) (mem "probeNameNonce" false) (mem "renameUserMain" false) (mem "runtimeAlias" false) (mem "runtimeDependencyName" false) (mem "runtimeDependencyPrefix" false) (mem "sentinelLine" false) (mem "tagsInOrder" false) (mem "valuePrintExprWith" false))))
+(DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "Section" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "freshProbeNonce" false) (mem "firstNonEmptyLine" false) (mem "lookupChunk" false) (mem "mintNonce" false) (mem "noncedPrefix" false) (mem "probeNameNonce" false) (mem "renameUserMain" false) (mem "runtimeAlias" false) (mem "runtimeDependencyName" false) (mem "runtimeDependencyPrefix" false) (mem "sentinelLine" false) (mem "tagsInOrder" false) (mem "valuePrintExprWith" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "RunResult" false) (mem "buildDetailsFrom" false) (mem "exampleExpected" false) (mem "synthSrcNamed" false))))
 (DTypeSig false "sentinelBase" (TyCon "String"))
 (DFunDef false "sentinelBase" () (ELit (LString "@@__mdk_native_doctest__@@")))
@@ -527,9 +530,9 @@ renderOne chunks note i (Ok _) = match lookupChunk (intToString i) chunks
 (DTypeSig true "doctestRendered" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))))))
 (DFunDef false "doctestRendered" ((PVar "nonce") (PVar "examples") (PVar "synthResults") (PVar "code") (PVar "out") (PVar "errOut")) (EBlock (DoLet false false (PVar "chunks") (EApp (EApp (EVar "chunksOf") (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (EApp (EVar "splitNl") (EVar "out")))) (DoExpr (EIf (EApp (EApp (EVar "tagsInOrder") (EApp (EApp (EApp (EVar "expectedTags") (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults"))) (EVar "chunks")) (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EVar "renderAll") (EVar "chunks")) (EApp (EApp (EVar "abortNote") (EVar "code")) (EVar "errOut"))) (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults"))) (EApp (EVar "Err") (EVar "forgedTranscript"))))))
 (DTypeSig false "probeSource" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String"))))))
-(DFunDef false "probeSource" ((PVar "nonce") (PVar "tsrc") (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PTuple PWild (PVar "imports") (PVar "decls") (PVar "entry")) (EApp (EApp (EApp (EVar "doctestSection") (EVar "nonce")) (EVar "examples")) (EVar "synthResults"))) (DoExpr (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "imports") (EListLit (ELit (LString "")) (EApp (EVar "renameUserMain") (EVar "tsrc")) (ELit (LString "")))) (EVar "decls")) (EListLit (ELit (LString "")) (ELit (LString "main =")))) (EVar "entry")) (EListLit (ELit (LString ""))))))))
-(DTypeSig true "doctestSection" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "doctestSection" ((PVar "nonce") (PVar "examples") (PVar "synthResults")) (ETuple (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce")) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "import ")) (EApp (EVar "display") (EApp (EVar "runtimeDependencyName") (EVar "nonce")))) (ELit (LString ".runtime as "))) (EApp (EVar "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString "")))) (EApp (EApp (EApp (EApp (EVar "synthLines") (EVar "nonce")) (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults")) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ".putStrLn \""))) (EApp (EVar "display") (EApp (EApp (EVar "sentinelLine") (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (EVar "endTag")))) (ELit (LString "\"")))))))
+(DFunDef false "probeSource" ((PVar "nonce") (PVar "tsrc") (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PVar "section") (EApp (EApp (EApp (EVar "doctestSection") (EVar "nonce")) (EVar "examples")) (EVar "synthResults"))) (DoExpr (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EFieldAccess (EVar "section") "secImports") (EListLit (ELit (LString "")) (EApp (EVar "renameUserMain") (EVar "tsrc")) (ELit (LString "")))) (EFieldAccess (EVar "section") "secDecls")) (EListLit (ELit (LString "")) (ELit (LString "main =")))) (EFieldAccess (EVar "section") "secEntry")) (EListLit (ELit (LString ""))))))))
+(DTypeSig true "doctestSection" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Section")))))
+(DFunDef false "doctestSection" ((PVar "nonce") (PVar "examples") (PVar "synthResults")) (ERecordCreate "Section" ((fa "secPrefix" (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (fa "secImports" (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "import ")) (EApp (EVar "display") (EApp (EVar "runtimeDependencyName") (EVar "nonce")))) (ELit (LString ".runtime as "))) (EApp (EVar "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ""))))) (fa "secDecls" (EApp (EApp (EApp (EApp (EVar "synthLines") (EVar "nonce")) (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults"))) (fa "secEntry" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults")) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ".putStrLn \""))) (EApp (EVar "display") (EApp (EApp (EVar "sentinelLine") (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (EVar "endTag")))) (ELit (LString "\"")))))))))
 (DTypeSig true "doctestProbePrefixes" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "doctestProbePrefixes" () (EListLit (ELit (LString "__ndt_")) (ELit (LString "NpRuntime_")) (EVar "runtimeDependencyPrefix")))
 (DTypeSig false "probeBindingName" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
@@ -561,7 +564,7 @@ renderOne chunks note i (Ok _) = match lookupChunk (intToString i) chunks
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "splitNl" false))))
-(DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "freshProbeNonce" false) (mem "firstNonEmptyLine" false) (mem "lookupChunk" false) (mem "mintNonce" false) (mem "noncedPrefix" false) (mem "probeNameNonce" false) (mem "renameUserMain" false) (mem "runtimeAlias" false) (mem "runtimeDependencyName" false) (mem "runtimeDependencyPrefix" false) (mem "sentinelLine" false) (mem "tagsInOrder" false) (mem "valuePrintExprWith" false))))
+(DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "Section" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "freshProbeNonce" false) (mem "firstNonEmptyLine" false) (mem "lookupChunk" false) (mem "mintNonce" false) (mem "noncedPrefix" false) (mem "probeNameNonce" false) (mem "renameUserMain" false) (mem "runtimeAlias" false) (mem "runtimeDependencyName" false) (mem "runtimeDependencyPrefix" false) (mem "sentinelLine" false) (mem "tagsInOrder" false) (mem "valuePrintExprWith" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "RunResult" false) (mem "buildDetailsFrom" false) (mem "exampleExpected" false) (mem "synthSrcNamed" false))))
 (DTypeSig false "sentinelBase" (TyCon "String"))
 (DFunDef false "sentinelBase" () (ELit (LString "@@__mdk_native_doctest__@@")))
@@ -597,9 +600,9 @@ renderOne chunks note i (Ok _) = match lookupChunk (intToString i) chunks
 (DTypeSig true "doctestRendered" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))))))
 (DFunDef false "doctestRendered" ((PVar "nonce") (PVar "examples") (PVar "synthResults") (PVar "code") (PVar "out") (PVar "errOut")) (EBlock (DoLet false false (PVar "chunks") (EApp (EApp (EVar "chunksOf") (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (EApp (EVar "splitNl") (EVar "out")))) (DoExpr (EIf (EApp (EApp (EVar "tagsInOrder") (EApp (EApp (EApp (EVar "expectedTags") (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults"))) (EVar "chunks")) (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EVar "renderAll") (EVar "chunks")) (EApp (EApp (EVar "abortNote") (EVar "code")) (EVar "errOut"))) (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults"))) (EApp (EVar "Err") (EVar "forgedTranscript"))))))
 (DTypeSig false "probeSource" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String"))))))
-(DFunDef false "probeSource" ((PVar "nonce") (PVar "tsrc") (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PTuple PWild (PVar "imports") (PVar "decls") (PVar "entry")) (EApp (EApp (EApp (EVar "doctestSection") (EVar "nonce")) (EVar "examples")) (EVar "synthResults"))) (DoExpr (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "imports") (EListLit (ELit (LString "")) (EApp (EVar "renameUserMain") (EVar "tsrc")) (ELit (LString "")))) (EVar "decls")) (EListLit (ELit (LString "")) (ELit (LString "main =")))) (EVar "entry")) (EListLit (ELit (LString ""))))))))
-(DTypeSig true "doctestSection" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "doctestSection" ((PVar "nonce") (PVar "examples") (PVar "synthResults")) (ETuple (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce")) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "import ")) (EApp (EMethodRef "display") (EApp (EVar "runtimeDependencyName") (EVar "nonce")))) (ELit (LString ".runtime as "))) (EApp (EMethodRef "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString "")))) (EApp (EApp (EApp (EApp (EVar "synthLines") (EVar "nonce")) (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults")) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ".putStrLn \""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "sentinelLine") (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (EVar "endTag")))) (ELit (LString "\"")))))))
+(DFunDef false "probeSource" ((PVar "nonce") (PVar "tsrc") (PVar "examples") (PVar "synthResults")) (EBlock (DoLet false false (PVar "section") (EApp (EApp (EApp (EVar "doctestSection") (EVar "nonce")) (EVar "examples")) (EVar "synthResults"))) (DoExpr (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EFieldAccess (EVar "section") "secImports") (EListLit (ELit (LString "")) (EApp (EVar "renameUserMain") (EVar "tsrc")) (ELit (LString "")))) (EFieldAccess (EVar "section") "secDecls")) (EListLit (ELit (LString "")) (ELit (LString "main =")))) (EFieldAccess (EVar "section") "secEntry")) (EListLit (ELit (LString ""))))))))
+(DTypeSig true "doctestSection" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Section")))))
+(DFunDef false "doctestSection" ((PVar "nonce") (PVar "examples") (PVar "synthResults")) (ERecordCreate "Section" ((fa "secPrefix" (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (fa "secImports" (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "import ")) (EApp (EMethodRef "display") (EApp (EVar "runtimeDependencyName") (EVar "nonce")))) (ELit (LString ".runtime as "))) (EApp (EMethodRef "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ""))))) (fa "secDecls" (EApp (EApp (EApp (EApp (EVar "synthLines") (EVar "nonce")) (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults"))) (fa "secEntry" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (ELit (LInt 0))) (EVar "examples")) (EVar "synthResults")) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ".putStrLn \""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "sentinelLine") (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (EVar "endTag")))) (ELit (LString "\"")))))))))
 (DTypeSig true "doctestProbePrefixes" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "doctestProbePrefixes" () (EListLit (ELit (LString "__ndt_")) (ELit (LString "NpRuntime_")) (EVar "runtimeDependencyPrefix")))
 (DTypeSig false "probeBindingName" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))

@@ -1,5 +1,5 @@
 # META
-source_lines=477
+source_lines=478
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/native_test_decls.mdk — the NATIVE execution engine for
@@ -61,6 +61,7 @@ import support.util.{joinNl, splitNl}
 import tools.doctest.{ExResult(..)}
 import tools.probe_transcript.{
   Chunk(..),
+  Section(..),
   chunksOf,
   decodeValue,
   endTag,
@@ -298,13 +299,13 @@ testProbePrefixes = [
 
 probeSource : String -> String -> List (String, Int, Expr) -> String
 probeSource nonce tsrc tests =
-  let (_, imports, decls, entry) = testSection nonce 0 tests
+  let section = testSection nonce 0 tests
   joinNl
-    (imports
+    (section.secImports
       ++ ["", renameUserMain tsrc, ""]
-      ++ decls
+      ++ section.secDecls
       ++ ["main ="]
-      ++ entry
+      ++ section.secEntry
       ++ [""])
 
 -- This engine's part of a probe, as `tools/native_probe.mdk` merges it with
@@ -313,22 +314,20 @@ probeSource nonce tsrc tests =
 -- transcript.  Tests are numbered from `first`, so two sections of one probe
 -- never bind the same name.
 export
-testSection : String ->
-  Int ->
-  List (String, Int, Expr) ->
-  (String, List String, List String, List String)
-testSection nonce first tests = (
-  noncedPrefix sentinelBase nonce,
-  [
+testSection : String -> Int -> List (String, Int, Expr) -> Section
+testSection nonce first tests = Section {
+  secPrefix = noncedPrefix sentinelBase nonce,
+  secImports = [
     "import test as \{expectationAlias nonce}",
     "import \{runtimeDependencyName nonce}.runtime as \{runtimeAlias nonce}",
   ],
-  testBindings nonce first tests,
-  mainLines nonce first tests
-    ++ [
-      "  \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) endTag}\"",
-    ],
-)
+  secDecls = testBindings nonce first tests,
+  secEntry =
+    mainLines nonce first tests
+      ++ [
+        "  \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) endTag}\"",
+      ],
+}
 
 bindingName : String -> Int -> String
 bindingName nonce i = "__ts_\{probeNameNonce nonce}_\{intToString i}__"
@@ -342,14 +341,16 @@ valueName nonce i = "__tsv_\{probeNameNonce nonce}_\{intToString i}__"
 -- Per test: the body as a binding, plus a printer that emits the constructor
 -- tag and the three rendered fields between sentinels.
 --
--- ⚠️ BOTH take a `Unit` parameter, and the body's is load-bearing, not
--- symmetry.  MEASURED: the native backend evaluates a top-level NULLARY binding
--- eagerly, before `main` runs — `boom = panic "boom"` kills the program before
--- `main`'s first `putStrLn` reaches stdout, where the interpreter prints it
--- first.  As nullary bindings, every test body would therefore be forced at
--- startup, so one panicking test would abort the probe before ANY sentinel was
--- printed and the whole file would report as one undifferentiated abort.  Under
--- a parameter the body is evaluated where it is called — inside `main`, in test
+-- BOTH take a `Unit` parameter, and the body's is load-bearing, not symmetry.
+-- MEASURED: the native backend evaluates a top-level NULLARY binding eagerly,
+-- before `main` runs, when its body is a direct effect or panic —
+-- `boom = panic "boom"` kills the program before `main`'s first `putStrLn`
+-- reaches stdout, where the interpreter prints it first.  The behavior is
+-- shape-dependent: a doctest smoke binding is forced at startup, but
+-- `__ndt_i__ = debug (bump ())` is not.  As nullary bindings, test bodies of the
+-- forced shape would be forced at startup, so one panicking test would abort the
+-- probe before ANY sentinel was printed and the whole file would report as one
+-- undifferentiated abort.  Under a parameter the body is evaluated where it is called — inside `main`, in test
 -- order — which is what gives the abort rule its per-test attribution.
 testBindings : String -> Int -> List (String, Int, Expr) -> List String
 testBindings _ _ [] = []
@@ -486,7 +487,7 @@ fromFields note _ _ _ _ =
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "splitNl" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "ExResult" true))))
-(DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "freshProbeNonce" false) (mem "firstNonEmptyLine" false) (mem "lookupChunk" false) (mem "mintNonce" false) (mem "noncedPrefix" false) (mem "probeNameNonce" false) (mem "renameUserMain" false) (mem "runtimeAlias" false) (mem "runtimeDependencyName" false) (mem "runtimeDependencyPrefix" false) (mem "sentinelLine" false) (mem "startTag" false) (mem "tagsInOrder" false) (mem "valuePrintExprWith" false))))
+(DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "Section" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "freshProbeNonce" false) (mem "firstNonEmptyLine" false) (mem "lookupChunk" false) (mem "mintNonce" false) (mem "noncedPrefix" false) (mem "probeNameNonce" false) (mem "renameUserMain" false) (mem "runtimeAlias" false) (mem "runtimeDependencyName" false) (mem "runtimeDependencyPrefix" false) (mem "sentinelLine" false) (mem "startTag" false) (mem "tagsInOrder" false) (mem "valuePrintExprWith" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false))))
 (DTypeSig false "sentinelBase" (TyCon "String"))
 (DFunDef false "sentinelBase" () (ELit (LString "@@__mdk_native_test__@@")))
@@ -514,9 +515,9 @@ fromFields note _ _ _ _ =
 (DTypeSig true "testProbePrefixes" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "testProbePrefixes" () (EListLit (ELit (LString "__ts_")) (ELit (LString "__tse_")) (ELit (LString "__tsv_")) (ELit (LString "NpTest_")) (ELit (LString "NpRuntime_")) (EVar "runtimeDependencyPrefix")))
 (DTypeSig false "probeSource" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyCon "String")))))
-(DFunDef false "probeSource" ((PVar "nonce") (PVar "tsrc") (PVar "tests")) (EBlock (DoLet false false (PTuple PWild (PVar "imports") (PVar "decls") (PVar "entry")) (EApp (EApp (EApp (EVar "testSection") (EVar "nonce")) (ELit (LInt 0))) (EVar "tests"))) (DoExpr (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "imports") (EListLit (ELit (LString "")) (EApp (EVar "renameUserMain") (EVar "tsrc")) (ELit (LString "")))) (EVar "decls")) (EListLit (ELit (LString "main =")))) (EVar "entry")) (EListLit (ELit (LString ""))))))))
-(DTypeSig true "testSection" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "testSection" ((PVar "nonce") (PVar "first") (PVar "tests")) (ETuple (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "import test as ")) (EApp (EVar "display") (EApp (EVar "expectationAlias") (EVar "nonce")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "import ")) (EApp (EVar "display") (EApp (EVar "runtimeDependencyName") (EVar "nonce")))) (ELit (LString ".runtime as "))) (EApp (EVar "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString "")))) (EApp (EApp (EApp (EVar "testBindings") (EVar "nonce")) (EVar "first")) (EVar "tests")) (EBinOp "++" (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (EVar "first")) (EVar "tests")) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ".putStrLn \""))) (EApp (EVar "display") (EApp (EApp (EVar "sentinelLine") (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (EVar "endTag")))) (ELit (LString "\"")))))))
+(DFunDef false "probeSource" ((PVar "nonce") (PVar "tsrc") (PVar "tests")) (EBlock (DoLet false false (PVar "section") (EApp (EApp (EApp (EVar "testSection") (EVar "nonce")) (ELit (LInt 0))) (EVar "tests"))) (DoExpr (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EFieldAccess (EVar "section") "secImports") (EListLit (ELit (LString "")) (EApp (EVar "renameUserMain") (EVar "tsrc")) (ELit (LString "")))) (EFieldAccess (EVar "section") "secDecls")) (EListLit (ELit (LString "main =")))) (EFieldAccess (EVar "section") "secEntry")) (EListLit (ELit (LString ""))))))))
+(DTypeSig true "testSection" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyCon "Section")))))
+(DFunDef false "testSection" ((PVar "nonce") (PVar "first") (PVar "tests")) (ERecordCreate "Section" ((fa "secPrefix" (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (fa "secImports" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "import test as ")) (EApp (EVar "display") (EApp (EVar "expectationAlias") (EVar "nonce")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "import ")) (EApp (EVar "display") (EApp (EVar "runtimeDependencyName") (EVar "nonce")))) (ELit (LString ".runtime as "))) (EApp (EVar "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ""))))) (fa "secDecls" (EApp (EApp (EApp (EVar "testBindings") (EVar "nonce")) (EVar "first")) (EVar "tests"))) (fa "secEntry" (EBinOp "++" (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (EVar "first")) (EVar "tests")) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ".putStrLn \""))) (EApp (EVar "display") (EApp (EApp (EVar "sentinelLine") (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (EVar "endTag")))) (ELit (LString "\"")))))))))
 (DTypeSig false "bindingName" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "bindingName" ((PVar "nonce") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "__ts_")) (EApp (EVar "display") (EApp (EVar "probeNameNonce") (EVar "nonce")))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "__"))))
 (DTypeSig false "printerName" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
@@ -565,7 +566,7 @@ fromFields note _ _ _ _ =
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "splitNl" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "ExResult" true))))
-(DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "freshProbeNonce" false) (mem "firstNonEmptyLine" false) (mem "lookupChunk" false) (mem "mintNonce" false) (mem "noncedPrefix" false) (mem "probeNameNonce" false) (mem "renameUserMain" false) (mem "runtimeAlias" false) (mem "runtimeDependencyName" false) (mem "runtimeDependencyPrefix" false) (mem "sentinelLine" false) (mem "startTag" false) (mem "tagsInOrder" false) (mem "valuePrintExprWith" false))))
+(DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "Section" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "freshProbeNonce" false) (mem "firstNonEmptyLine" false) (mem "lookupChunk" false) (mem "mintNonce" false) (mem "noncedPrefix" false) (mem "probeNameNonce" false) (mem "renameUserMain" false) (mem "runtimeAlias" false) (mem "runtimeDependencyName" false) (mem "runtimeDependencyPrefix" false) (mem "sentinelLine" false) (mem "startTag" false) (mem "tagsInOrder" false) (mem "valuePrintExprWith" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false))))
 (DTypeSig false "sentinelBase" (TyCon "String"))
 (DFunDef false "sentinelBase" () (ELit (LString "@@__mdk_native_test__@@")))
@@ -593,9 +594,9 @@ fromFields note _ _ _ _ =
 (DTypeSig true "testProbePrefixes" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "testProbePrefixes" () (EListLit (ELit (LString "__ts_")) (ELit (LString "__tse_")) (ELit (LString "__tsv_")) (ELit (LString "NpTest_")) (ELit (LString "NpRuntime_")) (EVar "runtimeDependencyPrefix")))
 (DTypeSig false "probeSource" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyCon "String")))))
-(DFunDef false "probeSource" ((PVar "nonce") (PVar "tsrc") (PVar "tests")) (EBlock (DoLet false false (PTuple PWild (PVar "imports") (PVar "decls") (PVar "entry")) (EApp (EApp (EApp (EVar "testSection") (EVar "nonce")) (ELit (LInt 0))) (EVar "tests"))) (DoExpr (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "imports") (EListLit (ELit (LString "")) (EApp (EVar "renameUserMain") (EVar "tsrc")) (ELit (LString "")))) (EVar "decls")) (EListLit (ELit (LString "main =")))) (EVar "entry")) (EListLit (ELit (LString ""))))))))
-(DTypeSig true "testSection" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "testSection" ((PVar "nonce") (PVar "first") (PVar "tests")) (ETuple (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "import test as ")) (EApp (EMethodRef "display") (EApp (EVar "expectationAlias") (EVar "nonce")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "import ")) (EApp (EMethodRef "display") (EApp (EVar "runtimeDependencyName") (EVar "nonce")))) (ELit (LString ".runtime as "))) (EApp (EMethodRef "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString "")))) (EApp (EApp (EApp (EVar "testBindings") (EVar "nonce")) (EVar "first")) (EVar "tests")) (EBinOp "++" (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (EVar "first")) (EVar "tests")) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ".putStrLn \""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "sentinelLine") (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (EVar "endTag")))) (ELit (LString "\"")))))))
+(DFunDef false "probeSource" ((PVar "nonce") (PVar "tsrc") (PVar "tests")) (EBlock (DoLet false false (PVar "section") (EApp (EApp (EApp (EVar "testSection") (EVar "nonce")) (ELit (LInt 0))) (EVar "tests"))) (DoExpr (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EFieldAccess (EVar "section") "secImports") (EListLit (ELit (LString "")) (EApp (EVar "renameUserMain") (EVar "tsrc")) (ELit (LString "")))) (EFieldAccess (EVar "section") "secDecls")) (EListLit (ELit (LString "main =")))) (EFieldAccess (EVar "section") "secEntry")) (EListLit (ELit (LString ""))))))))
+(DTypeSig true "testSection" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyCon "Section")))))
+(DFunDef false "testSection" ((PVar "nonce") (PVar "first") (PVar "tests")) (ERecordCreate "Section" ((fa "secPrefix" (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (fa "secImports" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "import test as ")) (EApp (EMethodRef "display") (EApp (EVar "expectationAlias") (EVar "nonce")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "import ")) (EApp (EMethodRef "display") (EApp (EVar "runtimeDependencyName") (EVar "nonce")))) (ELit (LString ".runtime as "))) (EApp (EMethodRef "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ""))))) (fa "secDecls" (EApp (EApp (EApp (EVar "testBindings") (EVar "nonce")) (EVar "first")) (EVar "tests"))) (fa "secEntry" (EBinOp "++" (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (EVar "first")) (EVar "tests")) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ".putStrLn \""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "sentinelLine") (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (EVar "endTag")))) (ELit (LString "\"")))))))))
 (DTypeSig false "bindingName" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "bindingName" ((PVar "nonce") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "__ts_")) (EApp (EMethodRef "display") (EApp (EVar "probeNameNonce") (EVar "nonce")))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "__"))))
 (DTypeSig false "printerName" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
