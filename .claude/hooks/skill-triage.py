@@ -118,7 +118,13 @@ write_tests = re.search(
     prompt, re.IGNORECASE,
 )
 
-if not roadmap and not stdlib and not mcp and not sprint and not gates and not debug and not write_tests:
+# Style-rule task: adding or changing a rubric class, an exception or a ruling,
+# or relabelling review-bench fixtures. The procedure lives in `style-rule`.
+style_rule = re.search(r"\bstyle (rules?|rulings?|pass\w*)\b|\brubric\b|\bSTYLE-RU(BRIC|LINGS)\b"
+                       r"|\breview.?bench\b|\bslop\b", prompt, re.IGNORECASE)
+
+if not roadmap and not stdlib and not mcp and not sprint and not gates and not debug and not write_tests \
+        and not style_rule:
     sys.exit(0)
 
 if roadmap:
@@ -232,6 +238,16 @@ if debug:
         "differential recipe. AGENTS.md keeps only the three traps that turn "
         "a wrong answer into a right-looking one ([D-JSON-HOLE], "
         "[D-BUILD-PIPE], [D-TWO-ARM-STDLIB]).\n"
+        "Triage reminder, not a directive."
+    )
+
+if style_rule:
+    print(
+        "Skill triage (style-rule task detected): load style-rule before "
+        "editing docs/design/STYLE-RUBRIC.md or the review-bench fixtures -- "
+        "a rule needs Val's ruling (one question at a time, on a real "
+        "instance), a STYLE-RULINGS.md entry, fixtures checked with "
+        "scripts/review_bench/curate.py, and a dev measurement before test.\n"
         "Triage reminder, not a directive."
     )
 

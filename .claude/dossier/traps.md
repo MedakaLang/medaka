@@ -328,6 +328,7 @@ Typechecker bugs also answer `.claude/workstreams/TYPECHECK.md` (`ws:typecheck`)
 | **debug-pipeline** | Parse/typecheck/eval failure or a wrong value; first choice for [T-DISPATCH-LOADER]. Also carries the probe/flag catalogue and the two-arm differential recipe. |
 | **gates** | A gate or CI shard went red and you need to know what it proved; or you're adding a fixture, a golden, or a gate. |
 | **write-tests** | Asked to "write tests"/"add unit tests" for a module, or about to add ANY check — picks the vehicle (doctest / prop / `*_test.mdk` sibling / `kind = "native"` gate-test / shell) before you write one. Read it before `gates`, not after — see [WT-VEHICLE]. |
+| **style-rule** | Adding or changing a style rule: a rubric class, an exception, or a ruling (`docs/design/STYLE-RUBRIC.md`, `docs/design/STYLE-RULINGS.md`); relabelling review-bench fixtures. Ruling first (Val, one question at a time), then fixtures (`scripts/review_bench/curate.py`), then a dev measurement. |
 | **harden-typechecker** | Typechecker-*internal*: `type_error`, constraint/coherence/unification. |
 | **perf-hunt** | Stage slow, or `diff_compiler_perf_scaling.sh` red. |
 | **benchmark-emitter** | `compiler/backend/*` change to measure, or a suspicious fixpoint failure. |

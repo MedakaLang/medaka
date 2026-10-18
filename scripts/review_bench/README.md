@@ -124,6 +124,9 @@ $1.30 for a 40-item Opus ceiling.
 
 ## Adding a class
 
+The whole procedure, ruling to measurement, is the `style-rule` skill
+(`.claude/skills/style-rule/SKILL.md`). The bench-side steps:
+
 1. Add the row to `docs/design/STYLE-RUBRIC.md`: positive, exceptions, ruling.
    The rule text is parsed from there at run time.
 2. Add one entry to `SUBJECTS` in `rubric.py`: the subject phrase (written
@@ -131,11 +134,14 @@ $1.30 for a 40-item Opus ceiling.
    (`comments`, `monads`, `tests`, `stdlib_doc`), and whether it needs
    reasoning across two snippets.
 3. `bench.py questions --check` must report no class without an entry.
-4. Add fixtures to both splits.
+4. Add fixtures with `curate.py add` (it assigns ids and splits), then
+   `curate.py check` and `curate.py stats`.
 
 ## Files
 
 - `bench.py`: the CLI, verification and the report.
+- `curate.py`: fixture curation, offline: `check`, `add`, `edit`, `stats`
+  (writes `fixtures/STATS.md`), `contested`.
 - `rubric.py`: rubric parsing, per-class subjects and notes, Haiku/Opus
   system prompts.
 - `items.py`: fixture loading, selection, evidence modes, prompt rendering,
