@@ -23,6 +23,7 @@ One module, `typecheck.mdk`, still holds the inference core; the rest are the mo
 | `evidence_complete.mdk` | The completeness judgment: does every dispatch destination name an instance or a given | `EvidenceRow` predicate |
 | `disposition.mdk` | Whole-graph table of which method each impl supplies or inherits from the default; importable by `ir/`, `eval/`, `backend/` without `typecheck.mdk` | `installedDispositionsOpt` |
 | `route_key.mdk` | The only mint of an impl route word | `evMethodRoutes`, `numIntWord` |
+| `chain_key.mdk` | The part of the module-chain memo key a step reads from modules outside its prefix: instance heads and constrained signature names | `chainGraphKey` |
 | `runtime_types.mdk` | What each source binder holds at run time, keyed by `BinderId`, materialized after the drain | `RuntimeType`, `BinderRow` |
 | `annotate.mdk` | Lexical-addressing emission pass: variable references to addressed references, right before eval | `annotateProgram` |
 | `private_mangle.mdk` | Universal per-module name mangling for the flat multi-module emit path | `mangledName`, `hashName`, `injectiveIdent` |

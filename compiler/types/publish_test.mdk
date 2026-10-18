@@ -33,9 +33,10 @@ import types.route_key.{installedEvidenceEntries}
 import types.typecheck.{
   checkOneSchemeFullK, checkModulesDiagsChain, checkModulesAllLines,
   elaborateModulesReport, checkModules, methodReturnMemoCurrentViews,
-  methodReturnMemoRetentionStats, tcCode, tcMsg, MethodReturnMemoView(..),
-  checkModulesChainReportFor, checkOneReportK, checkModulesPartialK,
-  currentLocalSchemesLoc, currentSeedSchemes, ppSchemeNamed, ppSchemeNamedFull
+  methodReturnMemoRetentionStats, chainMemoReplayedSteps, tcCode, tcMsg,
+  MethodReturnMemoView(..), checkModulesChainReportFor, checkOneReportK,
+  checkModulesPartialK, currentLocalSchemesLoc, currentSeedSchemes,
+  ppSchemeNamed, ppSchemeNamedFull
 }
 import driver.diagnostics.{analyzeProjectReport, noStdlibExports}
 import test_process.{withScratchDir}
@@ -584,6 +585,97 @@ test "a graph-visible instance dropped from a later prefix module: warm equals c
       "warm run reports as many errors as cold",
       expectEqual (length cold) (length warm),
     ),
+  ]
+
+test "a graph-visible instance added to a later prefix module: warm equals cold" =
+  let _ = instErrors "inst-k2" False
+  let warm = instErrors "inst-k2" True
+  let cold = instErrors "inst-cold2" True
+  expectEqual cold warm
+
+-- The mark set: a later module's `=>` signature names a binding that an earlier
+-- module also declares, so the earlier module's occurrence is marked a dict
+-- application.  Schemes and diagnostics do not move; the checked program's
+-- evidence does.
+markA : String
+markA = "h : Int -> Int\nh x = x\nexport useA : Int -> Int\nuseA = h\n"
+
+markB : Bool -> String
+markB constrained =
+  if constrained then
+    "import i.{Speak, speak}\nexport h : Speak a => a -> String\nh x = speak x\nexport bval = 1\n"
+  else
+    "import i.{Speak, speak}\nexport bval = 1\n"
+
+markEntry : String
+markEntry = "import a.{useA}\nimport b.{bval}\nentry = bval\n"
+
+markDrive : String -> Bool -> List String
+markDrive key constrained =
+  let bSrc = markB constrained
+  let report =
+    checkModulesChainReportFor
+      False
+      (Some (4266, 4267))
+      key
+      [Some instIface, Some markA, Some bSrc, None]
+      []
+      (desugar (parse ""))
+      [
+        ("i", desugar (parseLocated instIface)),
+        ("a", desugar (parseLocated markA)),
+        ("b", desugar (parseLocated bSrc)),
+        ("e", desugar (parseLocated markEntry)),
+      ]
+  accRenderChecked report.trChecked
+
+test "a later module's constrained signature name: warm evidence equals cold" =
+  let _ = markDrive "mark-k" True
+  let warmRemoved = markDrive "mark-k" False
+  let coldRemoved = markDrive "mark-cold" False
+  let _ = markDrive "mark-k2" False
+  let warmAdded = markDrive "mark-k2" True
+  let coldAdded = markDrive "mark-cold2" True
+  expectEach [
+    ("removed", expectEqual coldRemoved warmRemoved),
+    ("added", expectEqual coldAdded warmAdded),
+  ]
+
+-- Steps replayed by the last keyed drive, with the entry varied.  A body edit
+-- touches no fingerprinted input and replays the whole prefix; an orphan impl in
+-- the entry changes the graph key and replays none.
+replayDrive : String -> String -> Int
+replayDrive key entrySrc =
+  let bSrc = instHolder True
+  let _ =
+    checkModulesChainReportFor
+      False
+      (Some (4266, 4267))
+      key
+      [Some instIface, Some instUse, Some bSrc, None]
+      []
+      (desugar (parse ""))
+      [
+        ("i", desugar (parseLocated instIface)),
+        ("a", desugar (parseLocated instUse)),
+        ("b", desugar (parseLocated bSrc)),
+        ("e", desugar (parseLocated entrySrc)),
+      ]
+  chainMemoReplayedSteps ()
+
+test "the chain memo replays the prefix after a body edit and not after an orphan impl" =
+  let _ = replayDrive "replay-k" instEntry
+  let afterBody = replayDrive "replay-k" (instEntry ++ "extra = 42\n")
+  let _ = replayDrive "replay-k2" instEntry
+  let afterImpl =
+    replayDrive
+      "replay-k2"
+      ("import i.{Speak}\n"
+        ++ instEntry
+        ++ "impl Speak Bool where\n  speak _ = \"b\"\n")
+  expectEach [
+    ("body edit replays the three prefix steps", expectEqual 3 afterBody),
+    ("orphan impl replays none", expectEqual 0 afterImpl),
   ]
 
 -- The same-module variant: the instance sits in the prefix module whose own step
