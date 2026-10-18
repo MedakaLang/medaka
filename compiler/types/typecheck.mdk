@@ -359,6 +359,11 @@ export import types.publish.{
 }
 import types.publish.{
   TcReport,
+  PartialAnalysis,
+  EntryTables(..),
+  noEntryTables,
+  partialAnalysis,
+  freezePub,
   freezeRows,
   freezeModDiags,
   freezeNewest,
@@ -14659,14 +14664,37 @@ coreOwnContexts _ =
 -- no entry for at all.
 export
 ppSchemeNamedFull : String -> Scheme -> String
-ppSchemeNamedFull n s = match omLookup n perRun.value.schemeDefIdsRef.value
-  Some _ => ppSchemeNamed n s
+ppSchemeNamedFull n s =
+  ppSchemeCon (seedContext crossRun.value.coreSchemeObligationsRef.value n) s
+
+-- The context of the seed name [n], by the three steps above; the third reads
+-- [coreContexts], the prelude's contexts keyed by bare name.
+seedContext : OrdMap (List VecObl) -> String -> List VecObl
+seedContext coreContexts n = match omLookup n perRun.value.schemeDefIdsRef.value
+  Some _ => ownContext n
   None => match lookupSchemeObls n 0 perRun.value.schemeObligationsRef.value
-    Some obs => ppSchemeCon obs s
-    None =>
-      ppSchemeCon
-        (optionOr [] (omLookup n crossRun.value.coreSchemeObligationsRef.value))
-        s
+    Some obs => obs
+    None => optionOr [] (omLookup n coreContexts)
+
+-- The last module of [modules] (the one `perRun` holds once a drive has checked
+-- it): its locals and its import seed, frozen with their contexts.  The seed's
+-- prelude contexts come from [coreContexts], `graphPreamble`'s snapshot.
+captureEntryTables : OrdMap (List VecObl) ->
+  List (String, List Decl) ->
+  EntryTables
+captureEntryTables coreContexts modules = match last modules
+  None => noEntryTables
+  Some (mid, _) => EntryTables {
+    etModule = mid,
+    etLocals =
+      map
+        ((n, loc, s) => (n, freezePub s (ownContext n), loc))
+        perRun.value.localSchemesOut.value,
+    etSeed =
+      map
+        (b => (fst b, freezePub (snd b) (seedContext coreContexts (fst b))))
+        perRun.value.seedSchemesOut.value,
+  }
 
 stripEff : Ty -> Ty
 stripEff (TyEffect _ _ t) = t
@@ -53587,6 +53615,32 @@ checkModulesK preludeKey runtimeDecls coreDecls0 modules0 =
   let (coreDecls, modules) = stampGraphDecls coreDecls0 modules0
   let (runtimeSeed, coreSchemes) =
     checkModulesPreambleK preludeKey runtimeDecls coreDecls modules
+  cmFold runtimeSeed coreSchemes modules
+
+-- `checkModulesK` also handing back what its drive left for the last module it
+-- checked (its locals and import seed), taken at the drive's end.  It returns no
+-- `TcReport`: the drive harvests no diagnostics, so it judges nothing.
+export
+checkModulesPartialK : Option (Int, Int) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  PartialAnalysis
+checkModulesPartialK preludeKey runtimeDecls coreDecls0 modules0 =
+  let (coreDecls, modules) = stampGraphDecls coreDecls0 modules0
+  let (runtimeSeed, coreSchemes, coreClosed, coreContexts, _, _) =
+    graphPreamble GOutDiags preludeKey runtimeDecls coreDecls modules
+  let rows = cmFold runtimeSeed coreSchemes modules
+  partialAnalysis
+    rows
+    (publishedCore coreClosed coreContexts coreSchemes)
+    (captureEntryTables coreContexts modules)
+
+cmFold : List (String, Scheme) ->
+  ModuleBindings ->
+  List (String, List Decl) ->
+  List (String, List (String, PubScheme))
+cmFold runtimeSeed coreSchemes modules =
   -- #154 PR-C: cmCheckWorker reads NEITHER accData (checkModuleFull → Module path, where
   -- checkBodyImpl binds it `_` and never reads it) NOR accAll (its `_accAll` param), so
   -- both concats are pure waste here — the residual O(modules^2) the PR-A review found.
@@ -54113,15 +54167,36 @@ checkModulesDiagsChainFor : Bool ->
   List Decl ->
   List (String, List Decl) ->
   List ModDiags
-checkModulesDiagsChainFor valueMain None _ _ runtimeDecls coreDecls0 modules0 =
+checkModulesDiagsChainFor valueMain preludeKey chainKey stepKeys runtimeDecls coreDecls0 modules0 =
+  (checkModulesChainReportFor
+    valueMain
+    preludeKey
+    chainKey
+    stepKeys
+    runtimeDecls
+    coreDecls0
+    modules0).trDiagnostics
+
+-- `checkModulesDiagsChainFor` returning the drive's whole report.  The keyed arm
+-- builds it with the same `graphReport` call as `driveGraphK`'s diags arm.
+export
+checkModulesChainReportFor : Bool ->
+  Option (Int, Int) ->
+  String ->
+  List (Option String) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  TcReport
+checkModulesChainReportFor valueMain None _ _ runtimeDecls coreDecls0 modules0 =
   (driveGraphK
     GOutDiags
     valueMain
     None
     runtimeDecls
     coreDecls0
-    modules0).gdPerMod
-checkModulesDiagsChainFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0 modules0 =
+    modules0).gdReport
+checkModulesChainReportFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0 modules0 =
   -- The keyed arm mirrors `driveGraphK`'s prologue by hand, so it owes the same
   -- method-alias rewrite: without it this arm typechecks a graph in which
   -- `import m as A` binds none of `m`'s methods under their origin name, and a bare
@@ -54130,8 +54205,8 @@ checkModulesDiagsChainFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDec
   -- it is stable under the prefix the step memo resumes from.
   let (coreDecls, modules) =
     stampGraphDecls coreDecls0 (renameAliasedMethods coreDecls0 modules0)
-  let (runtimeSeed, coreSchemes) =
-    checkModulesPreambleK (Some (rk, ck)) runtimeDecls coreDecls modules
+  let (runtimeSeed, coreSchemes, coreClosed, coreContexts, _, _) =
+    graphPreamble GOutDiags (Some (rk, ck)) runtimeDecls coreDecls modules
   let fullKey =
     "\{driverState.value.ioJoinProfile.value}\n\{chainFullKey rk ck chainKey}"
   let steps = match !moduleChainMemoRef
@@ -54180,10 +54255,22 @@ checkModulesDiagsChainFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDec
       coreDecls
       modules
   -- `driveGraphK`'s freeze point: the rows no recorded step froze.
-  attachCoherenceConflict
-    (attachDrainFindings
-      (findings ++ wanted)
-      (reverseL (freezeNewest open finalResults)))
+  let perMod =
+    attachCoherenceConflict
+      (attachDrainFindings
+        (findings ++ wanted)
+        (reverseL (freezeNewest open finalResults)))
+  let entryTables = captureEntryTables coreContexts modules
+  -- Built for the report, not installed: no lowering reads a check drive's table.
+  let dispositions = buildDispositions driverState.value.declEnvsRef.value
+  graphReport
+    perMod
+    (publishedCore coreClosed coreContexts coreSchemes)
+    []
+    drivenEvidence
+    dispositions
+    None
+    entryTables
 
 -- The fold itself, iterative, recording a step after each non-entry module while
 -- keys are available.  Mirrors `driveGraphK GOutDiags`'s `foldModules` exactly:
@@ -54497,9 +54584,9 @@ driveGraphK sel valueMain preludeKey runtimeDecls coreDecls0 modulesIn =
   let perMod =
     attachCoherenceConflict
       (attachDrainFindings (findings ++ wanted) (map freezeModDiags perModRaw))
-  let corePub = match coreClosed
-    Some rows => rows
-    None => freezeRows (publishCore coreContexts coreSchemes.mbSchemes)
+  -- Before the tree arm's `dictPass`, which writes `perRun`.
+  let entryTables = captureEntryTables coreContexts modules
+  let corePub = publishedCore coreClosed coreContexts coreSchemes
   -- #1112 A-3: the whole-graph IE/CE `buildDeclEnvs` filled in the preamble
   -- above is already complete at this point — installed here, once per
   -- elaboration, on both arms alike (mirroring `installEvidence`'s own
@@ -54516,7 +54603,15 @@ driveGraphK sel valueMain preludeKey runtimeDecls coreDecls0 modulesIn =
       gdResidual = [],
       gdEvTable = graphRun.value.evTable.value,
       gdDispositions = dispositions,
-      gdReport = graphReport perMod corePub [] drivenEvidence dispositions None,
+      gdReport =
+        graphReport
+          perMod
+          corePub
+          []
+          drivenEvidence
+          dispositions
+          None
+          entryTables,
     }
     GOutTrees =>
       -- The set `dictPass` prepends dict params for: the bare set plus every
@@ -54558,8 +54653,19 @@ driveGraphK sel valueMain preludeKey runtimeDecls coreDecls0 modulesIn =
             residual
             drivenEvidence
             dispositions
-            (Some (coreD, modulesOut)),
+            (Some (coreD, modulesOut))
+            entryTables,
       }
+
+-- The prelude's published rows: the core pass's own when that pass closed core
+-- (the diags arm), else frozen now with [contexts].
+publishedCore : Option (List (String, PubScheme)) ->
+  OrdMap (List VecObl) ->
+  ModuleBindings ->
+  List (String, PubScheme)
+publishedCore (Some rows) _ _ = rows
+publishedCore None contexts coreSchemes =
+  freezeRows (publishCore contexts coreSchemes.mbSchemes)
 
 -- The whole-graph coherence verdict, attached to the entry module's diagnostics —
 -- the tail `driveGraphK` and the chain memo both end with.  The narrower
@@ -54774,6 +54880,31 @@ checkModulesEntryFullSplitK : Bool ->
   List (String, List Decl) ->
   (List (String, PubScheme), List (String, PubScheme), List TcDiag, List TcDiag)
 checkModulesEntryFullSplitK valueMain preludeKey runtimeDecls coreDecls0 modules0 =
+  entrySplit
+    (checkModulesEntryFullReportK
+      valueMain
+      preludeKey
+      runtimeDecls
+      coreDecls0
+      modules0)
+
+-- `checkModulesEntryFullSplitK`'s four parts, read off its drive's report.
+export
+entrySplit : TcReport ->
+  (List (String, PubScheme), List (String, PubScheme), List TcDiag, List TcDiag)
+entrySplit r =
+  let (schemes, errs, warns) = checkModulesEntryFromDiags r.trDiagnostics
+  (r.trPartial.paCore, schemes, errs, warns)
+
+-- `checkModulesEntryFullSplitK` returning its drive's whole report.
+export
+checkModulesEntryFullReportK : Bool ->
+  Option (Int, Int) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  TcReport
+checkModulesEntryFullReportK valueMain preludeKey runtimeDecls coreDecls0 modules0 =
   -- The single-file front door loads stdlib/core.mdk twice: once as its prelude and
   -- once as the singleton `__user__` module.  Resolve already owns the syntactic
   -- self-test that prevents double-seeding core.  Apply that same authority before
@@ -54789,16 +54920,13 @@ checkModulesEntryFullSplitK valueMain preludeKey runtimeDecls coreDecls0 modules
         else
           (preludeKey, coreDecls0, modules0)
       _ => (preludeKey, coreDecls0, modules0)
-  let g =
-    driveGraphK
-      GOutDiags
-      valueMain
-      effectivePreludeKey
-      runtimeDecls
-      effectiveCoreDecls0
-      effectiveModules0
-  let (schemes, errs, warns) = checkModulesEntryFromDiags g.gdPerMod
-  (g.gdCoreSchemes, schemes, errs, warns)
+  (driveGraphK
+    GOutDiags
+    valueMain
+    effectivePreludeKey
+    runtimeDecls
+    effectiveCoreDecls0
+    effectiveModules0).gdReport
 
 -- prepend an optional bare-message diagnostic (code, severity, help) to a TcDiag list.
 prependDiagOpt : String ->
@@ -54901,13 +55029,9 @@ checkOneSchemeFullK : Option (Int, Int) ->
   List Decl ->
   (String, List Decl) ->
   (List (String, PubScheme), List (String, PubScheme))
-checkOneSchemeFullK preludeKey runtimeDecls coreDecls (rootId, prog) =
-  let (coreSchemes, schemes, _, _) = checkModulesEntryFullSplitK
-    False
-    preludeKey
-    runtimeDecls
-    coreDecls
-    [(rootId, prog)]
+checkOneSchemeFullK preludeKey runtimeDecls coreDecls prog =
+  let (coreSchemes, schemes, _, _) =
+    entrySplit (checkOneReportK False preludeKey runtimeDecls coreDecls prog)
   (coreSchemes, schemes)
 
 -- diagnostics-returning sibling of `checkOneScheme`, matching the former wrapper's
@@ -54930,14 +55054,27 @@ checkOneDiagsK : Bool ->
   List Decl ->
   (String, List Decl) ->
   (List TcDiag, List TcDiag)
-checkOneDiagsK valueMain preludeKey runtimeDecls coreDecls (rootId, prog) =
-  let (_, _, errs, warns) = checkModulesEntryFullSplitK
-    valueMain
-    preludeKey
-    runtimeDecls
-    coreDecls
-    [(rootId, prog)]
+checkOneDiagsK valueMain preludeKey runtimeDecls coreDecls prog =
+  let (_, _, errs, warns) =
+    entrySplit
+      (checkOneReportK valueMain preludeKey runtimeDecls coreDecls prog)
   (errs, warns)
+
+-- The report-returning sibling of both `checkOneSchemeFullK` and `checkOneDiagsK`:
+-- the one-module drive's whole report, which each of them projects.
+export
+checkOneReportK : Bool ->
+  Option (Int, Int) ->
+  List Decl ->
+  List Decl ->
+  (String, List Decl) ->
+  TcReport
+checkOneReportK valueMain preludeKey runtimeDecls coreDecls (rootId, prog) = checkModulesEntryFullReportK
+  valueMain
+  preludeKey
+  runtimeDecls
+  coreDecls
+  [(rootId, prog)]
 
 -- `checkModulesEntryFullK` for a SYNTHETIC program graph — one this driver derived
 -- from the user's rather than one the user wrote — with `mainSchemeRef` SAVED AND
@@ -55155,8 +55292,21 @@ elaborateModulesWithSchemes : Bool ->
   List (String, List Decl) ->
   (ElabResult, List (String, PubScheme), List (String, PubScheme))
 elaborateModulesWithSchemes valueMain runtimeDecls coreDecls0 modulesIn =
+  let (result, r) =
+    elaborateModulesWithReport valueMain runtimeDecls coreDecls0 modulesIn
+  let (core, entrySchemes, _, _) = entrySplit r
+  (result, core, entrySchemes)
+
+-- `elaborateModulesWithSchemes` returning its drive's whole report beside the
+-- elaboration.
+export
+elaborateModulesWithReport : Bool ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  (ElabResult, TcReport)
+elaborateModulesWithReport valueMain runtimeDecls coreDecls0 modulesIn =
   let g = driveGraphK GOutTrees valueMain None runtimeDecls coreDecls0 modulesIn
-  let (entrySchemes, _, _) = checkModulesEntryFromDiags g.gdPerMod
   (
     (
       g.gdCore,
@@ -55166,8 +55316,7 @@ elaborateModulesWithSchemes valueMain runtimeDecls coreDecls0 modulesIn =
       g.gdEvTable,
       g.gdDispositions,
     ),
-    g.gdCoreSchemes,
-    entrySchemes,
+    g.gdReport,
   )
 
 -- The report of `elaborateModules`' drive, for a test that reads it.
@@ -55177,7 +55326,7 @@ elaborateModulesReport : List Decl ->
   List (String, List Decl) ->
   TcReport
 elaborateModulesReport runtimeDecls coreDecls0 modulesIn =
-  (driveGraphK GOutTrees False None runtimeDecls coreDecls0 modulesIn).gdReport
+  snd (elaborateModulesWithReport False runtimeDecls coreDecls0 modulesIn)
 -- arg-position interface-method names whose route resolveArgStamps may stamp
 -- (populated on every path; an empty set would degenerate prePassDictArg to prePassDict)
 

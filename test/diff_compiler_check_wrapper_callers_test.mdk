@@ -36,20 +36,21 @@ import string.{
 import list.{nub, sort, lookup, filter}
 import regex.{Regex, Match, mustCompile, isMatch, findAll}
 
--- The 10 live wrapper-family names. `checkOneSchemeFull` joined 2026-08-27
+-- The 11 live wrapper-family names. `checkOneSchemeFull` joined 2026-08-27
 -- (S-full-env-scheme-entry, #1116); the keyed siblings `checkOneDiagsK` and
 -- `checkOneSchemeFullK` came with PR #2494 (`checkCoreMemoized` prelude key);
 -- `checkOneMatchToLines` joined 2026-09-19 (S-match-lines-module-arm, #1116);
 -- `checkOneToLinesWithRuntimeK` is the keyed sibling of
 -- `checkOneToLinesWithRuntime` (the clean single-file report reuses the
--- analyze-time prelude memo).
+-- analyze-time prelude memo); `checkOneReportK` is the report-returning
+-- sibling both `checkOneSchemeFullK` and `checkOneDiagsK` project.
 -- Without a row, a migrated caller would census as a ZERO-wrapper caller.
 wrapNames : List String
 wrapNames = [
   "checkOneScheme", "checkOneDiags", "checkOneSchemeFull", "checkOneDiagsK",
   "checkOneSchemeFullK", "checkOneToLines", "checkOneToLinesWithRuntime",
   "checkOneToLinesWithRuntimeK", "checkOneErrorsWithRuntime",
-  "checkOneMatchToLines"
+  "checkOneMatchToLines", "checkOneReportK"
 ]
 
 importRe : Regex
