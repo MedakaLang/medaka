@@ -1261,9 +1261,11 @@ def find_defs(tree: Tree, names: list[str]) -> dict[str, list[tuple[str, int, st
     hits = (tree.grep(p[:2], ("-E",), ("*.mdk",)) + tree.grep(p[2:4], ("-E",), ("*.mjs", "*.js"))
             + tree.grep(p[4:], ("-E",), ("*.sh",)))
     out: dict[str, list] = {n: [] for n in names}
+    per_name = {n: [re.compile(x.format(n=re.escape(n))) for x in DEF_PATS] for n in names}
     for p, ln, t in hits:
         for n in names:
-            if re.search(rf"(?<![\w']){re.escape(n)}(?![\w'])", t):
+            # the line must define `n` itself, not merely mention it
+            if any(rx.search(t) for rx in per_name[n]):
                 out[n].append((p, ln, t))
     return out
 
@@ -1337,7 +1339,7 @@ def gen_comment_stale(it: dict) -> list[dict]:
                 say(0, f"`{i}`: does not occur anywhere else in the tree")
             else:
                 fs = sorted({h[0] for h in ext})
-                say(3 if len(fs) <= 5 else 6, f"`{i}`: no definition found; mentioned in {_short(fs, 2)}")
+                say(1 if len(fs) <= 5 else 6, f"`{i}`: no definition found; mentioned in {_short(fs, 2)}")
 
     for kind in ("env", "flag"):
         vals = m[kind][:6]
@@ -1500,6 +1502,12 @@ def covers(gen_refs: list[dict], cur: dict) -> bool:
     cf = cur.get("file") or ""
     ca = (cur.get("anchor") or "").strip()
     cr = _range(cur.get("lines"))
+    if cur.get("fact") and not cur.get("excerpt"):
+        # A curated finding with no code: covered when a generated fact names the
+        # same thing (one of its names, or its path).
+        keys = [n for n in re.split(r"[ ,/]+", ca) if re.fullmatch(r"[A-Za-z_][\w']*", n)] + [cf]
+        if any(f"`{k}`" in (g.get("fact") or "") for g in gen_refs for k in keys if k):
+            return True
     for g in gen_refs:
         if g.get("file") != cf and not (g.get("excerpt") and f"{cf}:" in g["excerpt"]):
             continue
@@ -1512,12 +1520,13 @@ def covers(gen_refs: list[dict], cur: dict) -> bool:
         if not ca:
             return True
         ga = g.get("anchor") or ""
-        if ca and (ca == ga or ca in re.split(r"[ ,/]+", ga)):
+        names = [n for n in re.split(r"[ ,/]+", ca) if n]
+        if ca == ga or any(n in re.split(r"[ ,/]+", ga) for n in names):
             return True
         gr = _range(g.get("lines"))
         if cr and gr and gr[0] <= cr[1] and gr[1] >= cr[0]:
             return True
-        if ca and re.search(rf"`{re.escape(ca)}`", g.get("fact") or ""):
+        if any(re.search(rf"`{re.escape(n)}`", g.get("fact") or "") for n in names):
             return True
     return False
 
