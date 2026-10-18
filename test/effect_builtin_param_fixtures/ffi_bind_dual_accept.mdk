@@ -1,12 +1,12 @@
 -- One declaration bound to both hosts: `bind c` names the C symbol and `bind js`
 -- the JavaScript function.  Its row names one atom per host, each `HOST/LIBRARY`,
 -- and a caller bounded by the bound forms `"c*"` and `"js*"` admits both.
-extern fetchText : (url : String) -> <FFI "c/libfetch", FFI "js/fetch"> String
+extern fetchPage : (url : String) -> <FFI "c/libfetch", FFI "js/fetch"> String
   bind c "fetch_text"
   bind js "fetchText"
 
 fetchBoth : String -> <FFI "c*", FFI "js*"> String
-fetchBoth url = fetchText url
+fetchBoth url = fetchPage url
 
 main : <IO> Unit
 main = println "ffi dual binding accept"

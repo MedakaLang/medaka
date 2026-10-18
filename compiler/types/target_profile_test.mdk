@@ -76,7 +76,7 @@ test "(a) the six grant sets are TARGETS-DESIGN 8.1" = expectEach [
   (
     "wasmgc/edge",
     expectEqual
-      (Ok ["Stdout", "Stderr", "Clock", "Rand", "FFI"])
+      (Ok ["Stdout", "Stderr", "Clock", "Rand", "Net", "FFI"])
       (grantedBy "wasmgc/edge"),
   ),
   ("wasmgc/wasi-p2", expectEqual (Ok ["FFI"]) (grantedBy "wasmgc/wasi-p2")),
@@ -93,27 +93,30 @@ test "(a) every grant is a label's whole domain" =
       ))
       profileNames)
 
-test "(a) backend tags, host ABI and label lookup" = expectAll [
-  expectEqual
-    (Ok "llvm/C symbols")
-    (map
-      (p => backendName (profileBackend p) ++ "/" ++ profileAbi p)
-      (lookupProfile "native")),
-  expectEqual
-    (Ok "eval")
-    (map (p => backendName (profileBackend p)) (lookupProfile "eval/run")),
-  expectEqual
-    (Ok "wasmgc/WIT")
-    (map
-      (p => backendName (profileBackend p) ++ "/" ++ profileAbi p)
-      (lookupProfile "wasmgc/wasi-p2")),
-  expectEqual
-    (Ok True)
-    (map (p => grantsLabel p "Net") (lookupProfile "eval/run")),
-  expectEqual
-    (Ok False)
-    (map (p => grantsLabel p "Net") (lookupProfile "wasmgc/edge")),
-]
+test "(a) backend tags, host ABI and label lookup" = expectAll
+  [
+    expectEqual
+      (Ok "llvm/C symbols")
+      (map
+        (p => backendName (profileBackend p) ++ "/" ++ profileAbi p)
+        (lookupProfile "native")),
+    expectEqual
+      (Ok "eval")
+      (map (p => backendName (profileBackend p)) (lookupProfile "eval/run")),
+    expectEqual
+      (Ok "wasmgc/WIT")
+      (map
+        (p => backendName (profileBackend p) ++ "/" ++ profileAbi p)
+        (lookupProfile "wasmgc/wasi-p2")),
+    expectEqual
+      (Ok True)
+      (map (p => grantsLabel p "Net") (lookupProfile "eval/run")),
+    -- The edge grants `Net` over its whole domain, so its `fetchText` rides the
+    -- grant; the socket externs stay unprovided there, refused by the wall.
+    expectEqual
+      (Ok True)
+      (map (p => grantsLabel p "Net") (lookupProfile "wasmgc/edge")),
+  ]
 
 test "(b) aliases resolve to their profile" = expectAll [
   expectEqual
@@ -187,10 +190,21 @@ test "run checks against eval/run, narrowed by the selected profile" = expectEac
         (Ok ("eval/run ∩ llvm/native-posix", elevenLabels))
         (runView (Some "native")),
     ),
+    -- The edge grants `Net`, which eval/run also grants, so `run` keeps it
+    -- under the edge's narrowing (and `FFI`, which eval/run does not grant, goes).
     (
       "edge",
       expectEqual
-        (Ok ("eval/run ∩ wasmgc/edge", ["Stdout", "Stderr", "Clock", "Rand"]))
+        (Ok (
+          "eval/run ∩ wasmgc/edge",
+          [
+            "Stdout",
+            "Stderr",
+            "Clock",
+            "Rand",
+            "Net",
+          ],
+        ))
         (runView (Some "wasmgc/edge")),
     ),
   ]

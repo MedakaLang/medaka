@@ -1,0 +1,7 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/fetch_reached.mdk:5:0: the built-in `fetchText` is reached via `main → get → fetchText`, and the target `eval/run` does not provide it (PERMANENT: the interpreter has no HTTP client; only the wasmgc/edge target lowers `fetchText`): the target cannot provide it, by design; `medaka run` evaluates the program with the interpreter, so build it for a target that provides it
+  |
+5 | get url = fetchText url
+  | ^

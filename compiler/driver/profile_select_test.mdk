@@ -58,7 +58,7 @@ analyzedIn rsrc csrc manifestText = match makeTempDir ()
 
 edgeRefusal : String
 edgeRefusal =
-  "performs <FileRead \"x\"> where only <IO> is allowed; `IO` on `wasmgc/edge` is <Clock, Rand, Stderr, Stdout>"
+  "performs <FileRead \"x\"> where only <IO> is allowed; `IO` on `wasmgc/edge` is <Clock, Net, Rand, Stderr, Stdout>"
 
 check : <IO> Expectation
 check = match readFile "stdlib/runtime.mdk"

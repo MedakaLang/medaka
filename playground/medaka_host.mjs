@@ -9,16 +9,25 @@
 // Consumers: test/wasm/run.js (every wasm gate, profile wasmgc/node),
 // playground/worker.js (the user's program, wasmgc/browser-worker),
 // playground/compile.mjs (the compiler itself, COMPILER_HOST), and the runner stubs in
-// playground/roundtrip_test.mjs and playground/client_flow_test.mjs.  The import
+// playground/roundtrip_test.mjs and playground/client_flow_test.mjs, and the loader
+// `medaka build --target wasmgc/edge` writes beside the wasm (compiler/backend/
+// wasm_loader.mdk: `run` and `fetch` over runToResult and textResponse).  The import
 // surface is docs/spec/WASM-SEMANTICS.md §3; WH3 and WH4 hold here, once.
 //
 // API:
 //   createHost(profile, opts) -> host       host.imports is the import object
+//                                           host.importsFor(promising) is one run's
 //   makeImports(profile, opts) -> imports   createHost(profile, opts).imports
+//   jspiAvailable() -> boolean              the engine has JSPI
+//   promiseImport(capability, key, fn, promising) -> import   a promise-answering key
 //   runProgram(wasm, host, opts) -> { kind: 'done' } | { kind: 'exit', code }
 //                                 | { kind: 'error', error, inProgram }
+//   runToResult(module, profile, opts) -> Promise<{ stdout, stderr, exitCode }>
+//                                           one buffered run: done is 0, exit is its code,
+//                                           an error is 1 with its message appended to stderr
+//   textResponse(result) -> Response        stdout as text/plain; 200 on exit 0, else 500
 //   profile = a name in PROFILES, or a host configuration such as COMPILER_HOST.
-//   opts = { vfs, args, getEnv, executablePath, stdin, sink, streaming, isolated, hostLabel, withheldHint }
+//   opts = { vfs, args, getEnv, executablePath, stdin, sink, streaming, isolated, hostLabel, withheldHint, fetch }
 
 // ── capability slices ────────────────────────────────────────────────────────
 // Each slice lists the import keys it implements.  A key may sit in several slices
@@ -73,6 +82,14 @@ export const SLICES = {
     externs: ['wallTimeSec', 'monotonicSec', 'sleepMs'],
   },
   entropy: { needs: ['Rand'], keys: ['mdk_os_entropy', ...RESULT_KEYS], externs: ['osEntropyBytes'] },
+  // fetchText: the url arrives on the path channel and the body (or the failure text)
+  // leaves on the result channel.  The import answers with a promise, so it is
+  // installed only through `host.importsFor(promising)`.
+  net: {
+    needs: ['Net'],
+    keys: ['mdk_fetch_text', ...PATH_KEYS, ...RESULT_KEYS],
+    externs: ['fetchText'],
+  },
   stdin: {
     needs: ['Stdin'],
     keys: ['mdk_read_line', 'mdk_read_all', 'mdk_read_exactly', ...RESULT_KEYS],
@@ -93,7 +110,7 @@ export const PROFILES = {
     grants: ['Stdout', 'Stderr', 'Clock', 'Rand', 'FileRead', 'FileWrite', 'FFI'],
     process: false,
   },
-  'wasmgc/edge': { grants: ['Stdout', 'Stderr', 'Clock', 'Rand', 'FFI'], process: false },
+  'wasmgc/edge': { grants: ['Stdout', 'Stderr', 'Clock', 'Rand', 'Net', 'FFI'], process: false },
   'wasmgc/wasi-p2': { grants: ['FFI'], process: false },
 };
 
@@ -151,6 +168,7 @@ export const KEY_EXTERN = {
   mdk_os_entropy: 'osEntropyBytes', mdk_executable_path: 'executablePath',
   mdk_args_count: 'args', mdk_arg_len: 'args', mdk_arg_byte: 'args', mdk_exit: 'exit',
   mdk_wall_time_sec: 'wallTimeSec', mdk_monotonic_sec: 'monotonicSec', mdk_sleep_ms: 'sleepMs',
+  mdk_fetch_text: 'fetchText',
   mdk_result_len: 'readFile/getEnv result', mdk_result_byte: 'readFile/getEnv result',
 };
 
@@ -189,6 +207,37 @@ export class HostKeyError extends Error {
 export class ExitSignal extends Error {
   constructor(code) { super('exit ' + code); this.code = code; }
 }
+
+// ── JSPI: host imports that wait on a promise (WASM-ASYNC-DESIGN WA-5) ──────
+// With JS Promise Integration, a `WebAssembly.Suspending` import may answer with a
+// promise: the guest's stack is suspended until it settles, and the event loop runs
+// meanwhile.  That needs both halves of the API, and an entry called through
+// `WebAssembly.promising`: V8 traps (SuspendError) on any call to a Suspending import
+// from an entry that was not, whatever the import returns.  So only runProgram, whose
+// entry is promising whenever JSPI is present, installs the Suspending forms
+// (`host.importsFor`); every other caller of `mdk_main` gets the synchronous ones.
+export function jspiAvailable() {
+  return typeof WebAssembly.Suspending === 'function' && typeof WebAssembly.promising === 'function';
+}
+
+// The import for host key `key` of slice `capability` whose JS side `fn` answers with a
+// promise.  `promising` says whether the run's entry is promising (runProgram's, with
+// JSPI present); otherwise the import raises a CapabilityError naming JSPI, since
+// there is no way to wait on the promise and answering at once would be wrong.
+export function promiseImport(capability, key, fn, promising) {
+  if (promising) return new WebAssembly.Suspending(fn);
+  return () => noJspi(capability, key);
+}
+
+function noJspi(capability, key) {
+  throw new CapabilityError(capability,
+    `${KEY_EXTERN[key] || key} waits on the host, which needs JSPI (WebAssembly.Suspending and `
+    + 'WebAssembly.promising) and a promising entry; this engine or entry does not provide it');
+}
+
+// A thenable is any object or function with a callable `then`: what `await` would wait on.
+const isThenable = (v) =>
+  v !== null && (typeof v === 'object' || typeof v === 'function') && typeof v.then === 'function';
 
 // ── float formatting (WH2: ≡ medaka_rt.c mdk_float_lexeme) ───────────────────
 // SHORTEST-ROUND-TRIP since issue #57. `toExponential()` (no arg) is JS's shortest
@@ -625,6 +674,8 @@ export function createHost(profile, opts = {}) {
     sink: opts.sink || bufferSink(),
     streaming: !!opts.streaming,
     isolated: opts.isolated,
+    // The `fetch` the net slice calls: injectable so a gate can answer without a network.
+    fetch: opts.fetch,
     stdoutBuf: [], stderrBuf: [],
     pathBuf: [], resultBuf: new Uint8Array(0), writeBuf: [],
     floatFmtBuf: new Uint8Array(0), strToFloatOk: 0,
@@ -942,6 +993,49 @@ export function createHost(profile, opts = {}) {
       if (host.streaming) host.flush();
       Atomics.wait(host.waitCell, 0, 0, ms);
     },
+    // fetchText without a promising entry: there is no way to wait on the response.
+    mdk_fetch_text: () => noJspi('net', 'mdk_fetch_text'),
+  };
+  // The promise-answering forms of keys that `real` serves synchronously, installed by
+  // runProgram under a promising entry.  Sleep there is a timer, so it needs no
+  // cross-origin isolation and the event loop (a page's timers and messages) runs
+  // during it.  A timer's delay is capped at 2^31-1 ms, so a longer sleep takes steps.
+  const suspending = {
+    mdk_sleep_ms: (ms) => {
+      ms = Number(ms);
+      if (ms <= 0) return undefined;
+      if (host.streaming) host.flush();
+      const step = (left) => new Promise((resolve) => setTimeout(resolve, Math.min(left, 0x7fffffff)))
+        .then(() => (left > 0x7fffffff ? step(left - 0x7fffffff) : undefined));
+      return step(ms);
+    },
+    // GET the url on the path channel: 1 with the body of a 2xx response on the result
+    // channel, 0 with "<status> <statusText>" (just the status when the text is empty)
+    // for any other status or the failure's message when no response arrives.  Only
+    // http and https URLs are fetched: other schemes (file: on Bun and Deno reads local
+    // files) fail before `fetch` is called.  The url is taken before the first await,
+    // so the channel is free again while the guest is suspended.
+    mdk_fetch_text: async () => {
+      const url = takePath();
+      if (host.streaming) host.flush();
+      let scheme;
+      try { scheme = new URL(url).protocol; } catch (_) { scheme = null; }
+      if (scheme !== 'http:' && scheme !== 'https:') {
+        host.resultBuf = enc(scheme === null
+          ? `fetchText: unsupported URL ${JSON.stringify(url)} (only absolute http and https URLs)`
+          : `fetchText: unsupported URL scheme "${scheme}" (only http and https)`);
+        return 0;
+      }
+      try {
+        const res = await (host.fetch || globalThis.fetch)(url);
+        if (res.ok) { host.resultBuf = new Uint8Array(await res.arrayBuffer()); return 1; }
+        host.resultBuf = enc(res.statusText ? `${res.status} ${res.statusText}` : String(res.status));
+        return 0;
+      } catch (e) {
+        host.resultBuf = enc(String((e && e.message) || e));
+        return 0;
+      }
+    },
   };
   // Every key of every slice is a callable: real when an installed slice lists it,
   // otherwise one that throws the CapabilityError naming the withheld slice (WH3: never
@@ -957,6 +1051,17 @@ export function createHost(profile, opts = {}) {
     }
   host.bindings = opts.bindings || {};
   host.imports = { env, jsffi: jsffiImports(host, host.bindings) };
+  // The import object for one run: `host.imports` unless the entry is promising, when
+  // each installed key with a promise-answering form takes it.  A withheld key keeps
+  // its CapabilityError stub either way.
+  host.importsFor = (promising) => {
+    if (!promising) return host.imports;
+    const penv = { ...host.imports.env };
+    for (const [k, fn] of Object.entries(suspending))
+      if (installed.has(k))
+        penv[k] = promiseImport(Object.keys(SLICES).find((s) => SLICES[s].keys.includes(k)), k, fn, true);
+    return { ...host.imports, env: penv };
+  };
   return host;
 }
 
@@ -1067,11 +1172,20 @@ function jsffiCallable(host, bindings, field) {
     const { args, arrays } = decodeJsArgs(params, wire, Uint8Array.from(host.pathBuf));
     host.pathBuf = [];
     let v;
+    let thenable;
     try {
       v = fn(...args);
+      thenable = isThenable(v);
     } catch (e) {
       throw new JsBindingError(name, `js binding \`${name}\` threw: ${e && e.message !== undefined ? e.message : String(e)}`);
     }
+    // A js binding is synchronous (docs/design/TARGETS-DESIGN.md section 7.6), whatever
+    // its result type: the guest cannot wait on a thenable, and a `Unit` result would
+    // otherwise drop it unseen.
+    if (thenable)
+      throw new JsBindingError(name,
+        `js binding \`${name}\` returned a thenable (a promise, or a value with a \`then\` method), not ${result}: `
+        + 'a js binding must answer synchronously');
     const r = encodeJsResult(name, result, v);
     const back = arrays.map((a) => {
       const b = new Uint8Array(a.length * 8);
@@ -1123,6 +1237,12 @@ export function makeImports(profile, opts) { return createHost(profile, opts).im
 // Compile (unless given a Module), refuse an old entry shape, instantiate, call
 // `mdk_main`, and flush on every way out.  `inProgram` says whether `mdk_main` had
 // started: a failure after that is the program's, not the instantiation's.
+// With JSPI present the entry is `WebAssembly.promising(mdk_main)`, awaited, so the
+// imports from `host.importsFor(true)` may suspend it.  A suspended run settles the
+// same ways a synchronous one ends: an `exit` after a resumption rejects with its
+// ExitSignal and a trap with its RuntimeError, both caught below after a flush.  The
+// start function runs during instantiation and is never promising: a Suspending import
+// it reached would trap with a SuspendError.
 export async function runProgram(wasm, host, opts = {}) {
   let inProgram = false;
   try {
@@ -1132,14 +1252,46 @@ export async function runProgram(wasm, host, opts = {}) {
       throw new OldEntryShape(opts.oldEntryMessage
         || 'this module was built by an older compiler: its start function runs main itself; rebuild it');
     checkImportKeys(module, host);
-    const instance = await WebAssembly.instantiate(module, host.imports);
+    const promising = jspiAvailable();
+    const instance = await WebAssembly.instantiate(module, host.importsFor(promising));
     inProgram = true;
-    if (typeof instance.exports.mdk_main === 'function') instance.exports.mdk_main();
+    const main = instance.exports.mdk_main;
+    if (typeof main === 'function') {
+      if (promising) await WebAssembly.promising(main)();
+      else main();
+    }
     host.flush();
     return { kind: 'done' };
   } catch (e) {
     host.flush();
     if (e instanceof ExitSignal) return { kind: 'exit', code: e.code };
+    if (!inProgram && e && (e.name === 'SuspendError' || /suspend without WebAssembly\.promising/.test(e.message)))
+      e.message += ': a top-level value called fetchText or sleepMs during initialization; '
+        + 'JSPI cannot suspend there: move the call into main';
     return { kind: 'error', error: e, inProgram };
   }
+}
+
+// One run with both streams buffered.  An error ends in exit code 1 and its message
+// follows whatever the program wrote to stderr.
+export async function runToResult(module, profile, opts = {}) {
+  const sink = bufferSink();
+  const host = createHost(profile, { ...opts, sink });
+  const r = await runProgram(module, host, opts);
+  let stderr = sink.text('stderr');
+  let exitCode = 0;
+  if (r.kind === 'exit') exitCode = r.code;
+  else if (r.kind === 'error') {
+    exitCode = 1;
+    stderr += `${r.error && r.error.message !== undefined ? r.error.message : String(r.error)}\n`;
+  }
+  return { stdout: sink.text('stdout'), stderr, exitCode };
+}
+
+// The HTTP answer for a result: its stdout, 200 on a clean exit and 500 otherwise.
+export function textResponse(result) {
+  return new Response(result.stdout, {
+    status: result.exitCode === 0 ? 200 : 500,
+    headers: { 'content-type': 'text/plain; charset=utf-8' },
+  });
 }

@@ -1,5 +1,5 @@
 # META
-source_lines=1331
+source_lines=1337
 stages=DESUGAR,MARK
 # SOURCE
 -- Checks a lowered program must pass before an emitter writes any of it.  Each
@@ -117,6 +117,7 @@ import frontend.ast.{
   Pat(..), Route(..), Decl(..), ExternDecl(..), Ty(..), Lit(..), BinderId(..)
 }
 import types.target_profile.{TargetProfile, withheldLabels, profileName}
+import types.target_profile as TP
 import backend.extern_catalog.{
   Disposition(..),
   GapKind(..),
@@ -124,6 +125,7 @@ import backend.extern_catalog.{
   gapKindName,
   rowLlvm,
   rowWasm,
+  rowEval,
 }
 import support.ordmap.{
   OrdMap,
@@ -136,12 +138,23 @@ import support.ordmap.{
 import types.private_mangle.{dictTag, hashName}
 import support.util.{dedupBy, isNonEmptyL, joinWith, listLen, reverseL}
 
-public export data Backend = LlvmBackend | WasmBackend
+-- A column of the extern catalog: the two emitters, and the interpreter that
+-- `medaka run` evaluates with.
+public export data Backend = LlvmBackend | WasmBackend | EvalBackend
 
 export
 backendName : Backend -> String
 backendName LlvmBackend = "llvm"
 backendName WasmBackend = "wasm"
+backendName EvalBackend = "eval"
+
+-- The column a profile's programs run on.
+export
+profileColumn : TargetProfile -> Backend
+profileColumn p = match TP.profileBackend p
+  TP.BackendLlvm => LlvmBackend
+  TP.BackendWasmgc => WasmBackend
+  TP.BackendEval => EvalBackend
 
 -- A free reference to a runtime extern the backend does not lower: the extern,
 -- the backend, the row's gap kind and reason, and the top-level binding the
@@ -167,6 +180,9 @@ unprovidedOn LlvmBackend name = match catalogRow name
 unprovidedOn WasmBackend name = match catalogRow name
   Some r => notProvidedOf (rowWasm r)
   None => None
+unprovidedOn EvalBackend name = match catalogRow name
+  Some r => notProvidedOf (rowEval r)
+  None => None
 
 notProvidedOf : Disposition f -> Option (GapKind, String)
 notProvidedOf (NotProvided kind why) = Some (kind, why)
@@ -177,7 +193,10 @@ isUnprovidedOn : Backend -> String -> Bool
 isUnprovidedOn backend name = isSome (unprovidedOn backend name)
 
 -- Every free reference to a runtime extern `backend` does not lower, one
--- finding per distinct extern, in the order of first reference.
+-- finding per distinct extern, in the order of first reference.  The target
+-- check refuses every built-in a program reaches that is `NotProvided` on the
+-- profile's column (`profileColumn`), so a finding for a program that check
+-- admitted under that profile is a compiler bug.
 -- `runtimeExterns` names the externs the entry declared from
 -- `stdlib/runtime.mdk`; a name among them with no catalog row is an internal
 -- error, raised before the program is read.
@@ -423,6 +442,7 @@ dictTagCollision backend (CProgram _ _ _ impls _ _) =
       LlvmBackend => None
       WasmBackend =>
         checkDictTagsInjective wasmDictTagSpace dictTag rows omEmpty
+      EvalBackend => None
 
 nativeDictTagSpace : String
 nativeDictTagSpace =
@@ -514,11 +534,10 @@ export
 renderExternRefusal : List ExternFinding -> String
 renderExternRefusal findings = renderExternRefusalUnder !checkedTarget findings
 
--- A refusal is partitioned by what `check` already judged against the target.
--- An extern behind a label the profile does not reach (`withheldLabels`) says so
--- (`withheldExternNote`).  An extern whose labels the profile reaches and whose
--- row is a ratchet gap is a lowering still owed, by #3666.  Any other finding,
--- a label-less extern among them, reads as it does with no target.
+-- A refusal here is a compiler bug: `check` refuses a program that reaches a
+-- built-in its target does not provide, so none arrives after an admitted
+-- check, and every finding says so (`checkMissedNote`).  An extern behind a
+-- label the profile does not reach (`withheldLabels`) also names that label.
 export
 renderExternRefusalUnder : Option CheckedTarget -> List ExternFinding -> String
 renderExternRefusalUnder None findings =
@@ -527,32 +546,19 @@ renderExternRefusalUnder (Some t) findings =
   joinWith "\n" (map (renderFindingUnder t) findings)
 
 renderFindingUnder : CheckedTarget -> ExternFinding -> String
-renderFindingUnder (t@(CheckedTarget profile labels)) (f@(ExternFinding name backend kind _ _)) =
+renderFindingUnder (CheckedTarget profile labels) (f@(ExternFinding name backend _ _ _)) =
   let declared = optionOr [] (omLookup name labels)
-  match withheldLabels profile declared
-    [] =>
-      if isRatchetGap backend kind then
-        "\{renderExternFinding f}; `\{profileName profile}` grants its labels, so this is a lowering still owed (#3666)"
-      else
-        renderExternFinding f
+  let withheldNote = match withheldLabels profile declared
+    [] => ""
     withheld =>
-      "\{renderExternFinding f}; \{withheldExternNote backend name withheld t}"
+      "; the target `\{profileName profile}` does not grant \{joinWith ", " withheld}, which `\{name}` performs"
+  "\{renderExternFinding f}\{withheldNote}; \{checkMissedNote backend}"
 
--- `eval` is absent because the validator never runs for it; the extern catalog
--- gate's own `isRatchet` deliberately adds eval GapBug rows to what it counts.
-isRatchetGap : Backend -> GapKind -> Bool
-isRatchetGap WasmBackend GapUnported = True
-isRatchetGap _ _ = False
-
--- Why an extern the profile withholds reached the lowering of a program that
--- passed the target check.  `check` judges what `main` performs, so it admits
--- a program that names the extern without performing it (a value never
--- applied); a call it failed to see would arrive here the same way, and the
--- lowering cannot tell the two apart, so the note claims neither.
-export
-withheldExternNote : Backend -> String -> List String -> CheckedTarget -> String
-withheldExternNote backend name withheld (CheckedTarget profile _) =
-  "the target `\{profileName profile}` does not grant \{joinWith ", " withheld}, which `\{name}` performs; `check` admits a program that names it without performing it, but the \{backendName backend} backend cannot lower even the name"
+-- Why a finding reached the lowering of a program that passed the target
+-- check: blamed on the compiler, never on the program.
+checkMissedNote : Backend -> String
+checkMissedNote backend =
+  "`check` should have refused this program before the \{backendName backend} backend saw it, so this is a bug in the compiler"
 
 -- What `medaka build` checked the program against before lowering: the
 -- selected profile, and each runtime extern's declared labels.
@@ -1341,14 +1347,18 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "callModeSexp" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true) (mem "Lit" true) (mem "BinderId" true))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "withheldLabels" false) (mem "profileName" false))))
-(DUse false (UseGroup ("backend" "extern_catalog") ((mem "Disposition" true) (mem "GapKind" true) (mem "catalogRow" false) (mem "gapKindName" false) (mem "rowLlvm" false) (mem "rowWasm" false))))
+(DUse false (UseAlias ("types" "target_profile") "TP"))
+(DUse false (UseGroup ("backend" "extern_catalog") ((mem "Disposition" true) (mem "GapKind" true) (mem "catalogRow" false) (mem "gapKindName" false) (mem "rowLlvm" false) (mem "rowWasm" false) (mem "rowEval" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "hashName" false))))
 (DUse false (UseGroup ("support" "util") ((mem "dedupBy" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "reverseL" false))))
-(DData Public "Backend" () ((variant "LlvmBackend" (ConPos)) (variant "WasmBackend" (ConPos))) ())
+(DData Public "Backend" () ((variant "LlvmBackend" (ConPos)) (variant "WasmBackend" (ConPos)) (variant "EvalBackend" (ConPos))) ())
 (DTypeSig true "backendName" (TyFun (TyCon "Backend") (TyCon "String")))
 (DFunDef false "backendName" ((PCon "LlvmBackend")) (ELit (LString "llvm")))
 (DFunDef false "backendName" ((PCon "WasmBackend")) (ELit (LString "wasm")))
+(DFunDef false "backendName" ((PCon "EvalBackend")) (ELit (LString "eval")))
+(DTypeSig true "profileColumn" (TyFun (TyCon "TargetProfile") (TyCon "Backend")))
+(DFunDef false "profileColumn" ((PVar "p")) (EMatch (EApp (EVar "TP.profileBackend") (EVar "p")) (arm (PCon "TP.BackendLlvm") () (EVar "LlvmBackend")) (arm (PCon "TP.BackendWasmgc") () (EVar "WasmBackend")) (arm (PCon "TP.BackendEval") () (EVar "EvalBackend"))))
 (DData Public "ExternFinding" () ((variant "ExternFinding" (ConPos (TyCon "String") (TyCon "Backend") (TyCon "GapKind") (TyCon "String") (TyCon "String")))) ())
 (DTypeSig true "findingExtern" (TyFun (TyCon "ExternFinding") (TyCon "String")))
 (DFunDef false "findingExtern" ((PCon "ExternFinding" (PVar "name") PWild PWild PWild PWild)) (EVar "name"))
@@ -1357,6 +1367,7 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DTypeSig true "unprovidedOn" (TyFun (TyCon "Backend") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "GapKind") (TyCon "String"))))))
 (DFunDef false "unprovidedOn" ((PCon "LlvmBackend") (PVar "name")) (EMatch (EApp (EVar "catalogRow") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "notProvidedOf") (EApp (EVar "rowLlvm") (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
 (DFunDef false "unprovidedOn" ((PCon "WasmBackend") (PVar "name")) (EMatch (EApp (EVar "catalogRow") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "notProvidedOf") (EApp (EVar "rowWasm") (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "unprovidedOn" ((PCon "EvalBackend") (PVar "name")) (EMatch (EApp (EVar "catalogRow") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "notProvidedOf") (EApp (EVar "rowEval") (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "notProvidedOf" (TyFun (TyApp (TyCon "Disposition") (TyVar "f")) (TyApp (TyCon "Option") (TyTuple (TyCon "GapKind") (TyCon "String")))))
 (DFunDef false "notProvidedOf" ((PCon "NotProvided" (PVar "kind") (PVar "why"))) (EApp (EVar "Some") (ETuple (EVar "kind") (EVar "why"))))
 (DFunDef false "notProvidedOf" (PWild) (EVar "None"))
@@ -1403,7 +1414,7 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DTypeSig true "validateDictTags" (TyFun (TyCon "Backend") (TyFun (TyCon "CProgram") (TyCon "Unit"))))
 (DFunDef false "validateDictTags" ((PVar "backend") (PVar "cp")) (EMatch (EApp (EApp (EVar "dictTagCollision") (EVar "backend")) (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "panic") (EVar "message"))) (arm (PCon "None") () (ELit LUnit))))
 (DTypeSig true "dictTagCollision" (TyFun (TyCon "Backend") (TyFun (TyCon "CProgram") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "dictTagCollision" ((PVar "backend") (PCon "CProgram" PWild PWild PWild (PVar "impls") PWild PWild)) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "dedupBy") (EVar "dictRouteWordKey")) (EApp (EApp (EVar "map") (EVar "dictRouteWordRow")) (EVar "impls")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "nativeDictTagSpace")) (EVar "hashName")) (EVar "rows")) (EVar "omEmpty")) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "Some") (EVar "message"))) (arm (PCon "None") () (EMatch (EVar "backend") (arm (PCon "LlvmBackend") () (EVar "None")) (arm (PCon "WasmBackend") () (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "wasmDictTagSpace")) (EVar "dictTag")) (EVar "rows")) (EVar "omEmpty")))))))))
+(DFunDef false "dictTagCollision" ((PVar "backend") (PCon "CProgram" PWild PWild PWild (PVar "impls") PWild PWild)) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "dedupBy") (EVar "dictRouteWordKey")) (EApp (EApp (EVar "map") (EVar "dictRouteWordRow")) (EVar "impls")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "nativeDictTagSpace")) (EVar "hashName")) (EVar "rows")) (EVar "omEmpty")) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "Some") (EVar "message"))) (arm (PCon "None") () (EMatch (EVar "backend") (arm (PCon "LlvmBackend") () (EVar "None")) (arm (PCon "WasmBackend") () (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "wasmDictTagSpace")) (EVar "dictTag")) (EVar "rows")) (EVar "omEmpty"))) (arm (PCon "EvalBackend") () (EVar "None"))))))))
 (DTypeSig false "nativeDictTagSpace" (TyCon "String"))
 (DFunDef false "nativeDictTagSpace" () (ELit (LString "native (LLVM) i64 dict-witness word `hashName` -- BOTH backends, since the wasm tag is this hash masked")))
 (DTypeSig false "wasmDictTagSpace" (TyCon "String"))
@@ -1437,12 +1448,9 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DFunDef false "renderExternRefusalUnder" ((PCon "None") (PVar "findings")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EVar "renderExternFinding")) (EVar "findings"))))
 (DFunDef false "renderExternRefusalUnder" ((PCon "Some" (PVar "t")) (PVar "findings")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EApp (EVar "renderFindingUnder") (EVar "t"))) (EVar "findings"))))
 (DTypeSig false "renderFindingUnder" (TyFun (TyCon "CheckedTarget") (TyFun (TyCon "ExternFinding") (TyCon "String"))))
-(DFunDef false "renderFindingUnder" ((PAs "t" (PCon "CheckedTarget" (PVar "profile") (PVar "labels"))) (PAs "f" (PCon "ExternFinding" (PVar "name") (PVar "backend") (PVar "kind") PWild PWild))) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "labels")))) (DoExpr (EMatch (EApp (EApp (EVar "withheldLabels") (EVar "profile")) (EVar "declared")) (arm (PList) () (EIf (EApp (EApp (EVar "isRatchetGap") (EVar "backend")) (EVar "kind")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; `"))) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` grants its labels, so this is a lowering still owed (#3666)"))) (EApp (EVar "renderExternFinding") (EVar "f")))) (arm (PVar "withheld") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; "))) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EVar "withheldExternNote") (EVar "backend")) (EVar "name")) (EVar "withheld")) (EVar "t")))) (ELit (LString ""))))))))
-(DTypeSig false "isRatchetGap" (TyFun (TyCon "Backend") (TyFun (TyCon "GapKind") (TyCon "Bool"))))
-(DFunDef false "isRatchetGap" ((PCon "WasmBackend") (PCon "GapUnported")) (EVar "True"))
-(DFunDef false "isRatchetGap" (PWild PWild) (EVar "False"))
-(DTypeSig true "withheldExternNote" (TyFun (TyCon "Backend") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CheckedTarget") (TyCon "String"))))))
-(DFunDef false "withheldExternNote" ((PVar "backend") (PVar "name") (PVar "withheld") (PCon "CheckedTarget" (PVar "profile") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the target `")) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not grant "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "withheld")))) (ELit (LString ", which `"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` performs; `check` admits a program that names it without performing it, but the "))) (EApp (EVar "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " backend cannot lower even the name"))))
+(DFunDef false "renderFindingUnder" ((PCon "CheckedTarget" (PVar "profile") (PVar "labels")) (PAs "f" (PCon "ExternFinding" (PVar "name") (PVar "backend") PWild PWild PWild))) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "labels")))) (DoLet false false (PVar "withheldNote") (EMatch (EApp (EApp (EVar "withheldLabels") (EVar "profile")) (EVar "declared")) (arm (PList) () (ELit (LString ""))) (arm (PVar "withheld") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "; the target `")) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not grant "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "withheld")))) (ELit (LString ", which `"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` performs")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString ""))) (EApp (EVar "display") (EVar "withheldNote"))) (ELit (LString "; "))) (EApp (EVar "display") (EApp (EVar "checkMissedNote") (EVar "backend")))) (ELit (LString ""))))))
+(DTypeSig false "checkMissedNote" (TyFun (TyCon "Backend") (TyCon "String")))
+(DFunDef false "checkMissedNote" ((PVar "backend")) (EBinOp "++" (EBinOp "++" (ELit (LString "`check` should have refused this program before the ")) (EApp (EVar "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " backend saw it, so this is a bug in the compiler"))))
 (DData Public "CheckedTarget" () ((variant "CheckedTarget" (ConPos (TyCon "TargetProfile") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "checkedTargetOf" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CheckedTarget"))))
 (DFunDef false "checkedTargetOf" ((PVar "profile") (PVar "runtimeDecls")) (EApp (EApp (EVar "CheckedTarget") (EVar "profile")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "externLabels") (EVar "runtimeDecls"))) (EVar "omEmpty"))))
@@ -1749,14 +1757,18 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "callModeSexp" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Ty" true) (mem "Lit" true) (mem "BinderId" true))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "withheldLabels" false) (mem "profileName" false))))
-(DUse false (UseGroup ("backend" "extern_catalog") ((mem "Disposition" true) (mem "GapKind" true) (mem "catalogRow" false) (mem "gapKindName" false) (mem "rowLlvm" false) (mem "rowWasm" false))))
+(DUse false (UseAlias ("types" "target_profile") "TP"))
+(DUse false (UseGroup ("backend" "extern_catalog") ((mem "Disposition" true) (mem "GapKind" true) (mem "catalogRow" false) (mem "gapKindName" false) (mem "rowLlvm" false) (mem "rowWasm" false) (mem "rowEval" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "dictTag" false) (mem "hashName" false))))
 (DUse false (UseGroup ("support" "util") ((mem "dedupBy" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "reverseL" false))))
-(DData Public "Backend" () ((variant "LlvmBackend" (ConPos)) (variant "WasmBackend" (ConPos))) ())
+(DData Public "Backend" () ((variant "LlvmBackend" (ConPos)) (variant "WasmBackend" (ConPos)) (variant "EvalBackend" (ConPos))) ())
 (DTypeSig true "backendName" (TyFun (TyCon "Backend") (TyCon "String")))
 (DFunDef false "backendName" ((PCon "LlvmBackend")) (ELit (LString "llvm")))
 (DFunDef false "backendName" ((PCon "WasmBackend")) (ELit (LString "wasm")))
+(DFunDef false "backendName" ((PCon "EvalBackend")) (ELit (LString "eval")))
+(DTypeSig true "profileColumn" (TyFun (TyCon "TargetProfile") (TyCon "Backend")))
+(DFunDef false "profileColumn" ((PVar "p")) (EMatch (EApp (EVar "TP.profileBackend") (EVar "p")) (arm (PCon "TP.BackendLlvm") () (EVar "LlvmBackend")) (arm (PCon "TP.BackendWasmgc") () (EVar "WasmBackend")) (arm (PCon "TP.BackendEval") () (EVar "EvalBackend"))))
 (DData Public "ExternFinding" () ((variant "ExternFinding" (ConPos (TyCon "String") (TyCon "Backend") (TyCon "GapKind") (TyCon "String") (TyCon "String")))) ())
 (DTypeSig true "findingExtern" (TyFun (TyCon "ExternFinding") (TyCon "String")))
 (DFunDef false "findingExtern" ((PCon "ExternFinding" (PVar "name") PWild PWild PWild PWild)) (EVar "name"))
@@ -1765,6 +1777,7 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DTypeSig true "unprovidedOn" (TyFun (TyCon "Backend") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "GapKind") (TyCon "String"))))))
 (DFunDef false "unprovidedOn" ((PCon "LlvmBackend") (PVar "name")) (EMatch (EApp (EVar "catalogRow") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "notProvidedOf") (EApp (EVar "rowLlvm") (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
 (DFunDef false "unprovidedOn" ((PCon "WasmBackend") (PVar "name")) (EMatch (EApp (EVar "catalogRow") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "notProvidedOf") (EApp (EVar "rowWasm") (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "unprovidedOn" ((PCon "EvalBackend") (PVar "name")) (EMatch (EApp (EVar "catalogRow") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "notProvidedOf") (EApp (EVar "rowEval") (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "notProvidedOf" (TyFun (TyApp (TyCon "Disposition") (TyVar "f")) (TyApp (TyCon "Option") (TyTuple (TyCon "GapKind") (TyCon "String")))))
 (DFunDef false "notProvidedOf" ((PCon "NotProvided" (PVar "kind") (PVar "why"))) (EApp (EVar "Some") (ETuple (EVar "kind") (EVar "why"))))
 (DFunDef false "notProvidedOf" (PWild) (EVar "None"))
@@ -1811,7 +1824,7 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DTypeSig true "validateDictTags" (TyFun (TyCon "Backend") (TyFun (TyCon "CProgram") (TyCon "Unit"))))
 (DFunDef false "validateDictTags" ((PVar "backend") (PVar "cp")) (EMatch (EApp (EApp (EVar "dictTagCollision") (EVar "backend")) (EVar "cp")) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "panic") (EVar "message"))) (arm (PCon "None") () (ELit LUnit))))
 (DTypeSig true "dictTagCollision" (TyFun (TyCon "Backend") (TyFun (TyCon "CProgram") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "dictTagCollision" ((PVar "backend") (PCon "CProgram" PWild PWild PWild (PVar "impls") PWild PWild)) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "dedupBy") (EVar "dictRouteWordKey")) (EApp (EApp (EMethodRef "map") (EVar "dictRouteWordRow")) (EVar "impls")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "nativeDictTagSpace")) (EVar "hashName")) (EVar "rows")) (EVar "omEmpty")) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "Some") (EVar "message"))) (arm (PCon "None") () (EMatch (EVar "backend") (arm (PCon "LlvmBackend") () (EVar "None")) (arm (PCon "WasmBackend") () (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "wasmDictTagSpace")) (EVar "dictTag")) (EVar "rows")) (EVar "omEmpty")))))))))
+(DFunDef false "dictTagCollision" ((PVar "backend") (PCon "CProgram" PWild PWild PWild (PVar "impls") PWild PWild)) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "dedupBy") (EVar "dictRouteWordKey")) (EApp (EApp (EMethodRef "map") (EVar "dictRouteWordRow")) (EVar "impls")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "nativeDictTagSpace")) (EVar "hashName")) (EVar "rows")) (EVar "omEmpty")) (arm (PCon "Some" (PVar "message")) () (EApp (EVar "Some") (EVar "message"))) (arm (PCon "None") () (EMatch (EVar "backend") (arm (PCon "LlvmBackend") () (EVar "None")) (arm (PCon "WasmBackend") () (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "wasmDictTagSpace")) (EVar "dictTag")) (EVar "rows")) (EVar "omEmpty"))) (arm (PCon "EvalBackend") () (EVar "None"))))))))
 (DTypeSig false "nativeDictTagSpace" (TyCon "String"))
 (DFunDef false "nativeDictTagSpace" () (ELit (LString "native (LLVM) i64 dict-witness word `hashName` -- BOTH backends, since the wasm tag is this hash masked")))
 (DTypeSig false "wasmDictTagSpace" (TyCon "String"))
@@ -1845,12 +1858,9 @@ renderBinderRefusal bad = joinWith "\n" bad
 (DFunDef false "renderExternRefusalUnder" ((PCon "None") (PVar "findings")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EVar "renderExternFinding")) (EVar "findings"))))
 (DFunDef false "renderExternRefusalUnder" ((PCon "Some" (PVar "t")) (PVar "findings")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "renderFindingUnder") (EVar "t"))) (EVar "findings"))))
 (DTypeSig false "renderFindingUnder" (TyFun (TyCon "CheckedTarget") (TyFun (TyCon "ExternFinding") (TyCon "String"))))
-(DFunDef false "renderFindingUnder" ((PAs "t" (PCon "CheckedTarget" (PVar "profile") (PVar "labels"))) (PAs "f" (PCon "ExternFinding" (PVar "name") (PVar "backend") (PVar "kind") PWild PWild))) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "labels")))) (DoExpr (EMatch (EApp (EApp (EVar "withheldLabels") (EVar "profile")) (EVar "declared")) (arm (PList) () (EIf (EApp (EApp (EVar "isRatchetGap") (EVar "backend")) (EVar "kind")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; `"))) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` grants its labels, so this is a lowering still owed (#3666)"))) (EApp (EVar "renderExternFinding") (EVar "f")))) (arm (PVar "withheld") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EVar "withheldExternNote") (EVar "backend")) (EVar "name")) (EVar "withheld")) (EVar "t")))) (ELit (LString ""))))))))
-(DTypeSig false "isRatchetGap" (TyFun (TyCon "Backend") (TyFun (TyCon "GapKind") (TyCon "Bool"))))
-(DFunDef false "isRatchetGap" ((PCon "WasmBackend") (PCon "GapUnported")) (EVar "True"))
-(DFunDef false "isRatchetGap" (PWild PWild) (EVar "False"))
-(DTypeSig true "withheldExternNote" (TyFun (TyCon "Backend") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CheckedTarget") (TyCon "String"))))))
-(DFunDef false "withheldExternNote" ((PVar "backend") (PVar "name") (PVar "withheld") (PCon "CheckedTarget" (PVar "profile") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the target `")) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not grant "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "withheld")))) (ELit (LString ", which `"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` performs; `check` admits a program that names it without performing it, but the "))) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " backend cannot lower even the name"))))
+(DFunDef false "renderFindingUnder" ((PCon "CheckedTarget" (PVar "profile") (PVar "labels")) (PAs "f" (PCon "ExternFinding" (PVar "name") (PVar "backend") PWild PWild PWild))) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "labels")))) (DoLet false false (PVar "withheldNote") (EMatch (EApp (EApp (EVar "withheldLabels") (EVar "profile")) (EVar "declared")) (arm (PList) () (ELit (LString ""))) (arm (PVar "withheld") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "; the target `")) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not grant "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "withheld")))) (ELit (LString ", which `"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` performs")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "withheldNote"))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EApp (EVar "checkMissedNote") (EVar "backend")))) (ELit (LString ""))))))
+(DTypeSig false "checkMissedNote" (TyFun (TyCon "Backend") (TyCon "String")))
+(DFunDef false "checkMissedNote" ((PVar "backend")) (EBinOp "++" (EBinOp "++" (ELit (LString "`check` should have refused this program before the ")) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " backend saw it, so this is a bug in the compiler"))))
 (DData Public "CheckedTarget" () ((variant "CheckedTarget" (ConPos (TyCon "TargetProfile") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "checkedTargetOf" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CheckedTarget"))))
 (DFunDef false "checkedTargetOf" ((PVar "profile") (PVar "runtimeDecls")) (EApp (EApp (EVar "CheckedTarget") (EVar "profile")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "externLabels") (EVar "runtimeDecls"))) (EVar "omEmpty"))))

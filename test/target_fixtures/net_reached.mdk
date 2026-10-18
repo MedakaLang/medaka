@@ -1,6 +1,6 @@
 -- `main` reaches `Net` through a helper: refused by every profile that does
 -- not grant `Net` (wasmgc/node here), with the via-chain; admitted by
--- llvm/native-posix and eval/run.
+-- llvm/native-posix; refused by eval/run, whose interpreter lacks `netResolve`.
 lookup : String -> <Net> Result String (List String)
 lookup h = netResolve h
 

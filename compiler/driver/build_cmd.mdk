@@ -33,10 +33,13 @@ import support.timer.{perfEnabled, now, emitPhase}
 import driver.loader.{
   entrySearchRoots, findProjectRootOrSelf, readDeps, readForeignLibs
 }
-import support.path.{dirOf, chopExt, joinPath}
+import support.path.{dirOf, baseOf, chopExt, joinPath}
 import frontend.parser.{parseResult}
 import frontend.parse_cache.{notePreludeParse}
-import types.target_profile.{selectedProfile, profileName, targetProfileEnv}
+import types.target_profile.{
+  TargetProfile, selectedProfile, profileName, targetProfileEnv
+}
+import backend.wasm_loader.{edgeLoader, edgeBytesLoader}
 import driver.front_gate.{
   GateAsk,
   gateAssignments,
@@ -1176,7 +1179,10 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr fro
   -- Surface a missing/unset/mistyped MEDAKA_WASM_EMITTER as an actionable error
   -- here; without this, runCommand fails with a bare "No such file or directory"
   -- that names neither the variable nor the fix.
-  if wasmEmitter == "" then
+  let edgeOutErr = edgeOutPathError outPath
+  if isSome edgeOutErr then
+    buildErr (optionOr "" edgeOutErr)
+  else if wasmEmitter == "" then
     buildErr
       "error: --target wasm needs a wasm emitter; build one with `sh test/wasm/build_wasm_oracle.sh` and set MEDAKA_WASM_EMITTER to its path"
   else if not (fileExists wasmEmitter) then
@@ -1209,7 +1215,11 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr fro
               -- Same --keep-ir handling as the native path (.wat instead of
               -- .ll), including the AFTER-assemble ordering — see the comment
               -- on the native path's runBuildNativeIn for why.
-              let res = wasmAssemble watPath outPath inputAbs
+              let res = match wasmAssemble watPath outPath inputAbs
+                Ok r => match writeEdgeLoader root outPath
+                  Some e => buildErr e
+                  None => Ok r
+                Err r => Err r
               let (keptIr, keepNotes) =
                 if effectiveKeepIr keepIrCli then
                   keepIrOutcome (outPath ++ ".wat") wat
@@ -1280,6 +1290,69 @@ wasmAssemble watPath outPath inputAbs =
           ])
             Err e => buildErr "error: stripping \{outPath} failed\n\{e}"
             Ok _ => buildOk "built \{inputAbs} -> \{outPath}"
+
+-- An edge build's `-o` is judged before anything is emitted: the loader files are
+-- named from it, so a name that is not `.wasm`, or whose loaders would overwrite
+-- the host module copy (`medaka_host.mjs`) or the other loader form (`<x>.bytes.mjs`),
+-- must leave nothing behind.  `None` is also what every other profile gets.
+edgeOutPathError : String -> <IO> Option String
+edgeOutPathError outPath = match !selectedProfile
+  None => None
+  Some p =>
+    if isNone (edgeLoader p "") then None else edgeOutNameError p outPath
+
+edgeOutNameError : TargetProfile -> String -> Option String
+edgeOutNameError p outPath =
+  let stem = chopExt (baseOf outPath)
+  if not (endsWith ".wasm" outPath) then
+    Some
+      "error: --target \{profileName p} writes a loader beside the wasm and needs `-o` to end in `.wasm`, got `\{outPath}`"
+  else if stem == "medaka_host" || endsWith ".bytes" stem then
+    Some
+      "error: --target \{profileName p} writes `\{stem}.mjs` and `\{stem}.bytes.mjs` beside the wasm, which would collide with the host module copy or the other loader form; choose a `-o` name other than `medaka_host` or one ending in `.bytes`, got `\{outPath}`"
+  else
+    None
+
+-- An edge build also writes the loader beside the wasm (compiler/backend/
+-- wasm_loader.mdk): `<base>.mjs`, `<base>.bytes.mjs`, and a copy of the host
+-- module they import.  `None` is success, and also what every other profile gets.
+writeEdgeLoader : String -> String -> <IO> Option String
+writeEdgeLoader root outPath = match !selectedProfile
+  None => None
+  Some p => match edgeTexts p (baseOf outPath)
+    None => None
+    Some texts => writeEdgeFiles root outPath p texts
+
+edgeTexts : TargetProfile -> String -> Option (String, String)
+edgeTexts p wasmFile = match edgeLoader p wasmFile
+  None => None
+  Some sourceForm => map (b => (sourceForm, b)) (edgeBytesLoader p wasmFile)
+
+writeEdgeFiles : String ->
+  String ->
+  TargetProfile ->
+  (String, String) ->
+  <IO> Option String
+writeEdgeFiles root outPath p (sourceForm, bytesForm) =
+  let hostSrc = joinPath root "playground/medaka_host.mjs"
+  match readFile hostSrc
+    Err e =>
+      Some
+        "error: cannot read the wasm host module at `\{hostSrc}`: \{e}; set MEDAKA_ROOT to your medaka checkout"
+    Ok host =>
+      let base = chopExt outPath
+      firstWriteError [
+        (base ++ ".mjs", sourceForm),
+        (base ++ ".bytes.mjs", bytesForm),
+        (joinPath (dirOf outPath) "medaka_host.mjs", host),
+      ]
+
+firstWriteError : List (String, String) -> <IO> Option String
+firstWriteError [] = None
+firstWriteError ((path, text) :: rest) = match writeFile path text
+  Err e => Some "error: could not write \{path}: \{e}"
+  Ok _ => firstWriteError rest
+
 -- EMIT STEP.  Two paths, selected by the MEDAKA_EMITTER env var:
 --   * set   → invoke that NATIVE EMITTER BINARY directly (OCaml-free path — the
 --             clang(seed) binary from test/bootstrap_from_seed.sh).  Args are the

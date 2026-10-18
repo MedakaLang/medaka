@@ -1,0 +1,9 @@
+-- A `Unit` binding that answers with a promise ends the program at the call:
+-- the host refuses a thenable whatever the result type.
+extern jsTick : Unit -> <FFI "js"> Unit
+  bind js "jsTick"
+
+main =
+  let _ = println "before"
+  let _ = jsTick ()
+  println "after"

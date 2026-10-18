@@ -10,8 +10,9 @@
    (empty and non-ASCII included), `Int` at both ends of its range, a binding
    called directly, as a value and in tail position, the two `i64` results an
    `Int` cannot hold, a binding that throws, a binding the host was not given,
-   a `String` result with a lone surrogate, and externs whose names differ by
-   a `w_` prefix.  The last two tests build the programs in
+   a `String` result with a lone surrogate, externs whose names differ by
+   a `w_` prefix, and a `Unit` binding that answers with a promise, which the
+   real host refuses as the stub does.  The last two tests build the programs in
    `test/two_host_fixtures` native and for wasm and check both outputs.
 
    Runs under `medaka test --native`: it spawns the compiler and node. -}
@@ -78,6 +79,29 @@ test "jsffi: each fixture under the stub host prints what WASM-SEMANTICS section
       ),
       runsAs scratch "w_prefix" (0, "11\n21\n31\n", ""),
     ])
+    (msg => fail msg)
+
+thenableMsg : String
+thenableMsg =
+  "runtime error: js binding `jsTick` returned a thenable (a promise, or a value with a `then` method), not Unit: a js binding must answer synchronously\n"
+
+-- A thenable is refused whatever the result type, so a `Unit` binding that
+-- answers with a promise ends the program at the call, on the stub host and on
+-- the real one (`test/wasm/run.js`) alike.
+test "jsffi: a Unit binding returning a thenable is a JsBindingError on both hosts" =
+  inFreshDirOf
+    (scratch => match stubRun scratch "unit_thenable"
+      Err e => fail e
+      Ok stub => expectAll [
+        expectEqual (1, "before\n", thenableMsg) stub,
+        expectEqual
+          (Ok (1, "before\n", thenableMsg))
+          (boundedVerbSeconds 60 "node" [
+            "\{medakaRoot}/test/wasm/run.js",
+            "\{scratch}/unit_thenable.wasm",
+            "\{corpus}/bindings.mjs",
+          ]),
+      ])
     (msg => fail msg)
 
 -- # The two-host cell: one declaration set, `bind c` and `bind js`.

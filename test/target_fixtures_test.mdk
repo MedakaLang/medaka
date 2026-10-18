@@ -102,10 +102,15 @@ test "target_fixtures: one admitted and one refused program per profile" = expec
       ["--target", "native"]
       "no_main.mdk",
     targetCase
-      "evalrun_accepts_net"
+      "evalrun_refuses_net"
       "check"
       ["--target", "eval/run"]
       "net_reached.mdk",
+    targetCase
+      "evalrun_accepts_builtin_unreached"
+      "check"
+      ["--target", "eval/run"]
+      "builtin_unreached.mdk",
     targetCase
       "evalrun_refuses_ffi"
       "check"
@@ -179,7 +184,7 @@ test "target_fixtures: the IO join, FFI and user labels" = expectEach [
     ["--target", "native"]
     "net_param.mdk",
   targetCase
-    "edge_refuses_net_param"
+    "edge_refuses_net_socket"
     "check"
     ["--target", "wasmgc/edge"]
     "net_param.mdk",
@@ -199,6 +204,23 @@ test "target_fixtures: the IO join, FFI and user labels" = expectEach [
     "check"
     ["--target", "native"]
     "user_spelled_net.mdk",
+]
+
+-- `fetchText` is a built-in under the `Net` label: the edge grants `Net` and
+-- serves it, so it admits the program; native and eval/run grant `Net` too but
+-- provide no `fetchText`, so the built-in wall refuses it at check and run.
+test "target_fixtures: fetchText rides the edge's Net grant" = expectEach [
+  targetCase
+    "edge_accepts_fetch"
+    "check"
+    ["--target", "wasmgc/edge"]
+    "fetch_reached.mdk",
+  targetCase
+    "native_refuses_fetch"
+    "check"
+    ["--target", "native"]
+    "fetch_reached.mdk",
+  targetCase "run_refuses_fetch" "run" [] "fetch_reached.mdk",
 ]
 
 test "target_fixtures: build checks in its emitter child, and an empty IO join refuses IO" = expectEach

@@ -14,13 +14,14 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import os from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createHost, runProgram, confine, CapabilityError, JsBindingError, HostKeyError, MemoryVfs, SLICES, KEY_EXTERN } from './medaka_host.mjs';
+import { createHost, runProgram, confine, jspiAvailable, CapabilityError, JsBindingError, HostKeyError, MemoryVfs, SLICES, KEY_EXTERN } from './medaka_host.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = dirname(here);
 const medaka = join(root, 'medaka');
 const emitter = process.env.MEDAKA_WASM_EMITTER || join(root, 'test', 'bin', 'wasm_emit_modules_main');
 const runJs = process.env.MEDAKA_HOST_TEST_RUNJS || join(root, 'test', 'wasm', 'run.js');
+const NO_JSPI = ['--import', pathToFileURL(join(root, 'test', 'async_jspi_fixtures', 'no_jspi.mjs')).href];
 const workerJs = process.env.MEDAKA_HOST_TEST_WORKER || join(here, 'worker.js');
 const compileMjs = process.env.MEDAKA_HOST_TEST_COMPILE || join(here, 'compile.mjs');
 for (const [what, p] of [['medaka binary', medaka], ['wasm emitter', emitter]])
@@ -137,6 +138,56 @@ main =
     + 'main =\n  let _ = println "before"\n  println (jsThrow "x")\n',
   jsupper: 'extern jsUpper : String -> <FFI "js"> String\n  bind js "jsUpper"\n\n'
     + 'main =\n  let _ = println (jsUpper "abc")\n  exit 3\n',
+  jsunitpromise: 'extern jsTick : Unit -> <FFI "js"> Unit\n  bind js "jsTick"\n\n'
+    + 'main =\n  let _ = println "before"\n  let _ = jsTick ()\n  println "after"\n',
+  // The sleep is 3000 frames deep, after a partial line, and `exit` follows it.
+  deepsleep: String.raw`deep n =
+  if n == 0 then
+    let _ = putStr "mid"
+    let _ = sleepMs 30
+    let _ = putStrLn " after"
+    0
+  else
+    1 + deep (n - 1)
+
+main =
+  let _ = putStrLn "start"
+  let _ = putStrLn "depth \{deep 3000}"
+  exit 4
+`,
+  fetchtext: String.raw`show r = match r
+  Ok body => "ok: " ++ body
+  Err e => "err: " ++ e
+
+main =
+  let _ = println (show (fetchText "https://stub.test/ok"))
+  let _ = println (show (fetchText "https://stub.test/missing"))
+  println (show (fetchText "https://stub.test/down"))
+`,
+  fetchschemes: String.raw`show r = match r
+  Ok body => "ok: " ++ body
+  Err e => "err: " ++ e
+
+try u = println (u ++ " -> " ++ show (fetchText u))
+
+main =
+  let _ = try "file:///etc/hostname"
+  let _ = try "data:text/plain,hi"
+  let _ = try "ftp://stub.test/x"
+  let _ = try "blob:http://stub.test/x"
+  let _ = try "javascript:alert(1)"
+  let _ = try "not a url"
+  let _ = try "/relative/path"
+  let _ = try "http://stub.test/ok"
+  let _ = try "https://stub.test/ok"
+  try "https://stub.test/bare500"
+`,
+  toplevelfetch: String.raw`page = fetchText "http://127.0.0.1:1/x"
+
+main = match page
+  Ok b => println b
+  Err e => println e
+`,
   bigexit: BIG_LOOP + 'main =\n  let _ = loop 1\n  exit 3\n',
   bigtrap: BIG_LOOP + 'main =\n  let _ = loop 1\n  let z = length [1] - 1\n  println (10 / z)\n',
 };
@@ -647,6 +698,194 @@ function check(name, ok, detail) {
     JSON.stringify({ kind: r4.kind, code: r4.code, error: r4.error && r4.error.message }));
 }
 
+// (t) JSPI (docs/design/WASM-ASYNC-DESIGN.md WA-5) and the synchronous jsffi rule.
+// A js binding's thenable is a JsBindingError for every result type, `Unit` included.
+{
+  const h = createHost('wasmgc/node', { bindings: { jsTick: () => Promise.resolve() } });
+  const r = await runProgram(readFileSync(build('jsunitpromise', 'wasmgc/node')), h);
+  check('(t1) jsffi: a Unit binding that returns a promise is a JsBindingError at the call',
+    r.kind === 'error' && r.error instanceof JsBindingError && r.error.binding === 'jsTick'
+      && r.error.message.includes('returned a thenable') && h.sink.text('stdout') === 'before\n',
+    JSON.stringify({ kind: r.kind, error: r.error && r.error.message, out: h.sink.text('stdout') }));
+  const results = ['Unit', 'String', 'Int', 'Float', 'Bool', 'Char', 'U8', 'U16', 'U32', 'I32', 'U64', 'I64'];
+  const thenables = [Promise.resolve(1), { then() {} }, Object.assign(() => 0, { then: () => {} })];
+  let answer;
+  const hs = createHost('wasmgc/node', { bindings: { jsT: () => answer } });
+  const bad = [];
+  for (const res of results)
+    for (const [i, t] of thenables.entries()) {
+      answer = t;
+      const want = `js binding \`jsT\` returned a thenable (a promise, or a value with a \`then\` method), not ${res}: `
+        + 'a js binding must answer synchronously';
+      try {
+        hs.imports.jsffi[`jsT:->${res}`]();
+        bad.push(`${res} thenable ${i}: accepted`);
+      } catch (e) {
+        if (!(e instanceof JsBindingError) || e.message !== want) bad.push(`${res} thenable ${i}: ${e && e.message}`);
+      }
+    }
+  // a `then` that is not a function makes no thenable: a Unit result still ignores it
+  for (const v of [{ then: 1 }, {}, null]) {
+    answer = v;
+    try { hs.imports.jsffi['jsT:->Unit'](); } catch (e) { bad.push(`Unit ${JSON.stringify(v)}: ${e.message}`); }
+  }
+  check('(t1) jsffi: a thenable is refused for every result type; a non-thenable Unit result is ignored',
+    bad.length === 0, bad.join('; '));
+}
+// The JSPI probes run in child processes, with `--experimental-wasm-jspi` and with the
+// no_jspi preload (a flagless Node may have JSPI on by default), so
+// both modes are measured whichever this process has.  The child runs `deepsleep` on a
+// streaming host and records each delivery, plus `timer`: a timeout armed when `mid`
+// arrives, which fires inside the sleep only if the guest was suspended, not blocked.
+// MHT_SEAM replaces the sleep with a promise-answering import made through the seam.
+{
+  const child = String.raw`
+const { createHost, runProgram, promiseImport, jspiAvailable } = await import(process.env.MHT_HOST);
+const { readFileSync } = await import('node:fs');
+const events = [];
+let armed = false;
+const sink = { write(stream, b) {
+  const t = Buffer.from(b).toString('utf8');
+  events.push(stream + ':' + t);
+  if (!armed && t.includes('mid')) { armed = true; setTimeout(() => events.push('timer'), 0); }
+} };
+const host = createHost('wasmgc/node', { sink, streaming: true });
+if (process.env.MHT_SEAM)
+  host.imports.env.mdk_sleep_ms = promiseImport('clock', 'mdk_sleep_ms',
+    () => new Promise((resolve) => setTimeout(resolve, 1)), jspiAvailable());
+const r = await runProgram(readFileSync(process.env.MHT_WASM), host);
+await new Promise((resolve) => setTimeout(resolve, 20));
+const e = r.error;
+console.log(JSON.stringify({ jspi: jspiAvailable(), kind: r.kind, code: r.code, events,
+  error: e && { name: e.name, capability: e.capability, message: e.message } }));
+`;
+  const wasm = build('deepsleep', 'wasmgc/node');
+  const hostUrl = pathToFileURL(join(here, 'medaka_host.mjs')).href;
+  const runChild = (flags, extra) => {
+    const r = spawnSync(process.execPath, [...flags, '--input-type=module', '-e', child], {
+      env: { ...process.env, MHT_HOST: hostUrl, MHT_WASM: wasm, ...extra }, encoding: 'utf8',
+    });
+    try { return JSON.parse(r.stdout); } catch (e) { return { raw: r.stdout + r.stderr, status: r.status }; }
+  };
+  const ordered = (events) => JSON.stringify(events);
+  const seam = runChild(NO_JSPI, { MHT_SEAM: '1' });
+  check('(t2) no JSPI: a promise-answering import made through the seam is a CapabilityError naming JSPI',
+    seam.jspi === false && seam.kind === 'error' && seam.error && seam.error.name === 'CapabilityError'
+      && seam.error.capability === 'clock' && seam.error.message.includes('JSPI'),
+    JSON.stringify(seam));
+  const jspi = runChild(['--experimental-wasm-jspi'], {});
+  check('(t3) JSPI: a sleep 3000 calls deep suspends after flushing the partial line, and output keeps its order',
+    jspi.jspi === true && ordered(jspi.events)
+      === ordered(['stdout:start\n', 'stdout:mid', 'timer', 'stdout: after\n', 'stdout:depth 3000\n']),
+    JSON.stringify(jspi));
+  check('(t4) JSPI: mdk_exit after the resumed sleep is { kind: exit } with the program\'s code',
+    jspi.kind === 'exit' && jspi.code === 4, JSON.stringify(jspi));
+  const plain = runChild(NO_JSPI, {});
+  check('(t3) no JSPI: the same sleep blocks (Atomics.wait), so the timeout fires only after the run',
+    plain.jspi === false && plain.kind === 'exit' && plain.code === 4 && ordered(plain.events)
+      === ordered(['stdout:start\n', 'stdout:mid', 'stdout: after\n', 'stdout:depth 3000\n', 'timer']),
+    JSON.stringify(plain));
+  const viaRunJs = spawnSync(process.execPath, ['--experimental-wasm-jspi', runJs, wasm], { encoding: 'utf8' });
+  check('(t4) run.js under JSPI: the program\'s exit code and every line',
+    viaRunJs.status === 4 && viaRunJs.stdout === 'start\nmid after\ndepth 3000\n' && viaRunJs.stderr === '',
+    JSON.stringify({ stdout: viaRunJs.stdout, stderr: viaRunJs.stderr, status: viaRunJs.status }));
+}
+
+// (u) fetchText on the edge profile: the host's `fetch` is an injected stub, so no network
+// is touched.  The edge host needs JSPI to wait on the promise, so the run is a child with
+// and without `--experimental-wasm-jspi`.
+{
+  const child = String.raw`
+const { createHost, runProgram, jspiAvailable } = await import(process.env.MHT_HOST);
+const { readFileSync } = await import('node:fs');
+const fetch = async (url) => {
+  if (url.endsWith('/ok')) return { ok: true, status: 200, statusText: 'OK', arrayBuffer: async () => new TextEncoder().encode('hello').buffer };
+  if (url.endsWith('/missing')) return { ok: false, status: 404, statusText: 'Not Found' };
+  throw new TypeError('fetch failed');
+};
+const host = createHost('wasmgc/edge', { fetch });
+const r = await runProgram(readFileSync(process.env.MHT_WASM), host);
+const e = r.error;
+console.log(JSON.stringify({ jspi: jspiAvailable(), kind: r.kind, out: host.sink.text('stdout'),
+  error: e && { name: e.name, message: e.message } }));
+`;
+  const wasm = build('fetchtext', 'wasmgc/edge');
+  const hostUrl = pathToFileURL(join(here, 'medaka_host.mjs')).href;
+  const runChild = (flags) => {
+    const r = spawnSync(process.execPath, [...flags, '--input-type=module', '-e', child], {
+      env: { ...process.env, MHT_HOST: hostUrl, MHT_WASM: wasm }, encoding: 'utf8',
+    });
+    try { return JSON.parse(r.stdout); } catch (e) { return { raw: r.stdout + r.stderr, status: r.status }; }
+  };
+  const jspi = runChild(['--experimental-wasm-jspi']);
+  check('(u1) JSPI: fetchText answers Ok body for a 200, Err "404 Not Found" for a 404 and Err message for a rejection',
+    jspi.jspi === true && jspi.kind === 'done'
+      && jspi.out === 'ok: hello\nerr: 404 Not Found\nerr: fetch failed\n',
+    JSON.stringify(jspi));
+  const plain = runChild(NO_JSPI);
+  check('(u2) no JSPI: fetchText is a CapabilityError naming JSPI',
+    plain.jspi === false && plain.kind === 'error' && plain.error && plain.error.name === 'CapabilityError'
+      && plain.error.message.includes('JSPI'),
+    JSON.stringify(plain));
+}
+
+// (v) fetchText refuses every scheme but http and https before `fetch` is called, and an
+// empty statusText leaves the bare status.  The stub records each call it receives.
+{
+  const child = String.raw`
+const { createHost, runProgram } = await import(process.env.MHT_HOST);
+const { readFileSync } = await import('node:fs');
+const calls = [];
+const fetch = async (url) => {
+  calls.push(url);
+  if (url.endsWith('/bare500')) return { ok: false, status: 500, statusText: '' };
+  return { ok: true, status: 200, statusText: 'OK', arrayBuffer: async () => new TextEncoder().encode('hello').buffer };
+};
+const host = createHost('wasmgc/edge', { fetch });
+const r = await runProgram(readFileSync(process.env.MHT_WASM), host);
+console.log(JSON.stringify({ kind: r.kind, out: host.sink.text('stdout'), calls }));
+`;
+  const wasm = build('fetchschemes', 'wasmgc/edge');
+  const hostUrl = pathToFileURL(join(here, 'medaka_host.mjs')).href;
+  const r = spawnSync(process.execPath, ['--experimental-wasm-jspi', '--input-type=module', '-e', child], {
+    env: { ...process.env, MHT_HOST: hostUrl, MHT_WASM: wasm }, encoding: 'utf8',
+  });
+  let got;
+  try { got = JSON.parse(r.stdout); } catch (e) { got = { raw: r.stdout + r.stderr }; }
+  const refused = (u, why) => `${u} -> err: fetchText: unsupported URL ${why}\n`;
+  const want = refused('file:///etc/hostname', 'scheme "file:" (only http and https)')
+    + refused('data:text/plain,hi', 'scheme "data:" (only http and https)')
+    + refused('ftp://stub.test/x', 'scheme "ftp:" (only http and https)')
+    + refused('blob:http://stub.test/x', 'scheme "blob:" (only http and https)')
+    + refused('javascript:alert(1)', 'scheme "javascript:" (only http and https)')
+    + refused('not a url', '"not a url" (only absolute http and https URLs)')
+    + refused('/relative/path', '"/relative/path" (only absolute http and https URLs)')
+    + 'http://stub.test/ok -> ok: hello\nhttps://stub.test/ok -> ok: hello\n'
+    + 'https://stub.test/bare500 -> err: 500\n';
+  check('(v1) fetchText: only http(s) URLs reach fetch; others are Err naming the scheme; empty statusText gives the bare status',
+    got.kind === 'done' && got.out === want
+      && JSON.stringify(got.calls) === JSON.stringify(['http://stub.test/ok', 'https://stub.test/ok', 'https://stub.test/bare500']),
+    JSON.stringify(got));
+}
+
+// (w) a top-level value that suspends traps at instantiation; the error names the cause.
+{
+  const wasm = build('toplevelfetch', 'wasmgc/edge');
+  const runner = join(work, 'toplevel_runner.mjs');
+  writeFileSync(runner, `
+import { createHost, runToResult } from ${JSON.stringify(pathToFileURL(join(here, 'medaka_host.mjs')).href)};
+import { readFileSync } from 'node:fs';
+const r = await runToResult(readFileSync(process.argv[2]), 'wasmgc/edge', { fetch: async () => { throw new TypeError('no net'); } });
+process.stderr.write(r.stderr);
+process.exit(r.exitCode);
+`);
+  const r = spawnSync(process.execPath, ['--experimental-wasm-jspi', runner, wasm], { encoding: 'utf8' });
+  check('(w) a top-level fetchText exits 1 with a message naming the top-level value and main',
+    r.status === 1 && r.stderr.includes('a top-level value called fetchText or sleepMs during initialization')
+      && r.stderr.includes('move the call into main'),
+    JSON.stringify({ status: r.status, stderr: r.stderr }));
+}
+
 // Report only: slices no module built above imports a key of.
 {
   const imported = new Set();
@@ -656,6 +895,7 @@ function check(name, ok, detail) {
   const unused = Object.entries(SLICES)
     .filter(([, s]) => !s.keys.some((k) => imported.has(k))).map(([n]) => n);
   console.log(`unused slices (no probe module imports a key): ${unused.join(', ') || 'none'}`);
+  console.log(`JSPI in this process (in-process runs use a promising entry): ${jspiAvailable()}`);
 }
 
 rmSync(work, { recursive: true, force: true });

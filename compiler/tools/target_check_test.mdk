@@ -1,0 +1,240 @@
+-- Sibling test module for `compiler/tools/target_check.mdk` ([P-TEST-SIBLING]).
+--
+-- The built-in wall refuses a program that reaches a runtime extern its target
+-- does not provide.  This file derives the whole matrix from the extern
+-- catalog: every profile of `target_profile.mdk`, crossed with every row that
+-- is `NotProvided` on that profile's column.  For each pair it checks a
+-- one-line program that names the row, and requires the refusal to quote the
+-- row's own reason, so a row whose refusal vanishes, or whose text drifts from
+-- the catalog, fails by name.  Its second half pins which bodies each column
+-- judges: the interpreter's reach, and the emitters'.
+--
+-- Native-only: each pair spawns the `medaka` binary.
+
+import test_process.{medakaBin, boundedVerb, withScratchDir}
+import test.{Expectation, expectEach, expectEqual, expectTextContainsAll, fail}
+
+import types.target_profile.{TargetProfile, profileNames, lookupProfile}
+import backend.core_validate.{Backend, profileColumn, unprovidedOn}
+import backend.extern_catalog.{catalogRows, rowName}
+
+-- Every profile, with the (row, reason) pairs its column leaves unprovided.
+profileGaps : List (String, List (String, String))
+profileGaps = filterMap profileGap profileNames
+
+profileGap : String -> Option (String, List (String, String))
+profileGap name = match lookupProfile name
+  Ok p => Some (name, unprovidedRows (profileColumn p))
+  Err _ => None
+
+unprovidedRows : Backend -> List (String, String)
+unprovidedRows col =
+  filterMap
+    (r => map (kv => (rowName r, snd kv)) (unprovidedOn col (rowName r)))
+    catalogRows
+
+-- One pair: the program `main = let x = <row> in ()` under `--target
+-- <profile>` must exit 1 and quote the row's reason.
+pairCase : String ->
+  String ->
+  (String, String) ->
+  <Exec, IO, FileRead, FileWrite> (String, Expectation)
+pairCase dir profile (row, reason) = (
+  "\{profile}: \{row}",
+  verdictOf dir profile row reason,
+)
+
+verdictOf : String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+verdictOf dir profile row reason =
+  let file = "\{dir}/p.mdk"
+  match writeFile file "main = let x = \{row} in ()\n"
+    Err e => fail "could not write \{file}: \{e}"
+    Ok _ => match boundedVerb medakaBin ["check", "--target", profile, file]
+      Err e => fail "could not spawn: \{e}"
+      Ok (code, out, err) =>
+        if code == 1 then
+          expectTextContainsAll ["`\{row}`", reason] "\{out}\{err}"
+        else
+          fail "expected exit 1, got \{intToString code}: \{out}\{err}"
+
+test "target_check: every NotProvided row of every profile's column is refused with its reason" = withScratchDir
+  (dir =>
+    expectEach
+      (flatMap (pg => map (pairCase dir (fst pg)) (snd pg)) profileGaps))
+
+test "target_check: the matrix is non-empty on every column" =
+  expectEqual [] (filter (pg => length (snd pg) == 0) profileGaps |> map fst)
+
+-- # What each column reaches
+--
+-- `medaka run` judges the interpreter's column over what the interpreter
+-- evaluates: an impl method only once a reached call names its method, and a
+-- top-level let group only once its binder is reached.  An emitter lowers
+-- every impl, so `check --target` for wasm or native judges the unused impl
+-- too.
+
+-- Writes each (file, source) into `dir`, then runs `medaka` with `argv` and
+-- the entry file, and requires the exit code and every text.
+programCase : String ->
+  List (String, String) ->
+  List String ->
+  String ->
+  Int ->
+  List String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+programCase dir files argv entry code texts = match writeAll dir files
+  Err e => fail "could not write \{dir}: \{e}"
+  Ok _ => match boundedVerb medakaBin (argv ++ ["\{dir}/\{entry}"])
+    Err e => fail "could not spawn: \{e}"
+    Ok (got, out, err) =>
+      if got == code then
+        expectTextContainsAll texts "\{out}\{err}"
+      else
+        fail
+          "expected exit \{intToString code}, got \{intToString got}: \{out}\{err}"
+
+writeAll : String -> List (String, String) -> <FileWrite> Result String Unit
+writeAll _ [] = Ok ()
+writeAll dir ((file, src) :: rest) = match writeFile "\{dir}/\{file}" src
+  Err e => Err e
+  Ok _ => writeAll dir rest
+
+resolveImpl : String
+resolveImpl =
+  "interface Res a where\n  res : a -> <Net> Result String (List String)\n\nimpl Res String where\n  res s = netResolve s\n\n"
+
+implUnused : (String, String)
+implUnused = ("impl_unused.mdk", resolveImpl ++ "main = println \"hi\"\n")
+
+fetchImplUnused : (String, String)
+fetchImplUnused = (
+  "fetch_impl_unused.mdk",
+  "interface Get a where\n  get : a -> <Net> Result String String\n\nimpl Get String where\n  get u = fetchText u\n\nmain = println \"hi\"\n",
+)
+
+dialLib : (String, String)
+dialLib = (
+  "lib.mdk",
+  "public export data Srv = Srv String\n\nexport interface Dial a where\n  dial : a -> <Net> Result String (List String)\n\nexport impl Dial Srv where\n  dial (Srv h) = netResolve h\n\nexport\nname : Srv -> String\nname (Srv h) = h\n",
+)
+
+printResult : String
+printResult = "  Ok _ => println \"ok\"\n  Err e => println e\n"
+
+test "target_check: run judges what the interpreter reaches, the emitters what they lower" = withScratchDir
+  (dir => expectEach [
+    (
+      "run admits an impl method no reached call dispatches to",
+      programCase dir [implUnused] ["run"] "impl_unused.mdk" 0 ["hi"],
+    ),
+    (
+      "run admits a top-level let group main does not reach",
+      programCase
+        dir
+        [
+          (
+            "letrec_unused.mdk",
+            "let rec go x = netResolve x\n\nmain = println \"hi\"\n",
+          ),
+        ]
+        ["run"]
+        "letrec_unused.mdk"
+        0
+        ["hi"],
+    ),
+    (
+      "run admits an imported module's impl whose method no reached call names",
+      programCase
+        dir
+        [
+          dialLib,
+          (
+            "dial_main.mdk",
+            "import lib.{Srv(..), name}\n\nmain = println (name (Srv \"db.local\"))\n",
+          ),
+        ]
+        ["run"]
+        "dial_main.mdk"
+        0
+        ["db.local"],
+    ),
+    (
+      "run refuses an impl a reached call dispatches to",
+      programCase
+        dir
+        [
+          (
+            "impl_dispatched.mdk",
+            resolveImpl ++ "main = match res \"example.com\"\n" ++ printResult,
+          ),
+        ]
+        ["run"]
+        "impl_dispatched.mdk"
+        1
+        ["the built-in `netResolve` is reached via `main → res → netResolve`"],
+    ),
+    (
+      "run refuses main reaching the built-in",
+      programCase
+        dir
+        [
+          (
+            "plain.mdk",
+            "main = match netResolve \"example.com\"\n" ++ printResult,
+          ),
+        ]
+        ["run"]
+        "plain.mdk"
+        1
+        ["the built-in `netResolve` is reached via `main → netResolve`"],
+    ),
+    (
+      "wasm refuses the unused impl it lowers",
+      programCase
+        dir
+        [implUnused]
+        ["check", "--target", "wasm"]
+        "impl_unused.mdk"
+        1
+        [
+          "the built-in `netResolve` is reached from an impl method",
+          "`wasmgc/node`"
+        ],
+    ),
+    (
+      "native refuses the unused impl it lowers",
+      programCase
+        dir
+        [fetchImplUnused]
+        ["check", "--target", "native"]
+        "fetch_impl_unused.mdk"
+        1
+        [
+          "the built-in `fetchText` is reached from an impl method",
+          "`llvm/native-posix`"
+        ],
+    ),
+  ])
+
+test "target_check: a user module named runtime keeps its own names" = withScratchDir
+  (dir =>
+    programCase
+      dir
+      [
+        (
+          "runtime.mdk",
+          "export\nfetchText : String -> Result String String\nfetchText u = Ok (\"rt \" ++ u)\n",
+        ),
+        (
+          "main.mdk",
+          "import runtime.{fetchText}\n\nmain = match fetchText \"x\"\n  Ok s => println s\n  Err e => println e\n",
+        ),
+      ]
+      ["run"]
+      "main.mdk"
+      0
+      ["rt x"])

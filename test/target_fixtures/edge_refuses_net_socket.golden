@@ -1,0 +1,7 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/net_param.mdk:4:0: the built-in `netResolve` is reached via `main → fetchHost → netResolve`, and the target `wasmgc/edge` does not provide it (PERMANENT: the `net` module is native-only: raw BSD sockets have no WasmGC equivalent — build for a native target instead): the target cannot provide it, by design; choose a target that provides it
+  |
+4 | fetchHost h = match netResolve h
+  | ^

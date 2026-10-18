@@ -153,6 +153,10 @@ buildAndRun scratch name =
             Err e => Err "\{name}: could not run the built binary: \{e}"
             Ok r => Ok r
 
+-- Preload that deletes WebAssembly.Suspending and WebAssembly.promising.
+noJspiPreload : <IO> String
+noJspiPreload = "\{medakaRoot}/test/async_jspi_fixtures/no_jspi.mjs"
+
 -- Builds the .mdk file `entry` for wasm into `out`.
 buildWasmFile : String -> String -> <Exec, IO> Result String Unit
 buildWasmFile entry out =
@@ -163,10 +167,14 @@ buildWasmFile entry out =
       Err
         "`medaka build --target wasm \{entry}` exited \{intToString code}: \{o ++ err}"
 
--- Executes a built wasm module under the Node host; an exit other than `want`
--- is an error carrying the code and stderr, so a crash is never a result.
+-- Executes a built wasm module under the Node host with JSPI removed (a Node
+-- may ship it on by default), so a sleep takes the Atomics.wait form; an exit
+-- other than `want` is an error carrying the code and stderr, so a crash is
+-- never a result.
 runWasmFile : String -> Int -> <Exec, IO> Result String (Int, String, String)
 runWasmFile wasmPath want = match boundedVerbSeconds 30 "node" [
+  "--import",
+  noJspiPreload,
   "\{medakaRoot}/test/wasm/run.js",
   wasmPath,
 ]
@@ -253,6 +261,126 @@ test "diff_async: build+exec matches the committed stdout for every native fixtu
 
 test "diff_async: wasm build+run matches the same committed stdout for every wasm fixture" =
   gradeAll "wasm" gradeWasmFixture wasmRoster
+
+-- # The JSPI arm
+--
+-- The wasm arm above runs with JSPI removed, so it reaches `sleep` through
+-- Atomics.wait; the no-JSPI trace arm below asserts that. Under
+-- `--experimental-wasm-jspi` the host binds a `WebAssembly.Suspending` sleep
+-- instead, and the same module must print the same stdout. The stdout is
+-- identical either way, so the run is preloaded with a tracer that reports how
+-- many Suspending imports were built and called.
+
+jspiTracer : <IO> String
+jspiTracer = "\{medakaRoot}/test/async_jspi_fixtures/suspending_trace.mjs"
+
+-- True when this node, given the JSPI flag, exposes `WebAssembly.Suspending`.
+nodeHasJspi : <Exec> Bool
+nodeHasJspi = match boundedVerbSeconds 20 "node" [
+  "--experimental-wasm-jspi",
+  "-e",
+  "process.exit(typeof WebAssembly.Suspending === 'function' ? 0 : 1)",
+]
+  Ok (0, _, _) => True
+  _ => False
+
+-- Runs a built module with the tracer preloaded after `flags`. The program
+-- must exit 0, and stderr must be exactly the tracer's one line.
+runTraced : List String ->
+  String ->
+  <Exec, IO> Result String (Int, String, String)
+runTraced flags wasmPath = match (boundedVerbSeconds
+  30
+  "node"
+  (flags
+    ++ [
+      "--import",
+      jspiTracer,
+      "\{medakaRoot}/test/wasm/run.js",
+      wasmPath,
+    ]))
+  Err e => Err e
+  Ok (code, out, err) =>
+    if code /= 0 then
+      Err
+        "node exited \{intToString code}, want 0: stdout=\{debug out} stderr=\{debug err}"
+    else match lines (trim err)
+      [line] =>
+        if contains "TRACE suspending-imports=" line then
+          Ok (code, out, err)
+        else
+          Err "stderr is not the tracer line: \{debug err}"
+      _ => Err "stderr is not exactly the tracer line: \{debug err}"
+
+runJspiTraced : String -> <Exec, IO> Result String (Int, String, String)
+runJspiTraced = runTraced ["--experimental-wasm-jspi"]
+
+runNoJspiTraced : String -> <Exec, IO> Result String (Int, String, String)
+runNoJspiTraced = runTraced ["--import", noJspiPreload]
+
+-- The stdout grade of `gradeRun`, plus: the tracer saw the sleep go through a
+-- Suspending import.
+gradeJspi : String -> Result String (Int, String, String) -> Option String
+gradeJspi want result = match gradeRun "wasm-jspi" "overlap_sleeps" want result
+  Some e => Some e
+  None => match result
+    Ok (_, _, err) =>
+      if contains "suspending-imports=0" err
+        || not (contains "suspending-calls=" err) then
+        Some
+          "  wasm-jspi overlap_sleeps: no Suspending import was used: \{debug err}"
+      else
+        None
+    Err e => Some e
+
+-- The stdout grade of `gradeRun`, plus: the tracer saw no Suspending import
+-- and the sleep go through Atomics.wait.
+gradeNoJspi : String -> Result String (Int, String, String) -> Option String
+gradeNoJspi want result =
+  match gradeRun "wasm-nojspi" "overlap_sleeps" want result
+    Some e => Some e
+    None => match result
+      Ok (_, _, err) =>
+        if contains "suspending-imports=0" err
+          && contains "atomics-waits=1" err then
+          None
+        else
+          Some
+            "  wasm-nojspi overlap_sleeps: want suspending-imports=0 atomics-waits=1: \{debug err}"
+      Err e => Some e
+
+test "diff_async: overlap_sleeps without JSPI prints the same stdout through Atomics.wait" =
+  match (freshDir (), wantOutput "overlap_sleeps")
+    (Err e, _) => fail "could not make a scratch directory: \{e}"
+    (_, Err e) => fail "overlap_sleeps: \{e}"
+    (Ok scratch, Ok want) =>
+      let wasmPath = "\{scratch}/overlap_sleeps.wasm"
+      let verdict = match buildWasmFile "\{corpus}/overlap_sleeps.mdk" wasmPath
+        Err e => fail "overlap_sleeps: \{e}"
+        Ok _ => match gradeNoJspi want (runNoJspiTraced wasmPath)
+          Some e => fail e
+          None => pass
+      let _ = boundedVerbSeconds 10 "rm" ["-rf", scratch]
+      verdict
+
+test "diff_async: overlap_sleeps under JSPI prints the same stdout through a Suspending sleep" =
+  if not nodeHasJspi then
+    let _ =
+      println
+        "SKIP diff_async JSPI arm: node --experimental-wasm-jspi exposes no WebAssembly.Suspending"
+    pass
+  else match (freshDir (), wantOutput "overlap_sleeps")
+    (Err e, _) => fail "could not make a scratch directory: \{e}"
+    (_, Err e) => fail "overlap_sleeps: \{e}"
+    (Ok scratch, Ok want) =>
+      let wasmPath = "\{scratch}/overlap_sleeps.wasm"
+      let verdict = match buildWasmFile "\{corpus}/overlap_sleeps.mdk" wasmPath
+        Err e => fail "overlap_sleeps: \{e}"
+        Ok _ => match gradeJspi want (runJspiTraced wasmPath)
+          Some e => fail e
+          None => pass
+      let _ = boundedVerbSeconds 10 "rm" ["-rf", scratch]
+      verdict
 
 -- # The wasm progress detector
 --

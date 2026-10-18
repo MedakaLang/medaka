@@ -264,15 +264,19 @@ above Core IR; these laws are the wasm peers of EMITTER-SEMANTICS §2 (V1–V6).
 Native's TCB below the emitted IR is `runtime/medaka_rt.c`. Wasm's is **one JS
 module**, `playground/medaka_host.mjs`, plus the engine. It builds the `env`
 import object from capability slices (`stdout stderr floatfmt math strtod fs filebound env
-args exit clock entropy stdin`), installs the slices a profile grants
+args exit clock entropy net stdin`; `net` grants `fetchText`, an HTTP(S) GET that answers with a promise), installs the slices a profile grants
 (`wasmgc/node`, `wasmgc/browser-worker`, `wasmgc/edge`, `wasmgc/wasi-p2`, the
 labels of `compiler/types/target_profile.mdk`), and owns the shims and the flush
-discipline. Three hosts consume it and add only their side of the boundary:
+discipline. Four hosts consume it and add only their side of the boundary:
 `test/wasm/run.js` (Node runner: gates, CLI users; `wasmgc/node` over the real
 filesystem), `playground/worker.js` (runs the USER's compiled program;
 `wasmgc/browser-worker` over a per-run in-memory vfs) and `playground/compile.mjs`
 (runs the COMPILER itself, i.e. `playground.wasm`, on the module's
-`COMPILER_HOST` configuration, which is not a profile). Each used to carry its own
+`COMPILER_HOST` configuration, which is not a profile) and the loader
+`medaka build --target wasmgc/edge` writes beside the wasm (`x.mjs`, plus `x.bytes.mjs` for
+Bun and a copy of the host module; text from `compiler/backend/wasm_loader.mdk`), which exports `run(opts)`
+and a default `{ fetch }` over the host's `runToResult` and `textResponse`: the edge slice set, 200 with
+stdout on exit 0 and 500 otherwise. Each used to carry its own
 copy of the shims; #543 landed where a fix reached two copies of three. The
 copies are gone, and `checkImportKeys` in `playground/medaka_host.mjs` refuses a module whose `env`
 imports name a key no slice lists, and `compiler/types/target_profile_host_test.mdk` checks the host's grants against `target_profile.mdk`. Parts of the
@@ -288,7 +292,10 @@ import surface part of the semantics, with laws:
   `NotProvided` row in `compiler/backend/extern_catalog.mdk` if any engine withholds it.
   The entry is closed the same way: an emitted module's `(start $__init)` runs
   only the eager value-global initializers, and the program runs when the host
-  calls the `mdk_main` export. Every host calls `exports.mdk_main()` after
+  calls the `mdk_main` export. When the engine has JSPI, `runProgram` calls `mdk_main` through
+  `WebAssembly.promising` and awaits it, so the imports that wait on a promise (`mdk_sleep_ms`,
+  `mdk_fetch_text`) are `WebAssembly.Suspending`; the start function is never promising, so a
+  top-level value that reaches one fails with a named error. Every host calls `exports.mdk_main()` after
   `instantiate`, inside the same exit and trap handling as the instantiation,
   so a value init that panics still fails at instantiate time, before any
   `main` output. A module instantiated without that call runs no program code
@@ -378,10 +385,11 @@ import surface part of the semantics, with laws:
 | `mdk_args_count` / `mdk_arg_len` / `mdk_arg_byte` | ~1111–1113 | `args` reached | real (`MDK_ARGS`) | capability error (`args` withheld) | real (guest argv = the `compile`/`hover`/`complete` call) | argv marshaling | capability |
 | `mdk_read_line` / `mdk_read_all` / `mdk_read_exactly` | `hostImportSig` | `readLine` and `readLineOpt` / `readAll` / `readExactly` reached (`readLine` and `readLineOpt` share a key) | real (fd 0 through `createHost`'s `stdin` source: `fs.readSync`, blocking, `EAGAIN` retried) | withheld (`stdin` is not granted) | withheld | one host-side buffer behind all four readers, as the C `stdin` stream is; the source returns bytes and zero bytes is end of input, which stays end. `mdk_read_line` answers 1 with the line on the result channel (only `\n` ends it; a final unterminated line counts) or 0 at end with nothing read; `readLine` takes the empty result, `readLineOpt` takes `None`. `mdk_read_all` drains the buffer. `mdk_read_exactly(n)` answers 1 with `n` bytes, or 0 when fewer remain, consuming them; `n <= 0` is an empty 1. Bytes are read as UTF-8 by the guest, each ill-formed sequence one U+FFFD | capability |
 | `mdk_os_entropy` | `hostImportSig` | `osEntropyBytes` reached | real (`crypto.getRandomValues`, in chunks of at most 65,536 bytes) | real (the same) | withheld (the compiler host grants no `Rand`) | 1 + the n random bytes on the result channel; 0 + native's panic text for a negative or oversized count, which the guest panics with (`$mdk_refused_panic`) | entropy |
+| `mdk_fetch_text` | `hostImportSig` | `fetchText` reached | real, edge profile only (`net` slice; `fetch` from `createHost`'s options, default `globalThis.fetch`); answers a promise, so it runs only under JSPI and otherwise raises the named JSPI `CapabilityError` | withheld (`Net` is not granted) | withheld | the url on the path channel; 1 + the body of a 2xx response on the result channel (decoded leniently when not valid UTF-8); 0 + `<status> <statusText>` (just `<status>` when the text is empty) for any other status, or the failure's message when no response arrives or the URL is not an absolute `http:`/`https:` URL (no `fetch` call is made for any other scheme, `file:` included) | edge-only |
 | `mdk_executable_path` | `hostImportSig` | `executablePath` reached | real (`createHost`'s `executablePath`, which `test/wasm/run.js` sets to the absolute path of the module) | withheld (`Env` is not granted) | the empty path (the `env` host answers no module path) | 1 + the path on the result channel; `""` when the host was given none | capability |
 | `mdk_result_len` / `mdk_result_byte` | ~1114–1115 | `readFile`, `readFileBytes`, `writeFile`, `writeFileBytes`, `rename`, `listDir`, `statFile`, `fileExists`, `canonicalizePath`, `getEnv`, `readLine`, `readLineOpt`, `readAll`, `readExactly`, `osEntropyBytes`, `executablePath` reached | real | real (the `fs` slice's result channel) | real | read cached result | — |
 | `mdk_exit` | `hostImportSig` | `exit` use (its plan host key) | real (`ExitSignal` unwind, flush stdout then stderr, exit) | capability error (`exit` withheld; a clean `exit 0` reports an error — deliberate, UX-noteworthy) | real (`ExitSignal` unwind) | flush + exit | T1/WH4 ✅ (#376) |
-| `mdk_wall_time_sec` / `mdk_monotonic_sec` / `mdk_sleep_ms` | `hostImportSig` | `wallTimeSec` / `monotonicSec` / `sleepMs` use, each its own plan host key | real (the host's wall clock, its monotonic clock, a blocking wait on a shared cell) | wall and monotonic reads real; sleep real only when the page is cross-origin isolated, else a named capability error | real (same keys; never sleeps, present to avoid a LinkError) | f64 seconds; f64 seconds; sleep `i64` ms, non-positive returns at once | — |
+| `mdk_wall_time_sec` / `mdk_monotonic_sec` / `mdk_sleep_ms` | `hostImportSig` | `wallTimeSec` / `monotonicSec` / `sleepMs` use, each its own plan host key | real (the host's wall clock, its monotonic clock; sleep is a `Suspending` timer under JSPI, else a blocking wait on a shared cell) | wall and monotonic reads real; sleep is a `Suspending` timer under JSPI (no isolation needed), else real only when the page is cross-origin isolated, else a named capability error | real (same keys; never sleeps, present to avoid a LinkError) | f64 seconds; f64 seconds; sleep `i64` ms, non-positive returns at once | — |
 | `mdk_write_file_reset` / `_push` / `_commit` | ~1223–1225 | `writeFileBytes` reached (`writeFile` reaches `_reset` and `_push` too) | real | real over the per-run vfs (`fs` slice) | real over the source vfs (`fs` slice) | streamed file write; the commit confines the path in write mode first | WH3 ✅ (#375) |
 | `mdk_write_file` | `hostImportSig` | `writeFile` reached | real (Node fs) | real over the per-run vfs | real over the source vfs | `writeFile`'s commit: the bytes streamed with `mdk_write_file_push` go to the path on the path channel, confined `(entry 0, write 1)`; 1, or 0 + the error text as the result. A file the write creates reads `0o644` on `MemoryVfs` | confinement |
 | `mdk_append_file` | `hostImportSig` | `appendFile` reached | real (`fs.appendFileSync`) | real over the per-run vfs (the file is created when absent, at `0o644`; an existing file keeps its mode) | real over the source vfs | `appendFile`'s commit: the bytes streamed with `mdk_write_file_push` are appended to the path on the path channel, confined `(entry 0, write 1)`; 1, or 0 + the error text as the result | confinement |
@@ -493,7 +501,7 @@ before anything crosses, as on native.
 | `U64` `I64` | `i64` | `i64` | a `BigInt` (`U64` read unsigned) |
 | `String` | `i32`: the byte length | none | a JS string. The guest resets the path channel once per call (`mdk_path_reset`), then appends each `String` and `Array` argument in parameter order (`$mdk_push_path_more`); the host splits the channel by the lengths in the parameters and decodes each `String` as UTF-8, which a Medaka `String` always is. A `String` result goes to the result channel (`mdk_result_len`/`mdk_result_byte`) after any copy-back words, encoded as UTF-8 |
 | `Array` | `i32`: the element count | refused | a `BigInt64Array` holding the elements, 8 bytes each, little-endian two's complement on the path channel. The binding may write to it. After the call the host writes every `Array` argument's elements back, in parameter order and at the same count, to the start of the result channel, and the guest copies them into the caller's array. The copy-back is unconditional, as native's is (FFI-ABI §2.4). Before it writes any element of an array, the guest checks that every element fits `Int`. If one does not, it stops with `runtime error [E-PANIC]: foreign call '<jsName>' wrote a value outside Int's range … into an Array Int argument`, as native does. An `Array Int` result is an emitter gap on wasm as it is on native: native has no length channel for it, and the two targets must not give one declaration two meanings |
-| `Unit` | none | none | nothing. A `Unit` argument is still evaluated, and the JS function receives no argument for it. The host ignores a `Unit` binding's return value |
+| `Unit` | none | none | nothing. A `Unit` argument is still evaluated, and the JS function receives no argument for it. The host ignores a `Unit` binding's return value when it is not a thenable. A thenable result (any non-null object or function with a function-valued `then`) is refused with a `JsBindingError`, for every result type, `Unit` included: a binding answers synchronously (TARGETS-DESIGN §7.6), and the guest cannot wait on a promise |
 
 **A `String` argument is its bytes, NUL included.** A `String` containing U+0000
 reaches a `js` binding intact, because the host splits the path channel by the
@@ -514,9 +522,11 @@ catches the exception. It ends the program at that call with the error
 ``js binding `<jsName>` threw: <message>``. A result of the wrong JS type ends
 it the same way, with ``js binding `<jsName>` returned <what>, not <head>``.
 Examples are a `Number` for an `Int`, an out-of-range `BigInt` for a `U64`, a
-non-string for a `String`, or a lone surrogate. Medaka code cannot catch either
-error, because a foreign call cannot fail into Medaka (FFI-ABI §4). The error
-unwinds the guest, and the host flushes stdout and then stderr (WH4).
+non-string for a `String`, or a lone surrogate. A thenable, whatever the head,
+ends it with ``js binding `<jsName>` returned a thenable (a promise, or a value
+with a `then` method), not <head>: a js binding must answer synchronously``.
+Medaka code cannot catch any of these errors, because a foreign call cannot
+fail into Medaka (FFI-ABI §4). The error unwinds the guest, and the host flushes stdout and then stderr (WH4).
 `test/wasm/run.js` reports it as `runtime error: <message>` and exits 1. No
 value is ever substituted.
 

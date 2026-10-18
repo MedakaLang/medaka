@@ -1,5 +1,5 @@
--- A parameterized label at the entry, `Net "a.com"`: a profile granting the
--- whole `Net` domain admits it; one granting no `Net` refuses it.
+-- `Net "a.com"` at the entry: `native` admits it; `wasmgc/edge` grants `Net`,
+-- yet refuses the socket built-in `netResolve` it reaches (native-only).
 fetchHost : (h : String) -> <Net h, Stdout> Unit
 fetchHost h = match netResolve h
   Ok _ => println "resolved"

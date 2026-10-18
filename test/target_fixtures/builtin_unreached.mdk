@@ -1,0 +1,9 @@
+-- The socket module is imported and never called, and a local binder is
+-- spelled like a socket built-in: no built-in the interpreter lacks is
+-- reached, so eval/run admits the program.
+import net.{resolve}
+
+main : <Stdout> Unit
+main =
+  let netSend = 3
+  println (netSend + 1)

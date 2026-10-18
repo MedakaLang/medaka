@@ -231,6 +231,11 @@ inlang-backend-emit-binder-refusal-test:
 inlang-backend-emit-plan-test:
 	./medaka test --native compiler/backend/emit_plan_test.mdk
 
+## The built-in wall's derived pin: every profile x every NotProvided catalog
+## row is refused with the row's reason. Native: each pair spawns `medaka`.
+inlang-tools-target-check-test:
+	./medaka test --native compiler/tools/target_check_test.mdk
+
 ## Coded-trap helpers of wasm_emit.mdk: one `$trapmsg_K` per distinct fixed text,
 ## graded against the spec's stderr lines.
 inlang-backend-wasm-emit-trapmsg-test:
@@ -245,6 +250,10 @@ inlang-backend-wasm-emit-paramname-test:
 ## payload, shared by every site that spells the same bytes.
 inlang-backend-wasm-emit-strseg-test:
 	./medaka test compiler/backend/wasm_emit_strseg_test.mdk
+
+## The edge loader text of wasm_loader.mdk; no entry imports the sibling.
+inlang-backend-wasm-loader-test:
+	./medaka test compiler/backend/wasm_loader_test.mdk
 
 ## #3908: match-arm self tail calls must lower to musttail. The sibling is
 ## native-only (the claim is about emitted code) and has no other runner.

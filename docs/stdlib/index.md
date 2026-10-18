@@ -870,6 +870,7 @@ The host primitives.
 - [`wallTimeSec`](runtime.md#walltimesec)
 - [`monotonicSec`](runtime.md#monotonicsec)
 - [`sleepMs`](runtime.md#sleepms)
+- [`fetchText`](runtime.md#fetchtext)
 - [`allocBytes`](runtime.md#allocbytes)
 - [`randomInt`](runtime.md#randomint)
 - [`randomBool`](runtime.md#randombool)

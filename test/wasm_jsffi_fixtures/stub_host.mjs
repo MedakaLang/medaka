@@ -130,11 +130,18 @@ function jsffiImports(module, host, bindings) {
       const { args, arrays } = decodeArgs(params, wire, Uint8Array.from(host.pathBuf));
       host.pathBuf = [];
       let v;
+      let thenable;
       try {
         v = fn(...args);
+        thenable = v !== null && (typeof v === 'object' || typeof v === 'function') && typeof v.then === 'function';
       } catch (e) {
         throw new JsBindingError(name, `js binding \`${name}\` threw: ${e && e.message !== undefined ? e.message : String(e)}`);
       }
+      // A thenable is refused for every result type, `Unit` included (section 3.1).
+      if (thenable)
+        throw new JsBindingError(name,
+          `js binding \`${name}\` returned a thenable (a promise, or a value with a \`then\` method), not ${result}: `
+          + 'a js binding must answer synchronously');
       const r = encodeResult(name, result, v);
       const back = arrays.map((a) => {
         const b = new Uint8Array(a.length * 8);

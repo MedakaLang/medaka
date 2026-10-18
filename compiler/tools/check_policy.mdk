@@ -56,7 +56,7 @@ import types.typecheck.{
 }
 import eval.eval.{
   Value(..), evalModulesRootEnvWith, buildStampExterns, apply, outputRef,
-  ppValue, externDeclNamesOfDecls
+  ppValue
 }
 import support.util.{
   sortUniqS, joinWith, escStr, lookupAssoc, filterList, listLen, escOneHex2,
@@ -321,8 +321,8 @@ lookupValue k ((n, v) :: rest) = if k == n then Some v else lookupValue k rest
 -- (`shouldAutoPrintMain` reads the drive's `main` type), the scheme of the
 -- prelude `println` the wrap applies to it.  The binding rule reads the
 -- program the drive read: `tiCore` and `tiModules` are its desugared prelude and
--- module graph (the entry last), and `tiCatalogExterns` names the externs
--- `stdlib/runtime.mdk` declares: a module that declares one again runs the
+-- module graph (the entry last), and `tiRuntime` is `stdlib/runtime.mdk`, whose
+-- externs are the built-ins: a module that declares one again runs the
 -- built-in, not a foreign call.
 public export data TargetInputs = TargetInputs {
   tiSchemes : List (String, Scheme),
@@ -331,7 +331,7 @@ public export data TargetInputs = TargetInputs {
   tiAutoPrintCall : Option Scheme,
   tiCore : List Decl,
   tiModules : List (String, List Decl),
-  tiCatalogExterns : List String,
+  tiRuntime : List Decl,
 }
 
 public export data EntryAnalysis = EntryAnalysis {
@@ -367,7 +367,7 @@ analyzeProgram valueMain rtD coreD modsD =
       tiAutoPrintCall = autoPrintCall,
       tiCore = coreD,
       tiModules = modsD,
-      tiCatalogExterns = externDeclNamesOfDecls rtD,
+      tiRuntime = rtD,
     },
   }
 

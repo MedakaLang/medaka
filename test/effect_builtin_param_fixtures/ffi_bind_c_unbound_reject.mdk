@@ -1,6 +1,6 @@
 -- A row naming the `c` host on a declaration bound only to JavaScript.  A `c`
 -- binding is implied only when there is no clause at all.
-extern fetchText : String -> <FFI "c/libfetch"> String
+extern fetchPage : String -> <FFI "c/libfetch"> String
   bind js "fetchText"
 
 main : <IO> Unit

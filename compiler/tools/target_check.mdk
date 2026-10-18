@@ -1,27 +1,40 @@
 -- compiler/tools/target_check.mdk — does a program fit a target profile?
--- Two rules.  The entry's invocation summary, cut to the labels a profile
+-- Three rules.  The entry's invocation summary, cut to the labels a profile
 -- gates, is judged by the same subsumption `check-policy` uses, and a refusal
--- becomes one located `T-TARGET-CAPABILITY` diagnostic.  And every user extern
+-- becomes one located `T-TARGET-CAPABILITY` diagnostic.  Every user extern
 -- the program reaches must be bound for the host the profile calls foreign
 -- code through, else it is a `T-TARGET-NO-BINDING` diagnostic located at the
--- declaration.
+-- declaration.  And every built-in the program reaches must be provided by the
+-- profile's column of the extern catalog, else it is a `T-TARGET-NOT-PROVIDED`
+-- diagnostic located at the binding that names it.
 import frontend.ast.{
   Decl(..),
   ExternBind(..),
   ExternDecl(..),
+  LetBind(..),
   Loc(..),
   TyConOrigin(..),
   externBindings,
+  letBindName,
 }
+import frontend.marker.{declRefs}
+import backend.core_validate.{
+  Backend(..), profileColumn, unprovidedOn, isUnprovidedOn
+}
+import backend.extern_catalog.{GapKind(..), gapKindName}
 import types.target_profile.{
   TargetProfile,
+  buildable,
+  lookupProfile,
   profileName,
+  profileNames,
   profileGrants,
   profileBindingHost,
   isGatedLabel,
   reachesLabel,
+  runProfile,
 }
-import ir.dce.{reachedExternChains}
+import ir.dce.{ReachRoots(..), reachedExternChains, reachedExternRoutes}
 import types.effect_policy.{
   PolicyVerdict(..), policyRefusals, buildCallGraph, fnEffectsTable, viaChain
 }
@@ -40,7 +53,7 @@ import driver.diagnostics.{
   readFileSafe,
   srcLinesArr,
 }
-import support.util.{lookupAssoc, joinWith, dedup, contains, anyList}
+import support.util.{lookupAssoc, joinWith, dedup, dedupBy, contains, anyList}
 import string.{trim}
 import list.{lookup}
 
@@ -52,6 +65,10 @@ export
 targetNoBindingCode : String
 targetNoBindingCode = "T-TARGET-NO-BINDING"
 
+export
+targetNotProvidedCode : String
+targetNotProvidedCode = "T-TARGET-NOT-PROVIDED"
+
 -- The refusals of the program whose entry file is `file`; `[]` admits it.
 -- `paths` maps each module to its file, where a refused extern is located.  A
 -- program with no `main` of its own has no entry to judge, and that is a
@@ -59,7 +76,9 @@ targetNoBindingCode = "T-TARGET-NO-BINDING"
 -- verdict, one diagnostic per declaration; the entry's capability refusal is
 -- reported only when no declaration is refused.  The two meet on `FFI`, which
 -- `eval/run` alone withholds, so the declaration names the cause where the
--- entry's row would only name the label.
+-- entry's row would only name the label.  A reached built-in the profile does
+-- not provide is judged only when the capability rule admits the entry: a
+-- withheld label already names why the built-in cannot run there.
 export
 targetRefusal : TargetProfile ->
   String ->
@@ -69,11 +88,13 @@ targetRefusal : TargetProfile ->
 targetRefusal profile file paths analysis =
   match lookupAssoc "main" analysis.tiSchemes
     None => [missingEntryDiag profile file]
-    Some sch => match bindingRefusals profile paths analysis
-      [] => match capabilityRefusal profile analysis sch
-        Some d => [d]
-        None => []
-      ds => ds
+    Some sch =>
+      let bound = bindingRefusals profile paths analysis
+      match capabilityRefusal profile analysis sch
+        Some d => match bound
+          [] => [d]
+          ds => ds
+        None => bound ++ builtinRefusals profile paths analysis
 
 -- The file a target refusal is located in: a refused extern's module, else
 -- the entry.
@@ -148,19 +169,20 @@ bindingRefusals : TargetProfile ->
   TargetInputs ->
   List Diag
 bindingRefusals profile paths analysis =
+  let builtins = map (ed => ed.edName) (externDecls analysis.tiRuntime)
   let userExterns =
     flatMap
       ((mid, decls) =>
         map
           (ed => (mid, ed))
           (filter
-            (ed => not (contains ed.edName analysis.tiCatalogExterns))
+            (ed => not (contains ed.edName builtins))
             (externDecls decls)))
       analysis.tiModules
   match userExterns
     [] => []
     _ =>
-      let chains = reachedExternChains analysis.tiCore analysis.tiModules
+      let chains = reachedExternChains None analysis.tiCore analysis.tiModules
       filterMap (unboundReached profile paths chains) userExterns
 
 externDecls : List Decl -> List ExternDecl
@@ -205,6 +227,163 @@ noBindingDiag profile path (ed, chain) =
     targetNoBindingCode
     "the extern `\{ed.edName}` is reached\{reachRoute chain}, and \{why}"
     (Some (inFile path ed.edLoc))
+
+-- ── the built-in rule ───────────────────────────────────────────────────────
+-- Every built-in the program reaches whose catalog row gives the profile's
+-- column (`profileColumn`) no lowering, one diagnostic per built-in.  A
+-- built-in is an extern of `stdlib/runtime.mdk`, which every module sees
+-- without an import, or a module's declaration of one again, which runs it.
+-- The reach is the binding rule's, with the runtime as a module of its own,
+-- so a local binder spelled like a built-in reaches nothing.  An emitter's
+-- column is judged over what the emitter lowers, every impl among it; the
+-- interpreter's over what it evaluates, an impl only once a reached call can
+-- dispatch to it (`reachRootsOf`).  `stdlib/core.mdk` names no built-in that
+-- any column leaves unprovided (`core_validate_test`), so a program none of
+-- whose modules names one skips the reach.
+builtinRefusals : TargetProfile ->
+  List (String, String) ->
+  TargetInputs ->
+  List Diag
+builtinRefusals profile paths analysis =
+  let column = profileColumn profile
+  let named =
+    anyList
+      ((_, decls) =>
+        anyList (d => anyList (isUnprovidedOn column) (declRefs d)) decls)
+      analysis.tiModules
+  if named then
+    let routes =
+      reachedExternRoutes
+        (reachRootsOf column)
+        (Some (runtimeUnit, analysis.tiRuntime))
+        analysis.tiCore
+        analysis.tiModules
+    filterMap
+      (unprovidedReached profile paths analysis)
+      (dedupBy (r => snd (fst r)) routes)
+  else
+    []
+
+-- What a column's reach starts from: what its programs run.
+reachRootsOf : Backend -> ReachRoots
+reachRootsOf LlvmBackend = EmittedRoots
+reachRootsOf WasmBackend = EmittedRoots
+reachRootsOf EvalBackend = DispatchedRoots
+
+-- The module id the runtime's declarations are scoped under in the reach.  No
+-- import path spells it, so a user module named `runtime` keeps its own names
+-- apart from the built-ins.
+runtimeUnit : String
+runtimeUnit = "<runtime>"
+
+unprovidedReached : TargetProfile ->
+  List (String, String) ->
+  TargetInputs ->
+  ((String, String), List (String, String)) ->
+  Option Diag
+unprovidedReached profile paths analysis ((_, name), route) =
+  let column = profileColumn profile
+  map
+    ((kind, why) =>
+      mkDiag
+        SevError
+        targetNotProvidedCode
+        "the built-in `\{name}` is reached\{reachRoute (map snd route)}, and the target `\{profileName profile}` does not provide it (\{gapKindName kind}: \{why}): \{gapCause kind}\{gapAdvice profile column kind name}"
+        (namingBindingLoc paths analysis route))
+    (unprovidedOn column name)
+
+-- Whether the program or the compiler is at fault, by the row's gap kind.
+gapCause : GapKind -> String
+gapCause GapPermanent = "the target cannot provide it, by design"
+gapCause GapBug = "this is a gap in the compiler, not in the program"
+gapCause GapTodo = "no backend provides it yet"
+gapCause GapDead = "no backend lowers it"
+gapCause GapUnported = "its lowering for this backend is not written yet"
+
+-- What the user can do instead, when a target `medaka build` emits for
+-- provides the built-in.  The interpreter judges `medaka run` whatever its
+-- target, so its advice is to build.  An emitter's is to choose another
+-- target, except for a gap the compiler owes (`GapBug`), which no choice of
+-- target remedies.
+gapAdvice : TargetProfile -> Backend -> GapKind -> String -> String
+gapAdvice profile EvalBackend _ name = runAdvice profile name
+gapAdvice _ _ GapBug _ = ""
+gapAdvice _ _ _ name =
+  if emitterProvides name then "; choose a target that provides it" else ""
+
+runAdvice : TargetProfile -> String -> String
+runAdvice profile name =
+  if emitterProvides name then match runTargetOf profile
+    Some t =>
+      if isUnprovidedOn (profileColumn t) name then
+        runBuildAdvice
+      else
+        "; `medaka run` evaluates the program with the interpreter whatever its target, so `medaka build --target \{profileName t}` runs it on `\{profileName t}`"
+    None => runBuildAdvice
+  else
+    ""
+
+runBuildAdvice : String
+runBuildAdvice =
+  "; `medaka run` evaluates the program with the interpreter, so build it for a target that provides it"
+
+emitterProvides : String -> Bool
+emitterProvides name =
+  not (isUnprovidedOn LlvmBackend name && isUnprovidedOn WasmBackend name)
+
+-- The target `t` of `medaka run --target t` when `profile` is the
+-- interpreter's profile narrowed to it (`runProfile`).
+runTargetOf : TargetProfile -> Option TargetProfile
+runTargetOf profile =
+  match filter (narrowsTo profile) (filterMap profileNamed profileNames)
+    t :: _ => Some t
+    [] => None
+
+narrowsTo : TargetProfile -> TargetProfile -> Bool
+narrowsTo profile t =
+  buildable t && profileName (runProfile (Some t)) == profileName profile
+
+profileNamed : String -> Option TargetProfile
+profileNamed n = match lookupProfile n
+  Ok p => Some p
+  Err _ => None
+
+-- The definition of the last binding on the route before the built-in, in
+-- its module's file; the entry's when the route has no such binding.
+namingBindingLoc : List (String, String) ->
+  TargetInputs ->
+  List (String, String) ->
+  Option Loc
+namingBindingLoc paths analysis route =
+  match bindingDefinitionLoc paths analysis route
+    Some l => Some l
+    None => entryLoc analysis.tiEntryDecls
+
+bindingDefinitionLoc : List (String, String) ->
+  TargetInputs ->
+  List (String, String) ->
+  Option Loc
+bindingDefinitionLoc paths analysis route = do
+  (mid, n) <- lastBindingStep route
+  decls <- lookup mid analysis.tiModules
+  l <- definitionLoc n decls
+  Some (inFile (lookupAssoc mid paths) l)
+
+lastBindingStep : List (String, String) -> Option (String, String)
+lastBindingStep [step, _] = Some step
+lastBindingStep (_ :: rest) = lastBindingStep rest
+lastBindingStep [] = None
+
+definitionLoc : String -> List Decl -> Option Loc
+definitionLoc _ [] = None
+definitionLoc n ((DAttrib _ d) :: rest) = definitionLoc n (d :: rest)
+definitionLoc n ((DFunDef _ m _ _ l _) :: rest) =
+  if m == n then Some l else definitionLoc n rest
+definitionLoc n ((DLetGroup _ binds) :: rest) =
+  match filter (b => letBindName b == n) binds
+    (LetBind _ _ l _) :: _ => Some l
+    [] => definitionLoc n rest
+definitionLoc n (_ :: rest) = definitionLoc n rest
 
 -- How a reached name is reached: from `main`, or from a body the program
 -- emits whatever `main` calls.
