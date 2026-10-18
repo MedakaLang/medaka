@@ -684,6 +684,7 @@ copyLocalAbsState : LocalAbsState -> LocalAbsState
 coreAliasSchemes : UsePath -> List (String, a) -> List (String, a)
 coreCheckMemoHit : Option (Int, Int) -> Option CoreCheckMemo
 coreCheckMemoRef : Ref (Option CoreCheckMemo)
+coreOwnContexts : Unit -> Map String (List VecObl)
 coreQualScheme : String -> (String, a) -> (String, a)
 coreRenameScheme : List (String, a) -> UseMember -> List (String, a)
 coreShadowMapFor : List Decl -> List (String, String) -> List (String, String)
@@ -949,6 +950,7 @@ domainParamWith : Option String -> List (String, String) -> Param
 drainStampQueue : Unit -> List DrainFinding
 driveErrs : List DrainFinding -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List TcDiag
 driveGraphK : GraphOut -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> GraphDrive
+drivenEvidence : Unit -> List EvEntry
 driverState : Ref DriverState
 dropFirst : Int -> List a -> List a
 dropGoalsSince : Int -> List GoalKind -> Unit
@@ -994,6 +996,7 @@ effvarIdOf : (String, Ref Effvar) -> Int
 effvarLevel : Ref Effvar -> Int
 elabModuleStamp : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List Decl)
 elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable)
+elaborateModulesReport : List Decl -> List Decl -> List (String, List Decl) -> TcReport
 elaborateModulesWithSchemes : Bool -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable), List (String, PubScheme), List (String, PubScheme))
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 elselessIfHelp : String
@@ -1375,7 +1378,7 @@ graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
 graphCollect : GraphOut -> Bool -> String -> (List Decl, List (String, PubScheme), List TcDiag, List TcDiag) -> (List (String, List Decl), List (String, (List (String, PubScheme), List TcDiag, List TcDiag))) -> (List (String, List Decl), List (String, (List (String, PubScheme), List TcDiag, List TcDiag)))
 graphMarksNow : Unit -> GraphMarks
 graphModuleWorker : GraphOut -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, (List Decl, List (String, PubScheme), List TcDiag, List TcDiag))
-graphPreamble : GraphOut -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), List Decl, MarkSets)
+graphPreamble : GraphOut -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), Map String (List VecObl), List Decl, MarkSets)
 graphPubDefiners : String -> List (String, (String, String))
 graphRun : Ref GraphRun
 groundAdmittedGo : TcEnv -> String -> List IfaceRef -> List Mono -> Option Loc -> Unit
@@ -2533,7 +2536,7 @@ publicDataScopeDecls : List Decl -> List Decl
 publicModuleExports : List Decl -> ModuleBindings -> List (String, ExportBinding)
 publicStandaloneNames : List Decl -> List String
 publicValNames : List Decl -> List String
-publishCore : List (String, Scheme) -> List (String, PubScheme)
+publishCore : Map String (List VecObl) -> List (String, Scheme) -> List (String, PubScheme)
 publishEvidence : Unit -> Unit
 publishMethodPredGivens : List String -> Ty -> MethodBodyInstance -> ScopeId -> Unit
 publishMethodReturnTrace : List EvEntry -> MethodReturnTraceEntry -> MethodReturnTraceEntry

@@ -18,6 +18,7 @@ import types.repr.{
 import types.effect_rows.{EffRow(..), Effvar(..), Atom(..)}
 import types.effect_authority.{Authority(..), Authvar(..)}
 import types.disposition.{DispositionTable}
+import types.evidence_coverage.{EvidenceFault, evidenceFaults}
 import map as IdMap
 import map.{Map(..)}
 import list.{nub, reverse, mapAccumL}
@@ -112,6 +113,7 @@ public export data TcReport = TcReport {
   trDiagnostics : List ModDiags,
   trResidual : List (String, TcDiag),
   trChecked : Option CheckedProgram,
+  trEvidenceFaults : List EvidenceFault,
 }
 
 -- ── deep zonk, freeze by copy ──────────────────────────────────────────────
@@ -292,31 +294,38 @@ freezeNewest n rows
 -- ── the report of one graph drive ──────────────────────────────────────────
 
 -- The report over a drive's frozen outputs.  `trChecked` is withheld on any
--- error, any link left after freezing, and any effect summary still unsolved;
--- the weak variables it allows are listed in `cpWeak`.
+-- error, any link left after freezing, any effect summary still unsolved, and
+-- any evidence fault; the weak variables it allows are listed in `cpWeak`.  The
+-- evidence table is built only for a drive with none of the first three: an
+-- ill-typed drive has no checked program to carry it.  `trEvidenceFaults` is
+-- what the table failed against the trees, empty when it was not built.
 export
 graphReport : List ModDiags ->
   List (String, PubScheme) ->
   List (String, TcDiag) ->
-  EvTable ->
+  (Unit -> EvTable) ->
   DispositionTable ->
   Option (List Decl, List (String, List Decl)) ->
   TcReport
 graphReport perMod core residual evidence dispositions trees =
   let schemes = map (m => (fst m, modSchemes (snd m))) perMod
   let cells = graphCells (core :: map snd schemes)
-  let checked =
+  let judged =
     if isEmpty residual && noModErrors perMod && all isWeak cells then
-      Some CheckedProgram {
-        cpSchemes = schemes,
-        cpCore = core,
-        cpEvidence = evidence,
-        cpDispositions = dispositions,
-        cpTrees = trees,
-        cpWeak = cells,
-      }
+      let table = evidence ()
+      Some (table, evidenceFaults trees table)
     else
       None
+  let checked = match judged
+    Some (table, []) => Some CheckedProgram {
+      cpSchemes = schemes,
+      cpCore = core,
+      cpEvidence = table,
+      cpDispositions = dispositions,
+      cpTrees = trees,
+      cpWeak = cells,
+    }
+    _ => None
   TcReport {
     trPartial = PartialAnalysis {
       paSchemes = schemes,
@@ -327,6 +336,9 @@ graphReport perMod core residual evidence dispositions trees =
     trDiagnostics = perMod,
     trResidual = residual,
     trChecked = checked,
+    trEvidenceFaults = match judged
+      Some (_, faults) => faults
+      None => [],
   }
 
 -- Every live cell of every row, read at graph end.

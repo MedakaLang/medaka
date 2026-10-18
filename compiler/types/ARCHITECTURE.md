@@ -13,6 +13,7 @@ One module, `typecheck.mdk`, still holds the inference core; the rest are the mo
 |---|---|---|
 | `typecheck.mdk` | Hindley-Milner inference, constraint solving, dict-passing elaboration, coherence, the effect-row checker's wiring; described in `TYPECHECK-ARCHITECTURE.md` | `elaborateOne`, `grantWholeDomain` |
 | `publish.mdk` | The published shapes (`TcReport`, `CheckedProgram`, `PubScheme`, `TcDiag`, `ModDiags`), the deep zonk and freeze-by-copy over them, and the live-cell validator; imports no typechecker state | `freezePub`, `liveCells` |
+| `evidence_coverage.mdk` | The evidence coverage validator: every minted site in a program's trees answered once, in the shape its reader accepts, and no ordinal published twice; a pure walk over `Decl`s and an `EvTable` | `evidenceFaults`, `EvidenceFault` |
 | `repr.mdk` | The type representation (`Mono`, union-find `Tyvar`, `Scheme`) and every renderer over it; reads no typechecker state cell | `normalize`, `ppMono` |
 | `registry.mdk` | Identity and registry substrate the per-table re-keying units build on | `identKey`, `tabKeys` |
 | `evidence.mdk` | Request-owned nominal identities for goals, scopes, binders, instances, destinations | `EvidenceBinderId`, `ScopeId` |
