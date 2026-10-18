@@ -1,5 +1,4 @@
-"""Asking the judges: Jev through typesafe_sdk, Haiku and Opus through headless
-Claude Code. Every answer is cached by a hash of model + prompt + item content,
+"""Asking the judges: Haiku and Opus through headless Claude Code. Every answer is cached by a hash of model + prompt + item content,
 so a rerun costs nothing and an edit re-asks only what it changed.
 
 Each cache entry records what obtaining it cost, so the report's cost figures
@@ -7,12 +6,10 @@ include answers served from the cache.
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import os
 import re
-import site
 import subprocess
 import sys
 import time
@@ -21,14 +18,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 CACHE = HERE / ".cache"
-ROOT = HERE.parents[1]
-sys.path.insert(0, str(ROOT / "scripts" / "jev"))
-import jev_census as jc  # noqa: E402
 
-JEV_MODEL = jc.DEFAULT_MODEL
-JEV_USD_PER_MTOK_IN = 0.042  # docs.typesafe.ai/models.md; output tokens are free
 CLAUDE_MODELS = {"haiku": "claude-haiku-5-5", "opus": "claude-opus-5-5"}
-CHARS_PER_TOKEN = 4.0  # only for an estimate when the API reports no token count
+CHARS_PER_TOKEN = 4.0  # for token estimates from characters
 
 
 def chash(obj) -> str:
@@ -57,82 +49,6 @@ def _cache_put(kind: str, key: str, val: dict) -> None:
     tmp = d / f"{key}.tmp{os.getpid()}"
     tmp.write_text(json.dumps(val))
     tmp.replace(d / f"{key}.json")
-
-
-# ---------------------------------------------------------------------------
-# Jev
-# ---------------------------------------------------------------------------
-def _load_sdk():
-    try:
-        import typesafe_sdk  # noqa: F401
-    except ImportError:
-        # `python3 -I` drops the user site, where `pip install --user` puts the SDK.
-        sys.path.append(site.getusersitepackages())
-    return jc.load_sdk()
-
-
-def jev_cost(usage: dict, state: dict, questions: dict) -> tuple[float, bool]:
-    tin = usage.get("input")
-    if tin is None:
-        tin = len(json.dumps(state)) / CHARS_PER_TOKEN + len(json.dumps(questions)) / CHARS_PER_TOKEN
-        return tin * JEV_USD_PER_MTOK_IN / 1e6, True
-    return tin * JEV_USD_PER_MTOK_IN / 1e6, False
-
-
-def jev_request_key(model: str, state: dict, questions: dict) -> str:
-    # Both orders are in `questions`; sort_keys would merge them, so hash the order too.
-    return chash({"model": model, "state": state,
-                  "questions": {k: [q["instructions"], list(q["criteria"].items())]
-                                for k, q in questions.items()}})
-
-
-async def _jev_all(reqs: list[tuple[str, dict, dict]], model: str, jobs: int) -> dict[str, dict]:
-    sdk = _load_sdk()
-    out: dict[str, dict] = {}
-    todo = []
-    for key, state, qs in reqs:
-        hit = _cache_get("jev", key)
-        if hit is not None:
-            out[key] = hit
-        else:
-            todo.append((key, state, qs))
-    print(f"jev: {len(reqs)} requests, {len(out)} cached, {len(todo)} to ask", file=sys.stderr)
-    if not todo:
-        return out
-    retry = sdk.RetryPolicy(max_retries=4, http_statuses={429, 500, 502, 503, 504})
-    sem = asyncio.Semaphore(jobs)
-    t0 = time.perf_counter()
-    async with sdk.AsyncTypeSafeClient(api_key=jc.api_key(), retry=retry, timeout=120.0) as client:
-        async def one(key, state, qs):
-            built = {qid: sdk.Choice(instructions=q["instructions"], criteria=q["criteria"])
-                     for qid, q in qs.items()}
-            try:
-                async with sem:
-                    resp = await client.system_one(state=state, questions=built, model=model)
-            except Exception as e:  # noqa: BLE001 -- one failed item must not sink the run
-                out[key] = {"error": f"{type(e).__name__}: {e}"}
-                return
-            usage = {"input": resp.usage.input_tokens, "output": resp.usage.output_tokens}
-            cost, est = jev_cost(usage, state, qs)
-            res = {"answers": {qid: jc.answer_to_json(a) for qid, a in resp.answers.items()},
-                   "model": resp.model, "usage": usage, "cost_usd": cost, "cost_estimated": est}
-            _cache_put("jev", key, res)
-            out[key] = res
-        await asyncio.gather(*(one(*r) for r in todo))
-    print(f"jev: asked {len(todo)} in {time.perf_counter() - t0:.1f}s", file=sys.stderr)
-    return out
-
-
-def ask_jev(reqs: list[tuple[str, dict, dict]], model: str = JEV_MODEL, jobs: int = 4) -> dict[str, dict]:
-    """reqs: (cache key, state, questions). Returns {key: cached result or {'error'}}."""
-    return asyncio.run(_jev_all(reqs, model, jobs))
-
-
-def jev_p_flag(res: dict) -> float | None:
-    """Mean P(flag) over the two option orders."""
-    ps = [a["probabilities"]["flag"] for a in res.get("answers", {}).values()
-          if a.get("type") == "choice" and "flag" in a.get("probabilities", {})]
-    return sum(ps) / len(ps) if ps else None
 
 
 # ---------------------------------------------------------------------------

@@ -1,10 +1,9 @@
-"""The rubric classes, their Jev questions, and their Haiku prompts.
+"""The rubric classes and their Haiku prompts.
 
 The rule text is parsed from docs/design/STYLE-RUBRIC.md at run time, so a
 prompt is always the class's current rubric row. What lives here is only what
-the rubric cannot say: one narrow subject phrase per class (the thing the yes/no
-question asks about), which Medaka notes the judge needs, and whether the class
-needs reasoning across two snippets (those skip Jev dismissal in the cascade).
+the rubric cannot say: one narrow subject phrase per class, which Medaka notes
+the judge needs, and whether the class needs reasoning across two snippets.
 
 Every class in the rubric must have an entry in SUBJECTS; `bench.py questions
 --check` fails otherwise.
@@ -18,12 +17,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 RUBRIC_MD = ROOT / "docs" / "design" / "STYLE-RUBRIC.md"
 
-sys.path.insert(0, str(ROOT / "scripts" / "jev"))
-import jev_census as jc  # noqa: E402  (COMMENT_POLICY)
-
 # ---------------------------------------------------------------------------
-# Medaka facts the judges need. Rule 3 of the jev-judgments skill: language
-# facts go in the state; without them every Jev score inflated by a level.
+# Medaka facts the judges need.
 # ---------------------------------------------------------------------------
 CORE_NOTES = (
     "Medaka is a strict, pure-by-default functional language with Haskell-like "
@@ -60,8 +55,6 @@ STDLIB_DOC_NOTES = (
     "implementation narration."
 )
 
-# jc.DO_LANGUAGE_NOTES (the shipped census's state) exempts mixed and differing-arm
-# chains and suggests prefixing error strings; the rubric (R7, R8, R9) exempts neither.
 MONAD_NOTES = (
     "`Option a = Some a | None` and `Result e a = Ok a | Err e` are monads: "
     "`andThen : m a -> (a -> m b) -> m b` and `pure`. `do` is sugar over "
@@ -86,9 +79,20 @@ MONAD_NOTES = (
     "argument. Effectful steps are fine inside `do`."
 )
 
+COMMENT_POLICY = (
+    "A source comment should state a constraint or fact that the code itself "
+    "cannot show. History (what the code used to be, when or why it changed, "
+    "which issue or pull request decided it) and litigation of a decision "
+    "belong on the issue tracker or in a design document, not in the source, "
+    "because they stop being true or useful once the change lands. Prose that "
+    "argues against a wrong reading, or defends a choice, is NOT in that class: "
+    "it is stating a constraint the code cannot show, which is what a comment is "
+    "for."
+)
+
 NOTES = {
     "core": CORE_NOTES,
-    "comments": jc.COMMENT_POLICY + " The keep/cut test is per sentence, not per "
+    "comments": COMMENT_POLICY + " The keep/cut test is per sentence, not per "
                 "comment, and never a length rule.",
     "monads": MONAD_NOTES,
     "tests": TEST_NOTES,
@@ -96,8 +100,8 @@ NOTES = {
 }
 
 # ---------------------------------------------------------------------------
-# Per class: the subject of the yes/no question, extra notes, cross-snippet.
-# The subject names the thing; the rubric row (in the state) carries the rule
+# Per class: a subject phrase, extra notes, cross-snippet.
+# The subject names the thing; the rubric row carries the rule
 # and its exceptions. Write subjects from the rule, never from fixture items.
 # ---------------------------------------------------------------------------
 C = "comments"
@@ -214,37 +218,6 @@ def notes_for(cls: str) -> str:
 
 def cross_snippet(cls: str) -> bool:
     return SUBJECTS[cls][2]
-
-
-# ---------------------------------------------------------------------------
-# Jev: one Choice per class, asked in both option orders in one request.
-# ---------------------------------------------------------------------------
-def jev_question(r: dict) -> dict:
-    """The question dict (hashable, SDK-free). `criteria` is in flag-first order."""
-    subject = SUBJECTS[r["class"]][0]
-    exc = r["exceptions"] if r["exceptions"] and r["exceptions"].lower() != "none" else ""
-    return {
-        "type": "choice",
-        "instructions": (
-            f"Applying the house rule in `rule`, does `excerpt` contain {subject}, "
-            "so that a reviewer of a diff adding this code should flag it? "
-            "`evidence` holds related code from elsewhere in the repository, for "
-            "context only. `language_notes` explains Medaka. Judge only this one "
-            "rule."
-        ),
-        "criteria": {
-            "flag": f"The excerpt contains an instance: {r['positive']}",
-            "leave": ("The excerpt contains no instance of this rule"
-                      + (f", or only what the rule exempts: {exc}" if exc else ".")),
-        },
-    }
-
-
-def jev_both_orders(q: dict) -> dict:
-    """{'fwd': q, 'rev': q with option order reversed}: averaged to cancel position bias."""
-    rev = dict(q)
-    rev["criteria"] = dict(reversed(list(q["criteria"].items())))
-    return {"fwd": q, "rev": rev}
 
 
 # ---------------------------------------------------------------------------
