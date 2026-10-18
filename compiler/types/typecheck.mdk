@@ -53018,14 +53018,6 @@ data CoreCheckMemo = CoreCheckMemo {
 coreCheckMemoRef : Ref (Option CoreCheckMemo)
 coreCheckMemoRef = Ref None
 
--- The prelude's schemes from the core pass the last keyed diagnostics drive ran,
--- for a caller that read them off a graph drive that returns only per-module rows.
-export
-lastCoreSchemes : Unit -> List (String, Scheme)
-lastCoreSchemes _ = match !coreCheckMemoRef
-  Some m => pubSchemes m.ccmCorePub
-  None => []
-
 coreCheckMemoHit : Option (Int, Int) -> Option CoreCheckMemo
 coreCheckMemoHit None = None
 coreCheckMemoHit (Some key) = match !coreCheckMemoRef

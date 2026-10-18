@@ -1901,7 +1901,6 @@ labelKeyName : String -> String
 labelsMissing : List Atom -> List Atom -> List Atom
 lamUnderLoc : Expr -> Option (Option Loc, List Pat, Expr)
 lastComponent : List String -> String
-lastCoreSchemes : Unit -> List (String, Scheme)
 lastInvocationOps : Unit -> InvocationOps
 launderEscapeFromLog : List EffRow -> List EffRow -> List AbsorptionEvent -> List Atom
 launderOpenActualArrow : EffRow -> List AbsorptionEvent -> List Atom

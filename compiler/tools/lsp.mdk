@@ -39,8 +39,8 @@ import driver.diagnostics.{
   Diag,
   Severity(..),
   mkDiag,
-  analyzeFrom,
-  analyzeProject,
+  analyzeFromReport,
+  analyzeProjectReport,
   projectEntryAnalysis,
   stdlibExportsReader,
 }
@@ -1611,25 +1611,25 @@ publishDiagnosticsList uri diags =
   writeMessage (notificationMsg "textDocument/publishDiagnostics" params)
 
 -- Single-document diagnostics over the buffer's located decls (the
--- `analyzeLocated` pipeline minus its re-parse).
+-- `analyzeLocated` pipeline minus its re-parse).  Returns the typecheck drive's
+-- report, `None` when resolve rejected the buffer and nothing was driven.
 publishDiagnosticsFrom : String ->
   String ->
   String ->
   String ->
   List Decl ->
-  <IO> Unit
+  <IO> Option TcReport
 publishDiagnosticsFrom runtimeSrc coreSrc uri src decls =
-  publishDiagnosticsList
-    uri
-    (map
-      (diagToJson src)
-      (analyzeFrom
-        (stdlibExportsReader (lspMedakaRoot "." ++ "/stdlib"))
-        ""
-        runtimeSrc
-        coreSrc
-        decls
-        []))
+  let (diags, report) =
+    analyzeFromReport
+      (stdlibExportsReader (lspMedakaRoot "." ++ "/stdlib"))
+      ""
+      runtimeSrc
+      coreSrc
+      decls
+      []
+  let _ = publishDiagnosticsList uri (map (diagToJson src) diags)
+  report
 
 -- ── B.10.5: project-wide (multi-file) diagnostics ───────────────────────────
 --
@@ -1728,7 +1728,11 @@ headOr _ (x :: _) = x
 -- directory first (user modules shadow stdlib), then MEDAKA_ROOT/stdlib so an
 -- `import json` / other stdlib module resolves (without this, a buffer importing
 -- a stdlib module reports a spurious `UnknownModule`).
-publishProjectDiagnostics : String -> String -> String -> Docs -> <IO> Unit
+publishProjectDiagnostics : String ->
+  String ->
+  String ->
+  Docs ->
+  <IO> Option TcReport
 publishProjectDiagnostics runtimeSrc coreSrc uri docs =
   let rootFile = pathOfUri uri
   let projectDir = findProjectRootOrSelf (dirOfPath rootFile)
@@ -1738,8 +1742,8 @@ publishProjectDiagnostics runtimeSrc coreSrc uri docs =
   -- (no internal-extern restriction, no `--allow-internal` concept in the
   -- LSP); kept unguarded here too (`allowInternal = True`, `trustedMods = []`)
   -- so a live-edit session never flags what a build-time `check` wouldn't.
-  let results =
-    analyzeProject
+  let (report, results) =
+    analyzeProjectReport
       (stdlibExportsReader stdlibDir)
       True
       []
@@ -1750,7 +1754,8 @@ publishProjectDiagnostics runtimeSrc coreSrc uri docs =
       [projectDir, stdlibDir]
       runtimeSrc
       coreSrc
-  publishEach results
+  let _ = publishEach results
+  report
 -- Module root = nearest ancestor with medaka.toml (NOT the file's own dir), so
 -- a nested module's imports (rooted at the project dir) resolve.  Falls back to
 -- the file's dir when there's no medaka.toml.
@@ -1821,10 +1826,17 @@ docsFlag path (Docs xs flagged) =
 docsUnflag : String -> Docs -> Docs
 docsUnflag path (Docs xs flagged) = Docs xs (filter (/= path) flagged)
 
-publishForSelected : String -> String -> String -> String -> Docs -> <IO> Unit
+publishForSelected : String ->
+  String ->
+  String ->
+  String ->
+  Docs ->
+  <IO> Option TcReport
 publishForSelected runtimeSrc coreSrc uri text docs =
   match parseCachedLocated projectParseCache text
-    Err e => publishDiagnosticsList uri (parseErrorDiags e)
+    Err e =>
+      let _ = publishDiagnosticsList uri (parseErrorDiags e)
+      None
     Ok decls =>
       if anyImport decls then
         publishProjectDiagnostics runtimeSrc coreSrc uri docs

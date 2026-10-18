@@ -15,12 +15,12 @@ compiler/entries/profile_main.mdk : checkOneToLinesWithRuntime
 compiler/entries/selfproc_tc_probe.mdk : checkOneToLines
 compiler/entries/typecheck_main.mdk : checkOneToLines,checkOneToLinesWithRuntime
 compiler/tools/check.mdk : checkOneErrorsWithRuntime,checkOneToLinesWithRuntimeK
-compiler/tools/lsp.mdk : checkOneSchemeFullK
+compiler/tools/lsp.mdk : checkOneReportK
 compiler/tools/repl.mdk : checkOneScheme
 compiler/tools/snapshot.mdk : checkOneToLinesWithRuntime
 compiler/types/effect_bindings_test.mdk : checkOneDiags,checkOneSchemeFullK
 compiler/types/effect_authority_test.mdk : checkOneDiags,checkOneSchemeFullK
 compiler/types/law_harness_test.mdk : checkOneDiags
 compiler/types/prop_contract_test.mdk : checkOneDiags
-compiler/types/publish_test.mdk : checkOneSchemeFullK
+compiler/types/publish_test.mdk : checkOneReportK,checkOneSchemeFullK
 compiler/types/typecheck_test.mdk : checkOneDiags,checkOneSchemeFullK
