@@ -25,18 +25,13 @@
 --   * No source-location info on errors (compiler AST is location-stripped).
 --   * No :load / :reload commands.
 
-import frontend.ast.{Decl(..), DataVis(..)}
+import frontend.ast.{Decl(..), DataVis(..), IfaceMethod(..)}
 import frontend.lexer.{Token(..), tokenize}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveProgram, ppResError}
 import types.repr.{ppScheme, Scheme(..)}
-import types.typecheck.{
-  checkOneScheme,
-  elaborateModulesWithSchemes,
-  pubSchemes,
-  tcMsg,
-}
+import types.typecheck.{elaborateModulesWithSchemes, pubSchemes, tcMsg}
 import types.private_mangle.{mangleCtorCollisionsPair}
 import eval.eval.{
   Value(..),
@@ -70,13 +65,27 @@ preludeNamesRef : Ref (List String)
 preludeNamesRef = Ref []
 
 -- ── Initialise session ────────────────────────────────────────────────────
+-- The names a whole-graph check of the prelude would list: top-level binders
+-- plus interface method names (the check lists methods as schemes too).
+export
+preludeBinderNames : List Decl -> List String
+preludeBinderNames decls = funNamesOf decls ++ flatMap ifaceMethodNames decls
+
+ifaceMethodNames : Decl -> List String
+ifaceMethodNames (DAttrib _ d) = ifaceMethodNames d
+ifaceMethodNames (DInterface { methods, ... }) =
+  map
+    (m => match m
+      IfaceMethod n _ _ _ => n)
+    methods
+ifaceMethodNames _ = []
+
 export
 initSession : List Decl -> List Decl -> Unit
 initSession runtimeDecls preludeDecls =
   runtimeDeclsRef := runtimeDecls
   preludeDeclsRef := preludeDecls
-  let prelSchemes = checkOneScheme runtimeDecls [] ("__user__", preludeDecls)
-  let prelNames = map fst prelSchemes
+  let prelNames = preludeBinderNames preludeDecls
   preludeNamesRef := prelNames
   knownNamesRef := prelNames
   accumulatedRef := []

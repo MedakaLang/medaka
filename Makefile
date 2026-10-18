@@ -294,6 +294,9 @@ inlang-tools-check-policy-test:
 inlang-tools-doctest-test:
 	./medaka test compiler/tools/doctest_test.mdk
 
+inlang-tools-repl-test:
+	./medaka test compiler/tools/repl_test.mdk
+
 inlang-tools-native-probe-printer-test:
 	./medaka test compiler/tools/native_probe_printer_test.mdk
 

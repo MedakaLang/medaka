@@ -1,5 +1,5 @@
 # META
-source_lines=455
+source_lines=464
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka REPL (Stage 4, Phase B.9)
@@ -29,18 +29,13 @@ stages=DESUGAR,MARK
 --   * No source-location info on errors (compiler AST is location-stripped).
 --   * No :load / :reload commands.
 
-import frontend.ast.{Decl(..), DataVis(..)}
+import frontend.ast.{Decl(..), DataVis(..), IfaceMethod(..)}
 import frontend.lexer.{Token(..), tokenize}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveProgram, ppResError}
 import types.repr.{ppScheme, Scheme(..)}
-import types.typecheck.{
-  checkOneScheme,
-  elaborateModulesWithSchemes,
-  pubSchemes,
-  tcMsg,
-}
+import types.typecheck.{elaborateModulesWithSchemes, pubSchemes, tcMsg}
 import types.private_mangle.{mangleCtorCollisionsPair}
 import eval.eval.{
   Value(..),
@@ -74,13 +69,27 @@ preludeNamesRef : Ref (List String)
 preludeNamesRef = Ref []
 
 -- ── Initialise session ────────────────────────────────────────────────────
+-- The names a whole-graph check of the prelude would list: top-level binders
+-- plus interface method names (the check lists methods as schemes too).
+export
+preludeBinderNames : List Decl -> List String
+preludeBinderNames decls = funNamesOf decls ++ flatMap ifaceMethodNames decls
+
+ifaceMethodNames : Decl -> List String
+ifaceMethodNames (DAttrib _ d) = ifaceMethodNames d
+ifaceMethodNames (DInterface { methods, ... }) =
+  map
+    (m => match m
+      IfaceMethod n _ _ _ => n)
+    methods
+ifaceMethodNames _ = []
+
 export
 initSession : List Decl -> List Decl -> Unit
 initSession runtimeDecls preludeDecls =
   runtimeDeclsRef := runtimeDecls
   preludeDeclsRef := preludeDecls
-  let prelSchemes = checkOneScheme runtimeDecls [] ("__user__", preludeDecls)
-  let prelNames = map fst prelSchemes
+  let prelNames = preludeBinderNames preludeDecls
   preludeNamesRef := prelNames
   knownNamesRef := prelNames
   accumulatedRef := []
@@ -458,13 +467,13 @@ stringSplitOn sep s start cur len
     stringSlice start cur s :: stringSplitOn sep s (cur + 1) (cur + 1) len
   | otherwise = stringSplitOn sep s start (cur + 1) len
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "DataVis" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "DataVis" true) (mem "IfaceMethod" true))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "resolveProgram" false) (mem "ppResError" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "ppScheme" false) (mem "Scheme" true))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneScheme" false) (mem "elaborateModulesWithSchemes" false) (mem "pubSchemes" false) (mem "tcMsg" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModulesWithSchemes" false) (mem "pubSchemes" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalOneRootEnvWith" false) (mem "testCapableExterns" false) (mem "funNamesOf" false) (mem "dropShadowedExp" false) (mem "ppValue" false) (mem "lookupBinding" false) (mem "force" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "startsWith" false) (mem "stringTrim" false))))
@@ -480,8 +489,14 @@ stringSplitOn sep s start cur len
 (DFunDef false "preludeDeclsRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "preludeNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "preludeNamesRef" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig true "preludeBinderNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "preludeBinderNames" ((PVar "decls")) (EBinOp "++" (EApp (EVar "funNamesOf") (EVar "decls")) (EApp (EApp (EVar "flatMap") (EVar "ifaceMethodNames")) (EVar "decls"))))
+(DTypeSig false "ifaceMethodNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "ifaceMethodNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "ifaceMethodNames") (EVar "d")))
+(DFunDef false "ifaceMethodNames" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EMatch (EVar "m") (arm (PCon "IfaceMethod" (PVar "n") PWild PWild PWild) () (EVar "n"))))) (EVar "methods")))
+(DFunDef false "ifaceMethodNames" (PWild) (EListLit))
 (DTypeSig true "initSession" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
-(DFunDef false "initSession" ((PVar "runtimeDecls") (PVar "preludeDecls")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "runtimeDeclsRef")) (EVar "runtimeDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeDeclsRef")) (EVar "preludeDecls"))) (DoLet false false (PVar "prelSchemes") (EApp (EApp (EApp (EVar "checkOneScheme") (EVar "runtimeDecls")) (EListLit)) (ETuple (ELit (LString "__user__")) (EVar "preludeDecls")))) (DoLet false false (PVar "prelNames") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "prelSchemes"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeNamesRef")) (EVar "prelNames"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "knownNamesRef")) (EVar "prelNames"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "accumulatedRef")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "userBindingsRef")) (EListLit)))))
+(DFunDef false "initSession" ((PVar "runtimeDecls") (PVar "preludeDecls")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "runtimeDeclsRef")) (EVar "runtimeDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeDeclsRef")) (EVar "preludeDecls"))) (DoLet false false (PVar "prelNames") (EApp (EVar "preludeBinderNames") (EVar "preludeDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeNamesRef")) (EVar "prelNames"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "knownNamesRef")) (EVar "prelNames"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "accumulatedRef")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "userBindingsRef")) (EListLit)))))
 (DTypeSig false "isDeclStartToken" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isDeclStartToken" ((PCon "TData")) (EVar "True"))
 (DFunDef false "isDeclStartToken" ((PCon "TInterface")) (EVar "True"))
@@ -599,13 +614,13 @@ stringSplitOn sep s start cur len
 (DTypeSig false "stringSplitOn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "stringSplitOn" ((PVar "sep") (PVar "s") (PVar "start") (PVar "cur") (PVar "len")) (EIf (EBinOp ">=" (EVar "cur") (EVar "len")) (EListLit (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "len")) (EVar "s"))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "cur")) (EBinOp "+" (EVar "cur") (ELit (LInt 1)))) (EVar "s")) (EVar "sep")) (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "cur")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EVar "stringSplitOn") (EVar "sep")) (EVar "s")) (EBinOp "+" (EVar "cur") (ELit (LInt 1)))) (EBinOp "+" (EVar "cur") (ELit (LInt 1)))) (EVar "len"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "stringSplitOn") (EVar "sep")) (EVar "s")) (EVar "start")) (EBinOp "+" (EVar "cur") (ELit (LInt 1)))) (EVar "len")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "DataVis" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "DataVis" true) (mem "IfaceMethod" true))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenize" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "resolveProgram" false) (mem "ppResError" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "ppScheme" false) (mem "Scheme" true))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneScheme" false) (mem "elaborateModulesWithSchemes" false) (mem "pubSchemes" false) (mem "tcMsg" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModulesWithSchemes" false) (mem "pubSchemes" false) (mem "tcMsg" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisionsPair" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalOneRootEnvWith" false) (mem "testCapableExterns" false) (mem "funNamesOf" false) (mem "dropShadowedExp" false) (mem "ppValue" false) (mem "lookupBinding" false) (mem "force" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "startsWith" false) (mem "stringTrim" false))))
@@ -621,8 +636,14 @@ stringSplitOn sep s start cur len
 (DFunDef false "preludeDeclsRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "preludeNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "preludeNamesRef" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig true "preludeBinderNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "preludeBinderNames" ((PVar "decls")) (EBinOp "++" (EApp (EVar "funNamesOf") (EVar "decls")) (EApp (EApp (EDictApp "flatMap") (EVar "ifaceMethodNames")) (EVar "decls"))))
+(DTypeSig false "ifaceMethodNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "ifaceMethodNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "ifaceMethodNames") (EVar "d")))
+(DFunDef false "ifaceMethodNames" ((PRec "DInterface" ((rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EMatch (EVar "m") (arm (PCon "IfaceMethod" (PVar "n") PWild PWild PWild) () (EVar "n"))))) (EVar "methods")))
+(DFunDef false "ifaceMethodNames" (PWild) (EListLit))
 (DTypeSig true "initSession" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
-(DFunDef false "initSession" ((PVar "runtimeDecls") (PVar "preludeDecls")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "runtimeDeclsRef")) (EVar "runtimeDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeDeclsRef")) (EVar "preludeDecls"))) (DoLet false false (PVar "prelSchemes") (EApp (EApp (EApp (EVar "checkOneScheme") (EVar "runtimeDecls")) (EListLit)) (ETuple (ELit (LString "__user__")) (EVar "preludeDecls")))) (DoLet false false (PVar "prelNames") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "prelSchemes"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeNamesRef")) (EVar "prelNames"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "knownNamesRef")) (EVar "prelNames"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "accumulatedRef")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "userBindingsRef")) (EListLit)))))
+(DFunDef false "initSession" ((PVar "runtimeDecls") (PVar "preludeDecls")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "runtimeDeclsRef")) (EVar "runtimeDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeDeclsRef")) (EVar "preludeDecls"))) (DoLet false false (PVar "prelNames") (EApp (EVar "preludeBinderNames") (EVar "preludeDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "preludeNamesRef")) (EVar "prelNames"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "knownNamesRef")) (EVar "prelNames"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "accumulatedRef")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "userBindingsRef")) (EListLit)))))
 (DTypeSig false "isDeclStartToken" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isDeclStartToken" ((PCon "TData")) (EVar "True"))
 (DFunDef false "isDeclStartToken" ((PCon "TInterface")) (EVar "True"))

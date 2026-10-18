@@ -1,0 +1,31 @@
+import test.{expectAll, expectEqual}
+import list.{sort}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.typecheck.{checkOneScheme}
+import tools.repl.{preludeBinderNames}
+
+sortedUnique : List String -> List String
+sortedUnique xs = dedupe (sort xs)
+
+dedupe : List String -> List String
+dedupe (a :: b :: rest)
+  | a == b = dedupe (b :: rest)
+  | otherwise = a :: dedupe (b :: rest)
+dedupe xs = xs
+
+-- The session-init name set must equal what the whole-graph check of the
+-- prelude lists, so the REPL never prints a prelude binding as new.
+test "prelude binder names equal the names a whole-graph check lists" = match (
+  readFile "stdlib/runtime.mdk",
+  readFile "stdlib/core.mdk",
+)
+  (Ok r, Ok c) =>
+    let rd = desugar (parse r)
+    let cd = desugar (parse c)
+    expectAll [
+      expectEqual
+        (sortedUnique (map fst (checkOneScheme rd [] ("__user__", cd))))
+        (sortedUnique (preludeBinderNames cd)),
+    ]
+  _ => expectEqual "readable" "unreadable"
