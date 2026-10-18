@@ -78,6 +78,12 @@ import tools.prop_runner.{PropResult, PropRequest}
 public export data NativeArmResults =
   | NativeArmResults RunResult (List PropResult) (List ExResult) (List (List ExResult))
 
+-- The native property runner a caller's property phase reaches with its final
+-- requests: the target and its source, the plan modules, the requests.  The
+-- caller passes the target and source it holds; the merged probe's own leaf
+-- ignores them because it closed over the same pair when it was made.
+export type NativePropLeaf = String -> String -> List PlanModule -> List PropRequest -> <IO> List PropResult
+
 -- One arm of the file.  A test arm numbers its tests from its first index, so
 -- the ordinary tests and each pinned test bind distinct names in one program.
 data Arm =
@@ -102,7 +108,7 @@ runMergedNativeArms : String ->
   List Decl ->
   Option (List Example, List (Result String (List Decl))) ->
   Option (List (String, Int, Expr), List (String, Int, Expr)) ->
-  ((String -> String -> List PlanModule -> List PropRequest -> <IO> List PropResult) -> <IO> List PropResult) ->
+  (NativePropLeaf -> <IO> List PropResult) ->
   <IO> NativeArmResults
 runMergedNativeArms target tsrc userDecls docArm testArm props =
   let fixed = docArms docArm ++ testArms testArm

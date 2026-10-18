@@ -127,7 +127,11 @@ import tools.doctest.{
 import tools.native_doctest.{runNativeDoctests}
 import tools.native_test_decls.{runNativeTests}
 import tools.native_props.{runNativePlannedPropRequests}
-import tools.native_probe.{NativeArmResults(..), runMergedNativeArms}
+import tools.native_probe.{
+  NativeArmResults(..),
+  NativePropLeaf,
+  runMergedNativeArms,
+}
 import tools.prop_plan.{
   PlanModule(..),
   CustomPlan(..),
@@ -1409,7 +1413,7 @@ nativePropPhase : TestPair ->
   Option String ->
   String ->
   PinIndex ->
-  (String -> String -> List PlanModule -> List PropRequest -> <IO> List PropResult) ->
+  NativePropLeaf ->
   <IO> List PropResult
 nativePropPhase pair target tsrc userDecls cases filterOpt file index leaf
   | not (hasProps userDecls) = []
@@ -2705,7 +2709,7 @@ propsReportPinned engines pair native stdlibDir target tsrc userDecls cases filt
           file
           index))
 
-propsReportEnginesInProcess : (String -> String -> List PlanModule -> List PropRequest -> <IO> List PropResult) ->
+propsReportEnginesInProcess : NativePropLeaf ->
   List Engine ->
   List Decl ->
   List Decl ->
@@ -3138,7 +3142,7 @@ runEvalPreparedRows env helpers rows tsrc coreM modsM =
     (coreM ++ flatMap snd modsM)
 
 -- The structural-only path keeps the established engine behavior unchanged.
-propsReportEnginesPlain : (String -> String -> List PlanModule -> List PropRequest -> <IO> List PropResult) ->
+propsReportEnginesPlain : NativePropLeaf ->
   List Engine ->
   List Decl ->
   List Decl ->
@@ -3380,7 +3384,7 @@ plansHaveNoRejectedCarrier env rejected plans =
 customRejected : OrdMap String -> CustomPlan -> Bool
 customRejected rejected (CustomPlan _ _ word) = omHasKey word rejected
 
-runValidatedPropEngines : (String -> String -> List PlanModule -> List PropRequest -> <IO> List PropResult) ->
+runValidatedPropEngines : NativePropLeaf ->
   List Engine ->
   HelperValidation ->
   String ->
@@ -3431,7 +3435,7 @@ runValidatedPropEngines leaf engines (HelperValidation pair helpers rejected pro
 -- If elaborating a generated bridge changes diagnostics outside its synthetic
 -- source location, only properties which need a bridge become protocol rows.
 -- Structural properties continue against the original graph.
-runProtocolHelperEngines : (String -> String -> List PlanModule -> List PropRequest -> <IO> List PropResult) ->
+runProtocolHelperEngines : NativePropLeaf ->
   List Engine ->
   TestPair ->
   String ->
@@ -3463,7 +3467,7 @@ runProtocolHelperEngines leaf engines (TestPair _runtimeM rawCoreM coreM rawM mo
     file
     index
 
-runProtocolHelperEnginesGo : (String -> String -> List PlanModule -> List PropRequest -> <IO> List PropResult) ->
+runProtocolHelperEnginesGo : NativePropLeaf ->
   List Engine ->
   String ->
   List Decl ->
@@ -3521,7 +3525,7 @@ runProtocolHelperEnginesGo leaf (engine :: rest) message rawCoreM coreM rawM mod
         EngNative => runPreparedNativeRows leaf rows target tsrc modules
       here ++ next
 
-runValidatedPropEnginesGo : (String -> String -> List PlanModule -> List PropRequest -> <IO> List PropResult) ->
+runValidatedPropEnginesGo : NativePropLeaf ->
   List Engine ->
   List PropHelper ->
   OrdMap String ->
@@ -3597,7 +3601,7 @@ runValidatedPropEnginesGo leaf (engine :: rest) helpers rejected rawCoreM coreM 
           file
           index
 
-runPreparedNativeRows : (String -> String -> List PlanModule -> List PropRequest -> <IO> List PropResult) ->
+runPreparedNativeRows : NativePropLeaf ->
   List PreparedPropRequest ->
   String ->
   String ->
