@@ -42,6 +42,7 @@ import frontend.resolve.{
   resErrorDidYouMean,
   resErrorIsPrivateName,
   resolveModuleG,
+  resolveModulesErrorsByFile,
   importedCtorDecls,
   ModuleExports,
   withStdlibExports,
@@ -65,7 +66,8 @@ import frontend.marker.{
 }
 import types.repr.{Scheme}
 import types.publish.{
-  PubScheme(..), pubSchemes, TcReport(..), PartialAnalysis(..)
+  PubScheme(..), pubSchemes, TcReport(..), PartialAnalysis(..), partialAnalysis,
+  noEntryTables
 }
 import types.effect_invocation.{InvocationOps}
 import types.typecheck.{
@@ -746,15 +748,20 @@ hintResErrorPairs exportsFor pairs =
 
 export
 ppResolveErrorsByFile : List (String, List ResError) -> <IO> String
-ppResolveErrorsByFile pairs = joinNl (ppResolveErrorLines pairs)
+ppResolveErrorsByFile pairs = ppDiagBuckets (map resolveBucket pairs)
 
-ppResolveErrorLines : List (String, List ResError) -> <IO> List String
-ppResolveErrorLines [] = []
-ppResolveErrorLines ((_, []) :: rest) = ppResolveErrorLines rest
-ppResolveErrorLines ((file, errs) :: rest) =
+-- Each file's diagnostics rendered located against that file as it is on disk,
+-- the files in bucket order; a file with none is not read.
+export
+ppDiagBuckets : List (String, List Diag) -> <IO> String
+ppDiagBuckets buckets = joinNl (ppDiagBucketLines buckets)
+
+ppDiagBucketLines : List (String, List Diag) -> <IO> List String
+ppDiagBucketLines [] = []
+ppDiagBucketLines ((_, []) :: rest) = ppDiagBucketLines rest
+ppDiagBucketLines ((file, diags) :: rest) =
   let srcLines = srcLinesArr (readFileSafe file)
-  map (e => ppDiagCliLines srcLines file (diagOfResError e)) errs
-    ++ ppResolveErrorLines rest
+  map (ppDiagCliLines srcLines file) diags ++ ppDiagBucketLines rest
 
 -- #2400 F2b: one file, two spellings, in one tool.  The loader mints a module's
 -- path by joining its search root with the module id (`loader.fileOfModuleId`),
@@ -1009,63 +1016,47 @@ driveOneFileReport valueMain preludeKey rt core (mid, decls) =
     r,
   )
 
--- `analyzeFrom` plus the entry's rendered `name : scheme` lines from the SAME
--- typecheck drive, for the one caller that prints them (`checkRoute`'s
--- single-file arm).  The lines are rendered inside that drive, before any later
--- elaboration: a scheme rendered after another drive can name its type
--- variables differently (#4053).  The drive's `CheckDrive` rides with them.
--- Every other caller uses `analyzeFrom`, which does not render them.
+-- `check`'s drive, the arm `frontEnd` runs for it.  A single file's renders the
+-- entry's `name : scheme` lines inside the drive, before any later elaboration:
+-- a scheme rendered after another drive can name its type variables differently
+-- (#4053).  A graph's report is rendered later from its `trDiagnostics`, so its
+-- `cdLines` are empty.  `target` and `roots` key the module-chain memo.
 export
-analyzeFromDump : (List String -> <e> List (String, List String)) ->
-  String ->
-  String ->
-  String ->
-  List Decl ->
-  List String ->
-  <e> (List Diag, Option CheckDump)
-analyzeFromDump exportsFor modName runtimeSrc coreSrc raw internalGuard =
-  let (diags, dumped) =
-    analyzeFromDumpReport
-      exportsFor
-      modName
-      runtimeSrc
-      coreSrc
-      raw
-      internalGuard
-  (diags, map fst dumped)
-
--- `analyzeFromDump` handing back the drive's report beside its `CheckDump`.
-export
-analyzeFromDumpReport : (List String -> <e> List (String, List String)) ->
-  String ->
-  String ->
-  String ->
-  List Decl ->
-  List String ->
-  <e> (List Diag, Option (CheckDump, TcReport))
-analyzeFromDumpReport exportsFor modName runtimeSrc coreSrc raw internalGuard =
-  analyzeFromBy
-    (preludeKey rt core up =>
-      let (drive, r) =
-        driveOneFileReport (valueMainCandidate core [up]) preludeKey rt core up
-      let (_, schemes, tcErrs, tcWarns) = entrySplit r
-      (
-        (
-          CheckDump {
-            cdLines = schemeLines schemes ++ map tcMsg tcWarns,
-            cdDrive = drive,
-          },
-          r,
-        ),
-        tcErrs,
-        tcWarns,
-      ))
-    exportsFor
-    modName
-    runtimeSrc
-    coreSrc
-    raw
-    internalGuard
+checkFrontDrive : String -> List String -> FrontDriveIn -> (CheckDump, TcReport)
+checkFrontDrive target roots d = match (d.fdMods, d.fdPairs)
+  ([], [up]) =>
+    let (drive, r) =
+      driveOneFileReport
+        (valueMainCandidate d.fdCore [up])
+        d.fdPreludeKey
+        d.fdRuntime
+        d.fdCore
+        up
+    let (_, schemes, _, tcWarns) = entrySplit r
+    (
+      CheckDump {
+        cdLines = schemeLines schemes ++ map tcMsg tcWarns,
+        cdDrive = drive,
+      },
+      r,
+    )
+  (mods, pairs) =>
+    let r =
+      checkChainReport
+        (valueMainCandidate d.fdCore pairs)
+        d.fdPreludeKey
+        (chainKeyOf target roots)
+        d.fdRuntime
+        d.fdCore
+        mods
+        pairs
+    (
+      CheckDump {
+        cdLines = [],
+        cdDrive = graphCheckDrive r pairs (map modIdToPath mods),
+      },
+      r,
+    )
 
 -- `analyzeFrom` handing back the drive's `CheckDrive` (`None` when resolve
 -- rejected the program and nothing was driven).
@@ -1216,6 +1207,149 @@ perModuleErrs (_, (errs, _)) = errs
 
 perModuleWarns : (String, (List TcDiag, List TcDiag)) -> List TcDiag
 perModuleWarns (_, (_, warns)) = warns
+
+-- ── the front end ──────────────────────────────────────────────────────────
+--
+-- `frontEnd` runs a loaded program's raw-tree passes (derives, guard
+-- exhaustiveness, the two prelude-shadow checks, resolve under the
+-- internal-extern guard) and its one typecheck drive, which the verb supplies:
+-- `check` passes `checkFrontDrive`, `run` its elaboration of the trees it will
+-- execute.  A program resolve rejects is not driven.
+
+-- The program as the loader returned it, `(modId, path, decls)` per module.  A
+-- single module is analysed from its raw, real-span decls and driven as
+-- `__user__`; a graph comes with its desugared pairs, in the same dependency
+-- order, the entry last.
+public export data FrontProgram =
+  | FrontFile (String, String, List Decl)
+  | FrontGraph (List (String, String, List Decl)) (List (String, List Decl))
+
+-- `fiAllowInternal`/`fiTrusted` lift the internal-extern guard: off for every
+-- module under `--allow-internal`, else off for the modules named.
+public export data FrontInput = FrontInput {
+  fiAllowInternal : Bool,
+  fiTrusted : List String,
+  fiRuntimeSrc : String,
+  fiCoreSrc : String,
+  fiProgram : FrontProgram,
+}
+
+-- What the verb's drive is handed: the preludes resolve read, their memo key,
+-- and the desugared program.  `fdMods` is `[]` for a single file, whose one
+-- pair is named `__user__` and has no file.
+public export data FrontDriveIn = FrontDriveIn {
+  fdPreludeKey : Option (Int, Int),
+  fdRuntime : List Decl,
+  fdCore : List Decl,
+  fdPairs : List (String, List Decl),
+  fdMods : List (String, String, List Decl),
+}
+
+-- `foDiags` holds one bucket per loaded file, keyed by the loader's path, each
+-- in rendered order: a single file's surface half then its typecheck half, a
+-- graph's as `typecheckDiagsFold` buckets it, a rejected graph's resolve errors
+-- alone.  `foDriven` is what the drive kept beside its report, `None` exactly
+-- when resolve rejected the program.  `foReport.trChecked` is `None` whenever
+-- any diagnostic in `foDiags` is an error, including the ones the raw-tree
+-- passes add outside the drive (`R-CANNOT-DERIVE`).
+public export data FrontOutput a = FrontOutput {
+  foDiags : List (String, List Diag),
+  foReport : TcReport,
+  foDriven : Option a,
+}
+
+export
+frontEnd : (List String -> <e> List (String, List String)) ->
+  (FrontDriveIn -> <e> (a, TcReport)) ->
+  FrontInput ->
+  <e> FrontOutput a
+frontEnd exportsFor drive fi = match fi.fiProgram
+  FrontFile (mid, path, raw) =>
+    let s =
+      analyzeSurface
+        exportsFor
+        mid
+        fi.fiRuntimeSrc
+        fi.fiCoreSrc
+        raw
+        (internalGuardFor (fi.fiAllowInternal || contains mid fi.fiTrusted))
+    match s.resolveClean
+      False => undrivenOutput [(path, s.surfaceDiags)]
+      True =>
+        let (kept, r) = drive FrontDriveIn {
+          fdPreludeKey = s.surfacePreludeKey,
+          fdRuntime = s.surfaceRuntimeP,
+          fdCore = s.surfaceCoreP,
+          fdPairs = [("__user__", s.surfaceDesugared)],
+          fdMods = [],
+        }
+        let tcHalf = tcHalfOfPerModule (map dropModSchemes r.trDiagnostics)
+        drivenOutput [(path, analyzeFinish s tcHalf)] r kept
+  FrontGraph mods pairs =>
+    let rt = desugaredPrelude fi.fiRuntimeSrc
+    let core = desugaredPrelude fi.fiCoreSrc
+    let preludeKey = Some (
+      desugaredPreludeKey fi.fiRuntimeSrc,
+      desugaredPreludeKey fi.fiCoreSrc,
+    )
+    let resolved =
+      hintResErrorPairs
+        exportsFor
+        (resolveModulesErrorsByFile
+          (map modIdToPath mods)
+          fi.fiAllowInternal
+          fi.fiTrusted
+          preludeKey
+          rt
+          core
+          pairs)
+    match anyList (p => not (isEmpty (snd p))) resolved
+      True => undrivenOutput (map resolveBucket resolved)
+      False =>
+        let (kept, r) = drive FrontDriveIn {
+          fdPreludeKey = preludeKey,
+          fdRuntime = rt,
+          fdCore = core,
+          fdPairs = pairs,
+          fdMods = mods,
+        }
+        let buckets =
+          typecheckDiagsFold
+            rt
+            core
+            mods
+            pairs
+            (map dropModSchemes r.trDiagnostics)
+            (seedAll (map midPath mods) [])
+        drivenOutput buckets r kept
+
+resolveBucket : (String, List ResError) -> (String, List Diag)
+resolveBucket (file, errs) = (file, map diagOfResError errs)
+
+undrivenOutput : List (String, List Diag) -> FrontOutput a
+undrivenOutput buckets = FrontOutput {
+  foDiags = buckets,
+  foReport = undrivenReport,
+  foDriven = None,
+}
+
+drivenOutput : List (String, List Diag) -> TcReport -> a -> FrontOutput a
+drivenOutput buckets r kept = FrontOutput {
+  foDiags = buckets,
+  foReport = if anyList cjHasErrD buckets then { r | trChecked = None } else r,
+  foDriven = Some kept,
+}
+
+-- The report of a program no drive checked.
+undrivenReport : TcReport
+undrivenReport = TcReport {
+  trPartial = partialAnalysis [] [] noEntryTables,
+  trDiagnostics = [],
+  trResidual = [],
+  trChecked = None,
+  trEvidenceFaults = [],
+  trAutoPrint = None,
+}
 
 -- resolve over runtime + core (prelude) + target
 
@@ -1823,48 +1957,6 @@ export
 bucketsResolveRejected : List (String, List Diag) -> Bool
 bucketsResolveRejected buckets = anyList (b => resolveRejected (snd b)) buckets
 
--- `analyzeLoadedFull` for a caller that has ALREADY resolved this exact graph
--- clean (`check`'s front pass, same guard and same desugared trees): resolve is
--- not run again, its buckets are the empty per-file buckets.  `ResError` has no
--- warning variant, so a clean resolve contributes no diagnostic to any bucket.
-export
-analyzeLoadedResolvedClean : String ->
-  List String ->
-  String ->
-  String ->
-  List (String, String, List Decl) ->
-  List (String, List Decl) ->
-  (List ModDiags, List (String, List Diag))
-analyzeLoadedResolvedClean entry roots runtimeSrc coreSrc mods modPairs =
-  let (r, results) =
-    analyzeLoadedResolvedCleanReport
-      entry
-      roots
-      runtimeSrc
-      coreSrc
-      mods
-      modPairs
-  (r.trDiagnostics, results)
-
--- `analyzeLoadedResolvedClean` returning the typecheck drive's whole report.
-export
-analyzeLoadedResolvedCleanReport : String ->
-  List String ->
-  String ->
-  String ->
-  List (String, String, List Decl) ->
-  List (String, List Decl) ->
-  (TcReport, List (String, List Diag))
-analyzeLoadedResolvedCleanReport entry roots runtimeSrc coreSrc mods modPairs =
-  typecheckPassReport
-    (preludeDesugared runtimeSrc)
-    (preludeDesugared coreSrc)
-    (Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc))
-    (chainKeyOf entry roots)
-    mods
-    modPairs
-    (seedAll (map midPath mods) [])
-
 -- `analyzeProject` minus the load: resolve, then typecheck, then bucket — over a
 -- graph the caller has already loaded.  `medaka test` loads once and calls this,
 -- rather than handing `analyzeProject` an entry it would load a second time.
@@ -2218,21 +2310,19 @@ typecheckPassReport runtimeP coreP preludeKey chainKey mods modPairs buckets =
   let checkedMods = filterList ((mid, _, _) => not (omHasKey mid blocked)) mods
   let checkedPairs =
     filterList ((mid, _) => not (omHasKey mid blocked)) modPairs
-  -- the module-chain memo (types/typecheck.mdk): an unchanged import prefix is
-  -- resumed from its snapshot, so only the modules after it are re-checked.
   -- A value `main`'s auto-print obligation is posed by this drive, unless some
   -- module is resolve-rejected: the entry is then not the graph's last checked
   -- module.
   let rejected = bucketsResolveRejected buckets
   let valueMain = not rejected && valueMainCandidate coreP modPairs
   let driven =
-    checkModulesChainReportFor
+    checkChainReport
       valueMain
       preludeKey
       chainKey
-      (map moduleStepKey checkedMods)
       runtimeP
       coreP
+      checkedMods
       checkedPairs
   -- The drive covers only the modules resolve let through, so on a rejected graph
   -- its report checks a program that is not the one loaded.
@@ -2247,6 +2337,27 @@ typecheckPassReport runtimeP coreP preludeKey chainKey mods modPairs buckets =
       (map dropModSchemes report.trDiagnostics)
       buckets,
   )
+
+-- `check`'s drive of a graph: the module-chain memo (types/typecheck.mdk)
+-- resumes an unchanged import prefix from its snapshot, so only the modules
+-- after it are re-checked.  `mods` are the loaded triples `pairs` desugars.
+checkChainReport : Bool ->
+  Option (Int, Int) ->
+  String ->
+  List Decl ->
+  List Decl ->
+  List (String, String, List Decl) ->
+  List (String, List Decl) ->
+  TcReport
+checkChainReport valueMain preludeKey chainKey runtimeP coreP mods pairs =
+  checkModulesChainReportFor
+    valueMain
+    preludeKey
+    chainKey
+    (map moduleStepKey mods)
+    runtimeP
+    coreP
+    pairs
 
 -- The non-typecheck half of `typecheckPassFull`, over per-module `(errs, warns)` a
 -- driver already produced: fold in each module's guard-exhaustiveness, `deriving`

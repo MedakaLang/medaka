@@ -13,7 +13,7 @@ them). It turns argv and a root file into a dependency-ordered module list, runs
 |---|---|---|
 | `medaka_cli.mdk` | The native `medaka` dispatcher: one arm per verb (check, fmt, new, build, run, test, snapshot, repl, lsp, mcp, doc, codemod, check-policy, manifest, gate, lint); installs the stage-count dump | `main` |
 | `loader.mdk` | The dependency walk: dotted module id to file, topological order, cycle detection, project-root discovery from `medaka.toml` | `loadProgramE`, `findProjectRoot`, `fileOfModuleId` |
-| `diagnostics.mdk` | The accumulating error pipeline: every stage runs without exit-on-first-error and returns a structured `Diag` list with optional spans, plus hints and fixes | `mkDiag`, `diagOfResError` |
+| `diagnostics.mdk` | The accumulating error pipeline: every stage runs without exit-on-first-error and returns a structured `Diag` list with optional spans, plus hints and fixes. `frontEnd` runs a loaded program's raw-tree passes and its one typecheck drive, which the verb supplies (`check`: `checkFrontDrive`; `run`: its elaboration), and returns the diagnostics in rendered order with the drive's report | `mkDiag`, `diagOfResError`, `frontEnd` |
 | `build_cmd.mdk` | `medaka build`: shells out to a fresh emitter process, then clang, the C runtime and Boehm GC; native and wasm targets | `runBuild`, `runBuildNative`, `envOr` |
 | `main_autoprint.mdk` | Wraps the elaborated trees of a bare non-Unit value `main` in the prelude's own elaborated `println` under an unspellable name, applied with the drive's auto-print evidence; the `Async` main driver wrap; the async-main shape check | `executedTrees`, `executedFromReport`, `mainIsWrapped`, `shouldAutoPrintMain` |
 
