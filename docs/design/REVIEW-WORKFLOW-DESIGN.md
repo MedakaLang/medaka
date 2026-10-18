@@ -1,6 +1,6 @@
 # Review workflow: a cheap reviewer and the benchmark that measures it
 
-Status: design plus benchmark scaffolding, 2026-10-17. The rules the reviewer
+Status: design, measured 2026-10-17 to 2026-10-18. The rules the reviewer
 applies are `docs/design/STYLE-RUBRIC.md`; the fixtures and harness are
 `scripts/review_bench/`.
 
@@ -16,23 +16,20 @@ cost, measured rather than asserted.
 
 1. **Mechanical (free).** `medaka lint`, `medaka fmt`, the comment-register
    census. The reviewer never re-reports what a gate already enforces.
-2. **Candidate generation (free).** Code cuts the diff into units (each added or
-   changed declaration and comment block) and attaches the evidence a judge
-   needs: the definition behind each backticked identifier in a comment, existing
-   helpers with a similar name or signature for a new helper, the suppression
-   reason under each `lint-disable`, the declared return type of a `let _ =`
-   head. A class with no candidate generator falls through to stage 3.
-3. **Decision model.** One narrow yes/no question per class per candidate, all
-   of a candidate's questions batched into one request. Scores below a per-class
-   low threshold are dismissed; scores above a per-class high threshold are
-   reported only for classes whose precision has been measured; the middle band
-   moves on. Each question is asked in both option orders and averaged, because
-   decision models are position-biased.
-4. **Cheap generative checker (Haiku).** The middle band, plus classes that need
-   reasoning across two snippets (a stale comment against the code that
-   contradicts it, a duplicate against its original). One class per prompt;
-   few-shot examples come from the benchmark's dev split only. Every finding must
-   quote its evidence.
+2. **Evidence generation (free).** Code cuts the diff into hunks and attaches
+   the evidence a judge needs from outside the hunk, found with `git grep` and
+   `git show` at the diff's commit (`scripts/review_bench/evidence.py`): reference
+   counts for each declared name, existing stdlib and `compiler/support`
+   helpers with a similar shape, similar declarations in the same and other
+   files, whether each identifier, path and flag a comment names exists, named
+   constants equal to a literal.
+3. **Haiku battery.** One `claude-haiku-5-5` call per hunk with the whole
+   rubric in the system prompt, returning a list of findings, each quoting its
+   evidence.
+4. **Per-class confirm.** Each class the battery flagged is asked again with
+   that class's own prompt (its rule and exceptions, its notes, two dev-split
+   examples, its own generated evidence); a finding survives only if both flag
+   it.
 5. **Mechanical verifier.** The quoted lines exist; the named helper exists. A
    model re-reading its own finding does not count as verification: published
    measurements show plain LLM judges reject only a small fraction of
@@ -70,15 +67,28 @@ Measurements:
 
 Splits are by source (sprint or mined file), so an exemplar used in a prompt is
 never scored. Thresholds are set on the dev split and reported on the test
-split. Rewording a question against the items it got wrong turns the test split
-into training data, which `docs/design/JEV-LEDGER.md` records as a mistake
-already made once.
+split. Rewording a prompt against the items it got wrong turns the test split
+into training data.
 
-## What is known going in
+## What was measured
 
-- Jev already answers two of these classes well: the comment-register questions
-  (`history`, `offsite`) and the `do`-conversion questions (`uniform_chain`,
-  `recommend`), per `docs/design/JEV-LEDGER.md`.
+On the test split with generated evidence (`scripts/review_bench/RESULTS-*.md`):
+
+- The battery alone: recall 0.84, false-positive rate 0.13, $0.0027 per hunk;
+  about half of its findings on classes a hunk was not labelled for are wrong
+  by an Opus audit.
+- Battery then confirm: recall 0.76, false-positive rate 0.08, $0.0052 per
+  hunk; wrong findings on unlabelled classes fall from about 0.61 to 0.25 per
+  hunk while 79% of the real ones are kept.
+- A decision-model stage (Jev, a router or a confidence cascade in front of
+  Haiku) was measured and dropped (Val, 2026-10-18): the router cost 40% of a
+  battery call, dismissed no hunk at 95% recall, and as a filter after the
+  battery removed nothing.
+- Evidence generation lifts recall on the classes that need context outside
+  the hunk from 0.38 (excerpt only) to 0.70; hand-picked evidence reaches 0.84.
+
+## What was known going in
+
 - Synthetic fault injection overstates real-world accuracy by a wide margin in
   published code-review evaluations, which is why every fixture is a real
   excerpt.
