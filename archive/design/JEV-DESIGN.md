@@ -1,6 +1,12 @@
 # Jev judgment tools: calibrated judgments between lint and LLM review
 
-**Status:** PROPOSED, 2026-09-16. The census half is built (`scripts/jev/`);
+**Status:** SUPERSEDED, 2026-10-18. Jev was cut (Val): a Haiku call over the
+whole style rubric beat every arm with Jev in it
+(`scripts/review_bench/RESULTS-battery-2026-10-17.md`). `scripts/jev/` and the
+`jev-judgments` skill were deleted and epic #3117 closed; the code is in git
+history before that deletion. This document stays as the measured record.
+
+Original status: PROPOSED, 2026-09-16. The census half is built (`scripts/jev/`);
 the roadmap is filed as epic #3117 with milestones J-CENSUS, J-REVIEW, and
 J-NATIVE. J-NATIVE is parked as of 2026-09-17 and section 5.1 says on what
 condition it unparks. Tracking is on the issues; this document is the design

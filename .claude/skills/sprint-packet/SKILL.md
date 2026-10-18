@@ -146,8 +146,8 @@ twelve sites on a false premise about the language, and four minutes with an
 eight-line probe refuted it. The identical model on the identical sites landed
 all twelve once the packet carried that measurement, so the standing
 escalate-after-two-rounds rule would have been the wrong remedy — the defect
-was not capability. `docs/design/JEV-LEDGER.md` section 1.1 rule 4, and the
-episode is `docs/design/JEV-DESIGN.md` section 8.3. It is a single episode,
+was not capability. `archive/design/JEV-LEDGER.md` section 1.1 rule 4, and the
+episode is `archive/design/JEV-DESIGN.md` section 8.3. It is a single episode,
 N = 1; what carries the rule is the asymmetry, not the count.
 
 **Resuming a refusal:** an informal mid-task message still cannot change scope.
