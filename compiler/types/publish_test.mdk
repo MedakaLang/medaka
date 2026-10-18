@@ -1,16 +1,17 @@
 -- Unit tests for the published shapes' zonk, freeze, validator and graph report
 -- over hand-built values; a scheme's context surviving a later drive and a
--- shadowing binding's context (#2054); and published schemes holding no Link.
+-- shadowing binding's context (#2054); published schemes holding no Link; and
+-- the partial analysis a drive returns (locals, seed, module).
 import test.{
-  expectEqual, expectEach, expectTrue, expectGreaterThan, Expectation
+  expectEqual, expectEach, expectTrue, expectGreaterThan, Expectation, fail
 }
 import frontend.ast.{
-  TyConOrigin(..), EvId(..), EvVal(..), EvEntry(..), Route(..)
+  TyConOrigin(..), EvId(..), EvVal(..), EvEntry(..), Route(..), Loc(..), Decl
 }
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
-import list.{zip, filter, takeWhile, dropWhile, sort}
-import string.{lines}
+import list.{zip, filter, takeWhile, dropWhile, sort, sortOn, indexed}
+import string.{lines, startsWith}
 import support.util.{joinNl, joinWith}
 import types.repr.{
   Mono(..), Tyvar(..), Scheme(..), IfaceRef(..), VecObl(..), ppScheme
@@ -21,16 +22,23 @@ import types.effect_authority.{Authority(..), Authvar(..), authvarId}
 import types.publish.{
   PubScheme(..), VarKind(..), LiveCell(..), emptyZonk, zonkMono, zonkScheme,
   freezePub, liveCells, atGraphEnd, graphReport, ppPubScheme, TcReport(..),
-  CheckedProgram(..), ModDiags, TcDiag(..)
+  CheckedProgram(..), PartialAnalysis(..), ModDiags, TcDiag(..), noEntryTables
 }
-import types.disposition.{emptyDispositionTable}
+import types.disposition.{
+  MethodDisposition(..), emptyDispositionTable, dispositionRows, dispositionKey,
+  dispositionInstance, dispositionMethod, dispositionIface
+}
 import types.evidence_coverage.{EvShape(..), evShapeOf}
 import types.route_key.{installedEvidenceEntries}
 import types.typecheck.{
   checkOneSchemeFullK, checkModulesDiagsChain, checkModulesAllLines,
   elaborateModulesReport, checkModules, methodReturnMemoCurrentViews,
-  methodReturnMemoRetentionStats, tcCode, tcMsg, MethodReturnMemoView(..)
+  methodReturnMemoRetentionStats, tcCode, tcMsg, MethodReturnMemoView(..),
+  checkModulesChainReportFor, checkOneReportK, checkModulesPartialK,
+  currentLocalSchemesLoc, currentSeedSchemes, ppSchemeNamed, ppSchemeNamedFull
 }
+import driver.diagnostics.{analyzeProjectReport, noStdlibExports}
+import test_process.{withScratchDir}
 
 int : Mono
 int = TCon "Int" OriginBuiltin
@@ -330,15 +338,16 @@ accConflict = joinNl [
   "  cachedChoose _ = 99",
 ]
 
--- (published modules, memo views taken right after the drive)
+-- (the keyed chain's report, memo views taken right after the drive)
 accDrive : String ->
   String ->
   String ->
   String ->
-  (List ModDiags, List MethodReturnMemoView)
+  (TcReport, List MethodReturnMemoView)
 accDrive chainKey prefixSource entrySource stepKey =
-  let results =
-    checkModulesDiagsChain
+  let report =
+    checkModulesChainReportFor
+      False
       (Some (4053, 4055))
       chainKey
       [Some stepKey, None]
@@ -348,12 +357,40 @@ accDrive chainKey prefixSource entrySource stepKey =
         ("acc_prefix", desugar (parseLocated prefixSource)),
         ("acc_entry", desugar (parseLocated entrySource)),
       ]
-  (results, methodReturnMemoCurrentViews ())
+  (report, methodReturnMemoCurrentViews ())
 
--- Schemes WITH their context, diagnostics and the evidence/disposition views,
--- rendered at the moment of the call.
-accRender : (List ModDiags, List MethodReturnMemoView) -> List String
-accRender (mods, views) = flatMap accRenderMod mods ++ map debug views
+-- Schemes WITH their context, diagnostics, the memo views, and the checked
+-- program's evidence and dispositions, rendered at the moment of the call.
+accRender : (TcReport, List MethodReturnMemoView) -> List String
+accRender (r, views) =
+  flatMap accRenderMod r.trDiagnostics
+    ++ map debug views
+    ++ accRenderChecked r.trChecked
+
+-- The evidence in ordinal order, each id replaced by its rank, then the
+-- disposition rows; `withheld` when there is no checked program.
+accRenderChecked : Option CheckedProgram -> List String
+accRenderChecked None = ["withheld"]
+accRenderChecked (Some c) =
+  let ordered =
+    sortOn
+      (e => match e
+        EvEntry (EvId m i) _ => (m, i))
+      c.cpEvidence
+  "checked"
+    :: map
+        (ie => match ie
+          (rank, EvEntry _ v) => "ev \{debug rank} \{valText v}")
+        (indexed ordered)
+      ++ map dispositionText (dispositionRows c.cpDispositions)
+
+dispositionText : MethodDisposition -> String
+dispositionText d =
+  let kind = match d
+    Supplied {  } => "supplied"
+    InheritedDefault {  } => "inherited"
+  let key = dispositionKey (dispositionInstance d) (dispositionMethod d)
+  "disp \{kind} \{(dispositionIface d).irName} \{key}"
 
 accRenderMod : ModDiags -> List String
 accRenderMod (mid, (ss, errs, warns)) =
@@ -361,13 +398,13 @@ accRenderMod (mid, (ss, errs, warns)) =
     ++ rendered ss
     ++ map (d => "diag \{tcCode d}: \{tcMsg d}") (errs ++ warns)
 
-accLinks : (List ModDiags, List MethodReturnMemoView) -> Int
-accLinks (mods, _) =
+accLinks : (TcReport, List MethodReturnMemoView) -> Int
+accLinks (r, _) =
   fold
     (acc (_, (ss, _, _)) =>
       acc + fold (a e => a + linkCount (snd e).psScheme) 0 ss)
     0
-    mods
+    r.trDiagnostics
 
 accRetainedSteps : Unit -> Int
 accRetainedSteps _ =
@@ -426,11 +463,34 @@ accCheck (QKind name run) =
       ),
       ("a hit really retained a chain step", hitRetained),
       ("held P publishes no Link", expectEqual 0 (accLinks held)),
+      (
+        "cold P is checked",
+        expectEqual ["checked"] (filter (== "checked") cold),
+      ),
+      (
+        "cold P has evidence and dispositions",
+        expectEqual
+          (True, True)
+          (
+            not (isEmpty (filter (startsWith "ev ") cold)),
+            not (isEmpty (filter (startsWith "disp ") cold)),
+          ),
+      ),
     ],
   )
 
 test "P -> Q -> P: P rendered after Q equals cold P, for every kind of Q" =
   expectEach (map accCheck accQs)
+
+test "the keyed chain's report: withheld on an ill-typed graph, checked on a clean one" =
+  let pSrc2 = accPrefix False
+  let (bad, _) =
+    accDrive "acc-chain-bad" pSrc2 "entry : Int\nentry = \"wrong\"\n" pSrc2
+  let (good, _) = accDrive "acc-chain-good" pSrc2 accEntry pSrc2
+  expectEach [
+    ("ill-typed: withheld", expectTrue (isNone bad.trChecked)),
+    ("clean: checked", expectTrue (isSome good.trChecked)),
+  ]
 
 weakChainSteps : String -> Int
 weakChainSteps held =
@@ -558,7 +618,8 @@ checkedWeak mods residual =
       residual
       (_ => [])
       emptyDispositionTable
-      None).trChecked
+      None
+      noEntryTables).trChecked
 
 weakScheme : PubScheme
 weakScheme = pub (plainScheme (TFun (tvar 7) pureRow int))
@@ -687,3 +748,116 @@ test "#4267: the tree arm publishes the prelude's context" =
   expectEqual
     ["talk : Speak a => a -> String"]
     (rendered (filter (e => fst e == "talk") core))
+
+-- ── the partial analysis: locals, seed and module ─────────────────────────
+
+-- A local constrained binding and a prelude name with a context in the seed.
+localBuffer : String
+localBuffer = "own x =\n  let g y = talk y\n  g x\n"
+
+locText : Option Loc -> String
+locText (Some (Loc _ l1 c1 l2 c2)) =
+  "\{debug l1}:\{debug c1}-\{debug l2}:\{debug c2}"
+locText None = "-"
+
+-- Every local and seed name as the hover renderers show them from the tables
+-- the drive just left.
+todayTables : Unit -> (List String, List String)
+todayTables _ = (
+  map
+    ((n, loc, s) => "\{n} \{locText loc} : \{ppSchemeNamed n s}")
+    (currentLocalSchemesLoc ()),
+  map
+    (b => "\{fst b} : \{ppSchemeNamedFull (fst b) (snd b)}")
+    (currentSeedSchemes ()),
+)
+
+capturedTables : PartialAnalysis -> (List String, List String)
+capturedTables pa = (
+  map ((n, p, loc) => "\{n} \{locText loc} : \{ppPubScheme p}") pa.paLocals,
+  rendered pa.paSeed,
+)
+
+talkCore : List Decl
+talkCore = desugar (parse talkPrelude)
+
+test "diags arm: the captured locals and seed render as today's renderers do" =
+  let one = checkOneReportK False None [] talkCore (
+    "b",
+    desugar (parseLocated localBuffer),
+  )
+  let oneToday = todayTables ()
+  let project = checkModulesPartialK None [] talkCore [
+    ("b", desugar (parseLocated localBuffer)),
+  ]
+  let projectToday = todayTables ()
+  let (locals, seed) = oneToday
+  expectEach [
+    ("single file", expectEqual oneToday (capturedTables one.trPartial)),
+    ("project", expectEqual projectToday (capturedTables project)),
+    ("a local was captured", expectGreaterThan 0 (length locals)),
+    (
+      "the seed's talk carries the prelude's context",
+      expectEqual
+        ["talk : Speak a => a -> String"]
+        (filter (== "talk : Speak a => a -> String") seed),
+    ),
+  ]
+
+test "tree arm: the seed's talk renders with the prelude's context" =
+  let pa = (talkReport ()).trPartial
+  expectEach [
+    (
+      "talk",
+      expectEqual
+        ["talk : Speak a => a -> String"]
+        (rendered (filter (e => fst e == "talk") pa.paSeed)),
+    ),
+    ("the module is the entry", expectEqual "b" pa.paModule),
+  ]
+
+-- An imported module and an entry that imports it, with a resolve error in the
+-- entry when [broken].
+hoverEntry : Bool -> String
+hoverEntry broken =
+  let tail = if broken then "\nbad = undefinedThing + 1\n" else ""
+  "import m7.{base}\n\nexport\nlevel6 : Int\nlevel6 = base + 6\n\{tail}"
+
+projectModule : String ->
+  String ->
+  String ->
+  Bool ->
+  <Exec, IO, FileRead, FileWrite> String
+projectModule rsrc csrc dir broken =
+  let entry = "\{dir}/m6.mdk"
+  match (
+    writeFile "\{dir}/m7.mdk" "export\nbase : Int\nbase = 1\n",
+    writeFile entry (hoverEntry broken),
+  )
+    (Ok _, Ok _) =>
+      let (report, _) =
+        analyzeProjectReport
+          noStdlibExports
+          True
+          []
+          (Ref [])
+          (Ref [])
+          (_ => None)
+          entry
+          [dir, "stdlib"]
+          rsrc
+          csrc
+      match report
+        Some r => r.trPartial.paModule
+        None => "no report"
+    _ => "could not write the modules"
+
+test "paModule is the entry, or the last module checked when resolve blocks the entry" =
+  match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
+    (Ok rsrc, Ok csrc) =>
+      let clean = withScratchDir (dir =>
+        expectEqual "m6" (projectModule rsrc csrc dir False))
+      let blocked = withScratchDir (dir =>
+        expectEqual "m7" (projectModule rsrc csrc dir True))
+      expectEach [("clean", clean), ("entry resolve-rejected", blocked)]
+    _ => fail "could not read the prelude pair"

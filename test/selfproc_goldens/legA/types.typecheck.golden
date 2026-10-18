@@ -341,6 +341,7 @@ calleeIsGeneralized : String -> Option (List CSlot) -> List (Int, Mono) -> Bool
 calleeNumObls : Int -> Int -> List UObligation
 calleeTakesGrants : GrantCallee -> Bool
 candsOneIface : List KeyEntry -> Option String
+captureEntryTables : Map String (List VecObl) -> List (String, List Decl) -> EntryTables
 captureScope : Unit -> ScopeId
 captureTypeErrors : (Unit -> Unit) -> List TcDiag
 catalogCallee : String -> GrantCallee
@@ -484,16 +485,19 @@ checkModuleFullDiags : String -> ModuleSeed -> List Decl -> List Decl -> List De
 checkModuleFullImpl : String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List Decl)
 checkModules : List Decl -> List Decl -> List (String, List Decl) -> List (String, List (String, PubScheme))
 checkModulesAllLines : List Decl -> List Decl -> List (String, List Decl) -> String
+checkModulesChainReportFor : Bool -> Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> TcReport
 checkModulesDiagsChain : Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag))
 checkModulesDiagsChainFor : Bool -> Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag))
 checkModulesEntryFromDiags : List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> (List (String, PubScheme), List TcDiag, List TcDiag)
 checkModulesEntryFull : List Decl -> List Decl -> List (String, List Decl) -> (List (String, PubScheme), List TcDiag, List TcDiag)
 checkModulesEntryFullK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, PubScheme), List TcDiag, List TcDiag)
+checkModulesEntryFullReportK : Bool -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> TcReport
 checkModulesEntryFullSplitK : Bool -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, PubScheme), List (String, PubScheme), List TcDiag, List TcDiag)
 checkModulesEntryHasErrors : List Decl -> List Decl -> List (String, List Decl) -> Bool
 checkModulesEntryLines : List Decl -> List Decl -> List (String, List Decl) -> String
 checkModulesEntryReport : List Decl -> List Decl -> List (String, List Decl) -> String
 checkModulesK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, List (String, PubScheme))
+checkModulesPartialK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> PartialAnalysis
 checkModulesPreambleK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), ModuleBindings)
 checkNestedReqs : ImplUniverse -> ReqWalk -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
 checkOneCallObligation : Bool -> ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
@@ -505,6 +509,7 @@ checkOneEffectParam : String -> Param -> EffParamTy -> Unit
 checkOneErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkOneIfaceCycle : ClassEnv -> Int -> Ref (Map String Unit) -> CeRow -> Unit
 checkOneMatchToLines : List Decl -> List Decl -> String
+checkOneReportK : Bool -> Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> TcReport
 checkOneScheme : List Decl -> List Decl -> (String, List Decl) -> List (String, Scheme)
 checkOneSchemeFull : List Decl -> List Decl -> (String, List Decl) -> (List (String, PubScheme), List (String, PubScheme))
 checkOneSchemeFullK : Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List (String, PubScheme), List (String, PubScheme))
@@ -566,6 +571,7 @@ closeScope : Unit -> Unit
 closedRowEqCheck : List Atom -> List Atom -> Unit
 closedRowMismatchMsg : List Atom -> List Atom -> String
 cmCheckWorker : String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List (String, PubScheme))
+cmFold : List (String, Scheme) -> ModuleBindings -> List (String, List Decl) -> List (String, List (String, PubScheme))
 cohApply : Ref (List (Int, Mono)) -> Mono -> Mono
 cohBind : Ref (List (Int, Mono)) -> Int -> Mono -> Bool
 cohClassify : CohSweep -> CohImpl -> List Mono -> List Mono -> String -> String -> CohScan -> CohScan
@@ -997,6 +1003,7 @@ effvarLevel : Ref Effvar -> Int
 elabModuleStamp : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List Decl)
 elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable)
 elaborateModulesReport : List Decl -> List Decl -> List (String, List Decl) -> TcReport
+elaborateModulesWithReport : Bool -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable), TcReport)
 elaborateModulesWithSchemes : Bool -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable), List (String, PubScheme), List (String, PubScheme))
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 elselessIfHelp : String
@@ -1042,6 +1049,7 @@ entryCoversAllOthers : KeyEntry -> List KeyEntry -> Bool
 entryHeadMatches : Ty -> List Ty -> List Mono -> Bool
 entryOwnSchemes : List (String, List (String, a)) -> List (String, a)
 entryReportFromDiags : List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> String
+entrySplit : TcReport -> (List (String, PubScheme), List (String, PubScheme), List TcDiag, List TcDiag)
 envAlphaLets : TcEnv -> List (String, AlphaBinder)
 envCtors : TcEnv -> Map String Scheme
 envVarType : TcEnv -> String -> Option Mono
@@ -2542,6 +2550,7 @@ publishMethodPredGivens : List String -> Ty -> MethodBodyInstance -> ScopeId -> 
 publishMethodReturnTrace : List EvEntry -> MethodReturnTraceEntry -> MethodReturnTraceEntry
 publishOwn : List (String, Scheme) -> List (String, PubScheme)
 publishProducedResults : BindingSummary -> List (Option Loc, Mono) -> Unit
+publishedCore : Option (List (String, PubScheme)) -> Map String (List VecObl) -> ModuleBindings -> List (String, PubScheme)
 publishedPolarity : Polarity -> Polarity
 pushAdmittedOccObl : String -> Mono -> Unit
 pushAmbiguityAt : Bool -> Option Loc -> String -> Unit
@@ -2997,6 +3006,7 @@ seedAbstractRecordTypes : List Decl -> List (String, List Decl) -> Unit
 seedAlphaLets : TcEnv -> String -> Expr -> TcEnv
 seedBuiltinClasses : String -> List Decl -> Unit
 seedCheckRun : List Decl -> Unit
+seedContext : Map String (List VecObl) -> String -> List VecObl
 seedEffectDomains : Unit -> Unit
 seedNumLitFromIntAnchor : List MethodSchemeRow -> Unit
 seedParamPolarityFixpointScoped : List Decl -> List Decl -> Unit

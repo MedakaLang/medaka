@@ -15,7 +15,7 @@ import frontend.ast.{
 }
 import list.{filter}
 import types.evidence_coverage.{EvShape(..), EvidenceFault(..), evidenceFaults}
-import types.publish.{graphReport, TcReport(..)}
+import types.publish.{graphReport, TcReport(..), noEntryTables}
 import types.disposition.{emptyDispositionTable}
 
 ev : Int -> EvId
@@ -59,7 +59,8 @@ judged : Option (List Decl, List (String, List Decl)) ->
   EvTable ->
   (Bool, List EvidenceFault)
 judged ts table =
-  let r = graphReport [] [] [] (_ => table) emptyDispositionTable ts
+  let r =
+    graphReport [] [] [] (_ => table) emptyDispositionTable ts noEntryTables
   (isSome r.trChecked, r.trEvidenceFaults)
 
 test "a clean tree and table pass" = expectEqual (True, []) (judged trees clean)

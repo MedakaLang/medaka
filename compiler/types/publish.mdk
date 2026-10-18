@@ -92,11 +92,41 @@ public export data LiveCell =
   | OpenSummary String Int
   deriving (Eq, Debug)
 
+-- `paModule` is the module whose locals and seed the analysis holds: the last
+-- module the drive checked, which is not the entry when resolve blocked it.  A
+-- local's `Loc` is `None` where its binding site has none to give.
 public export data PartialAnalysis = PartialAnalysis {
+  paModule : String,
   paSchemes : List (String, List (String, PubScheme)),
   paCore : List (String, PubScheme),
-  paLocals : List (String, PubScheme, Loc),
+  paLocals : List (String, PubScheme, Option Loc),
   paSeed : List (String, PubScheme),
+}
+
+-- The last-checked module's id, locals and import seed, each frozen with its own
+-- context, taken while the typechecker's per-module tables are still that module's.
+public export data EntryTables = EntryTables {
+  etModule : String,
+  etLocals : List (String, PubScheme, Option Loc),
+  etSeed : List (String, PubScheme),
+}
+
+-- A drive that checked no module.
+export
+noEntryTables : EntryTables
+noEntryTables = EntryTables { etModule = "", etLocals = [], etSeed = [] }
+
+export
+partialAnalysis : List (String, List (String, PubScheme)) ->
+  List (String, PubScheme) ->
+  EntryTables ->
+  PartialAnalysis
+partialAnalysis schemes core tables = PartialAnalysis {
+  paModule = tables.etModule,
+  paSchemes = schemes,
+  paCore = core,
+  paLocals = tables.etLocals,
+  paSeed = tables.etSeed,
 }
 
 public export data CheckedProgram = CheckedProgram {
@@ -299,6 +329,7 @@ freezeNewest n rows
 -- evidence table is built only for a drive with none of the first three: an
 -- ill-typed drive has no checked program to carry it.  `trEvidenceFaults` is
 -- what the table failed against the trees, empty when it was not built.
+-- `tables` fill the partial analysis whether or not the program is checked.
 export
 graphReport : List ModDiags ->
   List (String, PubScheme) ->
@@ -306,8 +337,9 @@ graphReport : List ModDiags ->
   (Unit -> EvTable) ->
   DispositionTable ->
   Option (List Decl, List (String, List Decl)) ->
+  EntryTables ->
   TcReport
-graphReport perMod core residual evidence dispositions trees =
+graphReport perMod core residual evidence dispositions trees tables =
   let schemes = map (m => (fst m, modSchemes (snd m))) perMod
   let cells = graphCells (core :: map snd schemes)
   let judged =
@@ -327,12 +359,7 @@ graphReport perMod core residual evidence dispositions trees =
     }
     _ => None
   TcReport {
-    trPartial = PartialAnalysis {
-      paSchemes = schemes,
-      paCore = core,
-      paLocals = [],
-      paSeed = [],
-    },
+    trPartial = partialAnalysis schemes core tables,
     trDiagnostics = perMod,
     trResidual = residual,
     trChecked = checked,
