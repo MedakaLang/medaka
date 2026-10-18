@@ -299,6 +299,98 @@ strictProbes dir = match writeFile "\{dir}/defaulted.mdk" defaultedSrc
 test "strict native probe: defaulted body passes, ill-typed body fails by name, eval keeps the exemption (checks 8-10)" =
   withScratchDir strictProbes
 
+-- ── parent-side typecheck refusal and the exempt probe, per engine ────────────
+
+-- A doctest-bearing (so never exempt) target whose body is ill-typed.
+gatedIlltypedSrc : String
+gatedIlltypedSrc = unlines [
+  "-- > double 2",
+  "-- 4",
+  "export",
+  "double : Int -> Int",
+  "double x = x * 2",
+  "",
+  "bad : Int",
+  "bad = double \"x\"",
+  "",
+]
+
+-- A tests-only, doctest-free target outside the vehicle paths: exempt.
+exemptIlltypedSrc : String
+exemptIlltypedSrc = unlines [
+  "import test.{expectEqual}",
+  "",
+  "double : Int -> Int",
+  "double x = x * 2",
+  "",
+  "bad : Int",
+  "bad = double \"x\"",
+  "",
+  "test \"double one\" =",
+  "  expectEqual (double 1) 2",
+  "",
+]
+
+-- The parent refuses a non-exempt ill-typed target before any engine runs.
+gatedRefusalRow : String -> String -> <Exec, IO, FileRead> Expectation
+gatedRefusalRow engine target =
+  match runVerb 120 ["test", "--engines", engine, target]
+    Err e => fail "gated ill-typed (\{engine}): could not spawn: \{e}"
+    Ok (code, out, err) => expectAll [
+      expectEqual 1 code,
+      expectEqual "" out,
+      requireText
+        "gated ill-typed (\{engine})"
+        err
+        "type error in \{target}; `medaka test` requires it to `medaka check` first:",
+      requireText
+        "gated ill-typed (\{engine})"
+        err
+        "b1_doc.mdk:8:13: type mismatch: Int vs String",
+    ]
+
+exemptNativeRow : String -> <Exec, IO, FileRead> Expectation
+exemptNativeRow target =
+  match runVerb 120 ["test", "--engines", "native", target]
+    Err e => fail "exempt ill-typed (native): could not spawn: \{e}"
+    Ok (code, out, err) => expectAll [
+      expectEqual 1 code,
+      requireText
+        "exempt ill-typed (native)"
+        (out ++ err)
+        "native test runner: could not build \{target} natively",
+      requireText
+        "exempt ill-typed (native)"
+        (out ++ err)
+        "type mismatch: Int vs String",
+    ]
+
+exemptEvalRow : String -> <Exec, IO, FileRead> Expectation
+exemptEvalRow target = match runVerb 120 ["test", "--engines", "eval", target]
+  Err e => fail "exempt ill-typed (eval): could not spawn: \{e}"
+  Ok (code, out, err) => expectAll [
+    expectEqual 0 code,
+    requireText "exempt ill-typed (eval)" (out ++ err) "1/1 passed",
+  ]
+
+refusalProbes : String -> <Exec, IO, FileRead, FileWrite> Expectation
+refusalProbes dir =
+  let gated = "\{dir}/b1_doc.mdk"
+  let exempt = "\{dir}/b3_exempt.mdk"
+  match writeFile gated gatedIlltypedSrc
+    Err e => fail "could not write b1_doc.mdk: \{e}"
+    Ok _ => match writeFile exempt exemptIlltypedSrc
+      Err e => fail "could not write b3_exempt.mdk: \{e}"
+      Ok _ => expectEach [
+        ("non-exempt refused, native", gatedRefusalRow "native" gated),
+        ("non-exempt refused, eval", gatedRefusalRow "eval" gated),
+        ("exempt probe fails to build, native", exemptNativeRow exempt),
+        ("exempt runs untyped, eval", exemptEvalRow exempt),
+      ]
+
+test "ill-typed targets: non-exempt refused by the parent under either engine; exempt keeps the child's row and the eval pass" =
+  withScratchDir refusalProbes
+
 -- ── check 11: native_test_abort.mdk (tests 2-4 are errors, never dropped) ─────
 
 abortRow : String -> <Exec, IO, FileRead> Expectation
