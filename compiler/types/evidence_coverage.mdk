@@ -1,0 +1,302 @@
+-- Evidence coverage: does a published evidence table answer every site its
+-- program's trees carry, once each, with the shape that site's reader accepts?
+-- A pure walk over `Decl`s and an `EvTable`, so `types/publish.mdk` can judge a
+-- `CheckedProgram` without importing `types.typecheck`.
+--
+-- The shape each node's reader accepts (`types/route_key.mdk`):
+--   `EMethodAt`                          -> `EvMethod` (`evMethodRoutes`)
+--   `EDictAt`                            -> `EvMany`   (`evDictRoutes`)
+--   `EBinOp`, `EUnOp`, `EWideLit`        -> `EvOne`    (`evSiteRoute`)
+--   `ENumLit`                            -> `EvLit`    (`evSiteLit`)
+--   `EFieldAccess`, `ERecordUpdate`      -> `EvHead`   (`evSiteHead`)
+-- A node carrying `unminted` is answered by its reader without a lookup, so it
+-- needs no entry.  `dictPass` rewrites every literal away, so a dict-passed tree
+-- holds no `ENumLit` or `EWideLit`.
+import frontend.ast.{
+  Decl(..),
+  Expr(..),
+  Arm(..),
+  Guard(..),
+  GuardArm(..),
+  DoStmt(..),
+  InterpPart(..),
+  FieldAssign(..),
+  Section(..),
+  FunClause(..),
+  LetBind(..),
+  IfaceMethod(..),
+  MethodDefault(..),
+  ImplMethod(..),
+  EvId(..),
+  isUnminted,
+  EvVal(..),
+  EvEntry(..),
+  EvTable,
+}
+import support.util.{reverseL}
+
+-- The five answer kinds a published entry can have.
+public export data EvShape =
+  | ShapeOne
+  | ShapeMany
+  | ShapeMethod
+  | ShapeLit
+  | ShapeHead
+  deriving (Eq, Debug)
+
+-- One way a table fails its program.  An id is spelled as its module and its
+-- ordinal.  `MissingEntry` is a site no entry answers under its id (none at the
+-- ordinal, or one published by another module); `WrongShape` is a site whose
+-- entry is of a kind its reader refuses, with the expected kind first;
+-- `DuplicateOrdinal` is an ordinal two entries are published under.
+public export data EvidenceFault =
+  | MissingEntry String Int EvShape
+  | WrongShape String Int EvShape EvShape
+  | DuplicateOrdinal Int
+  deriving (Eq, Debug)
+
+export
+evShapeOf : EvVal -> EvShape
+evShapeOf (EvOne _) = ShapeOne
+evShapeOf (EvMany _) = ShapeMany
+evShapeOf (EvMethod _ _ _ _ _) = ShapeMethod
+evShapeOf (EvLit _ _) = ShapeLit
+evShapeOf (EvHead _) = ShapeHead
+
+-- The table indexed by ordinal less its smallest one, as `installEvidence` lays it
+-- out; the first entry at an ordinal is kept.
+data EvIndex = EvIndex Int (Array (Option EvEntry))
+
+-- Every fault of [table] against [trees]: duplicated ordinals first, then each
+-- uncovered site in tree order.  With no trees (a drive that returns none) only
+-- the ordinals are judged.
+export
+evidenceFaults : Option (List Decl, List (String, List Decl)) ->
+  EvTable ->
+  List EvidenceFault
+evidenceFaults trees table =
+  let lo = minOrdinal table
+  let arr = arrayMake (slotCount table lo - lo) None
+  let dups = fillIndex lo arr table []
+  let idx = EvIndex lo arr
+  let sites = match trees
+    None => []
+    Some (core, mods) => modsFaults idx mods (declsFaults idx core [])
+  reverseL dups ++ reverseL sites
+
+minOrdinal : EvTable -> Int
+minOrdinal [] = 0
+minOrdinal ((EvEntry (EvId _ i) _) :: rest) = minFrom rest i
+
+minFrom : EvTable -> Int -> Int
+minFrom [] acc = acc
+minFrom ((EvEntry (EvId _ i) _) :: rest) acc = minFrom rest (min i acc)
+
+-- one past the largest ordinal in the table, at least [acc]
+slotCount : EvTable -> Int -> Int
+slotCount [] acc = acc
+slotCount ((EvEntry (EvId _ i) _) :: rest) acc =
+  slotCount rest (max (i + 1) acc)
+
+fillIndex : Int ->
+  Array (Option EvEntry) ->
+  EvTable ->
+  List EvidenceFault ->
+  List EvidenceFault
+fillIndex _ _ [] acc = acc
+fillIndex lo arr ((e@(EvEntry (EvId _ i) _)) :: rest) acc =
+  match arrayGetUnsafe (i - lo) arr
+    None =>
+      let _ = arraySetUnsafe (i - lo) (Some e) arr
+      fillIndex lo arr rest acc
+    Some _ => fillIndex lo arr rest (DuplicateOrdinal i :: acc)
+
+-- The fault of one site, consed onto [acc]; none for a covered or unminted site.
+site : EvIndex -> EvId -> EvShape -> List EvidenceFault -> List EvidenceFault
+site (EvIndex lo arr) (ev@(EvId m i)) want acc
+  | isUnminted ev = acc
+  | i < lo || i - lo >= arrayLength arr = MissingEntry m i want :: acc
+  | otherwise = match arrayGetUnsafe (i - lo) arr
+    None => MissingEntry m i want :: acc
+    Some (EvEntry (EvId m2 _) v) =>
+      if m2 /= m then
+        MissingEntry m i want :: acc
+      else
+        let got = evShapeOf v
+        if got == want then acc else WrongShape m i want got :: acc
+
+modsFaults : EvIndex ->
+  List (String, List Decl) ->
+  List EvidenceFault ->
+  List EvidenceFault
+modsFaults _ [] acc = acc
+modsFaults idx ((_, ds) :: rest) acc =
+  modsFaults idx rest (declsFaults idx ds acc)
+
+declsFaults : EvIndex -> List Decl -> List EvidenceFault -> List EvidenceFault
+declsFaults _ [] acc = acc
+declsFaults idx (d :: rest) acc = declsFaults idx rest (declFaults idx d acc)
+
+-- Every `Decl` that holds an expression.
+declFaults : EvIndex -> Decl -> List EvidenceFault -> List EvidenceFault
+declFaults idx (DFunDef _ _ _ e _ _) acc = exprFaults idx e acc
+declFaults idx (DInterface { methods = ms }) acc = ifaceMethodsFaults idx ms acc
+declFaults idx (DImpl { methods = ms }) acc = implMethodsFaults idx ms acc
+declFaults idx (DProp _ _ _ e) acc = exprFaults idx e acc
+declFaults idx (DTest _ _ e) acc = exprFaults idx e acc
+declFaults idx (DLetGroup _ bs) acc = letBindsFaults idx bs acc
+declFaults idx (DAttrib _ d) acc = declFaults idx d acc
+declFaults _ _ acc = acc
+
+ifaceMethodsFaults : EvIndex ->
+  List IfaceMethod ->
+  List EvidenceFault ->
+  List EvidenceFault
+ifaceMethodsFaults _ [] acc = acc
+ifaceMethodsFaults idx ((IfaceMethod _ _ (Some (MethodDefault _ e)) _) :: rest) acc =
+  ifaceMethodsFaults idx rest (exprFaults idx e acc)
+ifaceMethodsFaults idx ((IfaceMethod _ _ None _) :: rest) acc =
+  ifaceMethodsFaults idx rest acc
+
+implMethodsFaults : EvIndex ->
+  List ImplMethod ->
+  List EvidenceFault ->
+  List EvidenceFault
+implMethodsFaults _ [] acc = acc
+implMethodsFaults idx ((ImplMethod _ _ e) :: rest) acc =
+  implMethodsFaults idx rest (exprFaults idx e acc)
+
+letBindsFaults : EvIndex ->
+  List LetBind ->
+  List EvidenceFault ->
+  List EvidenceFault
+letBindsFaults _ [] acc = acc
+letBindsFaults idx ((LetBind _ clauses _ _) :: rest) acc =
+  letBindsFaults idx rest (clausesFaults idx clauses acc)
+
+clausesFaults : EvIndex ->
+  List FunClause ->
+  List EvidenceFault ->
+  List EvidenceFault
+clausesFaults _ [] acc = acc
+clausesFaults idx ((FunClause _ e) :: rest) acc =
+  clausesFaults idx rest (exprFaults idx e acc)
+
+exprsFaults : EvIndex -> List Expr -> List EvidenceFault -> List EvidenceFault
+exprsFaults _ [] acc = acc
+exprsFaults idx (e :: rest) acc = exprsFaults idx rest (exprFaults idx e acc)
+
+-- Every constructor is listed, leaves included, so a new `Expr` node makes this
+-- match non-exhaustive rather than silently unwalked.
+exprFaults : EvIndex -> Expr -> List EvidenceFault -> List EvidenceFault
+exprFaults _ (ELit _) acc = acc
+exprFaults _ (EVar _) acc = acc
+exprFaults idx (EApp a b) acc = exprFaults idx b (exprFaults idx a acc)
+exprFaults idx (ELam _ b) acc = exprFaults idx b acc
+exprFaults idx (ELet _ _ _ e1 e2) acc =
+  exprFaults idx e2 (exprFaults idx e1 acc)
+exprFaults idx (EMatch e0 arms) acc =
+  armsFaults idx arms (exprFaults idx e0 acc)
+exprFaults idx (EIf c t el) acc =
+  exprFaults idx el (exprFaults idx t (exprFaults idx c acc))
+exprFaults idx (EBinOp _ a b ev) acc =
+  site idx ev ShapeOne (exprFaults idx b (exprFaults idx a acc))
+exprFaults idx (EUnOp _ a ev) acc = site idx ev ShapeOne (exprFaults idx a acc)
+exprFaults idx (EInfix _ a b) acc = exprFaults idx b (exprFaults idx a acc)
+exprFaults idx (EFieldAccess e0 _ ev) acc =
+  site idx ev ShapeHead (exprFaults idx e0 acc)
+exprFaults idx (ETuple es) acc = exprsFaults idx es acc
+exprFaults idx (EListLit es) acc = exprsFaults idx es acc
+exprFaults idx (EArrayLit es) acc = exprsFaults idx es acc
+exprFaults idx (ERangeList lo hi _) acc =
+  exprFaults idx hi (exprFaults idx lo acc)
+exprFaults idx (ERangeArray lo hi _) acc =
+  exprFaults idx hi (exprFaults idx lo acc)
+exprFaults idx (ESlice e0 lo hi _) acc =
+  exprFaults idx hi (exprFaults idx lo (exprFaults idx e0 acc))
+exprFaults idx (ELetGroup bs e2) acc =
+  exprFaults idx e2 (letBindsFaults idx bs acc)
+exprFaults _ (ESection (SecBare _)) acc = acc
+exprFaults idx (ESection (SecRight _ e0)) acc = exprFaults idx e0 acc
+exprFaults idx (ESection (SecLeft e0 _)) acc = exprFaults idx e0 acc
+exprFaults idx (EIndex e0 i) acc = exprFaults idx i (exprFaults idx e0 acc)
+exprFaults idx (EAnnot e0 _) acc = exprFaults idx e0 acc
+exprFaults idx (EHeadAnnot e0 _) acc = exprFaults idx e0 acc
+exprFaults idx (EBlock stmts) acc = stmtsFaults idx stmts acc
+exprFaults idx (EDo _ stmts) acc = stmtsFaults idx stmts acc
+exprFaults idx (EStringInterp parts) acc = interpFaults idx parts acc
+exprFaults idx (EGuards arms) acc = guardArmsFaults idx arms acc
+exprFaults idx (ERecordCreate _ fs) acc = fieldsFaults idx fs acc
+exprFaults idx (ERecordUpdate e0 fs ev) acc =
+  site idx ev ShapeHead (fieldsFaults idx fs (exprFaults idx e0 acc))
+exprFaults idx (EVariantUpdate _ e0 fs) acc =
+  fieldsFaults idx fs (exprFaults idx e0 acc)
+exprFaults idx (EMapLit _ kvs) acc = kvsFaults idx kvs acc
+exprFaults idx (ESetLit _ es) acc = exprsFaults idx es acc
+exprFaults idx (EAsPat _ e0) acc = exprFaults idx e0 acc
+exprFaults _ (EMethodRef _) acc = acc
+exprFaults _ (EDictApp _) acc = acc
+exprFaults _ (EVarAt _ _) acc = acc
+exprFaults _ (EVarId _ _) acc = acc
+exprFaults idx (EMethodAt _ _ ev) acc = site idx ev ShapeMethod acc
+exprFaults idx (EDictAt _ ev) acc = site idx ev ShapeMany acc
+exprFaults idx (ELoc _ e0) acc = exprFaults idx e0 acc
+exprFaults idx (EDoOrigin _ e0) acc = exprFaults idx e0 acc
+exprFaults idx (ENumLit _ ev _) acc = site idx ev ShapeLit acc
+exprFaults idx (EWideLit _ _ ev _) acc = site idx ev ShapeOne acc
+
+armsFaults : EvIndex -> List Arm -> List EvidenceFault -> List EvidenceFault
+armsFaults _ [] acc = acc
+armsFaults idx ((Arm _ gs body) :: rest) acc =
+  armsFaults idx rest (exprFaults idx body (guardsFaults idx gs acc))
+
+guardsFaults : EvIndex -> List Guard -> List EvidenceFault -> List EvidenceFault
+guardsFaults _ [] acc = acc
+guardsFaults idx ((GBool e) :: rest) acc =
+  guardsFaults idx rest (exprFaults idx e acc)
+guardsFaults idx ((GBind _ e) :: rest) acc =
+  guardsFaults idx rest (exprFaults idx e acc)
+
+guardArmsFaults : EvIndex ->
+  List GuardArm ->
+  List EvidenceFault ->
+  List EvidenceFault
+guardArmsFaults _ [] acc = acc
+guardArmsFaults idx ((GuardArm gs body) :: rest) acc =
+  guardArmsFaults idx rest (exprFaults idx body (guardsFaults idx gs acc))
+
+stmtsFaults : EvIndex -> List DoStmt -> List EvidenceFault -> List EvidenceFault
+stmtsFaults _ [] acc = acc
+stmtsFaults idx (s :: rest) acc = stmtsFaults idx rest (stmtFaults idx s acc)
+
+stmtFaults : EvIndex -> DoStmt -> List EvidenceFault -> List EvidenceFault
+stmtFaults idx (DoExpr e) acc = exprFaults idx e acc
+stmtFaults idx (DoBind _ e) acc = exprFaults idx e acc
+stmtFaults idx (DoLet _ _ _ e _) acc = exprFaults idx e acc
+stmtFaults idx (DoAssign _ e) acc = exprFaults idx e acc
+stmtFaults idx (DoFieldAssign _ _ e) acc = exprFaults idx e acc
+
+interpFaults : EvIndex ->
+  List InterpPart ->
+  List EvidenceFault ->
+  List EvidenceFault
+interpFaults _ [] acc = acc
+interpFaults idx ((InterpStr _) :: rest) acc = interpFaults idx rest acc
+interpFaults idx ((InterpExpr e) :: rest) acc =
+  interpFaults idx rest (exprFaults idx e acc)
+
+fieldsFaults : EvIndex ->
+  List FieldAssign ->
+  List EvidenceFault ->
+  List EvidenceFault
+fieldsFaults _ [] acc = acc
+fieldsFaults idx ((FieldAssign _ e) :: rest) acc =
+  fieldsFaults idx rest (exprFaults idx e acc)
+
+kvsFaults : EvIndex ->
+  List (Expr, Expr) ->
+  List EvidenceFault ->
+  List EvidenceFault
+kvsFaults _ [] acc = acc
+kvsFaults idx ((k, v) :: rest) acc =
+  kvsFaults idx rest (exprFaults idx v (exprFaults idx k acc))

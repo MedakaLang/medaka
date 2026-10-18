@@ -4,12 +4,14 @@
 import test.{
   expectEqual, expectEach, expectTrue, expectGreaterThan, Expectation
 }
-import frontend.ast.{TyConOrigin(..)}
+import frontend.ast.{
+  TyConOrigin(..), EvId(..), EvVal(..), EvEntry(..), Route(..)
+}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
-import list.{zip, filter, takeWhile, dropWhile}
+import list.{zip, filter, takeWhile, dropWhile, sort}
 import string.{lines}
-import support.util.{joinNl}
+import support.util.{joinNl, joinWith}
 import types.repr.{
   Mono(..), Tyvar(..), Scheme(..), IfaceRef(..), VecObl(..), ppScheme
 }
@@ -22,10 +24,12 @@ import types.publish.{
   CheckedProgram(..), ModDiags, TcDiag(..)
 }
 import types.disposition.{emptyDispositionTable}
+import types.evidence_coverage.{EvShape(..), evShapeOf}
+import types.route_key.{installedEvidenceEntries}
 import types.typecheck.{
   checkOneSchemeFullK, checkModulesDiagsChain, checkModulesAllLines,
-  checkModules, methodReturnMemoCurrentViews, methodReturnMemoRetentionStats,
-  tcCode, tcMsg, MethodReturnMemoView(..)
+  elaborateModulesReport, checkModules, methodReturnMemoCurrentViews,
+  methodReturnMemoRetentionStats, tcCode, tcMsg, MethodReturnMemoView(..)
 }
 
 int : Mono
@@ -548,7 +552,13 @@ checkedWeak : List ModDiags -> List (String, TcDiag) -> Option (List LiveCell)
 checkedWeak mods residual =
   map
     (c => c.cpWeak)
-    (graphReport mods [] residual [] emptyDispositionTable None).trChecked
+    (graphReport
+      mods
+      []
+      residual
+      (_ => [])
+      emptyDispositionTable
+      None).trChecked
 
 weakScheme : PubScheme
 weakScheme = pub (plainScheme (TFun (tvar 7) pureRow int))
@@ -600,3 +610,80 @@ test "checkModulesAllLines shows useSpeak's context under its module" =
   expectEqual
     ["useSpeak : Speak a => a -> String"]
     (filter (== "useSpeak : Speak a => a -> String") inP)
+
+-- ── the report's evidence and the prelude's contexts on the tree arm ───────
+
+talkPrelude : String
+talkPrelude = joinNl [
+  "interface Speak a where",
+  "  speak : a -> String",
+  "talk : Speak a => a -> String",
+  "talk x = speak x",
+  "impl Speak Int where",
+  "  speak _ = \"i\"",
+]
+
+-- A method occurrence, a dictionary application, an operator and literals.
+talkBuffer : String
+talkBuffer = "own x = talk x\nuse = talk 1\nn = 1 + 2\n"
+
+talkReport : Unit -> TcReport
+talkReport _ = elaborateModulesReport [] (desugar (parse talkPrelude)) [
+  ("b", desugar (parseLocated talkBuffer)),
+]
+
+routeText : Route -> String
+routeText RNone = "none"
+routeText (RKey w ds sups) = "key(\{w};\{routesText ds};\{routesText sups})"
+routeText (RDict d) = "dict(\{d})"
+routeText (RDictFwd d) = "fwd(\{d})"
+routeText (RLocal s ds) = "local(\{s};\{routesText ds})"
+routeText (RScalar s) = "scalar(\{s})"
+routeText (RProj r path) = "proj(\{routeText r};\{debug path})"
+
+routesText : List Route -> String
+routesText rs = joinWith "," (map routeText rs)
+
+valText : EvVal -> String
+valText (EvOne r) = routeText r
+valText (EvMany rs) = routesText rs
+valText (EvMethod iface arity r impls meths) =
+  "\{iface}/\{debug arity} \{routeText r} \{routesText impls} \{routesText meths}"
+valText (EvLit f r) = "\{debug f} \{routeText r}"
+valText (EvHead h) = h
+
+entryText : EvEntry -> String
+entryText (EvEntry (EvId m i) v) =
+  "\{m}#\{debug i} \{debug (evShapeOf v)} \{valText v}"
+
+-- Which of [shapes] some entry of [table] has.
+shapesPresent : List EvShape -> List EvEntry -> List Bool
+shapesPresent shapes table =
+  let have =
+    map
+      (e => match e
+        EvEntry _ v => evShapeOf v)
+      table
+  map (k => not (isEmpty (filter (== k) have))) shapes
+
+test "a driven program's cpEvidence is the installed table" =
+  let r = talkReport ()
+  let installed = sort (map entryText (installedEvidenceEntries ()))
+  let table = match r.trChecked
+    Some c => c.cpEvidence
+    None => []
+  let kinds = [ShapeOne, ShapeMany, ShapeMethod, ShapeLit]
+  expectEach [
+    ("checked, with no fault", expectEqual [] r.trEvidenceFaults),
+    ("equal as a set", expectEqual installed (sort (map entryText table))),
+    (
+      "every kind the program mints is present",
+      expectEqual (map (_ => True) kinds) (shapesPresent kinds table),
+    ),
+  ]
+
+test "#4267: the tree arm publishes the prelude's context" =
+  let core = (talkReport ()).trPartial.paCore
+  expectEqual
+    ["talk : Speak a => a -> String"]
+    (rendered (filter (e => fst e == "talk") core))

@@ -10993,8 +10993,7 @@ beginMethodReturnTrace _ =
 export
 finishMethodReturnTrace : Unit -> List MethodReturnTraceEntry
 finishMethodReturnTrace _ =
-  let evidence =
-    methodCellEntries () ++ siteCellEntries () ++ graphRun.value.evTable.value
+  let evidence = drivenEvidence ()
   let entries =
     map
       (publishMethodReturnTrace evidence)
@@ -11917,14 +11916,17 @@ methodCellEntriesFrom arr i acc
               c.ecMeth.value)
           :: acc)
 
--- Install the table the readers below this file consult: the per-goal entries the
--- drain recorded plus one entry per method occurrence and per minted site.  Called
+-- The whole evidence table of this graph: one entry per method occurrence and per
+-- minted site, plus the per-goal entries the drain recorded.
+drivenEvidence : Unit -> EvTable
+drivenEvidence _ =
+  methodCellEntries () ++ siteCellEntries () ++ graphRun.value.evTable.value
+
+-- Install the table the readers below this file consult.  The tree arm calls it
 -- before `dictPass` (which reads `EDictAt` routes) and again after it (which mints
--- `EMethodAt` nodes of its own), on both arms.
+-- `EMethodAt` nodes of its own).
 publishEvidence : Unit -> Unit
-publishEvidence _ =
-  installEvidence
-    (methodCellEntries () ++ siteCellEntries () ++ graphRun.value.evTable.value)
+publishEvidence _ = installEvidence (drivenEvidence ())
 
 graphRun : Ref GraphRun
 graphRun = Ref (freshGraphRun ())
@@ -14609,20 +14611,27 @@ publishOwn = map (b => (
   },
 ))
 
--- The prelude's schemes, each with the context the core pass snapshotted for it.
--- A drive that does not run the snapshotting core pass (the tree arm) publishes
--- them with no context.
-publishCore : List (String, Scheme) -> List (String, PubScheme)
-publishCore = map (b => (
+-- The prelude's schemes, each with the context [contexts] holds for it (the
+-- snapshot `coreOwnContexts` took after the core pass).
+publishCore : OrdMap (List VecObl) ->
+  List (String, Scheme) ->
+  List (String, PubScheme)
+publishCore contexts = map (b => (
   fst b,
   PubScheme {
     psScheme = snd b,
-    psContext =
-      optionOr
-        []
-        (omLookup (fst b) crossRun.value.coreSchemeObligationsRef.value),
+    psContext = optionOr [] (omLookup (fst b) contexts),
   },
 ))
+
+-- Core's own obligations, keyed by bare name (#837: the binding-id half of each
+-- key is dropped, as every cross-module reader looks a prelude name up by name).
+-- Read right after the core pass, while `perRun` still holds core's tables.
+coreOwnContexts : Unit -> OrdMap (List VecObl)
+coreOwnContexts _ =
+  omFromPairs
+    (map (kv => (fst (fst kv), snd kv)) perRun.value.schemeObligationsRef.value)
+    omEmpty
 
 -- S-full-env-scheme-entry (#1116): `ppSchemeNamed` for a display surface whose env
 -- spans more than the module last checked — the LSP's import-scoped seed tier.
@@ -53181,14 +53190,10 @@ checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
     -- plain-EVar use of a PRELUDE constrained fn (`println`) reads in instantiateVarTracked, so
     -- its Display obligation lands on the located check path instead of being dropped.
     -- #837: coreSchemeObligationsRef is NAME-keyed (declaredCrossModuleObls reads it by
-    -- bare cross-module name); drop the binding-id component of each (name, id) key.
-    crossRun.value.coreSchemeObligationsRef :=
-      omFromPairs
-        (map
-          (kv => (fst (fst kv), snd kv))
-          perRun.value.schemeObligationsRef.value)
-        omEmpty
-    let corePub = freezeRows (publishCore coreSchemes.mbSchemes)
+    -- bare cross-module name).
+    let coreContexts = coreOwnContexts ()
+    crossRun.value.coreSchemeObligationsRef := coreContexts
+    let corePub = freezeRows (publishCore coreContexts coreSchemes.mbSchemes)
     let _ = match key
       None => ()
       Some k =>
@@ -53306,7 +53311,7 @@ graphPreamble : GraphOut ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), List Decl, MarkSets)
+  (List (String, Scheme), ModuleBindings, Option (List (String, PubScheme)), OrdMap (List VecObl), List Decl, MarkSets)
 graphPreamble sel preludeKey runtimeDecls coreDecls modules =
   -- S-emit-interleave-leak (#2049), TREES only: THE EMIT DRIVER OWNS ITS OWN
   -- (EMPTY) CTOR ORACLE.  `matchOracle` lives on `driverState`, which
@@ -53432,17 +53437,24 @@ graphPreamble sel preludeKey runtimeDecls coreDecls modules =
   -- back for `dictPassModulesIfEnabled`, and a memo may hold no `Decl` (see
   -- `PreludePreamble`), so it runs the pass outright and drains only at graph end.
   -- The prelude's published rows come back here only when this pass closed core
-  -- (the diags arm); the tree arm publishes them after its graph-end drain.
-  let (coreSchemes, corePub, coreTree) = match sel
+  -- (the diags arm); the tree arm publishes them after its graph-end drain.  Both
+  -- arms return core's own contexts as a value.  The tree arm's snapshot is never
+  -- written to `crossRun.coreSchemeObligationsRef`, which inference reads.
+  let (coreSchemes, corePub, coreContexts, coreTree) = match sel
     GOutDiags =>
       let (bindings, published) =
         checkCoreMemoized preludeKey coreDecls runtimeSeed
-      (bindings, Some published, [])
+      (
+        bindings,
+        Some published,
+        crossRun.value.coreSchemeObligationsRef.value,
+        [],
+      )
     GOutTrees =>
       let (bindings, tree) =
         elabModuleStamp "" runtimeSeed [] coreDecls coreDecls
-      (bindings, None, tree)
-  (runtimeSeed, coreSchemes, corePub, coreTree, ms)
+      (bindings, None, coreOwnContexts (), tree)
+  (runtimeSeed, coreSchemes, corePub, coreContexts, coreTree, ms)
 
 -- `graphPreamble`'s `(runtimeSeed, coreSchemes)` projection, for the schemes-only
 -- driver (`checkModulesK`), which neither marks trees nor reads the mark sets back.
@@ -53452,7 +53464,7 @@ checkModulesPreambleK : Option (Int, Int) ->
   List (String, List Decl) ->
   (List (String, Scheme), ModuleBindings)
 checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =
-  let (runtimeSeed, coreSchemes, _, _, _) =
+  let (runtimeSeed, coreSchemes, _, _, _, _) =
     graphPreamble GOutDiags preludeKey runtimeDecls coreDecls modules
   (runtimeSeed, coreSchemes)
 
@@ -54368,13 +54380,17 @@ dispositionRowsOfMethods inst iface supplied required (m :: rest) =
     restRows
 
 -- ── THE graph driver ─────────────────────────────────────────────────────────
--- What a whole-graph drive produces, for either output selection.  `gdPerMod` and
--- `gdCoreSchemes` are filled on both; the remaining three are the tree arm's and
--- are empty on `GOutDiags` (the evidence table is the live cell either way — the
--- diags arm publishes nothing into it, so reading it costs a field access).
+-- What a whole-graph drive produces, for either output selection.  `gdPerMod`,
+-- `gdCoreSchemes` and `gdCoreContexts` are filled on both; `gdCore`, `gdModules`
+-- and `gdResidual` are the tree arm's and are empty on `GOutDiags`.  `gdEvTable`
+-- is the goal half of the evidence table only (the drain's per-goal entries, what
+-- `ElabResult` returns); the whole table the drive installs is the report's
+-- `cpEvidence`.
 data GraphDrive = GraphDrive {
   gdPerMod : List ModDiags,
   gdCoreSchemes : List (String, PubScheme),
+  -- core's own contexts, keyed by bare name, snapshotted after the core pass
+  gdCoreContexts : OrdMap (List VecObl),
   gdCore : List Decl,
   gdModules : List (String, List Decl),
   gdResidual : List (String, TcDiag),
@@ -54441,7 +54457,7 @@ driveGraphK sel valueMain preludeKey runtimeDecls coreDecls0 modulesIn =
   -- rewrite on VALUES and cannot move a type head, so the graph reaches identity
   -- minting in its final shape and no later pass has to re-mint.
   let (coreDecls, modules) = stampGraphDecls coreDecls0 modulesAliased
-  let (runtimeSeed, coreSchemes, coreClosed, coreTree, ms) =
+  let (runtimeSeed, coreSchemes, coreClosed, coreContexts, coreTree, ms) =
     graphPreamble sel preludeKey runtimeDecls coreDecls modules
   -- #154 PR-C: the worker reads BOTH accData (buildOracle `prog ++ accData`) and
   -- accAll (checkModuleFullImpl implDecls), and
@@ -54483,7 +54499,7 @@ driveGraphK sel valueMain preludeKey runtimeDecls coreDecls0 modulesIn =
       (attachDrainFindings (findings ++ wanted) (map freezeModDiags perModRaw))
   let corePub = match coreClosed
     Some rows => rows
-    None => freezeRows (publishCore coreSchemes.mbSchemes)
+    None => freezeRows (publishCore coreContexts coreSchemes.mbSchemes)
   -- #1112 A-3: the whole-graph IE/CE `buildDeclEnvs` filled in the preamble
   -- above is already complete at this point — installed here, once per
   -- elaboration, on both arms alike (mirroring `installEvidence`'s own
@@ -54494,19 +54510,13 @@ driveGraphK sel valueMain preludeKey runtimeDecls coreDecls0 modulesIn =
     GOutDiags => GraphDrive {
       gdPerMod = perMod,
       gdCoreSchemes = corePub,
+      gdCoreContexts = coreContexts,
       gdCore = [],
       gdModules = [],
       gdResidual = [],
       gdEvTable = graphRun.value.evTable.value,
       gdDispositions = dispositions,
-      gdReport =
-        graphReport
-          perMod
-          corePub
-          []
-          graphRun.value.evTable.value
-          dispositions
-          None,
+      gdReport = graphReport perMod corePub [] drivenEvidence dispositions None,
     }
     GOutTrees =>
       -- The set `dictPass` prepends dict params for: the bare set plus every
@@ -54534,17 +54544,19 @@ driveGraphK sel valueMain preludeKey runtimeDecls coreDecls0 modulesIn =
       GraphDrive {
         gdPerMod = perMod,
         gdCoreSchemes = corePub,
+        gdCoreContexts = coreContexts,
         gdCore = coreD,
         gdModules = modulesOut,
         gdResidual = residual,
         gdEvTable = graphRun.value.evTable.value,
         gdDispositions = dispositions,
+        -- read after the last `publishEvidence`, so the table is the installed one
         gdReport =
           graphReport
             perMod
             corePub
             residual
-            graphRun.value.evTable.value
+            drivenEvidence
             dispositions
             (Some (coreD, modulesOut)),
       }
@@ -55157,6 +55169,15 @@ elaborateModulesWithSchemes valueMain runtimeDecls coreDecls0 modulesIn =
     g.gdCoreSchemes,
     entrySchemes,
   )
+
+-- The report of `elaborateModules`' drive, for a test that reads it.
+export
+elaborateModulesReport : List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  TcReport
+elaborateModulesReport runtimeDecls coreDecls0 modulesIn =
+  (driveGraphK GOutTrees False None runtimeDecls coreDecls0 modulesIn).gdReport
 -- arg-position interface-method names whose route resolveArgStamps may stamp
 -- (populated on every path; an empty set would degenerate prePassDictArg to prePassDict)
 
