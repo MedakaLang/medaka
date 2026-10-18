@@ -123,8 +123,13 @@ write_tests = re.search(
 style_rule = re.search(r"\bstyle (rules?|rulings?|pass\w*)\b|\brubric\b|\bSTYLE-RU(BRIC|LINGS)\b"
                        r"|\breview.?bench\b|\bslop\b", prompt, re.IGNORECASE)
 
-if not roadmap and not stdlib and not mcp and not sprint and not gates and not debug and not write_tests \
-        and not style_rule:
+# Craft-review task over a diff: the cheap measured Haiku pass (`review-diff`)
+# goes first, before `style-review` or `pr-review`.
+review = re.search(r"\b(style|craft|slop)[ -]review\b"
+                   r"|\breview\w*\b.{0,40}\b(diff|branch|sprint|PR|pull request)\b",
+                   prompt, re.IGNORECASE)
+
+if not (roadmap or stdlib or mcp or sprint or gates or debug or write_tests or style_rule or review):
     sys.exit(0)
 
 if roadmap:
@@ -248,6 +253,16 @@ if style_rule:
         "a rule needs Val's ruling (one question at a time, on a real "
         "instance), a STYLE-RULINGS.md entry, fixtures checked with "
         "scripts/review_bench/curate.py, and a dev measurement before test.\n"
+        "Triage reminder, not a directive."
+    )
+
+if review:
+    print(
+        "Skill triage (diff review detected): for craft (style, comments, "
+        "duplication, tests), load review-diff first -- a cheap measured Haiku "
+        "pass (scripts/review_bench/review.py, --dry-run for the cost) whose "
+        "findings are leads to verify against docs/design/STYLE-RUBRIC.md. "
+        "Then style-review (end of sprint) or pr-review (per PR).\n"
         "Triage reminder, not a directive."
     )
 

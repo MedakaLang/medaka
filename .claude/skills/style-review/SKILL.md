@@ -30,6 +30,8 @@ explaining a rule here, it has been forked. Cite the source.
   aspiration.
 - **Findings are ranked.** A reviewer who lists twenty equals has ranked
   nothing. Lead with the ones that would still be wrong in six months.
+- **Cheap first pass.** Run the `review-diff` skill over the sprint diff
+  first; verify each of its findings against the rubric before reporting it.
 
 ## The checklist — each section, its single source
 

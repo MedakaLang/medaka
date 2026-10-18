@@ -21,6 +21,8 @@ diff can still be a bad diff.
   confident wrong finding wastes an Opus agent's day.
 - **Rank by what would actually bite.** Three real findings beat twenty nits. If you have
   no substantive findings, SAY SO — do not manufacture some to look thorough.
+- **Cheap first pass for craft.** The `review-diff` skill runs the measured Haiku style
+  reviewer over the diff; treat its findings as leads to verify, not findings.
 
 ## What to look for
 
