@@ -16,7 +16,8 @@
 import driver.diagnostics.{
   analyzeToLines, analyzeProjectFull, analyzeProjectReport, noStdlibExports,
   graphCheckDrive, CheckDrive(..), CheckDump(..), analyzeFrom, frontEnd,
-  checkFrontDrive, FrontInput(..), FrontProgram(..), FrontOutput(..), Diag(..)
+  checkFrontDrive, FrontInput(..), FrontPolicy(..), FrontProgram(..),
+  FrontOutput(..), Diag(..)
 }
 import frontend.parser.{parseLocated}
 import fs.{fixtureFiles}
@@ -328,6 +329,7 @@ frontOfFile rsrc csrc src = frontEnd noStdlibExports (checkFrontDrive
   fiTrusted = [],
   fiRuntimeSrc = rsrc,
   fiCoreSrc = csrc,
+  fiPolicy = NeverDriveRejected,
   fiProgram = FrontFile ("main", "main.mdk", parseLocated src),
 }
 
@@ -349,13 +351,7 @@ test "a derive error outside the drive withholds the checked program" = match (
         expectEqual
           (map
             diagText
-            (analyzeFrom
-              noStdlibExports
-              "main"
-              rsrc
-              csrc
-              (parseLocated bad)
-              []))
+            (analyzeFrom noStdlibExports "main" rsrc csrc (parseLocated bad)))
           (map diagText (flatMap snd front.foDiags)),
       ),
       ("clean control: checked", expectTrue (isSome clean.foReport.trChecked)),

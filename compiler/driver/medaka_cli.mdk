@@ -114,10 +114,9 @@ import frontend.parser.{
   Positions,
 }
 import frontend.lexer.{tokenizeWithOffsetPairs}
-import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.desugar_cache.{desugaredPrelude}
 import frontend.desugar.{desugarIn}
 import tools.target_parse.{targetDesugared}
-import frontend.resolve.{resolveModulesErrorsByFile, internalGuardFor, ResError}
 import driver.loader.{
   loadProgramFilesLocatedE,
   readSource,
@@ -140,22 +139,18 @@ import driver.front_gate.{
 }
 import driver.diagnostics.{
   desugaredModPairs,
-  analyzeLocated,
-  analyzeLocatedG,
-  analyzeFrom,
   CheckDrive(..),
   CheckDump(..),
   frontEnd,
   checkFrontDrive,
   FrontProgram(..),
   FrontInput(..),
+  FrontPolicy(..),
   FrontOutput(..),
   ppDiagCli,
   ppDiagCliLines,
   renderTcDiags,
-  ppResolveErrorsByFile,
   ppDiagBuckets,
-  hintResErrorPairs,
   stdlibExportsReader,
   diagOfResError,
   diagOfTypeError,
@@ -173,9 +168,6 @@ import driver.diagnostics.{
   flushRunEnvelope,
   pendingStaleNotice,
   readDiagSrc,
-  typecheckDiagsFold,
-  seedAll,
-  midPath,
   codeKind,
   optField,
   cjFixJson,
@@ -942,29 +934,6 @@ residualJsonTriples entryFile pathMap ((mid, d) :: rest) =
       (entryFile, readFileSafe entryFile, [diagOfTypeError d])
         :: residualJsonTriples entryFile pathMap rest
 
--- `locatedProjectDiags` over per-module diagnostics an elaboration already
--- produced: the same `foldModuleTc` tail `frontEnd` runs (guard exhaustiveness,
--- `deriving`, prelude-standalone shadows, bucketed per file).
---
--- The buckets start empty rather than from `resolvePass`: the caller runs
--- `resolveModulesErrorsByFile` first and aborts on any resolve error, so
--- `resolveRejected` has nothing to gate on.
-elaboratedProjectDiags : List Decl ->
-  List Decl ->
-  List (String, String, List Decl) ->
-  List (String, List Decl) ->
-  List (String, (List TcDiag, List TcDiag)) ->
-  <IO> (Option String, List (String, String, List Diag), Int)
-elaboratedProjectDiags rtD coreD modsWithPath modsD perMod =
-  locatedProjectDiags
-    (typecheckDiagsFold
-      rtD
-      coreD
-      modsWithPath
-      modsD
-      perMod
-      (seedAll (map midPath modsWithPath) []))
-
 -- One front-end run (`frontEnd`, driven by `checkFrontDrive`), then the report
 -- by module count: a single loaded module (no non-core imports) ⇒ the
 -- single-file runCheck (byte-identical full dump); >1 module ⇒ the multi-module
@@ -1011,6 +980,7 @@ checkRoute typesMode allowInternal trusted roots rsrc csrc tsrc target modsWithP
     fiTrusted = trusted,
     fiRuntimeSrc = rsrc,
     fiCoreSrc = csrc,
+    fiPolicy = NeverDriveRejected,
     fiProgram = program,
   }
   match program
@@ -1397,10 +1367,8 @@ requireArgs sp argv = match parseArgs sp argv
 --   position:     character, line
 
 -- Run check --json: mirrors OCaml's check --json (analyze_project → JSON).
--- Loads the graph once with the located loader and routes by module count
--- (mirrors checkRoute):
---   single module (no non-core imports) → analyzeFrom over the loaded decls
---   multi-module → analyzeLoadedFull over the loaded graph
+-- Loads the graph once with the located loader and runs one `frontEnd` over it
+-- (`checkJsonFileParts`), enveloped by module count as `checkRoute` reports.
 -- When the load fails, the ENTRY's parse errors are detected FIRST via
 -- parseResult; an IMPORTED module's are reported by the loader itself (#100),
 -- attributed to that module.
@@ -2841,6 +2809,7 @@ runRunCmd argv =
             fiTrusted = frontTrusted,
             fiRuntimeSrc = rsrc,
             fiCoreSrc = csrc,
+            fiPolicy = NeverDriveRejected,
             fiProgram = program,
           }
       let report = front.foReport
@@ -3544,10 +3513,10 @@ analyzeTarget target =
     Ok modsWithPath =>
       analyzeLoaded rsrc csrc target roots stdlibDir modsWithPath
 
--- Split out of `analyzeTarget` so the resolve gate and the typecheck gate each
--- read as one thing.  The typecheck gate is `run`'s: the per-module
--- diagnostics of the one elaboration, rendered located against each module's
--- own file, then anything only the graph-end drain saw.
+-- One front-end run (`frontEnd`) whose drive is the elaboration the verb reads.
+-- A graph resolve rejects is refused with its resolve errors and not driven;
+-- past resolve, the gate is `run`'s: the per-module diagnostics of the one elaboration, rendered located
+-- against each module's own file, then anything only the graph-end drain saw.
 analyzeLoaded : String ->
   String ->
   String ->
@@ -3559,41 +3528,38 @@ analyzeLoaded rsrc csrc target roots stdlibDir modsWithPath =
   let mods = map dropPathTriple modsWithPath
   let pathMap = map modIdToPath modsWithPath
   let trusted = projectTrustedMods target roots stdlibDir mods
-  let preludeKey = Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc)
   let rtD = desugaredPrelude rsrc
   let coreD = desugaredPrelude csrc
   let modsD = map desugarPair mods
-  let resDiags =
-    ppResolveErrorsByFile
-      (hintResErrorPairs
-        (stdlibExportsReader stdlibDir)
-        (resolveModulesErrorsByFile
-          pathMap
-          False
-          trusted
-          preludeKey
-          rtD
-          coreD
-          modsD))
-  match resDiags
-    "" =>
-      let (analysis, report) =
+  let front =
+    frontEnd
+      (stdlibExportsReader stdlibDir)
+      (_ =>
         analyzeProgramReport
           (valueMainCandidate coreD modsD)
           False
           rtD
           coreD
-          modsD
-      let residualHit = isNone report.trChecked
-      let (_, _, perMod, residual, _, _) = analysis.eaElab
-      match elaboratedProjectDiags rtD coreD modsWithPath modsD perMod
+          modsD)
+      FrontInput {
+        fiAllowInternal = False,
+        fiTrusted = trusted,
+        fiRuntimeSrc = rsrc,
+        fiCoreSrc = csrc,
+        fiPolicy = NeverDriveRejected,
+        fiProgram = FrontGraph modsWithPath modsD,
+      }
+  match front.foDriven
+    None => Err (ppDiagBuckets front.foDiags)
+    Some analysis =>
+      let (_, _, _, residual, _, _) = analysis.eaElab
+      match locatedProjectDiags front.foDiags
         (Some errText, _, _) => Err errText
         (None, _, _) =>
-          if residualHit then
+          if isNone front.foReport.trChecked then
             Err (residualOrGeneric pathMap target residual)
           else
             Ok analysis
-    _ => Err resDiags
 
 -- ── manifest ─────────────────────────────────────────────────────────────────
 -- WS-1c of EFFECTS-CONFORMANCE-ROADMAP.md.  Emit a module's verified capability

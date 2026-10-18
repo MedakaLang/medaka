@@ -6,7 +6,7 @@
 -- (the emitter child) can import this module without `medaka_cli.mdk`.
 
 import frontend.ast.{Decl, Loc(..)}
-import types.typecheck.{TcDiag, setStdlibOwnership}
+import types.typecheck.{setStdlibOwnership}
 import json.{Json(..), parse, stringify}
 import frontend.parser.{
   parseLocated,
@@ -23,9 +23,6 @@ import driver.diagnostics.{
   CheckJson(..),
   Diag(..),
   Severity(..),
-  analyzeFinish,
-  analyzeSurface,
-  bucketsResolveRejected,
   cjDiagnostic,
   cjFoldIntoFile,
   cjGraphParts,
@@ -34,10 +31,6 @@ import driver.diagnostics.{
   ppCheckJson,
   readFileSafe,
   relDiagPath,
-  resolveLoadedBuckets,
-  tcHalfOfPerModule,
-  typecheckDiagsFold,
-  typecheckLoadedBuckets,
   hintResErrorPairs,
   mainEntryError,
   ppDiagCliLines,
@@ -366,21 +359,24 @@ diagJsonPathOfEnv _ = match getEnv diagJsonEnv
   Some "" => None
   Some p => Some p
 
--- What the `--json` gate keeps for the envelope after the drive.  One module:
--- the entry's spelling, its source, the surface passes' diagnostics (none of
--- them a resolve error, which stopped the gate) and its located decls.  A
--- graph: the entry's spelling, the stdlib directory and the per-file resolve
--- buckets.
-public export data JsonFront =
-  | JsonSingle String String (List Diag) (List Decl)
-  | JsonGraph String String (List (String, List Diag))
+-- What the `--json` gate hands on for the front end the build's drive runs in
+-- (`entries/entry_support.runEmitAsked`): the entry's spelling, the stdlib
+-- directory, the search roots, and the trust the resolve runs under.
+public export data JsonFront = JsonFront {
+  jfEntry : String,
+  jfStdlibDir : String,
+  jfRoots : List String,
+  jfAllowInternal : Bool,
+  jfTrusted : List String,
+}
 
--- `frontGate` for the `--json` route: a refusal is `check --json`'s envelope
--- for the program.  Resolve runs as `check` runs it, so a refused graph's
--- envelope also carries what `check` reports for the modules resolve did not
--- block; that drive is the build's only one, since nothing is emitted.  The
--- `main` refusal waits for the drive (`frontJsonAfterDrive`): an envelope
--- with an error outranks it.
+-- `frontGate` for the `--json` route, up to the resolve: a load failure is
+-- `check --json`'s envelope for it.  Resolve runs in the build's one
+-- `frontEnd` run, as `check --json` runs it (`DriveUnblocked`), so a refused
+-- graph's envelope also carries what `check` reports for the modules resolve
+-- did not block; that check drive is the build's only one, since nothing is
+-- emitted.  The `main` refusal waits for the drive (`frontJsonVerdict`): an
+-- envelope with an error outranks it.
 export
 frontGateJson : Bool ->
   String ->
@@ -399,75 +395,31 @@ frontGateJson allowInternal stdlibDir rsrc csrc entry =
       let (flatStdlib, ownedStdlib) =
         stdlibOwnership entry roots stdlibDir pairs
       let _ = setStdlibOwnership flatStdlib ownedStdlib
-      match mods
-        [(mid, _, raw)] =>
-          let src = readFileSafe entry
-          let surface =
-            analyzeSurface
-              (cliStdlibExports stdlibDir)
-              mid
-              rsrc
-              csrc
-              raw
-              (internalGuardFor (allowInternal || contains mid trusted))
-          let diags = analyzeFinish surface []
-          if surface.resolveClean then
-            Ok (graph, JsonSingle entry src diags raw)
-          else
-            Err (fst (cjSingleParts entry src raw diags))
-        _ =>
-          let buckets =
-            resolveLoadedBuckets
-              (cliStdlibExports stdlibDir)
-              allowInternal
-              trusted
-              entry
-              roots
-              rsrc
-              csrc
-              mods
-              graph.fgModsD
-          if bucketsResolveRejected buckets then
-            let (_, results) =
-              typecheckLoadedBuckets
-                entry
-                roots
-                rsrc
-                csrc
-                mods
-                graph.fgModsD
-                buckets
-            Err (fst (cjGraphParts entry stdlibDir pairs results))
-          else
-            Ok (graph, JsonGraph entry stdlibDir buckets)
+      Ok (
+        graph,
+        JsonFront {
+          jfEntry = entry,
+          jfStdlibDir = stdlibDir,
+          jfRoots = roots,
+          jfAllowInternal = allowInternal,
+          jfTrusted = trusted,
+        },
+      )
 
--- The `--json` route's verdict once the build's drive has run: the envelope
+-- The `--json` route's verdict over the front end's buckets: the envelope
 -- with its errors, else the `main` refusal, else the target refusals folded
 -- into the clean envelope, each into its own file's entry, in the order
--- `build --json` reports them.  `Ok` is the clean envelope.  `perMod` is the
--- drive's per-module diagnostics, read with the surface ones as `check` reads
--- them.  The refusals' files must be spelled as the envelope spells them
--- (`jsonFrontKey`).
+-- `build --json` reports them.  `Ok` is the clean envelope.  The refusals'
+-- files must be spelled as the envelope spells them (`jsonFrontKey`).
 export
-frontJsonAfterDrive : JsonFront ->
-  List Decl ->
-  List Decl ->
+frontJsonVerdict : JsonFront ->
   List (String, String, List Decl) ->
-  List (String, List Decl) ->
-  List (String, (List TcDiag, List TcDiag)) ->
+  List (String, List Diag) ->
   List Diag ->
   <IO> Result CheckJson CheckJson
-frontJsonAfterDrive front rtD coreD mods modsD perMod refusal =
-  let (cj, hasErr) = match front
-    JsonSingle target src surface raw =>
-      cjSingleParts target src raw (surface ++ tcHalfOfPerModule perMod)
-    JsonGraph target stdlibDir buckets =>
-      cjGraphParts
-        target
-        stdlibDir
-        (map dropPathTriple mods)
-        (typecheckDiagsFold rtD coreD mods modsD perMod buckets)
-  let entry = jsonFrontEntry front
+frontJsonVerdict front mods buckets refusal =
+  let entry = front.jfEntry
+  let (cj, hasErr) = jsonEnvelope front mods buckets
   if hasErr then
     Err cj
   else match mainRefusalJson entry mods
@@ -478,17 +430,30 @@ frontJsonAfterDrive front rtD coreD mods modsD perMod refusal =
         Err (CjParts key (foldTargetDiags key (readFileSafe key) ds triples))
       _ => Ok cj
 
+-- `check --json`'s envelope over the front end's buckets, and whether it holds
+-- an error: a single module's is the one-file envelope, a graph's the
+-- multi-module one.
+export
+jsonEnvelope : JsonFront ->
+  List (String, String, List Decl) ->
+  List (String, List Diag) ->
+  <IO> (CheckJson, Bool)
+jsonEnvelope front [(_, _, raw)] buckets =
+  cjSingleParts
+    front.jfEntry
+    (readFileSafe front.jfEntry)
+    raw
+    (flatMap snd buckets)
+jsonEnvelope front mods buckets =
+  cjGraphParts front.jfEntry front.jfStdlibDir (map dropPathTriple mods) buckets
+
 -- A loaded module's file as the `--json` envelope spells it: the entry's
 -- spelling for a single module, else relative to the root a graph's envelope
 -- strips (`cjGraphParts`).
 export
-jsonFrontKey : JsonFront -> String -> String
-jsonFrontKey (JsonSingle target _ _ _) _ = target
-jsonFrontKey (JsonGraph _ stdlibDir _) path = relDiagPath (dirOf stdlibDir) path
-
-jsonFrontEntry : JsonFront -> String
-jsonFrontEntry (JsonSingle target _ _ _) = target
-jsonFrontEntry (JsonGraph target _ _) = target
+jsonFrontKey : JsonFront -> List (String, String, List Decl) -> String -> String
+jsonFrontKey front [_] _ = front.jfEntry
+jsonFrontKey front _ path = relDiagPath (dirOf front.jfStdlibDir) path
 
 -- The `main` refusal as its own envelope against the entry's spelling.
 mainRefusalJson : String ->

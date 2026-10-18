@@ -1,5 +1,5 @@
 # META
-source_lines=577
+source_lines=542
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/front_gate.mdk — the front-end error renderers the CLI verbs
@@ -10,7 +10,7 @@ stages=DESUGAR,MARK
 -- (the emitter child) can import this module without `medaka_cli.mdk`.
 
 import frontend.ast.{Decl, Loc(..)}
-import types.typecheck.{TcDiag, setStdlibOwnership}
+import types.typecheck.{setStdlibOwnership}
 import json.{Json(..), parse, stringify}
 import frontend.parser.{
   parseLocated,
@@ -27,9 +27,6 @@ import driver.diagnostics.{
   CheckJson(..),
   Diag(..),
   Severity(..),
-  analyzeFinish,
-  analyzeSurface,
-  bucketsResolveRejected,
   cjDiagnostic,
   cjFoldIntoFile,
   cjGraphParts,
@@ -38,10 +35,6 @@ import driver.diagnostics.{
   ppCheckJson,
   readFileSafe,
   relDiagPath,
-  resolveLoadedBuckets,
-  tcHalfOfPerModule,
-  typecheckDiagsFold,
-  typecheckLoadedBuckets,
   hintResErrorPairs,
   mainEntryError,
   ppDiagCliLines,
@@ -370,21 +363,24 @@ diagJsonPathOfEnv _ = match getEnv diagJsonEnv
   Some "" => None
   Some p => Some p
 
--- What the `--json` gate keeps for the envelope after the drive.  One module:
--- the entry's spelling, its source, the surface passes' diagnostics (none of
--- them a resolve error, which stopped the gate) and its located decls.  A
--- graph: the entry's spelling, the stdlib directory and the per-file resolve
--- buckets.
-public export data JsonFront =
-  | JsonSingle String String (List Diag) (List Decl)
-  | JsonGraph String String (List (String, List Diag))
+-- What the `--json` gate hands on for the front end the build's drive runs in
+-- (`entries/entry_support.runEmitAsked`): the entry's spelling, the stdlib
+-- directory, the search roots, and the trust the resolve runs under.
+public export data JsonFront = JsonFront {
+  jfEntry : String,
+  jfStdlibDir : String,
+  jfRoots : List String,
+  jfAllowInternal : Bool,
+  jfTrusted : List String,
+}
 
--- `frontGate` for the `--json` route: a refusal is `check --json`'s envelope
--- for the program.  Resolve runs as `check` runs it, so a refused graph's
--- envelope also carries what `check` reports for the modules resolve did not
--- block; that drive is the build's only one, since nothing is emitted.  The
--- `main` refusal waits for the drive (`frontJsonAfterDrive`): an envelope
--- with an error outranks it.
+-- `frontGate` for the `--json` route, up to the resolve: a load failure is
+-- `check --json`'s envelope for it.  Resolve runs in the build's one
+-- `frontEnd` run, as `check --json` runs it (`DriveUnblocked`), so a refused
+-- graph's envelope also carries what `check` reports for the modules resolve
+-- did not block; that check drive is the build's only one, since nothing is
+-- emitted.  The `main` refusal waits for the drive (`frontJsonVerdict`): an
+-- envelope with an error outranks it.
 export
 frontGateJson : Bool ->
   String ->
@@ -403,75 +399,31 @@ frontGateJson allowInternal stdlibDir rsrc csrc entry =
       let (flatStdlib, ownedStdlib) =
         stdlibOwnership entry roots stdlibDir pairs
       let _ = setStdlibOwnership flatStdlib ownedStdlib
-      match mods
-        [(mid, _, raw)] =>
-          let src = readFileSafe entry
-          let surface =
-            analyzeSurface
-              (cliStdlibExports stdlibDir)
-              mid
-              rsrc
-              csrc
-              raw
-              (internalGuardFor (allowInternal || contains mid trusted))
-          let diags = analyzeFinish surface []
-          if surface.resolveClean then
-            Ok (graph, JsonSingle entry src diags raw)
-          else
-            Err (fst (cjSingleParts entry src raw diags))
-        _ =>
-          let buckets =
-            resolveLoadedBuckets
-              (cliStdlibExports stdlibDir)
-              allowInternal
-              trusted
-              entry
-              roots
-              rsrc
-              csrc
-              mods
-              graph.fgModsD
-          if bucketsResolveRejected buckets then
-            let (_, results) =
-              typecheckLoadedBuckets
-                entry
-                roots
-                rsrc
-                csrc
-                mods
-                graph.fgModsD
-                buckets
-            Err (fst (cjGraphParts entry stdlibDir pairs results))
-          else
-            Ok (graph, JsonGraph entry stdlibDir buckets)
+      Ok (
+        graph,
+        JsonFront {
+          jfEntry = entry,
+          jfStdlibDir = stdlibDir,
+          jfRoots = roots,
+          jfAllowInternal = allowInternal,
+          jfTrusted = trusted,
+        },
+      )
 
--- The `--json` route's verdict once the build's drive has run: the envelope
+-- The `--json` route's verdict over the front end's buckets: the envelope
 -- with its errors, else the `main` refusal, else the target refusals folded
 -- into the clean envelope, each into its own file's entry, in the order
--- `build --json` reports them.  `Ok` is the clean envelope.  `perMod` is the
--- drive's per-module diagnostics, read with the surface ones as `check` reads
--- them.  The refusals' files must be spelled as the envelope spells them
--- (`jsonFrontKey`).
+-- `build --json` reports them.  `Ok` is the clean envelope.  The refusals'
+-- files must be spelled as the envelope spells them (`jsonFrontKey`).
 export
-frontJsonAfterDrive : JsonFront ->
-  List Decl ->
-  List Decl ->
+frontJsonVerdict : JsonFront ->
   List (String, String, List Decl) ->
-  List (String, List Decl) ->
-  List (String, (List TcDiag, List TcDiag)) ->
+  List (String, List Diag) ->
   List Diag ->
   <IO> Result CheckJson CheckJson
-frontJsonAfterDrive front rtD coreD mods modsD perMod refusal =
-  let (cj, hasErr) = match front
-    JsonSingle target src surface raw =>
-      cjSingleParts target src raw (surface ++ tcHalfOfPerModule perMod)
-    JsonGraph target stdlibDir buckets =>
-      cjGraphParts
-        target
-        stdlibDir
-        (map dropPathTriple mods)
-        (typecheckDiagsFold rtD coreD mods modsD perMod buckets)
-  let entry = jsonFrontEntry front
+frontJsonVerdict front mods buckets refusal =
+  let entry = front.jfEntry
+  let (cj, hasErr) = jsonEnvelope front mods buckets
   if hasErr then
     Err cj
   else match mainRefusalJson entry mods
@@ -482,17 +434,30 @@ frontJsonAfterDrive front rtD coreD mods modsD perMod refusal =
         Err (CjParts key (foldTargetDiags key (readFileSafe key) ds triples))
       _ => Ok cj
 
+-- `check --json`'s envelope over the front end's buckets, and whether it holds
+-- an error: a single module's is the one-file envelope, a graph's the
+-- multi-module one.
+export
+jsonEnvelope : JsonFront ->
+  List (String, String, List Decl) ->
+  List (String, List Diag) ->
+  <IO> (CheckJson, Bool)
+jsonEnvelope front [(_, _, raw)] buckets =
+  cjSingleParts
+    front.jfEntry
+    (readFileSafe front.jfEntry)
+    raw
+    (flatMap snd buckets)
+jsonEnvelope front mods buckets =
+  cjGraphParts front.jfEntry front.jfStdlibDir (map dropPathTriple mods) buckets
+
 -- A loaded module's file as the `--json` envelope spells it: the entry's
 -- spelling for a single module, else relative to the root a graph's envelope
 -- strips (`cjGraphParts`).
 export
-jsonFrontKey : JsonFront -> String -> String
-jsonFrontKey (JsonSingle target _ _ _) _ = target
-jsonFrontKey (JsonGraph _ stdlibDir _) path = relDiagPath (dirOf stdlibDir) path
-
-jsonFrontEntry : JsonFront -> String
-jsonFrontEntry (JsonSingle target _ _ _) = target
-jsonFrontEntry (JsonGraph target _ _) = target
+jsonFrontKey : JsonFront -> List (String, String, List Decl) -> String -> String
+jsonFrontKey front [_] _ = front.jfEntry
+jsonFrontKey front _ path = relDiagPath (dirOf front.jfStdlibDir) path
 
 -- The `main` refusal as its own envelope against the entry's spelling.
 mainRefusalJson : String ->
@@ -581,13 +546,13 @@ fileWithNotes key notes (JObject members) = match toList members
 fileWithNotes _ _ _ = None
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Loc" true))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "TcDiag" false) (mem "setStdlibOwnership" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "setStdlibOwnership" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "parse" false) (mem "stringify" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugarIn" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "internalGuardFor" false) (mem "resolveModulesErrorsByFile" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "CheckJson" true) (mem "Diag" true) (mem "Severity" true) (mem "analyzeFinish" false) (mem "analyzeSurface" false) (mem "bucketsResolveRejected" false) (mem "cjDiagnostic" false) (mem "cjFoldIntoFile" false) (mem "cjGraphParts" false) (mem "cjLoadFailure" false) (mem "cjSingleParts" false) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "relDiagPath" false) (mem "resolveLoadedBuckets" false) (mem "tcHalfOfPerModule" false) (mem "typecheckDiagsFold" false) (mem "typecheckLoadedBuckets" false) (mem "hintResErrorPairs" false) (mem "mainEntryError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "ppMainEntryError" false) (mem "ppResolveErrorsByFile" false) (mem "parseErrHelpFix" false) (mem "parseErrCode" false) (mem "srcLinesArr" false) (mem "stdlibExportsReader" false) (mem "surfaceErrors" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "CheckJson" true) (mem "Diag" true) (mem "Severity" true) (mem "cjDiagnostic" false) (mem "cjFoldIntoFile" false) (mem "cjGraphParts" false) (mem "cjLoadFailure" false) (mem "cjSingleParts" false) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "relDiagPath" false) (mem "hintResErrorPairs" false) (mem "mainEntryError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "ppMainEntryError" false) (mem "ppResolveErrorsByFile" false) (mem "parseErrHelpFix" false) (mem "parseErrCode" false) (mem "srcLinesArr" false) (mem "stdlibExportsReader" false) (mem "surfaceErrors" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "dropPathTriple" false) (mem "entrySearchRoots" false) (mem "loadProgramFilesLocatedE" false) (mem "modIdToPath" false) (mem "projectTrustedMods" false) (mem "readSource" false) (mem "stdlibOwnership" false) (mem "unknownModuleIdOf" false) (mem "findImportLoc" false) (mem "availableModulesHint" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "joinNl" false) (mem "splitLast" false))))
@@ -634,17 +599,17 @@ fileWithNotes _ _ _ = None
 (DFunDef false "writeGateAck" (PWild) (EMatch (EApp (EVar "getEnv") (EVar "gateAckEnv")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PLit (LString ""))) () (ELit LUnit)) (arm (PCon "Some" (PVar "path")) () (EMatch (EApp (EApp (EVar "writeFile") (EVar "path")) (ELit (LString "ran\n"))) (arm (PCon "Ok" PWild) () (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not write the gate acknowledgement to ")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))))))))
 (DTypeSig true "diagJsonPathOfEnv" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "diagJsonPathOfEnv" (PWild) (EMatch (EApp (EVar "getEnv") (EVar "diagJsonEnv")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PLit (LString ""))) () (EVar "None")) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "Some") (EVar "p")))))
-(DData Public "JsonFront" () ((variant "JsonSingle" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyApp (TyCon "List") (TyCon "Decl")))) (variant "JsonGraph" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))) ())
+(DData Public "JsonFront" () ((variant "JsonFront" (ConNamed (field "jfEntry" (TyCon "String")) (field "jfStdlibDir" (TyCon "String")) (field "jfRoots" (TyApp (TyCon "List") (TyCon "String"))) (field "jfAllowInternal" (TyCon "Bool")) (field "jfTrusted" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "frontGateJson" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "CheckJson")) (TyTuple (TyCon "FrontGraph") (TyCon "JsonFront"))))))))))
-(DFunDef false "frontGateJson" ((PVar "allowInternal") (PVar "stdlibDir") (PVar "rsrc") (PVar "csrc") (PVar "entry")) (EBlock (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "entry"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "entry")) (EVar "roots")) (arm (PCon "Err" (PVar "lerr")) () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EVar "cjLoadFailure") (EVar "entry")) (EApp (EVar "readFileSafe") (EVar "entry"))) (EVar "stdlibDir")) (EVar "lerr")))) (arm (PCon "Ok" (PVar "mods")) () (EBlock (DoLet false false (PVar "pairs") (EApp (EApp (EVar "map") (EVar "dropPathTriple")) (EVar "mods"))) (DoLet false false (PVar "graph") (EApp (EApp (EApp (EApp (EVar "frontGraphOf") (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "mods"))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "entry")) (EVar "roots")) (EVar "stdlibDir")) (EVar "pairs"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "entry")) (EVar "roots")) (EVar "stdlibDir")) (EVar "pairs"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoExpr (EMatch (EVar "mods") (arm (PList (PTuple (PVar "mid") PWild (PVar "raw"))) () (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "entry"))) (DoLet false false (PVar "surface") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeSurface") (EApp (EVar "cliStdlibExports") (EVar "stdlibDir"))) (EVar "mid")) (EVar "rsrc")) (EVar "csrc")) (EVar "raw")) (EApp (EVar "internalGuardFor") (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))))) (DoLet false false (PVar "diags") (EApp (EApp (EVar "analyzeFinish") (EVar "surface")) (EListLit))) (DoExpr (EIf (EFieldAccess (EVar "surface") "resolveClean") (EApp (EVar "Ok") (ETuple (EVar "graph") (EApp (EApp (EApp (EApp (EVar "JsonSingle") (EVar "entry")) (EVar "src")) (EVar "diags")) (EVar "raw")))) (EApp (EVar "Err") (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EVar "cjSingleParts") (EVar "entry")) (EVar "src")) (EVar "raw")) (EVar "diags")))))))) (arm PWild () (EBlock (DoLet false false (PVar "buckets") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveLoadedBuckets") (EApp (EVar "cliStdlibExports") (EVar "stdlibDir"))) (EVar "allowInternal")) (EVar "trusted")) (EVar "entry")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "mods")) (EFieldAccess (EVar "graph") "fgModsD"))) (DoExpr (EIf (EApp (EVar "bucketsResolveRejected") (EVar "buckets")) (EBlock (DoLet false false (PTuple PWild (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckLoadedBuckets") (EVar "entry")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "mods")) (EFieldAccess (EVar "graph") "fgModsD")) (EVar "buckets"))) (DoExpr (EApp (EVar "Err") (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EVar "cjGraphParts") (EVar "entry")) (EVar "stdlibDir")) (EVar "pairs")) (EVar "results")))))) (EApp (EVar "Ok") (ETuple (EVar "graph") (EApp (EApp (EApp (EVar "JsonGraph") (EVar "entry")) (EVar "stdlibDir")) (EVar "buckets"))))))))))))))))
-(DTypeSig true "frontJsonAfterDrive" (TyFun (TyCon "JsonFront") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "CheckJson")) (TyCon "CheckJson")))))))))))
-(DFunDef false "frontJsonAfterDrive" ((PVar "front") (PVar "rtD") (PVar "coreD") (PVar "mods") (PVar "modsD") (PVar "perMod") (PVar "refusal")) (EBlock (DoLet false false (PTuple (PVar "cj") (PVar "hasErr")) (EMatch (EVar "front") (arm (PCon "JsonSingle" (PVar "target") (PVar "src") (PVar "surface") (PVar "raw")) () (EApp (EApp (EApp (EApp (EVar "cjSingleParts") (EVar "target")) (EVar "src")) (EVar "raw")) (EBinOp "++" (EVar "surface") (EApp (EVar "tcHalfOfPerModule") (EVar "perMod"))))) (arm (PCon "JsonGraph" (PVar "target") (PVar "stdlibDir") (PVar "buckets")) () (EApp (EApp (EApp (EApp (EVar "cjGraphParts") (EVar "target")) (EVar "stdlibDir")) (EApp (EApp (EVar "map") (EVar "dropPathTriple")) (EVar "mods"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "rtD")) (EVar "coreD")) (EVar "mods")) (EVar "modsD")) (EVar "perMod")) (EVar "buckets")))))) (DoLet false false (PVar "entry") (EApp (EVar "jsonFrontEntry") (EVar "front"))) (DoExpr (EIf (EVar "hasErr") (EApp (EVar "Err") (EVar "cj")) (EMatch (EApp (EApp (EVar "mainRefusalJson") (EVar "entry")) (EVar "mods")) (arm (PCon "Some" (PVar "refused")) () (EApp (EVar "Err") (EVar "refused"))) (arm (PCon "None") () (EMatch (ETuple (EVar "refusal") (EVar "cj")) (arm (PTuple (PList) PWild) () (EApp (EVar "Ok") (EVar "cj"))) (arm (PTuple (PVar "ds") (PCon "CjParts" (PVar "key") (PVar "triples"))) () (EApp (EVar "Err") (EApp (EApp (EVar "CjParts") (EVar "key")) (EApp (EApp (EApp (EApp (EVar "foldTargetDiags") (EVar "key")) (EApp (EVar "readFileSafe") (EVar "key"))) (EVar "ds")) (EVar "triples"))))) (arm PWild () (EApp (EVar "Ok") (EVar "cj"))))))))))
-(DTypeSig true "jsonFrontKey" (TyFun (TyCon "JsonFront") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "jsonFrontKey" ((PCon "JsonSingle" (PVar "target") PWild PWild PWild) PWild) (EVar "target"))
-(DFunDef false "jsonFrontKey" ((PCon "JsonGraph" PWild (PVar "stdlibDir") PWild) (PVar "path")) (EApp (EApp (EVar "relDiagPath") (EApp (EVar "dirOf") (EVar "stdlibDir"))) (EVar "path")))
-(DTypeSig false "jsonFrontEntry" (TyFun (TyCon "JsonFront") (TyCon "String")))
-(DFunDef false "jsonFrontEntry" ((PCon "JsonSingle" (PVar "target") PWild PWild PWild)) (EVar "target"))
-(DFunDef false "jsonFrontEntry" ((PCon "JsonGraph" (PVar "target") PWild PWild)) (EVar "target"))
+(DFunDef false "frontGateJson" ((PVar "allowInternal") (PVar "stdlibDir") (PVar "rsrc") (PVar "csrc") (PVar "entry")) (EBlock (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "entry"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "entry")) (EVar "roots")) (arm (PCon "Err" (PVar "lerr")) () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EVar "cjLoadFailure") (EVar "entry")) (EApp (EVar "readFileSafe") (EVar "entry"))) (EVar "stdlibDir")) (EVar "lerr")))) (arm (PCon "Ok" (PVar "mods")) () (EBlock (DoLet false false (PVar "pairs") (EApp (EApp (EVar "map") (EVar "dropPathTriple")) (EVar "mods"))) (DoLet false false (PVar "graph") (EApp (EApp (EApp (EApp (EVar "frontGraphOf") (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "mods"))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "entry")) (EVar "roots")) (EVar "stdlibDir")) (EVar "pairs"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "entry")) (EVar "roots")) (EVar "stdlibDir")) (EVar "pairs"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoExpr (EApp (EVar "Ok") (ETuple (EVar "graph") (ERecordCreate "JsonFront" ((fa "jfEntry" (EVar "entry")) (fa "jfStdlibDir" (EVar "stdlibDir")) (fa "jfRoots" (EVar "roots")) (fa "jfAllowInternal" (EVar "allowInternal")) (fa "jfTrusted" (EVar "trusted")))))))))))))
+(DTypeSig true "frontJsonVerdict" (TyFun (TyCon "JsonFront") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "CheckJson")) (TyCon "CheckJson"))))))))
+(DFunDef false "frontJsonVerdict" ((PVar "front") (PVar "mods") (PVar "buckets") (PVar "refusal")) (EBlock (DoLet false false (PVar "entry") (EFieldAccess (EVar "front") "jfEntry")) (DoLet false false (PTuple (PVar "cj") (PVar "hasErr")) (EApp (EApp (EApp (EVar "jsonEnvelope") (EVar "front")) (EVar "mods")) (EVar "buckets"))) (DoExpr (EIf (EVar "hasErr") (EApp (EVar "Err") (EVar "cj")) (EMatch (EApp (EApp (EVar "mainRefusalJson") (EVar "entry")) (EVar "mods")) (arm (PCon "Some" (PVar "refused")) () (EApp (EVar "Err") (EVar "refused"))) (arm (PCon "None") () (EMatch (ETuple (EVar "refusal") (EVar "cj")) (arm (PTuple (PList) PWild) () (EApp (EVar "Ok") (EVar "cj"))) (arm (PTuple (PVar "ds") (PCon "CjParts" (PVar "key") (PVar "triples"))) () (EApp (EVar "Err") (EApp (EApp (EVar "CjParts") (EVar "key")) (EApp (EApp (EApp (EApp (EVar "foldTargetDiags") (EVar "key")) (EApp (EVar "readFileSafe") (EVar "key"))) (EVar "ds")) (EVar "triples"))))) (arm PWild () (EApp (EVar "Ok") (EVar "cj"))))))))))
+(DTypeSig true "jsonEnvelope" (TyFun (TyCon "JsonFront") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("IO") None (TyTuple (TyCon "CheckJson") (TyCon "Bool")))))))
+(DFunDef false "jsonEnvelope" ((PVar "front") (PList (PTuple PWild PWild (PVar "raw"))) (PVar "buckets")) (EApp (EApp (EApp (EApp (EVar "cjSingleParts") (EFieldAccess (EVar "front") "jfEntry")) (EApp (EVar "readFileSafe") (EFieldAccess (EVar "front") "jfEntry"))) (EVar "raw")) (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "buckets"))))
+(DFunDef false "jsonEnvelope" ((PVar "front") (PVar "mods") (PVar "buckets")) (EApp (EApp (EApp (EApp (EVar "cjGraphParts") (EFieldAccess (EVar "front") "jfEntry")) (EFieldAccess (EVar "front") "jfStdlibDir")) (EApp (EApp (EVar "map") (EVar "dropPathTriple")) (EVar "mods"))) (EVar "buckets")))
+(DTypeSig true "jsonFrontKey" (TyFun (TyCon "JsonFront") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "jsonFrontKey" ((PVar "front") (PList PWild) PWild) (EFieldAccess (EVar "front") "jfEntry"))
+(DFunDef false "jsonFrontKey" ((PVar "front") PWild (PVar "path")) (EApp (EApp (EVar "relDiagPath") (EApp (EVar "dirOf") (EFieldAccess (EVar "front") "jfStdlibDir"))) (EVar "path")))
 (DTypeSig false "mainRefusalJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "CheckJson"))))))
 (DFunDef false "mainRefusalJson" ((PVar "entry") (PVar "mods")) (EMatch (EApp (EVar "splitLast") (EVar "mods")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple PWild (PTuple PWild PWild (PVar "decls")))) () (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EApp (EApp (EVar "CjParts") (EVar "entry")) (EListLit (ETuple (EVar "entry") (EApp (EVar "readFileSafe") (EVar "entry")) (EListLit (EVar "d"))))))) (EApp (EVar "mainEntryError") (EVar "decls"))))))
 (DTypeSig true "writeDiagJson" (TyFun (TyCon "String") (TyFun (TyCon "CheckJson") (TyEffect ("IO") None (TyCon "Unit")))))
@@ -665,13 +630,13 @@ fileWithNotes _ _ _ = None
 (DFunDef false "fileWithNotes" (PWild PWild PWild) (EVar "None"))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Loc" true))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "TcDiag" false) (mem "setStdlibOwnership" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "setStdlibOwnership" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "parse" false) (mem "stringify" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugarIn" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "internalGuardFor" false) (mem "resolveModulesErrorsByFile" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "CheckJson" true) (mem "Diag" true) (mem "Severity" true) (mem "analyzeFinish" false) (mem "analyzeSurface" false) (mem "bucketsResolveRejected" false) (mem "cjDiagnostic" false) (mem "cjFoldIntoFile" false) (mem "cjGraphParts" false) (mem "cjLoadFailure" false) (mem "cjSingleParts" false) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "relDiagPath" false) (mem "resolveLoadedBuckets" false) (mem "tcHalfOfPerModule" false) (mem "typecheckDiagsFold" false) (mem "typecheckLoadedBuckets" false) (mem "hintResErrorPairs" false) (mem "mainEntryError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "ppMainEntryError" false) (mem "ppResolveErrorsByFile" false) (mem "parseErrHelpFix" false) (mem "parseErrCode" false) (mem "srcLinesArr" false) (mem "stdlibExportsReader" false) (mem "surfaceErrors" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "CheckJson" true) (mem "Diag" true) (mem "Severity" true) (mem "cjDiagnostic" false) (mem "cjFoldIntoFile" false) (mem "cjGraphParts" false) (mem "cjLoadFailure" false) (mem "cjSingleParts" false) (mem "ppCheckJson" false) (mem "readFileSafe" false) (mem "relDiagPath" false) (mem "hintResErrorPairs" false) (mem "mainEntryError" false) (mem "ppDiagCliLines" false) (mem "ppDiagCliSrc" false) (mem "ppMainEntryError" false) (mem "ppResolveErrorsByFile" false) (mem "parseErrHelpFix" false) (mem "parseErrCode" false) (mem "srcLinesArr" false) (mem "stdlibExportsReader" false) (mem "surfaceErrors" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "dropPathTriple" false) (mem "entrySearchRoots" false) (mem "loadProgramFilesLocatedE" false) (mem "modIdToPath" false) (mem "projectTrustedMods" false) (mem "readSource" false) (mem "stdlibOwnership" false) (mem "unknownModuleIdOf" false) (mem "findImportLoc" false) (mem "availableModulesHint" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "joinNl" false) (mem "splitLast" false))))
@@ -718,17 +683,17 @@ fileWithNotes _ _ _ = None
 (DFunDef false "writeGateAck" (PWild) (EMatch (EApp (EVar "getEnv") (EVar "gateAckEnv")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PLit (LString ""))) () (ELit LUnit)) (arm (PCon "Some" (PVar "path")) () (EMatch (EApp (EApp (EVar "writeFile") (EVar "path")) (ELit (LString "ran\n"))) (arm (PCon "Ok" PWild) () (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not write the gate acknowledgement to ")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (DoExpr (EApp (EVar "stageExit") (ELit (LInt 1))))))))))
 (DTypeSig true "diagJsonPathOfEnv" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "diagJsonPathOfEnv" (PWild) (EMatch (EApp (EVar "getEnv") (EVar "diagJsonEnv")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PLit (LString ""))) () (EVar "None")) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "Some") (EVar "p")))))
-(DData Public "JsonFront" () ((variant "JsonSingle" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyApp (TyCon "List") (TyCon "Decl")))) (variant "JsonGraph" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))) ())
+(DData Public "JsonFront" () ((variant "JsonFront" (ConNamed (field "jfEntry" (TyCon "String")) (field "jfStdlibDir" (TyCon "String")) (field "jfRoots" (TyApp (TyCon "List") (TyCon "String"))) (field "jfAllowInternal" (TyCon "Bool")) (field "jfTrusted" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "frontGateJson" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "CheckJson")) (TyTuple (TyCon "FrontGraph") (TyCon "JsonFront"))))))))))
-(DFunDef false "frontGateJson" ((PVar "allowInternal") (PVar "stdlibDir") (PVar "rsrc") (PVar "csrc") (PVar "entry")) (EBlock (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "entry"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "entry")) (EVar "roots")) (arm (PCon "Err" (PVar "lerr")) () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EVar "cjLoadFailure") (EVar "entry")) (EApp (EVar "readFileSafe") (EVar "entry"))) (EVar "stdlibDir")) (EVar "lerr")))) (arm (PCon "Ok" (PVar "mods")) () (EBlock (DoLet false false (PVar "pairs") (EApp (EApp (EMethodRef "map") (EVar "dropPathTriple")) (EVar "mods"))) (DoLet false false (PVar "graph") (EApp (EApp (EApp (EApp (EVar "frontGraphOf") (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "mods"))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "entry")) (EVar "roots")) (EVar "stdlibDir")) (EVar "pairs"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "entry")) (EVar "roots")) (EVar "stdlibDir")) (EVar "pairs"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoExpr (EMatch (EVar "mods") (arm (PList (PTuple (PVar "mid") PWild (PVar "raw"))) () (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "entry"))) (DoLet false false (PVar "surface") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeSurface") (EApp (EVar "cliStdlibExports") (EVar "stdlibDir"))) (EVar "mid")) (EVar "rsrc")) (EVar "csrc")) (EVar "raw")) (EApp (EVar "internalGuardFor") (EBinOp "||" (EVar "allowInternal") (EApp (EApp (EVar "contains") (EVar "mid")) (EVar "trusted")))))) (DoLet false false (PVar "diags") (EApp (EApp (EVar "analyzeFinish") (EVar "surface")) (EListLit))) (DoExpr (EIf (EFieldAccess (EVar "surface") "resolveClean") (EApp (EVar "Ok") (ETuple (EVar "graph") (EApp (EApp (EApp (EApp (EVar "JsonSingle") (EVar "entry")) (EVar "src")) (EVar "diags")) (EVar "raw")))) (EApp (EVar "Err") (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EVar "cjSingleParts") (EVar "entry")) (EVar "src")) (EVar "raw")) (EVar "diags")))))))) (arm PWild () (EBlock (DoLet false false (PVar "buckets") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveLoadedBuckets") (EApp (EVar "cliStdlibExports") (EVar "stdlibDir"))) (EVar "allowInternal")) (EVar "trusted")) (EVar "entry")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "mods")) (EFieldAccess (EVar "graph") "fgModsD"))) (DoExpr (EIf (EApp (EVar "bucketsResolveRejected") (EVar "buckets")) (EBlock (DoLet false false (PTuple PWild (PVar "results")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckLoadedBuckets") (EVar "entry")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "mods")) (EFieldAccess (EVar "graph") "fgModsD")) (EVar "buckets"))) (DoExpr (EApp (EVar "Err") (EApp (EVar "fst") (EApp (EApp (EApp (EApp (EVar "cjGraphParts") (EVar "entry")) (EVar "stdlibDir")) (EVar "pairs")) (EVar "results")))))) (EApp (EVar "Ok") (ETuple (EVar "graph") (EApp (EApp (EApp (EVar "JsonGraph") (EVar "entry")) (EVar "stdlibDir")) (EVar "buckets"))))))))))))))))
-(DTypeSig true "frontJsonAfterDrive" (TyFun (TyCon "JsonFront") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "CheckJson")) (TyCon "CheckJson")))))))))))
-(DFunDef false "frontJsonAfterDrive" ((PVar "front") (PVar "rtD") (PVar "coreD") (PVar "mods") (PVar "modsD") (PVar "perMod") (PVar "refusal")) (EBlock (DoLet false false (PTuple (PVar "cj") (PVar "hasErr")) (EMatch (EVar "front") (arm (PCon "JsonSingle" (PVar "target") (PVar "src") (PVar "surface") (PVar "raw")) () (EApp (EApp (EApp (EApp (EVar "cjSingleParts") (EVar "target")) (EVar "src")) (EVar "raw")) (EBinOp "++" (EVar "surface") (EApp (EVar "tcHalfOfPerModule") (EVar "perMod"))))) (arm (PCon "JsonGraph" (PVar "target") (PVar "stdlibDir") (PVar "buckets")) () (EApp (EApp (EApp (EApp (EVar "cjGraphParts") (EVar "target")) (EVar "stdlibDir")) (EApp (EApp (EMethodRef "map") (EVar "dropPathTriple")) (EVar "mods"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "rtD")) (EVar "coreD")) (EVar "mods")) (EVar "modsD")) (EVar "perMod")) (EVar "buckets")))))) (DoLet false false (PVar "entry") (EApp (EVar "jsonFrontEntry") (EVar "front"))) (DoExpr (EIf (EVar "hasErr") (EApp (EVar "Err") (EVar "cj")) (EMatch (EApp (EApp (EVar "mainRefusalJson") (EVar "entry")) (EVar "mods")) (arm (PCon "Some" (PVar "refused")) () (EApp (EVar "Err") (EVar "refused"))) (arm (PCon "None") () (EMatch (ETuple (EVar "refusal") (EVar "cj")) (arm (PTuple (PList) PWild) () (EApp (EVar "Ok") (EVar "cj"))) (arm (PTuple (PVar "ds") (PCon "CjParts" (PVar "key") (PVar "triples"))) () (EApp (EVar "Err") (EApp (EApp (EVar "CjParts") (EVar "key")) (EApp (EApp (EApp (EApp (EVar "foldTargetDiags") (EVar "key")) (EApp (EVar "readFileSafe") (EVar "key"))) (EVar "ds")) (EVar "triples"))))) (arm PWild () (EApp (EVar "Ok") (EVar "cj"))))))))))
-(DTypeSig true "jsonFrontKey" (TyFun (TyCon "JsonFront") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "jsonFrontKey" ((PCon "JsonSingle" (PVar "target") PWild PWild PWild) PWild) (EVar "target"))
-(DFunDef false "jsonFrontKey" ((PCon "JsonGraph" PWild (PVar "stdlibDir") PWild) (PVar "path")) (EApp (EApp (EVar "relDiagPath") (EApp (EVar "dirOf") (EVar "stdlibDir"))) (EVar "path")))
-(DTypeSig false "jsonFrontEntry" (TyFun (TyCon "JsonFront") (TyCon "String")))
-(DFunDef false "jsonFrontEntry" ((PCon "JsonSingle" (PVar "target") PWild PWild PWild)) (EVar "target"))
-(DFunDef false "jsonFrontEntry" ((PCon "JsonGraph" (PVar "target") PWild PWild)) (EVar "target"))
+(DFunDef false "frontGateJson" ((PVar "allowInternal") (PVar "stdlibDir") (PVar "rsrc") (PVar "csrc") (PVar "entry")) (EBlock (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "entry"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "entry")) (EVar "roots")) (arm (PCon "Err" (PVar "lerr")) () (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EVar "cjLoadFailure") (EVar "entry")) (EApp (EVar "readFileSafe") (EVar "entry"))) (EVar "stdlibDir")) (EVar "lerr")))) (arm (PCon "Ok" (PVar "mods")) () (EBlock (DoLet false false (PVar "pairs") (EApp (EApp (EMethodRef "map") (EVar "dropPathTriple")) (EVar "mods"))) (DoLet false false (PVar "graph") (EApp (EApp (EApp (EApp (EVar "frontGraphOf") (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "mods"))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "entry")) (EVar "roots")) (EVar "stdlibDir")) (EVar "pairs"))) (DoLet false false (PTuple (PVar "flatStdlib") (PVar "ownedStdlib")) (EApp (EApp (EApp (EApp (EVar "stdlibOwnership") (EVar "entry")) (EVar "roots")) (EVar "stdlibDir")) (EVar "pairs"))) (DoLet false false PWild (EApp (EApp (EVar "setStdlibOwnership") (EVar "flatStdlib")) (EVar "ownedStdlib"))) (DoExpr (EApp (EVar "Ok") (ETuple (EVar "graph") (ERecordCreate "JsonFront" ((fa "jfEntry" (EVar "entry")) (fa "jfStdlibDir" (EVar "stdlibDir")) (fa "jfRoots" (EVar "roots")) (fa "jfAllowInternal" (EVar "allowInternal")) (fa "jfTrusted" (EVar "trusted")))))))))))))
+(DTypeSig true "frontJsonVerdict" (TyFun (TyCon "JsonFront") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "CheckJson")) (TyCon "CheckJson"))))))))
+(DFunDef false "frontJsonVerdict" ((PVar "front") (PVar "mods") (PVar "buckets") (PVar "refusal")) (EBlock (DoLet false false (PVar "entry") (EFieldAccess (EVar "front") "jfEntry")) (DoLet false false (PTuple (PVar "cj") (PVar "hasErr")) (EApp (EApp (EApp (EVar "jsonEnvelope") (EVar "front")) (EVar "mods")) (EVar "buckets"))) (DoExpr (EIf (EVar "hasErr") (EApp (EVar "Err") (EVar "cj")) (EMatch (EApp (EApp (EVar "mainRefusalJson") (EVar "entry")) (EVar "mods")) (arm (PCon "Some" (PVar "refused")) () (EApp (EVar "Err") (EVar "refused"))) (arm (PCon "None") () (EMatch (ETuple (EVar "refusal") (EVar "cj")) (arm (PTuple (PList) PWild) () (EApp (EVar "Ok") (EVar "cj"))) (arm (PTuple (PVar "ds") (PCon "CjParts" (PVar "key") (PVar "triples"))) () (EApp (EVar "Err") (EApp (EApp (EVar "CjParts") (EVar "key")) (EApp (EApp (EApp (EApp (EVar "foldTargetDiags") (EVar "key")) (EApp (EVar "readFileSafe") (EVar "key"))) (EVar "ds")) (EVar "triples"))))) (arm PWild () (EApp (EVar "Ok") (EVar "cj"))))))))))
+(DTypeSig true "jsonEnvelope" (TyFun (TyCon "JsonFront") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("IO") None (TyTuple (TyCon "CheckJson") (TyCon "Bool")))))))
+(DFunDef false "jsonEnvelope" ((PVar "front") (PList (PTuple PWild PWild (PVar "raw"))) (PVar "buckets")) (EApp (EApp (EApp (EApp (EVar "cjSingleParts") (EFieldAccess (EVar "front") "jfEntry")) (EApp (EVar "readFileSafe") (EFieldAccess (EVar "front") "jfEntry"))) (EVar "raw")) (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "buckets"))))
+(DFunDef false "jsonEnvelope" ((PVar "front") (PVar "mods") (PVar "buckets")) (EApp (EApp (EApp (EApp (EVar "cjGraphParts") (EFieldAccess (EVar "front") "jfEntry")) (EFieldAccess (EVar "front") "jfStdlibDir")) (EApp (EApp (EMethodRef "map") (EVar "dropPathTriple")) (EVar "mods"))) (EVar "buckets")))
+(DTypeSig true "jsonFrontKey" (TyFun (TyCon "JsonFront") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "jsonFrontKey" ((PVar "front") (PList PWild) PWild) (EFieldAccess (EVar "front") "jfEntry"))
+(DFunDef false "jsonFrontKey" ((PVar "front") PWild (PVar "path")) (EApp (EApp (EVar "relDiagPath") (EApp (EVar "dirOf") (EFieldAccess (EVar "front") "jfStdlibDir"))) (EVar "path")))
 (DTypeSig false "mainRefusalJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "CheckJson"))))))
 (DFunDef false "mainRefusalJson" ((PVar "entry") (PVar "mods")) (EMatch (EApp (EVar "splitLast") (EVar "mods")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple PWild (PTuple PWild PWild (PVar "decls")))) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EApp (EApp (EVar "CjParts") (EVar "entry")) (EListLit (ETuple (EVar "entry") (EApp (EVar "readFileSafe") (EVar "entry")) (EListLit (EVar "d"))))))) (EApp (EVar "mainEntryError") (EVar "decls"))))))
 (DTypeSig true "writeDiagJson" (TyFun (TyCon "String") (TyFun (TyCon "CheckJson") (TyEffect ("IO") None (TyCon "Unit")))))

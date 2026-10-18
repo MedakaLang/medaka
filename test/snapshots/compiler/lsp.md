@@ -1,5 +1,5 @@
 # META
-source_lines=2330
+source_lines=2332
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -43,7 +43,8 @@ import driver.diagnostics.{
   Diag,
   Severity(..),
   mkDiag,
-  analyzeFromReport,
+  fileFront,
+  FrontOutput(..),
   analyzeProjectKeyed,
   projectEntryAnalysisOr,
   GraphId,
@@ -1691,9 +1692,9 @@ publishDiagnosticsList uri diags =
   let params = jObject [("uri", JString uri), ("diagnostics", jArray diags)]
   writeMessage (notificationMsg "textDocument/publishDiagnostics" params)
 
--- Single-document diagnostics over the buffer's located decls (the
--- `analyzeLocated` pipeline minus its re-parse).  Returns the typecheck drive's
--- report, `None` when resolve rejected the buffer and nothing was driven.
+-- Single-document diagnostics over the buffer's located decls, through
+-- `frontEnd` unguarded.  Returns the typecheck drive's report, `None` when
+-- resolve rejected the buffer and nothing was driven.
 publishDiagnosticsFrom : String ->
   String ->
   String ->
@@ -1701,16 +1702,17 @@ publishDiagnosticsFrom : String ->
   List Decl ->
   <IO> Option TcReport
 publishDiagnosticsFrom runtimeSrc coreSrc uri src decls =
-  let (diags, report) =
-    analyzeFromReport
+  let front =
+    fileFront
       (stdlibExportsReader (lspMedakaRoot "." ++ "/stdlib"))
       ""
+      True
       runtimeSrc
       coreSrc
       decls
-      []
+  let diags = flatMap snd front.foDiags
   let _ = publishDiagnosticsList uri (map (diagToJson src) diags)
-  report
+  map (_ => front.foReport) front.foDriven
 
 -- ── B.10.5: project-wide (multi-file) diagnostics ───────────────────────────
 --
@@ -2334,7 +2336,7 @@ unit : Unit
 unit = ()
 # DESUGAR
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "Severity" true) (mem "mkDiag" false) (mem "analyzeFromReport" false) (mem "analyzeProjectKeyed" false) (mem "projectEntryAnalysisOr" false) (mem "GraphId" false) (mem "graphIdSame" false) (mem "stdlibExportsReader" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "Severity" true) (mem "mkDiag" false) (mem "fileFront" false) (mem "FrontOutput" true) (mem "analyzeProjectKeyed" false) (mem "projectEntryAnalysisOr" false) (mem "GraphId" false) (mem "graphIdSame" false) (mem "stdlibExportsReader" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "findProjectRootOrSelf" false) (mem "parseCachedLocated" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false) (mem "manifestPathOf" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
@@ -2711,7 +2713,7 @@ unit = ()
 (DTypeSig false "publishDiagnosticsList" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Json")) (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "publishDiagnosticsList" ((PVar "uri") (PVar "diags")) (EBlock (DoLet false false (PVar "params") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EVar "diags")))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "notificationMsg") (ELit (LString "textDocument/publishDiagnostics"))) (EVar "params"))))))
 (DTypeSig false "publishDiagnosticsFrom" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "TcReport")))))))))
-(DFunDef false "publishDiagnosticsFrom" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "decls")) (EBlock (DoLet false false (PTuple (PVar "diags") (PVar "report")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFromReport") (EApp (EVar "stdlibExportsReader") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib"))))) (ELit (LString ""))) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "decls")) (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "publishDiagnosticsList") (EVar "uri")) (EApp (EApp (EVar "map") (EApp (EVar "diagToJson") (EVar "src"))) (EVar "diags")))) (DoExpr (EVar "report"))))
+(DFunDef false "publishDiagnosticsFrom" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "decls")) (EBlock (DoLet false false (PVar "front") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileFront") (EApp (EVar "stdlibExportsReader") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib"))))) (ELit (LString ""))) (EVar "True")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "decls"))) (DoLet false false (PVar "diags") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EFieldAccess (EVar "front") "foDiags"))) (DoLet false false PWild (EApp (EApp (EVar "publishDiagnosticsList") (EVar "uri")) (EApp (EApp (EVar "map") (EApp (EVar "diagToJson") (EVar "src"))) (EVar "diags")))) (DoExpr (EApp (EApp (EVar "map") (ELam (PWild) (EFieldAccess (EVar "front") "foReport"))) (EFieldAccess (EVar "front") "foDriven")))))
 (DTypeSig false "projectCache" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "projectCache" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "projectParseCache" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
@@ -2816,7 +2818,7 @@ unit = ()
 (DFunDef false "unit" () (ELit LUnit))
 # MARK
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "Severity" true) (mem "mkDiag" false) (mem "analyzeFromReport" false) (mem "analyzeProjectKeyed" false) (mem "projectEntryAnalysisOr" false) (mem "GraphId" false) (mem "graphIdSame" false) (mem "stdlibExportsReader" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "Severity" true) (mem "mkDiag" false) (mem "fileFront" false) (mem "FrontOutput" true) (mem "analyzeProjectKeyed" false) (mem "projectEntryAnalysisOr" false) (mem "GraphId" false) (mem "graphIdSame" false) (mem "stdlibExportsReader" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "findProjectRootOrSelf" false) (mem "parseCachedLocated" false))))
 (DUse false (UseGroup ("driver" "profile_select") ((mem "carryProjectProfile" false) (mem "manifestPathOf" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
@@ -3193,7 +3195,7 @@ unit = ()
 (DTypeSig false "publishDiagnosticsList" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Json")) (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "publishDiagnosticsList" ((PVar "uri") (PVar "diags")) (EBlock (DoLet false false (PVar "params") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EVar "uri"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EVar "diags")))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "notificationMsg") (ELit (LString "textDocument/publishDiagnostics"))) (EVar "params"))))))
 (DTypeSig false "publishDiagnosticsFrom" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "TcReport")))))))))
-(DFunDef false "publishDiagnosticsFrom" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "decls")) (EBlock (DoLet false false (PTuple (PVar "diags") (PVar "report")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "analyzeFromReport") (EApp (EVar "stdlibExportsReader") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib"))))) (ELit (LString ""))) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "decls")) (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "publishDiagnosticsList") (EVar "uri")) (EApp (EApp (EMethodRef "map") (EApp (EVar "diagToJson") (EVar "src"))) (EVar "diags")))) (DoExpr (EVar "report"))))
+(DFunDef false "publishDiagnosticsFrom" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "uri") (PVar "src") (PVar "decls")) (EBlock (DoLet false false (PVar "front") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fileFront") (EApp (EVar "stdlibExportsReader") (EBinOp "++" (EApp (EVar "lspMedakaRoot") (ELit (LString "."))) (ELit (LString "/stdlib"))))) (ELit (LString ""))) (EVar "True")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "decls"))) (DoLet false false (PVar "diags") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EFieldAccess (EVar "front") "foDiags"))) (DoLet false false PWild (EApp (EApp (EVar "publishDiagnosticsList") (EVar "uri")) (EApp (EApp (EMethodRef "map") (EApp (EVar "diagToJson") (EVar "src"))) (EVar "diags")))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam (PWild) (EFieldAccess (EVar "front") "foReport"))) (EFieldAccess (EVar "front") "foDriven")))))
 (DTypeSig false "projectCache" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "projectCache" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "projectParseCache" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))

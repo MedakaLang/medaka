@@ -39,7 +39,8 @@ import driver.diagnostics.{
   Diag,
   Severity(..),
   mkDiag,
-  analyzeFromReport,
+  fileFront,
+  FrontOutput(..),
   analyzeProjectKeyed,
   projectEntryAnalysisOr,
   GraphId,
@@ -1687,9 +1688,9 @@ publishDiagnosticsList uri diags =
   let params = jObject [("uri", JString uri), ("diagnostics", jArray diags)]
   writeMessage (notificationMsg "textDocument/publishDiagnostics" params)
 
--- Single-document diagnostics over the buffer's located decls (the
--- `analyzeLocated` pipeline minus its re-parse).  Returns the typecheck drive's
--- report, `None` when resolve rejected the buffer and nothing was driven.
+-- Single-document diagnostics over the buffer's located decls, through
+-- `frontEnd` unguarded.  Returns the typecheck drive's report, `None` when
+-- resolve rejected the buffer and nothing was driven.
 publishDiagnosticsFrom : String ->
   String ->
   String ->
@@ -1697,16 +1698,17 @@ publishDiagnosticsFrom : String ->
   List Decl ->
   <IO> Option TcReport
 publishDiagnosticsFrom runtimeSrc coreSrc uri src decls =
-  let (diags, report) =
-    analyzeFromReport
+  let front =
+    fileFront
       (stdlibExportsReader (lspMedakaRoot "." ++ "/stdlib"))
       ""
+      True
       runtimeSrc
       coreSrc
       decls
-      []
+  let diags = flatMap snd front.foDiags
   let _ = publishDiagnosticsList uri (map (diagToJson src) diags)
-  report
+  map (_ => front.foReport) front.foDriven
 
 -- ── B.10.5: project-wide (multi-file) diagnostics ───────────────────────────
 --

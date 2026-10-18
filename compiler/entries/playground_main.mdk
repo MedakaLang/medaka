@@ -92,7 +92,8 @@ import driver.loader.{
 }
 import driver.diagnostics.{
   analyzeProject,
-  analyzeLocated,
+  fileFront,
+  FrontOutput(..),
   exportsAmong,
   sourcesMentioning,
   Diag(..),
@@ -341,7 +342,8 @@ dropPath (mid, _, decls) = (mid, decls)
 playgroundParseCache : Ref (List (String, List Decl))
 playgroundParseCache = Ref []
 
--- Single module: analyzeLocated (correct single-file type errors).  Clean ⇒ emit.
+-- Single module: one unguarded `frontEnd` run over the located parse (correct
+-- single-file type errors).  Clean ⇒ emit.
 -- `mods` is `run`'s ALREADY-LOADED module list, threaded through rather than
 -- re-derived downstream (S2/#2442): the uncached `loadProgramE` had no memo of its own, so
 -- `doEmit`'s second call re-read and re-parsed every user module.
@@ -358,7 +360,10 @@ analyzeSingle : Bool ->
 analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP loaded exportsFor =
   let mods = map dropPath loaded
   let paths = map ((mid, path, _) => (mid, path)) loaded
-  let diags = analyzeLocated exportsFor rsrc csrc tsrc
+  let diags =
+    flatMap
+      snd
+      (fileFront exportsFor "" True rsrc csrc (parseLocated tsrc)).foDiags
   match any isDiagError diags
     True => emitDiagnostics (cjAllToJson [(entry, tsrc, diags)])
     False => guardedEmit emit rsrc csrc tsrc entry paths mods [
@@ -366,7 +371,7 @@ analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP loaded exportsFor =
     ]
 
 -- Multi-module: analyzeProject (loader path).  Clean ⇒ emit.
--- #1362: `analyzeSingle` above uses the UNGUARDED `analyzeLocated` (the
+-- #1362: `analyzeSingle` above runs the front end UNGUARDED (the
 -- playground has no `--allow-internal` flag or trusted-root concept); kept
 -- unguarded here too (`allowInternal = True`, `trustedMods = []`) for parity.
 analyzeMulti : Bool ->
