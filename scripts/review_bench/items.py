@@ -6,7 +6,9 @@ derived from the content, a missing split is reported as `none`, an evidence
 ref given as a bare string becomes a ref with no excerpt.
 
 Nothing a labeller wrote about the item (summary, notes, ruling, status,
-label_strength) is ever rendered into a prompt; only the code is.
+label_strength) is ever rendered into a prompt; only the code is, plus a ref's
+`fact`: a mechanically checkable statement about the tree ("no caller of `f`
+outside this file at this commit"), the output a candidate generator would give.
 """
 from __future__ import annotations
 
@@ -53,7 +55,7 @@ def evidence_refs(it: dict) -> list[dict]:
             out.append({"file": ref, "anchor": "", "excerpt": ""})
         elif isinstance(ref, dict):
             out.append({"file": ref.get("file", ""), "anchor": ref.get("anchor", ""),
-                        "excerpt": ref.get("excerpt", "") or ""})
+                        "excerpt": ref.get("excerpt", "") or "", "fact": ref.get("fact", "") or ""})
     return out
 
 
@@ -140,12 +142,14 @@ def render_user(it: dict) -> str:
     parts = [f"File: {location(it)}", "Excerpt:\n<<<\n" + it["excerpt"] + "\n>>>"]
     for i, ref in enumerate(it["_refs"], 1):
         head = f"Evidence {i}: {ref['file']}" + (f", `{ref['anchor']}`" if ref["anchor"] else "")
-        parts.append(head + ("\n<<<\n" + ref["excerpt"] + "\n>>>" if ref["excerpt"] else " (location only)"))
+        body = "\n<<<\n" + ref["excerpt"] + "\n>>>" if ref["excerpt"] else " (location only)"
+        parts.append(head + body + (f"\nFact: {ref['fact']}" if ref["fact"] else ""))
     return "\n\n".join(parts)
 
 
 def jev_evidence(it: dict) -> list[dict]:
-    return [{"file": r["file"], "anchor": r["anchor"], "excerpt": r["excerpt"]} for r in it["_refs"]]
+    return [{"file": r["file"], "anchor": r["anchor"], "excerpt": r["excerpt"]}
+            | ({"fact": r["fact"]} if r["fact"] else {}) for r in it["_refs"]]
 
 
 def few_shots(item: dict, pool: list[dict], k: int) -> list[tuple[str, bool, str]]:
@@ -163,4 +167,7 @@ def few_shots(item: dict, pool: list[dict], k: int) -> list[tuple[str, bool, str
         for lst in (pos, neg):
             if lst and len(picked) < k:
                 picked.append(lst.pop(0))
-    return [(render_user(p), p["polarity"] == "positive", p.get("summary", "")) for p in picked]
+    # An after-fix control's summary describes the defect it no longer has; as the
+    # "why" under DO NOT FLAG it reads as permission for that defect.
+    return [(render_user(p), p["polarity"] == "positive",
+             "" if p.get("control_kind") == "after-fix" else p.get("summary", "")) for p in picked]

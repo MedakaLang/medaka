@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 RUBRIC_MD = ROOT / "docs" / "design" / "STYLE-RUBRIC.md"
 
 sys.path.insert(0, str(ROOT / "scripts" / "jev"))
-import jev_census as jc  # noqa: E402  (COMMENT_POLICY, DO_LANGUAGE_NOTES)
+import jev_census as jc  # noqa: E402  (COMMENT_POLICY)
 
 # ---------------------------------------------------------------------------
 # Medaka facts the judges need. Rule 3 of the jev-judgments skill: language
@@ -38,7 +38,7 @@ CORE_NOTES = (
     "comment, `-- lint-disable-next-line <rule> <reason>` suppresses one lint "
     "finding. `let _ = e` discards a value. The stdlib has `List`, `Array`, "
     "`Vector`, `Map`, `HashMap`, `Set`, and the usual `map`/`filter`/`any`/"
-    "`all`/`find`/`count`/`elem`/`foldl`/`withDefault`/`orElse`/`mapErr`. "
+    "`all`/`find`/`count`/`elem`/`fold`/`foldRight`/`optionOr`/`orElse`/`mapErr`/`toResult`. "
     "Strings interpolate with `\"\\{e}\"`; triple-quoted strings are multi-line."
 )
 
@@ -60,11 +60,37 @@ STDLIB_DOC_NOTES = (
     "implementation narration."
 )
 
+# jc.DO_LANGUAGE_NOTES (the shipped census's state) exempts mixed and differing-arm
+# chains and suggests prefixing error strings; the rubric (R7, R8, R9) exempts neither.
+MONAD_NOTES = (
+    "`Option a = Some a | None` and `Result e a = Ok a | Err e` are monads: "
+    "`andThen : m a -> (a -> m b) -> m b` and `pure`. `do` is sugar over "
+    "`andThen`/`pure`: a line `x <- e` binds the success payload of `e` and "
+    "short-circuits on `None`/`Err`; `let x = e` is a pure binding; the last line "
+    "is the result. So\n"
+    "  match step1 x\n"
+    "    Err e => Err e\n"
+    "    Ok a => match step2 a\n"
+    "      Err e => Err e\n"
+    "      Ok b => step3 b\n"
+    "is exactly\n"
+    "  do\n"
+    "    a <- step1 x\n"
+    "    b <- step2 a\n"
+    "    step3 b\n"
+    "Failure arms that differ still sequence: each check becomes a named step "
+    "whose failure is an error constructor, and the steps go in one `do`. "
+    "`toResult err opt` turns an `Option` into a `Result`, so a chain mixing "
+    "the two also fits one `do`. `orElse` (from `Alternative`) expresses a "
+    "fallback staircase (`None => match ...`); it is strict in its second "
+    "argument. Effectful steps are fine inside `do`."
+)
+
 NOTES = {
     "core": CORE_NOTES,
     "comments": jc.COMMENT_POLICY + " The keep/cut test is per sentence, not per "
                 "comment, and never a length rule.",
-    "monads": jc.DO_LANGUAGE_NOTES,
+    "monads": MONAD_NOTES,
     "tests": TEST_NOTES,
     "stdlib_doc": STDLIB_DOC_NOTES,
 }
@@ -85,7 +111,7 @@ SUBJECTS: dict[str, tuple[str, tuple[str, ...], bool]] = {
     "data.clone-type": ("a two-case data type that is a clone of Option or Result", (), False),
     "data.param-clump": ("the same three or more parameters travelling together through two or more functions, or three or more adjacent parameters of one primitive type", (), False),
     "data.tuple-as-record": ("a tuple of three or more fields used as a record across two or more signatures", (), False),
-    "data.string-enum": ("a String compared against two or more literals to choose behaviour outside the function that parses it", (), False),
+    "data.string-enum": ("a String compared against literals to choose behaviour outside the function that parses it (two or more distinct literals, or one literal tested in more than one place)", (), False),
     "data.string-key": ("a composite identity built by joining fields into a String inside the program", (), False),
     "data.container": ("a container misuse: keyed lookup or membership on a growing List, positional indexing into a list, `acc ++ [x]` in a recursion, or HashMap order reaching output", (), False),
     "iface.underused": ("a hand-written function duplicating what `deriving` or a standard interface (Eq, Ord, Display, Debug) provides, or a family of same-shaped functions over distinct types with no shared interface", (), False),
@@ -101,11 +127,11 @@ SUBJECTS: dict[str, tuple[str, tuple[str, ...], bool]] = {
     "module.scattered-concern": ("new code adding a concern to a file that is not about it, or scattering one concern across distant regions", (), False),
     "comment.history": ("a comment sentence narrating what the code used to do or how it got here", (C,), False),
     "comment.provenance": ("a comment citing an issue number or plan id only to record which work item introduced the code", (C,), False),
-    "comment.measurement": ("a comment containing hand-typed measurements (percentages, CPU-seconds, sizes, counts)", (C,), False),
+    "comment.measurement": ("a comment containing hand-typed measurements or recorded observations (percentages, CPU-seconds, sizes, counts, or what a run printed at a named commit)", (C,), False),
     "comment.restates": ("a comment block of which half or more of the sentences restate what the code plainly says", (C,), False),
     "comment.ephemeral": ("a comment arguing with a reviewer or anchored to an in-flight change ('this slice', 'this PR')", (C,), False),
     "comment.speculative": ("a comment speculating about future changes ('if X ever gains Y')", (C,), False),
-    "comment.shout": ("dense ALL-CAPS emphasis: three or more emphatic capitalised words in one comment block", (C,), False),
+    "comment.shout": ("an emoji sigil (🚨, ⚠️, 🔒) or dense ALL-CAPS emphasis (three or more emphatic capitalised words in one comment block)", (C,), False),
     "doc.register": ("implementation narration inside a stdlib doc comment", (C, "stdlib_doc"), False),
     "test.weak-reject": ("a test asserting that something is rejected without naming the expected diagnostic code or message", (T,), False),
     "test.bool-helper": ("a test helper returning Bool that is graded with expectTrue/expectFalse", (T,), False),
@@ -118,7 +144,7 @@ SUBJECTS: dict[str, tuple[str, tuple[str, ...], bool]] = {
     "test.vehicle": ("a test in the wrong vehicle: a prop whose law does not document the API, or a shell gate whose `shell-because:` is not a valid reason", (T,), False),
     "comment.stale": ("a comment that contradicts or no longer describes the code, or names something that does not exist", (C,), True),
     "comment.layout": ("a comment left ragged or broken mid-clause by an edit", (C,), False),
-    "dup.in-diff": ("the same expression or body repeated within the excerpt", (), False),
+    "dup.in-diff": ("the same expression or body repeated within the excerpt, or repeating a body or expression that already exists in the same module (shown in evidence) instead of calling it", (), True),
     "dup.cross-file": ("a helper copied between files instead of shared", (), True),
     "dead.code": ("an unused binding, parameter, arm or import, a constructor with no producer, or an unreachable branch", (), False),
     "naming.misleading": ("a name that says something other than what the binding holds or does", (), False),

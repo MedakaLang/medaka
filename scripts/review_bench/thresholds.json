@@ -9,16 +9,16 @@
  },
  "classes": {
   "comment.ephemeral": {
-   "low": 0.95,
+   "low": 0.6,
    "high": null,
-   "n_pos": 1,
-   "n_ctrl": 0
+   "n_pos": 2,
+   "n_ctrl": 1
   },
   "comment.history": {
    "low": 0.05,
    "high": 0.25,
-   "n_pos": 14,
-   "n_ctrl": 6
+   "n_pos": 12,
+   "n_ctrl": 5
   },
   "comment.layout": {
    "low": 0.1,
@@ -27,8 +27,8 @@
    "n_ctrl": 3
   },
   "comment.measurement": {
-   "low": 0.35,
-   "high": 0.95,
+   "low": 0.05,
+   "high": 0.85,
    "n_pos": 7,
    "n_ctrl": 3
   },
@@ -39,19 +39,19 @@
    "n_ctrl": 2
   },
   "comment.restates": {
-   "low": 0.2,
+   "low": 0.3,
    "high": null,
-   "n_pos": 2,
+   "n_pos": 1,
    "n_ctrl": 1
   },
   "comment.shout": {
-   "low": 0.4,
+   "low": 0.95,
    "high": null,
    "n_pos": 3,
    "n_ctrl": 1
   },
   "comment.speculative": {
-   "low": 0.4,
+   "low": 0.9,
    "high": null,
    "n_pos": 1,
    "n_ctrl": 0
@@ -68,7 +68,7 @@
    "n_ctrl": 1
   },
   "data.clone-type": {
-   "low": 0.1,
+   "low": 0.05,
    "high": null,
    "n_pos": 1,
    "n_ctrl": 2
@@ -80,7 +80,7 @@
    "n_ctrl": 0
   },
   "data.param-clump": {
-   "low": 0.65,
+   "low": 0.6,
    "high": null,
    "n_pos": 1,
    "n_ctrl": 0
@@ -92,7 +92,7 @@
    "n_ctrl": 0
   },
   "data.string-enum": {
-   "low": 0.0,
+   "low": 0.5,
    "high": null,
    "n_pos": 1,
    "n_ctrl": 2
@@ -104,25 +104,25 @@
    "n_ctrl": 1
   },
   "data.stringly-error": {
-   "low": 0.85,
+   "low": 0.9,
    "high": null,
    "n_pos": 3,
    "n_ctrl": 3
   },
   "data.tuple-as-record": {
-   "low": 0.1,
+   "low": 0.5,
    "high": null,
    "n_pos": 3,
    "n_ctrl": 3
   },
   "dead.code": {
-   "low": 0.1,
+   "low": 0.8,
    "high": null,
    "n_pos": 2,
    "n_ctrl": 2
   },
   "defensive.discarded-result": {
-   "low": 0.35,
+   "low": 0.45,
    "high": null,
    "n_pos": 5,
    "n_ctrl": 0
@@ -134,7 +134,7 @@
    "n_ctrl": 2
   },
   "diag.quality": {
-   "low": 0.05,
+   "low": 0.75,
    "high": null,
    "n_pos": 1,
    "n_ctrl": 0
@@ -159,8 +159,7 @@
   "dup.in-diff": {
    "low": 0.0,
    "high": null,
-   "n_pos": 8,
-   "n_ctrl": 5
+   "note": "cross-snippet: always to Haiku"
   },
   "idiom.inside-out-pipeline": {
    "low": 0.15,
@@ -169,7 +168,7 @@
    "n_ctrl": 1
   },
   "idiom.let-underscore-unit": {
-   "low": 0.5,
+   "low": 0.85,
    "high": null,
    "n_pos": 1,
    "n_ctrl": 0
@@ -181,25 +180,25 @@
    "n_ctrl": 0
   },
   "magic-literal": {
-   "low": 0.1,
+   "low": 0.2,
    "high": null,
    "n_pos": 4,
    "n_ctrl": 0
   },
   "naming.misleading": {
-   "low": 0.35,
+   "low": 0.3,
    "high": null,
    "n_pos": 2,
    "n_ctrl": 1
   },
   "shape.do-cascade": {
-   "low": 0.85,
+   "low": 0.95,
    "high": null,
    "n_pos": 2,
    "n_ctrl": 1
   },
   "shape.nested-match": {
-   "low": 0.85,
+   "low": 0.95,
    "high": null,
    "n_pos": 2,
    "n_ctrl": 0
@@ -211,13 +210,13 @@
    "n_ctrl": 1
   },
   "suppress.invalid-reason": {
-   "low": 0.7,
-   "high": 0.75,
+   "low": 0.75,
+   "high": 0.8,
    "n_pos": 5,
    "n_ctrl": 3
   },
   "test.bool-helper": {
-   "low": 0.35,
+   "low": 0.85,
    "high": null,
    "n_pos": 3,
    "n_ctrl": 0
@@ -229,43 +228,43 @@
    "n_ctrl": 2
   },
   "test.escaped-program": {
-   "low": 0.65,
+   "low": 0.6,
    "high": null,
    "n_pos": 1,
    "n_ctrl": 0
   },
   "test.hand-count": {
-   "low": 0.95,
+   "low": 0.9,
    "high": null,
    "n_pos": 3,
    "n_ctrl": 1
   },
   "test.length-not-contents": {
-   "low": 0.6,
+   "low": 0.65,
    "high": null,
    "n_pos": 3,
    "n_ctrl": 2
   },
   "test.probe-in-production": {
-   "low": 0.6,
+   "low": 0.15,
    "high": null,
    "n_pos": 2,
    "n_ctrl": 1
   },
   "test.repeated-columns": {
-   "low": 0.9,
+   "low": 0.85,
    "high": null,
    "n_pos": 1,
    "n_ctrl": 0
   },
   "test.vehicle": {
-   "low": 0.05,
+   "low": 0.75,
    "high": null,
    "n_pos": 3,
    "n_ctrl": 2
   },
   "test.weak-reject": {
-   "low": 0.1,
+   "low": 0.05,
    "high": null,
    "n_pos": 3,
    "n_ctrl": 1

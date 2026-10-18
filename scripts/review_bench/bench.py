@@ -384,7 +384,10 @@ def _f(x, fmt="{:.2f}") -> str:
 def cmd_report(a) -> int:
     fx = I.load(a.fixtures)
     in_split = [it for it in fx if a.split == "all" or it["_split"] == a.split]
-    keys = {it["_key"] for it in in_split}
+    # Polarity and class come from the fixtures as they are now: a stored result keeps
+    # the label it was asked under, and an item relabelled since must score as relabelled.
+    cur = {it["_key"]: it for it in in_split}
+    keys = set(cur)
     judg: dict[str, int] = {}
     for it in in_split:
         if it["polarity"] == "judgment":
@@ -395,7 +398,9 @@ def cmd_report(a) -> int:
              f"Haiku, Opus and cascade flags count only after evidence verification. "
              f"Jev flags at P(flag) >= {a.jev_threshold}. Cost includes answers served from the cache.", ""]
     for stage in STAGES:
-        recs = [r for k, r in load_results(stage).items() if k in keys and r["polarity"] != "judgment"]
+        recs = [r | {"polarity": cur[k]["polarity"], "class": cur[k]["class"]}
+                for k, r in load_results(stage).items()
+                if k in keys and cur[k]["polarity"] != "judgment"]
         if not recs:
             continue
         classes = sorted({r["class"] for r in recs})

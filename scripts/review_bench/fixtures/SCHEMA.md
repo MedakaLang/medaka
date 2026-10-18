@@ -13,7 +13,7 @@ counts.
 | `id` | `"RB-0001"`… | Stable identifier. New items are appended; ids are never reused. |
 | `polarity` | `positive` \| `control` \| `judgment` | A reviewer must flag it; must not flag it; or is scored neither way. |
 | `class` | rubric slug | For a control, the class it is a control *for*. |
-| `control_kind` | string \| null | Controls only: `exception` (a rubric exception), `after-fix` (the fixed state of a positive), `declined` (raised in a past review and ruled not a defect), `clean` (ordinary code the class could tempt a reviewer to flag). |
+| `control_kind` | string \| null | Controls only: `exception` (a rubric exception), `after-fix` (the fixed state of a positive, which must be clean for its class; a fix that left a defect of the class behind makes the item `judgment`), `declined` (raised in a past review and ruled not a defect), `clean` (ordinary code the class could tempt a reviewer to flag). |
 | `ruling` | `"R14"` \| null | The ruling that governs the class or this instance; null for the classes established before the rulings. |
 | `severity` | `high` \| `medium` \| `low` \| null | Positives only. |
 | `summary` | string | One sentence: what a correct reviewer says, or why the item must not be flagged. |
@@ -22,7 +22,7 @@ counts.
 | `excerpt` | string | Byte-exact `git show <sha>:<file>` lines `start..end`, at most 40 lines. |
 | `evidence_scope` | `local` \| `file` \| `repo` | Whether the excerpt alone suffices, or the judge needs more of the file or other files. |
 | `evidence_refs` | list | `{file, anchor, sha, lines, excerpt, note?}` for the code a judge needs (the original being duplicated, the contradicting code). `excerpt` is `""` when the reference is a whole module or could not be resolved; `note` says which. |
-| `label_strength` | `val` \| `fixed` \| `declined` \| `candidate` | `val`: a ruling on this exact instance. `fixed`: a fix round changed it as asked (after-fix controls carry `fixed` too). `declined`: ruled not a defect in a past review. `candidate`: a miner's or scanner's judgment against the rubric, pending review. |
+| `label_strength` | `val` \| `fixed` \| `declined` \| `reviewed` \| `candidate` | `val`: a ruling on this exact instance. `fixed`: a fix round changed it as asked (after-fix controls carry `fixed` too). `declined`: ruled not a defect in a past review. `reviewed`: a candidate a second reader checked against the rulings after the judges contested it. `candidate`: a miner's or scanner's judgment against the rubric, pending review. |
 | `source` | `{kind, ref}` | `kind` is `style-report` (end-of-sprint review), `file-mining` (one file read end to end), `val-ruling`, `scan` (found with a scan script or grep while applying a ruling), or `derived` (a second class read off a mined item's excerpt or fix state; `ref` is the original's source). |
 | `fix` | object \| null | `{sha, file, lines, excerpt_after}` for a positive whose fix landed. `file` differs from `file` above when the fix moved the code. |
 | `split` | `dev` \| `test` | See below. |

@@ -113,3 +113,4 @@ token count, the Jev cost is estimated from characters and the report says so.
 - `items.py`: fixture loading, selection, prompt rendering, few-shot draw.
 - `engines.py`: the Jev and headless-Claude callers and the cache.
 - `thresholds.json`: per-class Jev bands written by `bench.py cascade`.
+- `RESULTS-*.md`: frozen measurements, one per pass; rerun rather than quote.

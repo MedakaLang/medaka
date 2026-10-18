@@ -152,7 +152,10 @@ def claude_request_key(model: str, system: str, user: str) -> str:
 def parse_verdict(text: str) -> dict | None:
     t = text.strip()
     t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t)
-    for cand in (t, t[t.find("{"): t.rfind("}") + 1] if "{" in t else ""):
+    braced = t[t.find("{"): t.rfind("}") + 1] if "{" in t else ""
+    # A quoted Medaka interpolation (`\{e}`) is not a JSON escape; double its backslash.
+    lenient = re.sub(r'\\(?![\\"/bfnrtu])', r"\\\\", braced)
+    for cand in (t, braced, lenient):
         try:
             v = json.loads(cand)
         except (json.JSONDecodeError, ValueError):
@@ -161,6 +164,15 @@ def parse_verdict(text: str) -> dict | None:
             return {"flag": bool(v.get("flag")), "confidence": float(v.get("confidence") or 0.0),
                     "evidence_quote": str(v.get("evidence_quote") or ""),
                     "reason": str(v.get("reason") or "")}
+    # Unescaped quotes inside a string field: the flag and confidence still read cleanly.
+    flag = re.search(r'"flag"\s*:\s*(true|false)', t)
+    if flag:
+        conf = re.search(r'"confidence"\s*:\s*([0-9.]+)', t)
+        quote = re.search(r'"evidence_quote"\s*:\s*"((?:[^"\\]|\\.)*)"', t)
+        reason = re.search(r'"reason"\s*:\s*"(.*)"\s*}\s*$', t, re.S)
+        return {"flag": flag.group(1) == "true", "confidence": float(conf.group(1)) if conf else 0.0,
+                "evidence_quote": quote.group(1) if quote else "",
+                "reason": reason.group(1) if reason else ""}
     return None
 
 
@@ -205,6 +217,9 @@ def ask_claude(reqs: list[tuple[str, str, str]], model: str, jobs: int = 4,
     todo = []
     for key, system, user in reqs:
         hit = _cache_get("claude", key)
+        if hit is not None and hit.get("parse_error"):
+            hit["verdict"] = parse_verdict(hit.get("raw") or "")
+            hit["parse_error"] = hit["verdict"] is None
         if hit is not None:
             out[key] = hit
         else:
