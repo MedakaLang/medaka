@@ -5,7 +5,8 @@
 -- This file is over 3,000 code lines because the driver, its report twin and the
 -- three engines' per-file orchestration share one prepared pair and one abort
 -- rule, so they live together.  The merged-probe glue (`mergesNativeArms` and
--- the functions it calls) is expected to move beside `native_probe.mdk`.
+-- the functions it calls) stays here: it reads `TestPair` and the property phase,
+-- which `native_probe.mdk` cannot import without a cycle.
 --
 -- Exports:
 --   runTest runtimeP coreP target roots   read the three sources + drive
@@ -1120,17 +1121,8 @@ driveMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases filt
       else
         let pair = phaseTrees engines userDecls rsrc csrc prepared
         let native =
-          nativeRunsFor
-            (mergesNativeArms
-              engines
-              target
-              tsrc
-              userDecls
-              examples
-              True
-              filterOpt
-              file
-              index)
+          multiNativeRuns
+            engines
             pair
             target
             tsrc
@@ -1205,41 +1197,18 @@ driveSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases fil
   else
     let synthResults = buildSynthResults userDecls examples
     let laterPhases = hasProps userDecls || hasTests userDecls
-    let merges =
-      mergesNativeArms
+    let (early, native) =
+      singleNativeRuns
         engines
+        runtimeDecls
+        coreDecls
         target
         tsrc
-        userDecls
-        examples
-        True
-        filterOpt
-        file
-        index
-    -- A merged probe plans the properties before the doctest phase, so it needs
-    -- the pair then; the native doctest arm reads no tree, so nothing that
-    -- phase evaluates is elaborated in between.
-    let early =
-      if merges && laterPhases then
-        Some
-          (singlePhaseTrees
-            engines
-            runtimeDecls
-            coreDecls
-            target
-            roots
-            userDecls)
-      else
-        None
-    let native =
-      nativeRunsFor
-        merges
-        (optionOr unreadTrees early)
-        target
-        tsrc
+        roots
         userDecls
         examples
         synthResults
+        laterPhases
         True
         cases
         filterOpt
@@ -1374,6 +1343,100 @@ nativeTestArmsOf includeTests userDecls tsrc filterOpt file index =
         (filterTestsByName filterOpt (nativeRawTests tsrc)))
   else
     None
+
+-- `nativeRunsFor` on the import-bearing arm, whose pair is already prepared.
+multiNativeRuns : List Engine ->
+  TestPair ->
+  String ->
+  String ->
+  List Decl ->
+  List Example ->
+  List (Result String (List Decl)) ->
+  Bool ->
+  Int ->
+  Option String ->
+  String ->
+  PinIndex ->
+  <IO> Option NativeArmResults
+multiNativeRuns engines pair target tsrc userDecls examples synthResults includeTests cases filterOpt file index =
+  nativeRunsFor
+    (mergesNativeArms
+      engines
+      target
+      tsrc
+      userDecls
+      examples
+      includeTests
+      filterOpt
+      file
+      index)
+    pair
+    target
+    tsrc
+    userDecls
+    examples
+    synthResults
+    includeTests
+    cases
+    filterOpt
+    file
+    index
+
+-- `nativeRunsFor` on the prelude-only arm, with the pair it prepares early when
+-- the merged probe needs it: a merged probe plans the properties before the
+-- doctest phase, and the native doctest arm reads no tree, so nothing that
+-- phase evaluates is elaborated in between.  The first component is that early
+-- pair, None when each arm runs on a probe of its own.
+singleNativeRuns : List Engine ->
+  List Decl ->
+  List Decl ->
+  String ->
+  String ->
+  List String ->
+  List Decl ->
+  List Example ->
+  List (Result String (List Decl)) ->
+  Bool ->
+  Bool ->
+  Int ->
+  Option String ->
+  String ->
+  PinIndex ->
+  <IO> (Option TestPair, Option NativeArmResults)
+singleNativeRuns engines runtimeDecls coreDecls target tsrc roots userDecls examples synthResults laterPhases includeTests cases filterOpt file index =
+  let merges =
+    mergesNativeArms
+      engines
+      target
+      tsrc
+      userDecls
+      examples
+      includeTests
+      filterOpt
+      file
+      index
+  let early =
+    if merges && laterPhases then
+      Some
+        (singlePhaseTrees engines runtimeDecls coreDecls target roots userDecls)
+    else
+      None
+  (
+    early,
+    nativeRunsFor
+      merges
+      (optionOr unreadTrees early)
+      target
+      tsrc
+      userDecls
+      examples
+      synthResults
+      includeTests
+      cases
+      filterOpt
+      file
+      index,
+  )
 
 -- The native arms' results from one merged probe (`tools/native_probe.mdk`)
 -- run before the phases, or None when each arm runs on a probe of its own.
@@ -2421,17 +2484,8 @@ reportMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases fil
     (None, prepared) =>
       let pair = phaseTrees engines userDecls rsrc csrc prepared
       let native =
-        nativeRunsFor
-          (mergesNativeArms
-            engines
-            target
-            tsrc
-            userDecls
-            examples
-            includeTestDecls
-            filterOpt
-            file
-            index)
+        multiNativeRuns
+          engines
           pair
           target
           tsrc
@@ -2503,33 +2557,18 @@ reportSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases fi
   let examples = filterExamplesByName filterOpt (targetExamples tsrc)
   let synthResults = buildSynthResults userDecls examples
   let laterPhases = hasProps userDecls || includeTestDecls && hasTests userDecls
-  let merges =
-    mergesNativeArms
+  let (early, native) =
+    singleNativeRuns
       engines
+      runtimeDecls
+      coreDecls
       target
       tsrc
-      userDecls
-      examples
-      includeTestDecls
-      filterOpt
-      file
-      index
-  -- `driveSingle`'s order, for the same reason.
-  let early =
-    if merges && laterPhases then
-      Some
-        (singlePhaseTrees engines runtimeDecls coreDecls target roots userDecls)
-    else
-      None
-  let native =
-    nativeRunsFor
-      merges
-      (optionOr unreadTrees early)
-      target
-      tsrc
+      roots
       userDecls
       examples
       synthResults
+      laterPhases
       includeTestDecls
       cases
       filterOpt
