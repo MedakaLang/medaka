@@ -24,8 +24,10 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import subprocess
+import threading
 from collections import Counter
 from pathlib import Path
 
@@ -102,8 +104,10 @@ class Tree:
         return self._grep[key]
 
     def decls(self, path: str) -> list["Decl"]:
+        # Generators compare declarations by identity, and review.py generates on
+        # several threads: every thread must get the one stored list.
         if path not in self._decls:
-            self._decls[path] = parse_decls(self.lines(path), path)
+            self._decls.setdefault(path, parse_decls(self.lines(path), path))
         return self._decls[path]
 
 
@@ -897,8 +901,7 @@ def library_pool(tree: Tree) -> list[Decl]:
             pool += [d for d in tree.decls(f) if d.kind in ("sig", "fn", "extern")]
             if f.startswith("stdlib/"):
                 pool += interface_methods(tree.lines(f), f)
-    tree._idx[key] = pool
-    return pool
+    return tree._idx.setdefault(key, pool)
 
 
 def doc_words(d: Decl) -> list[str]:
@@ -1291,7 +1294,7 @@ def gen_comment_stale(it: dict) -> list[dict]:
     quals = []
     for q in m["qual"][:6]:
         mod, nm = q.split(".", 1)
-        files = [f for f in tree.files() if f.endswith(f"/{mod}.mdk") or f == f"{mod}.mdk"]
+        files = sorted(f for f in tree.files() if f.endswith(f"/{mod}.mdk") or f == f"{mod}.mdk")
         if not files:
             continue
         quals.append((q, mod, nm, files))
@@ -1453,6 +1456,128 @@ def gen_magic_literal(it: dict) -> list[dict]:
     return budget([fact_ref(tree, path, "literal search", fact)] + refs)
 
 
+# ---------------------------------------------------------------------------
+# dup.*: what the excerpt's file and its candidate twins say about copies
+# ---------------------------------------------------------------------------
+# Off by default: measured on the dev split only (RESULTS-diffs-dev-2026-10-18.md).
+# review.py --twin-notes and diffbench.py turn it on.
+TWIN_NOTES = False
+# The lint rule each class's suppressions are about.
+DUP_RULES = {"dup.existing": ("rule-stdlib-reimpl",), "dup.in-diff": ("rule-duplicate-body",),
+             "dup.cross-file": ("rule-duplicate-body",)}
+DISABLE_RE = re.compile(r"^\s*--\s*lint-disable(?P<scope>-file|-next-line)?\b")
+# A comment sentence inside a declaration counts when it speaks of a copy and of a
+# reason for it; a block elsewhere in the file counts when it names the other file
+# and speaks of either.
+COPY_TOPIC = re.compile(r"\b(cop(?:y|ies|ied)|duplicat\w*|twins?|mirror\w*|re-?implement\w*|standalone|"
+                        r"not shared|its own)\b", re.I)
+COPY_REASON = re.compile(r"\b(independen\w*|oracles?|deliberate\w*|intentional\w*|on purpose|by design|"
+                         r"distinct\s+(?:\w+\s+)?(?:types?|ADTs?|data))\b", re.I)
+NOTE_CHARS = 300  # a quoted comment is cut at this many characters
+NOTES_PER_SPAN = 2
+
+
+def _comment_body(ln: str) -> str:
+    return re.sub(r"^\s*--\s?", "", ln).strip()
+
+
+def comment_blocks(ls: list[str]) -> list[tuple[int, int, str]]:
+    """(first, last, text) of each run of `--` comment lines, lint directives left out of
+    the text; 1-based."""
+    out, k = [], 0
+    while k < len(ls):
+        if ls[k].lstrip().startswith("--"):
+            j = k
+            while j + 1 < len(ls) and ls[j + 1].lstrip().startswith("--"):
+                j += 1
+            text = " ".join(_comment_body(x) for x in ls[k:j + 1] if not DISABLE_RE.match(x))
+            out.append((k + 1, j + 1, " ".join(text.replace("─", " ").split())))
+            k = j + 1
+        else:
+            k += 1
+    return out
+
+
+def _clip(s: str) -> str:
+    return s if len(s) <= NOTE_CHARS else s[:NOTE_CHARS].rstrip() + " …"
+
+
+def copy_notes(tree: Tree, path: str, rules: tuple[str, ...], lo: int, hi: int,
+               other: str | None) -> tuple[list[str], list[str]]:
+    """Neutral facts about copies in `path`, as (file-level, local): file-level are its
+    file-wide lint-disables of `rules` and, with `other`, comment blocks anywhere in it
+    that speak of copies and name `other`'s module; local are next-line disables and
+    comment blocks speaking of copies within lines lo..hi."""
+    ls = tree.lines(path)
+    blocks = comment_blocks(ls)
+    filelevel, local, used = [], [], set()
+    for first, last, text in blocks:
+        for n in range(first, last + 1):
+            m = DISABLE_RE.match(ls[n - 1])
+            hit = [r for r in re.findall(r"rule-[a-z-]+", ls[n - 1]) if r in rules] if m else []
+            if not hit:
+                continue
+            whole = m.group("scope") == "-file"
+            if not whole and not (lo <= n <= hi + 1):
+                continue
+            used.add(first)
+            fact = (f"`{path}` line {n} suppresses " + ", ".join(f"`{r}`" for r in hit)
+                    + (" for the whole file" if whole else " for the next declaration")
+                    + (f", under the comment: \"{_clip(text)}\"" if text else ", with no comment"))
+            (filelevel if whole else local).append(fact)
+    named = re.compile(rf"(?<!\w){re.escape(Path(other).name)}\b") if other else None
+    for first, last, text in blocks:
+        if first in used:
+            continue
+        inside = first <= hi and last >= lo
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        where = f"`{path}` line {first}" if first == last else f"`{path}` lines {first}-{last}"
+        if inside:
+            said = " ".join(s for s in sentences if COPY_TOPIC.search(s) and COPY_REASON.search(s))
+            if said:
+                local.append(f"{where}, a comment: \"{_clip(said)}\"")
+        elif named and named.search(text) and (COPY_TOPIC.search(text) or COPY_REASON.search(text)):
+            said = " ".join(s for s in sentences if named.search(s) or COPY_TOPIC.search(s) or COPY_REASON.search(s))
+            filelevel.append(f"{where}, a comment: \"{_clip(said)}\"")
+    return filelevel[:NOTES_PER_SPAN + 1], local[:NOTES_PER_SPAN]
+
+
+def twin_notes(it: dict, refs: list[dict]) -> list[dict]:
+    """What the excerpt's own file says about copies goes first, as a location-only ref;
+    what each candidate twin's file says is appended to that candidate's `fact`, a
+    file's file-level facts on its first candidate only."""
+    rules = DUP_RULES[it["class"]]
+    tree, path, span, decls, inside = excerpt_context(it)
+    if not span or tree.text(path) is None:
+        return refs
+    lo = min([span[0]] + [d.start for d in inside])
+    hi = max([span[1]] + [d.end for d in inside])
+    out, said = [], {path}
+    twin_files = []
+    for r in refs:
+        rr = _range(r.get("lines", ""))
+        if not rr or tree.text(r["file"]) is None:
+            out.append(r)
+            continue
+        twin = overlapping(tree.decls(r["file"]), *rr)
+        tlo = min([rr[0]] + [d.start for d in twin])
+        thi = max([rr[1]] + [d.end for d in twin])
+        same = r["file"] == path
+        filelevel, local = copy_notes(tree, r["file"], rules, tlo, thi, None if same else path)
+        if r["file"] not in said:
+            said.add(r["file"])
+            twin_files.append(r["file"])
+            local = filelevel + local
+        out.append(dict(r, fact=" ".join([r["fact"]] + local)) if local else r)
+    filelevel, local = copy_notes(tree, path, rules, lo, hi, None)
+    own = filelevel + local
+    for f in twin_files:
+        own += [n for n in copy_notes(tree, path, rules, 0, -1, f)[0] if n not in own]
+    if own:
+        out.insert(0, fact_ref(tree, path, "suppressions and comments on copies", " ".join(own)))
+    return out
+
+
 GENERATORS = {
     "dead.code": gen_dead_code,
     "dup.existing": gen_dup_existing,
@@ -1470,18 +1595,35 @@ def generate(it: dict) -> list[dict]:
     gen = GENERATORS.get(it["class"])
     if gen is None:
         return []
+    plain = _cached(it, [], lambda: gen(it))
+    if TWIN_NOTES and it["class"] in DUP_RULES:
+        # The notes go on top of the very refs the default gives, so they are the only change.
+        return _cached(it, ["twin-notes"], lambda: _notes_or_plain(it, plain))
+    return plain
+
+
+def _notes_or_plain(it: dict, plain: list[dict]) -> list[dict]:
+    try:
+        return twin_notes(it, plain)
+    except Exception as e:  # noqa: BLE001 -- a notes bug leaves the default evidence
+        print(f"evidence: twin notes for {it.get('id')}: {type(e).__name__}: {e}", flush=True)
+        return plain
+
+
+def _cached(it: dict, variant: list[str], make) -> list[dict]:
     key = hashlib.sha256(json.dumps([_SRC_HASH, it["class"], it.get("file"), it.get("sha"),
-                                     it.get("lines"), it["excerpt"]]).encode()).hexdigest()
+                                     it.get("lines"), it["excerpt"]] + variant).encode()).hexdigest()
     f = CACHE / f"{key}.json"
     if f.exists():
         return json.loads(f.read_text())
     try:
-        refs = gen(it)
+        refs = make()
     except Exception as e:  # noqa: BLE001 -- a generator bug must not sink a run; it shows as no evidence
         refs = []
         print(f"evidence: {it.get('id')}: {type(e).__name__}: {e}", flush=True)
     CACHE.mkdir(parents=True, exist_ok=True)
-    tmp = f.with_suffix(".tmp")
+    # Threads may write the same entry: each writes its own temporary file.
+    tmp = f.with_name(f"{f.stem}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(json.dumps(refs))
     tmp.replace(f)
     return refs

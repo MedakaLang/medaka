@@ -10,7 +10,8 @@ block, at the diff's head commit; see README.md "Reviewing a live diff"):
   1. evidence: the union of evidence.py's generators, capped as battery.py caps it;
   2. the battery prompt (battery.py), one Haiku call over the whole rubric;
   3. diff scope: a battery class goes on only if one of its findings quotes a
-     line the diff added or changed (or quotes only evidence blocks);
+     line the diff added or changed (or quotes only evidence blocks); `--scope
+     strict` asks for half the quoted lines (scope_strict);
   4. for each such class, the per-class confirm prompt (bench.claude_request,
      2 dev shots, that class's evidence); a finding survives only if both flag it;
   5. quote verification (bench.quote_verified), applied to both stages.
@@ -218,9 +219,9 @@ def cut_units(sha: str, path: str, changed: set[int], merge: bool = True) -> lis
     return out
 
 
-def build_units(a: str, b: str, files: list[str], jobs: int, merge: bool) -> tuple[list[dict], list[str]]:
-    """Units in file order, evidence generated `jobs` at a time (the generators are git-bound)."""
-    from concurrent.futures import ThreadPoolExecutor
+def unit_specs(a: str, b: str, files: list[str], merge: bool) -> tuple[list[tuple], list[str]]:
+    """[(path, lo, hi, anchor, excerpt, changed lines)] in file order, before any
+    evidence is generated, and notes on files with nothing to review."""
     specs, notes = [], []
     for path in files:
         fl = EV.Tree(b).lines(path)
@@ -231,10 +232,21 @@ def build_units(a: str, b: str, files: list[str], jobs: int, merge: bool) -> tup
             continue
         for lo, hi, anchor in cut_units(b, path, ch, merge):
             specs.append((path, lo, hi, anchor, "\n".join(fl[lo - 1:hi]), sorted(n for n in ch if lo <= n <= hi)))
+    return specs, notes
+
+
+def units_from_specs(b: str, specs: list[tuple], jobs: int) -> list[dict]:
+    """Units with evidence, generated `jobs` at a time (the generators are git-bound)."""
+    from concurrent.futures import ThreadPoolExecutor
     # evidence.py reports a generator error on stdout, which carries the review.
     with contextlib.redirect_stdout(sys.stderr), ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-        units = list(pool.map(lambda s: make_unit(b, *s[:5]) | {"changed": s[5]}, specs))
-    return units, notes
+        return list(pool.map(lambda s: make_unit(b, *s[:5]) | {"changed": s[5]}, specs))
+
+
+def build_units(a: str, b: str, files: list[str], jobs: int, merge: bool) -> tuple[list[dict], list[str]]:
+    """Units in file order, with evidence."""
+    specs, notes = unit_specs(a, b, files, merge)
+    return units_from_specs(b, specs, jobs), notes
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +288,56 @@ def scope(u: dict, quotes: list[str]) -> tuple[str, int, str] | None:
     return "evidence", u["changed"][0], q
 
 
+# Classes whose rule is stated about the change itself: a repeat in new code
+# (`dup.in-diff`), new behaviour with no test (`test.gap`), a concern a diff adds
+# (`module.scattered-concern`). `scope_strict` holds them to the same half rule,
+# since the instance their rule names is new code and either of a finding's two
+# quotes may show it; `scope_strict_exempt` lets them keep `scope`'s rule, the
+# variant measured beside it.
+ABOUT_THE_CHANGE = ("dup.in-diff", "test.gap", "module.scattered-concern")
+
+
+def comment_lines(excerpt: str) -> set[int]:
+    """0-based excerpt lines that are comment lines (`--`, or inside `{- -}`)."""
+    out, depth = set(), 0
+    for k, ln in enumerate(excerpt.split("\n")):
+        s = ln.strip()
+        if depth or s.startswith(("--", "{-")):
+            out.add(k)
+        depth = max(0, depth + ln.count("{-") - ln.count("-}"))
+    return out
+
+
+def scope_strict(u: dict, quotes: list[str], cls: str, exempt: tuple[str, ...] = ()) -> tuple[str, int, str] | None:
+    """The rubric's diff scope ("a finding is about code the diff adds or changes"):
+    a quote in the excerpt counts only when at least half of its non-blank lines are
+    changed lines, or, for `comment.stale`, when a changed quoted line is a comment
+    line (the diff edited the comment). Classes in `exempt` keep `scope`'s rule (any
+    quoted line changed). A finding quoting only evidence blocks is placed as `scope`
+    places it."""
+    loose = scope(u, quotes)
+    if loose is None or loose[0] == "evidence" or cls in exempt:
+        return loose
+    ch = set(u["changed"])
+    ls = u["excerpt"].split("\n")
+    comments = comment_lines(u["excerpt"]) if cls == "comment.stale" else set()
+    for q in quotes:
+        for i, j in quote_spans(u["excerpt"], q):
+            body = [k for k in range(i, j + 1) if ls[k].strip()]
+            hit = [k for k in body if u["lo"] + k in ch]
+            if hit and (2 * len(hit) >= len(body) or any(k in comments for k in hit)):
+                return "diff", u["lo"] + hit[0], q
+    return None
+
+
+def scope_strict_exempt(u: dict, quotes: list[str], cls: str) -> tuple[str, int, str] | None:
+    return scope_strict(u, quotes, cls, ABOUT_THE_CHANGE)
+
+
+SCOPES = {"diff": lambda u, quotes, _cls: scope(u, quotes), "strict": scope_strict,
+          "strict-exempt": scope_strict_exempt}
+
+
 # ---------------------------------------------------------------------------
 # Asking
 # ---------------------------------------------------------------------------
@@ -304,24 +366,38 @@ class Shots:
 
 
 def review(units: list[dict], rub: dict, fx: list[dict], classes: list[str], a) -> dict:
+    return review_units(units, rub, fx, classes, jobs=a.jobs, timeout=a.timeout, max_usd=a.max_usd,
+                        scope_fn=SCOPES[a.scope])
+
+
+def review_units(units: list[dict], rub: dict, fx: list[dict], classes: list[str], *, jobs: int, timeout: int,
+                 max_usd: float, scope_fn=SCOPES["diff"]) -> dict:
+    """The funnel over `units`. Besides the totals, `per_unit` records for each reviewed
+    unit what its answers cost when first asked (cached or not), what that run asked
+    anew, its findings, and what the scope filter dropped at each stage."""
     model = E.CLAUDE_MODELS["haiku"]
     shots = Shots(fx)
     spend = reused = 0.0
     asked = 0
     findings, out_of_scope, errors, done = [], 0, 0, 0
-    chunk = max(1, a.jobs) * 2
+    per_unit: dict[str, dict] = {}
+    chunk = max(1, jobs) * 2
     for n0 in range(0, len(units), chunk):
-        if spend >= a.max_usd:
+        if spend >= max_usd:
             break
         part = units[n0:n0 + chunk]
         fresh = {u["_key"]: E._cache_get(BATTERY_KIND, BT.battery_request(u, rub, classes, True)[0]) is None
                  for u in part}
-        bat = BT.run_battery(part, rub, {u["_key"]: classes for u in part}, BATTERY_KIND, a.jobs, a.timeout, True)
+        bat = BT.run_battery(part, rub, {u["_key"]: classes for u in part}, BATTERY_KIND, jobs, timeout, True)
         for u in part:
             r = bat[u["_key"]]
             errors += bool(r.get("error"))
+            pu = per_unit[u["_key"]] = {"cost": r["cost_usd"], "new": 0.0, "error": bool(r.get("error")),
+                                        "battery": sorted(r["flags"]), "findings": [], "confirm_no": [],
+                                        "dropped_battery": [], "dropped_confirm": []}
             if fresh[u["_key"]]:
                 spend += r["cost_usd"]
+                pu["new"] += r["cost_usd"]
                 asked += "error" not in r
             else:
                 reused += r["cost_usd"]
@@ -337,9 +413,14 @@ def review(units: list[dict], rub: dict, fx: list[dict], classes: list[str], a) 
                 k = (u["_key"], f["class"])
                 if f["class"] not in bat[u["_key"]]["flags"] or not B.quote_verified(u, f["evidence_quote"]):
                     continue
-                if scope(u, [f["evidence_quote"]]) and f["confidence"] > best.get(k, {}).get("confidence", -1):
+                if (scope_fn(u, [f["evidence_quote"]], f["class"])
+                        and f["confidence"] > best.get(k, {}).get("confidence", -1)):
                     best[k] = f
-            out_of_scope += sum(1 for c in bat[u["_key"]]["flags"] if (u["_key"], c) not in best)
+            for c, f in sorted(bat[u["_key"]]["flags"].items()):
+                if (u["_key"], c) not in best:
+                    out_of_scope += 1
+                    per_unit[u["_key"]]["dropped_battery"].append(
+                        {"class": c, "quote": f["evidence_quote"], "confidence": f["confidence"]})
         pairs = [(u, c) for u in part for c in sorted(bat[u["_key"]]["flags"]) if (u["_key"], c) in best]
         shots.need({c for _, c in pairs})
         pool = {u["_key"]: BT.shot_pool(u, fx) for u in part}
@@ -347,7 +428,7 @@ def review(units: list[dict], rub: dict, fx: list[dict], classes: list[str], a) 
         for u, c in pairs:
             key = B.claude_request(BT.pseudo_item(u, c), rub, model, SHOTS, pool[u["_key"]])[0]
             pfresh[f"{u['_key']}#{c}"] = E._cache_get("claude", key) is None
-        pc = BT.run_perclass(pairs, rub, fx, SHOTS, a.jobs, a.timeout) if pairs else {}
+        pc = BT.run_perclass(pairs, rub, fx, SHOTS, jobs, timeout) if pairs else {}
         for k, rec in pc.items():
             errors += bool(rec.get("error"))
             if pfresh[k]:
@@ -357,21 +438,32 @@ def review(units: list[dict], rub: dict, fx: list[dict], classes: list[str], a) 
                 reused += rec["cost_usd"]
         for u, c in pairs:
             rec, bf = pc[f"{u['_key']}#{c}"], best[(u["_key"], c)]
+            pu = per_unit[u["_key"]]
+            pu["cost"] += rec["cost_usd"]
+            pu["new"] += rec["cost_usd"] if pfresh[f"{u['_key']}#{c}"] else 0.0
+            pu["error"] = pu["error"] or bool(rec.get("error"))
             if not rec.get("flag"):
+                pu["confirm_no"].append(c)
                 continue
-            where = scope(u, [rec.get("evidence_quote", ""), bf["evidence_quote"]])
+            where = scope_fn(u, [rec.get("evidence_quote", ""), bf["evidence_quote"]], c)
             if where is None:
                 out_of_scope += 1
+                pu["dropped_confirm"].append({"class": c, "quote": rec.get("evidence_quote", ""),
+                                              "battery_quote": bf["evidence_quote"],
+                                              "reason": rec.get("reason", "")})
                 continue
             kind, line, quote = where
-            findings.append({"file": u["file"], "line": line, "class": c, "quote": quote,
-                             "reason": rec.get("reason", ""), "confidence_battery": bf["confidence"],
-                             "confidence_confirm": rec.get("confidence", 0.0), "anchor": u["anchor"],
-                             "quote_from": kind})
+            f = {"file": u["file"], "line": line, "class": c, "quote": quote,
+                 "reason": rec.get("reason", ""), "confidence_battery": bf["confidence"],
+                 "confidence_confirm": rec.get("confidence", 0.0), "anchor": u["anchor"],
+                 "quote_from": kind}
+            findings.append(f)
+            pu["findings"].append(f)
         done += len(part)
     findings.sort(key=lambda f: (-f["confidence_battery"] * f["confidence_confirm"], f["file"], f["line"]))
     return {"findings": findings, "reviewed": units[:done], "unreviewed": units[done:], "spend": spend,
-            "reused": reused, "asked": asked, "out_of_scope": out_of_scope, "errors": errors}
+            "reused": reused, "asked": asked, "out_of_scope": out_of_scope, "errors": errors,
+            "per_unit": per_unit}
 
 
 # ---------------------------------------------------------------------------
@@ -475,7 +567,19 @@ def main() -> int:
     ap.add_argument("--one-decl", action="store_true",
                     help=f"one declaration per unit; by default adjacent touched declarations share a unit "
                          f"up to {MERGE_LINES} lines")
+    ap.add_argument("--scope", choices=sorted(SCOPES), default="diff",
+                    help="diff: a quote touching a changed line survives (the measured default); strict: at "
+                         "least half of the quote's lines must be changed (scope_strict); strict-exempt: the "
+                         "same, but dup.in-diff, test.gap and module.scattered-concern keep the default "
+                         "(dev-measured only, RESULTS-diffs-dev-2026-10-18.md)")
+    ap.add_argument("--twin-notes", action="store_true",
+                    help="dup.* evidence also states suppressions and deliberate-copy comments on the excerpt's "
+                         "file and its candidate twins (evidence.TWIN_NOTES; dev-measured only)")
     a = ap.parse_args()
+    EV.TWIN_NOTES = a.twin_notes
+    if a.scope != "diff" or a.twin_notes:
+        print("review: --scope strict / --twin-notes are measured on the dev split only; the closing "
+              "figures describe the default", file=sys.stderr)
 
     base, head, rev = resolve_rev(a.rev)
     files, skipped, other = changed_files(base, head)

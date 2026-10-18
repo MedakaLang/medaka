@@ -123,6 +123,80 @@ $R --rev A..B [--json] [--max-usd 1.00] [--jobs 4]
 - **Output:** findings ranked by battery times confirm confidence (the rubric
   carries no per-class severity), the units, what was skipped, the spend.
 
+Two variants are measured on the dev split only (`RESULTS-diffs-dev-2026-10-18.md`)
+and are off by default:
+
+- `--scope strict` (`review.scope_strict`): the rubric's "a finding is about
+  code the diff adds or changes" applied to the quote. A quote counts only when
+  at least half of its non-blank lines are changed lines, or, for
+  `comment.stale`, when a changed quoted line is a comment line (an edited
+  comment). Either of a finding's two quotes may qualify. `--scope
+  strict-exempt` also lets `dup.in-diff`, `test.gap` and
+  `module.scattered-concern` keep the default rule.
+- `--twin-notes` (`evidence.TWIN_NOTES`): the `dup.*` evidence also states, as
+  neutral facts, each `lint-disable` of the class's lint rule
+  (`rule-duplicate-body`, or `rule-stdlib-reimpl` for `dup.existing`) on the
+  excerpt's file or a candidate twin, with the comment above it, and comments
+  that speak of a deliberate copy (independence, an oracle, a distinct type).
+
+## Diff-level benchmark
+
+`diffbench.py` runs `review.py`'s funnel over the commits that introduced the
+labelled fixtures, so a finding is scored where the reviewer really meets the
+code: in units cut by `review.py`, among clean hunks, after the scope filter.
+Never a gate; exits 0.
+
+```sh
+D="python3 -I scripts/review_bench/diffbench.py"
+$D map                                   # introducing commits, kept/dropped counts (no model)
+$D plan                                  # commits and units per split (no model)
+$D estimate                              # unit counts and cost per split and arm, asking nothing
+$D run --split dev --arm baseline
+$D run --split dev --arm g1 --units-of baseline   # also g2, g2-exempt, fixed
+$D audit --split dev --arm baseline --n 40
+$D audit --split dev --arm fixed --new-against baseline --n 15
+$D report --split dev --out /tmp/diffs.md
+```
+
+- **Introducing commit:** `git blame --line-porcelain -w` over each positive,
+  control and judgment fixture's range at its sha. The commit that wrote most
+  of its lines is its commit C; the item is kept when C wrote at least half the
+  excerpt, and its range is mapped to the line numbers of those lines in C.
+  Items in non-`.mdk` files, or in a file `review.py` skips at C, are dropped.
+- **Units:** `review.unit_specs` cuts C's units against its first parent. Each
+  unit overlapping a kept item is reviewed, plus a fixed-seed sample (seed
+  20261018) of up to 3 other units per commit. A split reviews the units
+  holding its items; a labelled commit's other units count toward the split of
+  the majority of its items.
+- **Clean commits:** non-merge commits on `MAIN` (pinned in the file) that touch
+  `.mdk` files, dated within the labelled commits' span, introduced no kept
+  item and are not seed refreshes; shuffled with the seed, split by a hash of the
+  sha, 30 per split, up to 8 sampled units each. The two commits whose live
+  reviews exposed the gaps (`EXPOSED`) are left out.
+- **Few-shot examples** never come from a fixture the reviewed commit introduced.
+- **Scoring:** a positive is found when a surviving finding of its class lies
+  in its mapped range (plus or minus 2 lines) or its unit's anchor names its
+  declaration; the same test on a control is a false positive. A finding of an
+  `also_present` class or of a judgment item's class at the item is allowed;
+  every other finding is unlabelled. The report compares each arm with the
+  item-level `verify:battery-pc` result on the same items, and gives unlabelled
+  findings per unit and per 100 changed lines for item units, other units of
+  labelled commits and clean units.
+- **Arms:** `baseline` (the default review), `g2` (`--scope strict`),
+  `g2-exempt` (`--scope strict-exempt`), `g1` (`--twin-notes`), `fixed` (`g1`
+  and `g2`). The scope arms ask nothing new: a stricter scope confirms a subset
+  of the classes. Every arm but `baseline` runs on the units whose evidence
+  without twin notes is what `baseline` asked with (a few generators depend on
+  the process's string-hash order), and `report` compares arms on the units
+  every listed run reviewed.
+- **Audit:** Opus judges a fixed-seed sample of an arm's unlabelled findings
+  with `battery.py`'s audit prompt, its scope paragraph replaced by the diff's
+  (the changed lines are listed after the excerpt), and gives a cause for each
+  "no". The judge always sees the twin notes.
+- **Budget:** a ledger under `.cache/diffbench/` stops new asking at $6.00 in
+  all. `run` and `audit` on `test` refuse without `--approved`: the test split
+  is looked at once, with the owner's approval.
+
 ## Cache and results
 
 Every answer is cached under `.cache/claude/` by a hash of model,
@@ -190,4 +264,5 @@ The whole procedure, ruling to measurement, is the `style-rule` skill
   `RESULTS-battery-2026-10-17.md` is its first run.
 - `review.py`: the battery-then-confirm reviewer over a live diff (see
   "Reviewing a live diff").
+- `diffbench.py`: the diff-level benchmark (see "Diff-level benchmark").
 - `RESULTS-*.md`: frozen measurements, one per pass; rerun rather than quote.
