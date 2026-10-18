@@ -2439,8 +2439,8 @@ test "ordinary return memo fence preserves outcomes and evidence across requests
       ],
     ),
     (
-      "a stale prefix re-derives rather than replaying the cache",
-      expectNotEqual changed forcedStale,
+      "a reused step key over changed impl heads re-derives, because the chain key fingerprints instance heads",
+      expectEqual changed forcedStale,
     ),
     (
       "cold and changed instances have distinct prerequisites and evidence",
@@ -3014,23 +3014,50 @@ test "module-chain cache hits restore bounded scopes across failing suffixes" =
   let afterFailed = runCachedObserved "entry = 0\n"
   let conflicting = runCachedObserved conflictingSource
   let afterConflict = runCachedObserved "entry = 0\n"
-  expectEqual
-    [True, True, True, True, True, True, True]
-    [
-      withoutBinderIds cold.rvTrace
-        == [context ATLegacyScalar "cache_prefix" "binding:f"],
-      hit.rvTrace == [],
-      afterFailed.rvTrace == [],
-      afterConflict.rvTrace == [],
-      cold.rvFrameCount == hit.rvFrameCount
-        && cold.rvFrameCount == afterFailed.rvFrameCount
-        && cold.rvFrameCount == afterConflict.rvFrameCount,
-      failed.rvErrors > 0 && conflicting.rvErrors > 0,
-      cold.rvFrameCount <= cold.rvFrameCapacity
-        && hit.rvFrameCount <= hit.rvFrameCapacity
-        && afterFailed.rvFrameCount <= afterFailed.rvFrameCapacity
-        && afterConflict.rvFrameCount <= afterConflict.rvFrameCapacity,
-    ]
+  let afterConflictHit = runCachedObserved "entry = 0\n"
+  let runs = [cold, hit, afterFailed, afterConflict, afterConflictHit]
+  expectEach [
+    (
+      "cold traces the prefix's scalar assumption",
+      expectEqual
+        [context ATLegacyScalar "cache_prefix" "binding:f"]
+        (withoutBinderIds cold.rvTrace),
+    ),
+    ("hit replays with no trace", expectEqual [] hit.rvTrace),
+    (
+      "a hit after a failing entry replays with no trace",
+      expectEqual [] afterFailed.rvTrace,
+    ),
+    (
+      "the conflicting entry's impl heads change the chain key, so the next drive re-derives",
+      expectEqual
+        (withoutBinderIds cold.rvTrace)
+        (withoutBinderIds afterConflict.rvTrace),
+    ),
+    (
+      "the drive after that re-derivation hits again",
+      expectEqual [] afterConflictHit.rvTrace,
+    ),
+    (
+      "every run leaves the same frame count",
+      expectEqual
+        (map (_ => cold.rvFrameCount) runs)
+        (map (view => view.rvFrameCount) runs),
+    ),
+    (
+      "both failing entries report errors",
+      expectEach [
+        ("failed", expectGreaterThan 0 failed.rvErrors),
+        ("conflicting", expectGreaterThan 0 conflicting.rvErrors),
+      ],
+    ),
+    (
+      "every run stays within its frame capacity",
+      expectEqual
+        (map (_ => True) runs)
+        (map (view => view.rvFrameCount <= view.rvFrameCapacity) runs),
+    ),
+  ]
 
 mixedAttrFirstSource : String
 mixedAttrFirstSource = joinNl [

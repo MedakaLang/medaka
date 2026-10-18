@@ -1,15 +1,18 @@
 -- Unit tests for the published shapes' zonk, freeze, validator and graph report
 -- over hand-built values; a scheme's context surviving a later drive and a
--- shadowing binding's context (#2054); and published schemes holding no Link.
+-- shadowing binding's context (#2054); published schemes holding no Link; and
+-- the partial analysis a drive returns (locals, seed, module).
 import test.{
-  expectEqual, expectEach, expectTrue, expectGreaterThan, Expectation
+  expectEqual, expectEach, expectTrue, expectGreaterThan, Expectation, fail
 }
-import frontend.ast.{TyConOrigin(..)}
+import frontend.ast.{
+  TyConOrigin(..), EvId(..), EvVal(..), EvEntry(..), Route(..), Loc(..), Decl
+}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
-import list.{zip, filter, takeWhile, dropWhile}
-import string.{lines}
-import support.util.{joinNl}
+import list.{zip, filter, takeWhile, dropWhile, sort, sortOn, indexed}
+import string.{lines, startsWith}
+import support.util.{joinNl, joinWith}
 import types.repr.{
   Mono(..), Tyvar(..), Scheme(..), IfaceRef(..), VecObl(..), ppScheme
 }
@@ -19,14 +22,24 @@ import types.effect_authority.{Authority(..), Authvar(..), authvarId}
 import types.publish.{
   PubScheme(..), VarKind(..), LiveCell(..), emptyZonk, zonkMono, zonkScheme,
   freezePub, liveCells, atGraphEnd, graphReport, ppPubScheme, TcReport(..),
-  CheckedProgram(..), ModDiags, TcDiag(..)
+  CheckedProgram(..), PartialAnalysis(..), ModDiags, TcDiag(..), noEntryTables
 }
-import types.disposition.{emptyDispositionTable}
+import types.disposition.{
+  MethodDisposition(..), emptyDispositionTable, dispositionRows, dispositionKey,
+  dispositionInstance, dispositionMethod, dispositionIface
+}
+import types.evidence_coverage.{EvShape(..), evShapeOf}
+import types.route_key.{installedEvidenceEntries}
 import types.typecheck.{
   checkOneSchemeFullK, checkModulesDiagsChain, checkModulesAllLines,
-  checkModules, methodReturnMemoCurrentViews, methodReturnMemoRetentionStats,
-  tcCode, tcMsg, MethodReturnMemoView(..)
+  elaborateModulesReport, checkModules, methodReturnMemoCurrentViews,
+  methodReturnMemoRetentionStats, chainMemoReplayedSteps, tcCode, tcMsg,
+  MethodReturnMemoView(..), checkModulesChainReportFor, checkOneReportK,
+  checkModulesPartialK
 }
+import driver.diagnostics.{analyzeProjectReport, noStdlibExports}
+import tools.lsp.{typeAtPoint}
+import test_process.{withScratchDir}
 
 int : Mono
 int = TCon "Int" OriginBuiltin
@@ -326,15 +339,16 @@ accConflict = joinNl [
   "  cachedChoose _ = 99",
 ]
 
--- (published modules, memo views taken right after the drive)
+-- (the keyed chain's report, memo views taken right after the drive)
 accDrive : String ->
   String ->
   String ->
   String ->
-  (List ModDiags, List MethodReturnMemoView)
+  (TcReport, List MethodReturnMemoView)
 accDrive chainKey prefixSource entrySource stepKey =
-  let results =
-    checkModulesDiagsChain
+  let report =
+    checkModulesChainReportFor
+      False
       (Some (4053, 4055))
       chainKey
       [Some stepKey, None]
@@ -344,12 +358,40 @@ accDrive chainKey prefixSource entrySource stepKey =
         ("acc_prefix", desugar (parseLocated prefixSource)),
         ("acc_entry", desugar (parseLocated entrySource)),
       ]
-  (results, methodReturnMemoCurrentViews ())
+  (report, methodReturnMemoCurrentViews ())
 
--- Schemes WITH their context, diagnostics and the evidence/disposition views,
--- rendered at the moment of the call.
-accRender : (List ModDiags, List MethodReturnMemoView) -> List String
-accRender (mods, views) = flatMap accRenderMod mods ++ map debug views
+-- Schemes WITH their context, diagnostics, the memo views, and the checked
+-- program's evidence and dispositions, rendered at the moment of the call.
+accRender : (TcReport, List MethodReturnMemoView) -> List String
+accRender (r, views) =
+  flatMap accRenderMod r.trDiagnostics
+    ++ map debug views
+    ++ accRenderChecked r.trChecked
+
+-- The evidence in ordinal order, each id replaced by its rank, then the
+-- disposition rows; `withheld` when there is no checked program.
+accRenderChecked : Option CheckedProgram -> List String
+accRenderChecked None = ["withheld"]
+accRenderChecked (Some c) =
+  let ordered =
+    sortOn
+      (e => match e
+        EvEntry (EvId m i) _ => (m, i))
+      c.cpEvidence
+  "checked"
+    :: map
+        (ie => match ie
+          (rank, EvEntry _ v) => "ev \{debug rank} \{valText v}")
+        (indexed ordered)
+      ++ map dispositionText (dispositionRows c.cpDispositions)
+
+dispositionText : MethodDisposition -> String
+dispositionText d =
+  let kind = match d
+    Supplied {  } => "supplied"
+    InheritedDefault {  } => "inherited"
+  let key = dispositionKey (dispositionInstance d) (dispositionMethod d)
+  "disp \{kind} \{(dispositionIface d).irName} \{key}"
 
 accRenderMod : ModDiags -> List String
 accRenderMod (mid, (ss, errs, warns)) =
@@ -357,13 +399,13 @@ accRenderMod (mid, (ss, errs, warns)) =
     ++ rendered ss
     ++ map (d => "diag \{tcCode d}: \{tcMsg d}") (errs ++ warns)
 
-accLinks : (List ModDiags, List MethodReturnMemoView) -> Int
-accLinks (mods, _) =
+accLinks : (TcReport, List MethodReturnMemoView) -> Int
+accLinks (r, _) =
   fold
     (acc (_, (ss, _, _)) =>
       acc + fold (a e => a + linkCount (snd e).psScheme) 0 ss)
     0
-    mods
+    r.trDiagnostics
 
 accRetainedSteps : Unit -> Int
 accRetainedSteps _ =
@@ -422,11 +464,34 @@ accCheck (QKind name run) =
       ),
       ("a hit really retained a chain step", hitRetained),
       ("held P publishes no Link", expectEqual 0 (accLinks held)),
+      (
+        "cold P is checked",
+        expectEqual ["checked"] (filter (== "checked") cold),
+      ),
+      (
+        "cold P has evidence and dispositions",
+        expectEqual
+          (True, True)
+          (
+            not (isEmpty (filter (startsWith "ev ") cold)),
+            not (isEmpty (filter (startsWith "disp ") cold)),
+          ),
+      ),
     ],
   )
 
 test "P -> Q -> P: P rendered after Q equals cold P, for every kind of Q" =
   expectEach (map accCheck accQs)
+
+test "the keyed chain's report: withheld on an ill-typed graph, checked on a clean one" =
+  let pSrc2 = accPrefix False
+  let (bad, _) =
+    accDrive "acc-chain-bad" pSrc2 "entry : Int\nentry = \"wrong\"\n" pSrc2
+  let (good, _) = accDrive "acc-chain-good" pSrc2 accEntry pSrc2
+  expectEach [
+    ("ill-typed: withheld", expectTrue (isNone bad.trChecked)),
+    ("clean: checked", expectTrue (isSome good.trChecked)),
+  ]
 
 weakChainSteps : String -> Int
 weakChainSteps held =
@@ -522,6 +587,97 @@ test "a graph-visible instance dropped from a later prefix module: warm equals c
     ),
   ]
 
+test "a graph-visible instance added to a later prefix module: warm equals cold" =
+  let _ = instErrors "inst-k2" False
+  let warm = instErrors "inst-k2" True
+  let cold = instErrors "inst-cold2" True
+  expectEqual cold warm
+
+-- The mark set: a later module's `=>` signature names a binding that an earlier
+-- module also declares, so the earlier module's occurrence is marked a dict
+-- application.  Schemes and diagnostics do not move; the checked program's
+-- evidence does.
+markA : String
+markA = "h : Int -> Int\nh x = x\nexport useA : Int -> Int\nuseA = h\n"
+
+markB : Bool -> String
+markB constrained =
+  if constrained then
+    "import i.{Speak, speak}\nexport h : Speak a => a -> String\nh x = speak x\nexport bval = 1\n"
+  else
+    "import i.{Speak, speak}\nexport bval = 1\n"
+
+markEntry : String
+markEntry = "import a.{useA}\nimport b.{bval}\nentry = bval\n"
+
+markDrive : String -> Bool -> List String
+markDrive key constrained =
+  let bSrc = markB constrained
+  let report =
+    checkModulesChainReportFor
+      False
+      (Some (4266, 4267))
+      key
+      [Some instIface, Some markA, Some bSrc, None]
+      []
+      (desugar (parse ""))
+      [
+        ("i", desugar (parseLocated instIface)),
+        ("a", desugar (parseLocated markA)),
+        ("b", desugar (parseLocated bSrc)),
+        ("e", desugar (parseLocated markEntry)),
+      ]
+  accRenderChecked report.trChecked
+
+test "a later module's constrained signature name: warm evidence equals cold" =
+  let _ = markDrive "mark-k" True
+  let warmRemoved = markDrive "mark-k" False
+  let coldRemoved = markDrive "mark-cold" False
+  let _ = markDrive "mark-k2" False
+  let warmAdded = markDrive "mark-k2" True
+  let coldAdded = markDrive "mark-cold2" True
+  expectEach [
+    ("removed", expectEqual coldRemoved warmRemoved),
+    ("added", expectEqual coldAdded warmAdded),
+  ]
+
+-- Steps replayed by the last keyed drive, with the entry varied.  A body edit
+-- touches no fingerprinted input and replays the whole prefix; an orphan impl in
+-- the entry changes the graph key and replays none.
+replayDrive : String -> String -> Int
+replayDrive key entrySrc =
+  let bSrc = instHolder True
+  let _ =
+    checkModulesChainReportFor
+      False
+      (Some (4266, 4267))
+      key
+      [Some instIface, Some instUse, Some bSrc, None]
+      []
+      (desugar (parse ""))
+      [
+        ("i", desugar (parseLocated instIface)),
+        ("a", desugar (parseLocated instUse)),
+        ("b", desugar (parseLocated bSrc)),
+        ("e", desugar (parseLocated entrySrc)),
+      ]
+  chainMemoReplayedSteps ()
+
+test "the chain memo replays the prefix after a body edit and not after an orphan impl" =
+  let _ = replayDrive "replay-k" instEntry
+  let afterBody = replayDrive "replay-k" (instEntry ++ "extra = 42\n")
+  let _ = replayDrive "replay-k2" instEntry
+  let afterImpl =
+    replayDrive
+      "replay-k2"
+      ("import i.{Speak}\n"
+        ++ instEntry
+        ++ "impl Speak Bool where\n  speak _ = \"b\"\n")
+  expectEach [
+    ("body edit replays the three prefix steps", expectEqual 3 afterBody),
+    ("orphan impl replays none", expectEqual 0 afterImpl),
+  ]
+
 -- The same-module variant: the instance sits in the prefix module whose own step
 -- key changes, so its step misses.  This is a different case from the one above.
 test "a graph-visible instance added to the prefix: warm P' equals cold P'" =
@@ -548,7 +704,14 @@ checkedWeak : List ModDiags -> List (String, TcDiag) -> Option (List LiveCell)
 checkedWeak mods residual =
   map
     (c => c.cpWeak)
-    (graphReport mods [] residual [] emptyDispositionTable None).trChecked
+    (graphReport
+      mods
+      []
+      residual
+      (_ => [])
+      emptyDispositionTable
+      None
+      noEntryTables).trChecked
 
 weakScheme : PubScheme
 weakScheme = pub (plainScheme (TFun (tvar 7) pureRow int))
@@ -600,3 +763,288 @@ test "checkModulesAllLines shows useSpeak's context under its module" =
   expectEqual
     ["useSpeak : Speak a => a -> String"]
     (filter (== "useSpeak : Speak a => a -> String") inP)
+
+-- ── the report's evidence and the prelude's contexts on the tree arm ───────
+
+talkPrelude : String
+talkPrelude = joinNl [
+  "interface Speak a where",
+  "  speak : a -> String",
+  "talk : Speak a => a -> String",
+  "talk x = speak x",
+  "impl Speak Int where",
+  "  speak _ = \"i\"",
+]
+
+-- A method occurrence, a dictionary application, an operator and literals.
+talkBuffer : String
+talkBuffer = "own x = talk x\nuse = talk 1\nn = 1 + 2\n"
+
+talkReport : Unit -> TcReport
+talkReport _ = elaborateModulesReport [] (desugar (parse talkPrelude)) [
+  ("b", desugar (parseLocated talkBuffer)),
+]
+
+routeText : Route -> String
+routeText RNone = "none"
+routeText (RKey w ds sups) = "key(\{w};\{routesText ds};\{routesText sups})"
+routeText (RDict d) = "dict(\{d})"
+routeText (RDictFwd d) = "fwd(\{d})"
+routeText (RLocal s ds) = "local(\{s};\{routesText ds})"
+routeText (RScalar s) = "scalar(\{s})"
+routeText (RProj r path) = "proj(\{routeText r};\{debug path})"
+
+routesText : List Route -> String
+routesText rs = joinWith "," (map routeText rs)
+
+valText : EvVal -> String
+valText (EvOne r) = routeText r
+valText (EvMany rs) = routesText rs
+valText (EvMethod iface arity r impls meths) =
+  "\{iface}/\{debug arity} \{routeText r} \{routesText impls} \{routesText meths}"
+valText (EvLit f r) = "\{debug f} \{routeText r}"
+valText (EvHead h) = h
+
+entryText : EvEntry -> String
+entryText (EvEntry (EvId m i) v) =
+  "\{m}#\{debug i} \{debug (evShapeOf v)} \{valText v}"
+
+-- Which of [shapes] some entry of [table] has.
+shapesPresent : List EvShape -> List EvEntry -> List Bool
+shapesPresent shapes table =
+  let have =
+    map
+      (e => match e
+        EvEntry _ v => evShapeOf v)
+      table
+  map (k => not (isEmpty (filter (== k) have))) shapes
+
+test "a driven program's cpEvidence is the installed table" =
+  let r = talkReport ()
+  let installed = sort (map entryText (installedEvidenceEntries ()))
+  let table = match r.trChecked
+    Some c => c.cpEvidence
+    None => []
+  let kinds = [ShapeOne, ShapeMany, ShapeMethod, ShapeLit]
+  expectEach [
+    ("checked, with no fault", expectEqual [] r.trEvidenceFaults),
+    ("equal as a set", expectEqual installed (sort (map entryText table))),
+    (
+      "every kind the program mints is present",
+      expectEqual (map (_ => True) kinds) (shapesPresent kinds table),
+    ),
+  ]
+
+test "#4267: the tree arm publishes the prelude's context" =
+  let core = (talkReport ()).trPartial.paCore
+  expectEqual
+    ["talk : Speak a => a -> String"]
+    (rendered (filter (e => fst e == "talk") core))
+
+-- ── the partial analysis: locals, seed and module ─────────────────────────
+
+-- A local constrained binding and a prelude name with a context in the seed.
+localBuffer : String
+localBuffer = "own x =\n  let g y = talk y\n  g x\n"
+
+locText : Option Loc -> String
+locText (Some (Loc _ l1 c1 l2 c2)) =
+  "\{debug l1}:\{debug c1}-\{debug l2}:\{debug c2}"
+locText None = "-"
+
+-- The local and seed names `localBuffer`'s drive captures, as the renderers the
+-- hover surfaces used before the analysis carried them showed them (pinned from
+-- the base binary).  An interface method in the seed and an unsigned local render
+-- without their interface context.
+pinnedLocals : List String
+pinnedLocals = [
+  "g 2:6-2:7 : a -> String",
+  "y 2:8-2:9 : a",
+  "x 1:4-1:5 : a",
+]
+
+pinnedSeed : List String
+pinnedSeed = ["speak : a -> String", "talk : Speak a => a -> String"]
+
+capturedTables : PartialAnalysis -> (List String, List String)
+capturedTables pa = (
+  map ((n, p, loc) => "\{n} \{locText loc} : \{ppPubScheme p}") pa.paLocals,
+  rendered pa.paSeed,
+)
+
+talkCore : List Decl
+talkCore = desugar (parse talkPrelude)
+
+test "diags arm: the captured locals and seed render as the hover renderers did" =
+  let one = checkOneReportK False None [] talkCore (
+    "b",
+    desugar (parseLocated localBuffer),
+  )
+  let project = checkModulesPartialK None [] talkCore [
+    ("b", desugar (parseLocated localBuffer)),
+  ]
+  expectEach [
+    (
+      "single file",
+      expectEqual (pinnedLocals, pinnedSeed) (capturedTables one.trPartial),
+    ),
+    (
+      "project",
+      expectEqual (pinnedLocals, pinnedSeed) (capturedTables project),
+    ),
+  ]
+
+test "tree arm: the seed's talk renders with the prelude's context" =
+  let pa = (talkReport ()).trPartial
+  expectEach [
+    (
+      "talk",
+      expectEqual
+        ["talk : Speak a => a -> String"]
+        (rendered (filter (e => fst e == "talk") pa.paSeed)),
+    ),
+    ("the module is the entry", expectEqual "b" pa.paModule),
+  ]
+
+-- An imported module and an entry that imports it, with a resolve error in the
+-- entry when [broken].
+hoverEntry : Bool -> String
+hoverEntry broken =
+  let tail = if broken then "\nbad = undefinedThing + 1\n" else ""
+  "import m7.{base}\n\nexport\nlevel6 : Int\nlevel6 = base + 6\n\{tail}\nloc z = let w = z in w\n"
+
+-- The report of the `m7`/`m6` project, projected by [view].
+projectReport : (TcReport -> a) ->
+  String ->
+  String ->
+  String ->
+  Bool ->
+  <Exec, IO, FileRead, FileWrite> Result String a
+projectReport view rsrc csrc dir broken =
+  let entry = "\{dir}/m6.mdk"
+  match (
+    writeFile "\{dir}/m7.mdk" "export\nbase : Int\nbase = 1\n",
+    writeFile entry (hoverEntry broken),
+  )
+    (Ok _, Ok _) =>
+      let (report, _) =
+        analyzeProjectReport
+          noStdlibExports
+          True
+          []
+          (Ref [])
+          (Ref [])
+          (_ => None)
+          entry
+          [dir, "stdlib"]
+          rsrc
+          csrc
+      match report
+        Some r => Ok (view r)
+        None => Err "no report"
+    _ => Err "could not write the modules"
+
+projectModule : String ->
+  String ->
+  String ->
+  Bool ->
+  <Exec, IO, FileRead, FileWrite> String
+projectModule rsrc csrc dir broken =
+  match projectReport (r => r.trPartial.paModule) rsrc csrc dir broken
+    Ok m => m
+    Err e => e
+
+test "a resolve-rejected graph's report is not checked; its clean twin is" =
+  match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
+    (Ok rsrc, Ok csrc) =>
+      let isChecked = r => isSome r.trChecked
+      let clean = withScratchDir (dir =>
+        expectEqual (Ok True) (projectReport isChecked rsrc csrc dir False))
+      let blocked = withScratchDir (dir =>
+        expectEqual (Ok False) (projectReport isChecked rsrc csrc dir True))
+      expectEach [("clean", clean), ("entry resolve-rejected", blocked)]
+    _ => fail "could not read the prelude pair"
+
+test "paModule is the entry, or the last module checked when resolve blocks the entry" =
+  match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
+    (Ok rsrc, Ok csrc) =>
+      let clean = withScratchDir (dir =>
+        expectEqual "m6" (projectModule rsrc csrc dir False))
+      let blocked = withScratchDir (dir =>
+        expectEqual "m7" (projectModule rsrc csrc dir True))
+      expectEach [("clean", clean), ("entry resolve-rejected", blocked)]
+    _ => fail "could not read the prelude pair"
+
+-- The hover answers of the project buffer with a resolve error (`level6`, the
+-- imported `base`, the local `w`), as the base binary answered them.
+hoverAnswers : String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+hoverAnswers rsrc csrc dir =
+  let entry = "\{dir}/m6.mdk"
+  let src = hoverEntry True
+  match (
+    writeFile "\{dir}/m7.mdk" "export\nbase : Int\nbase = 1\n",
+    writeFile entry src,
+  )
+    (Ok _, Ok _) => expectEach [
+      (
+        "level6",
+        expectEqual (Some "level6 : Int") (typeAtPoint rsrc csrc entry src 4 2),
+      ),
+      (
+        "base, imported",
+        expectEqual (Some "base : Int") (typeAtPoint rsrc csrc entry src 4 11),
+      ),
+      (
+        "w, a local",
+        expectEqual (Some "w : a") (typeAtPoint rsrc csrc entry src 8 21),
+      ),
+    ]
+    _ => fail "could not write the modules"
+
+test "hover answers on a project buffer with a resolve error" = match (
+  readFile "stdlib/runtime.mdk",
+  readFile "stdlib/core.mdk",
+)
+  (Ok rsrc, Ok csrc) => withScratchDir (hoverAnswers rsrc csrc)
+  _ => fail "could not read the prelude pair"
+
+-- A single-file buffer with a resolve error, and one with a type error.
+resolveErrorBuffer : String
+resolveErrorBuffer = "f x = let y = x in undefinedThing + y\n\ng = putStrLn\n"
+
+typeErrorBuffer : String
+typeErrorBuffer =
+  "f x = let y = x in y\n\ng = putStrLn\n\ntype_err : Int\ntype_err = True\n"
+
+test "hover answers on a single-file buffer with a resolve or type error" =
+  match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
+    (Ok rsrc, Ok csrc) =>
+      let at = src l c => typeAtPoint rsrc csrc "buf.mdk" src l c
+      expectEach [
+        (
+          "resolve error, local y",
+          expectEqual (Some "y : a") (at resolveErrorBuffer 0 10),
+        ),
+        (
+          "resolve error, param x",
+          expectEqual (Some "x : a") (at resolveErrorBuffer 0 2),
+        ),
+        (
+          "resolve error, seed putStrLn",
+          expectEqual
+            (Some "putStrLn : String -> <Stdout> Unit")
+            (at resolveErrorBuffer 2 5),
+        ),
+        (
+          "type error, local y",
+          expectEqual (Some "y : a") (at typeErrorBuffer 0 10),
+        ),
+        (
+          "type error, signed binding",
+          expectEqual (Some "type_err : Int") (at typeErrorBuffer 4 2),
+        ),
+      ]
+    _ => fail "could not read the prelude pair"

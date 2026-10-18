@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Catch-all clause census over the typechecker (`compiler/types/typecheck.mdk` and `compiler/types/repr.mdk`, #2551).
+"""Catch-all clause census over the typechecker (`compiler/types/typecheck.mdk`, `compiler/types/repr.mdk`, `compiler/types/chain_key.mdk` and `compiler/types/evidence_coverage.mdk`, #2551).
 
 Enumerates every top-level multi-clause function whose clauses dispatch on an
 `Expr` or `Decl` constructor at some parameter position while the FINAL clause
@@ -33,7 +33,12 @@ import sys
 
 ROOT = sys.argv[1] if len(sys.argv) > 1 else "."
 AST = f"{ROOT}/compiler/frontend/ast.mdk"
-SRCS = [f"{ROOT}/compiler/types/typecheck.mdk", f"{ROOT}/compiler/types/repr.mdk"]
+SRCS = [
+    f"{ROOT}/compiler/types/typecheck.mdk",
+    f"{ROOT}/compiler/types/repr.mdk",
+    f"{ROOT}/compiler/types/chain_key.mdk",
+    f"{ROOT}/compiler/types/evidence_coverage.mdk",
+]
 SUMS = ("Expr", "Decl")
 
 # Which verb/runner executes a `Decl` constructor's body, or why it has none

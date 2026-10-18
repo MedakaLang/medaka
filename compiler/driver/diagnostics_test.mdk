@@ -13,15 +13,21 @@
    publishes no link and no unsolved effect summary, and a value-restricted
    binding publishes its weak variable. -}
 
-import driver.diagnostics.{analyzeToLines, analyzeProjectFull, noStdlibExports}
+import driver.diagnostics.{
+  analyzeToLines, analyzeProjectFull, analyzeProjectReport, noStdlibExports,
+  graphCheckDrive, CheckDrive(..)
+}
 import fs.{fixtureFiles}
 import list.{sort, somes}
 import path.{dirname, stem}
 import string.{endsWith, lines, trim, unlines}
 import test.{
-  Expectation, expectAll, expectEach, expectEqual, expectNoFindings, fail
+  Expectation, expectAll, expectEach, expectEqual, expectFalse,
+  expectNoFindings, fail
 }
-import types.publish.{PubScheme(..), LiveCell(..), graphCells}
+import types.publish.{
+  PubScheme(..), LiveCell(..), TcReport(..), graphCells, pubSchemes
+}
 import types.repr.{ppSchemeCon}
 import test_process.{withScratchDir}
 
@@ -246,4 +252,62 @@ weakCheck rsrc csrc dir =
 test "graph end: held = idf Empty publishes one WeakVar and renders as Box a" =
   match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
     (Ok rsrc, Ok csrc) => withScratchDir (weakCheck rsrc csrc)
+    _ => fail "could not read the prelude pair"
+
+-- ── the check drive reads its own report ───────────────────────────────────
+
+-- The report of the one-module project holding [src].
+reportOf : String ->
+  String ->
+  String ->
+  String ->
+  <IO, FileWrite> Option TcReport
+reportOf rsrc csrc dir src =
+  let entry = "\{dir}/main.mdk"
+  match writeFile entry src
+    Err _ => None
+    Ok _ =>
+      fst
+        (analyzeProjectReport
+          noStdlibExports
+          True
+          []
+          (Ref [])
+          (Ref [])
+          (_ => None)
+          entry
+          [dir, "stdlib"]
+          rsrc
+          csrc)
+
+entryNames : CheckDrive -> List String
+entryNames d = sort (map fst d.cdEntrySchemes)
+
+test "a check drive built from a report holds that report's schemes after a later drive" =
+  match (
+    readFile "stdlib/runtime.mdk",
+    readFile "stdlib/core.mdk",
+  )
+    (Ok rsrc, Ok csrc) => withScratchDir (dir =>
+      let a = reportOf rsrc csrc dir "export\nalphaOnly : Int\nalphaOnly = 1\n"
+      let b = reportOf rsrc csrc dir "export\nbetaOnly : Int\nbetaOnly = 2\n"
+      match (a, b)
+        (Some ra, Some rb) =>
+          let da = graphCheckDrive ra [] []
+          let db = graphCheckDrive rb [] []
+          expectEach [
+            ("first program", expectEqual ["alphaOnly"] (entryNames da)),
+            ("second program", expectEqual ["betaOnly"] (entryNames db)),
+            (
+              "core schemes are the report's",
+              expectEqual
+                (map fst (pubSchemes ra.trPartial.paCore))
+                (map fst da.cdCoreSchemes),
+            ),
+            (
+              "core schemes are present",
+              expectFalse (isEmpty da.cdCoreSchemes),
+            ),
+          ]
+        _ => fail "a project produced no report")
     _ => fail "could not read the prelude pair"

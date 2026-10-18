@@ -1,0 +1,112 @@
+-- Unit tests for the evidence coverage validator over hand-built trees and tables,
+-- and for `graphReport` withholding the checked program on each fault.
+import test.{expectEqual, expectEach}
+import frontend.ast.{
+  Decl(..),
+  Expr(..),
+  EvId(..),
+  EvVal(..),
+  EvEntry(..),
+  EvTable,
+  Route(..),
+  unminted,
+  noDeclLoc,
+  noBinderId,
+}
+import list.{filter}
+import types.evidence_coverage.{EvShape(..), EvidenceFault(..), evidenceFaults}
+import types.publish.{graphReport, TcReport(..), noEntryTables}
+import types.disposition.{emptyDispositionTable}
+
+ev : Int -> EvId
+ev i = EvId "m" i
+
+-- One site of every kind the readers look up, plus an unminted operator, which
+-- needs no entry.
+body : Expr
+body =
+  EApp
+    (EApp (EMethodAt "show" "" (ev 0)) (EDictAt "f" (ev 1)))
+    (EBinOp
+      "+"
+      (ENumLit 1 (ev 2) "1")
+      (EBinOp
+        "-"
+        (EFieldAccess (EVar "r") "x" (ev 3))
+        (ERecordUpdate (EWideLit 1 0 (ev 4) "") [] (ev 5))
+        unminted)
+      (ev 6))
+
+trees : Option (List Decl, List (String, List Decl))
+trees = Some ([], [("m", [DFunDef False "f" [] body noDeclLoc noBinderId])])
+
+clean : EvTable
+clean = [
+  EvEntry (ev 0) (EvMethod "Show" 1 RNone [] []),
+  EvEntry (ev 1) (EvMany []),
+  EvEntry (ev 2) (EvLit None RNone),
+  EvEntry (ev 3) (EvHead "R"),
+  EvEntry (ev 4) (EvOne RNone),
+  EvEntry (ev 5) (EvHead "R"),
+  EvEntry (ev 6) (EvOne RNone),
+]
+
+ordinal : EvEntry -> Int
+ordinal (EvEntry (EvId _ i) _) = i
+
+-- (checked program published, faults reported) for [table] over the trees.
+judged : Option (List Decl, List (String, List Decl)) ->
+  EvTable ->
+  (Bool, List EvidenceFault)
+judged ts table =
+  let r =
+    graphReport [] [] [] (_ => table) emptyDispositionTable ts noEntryTables
+  (isSome r.trChecked, r.trEvidenceFaults)
+
+test "a clean tree and table pass" = expectEqual (True, []) (judged trees clean)
+
+test "a dropped entry is a missing site and withholds the checked program" =
+  expectEqual
+    (False, [MissingEntry "m" 3 ShapeHead])
+    (judged trees (filter (e => ordinal e /= 3) clean))
+
+test "a duplicated ordinal is reported and withholds the checked program" =
+  expectEqual
+    (False, [DuplicateOrdinal 6])
+    (judged trees (clean ++ [EvEntry (ev 6) (EvOne RNone)]))
+
+test "a wrong shape is reported with the reader's kind first" =
+  let swapped =
+    map (e => if ordinal e == 1 then EvEntry (ev 1) (EvOne RNone) else e) clean
+  expectEqual
+    (False, [WrongShape "m" 1 ShapeMany ShapeOne])
+    (judged trees swapped)
+
+test "an entry published by another module does not answer the site" =
+  let foreign =
+    map
+      (e => if ordinal e == 0 then EvEntry (EvId "n" 0) (EvMany []) else e)
+      clean
+  expectEqual (False, [MissingEntry "m" 0 ShapeMethod]) (judged trees foreign)
+
+test "with no trees only the ordinals are judged" = expectEach [
+  ("an uncovered table passes", expectEqual (True, []) (judged None [])),
+  (
+    "a duplicate is still reported",
+    expectEqual
+      (False, [DuplicateOrdinal 1])
+      (judged None [EvEntry (ev 1) (EvMany []), EvEntry (ev 1) (EvMany [])]),
+  ),
+]
+
+test "the faults come back duplicates first, then sites in tree order" =
+  expectEqual
+    [
+      DuplicateOrdinal 2,
+      MissingEntry "m" 0 ShapeMethod,
+      MissingEntry "m" 1 ShapeMany,
+    ]
+    (evidenceFaults
+      trees
+      (filter (e => ordinal e > 1) clean
+        ++ [EvEntry (ev 2) (EvLit None RNone)]))

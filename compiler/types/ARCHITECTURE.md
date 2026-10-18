@@ -13,6 +13,7 @@ One module, `typecheck.mdk`, still holds the inference core; the rest are the mo
 |---|---|---|
 | `typecheck.mdk` | Hindley-Milner inference, constraint solving, dict-passing elaboration, coherence, the effect-row checker's wiring; described in `TYPECHECK-ARCHITECTURE.md` | `elaborateOne`, `grantWholeDomain` |
 | `publish.mdk` | The published shapes (`TcReport`, `CheckedProgram`, `PubScheme`, `TcDiag`, `ModDiags`), the deep zonk and freeze-by-copy over them, and the live-cell validator; imports no typechecker state | `freezePub`, `liveCells` |
+| `evidence_coverage.mdk` | The evidence coverage validator: every minted site in a program's trees answered once, in the shape its reader accepts, and no ordinal published twice; a pure walk over `Decl`s and an `EvTable` | `evidenceFaults`, `EvidenceFault` |
 | `repr.mdk` | The type representation (`Mono`, union-find `Tyvar`, `Scheme`) and every renderer over it; reads no typechecker state cell | `normalize`, `ppMono` |
 | `registry.mdk` | Identity and registry substrate the per-table re-keying units build on | `identKey`, `tabKeys` |
 | `evidence.mdk` | Request-owned nominal identities for goals, scopes, binders, instances, destinations | `EvidenceBinderId`, `ScopeId` |
@@ -22,6 +23,7 @@ One module, `typecheck.mdk`, still holds the inference core; the rest are the mo
 | `evidence_complete.mdk` | The completeness judgment: does every dispatch destination name an instance or a given | `EvidenceRow` predicate |
 | `disposition.mdk` | Whole-graph table of which method each impl supplies or inherits from the default; importable by `ir/`, `eval/`, `backend/` without `typecheck.mdk` | `installedDispositionsOpt` |
 | `route_key.mdk` | The only mint of an impl route word | `evMethodRoutes`, `numIntWord` |
+| `chain_key.mdk` | The part of the module-chain memo key a step reads from modules outside its prefix: instance heads and constrained signature names | `chainGraphKey` |
 | `runtime_types.mdk` | What each source binder holds at run time, keyed by `BinderId`, materialized after the drain | `RuntimeType`, `BinderRow` |
 | `annotate.mdk` | Lexical-addressing emission pass: variable references to addressed references, right before eval | `annotateProgram` |
 | `private_mangle.mdk` | Universal per-module name mangling for the flat multi-module emit path | `mangledName`, `hashName`, `injectiveIdent` |

@@ -1,9 +1,10 @@
-{- | Catch-all clause ratchet over compiler/types/typecheck.mdk and
-   compiler/types/repr.mdk (#2551). Replaces diff_compiler_catch_all_census.sh
+{- | Catch-all clause ratchet over compiler/types/typecheck.mdk,
+   compiler/types/repr.mdk, compiler/types/chain_key.mdk and
+   compiler/types/evidence_coverage.mdk (#2551). Replaces diff_compiler_catch_all_census.sh
    and the check mode of test/catch_all_census.py (the .py stays as the
    ledger writer; the ledgers are not touched here).
 
-   PROVES: the list of top-level multi-clause functions in those two files that
+   PROVES: the list of top-level multi-clause functions in those files that
    dispatch on an Expr or Decl constructor at some parameter position, whose
    FINAL clause is a catch-all (`_` or a bare variable) there, and whose named
    constructors do not cover the whole sum, equals test/catch_all_census.ledger
@@ -33,15 +34,18 @@ import string.{
 }
 import list.{nub, sort, sortBy, takeWhile, dropWhile}
 
--- Read every subject file once. Result is (ast, typecheck+repr, site ledger, decl ledger).
+-- Read every subject file once. Result is (ast, the censused sources joined,
+-- site ledger, decl ledger). The source list matches SRCS in test/catch_all_census.py.
 loadAll : <IO, FileRead> Result String (String, String, String, String)
 loadAll = do
   astText <- readFile (underRoot "compiler/frontend/ast.mdk")
   tc <- readFile (underRoot "compiler/types/typecheck.mdk")
   rp <- readFile (underRoot "compiler/types/repr.mdk")
+  ck <- readFile (underRoot "compiler/types/chain_key.mdk")
+  ec <- readFile (underRoot "compiler/types/evidence_coverage.mdk")
   siteLedger <- readFile (underRoot "test/catch_all_census.ledger")
   declLedger <- readFile (underRoot "test/decl_runner.ledger")
-  Ok (astText, "\{tc}\n\{rp}", siteLedger, declLedger)
+  Ok (astText, "\{tc}\n\{rp}\n\{ck}\n\{ec}", siteLedger, declLedger)
 
 siteCheck : <IO, FileRead> Expectation
 siteCheck = match loadAll

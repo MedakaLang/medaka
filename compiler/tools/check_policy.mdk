@@ -46,9 +46,11 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.repr.{Scheme(..), Mono(..), normalize}
 import types.private_mangle.{mangleCtorCollisionsPair}
+import types.publish.{TcReport}
 import types.typecheck.{
   ElabResult,
-  elaborateModulesWithSchemes,
+  elaborateModulesWithReport,
+  entrySplit,
   pubSchemes,
   lastInvocationOps,
   decodeSetParam,
@@ -349,8 +351,19 @@ analyzeProgram : Bool ->
   List (String, List Decl) ->
   EntryAnalysis
 analyzeProgram valueMain rtD coreD modsD =
-  let (elaborated, preludePub, ownPub) =
-    elaborateModulesWithSchemes valueMain rtD coreD modsD
+  fst (analyzeProgramReport valueMain rtD coreD modsD)
+
+-- `analyzeProgram` handing back its drive's whole report beside the analysis.
+export
+analyzeProgramReport : Bool ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  (EntryAnalysis, TcReport)
+analyzeProgramReport valueMain rtD coreD modsD =
+  let (elaborated, report) =
+    elaborateModulesWithReport valueMain rtD coreD modsD
+  let (preludePub, ownPub, _, _) = entrySplit report
   let preludeSchemes = pubSchemes preludePub
   let ops = lastInvocationOps ()
   let autoPrintCall =
@@ -358,18 +371,21 @@ analyzeProgram valueMain rtD coreD modsD =
       lookupAssoc "println" preludeSchemes
     else
       None
-  EntryAnalysis {
-    eaElab = elaborated,
-    eaTarget = TargetInputs {
-      tiSchemes = pubSchemes ownPub ++ preludeSchemes,
-      tiOps = ops,
-      tiEntryDecls = entryModuleDecls modsD,
-      tiAutoPrintCall = autoPrintCall,
-      tiCore = coreD,
-      tiModules = modsD,
-      tiRuntime = rtD,
+  (
+    EntryAnalysis {
+      eaElab = elaborated,
+      eaTarget = TargetInputs {
+        tiSchemes = pubSchemes ownPub ++ preludeSchemes,
+        tiOps = ops,
+        tiEntryDecls = entryModuleDecls modsD,
+        tiAutoPrintCall = autoPrintCall,
+        tiCore = coreD,
+        tiModules = modsD,
+        tiRuntime = rtD,
+      },
     },
-  }
+    report,
+  )
 
 -- The entry module's decls: the last of the loader's dependency-first list.
 entryModuleDecls : List (String, List Decl) -> List Decl

@@ -10,8 +10,8 @@ stages=DESUGAR,MARK
 -- What lives here reads NO typechecker state cell — nothing in this module touches
 -- `perRun`, `crossRun`, `driverState` or `graphRun` — and is closed under its own
 -- references.  That is the criterion for a file of its own rather than a region of
--- `typecheck.mdk` (#2586); the two scheme printers that DO read state
--- (`ppSchemeNamed`, `ppSchemeNamedFull`, which consult the scheme-obligation tables)
+-- `typecheck.mdk` (#2586); the two context readers that DO read state
+-- (`ownContext`, `seedContext`, which consult the scheme-obligation tables)
 -- stay there.
 --
 -- Effect domains and rows have their own owners. Import those representations
