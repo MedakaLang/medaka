@@ -38,6 +38,7 @@ import support.path.{joinPath, baseOf, dirOf}
 import support.util.{joinNl, splitNl, startsWith, listLen}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert}
 import tools.probe_transcript.{
+  Section(..),
   freshProbeNonce,
   mintNonce,
   probeNameNonce,
@@ -193,7 +194,7 @@ runMerged target tsrc userDecls arms tmpDir nonce =
 buildMerged : String ->
   String ->
   String ->
-  List (String, List String, List String, List String) ->
+  List Section ->
   String ->
   String ->
   <IO> Bool
@@ -232,10 +233,7 @@ buildMerged target tsrc nonce sections tmpDir outPath =
 -- The imports of every section, each once; the target's source once, its own
 -- `main` renamed; every section's bindings; one entry per section; and a `main`
 -- that runs the section the selector names.  With no selector it runs nothing.
-mergedSource : String ->
-  String ->
-  List (String, List String, List String, List String) ->
-  String
+mergedSource : String -> String -> List Section -> String
 mergedSource nonce tsrc sections =
   joinNl
     (distinctLines
@@ -254,11 +252,11 @@ mergedSource nonce tsrc sections =
       ++ dispatchLines nonce 0 sections
       ++ ["  _ => ()", ""])
 
-sectionImports : (String, List String, List String, List String) -> List String
-sectionImports (_, imports, _, _) = imports
+sectionImports : Section -> List String
+sectionImports section = section.secImports
 
-sectionDecls : (String, List String, List String, List String) -> List String
-sectionDecls (_, _, decls, _) = decls ++ [""]
+sectionDecls : Section -> List String
+sectionDecls section = section.secDecls ++ [""]
 
 distinctLines : List String -> OrdMap Unit -> List String
 distinctLines [] _ = []
@@ -266,18 +264,15 @@ distinctLines (l :: rest) seen
   | l == "" || omHasKey l seen = distinctLines rest seen
   | otherwise = l :: distinctLines rest (omInsert l () seen)
 
-entryLines : String ->
-  Int ->
-  List (String, List String, List String, List String) ->
-  List String
+entryLines : String -> Int -> List Section -> List String
 entryLines _ _ [] = []
-entryLines nonce k ((_, _, _, entry) :: rest) =
-  ["\{entryName nonce k} _ ="] ++ entry ++ [""] ++ entryLines nonce (k + 1) rest
+entryLines nonce k (section :: rest) =
+  ["\{entryName nonce k} _ ="]
+    ++ section.secEntry
+    ++ [""]
+    ++ entryLines nonce (k + 1) rest
 
-dispatchLines : String ->
-  Int ->
-  List (String, List String, List String, List String) ->
-  List String
+dispatchLines : String -> Int -> List Section -> List String
 dispatchLines _ _ [] = []
 dispatchLines nonce k (_ :: rest) =
   "  \"\{sectionKey k}\" => \{entryName nonce k} ()"
@@ -305,10 +300,11 @@ runSections : String ->
   String ->
   Int ->
   List Arm ->
-  List (String, List String, List String, List String) ->
+  List Section ->
   <IO> List ArmOut
-runSections target tsrc userDecls nonce outPath k (arm :: arms) ((prefix, _, _, _) :: sections) =
-  let out = runSection target tsrc userDecls nonce outPath k arm prefix
+runSections target tsrc userDecls nonce outPath k (arm :: arms) (section :: sections) =
+  let out =
+    runSection target tsrc userDecls nonce outPath k arm section.secPrefix
   out :: runSections target tsrc userDecls nonce outPath (k + 1) arms sections
 runSections _ _ _ _ _ _ _ _ = []
 
@@ -345,7 +341,7 @@ printedSentinel _ [] = False
 printedSentinel prefix (l :: rest) =
   startsWith prefix l || printedSentinel prefix rest
 
-armSection : String -> Arm -> (String, List String, List String, List String)
+armSection : String -> Arm -> Section
 armSection nonce (DocArm examples synthResults) =
   doctestSection nonce examples synthResults
 armSection nonce (TestArm first tests) = testSection nonce first tests

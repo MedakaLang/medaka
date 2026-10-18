@@ -19,10 +19,10 @@ import support.util.{
 }
 import string.{toInt}
 import tools.probe_transcript.{
-  Chunk(..), chunksOf, decodeValue, endTag, firstNonEmptyLine, mintNonce,
-  freshProbeNonce, noncedPrefix, probeNameNonce, renameUserMain, runtimeAlias,
-  runtimeDependencyName, runtimeDependencyPrefix, sentinelLine, startTag,
-  tagsInOrder, valuePrintExprWith
+  Chunk(..), Section(..), chunksOf, decodeValue, endTag, firstNonEmptyLine,
+  mintNonce, freshProbeNonce, noncedPrefix, probeNameNonce, renameUserMain,
+  runtimeAlias, runtimeDependencyName, runtimeDependencyPrefix, sentinelLine,
+  startTag, tagsInOrder, valuePrintExprWith
 }
 import tools.printer.{exprToString, ppTy}
 import tools.prop_plan.{
@@ -140,12 +140,13 @@ plannedRowsFrom outcomes _ (Ok rows) = plannedResults outcomes rows
 -- lines, the generator, shrinker and law bindings, and the body that prints
 -- the transcript.  A settled plan contributes nothing.
 export
-propSection : String ->
-  List PlanModule ->
-  NativePropPlan ->
-  (String, List String, List String, List String)
-propSection nonce _ (NativePropsSettled _) =
-  (noncedPrefix sentinelBase nonce, [], [], [])
+propSection : String -> List PlanModule -> NativePropPlan -> Section
+propSection nonce _ (NativePropsSettled _) = Section {
+  secPrefix = noncedPrefix sentinelBase nonce,
+  secImports = [],
+  secDecls = [],
+  secEntry = [],
+}
 propSection nonce modules (NativePropsToRun env _ jobs) =
   plannedSection nonce modules env jobs
 
@@ -631,85 +632,87 @@ plannedProbeSource : String ->
   List NativePlanOutcome ->
   String
 plannedProbeSource nonce target tsrc modules env jobs =
-  let (_, imports, decls, entry) = plannedSection nonce modules env jobs
+  let section = plannedSection nonce modules env jobs
   joinNl
-    (imports
+    (section.secImports
       ++ [probeTargetSource target tsrc, ""]
-      ++ decls
+      ++ section.secDecls
       ++ ["main ="]
-      ++ entry
+      ++ section.secEntry
       ++ [""])
 
 plannedSection : String ->
   List PlanModule ->
   PlanEnv ->
   List NativePlanOutcome ->
-  (String, List String, List String, List String)
+  Section
 plannedSection nonce modules env jobs =
   let graph = sharedGraph env jobs
   let prefix = genNodePrefix nonce
-  (
-    noncedPrefix sentinelBase nonce,
-    plannedImports nonce modules graph,
-    [
-        "\{generatedPrefix nonce}state : Ref Int",
-        "\{generatedPrefix nonce}state = \{runtimeAlias nonce}.Ref 0",
-        "",
-        "\{generatedPrefix nonce}custom_state : Ref U64",
-        "\{generatedPrefix nonce}custom_state = \{runtimeAlias nonce}.Ref 0",
-        "",
-        "\{generatedPrefix nonce}word n = ((n % \{intToString structuralRngWordModulus}) + \{intToString structuralRngWordModulus}) % \{intToString structuralRngWordModulus}",
-        "",
-        "\{generatedPrefix nonce}mul_word left right =",
-        "  let x = \{generatedPrefix nonce}word left",
-        "  let y = \{generatedPrefix nonce}word right",
-        "  let x_low = x % \{intToString structuralRngWordHalf}",
-        "  let x_high = x / \{intToString structuralRngWordHalf}",
-        "  let y_low = y % \{intToString structuralRngWordHalf}",
-        "  let y_high = y / \{intToString structuralRngWordHalf}",
-        "  let low = x_low * y_low",
-        "  let cross = x_low * y_high + x_high * y_low",
-        "  \{generatedPrefix nonce}word (low + (cross % \{intToString structuralRngWordHalf}) * \{intToString structuralRngWordHalf})",
-        "",
-        "\{generatedPrefix nonce}next _ =",
-        "  let s = (!\{generatedPrefix nonce}state * \{intToString structuralRngMultiplier} + \{intToString structuralRngIncrement}) % \{intToString structuralRngModulus}",
-        "  \{generatedPrefix nonce}state := s",
-        "  let word = \{generatedPrefix nonce}word s",
-        "  let h1 = \{generatedPrefix nonce}word (\{runtimeAlias nonce}.bitXor word (\{runtimeAlias nonce}.shiftRight word 16))",
-        "  let h2 = \{generatedPrefix nonce}mul_word h1 \{intToString structuralRngMixMultiplier1}",
-        "  let h3 = \{generatedPrefix nonce}word (\{runtimeAlias nonce}.bitXor h2 (\{runtimeAlias nonce}.shiftRight h2 13))",
-        "  let h4 = \{generatedPrefix nonce}mul_word h3 \{intToString structuralRngMixMultiplier2}",
-        "  \{generatedPrefix nonce}word (\{runtimeAlias nonce}.bitXor h4 (\{runtimeAlias nonce}.shiftRight h4 16))",
-        "",
-        "\{generatedPrefix nonce}int _ = \{generatedPrefix nonce}choose \{intToString (intMax - intMin + 1)} + \{intToString intMin}",
-        "\{generatedPrefix nonce}bool _ = \{generatedPrefix nonce}choose 2 == 1",
-        "\{generatedPrefix nonce}choose n =",
-        "  let word = \{generatedPrefix nonce}next ()",
-        "  if n <= 0 then 0 else word % n",
-        "\{generatedPrefix nonce}char _ = \{coreAlias nonce}.optionOr ' ' (\{runtimeAlias nonce}.charFromCode (32 + \{generatedPrefix nonce}choose 95))",
-        "\{generatedPrefix nonce}string n = if n <= 0 then \"\" else \{runtimeAlias nonce}.charToStr (\{generatedPrefix nonce}char ()) ++ \{generatedPrefix nonce}string (n - 1)",
-        "",
-        "\{generatedPrefix nonce}join_strings _ [] = \"\"",
-        "\{generatedPrefix nonce}join_strings _ (x :: []) = x",
-        "\{generatedPrefix nonce}join_strings sep (x :: xs) = x ++ sep ++ \{generatedPrefix nonce}join_strings sep xs",
-        "",
-        "\{generatedPrefix nonce}array_to_list arr = \{generatedPrefix nonce}array_to_list_go arr 0",
-        "\{generatedPrefix nonce}array_to_list_go arr i = if i >= \{runtimeAlias nonce}.arrayLength arr then [] else arr[i] :: \{generatedPrefix nonce}array_to_list_go arr (i + 1)",
-        "",
-        "\{generatedPrefix nonce}delete_each [] = []",
-        "\{generatedPrefix nonce}delete_each (x :: xs) = xs :: \{coreAlias nonce}.map (ys => x :: ys) (\{generatedPrefix nonce}delete_each xs)",
-        "\{generatedPrefix nonce}replace_each f [] = []",
-        "\{generatedPrefix nonce}replace_each f (x :: xs) = \{coreAlias nonce}.map (ys => ys :: xs) (f x) ++ \{coreAlias nonce}.map (ys => x :: ys) (\{generatedPrefix nonce}replace_each f xs)",
-        "",
-      ]
-      ++ plannedPropLines nonce modules env graph jobs 0
-      ++ graphLines nonce modules env (coreAlias nonce) prefix graph
-      ++ graphAuxLines nonce modules env (coreAlias nonce) prefix graph,
-    plannedMainLines nonce jobs 0
-      ++ [
-        "  \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) endTag}\"",
-      ],
-  )
+  Section {
+    secPrefix = noncedPrefix sentinelBase nonce,
+    secImports = plannedImports nonce modules graph,
+    secDecls =
+      [
+          "\{generatedPrefix nonce}state : Ref Int",
+          "\{generatedPrefix nonce}state = \{runtimeAlias nonce}.Ref 0",
+          "",
+          "\{generatedPrefix nonce}custom_state : Ref U64",
+          "\{generatedPrefix nonce}custom_state = \{runtimeAlias nonce}.Ref 0",
+          "",
+          "\{generatedPrefix nonce}word n = ((n % \{intToString structuralRngWordModulus}) + \{intToString structuralRngWordModulus}) % \{intToString structuralRngWordModulus}",
+          "",
+          "\{generatedPrefix nonce}mul_word left right =",
+          "  let x = \{generatedPrefix nonce}word left",
+          "  let y = \{generatedPrefix nonce}word right",
+          "  let x_low = x % \{intToString structuralRngWordHalf}",
+          "  let x_high = x / \{intToString structuralRngWordHalf}",
+          "  let y_low = y % \{intToString structuralRngWordHalf}",
+          "  let y_high = y / \{intToString structuralRngWordHalf}",
+          "  let low = x_low * y_low",
+          "  let cross = x_low * y_high + x_high * y_low",
+          "  \{generatedPrefix nonce}word (low + (cross % \{intToString structuralRngWordHalf}) * \{intToString structuralRngWordHalf})",
+          "",
+          "\{generatedPrefix nonce}next _ =",
+          "  let s = (!\{generatedPrefix nonce}state * \{intToString structuralRngMultiplier} + \{intToString structuralRngIncrement}) % \{intToString structuralRngModulus}",
+          "  \{generatedPrefix nonce}state := s",
+          "  let word = \{generatedPrefix nonce}word s",
+          "  let h1 = \{generatedPrefix nonce}word (\{runtimeAlias nonce}.bitXor word (\{runtimeAlias nonce}.shiftRight word 16))",
+          "  let h2 = \{generatedPrefix nonce}mul_word h1 \{intToString structuralRngMixMultiplier1}",
+          "  let h3 = \{generatedPrefix nonce}word (\{runtimeAlias nonce}.bitXor h2 (\{runtimeAlias nonce}.shiftRight h2 13))",
+          "  let h4 = \{generatedPrefix nonce}mul_word h3 \{intToString structuralRngMixMultiplier2}",
+          "  \{generatedPrefix nonce}word (\{runtimeAlias nonce}.bitXor h4 (\{runtimeAlias nonce}.shiftRight h4 16))",
+          "",
+          "\{generatedPrefix nonce}int _ = \{generatedPrefix nonce}choose \{intToString (intMax - intMin + 1)} + \{intToString intMin}",
+          "\{generatedPrefix nonce}bool _ = \{generatedPrefix nonce}choose 2 == 1",
+          "\{generatedPrefix nonce}choose n =",
+          "  let word = \{generatedPrefix nonce}next ()",
+          "  if n <= 0 then 0 else word % n",
+          "\{generatedPrefix nonce}char _ = \{coreAlias nonce}.optionOr ' ' (\{runtimeAlias nonce}.charFromCode (32 + \{generatedPrefix nonce}choose 95))",
+          "\{generatedPrefix nonce}string n = if n <= 0 then \"\" else \{runtimeAlias nonce}.charToStr (\{generatedPrefix nonce}char ()) ++ \{generatedPrefix nonce}string (n - 1)",
+          "",
+          "\{generatedPrefix nonce}join_strings _ [] = \"\"",
+          "\{generatedPrefix nonce}join_strings _ (x :: []) = x",
+          "\{generatedPrefix nonce}join_strings sep (x :: xs) = x ++ sep ++ \{generatedPrefix nonce}join_strings sep xs",
+          "",
+          "\{generatedPrefix nonce}array_to_list arr = \{generatedPrefix nonce}array_to_list_go arr 0",
+          "\{generatedPrefix nonce}array_to_list_go arr i = if i >= \{runtimeAlias nonce}.arrayLength arr then [] else arr[i] :: \{generatedPrefix nonce}array_to_list_go arr (i + 1)",
+          "",
+          "\{generatedPrefix nonce}delete_each [] = []",
+          "\{generatedPrefix nonce}delete_each (x :: xs) = xs :: \{coreAlias nonce}.map (ys => x :: ys) (\{generatedPrefix nonce}delete_each xs)",
+          "\{generatedPrefix nonce}replace_each f [] = []",
+          "\{generatedPrefix nonce}replace_each f (x :: xs) = \{coreAlias nonce}.map (ys => ys :: xs) (f x) ++ \{coreAlias nonce}.map (ys => x :: ys) (\{generatedPrefix nonce}replace_each f xs)",
+          "",
+        ]
+        ++ plannedPropLines nonce modules env graph jobs 0
+        ++ graphLines nonce modules env (coreAlias nonce) prefix graph
+        ++ graphAuxLines nonce modules env (coreAlias nonce) prefix graph,
+    secEntry =
+      plannedMainLines nonce jobs 0
+        ++ [
+          "  \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) endTag}\"",
+        ],
+  }
 
 -- Each imported module gets a probe-local alias. Constructor selection is by
 -- the TypeKey owner, never by a bare source spelling.

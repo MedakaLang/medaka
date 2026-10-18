@@ -57,6 +57,7 @@ import support.util.{joinNl, splitNl}
 import tools.doctest.{ExResult(..)}
 import tools.probe_transcript.{
   Chunk(..),
+  Section(..),
   chunksOf,
   decodeValue,
   endTag,
@@ -294,13 +295,13 @@ testProbePrefixes = [
 
 probeSource : String -> String -> List (String, Int, Expr) -> String
 probeSource nonce tsrc tests =
-  let (_, imports, decls, entry) = testSection nonce 0 tests
+  let section = testSection nonce 0 tests
   joinNl
-    (imports
+    (section.secImports
       ++ ["", renameUserMain tsrc, ""]
-      ++ decls
+      ++ section.secDecls
       ++ ["main ="]
-      ++ entry
+      ++ section.secEntry
       ++ [""])
 
 -- This engine's part of a probe, as `tools/native_probe.mdk` merges it with
@@ -309,22 +310,20 @@ probeSource nonce tsrc tests =
 -- transcript.  Tests are numbered from `first`, so two sections of one probe
 -- never bind the same name.
 export
-testSection : String ->
-  Int ->
-  List (String, Int, Expr) ->
-  (String, List String, List String, List String)
-testSection nonce first tests = (
-  noncedPrefix sentinelBase nonce,
-  [
+testSection : String -> Int -> List (String, Int, Expr) -> Section
+testSection nonce first tests = Section {
+  secPrefix = noncedPrefix sentinelBase nonce,
+  secImports = [
     "import test as \{expectationAlias nonce}",
     "import \{runtimeDependencyName nonce}.runtime as \{runtimeAlias nonce}",
   ],
-  testBindings nonce first tests,
-  mainLines nonce first tests
-    ++ [
-      "  \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) endTag}\"",
-    ],
-)
+  secDecls = testBindings nonce first tests,
+  secEntry =
+    mainLines nonce first tests
+      ++ [
+        "  \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) endTag}\"",
+      ],
+}
 
 bindingName : String -> Int -> String
 bindingName nonce i = "__ts_\{probeNameNonce nonce}_\{intToString i}__"

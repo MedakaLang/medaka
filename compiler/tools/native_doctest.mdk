@@ -59,6 +59,7 @@ import support.path.{joinPath, baseOf, dirOf}
 import support.util.{joinNl, splitNl}
 import tools.probe_transcript.{
   Chunk(..),
+  Section(..),
   chunksOf,
   decodeValue,
   endTag,
@@ -357,13 +358,13 @@ probeSource : String ->
   List (Result String (List Decl)) ->
   String
 probeSource nonce tsrc examples synthResults =
-  let (_, imports, decls, entry) = doctestSection nonce examples synthResults
+  let section = doctestSection nonce examples synthResults
   joinNl
-    (imports
+    (section.secImports
       ++ ["", renameUserMain tsrc, ""]
-      ++ decls
+      ++ section.secDecls
       ++ ["", "main ="]
-      ++ entry
+      ++ section.secEntry
       ++ [""])
 
 -- This engine's part of a probe, as `tools/native_probe.mdk` merges it with
@@ -375,16 +376,18 @@ export
 doctestSection : String ->
   List Example ->
   List (Result String (List Decl)) ->
-  (String, List String, List String, List String)
-doctestSection nonce examples synthResults = (
-  noncedPrefix sentinelBase nonce,
-  ["import \{runtimeDependencyName nonce}.runtime as \{runtimeAlias nonce}"],
-  synthLines nonce 0 examples synthResults,
-  mainLines nonce 0 examples synthResults
-    ++ [
-      "  \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) endTag}\"",
-    ],
-)
+  Section
+doctestSection nonce examples synthResults = Section {
+  secPrefix = noncedPrefix sentinelBase nonce,
+  secImports =
+    ["import \{runtimeDependencyName nonce}.runtime as \{runtimeAlias nonce}"],
+  secDecls = synthLines nonce 0 examples synthResults,
+  secEntry =
+    mainLines nonce 0 examples synthResults
+      ++ [
+        "  \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) endTag}\"",
+      ],
+}
 
 -- The generated names this engine's probe uses, which a nonce must avoid.
 export
