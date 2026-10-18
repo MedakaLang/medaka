@@ -409,6 +409,7 @@ censusSuperStep : List String -> Int -> Super -> Option Int
 censusVecSuperStep : List String -> (List Int, List Mono) -> Super -> Option (List Int, List Mono)
 chainFullKey : Int -> Int -> String -> String
 chainGo : List (String, Scheme) -> List (String, ExportBinding) -> List (String, List (String, ExportBinding)) -> List Decl -> List Decl -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> Int -> List (Option String) -> List (String, List Decl) -> (List (String, (List (String, PubScheme), List TcDiag, List TcDiag)), Int, List ChainStep)
+chainMemoReplayedSteps : Unit -> Int
 changesFileRow : EffRow -> EffRow -> Bool
 changesPackedFileBound : Bool -> Mono -> Mono -> Bool
 checkAdmittedOccObl : ImplEnv -> (String, Mono, Option Loc) -> Unit
@@ -648,7 +649,6 @@ consOp : Mono -> Mono -> Mono
 consSiteFn : String -> a -> Map String (List a) -> Map String (List a)
 constrainedApplicationHelp : Mono -> Mono -> Option String
 constrainedApplicationText : Mono -> Mono -> List String -> String
-constrainedSigName : Decl -> List String
 constrainedSigNames : List Decl -> List String
 constrainedSigPredicateSlots : Decl -> List (String, List PredicateSlot)
 constraintArgMono : Ty -> List (String, Mono) -> Option Mono
@@ -1813,7 +1813,6 @@ isAliasMethodImport : List (List String, Loc) -> Decl -> Bool
 isBareTyvarMono : Mono -> Bool
 isCompareMethod : String -> Bool
 isConPat : Pat -> Bool
-isConstrainedTy : Ty -> Bool
 isCovariantPolarity : Polarity -> Bool
 isCtorAppSpine : TcEnv -> Expr -> Bool
 isDeclaredCtorHead : TcEnv -> String -> Bool
