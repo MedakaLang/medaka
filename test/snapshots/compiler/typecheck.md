@@ -1,5 +1,5 @@
 # META
-source_lines=57375
+source_lines=57367
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -53022,14 +53022,6 @@ data CoreCheckMemo = CoreCheckMemo {
 coreCheckMemoRef : Ref (Option CoreCheckMemo)
 coreCheckMemoRef = Ref None
 
--- The prelude's schemes from the core pass the last keyed diagnostics drive ran,
--- for a caller that read them off a graph drive that returns only per-module rows.
-export
-lastCoreSchemes : Unit -> List (String, Scheme)
-lastCoreSchemes _ = match !coreCheckMemoRef
-  Some m => pubSchemes m.ccmCorePub
-  None => []
-
 coreCheckMemoHit : Option (Int, Int) -> Option CoreCheckMemo
 coreCheckMemoHit None = None
 coreCheckMemoHit (Some key) = match !coreCheckMemoRef
@@ -66356,8 +66348,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DData Private "CoreCheckMemo" () ((variant "CoreCheckMemo" (ConNamed (field "ccmKey" (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (field "ccmCoreSchemes" (TyCon "ModuleBindings")) (field "ccmCorePub" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "ccmCrossRun" (TyCon "CrossRun")) (field "ccmGraphRun" (TyCon "GraphRun")) (field "ccmDriver" (TyCon "DriverState"))))) ())
 (DTypeSig false "coreCheckMemoRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "CoreCheckMemo"))))
 (DFunDef false "coreCheckMemoRef" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig true "lastCoreSchemes" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))
-(DFunDef false "lastCoreSchemes" (PWild) (EMatch (EUnOp "!" (EVar "coreCheckMemoRef")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "pubSchemes") (EFieldAccess (EVar "m") "ccmCorePub"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "coreCheckMemoHit" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "CoreCheckMemo"))))
 (DFunDef false "coreCheckMemoHit" ((PCon "None")) (EVar "None"))
 (DFunDef false "coreCheckMemoHit" ((PCon "Some" (PVar "key"))) (EMatch (EUnOp "!" (EVar "coreCheckMemoRef")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m")) () (EIf (EBinOp "==" (EFieldAccess (EVar "m") "ccmKey") (ETuple (EVar "key") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "ioJoinProfile") "value"))) (EApp (EVar "Some") (EVar "m")) (EVar "None")))))
@@ -75840,8 +75830,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DData Private "CoreCheckMemo" () ((variant "CoreCheckMemo" (ConNamed (field "ccmKey" (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "String"))) (field "ccmCoreSchemes" (TyCon "ModuleBindings")) (field "ccmCorePub" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "ccmCrossRun" (TyCon "CrossRun")) (field "ccmGraphRun" (TyCon "GraphRun")) (field "ccmDriver" (TyCon "DriverState"))))) ())
 (DTypeSig false "coreCheckMemoRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "CoreCheckMemo"))))
 (DFunDef false "coreCheckMemoRef" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig true "lastCoreSchemes" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))
-(DFunDef false "lastCoreSchemes" (PWild) (EMatch (EUnOp "!" (EVar "coreCheckMemoRef")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "pubSchemes") (EFieldAccess (EVar "m") "ccmCorePub"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "coreCheckMemoHit" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "CoreCheckMemo"))))
 (DFunDef false "coreCheckMemoHit" ((PCon "None")) (EVar "None"))
 (DFunDef false "coreCheckMemoHit" ((PCon "Some" (PVar "key"))) (EMatch (EUnOp "!" (EVar "coreCheckMemoRef")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m")) () (EIf (EBinOp "==" (EFieldAccess (EVar "m") "ccmKey") (ETuple (EVar "key") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "ioJoinProfile") "value"))) (EApp (EVar "Some") (EVar "m")) (EVar "None")))))

@@ -139,7 +139,7 @@ import driver.front_gate.{
   ppParseError,
 }
 import driver.diagnostics.{
-  analyzeLoadedResolvedClean,
+  analyzeLoadedResolvedCleanReport,
   desugaredModPairs,
   analyzeLocated,
   analyzeLocatedG,
@@ -208,13 +208,13 @@ import json.{
   parse as parseJson,
   asString,
 }
+import types.publish.{TcReport(..)}
 import types.typecheck.{
   elaborateModules,
   resetTypeErrorsSticky,
   hadTypeErrors,
   TcDiag,
   ElabResult,
-  ModDiags,
   mainTypeIsUnit,
   setStdlibOwnership,
 }
@@ -851,16 +851,22 @@ locatedProjectDiags : String ->
   String ->
   List (String, String, List Decl) ->
   List (String, List Decl) ->
-  <IO> (Option String, List (String, String, List Diag), Int, List ModDiags)
+  <IO> (Option String, List (String, String, List Diag), Int, TcReport)
 locatedProjectDiags target roots rsrc csrc modsWithPath modPairs =
-  let (perMod, results) =
-    analyzeLoadedResolvedClean target roots rsrc csrc modsWithPath modPairs
+  let (report, results) =
+    analyzeLoadedResolvedCleanReport
+      target
+      roots
+      rsrc
+      csrc
+      modsWithPath
+      modPairs
   let triples = map readDiagSrc results
   (
     joinedOrNone (flatMap renderTripleErrors triples),
     map cohWarnsOfTriple triples,
     length (flatMap hiddenWarnsOfTriple (dropEntryTriple triples)),
-    perMod,
+    report,
   )
 
 -- `run --json`'s multi-module arms' own copy of `diagnostics.relDiagTriple`
@@ -1148,9 +1154,9 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
           let _ = emitAbortTotal ()
           let _ = putStrLn errText
           stageExit 1
-        (None, projWarns, hiddenCount, perMod) =>
-          let drive = graphCheckDrive perMod modPairs pathMap
-          let report = checkModulesReport exWarns perMod
+        (None, projWarns, hiddenCount, tcReport) =>
+          let drive = graphCheckDrive tcReport modPairs pathMap
+          let report = checkModulesReport exWarns tcReport.trDiagnostics
           let _ = checkTargetGate rsrc csrc tsrc target drive
           let _ = putStrLn report
           -- F-3d: an IMPORTED module's ⊑-incomparable pair, LOCATED against that

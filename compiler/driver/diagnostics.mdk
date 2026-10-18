@@ -71,7 +71,7 @@ import types.effect_invocation.{InvocationOps}
 import types.typecheck.{
   checkOneReportK, checkModulesEntryFullReportK, entrySplit, schemeLines,
   checkModulesChainReportFor, chainFullKey, checkModulesPartialK,
-  lastInvocationOps, lastCoreSchemes,
+  lastInvocationOps,
   entryOwnSchemes, dropModSchemes, ModDiags, setCoherenceUserDecls,
   setStdlibOwnership, TcDiag(..), tcMsg,
   -- #2738: the importer peer of `preludeStandaloneShadows`.  It lives in the
@@ -953,17 +953,18 @@ public export data CheckDump = CheckDump {
   cdDrive : CheckDrive,
 }
 
--- The drive of a multi-module check, read right after it ran: `perMod` is what
--- the graph drive returned, `modPairs` the desugared graph it read and `paths`
--- the loader's module-to-file map.
+-- The drive of a multi-module check, taken from the report that drive returned:
+-- `modPairs` is the desugared graph it read and `paths` the loader's
+-- module-to-file map.
 export
-graphCheckDrive : List ModDiags ->
+graphCheckDrive : TcReport ->
   List (String, List Decl) ->
   List (String, String) ->
   CheckDrive
-graphCheckDrive perMod modPairs paths = CheckDrive {
-  cdEntrySchemes = pubSchemes (entryOwnSchemes (map modOwnSchemes perMod)),
-  cdCoreSchemes = lastCoreSchemes (),
+graphCheckDrive r modPairs paths = CheckDrive {
+  cdEntrySchemes =
+    pubSchemes (entryOwnSchemes (map modOwnSchemes r.trDiagnostics)),
+  cdCoreSchemes = pubSchemes r.trPartial.paCore,
   cdOps = lastInvocationOps (),
   cdMods = modPairs,
   cdPaths = paths,
@@ -1779,7 +1780,27 @@ analyzeLoadedResolvedClean : String ->
   List (String, List Decl) ->
   (List ModDiags, List (String, List Diag))
 analyzeLoadedResolvedClean entry roots runtimeSrc coreSrc mods modPairs =
-  typecheckPassFull
+  let (r, results) =
+    analyzeLoadedResolvedCleanReport
+      entry
+      roots
+      runtimeSrc
+      coreSrc
+      mods
+      modPairs
+  (r.trDiagnostics, results)
+
+-- `analyzeLoadedResolvedClean` returning the typecheck drive's whole report.
+export
+analyzeLoadedResolvedCleanReport : String ->
+  List String ->
+  String ->
+  String ->
+  List (String, String, List Decl) ->
+  List (String, List Decl) ->
+  (TcReport, List (String, List Diag))
+analyzeLoadedResolvedCleanReport entry roots runtimeSrc coreSrc mods modPairs =
+  typecheckPassReport
     (preludeDesugared runtimeSrc)
     (preludeDesugared coreSrc)
     (Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc))
@@ -3299,8 +3320,8 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
         stdlibOwnership target roots stdlibDir mods
       let _ = setStdlibOwnership flatStdlib ownedStdlib
       let modPairs = desugaredModPairs modsWithPath
-      let (perMod, results) =
-        analyzeLoadedFull
+      let (report, results) =
+        analyzeLoadedReport
           (stdlibExportsReader stdlibDir)
           allowInternal
           trusted
@@ -3310,7 +3331,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
           csrc
           modsWithPath
           modPairs
-      let drive = graphCheckDrive perMod modPairs (map modIdToPath modsWithPath)
+      let drive = graphCheckDrive report modPairs (map modIdToPath modsWithPath)
       let (cj, hasErr) = cjGraphParts target stdlibDir mods results
       (cj, hasErr, Some drive)
 
