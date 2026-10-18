@@ -35,7 +35,7 @@ import driver.build_cmd.{
 }
 import driver.loader.{entrySearchRoots}
 import support.path.{joinPath, baseOf, dirOf}
-import support.util.{joinNl, splitNl, startsWith, listLen}
+import support.util.{anyList, joinNl, splitNl, startsWith, listLen}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert}
 import tools.probe_transcript.{
   Section(..),
@@ -336,16 +336,11 @@ runSection target tsrc userDecls nonce outPath k arm prefix =
     outPath,
   ]
     Ok (code, out, errOut) =>
-      if printedSentinel prefix (splitNl out) then
+      if anyList (startsWith prefix) (splitNl out) then
         armDecode nonce arm code out errOut
       else
         armAlone target tsrc userDecls arm
     Err _ => armAlone target tsrc userDecls arm
-
-printedSentinel : String -> List String -> Bool
-printedSentinel _ [] = False
-printedSentinel prefix (l :: rest) =
-  startsWith prefix l || printedSentinel prefix rest
 
 armSection : String -> Arm -> Section
 armSection nonce (DocArm examples synthResults) =
@@ -374,17 +369,34 @@ armAlone target tsrc _ (TestArm _ tests) =
 armAlone target tsrc _ (PropArm plan modules) =
   PropOut (runNativePropPlan target tsrc modules plan)
 
+-- Every arm output `pick` accepts, in arm order.
+armOuts : (ArmOut -> Option a) -> List ArmOut -> List a
+armOuts _ [] = []
+armOuts pick (out :: rest) = match pick out
+  Some x => x :: armOuts pick rest
+  None => armOuts pick rest
+
 doctestOut : List ArmOut -> RunResult
-doctestOut [] = RunResult 0 0 0 0 []
-doctestOut ((DocOut result) :: _) = result
-doctestOut (_ :: rest) = doctestOut rest
+doctestOut outs = match armOuts docResult outs
+  result :: _ => result
+  [] => RunResult 0 0 0 0 []
+
+docResult : ArmOut -> Option RunResult
+docResult (DocOut result) = Some result
+docResult _ = None
 
 testOuts : List ArmOut -> List (List ExResult)
-testOuts [] = []
-testOuts ((TestOut results) :: rest) = results :: testOuts rest
-testOuts (_ :: rest) = testOuts rest
+testOuts outs = armOuts testResult outs
+
+testResult : ArmOut -> Option (List ExResult)
+testResult (TestOut results) = Some results
+testResult _ = None
 
 propOut : List ArmOut -> List PropResult
-propOut [] = []
-propOut ((PropOut rows) :: _) = rows
-propOut (_ :: rest) = propOut rest
+propOut outs = match armOuts propResult outs
+  rows :: _ => rows
+  [] => []
+
+propResult : ArmOut -> Option (List PropResult)
+propResult (PropOut rows) = Some rows
+propResult _ = None

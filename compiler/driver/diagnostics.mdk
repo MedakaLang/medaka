@@ -48,7 +48,7 @@ import frontend.resolve.{
   hintableUnboundNames,
   exportedValueNames,
 }
-import list.{drop}
+import list.{drop, last}
 import support.ordmap.{
   OrdMap,
   omEmpty,
@@ -1632,9 +1632,9 @@ graphIdOf mods = GraphId {
 }
 
 lastModId : List (String, String, List Decl) -> String
-lastModId [] = ""
-lastModId [(mid, _, _)] = mid
-lastModId (_ :: rest) = lastModId rest
+lastModId mods = match last mods
+  Some (mid, _, _) => mid
+  None => ""
 
 export
 graphIdSame : GraphId -> GraphId -> Bool
