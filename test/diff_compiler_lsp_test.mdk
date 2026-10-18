@@ -30,6 +30,13 @@
    | `b4-inlayhint` | didOpen, inlayHint over the buffer | one `: <ty>` hint per UNSIGNATURED top-level binding, at the real end-of-name column |
    | `b4-hover-shadowed-local` | didOpen, hover on a local shadowing a prelude name | the LOCAL's type (#2092, an S0: the prelude's scheme was answered instead) |
    | `b4-hover-no-local-control` | didOpen, hover where no local is in scope | the PRELUDE's scheme — proving #2092's fix is position-scoped, not "locals always win" |
+   | `kept-sibling-other-buffer` | didOpen a project entry, hover, didOpen its sibling with new text, hover | the second hover reads the sibling's BUFFER, not the analysis the entry's publish kept |
+   | `kept-value-main` | hover on `main` in `main = []`, single-file and project | `main : List a`, the same answer an un-retained drive gives |
+   | `kept-resolve-error-project` | didOpen a project entry with a resolve error, hover | `level6 : Int`: a resolve-blocked publish keeps nothing and the hover drives |
+   | `kept-resolve-error-single` | didOpen a single file with a resolve error, hover | `level6 : Int` and `bad : Int`, as a drive answers them |
+   | `kept-cold` | didOpen a buffer whose publish kept nothing, then completion and inlayHint | both drive and answer: the buffer's own `level6` completes, `bad` earns its hint |
+   | `kept-stale-edit` | didOpen, didChange to a resolve-erroring text, hover | the NEW text's type, never the analysis the first publish kept |
+   | `kept-inlay-project` | inlayHint over an import-bearing buffer | `: Int` on `k = plain 3`, the type the project analysis gives (`check --types`), not the buffer typechecked alone |
 
    Each row is its own `medaka lsp` process, exactly as the retired scripts
    drove them: a session is one framed stream in and one framed stream out,
@@ -60,7 +67,8 @@
    completion with no stdin handle, so there is no native spelling of an
    interactive session. That property keeps its interactive driver in
    `test/lsp_warm_session.sh` and is graded here as its own test, on the
-   script's exit code and output.
+   script's exit code and output. So does the hover twin of that property:
+   a sibling rewritten on disk between two hovers, with no `didChange`.
 
    # The goldens
 
@@ -419,6 +427,48 @@ projectFiles = [
   ("main_app.mdk", mainAppSrc),
 ]
 
+-- # The sessions that reach an analysis a publish kept
+
+manifest : (String, String)
+manifest = ("medaka.toml", "[package]\nname = \"kept\"\n")
+
+sibSrc : String
+sibSrc = "export\nbase = 7\n"
+
+-- | The entry's `show` takes its type from the sibling's `base`.
+showSrc : String
+showSrc = "import sib.{base}\n\nshow = base\n\nmain = println show\n"
+
+valueMainSrc : String
+valueMainSrc = "main = []\n"
+
+valueMainProjSrc : String
+valueMainProjSrc = "import sib.{base}\n\nmain = []\n"
+
+-- | A resolve error in a later decl than the hovered `level6`.
+resErrSrc : String
+resErrSrc = "level6 : Int\nlevel6 = 6\n\nbad = undefinedThing + 1\n"
+
+resErrProjSrc : String
+resErrProjSrc =
+  "import m7.{base}\n\nexport\nlevel6 : Int\nlevel6 = base + 6\n\nbad = undefinedThing + 1\n"
+
+-- | `double` is `Num`-constrained here and `Semigroup`-constrained in the
+-- edit, so the two texts' answers differ.
+numDoubleSrc : String
+numDoubleSrc = "double x = x + x\n\nmain = println (double 2)\n"
+
+semiDoubleSrc : String
+semiDoubleSrc = "double x = x ++ x\n\nbad = undefinedThing\n"
+
+plainLibSrc : String
+plainLibSrc = "export\nplain : Int -> Int\nplain n = n + 1\n"
+
+-- | `k` is `Int` only through the imported `plain`; typechecked alone the
+-- buffer cannot know that.
+inlayProjSrc : String
+inlayProjSrc = "import lib.{plain}\n\nk = plain 3\n\nmain = println k\n"
+
 -- # The table
 
 {- | The golden a row reads, and how to read it.
@@ -657,6 +707,116 @@ probes = [
       ],
     oracle = NoOracle,
     grade = gradeNoLocalControl,
+  },
+  Probe {
+    name = "kept-sibling-other-buffer",
+    files = [manifest, ("sib.mdk", sibSrc), ("main.mdk", showSrc)],
+    requests =
+      dir => [
+        initCaps,
+        didOpenMsg "file://\{dir}/main.mdk" showSrc,
+        rpc 2 "textDocument/hover" (posParams "file://\{dir}/main.mdk" 2 0),
+        didOpenMsg "file://\{dir}/sib.mdk" "export\nbase = 'c'\n",
+        rpc 3 "textDocument/hover" (posParams "file://\{dir}/main.mdk" 2 0),
+        bye,
+      ],
+    oracle = NoOracle,
+    grade =
+      s => somes [
+        hoverIs s 2 "show : Int",
+        hoverIs s 3 "show : Char",
+      ],
+  },
+  Probe {
+    name = "kept-value-main",
+    files = [manifest, ("sib.mdk", sibSrc), ("main.mdk", valueMainProjSrc)],
+    requests =
+      dir => [
+        initCaps,
+        didOpenMsg "file:///vm.mdk" valueMainSrc,
+        rpc 2 "textDocument/hover" (posParams "file:///vm.mdk" 0 0),
+        didOpenMsg "file://\{dir}/main.mdk" valueMainProjSrc,
+        rpc 3 "textDocument/hover" (posParams "file://\{dir}/main.mdk" 2 0),
+        bye,
+      ],
+    oracle = NoOracle,
+    grade =
+      s => somes [
+        hoverIs s 2 "main : List a",
+        hoverIs s 3 "main : List a",
+      ],
+  },
+  Probe {
+    name = "kept-resolve-error-project",
+    files = [
+      manifest,
+      ("m7.mdk", "export\nbase : Int\nbase = 1\n"),
+      ("m6.mdk", resErrProjSrc),
+    ],
+    requests =
+      dir => [
+        initCaps,
+        didOpenMsg "file://\{dir}/m6.mdk" resErrProjSrc,
+        rpc 2 "textDocument/hover" (posParams "file://\{dir}/m6.mdk" 4 2),
+        bye,
+      ],
+    oracle = NoOracle,
+    grade = s => somes [hoverIs s 2 "level6 : Int"],
+  },
+  Probe {
+    name = "kept-resolve-error-single",
+    files = [],
+    requests =
+      _ => [
+        initCaps,
+        didOpenMsg "file:///res.mdk" resErrSrc,
+        rpc 2 "textDocument/hover" (posParams "file:///res.mdk" 1 2),
+        rpc 3 "textDocument/hover" (posParams "file:///res.mdk" 3 0),
+        bye,
+      ],
+    oracle = NoOracle,
+    grade = s => somes [hoverIs s 2 "level6 : Int", hoverIs s 3 "bad : Int"],
+  },
+  Probe {
+    name = "kept-cold",
+    files = [],
+    requests =
+      _ => [
+        initCaps,
+        didOpenMsg "file:///cold.mdk" resErrSrc,
+        rpc 3 "textDocument/completion" (posParams "file:///cold.mdk" 1 3),
+        rpc 4 "textDocument/inlayHint" (inlayParams "file:///cold.mdk"),
+        bye,
+      ],
+    oracle = NoOracle,
+    grade = gradeCold,
+  },
+  Probe {
+    name = "kept-stale-edit",
+    files = [],
+    requests =
+      _ => [
+        initCaps,
+        didOpenMsg "file:///edit.mdk" numDoubleSrc,
+        didChangeMsg "file:///edit.mdk" semiDoubleSrc,
+        rpc 2 "textDocument/hover" (posParams "file:///edit.mdk" 0 0),
+        bye,
+      ],
+    oracle = NoOracle,
+    grade = s => somes [hoverIs s 2 "double : Semigroup a => a -> a"],
+  },
+  Probe {
+    name = "kept-inlay-project",
+    files = [manifest, ("lib.mdk", plainLibSrc), ("main.mdk", inlayProjSrc)],
+    requests =
+      dir => [
+        initCaps,
+        didOpenMsg "file://\{dir}/main.mdk" inlayProjSrc,
+        rpc 4 "textDocument/inlayHint" (inlayParams "file://\{dir}/main.mdk"),
+        bye,
+      ],
+    oracle = NoOracle,
+    grade = gradeInlayProject,
   },
 ]
 
@@ -1096,6 +1256,51 @@ preludeScheme s (idn, which) =
     Some
       "`count` \{which} hovers as \{debug v}, expected the prelude's Foldable-constrained scheme"
 
+-- | The hover body of the reply to `id` with its code fence removed: the
+-- `name : type` line alone.
+hoverAnswer : Int -> List Json -> String
+hoverAnswer idn objs =
+  join
+    "\n"
+    (filter (l => not (startsWith "```" l)) (lines (hoverValue idn objs)))
+
+hoverIs : Seen -> Int -> String -> Option String
+hoverIs s idn want =
+  let got = hoverAnswer idn s.objs
+  unless
+    (got == want)
+    "hover \{intToString idn} answered \{debug got}, expected \{debug want}"
+
+-- | The labels of the hints on 0-based `line` of the reply to `id`.
+hintLabels : Int -> Int -> Seen -> List String
+hintLabels idn line s =
+  map
+    (h => strField "label" h)
+    (filter (h => hintLine h == line) (elems (resultTo idn s.objs)))
+
+gradeCold : Seen -> List String
+gradeCold s =
+  let items =
+    map
+      (it => "\{strField "label" it} : \{strField "detail" it}")
+      (itemsOf (resultTo 3 s.objs))
+  somes [
+    unless
+      (elem "level6 : Int" items)
+      "completing `lev` did not offer the buffer's own `level6 : Int`: \{debug items}",
+    unless
+      (hintLabels 4 3 s == [": Int"])
+      "the unsignatured `bad` earned \{debug (hintLabels 4 3 s)}, expected [\": Int\"]",
+    unless (hintLabels 4 1 s == []) "the signatured `level6` earned a hint",
+  ]
+
+gradeInlayProject : Seen -> List String
+gradeInlayProject s = somes [
+  unless
+    (hintLabels 4 2 s == [": Int"])
+    "`k = plain 3` earned \{debug (hintLabels 4 2 s)}, expected [\": Int\"] as check --types says",
+]
+
 -- # Running one row
 
 {- | The ceiling on one session.
@@ -1140,9 +1345,7 @@ drive msgs =
    so a red run names every disagreement at once. -}
 data Outcome = Outcome { name : String, findings : List String }
 
-gradeProbe : String ->
-  Probe ->
-  <Exec, FileRead, FileWrite, IO> Outcome
+gradeProbe : String -> Probe -> <Exec, FileRead, FileWrite, IO> Outcome
 gradeProbe scratch p =
   let dir = "\{scratch}/\{p.name}"
   match layOut dir p.files
@@ -1156,17 +1359,13 @@ gradeProbe scratch p =
    Each row gets its own, since one row's project is another row's noise:
    a leftover `main_app.mdk` in a shared directory would be read by whatever
    later row opened a buffer beside it. -}
-layOut : String ->
-  List (String, String) ->
-  <FileWrite, IO> Result String Unit
+layOut : String -> List (String, String) -> <FileWrite, IO> Result String Unit
 layOut _ [] = Ok ()
 layOut dir files = match mkdirAll dir
   Err e => Err "could not make \{dir}: \{e}"
   Ok _ => writeAll dir files
 
-writeAll : String ->
-  List (String, String) ->
-  <FileWrite, IO> Result String Unit
+writeAll : String -> List (String, String) -> <FileWrite, IO> Result String Unit
 writeAll _ [] = Ok ()
 writeAll dir ((rel, text) :: rest) = match writeFile "\{dir}/\{rel}" text
   Err e => Err "could not write \{dir}/\{rel}: \{e}"

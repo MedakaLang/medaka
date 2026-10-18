@@ -10,8 +10,10 @@
 -- `stageCountInit`.  The dump goes to stderr only, as `[stage]<TAB>key<TAB>n`; the
 -- prefix differs from MEDAKA_STATS's `[stats]` so a filtered read never mixes them.
 
-import string.{startsWith}
+import list.{partition}
+import string.{split, startsWith}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omKeys}
+import support.util.{joinNl}
 
 stageCountOn : Ref Bool
 stageCountOn = Ref False
@@ -61,6 +63,19 @@ stagePrefix = "[stage]\t"
 export
 isStageLine : String -> Bool
 isStageLine l = startsWith stagePrefix l
+
+-- A child process's `[stage]` lines belong to this process's stderr on every
+-- route, `--json` included, so they are lifted out of the child's captured
+-- stderr before any route decides what to embed or forward.  The rest of the
+-- child's stream is returned unchanged when it has no stage lines.
+export
+forwardStageLines : String -> <IO> String
+forwardStageLines err =
+  let (stage, rest) = partition isStageLine (split "\n" err)
+  let _ = match stage
+    [] => ()
+    _ => ePutStrLn (joinNl stage)
+  joinNl rest
 
 stageDumpKeys : List String -> <IO> Unit
 stageDumpKeys [] = ()

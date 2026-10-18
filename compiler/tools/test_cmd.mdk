@@ -2,6 +2,12 @@
 -- factored out of test_main.mdk so BOTH the interpreted driver (test_main.mdk)
 -- and the native CLI (medaka_cli.mdk's runTestCmd) share one implementation.
 --
+-- This file is over 3,000 code lines because the driver, its report twin and the
+-- three engines' per-file orchestration share one prepared pair and one abort
+-- rule, so they live together.  The merged-probe glue (`mergesNativeArms` and
+-- the functions it calls) stays here: it reads `TestPair` and the property phase,
+-- which `native_probe.mdk` cannot import without a cycle.
+--
 -- Exports:
 --   runTest runtimeP coreP target roots   read the three sources + drive
 --   rootsOrDefault target roots           default roots to [dirOf target]
@@ -113,6 +119,7 @@ import tools.doctest.{
   runPassed,
   runFailed,
   runErrors,
+  exampleExpected,
   exampleInput,
   exampleLine,
   synthName,
@@ -121,6 +128,11 @@ import tools.doctest.{
 import tools.native_doctest.{runNativeDoctests}
 import tools.native_test_decls.{runNativeTests}
 import tools.native_props.{runNativePlannedPropRequests}
+import tools.native_probe.{
+  NativeArmResults(..),
+  NativePropLeaf,
+  runMergedNativeArms,
+}
 import tools.prop_plan.{
   PlanModule(..),
   CustomPlan(..),
@@ -234,7 +246,7 @@ import support.util.{
   anyList,
 }
 import support.path.{dirOf, baseOf, joinPath}
-import support.stage_count.{stageExit}
+import support.stage_count.{forwardStageLines, stageExit}
 import args.{
   ArgSpec, Args, spec, switch, value, internal, flag, flagValue, withStrictDash
 }
@@ -760,15 +772,20 @@ data Prepared =
 -- on it.  `hasDoctests` is the module's UNFILTERED
 -- doctest presence: the arm is chosen by what the module contains, so `--filter`
 -- cannot move it.
+--
+-- `unread` is `treesUnread` for the run.  An exempt, doctest-free target then has
+-- no gate and no tree reader, so the elaboration is skipped; the load and
+-- `modulePathMap` still happen.
 prepareMulti : String ->
   String ->
   String ->
   List String ->
   Bool ->
   Bool ->
+  Bool ->
   List Decl ->
   <IO> (Option String, Prepared)
-prepareMulti rsrc csrc target roots exempt hasDoctests synthDecls =
+prepareMulti rsrc csrc target roots exempt unread hasDoctests synthDecls =
   let loaded = perfRow "test-load" target (_ =>
     loadProgramFilesLocatedE (_ => None) target roots)
   match loaded
@@ -778,19 +795,22 @@ prepareMulti rsrc csrc target roots exempt hasDoctests synthDecls =
     )
     Ok mods =>
       modulePathMap := map modIdToPath mods
-      perfRow
-        "test-gate"
-        (if hasDoctests then "check" else "elaborate")
-        (_ =>
-          elaborateFor
-            rsrc
-            csrc
-            target
-            roots
-            mods
-            exempt
-            hasDoctests
-            synthDecls)
+      if exempt && unread && not hasDoctests then
+        (None, PreparedPair unreadTrees)
+      else
+        perfRow
+          "test-gate"
+          (if hasDoctests then "check" else "elaborate")
+          (_ =>
+            elaborateFor
+              rsrc
+              csrc
+              target
+              roots
+              mods
+              exempt
+              hasDoctests
+              synthDecls)
 
 elaborateFor : String ->
   String ->
@@ -958,6 +978,17 @@ prepareSingle : List Decl ->
   List Decl ->
   <IO> TestPair
 prepareSingle runtimeDecls coreDecls target roots userDecls =
+  fst (prepareSingleDiags runtimeDecls coreDecls target roots userDecls)
+
+-- `prepareSingle` beside its elaboration's diagnostics.  Nothing is injected,
+-- so they are the `helperElabDiags` of the pair it returns.
+prepareSingleDiags : List Decl ->
+  List Decl ->
+  String ->
+  List String ->
+  List Decl ->
+  <IO> (TestPair, List (String, TcDiag))
+prepareSingleDiags runtimeDecls coreDecls target roots userDecls =
   let livePrelude =
     if programIsCore userDecls then
       []
@@ -966,11 +997,7 @@ prepareSingle runtimeDecls coreDecls target roots userDecls =
   let rootId = singleRootId roots target
   modulePathMap := [(rootId, target)]
   perfRow "test-elab" "single" (_ =>
-    uncurryPair
-      runtimeDecls
-      livePrelude
-      [(rootId, userDecls)]
-      (elaborateModulesMangled runtimeDecls livePrelude [(rootId, userDecls)]))
+    helperElaboration runtimeDecls livePrelude [(rootId, userDecls)] [])
 
 -- One `[perf]` row (`MEDAKA_PERF`, support/timer.mdk) around a step of the
 -- harness itself, so the parent's load, gate, phase elaboration and prop
@@ -1080,6 +1107,7 @@ driveMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases filt
       target
       roots
       exempt
+      (treesUnread engines userDecls)
       (isNonEmptyL allExamples)
       synthDecls
   match gated
@@ -1092,10 +1120,25 @@ driveMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases filt
         False
       else
         let pair = phaseTrees engines userDecls rsrc csrc prepared
+        let native =
+          multiNativeRuns
+            engines
+            pair
+            target
+            tsrc
+            userDecls
+            examples
+            synthResults
+            True
+            cases
+            filterOpt
+            file
+            index
         let doctestsOk =
           runDoctests
             engines
             (DtPair pair)
+            native
             target
             tsrc
             userDecls
@@ -1105,6 +1148,7 @@ driveMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases filt
           runPropsPinned
             engines
             pair
+            native
             stdlibDir
             target
             tsrc
@@ -1117,6 +1161,7 @@ driveMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases filt
           runTestDeclsPinned
             engines
             pair
+            native
             runtimeDecls
             target
             tsrc
@@ -1150,25 +1195,45 @@ driveSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases fil
     let _ = filterMatchedNothingNotice target
     False
   else
+    let synthResults = buildSynthResults userDecls examples
+    let laterPhases = hasProps userDecls || hasTests userDecls
+    let (early, native) =
+      singleNativeRuns
+        engines
+        runtimeDecls
+        coreDecls
+        target
+        tsrc
+        roots
+        userDecls
+        examples
+        synthResults
+        laterPhases
+        True
+        cases
+        filterOpt
+        file
+        index
     let doctestsOk =
       runDoctests
         engines
         (DtSingle runtimeDecls coreDecls target roots userDecls)
+        native
         target
         tsrc
         userDecls
         examples
-        (buildSynthResults userDecls examples)
-    if hasProps userDecls || hasTests userDecls then
-      let pair =
-        if treesUnread engines userDecls then
-          unreadTrees
-        else
-          prepareSingle runtimeDecls coreDecls target roots userDecls
+        synthResults
+    if laterPhases then
+      let pair = match early
+        Some trees => trees
+        None =>
+          singlePhaseTrees engines runtimeDecls coreDecls target roots userDecls
       let propsOk =
         runPropsPinned
           engines
           pair
+          native
           stdlibDir
           target
           tsrc
@@ -1181,6 +1246,7 @@ driveSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases fil
         runTestDeclsPinned
           engines
           pair
+          native
           runtimeDecls
           target
           tsrc
@@ -1191,6 +1257,253 @@ driveSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases fil
       doctestsOk && propsOk && testsOk
     else
       doctestsOk
+
+-- The prelude-only arm's prop/`test "…"` pair, or `unreadTrees` when no phase
+-- under `engines` reads it.
+singlePhaseTrees : List Engine ->
+  List Decl ->
+  List Decl ->
+  String ->
+  List String ->
+  List Decl ->
+  <IO> TestPair
+singlePhaseTrees engines runtimeDecls coreDecls target roots userDecls =
+  if treesUnread engines userDecls then
+    unreadTrees
+  else
+    prepareSingle runtimeDecls coreDecls target roots userDecls
+
+-- The native arms share one merged probe when the native engine runs alone, the
+-- file is not the prelude, and its arms would otherwise build two probes or
+-- more.  The prelude keeps one probe per arm: its doctest arm is never built
+-- (`nativeSkipReason`) and its property arm drops the spliced source.  A file
+-- with a smoke example also keeps them: the native backend forces the smoke
+-- binding at startup, so in the merged binary its side effect would repeat in
+-- every section.  Under a second engine the property plan would be made before the
+-- interpreter's doctest elaboration, between it and the later reads of the
+-- pair, so those runs keep one probe per arm.
+mergesNativeArms : List Engine ->
+  String ->
+  String ->
+  List Decl ->
+  List Example ->
+  Bool ->
+  Option String ->
+  String ->
+  PinIndex ->
+  Bool
+mergesNativeArms [EngNative] target tsrc userDecls examples includeTests filterOpt file index =
+  not (programIsCore userDecls)
+    && baseOf target /= "core.mdk"
+    && not (anyList (e => isNone (exampleExpected e)) examples)
+    && nativeProbeCount
+        tsrc
+        userDecls
+        examples
+        includeTests
+        filterOpt
+        file
+        index
+      >= 2
+mergesNativeArms _ _ _ _ _ _ _ _ _ = False
+
+-- The probes the native arms build one per arm: the doctests, the batch of
+-- ordinary tests, each test pinned as an expected native error, and the
+-- properties.
+nativeProbeCount : String ->
+  List Decl ->
+  List Example ->
+  Bool ->
+  Option String ->
+  String ->
+  PinIndex ->
+  Int
+nativeProbeCount tsrc userDecls examples includeTests filterOpt file index =
+  let doctests = if isNonEmptyL examples then 1 else 0
+  let tests =
+    match nativeTestArmsOf includeTests userDecls tsrc filterOpt file index
+      Some (_, pinned) => 1 + listLen pinned
+      None => 0
+  let props = if hasProps userDecls then 1 else 0
+  doctests + tests + props
+
+nativeTestArmsOf : Bool ->
+  List Decl ->
+  String ->
+  Option String ->
+  String ->
+  PinIndex ->
+  Option (List (String, Int, Expr), List (String, Int, Expr))
+nativeTestArmsOf includeTests userDecls tsrc filterOpt file index =
+  if includeTests && hasTests userDecls then
+    Some
+      (nativeTestArms
+        index
+        file
+        (filterTestsByName filterOpt (nativeRawTests tsrc)))
+  else
+    None
+
+-- `nativeRunsFor` on the import-bearing arm, whose pair is already prepared.
+multiNativeRuns : List Engine ->
+  TestPair ->
+  String ->
+  String ->
+  List Decl ->
+  List Example ->
+  List (Result String (List Decl)) ->
+  Bool ->
+  Int ->
+  Option String ->
+  String ->
+  PinIndex ->
+  <IO> Option NativeArmResults
+multiNativeRuns engines pair target tsrc userDecls examples synthResults includeTests cases filterOpt file index =
+  nativeRunsFor
+    (mergesNativeArms
+      engines
+      target
+      tsrc
+      userDecls
+      examples
+      includeTests
+      filterOpt
+      file
+      index)
+    pair
+    target
+    tsrc
+    userDecls
+    examples
+    synthResults
+    includeTests
+    cases
+    filterOpt
+    file
+    index
+
+-- `nativeRunsFor` on the prelude-only arm, with the pair it prepares early when
+-- the merged probe needs it: a merged probe plans the properties before the
+-- doctest phase, and the native doctest arm reads no tree, so nothing that
+-- phase evaluates is elaborated in between.  The first component is that early
+-- pair, None when each arm runs on a probe of its own.
+singleNativeRuns : List Engine ->
+  List Decl ->
+  List Decl ->
+  String ->
+  String ->
+  List String ->
+  List Decl ->
+  List Example ->
+  List (Result String (List Decl)) ->
+  Bool ->
+  Bool ->
+  Int ->
+  Option String ->
+  String ->
+  PinIndex ->
+  <IO> (Option TestPair, Option NativeArmResults)
+singleNativeRuns engines runtimeDecls coreDecls target tsrc roots userDecls examples synthResults laterPhases includeTests cases filterOpt file index =
+  let merges =
+    mergesNativeArms
+      engines
+      target
+      tsrc
+      userDecls
+      examples
+      includeTests
+      filterOpt
+      file
+      index
+  let early =
+    if merges && laterPhases then
+      Some
+        (singlePhaseTrees engines runtimeDecls coreDecls target roots userDecls)
+    else
+      None
+  (
+    early,
+    nativeRunsFor
+      merges
+      (optionOr unreadTrees early)
+      target
+      tsrc
+      userDecls
+      examples
+      synthResults
+      includeTests
+      cases
+      filterOpt
+      file
+      index,
+  )
+
+-- The native arms' results from one merged probe (`tools/native_probe.mdk`)
+-- run before the phases, or None when each arm runs on a probe of its own.
+-- `merges` is `mergesNativeArms`'s verdict; `pair` the trees the property phase
+-- reads.
+nativeRunsFor : Bool ->
+  TestPair ->
+  String ->
+  String ->
+  List Decl ->
+  List Example ->
+  List (Result String (List Decl)) ->
+  Bool ->
+  Int ->
+  Option String ->
+  String ->
+  PinIndex ->
+  <IO> Option NativeArmResults
+nativeRunsFor False _ _ _ _ _ _ _ _ _ _ _ = None
+nativeRunsFor True pair target tsrc userDecls examples synthResults includeTests cases filterOpt file index =
+  Some
+    (runMergedNativeArms
+      target
+      tsrc
+      userDecls
+      (if isNonEmptyL examples then Some (examples, synthResults) else None)
+      (nativeTestArmsOf includeTests userDecls tsrc filterOpt file index)
+      (nativePropPhase pair target tsrc userDecls cases filterOpt file index))
+
+-- The native property phase on the leaf the merged probe hands it: the path
+-- `propsReportEngines` takes for the native engine.
+nativePropPhase : TestPair ->
+  String ->
+  String ->
+  List Decl ->
+  Int ->
+  Option String ->
+  String ->
+  PinIndex ->
+  NativePropLeaf ->
+  <IO> List PropResult
+nativePropPhase pair target tsrc userDecls cases filterOpt file index leaf
+  | not (hasProps userDecls) = []
+  | otherwise = match pair
+    TestPairErr _ => []
+    TestPair runtimeM rawCoreM coreM rawM modsM => withEvidencePreserved (_ =>
+      propsReportEnginesInProcess
+        leaf
+        [EngNative]
+        runtimeM
+        rawCoreM
+        coreM
+        rawM
+        modsM
+        target
+        tsrc
+        userDecls
+        cases
+        filterOpt
+        file
+        index)
+
+nativePropRowsOr : Option NativeArmResults ->
+  (Unit -> <IO> List PropResult) ->
+  <IO> List PropResult
+nativePropRowsOr (Some (NativeArmResults _ rows _ _)) _ = rows
+nativePropRowsOr None run = run ()
 
 filterMatchedNothingNotice : String -> <IO> Unit
 filterMatchedNothingNotice target =
@@ -1209,19 +1522,29 @@ filterExamplesByName (Some sub) examples =
 
 runDoctests : List Engine ->
   DoctestTrees ->
+  Option NativeArmResults ->
   String ->
   String ->
   List Decl ->
   List Example ->
   List (Result String (List Decl)) ->
   <IO> Bool
-runDoctests engines trees target tsrc userDecls examples synthResults =
+runDoctests engines trees native target tsrc userDecls examples synthResults =
   let _ = putStrLn ("running doctests in " ++ target)
   match examples
     [] =>
       let _ = putStrLn "  (no doctests found)"
       True
-    _ => runEngines engines trees target tsrc userDecls examples synthResults
+    _ =>
+      runEngines
+        engines
+        trees
+        native
+        target
+        tsrc
+        userDecls
+        examples
+        synthResults
 
 -- Run the doctests under each requested engine in turn, AND-ing pass/fail
 -- across engines. With exactly one engine (the default `[EngNative]`, or
@@ -1230,37 +1553,55 @@ runDoctests engines trees target tsrc userDecls examples synthResults =
 -- their independent pass/fail) don't run together.
 runEngines : List Engine ->
   DoctestTrees ->
+  Option NativeArmResults ->
   String ->
   String ->
   List Decl ->
   List Example ->
   List (Result String (List Decl)) ->
   <IO> Bool
-runEngines [e] trees target tsrc userDecls examples synthResults =
+runEngines [e] trees native target tsrc userDecls examples synthResults =
   reportDoctests
     target
-    (runChosenOn e trees target tsrc userDecls examples synthResults)
-runEngines engines trees target tsrc userDecls examples synthResults =
-  runEnginesTagged engines trees target tsrc userDecls examples synthResults
+    (runChosenOn e trees native target tsrc userDecls examples synthResults)
+runEngines engines trees native target tsrc userDecls examples synthResults =
+  runEnginesTagged
+    engines
+    trees
+    native
+    target
+    tsrc
+    userDecls
+    examples
+    synthResults
 
 runEnginesTagged : List Engine ->
   DoctestTrees ->
+  Option NativeArmResults ->
   String ->
   String ->
   List Decl ->
   List Example ->
   List (Result String (List Decl)) ->
   <IO> Bool
-runEnginesTagged [] _ _ _ _ _ _ = True
-runEnginesTagged (e :: rest) trees target tsrc userDecls examples synthResults =
+runEnginesTagged [] _ _ _ _ _ _ _ = True
+runEnginesTagged (e :: rest) trees native target tsrc userDecls examples synthResults =
   let _ = putStrLn ""
   let _ = putStrLn "-- \{engineName e} --"
   let ok =
     reportDoctests
       target
-      (runChosenOn e trees target tsrc userDecls examples synthResults)
+      (runChosenOn e trees native target tsrc userDecls examples synthResults)
   let restOk =
-    runEnginesTagged rest trees target tsrc userDecls examples synthResults
+    runEnginesTagged
+      rest
+      trees
+      native
+      target
+      tsrc
+      userDecls
+      examples
+      synthResults
   ok && restOk
 
 -- ── engine dispatch (#81 Stage 3) ────────────────────────────────────────────
@@ -1274,15 +1615,18 @@ runEnginesTagged (e :: rest) trees target tsrc userDecls examples synthResults =
 export
 runChosenOn : Engine ->
   DoctestTrees ->
+  Option NativeArmResults ->
   String ->
   String ->
   List Decl ->
   List Example ->
   List (Result String (List Decl)) ->
   <IO> RunResult
-runChosenOn EngInterp trees _target _tsrc _userDecls examples synthResults =
+runChosenOn EngInterp trees _native _target _tsrc _userDecls examples synthResults =
   runChosen trees examples synthResults
-runChosenOn EngNative _trees target tsrc userDecls examples synthResults =
+runChosenOn EngNative _trees (Some (NativeArmResults result _ _ _)) _target _tsrc _userDecls _examples _synthResults =
+  result
+runChosenOn EngNative _trees None target tsrc userDecls examples synthResults =
   runNativeDoctests target tsrc userDecls examples synthResults
 
 -- The interpreter arm.  `DtPair` is the one elaboration the whole invocation
@@ -1523,14 +1867,18 @@ collectPropLines (_ :: rest) = collectPropLines rest
 -- the driver (`elaboratedRootProps`, `collectTests`) and evaluate them in the
 -- driver's env.  A body left with bare constructor references would look for a
 -- cell the rename has moved.  Applying it here renames env and bodies together;
--- the driver's own call is then an idempotent no-op.
+-- the driver's own call is then an idempotent no-op.  The elaboration's error
+-- diagnostics come back beside the trees, each keyed by its module.
 elaborateModulesMangled : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List Decl, List (String, List Decl))
+  ((List Decl, List (String, List Decl)), List (String, TcDiag))
 elaborateModulesMangled runtimeDecls coreDecls modules =
   match elaborateModules runtimeDecls coreDecls modules
-    (coreE, modulesE, _, _, _, _) => mangleCtorCollisionsPair (coreE, modulesE)
+    (coreE, modulesE, perModule, residual, _, _) => (
+      mangleCtorCollisionsPair (coreE, modulesE),
+      residual ++ perModuleErrors perModule [],
+    )
 
 -- Evaluate the file's `prop "…"` decls in the shared elaboration's root
 -- environment.  `evalModulesRootEnv` exposes the prelude globals (eq/compare)
@@ -1541,6 +1889,7 @@ elaborateModulesMangled runtimeDecls coreDecls modules =
 -- prop would "fail".
 runPropsPinned : List Engine ->
   TestPair ->
+  Option NativeArmResults ->
   String ->
   String ->
   String ->
@@ -1550,7 +1899,7 @@ runPropsPinned : List Engine ->
   String ->
   PinIndex ->
   <IO> Bool
-runPropsPinned engines pair stdlibDir target tsrc userDecls cases filterOpt file index
+runPropsPinned engines pair native stdlibDir target tsrc userDecls cases filterOpt file index
   | not (hasProps userDecls) = True
   | otherwise = match pair
     TestPairErr err =>
@@ -1561,21 +1910,22 @@ runPropsPinned engines pair stdlibDir target tsrc userDecls cases filterOpt file
         (gradeProps
           index
           file
-          (propsReportEngines
-            engines
-            stdlibDir
-            runtimeM
-            rawCoreM
-            coreM
-            rawM
-            modsM
-            target
-            tsrc
-            userDecls
-            cases
-            filterOpt
-            file
-            index)))
+          (nativePropRowsOr native (_ =>
+            propsReportEngines
+              engines
+              stdlibDir
+              runtimeM
+              rawCoreM
+              coreM
+              rawM
+              modsM
+              target
+              tsrc
+              userDecls
+              cases
+              filterOpt
+              file
+              index))))
 
 printGradedPropRows : List GradedProp -> <IO> Bool
 printGradedPropRows [] = True
@@ -1636,6 +1986,7 @@ lastModule (_ :: rest) = lastModule rest
 -- does, and each engine's block is labelled when there is more than one.
 runTestDeclsPinned : List Engine ->
   TestPair ->
+  Option NativeArmResults ->
   List Decl ->
   String ->
   String ->
@@ -1644,7 +1995,7 @@ runTestDeclsPinned : List Engine ->
   String ->
   PinIndex ->
   <IO> Bool
-runTestDeclsPinned engines pair runtimeDecls target tsrc userDecls filterOpt file index
+runTestDeclsPinned engines pair native runtimeDecls target tsrc userDecls filterOpt file index
   | not (hasTests userDecls) = True
   | otherwise =
     printGradedTestRows
@@ -1657,6 +2008,7 @@ runTestDeclsPinned engines pair runtimeDecls target tsrc userDecls filterOpt fil
           (testDeclsReportPinned
             engines
             pair
+            native
             runtimeDecls
             target
             tsrc
@@ -2124,17 +2476,33 @@ reportMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases fil
       target
       roots
       exempt
+      (treesUnread engines userDecls)
       (isNonEmptyL allExamples)
       (buildSynthDecls synthResults)
   match prepared
     (Some errText, _) => (Some errText, [], [], [], False)
     (None, prepared) =>
       let pair = phaseTrees engines userDecls rsrc csrc prepared
+      let native =
+        multiNativeRuns
+          engines
+          pair
+          target
+          tsrc
+          userDecls
+          examples
+          synthResults
+          includeTestDecls
+          cases
+          filterOpt
+          file
+          index
       (
         None,
         doctestReport
           engines
           (DtPair pair)
+          native
           target
           tsrc
           userDecls
@@ -2143,6 +2511,7 @@ reportMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases fil
         propsReportPinned
           engines
           pair
+          native
           stdlibDir
           target
           tsrc
@@ -2155,6 +2524,7 @@ reportMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases fil
           includeTestDecls
           engines
           pair
+          native
           runtimeDecls
           target
           tsrc
@@ -2185,27 +2555,47 @@ reportSingle : List Engine ->
   <IO> (Option String, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
 reportSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases filterOpt includeTestDecls userDecls exempt file index =
   let examples = filterExamplesByName filterOpt (targetExamples tsrc)
+  let synthResults = buildSynthResults userDecls examples
+  let laterPhases = hasProps userDecls || includeTestDecls && hasTests userDecls
+  let (early, native) =
+    singleNativeRuns
+      engines
+      runtimeDecls
+      coreDecls
+      target
+      tsrc
+      roots
+      userDecls
+      examples
+      synthResults
+      laterPhases
+      includeTestDecls
+      cases
+      filterOpt
+      file
+      index
   let doctestRuns =
     doctestReport
       engines
       (DtSingle runtimeDecls coreDecls target roots userDecls)
+      native
       target
       tsrc
       userDecls
       examples
-      (buildSynthResults userDecls examples)
-  if hasProps userDecls || includeTestDecls && hasTests userDecls then
-    let pair =
-      if treesUnread engines userDecls then
-        unreadTrees
-      else
-        prepareSingle runtimeDecls coreDecls target roots userDecls
+      synthResults
+  if laterPhases then
+    let pair = match early
+      Some trees => trees
+      None =>
+        singlePhaseTrees engines runtimeDecls coreDecls target roots userDecls
     (
       None,
       doctestRuns,
       propsReportPinned
         engines
         pair
+        native
         stdlibDir
         target
         tsrc
@@ -2218,6 +2608,7 @@ reportSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases fi
         includeTestDecls
         engines
         pair
+        native
         runtimeDecls
         target
         tsrc
@@ -2236,6 +2627,7 @@ reportSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases fi
 reportTestDecls : Bool ->
   List Engine ->
   TestPair ->
+  Option NativeArmResults ->
   List Decl ->
   String ->
   String ->
@@ -2244,11 +2636,12 @@ reportTestDecls : Bool ->
   String ->
   PinIndex ->
   <IO> List (Engine, String, Int, ExResult)
-reportTestDecls False _ _ _ _ _ _ _ _ _ = []
-reportTestDecls True engines pair runtimeDecls target tsrc userDecls filterOpt file index =
+reportTestDecls False _ _ _ _ _ _ _ _ _ _ = []
+reportTestDecls True engines pair native runtimeDecls target tsrc userDecls filterOpt file index =
   testDeclsReportPinned
     engines
     pair
+    native
     runtimeDecls
     target
     tsrc
@@ -2266,16 +2659,25 @@ reportTestDecls True engines pair runtimeDecls target tsrc userDecls filterOpt f
 -- medaka_test still passes `None` (unchanged behavior, #2295 scoped to CLI).
 doctestReport : List Engine ->
   DoctestTrees ->
+  Option NativeArmResults ->
   String ->
   String ->
   List Decl ->
   List Example ->
   List (Result String (List Decl)) ->
   <IO> List (Engine, RunResult)
-doctestReport engines _trees _target _tsrc _userDecls [] _synthResults =
+doctestReport engines _trees _native _target _tsrc _userDecls [] _synthResults =
   emptyDoctestRuns engines
-doctestReport engines trees target tsrc userDecls examples synthResults =
-  doctestReportGo engines trees target tsrc userDecls examples synthResults
+doctestReport engines trees native target tsrc userDecls examples synthResults =
+  doctestReportGo
+    engines
+    trees
+    native
+    target
+    tsrc
+    userDecls
+    examples
+    synthResults
 
 emptyDoctestRuns : List Engine -> List (Engine, RunResult)
 emptyDoctestRuns [] = []
@@ -2284,16 +2686,25 @@ emptyDoctestRuns (e :: rest) =
 
 doctestReportGo : List Engine ->
   DoctestTrees ->
+  Option NativeArmResults ->
   String ->
   String ->
   List Decl ->
   List Example ->
   List (Result String (List Decl)) ->
   <IO> List (Engine, RunResult)
-doctestReportGo [] _ _ _ _ _ _ = []
-doctestReportGo (e :: rest) trees target tsrc userDecls examples synthResults =
-  (e, runChosenOn e trees target tsrc userDecls examples synthResults)
-    :: doctestReportGo rest trees target tsrc userDecls examples synthResults
+doctestReportGo [] _ _ _ _ _ _ _ = []
+doctestReportGo (e :: rest) trees native target tsrc userDecls examples synthResults =
+  (e, runChosenOn e trees native target tsrc userDecls examples synthResults)
+    :: doctestReportGo
+      rest
+      trees
+      native
+      target
+      tsrc
+      userDecls
+      examples
+      synthResults
 
 -- Prop phase as pure data: same single-file/multi-module split as the human
 -- path, with raw engine outcomes graded only after both engines complete.
@@ -2305,6 +2716,7 @@ doctestReportGo (e :: rest) trees target tsrc userDecls examples synthResults =
 -- seed/case count), then grades the raw rows separately.
 propsReportPinned : List Engine ->
   TestPair ->
+  Option NativeArmResults ->
   String ->
   String ->
   String ->
@@ -2314,28 +2726,30 @@ propsReportPinned : List Engine ->
   String ->
   PinIndex ->
   <IO> List PropResult
-propsReportPinned engines pair stdlibDir target tsrc userDecls cases filterOpt file index
+propsReportPinned engines pair native stdlibDir target tsrc userDecls cases filterOpt file index
   | not (hasProps userDecls) = []
   | otherwise = match pair
     TestPairErr _ => []
-    TestPair runtimeM rawCoreM coreM rawM modsM => withEvidencePreserved (_ =>
-      propsReportEngines
-        engines
-        stdlibDir
-        runtimeM
-        rawCoreM
-        coreM
-        rawM
-        modsM
-        target
-        tsrc
-        userDecls
-        cases
-        filterOpt
-        file
-        index)
+    TestPair runtimeM rawCoreM coreM rawM modsM => withEvidencePreserved
+      (_ => nativePropRowsOr native (_ =>
+        propsReportEngines
+          engines
+          stdlibDir
+          runtimeM
+          rawCoreM
+          coreM
+          rawM
+          modsM
+          target
+          tsrc
+          userDecls
+          cases
+          filterOpt
+          file
+          index))
 
-propsReportEnginesInProcess : List Engine ->
+propsReportEnginesInProcess : NativePropLeaf ->
+  List Engine ->
   List Decl ->
   List Decl ->
   List Decl ->
@@ -2349,8 +2763,8 @@ propsReportEnginesInProcess : List Engine ->
   String ->
   PinIndex ->
   <IO> List PropResult
-propsReportEnginesInProcess [] _ _ _ _ _ _ _ _ _ _ _ _ = []
-propsReportEnginesInProcess engines runtimeM rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+propsReportEnginesInProcess _ [] _ _ _ _ _ _ _ _ _ _ _ _ = []
+propsReportEnginesInProcess leaf engines runtimeM rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
   let modules = planModules rawCoreM coreM rawM modsM
   let root = rootPlanModuleId rawM target
   let planningRequests =
@@ -2362,6 +2776,7 @@ propsReportEnginesInProcess engines runtimeM rawCoreM coreM rawM modsM target ts
     (elaboratedRootProps modsM userDecls))
     Err _ =>
       propsReportEnginesPlain
+        leaf
         engines
         rawCoreM
         coreM
@@ -2379,6 +2794,7 @@ propsReportEnginesInProcess engines runtimeM rawCoreM coreM rawM modsM target ts
       match customPlansReachable planEnv plans
         [] =>
           propsReportEnginesPlain
+            leaf
             engines
             rawCoreM
             coreM
@@ -2393,8 +2809,15 @@ propsReportEnginesInProcess engines runtimeM rawCoreM coreM rawM modsM target ts
             index
         _ =>
           let validation =
-            validateHelperPlans planEnv runtimeM rawCoreM rawM plans
+            validateHelperPlans
+              planEnv
+              (helperElabDiags runtimeM rawCoreM rawM)
+              runtimeM
+              rawCoreM
+              rawM
+              plans
           runValidatedPropEngines
+            leaf
             engines
             validation
             target
@@ -2446,6 +2869,7 @@ propsReportEngines (EngInterp :: rest) stdlibDir runtimeM rawCoreM coreM rawM mo
       index
 propsReportEngines (EngNative :: rest) stdlibDir runtimeM rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
   propsReportEnginesInProcess
+      runNativePlannedPropRequests
       [EngNative]
       runtimeM
       rawCoreM
@@ -2495,24 +2919,26 @@ superviseEvalProps medaka target requests =
       workerRuntimeRows
         requests
         "could not start interpreter property worker: \{message}"
-    Ok (code, stdout, stderr) => match takeEvalPropBootstrap stdout
-      Err message =>
-        if code == 0 then
-          workerProtocolRows requests message
-        else
-          workerRuntimeRows requests (workerAbortDetail code stderr)
-      Ok (nonce, transcript) =>
-        match decodeEvalPropRows nonce requests transcript
-          Ok rows =>
-            if code == 0 then
-              rows
-            else
-              workerRuntimeRows requests (workerAbortDetail code stderr)
-          Err message =>
-            if code == 0 then
-              workerProtocolRows requests message
-            else
-              workerRuntimeRows requests (workerAbortDetail code stderr)
+    Ok (code, stdout, workerErr) =>
+      let stderr = forwardStageLines workerErr
+      match takeEvalPropBootstrap stdout
+        Err message =>
+          if code == 0 then
+            workerProtocolRows requests message
+          else
+            workerRuntimeRows requests (workerAbortDetail code stderr)
+        Ok (nonce, transcript) =>
+          match decodeEvalPropRows nonce requests transcript
+            Ok rows =>
+              if code == 0 then
+                rows
+              else
+                workerRuntimeRows requests (workerAbortDetail code stderr)
+            Err message =>
+              if code == 0 then
+                workerProtocolRows requests message
+              else
+                workerRuntimeRows requests (workerAbortDetail code stderr)
 
 workerAbortDetail : Int -> String -> String
 workerAbortDetail code stderr =
@@ -2609,44 +3035,44 @@ runEvalPropsWorkerSource target nonce requests runtimeSrc coreSrc stdlibDir tsrc
   let exempt = typecheckExempt target userDecls tsrc
   currentEvalFile := target
   if hasUseDecls userDecls then
-    let prepared = prepareMulti runtimeSrc coreSrc target roots exempt False []
+    let prepared =
+      prepareMulti runtimeSrc coreSrc target roots exempt False False []
     match prepared
       (Some message, _) => evalWorkerDie (typecheckGateFail target message)
       (None, work) =>
         let rows = withEvidencePreserved (_ =>
           runEvalRequestRows
             (forcePrepared runtimeSrc coreSrc work)
+            None
             target
             tsrc
             userDecls
             requests)
         emitEvalPropRows nonce rows
-  else match (if exempt then
-    None
   else
-    singleFileTypeErrors target tsrc runtimeSrc coreSrc)
-    Some message => evalWorkerDie (typecheckGateFail target message)
-    None =>
-      let rows = withEvidencePreserved (_ =>
-        runEvalRequestRows
-          (prepareSingle runtimeDecls coreDecls target roots userDecls)
-          target
-          tsrc
-          userDecls
-          requests)
-      emitEvalPropRows nonce rows
+    -- No gate here: the parent refused an ill-typed target before spawning
+    -- this worker (`driveAll`).
+    let rows = withEvidencePreserved (_ =>
+      let (pair, diags) =
+        prepareSingleDiags runtimeDecls coreDecls target roots userDecls
+      runEvalRequestRows pair (Some diags) target tsrc userDecls requests)
+    emitEvalPropRows nonce rows
 
+-- `held` is the diagnostics of the elaboration that built the pair, when that
+-- elaboration had the input a helper baseline needs (`helperElabDiags`); None
+-- makes helper validation drive its own baseline.
 runEvalRequestRows : TestPair ->
+  Option (List (String, TcDiag)) ->
   String ->
   String ->
   List Decl ->
   List PropRequest ->
   <IO> List PropResult
-runEvalRequestRows (TestPairErr message) _ _ _ requests =
+runEvalRequestRows (TestPairErr message) _ _ _ _ requests =
   workerRuntimeRows
     requests
     "interpreter property worker could not prepare properties: \{message}"
-runEvalRequestRows (TestPair runtimeM rawCoreM coreM rawM modsM) target tsrc userDecls requests =
+runEvalRequestRows (TestPair runtimeM rawCoreM coreM rawM modsM) held target tsrc userDecls requests =
   let root = rootPlanModuleId rawM target
   let modules = planModules rawCoreM coreM rawM modsM
   match (planPropRequestsTimed
@@ -2659,9 +3085,13 @@ runEvalRequestRows (TestPair runtimeM rawCoreM coreM rawM modsM) target tsrc use
       match customPlansReachable planEnv (preparedPlans rows)
         [] => runEvalPreparedRows planEnv [] rows tsrc coreM modsM
         _ =>
+          let baseline = match held
+            Some diags => diags
+            None => helperElabDiags runtimeM rawCoreM rawM
           runValidatedEvalRequests
             (validateHelperPlans
               planEnv
+              baseline
               runtimeM
               rawCoreM
               rawM
@@ -2751,7 +3181,8 @@ runEvalPreparedRows env helpers rows tsrc coreM modsM =
     (coreM ++ flatMap snd modsM)
 
 -- The structural-only path keeps the established engine behavior unchanged.
-propsReportEnginesPlain : List Engine ->
+propsReportEnginesPlain : NativePropLeaf ->
+  List Engine ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
@@ -2764,8 +3195,8 @@ propsReportEnginesPlain : List Engine ->
   String ->
   PinIndex ->
   <IO> List PropResult
-propsReportEnginesPlain [] _ _ _ _ _ _ _ _ _ _ _ = []
-propsReportEnginesPlain (EngInterp :: rest) rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+propsReportEnginesPlain _ [] _ _ _ _ _ _ _ _ _ _ _ = []
+propsReportEnginesPlain leaf (EngInterp :: rest) rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
   runAllPlannedPropRequestsResults
       (rootPlanModuleId rawM target)
       (planModules rawCoreM coreM rawM modsM)
@@ -2774,6 +3205,7 @@ propsReportEnginesPlain (EngInterp :: rest) rawCoreM coreM rawM modsM target tsr
       (evalModulesRootEvalEnvWith (testCapableExterns ()) coreM modsM)
       (elaboratedRootProps modsM userDecls)
     ++ propsReportEnginesPlain
+      leaf
       rest
       rawCoreM
       coreM
@@ -2786,13 +3218,14 @@ propsReportEnginesPlain (EngInterp :: rest) rawCoreM coreM rawM modsM target tsr
       filterOpt
       file
       index
-propsReportEnginesPlain (EngNative :: rest) rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
-  runNativePlannedPropRequests
+propsReportEnginesPlain leaf (EngNative :: rest) rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+  leaf
       target
       tsrc
       (planModules rawCoreM coreM rawM modsM)
       (propRequestsFor index file "native" userDecls cases filterOpt)
     ++ propsReportEnginesPlain
+      leaf
       rest
       rawCoreM
       coreM
@@ -2821,15 +3254,24 @@ prependPlans (plan :: rest) acc = prependPlans rest (plan :: acc)
 
 -- Baseline diagnostics are keyed by their complete typecheck goal.  A helper
 -- pass is allowed to add only diagnostics located in a synthetic helper body.
+-- `baseline` is the program's own elaboration diagnostics, as
+-- `helperElabDiags` computes them.
 validateHelperPlans : PlanEnv ->
+  List (String, TcDiag) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   List GenPlan ->
   HelperValidation
-validateHelperPlans planEnv runtimeM rawCoreM rawM plans =
-  let baseline = helperDiagIndex (helperElabDiags runtimeM rawCoreM rawM)
-  validateHelperPlansGo planEnv runtimeM rawCoreM rawM plans baseline omEmpty
+validateHelperPlans planEnv baseline runtimeM rawCoreM rawM plans =
+  validateHelperPlansGo
+    planEnv
+    runtimeM
+    rawCoreM
+    rawM
+    plans
+    (helperDiagIndex baseline)
+    omEmpty
 
 validateHelperPlansGo : PlanEnv ->
   List Decl ->
@@ -2845,11 +3287,8 @@ validateHelperPlansGo planEnv runtimeM rawCoreM rawM plans baseline rejected =
     [] =>
       HelperValidation (helperPair runtimeM rawCoreM rawM []) [] rejected None
     _ =>
-      let candidate = helperPair runtimeM rawCoreM rawM decls
-      let delta =
-        helperDiagDelta
-          baseline
-          (helperElabDiagsWith runtimeM rawCoreM rawM decls)
+      let (candidate, diags) = helperElaboration runtimeM rawCoreM rawM decls
+      let delta = helperDiagDelta baseline diags
       let helperFiles = helperFileIndex helpers 0 omEmpty
       let (bad, unexpected) = helperDiagFailures helperFiles delta omEmpty False
       if omKeys bad == [] then
@@ -2880,33 +3319,32 @@ helperPair : List Decl ->
   List Decl ->
   TestPair
 helperPair runtimeM rawCoreM rawM decls =
+  fst (helperElaboration runtimeM rawCoreM rawM decls)
+
+-- One drive over the program with [decls] injected into its last module: the
+-- trees and the diagnostics of the same elaboration, whose evidence table it
+-- leaves installed for the evaluation of those trees.
+helperElaboration : List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List Decl ->
+  (TestPair, List (String, TcDiag))
+helperElaboration runtimeM rawCoreM rawM decls =
   let injected = injectIntoLast decls rawM
-  match elaborateModules runtimeM rawCoreM injected
-    (coreE, modulesE, _, _, _, _) =>
-      let (coreM, modsM) = mangleCtorCollisionsPair (coreE, modulesE)
-      TestPair runtimeM rawCoreM coreM injected modsM
+  let ((coreM, modsM), diags) =
+    elaborateModulesMangled runtimeM rawCoreM injected
+  (TestPair runtimeM rawCoreM coreM injected modsM, diags)
 
 -- The program's own elaboration diagnostics: the baseline a helper pass is
--- measured against.
+-- measured against.  A diagnostics-only drive, so it restores the evidence
+-- table the trees evaluated after it were elaborated under.
 export
 helperElabDiags : List Decl ->
   List Decl ->
   List (String, List Decl) ->
   List (String, TcDiag)
 helperElabDiags runtimeM rawCoreM rawM =
-  helperElabDiagsWith runtimeM rawCoreM rawM []
-
--- A diagnostics-only drive.  The trees evaluated after it are the candidate
--- `helperPair` elaborated before it, so it leaves that drive's evidence table
--- installed.
-helperElabDiagsWith : List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  List Decl ->
-  List (String, TcDiag)
-helperElabDiagsWith runtimeM rawCoreM rawM decls =
-  match (withEvidencePreserved (_ =>
-    elaborateModules runtimeM rawCoreM (injectIntoLast decls rawM)))
+  match withEvidencePreserved (_ => elaborateModules runtimeM rawCoreM rawM)
     (_, _, perModule, residual, _, _) =>
       residual ++ perModuleErrors perModule []
 
@@ -2985,7 +3423,8 @@ plansHaveNoRejectedCarrier env rejected plans =
 customRejected : OrdMap String -> CustomPlan -> Bool
 customRejected rejected (CustomPlan _ _ word) = omHasKey word rejected
 
-runValidatedPropEngines : List Engine ->
+runValidatedPropEngines : NativePropLeaf ->
+  List Engine ->
   HelperValidation ->
   String ->
   String ->
@@ -2995,11 +3434,12 @@ runValidatedPropEngines : List Engine ->
   String ->
   PinIndex ->
   <IO> List PropResult
-runValidatedPropEngines [] _ _ _ _ _ _ _ _ = []
-runValidatedPropEngines engines (HelperValidation pair helpers rejected protocol) target tsrc userDecls cases filterOpt file index =
+runValidatedPropEngines _ [] _ _ _ _ _ _ _ _ = []
+runValidatedPropEngines leaf engines (HelperValidation pair helpers rejected protocol) target tsrc userDecls cases filterOpt file index =
   match protocol
     Some message =>
       runProtocolHelperEngines
+        leaf
         engines
         pair
         message
@@ -3015,6 +3455,7 @@ runValidatedPropEngines engines (HelperValidation pair helpers rejected protocol
         protocolPropResults engines message userDecls cases filterOpt
       TestPair _runtimeM rawCoreM coreM rawM modsM =>
         runValidatedPropEnginesGo
+          leaf
           engines
           helpers
           rejected
@@ -3033,7 +3474,8 @@ runValidatedPropEngines engines (HelperValidation pair helpers rejected protocol
 -- If elaborating a generated bridge changes diagnostics outside its synthetic
 -- source location, only properties which need a bridge become protocol rows.
 -- Structural properties continue against the original graph.
-runProtocolHelperEngines : List Engine ->
+runProtocolHelperEngines : NativePropLeaf ->
+  List Engine ->
   TestPair ->
   String ->
   String ->
@@ -3044,11 +3486,12 @@ runProtocolHelperEngines : List Engine ->
   String ->
   PinIndex ->
   <IO> List PropResult
-runProtocolHelperEngines [] _ _ _ _ _ _ _ _ _ = []
-runProtocolHelperEngines engines (TestPairErr err) _ _ _ userDecls cases filterOpt _ _ =
+runProtocolHelperEngines _ [] _ _ _ _ _ _ _ _ _ = []
+runProtocolHelperEngines _ engines (TestPairErr err) _ _ _ userDecls cases filterOpt _ _ =
   protocolPropResults engines err userDecls cases filterOpt
-runProtocolHelperEngines engines (TestPair _runtimeM rawCoreM coreM rawM modsM) message target tsrc userDecls cases filterOpt file index =
+runProtocolHelperEngines leaf engines (TestPair _runtimeM rawCoreM coreM rawM modsM) message target tsrc userDecls cases filterOpt file index =
   runProtocolHelperEnginesGo
+    leaf
     engines
     message
     rawCoreM
@@ -3063,7 +3506,8 @@ runProtocolHelperEngines engines (TestPair _runtimeM rawCoreM coreM rawM modsM) 
     file
     index
 
-runProtocolHelperEnginesGo : List Engine ->
+runProtocolHelperEnginesGo : NativePropLeaf ->
+  List Engine ->
   String ->
   List Decl ->
   List Decl ->
@@ -3077,14 +3521,15 @@ runProtocolHelperEnginesGo : List Engine ->
   String ->
   PinIndex ->
   <IO> List PropResult
-runProtocolHelperEnginesGo [] _ _ _ _ _ _ _ _ _ _ _ _ = []
-runProtocolHelperEnginesGo (engine :: rest) message rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+runProtocolHelperEnginesGo _ [] _ _ _ _ _ _ _ _ _ _ _ _ = []
+runProtocolHelperEnginesGo leaf (engine :: rest) message rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
   let engineText = engineName engine
   let requests = propRequestsFor index file engineText userDecls cases filterOpt
   let root = rootPlanModuleId rawM target
   let modules = planModules rawCoreM coreM rawM modsM
   let next =
     runProtocolHelperEnginesGo
+      leaf
       rest
       message
       rawCoreM
@@ -3116,10 +3561,11 @@ runProtocolHelperEnginesGo (engine :: rest) message rawCoreM coreM rawM modsM ta
             (propLineTests tsrc)
             (evalModulesRootEvalEnvWith (testCapableExterns ()) coreM modsM)
             (coreM ++ flatMap snd modsM)
-        EngNative => runPreparedNativeRows rows target tsrc modules
+        EngNative => runPreparedNativeRows leaf rows target tsrc modules
       here ++ next
 
-runValidatedPropEnginesGo : List Engine ->
+runValidatedPropEnginesGo : NativePropLeaf ->
+  List Engine ->
   List PropHelper ->
   OrdMap String ->
   List Decl ->
@@ -3134,9 +3580,9 @@ runValidatedPropEnginesGo : List Engine ->
   String ->
   PinIndex ->
   <IO> List PropResult
-runValidatedPropEnginesGo [] _helpers _rejected _rawCoreM _coreM _rawM _modsM _target _tsrc _userDecls _cases _filterOpt _file _index =
+runValidatedPropEnginesGo _ [] _helpers _rejected _rawCoreM _coreM _rawM _modsM _target _tsrc _userDecls _cases _filterOpt _file _index =
   []
-runValidatedPropEnginesGo (engine :: rest) helpers rejected rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+runValidatedPropEnginesGo leaf (engine :: rest) helpers rejected rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
   let engineText = engineName engine
   let requests = propRequestsFor index file engineText userDecls cases filterOpt
   let root = rootPlanModuleId rawM target
@@ -3149,6 +3595,7 @@ runValidatedPropEnginesGo (engine :: rest) helpers rejected rawCoreM coreM rawM 
     Err err =>
       preparedResults (map (preparedPlanError engineText err) requests)
         ++ runValidatedPropEnginesGo
+          leaf
           rest
           helpers
           rejected
@@ -3174,9 +3621,10 @@ runValidatedPropEnginesGo (engine :: rest) helpers rejected rawCoreM coreM rawM 
             (propLineTests tsrc)
             (evalModulesRootEvalEnvWith (testCapableExterns ()) coreM modsM)
             (coreM ++ flatMap snd modsM)
-        EngNative => runPreparedNativeRows rows target tsrc modules
+        EngNative => runPreparedNativeRows leaf rows target tsrc modules
       here
         ++ runValidatedPropEnginesGo
+          leaf
           rest
           helpers
           rejected
@@ -3192,15 +3640,16 @@ runValidatedPropEnginesGo (engine :: rest) helpers rejected rawCoreM coreM rawM 
           file
           index
 
-runPreparedNativeRows : List PreparedPropRequest ->
+runPreparedNativeRows : NativePropLeaf ->
+  List PreparedPropRequest ->
   String ->
   String ->
   List PlanModule ->
   <IO> List PropResult
-runPreparedNativeRows rows target tsrc modules =
+runPreparedNativeRows leaf rows target tsrc modules =
   mergeNativePreparedRows
     rows
-    (runNativePlannedPropRequests target tsrc modules (preparedRequests rows))
+    (leaf target tsrc modules (preparedRequests rows))
 
 preparedRequests : List PreparedPropRequest -> List PropRequest
 preparedRequests [] = []
@@ -3458,6 +3907,7 @@ pinCasesOr fallback pin = match pin.pinCases
 -- the disagreement a second engine exists to expose.
 testDeclsReportPinned : List Engine ->
   TestPair ->
+  Option NativeArmResults ->
   List Decl ->
   String ->
   String ->
@@ -3466,12 +3916,13 @@ testDeclsReportPinned : List Engine ->
   String ->
   PinIndex ->
   <IO> List (Engine, String, Int, ExResult)
-testDeclsReportPinned engines pair runtimeDecls target tsrc userDecls filterOpt file index
+testDeclsReportPinned engines pair native runtimeDecls target tsrc userDecls filterOpt file index
   | not (hasTests userDecls) = []
   | otherwise =
     testDeclsReportEngines
       engines
       pair
+      native
       runtimeDecls
       target
       tsrc
@@ -3482,6 +3933,7 @@ testDeclsReportPinned engines pair runtimeDecls target tsrc userDecls filterOpt 
 
 testDeclsReportEngines : List Engine ->
   TestPair ->
+  Option NativeArmResults ->
   List Decl ->
   String ->
   String ->
@@ -3490,13 +3942,14 @@ testDeclsReportEngines : List Engine ->
   String ->
   PinIndex ->
   <IO> List (Engine, String, Int, ExResult)
-testDeclsReportEngines [] _ _ _ _ _ _ _ _ = []
-testDeclsReportEngines (e :: rest) pair runtimeDecls target tsrc userDecls filterOpt file index =
+testDeclsReportEngines [] _ _ _ _ _ _ _ _ _ = []
+testDeclsReportEngines (e :: rest) pair native runtimeDecls target tsrc userDecls filterOpt file index =
   map
       (t => tagWithEngine e t)
       (testDeclsReportOn
         e
         pair
+        native
         runtimeDecls
         target
         tsrc
@@ -3507,6 +3960,7 @@ testDeclsReportEngines (e :: rest) pair runtimeDecls target tsrc userDecls filte
     ++ testDeclsReportEngines
       rest
       pair
+      native
       runtimeDecls
       target
       tsrc
@@ -3522,6 +3976,7 @@ tagWithEngine e (name, line, result) = (e, name, line, result)
 
 testDeclsReportOn : Engine ->
   TestPair ->
+  Option NativeArmResults ->
   List Decl ->
   String ->
   String ->
@@ -3530,24 +3985,24 @@ testDeclsReportOn : Engine ->
   String ->
   PinIndex ->
   <IO> List (String, Int, ExResult)
-testDeclsReportOn EngInterp (TestPairErr _) _runtimeDecls _target _tsrc _userDecls _filterOpt _file _index =
+testDeclsReportOn EngInterp (TestPairErr _) _native _runtimeDecls _target _tsrc _userDecls _filterOpt _file _index =
   []
-testDeclsReportOn EngInterp (TestPair _runtimeM _rawCoreM coreM _rawM modsM) runtimeDecls target tsrc userDecls filterOpt _file _index =
+testDeclsReportOn EngInterp (TestPair _runtimeM _rawCoreM coreM _rawM modsM) _native runtimeDecls target tsrc userDecls filterOpt _file _index =
   gatedTestsCollect
     target
     (runtimeDecls ++ coreM ++ flatMap snd modsM)
     (evalModulesRootEvalEnvWith (testCapableExterns ()) coreM modsM)
     (rootTestsOf filterOpt tsrc modsM userDecls)
-testDeclsReportOn EngNative _pair _runtimeDecls target tsrc _userDecls filterOpt file index =
+testDeclsReportOn EngNative _pair native _runtimeDecls target tsrc _userDecls filterOpt file index =
   let tests = filterTestsByName filterOpt (nativeRawTests tsrc)
-  let ordinary = filterList (notExpectedNativeError index file) tests
-  nativeTestsWithPinnedErrors
-    target
-    tsrc
-    index
-    file
-    tests
-    (runNativeTests target tsrc ordinary)
+  match native
+    Some (NativeArmResults _ _ ordinary pinned) =>
+      nativeTestsWithPinnedErrors index file tests ordinary pinned
+    None =>
+      let (ordinary, pinned) = nativeTestArms index file tests
+      let ordinaryResults = runNativeTests target tsrc ordinary
+      let pinnedResults = map (t => runNativeTests target tsrc [t]) pinned
+      nativeTestsWithPinnedErrors index file tests ordinaryResults pinnedResults
 
 notExpectedNativeError : PinIndex -> String -> (String, Int, Expr) -> Bool
 notExpectedNativeError index file (name, _, _) =
@@ -3561,35 +4016,49 @@ isExpectedNativeError index file name =
       _ => False
     None => False
 
--- An expected native abort receives its own probe, while all ordinary tests
--- remain one compiled batch. Recombine by source tuple so later ordinary tests
--- cannot vanish behind the known abort and duplicate unpinned names stay ordered.
-nativeTestsWithPinnedErrors : String ->
+-- The ordinary tests, which run as one batch, and the tests pinned as an
+-- expected native error, each of which runs on its own so that its abort
+-- cannot end the batch.
+nativeTestArms : PinIndex ->
   String ->
-  PinIndex ->
+  List (String, Int, Expr) ->
+  (List (String, Int, Expr), List (String, Int, Expr))
+nativeTestArms index file tests = (
+  filterList (notExpectedNativeError index file) tests,
+  filterList (t => isExpectedNativeError index file (fst3 t)) tests,
+)
+
+-- Recombine the batch's results and each pinned test's own by source tuple, so
+-- later ordinary tests cannot vanish behind the known abort and duplicate
+-- unpinned names stay ordered.
+nativeTestsWithPinnedErrors : PinIndex ->
   String ->
   List (String, Int, Expr) ->
   List ExResult ->
-  <IO> List (String, Int, ExResult)
-nativeTestsWithPinnedErrors _ _ _ _ [] _ = []
-nativeTestsWithPinnedErrors target tsrc index file ((selected@(name, line, _)) :: rest) ordinary =
-  if isExpectedNativeError
-    index
-    file
-    name then match runNativeTests target tsrc [selected]
-    [result] =>
+  List (List ExResult) ->
+  List (String, Int, ExResult)
+nativeTestsWithPinnedErrors _ _ [] _ _ = []
+nativeTestsWithPinnedErrors index file ((name, line, _) :: rest) ordinary pinned =
+  if isExpectedNativeError index file name then match pinned
+    [result] :: pinnedRest =>
       (name, line, result)
-        :: nativeTestsWithPinnedErrors target tsrc index file rest ordinary
-    _ =>
-      (name, line, Errored "native test runner returned no selected result")
-        :: nativeTestsWithPinnedErrors target tsrc index file rest ordinary
+        :: nativeTestsWithPinnedErrors index file rest ordinary pinnedRest
+    _ :: pinnedRest =>
+      (name, line, noSelectedResult)
+        :: nativeTestsWithPinnedErrors index file rest ordinary pinnedRest
+    [] =>
+      (name, line, noSelectedResult)
+        :: nativeTestsWithPinnedErrors index file rest ordinary []
   else match ordinary
     [] =>
-      (name, line, Errored "native test runner returned no selected result")
-        :: nativeTestsWithPinnedErrors target tsrc index file rest []
+      (name, line, noSelectedResult)
+        :: nativeTestsWithPinnedErrors index file rest [] pinned
     result :: ordinaryRest =>
       (name, line, result)
-        :: nativeTestsWithPinnedErrors target tsrc index file rest ordinaryRest
+        :: nativeTestsWithPinnedErrors index file rest ordinaryRest pinned
+
+noSelectedResult : ExResult
+noSelectedResult = Errored "native test runner returned no selected result"
 
 -- The `--json` twin of `gatedReportTests`: the capability refusal reaches this
 -- surface as one `Errored` per test carrying the same message, so a machine

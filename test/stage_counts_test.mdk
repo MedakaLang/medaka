@@ -317,12 +317,37 @@ driveProbes dir = [
   replRows dir,
   -- the test engine drives the doctest-injected program as a second graph
   probeRows "test_doc_eval" ["test", "--engines", "eval", fixture "doc.mdk"],
-  probeRows "test_docimp_eval" [
-    "test",
-    "--engines",
-    "eval",
-    fixture "docimp.mdk",
-  ],
+  probeRows
+    "test_docimp_eval"
+    [
+      "test",
+      "--engines",
+      "eval",
+      fixture "docimp.mdk",
+    ],
+  -- #4156 eval props worker re-drives its graph
+  probeRows
+    "test_propsdoc_eval"
+    [
+      "test",
+      "--engines",
+      "eval",
+      fixture "props_doc.mdk",
+    ],
+  -- #4155 custom-Arbitrary validation elaborates the same input twice
+  probeRows
+    "test_arb_eval"
+    [
+      "test",
+      "--engines",
+      "eval",
+      fixture "arbitrary.mdk",
+    ],
+  -- #3902 the parent drives a graph that only the native child reads
+  probeRows "test_tonly_native" ["test", fixture "t_only.mdk"],
+  -- #2732 the parent's gate drive, which the child's strict refusal cannot
+  -- replace
+  probeRows "test_doc_native" ["test", fixture "doc.mdk"],
 ]
 
 test "stage_counts: per-verb stage counts match stage_counts.golden" = withScratchDir

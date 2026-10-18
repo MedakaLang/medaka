@@ -68,6 +68,16 @@ import support.util.{joinNl, reverseL, splitNl, startsWith, stringTrim}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert}
 import string.{replaceAll, toInt}
 
+-- One native arm's part of a merged probe (`tools/native_probe.mdk`): the
+-- sentinel prefix its transcript is read under, its import lines, its
+-- top-level bindings, and the body that prints the transcript.
+public export data Section = Section {
+  secPrefix : String,
+  secImports : List String,
+  secDecls : List String,
+  secEntry : List String,
+}
+
 -- The tag of a sentinel line under `prefix`, or None for an ordinary output
 -- line.
 export

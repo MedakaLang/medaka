@@ -11,9 +11,12 @@ import test_process.{
   medakaBin, medakaRoot, underRoot, boundedVerbSeconds, withScratchDir
 }
 import test.{
-  Expectation, expectAll, expectEach, expectTextContainsAll, fail, pass
+  Expectation, expectAll, expectEach, expectEqual, expectTextContainsAll, fail,
+  pass
 }
+import compiler_cli_test_support.{expectVerbExitStartsWithAndContains}
 import regex as R
+import json as J
 
 -- Best-effort prebuild of the prelude object (cost control only; a failed build
 -- just falls back to inline compilation, as the script did).  No runtime
@@ -297,6 +300,87 @@ strictProbes dir = match writeFile "\{dir}/defaulted.mdk" defaultedSrc
 test "strict native probe: defaulted body passes, ill-typed body fails by name, eval keeps the exemption (checks 8-10)" =
   withScratchDir strictProbes
 
+-- ── parent-side typecheck refusal and the exempt probe, per engine ────────────
+
+-- A doctest-bearing (so never exempt) target whose body is ill-typed.
+gatedIlltypedSrc : String
+gatedIlltypedSrc = unlines [
+  "-- > double 2",
+  "-- 4",
+  "export",
+  "double : Int -> Int",
+  "double x = x * 2",
+  "",
+  "bad : Int",
+  "bad = double \"x\"",
+  "",
+]
+
+-- A tests-only, doctest-free target outside the vehicle paths: exempt.
+exemptIlltypedSrc : String
+exemptIlltypedSrc = unlines [
+  "import test.{expectEqual}",
+  "",
+  "double : Int -> Int",
+  "double x = x * 2",
+  "",
+  "bad : Int",
+  "bad = double \"x\"",
+  "",
+  "test \"double one\" =",
+  "  expectEqual (double 1) 2",
+  "",
+]
+
+-- The parent refuses a non-exempt ill-typed target before any engine runs.
+gatedRefusalRow : String -> String -> <Exec, IO> Expectation
+gatedRefusalRow engine target =
+  expectVerbExitStartsWithAndContains
+    "test"
+    ["--engines", engine, target]
+    1
+    "type error in \{target}; `medaka test` requires it to `medaka check` first:"
+    ["b1_doc.mdk:8:13: type mismatch: Int vs String"]
+
+exemptNativeRow : String -> <Exec, IO> Expectation
+exemptNativeRow target =
+  expectVerbExitStartsWithAndContains
+    "test"
+    ["--engines", "native", target]
+    1
+    ""
+    [
+      "native test runner: could not build \{target} natively",
+      "type mismatch: Int vs String",
+    ]
+
+exemptEvalRow : String -> <Exec, IO> Expectation
+exemptEvalRow target =
+  expectVerbExitStartsWithAndContains
+    "test"
+    ["--engines", "eval", target]
+    0
+    ""
+    ["1/1 passed"]
+
+refusalProbes : String -> <Exec, IO, FileRead, FileWrite> Expectation
+refusalProbes dir =
+  let gated = "\{dir}/b1_doc.mdk"
+  let exempt = "\{dir}/b3_exempt.mdk"
+  match writeFile gated gatedIlltypedSrc
+    Err e => fail "could not write b1_doc.mdk: \{e}"
+    Ok _ => match writeFile exempt exemptIlltypedSrc
+      Err e => fail "could not write b3_exempt.mdk: \{e}"
+      Ok _ => expectEach [
+        ("non-exempt refused, native", gatedRefusalRow "native" gated),
+        ("non-exempt refused, eval", gatedRefusalRow "eval" gated),
+        ("exempt probe fails to build, native", exemptNativeRow exempt),
+        ("exempt runs untyped, eval", exemptEvalRow exempt),
+      ]
+
+test "ill-typed targets: non-exempt refused by the parent under either engine; exempt keeps the child's row and the eval pass" =
+  withScratchDir refusalProbes
+
 -- ── check 11: native_test_abort.mdk (tests 2-4 are errors, never dropped) ─────
 
 abortRow : String -> <Exec, IO, FileRead> Expectation
@@ -512,24 +596,133 @@ envProbeRow : String -> <Exec, IO, FileRead, FileWrite> Expectation
 envProbeRow dir =
   match writeFile "\{dir}/env_probe.mdk" (envProbeSrc "\{medakaRoot}/medaka")
     Err e => fail "could not write env_probe.mdk: \{e}"
-    Ok _ =>
-      match (boundedVerbSeconds 120 "sh" [
-        "-c",
-        unsetMedakaScript,
-        "medaka",
-        medakaRoot,
-        medakaBin,
-        "test",
-        "--native",
-        "\{dir}/env_probe.mdk",
-      ])
-        Err e => fail "env_probe.mdk: could not spawn: \{e}"
-        Ok (code, out, err) =>
-          if code /= 0 then
-            fail
-              "env_probe.mdk: 'medaka test --native' exited \{intToString code} (expected 0): \{out ++ err}"
-          else
-            requireText "env_probe.mdk" (out ++ err) "1/1 passed"
+    Ok _ => match boundedVerbSeconds 120 "sh" [
+      "-c",
+      unsetMedakaScript,
+      "medaka",
+      medakaRoot,
+      medakaBin,
+      "test",
+      "--native",
+      "\{dir}/env_probe.mdk",
+    ]
+      Err e => fail "env_probe.mdk: could not spawn: \{e}"
+      Ok (code, out, err) =>
+        if code /= 0 then
+          fail
+            "env_probe.mdk: 'medaka test --native' exited \{intToString code} (expected 0): \{out ++ err}"
+        else
+          requireText "env_probe.mdk" (out ++ err) "1/1 passed"
 
 test "native doctest probe: MEDAKA reaches the probe as the test probes set it (check 19)" =
   withScratchDir envProbeRow
+
+-- ── the merged native probe falls back to one probe per arm ───────────────────
+-- `compiler/tools/native_probe.mdk` builds every native arm of a file into one
+-- probe.  When that probe cannot build, or a section of it dies before printing
+-- anything, the arm runs on its own probe, whose path (`dt_<file>`) its error
+-- detail names; the other arms are graded exactly as on their own probes.
+
+-- The doctest example does not type-check, so the merged probe cannot build;
+-- the test and the property still pass on their own probes.
+mergedBuildFailSrc : String
+mergedBuildFailSrc =
+  "import test.{expectEqual}\n\n-- > double \"x\"\n-- 0\nexport\ndouble : Int -> Int\ndouble x = x * 2\n\ntest \"double one\" =\n  expectEqual (double 1) 2\n\nprop \"double is even\" (n : Int) =\n  double n % 2 == 0\n"
+
+-- A smoke example that panics is a nullary binding the native backend forces
+-- before `main`, so every section of the merged probe dies at startup; the
+-- tests still pass on their own probe.
+mergedStartupSrc : String
+mergedStartupSrc =
+  "import test.{expectEqual}\n\n-- > double 2\n-- 4\n-- > panic \"startup boom\"\nexport\ndouble : Int -> Int\ndouble x = x * 2\n\ntest \"double one\" =\n  expectEqual (double 1) 2\n"
+
+-- One line per graded row of a `--json` report: the phase, the row's name (a
+-- doctest's line) and its status.
+reportRows : J.Json -> List String
+reportRows report =
+  map
+      (row => "doctest \{jsonText "line" row} \{jsonText "status" row}")
+      (jsonRowsAt ["doctests", "examples"] report)
+    ++ map
+      (row => "prop \{jsonText "name" row} \{jsonText "status" row}")
+      (jsonRowsAt ["properties"] report)
+    ++ map
+      (row => "test \{jsonText "name" row} \{jsonText "status" row}")
+      (jsonRowsAt ["tests"] report)
+
+jsonRowsAt : List String -> J.Json -> List J.Json
+jsonRowsAt [] value = match J.asArray value
+  Some rows => toList rows
+  None => []
+jsonRowsAt (key :: rest) value = match J.get key value
+  Some inner => jsonRowsAt rest inner
+  None => []
+
+jsonText : String -> J.Json -> String
+jsonText key row = match J.get key row
+  Some (J.JString text) => text
+  Some (J.JInt n) => intToString n
+  _ => "<missing \{key}>"
+
+mergedFallbackRow : String ->
+  String ->
+  String ->
+  List String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+mergedFallbackRow dir name src expected =
+  let path = "\{dir}/\{name}.mdk"
+  match writeFile path src
+    Err e => fail "could not write \{name}.mdk: \{e}"
+    Ok _ => expectAll [
+      expectVerbExitStartsWithAndContains
+        "test"
+        ["--json", path]
+        1
+        ""
+        ["/dt_\{name}.mdk:"],
+      mergedFallbackRows name path expected,
+    ]
+
+mergedFallbackRows : String ->
+  String ->
+  List String ->
+  <Exec, IO, FileRead> Expectation
+mergedFallbackRows name path expected =
+  match runVerb 300 ["test", "--json", path]
+    Err e => fail "\{name}.mdk: could not spawn: \{e}"
+    Ok (_, out, _) => match J.parse out
+      Err e => fail "\{name}.mdk: the --json report did not parse: \{e}"
+      Ok report => expectEqual expected (reportRows report)
+
+test "merged native probe: a build failure falls back to one probe per arm" = withScratchDir
+  (dir => mergedFallbackRow dir "merged_build_fail" mergedBuildFailSrc [
+    "doctest 3 error", "prop double is even pass", "test double one pass"
+  ])
+
+test "merged native probe: a section that dies at startup reruns on its own probe" = withScratchDir
+  (dir => mergedFallbackRow dir "merged_startup" mergedStartupSrc [
+    "doctest 3 error", "doctest 5 error", "test double one pass"
+  ])
+
+-- A smoke example (no expected block) is a binding the native backend forces at
+-- startup.  Its side effect must run once, not once per section of a merged
+-- probe, so a file with one keeps a probe per arm.
+smokeSideEffectSrc : String -> String
+smokeSideEffectSrc log =
+  "import test.{expectEqual}\n\n-- > appendFile \"\{log}\" \"x\"\n-- > double 2\n-- 4\nexport\ndouble : Int -> Int\ndouble x = x * 2\n\ntest \"log written once\" =\n  expectEqual (readFile \"\{log}\") (Ok \"x\")\n\nprop \"double is even\" (n : Int) =\n  double n % 2 == 0\n"
+
+smokeSideEffectRow : String -> <Exec, IO, FileRead, FileWrite> Expectation
+smokeSideEffectRow dir =
+  let path = "\{dir}/smoke_side.mdk"
+  match writeFile path (smokeSideEffectSrc "\{dir}/smoke_side.log")
+    Err e => fail "could not write smoke_side.mdk: \{e}"
+    Ok _ =>
+      expectVerbExitStartsWithAndContains
+        "test"
+        ["--engines", "native", path]
+        0
+        ""
+        ["2/2 passed", "[native] ... OK", "1/1 passed"]
+
+test "merged native probe: a smoke example's side effect runs once" =
+  withScratchDir smokeSideEffectRow

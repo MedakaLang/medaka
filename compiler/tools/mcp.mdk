@@ -44,6 +44,7 @@ import driver.diagnostics.{
 }
 import tools.lsp.{
   typeAtPoint,
+  typeAtPoints,
   documentSymbols,
   definitionResult,
   referencesResult,
@@ -120,6 +121,7 @@ import tools.test_pins_report.{
   knownRedCountProps,
 }
 import support.util.{joinWith}
+import list.{zipWith}
 import regex.{Regex, Match, mustCompile, findAll}
 
 -- ── protocol / server identity ──────────────────────────────────────────────
@@ -730,31 +732,24 @@ typeAtManyCols : String ->
   List Int ->
   <IO> Json
 typeAtManyCols runtimeSrc coreSrc path src line symbol cols =
-  let header = stringConcat [
-    "'",
-    symbol,
-    "' is ambiguous on line ",
-    intToString line,
-    " — ",
-    intToString (length cols),
-    " matches:",
-  ]
-  let bodies = typeAtColLines runtimeSrc coreSrc path src line cols
+  let header = stringConcat
+    [
+      "'",
+      symbol,
+      "' is ambiguous on line ",
+      intToString line,
+      " — ",
+      intToString (length cols),
+      " matches:",
+    ]
+  -- Every match is answered from one analysis of the file.
+  let answers = typeAtPoints runtimeSrc coreSrc path src line cols
+  let bodies = zipWith typeAtColLine cols answers
   toolTextResult (joinWith "\n" (header :: bodies)) False
 
-typeAtColLines : String ->
-  String ->
-  String ->
-  String ->
-  Int ->
-  List Int ->
-  <IO> List String
-typeAtColLines _runtimeSrc _coreSrc _path _src _line [] = []
-typeAtColLines runtimeSrc coreSrc path src line (col :: rest) =
-  let here = match typeAtPoint runtimeSrc coreSrc path src line col
-    Some ty => stringConcat ["  col ", intToString col, ": ", ty]
-    None => stringConcat ["  col ", intToString col, ": no symbol"]
-  here :: typeAtColLines runtimeSrc coreSrc path src line rest
+typeAtColLine : Int -> Option String -> String
+typeAtColLine col (Some ty) = stringConcat ["  col ", intToString col, ": ", ty]
+typeAtColLine col None = stringConcat ["  col ", intToString col, ": no symbol"]
 
 -- ── medaka_symbols tool ───────────────────────────────────────────────────────
 

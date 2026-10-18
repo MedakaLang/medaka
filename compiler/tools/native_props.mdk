@@ -19,10 +19,10 @@ import support.util.{
 }
 import string.{toInt}
 import tools.probe_transcript.{
-  Chunk(..), chunksOf, decodeValue, endTag, firstNonEmptyLine, mintNonce,
-  freshProbeNonce, noncedPrefix, probeNameNonce, renameUserMain, runtimeAlias,
-  runtimeDependencyName, runtimeDependencyPrefix, sentinelLine, startTag,
-  tagsInOrder, valuePrintExprWith
+  Chunk(..), Section(..), chunksOf, decodeValue, endTag, firstNonEmptyLine,
+  mintNonce, freshProbeNonce, noncedPrefix, probeNameNonce, renameUserMain,
+  runtimeAlias, runtimeDependencyName, runtimeDependencyPrefix, sentinelLine,
+  startTag, tagsInOrder, valuePrintExprWith
 }
 import tools.printer.{exprToString, ppTy}
 import tools.prop_plan.{
@@ -68,29 +68,102 @@ runNativePlannedPropRequests : String ->
   List PropRequest ->
   <IO> List PropResult
 runNativePlannedPropRequests target tsrc modules requests =
+  runNativePropPlan
+    target
+    tsrc
+    modules
+    (planNativePropRequests tsrc modules requests)
+
+-- The planning half of `runNativePlannedPropRequests`: either every requested
+-- result is already decided (no probe is needed), or the planned laws that a
+-- probe must run beside the outcomes their rows are merged into.
+export data NativePropPlan =
+  | NativePropsSettled (List PropResult)
+  | NativePropsToRun PlanEnv (List NativePlanOutcome) (List NativePlanOutcome)
+
+export
+planNativePropRequests : String ->
+  List PlanModule ->
+  List PropRequest ->
+  NativePropPlan
+planNativePropRequests tsrc modules requests =
   let props = filterProps (desugarProps tsrc)
   match requestIndex requests omEmpty
-    Err duplicate => nativeProtocolErrors duplicate requests
+    Err duplicate =>
+      NativePropsSettled (nativeProtocolErrors duplicate requests)
     Ok index => match duplicateSelectedPropName props index omEmpty
       Some duplicate =>
-        nativeProtocolErrors
-          "duplicate property declaration name \"{duplicate}\""
-          requests
+        NativePropsSettled
+          (nativeProtocolErrors
+            "duplicate property declaration name \"\{duplicate}\""
+            requests)
       None => match buildPlanEnvModules (plannedRoot modules) modules
         Err e =>
-          plannedResults (planCapabilities props index (planErrorText e)) []
+          NativePropsSettled
+            (plannedResults (planCapabilities props index (planErrorText e)) [])
         Ok env =>
           let outcomes = plannedOutcomes env modules props index
-          let runnable = plannedRunnable outcomes
-          match runnable
-            [] => plannedResults outcomes []
-            _ => match nativeRenderedPlanned target tsrc modules env runnable
-              Err failure =>
-                plannedResults
-                  outcomes
-                  (map (nativePlannedFailure failure) runnable)
-              Ok rows => plannedResults outcomes rows
+          match plannedRunnable outcomes
+            [] => NativePropsSettled (plannedResults outcomes [])
+            runnable => NativePropsToRun env outcomes runnable
 
+-- The rows of a plan that needs no probe.
+export
+nativePropsSettled : NativePropPlan -> Option (List PropResult)
+nativePropsSettled (NativePropsSettled rows) = Some rows
+nativePropsSettled (NativePropsToRun _ _ _) = None
+
+-- The plan run through this engine's own probe.
+export
+runNativePropPlan : String ->
+  String ->
+  List PlanModule ->
+  NativePropPlan ->
+  <IO> List PropResult
+runNativePropPlan _ _ _ (NativePropsSettled rows) = rows
+runNativePropPlan target tsrc modules (NativePropsToRun env outcomes runnable) =
+  plannedRowsFrom
+    outcomes
+    runnable
+    (nativeRenderedPlanned target tsrc modules env runnable)
+
+plannedRowsFrom : List NativePlanOutcome ->
+  List NativePlanOutcome ->
+  Result NativeFailure (List PropResult) ->
+  List PropResult
+plannedRowsFrom outcomes runnable (Err failure) =
+  plannedResults outcomes (map (nativePlannedFailure failure) runnable)
+plannedRowsFrom outcomes _ (Ok rows) = plannedResults outcomes rows
+
+-- This engine's part of a probe, as `tools/native_probe.mdk` merges it with
+-- the other native arms of the same file: the sentinel prefix, the import
+-- lines, the generator, shrinker and law bindings, and the body that prints
+-- the transcript.  A settled plan contributes nothing.
+export
+propSection : String -> List PlanModule -> NativePropPlan -> Section
+propSection nonce _ (NativePropsSettled _) = Section {
+  secPrefix = noncedPrefix sentinelBase nonce,
+  secImports = [],
+  secDecls = [],
+  secEntry = [],
+}
+propSection nonce modules (NativePropsToRun env _ jobs) =
+  plannedSection nonce modules env jobs
+
+-- One probe run's exit code, stdout and stderr, read back as the plan's rows.
+export
+propResultsFromRun : String ->
+  NativePropPlan ->
+  Int ->
+  String ->
+  String ->
+  List PropResult
+propResultsFromRun _ (NativePropsSettled rows) _ _ _ = rows
+propResultsFromRun nonce (NativePropsToRun _ outcomes runnable) code stdout stderr =
+  plannedRowsFrom
+    outcomes
+    runnable
+    (plannedRendered nonce runnable code stdout stderr)
 -- Expose the rendered probe without compiling it so the registry shape can be
 -- checked directly.  The execution path above and this renderer share the
 -- same planning and closed-graph construction.
@@ -114,8 +187,7 @@ renderNativePlannedProbe target tsrc modules requests =
           if listLen jobs == 0 then
             Err "native property runner: no selected property could be rendered"
           else
-            let nonce =
-              freshProbeNonce "source_check" probeNamespacePrefixes tsrc
+            let nonce = freshProbeNonce "source_check" propProbePrefixes tsrc
             Ok (plannedProbeSource nonce target tsrc modules env jobs)
 
 plannedRoot : List PlanModule -> String
@@ -254,9 +326,9 @@ requestIndex [] index = Ok index
 requestIndex (r :: rest) index =
   let name = propRequestName r
   if propRequestCases r <= 0 then
-    Err "property request \"{name}\" has a non-positive case budget"
+    Err "property request \"\{name}\" has a non-positive case budget"
   else if omHasKey name index then
-    Err "duplicate property request name \"{name}\""
+    Err "duplicate property request name \"\{name}\""
   else
     requestIndex rest (omInsert name r index)
 
@@ -336,7 +408,7 @@ nativeRenderedPlanned target tsrc modules env jobs = match makeTempDir ()
       (NativeRuntimeFailure
         "native property runner: could not create a scratch directory: \{e}")
   Ok tmp =>
-    let nonce = freshProbeNonce (mintNonce ()) probeNamespacePrefixes tsrc
+    let nonce = freshProbeNonce (mintNonce ()) propProbePrefixes tsrc
     let rendered = runInTmpPlanned target tsrc modules env jobs tmp nonce
     let _ = cleanupTempDir tmp
     rendered
@@ -414,15 +486,23 @@ buildAndRunPlanned target entry out tmp jobs nonce =
         Err
           (NativeRuntimeFailure
             "native property runner: could not run the compiled probe: \{e}")
-      Ok (code, stdout, stderr) =>
-        let props = plannedDeclRequests jobs
-        let chunks = chunksOf (noncedPrefix sentinelBase nonce) (splitNl stdout)
-        if tagsInOrder (expectedTags 0 props) chunks then
-          Ok (renderAll chunks (abortNote code stderr) 0 props)
-        else
-          Err
-            (NativeProtocolFailure
-              "native property runner: the probe printed a forged or malformed transcript; no property result was trusted")
+      Ok (code, stdout, stderr) => plannedRendered nonce jobs code stdout stderr
+
+plannedRendered : String ->
+  List NativePlanOutcome ->
+  Int ->
+  String ->
+  String ->
+  Result NativeFailure (List PropResult)
+plannedRendered nonce jobs code stdout stderr =
+  let props = plannedDeclRequests jobs
+  let chunks = chunksOf (noncedPrefix sentinelBase nonce) (splitNl stdout)
+  if tagsInOrder (expectedTags 0 props) chunks then
+    Ok (renderAll chunks (abortNote code stderr) 0 props)
+  else
+    Err
+      (NativeProtocolFailure
+        "native property runner: the probe printed a forged or malformed transcript; no property result was trusted")
 
 plannedDeclRequests : List NativePlanOutcome -> List (Decl, PropRequest)
 plannedDeclRequests [] = []
@@ -533,8 +613,10 @@ classifyNativeFields chunks note request i =
 
 -- Probe source ---------------------------------------------------------------
 
-probeNamespacePrefixes : List String
-probeNamespacePrefixes = [
+-- The generated names this engine's probe uses, which a nonce must avoid.
+export
+propProbePrefixes : List String
+propProbePrefixes = [
   "__np_",
   "NpCore_",
   "NpRuntime_",
@@ -550,71 +632,87 @@ plannedProbeSource : String ->
   List NativePlanOutcome ->
   String
 plannedProbeSource nonce target tsrc modules env jobs =
+  let section = plannedSection nonce modules env jobs
+  joinNl
+    (section.secImports
+      ++ [probeTargetSource target tsrc, ""]
+      ++ section.secDecls
+      ++ ["main ="]
+      ++ section.secEntry
+      ++ [""])
+
+plannedSection : String ->
+  List PlanModule ->
+  PlanEnv ->
+  List NativePlanOutcome ->
+  Section
+plannedSection nonce modules env jobs =
   let graph = sharedGraph env jobs
   let prefix = genNodePrefix nonce
-  joinNl
-    (plannedImports nonce modules graph
-      ++ [probeTargetSource target tsrc, ""]
-      ++ [
-        "\{generatedPrefix nonce}state : Ref Int",
-        "\{generatedPrefix nonce}state = \{runtimeAlias nonce}.Ref 0",
-        "",
-        "\{generatedPrefix nonce}custom_state : Ref U64",
-        "\{generatedPrefix nonce}custom_state = \{runtimeAlias nonce}.Ref 0",
-        "",
-        "\{generatedPrefix nonce}word n = ((n % \{intToString structuralRngWordModulus}) + \{intToString structuralRngWordModulus}) % \{intToString structuralRngWordModulus}",
-        "",
-        "\{generatedPrefix nonce}mul_word left right =",
-        "  let x = \{generatedPrefix nonce}word left",
-        "  let y = \{generatedPrefix nonce}word right",
-        "  let x_low = x % \{intToString structuralRngWordHalf}",
-        "  let x_high = x / \{intToString structuralRngWordHalf}",
-        "  let y_low = y % \{intToString structuralRngWordHalf}",
-        "  let y_high = y / \{intToString structuralRngWordHalf}",
-        "  let low = x_low * y_low",
-        "  let cross = x_low * y_high + x_high * y_low",
-        "  \{generatedPrefix nonce}word (low + (cross % \{intToString structuralRngWordHalf}) * \{intToString structuralRngWordHalf})",
-        "",
-        "\{generatedPrefix nonce}next _ =",
-        "  let s = (!\{generatedPrefix nonce}state * \{intToString structuralRngMultiplier} + \{intToString structuralRngIncrement}) % \{intToString structuralRngModulus}",
-        "  \{generatedPrefix nonce}state := s",
-        "  let word = \{generatedPrefix nonce}word s",
-        "  let h1 = \{generatedPrefix nonce}word (\{runtimeAlias nonce}.bitXor word (\{runtimeAlias nonce}.shiftRight word 16))",
-        "  let h2 = \{generatedPrefix nonce}mul_word h1 \{intToString structuralRngMixMultiplier1}",
-        "  let h3 = \{generatedPrefix nonce}word (\{runtimeAlias nonce}.bitXor h2 (\{runtimeAlias nonce}.shiftRight h2 13))",
-        "  let h4 = \{generatedPrefix nonce}mul_word h3 \{intToString structuralRngMixMultiplier2}",
-        "  \{generatedPrefix nonce}word (\{runtimeAlias nonce}.bitXor h4 (\{runtimeAlias nonce}.shiftRight h4 16))",
-        "",
-        "\{generatedPrefix nonce}int _ = \{generatedPrefix nonce}choose \{intToString (intMax - intMin + 1)} + \{intToString intMin}",
-        "\{generatedPrefix nonce}bool _ = \{generatedPrefix nonce}choose 2 == 1",
-        "\{generatedPrefix nonce}choose n =",
-        "  let word = \{generatedPrefix nonce}next ()",
-        "  if n <= 0 then 0 else word % n",
-        "\{generatedPrefix nonce}char _ = \{coreAlias nonce}.optionOr ' ' (\{runtimeAlias nonce}.charFromCode (32 + \{generatedPrefix nonce}choose 95))",
-        "\{generatedPrefix nonce}string n = if n <= 0 then \"\" else \{runtimeAlias nonce}.charToStr (\{generatedPrefix nonce}char ()) ++ \{generatedPrefix nonce}string (n - 1)",
-        "",
-        "\{generatedPrefix nonce}join_strings _ [] = \"\"",
-        "\{generatedPrefix nonce}join_strings _ (x :: []) = x",
-        "\{generatedPrefix nonce}join_strings sep (x :: xs) = x ++ sep ++ \{generatedPrefix nonce}join_strings sep xs",
-        "",
-        "\{generatedPrefix nonce}array_to_list arr = \{generatedPrefix nonce}array_to_list_go arr 0",
-        "\{generatedPrefix nonce}array_to_list_go arr i = if i >= \{runtimeAlias nonce}.arrayLength arr then [] else arr[i] :: \{generatedPrefix nonce}array_to_list_go arr (i + 1)",
-        "",
-        "\{generatedPrefix nonce}delete_each [] = []",
-        "\{generatedPrefix nonce}delete_each (x :: xs) = xs :: \{coreAlias nonce}.map (ys => x :: ys) (\{generatedPrefix nonce}delete_each xs)",
-        "\{generatedPrefix nonce}replace_each f [] = []",
-        "\{generatedPrefix nonce}replace_each f (x :: xs) = \{coreAlias nonce}.map (ys => ys :: xs) (f x) ++ \{coreAlias nonce}.map (ys => x :: ys) (\{generatedPrefix nonce}replace_each f xs)",
-        "",
-      ]
-      ++ plannedPropLines nonce modules env graph jobs 0
-      ++ graphLines nonce modules env (coreAlias nonce) prefix graph
-      ++ graphAuxLines nonce modules env (coreAlias nonce) prefix graph
-      ++ ["main ="]
-      ++ plannedMainLines nonce jobs 0
-      ++ [
-        "  \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) endTag}\"",
-        "",
-      ])
+  Section {
+    secPrefix = noncedPrefix sentinelBase nonce,
+    secImports = plannedImports nonce modules graph,
+    secDecls =
+      [
+          "\{generatedPrefix nonce}state : Ref Int",
+          "\{generatedPrefix nonce}state = \{runtimeAlias nonce}.Ref 0",
+          "",
+          "\{generatedPrefix nonce}custom_state : Ref U64",
+          "\{generatedPrefix nonce}custom_state = \{runtimeAlias nonce}.Ref 0",
+          "",
+          "\{generatedPrefix nonce}word n = ((n % \{intToString structuralRngWordModulus}) + \{intToString structuralRngWordModulus}) % \{intToString structuralRngWordModulus}",
+          "",
+          "\{generatedPrefix nonce}mul_word left right =",
+          "  let x = \{generatedPrefix nonce}word left",
+          "  let y = \{generatedPrefix nonce}word right",
+          "  let x_low = x % \{intToString structuralRngWordHalf}",
+          "  let x_high = x / \{intToString structuralRngWordHalf}",
+          "  let y_low = y % \{intToString structuralRngWordHalf}",
+          "  let y_high = y / \{intToString structuralRngWordHalf}",
+          "  let low = x_low * y_low",
+          "  let cross = x_low * y_high + x_high * y_low",
+          "  \{generatedPrefix nonce}word (low + (cross % \{intToString structuralRngWordHalf}) * \{intToString structuralRngWordHalf})",
+          "",
+          "\{generatedPrefix nonce}next _ =",
+          "  let s = (!\{generatedPrefix nonce}state * \{intToString structuralRngMultiplier} + \{intToString structuralRngIncrement}) % \{intToString structuralRngModulus}",
+          "  \{generatedPrefix nonce}state := s",
+          "  let word = \{generatedPrefix nonce}word s",
+          "  let h1 = \{generatedPrefix nonce}word (\{runtimeAlias nonce}.bitXor word (\{runtimeAlias nonce}.shiftRight word 16))",
+          "  let h2 = \{generatedPrefix nonce}mul_word h1 \{intToString structuralRngMixMultiplier1}",
+          "  let h3 = \{generatedPrefix nonce}word (\{runtimeAlias nonce}.bitXor h2 (\{runtimeAlias nonce}.shiftRight h2 13))",
+          "  let h4 = \{generatedPrefix nonce}mul_word h3 \{intToString structuralRngMixMultiplier2}",
+          "  \{generatedPrefix nonce}word (\{runtimeAlias nonce}.bitXor h4 (\{runtimeAlias nonce}.shiftRight h4 16))",
+          "",
+          "\{generatedPrefix nonce}int _ = \{generatedPrefix nonce}choose \{intToString (intMax - intMin + 1)} + \{intToString intMin}",
+          "\{generatedPrefix nonce}bool _ = \{generatedPrefix nonce}choose 2 == 1",
+          "\{generatedPrefix nonce}choose n =",
+          "  let word = \{generatedPrefix nonce}next ()",
+          "  if n <= 0 then 0 else word % n",
+          "\{generatedPrefix nonce}char _ = \{coreAlias nonce}.optionOr ' ' (\{runtimeAlias nonce}.charFromCode (32 + \{generatedPrefix nonce}choose 95))",
+          "\{generatedPrefix nonce}string n = if n <= 0 then \"\" else \{runtimeAlias nonce}.charToStr (\{generatedPrefix nonce}char ()) ++ \{generatedPrefix nonce}string (n - 1)",
+          "",
+          "\{generatedPrefix nonce}join_strings _ [] = \"\"",
+          "\{generatedPrefix nonce}join_strings _ (x :: []) = x",
+          "\{generatedPrefix nonce}join_strings sep (x :: xs) = x ++ sep ++ \{generatedPrefix nonce}join_strings sep xs",
+          "",
+          "\{generatedPrefix nonce}array_to_list arr = \{generatedPrefix nonce}array_to_list_go arr 0",
+          "\{generatedPrefix nonce}array_to_list_go arr i = if i >= \{runtimeAlias nonce}.arrayLength arr then [] else arr[i] :: \{generatedPrefix nonce}array_to_list_go arr (i + 1)",
+          "",
+          "\{generatedPrefix nonce}delete_each [] = []",
+          "\{generatedPrefix nonce}delete_each (x :: xs) = xs :: \{coreAlias nonce}.map (ys => x :: ys) (\{generatedPrefix nonce}delete_each xs)",
+          "\{generatedPrefix nonce}replace_each f [] = []",
+          "\{generatedPrefix nonce}replace_each f (x :: xs) = \{coreAlias nonce}.map (ys => ys :: xs) (f x) ++ \{coreAlias nonce}.map (ys => x :: ys) (\{generatedPrefix nonce}replace_each f xs)",
+          "",
+        ]
+        ++ plannedPropLines nonce modules env graph jobs 0
+        ++ graphLines nonce modules env (coreAlias nonce) prefix graph
+        ++ graphAuxLines nonce modules env (coreAlias nonce) prefix graph,
+    secEntry =
+      plannedMainLines nonce jobs 0
+        ++ [
+          "  \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) endTag}\"",
+        ],
+  }
 
 -- Each imported module gets a probe-local alias. Constructor selection is by
 -- the TypeKey owner, never by a bare source spelling.

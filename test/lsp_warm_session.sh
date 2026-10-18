@@ -27,6 +27,9 @@
 # process. A hit that quietly replays the previous state's verdict fails in the
 # direction that matters — the stale verdict is usually the CLEAN one.
 #
+# The second property is the same hazard for hover: the analysis a publish
+# keeps must not answer once a sibling changes on disk between two requests.
+#
 # Usage: sh test/lsp_warm_session.sh
 #   MEDAKA      the binary to drive (default: the one beside this tree)
 #   MEDAKA_ROOT the tree it resolves its stdlib from
@@ -193,6 +196,90 @@ for line in bad:
 sys.exit(1 if bad else 0)
 PY
 check "multi-module project, 7 didChange states → warm publishes == cold check --json each time" "$?"
+
+# A hover answers from the analysis the entry's last publish kept only while
+# the graph it read is unchanged. A sibling rewritten ON DISK, with no
+# didChange for anything, must make the next hover answer from the new content.
+P7="$TMP/p7"
+mkdir -p "$P7"
+printf '[package]\nname = "p7"\n' > "$P7/medaka.toml"
+printf 'export\nbase = 7\n' > "$P7/sib.mdk"
+printf 'import sib.{base}\n\nshow = base\n\nmain = println show\n' > "$P7/main.mdk"
+perl -e 'alarm 300; exec @ARGV' -- python3 - "$MEDAKA" "$ROOT" "$P7" <<'PY'
+import json, os, subprocess, sys
+
+MEDAKA, ROOT, P7 = sys.argv[1], sys.argv[2], sys.argv[3]
+ENTRY = os.path.join(P7, "main.mdk")
+URI = "file://" + ENTRY
+
+
+def frame(o):
+    b = json.dumps(o, separators=(",", ":")).encode()
+    return b"Content-Length: %d\r\n\r\n" % len(b) + b
+
+
+p = subprocess.Popen([MEDAKA, "lsp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                     stderr=subprocess.DEVNULL, env=dict(os.environ, MEDAKA_ROOT=ROOT))
+
+
+def send(o):
+    p.stdin.write(frame(o))
+    p.stdin.flush()
+
+
+def reply(wait_id):
+    buf = b""
+    while True:
+        while b"\r\n\r\n" not in buf:
+            c = p.stdout.read(1)
+            if not c:
+                return None
+            buf += c
+        head, rest = buf.split(b"\r\n\r\n", 1)
+        n = int(head.split(b":")[-1])
+        while len(rest) < n:
+            c = p.stdout.read(n - len(rest))
+            if not c:
+                return None
+            rest += c
+        buf = rest[n:]
+        o = json.loads(rest[:n].decode())
+        if o.get("id") == wait_id:
+            return o
+
+
+def hover(i):
+    send({"jsonrpc": "2.0", "id": i, "method": "textDocument/hover",
+          "params": {"textDocument": {"uri": URI},
+                     "position": {"line": 2, "character": 0}}})
+    o = reply(i) or {}
+    v = ((o.get("result") or {}).get("contents") or {}).get("value", "")
+    return "\n".join(l for l in v.splitlines() if not l.startswith("```"))
+
+
+send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+      "params": {"rootUri": "file://" + P7, "capabilities": {}}})
+reply(1)
+send({"jsonrpc": "2.0", "method": "textDocument/didOpen",
+      "params": {"textDocument": {"uri": URI, "languageId": "medaka", "version": 1,
+                                  "text": open(ENTRY).read()}}})
+before = hover(2)
+open(os.path.join(P7, "sib.mdk"), "w").write('export\nbase = "seven"\n')
+after = hover(3)
+send({"jsonrpc": "2.0", "id": 9, "method": "shutdown", "params": {}})
+send({"jsonrpc": "2.0", "method": "exit", "params": {}})
+p.stdin.close()
+p.wait()
+bad = []
+if before != "show : Int":
+    bad.append("  before the disk edit: hover answered %r, expected 'show : Int'" % before)
+if after != "show : String":
+    bad.append("  after the disk edit: hover answered %r, expected 'show : String'" % after)
+for line in bad:
+    sys.stderr.write(line + "\n")
+sys.exit(1 if bad else 0)
+PY
+check "sibling rewritten on disk, no didChange → the next hover answers from the new content" "$?"
 
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

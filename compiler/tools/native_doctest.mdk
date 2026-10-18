@@ -59,6 +59,7 @@ import support.path.{joinPath, baseOf, dirOf}
 import support.util.{joinNl, splitNl}
 import tools.probe_transcript.{
   Chunk(..),
+  Section(..),
   chunksOf,
   decodeValue,
   endTag,
@@ -187,7 +188,7 @@ nativeRendered target tsrc userDecls examples synthResults =
         -- The nonce is drawn HERE, before the probe source is written, so it
         -- reaches `runInTmp` in time to land in the generated code the target's
         -- own (already-fixed) source cannot see or influence.
-        let nonce = freshProbeNonce (mintNonce ()) probeNamespacePrefixes tsrc
+        let nonce = freshProbeNonce (mintNonce ()) doctestProbePrefixes tsrc
         -- `rendered` is bound (and so fully forced — Medaka is strict) BEFORE the
         -- teardown, so the probe binary still exists while it runs.  Same shape as
         -- `build_cmd.mdk`'s `runBuildNative`.
@@ -321,11 +322,24 @@ buildAndRun target entryPath outPath tmpDir examples synthResults nonce =
       Err e =>
         Err "native doctest runner: could not run the compiled probe: \{e}"
       Ok (code, out, errOut) =>
-        let chunks = chunksOf (noncedPrefix sentinelBase nonce) (splitNl out)
-        if tagsInOrder (expectedTags 0 examples synthResults) chunks then
-          Ok (renderAll chunks (abortNote code errOut) 0 examples synthResults)
-        else
-          Err forgedTranscript
+        doctestRendered nonce examples synthResults code out errOut
+
+-- One probe run's exit code, stdout and stderr, read back as one rendered
+-- actual per example, or the whole-file error a forged transcript is.
+export
+doctestRendered : String ->
+  List Example ->
+  List (Result String (List Decl)) ->
+  Int ->
+  String ->
+  String ->
+  Result String (List (Result String String))
+doctestRendered nonce examples synthResults code out errOut =
+  let chunks = chunksOf (noncedPrefix sentinelBase nonce) (splitNl out)
+  if tagsInOrder (expectedTags 0 examples synthResults) chunks then
+    Ok (renderAll chunks (abortNote code errOut) 0 examples synthResults)
+  else
+    Err forgedTranscript
 
 -- ── the probe program ───────────────────────────────────────────────────────
 -- target source (verbatim, its own `main` renamed by `renameUserMain`) ++ the
@@ -344,23 +358,41 @@ probeSource : String ->
   List (Result String (List Decl)) ->
   String
 probeSource nonce tsrc examples synthResults =
+  let section = doctestSection nonce examples synthResults
   joinNl
-    ([
-        "import \{runtimeDependencyName nonce}.runtime as \{runtimeAlias nonce}",
-        "",
-        renameUserMain tsrc,
-        "",
-      ]
-      ++ synthLines nonce 0 examples synthResults
+    (section.secImports
+      ++ ["", renameUserMain tsrc, ""]
+      ++ section.secDecls
       ++ ["", "main ="]
-      ++ mainLines nonce 0 examples synthResults
+      ++ section.secEntry
+      ++ [""])
+
+-- This engine's part of a probe, as `tools/native_probe.mdk` merges it with
+-- the other native arms of the same file: the sentinel prefix its transcript
+-- is read under, its import lines, its top-level bindings, and the body that
+-- prints the transcript.  `probeSource` places the same four around the target
+-- alone.
+export
+doctestSection : String ->
+  List Example ->
+  List (Result String (List Decl)) ->
+  Section
+doctestSection nonce examples synthResults = Section {
+  secPrefix = noncedPrefix sentinelBase nonce,
+  secImports =
+    ["import \{runtimeDependencyName nonce}.runtime as \{runtimeAlias nonce}"],
+  secDecls = synthLines nonce 0 examples synthResults,
+  secEntry =
+    mainLines nonce 0 examples synthResults
       ++ [
         "  \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) endTag}\"",
-        "",
-      ])
+      ],
+}
 
-probeNamespacePrefixes : List String
-probeNamespacePrefixes = ["__ndt_", "NpRuntime_", runtimeDependencyPrefix]
+-- The generated names this engine's probe uses, which a nonce must avoid.
+export
+doctestProbePrefixes : List String
+doctestProbePrefixes = ["__ndt_", "NpRuntime_", runtimeDependencyPrefix]
 
 probeBindingName : String -> Int -> String
 probeBindingName nonce i = "__ndt_\{probeNameNonce nonce}_\{intToString i}__"

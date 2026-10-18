@@ -57,6 +57,7 @@ import support.util.{joinNl, splitNl}
 import tools.doctest.{ExResult(..)}
 import tools.probe_transcript.{
   Chunk(..),
+  Section(..),
   chunksOf,
   decodeValue,
   endTag,
@@ -137,7 +138,7 @@ nativeRendered target tsrc tests = match makeTempDir ()
     -- The nonce is drawn HERE, before the probe source is written, so it
     -- reaches `runInTmp` in time to land in the generated code the target's
     -- own (already-fixed) source cannot see or influence.
-    let nonce = freshProbeNonce (mintNonce ()) probeNamespacePrefixes tsrc
+    let nonce = freshProbeNonce (mintNonce ()) testProbePrefixes tsrc
     -- `results` is bound (and so fully forced — Medaka is strict) BEFORE the
     -- teardown, so the probe binary still exists while it runs.
     let results = runInTmp target tsrc tests tmpDir nonce
@@ -222,12 +223,39 @@ buildAndRun target entryPath outPath tmpDir tests nonce =
       outPath,
     ]
       Err e => Err "native test runner: could not run the compiled probe: \{e}"
-      Ok (code, out, errOut) =>
-        let chunks = chunksOf (noncedPrefix sentinelBase nonce) (splitNl out)
-        if tagsInOrder (expectedTags 0 tests) chunks then
-          Ok (renderAll chunks (abortNote code errOut) 0 tests)
-        else
-          Err forgedTranscript
+      Ok (code, out, errOut) => testsRendered nonce 0 tests code out errOut
+
+-- One probe run's exit code, stdout and stderr, read back as one `ExResult`
+-- per test.  `first` is the index the section numbered its first test with
+-- (`testSection`).
+testsRendered : String ->
+  Int ->
+  List (String, Int, Expr) ->
+  Int ->
+  String ->
+  String ->
+  Result String (List ExResult)
+testsRendered nonce first tests code out errOut =
+  let chunks = chunksOf (noncedPrefix sentinelBase nonce) (splitNl out)
+  if tagsInOrder (expectedTags first tests) chunks then
+    Ok (renderAll chunks (abortNote code errOut) first tests)
+  else
+    Err forgedTranscript
+
+-- `testsRendered` with a whole-run error reported on every test, as
+-- `runNativeTests` reports one.
+export
+testResultsFromRun : String ->
+  Int ->
+  List (String, Int, Expr) ->
+  Int ->
+  String ->
+  String ->
+  List ExResult
+testResultsFromRun nonce first tests code out errOut =
+  match testsRendered nonce first tests code out errOut
+    Err reason => map (_ => Errored reason) tests
+    Ok results => results
 
 -- ── the probe program ───────────────────────────────────────────────────────
 -- THE PROBE MAY NOT NAME `Pass` OR `Fail`.  The target's source is spliced
@@ -253,8 +281,10 @@ buildAndRun target entryPath outPath tmpDir tests nonce =
 expectationAlias : String -> String
 expectationAlias nonce = "NpTest_\{probeNameNonce nonce}"
 
-probeNamespacePrefixes : List String
-probeNamespacePrefixes = [
+-- The generated names this engine's probe uses, which a nonce must avoid.
+export
+testProbePrefixes : List String
+testProbePrefixes = [
   "__ts_",
   "__tse_",
   "__tsv_",
@@ -265,21 +295,35 @@ probeNamespacePrefixes = [
 
 probeSource : String -> String -> List (String, Int, Expr) -> String
 probeSource nonce tsrc tests =
+  let section = testSection nonce 0 tests
   joinNl
-    ([
-        "import test as \{expectationAlias nonce}",
-        "import \{runtimeDependencyName nonce}.runtime as \{runtimeAlias nonce}",
-        "",
-        renameUserMain tsrc,
-        "",
-      ]
-      ++ testBindings nonce 0 tests
+    (section.secImports
+      ++ ["", renameUserMain tsrc, ""]
+      ++ section.secDecls
       ++ ["main ="]
-      ++ mainLines nonce 0 tests
+      ++ section.secEntry
+      ++ [""])
+
+-- This engine's part of a probe, as `tools/native_probe.mdk` merges it with
+-- the other native arms of the same file: the sentinel prefix, the import
+-- lines, the per-test bindings and printers, and the body that prints the
+-- transcript.  Tests are numbered from `first`, so two sections of one probe
+-- never bind the same name.
+export
+testSection : String -> Int -> List (String, Int, Expr) -> Section
+testSection nonce first tests = Section {
+  secPrefix = noncedPrefix sentinelBase nonce,
+  secImports = [
+    "import test as \{expectationAlias nonce}",
+    "import \{runtimeDependencyName nonce}.runtime as \{runtimeAlias nonce}",
+  ],
+  secDecls = testBindings nonce first tests,
+  secEntry =
+    mainLines nonce first tests
       ++ [
         "  \{runtimeAlias nonce}.putStrLn \"\{sentinelLine (noncedPrefix sentinelBase nonce) endTag}\"",
-        "",
-      ])
+      ],
+}
 
 bindingName : String -> Int -> String
 bindingName nonce i = "__ts_\{probeNameNonce nonce}_\{intToString i}__"
@@ -293,14 +337,16 @@ valueName nonce i = "__tsv_\{probeNameNonce nonce}_\{intToString i}__"
 -- Per test: the body as a binding, plus a printer that emits the constructor
 -- tag and the three rendered fields between sentinels.
 --
--- ⚠️ BOTH take a `Unit` parameter, and the body's is load-bearing, not
--- symmetry.  MEASURED: the native backend evaluates a top-level NULLARY binding
--- eagerly, before `main` runs — `boom = panic "boom"` kills the program before
--- `main`'s first `putStrLn` reaches stdout, where the interpreter prints it
--- first.  As nullary bindings, every test body would therefore be forced at
--- startup, so one panicking test would abort the probe before ANY sentinel was
--- printed and the whole file would report as one undifferentiated abort.  Under
--- a parameter the body is evaluated where it is called — inside `main`, in test
+-- BOTH take a `Unit` parameter, and the body's is load-bearing, not symmetry.
+-- MEASURED: the native backend evaluates a top-level NULLARY binding eagerly,
+-- before `main` runs, when its body is a direct effect or panic —
+-- `boom = panic "boom"` kills the program before `main`'s first `putStrLn`
+-- reaches stdout, where the interpreter prints it first.  The behavior is
+-- shape-dependent: a doctest smoke binding is forced at startup, but
+-- `__ndt_i__ = debug (bump ())` is not.  As nullary bindings, test bodies of the
+-- forced shape would be forced at startup, so one panicking test would abort the
+-- probe before ANY sentinel was printed and the whole file would report as one
+-- undifferentiated abort.  Under a parameter the body is evaluated where it is called — inside `main`, in test
 -- order — which is what gives the abort rule its per-test attribution.
 testBindings : String -> Int -> List (String, Int, Expr) -> List String
 testBindings _ _ [] = []
