@@ -14,6 +14,7 @@ import test.{
   Expectation, expectAll, expectEach, expectEqual, expectTextContainsAll, fail,
   pass
 }
+import compiler_cli_test_support.{expectVerbExitStartsWithAndContains}
 import regex as R
 import json as J
 
@@ -332,46 +333,35 @@ exemptIlltypedSrc = unlines [
 ]
 
 -- The parent refuses a non-exempt ill-typed target before any engine runs.
-gatedRefusalRow : String -> String -> <Exec, IO, FileRead> Expectation
+gatedRefusalRow : String -> String -> <Exec, IO> Expectation
 gatedRefusalRow engine target =
-  match runVerb 120 ["test", "--engines", engine, target]
-    Err e => fail "gated ill-typed (\{engine}): could not spawn: \{e}"
-    Ok (code, out, err) => expectAll [
-      expectEqual 1 code,
-      expectEqual "" out,
-      requireText
-        "gated ill-typed (\{engine})"
-        err
-        "type error in \{target}; `medaka test` requires it to `medaka check` first:",
-      requireText
-        "gated ill-typed (\{engine})"
-        err
-        "b1_doc.mdk:8:13: type mismatch: Int vs String",
-    ]
+  expectVerbExitStartsWithAndContains
+    "test"
+    ["--engines", engine, target]
+    1
+    "type error in \{target}; `medaka test` requires it to `medaka check` first:"
+    ["b1_doc.mdk:8:13: type mismatch: Int vs String"]
 
-exemptNativeRow : String -> <Exec, IO, FileRead> Expectation
+exemptNativeRow : String -> <Exec, IO> Expectation
 exemptNativeRow target =
-  match runVerb 120 ["test", "--engines", "native", target]
-    Err e => fail "exempt ill-typed (native): could not spawn: \{e}"
-    Ok (code, out, err) => expectAll [
-      expectEqual 1 code,
-      requireText
-        "exempt ill-typed (native)"
-        (out ++ err)
-        "native test runner: could not build \{target} natively",
-      requireText
-        "exempt ill-typed (native)"
-        (out ++ err)
-        "type mismatch: Int vs String",
+  expectVerbExitStartsWithAndContains
+    "test"
+    ["--engines", "native", target]
+    1
+    ""
+    [
+      "native test runner: could not build \{target} natively",
+      "type mismatch: Int vs String",
     ]
 
-exemptEvalRow : String -> <Exec, IO, FileRead> Expectation
-exemptEvalRow target = match runVerb 120 ["test", "--engines", "eval", target]
-  Err e => fail "exempt ill-typed (eval): could not spawn: \{e}"
-  Ok (code, out, err) => expectAll [
-    expectEqual 0 code,
-    requireText "exempt ill-typed (eval)" (out ++ err) "1/1 passed",
-  ]
+exemptEvalRow : String -> <Exec, IO> Expectation
+exemptEvalRow target =
+  expectVerbExitStartsWithAndContains
+    "test"
+    ["--engines", "eval", target]
+    0
+    ""
+    ["1/1 passed"]
 
 refusalProbes : String -> <Exec, IO, FileRead, FileWrite> Expectation
 refusalProbes dir =
@@ -683,15 +673,26 @@ mergedFallbackRow dir name src expected =
   let path = "\{dir}/\{name}.mdk"
   match writeFile path src
     Err e => fail "could not write \{name}.mdk: \{e}"
-    Ok _ => match runVerb 300 ["test", "--json", path]
-      Err e => fail "\{name}.mdk: could not spawn: \{e}"
-      Ok (code, out, _) => match J.parse out
-        Err e => fail "\{name}.mdk: the --json report did not parse: \{e}"
-        Ok report => expectAll [
-          expectEqual 1 code,
-          expectEqual expected (reportRows report),
-          requireText "\{name}.mdk" out "/dt_\{name}.mdk:",
-        ]
+    Ok _ => expectAll [
+      expectVerbExitStartsWithAndContains
+        "test"
+        ["--json", path]
+        1
+        ""
+        ["/dt_\{name}.mdk:"],
+      mergedFallbackRows name path expected,
+    ]
+
+mergedFallbackRows : String ->
+  String ->
+  List String ->
+  <Exec, IO, FileRead> Expectation
+mergedFallbackRows name path expected =
+  match runVerb 300 ["test", "--json", path]
+    Err e => fail "\{name}.mdk: could not spawn: \{e}"
+    Ok (_, out, _) => match J.parse out
+      Err e => fail "\{name}.mdk: the --json report did not parse: \{e}"
+      Ok report => expectEqual expected (reportRows report)
 
 test "merged native probe: a build failure falls back to one probe per arm" = withScratchDir
   (dir => mergedFallbackRow dir "merged_build_fail" mergedBuildFailSrc [
@@ -702,3 +703,26 @@ test "merged native probe: a section that dies at startup reruns on its own prob
   (dir => mergedFallbackRow dir "merged_startup" mergedStartupSrc [
     "doctest 3 error", "doctest 5 error", "test double one pass"
   ])
+
+-- A smoke example (no expected block) is a binding the native backend forces at
+-- startup.  Its side effect must run once, not once per section of a merged
+-- probe, so a file with one keeps a probe per arm.
+smokeSideEffectSrc : String -> String
+smokeSideEffectSrc log =
+  "import test.{expectEqual}\n\n-- > appendFile \"\{log}\" \"x\"\n-- > double 2\n-- 4\nexport\ndouble : Int -> Int\ndouble x = x * 2\n\ntest \"log written once\" =\n  expectEqual (readFile \"\{log}\") (Ok \"x\")\n\nprop \"double is even\" (n : Int) =\n  double n % 2 == 0\n"
+
+smokeSideEffectRow : String -> <Exec, IO, FileRead, FileWrite> Expectation
+smokeSideEffectRow dir =
+  let path = "\{dir}/smoke_side.mdk"
+  match writeFile path (smokeSideEffectSrc "\{dir}/smoke_side.log")
+    Err e => fail "could not write smoke_side.mdk: \{e}"
+    Ok _ =>
+      expectVerbExitStartsWithAndContains
+        "test"
+        ["--engines", "native", path]
+        0
+        ""
+        ["2/2 passed", "[native] ... OK", "1/1 passed"]
+
+test "merged native probe: a smoke example's side effect runs once" =
+  withScratchDir smokeSideEffectRow

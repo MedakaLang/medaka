@@ -95,7 +95,7 @@ planNativePropRequests tsrc modules requests =
       Some duplicate =>
         NativePropsSettled
           (nativeProtocolErrors
-            "duplicate property declaration name \"{duplicate}\""
+            "duplicate property declaration name \"\{duplicate}\""
             requests)
       None => match buildPlanEnvModules (plannedRoot modules) modules
         Err e =>
@@ -325,9 +325,9 @@ requestIndex [] index = Ok index
 requestIndex (r :: rest) index =
   let name = propRequestName r
   if propRequestCases r <= 0 then
-    Err "property request \"{name}\" has a non-positive case budget"
+    Err "property request \"\{name}\" has a non-positive case budget"
   else if omHasKey name index then
-    Err "duplicate property request name \"{name}\""
+    Err "duplicate property request name \"\{name}\""
   else
     requestIndex rest (omInsert name r index)
 

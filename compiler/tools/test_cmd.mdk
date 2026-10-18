@@ -2,6 +2,11 @@
 -- factored out of test_main.mdk so BOTH the interpreted driver (test_main.mdk)
 -- and the native CLI (medaka_cli.mdk's runTestCmd) share one implementation.
 --
+-- This file is over 3,000 code lines because the driver, its report twin and the
+-- three engines' per-file orchestration share one prepared pair and one abort
+-- rule, so they live together.  The merged-probe glue (`mergesNativeArms` and
+-- the functions it calls) is expected to move beside `native_probe.mdk`.
+--
 -- Exports:
 --   runTest runtimeP coreP target roots   read the three sources + drive
 --   rootsOrDefault target roots           default roots to [dirOf target]
@@ -113,6 +118,7 @@ import tools.doctest.{
   runPassed,
   runFailed,
   runErrors,
+  exampleExpected,
   exampleInput,
   exampleLine,
   synthName,
@@ -1296,8 +1302,11 @@ singlePhaseTrees engines runtimeDecls coreDecls target roots userDecls =
 
 -- The native arms share one merged probe when the native engine runs alone, the
 -- file is not the prelude, and its arms would otherwise build two probes or
--- more.  The prelude's doctest and property arms are built without its spliced
--- source.  Under a second engine the property plan would be made before the
+-- more.  The prelude keeps one probe per arm: its doctest arm is never built
+-- (`nativeSkipReason`) and its property arm drops the spliced source.  A file
+-- with a smoke example also keeps them: the native backend forces the smoke
+-- binding at startup, so in the merged binary its side effect would repeat in
+-- every section.  Under a second engine the property plan would be made before the
 -- interpreter's doctest elaboration, between it and the later reads of the
 -- pair, so those runs keep one probe per arm.
 mergesNativeArms : List Engine ->
@@ -1313,6 +1322,7 @@ mergesNativeArms : List Engine ->
 mergesNativeArms [EngNative] target tsrc userDecls examples includeTests filterOpt file index =
   not (programIsCore userDecls)
     && baseOf target /= "core.mdk"
+    && not (anyList (e => isNone (exampleExpected e)) examples)
     && nativeProbeCount
         tsrc
         userDecls

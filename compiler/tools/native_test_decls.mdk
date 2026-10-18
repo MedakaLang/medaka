@@ -338,14 +338,16 @@ valueName nonce i = "__tsv_\{probeNameNonce nonce}_\{intToString i}__"
 -- Per test: the body as a binding, plus a printer that emits the constructor
 -- tag and the three rendered fields between sentinels.
 --
--- ⚠️ BOTH take a `Unit` parameter, and the body's is load-bearing, not
--- symmetry.  MEASURED: the native backend evaluates a top-level NULLARY binding
--- eagerly, before `main` runs — `boom = panic "boom"` kills the program before
--- `main`'s first `putStrLn` reaches stdout, where the interpreter prints it
--- first.  As nullary bindings, every test body would therefore be forced at
--- startup, so one panicking test would abort the probe before ANY sentinel was
--- printed and the whole file would report as one undifferentiated abort.  Under
--- a parameter the body is evaluated where it is called — inside `main`, in test
+-- BOTH take a `Unit` parameter, and the body's is load-bearing, not symmetry.
+-- MEASURED: the native backend evaluates a top-level NULLARY binding eagerly,
+-- before `main` runs, when its body is a direct effect or panic —
+-- `boom = panic "boom"` kills the program before `main`'s first `putStrLn`
+-- reaches stdout, where the interpreter prints it first.  The behavior is
+-- shape-dependent: a doctest smoke binding is forced at startup, but
+-- `__ndt_i__ = debug (bump ())` is not.  As nullary bindings, test bodies of the
+-- forced shape would be forced at startup, so one panicking test would abort the
+-- probe before ANY sentinel was printed and the whole file would report as one
+-- undifferentiated abort.  Under a parameter the body is evaluated where it is called — inside `main`, in test
 -- order — which is what gives the abort rule its per-test attribution.
 testBindings : String -> Int -> List (String, Int, Expr) -> List String
 testBindings _ _ [] = []
