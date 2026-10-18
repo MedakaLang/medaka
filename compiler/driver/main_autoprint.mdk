@@ -39,6 +39,7 @@ import frontend.ast.{
 }
 import types.typecheck.{mainTypeIsUnit, mainTypeIsAsync, mainAsyncPayloadIsUnit}
 import types.private_mangle.{mangledName}
+import types.publish.{TcReport(..), CheckedProgram(..)}
 
 -- The loader hands modules dependency-first, so the ENTRY module is last.
 entryPair : List (String, List Decl) -> Option (String, List Decl)
@@ -212,6 +213,24 @@ executedTrees autoPrint driver (coreD, modsD) (coreE, modsE) =
     Ok (coreE, asyncWrapModules driver modsE)
   else
     Ok (coreE, modsE)
+
+-- `executedTrees` over the trees and auto-print evidence of the drive [report]
+-- judged.  A report with no checked program has nothing to run: the driver's
+-- gate refused it before this point, so reaching here is an internal error.
+export
+executedFromReport : TcReport ->
+  String ->
+  (List Decl, List (String, List Decl)) ->
+  Result String (List Decl, List (String, List Decl))
+executedFromReport report driver source = match report.trChecked
+  Some checked => match checked.cpTrees
+    Some trees => executedTrees report.trAutoPrint driver source trees
+    None => noChecked
+  None => noChecked
+
+noChecked : Result String (List Decl, List (String, List Decl))
+noChecked =
+  Err "internal error: the typecheck published no checked program to run"
 
 -- True iff the entry `main` is a driver wrap (`executedTrees`), before or after
 -- `mangleUnitsEv` renames the pins.  The wrapped `main`'s result is `Unit`, so

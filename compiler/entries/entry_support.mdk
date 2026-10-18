@@ -11,6 +11,7 @@
 
 import frontend.ast.{Decl(..), Expr(..), DoStmt(..), LetBind(..), Loc(..), EvId}
 import types.typecheck.{TcDiag}
+import types.publish.{TcReport(..)}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar, desugarIn, mapProg}
 import frontend.desugar_cache.{desugaredPrelude}
@@ -31,8 +32,6 @@ import types.typecheck.{
   ElabResult,
   elaborateOne,
   elaborateModulesWithReport,
-  hadTypeErrors,
-  resetTypeErrorsSticky,
   setStdlibOwnership,
 }
 import support.path.{dirOf, joinPath}
@@ -67,6 +66,7 @@ import ir.core_ir_lower.{externDeclNamesOf}
 import driver.main_autoprint.{
   valueMainCandidate,
   executedTrees,
+  executedFromReport,
   asyncMainShapeError,
 }
 
@@ -340,23 +340,19 @@ moduleLoadHint e = match unknownModuleIdOf e
 -- Unit main (incl. every compiler-graph main) takes the unchanged path, so emitter
 -- output on the compiler graph is byte-identical.
 
--- #2089: the emit driver's own elaboration is the only `elaborateModules` caller
--- that never read `hadTypeErrors` afterwards — a type error surfaced only on this
--- path (the mangled tree, or the compiler's own graph on the bootstrap, which never
--- passes through `medaka build`'s CLI gate) reached codegen at exit 0.  The gate is
--- HARD: ruling 3 made this process `build`'s only typecheck, so nothing downstream
+-- #2089: a type error must stop this driver's own elaboration — it surfaced only
+-- on this path (the mangled tree, or the compiler's own graph on the bootstrap,
+-- which never passes through `medaka build`'s CLI gate) and reached codegen at
+-- exit 0.  The gate reads the drive's report (`trChecked`) and is HARD: ruling 3 made this process `build`'s only typecheck, so nothing downstream
 -- would reject the program, and `MEDAKA_STRICT=1` no longer selects between two
 -- behaviours.
 --
 -- Residual-only arm: the graph-end drain's own diagnostics, which the per-module
 -- lists cannot carry (they close before the drain runs).
-emitResidualGate : List (String, String) ->
-  String ->
-  List (String, TcDiag) ->
-  <IO> Unit
-emitResidualGate pathMap target residual =
-  if hadTypeErrors () then
-    let _ = ePutStrLn (residualOrGeneric pathMap target residual)
+emitResidualGate : List (String, String) -> String -> TcReport -> <IO> Unit
+emitResidualGate pathMap target report =
+  if isNone report.trChecked then
+    let _ = ePutStrLn (residualOrGeneric pathMap target report.trResidual)
     stageExit emitDiagExitCode
 
 -- The whole diagnostic verdict for a build, rendered as `medaka check` renders
@@ -369,9 +365,9 @@ emitFullGate : List (String, String, List Decl) ->
   List Decl ->
   List (String, List Decl) ->
   List (String, (List TcDiag, List TcDiag)) ->
-  List (String, TcDiag) ->
+  TcReport ->
   <IO> Unit
-emitFullGate modsWithPath runtimeDecls coreDecls modules perMod residual =
+emitFullGate modsWithPath runtimeDecls coreDecls modules perMod report =
   let (errLines, warnLines) =
     emitGateDiags runtimeDecls coreDecls modsWithPath modules perMod
   let pathMap = map modIdToPath modsWithPath
@@ -383,7 +379,7 @@ emitFullGate modsWithPath runtimeDecls coreDecls modules perMod residual =
     -- verdict.
     [] =>
       let _ = map ePutStrLn warnLines
-      emitResidualGate pathMap (entryPathOf modsWithPath) residual
+      emitResidualGate pathMap (entryPathOf modsWithPath) report
     _ =>
       let _ = map ePutStrLn errLines
       stageExit emitDiagExitCode
@@ -426,7 +422,7 @@ elaborateForTarget : Option TargetProfile ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (ElabResult, Option EvId, List Diag)
+  (ElabResult, TcReport, List Diag)
 elaborateForTarget None _ _ runtimeDecls coreDecls modules =
   let (elaborated, report) =
     elaborateModulesWithReport
@@ -435,7 +431,7 @@ elaborateForTarget None _ _ runtimeDecls coreDecls modules =
       runtimeDecls
       coreDecls
       modules
-  (elaborated, report.trAutoPrint, [])
+  (elaborated, report, [])
 elaborateForTarget (Some p) modsWithPath paths runtimeDecls coreDecls modules =
   let (analysis, report) =
     analyzeProgramReport
@@ -446,7 +442,7 @@ elaborateForTarget (Some p) modsWithPath paths runtimeDecls coreDecls modules =
       modules
   (
     analysis.eaElab,
-    report.trAutoPrint,
+    report,
     targetRefusal p (entryPathOf modsWithPath) paths analysis.eaTarget,
   )
 
@@ -481,11 +477,11 @@ emitJsonGate : String ->
   List Decl ->
   List (String, List Decl) ->
   List (String, (List TcDiag, List TcDiag)) ->
-  List (String, TcDiag) ->
+  TcReport ->
   Option TargetProfile ->
   List Diag ->
   <IO> CheckJson
-emitJsonGate path front modsWithPath runtimeDecls coreDecls modules perMod residual profile refusal =
+emitJsonGate path front modsWithPath runtimeDecls coreDecls modules perMod report profile refusal =
   let verdict =
     frontJsonAfterDrive
       front
@@ -504,7 +500,7 @@ emitJsonGate path front modsWithPath runtimeDecls coreDecls modules perMod resid
         emitResidualGate
           (map modIdToPath modsWithPath)
           (entryPathOf modsWithPath)
-          residual
+          report
       let _ = emitTargetGate modsWithPath runtimeDecls profile []
       cj
 
@@ -546,13 +542,12 @@ runEmitAsked ask asyncDriver emitTail modsWithPath runtimeDecls coreDecls module
   -- verdict equal `check`'s by construction; `mangleUnitsEv` then renames the elaborated
   -- trees AND the evidence table's `RLocal` routes.  `emitElaborated` mangles exactly
   -- once, after the one elaboration and the driver's wrap.
-  let _ = resetTypeErrorsSticky ()
   let profile = selectTargetProfileOfEnv ()
   let paths = map modIdToPath modsWithPath
   let reported = match ask
     None => paths
     Some (_, front) => map ((mid, path) => (mid, jsonFrontKey front path)) paths
-  let (elaborated, autoPrint, refusal) =
+  let (elaborated, report, refusal) =
     elaborateForTarget
       profile
       modsWithPath
@@ -560,14 +555,14 @@ runEmitAsked ask asyncDriver emitTail modsWithPath runtimeDecls coreDecls module
       runtimeDecls
       coreDecls
       modules
-  let (coreE, modulesE, perMod, residual, _, _) = elaborated
+  let (_, _, perMod, _, _, _) = elaborated
   -- Both halves of the fold now read the trees the loader parsed: the elaboration
   -- above is the user's own program, so a diagnostic names the constructors and
   -- imports the user wrote (#2809).
   let clean = match ask
     None =>
       let _ =
-        emitFullGate modsWithPath runtimeDecls coreDecls modules perMod residual
+        emitFullGate modsWithPath runtimeDecls coreDecls modules perMod report
       let _ = emitTargetGate modsWithPath runtimeDecls profile refusal
       None
     Some (path, front) =>
@@ -580,39 +575,31 @@ runEmitAsked ask asyncDriver emitTail modsWithPath runtimeDecls coreDecls module
           coreDecls
           modules
           perMod
-          residual
+          report
           profile
           refusal
       Some (path, cj)
-  let _ = emitElaborated
-    asyncDriver
-    emitTail
-    runtimeDecls
-    coreDecls
-    modules
-    autoPrint
-    (coreE, modulesE)
+  let _ =
+    emitElaborated asyncDriver emitTail runtimeDecls coreDecls modules report
   match clean
     Some (path, cj) => writeDiagJson path cj
     None => ()
 
 -- The emit of a program the gate admitted, from the elaboration that judged it
--- (`elaborated`, whose auto-print evidence is [autoPrint]): the driver's wrap is
--- applied to its trees (`executedTrees`), and the result is mangled once.
+-- (`report`, whose checked trees are run): the driver's wrap is applied to
+-- them (`executedFromReport`), and the result is mangled once.
 emitElaborated : String ->
   (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  Option EvId ->
-  (List Decl, List (String, List Decl)) ->
+  TcReport ->
   <IO> Unit
-emitElaborated asyncDriver emitTail runtimeDecls coreDecls modules autoPrint elaborated =
+emitElaborated asyncDriver emitTail runtimeDecls coreDecls modules report =
   match asyncMainShapeError modules
     Some msg => failWith msg
     None =>
-      let executed =
-        executedTrees autoPrint asyncDriver (coreDecls, modules) elaborated
+      let executed = executedFromReport report asyncDriver (coreDecls, modules)
       match executed
         Err msg => failWith msg
         Ok (coreW, modulesW) =>

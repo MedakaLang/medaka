@@ -1,5 +1,5 @@
 # META
-source_lines=355
+source_lines=374
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/main_autoprint.mdk — shared composite-`main` auto-print wrap.
@@ -43,6 +43,7 @@ import frontend.ast.{
 }
 import types.typecheck.{mainTypeIsUnit, mainTypeIsAsync, mainAsyncPayloadIsUnit}
 import types.private_mangle.{mangledName}
+import types.publish.{TcReport(..), CheckedProgram(..)}
 
 -- The loader hands modules dependency-first, so the ENTRY module is last.
 entryPair : List (String, List Decl) -> Option (String, List Decl)
@@ -217,6 +218,24 @@ executedTrees autoPrint driver (coreD, modsD) (coreE, modsE) =
   else
     Ok (coreE, modsE)
 
+-- `executedTrees` over the trees and auto-print evidence of the drive [report]
+-- judged.  A report with no checked program has nothing to run: the driver's
+-- gate refused it before this point, so reaching here is an internal error.
+export
+executedFromReport : TcReport ->
+  String ->
+  (List Decl, List (String, List Decl)) ->
+  Result String (List Decl, List (String, List Decl))
+executedFromReport report driver source = match report.trChecked
+  Some checked => match checked.cpTrees
+    Some trees => executedTrees report.trAutoPrint driver source trees
+    None => noChecked
+  None => noChecked
+
+noChecked : Result String (List Decl, List (String, List Decl))
+noChecked =
+  Err "internal error: the typecheck published no checked program to run"
+
 -- True iff the entry `main` is a driver wrap (`executedTrees`), before or after
 -- `mangleUnitsEv` renames the pins.  The wrapped `main`'s result is `Unit`, so
 -- an emitter's scalar auto-print must not print it again.
@@ -361,6 +380,7 @@ asyncPinImport =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "EvId" false) (mem "Pat" false) (mem "Loc" true) (mem "UsePath" true) (mem "UseMember" true))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "mainAsyncPayloadIsUnit" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
+(DUse false (UseGroup ("types" "publish") ((mem "TcReport" true) (mem "CheckedProgram" true))))
 (DTypeSig false "entryPair" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "entryPair" ((PList)) (EVar "None"))
 (DFunDef false "entryPair" ((PList (PVar "p"))) (EApp (EVar "Some") (EVar "p")))
@@ -397,6 +417,10 @@ asyncPinImport =
 (DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest")))
 (DTypeSig true "executedTrees" (TyFun (TyApp (TyCon "Option") (TyCon "EvId")) (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
 (DFunDef false "executedTrees" ((PVar "autoPrint") (PVar "driver") (PTuple (PVar "coreD") (PVar "modsD")) (PTuple (PVar "coreE") (PVar "modsE"))) (EIf (EApp (EApp (EVar "shouldAutoPrintMain") (EVar "coreD")) (EVar "modsD")) (EMatch (EVar "autoPrint") (arm (PCon "Some" (PVar "ev")) () (EApp (EVar "Ok") (ETuple (EApp (EVar "autoPrintPinCore") (EVar "coreE")) (EApp (EApp (EVar "onEntry") (EApp (EVar "wrapEntryMain") (EApp (EApp (EVar "EDictAt") (EVar "autoPrintPinName")) (EVar "ev")))) (EVar "modsE"))))) (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "internal error: the typecheck published no evidence for printing the value `main`"))))) (EIf (EApp (EApp (EVar "shouldAsyncWrapMain") (EVar "driver")) (EVar "modsD")) (EApp (EVar "Ok") (ETuple (EVar "coreE") (EApp (EApp (EVar "asyncWrapModules") (EVar "driver")) (EVar "modsE")))) (EApp (EVar "Ok") (ETuple (EVar "coreE") (EVar "modsE"))))))
+(DTypeSig true "executedFromReport" (TyFun (TyCon "TcReport") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
+(DFunDef false "executedFromReport" ((PVar "report") (PVar "driver") (PVar "source")) (EMatch (EFieldAccess (EVar "report") "trChecked") (arm (PCon "Some" (PVar "checked")) () (EMatch (EFieldAccess (EVar "checked") "cpTrees") (arm (PCon "Some" (PVar "trees")) () (EApp (EApp (EApp (EApp (EVar "executedTrees") (EFieldAccess (EVar "report") "trAutoPrint")) (EVar "driver")) (EVar "source")) (EVar "trees"))) (arm (PCon "None") () (EVar "noChecked")))) (arm (PCon "None") () (EVar "noChecked"))))
+(DTypeSig false "noChecked" (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "noChecked" () (EApp (EVar "Err") (ELit (LString "internal error: the typecheck published no checked program to run"))))
 (DTypeSig true "mainIsWrapped" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))
 (DFunDef false "mainIsWrapped" ((PVar "modules")) (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EApp (EVar "wrappedMainIn") (EVar "decls"))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "wrappedMainIn" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
@@ -449,6 +473,7 @@ asyncPinImport =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "EvId" false) (mem "Pat" false) (mem "Loc" true) (mem "UsePath" true) (mem "UseMember" true))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "mainAsyncPayloadIsUnit" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
+(DUse false (UseGroup ("types" "publish") ((mem "TcReport" true) (mem "CheckedProgram" true))))
 (DTypeSig false "entryPair" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "entryPair" ((PList)) (EVar "None"))
 (DFunDef false "entryPair" ((PList (PVar "p"))) (EApp (EVar "Some") (EVar "p")))
@@ -485,6 +510,10 @@ asyncPinImport =
 (DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest")))
 (DTypeSig true "executedTrees" (TyFun (TyApp (TyCon "Option") (TyCon "EvId")) (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
 (DFunDef false "executedTrees" ((PVar "autoPrint") (PVar "driver") (PTuple (PVar "coreD") (PVar "modsD")) (PTuple (PVar "coreE") (PVar "modsE"))) (EIf (EApp (EApp (EVar "shouldAutoPrintMain") (EVar "coreD")) (EVar "modsD")) (EMatch (EVar "autoPrint") (arm (PCon "Some" (PVar "ev")) () (EApp (EVar "Ok") (ETuple (EApp (EVar "autoPrintPinCore") (EVar "coreE")) (EApp (EApp (EVar "onEntry") (EApp (EVar "wrapEntryMain") (EApp (EApp (EVar "EDictAt") (EVar "autoPrintPinName")) (EVar "ev")))) (EVar "modsE"))))) (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "internal error: the typecheck published no evidence for printing the value `main`"))))) (EIf (EApp (EApp (EVar "shouldAsyncWrapMain") (EVar "driver")) (EVar "modsD")) (EApp (EVar "Ok") (ETuple (EVar "coreE") (EApp (EApp (EVar "asyncWrapModules") (EVar "driver")) (EVar "modsE")))) (EApp (EVar "Ok") (ETuple (EVar "coreE") (EVar "modsE"))))))
+(DTypeSig true "executedFromReport" (TyFun (TyCon "TcReport") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
+(DFunDef false "executedFromReport" ((PVar "report") (PVar "driver") (PVar "source")) (EMatch (EFieldAccess (EVar "report") "trChecked") (arm (PCon "Some" (PVar "checked")) () (EMatch (EFieldAccess (EVar "checked") "cpTrees") (arm (PCon "Some" (PVar "trees")) () (EApp (EApp (EApp (EApp (EVar "executedTrees") (EFieldAccess (EVar "report") "trAutoPrint")) (EVar "driver")) (EVar "source")) (EVar "trees"))) (arm (PCon "None") () (EVar "noChecked")))) (arm (PCon "None") () (EVar "noChecked"))))
+(DTypeSig false "noChecked" (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "noChecked" () (EApp (EVar "Err") (ELit (LString "internal error: the typecheck published no checked program to run"))))
 (DTypeSig true "mainIsWrapped" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))
 (DFunDef false "mainIsWrapped" ((PVar "modules")) (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EApp (EVar "wrappedMainIn") (EVar "decls"))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "wrappedMainIn" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))

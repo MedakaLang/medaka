@@ -210,8 +210,6 @@ import json.{
 }
 import types.publish.{TcReport(..)}
 import types.typecheck.{
-  resetTypeErrorsSticky,
-  hadTypeErrors,
   TcDiag,
   mainTypeIsUnit,
   setStdlibOwnership,
@@ -220,7 +218,7 @@ import driver.main_autoprint.{
   asyncMainShapeError,
   shouldAutoPrintMain,
   valueMainCandidate,
-  executedTrees,
+  executedFromReport,
 }
 import eval.eval.{
   evalModulesOutputRun,
@@ -339,7 +337,6 @@ import tools.check_policy.{
   PolicyOutcome(..),
   runManifest,
   ManifestArgs(..),
-  analyzeProgram,
   analyzeProgramReport,
   EntryAnalysis(..),
   TargetInputs(..),
@@ -2954,10 +2951,9 @@ runRunCmd argv =
                         (ppDiagCliLines (srcLinesArr tsrc) target)
                         (filter diagIsError surfaceDiags)))
             True =>
-              let _ = resetTypeErrorsSticky ()
-              let (analysis, autoPrint) = elaborateRun rtD coreD modsD
-              let (coreE, modsE, perMod, residual, _, _) = analysis.eaElab
-              let residualHit = hadTypeErrors ()
+              let (analysis, report) = elaborateRun rtD coreD modsD
+              let (_, _, perMod, residual, _, _) = analysis.eaElab
+              let residualHit = isNone report.trChecked
               let diags = analyzeFinish surface (tcHalfOfPerModule perMod)
               match filter diagIsError diags
                 [] => match residualHit
@@ -2989,11 +2985,7 @@ runRunCmd argv =
                     -- multi-module arm below keeps `projWarns` on the
                     -- coherence allowlist.
                     let executed =
-                      executedTrees
-                        autoPrint
-                        "runAsyncMain"
-                        (coreD, modsD)
-                        (coreE, modsE)
+                      executedFromReport report "runAsyncMain" (coreD, modsD)
                     match executed
                       Err msg => runAbort msg
                       Ok trees =>
@@ -3043,9 +3035,8 @@ runRunCmd argv =
             -- per-module report below is rendered from ITS output rather than
             -- from a second, check-only pass over the same graph.
             "" =>
-              let _ = resetTypeErrorsSticky ()
-              let (analysis, autoPrint) = elaborateRun rtD coreD modsD
-              let (coreE, modsE, perMod, residual, _, _) = analysis.eaElab
+              let (analysis, report) = elaborateRun rtD coreD modsD
+              let (_, _, perMod, residual, _, _) = analysis.eaElab
               match elaboratedProjectDiags rtD coreD modsWithPath modsD perMod
                 (Some errText, _, _) => match jsonMode
                   True =>
@@ -3066,7 +3057,7 @@ runRunCmd argv =
                           perMod)
                     runAbortJson jsonTriples
                   False => runAbort errText
-                (None, projWarns, _) => match hadTypeErrors ()
+                (None, projWarns, _) => match isNone report.trChecked
                   -- Belt-and-braces: anything only the graph-end drain can
                   -- see still aborts before eval.
                   True => match jsonMode
@@ -3090,11 +3081,7 @@ runRunCmd argv =
                     let _ =
                       emitPhase perfOn "check" (perfTCheck - perfTLoad) target
                     let executed =
-                      executedTrees
-                        autoPrint
-                        "runAsyncMain"
-                        (coreD, modsD)
-                        (coreE, modsE)
+                      executedFromReport report "runAsyncMain" (coreD, modsD)
                     match executed
                       Err msg => runAbort msg
                       Ok trees =>
@@ -3116,15 +3103,12 @@ runRunCmd argv =
                 runAbortJson jsonTriples
               False => runAbort resDiags
 -- G1 (SOUNDNESS): typecheck the WHOLE module graph and abort before
--- eval on ANY type error.  elaborateModules route-stamps via the
--- per-module typecheck (checkModuleFullImpl), which pushes into the
--- sticky error accumulator; resetTypeErrorsSticky clears it first so
--- hadTypeErrors reflects THIS run only.  A type error makes
--- evalModulesOutput miscompile (the G1 bug), so we never reach it.
--- Resolve-phase errors (e.g. PrivateNameAccess) ride a SEPARATE channel
--- hadTypeErrors does not cover, so resolveModulesErrorsByFile is consulted
--- FIRST (mirroring `check`/`build`) and run aborts with the same humane
--- diagnostic before elaborate/eval.
+-- eval unless the drive's report carries a checked program (`trChecked`).  A
+-- type error makes evalModulesOutput miscompile (the G1 bug), so we never
+-- reach it.  Resolve-phase errors (e.g. PrivateNameAccess) ride a SEPARATE
+-- channel the report does not cover, so resolveModulesErrorsByFile is
+-- consulted FIRST (mirroring `check`/`build`) and run aborts with the same
+-- humane diagnostic before elaborate/eval.
 
 desugarPair : (String, List Decl) -> (String, List Decl)
 desugarPair (mid, p) = (mid, desugarIn mid p)
@@ -3136,14 +3120,14 @@ desugarPair (mid, p) = (mid, desugarIn mid p)
 elaborateRun : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  <IO> (EntryAnalysis, Option EvId)
+  <IO> (EntryAnalysis, TcReport)
 elaborateRun rtD coreD modsD =
   let (analysis, report) =
     analyzeProgramReport (valueMainCandidate coreD modsD) True rtD coreD modsD
   let _ = match asyncMainShapeError modsD
     Some msg => runAbort msg
     None => ()
-  (analysis, report.trAutoPrint)
+  (analysis, report)
 
 -- B2 (RUN-EFFECTS): evalModulesOutputRun is evalModulesOutput plus the real-I/O
 -- externs (File/Env/Stdin/Stderr/Clock), hence the `IO` row.  An `Async` main
@@ -3674,7 +3658,7 @@ runCheckPolicyArgs (PolicyArgs (Some target) allow fn) =
 -- `manifest` and `check-policy` load and analyze their target exactly as
 -- `medaka check` does: the multi-file loader (project root, sibling and stdlib
 -- imports), `check`'s resolve diagnostics, then one elaboration of the graph
--- (`analyzeProgram`), refusing on any error `check` would report for it.  The
+-- (`analyzeProgramReport`), refusing on any error `check` would report for it.  The
 -- two verbs therefore read the entry's row from the same analysis, and a
 -- manifest's claim is one `check-policy` can verify.
 analyzeTarget : String -> <IO> Result String EntryAnalysis
@@ -3727,10 +3711,14 @@ analyzeLoaded rsrc csrc target roots stdlibDir modsWithPath =
           modsD))
   match resDiags
     "" =>
-      let _ = resetTypeErrorsSticky ()
-      let analysis =
-        analyzeProgram (valueMainCandidate coreD modsD) False rtD coreD modsD
-      let residualHit = hadTypeErrors ()
+      let (analysis, report) =
+        analyzeProgramReport
+          (valueMainCandidate coreD modsD)
+          False
+          rtD
+          coreD
+          modsD
+      let residualHit = isNone report.trChecked
       let (_, _, perMod, residual, _, _) = analysis.eaElab
       match elaboratedProjectDiags rtD coreD modsWithPath modsD perMod
         (Some errText, _, _) => Err errText
