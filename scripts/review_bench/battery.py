@@ -494,6 +494,9 @@ def cmd_perclass(a) -> int:
     us = _select_units(fx, a, known)
     if a.which == "labelled":
         pairs = [(u, c) for u in us for c in sorted(u["labels"])]
+    elif a.which == "flagged":
+        bflags, _ = arm_flags(a.base, us, units(fx, "dev", known))
+        pairs = [(u, c) for u in us for c in sorted(bflags.get(u["_key"], ()))]
     else:
         pairs = [(u, c) for u in us for c in sorted(known)]
     print(f"perclass[{a.which}] {len(pairs)} (excerpt, class) pairs over {len(us)} excerpts", file=sys.stderr)
@@ -962,7 +965,9 @@ def main() -> int:
 
     p = sub.add_parser("perclass", help="arm C: per-class Haiku (bench.py prompt) on every or labelled class")
     common(p)
-    p.add_argument("--which", choices=("all", "labelled"), default="all")
+    p.add_argument("--which", choices=("all", "labelled", "flagged"), default="all",
+                   help="`flagged`: the classes the --base battery flagged, for `verify:<base>`")
+    p.add_argument("--base", default="battery-pc", help="the battery arm `--which flagged` confirms")
     p.add_argument("--shots", type=int, default=2)
     p.set_defaults(fn=cmd_perclass)
 
