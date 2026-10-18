@@ -1,5 +1,5 @@
 # META
-source_lines=4332
+source_lines=4331
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -1649,20 +1649,19 @@ emitHiddenDiagNote n =
 --      name (#1185).  A single file has no imported modules to add warnings from.
 --  (3) PERF.  The render cost is "per file whose channel is non-empty"; here there
 --      is exactly ONE file, already read into `src` for the error path.
---  (1) CRITERION.  `check`'s single-file arm (`checkRoute`) and `run`'s
---      (`runRunCmd`'s `[(runMid, runDecls)]` arm) apply the SAME
---      `filter diagIsWarn` to an `analyzeFrom` result over the SAME program.
---      ⚠️ NOT to the same `diags` VALUE: the two `analyzeFrom` calls differ in
---      their guard — `check` passes `internalGuardFor (allowInternal || contains
---      mid trusted)`, `run` passes `internalGuardFor allowInternal`, the
---      `|| contains mid trusted` disjunct being a pre-existing asymmetry that
---      `run`'s own arm documents and this slice did not touch.  That guard
+--  (1) CRITERION.  `check`'s single-file arm (`checkFileReport`) and `run`'s
+--      (`runRunCmd`'s `[_]` arm) apply the SAME `filter diagIsWarn` to the
+--      diagnostics of one `frontEnd` run over the SAME `FrontFile` program.
+--      Not to the same `diags` VALUE: `check` passes its `trusted` set as
+--      `fiTrusted` and `run`'s single-file arm passes `[]`, a pre-existing
+--      asymmetry that `run`'s own arm documents.  The front end's guard is
+--      `internalGuardFor (fiAllowInternal || contains mid fiTrusted)`, which
 --      decides only which constructs count as "internal" for `ResError` gating,
---      and every `ResError` reaches `diags` as a `SevError` via `diagOfResError`
---      — so the two results can differ ONLY in their ERROR set, never in the
---      `diagIsWarn` subset either arm surfaces.  So this still cannot surface a
---      warning `check` does not already show — it makes the three verbs agree on
---      one input, which IS the criterion.
+--      and every `ResError` reaches `diags` as a `SevError` via `diagOfResError`,
+--      so the two results can differ ONLY in their ERROR set, never in the
+--      `diagIsWarn` subset either arm surfaces.  So this cannot surface a
+--      warning `check` does not already show: it makes the three verbs agree on
+--      one input, which is the criterion.
 --
 -- The split is deliberate.  The multi-module arms (`locatedProjectDiags`'s
 -- callers, `isHiddenNonEntryWarn`, `hiddenWarnsOfTriple`) stay on
@@ -2551,15 +2550,15 @@ finishBuildArgs _ _ _ = Err "error: medaka build takes exactly one input file"
 -- Shared eval tail: once the gate has ruled the program CLEAN and the whole
 -- module graph has been elaborated (route-stamping via the per-module
 -- typecheck, mainSchemeRef populated), force `main`.  Only reached AFTER the
--- check-strength gate below (single-file: analyzeLocatedG; multi-module:
--- resolve + hadTypeErrors), so a genuinely ill-typed program never reaches
--- evalModulesOutput (G1 soundness invariant).
--- [cohWarns] are the COHERENCE warnings (`W-INCOMPARABLE-IMPLS`, and ONLY those —
--- see `isCoherenceWarn` for why not the whole channel) that the caller's own gate
--- already computed, as (path, src, diags) triples.  ⚠️ A parameter rather than
--- something recomputed here because the two call sites derive them differently
--- (single-file: `analyzeLocatedG`'s diags; multi-module: `locatedProjectDiags`'
--- per-module triples) and recomputing would mean a second whole-graph front-end pass.
+-- check-strength gate below (both arms: the front end's diagnostics, then its
+-- drive's report, which must carry `trChecked`), so a genuinely ill-typed
+-- program never reaches evalModulesOutput (G1 soundness invariant).
+-- [cohWarns] are the warnings the caller's own gate already computed, as (path,
+-- src, diags) triples: the single-file arm's whole warning set
+-- (`allWarnTriples`), the multi-module arm's `runBuildWarnCodes` only
+-- (`isCoherenceWarn`, whose note says why not the whole channel).
+-- A parameter rather than something recomputed here because the two arms derive
+-- them differently, and recomputing would mean a second front-end pass.
 --
 -- 🚨 THIS PARAMETER EXISTS BECAUSE `run` WAS SILENT ON THE ONE DIAGNOSTIC F-3d
 -- DEMOTED.  `finishRunEval` has always called `emitLocatedWarnings`, but only over
@@ -2820,9 +2819,9 @@ runRunCmd argv =
       match mods
         [_] =>
           -- Single-file: render byte-identical caret diagnostics via
-          -- ppDiagCliSrc, instead of the opaque "type error in <file>" message
-          -- (P1-8).  A program resolve rejected was not driven and carries its
-          -- resolve errors here.
+          -- ppDiagCliSrc, instead of an opaque "type error in <file>" message.
+          -- A program resolve rejected was not driven and carries its resolve
+          -- errors here.
           let tsrc = readFileSafe target
           let diags = flatMap snd front.foDiags
           match (filter diagIsError diags, front.foDriven)

@@ -13,8 +13,8 @@
 -- type-broken or parse-broken program, compiles its native diagnostic/panic path
 -- to a wasm `unreachable` trap that aborts with ZERO bytes on stdout/stderr — so
 -- a browser host cannot surface compile errors through it.  This entry runs the
--- REAL front end (the same `analyzeLocated`/`analyzeProject` path the native
--- `medaka check --json` uses), and:
+-- REAL front end (`frontEnd`, via `fileFront`/`analyzeProject`, as the native
+-- `medaka check --json` does), and:
 --   * if there are check errors → prints JSON diagnostics in the SAME shape
 --     `medaka check --json` emits ({"files":[{"file","diagnostics":[...]}]}),
 --     then exits 0 cleanly — NO trap;
@@ -25,11 +25,11 @@
 -- HOW MANY TIMES IT RUNS (S2/#2442 — this line used to read "ONCE" and was wrong).
 -- Per invocation, over the user's program:
 --   `analyze` — parsed + loaded ONCE (`run`'s `loadProgramFilesLocatedCachedE`, threaded downstream),
---     typechecked ONCE (`analyzeFrom`/`analyzeProject`), a drive that also judges
+--     typechecked ONCE (`fileFront`/`analyzeProject`), a drive that also judges
 --     a bare-value main's auto-print `Display` obligation.
 --     Prelude parsing+desugaring goes through the process-wide content-keyed
 --     `desugaredPrelude` memo (`frontend/desugar_cache.mdk`) on BOTH arms —
---     `analyzeFrom` on the single-module arm, `analyzeProject` on the
+--     `fileFront` on the single-module arm, `analyzeProject` on the
 --     multi-module arm — so `doEmit`'s reads below are cache hits either way,
 --     and, because the host re-enters `main` on one live instance
 --     (`mdk_main`, see playground/compile.mjs), the prelude is parsed and
@@ -170,7 +170,7 @@ import backend.emit_plan.{buildEmitPlanReached}
 -- are already linked for `compile`).
 --
 -- `analyze` (#2442) is `compile` minus the emit tail: it runs the IDENTICAL
--- diagnostic-producing logic — the same analyzeLocated/analyzeProject route, the
+-- diagnostic-producing logic — the same fileFront/analyzeProject route, the
 -- same main-shape guard, the same async payload check — and stops where `compile`
 -- would call `runEmit`.  It exists because the editor's live-squiggle path
 -- (playground/language-worker.js) throws the WAT away: on a clean one-liner, 596ms
@@ -246,7 +246,7 @@ shippedIds a =
 -- requirement).  Then route exactly as `medaka check --json` does:
 --   parse error          → single located diagnostic
 --   load error           → single diagnostic (missing import etc.)
---   1 module             → analyzeLocated (single-file path)
+--   1 module             → fileFront (single-file path)
 --   N modules            → analyzeProject (loader path)
 -- If analysis is clean, fall through to emit.
 -- `emit` False (mode `analyze`) takes the SAME route through every diagnostic
@@ -526,8 +526,8 @@ mainShapeError decls = match findMainFunDef decls
 --
 -- COMPOSITE-MAIN AUTO-PRINT (design §10, single-process in-browser path): a bare
 -- non-Unit VALUE main is printed by the wrap `finishClean` applies to its
--- elaborated trees (`executedTrees`), so composite mains no longer crash the
--- emitter.  A bare underived-ADT main never reaches here: the analyze drive posed
+-- elaborated trees (`executedTrees`), so the emitter never sees an unwrapped
+-- composite main.  A bare underived-ADT main never reaches here: the analyze drive posed
 -- the wrap's `Display` obligation and reported it.  A Unit main is unchanged.
 -- An `Async` main is driven by `runAsyncMain`; one whose payload is not `Unit`
 -- is reported here, in `analyze` mode too.

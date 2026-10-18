@@ -140,7 +140,7 @@ autoPrintPinName = "0autoprintln"
 -- PRELUDE's scope, where `Display` is the one own declaration and no user
 -- interface can outrank it.  Only the synthesized occurrence was ever broken.
 --
--- So the wrap now denotes THAT declaration: [coreDecls] is the ELABORATED
+-- So the wrap denotes THAT declaration: [coreDecls] is the ELABORATED
 -- prelude, and this copies its `println : Display a => a -> <IO> Unit`
 -- signature and clauses, dict parameter included, under an unspellable name
 -- and appends them to the core decl list.  `executedTrees` applies the copy to

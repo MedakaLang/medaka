@@ -1818,7 +1818,7 @@ publishProjectDiagnostics runtimeSrc coreSrc uri text docs =
   let projectDir = findProjectRootOrSelf (dirOfPath rootFile)
   let stdlibDir = lspMedakaRoot "." ++ "/stdlib"
   let read = path => docsGet (uriOfPath path) docs
-  -- #1362: the single-doc path (line ~223) uses the UNGUARDED `analyzeLocated`
+  -- #1362: the single-doc path (`publishDiagnosticsFrom`) runs `fileFront` UNGUARDED
   -- (no internal-extern restriction, no `--allow-internal` concept in the
   -- LSP); kept unguarded here too (`allowInternal = True`, `trustedMods = []`)
   -- so a live-edit session never flags what a build-time `check` wouldn't.

@@ -359,9 +359,9 @@ moduleLoadHint e = match unknownModuleIdOf e
 -- #2089: a type error must stop this driver's own elaboration — it surfaced only
 -- on this path (the mangled tree, or the compiler's own graph on the bootstrap,
 -- which never passes through `medaka build`'s CLI gate) and reached codegen at
--- exit 0.  The gate reads the drive's report (`trChecked`) and is HARD: ruling 3 made this process `build`'s only typecheck, so nothing downstream
--- would reject the program, and `MEDAKA_STRICT=1` no longer selects between two
--- behaviours.
+-- exit 0.  The gate reads the drive's report (`trChecked`) and is HARD under
+-- every setting of `MEDAKA_STRICT`: this process is the only typecheck on the
+-- build path, so nothing downstream rejects the program.
 --
 -- Residual-only arm: the graph-end drain's own diagnostics, which the per-module
 -- lists cannot carry (they close before the drain runs).
