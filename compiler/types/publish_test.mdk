@@ -913,12 +913,14 @@ hoverEntry broken =
   let tail = if broken then "\nbad = undefinedThing + 1\n" else ""
   "import m7.{base}\n\nexport\nlevel6 : Int\nlevel6 = base + 6\n\{tail}\nloc z = let w = z in w\n"
 
-projectModule : String ->
+-- The report of the `m7`/`m6` project, projected by [view].
+projectReport : (TcReport -> a) ->
+  String ->
   String ->
   String ->
   Bool ->
-  <Exec, IO, FileRead, FileWrite> String
-projectModule rsrc csrc dir broken =
+  <Exec, IO, FileRead, FileWrite> Result String a
+projectReport view rsrc csrc dir broken =
   let entry = "\{dir}/m6.mdk"
   match (
     writeFile "\{dir}/m7.mdk" "export\nbase : Int\nbase = 1\n",
@@ -938,9 +940,30 @@ projectModule rsrc csrc dir broken =
           rsrc
           csrc
       match report
-        Some r => r.trPartial.paModule
-        None => "no report"
-    _ => "could not write the modules"
+        Some r => Ok (view r)
+        None => Err "no report"
+    _ => Err "could not write the modules"
+
+projectModule : String ->
+  String ->
+  String ->
+  Bool ->
+  <Exec, IO, FileRead, FileWrite> String
+projectModule rsrc csrc dir broken =
+  match projectReport (r => r.trPartial.paModule) rsrc csrc dir broken
+    Ok m => m
+    Err e => e
+
+test "a resolve-rejected graph's report is not checked; its clean twin is" =
+  match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
+    (Ok rsrc, Ok csrc) =>
+      let isChecked = r => isSome r.trChecked
+      let clean = withScratchDir (dir =>
+        expectEqual (Ok True) (projectReport isChecked rsrc csrc dir False))
+      let blocked = withScratchDir (dir =>
+        expectEqual (Ok False) (projectReport isChecked rsrc csrc dir True))
+      expectEach [("clean", clean), ("entry resolve-rejected", blocked)]
+    _ => fail "could not read the prelude pair"
 
 test "paModule is the entry, or the last module checked when resolve blocks the entry" =
   match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")

@@ -1,5 +1,5 @@
 # META
-source_lines=2236
+source_lines=2237
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -801,10 +801,11 @@ typeAtPoint runtimeSrc coreSrc filePath src line col =
             (hoverSchemeAt name src line col env)
 
 -- The hover lookup env for the buffer.  A buffer with a non-core sibling import
--- goes through the multi-module project pipeline (loads the import graph; the
--- entry's own schemes are returned and its locals + import-scoped seed land in the
--- hover side-channels), so imported names resolve.  A single-file buffer keeps the
--- fast `docEnv` path (core + runtime + this buffer only).
+-- goes through the multi-module project pipeline (`projectEntryEnv`: it loads the
+-- import graph and builds the env from the drive's `PartialAnalysis`, the entry's
+-- own schemes plus its locals and import-scoped seed), so imported names resolve.
+-- A single-file buffer keeps the fast `docEnv` path (core + runtime + this buffer
+-- only).
 hoverEnvFor : String ->
   String ->
   String ->

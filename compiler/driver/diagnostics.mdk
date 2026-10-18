@@ -1872,13 +1872,11 @@ projectDiagsLoadedFull exportsFor allowInternal trustedMods runtimeP coreP prelu
 -- split, unlike the OCaml attribute_load_error; entry is the conservative
 -- fallback there too for cycle/ambiguous).
 
--- LSP project-aware hover/completion: load the graph rooted at `entry` (the same
--- loader + cache + read disk-fallback analyzeProject uses) and return the ENTRY
--- module's own top-level schemes.  Its drive (`checkModulesPartialK`) ALSO populates the
--- typecheck hover side-channels (localSchemesOut/seedSchemesOut) for the entry
--- module (checked last), so its locals and its import-scoped seed (runtime + core
--- + imported names) are available to the hover lookup fallback chain.  None on a
--- load error (a buffer with an unresolved import) — hover then degrades to null.
+-- Load the graph rooted at `entry` (the same loader + cache + read disk-fallback
+-- analyzeProject uses) and return the ENTRY module's own top-level schemes, taken
+-- from `projectEntryAnalysis`'s `PartialAnalysis`; the rest of that analysis (the
+-- prelude's schemes, the entry's locals and seed) is dropped.  None on a load
+-- error (a buffer with an unresolved import).
 export
 projectEntrySchemes : Ref (List (String, String)) ->
   Ref (List (String, List Decl)) ->
@@ -2144,10 +2142,9 @@ typecheckPassReport runtimeP coreP preludeKey chainKey mods modPairs buckets =
   -- A value `main`'s auto-print obligation is posed by this drive, unless some
   -- module is resolve-rejected: the entry is then not the graph's last checked
   -- module.
-  let valueMain =
-    not (anyList (b => resolveRejected (snd b)) buckets)
-      && valueMainCandidate coreP modPairs
-  let report =
+  let rejected = bucketsResolveRejected buckets
+  let valueMain = not rejected && valueMainCandidate coreP modPairs
+  let driven =
     checkModulesChainReportFor
       valueMain
       preludeKey
@@ -2156,6 +2153,9 @@ typecheckPassReport runtimeP coreP preludeKey chainKey mods modPairs buckets =
       runtimeP
       coreP
       checkedPairs
+  -- The drive covers only the modules resolve let through, so on a rejected graph
+  -- its report checks a program that is not the one loaded.
+  let report = if rejected then { driven | trChecked = None } else driven
   (
     report,
     typecheckDiagsFold

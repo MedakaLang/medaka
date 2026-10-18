@@ -28,12 +28,14 @@ deAliasMethodImports	Decl	1/14
 deAliasMethodMembers	Decl	2/14
 declBodyVarsOf	Decl	1/14
 declCtorIdentsOf	Decl	3/14
+declFaults	Decl	5/14
 declIsOwnedType	Decl	1/14
 declKindEntry	Decl	1/14
 declMethodIdentsOf	Decl	2/14
 declMethodNamesOf	Decl	3/14
 declNameLocs	Decl	1/14
 declRefNames	Decl	7/14
+declRow	Decl	2/14
 definerShadowArgHead	Expr	2/42
 definerShadowVarHead	Expr	3/42
 dictPassDecl	Decl	3/14

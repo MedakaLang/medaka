@@ -875,8 +875,8 @@ echo "  ok: CE block is $ce_n line(s), no elaboration-machinery call, no exclude
 # are all kept, re-pointed at `graphPreamble`, and two NEW rows are added: the
 # SOLE-SITE row (every mention of a writer's NAME in this file, outside the writer's
 # own column-0 definition lines, must fall inside `graphPreamble`'s body) and the
-# single-entry row (`graphPreamble` must have exactly the two call sites the
-# consolidation leaves -- `driveGraphK` and `checkModulesPreambleK`'s projection).
+# single-entry row (`graphPreamble` must have exactly the call sites listed at that
+# row below -- two drivers and two projections).
 #
 # The sole-site row is file-wide on purpose. A row keyed on one consumer's body can
 # only fire for a writer copied into THAT body, and it can only fire at all if the
@@ -1012,22 +1012,35 @@ echo "      in the file carries a copy of any row"
 
 # THE SINGLE-ENTRY ROW. The rows above prove each writer has exactly one site and
 # that the site is graphPreamble. This one proves the CALL COUNT: graphPreamble
-# is called from exactly the two sites the consolidation leaves -- `driveGraphK`
-# (the one graph driver) and `checkModulesPreambleK` (its two-component projection,
-# for the schemes-only `checkModulesK`). A third call site is a new Module-mode
-# entry and must be adjudicated here, not merged silently.
+# is called from exactly these four sites, one row each with its reason:
+#   driveGraphK                  -- the one graph driver
+#   checkModulesChainReportFor   -- the keyed chain arm (`chainGo`'s caller). It
+#                                    mirrors driveGraphK's prologue by hand because
+#                                    the memo resumes mid-fold, and it needs the
+#                                    preamble's core closure and contexts to build
+#                                    the drive's TcReport (sprint arch-p1-6, the
+#                                    report-on-every-drive slice, licensed this call)
+#   checkModulesPreambleK        -- the two-component projection for the
+#                                    schemes-only `checkModulesK`
+#   checkModulesPartialK         -- the schemes-only drive that also returns its
+#                                    PartialAnalysis, so it projects the core
+#                                    closure and contexts as well (same slice)
+# A fifth call site is a new Module-mode entry and must be adjudicated here, not
+# merged silently.
 # every non-comment mention of the name that is not one of its own two definition
 # lines (signature + equation, both at column 0) is a call site.
 gp_calls=$(grep -n 'graphPreamble' "$TC" | grep -v ':[[:space:]]*--' | grep -vc '^[0-9]*:graphPreamble ' || true)
-if [ "$gp_calls" -ne 2 ]; then
+if [ "$gp_calls" -ne 4 ]; then
   echo "FAIL: graphPreamble has $gp_calls call site(s) in compiler/types/typecheck.mdk,"
-  echo "  expected exactly 2 (driveGraphK, and checkModulesPreambleK's projection)."
-  echo "  A third caller is a new Module-mode driver entry.  REMEDY: route it through"
+  echo "  expected exactly 4 (driveGraphK, the keyed chain arm of"
+  echo "  checkModulesChainReportFor, and the checkModulesPreambleK and"
+  echo "  checkModulesPartialK projections)."
+  echo "  A fifth caller is a new Module-mode driver entry.  REMEDY: route it through"
   echo "  driveGraphK's output selection instead, or -- if a genuinely new entry is"
   echo "  intended -- raise this count HERE, in the same commit, with a reason."
   exit 1
 fi
-echo "  ok: graphPreamble has exactly 2 call sites (one driver + one projection)"
+echo "  ok: graphPreamble has exactly 4 call sites (two drivers + two projections)"
 
 # ORDER: populateEffectDomainsGraph must precede the declEnvsRef := write, at BOTH
 # entries -- the #2789 class. An envelope built before effect domains are

@@ -1,5 +1,5 @@
 # META
-source_lines=513
+source_lines=516
 stages=DESUGAR,MARK
 # SOURCE
 -- The shapes the typechecker publishes, and the pure functions that freeze a
@@ -328,10 +328,13 @@ freezeNewest n rows
 -- ── the report of one graph drive ──────────────────────────────────────────
 
 -- The report over a drive's frozen outputs.  `trChecked` is withheld on any
--- error, any link left after freezing, any effect summary still unsolved, and
--- any evidence fault; the weak variables it allows are listed in `cpWeak`.  The
--- evidence table is built only for a drive with none of the first three: an
--- ill-typed drive has no checked program to carry it.  `trEvidenceFaults` is
+-- error the drive reports, any link left after freezing, any effect summary
+-- still unsolved, and any evidence fault; the weak variables it allows are listed
+-- in `cpWeak`.  The project typecheck pass (`typecheckPassReport` in
+-- `driver/diagnostics.mdk`) also withholds it when resolve rejected any module of
+-- the graph.  An error that pass adds after the drive (`R-CANNOT-DERIVE`) does not
+-- withhold it.  The evidence table is built only for a drive with no error, link
+-- or open summary: an ill-typed drive has no checked program to carry it.  `trEvidenceFaults` is
 -- what the table failed against the trees, empty when it was not built.
 -- `tables` fill the partial analysis whether or not the program is checked.
 export
