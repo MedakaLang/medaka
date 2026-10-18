@@ -335,12 +335,19 @@ driveProbes dir = [
       fixture "props_doc.mdk",
     ],
   -- #4155 custom-Arbitrary validation elaborates the same input twice
-  probeRows "test_arb_eval" [
-    "test",
-    "--engines",
-    "eval",
-    fixture "arbitrary.mdk",
-  ],
+  probeRows
+    "test_arb_eval"
+    [
+      "test",
+      "--engines",
+      "eval",
+      fixture "arbitrary.mdk",
+    ],
+  -- #3902 the parent drives a graph that only the native child reads
+  probeRows "test_tonly_native" ["test", fixture "t_only.mdk"],
+  -- #2732 the parent's gate drive, which the child's strict refusal cannot
+  -- replace
+  probeRows "test_doc_native" ["test", fixture "doc.mdk"],
 ]
 
 test "stage_counts: per-verb stage counts match stage_counts.golden" = withScratchDir

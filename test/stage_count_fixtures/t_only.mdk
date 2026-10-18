@@ -1,0 +1,6 @@
+import test.{expectEqual}
+
+double : Int -> Int
+double x = x * 2
+
+test "double one" = expectEqual (double 1) 2
