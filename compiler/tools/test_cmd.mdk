@@ -761,15 +761,20 @@ data Prepared =
 -- on it.  `hasDoctests` is the module's UNFILTERED
 -- doctest presence: the arm is chosen by what the module contains, so `--filter`
 -- cannot move it.
+--
+-- `unread` is `treesUnread` for the run.  An exempt, doctest-free target then has
+-- no gate and no tree reader, so the elaboration is skipped; the load and
+-- `modulePathMap` still happen.
 prepareMulti : String ->
   String ->
   String ->
   List String ->
   Bool ->
   Bool ->
+  Bool ->
   List Decl ->
   <IO> (Option String, Prepared)
-prepareMulti rsrc csrc target roots exempt hasDoctests synthDecls =
+prepareMulti rsrc csrc target roots exempt unread hasDoctests synthDecls =
   let loaded = perfRow "test-load" target (_ =>
     loadProgramFilesLocatedE (_ => None) target roots)
   match loaded
@@ -779,19 +784,22 @@ prepareMulti rsrc csrc target roots exempt hasDoctests synthDecls =
     )
     Ok mods =>
       modulePathMap := map modIdToPath mods
-      perfRow
-        "test-gate"
-        (if hasDoctests then "check" else "elaborate")
-        (_ =>
-          elaborateFor
-            rsrc
-            csrc
-            target
-            roots
-            mods
-            exempt
-            hasDoctests
-            synthDecls)
+      if exempt && unread && not hasDoctests then
+        (None, PreparedPair unreadTrees)
+      else
+        perfRow
+          "test-gate"
+          (if hasDoctests then "check" else "elaborate")
+          (_ =>
+            elaborateFor
+              rsrc
+              csrc
+              target
+              roots
+              mods
+              exempt
+              hasDoctests
+              synthDecls)
 
 elaborateFor : String ->
   String ->
@@ -1088,6 +1096,7 @@ driveMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases filt
       target
       roots
       exempt
+      (treesUnread engines userDecls)
       (isNonEmptyL allExamples)
       synthDecls
   match gated
@@ -2390,6 +2399,7 @@ reportMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases fil
       target
       roots
       exempt
+      (treesUnread engines userDecls)
       (isNonEmptyL allExamples)
       (buildSynthDecls synthResults)
   match prepared
@@ -2972,7 +2982,8 @@ runEvalPropsWorkerSource target nonce requests runtimeSrc coreSrc stdlibDir tsrc
   let exempt = typecheckExempt target userDecls tsrc
   currentEvalFile := target
   if hasUseDecls userDecls then
-    let prepared = prepareMulti runtimeSrc coreSrc target roots exempt False []
+    let prepared =
+      prepareMulti runtimeSrc coreSrc target roots exempt False False []
     match prepared
       (Some message, _) => evalWorkerDie (typecheckGateFail target message)
       (None, work) =>

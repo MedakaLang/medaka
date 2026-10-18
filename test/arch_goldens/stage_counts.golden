@@ -259,9 +259,9 @@ test_arb_eval.read.source	2
 test_arb_eval.typecheck.drive	5
 test_arb_eval.typecheck.module	10
 test_tonly_native.exit	0
-test_tonly_native.desugar	16
+test_tonly_native.desugar	11
 test_tonly_native.exhaust.guards	6
-test_tonly_native.exhaust.oracle	21
+test_tonly_native.exhaust.oracle	14
 test_tonly_native.lex.offsets	2
 test_tonly_native.lex.pairs	13
 test_tonly_native.lex.tokenize	2
@@ -269,8 +269,8 @@ test_tonly_native.lint.comments	1
 test_tonly_native.load.located	2
 test_tonly_native.parse.prescan	14
 test_tonly_native.read.source	12
-test_tonly_native.typecheck.drive	2
-test_tonly_native.typecheck.module	13
+test_tonly_native.typecheck.drive	1
+test_tonly_native.typecheck.module	7
 test_doc_native.exit	0
 test_doc_native.desugar	9
 test_doc_native.exhaust.guards	3
