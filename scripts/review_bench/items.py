@@ -138,6 +138,32 @@ def location(it: dict) -> str:
     return loc
 
 
+EVIDENCE_MODES = ("curated", "generated", "none")
+
+
+def set_evidence(items: list[dict], mode: str, classes: set[str] | None = None) -> None:
+    """Point every item's `_refs` at the evidence `mode` supplies: the fixture's
+    hand-curated refs, refs found by evidence.py, or none. With `classes`,
+    generation runs only for items of those classes (few-shot examples are
+    always of the scored item's class)."""
+    if mode == "curated":
+        for it in items:
+            it["_refs"] = evidence_refs(it)
+    elif mode == "none":
+        for it in items:
+            it["_refs"] = []
+    elif mode == "generated":
+        import evidence as EV
+        for it in items:
+            if classes is not None and it["class"] not in classes:
+                it["_refs"] = []
+                continue
+            it["_refs"] = [{"file": r["file"], "anchor": r["anchor"], "excerpt": r["excerpt"],
+                            "fact": r.get("fact", "")} for r in EV.generate(it)]
+    else:
+        sys.exit(f"unknown evidence mode {mode!r}; one of {EVIDENCE_MODES}")
+
+
 def render_user(it: dict) -> str:
     parts = [f"File: {location(it)}", "Excerpt:\n<<<\n" + it["excerpt"] + "\n>>>"]
     for i, ref in enumerate(it["_refs"], 1):
