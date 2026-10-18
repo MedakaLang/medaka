@@ -1,5 +1,7 @@
 # Whole-rubric review per hunk, 2026-10-17: does a Jev router pay?
 
+Reproduce at commit 8fbc5977f; the Jev and cascade stages were removed after it.
+
 The per-item benchmark asks each judge only the class an item is labelled for.
 A real review asks all 47 classes of every hunk, and most (hunk, class) pairs
 are negatives, which is where a cheap router could pay. This run measures that.

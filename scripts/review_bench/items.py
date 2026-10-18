@@ -173,11 +173,6 @@ def render_user(it: dict) -> str:
     return "\n\n".join(parts)
 
 
-def jev_evidence(it: dict) -> list[dict]:
-    return [{"file": r["file"], "anchor": r["anchor"], "excerpt": r["excerpt"]}
-            | ({"fact": r["fact"]} if r["fact"] else {}) for r in it["_refs"]]
-
-
 def few_shots(item: dict, pool: list[dict], k: int) -> list[tuple[str, bool, str]]:
     """k dev-split examples of the item's class, alternating polarity, never from
     the item's own source group, in a fixed hash order."""

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Whole-rubric review per excerpt: does a Jev router pay when every class is
-asked of every hunk?
+"""Hunk-level review measurement: one Haiku call per excerpt over the whole rubric,
+scored against the labelled fixtures.
 
 A MEASUREMENT, NOT A GATE. It calls external models and exits 0 unless misused.
 Never enrol it in test/gates.toml.
@@ -14,22 +14,14 @@ only through the Opus audit.
 Arms (subcommand that asks, then the name `report --arms` scores it by):
   A   `battery`     one Haiku call per excerpt, the whole rubric in the system
                     prompt; `battery` or `battery-pc` (with --prompt-cache)
-  B   `jev`+`route` one Jev pass per excerpt over every class (state layouts
-                    shared, shared1, family, perclass), then per-class Haiku on
-                    the classes it forwards; `route:<layout>:fit95`
-  B'  `restricted`  one Haiku battery call over the forwarded classes only;
-                    `restricted:<layout>:fit95`
   C   `perclass`    per-class Haiku on every class; `perclass`
-  computed from the above without new calls: `jev:<router>` (the router alone),
-  `filter:<battery>:<router>` (battery findings the router would forward),
+  computed from the above without new calls:
   `verify:<battery>` (battery findings per-class Haiku confirms)
 
-A router `<layout>:fit95` takes the global threshold at which the layout keeps
-95% of dev's labelled positives; `:cross` also forwards the cross-snippet
-classes. Every Haiku finding is verified as in bench.py: its quote must occur.
+Every Haiku finding is verified as in bench.py: its quote must occur.
 
 Subcommands (`python3 -I scripts/review_bench/battery.py <cmd> -h`):
-  jev, battery, perclass, route, restricted, audit, report
+  battery, perclass, audit, report
 """
 from __future__ import annotations
 
@@ -52,11 +44,7 @@ import engines as E  # noqa: E402
 import items as I  # noqa: E402
 import rubric as R  # noqa: E402
 
-sys.path.insert(0, str(HERE.parents[1] / "scripts" / "jev"))
-from jev_eval import auc  # noqa: E402
-
 RESULTS = E.CACHE / "results"
-STATES = ("shared", "shared1", "family", "perclass")
 SAMPLE_SEED = 20261017
 
 
@@ -176,97 +164,6 @@ def label_of(u: dict, cls: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Jev router: three state layouts, the per-class question text unchanged.
-# ---------------------------------------------------------------------------
-def slug_key(cls: str) -> str:
-    return re.sub(r"[^a-z0-9]", "_", cls)
-
-
-def _multi_rule_question(r: dict) -> dict:
-    q = R.jev_question(r)
-    q = dict(q)
-    q["instructions"] = q["instructions"].replace("`rule`", f"`rules.{slug_key(r['class'])}`")
-    return q
-
-
-def jev_requests(u: dict, rub: dict, classes: list[str], layout: str, model: str) -> list[tuple]:
-    """[(cache key, state, questions, [classes answered])]. Question ids are `<class>|fwd|rev`."""
-    evidence = I.jev_evidence(u)
-    base = {"file": I.location(u), "excerpt": u["excerpt"], "evidence": evidence}
-    if layout == "perclass":
-        out = []
-        for c in classes:
-            it = pseudo_item(u, c)
-            key, state, qs = B.jev_request(it, rub, model)
-            out.append((key, state, {f"{c}|{k}": v for k, v in qs.items()}, [c]))
-        return out
-    if layout in ("shared", "shared1"):
-        groups = {"all": classes}
-    else:
-        groups = {}
-        for c in classes:
-            groups.setdefault("+".join(R.SUBJECTS[c][1]) or "plain", []).append(c)
-    # `shared1` asks the flag-first order only: half the question tokens, no position-bias average.
-    orders = ("fwd",) if layout == "shared1" else ("fwd", "rev")
-    out = []
-    for _g, cs in groups.items():
-        note_keys = ["core"] + sorted({k for c in cs for k in R.SUBJECTS[c][1]})
-        state = {"language_notes": {k: R.NOTES[k] for k in note_keys},
-                 "rules": {slug_key(c): R.rule_text(rub[c]) for c in cs}} | base
-        qs = {}
-        for c in cs:
-            for k, v in R.jev_both_orders(_multi_rule_question(rub[c])).items():
-                if k in orders:
-                    qs[f"{c}|{k}"] = v
-        out.append((E.jev_request_key(model, state, qs), state, qs, cs))
-    return out
-
-
-def jev_class_p(res: dict, cls: str) -> float | None:
-    ps = [a["probabilities"]["flag"] for qid, a in res.get("answers", {}).items()
-          if qid.split("|")[0] == cls and a.get("type") == "choice" and "flag" in a.get("probabilities", {})]
-    return sum(ps) / len(ps) if ps else None
-
-
-def cmd_jev(a) -> int:
-    rub, known, fx = _setup()
-    us = _select_units(fx, a, known)
-    classes = sorted(known)
-    reqs = {u["_key"]: jev_requests(u, rub, classes, a.layout, a.jev_model) for u in us}
-    flat = list({r[0]: r[:3] for rs in reqs.values() for r in rs}.values())
-    toks = sum(len(json.dumps(s)) + len(json.dumps(q)) for _, s, q in flat) / E.CHARS_PER_TOKEN
-    print(f"jev[{a.layout}] over {len(us)} excerpts: {len(flat)} requests, ~{toks:.0f} input tokens est., "
-          f"~${toks * E.JEV_USD_PER_MTOK_IN / 1e6:.3f}", file=sys.stderr)
-    if a.dry_run:
-        if a.show:
-            k, s, q = flat[0]
-            print(json.dumps({"state": s, "questions": dict(list(q.items())[:4])}, indent=1))
-        return 0
-    todo = sum(1 for k, _, _ in flat if E._cache_get("jev", k) is None)
-    t0 = time.perf_counter()
-    res = E.ask_jev(flat, a.jev_model, a.jobs)
-    wall = time.perf_counter() - t0
-    out = {}
-    for u in us:
-        ps, cost, errs = {}, 0.0, 0
-        for key, _s, _q, cs in reqs[u["_key"]]:
-            r = res.get(key, {"error": "missing"})
-            if "error" in r:
-                errs += 1
-                continue
-            cost += r["cost_usd"]
-            for c in cs:
-                ps[c] = jev_class_p(r, c)
-        out[u["_key"]] = {"p": ps, "cost_usd": cost, "errors": errs, "requests": len(reqs[u["_key"]])}
-    _save(f"battery-jev-{a.layout}", out)
-    _log_run(f"jev-{a.layout}", a.split, len(us), todo, wall, a.jobs)
-    tot = sum(r["cost_usd"] for r in out.values())
-    print(f"jev[{a.layout}]: {len(out)} excerpts, {sum(r['errors'] for r in out.values())} failed requests, "
-          f"${tot:.4f} (${tot / max(len(out), 1):.5f}/excerpt), {wall:.0f}s for {todo} asked", file=sys.stderr)
-    return 0
-
-
-# ---------------------------------------------------------------------------
 # Headless Claude returning raw text (the battery returns a list, not a verdict).
 # ---------------------------------------------------------------------------
 def _claude_raw_one(model: str, system: str, user: str, timeout: int, prompt_cache: bool) -> dict:
@@ -329,7 +226,7 @@ def ask_raw(reqs: list[tuple[str, str, str]], model: str, kind: str, jobs: int, 
 
 
 # ---------------------------------------------------------------------------
-# Arm A / B': the battery prompt.
+# Arm A: the battery prompt.
 # ---------------------------------------------------------------------------
 BATTERY_CONTRACT = (
     "Reply with one JSON array and nothing else. Each element is one finding:\n"
@@ -463,7 +360,7 @@ def cmd_battery(a) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Arm C (and B's Haiku stage): per-class Haiku with the bench.py prompt.
+# Arm C: per-class Haiku with the bench.py prompt.
 # ---------------------------------------------------------------------------
 def run_perclass(pairs: list[tuple[dict, str]], rub: dict, fx: list[dict], shots: int, jobs: int,
                  timeout: int) -> dict[str, dict]:
@@ -495,7 +392,7 @@ def cmd_perclass(a) -> int:
     if a.which == "labelled":
         pairs = [(u, c) for u in us for c in sorted(u["labels"])]
     elif a.which == "flagged":
-        bflags, _ = arm_flags(a.base, us, units(fx, "dev", known))
+        bflags, _ = arm_flags(a.base, us)
         pairs = [(u, c) for u in us for c in sorted(bflags.get(u["_key"], ()))]
     else:
         pairs = [(u, c) for u in us for c in sorted(known)]
@@ -509,81 +406,6 @@ def cmd_perclass(a) -> int:
     cost = sum(r["cost_usd"] for r in out.values())
     print(f"perclass: {len(out)} pairs, {sum(1 for r in out.values() if r.get('error'))} errors, "
           f"${cost:.4f}", file=sys.stderr)
-    return 0
-
-
-# ---------------------------------------------------------------------------
-# Router decisions, shared by B, B' and the report.
-# ---------------------------------------------------------------------------
-def load_router(layout: str) -> dict[str, dict]:
-    return _load(f"battery-jev-{layout}")
-
-
-def fit_global(us: list[dict], jev: dict, target: float) -> float:
-    ps = sorted(jev[u["_key"]]["p"].get(c) or 0.0 for u in us if u["_key"] in jev
-                for c, pol in u["labels"].items() if pol == "positive")
-    if not ps:
-        return 0.0
-    grid = [i / 200 for i in range(0, 201)]
-    return max(t for t in grid if sum(1 for p in ps if p >= t) >= target * len(ps))
-
-
-def router_rule(spec: str, us_dev: list[dict]) -> tuple[str, callable]:
-    """spec `<layout>:<threshold>|fit95[:cross]`. `cross` always forwards the cross-snippet classes."""
-    parts = spec.split(":")
-    layout, thr = parts[0], parts[1] if len(parts) > 1 else "fit95"
-    cross = "cross" in parts[2:]
-    jev = load_router(layout)
-    if thr.startswith("fit"):
-        t = fit_global(us_dev, jev, int(thr[3:]) / 100)
-    else:
-        t = float(thr)
-
-    def fwd(u: dict, c: str) -> bool:
-        if cross and R.cross_snippet(c):
-            return True
-        p = jev.get(u["_key"], {}).get("p", {}).get(c)
-        return p is None or p >= t
-    return f"{layout} t={t:.3f}{' +cross' if cross else ''}", fwd
-
-
-def cmd_restricted(a) -> int:
-    rub, known, fx = _setup()
-    us = _select_units(fx, a, known)
-    dev = units(fx, "dev", known)
-    name, fwd = router_rule(a.router, dev)
-    order = _rubric_order(rub, known)
-    sets = {u["_key"]: [c for c in order if fwd(u, c)] for u in us}
-    n = sum(len(v) for v in sets.values())
-    print(f"restricted battery, router {name}: {n / max(len(us), 1):.1f} classes per excerpt", file=sys.stderr)
-    if a.dry_run:
-        return 0
-    t0 = time.perf_counter()
-    out = run_battery(us, rub, sets, "battery_r", a.jobs, a.timeout, False)
-    for k in out:
-        out[k]["router"] = name
-    stage = f"battery-restricted-{_tag(a.router)}"
-    _save(stage, out)
-    _log_run(stage, a.split, len(us), None, time.perf_counter() - t0, a.jobs)
-    _summary(stage, out)
-    return 0
-
-
-def cmd_route(a) -> int:
-    """Ask per-class Haiku on the pairs a router forwards (B's Haiku stage)."""
-    rub, known, fx = _setup()
-    us = _select_units(fx, a, known)
-    dev = units(fx, "dev", known)
-    name, fwd = router_rule(a.router, dev)
-    pairs = [(u, c) for u in us for c in sorted(known) if fwd(u, c)
-             and (not a.labelled_only or c in u["labels"])]
-    print(f"route {name}: {len(pairs)} pairs ({len(pairs) / max(len(us), 1):.1f}/excerpt)", file=sys.stderr)
-    if a.dry_run:
-        return 0
-    t0 = time.perf_counter()
-    out = run_perclass(pairs, rub, fx, a.shots, a.jobs, a.timeout)
-    _save("battery-perclass", out)
-    _log_run(f"route-{_tag(a.router)}", a.split, len(us), None, time.perf_counter() - t0, a.jobs)
     return 0
 
 
@@ -630,8 +452,7 @@ def unlabelled_flags(us: list[dict], arm: dict[str, set[str]], details: dict) ->
 def cmd_audit(a) -> int:
     rub, known, fx = _setup()
     us = _select_units(fx, a, known)
-    dev = units(fx, "dev", known)
-    arm, details = arm_flags(a.arm, us, dev)
+    arm, details = arm_flags(a.arm, us)
     flags = unlabelled_flags(us, arm, details)
     rng = random.Random(SAMPLE_SEED)
     picked = rng.sample(flags, min(a.n, len(flags)))
@@ -663,33 +484,17 @@ def cmd_audit(a) -> int:
 # ---------------------------------------------------------------------------
 # Scoring arms.
 # ---------------------------------------------------------------------------
-def arm_flags(arm: str, us: list[dict], dev: list[dict]) -> tuple[dict, dict]:
+def arm_flags(arm: str, us: list[dict]) -> tuple[dict, dict]:
     """Returns ({unit key: flagged classes}, {(unit, class): finding}) and per-unit cost via ARM_COST.
-    arm: `battery` | `battery-pc` | `perclass` | `route:<router>` | `restricted:<router>` | `jev:<router>`
-    | `filter:<battery>:<router>` | `verify:<battery>`."""
+    arm: `battery` | `battery-pc` | `perclass` | `verify:<battery>`."""
     ARM_COST.clear()
     flags, det = {}, {}
-    if arm.startswith("filter:"):
-        # Jev after the battery: a battery finding survives only if the router would forward its class.
-        _, base, spec = arm.split(":", 2)
-        bflags, bdet = arm_flags(base, us, dev)
-        bcost = dict(ARM_COST)
-        _name, fwd = router_rule(spec, dev)
-        jcost = {k: v["cost_usd"] for k, v in load_router(spec.split(":")[0]).items()}
-        ARM_COST.clear()
-        for u in us:
-            if u["_key"] not in bflags:
-                continue
-            flags[u["_key"]] = {c for c in bflags[u["_key"]] if fwd(u, c)}
-            c0, d0, n0 = bcost[u["_key"]]
-            ARM_COST[u["_key"]] = (c0 + jcost.get(u["_key"], 0.0), d0, n0)
-        return flags, {k: v for k, v in bdet.items() if k[1] in flags.get(k[0], ())}
     if arm.startswith("verify:"):
         # Per-class Haiku after the battery: a battery finding survives only if the
         # per-class prompt for its class also flags it. Complete only where every
         # battery-flagged class has a per-class answer.
         base = arm.split(":", 1)[1]
-        bflags, _ = arm_flags(base, us, dev)
+        bflags, _ = arm_flags(base, us)
         bcost = dict(ARM_COST)
         pc = _load("battery-perclass")
         ARM_COST.clear()
@@ -711,13 +516,8 @@ def arm_flags(arm: str, us: list[dict], dev: list[dict]) -> tuple[dict, dict]:
             if complete:
                 ARM_COST[u["_key"]] = (cost, dur, len(bflags[u["_key"]]))
         return flags, det
-    if arm in ("battery", "battery-pc") or arm.startswith("restricted:"):
-        stage = arm if not arm.startswith("restricted:") else f"battery-restricted-{_tag(arm.split(':', 1)[1])}"
-        res = _load(stage)
-        jcost = {}
-        if arm.startswith("restricted:"):
-            layout = arm.split(":", 1)[1].split(":")[0]
-            jcost = {k: v["cost_usd"] for k, v in load_router(layout).items()}
+    if arm in ("battery", "battery-pc"):
+        res = _load(arm)
         for u in us:
             r = res.get(u["_key"])
             if r is None:
@@ -725,26 +525,15 @@ def arm_flags(arm: str, us: list[dict], dev: list[dict]) -> tuple[dict, dict]:
             flags[u["_key"]] = set(r["flags"])
             for c, f in r["flags"].items():
                 det[(u["_key"], c)] = f
-            ARM_COST[u["_key"]] = (r["cost_usd"] + jcost.get(u["_key"], 0.0), r.get("duration_ms") or 0,
-                                   r.get("classes_asked", 0))
+            ARM_COST[u["_key"]] = (r["cost_usd"], r.get("duration_ms") or 0, r.get("classes_asked", 0))
         return flags, det
+    if arm != "perclass":
+        sys.exit(f"unknown arm `{arm}`: battery | battery-pc | perclass | verify:<battery>")
     pc = _load("battery-perclass")
-    if arm == "perclass":
-        fwd, jcost = (lambda u, c: True), {}
-    else:
-        kind, spec = arm.split(":", 1)
-        _name, fwd = router_rule(spec, dev)
-        jcost = {k: v["cost_usd"] for k, v in load_router(spec.split(":")[0]).items()}
-    jev_only = arm.startswith("jev:")
     for u in us:
-        cs, cost, dur, n, complete = set(), jcost.get(u["_key"], 0.0), 0, 0, True
+        cs, cost, dur, n, complete = set(), 0.0, 0, 0, True
         for c in sorted(R.SUBJECTS):
-            if not fwd(u, c):
-                continue
             n += 1
-            if jev_only:
-                cs.add(c)
-                continue
             r = pc.get(f"{u['_key']}#{c}")
             if r is None:
                 complete = False
@@ -785,52 +574,13 @@ def metrics(us: list[dict], flags: dict[str, set[str]], complete: set[str]) -> d
             "fpr": fp / nctl if nctl else None, "unl_per": unl / nc if nc else None, "unl": unl, "nc": nc}
 
 
-def router_stats(us: list[dict], layout: str, dev: list[dict]) -> dict:
-    jev = load_router(layout)
-    pos, ctl, unl = [], [], []
-    for u in us:
-        if u["_key"] not in jev:
-            continue
-        for c, p in jev[u["_key"]]["p"].items():
-            if p is None:
-                continue
-            lab = label_of(u, c)
-            (pos if lab == "positive" else ctl if lab == "control" else unl if lab == "unlabelled" else []).append(p)
-    pairs = [(p, True) for p in pos] + [(p, False) for p in ctl]
-    pairs_u = [(p, True) for p in pos] + [(p, False) for p in unl]
-    t = fit_global(dev, jev, 0.95)
-    return {"auc_pc": auc(pairs) if pairs else None, "auc_pu": auc(pairs_u) if pairs_u else None,
-            "t95": t, "n": len([u for u in us if u["_key"] in jev]),
-            "cost": sum(jev[u["_key"]]["cost_usd"] for u in us if u["_key"] in jev),
-            "fwd_per": (sum(1 for p in pos + ctl + unl if p >= t)
-                        + sum(1 for u in us if u["_key"] in jev for c, p in jev[u["_key"]]["p"].items()
-                              if p is not None and label_of(u, c) == "allowed" and p >= t))
-            / max(1, len([u for u in us if u["_key"] in jev])),
-            "pos_recall": sum(1 for p in pos if p >= t) / len(pos) if pos else None,
-            "ctl_fwd": sum(1 for p in ctl if p >= t) / len(ctl) if ctl else None}
-
-
 def cmd_report(a) -> int:
     rub, known, fx = _setup()
     us = _select_units(fx, a, known)
-    dev = units(fx, "dev", known)
     ev = sum(u["evidence_chars"] for u in us) / max(1, len(us))
     lines = [f"## Split `{a.split}`, evidence `{EVIDENCE}`: {len(us)} excerpts, "
              f"evidence {ev / E.CHARS_PER_TOKEN:.0f} tokens per excerpt (characters / 4)", ""]
-    lines += ["### Jev router alone (P(flag) over every class of every excerpt)", "",
-              "| state | excerpts | AUC pos vs ctl | AUC pos vs unlabelled | t (95% dev recall) | "
-              "recall at t | controls forwarded | classes forwarded / excerpt | $/excerpt |",
-              "|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
-    for layout in STATES:
-        if not load_router(layout):
-            continue
-        s = router_stats(us, layout, dev)
-        if not s["n"]:
-            continue
-        lines.append(f"| {layout} | {s['n']} | {_f(s['auc_pc'])} | {_f(s['auc_pu'])} | {s['t95']:.3f} | "
-                     f"{_f(s['pos_recall'])} | {_f(s['ctl_fwd'])} | {s['fwd_per']:.1f} | "
-                     f"${s['cost'] / s['n']:.5f} |")
-    lines += ["", "### Arms", "",
+    lines += ["### Arms", "",
               "| arm | excerpts | recall | FPR | unlabelled flags / excerpt (excerpts) | classes asked / excerpt | "
               "$/excerpt | Claude s / excerpt |",
               "|---|---:|---:|---:|---:|---:|---:|---:|"]
@@ -839,7 +589,7 @@ def cmd_report(a) -> int:
         if a.sample_for and any(arm.startswith(p) for p in a.sample_for):
             sub = sample(us, a.sample)
         try:
-            flags, _ = arm_flags(arm, sub, dev)
+            flags, _ = arm_flags(arm, sub)
         except (FileNotFoundError, KeyError) as e:
             lines.append(f"| {arm} | missing: {e} |")
             continue
@@ -950,13 +700,6 @@ def main() -> int:
         if claude:
             p.add_argument("--timeout", type=int, default=300)
 
-    p = sub.add_parser("jev", help="Jev router over every class of every excerpt")
-    common(p, claude=False)
-    p.add_argument("--layout", choices=STATES, default="shared")
-    p.add_argument("--jev-model", default=E.JEV_MODEL)
-    p.add_argument("--show", action="store_true")
-    p.set_defaults(fn=cmd_jev)
-
     p = sub.add_parser("battery", help="arm A: one Haiku call per excerpt over the whole rubric")
     common(p)
     p.add_argument("--prompt-cache", action="store_true")
@@ -970,19 +713,6 @@ def main() -> int:
     p.add_argument("--base", default="battery-pc", help="the battery arm `--which flagged` confirms")
     p.add_argument("--shots", type=int, default=2)
     p.set_defaults(fn=cmd_perclass)
-
-    p = sub.add_parser("route", help="arm B: per-class Haiku on the classes a router forwards")
-    common(p)
-    p.add_argument("--router", required=True, help="<layout>:<t>|fit95[:cross]")
-    p.add_argument("--labelled-only", action="store_true",
-                   help="ask only forwarded pairs that carry a label: recall and FPR, not volume or cost")
-    p.add_argument("--shots", type=int, default=2)
-    p.set_defaults(fn=cmd_route)
-
-    p = sub.add_parser("restricted", help="arm B': Haiku battery over the forwarded classes only")
-    common(p)
-    p.add_argument("--router", required=True)
-    p.set_defaults(fn=cmd_restricted)
 
     p = sub.add_parser("audit", help="Opus judges a fixed-seed sample of an arm's unlabelled flags")
     common(p)

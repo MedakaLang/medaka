@@ -1,5 +1,7 @@
 # Stage-1 evidence generation, 2026-10-17
 
+Reproduce at commit 8fbc5977f; the Jev and cascade stages were removed after it.
+
 What a judge does when nobody curates its evidence. The same Haiku and Jev
 prompts as `RESULTS-2026-10-17b.md` (fixtures and rubric after the first
 adjudication pass), run three ways: `none` (excerpt only), `curated` (the
