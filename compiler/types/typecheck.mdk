@@ -515,6 +515,7 @@ import types.registry.{
   spCandsOf,
   spLookupIdent,
 }
+import types.chain_key.{chainGraphKey, constrainedSigName, isConstrainedTy}
 -- B-2.2-e: THE route-word mint, shared with `eval/eval.mdk` and
 -- `ir/core_ir_lower.mdk`.  Before this bite each of those spelled its own copy
 -- (`implKeyTc` here, `implKeyOf` there) over its own `Ty` printer; they are now
@@ -28270,17 +28271,6 @@ export
 constrainedSigNames : List Decl -> List String
 constrainedSigNames prog = flatMap constrainedSigName prog
 
-constrainedSigName : Decl -> List String
-constrainedSigName (DTypeSig _ n ty _)
-  | isConstrainedTy ty = [n]
-  | otherwise = []
-constrainedSigName (DAttrib _ d) = constrainedSigName d
-constrainedSigName _ = []
-
-isConstrainedTy : Ty -> Bool
-isConstrainedTy (TyConstrained _ _) = True
-isConstrainedTy _ = False
-
 -- The PRELUDE's own `=>`-constrained fns that must ALSO be dict-passed: those
 -- whose body uses a return-position method (`when`/`unless` use `pure`), so
 -- arg-tag dispatch can't resolve it at a constraint variable's type.  Every OTHER
@@ -54014,6 +54004,9 @@ setMainSchemeIfEntry True schemes =
 -- and roots) and one `Option String` per module (mid + path + the EXACT source
 -- the loader parsed — `loadedSourceOf`); a `None` step is never recorded and ends
 -- recording for the steps after it.  The entry (last) module is never recorded.
+-- The memo key also carries `chainGraphKey`: the instance heads and constrained
+-- signature names of EVERY module including the entry, which an earlier step reads
+-- through the graph but its own source key cannot see.
 data ChainStep = ChainStep {
   csKey : String,
   csDepEnv : List (String, List (String, ExportBinding)),
@@ -54025,7 +54018,11 @@ data ChainStep = ChainStep {
   csDriver : DriverState,
 }
 
-data ChainMemo = ChainMemo { chKey : String, chSteps : List ChainStep }
+data ChainMemo = ChainMemo {
+  chKey : String,
+  chSteps : List ChainStep,
+  chReplayed : Int,
+}
 
 moduleChainMemoRef : Ref (Option ChainMemo)
 moduleChainMemoRef = Ref None
@@ -54066,6 +54063,13 @@ methodReturnMemoRetentionStats _ =
     coreSummaries + chainSummaries,
     steps,
   )
+
+-- How many steps the last keyed chain drive replayed instead of re-checking.
+export
+chainMemoReplayedSteps : Unit -> Int
+chainMemoReplayedSteps _ = match moduleChainMemoRef.value
+  None => 0
+  Some memo => memo.chReplayed
 
 export
 methodReturnMemoCurrentViews : Unit -> List MethodReturnMemoView
@@ -54208,7 +54212,7 @@ checkModulesChainReportFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDe
   let (runtimeSeed, coreSchemes, coreClosed, coreContexts, _, _) =
     graphPreamble GOutDiags (Some (rk, ck)) runtimeDecls coreDecls modules
   let fullKey =
-    "\{driverState.value.ioJoinProfile.value}\n\{chainFullKey rk ck chainKey}"
+    "\{driverState.value.ioJoinProfile.value}\n\{chainFullKey rk ck chainKey}\n\{chainGraphKey modules}"
   let steps = match !moduleChainMemoRef
     Some m => if m.chKey == fullKey then m.chSteps else []
     None => []
@@ -54244,6 +54248,7 @@ checkModulesChainReportFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDe
     ChainMemo {
       chKey = fullKey,
       chSteps = kept ++ reverseL newSteps,
+      chReplayed = n,
     }
   -- #2705: the graph-end drain for what the steps did not already drain (the entry
   -- module, and any module after the last recorded step) — see `chainGo`.

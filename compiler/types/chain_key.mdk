@@ -1,0 +1,46 @@
+-- The part of the module-chain memo key that covers what a recorded step reads
+-- from modules outside its own prefix: every instance head, which is visible to
+-- the whole graph whether or not a module imports its definer, and every
+-- constrained signature's bare name, which joins every module's dict-name set.
+-- A step's own source key cannot see either when a later module declares them.
+import frontend.ast.{Decl(..), Ty(..), Require(..), ImplMethod(..)}
+import support.util.{joinWith}
+import types.route_key.{implRouteKeyWord}
+
+export
+chainGraphKey : List (String, List Decl) -> String
+chainGraphKey modules = joinWith "\n" (flatMap moduleRows modules)
+
+moduleRows : (String, List Decl) -> List String
+moduleRows (mid, decls) = flatMap (declRow mid) decls
+
+declRow : String -> Decl -> List String
+declRow mid (DImpl { iface, tys, reqs, methods, implOrigin }) =
+  let reqWords =
+    map
+      (r => implRouteKeyWord r.requireOrigin r.requireHead r.requireArgs None)
+      reqs
+  let names =
+    map
+      (m => match m
+        ImplMethod n _ _ => n)
+      methods
+  [
+    "\{mid} impl \{implRouteKeyWord implOrigin iface tys None} requires \{joinWith "," reqWords} with \{joinWith "," names}",
+  ]
+declRow mid (DAttrib _ d) = declRow mid d
+declRow mid d = map (n => "\{mid} dict \{n}") (constrainedSigName d)
+
+-- A `=>`-constrained top-level signature's name, looking through attributes.
+export
+constrainedSigName : Decl -> List String
+constrainedSigName (DTypeSig _ n ty _)
+  | isConstrainedTy ty = [n]
+  | otherwise = []
+constrainedSigName (DAttrib _ d) = constrainedSigName d
+constrainedSigName _ = []
+
+export
+isConstrainedTy : Ty -> Bool
+isConstrainedTy (TyConstrained _ _) = True
+isConstrainedTy _ = False
