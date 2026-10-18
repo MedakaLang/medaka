@@ -1,5 +1,5 @@
 # META
-source_lines=4290
+source_lines=4292
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -238,7 +238,7 @@ import support.util.{
   anyList,
 }
 import support.path.{dirOf, baseOf, joinPath}
-import support.stage_count.{stageExit}
+import support.stage_count.{forwardStageLines, stageExit}
 import args.{
   ArgSpec, Args, spec, switch, value, internal, flag, flagValue, withStrictDash
 }
@@ -2499,24 +2499,26 @@ superviseEvalProps medaka target requests =
       workerRuntimeRows
         requests
         "could not start interpreter property worker: \{message}"
-    Ok (code, stdout, stderr) => match takeEvalPropBootstrap stdout
-      Err message =>
-        if code == 0 then
-          workerProtocolRows requests message
-        else
-          workerRuntimeRows requests (workerAbortDetail code stderr)
-      Ok (nonce, transcript) =>
-        match decodeEvalPropRows nonce requests transcript
-          Ok rows =>
-            if code == 0 then
-              rows
-            else
-              workerRuntimeRows requests (workerAbortDetail code stderr)
-          Err message =>
-            if code == 0 then
-              workerProtocolRows requests message
-            else
-              workerRuntimeRows requests (workerAbortDetail code stderr)
+    Ok (code, stdout, workerErr) =>
+      let stderr = forwardStageLines workerErr
+      match takeEvalPropBootstrap stdout
+        Err message =>
+          if code == 0 then
+            workerProtocolRows requests message
+          else
+            workerRuntimeRows requests (workerAbortDetail code stderr)
+        Ok (nonce, transcript) =>
+          match decodeEvalPropRows nonce requests transcript
+            Ok rows =>
+              if code == 0 then
+                rows
+              else
+                workerRuntimeRows requests (workerAbortDetail code stderr)
+            Err message =>
+              if code == 0 then
+                workerProtocolRows requests message
+              else
+                workerRuntimeRows requests (workerAbortDetail code stderr)
 
 workerAbortDetail : Int -> String -> String
 workerAbortDetail code stderr =
@@ -4323,7 +4325,7 @@ testFilesReport _ _ acc = acc
 (DUse true (UseGroup ("support" "util") ((mem "rootsOrDefault" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false) (mem "contains" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "reverseL" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false) (mem "joinPath" false))))
-(DUse false (UseGroup ("support" "stage_count") ((mem "stageExit" false))))
+(DUse false (UseGroup ("support" "stage_count") ((mem "forwardStageLines" false) (mem "stageExit" false))))
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "internal" false) (mem "flag" false) (mem "flagValue" false) (mem "withStrictDash" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "splitLintNames" false))))
@@ -4598,7 +4600,7 @@ testFilesReport _ _ acc = acc
 (DFunDef false "propWorkerCli" ((PVar "stdlibDir")) (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EApp (EVar "joinPath") (EApp (EVar "dirOf") (EVar "stdlibDir"))) (ELit (LString "medaka")))))
 (DTypeSig false "superviseEvalProps" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult")))))))
 (DFunDef false "superviseEvalProps" (PWild PWild (PList)) (EListLit))
-(DFunDef false "superviseEvalProps" ((PVar "medaka") (PVar "target") (PVar "requests")) (EBlock (DoLet false false (PVar "argv") (EBinOp "++" (EListLit (ELit (LString "test")) (ELit (LString "--props-worker"))) (EApp (EApp (EVar "workerPositionals") (EVar "target")) (EVar "requests")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (EVar "medaka")) (EVar "argv")) (arm (PCon "Err" (PVar "message")) () (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not start interpreter property worker: ")) (EApp (EVar "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "stdout") (PVar "stderr"))) () (EMatch (EApp (EVar "takeEvalPropBootstrap") (EVar "stdout")) (arm (PCon "Err" (PVar "message")) () (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EApp (EApp (EVar "workerProtocolRows") (EVar "requests")) (EVar "message")) (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EApp (EApp (EVar "workerAbortDetail") (EVar "code")) (EVar "stderr"))))) (arm (PCon "Ok" (PTuple (PVar "nonce") (PVar "transcript"))) () (EMatch (EApp (EApp (EApp (EVar "decodeEvalPropRows") (EVar "nonce")) (EVar "requests")) (EVar "transcript")) (arm (PCon "Ok" (PVar "rows")) () (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EVar "rows") (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EApp (EApp (EVar "workerAbortDetail") (EVar "code")) (EVar "stderr"))))) (arm (PCon "Err" (PVar "message")) () (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EApp (EApp (EVar "workerProtocolRows") (EVar "requests")) (EVar "message")) (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EApp (EApp (EVar "workerAbortDetail") (EVar "code")) (EVar "stderr")))))))))))))
+(DFunDef false "superviseEvalProps" ((PVar "medaka") (PVar "target") (PVar "requests")) (EBlock (DoLet false false (PVar "argv") (EBinOp "++" (EListLit (ELit (LString "test")) (ELit (LString "--props-worker"))) (EApp (EApp (EVar "workerPositionals") (EVar "target")) (EVar "requests")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (EVar "medaka")) (EVar "argv")) (arm (PCon "Err" (PVar "message")) () (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not start interpreter property worker: ")) (EApp (EVar "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "stdout") (PVar "workerErr"))) () (EBlock (DoLet false false (PVar "stderr") (EApp (EVar "forwardStageLines") (EVar "workerErr"))) (DoExpr (EMatch (EApp (EVar "takeEvalPropBootstrap") (EVar "stdout")) (arm (PCon "Err" (PVar "message")) () (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EApp (EApp (EVar "workerProtocolRows") (EVar "requests")) (EVar "message")) (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EApp (EApp (EVar "workerAbortDetail") (EVar "code")) (EVar "stderr"))))) (arm (PCon "Ok" (PTuple (PVar "nonce") (PVar "transcript"))) () (EMatch (EApp (EApp (EApp (EVar "decodeEvalPropRows") (EVar "nonce")) (EVar "requests")) (EVar "transcript")) (arm (PCon "Ok" (PVar "rows")) () (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EVar "rows") (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EApp (EApp (EVar "workerAbortDetail") (EVar "code")) (EVar "stderr"))))) (arm (PCon "Err" (PVar "message")) () (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EApp (EApp (EVar "workerProtocolRows") (EVar "requests")) (EVar "message")) (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EApp (EApp (EVar "workerAbortDetail") (EVar "code")) (EVar "stderr")))))))))))))))
 (DTypeSig false "workerAbortDetail" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "workerAbortDetail" ((PVar "code") (PVar "stderr")) (EBlock (DoLet false false (PVar "first") (EApp (EVar "firstNonEmptyLine") (EApp (EVar "splitNl") (EVar "stderr")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "interpreter property worker batch aborted (exit ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ")"))) (EIf (EBinOp "==" (EVar "first") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString " — ")) (EApp (EVar "display") (EVar "first"))) (ELit (LString ""))))))))
 (DTypeSig false "workerPositionals" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -4947,7 +4949,7 @@ testFilesReport _ _ acc = acc
 (DUse true (UseGroup ("support" "util") ((mem "rootsOrDefault" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false) (mem "contains" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "reverseL" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false) (mem "joinPath" false))))
-(DUse false (UseGroup ("support" "stage_count") ((mem "stageExit" false))))
+(DUse false (UseGroup ("support" "stage_count") ((mem "forwardStageLines" false) (mem "stageExit" false))))
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "internal" false) (mem "flag" false) (mem "flagValue" false) (mem "withStrictDash" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "splitLintNames" false))))
@@ -5222,7 +5224,7 @@ testFilesReport _ _ acc = acc
 (DFunDef false "propWorkerCli" ((PVar "stdlibDir")) (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EApp (EVar "joinPath") (EApp (EVar "dirOf") (EVar "stdlibDir"))) (ELit (LString "medaka")))))
 (DTypeSig false "superviseEvalProps" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult")))))))
 (DFunDef false "superviseEvalProps" (PWild PWild (PList)) (EListLit))
-(DFunDef false "superviseEvalProps" ((PVar "medaka") (PVar "target") (PVar "requests")) (EBlock (DoLet false false (PVar "argv") (EBinOp "++" (EListLit (ELit (LString "test")) (ELit (LString "--props-worker"))) (EApp (EApp (EVar "workerPositionals") (EVar "target")) (EVar "requests")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (EVar "medaka")) (EVar "argv")) (arm (PCon "Err" (PVar "message")) () (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not start interpreter property worker: ")) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "stdout") (PVar "stderr"))) () (EMatch (EApp (EVar "takeEvalPropBootstrap") (EVar "stdout")) (arm (PCon "Err" (PVar "message")) () (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EApp (EApp (EVar "workerProtocolRows") (EVar "requests")) (EVar "message")) (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EApp (EApp (EVar "workerAbortDetail") (EVar "code")) (EVar "stderr"))))) (arm (PCon "Ok" (PTuple (PVar "nonce") (PVar "transcript"))) () (EMatch (EApp (EApp (EApp (EVar "decodeEvalPropRows") (EVar "nonce")) (EVar "requests")) (EVar "transcript")) (arm (PCon "Ok" (PVar "rows")) () (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EVar "rows") (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EApp (EApp (EVar "workerAbortDetail") (EVar "code")) (EVar "stderr"))))) (arm (PCon "Err" (PVar "message")) () (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EApp (EApp (EVar "workerProtocolRows") (EVar "requests")) (EVar "message")) (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EApp (EApp (EVar "workerAbortDetail") (EVar "code")) (EVar "stderr")))))))))))))
+(DFunDef false "superviseEvalProps" ((PVar "medaka") (PVar "target") (PVar "requests")) (EBlock (DoLet false false (PVar "argv") (EBinOp "++" (EListLit (ELit (LString "test")) (ELit (LString "--props-worker"))) (EApp (EApp (EVar "workerPositionals") (EVar "target")) (EVar "requests")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (EVar "medaka")) (EVar "argv")) (arm (PCon "Err" (PVar "message")) () (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EBinOp "++" (EBinOp "++" (ELit (LString "could not start interpreter property worker: ")) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "stdout") (PVar "workerErr"))) () (EBlock (DoLet false false (PVar "stderr") (EApp (EVar "forwardStageLines") (EVar "workerErr"))) (DoExpr (EMatch (EApp (EVar "takeEvalPropBootstrap") (EVar "stdout")) (arm (PCon "Err" (PVar "message")) () (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EApp (EApp (EVar "workerProtocolRows") (EVar "requests")) (EVar "message")) (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EApp (EApp (EVar "workerAbortDetail") (EVar "code")) (EVar "stderr"))))) (arm (PCon "Ok" (PTuple (PVar "nonce") (PVar "transcript"))) () (EMatch (EApp (EApp (EApp (EVar "decodeEvalPropRows") (EVar "nonce")) (EVar "requests")) (EVar "transcript")) (arm (PCon "Ok" (PVar "rows")) () (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EVar "rows") (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EApp (EApp (EVar "workerAbortDetail") (EVar "code")) (EVar "stderr"))))) (arm (PCon "Err" (PVar "message")) () (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EApp (EApp (EVar "workerProtocolRows") (EVar "requests")) (EVar "message")) (EApp (EApp (EVar "workerRuntimeRows") (EVar "requests")) (EApp (EApp (EVar "workerAbortDetail") (EVar "code")) (EVar "stderr")))))))))))))))
 (DTypeSig false "workerAbortDetail" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "workerAbortDetail" ((PVar "code") (PVar "stderr")) (EBlock (DoLet false false (PVar "first") (EApp (EVar "firstNonEmptyLine") (EApp (EVar "splitNl") (EVar "stderr")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "interpreter property worker batch aborted (exit ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ")"))) (EIf (EBinOp "==" (EVar "first") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString " — ")) (EApp (EMethodRef "display") (EVar "first"))) (ELit (LString ""))))))))
 (DTypeSig false "workerPositionals" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PropRequest")) (TyApp (TyCon "List") (TyCon "String")))))

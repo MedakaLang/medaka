@@ -1,0 +1,8 @@
+-- Doubles.
+-- > double 2
+-- 4
+double : Int -> Int
+double x = x * 2
+
+prop "double is even" (n : Int) =
+  double n % 2 == 0

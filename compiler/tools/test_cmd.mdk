@@ -234,7 +234,7 @@ import support.util.{
   anyList,
 }
 import support.path.{dirOf, baseOf, joinPath}
-import support.stage_count.{stageExit}
+import support.stage_count.{forwardStageLines, stageExit}
 import args.{
   ArgSpec, Args, spec, switch, value, internal, flag, flagValue, withStrictDash
 }
@@ -2495,24 +2495,26 @@ superviseEvalProps medaka target requests =
       workerRuntimeRows
         requests
         "could not start interpreter property worker: \{message}"
-    Ok (code, stdout, stderr) => match takeEvalPropBootstrap stdout
-      Err message =>
-        if code == 0 then
-          workerProtocolRows requests message
-        else
-          workerRuntimeRows requests (workerAbortDetail code stderr)
-      Ok (nonce, transcript) =>
-        match decodeEvalPropRows nonce requests transcript
-          Ok rows =>
-            if code == 0 then
-              rows
-            else
-              workerRuntimeRows requests (workerAbortDetail code stderr)
-          Err message =>
-            if code == 0 then
-              workerProtocolRows requests message
-            else
-              workerRuntimeRows requests (workerAbortDetail code stderr)
+    Ok (code, stdout, workerErr) =>
+      let stderr = forwardStageLines workerErr
+      match takeEvalPropBootstrap stdout
+        Err message =>
+          if code == 0 then
+            workerProtocolRows requests message
+          else
+            workerRuntimeRows requests (workerAbortDetail code stderr)
+        Ok (nonce, transcript) =>
+          match decodeEvalPropRows nonce requests transcript
+            Ok rows =>
+              if code == 0 then
+                rows
+              else
+                workerRuntimeRows requests (workerAbortDetail code stderr)
+            Err message =>
+              if code == 0 then
+                workerProtocolRows requests message
+              else
+                workerRuntimeRows requests (workerAbortDetail code stderr)
 
 workerAbortDetail : Int -> String -> String
 workerAbortDetail code stderr =

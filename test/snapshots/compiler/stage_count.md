@@ -1,5 +1,5 @@
 # META
-source_lines=69
+source_lines=84
 stages=DESUGAR,MARK
 # SOURCE
 -- Deterministic per-stage CALL counter: how many times each pipeline stage ran in
@@ -14,8 +14,10 @@ stages=DESUGAR,MARK
 -- `stageCountInit`.  The dump goes to stderr only, as `[stage]<TAB>key<TAB>n`; the
 -- prefix differs from MEDAKA_STATS's `[stats]` so a filtered read never mixes them.
 
-import string.{startsWith}
+import list.{partition}
+import string.{split, startsWith}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omKeys}
+import support.util.{joinNl}
 
 stageCountOn : Ref Bool
 stageCountOn = Ref False
@@ -66,14 +68,29 @@ export
 isStageLine : String -> Bool
 isStageLine l = startsWith stagePrefix l
 
+-- A child process's `[stage]` lines belong to this process's stderr on every
+-- route, `--json` included, so they are lifted out of the child's captured
+-- stderr before any route decides what to embed or forward.  The rest of the
+-- child's stream is returned unchanged when it has no stage lines.
+export
+forwardStageLines : String -> <IO> String
+forwardStageLines err =
+  let (stage, rest) = partition isStageLine (split "\n" err)
+  let _ = match stage
+    [] => ()
+    _ => ePutStrLn (joinNl stage)
+  joinNl rest
+
 stageDumpKeys : List String -> <IO> Unit
 stageDumpKeys [] = ()
 stageDumpKeys (k :: rest) =
   let _ = ePutStrLn "\{stagePrefix}\{k}\t\{countOf k}"
   stageDumpKeys rest
 # DESUGAR
-(DUse false (UseGroup ("string") ((mem "startsWith" false))))
+(DUse false (UseGroup ("list") ((mem "partition" false))))
+(DUse false (UseGroup ("string") ((mem "split" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omKeys" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false))))
 (DTypeSig false "stageCountOn" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "stageCountOn" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "stageCounts" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Int"))))
@@ -92,12 +109,16 @@ stageDumpKeys (k :: rest) =
 (DFunDef false "stagePrefix" () (ELit (LString "[stage]\t")))
 (DTypeSig true "isStageLine" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isStageLine" ((PVar "l")) (EApp (EApp (EVar "startsWith") (EVar "stagePrefix")) (EVar "l")))
+(DTypeSig true "forwardStageLines" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
+(DFunDef false "forwardStageLines" ((PVar "err")) (EBlock (DoLet false false (PTuple (PVar "stage") (PVar "rest")) (EApp (EApp (EVar "partition") (EVar "isStageLine")) (EApp (EApp (EVar "split") (ELit (LString "\n"))) (EVar "err")))) (DoLet false false PWild (EMatch (EVar "stage") (arm (PList) () (ELit LUnit)) (arm PWild () (EApp (EVar "ePutStrLn") (EApp (EVar "joinNl") (EVar "stage")))))) (DoExpr (EApp (EVar "joinNl") (EVar "rest")))))
 (DTypeSig false "stageDumpKeys" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "stageDumpKeys" ((PList)) (ELit LUnit))
 (DFunDef false "stageDumpKeys" ((PCons (PVar "k") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "stagePrefix"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "k"))) (ELit (LString "\t"))) (EApp (EVar "display") (EApp (EVar "countOf") (EVar "k")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "stageDumpKeys") (EVar "rest")))))
 # MARK
-(DUse false (UseGroup ("string") ((mem "startsWith" false))))
+(DUse false (UseGroup ("list") ((mem "partition" false))))
+(DUse false (UseGroup ("string") ((mem "split" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omKeys" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false))))
 (DTypeSig false "stageCountOn" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "stageCountOn" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "stageCounts" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Int"))))
@@ -116,6 +137,8 @@ stageDumpKeys (k :: rest) =
 (DFunDef false "stagePrefix" () (ELit (LString "[stage]\t")))
 (DTypeSig true "isStageLine" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isStageLine" ((PVar "l")) (EApp (EApp (EVar "startsWith") (EVar "stagePrefix")) (EVar "l")))
+(DTypeSig true "forwardStageLines" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
+(DFunDef false "forwardStageLines" ((PVar "err")) (EBlock (DoLet false false (PTuple (PVar "stage") (PVar "rest")) (EApp (EApp (EVar "partition") (EVar "isStageLine")) (EApp (EApp (EVar "split") (ELit (LString "\n"))) (EVar "err")))) (DoLet false false PWild (EMatch (EVar "stage") (arm (PList) () (ELit LUnit)) (arm PWild () (EApp (EVar "ePutStrLn") (EApp (EVar "joinNl") (EVar "stage")))))) (DoExpr (EApp (EVar "joinNl") (EVar "rest")))))
 (DTypeSig false "stageDumpKeys" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "stageDumpKeys" ((PList)) (ELit LUnit))
 (DFunDef false "stageDumpKeys" ((PCons (PVar "k") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "stagePrefix"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EApp (EVar "countOf") (EVar "k")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "stageDumpKeys") (EVar "rest")))))
