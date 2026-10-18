@@ -1,5 +1,5 @@
 # META
-source_lines=57439
+source_lines=57375
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -9017,46 +9017,14 @@ pushNumLitObl predicate occurrence loc scope = wPush
 -- lets the reframe pick site-specific wording (if-branches / list elements / cons
 -- head-vs-element) over the bare `Type mismatch: Int vs T`.
 
--- LSP hover: every local binding (let-bound name, lambda param, function-clause
--- param, match-arm binder) flows through inferPat's PVar/PAs arms.  Capture
--- (name, mono var) here so hover can render a *local* variable's inferred type:
--- Scheme-returning entries expose only top-level + global schemes, so without this
--- a hover over e.g. a `let input = …` name finds nothing and returns null.  The
--- mono var is union-find-solved by the time inference ends; the module checker
--- then generalizes each into `localSchemesOut`, which the LSP reads as a hover
--- fallback.  This side-channel does NOT enter the returned env, so completion and
--- inlay-hint output (which consume the env directly) are unaffected.
-
--- Hover side-channel for the SEED (runtime.mdk externs: putStrLn, readLine, …).
--- The module checker keeps the seed in scope for inference but excludes it from
--- the returned env (see its comment), so externs aren't otherwise hoverable.
-
--- Getters for the LSP (cross-module).  The raw Refs are nullary value globals
--- (@mdk_g_), which the import-aware mangling map doesn't carry, so expose them
--- through functions — the form every other tools→typecheck import already uses.
-export
-currentLocalSchemes : Unit -> List (String, Scheme)
-currentLocalSchemes _ = dropLocalLocs perRun.value.localSchemesOut.value
-
--- #2092: the same list WITH each binder's own `Loc` (`None` where the binding
--- site had no location to give).  The bare-name pairs above cannot answer
--- "is the cursor inside THIS binding's scope?" — they carry no position at all,
--- so the LSP's `hoverScheme` had to consult them AFTER the (prelude-bearing)
--- env, and a local shadowing a prelude name never got a chance to answer.
--- Position-aware consumers read this; the bare-name view stays for the
--- consumers (completion tiers) that genuinely want every local regardless of
--- where the cursor is.
-export
-currentLocalSchemesLoc : Unit -> List (String, Option Loc, Scheme)
-currentLocalSchemesLoc _ = perRun.value.localSchemesOut.value
-
-dropLocalLocs : List (String, Option Loc, Scheme) -> List (String, Scheme)
-dropLocalLocs [] = []
-dropLocalLocs ((n, _, s) :: rest) = (n, s) :: dropLocalLocs rest
-
-export
-currentSeedSchemes : Unit -> List (String, Scheme)
-currentSeedSchemes _ = perRun.value.seedSchemesOut.value
+-- Every local binding (let-bound name, lambda param, function-clause param,
+-- match-arm binder) flows through inferPat's PVar/PAs arms, which capture
+-- (name, mono var) here.  The mono var is union-find-solved by the time inference
+-- ends; the module checker then generalizes each into `localSchemesOut`, and
+-- `captureEntryTables` freezes them into the drive's `PartialAnalysis`.  The seed
+-- (runtime.mdk externs: putStrLn, readLine, …) stays in scope for inference but
+-- is excluded from the returned env, so `seedSchemesOut` is frozen the same way.
+-- Neither enters the returned env.
 
 -- `loc` is the BINDER's own source span (#2092) — `None` only where the binding
 -- site genuinely has none to give.  Discarding it is what made the hover tier
@@ -10719,7 +10687,7 @@ mainAsyncPayloadIsUnit _ = match driverState.value.mainSchemeRef.value
 -- its ambiguity is a real error, reported by the auto-print obligation
 -- (`autoPrintWanted`).
 -- A `Scheme` carries no context, so the variable case reads the obligation
--- side-channel `ppSchemeNamed` renders the `=>` from, keyed the same way; it
+-- side-channel `ownContext` reads the `=>` from, keyed the same way; it
 -- answers for the module last checked, the entry module on the paths that ask
 -- about `main`'s shape.
 -- Used by the emitters to suppress the auto-print of Unit-returning mains even
@@ -14588,16 +14556,6 @@ substMono subst esub asub t = match normalize t
   TQual inner q => TQual (substMono subst esub asub inner) (substAuth asub q)
   TAuth q => TAuth (substAuth asub q)
 
--- Render a binding's scheme WITH its inferred/declared constraint context, looked
--- up by NAME from schemeObligationsRef (the always-on obligation side-channel the
--- most-recent typecheck left populated).  A name with no recorded obligations
--- renders as plain ppScheme.  A published scheme carries its own context
--- (`publishOwn`); this renders a bare scheme of the module last checked, as the
--- LSP's local-binder hover and inlay hints do.
-export
-ppSchemeNamed : String -> Scheme -> String
-ppSchemeNamed n s = ppSchemeCon (ownContext n) s
-
 -- The context the module last checked recorded for its binding [n].
 ownContext : String -> List VecObl
 ownContext n =
@@ -14643,37 +14601,15 @@ coreOwnContexts _ =
     (map (kv => (fst (fst kv), snd kv)) perRun.value.schemeObligationsRef.value)
     omEmpty
 
--- S-full-env-scheme-entry (#1116): `ppSchemeNamed` for a display surface whose env
--- spans more than the module last checked — the LSP's import-scoped seed tier.
--- The hover and completion envs `checkOneSchemeFull` returns carry their contexts
--- (`publishOwn`, `publishCore`) and do not come here.
---
--- 🚨 The gap this closes is in the OBLIGATION SIDE-CHANNEL, not in the scheme list.
--- A `Scheme` is `Forall _ _ Mono` — it carries no context — so every `=>` on every
--- display surface comes from `perRun.schemeObligationsRef`, which holds the
--- obligations of the one module last checked. On a one-module graph that module is
--- `prelude ++ buffer`, so `println` renders `Display a => a -> <IO> Unit`.  On the
--- MODULE arm each module gets its own `resetState`, and the prelude's obligations
--- are snapshotted out to `crossRun.coreSchemeObligationsRef` by
--- `checkModulesPreambleK` — the same name-keyed store `declaredCrossModuleObls`
--- lookup (2) already treats as the source-exact home of a prelude name's context.
--- Rendering a Module-arm prelude scheme through plain `ppSchemeNamed` therefore
--- DROPS the context (MEASURED: 34 of the 125 empty-prefix completions on a bare
--- buffer, `println :: a -> <IO> Unit` for `Display a => a -> <IO> Unit`).
---
--- The three-step order is what keeps a shadowing user binding safe: a name the
--- module last checked BINDS renders exactly as `ppSchemeNamed` renders it, context
--- or none, and never reaches the prelude store — so a buffer's own `isEven x = "s"`
--- cannot pick up the prelude `isEven`'s context (#2054's shape).  The prelude store
--- is consulted ONLY for a name this module does not bind and the per-run table has
--- no entry for at all.
-export
-ppSchemeNamedFull : String -> Scheme -> String
-ppSchemeNamedFull n s =
-  ppSchemeCon (seedContext crossRun.value.coreSchemeObligationsRef.value n) s
-
--- The context of the seed name [n], by the three steps above; the third reads
--- [coreContexts], the prelude's contexts keyed by bare name.
+-- The context a seed name renders with, by three steps in order.  A name the
+-- module last checked BINDS takes that module's own context, or none, and never
+-- reaches the prelude store, so a buffer's own `isEven x = "s"` cannot pick up the
+-- prelude `isEven`'s context (#2054's shape).  The prelude's contexts are consulted
+-- ONLY for a name this module does not bind and whose per-run table has no entry
+-- at all: on the module arm each module gets its own `resetState`, so the
+-- prelude's obligations are not in `perRun`, and a prelude scheme would otherwise
+-- render without its `=>`.
+-- The third step reads [coreContexts], the prelude's contexts keyed by bare name.
 seedContext : OrdMap (List VecObl) -> String -> List VecObl
 seedContext coreContexts n = match omLookup n perRun.value.schemeDefIdsRef.value
   Some _ => ownContext n
@@ -22087,7 +22023,7 @@ lookupSchemeObls x id (((n2, i2), v) :: rest)
   | otherwise = lookupSchemeObls x id rest
 
 -- name-only scan (first match) — the bare-name fallback and the display readers
--- (ppSchemeNamed / lookupSchemeIface) keep exactly this pre-#837 behaviour.
+-- (lookupSchemeIface) keep exactly this pre-#837 behaviour.
 lookupSchemeOblsByName : String ->
   List ((String, Int), List VecObl) ->
   Option (List VecObl)
@@ -36706,7 +36642,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
     (prog, ids)
   let progS = fst stampRes
   -- #907: index name→id as an OrdMap (was a List scanned linearly per rendered
-  -- scheme in ppSchemeNamed / per SCC member in registerSchemeObligations → O(decls²)).
+  -- scheme in ownContext / per SCC member in registerSchemeObligations → O(decls²)).
   -- Built from the REVERSED pairs so omFromPairs' last-write-wins reproduces the old
   -- `lookupAssoc` first-match-wins on a duplicated binder name (same pattern as sigTyMapRef).
   perRun.value.schemeDefIdsRef := omFromPairs (reverseL (snd stampRes)) omEmpty
@@ -58830,15 +58766,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "mkMethodOccObl" ((PVar "iface") (PVar "typarams") (PVar "mty") (PVar "occ") (PVar "omitted") (PVar "prov") (PVar "loc") (PVar "scope")) (ERecordCreate "UObligation" ((fa "pred" (ERecordCreate "Predicate" ((fa "iface" (EVar "iface")) (fa "args" (EListLit))))) (fa "originId" (ELit (LInt 0))) (fa "prov" (EVar "prov")) (fa "loc" (EVar "loc")) (fa "uoScope" (EVar "scope")) (fa "oblProj" (EApp (EApp (EApp (EApp (EVar "OpMethodOcc") (EVar "typarams")) (EVar "mty")) (EVar "occ")) (EVar "omitted"))))))
 (DTypeSig false "pushNumLitObl" (TyFun (TyCon "ClassPredicate") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit"))))))
 (DFunDef false "pushNumLitObl" ((PVar "predicate") (PVar "occurrence") (PVar "loc") (PVar "scope")) (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (ERecordCreate "UObligation" ((fa "pred" (ERecordCreate "Predicate" ((fa "iface" (EFieldAccess (EVar "predicate") "predicateInterface")) (fa "args" (EFieldAccess (EVar "predicate") "predicateArguments"))))) (fa "originId" (ELit (LInt 0))) (fa "prov" (EVar "PNumLit")) (fa "loc" (EVar "loc")) (fa "uoScope" (EVar "scope")) (fa "oblProj" (EApp (EVar "OpNumLit") (EVar "occurrence")))))))
-(DTypeSig true "currentLocalSchemes" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))
-(DFunDef false "currentLocalSchemes" (PWild) (EApp (EVar "dropLocalLocs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localSchemesOut") "value")))
-(DTypeSig true "currentLocalSchemesLoc" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Scheme")))))
-(DFunDef false "currentLocalSchemesLoc" (PWild) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localSchemesOut") "value"))
-(DTypeSig false "dropLocalLocs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))
-(DFunDef false "dropLocalLocs" ((PList)) (EListLit))
-(DFunDef false "dropLocalLocs" ((PCons (PTuple (PVar "n") PWild (PVar "s")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EVar "s")) (EApp (EVar "dropLocalLocs") (EVar "rest"))))
-(DTypeSig true "currentSeedSchemes" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))
-(DFunDef false "currentSeedSchemes" (PWild) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "seedSchemesOut") "value"))
 (DTypeSig false "recordLocalBind" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "BinderId") (TyFun (TyCon "Mono") (TyCon "Unit"))))))
 (DFunDef false "recordLocalBind" ((PVar "name") (PVar "loc") (PVar "bid") (PVar "v")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "recordBinderType") (EVar "bid")) (EVar "name")) (EVar "v")) (EVar "None")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localBindRefs")) (EBinOp "::" (ETuple (EApp (EVar "localSourceName") (EVar "name")) (EVar "loc") (EVar "v")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localBindRefs") "value"))))))
 (DTypeSig false "recordBinderType" (TyFun (TyCon "BinderId") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyCon "Bool") (TyCon "Unit")))))))
@@ -59792,8 +59719,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "lowerAuthLevels" ((PVar "level") (PVar "q")) (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") (PVar "lvl") (PVar "top") (PVar "pat") (PVar "name")) () (EIf (EBinOp ">" (EVar "lvl") (EVar "level")) (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EApp (EApp (EApp (EVar "AUnbound") (EVar "id")) (EVar "level")) (EVar "top")) (EVar "pat")) (EVar "name"))) (ELit LUnit))) (arm (PCon "ALink" PWild PWild PWild) () (ELit LUnit))))) (ELit LUnit)) (EApp (EVar "authVars") (EVar "q"))))
 (DTypeSig false "substMono" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))) (TyFun (TyCon "Mono") (TyCon "Mono"))))))
 (DFunDef false "substMono" ((PVar "subst") (PVar "esub") (PVar "asub") (PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TVar" (PVar "cell")) () (EApp (EApp (EVar "optionOr") (EApp (EVar "TVar") (EVar "cell"))) (EApp (EApp (EVar "lookupAssocI") (EApp (EVar "tyvarId") (EVar "cell"))) (EVar "subst")))) (arm (PAs "c" (PCon "TCon" PWild PWild)) () (EVar "c")) (arm (PCon "TRigid" (PVar "n")) () (EApp (EVar "TRigid") (EVar "n"))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EApp (EApp (EVar "TApp") (EApp (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EVar "esub")) (EVar "asub")) (EVar "a"))) (EApp (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EVar "esub")) (EVar "asub")) (EVar "b")))) (arm (PCon "TFun" (PVar "a") (PVar "eff") (PVar "b")) () (EApp (EApp (EApp (EVar "TFun") (EApp (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EVar "esub")) (EVar "asub")) (EVar "a"))) (EApp (EApp (EApp (EVar "substRow") (EVar "esub")) (EVar "asub")) (EVar "eff"))) (EApp (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EVar "esub")) (EVar "asub")) (EVar "b")))) (arm (PCon "TEff" (PVar "r")) () (EApp (EVar "TEff") (EApp (EApp (EApp (EVar "substRow") (EVar "esub")) (EVar "asub")) (EVar "r")))) (arm (PCon "TQual" (PVar "inner") (PVar "q")) () (EApp (EApp (EVar "TQual") (EApp (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EVar "esub")) (EVar "asub")) (EVar "inner"))) (EApp (EApp (EVar "substAuth") (EVar "asub")) (EVar "q")))) (arm (PCon "TAuth" (PVar "q")) () (EApp (EVar "TAuth") (EApp (EApp (EVar "substAuth") (EVar "asub")) (EVar "q"))))))
-(DTypeSig true "ppSchemeNamed" (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "String"))))
-(DFunDef false "ppSchemeNamed" ((PVar "n") (PVar "s")) (EApp (EApp (EVar "ppSchemeCon") (EApp (EVar "ownContext") (EVar "n"))) (EVar "s")))
 (DTypeSig false "ownContext" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "VecObl"))))
 (DFunDef false "ownContext" ((PVar "n")) (EBlock (DoLet false false (PVar "id") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeDefIdsRef") "value")))) (DoExpr (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EApp (EVar "lookupSchemeObls") (EVar "n")) (EVar "id")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value"))))))
 (DTypeSig false "publishOwn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))
@@ -59802,8 +59727,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "publishCore" ((PVar "contexts")) (EApp (EVar "map") (ELam ((PVar "b")) (ETuple (EApp (EVar "fst") (EVar "b")) (ERecordCreate "PubScheme" ((fa "psScheme" (EApp (EVar "snd") (EVar "b"))) (fa "psContext" (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EVar "fst") (EVar "b"))) (EVar "contexts"))))))))))
 (DTypeSig false "coreOwnContexts" (TyFun (TyCon "Unit") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl")))))
 (DFunDef false "coreOwnContexts" (PWild) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (ELam ((PVar "kv")) (ETuple (EApp (EVar "fst") (EApp (EVar "fst") (EVar "kv"))) (EApp (EVar "snd") (EVar "kv"))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value"))) (EVar "omEmpty")))
-(DTypeSig true "ppSchemeNamedFull" (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "String"))))
-(DFunDef false "ppSchemeNamedFull" ((PVar "n") (PVar "s")) (EApp (EApp (EVar "ppSchemeCon") (EApp (EApp (EVar "seedContext") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "coreSchemeObligationsRef") "value")) (EVar "n"))) (EVar "s")))
 (DTypeSig false "seedContext" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "VecObl")))))
 (DFunDef false "seedContext" ((PVar "coreContexts") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeDefIdsRef") "value")) (arm (PCon "Some" PWild) () (EApp (EVar "ownContext") (EVar "n"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "lookupSchemeObls") (EVar "n")) (ELit (LInt 0))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")) (arm (PCon "Some" (PVar "obs")) () (EVar "obs")) (arm (PCon "None") () (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "coreContexts"))))))))
 (DTypeSig false "captureEntryTables" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "EntryTables"))))
@@ -68327,15 +68250,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "mkMethodOccObl" ((PVar "iface") (PVar "typarams") (PVar "mty") (PVar "occ") (PVar "omitted") (PVar "prov") (PVar "loc") (PVar "scope")) (ERecordCreate "UObligation" ((fa "pred" (ERecordCreate "Predicate" ((fa "iface" (EVar "iface")) (fa "args" (EListLit))))) (fa "originId" (ELit (LInt 0))) (fa "prov" (EVar "prov")) (fa "loc" (EVar "loc")) (fa "uoScope" (EVar "scope")) (fa "oblProj" (EApp (EApp (EApp (EApp (EVar "OpMethodOcc") (EVar "typarams")) (EVar "mty")) (EVar "occ")) (EVar "omitted"))))))
 (DTypeSig false "pushNumLitObl" (TyFun (TyCon "ClassPredicate") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit"))))))
 (DFunDef false "pushNumLitObl" ((PVar "predicate") (PVar "occurrence") (PVar "loc") (PVar "scope")) (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (ERecordCreate "UObligation" ((fa "pred" (ERecordCreate "Predicate" ((fa "iface" (EFieldAccess (EVar "predicate") "predicateInterface")) (fa "args" (EFieldAccess (EVar "predicate") "predicateArguments"))))) (fa "originId" (ELit (LInt 0))) (fa "prov" (EVar "PNumLit")) (fa "loc" (EVar "loc")) (fa "uoScope" (EVar "scope")) (fa "oblProj" (EApp (EVar "OpNumLit") (EVar "occurrence")))))))
-(DTypeSig true "currentLocalSchemes" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))
-(DFunDef false "currentLocalSchemes" (PWild) (EApp (EVar "dropLocalLocs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localSchemesOut") "value")))
-(DTypeSig true "currentLocalSchemesLoc" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Scheme")))))
-(DFunDef false "currentLocalSchemesLoc" (PWild) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localSchemesOut") "value"))
-(DTypeSig false "dropLocalLocs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))
-(DFunDef false "dropLocalLocs" ((PList)) (EListLit))
-(DFunDef false "dropLocalLocs" ((PCons (PTuple (PVar "n") PWild (PVar "s")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EVar "s")) (EApp (EVar "dropLocalLocs") (EVar "rest"))))
-(DTypeSig true "currentSeedSchemes" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))
-(DFunDef false "currentSeedSchemes" (PWild) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "seedSchemesOut") "value"))
 (DTypeSig false "recordLocalBind" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "BinderId") (TyFun (TyCon "Mono") (TyCon "Unit"))))))
 (DFunDef false "recordLocalBind" ((PVar "name") (PVar "loc") (PVar "bid") (PVar "v")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "recordBinderType") (EVar "bid")) (EVar "name")) (EVar "v")) (EVar "None")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localBindRefs")) (EBinOp "::" (ETuple (EApp (EVar "localSourceName") (EVar "name")) (EVar "loc") (EVar "v")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localBindRefs") "value"))))))
 (DTypeSig false "recordBinderType" (TyFun (TyCon "BinderId") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyCon "Bool") (TyCon "Unit")))))))
@@ -69289,8 +69203,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "lowerAuthLevels" ((PVar "level") (PVar "q")) (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" (PVar "id") (PVar "lvl") (PVar "top") (PVar "pat") (PVar "name")) () (EIf (EBinOp ">" (EVar "lvl") (EVar "level")) (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EApp (EApp (EApp (EApp (EVar "AUnbound") (EVar "id")) (EVar "level")) (EVar "top")) (EVar "pat")) (EVar "name"))) (ELit LUnit))) (arm (PCon "ALink" PWild PWild PWild) () (ELit LUnit))))) (ELit LUnit)) (EApp (EVar "authVars") (EVar "q"))))
 (DTypeSig false "substMono" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Authority"))) (TyFun (TyCon "Mono") (TyCon "Mono"))))))
 (DFunDef false "substMono" ((PVar "subst") (PVar "esub") (PVar "asub") (PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TVar" (PVar "cell")) () (EApp (EApp (EVar "optionOr") (EApp (EVar "TVar") (EVar "cell"))) (EApp (EApp (EVar "lookupAssocI") (EApp (EVar "tyvarId") (EVar "cell"))) (EVar "subst")))) (arm (PAs "c" (PCon "TCon" PWild PWild)) () (EVar "c")) (arm (PCon "TRigid" (PVar "n")) () (EApp (EVar "TRigid") (EVar "n"))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EApp (EApp (EVar "TApp") (EApp (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EVar "esub")) (EVar "asub")) (EVar "a"))) (EApp (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EVar "esub")) (EVar "asub")) (EVar "b")))) (arm (PCon "TFun" (PVar "a") (PVar "eff") (PVar "b")) () (EApp (EApp (EApp (EVar "TFun") (EApp (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EVar "esub")) (EVar "asub")) (EVar "a"))) (EApp (EApp (EApp (EVar "substRow") (EVar "esub")) (EVar "asub")) (EVar "eff"))) (EApp (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EVar "esub")) (EVar "asub")) (EVar "b")))) (arm (PCon "TEff" (PVar "r")) () (EApp (EVar "TEff") (EApp (EApp (EApp (EVar "substRow") (EVar "esub")) (EVar "asub")) (EVar "r")))) (arm (PCon "TQual" (PVar "inner") (PVar "q")) () (EApp (EApp (EVar "TQual") (EApp (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EVar "esub")) (EVar "asub")) (EVar "inner"))) (EApp (EApp (EVar "substAuth") (EVar "asub")) (EVar "q")))) (arm (PCon "TAuth" (PVar "q")) () (EApp (EVar "TAuth") (EApp (EApp (EVar "substAuth") (EVar "asub")) (EVar "q"))))))
-(DTypeSig true "ppSchemeNamed" (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "String"))))
-(DFunDef false "ppSchemeNamed" ((PVar "n") (PVar "s")) (EApp (EApp (EVar "ppSchemeCon") (EApp (EVar "ownContext") (EVar "n"))) (EVar "s")))
 (DTypeSig false "ownContext" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "VecObl"))))
 (DFunDef false "ownContext" ((PVar "n")) (EBlock (DoLet false false (PVar "id") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeDefIdsRef") "value")))) (DoExpr (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EApp (EVar "lookupSchemeObls") (EVar "n")) (EVar "id")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value"))))))
 (DTypeSig false "publishOwn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))))
@@ -69299,8 +69211,6 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DFunDef false "publishCore" ((PVar "contexts")) (EApp (EMethodRef "map") (ELam ((PVar "b")) (ETuple (EApp (EVar "fst") (EVar "b")) (ERecordCreate "PubScheme" ((fa "psScheme" (EApp (EVar "snd") (EVar "b"))) (fa "psContext" (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EVar "fst") (EVar "b"))) (EVar "contexts"))))))))))
 (DTypeSig false "coreOwnContexts" (TyFun (TyCon "Unit") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl")))))
 (DFunDef false "coreOwnContexts" (PWild) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "kv")) (ETuple (EApp (EVar "fst") (EApp (EVar "fst") (EVar "kv"))) (EApp (EVar "snd") (EVar "kv"))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value"))) (EVar "omEmpty")))
-(DTypeSig true "ppSchemeNamedFull" (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "String"))))
-(DFunDef false "ppSchemeNamedFull" ((PVar "n") (PVar "s")) (EApp (EApp (EVar "ppSchemeCon") (EApp (EApp (EVar "seedContext") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "coreSchemeObligationsRef") "value")) (EVar "n"))) (EVar "s")))
 (DTypeSig false "seedContext" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "VecObl")))))
 (DFunDef false "seedContext" ((PVar "coreContexts") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeDefIdsRef") "value")) (arm (PCon "Some" PWild) () (EApp (EVar "ownContext") (EVar "n"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "lookupSchemeObls") (EVar "n")) (ELit (LInt 0))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")) (arm (PCon "Some" (PVar "obs")) () (EVar "obs")) (arm (PCon "None") () (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "coreContexts"))))))))
 (DTypeSig false "captureEntryTables" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "EntryTables"))))

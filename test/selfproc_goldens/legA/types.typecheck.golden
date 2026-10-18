@@ -719,12 +719,9 @@ currentDoDeferred : Ref Bool
 currentDoOrigin : Ref (Option Loc)
 currentJoinContext : Ref (Option JoinContext)
 currentLoc : Ref (Option Loc)
-currentLocalSchemes : Unit -> List (String, Scheme)
-currentLocalSchemesLoc : Unit -> List (String, Option Loc, Scheme)
 currentMethodMismatch : Ref (Option String)
 currentModuleMarks : Unit -> GraphMarks
 currentScopeStore : Unit -> ScopeStore
-currentSeedSchemes : Unit -> List (String, Scheme)
 cyclicSuperIfaceMsg : List String -> String
 dataEnvAddDecl : Int -> Bool -> Decl -> DataEnv -> DataEnv
 dataEnvFinish : DataEnv -> DataEnv
@@ -960,7 +957,6 @@ drivenEvidence : Unit -> List EvEntry
 driverState : Ref DriverState
 dropFirst : Int -> List a -> List a
 dropGoalsSince : Int -> List GoalKind -> Unit
-dropLocalLocs : List (String, Option Loc, Scheme) -> List (String, Scheme)
 dropModSchemes : (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> (String, (List TcDiag, List TcDiag))
 dropRenameSuffixes : List String -> String
 dtopFor : EffLabel -> Param
@@ -2476,8 +2472,6 @@ positionBindings : List Ty -> List Mono -> List (String, Mono) -> Option (List (
 positionCells : List (String, Int) -> List (Int, Ref Authvar)
 positionalSigVars : List (String, Int) -> List (Int, Ref Authvar) -> SigVars
 postponePendingJoins : Int -> Unit
-ppSchemeNamed : String -> Scheme -> String
-ppSchemeNamedFull : String -> Scheme -> String
 prePassDeclScoped : ArgRw -> Decl -> Decl
 prePassDict : List String -> List String -> List Decl -> List Decl
 prePassFunClauseScoped : ArgRw -> FunClause -> FunClause

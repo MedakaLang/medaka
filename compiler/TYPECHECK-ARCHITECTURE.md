@@ -755,7 +755,7 @@ edges constrain refactors and none was named before:
 | → `types/private_mangle.mdk` (`mangledName`) | typecheck depends on the **backend**; bears on §7.4 and on §7.3 (it is what does *not* qualify type names) |
 | → `support/scc.mdk` (`tarjanSCCs`) | Tarjan is not in this file (§2) |
 | → `frontend/marker.mdk` (`localBoundNames`) | `localBoundNames` only. The mark pass is **not** on any production verb, so **no `EMethodRef` reaches this file**: `run`/`build` mark dicts in this file's own `prePassDict`/`prePassDictArg`, which mint `EMethodAt`/`EDictAt`, and `check` sees the unmarked tree |
-| ← `tools/lsp.mdk` (`currentLocalSchemes`, `currentSeedSchemes`) | the LSP reads `PerRun` state **after** a run completes, so `localSchemesOut`/`seedSchemesOut` are a **live external contract on reset timing** |
+| → `types/publish.mdk` (`PartialAnalysis`) | `captureEntryTables` freezes `localSchemesOut`/`seedSchemesOut` at drive end, before the next module's reset, each with its context |
 
 Also: `driver/diagnostics.mdk` consumes the `checkOne*` and `checkModules*`
 projections plus `entryOwnSchemes`; `ir/` reaches this file only through

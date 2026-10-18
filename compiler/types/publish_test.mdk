@@ -35,10 +35,10 @@ import types.typecheck.{
   elaborateModulesReport, checkModules, methodReturnMemoCurrentViews,
   methodReturnMemoRetentionStats, chainMemoReplayedSteps, tcCode, tcMsg,
   MethodReturnMemoView(..), checkModulesChainReportFor, checkOneReportK,
-  checkModulesPartialK, currentLocalSchemesLoc, currentSeedSchemes,
-  ppSchemeNamed, ppSchemeNamedFull
+  checkModulesPartialK
 }
 import driver.diagnostics.{analyzeProjectReport, noStdlibExports}
+import tools.lsp.{typeAtPoint}
 import test_process.{withScratchDir}
 
 int : Mono
@@ -852,17 +852,19 @@ locText (Some (Loc _ l1 c1 l2 c2)) =
   "\{debug l1}:\{debug c1}-\{debug l2}:\{debug c2}"
 locText None = "-"
 
--- Every local and seed name as the hover renderers show them from the tables
--- the drive just left.
-todayTables : Unit -> (List String, List String)
-todayTables _ = (
-  map
-    ((n, loc, s) => "\{n} \{locText loc} : \{ppSchemeNamed n s}")
-    (currentLocalSchemesLoc ()),
-  map
-    (b => "\{fst b} : \{ppSchemeNamedFull (fst b) (snd b)}")
-    (currentSeedSchemes ()),
-)
+-- The local and seed names `localBuffer`'s drive captures, as the renderers the
+-- hover surfaces used before the analysis carried them showed them (pinned from
+-- the base binary).  An interface method in the seed and an unsigned local render
+-- without their interface context.
+pinnedLocals : List String
+pinnedLocals = [
+  "g 2:6-2:7 : a -> String",
+  "y 2:8-2:9 : a",
+  "x 1:4-1:5 : a",
+]
+
+pinnedSeed : List String
+pinnedSeed = ["speak : a -> String", "talk : Speak a => a -> String"]
 
 capturedTables : PartialAnalysis -> (List String, List String)
 capturedTables pa = (
@@ -873,26 +875,22 @@ capturedTables pa = (
 talkCore : List Decl
 talkCore = desugar (parse talkPrelude)
 
-test "diags arm: the captured locals and seed render as today's renderers do" =
+test "diags arm: the captured locals and seed render as the hover renderers did" =
   let one = checkOneReportK False None [] talkCore (
     "b",
     desugar (parseLocated localBuffer),
   )
-  let oneToday = todayTables ()
   let project = checkModulesPartialK None [] talkCore [
     ("b", desugar (parseLocated localBuffer)),
   ]
-  let projectToday = todayTables ()
-  let (locals, seed) = oneToday
   expectEach [
-    ("single file", expectEqual oneToday (capturedTables one.trPartial)),
-    ("project", expectEqual projectToday (capturedTables project)),
-    ("a local was captured", expectGreaterThan 0 (length locals)),
     (
-      "the seed's talk carries the prelude's context",
-      expectEqual
-        ["talk : Speak a => a -> String"]
-        (filter (== "talk : Speak a => a -> String") seed),
+      "single file",
+      expectEqual (pinnedLocals, pinnedSeed) (capturedTables one.trPartial),
+    ),
+    (
+      "project",
+      expectEqual (pinnedLocals, pinnedSeed) (capturedTables project),
     ),
   ]
 
@@ -913,7 +911,7 @@ test "tree arm: the seed's talk renders with the prelude's context" =
 hoverEntry : Bool -> String
 hoverEntry broken =
   let tail = if broken then "\nbad = undefinedThing + 1\n" else ""
-  "import m7.{base}\n\nexport\nlevel6 : Int\nlevel6 = base + 6\n\{tail}"
+  "import m7.{base}\n\nexport\nlevel6 : Int\nlevel6 = base + 6\n\{tail}\nloc z = let w = z in w\n"
 
 projectModule : String ->
   String ->
@@ -952,4 +950,78 @@ test "paModule is the entry, or the last module checked when resolve blocks the 
       let blocked = withScratchDir (dir =>
         expectEqual "m7" (projectModule rsrc csrc dir True))
       expectEach [("clean", clean), ("entry resolve-rejected", blocked)]
+    _ => fail "could not read the prelude pair"
+
+-- The hover answers of the project buffer with a resolve error (`level6`, the
+-- imported `base`, the local `w`), as the base binary answered them.
+hoverAnswers : String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+hoverAnswers rsrc csrc dir =
+  let entry = "\{dir}/m6.mdk"
+  let src = hoverEntry True
+  match (
+    writeFile "\{dir}/m7.mdk" "export\nbase : Int\nbase = 1\n",
+    writeFile entry src,
+  )
+    (Ok _, Ok _) => expectEach [
+      (
+        "level6",
+        expectEqual (Some "level6 : Int") (typeAtPoint rsrc csrc entry src 4 2),
+      ),
+      (
+        "base, imported",
+        expectEqual (Some "base : Int") (typeAtPoint rsrc csrc entry src 4 11),
+      ),
+      (
+        "w, a local",
+        expectEqual (Some "w : a") (typeAtPoint rsrc csrc entry src 8 21),
+      ),
+    ]
+    _ => fail "could not write the modules"
+
+test "hover answers on a project buffer with a resolve error" = match (
+  readFile "stdlib/runtime.mdk",
+  readFile "stdlib/core.mdk",
+)
+  (Ok rsrc, Ok csrc) => withScratchDir (hoverAnswers rsrc csrc)
+  _ => fail "could not read the prelude pair"
+
+-- A single-file buffer with a resolve error, and one with a type error.
+resolveErrorBuffer : String
+resolveErrorBuffer = "f x = let y = x in undefinedThing + y\n\ng = putStrLn\n"
+
+typeErrorBuffer : String
+typeErrorBuffer =
+  "f x = let y = x in y\n\ng = putStrLn\n\ntype_err : Int\ntype_err = True\n"
+
+test "hover answers on a single-file buffer with a resolve or type error" =
+  match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
+    (Ok rsrc, Ok csrc) =>
+      let at = src l c => typeAtPoint rsrc csrc "buf.mdk" src l c
+      expectEach [
+        (
+          "resolve error, local y",
+          expectEqual (Some "y : a") (at resolveErrorBuffer 0 10),
+        ),
+        (
+          "resolve error, param x",
+          expectEqual (Some "x : a") (at resolveErrorBuffer 0 2),
+        ),
+        (
+          "resolve error, seed putStrLn",
+          expectEqual
+            (Some "putStrLn : String -> <Stdout> Unit")
+            (at resolveErrorBuffer 2 5),
+        ),
+        (
+          "type error, local y",
+          expectEqual (Some "y : a") (at typeErrorBuffer 0 10),
+        ),
+        (
+          "type error, signed binding",
+          expectEqual (Some "type_err : Int") (at typeErrorBuffer 4 2),
+        ),
+      ]
     _ => fail "could not read the prelude pair"
