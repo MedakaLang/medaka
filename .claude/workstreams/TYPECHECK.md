@@ -102,7 +102,7 @@ removing it:
   module's prefix read as "already qualified" and collided with its sibling, compiling a wrong
   slot at exit 0 on a program the parent commit refused.
   **Updated 2026-09-10 (#2809):** the emit order itself is now the other way round.
-  `runEmitWith` / `emitModulesWith` (`compiler/entries/entry_support.mdk`) run
+  `runEmitWith` / `emitElaborated` (`compiler/entries/entry_support.mdk`) run
   `elaborateModules` on the graph the user wrote, then the #2089 residual gate, then
   `mangleUnitsEv` (`compiler/types/private_mangle.mdk`) over the
   elaborated, dict-passed trees and the installed evidence table — so the emitter child's

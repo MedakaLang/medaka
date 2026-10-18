@@ -46,6 +46,7 @@ import ir.core_ir_lower.{
   validateFfiExternTypeNames,
 }
 import ir.dce.{dceFilter}
+import driver.main_autoprint.{mainIsWrapped}
 import backend.wasm_emit.{
   emitProgram,
   makeWasmEmitInputFull,
@@ -81,6 +82,7 @@ emitTail : List (String, String, List Decl) ->
   List (String, List Decl) ->
   <IO> Unit
 emitTail mods runtimeDecls coreD modules1 =
+  let wrapped = mainIsWrapped modules1
   let modules2 = stampSiteFiles mods modules1
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0
@@ -96,8 +98,8 @@ emitTail mods runtimeDecls coreD modules1 =
       (makeWasmEmitInputFull
         (methodIfaceTable allDecls)
         (ctorFieldTypeNames allDecls)
-        (mainTypeIsFloat ())
-        (mainTypeIsUnit ())
+        (mainTypeIsFloat () && not wrapped)
+        (mainTypeIsUnit () || wrapped)
         (declaredRecordFieldOrders allDecls)
         ffiRows)
   let lowered = lowerProgramEmit allDecls

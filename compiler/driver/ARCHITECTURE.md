@@ -15,7 +15,7 @@ them). It turns argv and a root file into a dependency-ordered module list, runs
 | `loader.mdk` | The dependency walk: dotted module id to file, topological order, cycle detection, project-root discovery from `medaka.toml` | `loadProgramE`, `findProjectRoot`, `fileOfModuleId` |
 | `diagnostics.mdk` | The accumulating error pipeline: every stage runs without exit-on-first-error and returns a structured `Diag` list with optional spans, plus hints and fixes | `mkDiag`, `diagOfResError` |
 | `build_cmd.mdk` | `medaka build`: shells out to a fresh emitter process, then clang, the C runtime and Boehm GC; native and wasm targets | `runBuild`, `runBuildNative`, `envOr` |
-| `main_autoprint.mdk` | Wraps a bare non-Unit value `main` in the prelude's own `println` under an unspellable name, and the async-main shape check | `autoPrintWrapModules`, `shouldAutoPrintMain` |
+| `main_autoprint.mdk` | Wraps the elaborated trees of a bare non-Unit value `main` in the prelude's own elaborated `println` under an unspellable name, applied with the drive's auto-print evidence; the `Async` main driver wrap; the async-main shape check | `executedTrees`, `mainIsWrapped`, `shouldAutoPrintMain` |
 
 ## Laws that bind it
 - **A1** — nothing below `driver/` imports it. The one `eval -> driver` edge (`eval.mdk` importing `diagnostics`) is a counted violation.

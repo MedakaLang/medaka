@@ -11,7 +11,7 @@
 -- A link-bearing effect cell survives only as a join member that carries labels
 -- (the shared labelled suffix `effect_rows` keeps on purpose); `liveCells`
 -- accepts exactly that and nothing else.
-import frontend.ast.{Loc, Decl, EvTable}
+import frontend.ast.{Loc, Decl, EvTable, EvId}
 import types.repr.{
   Mono(..), Tyvar(..), Scheme(..), AuthResidual(..), VecObl(..), ppSchemeCon
 }
@@ -144,6 +144,9 @@ public export data TcReport = TcReport {
   trResidual : List (String, TcDiag),
   trChecked : Option CheckedProgram,
   trEvidenceFaults : List EvidenceFault,
+  -- The evidence of an executing drive's auto-print of a value `main`: the
+  -- `Display` route the driver's printing wrap applies (driver/main_autoprint.mdk).
+  trAutoPrint : Option EvId,
 }
 
 -- ── deep zonk, freeze by copy ──────────────────────────────────────────────
@@ -369,6 +372,7 @@ graphReport perMod core residual evidence dispositions trees tables =
     trEvidenceFaults = match judged
       Some (_, faults) => faults
       None => [],
+    trAutoPrint = None,
   }
 
 -- Every live cell of every row, read at graph end.

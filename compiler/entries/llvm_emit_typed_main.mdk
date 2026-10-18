@@ -17,7 +17,7 @@
 -- table keyed off the unmangled decls misses every stamped lookup and
 -- `core_ir_lower` resolves the record by a bare-label first-match guess (the
 -- wrong-slot behaviour issue #38 closed).  Elaborate, mangle, then key every
--- table off the mangled decls — the order `entry_support.emitModulesWith` runs.
+-- table off the mangled decls — the order `entry_support.runEmitWith` runs.
 import frontend.ast.{Decl, Lit(..), BinderId(..), noDeclLoc}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}

@@ -244,7 +244,8 @@ authorityTermAsTypeMsg : List EffParamTy -> String
 authorityTermTextIn : Ref (List (Int, String)) -> Ref Int -> Authority -> String
 authorityUsesOf : Ty -> List (String, Param)
 authvarIdOf : (String, Ref Authvar) -> Int
-autoPrintWanted : Bool -> List TcDiag -> List Decl -> List (String, List Decl) -> List DrainFinding
+autoPrintEvidence : String -> ScopeId -> IfaceRef -> Mono -> EvId
+autoPrintWanted : Bool -> Bool -> List TcDiag -> List Decl -> List (String, List Decl) -> (List DrainFinding, Option EvId)
 axisAtomBinders : EffAtomTy -> List (String, Param)
 axisNamesArgument : List (String, EffParamTy) -> Bool
 axisProblems : List (String, Param) -> String -> Param -> List String
@@ -505,7 +506,6 @@ checkOneCallObligation : Bool -> ImplUniverse -> IfaceRef -> List Mono -> Option
 checkOneCallObligationNoImpl : IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
 checkOneDiags : List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
 checkOneDiagsK : Bool -> Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
-checkOneDiagsSynthetic : List Decl -> List Decl -> List (String, List Decl) -> (List TcDiag, List TcDiag)
 checkOneEffectParam : String -> Param -> EffParamTy -> Unit
 checkOneErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkOneIfaceCycle : ClassEnv -> Int -> Ref (Map String Unit) -> CeRow -> Unit
@@ -952,7 +952,7 @@ domainParam : Option String -> Param
 domainParamWith : Option String -> List (String, String) -> Param
 drainStampQueue : Unit -> List DrainFinding
 driveErrs : List DrainFinding -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List TcDiag
-driveGraphK : GraphOut -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> GraphDrive
+driveGraphK : GraphOut -> Bool -> Bool -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> GraphDrive
 drivenEvidence : Unit -> List EvEntry
 driverState : Ref DriverState
 dropFirst : Int -> List a -> List a
@@ -999,7 +999,7 @@ effvarLevel : Ref Effvar -> Int
 elabModuleStamp : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (ModuleBindings, List Decl)
 elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable)
 elaborateModulesReport : List Decl -> List Decl -> List (String, List Decl) -> TcReport
-elaborateModulesWithReport : Bool -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable), TcReport)
+elaborateModulesWithReport : Bool -> Bool -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable), TcReport)
 elaborateModulesWithSchemes : Bool -> List Decl -> List Decl -> List (String, List Decl) -> ((List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable), List (String, PubScheme), List (String, PubScheme))
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 elselessIfHelp : String
@@ -1862,7 +1862,7 @@ joinResultIs : Int -> PendingJoin -> Bool
 joinSideCheck : Bool -> List Atom -> List Atom -> List Atom -> List Atom -> Unit
 joinValueEqual : JoinContext -> Option Loc -> Mono -> Mono -> Unit
 joinValueTypes : JoinContext -> List (Option Loc, Mono) -> Mono
-judgeAutoPrintUse : IfaceRef -> Scheme -> Option Loc -> Unit
+judgeAutoPrintUse : IfaceRef -> Scheme -> Option Loc -> Mono
 judgeCells : Array (Option EvCell) -> Int -> Int -> List (String, TcDiag) -> List (String, TcDiag)
 judgeEvidence : List StampCtx -> List (String, TcDiag)
 judgeGoal : String -> Obligation -> List (String, TcDiag)

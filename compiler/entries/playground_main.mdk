@@ -26,9 +26,7 @@
 -- Per invocation, over the user's program:
 --   `analyze` — parsed + loaded ONCE (`run`'s `loadProgramFilesLocatedCachedE`, threaded downstream),
 --     typechecked ONCE (`analyzeFrom`/`analyzeProject`), a drive that also judges
---     a bare-value main's auto-print `Display` obligation; PLUS one further check
---     of the SYNTHETIC async wrap (`underivedMainDiags`) on the `Async` mains that
---     trigger it, which is a different program and not a repeat of the same work.
+--     a bare-value main's auto-print `Display` obligation.
 --     Prelude parsing+desugaring goes through the process-wide content-keyed
 --     `desugaredPrelude` memo (`frontend/desugar_cache.mdk`) on BOTH arms —
 --     `analyzeFrom` on the single-module arm, `analyzeProject` on the
@@ -38,7 +36,7 @@
 --     desugared once per SESSION, not once per keystroke.  User modules are
 --     loaded through the loader's source-keyed parse memo, likewise held for
 --     the session (`playgroundParseCache`).
---   Both modes then elaborate the program exactly once (`analyzeProgram` in
+--   Both modes then elaborate the program exactly once (`analyzeProgramReport` in
 --     `finishClean`): the `wasmgc/browser-worker` target check judges that
 --     elaboration, and `compile` emits from it.
 -- Before S2 this entry additionally re-loaded and re-parsed every user module, re-parsed
@@ -108,23 +106,16 @@ import driver.diagnostics.{
   readDiagSrc,
   parseErrCode,
   codeKind,
-  diagOfTypeError,
   missingMainDiag,
 }
 import driver.main_autoprint.{
-  shouldAutoPrintMain,
-  autoPrintWrapModules,
-  autoPrintPinCore,
-  autoPrintPinName,
-  underivedMainDiags,
-  shouldAsyncWrapMain,
-  asyncWrapModules,
+  executedTrees,
+  mainIsWrapped,
   asyncMainShapeError,
 }
 import types.target_profile.{selectedProfile, lookupProfile}
-import tools.check_policy.{EntryAnalysis(..), TargetInputs(..), analyzeProgram}
+import tools.check_policy.{EntryAnalysis(..), analyzeProgramReport}
 import tools.target_check.{targetRefusal, foldTargetDiags}
-import list.{last}
 import json.{
   Json(..),
   jObject,
@@ -138,13 +129,14 @@ import entries.entry_support.{
   desugarPair,
   runtimeExternNames,
   stampModulePaths,
+  failWith,
 }
-import support.util.{startsWith, lookupAssoc, splitOnChar, filterList}
+import support.util.{startsWith, splitOnChar, filterList}
 import types.publish.{PubScheme(..), ppPubScheme}
 import types.typecheck.{
-  ElabResult, constrainedSigNames, preludeReturnPosDictNames,
-  preludeArgPosDictNames, mainTypeIsFloat, mainTypeIsUnit,
-  checkedFfiExternTypeNamesModules, checkOneSchemeFullK
+  constrainedSigNames, preludeReturnPosDictNames, preludeArgPosDictNames,
+  mainTypeIsFloat, mainTypeIsUnit, checkedFfiExternTypeNamesModules,
+  checkOneSchemeFullK
 }
 import ir.core_ir_lower.{
   lowerProgramEmit,
@@ -178,7 +170,7 @@ import backend.emit_plan.{buildEmitPlanReached}
 --
 -- `analyze` (#2442) is `compile` minus the emit tail: it runs the IDENTICAL
 -- diagnostic-producing logic — the same analyzeLocated/analyzeProject route, the
--- same main-shape guard, the same async `underivedMainDiags` — and stops where `compile`
+-- same main-shape guard, the same async payload check — and stops where `compile`
 -- would call `runEmit`.  It exists because the editor's live-squiggle path
 -- (playground/language-worker.js) throws the WAT away: on a clean one-liner, 596ms
 -- of a 769ms `compile` was codegen nobody read.  The `emit` flag threaded through
@@ -508,7 +500,7 @@ mainShapeError decls = match findMainFunDef decls
 -- 🚨 IT ALSO RAN A WHOLE `mangleUnits` + `elaborateModules` HERE AND DISCARDED THE
 -- RESULT.  That call was NOT dead — bound to `_`, but its SIDE EFFECT was
 -- `mainSchemeRef`, the sole input to `mainTypeIsUnit`/`mainTypeIsAsync`/
--- `mainTypeIsFloat` and therefore to the `shouldAutoPrintMain` two lines below.
+-- `mainTypeIsFloat` and therefore to the `asyncMainShapeError` below.
 -- What retired it is that `mainSchemeRef` acquired a SECOND, equally authoritative
 -- producer on BOTH arms that reach here, after this call site was written:
 --   * single module — `analyzeFrom` → `checkOneDiags` → `checkModulesEntryFullSplit`
@@ -516,9 +508,8 @@ mainShapeError decls = match findMainFunDef decls
 --   * multi module  — `analyzeProject` → `typecheckPassFull` → `graphCollect` →
 --     `setMainSchemeIfEntry` (#2246's).
 -- Both run BEFORE this point on every path that reaches it, and nothing between
--- them and here writes the ref (`desugaredPrelude` and `desugarPair` are pure;
--- `underivedMainDiags` runs after, and `checkOneDiagsSynthetic` saves/restores it
--- by design).  MEASURED, not inferred (S2/#2442): an instrumented build printing all
+-- them and here writes the ref (`desugaredPrelude` and `desugarPair` are pure).
+-- MEASURED, not inferred (S2/#2442): an instrumented build printing all
 -- three predicates plus `shouldAutoPrintMain` immediately before and after this
 -- elaborate agreed on all four bits in 34/34 runs — 17 fixtures spanning Unit,
 -- Int/String/Bool/List/Option/Result/tuple values, Float, an explicit `main : Int`
@@ -529,12 +520,12 @@ mainShapeError decls = match findMainFunDef decls
 -- program exactly once.
 --
 -- COMPOSITE-MAIN AUTO-PRINT (design §10, single-process in-browser path): a bare
--- non-Unit VALUE main is rewritten `main = <e>` → `main = println <e>` (so composite
--- mains no longer crash the emitter).  A bare underived-ADT main never reaches here:
--- the analyze drive posed the wrap's `Display` obligation and reported it.  A
--- Unit/Async main is unchanged.
--- The async branch's `underivedMainDiags` is a DIAGNOSTIC, not part of emit, so it
--- runs in `analyze` mode too; only the `finishClean` tail is mode-dependent.
+-- non-Unit VALUE main is printed by the wrap `finishClean` applies to its
+-- elaborated trees (`executedTrees`), so composite mains no longer crash the
+-- emitter.  A bare underived-ADT main never reaches here: the analyze drive posed
+-- the wrap's `Display` obligation and reported it.  A Unit main is unchanged.
+-- An `Async` main is driven by `runAsyncMain`; one whose payload is not `Unit`
+-- is reported here, in `analyze` mode too.
 doEmit : Bool ->
   String ->
   String ->
@@ -548,27 +539,7 @@ doEmit emit rsrc csrc tsrc entry paths mods warnTriples =
   let rt = desugaredPrelude rsrc
   let core = desugaredPrelude csrc
   let modules = map desugarPair mods
-  let written =
-    printed => WrittenEntry {
-      wePath = entry,
-      weSource = tsrc,
-      weDecls = entryDeclsOf modules,
-      wePrinted = printed,
-    }
-  if shouldAutoPrintMain core modules then
-    -- coreW carries the wrap's prelude-pinned callee (autoPrintPinCore, #2185).
-    finishClean
-      emit
-      (written True)
-      paths
-      warnTriples
-      rt
-      (autoPrintPinCore core)
-      (autoPrintWrapModules modules)
-  else match asyncMainShapeError modules
-    -- An `Async` main is driven by the sequential `runAsync`: the browser build
-    -- has no clock host-imports (see wasm_emit_modules_main).
-
+  match asyncMainShapeError modules
     Some msg =>
       emitDiagnostics
         (cjAllToJson [
@@ -579,33 +550,17 @@ doEmit emit rsrc csrc tsrc entry paths mods warnTriples =
           ),
         ])
     None =>
-      if shouldAsyncWrapMain "runAsyncMain" modules then
-        -- Re-check the rewritten program, as the auto-print branch does.
-        let modulesW = asyncWrapModules "runAsyncMain" modules
-        match underivedMainDiags rt core modulesW
-          [] =>
-            finishClean emit (written False) paths warnTriples rt core modulesW
-          errs =>
-            emitDiagnostics
-              (cjAllToJson [(entry, tsrc, map diagOfTypeError errs)])
-      else
-        finishClean emit (written False) paths warnTriples rt core modules
+      finishClean
+        emit
+        WrittenEntry { wePath = entry, weSource = tsrc }
+        paths
+        warnTriples
+        rt
+        core
+        modules
 
--- The entry as the user wrote it, which `finishClean` may receive wrapped:
--- its path and source (where a refusal lands), its desugared decls (where
--- `main` is declared and what it calls), and whether the drivers print it.
-data WrittenEntry = WrittenEntry {
-  wePath : String,
-  weSource : String,
-  weDecls : List Decl,
-  wePrinted : Bool,
-}
-
--- The entry module's decls: the loader's list is dependency-first.
-entryDeclsOf : List (String, List Decl) -> List Decl
-entryDeclsOf modules = match last modules
-  Some (_, decls) => decls
-  None => []
+-- The entry's path and source, where a refusal lands.
+data WrittenEntry = WrittenEntry { wePath : String, weSource : String }
 
 -- ACCEPTED TRADEOFF (Val, 2026-09-01, #2442 review round F1): because `analyze`
 -- deliberately never reaches `runEmit` below, it CANNOT detect a codegen-only
@@ -625,7 +580,7 @@ entryDeclsOf modules = match last modules
 --
 -- The ONE divergence point between `compile` and `analyze`.  Every diagnostic
 -- from the frontend has already been produced here.  Both modes then run the
--- program's one elaboration (`analyzeProgram`, the drive `elaborateModules`
+-- program's one elaboration (`analyzeProgramReport`, the drive `elaborateModules`
 -- runs, with the entry's schemes and invocation table kept) and judge the entry
 -- against the selected profile on it, as `check --target` does; a refusal is
 -- the verdict in either mode.  Compile then emits from that same elaboration;
@@ -642,11 +597,21 @@ finishClean : Bool ->
   List (String, List Decl) ->
   <IO> Unit
 finishClean emit written paths warnTriples runtimeDecls coreDecls modules =
-  let analysis = analyzeProgram False runtimeDecls coreDecls modules
+  let (analysis, report) =
+    analyzeProgramReport True True runtimeDecls coreDecls modules
   match targetRefusalOf written paths analysis
     [] =>
       if emit then
-        runEmit paths warnTriples runtimeDecls analysis.eaElab
+        let (coreE, modulesE, _, _, _, _) = analysis.eaElab
+        let executed =
+          executedTrees
+            report.trAutoPrint
+            "runAsyncMain"
+            (coreDecls, modules)
+            (coreE, modulesE)
+        match executed
+          Ok executed => runEmit paths warnTriples runtimeDecls executed
+          Err msg => failWith msg
       else
         emitAnalyzeMarker warnTriples
     ds =>
@@ -656,27 +621,15 @@ finishClean emit written paths warnTriples runtimeDecls coreDecls modules =
         (cjAllToJson
           (foldTargetDiags written.wePath written.weSource ds warnTriples))
 
--- The selected profile's refusals of the program.  The analysis may be of the
--- wrapped program, so the entry is judged with its own decls, and a printed
--- entry with the `println` the wrap applies: the refusal then names what
--- `check --target` names for the same source, at the same place.
+-- The selected profile's refusals of the program, judged from its own
+-- elaboration as `check --target` judges it.
 targetRefusalOf : WrittenEntry ->
   List (String, String) ->
   EntryAnalysis ->
   <IO> List Diag
 targetRefusalOf written paths analysis = match !selectedProfile
   None => []
-  Some profile =>
-    let printedCall =
-      if written.wePrinted then
-        lookupAssoc autoPrintPinName analysis.eaTarget.tiSchemes
-      else
-        None
-    let inputs = analysis.eaTarget
-    targetRefusal profile written.wePath paths { inputs |
-      tiEntryDecls = written.weDecls,
-      tiAutoPrintCall = printedCall,
-    }
+  Some profile => targetRefusal profile written.wePath paths analysis.eaTarget
 
 -- `analyze`'s terminal marker: ALWAYS a marker line plus a one-line JSON payload.
 -- The payload is byte-identical to the warnings JSON `emitWatMarker` writes when
@@ -710,12 +663,13 @@ nonEmptyDiags _ = True
 runEmit : List (String, String) ->
   List (String, String, List Diag) ->
   List Decl ->
-  ElabResult ->
+  (List Decl, List (String, List Decl)) ->
   <IO> Unit
-runEmit paths warnTriples runtimeDecls elaborated =
+runEmit paths warnTriples runtimeDecls executed =
   -- #2809: the program is elaborated as written (`finishClean`), then its
   -- elaborated trees are mangled.
-  let (coreE, modulesE, _, _, _, _) = elaborated
+  let (coreE, modulesE) = executed
+  let wrapped = mainIsWrapped modulesE
   let (coreD, modulesM) = mangleUnitsEv coreE modulesE
   let modules2 = stampModulePaths paths modulesM
   let allDecls0 = coreD ++ flatMap snd modules2
@@ -732,8 +686,8 @@ runEmit paths warnTriples runtimeDecls elaborated =
       (makeWasmEmitInputFull
         (methodIfaceTable allDecls)
         (ctorFieldTypeNames allDecls)
-        (mainTypeIsFloat ())
-        (mainTypeIsUnit ())
+        (mainTypeIsFloat () && not wrapped)
+        (mainTypeIsUnit () || wrapped)
         (declaredRecordFieldOrders allDecls)
         ffiRows)
   -- Mirrors wasm_emit_modules_main.emitTail: bind the lowered

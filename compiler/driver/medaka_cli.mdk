@@ -104,7 +104,7 @@ import args.{
 }
 import frontend.ast.{
   letBindName, Decl(..), ExternDecl(..), Expr(..), Loc(..), Pat, LetBind(..),
-  EvTable
+  EvTable, EvId
 }
 import frontend.parser.{
   parseWithPositions,
@@ -210,22 +210,17 @@ import json.{
 }
 import types.publish.{TcReport(..)}
 import types.typecheck.{
-  elaborateModules,
   resetTypeErrorsSticky,
   hadTypeErrors,
   TcDiag,
-  ElabResult,
   mainTypeIsUnit,
   setStdlibOwnership,
 }
 import driver.main_autoprint.{
-  shouldAsyncWrapMain,
-  asyncWrapModules,
   asyncMainShapeError,
   shouldAutoPrintMain,
   valueMainCandidate,
-  autoPrintWrapModules,
-  autoPrintPinCore,
+  executedTrees,
 }
 import eval.eval.{
   evalModulesOutputRun,
@@ -345,6 +340,7 @@ import tools.check_policy.{
   runManifest,
   ManifestArgs(..),
   analyzeProgram,
+  analyzeProgramReport,
   EntryAnalysis(..),
   TargetInputs(..),
 }
@@ -2959,7 +2955,7 @@ runRunCmd argv =
                         (filter diagIsError surfaceDiags)))
             True =>
               let _ = resetTypeErrorsSticky ()
-              let analysis = elaborateRun rtD coreD modsD
+              let (analysis, autoPrint) = elaborateRun rtD coreD modsD
               let (coreE, modsE, perMod, residual, _, _) = analysis.eaElab
               let residualHit = hadTypeErrors ()
               let diags = analyzeFinish surface (tcHalfOfPerModule perMod)
@@ -2992,13 +2988,22 @@ runRunCmd argv =
                     -- so widening here widens both in lockstep.  The
                     -- multi-module arm below keeps `projWarns` on the
                     -- coherence allowlist.
-                    finishRunEval
-                      target
-                      jsonMode
-                      (autoPrintElaborated rtD coreD modsD (coreE, modsE))
-                      mods
-                      (allWarnTriples tsrc target diags)
-                      (runEvalPerf perfOn target perfT0 perfTCheck)
+                    let executed =
+                      executedTrees
+                        autoPrint
+                        "runAsyncMain"
+                        (coreD, modsD)
+                        (coreE, modsE)
+                    match executed
+                      Err msg => runAbort msg
+                      Ok trees =>
+                        finishRunEval
+                          target
+                          jsonMode
+                          trees
+                          mods
+                          (allWarnTriples tsrc target diags)
+                          (runEvalPerf perfOn target perfT0 perfTCheck)
                 errs => match jsonMode
                   -- #2798 review S2: `diags` (the WHOLE list `analyzeFinish`
                   -- returned, errors and warnings) for JSON — `errs` is the
@@ -3039,7 +3044,7 @@ runRunCmd argv =
             -- from a second, check-only pass over the same graph.
             "" =>
               let _ = resetTypeErrorsSticky ()
-              let analysis = elaborateRun rtD coreD modsD
+              let (analysis, autoPrint) = elaborateRun rtD coreD modsD
               let (coreE, modsE, perMod, residual, _, _) = analysis.eaElab
               match elaboratedProjectDiags rtD coreD modsWithPath modsD perMod
                 (Some errText, _, _) => match jsonMode
@@ -3084,13 +3089,22 @@ runRunCmd argv =
                     let perfTCheck = now ()
                     let _ =
                       emitPhase perfOn "check" (perfTCheck - perfTLoad) target
-                    finishRunEval
-                      target
-                      jsonMode
-                      (autoPrintElaborated rtD coreD modsD (coreE, modsE))
-                      mods
-                      projWarns
-                      (runEvalPerf perfOn target perfT0 perfTCheck)
+                    let executed =
+                      executedTrees
+                        autoPrint
+                        "runAsyncMain"
+                        (coreD, modsD)
+                        (coreE, modsE)
+                    match executed
+                      Err msg => runAbort msg
+                      Ok trees =>
+                        finishRunEval
+                          target
+                          jsonMode
+                          trees
+                          mods
+                          projWarns
+                          (runEvalPerf perfOn target perfT0 perfTCheck)
             _ => match jsonMode
               True =>
                 -- #2798 review S2: same `relDiagTriple root` normalization as
@@ -3116,72 +3130,24 @@ desugarPair : (String, List Decl) -> (String, List Decl)
 desugarPair (mid, p) = (mid, desugarIn mid p)
 
 -- (modId, path, decls) → (modId, path): the per-module file map threaded into the
--- `run`'s elaborate: one pass to learn `main`'s type, then — for a `main : Async _`
--- (ASYNC-DESIGN D5) — a second pass over the graph rewritten to apply the
--- `async` module's scheduler driver (main_autoprint.asyncWrapModules, #2506), so
--- the interpreter forces a plain Unit main whose body drives the scheduler.  A
--- plain main keeps the single pass; both leave mainSchemeRef populated for the
--- main-shape warnings `finishRunEval` reads.
+-- `run`'s one elaboration: the analysis its gate reads, and the auto-print
+-- evidence `executedTrees` wraps the elaborated trees with.  It leaves
+-- mainSchemeRef populated for the main-shape warnings `finishRunEval` reads.
 elaborateRun : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  <IO> EntryAnalysis
+  <IO> (EntryAnalysis, Option EvId)
 elaborateRun rtD coreD modsD =
-  let analysis = analyzeProgram (valueMainCandidate coreD modsD) rtD coreD modsD
-  match asyncMainShapeError modsD
-    Some msg =>
-      let _ = runAbort msg
-      analysis
-    None =>
-      if shouldAsyncWrapMain "runAsyncMain" modsD then
-        { analysis |
-          eaElab =
-            plainPerModuleOf
-              analysis.eaElab
-              (elaborateModules
-                rtD
-                coreD
-                (asyncWrapModules "runAsyncMain" modsD)),
-        }
-      else
-        analysis
-
--- The trees `run` evaluates for a zero-arg value `main` of a non-Unit type: the
--- auto-print-wrapped program (driver/main_autoprint.mdk), so `run` prints the
--- value exactly as `build`'s binary does.  Called only once the gate has
--- accepted the program, whose drive already judged the `Display` obligation
--- (`elaborateRun`'s value-main candidate), while `mainSchemeRef` still holds
--- the user's own `main`; its own diagnostics are not read.  Any other `main`
--- keeps the elaboration the gate ran.
-autoPrintElaborated : List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  (List Decl, List (String, List Decl)) ->
-  <IO> (List Decl, List (String, List Decl))
-autoPrintElaborated rtD coreD modsD elaborated =
-  if shouldAutoPrintMain coreD modsD then
-    let (coreE, modsE, _, _, _, _) =
-      elaborateModules rtD (autoPrintPinCore coreD) (autoPrintWrapModules modsD)
-    (coreE, modsE)
-  else
-    elaborated
-
--- The wrapped elaboration's trees, residual and evidence, carrying the PLAIN
--- program's per-module diagnostics.  The wrapped graph is synthetic — the
--- `async` scheduler driver applied to the user's `main` — so a diagnostic
--- attributed to it names code the user did not write.  The residual and the
--- sticky accumulator `hadTypeErrors` reads are the wrapped pass's, so a
--- diagnostic only the wrapped pass produces would still abort the run; none has
--- been constructed (the wrap strips `main`'s signature and applies a row-open
--- driver), so what the residual gate carries in practice is the graph-end
--- drain's diagnostics and the core pass's, which no per-module list holds.
-plainPerModuleOf : ElabResult -> ElabResult -> ElabResult
-plainPerModuleOf (_, _, perMod, _, _, _) (coreW, modsW, _, residualW, evW, dispW) =
-  (coreW, modsW, perMod, residualW, evW, dispW)
+  let (analysis, report) =
+    analyzeProgramReport (valueMainCandidate coreD modsD) True rtD coreD modsD
+  let _ = match asyncMainShapeError modsD
+    Some msg => runAbort msg
+    None => ()
+  (analysis, report.trAutoPrint)
 
 -- B2 (RUN-EFFECTS): evalModulesOutputRun is evalModulesOutput plus the real-I/O
 -- externs (File/Env/Stdin/Stderr/Clock), hence the `IO` row.  An `Async` main
--- reaches here already rewritten by `elaborateRun`.
+-- reaches here already rewritten by `executedTrees`.
 runProgramOutput : List Decl -> List (String, List Decl) -> <IO> String
 runProgramOutput preludeDecls modules =
   evalModulesOutputRun preludeDecls modules
@@ -3763,7 +3729,7 @@ analyzeLoaded rsrc csrc target roots stdlibDir modsWithPath =
     "" =>
       let _ = resetTypeErrorsSticky ()
       let analysis =
-        analyzeProgram (valueMainCandidate coreD modsD) rtD coreD modsD
+        analyzeProgram (valueMainCandidate coreD modsD) False rtD coreD modsD
       let residualHit = hadTypeErrors ()
       let (_, _, perMod, residual, _, _) = analysis.eaElab
       match elaboratedProjectDiags rtD coreD modsWithPath modsD perMod

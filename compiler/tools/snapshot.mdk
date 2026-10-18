@@ -615,7 +615,7 @@ evalOf runtimeDecls coreDecls d =
 emitBoth : String -> List String -> List Decl -> List Decl -> <IO> Unit
 emitBoth root sel runtimeDecls userDecls =
   -- Elaborate then mangle, keyed off the MANGLED decls -- the order
-  -- `entry_support.emitModulesWith` runs (mirrors `llvm_emit_typed_main.mdk`'s
+  -- `entry_support.runEmitWith` runs (mirrors `llvm_emit_typed_main.mdk`'s
   -- `runEmit`), so a name-keyed table below sees the same stamped names a real
   -- build's tables do.
   let (coreE, modulesE, _, _, _, _) =
