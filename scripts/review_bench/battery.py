@@ -309,6 +309,14 @@ def score_findings(u: dict, findings: list[dict] | None, allowed_classes: set[st
             "parse_error": findings is None}
 
 
+def battery_request(u: dict, rub: dict, classes: list[str], prompt_cache: bool) -> tuple[str, str, str]:
+    """(cache key, system, user) of one battery call; review.py asks the cache with the key."""
+    system, user = battery_system(rub, classes), I.render_user(u)
+    key = E.chash({"model": E.CLAUDE_MODELS["haiku"], "system": system, "user": user,
+                   "prompt_cache": prompt_cache})
+    return key, system, user
+
+
 def run_battery(us: list[dict], rub: dict, class_sets: dict[str, list[str]], kind: str, jobs: int,
                 timeout: int, prompt_cache: bool) -> dict[str, dict]:
     model = E.CLAUDE_MODELS["haiku"]
@@ -317,8 +325,7 @@ def run_battery(us: list[dict], rub: dict, class_sets: dict[str, list[str]], kin
         cs = class_sets[u["_key"]]
         if not cs:
             continue
-        system, user = battery_system(rub, cs), I.render_user(u)
-        key = E.chash({"model": model, "system": system, "user": user, "prompt_cache": prompt_cache})
+        key, system, user = battery_request(u, rub, cs, prompt_cache)
         reqs.append((key, system, user))
         by[u["_key"]] = key
     res = ask_raw(list({r[0]: r for r in reqs}.values()), model, kind, jobs, timeout, prompt_cache)

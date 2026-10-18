@@ -88,6 +88,41 @@ stratified sample: classes in a fixed hash order, positive and control side by
 side). `run` skips judgment items and classes not in the rubric, and says how
 many.
 
+## Reviewing a live diff
+
+`review.py` runs the measured arm, battery then per-class confirm with
+generated evidence, over a real diff. The skill is
+`.claude/skills/review-diff/SKILL.md`.
+
+```sh
+R="python3 -I scripts/review_bench/review.py"
+$R --dry-run                    # units, token and cost estimate
+$R --rev A..B [--json] [--max-usd 1.00] [--jobs 4]
+```
+
+- **Scope:** `.mdk` files the diff adds or changes, at B, committed code only.
+  Deleted files, `compiler/seed/`, `test/snapshots/`, goldens and any file in a
+  `*fixture*` or `must_fail` directory are skipped and listed.
+- **Units:** each touched top-level declaration with its leading comments
+  (evidence.py's `parse_decls`). An import run is one unit. Adjacent touched
+  declarations share a unit up to 40 lines, the fixtures' excerpt size, unless
+  `--one-decl` is given. A span over 80 lines becomes windows of the changed
+  runs with 8 lines of context each side. A changed blank line is no change.
+- **Prompts:** built by `battery.battery_request` and `bench.claude_request`
+  (2 dev shots), the measured functions. The battery runs with Claude Code's
+  prompt cache, as the measured `battery-pc` arm did.
+- **Diff scope:** a battery class goes to confirm only if one of its verified
+  battery findings (read back from the cached answer, since `run_battery`
+  keeps one per class) quotes a changed line, or quotes only evidence blocks.
+  A confirmed finding is reported at the first changed line its confirm or
+  battery quote overlaps; one argued only from evidence blocks is marked and
+  placed at the unit's first changed line. On `e5a3d0380` this halved the
+  confirm spend and dropped no finding judged real.
+- **Budget:** `--max-usd` is checked before each batch of `2 * --jobs` units,
+  so a run can pass it by one batch.
+- **Output:** findings ranked by battery times confirm confidence (the rubric
+  carries no per-class severity), the units, what was skipped, the spend.
+
 ## Cache and results
 
 Every answer is cached under `.cache/claude/` by a hash of model,
@@ -147,4 +182,6 @@ $1.30 for a 40-item Opus ceiling.
   excerpt: a whole-rubric Haiku call, per-class Haiku on every class, and an
   Opus audit of unlabelled flags. Its docstring lists the arms;
   `RESULTS-battery-2026-10-17.md` is its first run.
+- `review.py`: the battery-then-confirm reviewer over a live diff (see
+  "Reviewing a live diff").
 - `RESULTS-*.md`: frozen measurements, one per pass; rerun rather than quote.
