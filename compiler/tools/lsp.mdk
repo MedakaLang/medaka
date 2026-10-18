@@ -41,7 +41,7 @@ import driver.diagnostics.{
   mkDiag,
   analyzeFrom,
   analyzeProject,
-  projectEntrySchemes,
+  projectEntryAnalysis,
   stdlibExportsReader,
 }
 import driver.loader.{findProjectRootOrSelf, parseCachedLocated}
@@ -70,11 +70,14 @@ import string.{stripCR, toInt}
 import regex.{Regex, Match, mustCompile, escape, findAll, find}
 import frontend.desugar.{desugar}
 import types.repr.{Scheme(..)}
-import types.publish.{PubScheme(..), pubSchemes, ppPubScheme}
-import types.typecheck.{
-  checkOneSchemeFullK, ppSchemeNamed, ppSchemeNamedFull, currentLocalSchemes,
-  currentLocalSchemesLoc, currentSeedSchemes
+import types.publish.{
+  PubScheme(..),
+  PartialAnalysis(..),
+  TcReport(..),
+  pubSchemes,
+  ppPubScheme,
 }
+import types.typecheck.{checkOneReportK, entrySplit, entryOwnSchemes}
 import tools.fmt.{formatSourceChecked}
 import tools.refindex.{RefIndex, buildRefIndexProject, binderAt, usesOf, defsOf}
 import list.{sortBy}
@@ -687,8 +690,8 @@ defZipLocOr None p = jRange (declPosLine p - 1) 0 (declPosEndLine p) 0
 -- uses `parseLocatedResult`).  Prelude sources go through the S-1 memoized
 -- `parsePrelude` (the cheap unlocated entry, cached) and are parsed FIRST, so
 -- the live loc-state at typecheck time is this buffer's.
-docSchemes : String -> String -> String -> Option (List (String, PubScheme))
-docSchemes runtimeSrc coreSrc src =
+docEnv : String -> String -> String -> Option HoverEnv
+docEnv runtimeSrc coreSrc src =
   let runtimeDecls = desugaredPrelude runtimeSrc
   let coreDecls = desugaredPrelude coreSrc
   match parseLocatedResult src
@@ -697,12 +700,27 @@ docSchemes runtimeSrc coreSrc src =
       let userDecls = desugar userRaw
       let preludeKey =
         Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
-      let (preludeSchemes, ownSchemes) = checkOneSchemeFullK
-        preludeKey
-        runtimeDecls
-        coreDecls
-        ("__user__", userDecls)
-      Some (ownSchemes ++ preludeSchemes)
+      let report = checkOneReportK False preludeKey runtimeDecls coreDecls (
+        "__user__",
+        userDecls,
+      )
+      let (preludeSchemes, ownSchemes, _, _) = entrySplit report
+      Some (hoverEnvOf (ownSchemes ++ preludeSchemes) report.trPartial)
+
+-- The lookup tiers one drive gave a document: the entry's schemes (own first),
+-- then the locals and the import seed its `PartialAnalysis` holds.
+data HoverEnv = HoverEnv {
+  heSchemes : List (String, PubScheme),
+  heLocals : List (String, PubScheme, Option Loc),
+  heSeed : List (String, PubScheme),
+}
+
+hoverEnvOf : List (String, PubScheme) -> PartialAnalysis -> HoverEnv
+hoverEnvOf schemes pa = HoverEnv {
+  heSchemes = schemes,
+  heLocals = pa.paLocals,
+  heSeed = pa.paSeed,
+}
 
 -- Lookup a name's Scheme in the env (mirror repl.mdk lookupScheme / OCaml
 -- List.assoc_opt).
@@ -720,9 +738,9 @@ lookupSchemeL name ((n, s) :: rest)
 --   ```
 -- (exactly the OCaml format string).  Null when off an identifier or not in env.
 -- Extension over the OCaml oracle: when the name isn't a top-level/global binding,
--- fall back to `localSchemesOut` (let-bound names, lambda/clause params, match
--- binders captured during the typecheck docSchemes just ran), so local variables
--- also show their inferred type on hover.
+-- fall back to the locals the drive captured (let-bound names, lambda/clause
+-- params, match binders), so local variables also show their inferred type on
+-- hover.
 -- Produce the hover Json for the cursor position.  Resolve the identifier FIRST
 -- (cheap), then build the env (potentially loading the project graph), so an
 -- off-identifier hover never pays for a typecheck/load.
@@ -737,7 +755,7 @@ hoverFor runtimeSrc coreSrc uri src params docs = match (
       None => JNull
       Some env => match hoverSchemeAt name src line col env
         None => JNull
-        Some hit => jHover name (ppHoverScheme name hit)
+        Some hit => jHover name (ppHoverScheme hit)
   _ => JNull
 
 -- Stateless type-at-point for the `medaka mcp` `medaka_type_at` tool (#251) — and
@@ -745,13 +763,10 @@ hoverFor runtimeSrc coreSrc uri src params docs = match (
 -- it takes the (0-based, LSP-style) line/col as plain Ints rather than fishing
 -- them out of a synthetic params Json, and it returns the rendered `<name> :
 -- <type>` as PLAIN TEXT (no markdown/JSON wrapper) so the MCP layer drops it
--- straight into a tool-result content block.  The ORDER is load-bearing and
--- mirrors hoverFor exactly: resolve the identifier first (cheap), THEN build the
--- env — `hoverEnvFor` both returns the entry schemes AND populates the typecheck
--- hover side-channel Refs (currentLocalSchemes/currentSeedSchemes) that
--- `hoverScheme` reads next; reading them before the env build would silently lose
--- locals' and imported names' types.  The buffer is seeded into `docs` under its
--- own uri so the import-bearing project load (projectEntryEnv) sees exactly this
+-- straight into a tool-result content block.  The ORDER mirrors hoverFor:
+-- resolve the identifier first (cheap), THEN build the env, which carries the
+-- locals and the import seed its drive captured.  The buffer is seeded into
+-- `docs` under its own uri so the import-bearing project load (projectEntryEnv) sees exactly this
 -- text as the entry module; imported siblings resolve from disk through the
 -- loader's read/disk fallback (readModuleProgF).  None ⇒ off any identifier or
 -- not in scope — the caller maps that to a clean "no symbol" result, never a
@@ -778,65 +793,64 @@ typeAtPoint runtimeSrc coreSrc filePath src line col =
         None => None
         Some env =>
           map
-            (hit => stringConcat [name, " : ", ppHoverScheme name hit])
+            (hit => stringConcat [name, " : ", ppHoverScheme hit])
             (hoverSchemeAt name src line col env)
 
 -- The hover lookup env for the buffer.  A buffer with a non-core sibling import
 -- goes through the multi-module project pipeline (loads the import graph; the
 -- entry's own schemes are returned and its locals + import-scoped seed land in the
 -- hover side-channels), so imported names resolve.  A single-file buffer keeps the
--- fast `docSchemes` path (core + runtime + this buffer only).
+-- fast `docEnv` path (core + runtime + this buffer only).
 hoverEnvFor : String ->
   String ->
   String ->
   String ->
   Docs ->
-  <IO> Option (List (String, PubScheme))
+  <IO> Option HoverEnv
 hoverEnvFor runtimeSrc coreSrc uri src docs
   | bufferHasImports src = projectEntryEnv runtimeSrc coreSrc uri docs
-  | otherwise = docSchemes runtimeSrc coreSrc src
+  | otherwise = docEnv runtimeSrc coreSrc src
 
 -- Load the import graph rooted at this buffer (same loader/cache/read disk-
 -- fallback as publishProjectDiagnostics) and return the ENTRY module's own
--- schemes.  Side effect: the entry's locals + import-scoped seed (runtime + core
--- + imported names) are left in the typecheck hover side-channels.
-projectEntryEnv : String ->
-  String ->
-  String ->
-  Docs ->
-  <IO> Option (List (String, PubScheme))
+-- schemes, with the entry's locals + import-scoped seed (runtime + core +
+-- imported names) from the drive's `PartialAnalysis`.
+projectEntryEnv : String -> String -> String -> Docs -> <IO> Option HoverEnv
 projectEntryEnv runtimeSrc coreSrc uri docs =
   let rootFile = pathOfUri uri
   let projectDir = findProjectRootOrSelf (dirOfPath rootFile)
   let stdlibDir = lspMedakaRoot "." ++ "/stdlib"
   let read = path => docsGet (uriOfPath path) docs
-  projectEntrySchemes
-    projectCache
-    projectParseCache
-    read
-    rootFile
-    [projectDir, stdlibDir]
-    runtimeSrc
-    coreSrc
+  map
+    (pa => hoverEnvOf (entryOwnSchemes pa.paSchemes) pa)
+    (projectEntryAnalysis
+      projectCache
+      projectParseCache
+      read
+      rootFile
+      [projectDir, stdlibDir]
+      runtimeSrc
+      coreSrc)
 
 -- A hover or completion hit, tagged by the tier that answered it.  An env hit
--- carries the context its binding was published with.  A local or seed hit is a
--- bare scheme, rendered from the tables the last drive left (see `ppHoverScheme`).
--- The tag is the only place in the pipeline that knows which tier a name came
--- from (F2, the #2054 family): once collapsed to a bare `Option Scheme` the tiers
--- are indistinguishable, and losing it is what let a local's rendering reach
--- `ppSchemeNamedFull`'s bare-name prelude store.
-data HoverHit = EnvHit PubScheme | LocalHit Scheme | SeedHit Scheme
+-- carries the context its binding was published with, and so do a local and a
+-- seed hit: each was frozen with its own context when the drive captured it.
+-- The tag records which tier answered (F2, the #2054 family).
+data HoverHit = EnvHit PubScheme | LocalHit PubScheme | SeedHit PubScheme
+
+-- The locals without their binder spans.
+localSchemes : List (String, PubScheme, Option Loc) -> List (String, PubScheme)
+localSchemes = map ((n, s, _) => (n, s))
 
 -- Resolve a hovered name's scheme: the returned typecheck env (globals +
--- top-level) first, then the hover-only side-channels — locals (let/param/match
--- binders) and the seed (runtime.mdk externs) — neither of which the env carries.
-hoverScheme : String -> List (String, PubScheme) -> Option HoverHit
-hoverScheme name env = match lookupSchemeL name env
+-- top-level) first, then the locals (let/param/match binders) and the seed
+-- (runtime.mdk externs) — neither of which the env carries.
+hoverScheme : String -> HoverEnv -> Option HoverHit
+hoverScheme name env = match lookupSchemeL name env.heSchemes
   Some p => Some (EnvHit p)
-  None => match lookupSchemeL name (currentLocalSchemes ())
+  None => match lookupSchemeL name (localSchemes env.heLocals)
     Some s => Some (LocalHit s)
-    None => map SeedHit (lookupSchemeL name (currentSeedSchemes ()))
+    None => map SeedHit (lookupSchemeL name env.heSeed)
 
 -- POSITION-AWARE hoverScheme (#2092).  `hoverScheme`'s tier order asks `env`
 -- (own top-level ++ the WHOLE prelude) first, so a local binder whose bare name
@@ -852,15 +866,11 @@ hoverScheme name env = match lookupSchemeL name env
 -- consulted first ONLY when a local binding of that name actually covers the
 -- cursor; otherwise the original `env` → local → seed order runs untouched, so
 -- every non-shadowing hover in the buffer answers exactly as before.
-hoverSchemeAt : String ->
-  String ->
-  Int ->
-  Int ->
-  List (String, PubScheme) ->
-  Option HoverHit
-hoverSchemeAt name src line col env = match localSchemeAt name line col src
-  Some s => Some (LocalHit s)
-  None => hoverScheme name env
+hoverSchemeAt : String -> String -> Int -> Int -> HoverEnv -> Option HoverHit
+hoverSchemeAt name src line col env =
+  match localSchemeAt name line col src env.heLocals
+    Some s => Some (LocalHit s)
+    None => hoverScheme name env
 
 -- The scheme of the local binding of `name` that is in scope at the (0-based,
 -- LSP-style) cursor, or None when no local binding of that name covers it.
@@ -883,18 +893,20 @@ hoverSchemeAt name src line col env = match localSchemeAt name line col src
 -- giving the correct prelude answer for this shape.  This local tier is what
 -- introduces the sibling-arm mis-attribution.  Tracked as #2254 (per-arm
 -- scoping); not fixed here.
-localSchemeAt : String -> Int -> Int -> String -> Option Scheme
-localSchemeAt name line col src = match parseWithPositionsOpt src
+localSchemeAt : String ->
+  Int ->
+  Int ->
+  String ->
+  List (String, PubScheme, Option Loc) ->
+  Option PubScheme
+localSchemeAt name line col src locals = match parseWithPositionsOpt src
   None => None
   Some (_, pos) =>
     let decls = positionsDecls pos
     let cl = line + 1
     match declIndexAt decls 0 cl
       None => None
-      Some di =>
-        latestLocal
-          None
-          (localCandidates name cl col di decls (currentLocalSchemesLoc ()))
+      Some di => latestLocal None (localCandidates name cl col di decls locals)
 
 -- Index of the top-level decl whose start..end line range contains `l` (1-based).
 declIndexAt : List DeclPos -> Int -> Int -> Option Int
@@ -920,19 +932,19 @@ localCandidates : String ->
   Int ->
   Int ->
   List DeclPos ->
-  List (String, Option Loc, Scheme) ->
-  List (Int, Int, Scheme)
+  List (String, PubScheme, Option Loc) ->
+  List (Int, Int, PubScheme)
 localCandidates _ _ _ _ _ [] = []
-localCandidates name cl cc di decls ((n, Some (Loc _ bl bc _ _), sch) :: rest)
+localCandidates name cl cc di decls ((n, sch, Some (Loc _ bl bc _ _)) :: rest)
   | n == name && locAtOrBefore bl bc cl cc && declIndexIs decls bl di =
     (bl, bc, sch) :: localCandidates name cl cc di decls rest
 localCandidates name cl cc di decls (_ :: rest) =
   localCandidates name cl cc di decls rest
 
 -- The candidate whose binder starts LAST (innermost shadow wins).
-latestLocal : Option (Int, Int, Scheme) ->
-  List (Int, Int, Scheme) ->
-  Option Scheme
+latestLocal : Option (Int, Int, PubScheme) ->
+  List (Int, Int, PubScheme) ->
+  Option PubScheme
 latestLocal None [] = None
 latestLocal (Some (_, _, s)) [] = Some s
 latestLocal None (c :: rest) = latestLocal (Some c) rest
@@ -940,29 +952,12 @@ latestLocal (Some (pl, pc, ps)) ((bl, bc, bs) :: rest)
   | locAtOrBefore pl pc bl bc = latestLocal (Some (bl, bc, bs)) rest
   | otherwise = latestLocal (Some (pl, pc, ps)) rest
 
--- Render a display-surface scheme, choosing the render path by TIER.
---
--- 🚨 A GENUINE LOCAL MUST NOT REACH `ppSchemeNamedFull`'s THIRD ARM.  That arm
--- is keyed by BARE NAME against `crossRun.coreSchemeObligationsRef` — the
--- prelude's own obligation store — with no check that the `Scheme` in hand came
--- from that prelude binding.  A local binder is in neither `schemeDefIdsRef`
--- (top-level binders only) nor, in general, the module's own
--- `schemeObligationsRef`, so it falls through to arm 3 every time; if its bare
--- name collides with an unrelated prelude binding's, the surface renders the
--- LOCAL's inferred type carrying the PRELUDE binding's constraint context —
--- silently wrong, no error.  MEASURED on an import-bearing buffer whose entry
--- module has `let count = 5`: `count : Foldable a => Int`, for `count : Int`.
---
--- An env hit renders the context its binding was published with, so an own
--- binding never consults the prelude's and a prelude binding renders its own.
--- The import-scoped seed keeps `ppSchemeNamedFull`: those are the names arm 3 is
--- right for.  A local drops to `ppSchemeNamed`, which consults only the module
--- last checked's own tables — where a local constrained binding does register its
--- obligations (#816) — and never the prelude store.
-ppHoverScheme : String -> HoverHit -> String
-ppHoverScheme _ (EnvHit p) = ppPubScheme p
-ppHoverScheme n (LocalHit s) = ppSchemeNamed n s
-ppHoverScheme n (SeedHit s) = ppSchemeNamedFull n s
+-- Render a hit with the context it was published with: an own binding never
+-- takes the prelude's context, and a prelude binding takes its own.
+ppHoverScheme : HoverHit -> String
+ppHoverScheme (EnvHit p) = ppPubScheme p
+ppHoverScheme (LocalHit p) = ppPubScheme p
+ppHoverScheme (SeedHit p) = ppPubScheme p
 
 -- Build the Hover { contents: MarkupContent{ kind:"markdown", value } } object.
 jHover : String -> String -> Json
@@ -1041,7 +1036,7 @@ filterCompletions : String ->
 filterCompletions _ _ [] = []
 filterCompletions prefix seen ((n, hit) :: rest)
   | startsWith prefix n && not (anyName seen n) =
-    jCompletionItem n (ppHoverScheme n hit)
+    jCompletionItem n (ppHoverScheme hit)
       :: filterCompletions prefix (n :: seen) rest
   | otherwise = filterCompletions prefix seen rest
 
@@ -1072,11 +1067,11 @@ completionFor runtimeSrc coreSrc uri src params docs = match (
         jArray (filterCompletions prefix [] env)
   _ => JNull
 
--- Completion suggests names from the env directly (no side-channel fallback like
--- hover), so for a project buffer the env must be the FULL visible set: the
--- entry's own schemes + its locals + its import-scoped seed (core + runtime +
--- imported names).  A single-file buffer keeps `docSchemes` unchanged — adding
--- the seed/locals there would change the single-file completion golden.
+-- Completion suggests names from the env directly, so for a project buffer the
+-- env must be the FULL visible set: the entry's own schemes + its locals + its
+-- import-scoped seed (core + runtime + imported names).  A single-file buffer
+-- keeps `docEnv`'s schemes alone — adding the seed/locals there would change the
+-- single-file completion golden.
 completionEnvFor : String ->
   String ->
   String ->
@@ -1086,12 +1081,13 @@ completionEnvFor : String ->
 completionEnvFor runtimeSrc coreSrc uri src docs
   | bufferHasImports src =
     map
-      (own =>
-        tagTier EnvHit own
-          ++ tagTier LocalHit (currentLocalSchemes ())
-          ++ tagTier SeedHit (currentSeedSchemes ()))
+      (env =>
+        tagTier EnvHit env.heSchemes
+          ++ tagTier LocalHit (localSchemes env.heLocals)
+          ++ tagTier SeedHit env.heSeed)
       (projectEntryEnv runtimeSrc coreSrc uri docs)
-  | otherwise = map (tagTier EnvHit) (docSchemes runtimeSrc coreSrc src)
+  | otherwise =
+    map (env => tagTier EnvHit env.heSchemes) (docEnv runtimeSrc coreSrc src)
 
 -- Stamp one completion-env slice with its tier.  Order across the slices is
 -- unchanged, so `filterCompletions`' first-occurrence-wins dedup still resolves a
@@ -1159,12 +1155,12 @@ identRunLen arr len i acc
 -- inlay hints for a buffer: zip parse decls with positions, filter to
 -- unsignatured value bindings present in the env, place one hint each.
 inlayHints : String -> String -> String -> List Json
-inlayHints runtimeSrc coreSrc src = match docSchemes runtimeSrc coreSrc src
+inlayHints runtimeSrc coreSrc src = match docEnv runtimeSrc coreSrc src
   None => []
   Some env => match parseWithPositionsOpt src
     None => []
     Some (decls, positions) =>
-      inlayZip src decls decls (positionsDecls positions) (pubSchemes env)
+      inlayZip src decls decls (positionsDecls positions) env.heSchemes
 
 -- The (0-based line, col) right after a decl's name: the real name `Loc`'s end
 -- position (#331) when there is one, else the old `columnAfterName` heuristic
@@ -1178,15 +1174,14 @@ inlayNamePos src p = match declPosNameLoc p
       (columnAfterName src (declPosLine p - 1))
 
 -- decls passed twice: `allDecls` for the has-explicit-sig scan, `ds` walked.
--- Deliberately `ppSchemeNamed`, not `ppSchemeNamedFull`: `name` always comes from
--- `declBindingName d`, i.e. the BUFFER's own top-level binder, so it is always a HIT in
--- `perRun.schemeDefIdsRef` and `ppSchemeNamedFull` would take the same arm 1 anyway — the
--- prelude-obligation fallback the "Full" variant adds can never fire here.
+-- `name` always comes from `declBindingName d`, i.e. the BUFFER's own top-level
+-- binder, and the env lists the buffer's own schemes first, so the hit renders
+-- the context the buffer's binding was published with.
 inlayZip : String ->
   List Decl ->
   List Decl ->
   List DeclPos ->
-  List (String, Scheme) ->
+  List (String, PubScheme) ->
   List Json
 inlayZip src allDecls (d :: ds) (p :: ps) env = match declBindingName d
   None => inlayZip src allDecls ds ps env
@@ -1198,7 +1193,7 @@ inlayZip src allDecls (d :: ds) (p :: ps) env = match declBindingName d
       Some sch => match inlayNamePos src p
         None => inlayZip src allDecls ds ps env
         Some (line, col) =>
-          jInlayHint line col (stringConcat [": ", ppSchemeNamed name sch])
+          jInlayHint line col (stringConcat [": ", ppPubScheme sch])
             :: inlayZip src allDecls ds ps env
 inlayZip _ _ _ _ _ = []
 

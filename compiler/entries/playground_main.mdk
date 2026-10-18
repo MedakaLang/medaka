@@ -795,7 +795,7 @@ isDiagError _ = False
 -- These reuse the LSP's already-pure approach (compiler/tools/lsp.mdk hoverFor /
 -- completionFor on a no-import buffer) WITHOUT importing lsp.mdk: they call the
 -- typecheck env builder (`checkOneSchemeFull`, the same function the
--- LSP's single-file `docSchemes` path calls) and the pure identifier/prefix
+-- LSP's single-file `docEnv` path calls) and the pure identifier/prefix
 -- helpers below (ported verbatim from lsp.mdk).  The playground buffer is a single
 -- file (prelude only), so no project graph is ever needed.
 
@@ -842,7 +842,7 @@ queryResult isHover rsrc csrc tsrc line col = match parseResult tsrc
     let coreDecls = desugaredPrelude csrc
     let preludeKey = Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc)
     -- S-full-env-scheme-entry (#1116): Module arm, own schemes FIRST — kept in
-    -- lockstep with `docSchemes` in tools/lsp.mdk, whose comment carries the
+    -- lockstep with `docEnv` in tools/lsp.mdk, whose comment carries the
     -- shadowing rationale (`lookupSchemeL`/`hoverResult` are first-match scans).
     let (preludeSchemes, ownSchemes) = checkOneSchemeFullK
       preludeKey
