@@ -343,26 +343,29 @@ public export data EntryAnalysis = EntryAnalysis {
 
 -- [valueMain] is the drive's value-main candidate: a caller that reports the
 -- analysis' diagnostics passes `valueMainCandidate`, so they carry a value
--- `main`'s auto-print obligation.
+-- `main`'s auto-print obligation.  [executes] names the `async` driver of a
+-- caller that runs or emits the elaborated program (`elaborateModulesWithReport`).
 export
 analyzeProgram : Bool ->
+  Option String ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   EntryAnalysis
-analyzeProgram valueMain rtD coreD modsD =
-  fst (analyzeProgramReport valueMain rtD coreD modsD)
+analyzeProgram valueMain executes rtD coreD modsD =
+  fst (analyzeProgramReport valueMain executes rtD coreD modsD)
 
 -- `analyzeProgram` handing back its drive's whole report beside the analysis.
 export
 analyzeProgramReport : Bool ->
+  Option String ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   (EntryAnalysis, TcReport)
-analyzeProgramReport valueMain rtD coreD modsD =
+analyzeProgramReport valueMain executes rtD coreD modsD =
   let (elaborated, report) =
-    elaborateModulesWithReport valueMain rtD coreD modsD
+    elaborateModulesWithReport valueMain executes rtD coreD modsD
   let (preludePub, ownPub, _, _) = entrySplit report
   let preludeSchemes = pubSchemes preludePub
   let ops = lastInvocationOps ()

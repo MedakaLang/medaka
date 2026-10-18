@@ -6848,10 +6848,10 @@ stampModulesGo coreTypes known ((mid, prog) :: rest) =
 -- Minting `"__user__"` here would be exactly the
 -- failure the design forbids: `stampTyHead`'s immunity rule (fill in only an
 -- `OriginUnresolved` head) is what makes re-stamping impossible, and it makes a
--- WRONG FIRST STAMP PERMANENT.  `medaka run` on a no-import file reaches BOTH arms
--- in ONE process — the flat arm for diagnostics (`analyzeLocatedG`) and the graph
--- arm for elaboration (`elaborateModules`, module id from the loader) — so the two
--- claims were about the same declarations, and only one of them could be true.
+-- wrong first stamp permanent.  One process can reach both arms over the same
+-- declarations, the flat arm and the graph arm for elaboration
+-- (`elaborateModules`, module id from the loader), so the two claims would be
+-- about the same declarations, and only one of them could be true.
 --
 -- ⚠️ UNDER-supplying identity is correctable by a later graph pass; OVER-supplying a
 -- wrong one is not.  That asymmetry, not convenience, is why this claims less.

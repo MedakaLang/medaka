@@ -57,6 +57,7 @@ import backend.llvm_emit.{
   withNoInlineFns,
 }
 import ir.dce.{dceFilter}
+import driver.main_autoprint.{mainIsWrapped}
 import entries.entry_support.{
   driveEmitLocated,
   runtimeExternNames,
@@ -134,6 +135,7 @@ emitTail : List (String, String, List Decl) ->
   <IO> Unit
 emitTail mods runtimeDecls coreD modules1 =
   let half = emitHalfOfEnv
+  let wrapped = mainIsWrapped modules1
   let modules2 = stampSiteFiles mods modules1
   let allDecls0 = coreD ++ flatMap snd modules2
   -- SOURCE DCE IS OFF in the prelude-object modes.  It is per-program by
@@ -155,8 +157,8 @@ emitTail mods runtimeDecls coreD modules1 =
         (methodIfaceTable allDecls)
         (ctorFieldTypeNames allDecls)
         (externArities runtimeDecls)
-        (mainTypeIsUnit ())
-        (mainTypeIsFloat ())
+        (mainTypeIsUnit () || wrapped)
+        (mainTypeIsFloat () && not wrapped)
         half
         preludeBinds
         preludeImpls

@@ -10,7 +10,7 @@
 //
 // It imports the same compile.mjs seam, through its `analyze` mode: the guest
 // runs the IDENTICAL diagnostic-producing front end `compile` runs (same route,
-// same main-shape guard, same underivedMainDiags) and then stops before wasm
+// same main-shape guard, same async payload check) and then stops before wasm
 // codegen.  This worker discards the WAT, and emitting it cost 596ms of a 769ms
 // clean-program analyze (#2442).  Still ONE compiler entry — playground.wasm just
 // dispatches on an extra argv mode.

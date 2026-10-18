@@ -15,15 +15,18 @@
 
 import driver.diagnostics.{
   analyzeToLines, analyzeProjectFull, analyzeProjectReport, noStdlibExports,
-  graphCheckDrive, CheckDrive(..)
+  graphCheckDrive, CheckDrive(..), CheckDump(..), analyzeFrom, frontEnd,
+  checkFrontDrive, FrontInput(..), FrontPolicy(..), FrontProgram(..),
+  FrontOutput(..), Diag(..)
 }
+import frontend.parser.{parseLocated}
 import fs.{fixtureFiles}
 import list.{sort, somes}
 import path.{dirname, stem}
 import string.{endsWith, lines, trim, unlines}
 import test.{
   Expectation, expectAll, expectEach, expectEqual, expectFalse,
-  expectNoFindings, fail
+  expectNoFindings, expectTrue, fail
 }
 import types.publish.{
   PubScheme(..), LiveCell(..), TcReport(..), graphCells, pubSchemes
@@ -311,3 +314,46 @@ test "a check drive built from a report holds that report's schemes after a late
           ]
         _ => fail "a project produced no report")
     _ => fail "could not read the prelude pair"
+
+-- ── the front end carries every verdict ────────────────────────────────────
+
+diagText : Diag -> String
+diagText (Diag _ code msg _ _ _) = "\{code}: \{msg}"
+
+-- One single-file front-end run of [src] under `check`'s drive.
+frontOfFile : String -> String -> String -> FrontOutput CheckDump
+frontOfFile rsrc csrc src = frontEnd noStdlibExports (checkFrontDrive
+  "main.mdk"
+  []) FrontInput {
+  fiAllowInternal = False,
+  fiTrusted = [],
+  fiRuntimeSrc = rsrc,
+  fiCoreSrc = csrc,
+  fiPolicy = NeverDriveRejected,
+  fiProgram = FrontFile ("main", "main.mdk", parseLocated src),
+}
+
+test "a derive error outside the drive withholds the checked program" = match (
+  readFile "stdlib/runtime.mdk",
+  readFile "stdlib/core.mdk",
+)
+  (Ok rsrc, Ok csrc) =>
+    let bad = "data T = T deriving (Frob)\n"
+    let front = frontOfFile rsrc csrc bad
+    let clean = frontOfFile rsrc csrc "data T = T deriving (Eq)\n"
+    expectEach [
+      (
+        "derive error: no checked program",
+        expectTrue (isNone front.foReport.trChecked),
+      ),
+      (
+        "derive error: the diagnostics analyzeFrom reports",
+        expectEqual
+          (map
+            diagText
+            (analyzeFrom noStdlibExports "main" rsrc csrc (parseLocated bad)))
+          (map diagText (flatMap snd front.foDiags)),
+      ),
+      ("clean control: checked", expectTrue (isSome clean.foReport.trChecked)),
+    ]
+  _ => fail "could not read the prelude pair"

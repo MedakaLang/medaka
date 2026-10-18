@@ -104,7 +104,7 @@ import args.{
 }
 import frontend.ast.{
   letBindName, Decl(..), ExternDecl(..), Expr(..), Loc(..), Pat, LetBind(..),
-  EvTable
+  EvTable, EvId
 }
 import frontend.parser.{
   parseWithPositions,
@@ -114,10 +114,9 @@ import frontend.parser.{
   Positions,
 }
 import frontend.lexer.{tokenizeWithOffsetPairs}
-import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
+import frontend.desugar_cache.{desugaredPrelude}
 import frontend.desugar.{desugarIn}
 import tools.target_parse.{targetDesugared}
-import frontend.resolve.{resolveModulesErrorsByFile, internalGuardFor, ResError}
 import driver.loader.{
   loadProgramFilesLocatedE,
   readSource,
@@ -139,24 +138,19 @@ import driver.front_gate.{
   ppParseError,
 }
 import driver.diagnostics.{
-  analyzeLoadedResolvedCleanReport,
   desugaredModPairs,
-  analyzeLocated,
-  analyzeLocatedG,
-  analyzeFrom,
-  analyzeFromDump,
   CheckDrive(..),
   CheckDump(..),
-  graphCheckDrive,
-  analyzeSurface,
-  analyzeFinish,
-  tcHalfOfPerModule,
-  SurfaceAnalysis(..),
+  frontEnd,
+  checkFrontDrive,
+  FrontProgram(..),
+  FrontInput(..),
+  FrontPolicy(..),
+  FrontOutput(..),
   ppDiagCli,
   ppDiagCliLines,
   renderTcDiags,
-  ppResolveErrorsByFile,
-  hintResErrorPairs,
+  ppDiagBuckets,
   stdlibExportsReader,
   diagOfResError,
   diagOfTypeError,
@@ -174,9 +168,6 @@ import driver.diagnostics.{
   flushRunEnvelope,
   pendingStaleNotice,
   readDiagSrc,
-  typecheckDiagsFold,
-  seedAll,
-  midPath,
   codeKind,
   optField,
   cjFixJson,
@@ -210,22 +201,15 @@ import json.{
 }
 import types.publish.{TcReport(..)}
 import types.typecheck.{
-  elaborateModules,
-  resetTypeErrorsSticky,
-  hadTypeErrors,
   TcDiag,
-  ElabResult,
   mainTypeIsUnit,
   setStdlibOwnership,
 }
 import driver.main_autoprint.{
-  shouldAsyncWrapMain,
-  asyncWrapModules,
   asyncMainShapeError,
   shouldAutoPrintMain,
   valueMainCandidate,
-  autoPrintWrapModules,
-  autoPrintPinCore,
+  executedFromReport,
 }
 import eval.eval.{
   evalModulesOutputRun,
@@ -344,7 +328,7 @@ import tools.check_policy.{
   PolicyOutcome(..),
   runManifest,
   ManifestArgs(..),
-  analyzeProgram,
+  analyzeProgramReport,
   EntryAnalysis(..),
   TargetInputs(..),
 }
@@ -757,7 +741,6 @@ runCheckCmd argv =
                     stageExit 1
                 Ok modsWithPath =>
                   let mods = map dropPathTriple modsWithPath
-                  let pathMap = map modIdToPath modsWithPath
                   let trusted = projectTrustedMods target roots stdlibDir mods
                   -- #2072: the FFI-stamp discriminator, published to typecheck alongside the
                   -- #1713 reference-trust set above.  DIFFERENT predicate, deliberately: this
@@ -772,7 +755,6 @@ runCheckCmd argv =
                       typesMode
                       allowInternal
                       trusted
-                      pathMap
                       roots
                       rsrc
                       csrc
@@ -795,8 +777,8 @@ runCheckCmd argv =
 -- A load error (missing/cyclic import) is reported verbatim, like
 -- build/run; exit 1.  No-fixture single-file files never error here.
 
--- BOTH halves of the project analysis from ONE `analyzeProject` pass: the rendered
--- errors (exactly what `locatedProjectErrors` returns) AND the COHERENCE warnings.
+-- BOTH halves of a graph's diagnostics from ONE front-end run (`frontEnd`'s
+-- per-file buckets): the rendered errors AND the COHERENCE warnings.
 --
 -- Why one pass.  `run`/`build`'s multi-module arms already call this analysis as
 -- their check-strength gate and then THREW THE WARNINGS AWAY — so after F-3d demoted
@@ -836,37 +818,15 @@ runCheckCmd argv =
 -- diagnostics" note instead of silently reading as clean; `run`/`build` (the
 -- other two callers) ignore it, so their narrow-to-coherence behaviour and
 -- its measured perf/noise rationale (see `isCoherenceWarn`) are untouched.
--- #1362: the internal-extern guard (`allowInternal`/`trusted`) is applied by the
--- `resolveModulesErrorsByFile` gate `checkRoute` runs BEFORE this one, and this
--- pass does not resolve again: it is entered only on a clean front pass, so its
--- resolve buckets are the empty per-file buckets.
--- The fourth component is the per-module `(schemes, errs, warns)` this ONE pass
--- produced.  `check`'s multi-module arm renders its ENTRY REPORT from it
--- (`checkModulesReport`) rather than typechecking the graph a second time
--- through the entry-only driver, which differed from this one in its collector
--- alone.
-locatedProjectDiags : String ->
-  List String ->
-  String ->
-  String ->
-  List (String, String, List Decl) ->
-  List (String, List Decl) ->
-  <IO> (Option String, List (String, String, List Diag), Int, TcReport)
-locatedProjectDiags target roots rsrc csrc modsWithPath modPairs =
-  let (report, results) =
-    analyzeLoadedResolvedCleanReport
-      target
-      roots
-      rsrc
-      csrc
-      modsWithPath
-      modPairs
+-- `results` are the buckets of a graph resolve accepted, one per loaded file.
+locatedProjectDiags : List (String, List Diag) ->
+  <IO> (Option String, List (String, String, List Diag), Int)
+locatedProjectDiags results =
   let triples = map readDiagSrc results
   (
     joinedOrNone (flatMap renderTripleErrors triples),
     map cohWarnsOfTriple triples,
     length (flatMap hiddenWarnsOfTriple (dropEntryTriple triples)),
-    report,
   )
 
 -- `run --json`'s multi-module arms' own copy of `diagnostics.relDiagTriple`
@@ -905,19 +865,18 @@ runAbortJson triples =
   let _ = flushPendingRunDiags True
   stageExit 1
 
--- `run --json`'s structured counterpart to `ppResolveErrorsByFile` — one triple
--- per file with at least one resolve error, each converted via the SAME
--- `diagOfResError` the human renderer already uses, left for `cjAllToJson` (via
--- `runAbortJson`) to serialize instead of a second JSON printer.  `ResError`
--- carries no warning variant (frontend.resolve.ResError, all-error), so unlike
--- the typecheck triples below there is no filter to widen here.
-resolveErrorJsonTriples : List (String, List ResError) ->
+-- `run --json`'s structured counterpart to `ppDiagBuckets` over a graph resolve
+-- rejected — one triple per file with at least one resolve error, left for
+-- `cjAllToJson` (via `runAbortJson`) to serialize instead of a second JSON
+-- printer.  `ResError` carries no warning variant (frontend.resolve.ResError,
+-- all-error), so unlike the typecheck triples below there is no filter to widen
+-- here.
+resolveErrorJsonTriples : List (String, List Diag) ->
   <IO> List (String, String, List Diag)
 resolveErrorJsonTriples [] = []
 resolveErrorJsonTriples ((_, []) :: rest) = resolveErrorJsonTriples rest
-resolveErrorJsonTriples ((file, errs) :: rest) =
-  (file, readFileSafe file, map diagOfResError errs)
-    :: resolveErrorJsonTriples rest
+resolveErrorJsonTriples ((file, diags) :: rest) =
+  (file, readFileSafe file, diags) :: resolveErrorJsonTriples rest
 
 -- The generic #1812 deflection (`residualOrGeneric`'s own `[] =>` arm), as a
 -- `Diag` instead of prose, for the JSON residual arm's empty-residual case
@@ -975,69 +934,8 @@ residualJsonTriples entryFile pathMap ((mid, d) :: rest) =
       (entryFile, readFileSafe entryFile, [diagOfTypeError d])
         :: residualJsonTriples entryFile pathMap rest
 
--- The rendering half of `locatedProjectDiags`, over per-module diagnostics an
--- elaboration already produced: the same `foldModuleTc` tail `analyzeProject` runs
--- (guard exhaustiveness, `deriving`, prelude-standalone shadows, bucketed per file)
--- and the same three channels the triple carries.  `run`/`build` reach the triple
--- through here instead of through a second, check-only typecheck of the graph.
---
--- The buckets start empty rather than from `resolvePass`: both callers run
--- `resolveModulesErrorsByFile` first and abort on any resolve error, so
--- `resolveRejected` has nothing to gate on.
-elaboratedProjectDiags : List Decl ->
-  List Decl ->
-  List (String, String, List Decl) ->
-  List (String, List Decl) ->
-  List (String, (List TcDiag, List TcDiag)) ->
-  <IO> (Option String, List (String, String, List Diag), Int)
-elaboratedProjectDiags rtD coreD modsWithPath modsD perMod =
-  let results =
-    typecheckDiagsFold
-      rtD
-      coreD
-      modsWithPath
-      modsD
-      perMod
-      (seedAll (map midPath modsWithPath) [])
-  let triples = map readDiagSrc results
-  (
-    joinedOrNone (flatMap renderTripleErrors triples),
-    map cohWarnsOfTriple triples,
-    length (flatMap hiddenWarnsOfTriple (dropEntryTriple triples)),
-  )
-
--- `run --json`'s structured twin of `elaboratedProjectDiags`'s `Some errText`
--- arm: the SAME `typecheckDiagsFold` fold over the SAME already-elaborated
--- per-module diagnostics (`perMod`) — a second, cheap fold over data
--- `elaborateRun` already produced, not a second typecheck (see
--- `typecheckDiagsFold`'s own note) — kept as `Diag`s instead of rendered
--- lines. A sibling of `elaboratedProjectDiags` rather than a widened return
--- tuple on it, so its callers' existing 3-tuple match is untouched.
---
--- Unlike `renderTripleErrors` (the prose path, errors-only by design — the
--- human `run` has always dropped warnings once any error is present),
--- `nonEmptyTriples` here is the ONLY filter: `check --json`'s per-file
--- `diagnostics` array carries every diag, errors and warnings alike, and this
--- is the JSON channel, so it matches that array element-wise rather than a
--- narrower prose-derived one (#2798 review S2).
-elaboratedProjectJsonTriples : List Decl ->
-  List Decl ->
-  List (String, String, List Decl) ->
-  List (String, List Decl) ->
-  List (String, (List TcDiag, List TcDiag)) ->
-  <IO> List (String, String, List Diag)
-elaboratedProjectJsonTriples rtD coreD modsWithPath modsD perMod =
-  let results =
-    typecheckDiagsFold
-      rtD
-      coreD
-      modsWithPath
-      modsD
-      perMod
-      (seedAll (map midPath modsWithPath) [])
-  nonEmptyTriples (map readDiagSrc results)
-
--- Route by module count: a single loaded module (no non-core imports) ⇒ the
+-- One front-end run (`frontEnd`, driven by `checkFrontDrive`), then the report
+-- by module count: a single loaded module (no non-core imports) ⇒ the
 -- single-file runCheck (byte-identical full dump); >1 module ⇒ the multi-module
 -- import-resolving report.  `mods` is dependency-first, entry last.
 -- `target` is passed for positioned error output (Stage-A: file:line:col: message).
@@ -1051,10 +949,17 @@ elaboratedProjectJsonTriples rtD coreD modsWithPath modsD perMod =
 -- user's OWN top-level bindings (`userSchemeLines`) — filtering happens HERE,
 -- CLI-only, so the probe-driven goldens (check_main.mdk et al., which call
 -- `runCheck`/`checkModulesEntryLines` directly) keep dumping unconditionally.
+--
+-- BUGFIX (internal-extern noise on stdlib/compiler self-checks): `trusted`
+-- (projectTrustedMods, owning-root based) lifts the guard for EVERY module
+-- count, so `medaka check` on a bare stdlib file (e.g. `stdlib/array.mdk`, no
+-- non-core imports ⇒ the single-file arm) does not flag its OWN legitimate
+-- internal-extern calls unless the flag is passed every time.
+-- S-3/#164: the single-file arm analyses the loader's parsed, real-span `decls`
+-- for its one module, so the entry is not parsed a second time.
 checkRoute : Bool ->
   Bool ->
   List String ->
-  List (String, String) ->
   List String ->
   String ->
   String ->
@@ -1062,29 +967,39 @@ checkRoute : Bool ->
   String ->
   List (String, String, List Decl) ->
   <IO> Unit
-checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _, decls)] =
-  -- BUGFIX (internal-extern noise on stdlib/compiler self-checks): the caller
-  -- already computed `trusted` (projectTrustedMods, owning-root based) for
-  -- EVERY module count, and this single-module arm must not discard it and
-  -- gate purely on the CLI `--allow-internal` flag — `medaka check` on a
-  -- bare stdlib file (e.g. `stdlib/array.mdk`, no non-core imports ⇒ this
-  -- arm) then flags its OWN legitimate internal-extern calls as errors unless
-  -- the flag is passed every time, even with MEDAKA_ROOT correctly set.
-  -- Honour `trusted` here too, matching the multi-module arm below.
-  -- S-3/#164: this arm already has the loader's parsed, real-span `decls` for
-  -- this single module (`loadProgramFilesLocatedE` parsed it via
-  -- `parseLocatedResult`, the same machinery `analyzeLocatedG`'s internal
-  -- `parseLocated tsrc` would redundantly repeat) — call `analyzeFrom`
-  -- directly with `decls` instead of going through `analyzeLocatedG`, to skip
-  -- that re-parse.  Every OTHER `analyzeLocatedG` caller is untouched.
-  let (diags, dumped) =
-    analyzeFromDump
-      cliStdlibExportsEnv
-      mid
-      rsrc
-      csrc
-      decls
-      (internalGuardFor (allowInternal || contains mid trusted))
+checkRoute typesMode allowInternal trusted roots rsrc csrc tsrc target modsWithPath =
+  -- One desugar per module for the whole check: resolve, the drive and the entry
+  -- exhaust read these same trees.
+  let program = match modsWithPath
+    [m] => FrontFile m
+    _ => FrontGraph modsWithPath (desugaredModPairs modsWithPath)
+  let front = frontEnd cliStdlibExportsEnv (checkFrontDrive
+    target
+    roots) FrontInput {
+    fiAllowInternal = allowInternal,
+    fiTrusted = trusted,
+    fiRuntimeSrc = rsrc,
+    fiCoreSrc = csrc,
+    fiPolicy = NeverDriveRejected,
+    fiProgram = program,
+  }
+  match program
+    FrontFile (_, _, decls) =>
+      checkFileReport typesMode rsrc csrc tsrc target decls front
+    FrontGraph mods modPairs =>
+      checkProjectReport rsrc csrc tsrc target mods modPairs front
+
+-- `check`'s single-file report over its front-end run.
+checkFileReport : Bool ->
+  String ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  FrontOutput CheckDump ->
+  <IO> Unit
+checkFileReport typesMode rsrc csrc tsrc target decls front =
+  let diags = flatMap snd front.foDiags
   let errs = filter diagIsError diags
   match errs
     [] =>
@@ -1095,9 +1010,9 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _, d
       -- lines and re-emit them from `diags` (which carries the real Loc the
       -- --json path already reports).  See ERROR-QUALITY.md (Located dimension).
       let warns = filter diagIsWarn diags
-      -- The dump comes from the typecheck drive `analyzeFromDump` already ran,
-      -- so no second front end or elaboration is needed to print it.
-      let dumpLines = match dumped
+      -- The dump comes from the typecheck drive the front end already ran, so
+      -- no second front end or elaboration is needed to print it.
+      let dumpLines = match front.foDriven
         Some d => d.cdLines
         None => []
       let dump = stripWarningLines (joinNl dumpLines)
@@ -1105,7 +1020,7 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _, d
       let report = if typesMode then dump else filtered
       -- The target check reads the drive that produced the report, so there
       -- is no later elaboration to order the report ahead of.
-      let _ = match dumped
+      let _ = match front.foDriven
         Some d => checkTargetGate rsrc csrc tsrc target d.cdDrive
         None => ()
       let _ = putStrLn report
@@ -1129,35 +1044,43 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _, d
       let _ =
         ePutStrLn (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
       stageExit 1
-checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target modsWithPath =
-  let mods = map dropPathTriple modsWithPath
-  -- One desugar per module for the whole check: the front pass and the typecheck
-  -- analysis read these same trees.
-  let modPairs = desugaredModPairs modsWithPath
-  let (resDiags, exWarns) =
-    checkFrontPass allowInternal trusted pathMap rsrc csrc modPairs
-  match resDiags
-    "" =>
-      let projDiags =
-        locatedProjectDiags target roots rsrc csrc modsWithPath modPairs
-      match projDiags
+
+-- `check`'s multi-module report over its front-end run.  RESOLVE-phase errors
+-- (e.g. importing a name a module does not export — PrivateNameAccess) go to
+-- STDERR + exit 1, mirroring the single-file arm's channel discipline
+-- (errors→stderr).  #41: each module's resolve errors are attributed to its OWN
+-- file, not a single `target` fallback that mislabels every imported-module
+-- error as the entry file.
+checkProjectReport : String ->
+  String ->
+  String ->
+  String ->
+  List (String, String, List Decl) ->
+  List (String, List Decl) ->
+  FrontOutput CheckDump ->
+  <IO> Unit
+checkProjectReport rsrc csrc tsrc target mods modPairs front =
+  match front.foDriven
+    None => dieMsg (ppDiagBuckets front.foDiags)
+    Some dump =>
+      -- The entry's guard-exhaustiveness lines, rendered whenever resolve accepted
+      -- the graph.
+      let exWarns =
+        entryExhaust (desugaredPrelude rsrc) (desugaredPrelude csrc) modPairs
+      match locatedProjectDiags front.foDiags
         -- BUGFIX (imported-module diagnostics): when there ARE type errors, render
         -- the accumulated per-module diagnostics LOCATED (`file:L:C: msg` + caret),
         -- across ALL modules — reusing the exact analyzeProject surface `--json`
         -- mirrors — instead of the entry report's loc-free `TYPE ERROR: …` (which
         -- also dropped every imported-module error's location).  Clean ⇒ the schemes
         -- dump + main-shape warnings, unchanged.
-        -- `locatedProjectDiags`, not `locatedProjectErrors`: the SAME single
-        -- `analyzeProject` pass, keeping the coherence warnings its `fst` discards.
-
-        (Some errText, _, _, _) =>
+        (Some errText, _, _) =>
           let _ = emitAbortTotal ()
           let _ = putStrLn errText
           stageExit 1
-        (None, projWarns, hiddenCount, tcReport) =>
-          let drive = graphCheckDrive tcReport modPairs pathMap
-          let report = checkModulesReport exWarns tcReport.trDiagnostics
-          let _ = checkTargetGate rsrc csrc tsrc target drive
+        (None, projWarns, hiddenCount) =>
+          let report = checkModulesReport exWarns front.foReport.trDiagnostics
+          let _ = checkTargetGate rsrc csrc tsrc target dump.cdDrive
           let _ = putStrLn report
           -- F-3d: an IMPORTED module's ⊑-incomparable pair, LOCATED against that
           -- module's own file.  The line above reaches the ENTRY's diagnostics only,
@@ -1175,48 +1098,10 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
           let _ = emitHiddenDiagNote hiddenCount
           -- The main-shape warning reads the entry module's raw decls alone, so its
           -- first three (ignored) parameters are passed empty.
-          let mainWarns = match lastModPair mods
+          let mainWarns = match lastModPair (map dropPathTriple mods)
             Some (_, edecls) => mainShapeWarnings [] [] [] edecls
             None => []
           emitLocatedWarnings tsrc target mainWarns
-    _ => dieMsg resDiags
-
--- The multi-module arm's whole-graph front pass, ahead of the project analysis:
--- the rendered resolve errors (empty when the graph resolves) and the entry's
--- rendered guard-exhaustiveness lines.  `modsD` is the caller's
--- `desugaredModPairs`, the same trees the typecheck the analysis runs next reads,
--- so each module is desugared once per check.
---
--- RESOLVE-phase errors (e.g. importing a name a module does not export —
--- PrivateNameAccess) go to STDERR + exit 1, mirroring the single-file arm's
--- channel discipline (errors→stderr).  #41: each module's resolve errors are
--- attributed to its OWN file (via `pathMap`), not a single `target` fallback that
--- mislabels every imported-module error as the entry file.
-checkFrontPass : Bool ->
-  List String ->
-  List (String, String) ->
-  String ->
-  String ->
-  List (String, List Decl) ->
-  <IO> (String, String)
-checkFrontPass allowInternal trusted pathMap rsrc csrc modsD =
-  let rtD = desugaredPrelude rsrc
-  let coreD = desugaredPrelude csrc
-  let resDiags =
-    ppResolveErrorsByFile
-      (hintResErrorPairs
-        cliStdlibExportsEnv
-        (resolveModulesErrorsByFile
-          pathMap
-          allowInternal
-          trusted
-          (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
-          rtD
-          coreD
-          modsD))
-  match resDiags
-    "" => ("", entryExhaust rtD coreD modsD)
-    _ => (resDiags, "")
 
 -- ── main shape ──────────────────────────────────────────────────────────────
 -- `check`'s warning (`mainShapeWarnings`) and `run`/`build`'s refusal
@@ -1482,10 +1367,8 @@ requireArgs sp argv = match parseArgs sp argv
 --   position:     character, line
 
 -- Run check --json: mirrors OCaml's check --json (analyze_project → JSON).
--- Loads the graph once with the located loader and routes by module count
--- (mirrors checkRoute):
---   single module (no non-core imports) → analyzeFrom over the loaded decls
---   multi-module → analyzeLoadedFull over the loaded graph
+-- Loads the graph once with the located loader and runs one `frontEnd` over it
+-- (`checkJsonFileParts`), enveloped by module count as `checkRoute` reports.
 -- When the load fails, the ENTRY's parse errors are detected FIRST via
 -- parseResult; an IMPORTED module's are reported by the loader itself (#100),
 -- attributed to that module.
@@ -1762,20 +1645,19 @@ emitHiddenDiagNote n =
 --      name (#1185).  A single file has no imported modules to add warnings from.
 --  (3) PERF.  The render cost is "per file whose channel is non-empty"; here there
 --      is exactly ONE file, already read into `src` for the error path.
---  (1) CRITERION.  `check`'s single-file arm (`checkRoute`) and `run`'s
---      (`runRunCmd`'s `[(runMid, runDecls)]` arm) apply the SAME
---      `filter diagIsWarn` to an `analyzeFrom` result over the SAME program.
---      ⚠️ NOT to the same `diags` VALUE: the two `analyzeFrom` calls differ in
---      their guard — `check` passes `internalGuardFor (allowInternal || contains
---      mid trusted)`, `run` passes `internalGuardFor allowInternal`, the
---      `|| contains mid trusted` disjunct being a pre-existing asymmetry that
---      `run`'s own arm documents and this slice did not touch.  That guard
+--  (1) CRITERION.  `check`'s single-file arm (`checkFileReport`) and `run`'s
+--      (`runRunCmd`'s `[_]` arm) apply the SAME `filter diagIsWarn` to the
+--      diagnostics of one `frontEnd` run over the SAME `FrontFile` program.
+--      Not to the same `diags` VALUE: `check` passes its `trusted` set as
+--      `fiTrusted` and `run`'s single-file arm passes `[]`, a pre-existing
+--      asymmetry that `run`'s own arm documents.  The front end's guard is
+--      `internalGuardFor (fiAllowInternal || contains mid fiTrusted)`, which
 --      decides only which constructs count as "internal" for `ResError` gating,
---      and every `ResError` reaches `diags` as a `SevError` via `diagOfResError`
---      — so the two results can differ ONLY in their ERROR set, never in the
---      `diagIsWarn` subset either arm surfaces.  So this still cannot surface a
---      warning `check` does not already show — it makes the three verbs agree on
---      one input, which IS the criterion.
+--      and every `ResError` reaches `diags` as a `SevError` via `diagOfResError`,
+--      so the two results can differ ONLY in their ERROR set, never in the
+--      `diagIsWarn` subset either arm surfaces.  So this cannot surface a
+--      warning `check` does not already show: it makes the three verbs agree on
+--      one input, which is the criterion.
 --
 -- The split is deliberate.  The multi-module arms (`locatedProjectDiags`'s
 -- callers, `isHiddenNonEntryWarn`, `hiddenWarnsOfTriple`) stay on
@@ -2664,15 +2546,15 @@ finishBuildArgs _ _ _ = Err "error: medaka build takes exactly one input file"
 -- Shared eval tail: once the gate has ruled the program CLEAN and the whole
 -- module graph has been elaborated (route-stamping via the per-module
 -- typecheck, mainSchemeRef populated), force `main`.  Only reached AFTER the
--- check-strength gate below (single-file: analyzeLocatedG; multi-module:
--- resolve + hadTypeErrors), so a genuinely ill-typed program never reaches
--- evalModulesOutput (G1 soundness invariant).
--- [cohWarns] are the COHERENCE warnings (`W-INCOMPARABLE-IMPLS`, and ONLY those —
--- see `isCoherenceWarn` for why not the whole channel) that the caller's own gate
--- already computed, as (path, src, diags) triples.  ⚠️ A parameter rather than
--- something recomputed here because the two call sites derive them differently
--- (single-file: `analyzeLocatedG`'s diags; multi-module: `locatedProjectDiags`'
--- per-module triples) and recomputing would mean a second whole-graph front-end pass.
+-- check-strength gate below (both arms: the front end's diagnostics, then its
+-- drive's report, which must carry `trChecked`), so a genuinely ill-typed
+-- program never reaches evalModulesOutput (G1 soundness invariant).
+-- [cohWarns] are the warnings the caller's own gate already computed, as (path,
+-- src, diags) triples: the single-file arm's whole warning set
+-- (`allWarnTriples`), the multi-module arm's `runBuildWarnCodes` only
+-- (`isCoherenceWarn`, whose note says why not the whole channel).
+-- A parameter rather than something recomputed here because the two arms derive
+-- them differently, and recomputing would mean a second front-end pass.
 --
 -- 🚨 THIS PARAMETER EXISTS BECAUSE `run` WAS SILENT ON THE ONE DIAGNOSTIC F-3d
 -- DEMOTED.  `finishRunEval` has always called `emitLocatedWarnings`, but only over
@@ -2898,290 +2780,197 @@ runRunCmd argv =
       let _ = setStdlibOwnership flatStdlib ownedStdlib
       let perfTLoad = now ()
       let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
-      -- Route by module count, mirroring `checkRoute` EXACTLY, so that
-      -- `run` accepts/rejects the SAME set of programs `medaka check`
-      -- does (beta P0-1 / P1-8).  A gate of resolve-errors +
+      -- One front-end run (`frontEnd`), the same raw-tree passes and resolve
+      -- `checkRoute` runs, so `run` accepts/rejects the SAME set of programs
+      -- `medaka check` does (beta P0-1 / P1-8).  A gate of resolve-errors +
       -- elaborate + hadTypeErrors for ALL programs is a WEAKER predicate
       -- than check's: it misses constraint/no-impl/coherence errors
       -- (so run silently executes ill-typed programs) AND spuriously
       -- fires on some check-clean programs (standalone-fn-shadows-iface).
-      -- S-3/#164 (F-converge): match on the RAW `mods` rather than the
-      -- desugared `modsD` so this arm can hand `analyzeFrom` the loader's
-      -- own raw, real-span decls (`analyzeFrom` desugars internally, and
-      -- its guard-exhaustiveness/`checkDerives` passes need the RAW tree).
-      -- `desugarPair` preserves the module id and `map` preserves length,
-      -- so the routing decision and `runMid` are unchanged.
+      -- ONE typecheck of the program (ARCH §E): the front end's drive is the
+      -- elaboration `run` executes, so the located report is rendered from ITS
+      -- output rather than from a second, check-only pass.
+      -- S-3/#164 (F-converge): a single module is analysed from the loader's
+      -- own raw, real-span decls (its guard-exhaustiveness/`checkDerives` passes
+      -- need the RAW tree).  That arm's guard never consulted the `trusted` set,
+      -- only the bare `--allow-internal` flag, unlike `build`'s single-module
+      -- gate (`driver/front_gate.frontGate`).  That asymmetry is pre-existing;
+      -- this parity slice does not change it.
+      let (program, frontTrusted) = match modsWithPath
+        [m] => (FrontFile m, [])
+        _ => (FrontGraph modsWithPath modsD, trusted)
+      let front =
+        frontEnd
+          cliStdlibExportsEnv
+          (_ => elaborateRun rtD coreD modsD)
+          FrontInput {
+            fiAllowInternal = allowInternal,
+            fiTrusted = frontTrusted,
+            fiRuntimeSrc = rsrc,
+            fiCoreSrc = csrc,
+            fiPolicy = NeverDriveRejected,
+            fiProgram = program,
+          }
+      let report = front.foReport
       match mods
-        [(runMid, runDecls)] =>
-          -- Single-file: gate on the SAME located analysis `check`
-          -- uses (analyzeLocatedG → checkImplObligations et al.) and
-          -- render byte-identical caret diagnostics via ppDiagCliSrc,
-          -- instead of the opaque "type error in <file>" message (P1-8).
+        [_] =>
+          -- Single-file: render byte-identical caret diagnostics via
+          -- ppDiagCliSrc, instead of an opaque "type error in <file>" message.
+          -- A program resolve rejected was not driven and carries its resolve
+          -- errors here.
           let tsrc = readFileSafe target
-          -- ONE typecheck of the program (ARCH §E), the single-file twin of the
-          -- multi-module arm below: `analyzeSurface` runs the AST-level half of
-          -- `analyzeFrom` (derives, guard exhaustiveness, prelude-standalone
-          -- shadows, resolve) over the loader's own raw, real-span decls, and
-          -- the typecheck half comes from the elaboration `run` performs for
-          -- eval rather than from a second, check-only pass over the same
-          -- program.  `analyzeFinish` re-assembles them in `analyzeFrom`'s
-          -- result order, so `check` and `run` still render the same set.
-          -- The predicate is kept as it was: unlike `build`'s single-module
-          -- gate (`driver/front_gate.frontGate`), `run`'s never consulted the
-          -- `trusted` set —
-          -- only the bare `--allow-internal` flag.  That asymmetry is
-          -- pre-existing; this parity slice does not change it.
-          let surface =
-            analyzeSurface
-              cliStdlibExportsEnv
-              runMid
-              rsrc
-              csrc
-              runDecls
-              (internalGuardFor allowInternal)
-          match surface.resolveClean
-            -- Resolve rejected: no typecheck may run on this program, so the
-            -- surface diagnostics are the whole report (as they were when the
-            -- entry driver gated its own typecheck on the same predicate).
-            False =>
-              -- #2798 review S2: JSON carries the WHOLE surface list (errors
-              -- and warnings, matching `check --json`'s per-file diagnostics
-              -- array element-wise); the prose face stays errors-only, as it
-              -- always has been.
-              let surfaceDiags = analyzeFinish surface []
-              match jsonMode
-                True => runAbortJson [(target, tsrc, surfaceDiags)]
-                False =>
-                  runAbort
-                    (joinNl
-                      (map
-                        (ppDiagCliLines (srcLinesArr tsrc) target)
-                        (filter diagIsError surfaceDiags)))
-            True =>
-              let _ = resetTypeErrorsSticky ()
-              let analysis = elaborateRun rtD coreD modsD
-              let (coreE, modsE, perMod, residual, _, _) = analysis.eaElab
-              let residualHit = hadTypeErrors ()
-              let diags = analyzeFinish surface (tcHalfOfPerModule perMod)
-              match filter diagIsError diags
-                [] => match residualHit
-                  -- Belt-and-braces, as on the multi-module arm: anything only
-                  -- the graph-end drain can see still aborts before eval.
-                  True => match jsonMode
-                    True =>
-                      runAbortJson (residualJsonTriples target pathMap residual)
-                    False =>
-                      runAbort (residualOrGeneric pathMap target residual)
-                  False =>
-                    let _ =
-                      runTargetGate
-                        jsonMode
-                        (t => t)
-                        target
-                        pathMap
-                        mods
-                        analysis
-                    let perfTCheck = now ()
-                    let _ =
-                      emitPhase perfOn "check" (perfTCheck - perfTLoad) target
-                    -- #2400 / F4: SINGLE-FILE only, so `allWarnTriples` carries
-                    -- the FULL warning set here (it filters `diagIsWarn`, not
-                    -- `runBuildWarnCodes`; see its note).
-                    -- `finishRunEval` carries this triple down BOTH channels
-                    -- (human `renderTripleWarnings`, `--json` `pendingRunDiags`),
-                    -- so widening here widens both in lockstep.  The
-                    -- multi-module arm below keeps `projWarns` on the
-                    -- coherence allowlist.
-                    finishRunEval
-                      target
-                      jsonMode
-                      (autoPrintElaborated rtD coreD modsD (coreE, modsE))
-                      mods
-                      (allWarnTriples tsrc target diags)
-                      (runEvalPerf perfOn target perfT0 perfTCheck)
-                errs => match jsonMode
-                  -- #2798 review S2: `diags` (the WHOLE list `analyzeFinish`
-                  -- returned, errors and warnings) for JSON — `errs` is the
-                  -- errors-only prose projection of it.
-                  True => runAbortJson [(target, tsrc, diags)]
-                  False =>
-                    runAbort
-                      (joinNl
-                        (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
-        _ =>
-          -- Multi-module: gate on `locatedProjectErrors` — the SAME
-          -- analyzeProject predicate `checkRoute`'s multi-module arm uses —
-          -- so `run` rejects exactly the graphs `check` rejects (bug #40).
-          --
-          -- A gate of resolve + elaborateModules + hadTypeErrors is only
-          -- as sound as the obligations the elaborate driver checks (both
-          -- channels since #2705) and renders nothing located; `check`'s
-          -- predicate prints the real located `No impl of Display for Foo`
-          -- for `println "\{Foo 1}"` with no Display impl.
-          -- #186/#1360: per-module attribution via the loader's
-          -- `pathMap`, the same seam `checkRoute` uses (#41).
-          let resolvePairs =
-            hintResErrorPairs
-              cliStdlibExportsEnv
-              (resolveModulesErrorsByFile
-                pathMap
-                allowInternal
-                trusted
-                (Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc))
-                rtD
-                coreD
-                modsD)
-          let resDiags = ppResolveErrorsByFile resolvePairs
-          match resDiags
-            -- ONE typecheck of the graph (ARCH §E): the elaboration `run` needs
-            -- for eval is also the diagnostics producer, so the located
-            -- per-module report below is rendered from ITS output rather than
-            -- from a second, check-only pass over the same graph.
-            "" =>
-              let _ = resetTypeErrorsSticky ()
-              let analysis = elaborateRun rtD coreD modsD
-              let (coreE, modsE, perMod, residual, _, _) = analysis.eaElab
-              match elaboratedProjectDiags rtD coreD modsWithPath modsD perMod
-                (Some errText, _, _) => match jsonMode
+          let diags = flatMap snd front.foDiags
+          match (filter diagIsError diags, front.foDriven)
+            ([], Some analysis) =>
+              let (_, _, _, residual, _, _) = analysis.eaElab
+              match isNone report.trChecked
+                -- Belt-and-braces, as on the multi-module arm: anything only
+                -- the graph-end drain can see still aborts before eval.
+                True => match jsonMode
                   True =>
-                    -- #2798 review S2: normalize each file the SAME way
-                    -- `check --json`'s own multi-module arm does
-                    -- (`relDiagTriple root`, diagnostics.mdk ~:2478-2482) — an
-                    -- imported stdlib module resolves through the absolute
-                    -- `stdlibDir` root and must not leak that worktree path
-                    -- into the envelope's `file` field.
-                    let jsonTriples =
-                      map
-                        (relDiagTriple root)
-                        (elaboratedProjectJsonTriples
-                          rtD
-                          coreD
-                          modsWithPath
-                          modsD
-                          perMod)
-                    runAbortJson jsonTriples
-                  False => runAbort errText
-                (None, projWarns, _) => match hadTypeErrors ()
-                  -- Belt-and-braces: anything only the graph-end drain can
-                  -- see still aborts before eval.
-                  True => match jsonMode
-                    True =>
-                      runAbortJson
-                        (map
-                          (relDiagTriple root)
-                          (residualJsonTriples target pathMap residual))
-                    False =>
-                      runAbort (residualOrGeneric pathMap target residual)
-                  False =>
-                    let _ =
-                      runTargetGate
-                        jsonMode
-                        (relDiagTriple root)
+                    runAbortJson (residualJsonTriples target pathMap residual)
+                  False => runAbort (residualOrGeneric pathMap target residual)
+                False =>
+                  let _ =
+                    runTargetGate jsonMode (t => t) target pathMap mods analysis
+                  let perfTCheck = now ()
+                  let _ =
+                    emitPhase perfOn "check" (perfTCheck - perfTLoad) target
+                  -- #2400 / F4: SINGLE-FILE only, so `allWarnTriples` carries
+                  -- the FULL warning set here (it filters `diagIsWarn`, not
+                  -- `runBuildWarnCodes`; see its note).
+                  -- `finishRunEval` carries this triple down BOTH channels
+                  -- (human `renderTripleWarnings`, `--json` `pendingRunDiags`),
+                  -- so widening here widens both in lockstep.  The
+                  -- multi-module arm below keeps `projWarns` on the
+                  -- coherence allowlist.
+                  let executed =
+                    executedFromReport report "runAsyncMain" (coreD, modsD)
+                  match executed
+                    Err msg => runAbort msg
+                    Ok trees =>
+                      finishRunEval
                         target
-                        pathMap
+                        jsonMode
+                        trees
                         mods
-                        analysis
-                    let perfTCheck = now ()
-                    let _ =
-                      emitPhase perfOn "check" (perfTCheck - perfTLoad) target
-                    finishRunEval
-                      target
+                        (allWarnTriples tsrc target diags)
+                        (runEvalPerf perfOn target perfT0 perfTCheck)
+            (errs, _) => match jsonMode
+              -- #2798 review S2: `diags` (the WHOLE list, errors and warnings)
+              -- for JSON, matching `check --json`'s per-file diagnostics array
+              -- element-wise — `errs` is the errors-only prose projection of it.
+              True => runAbortJson [(target, tsrc, diags)]
+              False =>
+                runAbort
+                  (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
+        _ => match front.foDriven
+          -- Multi-module: resolve rejected the graph.  #186/#1360: per-module
+          -- attribution via the loader's `pathMap`, the same seam `checkRoute`
+          -- uses (#41).
+          None => match jsonMode
+            True =>
+              -- #2798 review S2: same `relDiagTriple root` normalization as
+              -- the typecheck-error arm below.
+              runAbortJson
+                (map
+                  (relDiagTriple root)
+                  (resolveErrorJsonTriples front.foDiags))
+            False => runAbort (ppDiagBuckets front.foDiags)
+          -- A gate of resolve + elaborateModules + hadTypeErrors is only as
+          -- sound as the obligations the elaborate driver checks (both channels
+          -- since #2705) and renders nothing located; `check`'s predicate prints
+          -- the real located `No impl of Display for Foo` for
+          -- `println "\{Foo 1}"` with no Display impl.
+          Some analysis =>
+            let (_, _, _, residual, _, _) = analysis.eaElab
+            match locatedProjectDiags front.foDiags
+              (Some errText, _, _) => match jsonMode
+                True =>
+                  -- #2798 review S2: normalize each file the SAME way
+                  -- `check --json`'s own multi-module arm does
+                  -- (`relDiagTriple root`, diagnostics.mdk ~:2478-2482) — an
+                  -- imported stdlib module resolves through the absolute
+                  -- `stdlibDir` root and must not leak that worktree path
+                  -- into the envelope's `file` field.  `nonEmptyTriples` is the
+                  -- only filter: like `check --json`'s per-file `diagnostics`
+                  -- array, the JSON channel carries warnings beside errors,
+                  -- where the prose `errText` is errors-only.
+                  let jsonTriples =
+                    map
+                      (relDiagTriple root)
+                      (nonEmptyTriples (map readDiagSrc front.foDiags))
+                  runAbortJson jsonTriples
+                False => runAbort errText
+              (None, projWarns, _) => match isNone report.trChecked
+                -- Belt-and-braces: anything only the graph-end drain can
+                -- see still aborts before eval.
+                True => match jsonMode
+                  True =>
+                    runAbortJson
+                      (map
+                        (relDiagTriple root)
+                        (residualJsonTriples target pathMap residual))
+                  False => runAbort (residualOrGeneric pathMap target residual)
+                False =>
+                  let _ =
+                    runTargetGate
                       jsonMode
-                      (autoPrintElaborated rtD coreD modsD (coreE, modsE))
+                      (relDiagTriple root)
+                      target
+                      pathMap
                       mods
-                      projWarns
-                      (runEvalPerf perfOn target perfT0 perfTCheck)
-            _ => match jsonMode
-              True =>
-                -- #2798 review S2: same `relDiagTriple root` normalization as
-                -- the typecheck-error arm above.
-                let jsonTriples =
-                  map
-                    (relDiagTriple root)
-                    (resolveErrorJsonTriples resolvePairs)
-                runAbortJson jsonTriples
-              False => runAbort resDiags
+                      analysis
+                  let perfTCheck = now ()
+                  let _ =
+                    emitPhase perfOn "check" (perfTCheck - perfTLoad) target
+                  let executed =
+                    executedFromReport report "runAsyncMain" (coreD, modsD)
+                  match executed
+                    Err msg => runAbort msg
+                    Ok trees =>
+                      finishRunEval
+                        target
+                        jsonMode
+                        trees
+                        mods
+                        projWarns
+                        (runEvalPerf perfOn target perfT0 perfTCheck)
 -- G1 (SOUNDNESS): typecheck the WHOLE module graph and abort before
--- eval on ANY type error.  elaborateModules route-stamps via the
--- per-module typecheck (checkModuleFullImpl), which pushes into the
--- sticky error accumulator; resetTypeErrorsSticky clears it first so
--- hadTypeErrors reflects THIS run only.  A type error makes
--- evalModulesOutput miscompile (the G1 bug), so we never reach it.
--- Resolve-phase errors (e.g. PrivateNameAccess) ride a SEPARATE channel
--- hadTypeErrors does not cover, so resolveModulesErrorsByFile is consulted
--- FIRST (mirroring `check`/`build`) and run aborts with the same humane
--- diagnostic before elaborate/eval.
+-- eval unless the drive's report carries a checked program (`trChecked`).  A
+-- type error makes evalModulesOutput miscompile (the G1 bug), so we never
+-- reach it.  Resolve-phase errors (e.g. PrivateNameAccess) ride a SEPARATE
+-- channel the report does not cover, so resolveModulesErrorsByFile is
+-- consulted FIRST (mirroring `check`/`build`) and run aborts with the same
+-- humane diagnostic before elaborate/eval.
 
 desugarPair : (String, List Decl) -> (String, List Decl)
 desugarPair (mid, p) = (mid, desugarIn mid p)
 
 -- (modId, path, decls) → (modId, path): the per-module file map threaded into the
--- `run`'s elaborate: one pass to learn `main`'s type, then — for a `main : Async _`
--- (ASYNC-DESIGN D5) — a second pass over the graph rewritten to apply the
--- `async` module's scheduler driver (main_autoprint.asyncWrapModules, #2506), so
--- the interpreter forces a plain Unit main whose body drives the scheduler.  A
--- plain main keeps the single pass; both leave mainSchemeRef populated for the
--- main-shape warnings `finishRunEval` reads.
+-- `run`'s one elaboration: the analysis its gate reads, and the auto-print
+-- evidence `executedTrees` wraps the elaborated trees with.  It leaves
+-- mainSchemeRef populated for the main-shape warnings `finishRunEval` reads.
 elaborateRun : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  <IO> EntryAnalysis
+  <IO> (EntryAnalysis, TcReport)
 elaborateRun rtD coreD modsD =
-  let analysis = analyzeProgram (valueMainCandidate coreD modsD) rtD coreD modsD
-  match asyncMainShapeError modsD
-    Some msg =>
-      let _ = runAbort msg
-      analysis
-    None =>
-      if shouldAsyncWrapMain "runAsyncMain" modsD then
-        { analysis |
-          eaElab =
-            plainPerModuleOf
-              analysis.eaElab
-              (elaborateModules
-                rtD
-                coreD
-                (asyncWrapModules "runAsyncMain" modsD)),
-        }
-      else
-        analysis
-
--- The trees `run` evaluates for a zero-arg value `main` of a non-Unit type: the
--- auto-print-wrapped program (driver/main_autoprint.mdk), so `run` prints the
--- value exactly as `build`'s binary does.  Called only once the gate has
--- accepted the program, whose drive already judged the `Display` obligation
--- (`elaborateRun`'s value-main candidate), while `mainSchemeRef` still holds
--- the user's own `main`; its own diagnostics are not read.  Any other `main`
--- keeps the elaboration the gate ran.
-autoPrintElaborated : List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  (List Decl, List (String, List Decl)) ->
-  <IO> (List Decl, List (String, List Decl))
-autoPrintElaborated rtD coreD modsD elaborated =
-  if shouldAutoPrintMain coreD modsD then
-    let (coreE, modsE, _, _, _, _) =
-      elaborateModules rtD (autoPrintPinCore coreD) (autoPrintWrapModules modsD)
-    (coreE, modsE)
-  else
-    elaborated
-
--- The wrapped elaboration's trees, residual and evidence, carrying the PLAIN
--- program's per-module diagnostics.  The wrapped graph is synthetic — the
--- `async` scheduler driver applied to the user's `main` — so a diagnostic
--- attributed to it names code the user did not write.  The residual and the
--- sticky accumulator `hadTypeErrors` reads are the wrapped pass's, so a
--- diagnostic only the wrapped pass produces would still abort the run; none has
--- been constructed (the wrap strips `main`'s signature and applies a row-open
--- driver), so what the residual gate carries in practice is the graph-end
--- drain's diagnostics and the core pass's, which no per-module list holds.
-plainPerModuleOf : ElabResult -> ElabResult -> ElabResult
-plainPerModuleOf (_, _, perMod, _, _, _) (coreW, modsW, _, residualW, evW, dispW) =
-  (coreW, modsW, perMod, residualW, evW, dispW)
+  let (analysis, report) =
+    analyzeProgramReport
+      (valueMainCandidate coreD modsD)
+      (Some "runAsyncMain")
+      rtD
+      coreD
+      modsD
+  let _ = match asyncMainShapeError modsD
+    Some msg => runAbort msg
+    None => ()
+  (analysis, report)
 
 -- B2 (RUN-EFFECTS): evalModulesOutputRun is evalModulesOutput plus the real-I/O
 -- externs (File/Env/Stdin/Stderr/Clock), hence the `IO` row.  An `Async` main
--- reaches here already rewritten by `elaborateRun`.
+-- reaches here already rewritten by `executedTrees`.
 runProgramOutput : List Decl -> List (String, List Decl) -> <IO> String
 runProgramOutput preludeDecls modules =
   evalModulesOutputRun preludeDecls modules
@@ -3708,7 +3497,7 @@ runCheckPolicyArgs (PolicyArgs (Some target) allow fn) =
 -- `manifest` and `check-policy` load and analyze their target exactly as
 -- `medaka check` does: the multi-file loader (project root, sibling and stdlib
 -- imports), `check`'s resolve diagnostics, then one elaboration of the graph
--- (`analyzeProgram`), refusing on any error `check` would report for it.  The
+-- (`analyzeProgramReport`), refusing on any error `check` would report for it.  The
 -- two verbs therefore read the entry's row from the same analysis, and a
 -- manifest's claim is one `check-policy` can verify.
 analyzeTarget : String -> <IO> Result String EntryAnalysis
@@ -3728,10 +3517,10 @@ analyzeTarget target =
     Ok modsWithPath =>
       analyzeLoaded rsrc csrc target roots stdlibDir modsWithPath
 
--- Split out of `analyzeTarget` so the resolve gate and the typecheck gate each
--- read as one thing.  The typecheck gate is `run`'s: the per-module
--- diagnostics of the one elaboration, rendered located against each module's
--- own file, then anything only the graph-end drain saw.
+-- One front-end run (`frontEnd`) whose drive is the elaboration the verb reads.
+-- A graph resolve rejects is refused with its resolve errors and not driven;
+-- past resolve, the gate is `run`'s: the per-module diagnostics of the one elaboration, rendered located
+-- against each module's own file, then anything only the graph-end drain saw.
 analyzeLoaded : String ->
   String ->
   String ->
@@ -3743,37 +3532,38 @@ analyzeLoaded rsrc csrc target roots stdlibDir modsWithPath =
   let mods = map dropPathTriple modsWithPath
   let pathMap = map modIdToPath modsWithPath
   let trusted = projectTrustedMods target roots stdlibDir mods
-  let preludeKey = Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc)
   let rtD = desugaredPrelude rsrc
   let coreD = desugaredPrelude csrc
   let modsD = map desugarPair mods
-  let resDiags =
-    ppResolveErrorsByFile
-      (hintResErrorPairs
-        (stdlibExportsReader stdlibDir)
-        (resolveModulesErrorsByFile
-          pathMap
-          False
-          trusted
-          preludeKey
+  let front =
+    frontEnd
+      (stdlibExportsReader stdlibDir)
+      (_ =>
+        analyzeProgramReport
+          (valueMainCandidate coreD modsD)
+          None
           rtD
           coreD
-          modsD))
-  match resDiags
-    "" =>
-      let _ = resetTypeErrorsSticky ()
-      let analysis =
-        analyzeProgram (valueMainCandidate coreD modsD) rtD coreD modsD
-      let residualHit = hadTypeErrors ()
-      let (_, _, perMod, residual, _, _) = analysis.eaElab
-      match elaboratedProjectDiags rtD coreD modsWithPath modsD perMod
+          modsD)
+      FrontInput {
+        fiAllowInternal = False,
+        fiTrusted = trusted,
+        fiRuntimeSrc = rsrc,
+        fiCoreSrc = csrc,
+        fiPolicy = NeverDriveRejected,
+        fiProgram = FrontGraph modsWithPath modsD,
+      }
+  match front.foDriven
+    None => Err (ppDiagBuckets front.foDiags)
+    Some analysis =>
+      let (_, _, _, residual, _, _) = analysis.eaElab
+      match locatedProjectDiags front.foDiags
         (Some errText, _, _) => Err errText
         (None, _, _) =>
-          if residualHit then
+          if isNone front.foReport.trChecked then
             Err (residualOrGeneric pathMap target residual)
           else
             Ok analysis
-    _ => Err resDiags
 
 -- ── manifest ─────────────────────────────────────────────────────────────────
 -- WS-1c of EFFECTS-CONFORMANCE-ROADMAP.md.  Emit a module's verified capability

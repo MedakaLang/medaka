@@ -37,9 +37,10 @@ loader module graph
 ```
 
 `compiler/entries/entry_support.mdk` owns the common command-line module driver.
-Its `runEmitWith`/`emitModulesWith` functions parameterize only the terminal
-`emitTail`, so composite-`main` rewriting, mangling, and elaboration are shared
-by the LLVM/Wasm command-line entries. DCE and lower/emit installation are wired
+Its `runEmitWith`/`emitElaborated` functions parameterize only the terminal
+`emitTail`, so elaboration, the composite-`main` wrap of the elaborated trees
+(`driver/main_autoprint.mdk`'s `executedTrees`), and mangling are shared by the
+LLVM/Wasm command-line entries. DCE and lower/emit installation are wired
 inside each backend's `emitTail`; native prelude/program-half modes may bypass
 DCE.
 

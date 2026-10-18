@@ -278,8 +278,7 @@ runStaged on targetPath rsrc csrc tsrc =
   let livePrelude = dropShadowedExp userNames cDecls
   -- The per-module schemes and residual diagnostics `elaborateModules` also returns
   -- have no consumer here: this driver measures stages and throws its emitted IR
-  -- away, so it has no diagnostic surface to route them to — entry_support's own
-  -- `emitModulesWith` names the same slots `_`.
+  -- away, so it has no diagnostic surface to route them to.
   let (coreE, modulesE, _, _, _, _) =
     elaborateModules rDecls livePrelude (("__user__", desugared) :: [])
   let (coreD, modules2) = mangleUnitsEv coreE modulesE

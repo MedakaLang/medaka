@@ -8,50 +8,43 @@
 -- (driver/main_autoprint.mdk) that every verb applies to a bare VALUE `main`
 -- (`main = 1 + 2`) — the shape essentially every fixture in test/llvm_fixtures/
 -- and test/wasm/fixtures/ uses.  `medaka run` applies the same wrap
--- (`autoPrintElaborated`, driver/medaka_cli.mdk); this probe keeps the
+-- (`executedTrees` in driver/medaka_cli.mdk's run arms); this probe keeps the
 -- interpreter arm free of the CLI's check gate and argument handling.
 --
 -- Like every compiler/entries/*.mdk this is a probe driver — not compiled into the
 -- `medaka` binary and not in the emitter seed graph — so it owes no re-mint.
 
 import frontend.ast.{Decl}
-import types.typecheck.{elaborateModules}
+import types.typecheck.{elaborateModulesWithReport}
+import types.publish.{TcReport(..)}
 import eval.eval.{evalModulesOutput}
-import driver.main_autoprint.{
-  autoPrintWrapModules,
-  autoPrintPinCore,
-  shouldAutoPrintMain,
-  shouldAsyncWrapMain,
-  asyncWrapModules,
-}
-import entries.entry_support.{driveModules}
+import driver.main_autoprint.{valueMainCandidate, executedTrees}
+import entries.entry_support.{driveModules, failWith}
 
 export
 oracleMain : Unit -> <IO> Unit
 oracleMain () = driveModules runElab
 
--- Elaborate once to learn `main`'s type (populates mainSchemeRef, which
--- shouldAutoPrintMain reads), wrap a bare non-Unit value main, then elaborate the
--- (possibly wrapped) graph for real and force it.  The double elaborate mirrors
--- entry_support.runEmitWith / playground_main.doEmit, which do exactly this.
+-- Elaborate once as an executing drive, which returns the auto-print evidence,
+-- then wrap the elaborated trees (a bare non-Unit value main is printed, an
+-- `Async` main takes the scheduler driver, #2506) and force them.
 runElab : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runElab runtimeDecls coreDecls modules =
-  let _ = elaborateModules runtimeDecls coreDecls modules
-  let fired = shouldAutoPrintMain coreDecls modules
-  -- An `Async` main takes the scheduler-driver rewrite instead (#2506), the
-  -- same one `medaka run`'s `elaborateRun` applies.
-  let asyncFired = shouldAsyncWrapMain "runAsyncMain" modules
-  let modulesW =
-    if fired then
-      autoPrintWrapModules modules
-    else if asyncFired then
-      asyncWrapModules "runAsyncMain" modules
-    else
+  let ((coreE, modulesE, _, _, _, _), report) =
+    elaborateModulesWithReport
+      (valueMainCandidate coreDecls modules)
+      (Some "runAsyncMain")
+      runtimeDecls
+      coreDecls
       modules
-  -- the wrap's callee is a PRELUDE re-binding (autoPrintPinCore, #2185 / F1 / F2).
-  let coreW = if fired then autoPrintPinCore coreDecls else coreDecls
-  let (coreE, modulesE, _, _, _, _) =
-    elaborateModules runtimeDecls coreW modulesW
-  putStr (evalModulesOutput coreE modulesE)
+  let executed =
+    executedTrees
+      report.trAutoPrint
+      "runAsyncMain"
+      (coreDecls, modules)
+      (coreE, modulesE)
+  match executed
+    Ok (coreW, modulesW) => putStr (evalModulesOutput coreW modulesW)
+    Err msg => failWith msg
 
 main = oracleMain ()

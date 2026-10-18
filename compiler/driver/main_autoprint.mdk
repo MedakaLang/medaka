@@ -11,9 +11,8 @@
 -- `autoPrintPinCore`'s own comment for why no SPELLING of this call — `println`,
 -- or `putStrLn (display …)` — can be safe (#2185, and its F1/F2 recurrence)
 -- so the value flows through the ordinary polymorphic print path every
--- backend already compiles.  The wrapped `main : <IO> Unit` suppresses the
--- emitter's own scalar auto-print (installMainIsUnitHint True), so a value is
--- printed exactly ONCE.
+-- backend already compiles.  A wrapped `main` (`mainIsWrapped`) suppresses the
+-- emitter's own scalar auto-print, so a value is printed exactly ONCE.
 --
 -- SCOPE / re-mint safety: the wrap fires ONLY on a bare zero-arg non-Unit/non-Async
 -- value main.  Every compiler-graph `main` is Unit/`<IO>`-typed, so
@@ -26,26 +25,21 @@
 -- Display'` error, NOT a miscompile.  The wrap's one class obligation is
 -- `Display τ_main`, and the drive that checks the entry module poses it itself
 -- (`autoPrintWanted`, types/typecheck.mdk) when its caller passes the syntactic
--- candidate below (`valueMainCandidate`); the wrapped program is elaborated only
--- for the trees it runs, never checked a second time.
+-- candidate below (`valueMainCandidate`).  The wrap is applied to that drive's
+-- elaborated trees (`executedTrees`), so the program is elaborated once.
 
 import frontend.ast.{
   Decl(..),
   Expr(..),
+  EvId,
   Pat,
-  Ty,
   Loc(..),
   UsePath(..),
   UseMember(..),
 }
-import types.typecheck.{
-  mainTypeIsUnit,
-  mainTypeIsAsync,
-  mainAsyncPayloadIsUnit,
-  checkOneDiagsSynthetic,
-  setCoherenceUserDecls,
-  TcDiag,
-}
+import types.typecheck.{mainTypeIsUnit, mainTypeIsAsync, mainAsyncPayloadIsUnit}
+import types.private_mangle.{mangledName}
+import types.publish.{TcReport(..), CheckedProgram(..)}
 
 -- The loader hands modules dependency-first, so the ENTRY module is last.
 entryPair : List (String, List Decl) -> Option (String, List Decl)
@@ -111,45 +105,6 @@ isMainTypeSig (DAttrib _ d) = isMainTypeSig d
 isMainTypeSig (DTypeSig _ "main" _ _) = True
 isMainTypeSig _ = False
 
--- The declared type of `main`, if the decls carry a signature for it.
-mainSigType : List Decl -> Option Ty
-mainSigType [] = None
-mainSigType ((DAttrib _ d) :: rest) = mainSigType (d :: rest)
-mainSigType ((DTypeSig _ "main" ty _) :: _) = Some ty
-mainSigType (_ :: rest) = mainSigType rest
-
--- Rewrite the entry module's `main = <e>` decl to `main = 0autoprintln <e>`.  A
--- `main : T` signature moves onto the body as an annotation,
--- `main = 0autoprintln (<e> : T)`: the printed value has the type the check drive
--- posed `Display` at, so a body whose type only `T` determines (`main = []` under
--- `main : List Int`) is no more ambiguous in the wrapped program than it was there.
--- ⚠️ The caller MUST pair this with `autoPrintPinCore` on the core decl list.
-export
-autoPrintWrapModules : List (String, List Decl) -> List (String, List Decl)
-autoPrintWrapModules [] = []
-autoPrintWrapModules [(mid, decls)] =
-  let declared = mainSigType decls
-  [
-    (
-      mid,
-      map (wrapMainDecl declared) (filter (d => not (isMainTypeSig d)) decls),
-    ),
-  ]
-autoPrintWrapModules (p :: rest) = p :: autoPrintWrapModules rest
-
-wrapMainDecl : Option Ty -> Decl -> Decl
-wrapMainDecl declared (DFunDef vis "main" [] body site bid) =
-  DFunDef vis "main" [] (wrapPrintln site (annotateMain declared body)) site bid
-wrapMainDecl declared (DAttrib a d) = DAttrib a (wrapMainDecl declared d)
-wrapMainDecl _ d = d
-
--- `<e>` → `(<e> : T)`, keeping the body's outer `ELoc` outermost so the wrap's
--- application still reports at the body's span.
-annotateMain : Option Ty -> Expr -> Expr
-annotateMain None body = body
-annotateMain (Some ty) (ELoc l inner) = ELoc l (EAnnot (ELoc l inner) ty)
-annotateMain (Some ty) body = EAnnot body ty
-
 -- The auto-print wrap's own entry point: an UNSPELLABLE name under which the
 -- prelude's own `println` declaration is re-bound (see `autoPrintPinCore`).  A
 -- Medaka identifier can never begin with a digit, so no user declaration — top
@@ -185,20 +140,19 @@ autoPrintPinName = "0autoprintln"
 -- PRELUDE's scope, where `Display` is the one own declaration and no user
 -- interface can outrank it.  Only the synthesized occurrence was ever broken.
 --
--- So the wrap now denotes THAT declaration: this copies the prelude's
--- `println : Display a => a -> <IO> Unit` signature and body verbatim under an
--- unspellable name and appends them to the core decl list, and `wrapPrintln`
--- emits `EVar autoPrintPinName`.  The copied body is a PRELUDE decl, so its
--- `display`/`putStrLn` are prelude-scoped exactly as `println`'s own are, and
--- the reference cannot be captured because the name cannot be declared.  No
--- name the wrap synthesizes is resolved in user scope any more — including
--- `putStrLn`, whose (narrower) capture vector goes with it.
+-- So the wrap denotes THAT declaration: [coreDecls] is the ELABORATED
+-- prelude, and this copies its `println : Display a => a -> <IO> Unit`
+-- signature and clauses, dict parameter included, under an unspellable name
+-- and appends them to the core decl list.  `executedTrees` applies the copy to
+-- `main`'s body as `EDictAt autoPrintPinName ev`, the dictionary the drive's
+-- evidence names.  The copied body was elaborated in the PRELUDE's scope, so its
+-- `display`/`putStrLn` resolve exactly as `println`'s own do, and the reference
+-- cannot be captured because the name cannot be declared.  No name the wrap
+-- synthesizes is resolved in user scope — including `putStrLn`, whose
+-- (narrower) capture vector goes with it.
 --
--- Verbatim copies, not a hand-built AST: the signature carries the constraint
--- that puts the name in `markWith`'s `constrained` set (so the occurrence marks
--- `EDictApp`, precisely as `println`'s own occurrences do) and no second
--- spelling of `Display a => a -> <IO> Unit` is minted that could drift from the
--- prelude's.
+-- Copies, not a hand-built AST: no second spelling of
+-- `Display a => a -> <IO> Unit` is minted that could drift from the prelude's.
 --
 -- Fires ONLY when the wrap fires (`shouldAutoPrintMain`, which already requires
 -- `definesPrintln`), so a program with a Unit/Async/function `main` — the
@@ -229,61 +183,103 @@ pinnedCopies origin pin ((DFunDef _ n ps body site bid) :: rest) =
     pinnedCopies origin pin rest
 pinnedCopies origin pin (_ :: rest) = pinnedCopies origin pin rest
 
--- `main = <e>` → `main = 0autoprintln <e>`, re-attaching the body's own source
--- span (its outer `ELoc`, from `parseLocated`) around the synthetic application,
--- the span the check drive reports the auto-print obligation at
--- (`autoPrintWanted`).  `ELoc` is transparent to every backend, so the emitted IR
--- is unchanged.  An un-located body (plain `parse`) is located at the binding.
---
--- The callee is the prelude's own `println` declaration re-bound under an
--- unspellable name — see `autoPrintPinCore` above for why no SPELLING of this
--- call (`println`, or `putStrLn (display …)`) can be safe.  Every caller that
--- calls `autoPrintWrapModules` MUST also pass `autoPrintPinCore coreDecls` as
--- the core decl list, or the name is unbound.
-wrapPrintln : Loc -> Expr -> Expr
-wrapPrintln site body = wrapCall autoPrintPinName site body
+-- The trees an executing driver runs, built from the drive that judged the
+-- program.  [source] is the program the drive read and [elaborated] its trees.
+--   * A printed value `main`: `main = <e>` becomes `main = 0autoprintln <e>`.
+--     The callee is the drive's own elaborated copy of `println`, re-bound under
+--     the pin (`autoPrintPinCore`).  The application is dict-passed by the
+--     auto-print evidence the drive published (`trAutoPrint`).
+--   * An `Async` main: `main = <e>` becomes `main = 0runasync <e>`.  Its driver
+--     is unconstrained, so it needs no evidence.
+--   * Any other `main`: the trees unchanged.
+-- A printed `main` with no evidence is refused: running it unprinted would exit
+-- 0 with nothing on stdout.
+export
+executedTrees : Option EvId ->
+  String ->
+  (List Decl, List (String, List Decl)) ->
+  (List Decl, List (String, List Decl)) ->
+  Result String (List Decl, List (String, List Decl))
+executedTrees autoPrint driver (coreD, modsD) (coreE, modsE) =
+  if shouldAutoPrintMain coreD modsD then match autoPrint
+    Some ev => Ok (
+      autoPrintPinCore coreE,
+      onEntry (wrapEntryMain (EDictAt autoPrintPinName ev)) modsE,
+    )
+    None =>
+      Err
+        "internal error: the typecheck published no evidence for printing the value `main`"
+  else if shouldAsyncWrapMain driver modsD then
+    Ok (coreE, asyncWrapModules driver modsE)
+  else
+    Ok (coreE, modsE)
+
+-- `executedTrees` over the trees and auto-print evidence of the drive [report]
+-- judged.  A report with no checked program has nothing to run: the driver's
+-- gate refused it before this point, so reaching here is an internal error.
+export
+executedFromReport : TcReport ->
+  String ->
+  (List Decl, List (String, List Decl)) ->
+  Result String (List Decl, List (String, List Decl))
+executedFromReport report driver source = match report.trChecked
+  Some checked => match checked.cpTrees
+    Some trees => executedTrees report.trAutoPrint driver source trees
+    None => noChecked
+  None => noChecked
+
+noChecked : Result String (List Decl, List (String, List Decl))
+noChecked =
+  Err "internal error: the typecheck published no checked program to run"
+
+-- True iff the entry `main` is a driver wrap (`executedTrees`), before or after
+-- `mangleUnitsEv` renames the pins.  The wrapped `main`'s result is `Unit`, so
+-- an emitter's scalar auto-print must not print it again.
+export
+mainIsWrapped : List (String, List Decl) -> Bool
+mainIsWrapped modules = match entryPair modules
+  Some (_, decls) => wrappedMainIn decls
+  None => False
+
+wrappedMainIn : List Decl -> Bool
+wrappedMainIn [] = False
+wrappedMainIn ((DAttrib _ d) :: rest) = wrappedMainIn (d :: rest)
+wrappedMainIn ((DFunDef _ "main" [] body _ _) :: _) = isWrapCall body
+wrappedMainIn (_ :: rest) = wrappedMainIn rest
+
+isWrapCall : Expr -> Bool
+isWrapCall (ELoc _ e) = isWrapCall e
+isWrapCall (EApp (EDictAt n _) _) =
+  n == autoPrintPinName || n == mangledName "core" autoPrintPinName
+isWrapCall (EApp (EVar n) _) =
+  n == asyncMainPinName || n == mangledName asyncModuleId asyncMainPinName
+isWrapCall _ = False
+
+-- [f] applied to the entry module's decls.
+onEntry : (List Decl -> List Decl) ->
+  List (String, List Decl) ->
+  List (String, List Decl)
+onEntry _ [] = []
+onEntry f [(mid, decls)] = [(mid, f decls)]
+onEntry f (p :: rest) = p :: onEntry f rest
+
+-- `main = <e>` becomes `main = callee <e>`, and `main`'s signature is dropped.
+wrapEntryMain : Expr -> List Decl -> List Decl
+wrapEntryMain callee decls =
+  map (wrapMainDecl callee) (filter (d => not (isMainTypeSig d)) decls)
+
+wrapMainDecl : Expr -> Decl -> Decl
+wrapMainDecl callee (DFunDef vis "main" [] body site bid) =
+  DFunDef vis "main" [] (wrapCall callee site body) site bid
+wrapMainDecl callee (DAttrib a d) = DAttrib a (wrapMainDecl callee d)
+wrapMainDecl _ d = d
 
 -- `<e>` → `callee <e>`, keeping the body's outer `ELoc` around the application.
 -- A body with none (an application such as `Err "x"`) is located at the `main`
--- binding [site], so a goal the synthesized call poses has a source location.
-wrapCall : String -> Loc -> Expr -> Expr
-wrapCall callee _ (ELoc l inner) = ELoc l (EApp (EVar callee) (ELoc l inner))
-wrapCall callee site body = ELoc site (EApp (EVar callee) body)
-
--- Re-run the CHECK gate on the async-wrapped program (`asyncWrapModules`), so a
--- program whose `Async` is not the driver's fails with a type error.  Runs over
--- the WHOLE loaded module graph (single-file or multi-module alike):
--- `checkOneDiagsSynthetic` (types/typecheck.mdk) is the `Module` arm's own general entry driver
--- (`checkModulesEntryFullK`), which already harvests only the graph's terminal
--- (entry) module's own diagnostics — so a multi-module import does not risk
--- the over-rejection the CLI's multi-module gate deliberately avoids; it sees
--- exactly the same entry-module report the non-wrapped check would.  Returns
--- the type-error `TcDiag`s for the caller to render.
---
--- This is a re-check run BETWEEN the two emit elaborations of `runEmitWith`
--- (`entries/entry_support.mdk`), so any global state it leaves behind is read by
--- the emit elaboration that follows it — `elaborateModules` seeds
--- `driverState.matchOracle` itself before each module is inferred so this
--- re-check's residue is never read back; do not attempt a fix here for a
--- resurfacing symptom, the seeding is the mechanism (see the `matchOracle`
--- write in `elaborateModules`, `compiler/types/typecheck.mdk`).
-export
-underivedMainDiags : List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  List TcDiag
-underivedMainDiags runtimeDecls coreDecls modules = match entryPair modules
-  None => []
-  Some (_, entryDecls) =>
-    let _ = setCoherenceUserDecls entryDecls
-    -- `entryDecls` here is the WRAPPED entry module (`main = 0runasync <e>`), not
-    -- the user's, so this re-check must not be allowed to redefine the driver's
-    -- record of the real `main`'s type — `checkOneDiagsSynthetic`
-    -- (types/typecheck.mdk) saves and restores `mainSchemeRef` around the whole
-    -- graph re-check, and its header states the `W-MAIN-SHAPE` regression that
-    -- reaching for the plain entry driver reintroduces.
-    let (tcErrs, _) = checkOneDiagsSynthetic runtimeDecls coreDecls modules
-    tcErrs
+-- binding [site].
+wrapCall : Expr -> Loc -> Expr -> Expr
+wrapCall callee _ (ELoc l inner) = ELoc l (EApp callee (ELoc l inner))
+wrapCall callee site body = ELoc site (EApp callee body)
 
 -- ── `main : Async _` driver wrap (ASYNC-DESIGN D5, ASYNC-RUNTIME-DESIGN §4.4) ──
 -- A `main` whose type heads in `Async` is an inert VALUE until a driver forces
@@ -364,15 +360,8 @@ pinAsyncDriver driver (mid, decls) =
     (mid, decls)
 
 wrapAsyncEntry : List (String, List Decl) -> List (String, List Decl)
-wrapAsyncEntry [] = []
-wrapAsyncEntry [(mid, decls)] = [
-  (
-    mid,
-    asyncPinImport
-      :: map wrapAsyncMainDecl (filter (d => not (isMainTypeSig d)) decls),
-  ),
-]
-wrapAsyncEntry (p :: rest) = p :: wrapAsyncEntry rest
+wrapAsyncEntry = onEntry (decls =>
+  asyncPinImport :: wrapEntryMain (EVar asyncMainPinName) decls)
 
 synthLoc : Loc
 synthLoc = Loc "" 0 0 0 0
@@ -383,9 +372,3 @@ asyncPinImport =
     False
     (UseGroup [asyncModuleId] [UseMember asyncMainPinName False synthLoc None])
     synthLoc
-
-wrapAsyncMainDecl : Decl -> Decl
-wrapAsyncMainDecl (DFunDef vis "main" [] body site bid) =
-  DFunDef vis "main" [] (wrapCall asyncMainPinName site body) site bid
-wrapAsyncMainDecl (DAttrib a d) = DAttrib a (wrapAsyncMainDecl d)
-wrapAsyncMainDecl d = d

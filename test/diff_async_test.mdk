@@ -62,11 +62,18 @@ import string.{
 }
 import test.{
   Expectation,
+  expectEach,
   expectEqual,
   fail,
   pass,
 }
-import test_process.{boundedVerbSeconds, medakaBin, medakaRoot}
+import test_process.{
+  boundedVerbSeconds,
+  expectSpawnFails,
+  medakaBin,
+  medakaRoot,
+  withScratchDir,
+}
 import time.{monotonic}
 
 corpus : <IO> String
@@ -599,3 +606,82 @@ test "diff_async: the readiness externs have no eval binding — the missing arm
         _ =>
           fail
             "\{path}: readiness extern(s) \{debug leaked} now appear in eval.mdk — the Net fixtures' native-only premise no longer holds and this gate needs a run arm, not a silent skip"
+
+-- # A project-local `async` module
+--
+-- An `Async` main is run as `runAsyncMain main`, with `runAsyncMain` taken
+-- from whatever module the program loads as `async`. A driver whose
+-- parameter does not accept `main`'s type is refused by `run`, `build` and
+-- `build --json` alike, located at `main`'s binding; executed, the program
+-- would hand the driver a value of the wrong type.
+
+-- Each row: the driver's parameter type and the mismatch it owes.
+lookalikeDrivers : List (String, String)
+lookalikeDrivers = [
+  ("Int", "Int vs Async a Unit"),
+  ("Async e Int", "Int vs Unit"),
+  ("Float", "Float vs Async a Unit"),
+  ("String", "String vs Async a Unit"),
+]
+
+lookalikeAsync : String -> String
+lookalikeAsync param = unlines [
+  "public export data Async e a = Done a",
+  "",
+  "export",
+  "runAsyncMain : \{param} -> <Stdout> Unit",
+  "runAsyncMain _ = println \"driver ran\"",
+]
+
+lookalikeMain : String
+lookalikeMain = unlines [
+  "import async.{Async(..)}",
+  "",
+  "main : Async e Unit",
+  "main = Done ()",
+]
+
+-- The three verbs' refusals of one driver, written into `dir`.
+gradeLookalike : String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+gradeLookalike param mismatch dir =
+  let entry = "\{dir}/main.mdk"
+  let wrote = do
+    _ <- writeFile "\{dir}/async.mdk" (lookalikeAsync param)
+    writeFile entry lookalikeMain
+  match wrote
+    Err e => fail "could not write the program: \{e}"
+    Ok _ => expectEach [
+      (
+        "run",
+        expectSpawnFails
+          medakaBin
+          ["run", entry]
+          "main.mdk:4:0: type mismatch: \{mismatch}",
+      ),
+      (
+        "build",
+        expectSpawnFails
+          medakaBin
+          ["build", entry, "-o", "\{dir}/bin"]
+          "main.mdk:4:0: type mismatch: \{mismatch}",
+      ),
+      (
+        "build --json",
+        expectSpawnFails
+          medakaBin
+          ["build", "--json", entry, "-o", "\{dir}/jbin"]
+          "\"code\":\"T-TYPE-MISMATCH\",\"kind\":\"type\",\"message\":\"type mismatch: \{mismatch}\",\"range\":{\"end\":{\"character\":4,\"line\":3},\"start\":{\"character\":0,\"line\":3}}",
+      ),
+    ]
+
+test "diff_async: a local `async` driver that does not accept main's type is refused by run and build" =
+  expectEach
+    (map
+      ((param, mismatch) => (
+        "runAsyncMain : \{param}",
+        withScratchDir (gradeLookalike param mismatch),
+      ))
+      lookalikeDrivers)

@@ -1,5 +1,5 @@
 # META
-source_lines=391
+source_lines=374
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/main_autoprint.mdk — shared composite-`main` auto-print wrap.
@@ -15,9 +15,8 @@ stages=DESUGAR,MARK
 -- `autoPrintPinCore`'s own comment for why no SPELLING of this call — `println`,
 -- or `putStrLn (display …)` — can be safe (#2185, and its F1/F2 recurrence)
 -- so the value flows through the ordinary polymorphic print path every
--- backend already compiles.  The wrapped `main : <IO> Unit` suppresses the
--- emitter's own scalar auto-print (installMainIsUnitHint True), so a value is
--- printed exactly ONCE.
+-- backend already compiles.  A wrapped `main` (`mainIsWrapped`) suppresses the
+-- emitter's own scalar auto-print, so a value is printed exactly ONCE.
 --
 -- SCOPE / re-mint safety: the wrap fires ONLY on a bare zero-arg non-Unit/non-Async
 -- value main.  Every compiler-graph `main` is Unit/`<IO>`-typed, so
@@ -30,26 +29,21 @@ stages=DESUGAR,MARK
 -- Display'` error, NOT a miscompile.  The wrap's one class obligation is
 -- `Display τ_main`, and the drive that checks the entry module poses it itself
 -- (`autoPrintWanted`, types/typecheck.mdk) when its caller passes the syntactic
--- candidate below (`valueMainCandidate`); the wrapped program is elaborated only
--- for the trees it runs, never checked a second time.
+-- candidate below (`valueMainCandidate`).  The wrap is applied to that drive's
+-- elaborated trees (`executedTrees`), so the program is elaborated once.
 
 import frontend.ast.{
   Decl(..),
   Expr(..),
+  EvId,
   Pat,
-  Ty,
   Loc(..),
   UsePath(..),
   UseMember(..),
 }
-import types.typecheck.{
-  mainTypeIsUnit,
-  mainTypeIsAsync,
-  mainAsyncPayloadIsUnit,
-  checkOneDiagsSynthetic,
-  setCoherenceUserDecls,
-  TcDiag,
-}
+import types.typecheck.{mainTypeIsUnit, mainTypeIsAsync, mainAsyncPayloadIsUnit}
+import types.private_mangle.{mangledName}
+import types.publish.{TcReport(..), CheckedProgram(..)}
 
 -- The loader hands modules dependency-first, so the ENTRY module is last.
 entryPair : List (String, List Decl) -> Option (String, List Decl)
@@ -115,45 +109,6 @@ isMainTypeSig (DAttrib _ d) = isMainTypeSig d
 isMainTypeSig (DTypeSig _ "main" _ _) = True
 isMainTypeSig _ = False
 
--- The declared type of `main`, if the decls carry a signature for it.
-mainSigType : List Decl -> Option Ty
-mainSigType [] = None
-mainSigType ((DAttrib _ d) :: rest) = mainSigType (d :: rest)
-mainSigType ((DTypeSig _ "main" ty _) :: _) = Some ty
-mainSigType (_ :: rest) = mainSigType rest
-
--- Rewrite the entry module's `main = <e>` decl to `main = 0autoprintln <e>`.  A
--- `main : T` signature moves onto the body as an annotation,
--- `main = 0autoprintln (<e> : T)`: the printed value has the type the check drive
--- posed `Display` at, so a body whose type only `T` determines (`main = []` under
--- `main : List Int`) is no more ambiguous in the wrapped program than it was there.
--- ⚠️ The caller MUST pair this with `autoPrintPinCore` on the core decl list.
-export
-autoPrintWrapModules : List (String, List Decl) -> List (String, List Decl)
-autoPrintWrapModules [] = []
-autoPrintWrapModules [(mid, decls)] =
-  let declared = mainSigType decls
-  [
-    (
-      mid,
-      map (wrapMainDecl declared) (filter (d => not (isMainTypeSig d)) decls),
-    ),
-  ]
-autoPrintWrapModules (p :: rest) = p :: autoPrintWrapModules rest
-
-wrapMainDecl : Option Ty -> Decl -> Decl
-wrapMainDecl declared (DFunDef vis "main" [] body site bid) =
-  DFunDef vis "main" [] (wrapPrintln site (annotateMain declared body)) site bid
-wrapMainDecl declared (DAttrib a d) = DAttrib a (wrapMainDecl declared d)
-wrapMainDecl _ d = d
-
--- `<e>` → `(<e> : T)`, keeping the body's outer `ELoc` outermost so the wrap's
--- application still reports at the body's span.
-annotateMain : Option Ty -> Expr -> Expr
-annotateMain None body = body
-annotateMain (Some ty) (ELoc l inner) = ELoc l (EAnnot (ELoc l inner) ty)
-annotateMain (Some ty) body = EAnnot body ty
-
 -- The auto-print wrap's own entry point: an UNSPELLABLE name under which the
 -- prelude's own `println` declaration is re-bound (see `autoPrintPinCore`).  A
 -- Medaka identifier can never begin with a digit, so no user declaration — top
@@ -189,20 +144,19 @@ autoPrintPinName = "0autoprintln"
 -- PRELUDE's scope, where `Display` is the one own declaration and no user
 -- interface can outrank it.  Only the synthesized occurrence was ever broken.
 --
--- So the wrap now denotes THAT declaration: this copies the prelude's
--- `println : Display a => a -> <IO> Unit` signature and body verbatim under an
--- unspellable name and appends them to the core decl list, and `wrapPrintln`
--- emits `EVar autoPrintPinName`.  The copied body is a PRELUDE decl, so its
--- `display`/`putStrLn` are prelude-scoped exactly as `println`'s own are, and
--- the reference cannot be captured because the name cannot be declared.  No
--- name the wrap synthesizes is resolved in user scope any more — including
--- `putStrLn`, whose (narrower) capture vector goes with it.
+-- So the wrap denotes THAT declaration: [coreDecls] is the ELABORATED
+-- prelude, and this copies its `println : Display a => a -> <IO> Unit`
+-- signature and clauses, dict parameter included, under an unspellable name
+-- and appends them to the core decl list.  `executedTrees` applies the copy to
+-- `main`'s body as `EDictAt autoPrintPinName ev`, the dictionary the drive's
+-- evidence names.  The copied body was elaborated in the PRELUDE's scope, so its
+-- `display`/`putStrLn` resolve exactly as `println`'s own do, and the reference
+-- cannot be captured because the name cannot be declared.  No name the wrap
+-- synthesizes is resolved in user scope — including `putStrLn`, whose
+-- (narrower) capture vector goes with it.
 --
--- Verbatim copies, not a hand-built AST: the signature carries the constraint
--- that puts the name in `markWith`'s `constrained` set (so the occurrence marks
--- `EDictApp`, precisely as `println`'s own occurrences do) and no second
--- spelling of `Display a => a -> <IO> Unit` is minted that could drift from the
--- prelude's.
+-- Copies, not a hand-built AST: no second spelling of
+-- `Display a => a -> <IO> Unit` is minted that could drift from the prelude's.
 --
 -- Fires ONLY when the wrap fires (`shouldAutoPrintMain`, which already requires
 -- `definesPrintln`), so a program with a Unit/Async/function `main` — the
@@ -233,61 +187,103 @@ pinnedCopies origin pin ((DFunDef _ n ps body site bid) :: rest) =
     pinnedCopies origin pin rest
 pinnedCopies origin pin (_ :: rest) = pinnedCopies origin pin rest
 
--- `main = <e>` → `main = 0autoprintln <e>`, re-attaching the body's own source
--- span (its outer `ELoc`, from `parseLocated`) around the synthetic application,
--- the span the check drive reports the auto-print obligation at
--- (`autoPrintWanted`).  `ELoc` is transparent to every backend, so the emitted IR
--- is unchanged.  An un-located body (plain `parse`) is located at the binding.
---
--- The callee is the prelude's own `println` declaration re-bound under an
--- unspellable name — see `autoPrintPinCore` above for why no SPELLING of this
--- call (`println`, or `putStrLn (display …)`) can be safe.  Every caller that
--- calls `autoPrintWrapModules` MUST also pass `autoPrintPinCore coreDecls` as
--- the core decl list, or the name is unbound.
-wrapPrintln : Loc -> Expr -> Expr
-wrapPrintln site body = wrapCall autoPrintPinName site body
+-- The trees an executing driver runs, built from the drive that judged the
+-- program.  [source] is the program the drive read and [elaborated] its trees.
+--   * A printed value `main`: `main = <e>` becomes `main = 0autoprintln <e>`.
+--     The callee is the drive's own elaborated copy of `println`, re-bound under
+--     the pin (`autoPrintPinCore`).  The application is dict-passed by the
+--     auto-print evidence the drive published (`trAutoPrint`).
+--   * An `Async` main: `main = <e>` becomes `main = 0runasync <e>`.  Its driver
+--     is unconstrained, so it needs no evidence.
+--   * Any other `main`: the trees unchanged.
+-- A printed `main` with no evidence is refused: running it unprinted would exit
+-- 0 with nothing on stdout.
+export
+executedTrees : Option EvId ->
+  String ->
+  (List Decl, List (String, List Decl)) ->
+  (List Decl, List (String, List Decl)) ->
+  Result String (List Decl, List (String, List Decl))
+executedTrees autoPrint driver (coreD, modsD) (coreE, modsE) =
+  if shouldAutoPrintMain coreD modsD then match autoPrint
+    Some ev => Ok (
+      autoPrintPinCore coreE,
+      onEntry (wrapEntryMain (EDictAt autoPrintPinName ev)) modsE,
+    )
+    None =>
+      Err
+        "internal error: the typecheck published no evidence for printing the value `main`"
+  else if shouldAsyncWrapMain driver modsD then
+    Ok (coreE, asyncWrapModules driver modsE)
+  else
+    Ok (coreE, modsE)
+
+-- `executedTrees` over the trees and auto-print evidence of the drive [report]
+-- judged.  A report with no checked program has nothing to run: the driver's
+-- gate refused it before this point, so reaching here is an internal error.
+export
+executedFromReport : TcReport ->
+  String ->
+  (List Decl, List (String, List Decl)) ->
+  Result String (List Decl, List (String, List Decl))
+executedFromReport report driver source = match report.trChecked
+  Some checked => match checked.cpTrees
+    Some trees => executedTrees report.trAutoPrint driver source trees
+    None => noChecked
+  None => noChecked
+
+noChecked : Result String (List Decl, List (String, List Decl))
+noChecked =
+  Err "internal error: the typecheck published no checked program to run"
+
+-- True iff the entry `main` is a driver wrap (`executedTrees`), before or after
+-- `mangleUnitsEv` renames the pins.  The wrapped `main`'s result is `Unit`, so
+-- an emitter's scalar auto-print must not print it again.
+export
+mainIsWrapped : List (String, List Decl) -> Bool
+mainIsWrapped modules = match entryPair modules
+  Some (_, decls) => wrappedMainIn decls
+  None => False
+
+wrappedMainIn : List Decl -> Bool
+wrappedMainIn [] = False
+wrappedMainIn ((DAttrib _ d) :: rest) = wrappedMainIn (d :: rest)
+wrappedMainIn ((DFunDef _ "main" [] body _ _) :: _) = isWrapCall body
+wrappedMainIn (_ :: rest) = wrappedMainIn rest
+
+isWrapCall : Expr -> Bool
+isWrapCall (ELoc _ e) = isWrapCall e
+isWrapCall (EApp (EDictAt n _) _) =
+  n == autoPrintPinName || n == mangledName "core" autoPrintPinName
+isWrapCall (EApp (EVar n) _) =
+  n == asyncMainPinName || n == mangledName asyncModuleId asyncMainPinName
+isWrapCall _ = False
+
+-- [f] applied to the entry module's decls.
+onEntry : (List Decl -> List Decl) ->
+  List (String, List Decl) ->
+  List (String, List Decl)
+onEntry _ [] = []
+onEntry f [(mid, decls)] = [(mid, f decls)]
+onEntry f (p :: rest) = p :: onEntry f rest
+
+-- `main = <e>` becomes `main = callee <e>`, and `main`'s signature is dropped.
+wrapEntryMain : Expr -> List Decl -> List Decl
+wrapEntryMain callee decls =
+  map (wrapMainDecl callee) (filter (d => not (isMainTypeSig d)) decls)
+
+wrapMainDecl : Expr -> Decl -> Decl
+wrapMainDecl callee (DFunDef vis "main" [] body site bid) =
+  DFunDef vis "main" [] (wrapCall callee site body) site bid
+wrapMainDecl callee (DAttrib a d) = DAttrib a (wrapMainDecl callee d)
+wrapMainDecl _ d = d
 
 -- `<e>` → `callee <e>`, keeping the body's outer `ELoc` around the application.
 -- A body with none (an application such as `Err "x"`) is located at the `main`
--- binding [site], so a goal the synthesized call poses has a source location.
-wrapCall : String -> Loc -> Expr -> Expr
-wrapCall callee _ (ELoc l inner) = ELoc l (EApp (EVar callee) (ELoc l inner))
-wrapCall callee site body = ELoc site (EApp (EVar callee) body)
-
--- Re-run the CHECK gate on the async-wrapped program (`asyncWrapModules`), so a
--- program whose `Async` is not the driver's fails with a type error.  Runs over
--- the WHOLE loaded module graph (single-file or multi-module alike):
--- `checkOneDiagsSynthetic` (types/typecheck.mdk) is the `Module` arm's own general entry driver
--- (`checkModulesEntryFullK`), which already harvests only the graph's terminal
--- (entry) module's own diagnostics — so a multi-module import does not risk
--- the over-rejection the CLI's multi-module gate deliberately avoids; it sees
--- exactly the same entry-module report the non-wrapped check would.  Returns
--- the type-error `TcDiag`s for the caller to render.
---
--- This is a re-check run BETWEEN the two emit elaborations of `runEmitWith`
--- (`entries/entry_support.mdk`), so any global state it leaves behind is read by
--- the emit elaboration that follows it — `elaborateModules` seeds
--- `driverState.matchOracle` itself before each module is inferred so this
--- re-check's residue is never read back; do not attempt a fix here for a
--- resurfacing symptom, the seeding is the mechanism (see the `matchOracle`
--- write in `elaborateModules`, `compiler/types/typecheck.mdk`).
-export
-underivedMainDiags : List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  List TcDiag
-underivedMainDiags runtimeDecls coreDecls modules = match entryPair modules
-  None => []
-  Some (_, entryDecls) =>
-    let _ = setCoherenceUserDecls entryDecls
-    -- `entryDecls` here is the WRAPPED entry module (`main = 0runasync <e>`), not
-    -- the user's, so this re-check must not be allowed to redefine the driver's
-    -- record of the real `main`'s type — `checkOneDiagsSynthetic`
-    -- (types/typecheck.mdk) saves and restores `mainSchemeRef` around the whole
-    -- graph re-check, and its header states the `W-MAIN-SHAPE` regression that
-    -- reaching for the plain entry driver reintroduces.
-    let (tcErrs, _) = checkOneDiagsSynthetic runtimeDecls coreDecls modules
-    tcErrs
+-- binding [site].
+wrapCall : Expr -> Loc -> Expr -> Expr
+wrapCall callee _ (ELoc l inner) = ELoc l (EApp callee (ELoc l inner))
+wrapCall callee site body = ELoc site (EApp callee body)
 
 -- ── `main : Async _` driver wrap (ASYNC-DESIGN D5, ASYNC-RUNTIME-DESIGN §4.4) ──
 -- A `main` whose type heads in `Async` is an inert VALUE until a driver forces
@@ -368,15 +364,8 @@ pinAsyncDriver driver (mid, decls) =
     (mid, decls)
 
 wrapAsyncEntry : List (String, List Decl) -> List (String, List Decl)
-wrapAsyncEntry [] = []
-wrapAsyncEntry [(mid, decls)] = [
-  (
-    mid,
-    asyncPinImport
-      :: map wrapAsyncMainDecl (filter (d => not (isMainTypeSig d)) decls),
-  ),
-]
-wrapAsyncEntry (p :: rest) = p :: wrapAsyncEntry rest
+wrapAsyncEntry = onEntry (decls =>
+  asyncPinImport :: wrapEntryMain (EVar asyncMainPinName) decls)
 
 synthLoc : Loc
 synthLoc = Loc "" 0 0 0 0
@@ -387,15 +376,11 @@ asyncPinImport =
     False
     (UseGroup [asyncModuleId] [UseMember asyncMainPinName False synthLoc None])
     synthLoc
-
-wrapAsyncMainDecl : Decl -> Decl
-wrapAsyncMainDecl (DFunDef vis "main" [] body site bid) =
-  DFunDef vis "main" [] (wrapCall asyncMainPinName site body) site bid
-wrapAsyncMainDecl (DAttrib a d) = DAttrib a (wrapAsyncMainDecl d)
-wrapAsyncMainDecl d = d
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" false) (mem "Ty" false) (mem "Loc" true) (mem "UsePath" true) (mem "UseMember" true))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "mainAsyncPayloadIsUnit" false) (mem "checkOneDiagsSynthetic" false) (mem "setCoherenceUserDecls" false) (mem "TcDiag" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "EvId" false) (mem "Pat" false) (mem "Loc" true) (mem "UsePath" true) (mem "UseMember" true))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "mainAsyncPayloadIsUnit" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
+(DUse false (UseGroup ("types" "publish") ((mem "TcReport" true) (mem "CheckedProgram" true))))
 (DTypeSig false "entryPair" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "entryPair" ((PList)) (EVar "None"))
 (DFunDef false "entryPair" ((PList (PVar "p"))) (EApp (EVar "Some") (EVar "p")))
@@ -418,23 +403,6 @@ wrapAsyncMainDecl d = d
 (DFunDef false "isMainTypeSig" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "isMainTypeSig") (EVar "d")))
 (DFunDef false "isMainTypeSig" ((PCon "DTypeSig" PWild (PLit (LString "main")) PWild PWild)) (EVar "True"))
 (DFunDef false "isMainTypeSig" (PWild) (EVar "False"))
-(DTypeSig false "mainSigType" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Ty"))))
-(DFunDef false "mainSigType" ((PList)) (EVar "None"))
-(DFunDef false "mainSigType" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "mainSigType") (EBinOp "::" (EVar "d") (EVar "rest"))))
-(DFunDef false "mainSigType" ((PCons (PCon "DTypeSig" PWild (PLit (LString "main")) (PVar "ty") PWild) PWild)) (EApp (EVar "Some") (EVar "ty")))
-(DFunDef false "mainSigType" ((PCons PWild (PVar "rest"))) (EApp (EVar "mainSigType") (EVar "rest")))
-(DTypeSig true "autoPrintWrapModules" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "autoPrintWrapModules" ((PList)) (EListLit))
-(DFunDef false "autoPrintWrapModules" ((PList (PTuple (PVar "mid") (PVar "decls")))) (EBlock (DoLet false false (PVar "declared") (EApp (EVar "mainSigType") (EVar "decls"))) (DoExpr (EListLit (ETuple (EVar "mid") (EApp (EApp (EVar "map") (EApp (EVar "wrapMainDecl") (EVar "declared"))) (EApp (EApp (EVar "filter") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EVar "isMainTypeSig") (EVar "d"))))) (EVar "decls"))))))))
-(DFunDef false "autoPrintWrapModules" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "::" (EVar "p") (EApp (EVar "autoPrintWrapModules") (EVar "rest"))))
-(DTypeSig false "wrapMainDecl" (TyFun (TyApp (TyCon "Option") (TyCon "Ty")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
-(DFunDef false "wrapMainDecl" ((PVar "declared") (PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EApp (EVar "wrapPrintln") (EVar "site")) (EApp (EApp (EVar "annotateMain") (EVar "declared")) (EVar "body")))) (EVar "site")) (EVar "bid")))
-(DFunDef false "wrapMainDecl" ((PVar "declared") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EApp (EVar "wrapMainDecl") (EVar "declared")) (EVar "d"))))
-(DFunDef false "wrapMainDecl" (PWild (PVar "d")) (EVar "d"))
-(DTypeSig false "annotateMain" (TyFun (TyApp (TyCon "Option") (TyCon "Ty")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "annotateMain" ((PCon "None") (PVar "body")) (EVar "body"))
-(DFunDef false "annotateMain" ((PCon "Some" (PVar "ty")) (PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner"))) (EVar "ty"))))
-(DFunDef false "annotateMain" ((PCon "Some" (PVar "ty")) (PVar "body")) (EApp (EApp (EVar "EAnnot") (EVar "body")) (EVar "ty")))
 (DTypeSig true "autoPrintPinName" (TyCon "String"))
 (DFunDef false "autoPrintPinName" () (ELit (LString "0autoprintln")))
 (DTypeSig true "autoPrintPinCore" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
@@ -447,13 +415,37 @@ wrapAsyncMainDecl d = d
 (DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons (PCon "DTypeSig" PWild (PVar "n") (PVar "ty") (PVar "site")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "origin")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "True")) (EVar "pin")) (EVar "ty")) (EVar "site")) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))))
 (DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") (PVar "site") (PVar "bid")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "origin")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "True")) (EVar "pin")) (EVar "ps")) (EVar "body")) (EVar "site")) (EVar "bid")) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))))
 (DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest")))
-(DTypeSig false "wrapPrintln" (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "wrapPrintln" ((PVar "site") (PVar "body")) (EApp (EApp (EApp (EVar "wrapCall") (EVar "autoPrintPinName")) (EVar "site")) (EVar "body")))
-(DTypeSig false "wrapCall" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "wrapCall" ((PVar "callee") PWild (PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "callee"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner")))))
-(DFunDef false "wrapCall" ((PVar "callee") (PVar "site") (PVar "body")) (EApp (EApp (EVar "ELoc") (EVar "site")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "callee"))) (EVar "body"))))
-(DTypeSig true "underivedMainDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "TcDiag"))))))
-(DFunDef false "underivedMainDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple PWild (PVar "entryDecls"))) () (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "entryDecls"))) (DoLet false false (PTuple (PVar "tcErrs") PWild) (EApp (EApp (EApp (EVar "checkOneDiagsSynthetic") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EVar "tcErrs"))))))
+(DTypeSig true "executedTrees" (TyFun (TyApp (TyCon "Option") (TyCon "EvId")) (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
+(DFunDef false "executedTrees" ((PVar "autoPrint") (PVar "driver") (PTuple (PVar "coreD") (PVar "modsD")) (PTuple (PVar "coreE") (PVar "modsE"))) (EIf (EApp (EApp (EVar "shouldAutoPrintMain") (EVar "coreD")) (EVar "modsD")) (EMatch (EVar "autoPrint") (arm (PCon "Some" (PVar "ev")) () (EApp (EVar "Ok") (ETuple (EApp (EVar "autoPrintPinCore") (EVar "coreE")) (EApp (EApp (EVar "onEntry") (EApp (EVar "wrapEntryMain") (EApp (EApp (EVar "EDictAt") (EVar "autoPrintPinName")) (EVar "ev")))) (EVar "modsE"))))) (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "internal error: the typecheck published no evidence for printing the value `main`"))))) (EIf (EApp (EApp (EVar "shouldAsyncWrapMain") (EVar "driver")) (EVar "modsD")) (EApp (EVar "Ok") (ETuple (EVar "coreE") (EApp (EApp (EVar "asyncWrapModules") (EVar "driver")) (EVar "modsE")))) (EApp (EVar "Ok") (ETuple (EVar "coreE") (EVar "modsE"))))))
+(DTypeSig true "executedFromReport" (TyFun (TyCon "TcReport") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
+(DFunDef false "executedFromReport" ((PVar "report") (PVar "driver") (PVar "source")) (EMatch (EFieldAccess (EVar "report") "trChecked") (arm (PCon "Some" (PVar "checked")) () (EMatch (EFieldAccess (EVar "checked") "cpTrees") (arm (PCon "Some" (PVar "trees")) () (EApp (EApp (EApp (EApp (EVar "executedTrees") (EFieldAccess (EVar "report") "trAutoPrint")) (EVar "driver")) (EVar "source")) (EVar "trees"))) (arm (PCon "None") () (EVar "noChecked")))) (arm (PCon "None") () (EVar "noChecked"))))
+(DTypeSig false "noChecked" (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "noChecked" () (EApp (EVar "Err") (ELit (LString "internal error: the typecheck published no checked program to run"))))
+(DTypeSig true "mainIsWrapped" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))
+(DFunDef false "mainIsWrapped" ((PVar "modules")) (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EApp (EVar "wrappedMainIn") (EVar "decls"))) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig false "wrappedMainIn" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
+(DFunDef false "wrappedMainIn" ((PList)) (EVar "False"))
+(DFunDef false "wrappedMainIn" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "wrappedMainIn") (EBinOp "::" (EVar "d") (EVar "rest"))))
+(DFunDef false "wrappedMainIn" ((PCons (PCon "DFunDef" PWild (PLit (LString "main")) (PList) (PVar "body") PWild PWild) PWild)) (EApp (EVar "isWrapCall") (EVar "body")))
+(DFunDef false "wrappedMainIn" ((PCons PWild (PVar "rest"))) (EApp (EVar "wrappedMainIn") (EVar "rest")))
+(DTypeSig false "isWrapCall" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "isWrapCall" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "isWrapCall") (EVar "e")))
+(DFunDef false "isWrapCall" ((PCon "EApp" (PCon "EDictAt" (PVar "n") PWild) PWild)) (EBinOp "||" (EBinOp "==" (EVar "n") (EVar "autoPrintPinName")) (EBinOp "==" (EVar "n") (EApp (EApp (EVar "mangledName") (ELit (LString "core"))) (EVar "autoPrintPinName")))))
+(DFunDef false "isWrapCall" ((PCon "EApp" (PCon "EVar" (PVar "n")) PWild)) (EBinOp "||" (EBinOp "==" (EVar "n") (EVar "asyncMainPinName")) (EBinOp "==" (EVar "n") (EApp (EApp (EVar "mangledName") (EVar "asyncModuleId")) (EVar "asyncMainPinName")))))
+(DFunDef false "isWrapCall" (PWild) (EVar "False"))
+(DTypeSig false "onEntry" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "onEntry" (PWild (PList)) (EListLit))
+(DFunDef false "onEntry" ((PVar "f") (PList (PTuple (PVar "mid") (PVar "decls")))) (EListLit (ETuple (EVar "mid") (EApp (EVar "f") (EVar "decls")))))
+(DFunDef false "onEntry" ((PVar "f") (PCons (PVar "p") (PVar "rest"))) (EBinOp "::" (EVar "p") (EApp (EApp (EVar "onEntry") (EVar "f")) (EVar "rest"))))
+(DTypeSig false "wrapEntryMain" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "wrapEntryMain" ((PVar "callee") (PVar "decls")) (EApp (EApp (EVar "map") (EApp (EVar "wrapMainDecl") (EVar "callee"))) (EApp (EApp (EVar "filter") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EVar "isMainTypeSig") (EVar "d"))))) (EVar "decls"))))
+(DTypeSig false "wrapMainDecl" (TyFun (TyCon "Expr") (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DFunDef false "wrapMainDecl" ((PVar "callee") (PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EApp (EApp (EVar "wrapCall") (EVar "callee")) (EVar "site")) (EVar "body"))) (EVar "site")) (EVar "bid")))
+(DFunDef false "wrapMainDecl" ((PVar "callee") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EApp (EVar "wrapMainDecl") (EVar "callee")) (EVar "d"))))
+(DFunDef false "wrapMainDecl" (PWild (PVar "d")) (EVar "d"))
+(DTypeSig false "wrapCall" (TyFun (TyCon "Expr") (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "wrapCall" ((PVar "callee") PWild (PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EVar "callee")) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner")))))
+(DFunDef false "wrapCall" ((PVar "callee") (PVar "site") (PVar "body")) (EApp (EApp (EVar "ELoc") (EVar "site")) (EApp (EApp (EVar "EApp") (EVar "callee")) (EVar "body"))))
 (DTypeSig true "asyncMainPinName" (TyCon "String"))
 (DFunDef false "asyncMainPinName" () (ELit (LString "0runasync")))
 (DTypeSig false "asyncModuleId" (TyCon "String"))
@@ -472,20 +464,16 @@ wrapAsyncMainDecl d = d
 (DTypeSig false "pinAsyncDriver" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "pinAsyncDriver" ((PVar "driver") (PTuple (PVar "mid") (PVar "decls"))) (EIf (EBinOp "==" (EVar "mid") (EVar "asyncModuleId")) (ETuple (EVar "mid") (EBinOp "++" (EVar "decls") (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "driver")) (EVar "asyncMainPinName")) (EVar "decls")))) (ETuple (EVar "mid") (EVar "decls"))))
 (DTypeSig false "wrapAsyncEntry" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "wrapAsyncEntry" ((PList)) (EListLit))
-(DFunDef false "wrapAsyncEntry" ((PList (PTuple (PVar "mid") (PVar "decls")))) (EListLit (ETuple (EVar "mid") (EBinOp "::" (EVar "asyncPinImport") (EApp (EApp (EVar "map") (EVar "wrapAsyncMainDecl")) (EApp (EApp (EVar "filter") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EVar "isMainTypeSig") (EVar "d"))))) (EVar "decls")))))))
-(DFunDef false "wrapAsyncEntry" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "::" (EVar "p") (EApp (EVar "wrapAsyncEntry") (EVar "rest"))))
+(DFunDef false "wrapAsyncEntry" () (EApp (EVar "onEntry") (ELam ((PVar "decls")) (EBinOp "::" (EVar "asyncPinImport") (EApp (EApp (EVar "wrapEntryMain") (EApp (EVar "EVar") (EVar "asyncMainPinName"))) (EVar "decls"))))))
 (DTypeSig false "synthLoc" (TyCon "Loc"))
 (DFunDef false "synthLoc" () (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))
 (DTypeSig false "asyncPinImport" (TyCon "Decl"))
 (DFunDef false "asyncPinImport" () (EApp (EApp (EApp (EVar "DUse") (EVar "False")) (EApp (EApp (EVar "UseGroup") (EListLit (EVar "asyncModuleId"))) (EListLit (EApp (EApp (EApp (EApp (EVar "UseMember") (EVar "asyncMainPinName")) (EVar "False")) (EVar "synthLoc")) (EVar "None"))))) (EVar "synthLoc")))
-(DTypeSig false "wrapAsyncMainDecl" (TyFun (TyCon "Decl") (TyCon "Decl")))
-(DFunDef false "wrapAsyncMainDecl" ((PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EApp (EApp (EVar "wrapCall") (EVar "asyncMainPinName")) (EVar "site")) (EVar "body"))) (EVar "site")) (EVar "bid")))
-(DFunDef false "wrapAsyncMainDecl" ((PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EVar "wrapAsyncMainDecl") (EVar "d"))))
-(DFunDef false "wrapAsyncMainDecl" ((PVar "d")) (EVar "d"))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" false) (mem "Ty" false) (mem "Loc" true) (mem "UsePath" true) (mem "UseMember" true))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "mainAsyncPayloadIsUnit" false) (mem "checkOneDiagsSynthetic" false) (mem "setCoherenceUserDecls" false) (mem "TcDiag" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "EvId" false) (mem "Pat" false) (mem "Loc" true) (mem "UsePath" true) (mem "UseMember" true))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "mainAsyncPayloadIsUnit" false))))
+(DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
+(DUse false (UseGroup ("types" "publish") ((mem "TcReport" true) (mem "CheckedProgram" true))))
 (DTypeSig false "entryPair" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "entryPair" ((PList)) (EVar "None"))
 (DFunDef false "entryPair" ((PList (PVar "p"))) (EApp (EVar "Some") (EVar "p")))
@@ -508,23 +496,6 @@ wrapAsyncMainDecl d = d
 (DFunDef false "isMainTypeSig" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "isMainTypeSig") (EVar "d")))
 (DFunDef false "isMainTypeSig" ((PCon "DTypeSig" PWild (PLit (LString "main")) PWild PWild)) (EVar "True"))
 (DFunDef false "isMainTypeSig" (PWild) (EVar "False"))
-(DTypeSig false "mainSigType" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Ty"))))
-(DFunDef false "mainSigType" ((PList)) (EVar "None"))
-(DFunDef false "mainSigType" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "mainSigType") (EBinOp "::" (EVar "d") (EVar "rest"))))
-(DFunDef false "mainSigType" ((PCons (PCon "DTypeSig" PWild (PLit (LString "main")) (PVar "ty") PWild) PWild)) (EApp (EVar "Some") (EVar "ty")))
-(DFunDef false "mainSigType" ((PCons PWild (PVar "rest"))) (EApp (EVar "mainSigType") (EVar "rest")))
-(DTypeSig true "autoPrintWrapModules" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "autoPrintWrapModules" ((PList)) (EListLit))
-(DFunDef false "autoPrintWrapModules" ((PList (PTuple (PVar "mid") (PVar "decls")))) (EBlock (DoLet false false (PVar "declared") (EApp (EVar "mainSigType") (EVar "decls"))) (DoExpr (EListLit (ETuple (EVar "mid") (EApp (EApp (EMethodRef "map") (EApp (EVar "wrapMainDecl") (EVar "declared"))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EVar "isMainTypeSig") (EVar "d"))))) (EVar "decls"))))))))
-(DFunDef false "autoPrintWrapModules" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "::" (EVar "p") (EApp (EVar "autoPrintWrapModules") (EVar "rest"))))
-(DTypeSig false "wrapMainDecl" (TyFun (TyApp (TyCon "Option") (TyCon "Ty")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
-(DFunDef false "wrapMainDecl" ((PVar "declared") (PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EApp (EVar "wrapPrintln") (EVar "site")) (EApp (EApp (EVar "annotateMain") (EVar "declared")) (EVar "body")))) (EVar "site")) (EVar "bid")))
-(DFunDef false "wrapMainDecl" ((PVar "declared") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EApp (EVar "wrapMainDecl") (EVar "declared")) (EVar "d"))))
-(DFunDef false "wrapMainDecl" (PWild (PVar "d")) (EVar "d"))
-(DTypeSig false "annotateMain" (TyFun (TyApp (TyCon "Option") (TyCon "Ty")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "annotateMain" ((PCon "None") (PVar "body")) (EVar "body"))
-(DFunDef false "annotateMain" ((PCon "Some" (PVar "ty")) (PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner"))) (EVar "ty"))))
-(DFunDef false "annotateMain" ((PCon "Some" (PVar "ty")) (PVar "body")) (EApp (EApp (EVar "EAnnot") (EVar "body")) (EVar "ty")))
 (DTypeSig true "autoPrintPinName" (TyCon "String"))
 (DFunDef false "autoPrintPinName" () (ELit (LString "0autoprintln")))
 (DTypeSig true "autoPrintPinCore" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
@@ -537,13 +508,37 @@ wrapAsyncMainDecl d = d
 (DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons (PCon "DTypeSig" PWild (PVar "n") (PVar "ty") (PVar "site")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "origin")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "True")) (EVar "pin")) (EVar "ty")) (EVar "site")) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))))
 (DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") (PVar "site") (PVar "bid")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "origin")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "True")) (EVar "pin")) (EVar "ps")) (EVar "body")) (EVar "site")) (EVar "bid")) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest"))))
 (DFunDef false "pinnedCopies" ((PVar "origin") (PVar "pin") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "origin")) (EVar "pin")) (EVar "rest")))
-(DTypeSig false "wrapPrintln" (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "wrapPrintln" ((PVar "site") (PVar "body")) (EApp (EApp (EApp (EVar "wrapCall") (EVar "autoPrintPinName")) (EVar "site")) (EVar "body")))
-(DTypeSig false "wrapCall" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "wrapCall" ((PVar "callee") PWild (PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "callee"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner")))))
-(DFunDef false "wrapCall" ((PVar "callee") (PVar "site") (PVar "body")) (EApp (EApp (EVar "ELoc") (EVar "site")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "callee"))) (EVar "body"))))
-(DTypeSig true "underivedMainDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "TcDiag"))))))
-(DFunDef false "underivedMainDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple PWild (PVar "entryDecls"))) () (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "entryDecls"))) (DoLet false false (PTuple (PVar "tcErrs") PWild) (EApp (EApp (EApp (EVar "checkOneDiagsSynthetic") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EVar "tcErrs"))))))
+(DTypeSig true "executedTrees" (TyFun (TyApp (TyCon "Option") (TyCon "EvId")) (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
+(DFunDef false "executedTrees" ((PVar "autoPrint") (PVar "driver") (PTuple (PVar "coreD") (PVar "modsD")) (PTuple (PVar "coreE") (PVar "modsE"))) (EIf (EApp (EApp (EVar "shouldAutoPrintMain") (EVar "coreD")) (EVar "modsD")) (EMatch (EVar "autoPrint") (arm (PCon "Some" (PVar "ev")) () (EApp (EVar "Ok") (ETuple (EApp (EVar "autoPrintPinCore") (EVar "coreE")) (EApp (EApp (EVar "onEntry") (EApp (EVar "wrapEntryMain") (EApp (EApp (EVar "EDictAt") (EVar "autoPrintPinName")) (EVar "ev")))) (EVar "modsE"))))) (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "internal error: the typecheck published no evidence for printing the value `main`"))))) (EIf (EApp (EApp (EVar "shouldAsyncWrapMain") (EVar "driver")) (EVar "modsD")) (EApp (EVar "Ok") (ETuple (EVar "coreE") (EApp (EApp (EVar "asyncWrapModules") (EVar "driver")) (EVar "modsE")))) (EApp (EVar "Ok") (ETuple (EVar "coreE") (EVar "modsE"))))))
+(DTypeSig true "executedFromReport" (TyFun (TyCon "TcReport") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
+(DFunDef false "executedFromReport" ((PVar "report") (PVar "driver") (PVar "source")) (EMatch (EFieldAccess (EVar "report") "trChecked") (arm (PCon "Some" (PVar "checked")) () (EMatch (EFieldAccess (EVar "checked") "cpTrees") (arm (PCon "Some" (PVar "trees")) () (EApp (EApp (EApp (EApp (EVar "executedTrees") (EFieldAccess (EVar "report") "trAutoPrint")) (EVar "driver")) (EVar "source")) (EVar "trees"))) (arm (PCon "None") () (EVar "noChecked")))) (arm (PCon "None") () (EVar "noChecked"))))
+(DTypeSig false "noChecked" (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "noChecked" () (EApp (EVar "Err") (ELit (LString "internal error: the typecheck published no checked program to run"))))
+(DTypeSig true "mainIsWrapped" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))
+(DFunDef false "mainIsWrapped" ((PVar "modules")) (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EApp (EVar "wrappedMainIn") (EVar "decls"))) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig false "wrappedMainIn" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
+(DFunDef false "wrappedMainIn" ((PList)) (EVar "False"))
+(DFunDef false "wrappedMainIn" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "wrappedMainIn") (EBinOp "::" (EVar "d") (EVar "rest"))))
+(DFunDef false "wrappedMainIn" ((PCons (PCon "DFunDef" PWild (PLit (LString "main")) (PList) (PVar "body") PWild PWild) PWild)) (EApp (EVar "isWrapCall") (EVar "body")))
+(DFunDef false "wrappedMainIn" ((PCons PWild (PVar "rest"))) (EApp (EVar "wrappedMainIn") (EVar "rest")))
+(DTypeSig false "isWrapCall" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "isWrapCall" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "isWrapCall") (EVar "e")))
+(DFunDef false "isWrapCall" ((PCon "EApp" (PCon "EDictAt" (PVar "n") PWild) PWild)) (EBinOp "||" (EBinOp "==" (EVar "n") (EVar "autoPrintPinName")) (EBinOp "==" (EVar "n") (EApp (EApp (EVar "mangledName") (ELit (LString "core"))) (EVar "autoPrintPinName")))))
+(DFunDef false "isWrapCall" ((PCon "EApp" (PCon "EVar" (PVar "n")) PWild)) (EBinOp "||" (EBinOp "==" (EVar "n") (EVar "asyncMainPinName")) (EBinOp "==" (EVar "n") (EApp (EApp (EVar "mangledName") (EVar "asyncModuleId")) (EVar "asyncMainPinName")))))
+(DFunDef false "isWrapCall" (PWild) (EVar "False"))
+(DTypeSig false "onEntry" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "onEntry" (PWild (PList)) (EListLit))
+(DFunDef false "onEntry" ((PVar "f") (PList (PTuple (PVar "mid") (PVar "decls")))) (EListLit (ETuple (EVar "mid") (EApp (EVar "f") (EVar "decls")))))
+(DFunDef false "onEntry" ((PVar "f") (PCons (PVar "p") (PVar "rest"))) (EBinOp "::" (EVar "p") (EApp (EApp (EVar "onEntry") (EVar "f")) (EVar "rest"))))
+(DTypeSig false "wrapEntryMain" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "wrapEntryMain" ((PVar "callee") (PVar "decls")) (EApp (EApp (EMethodRef "map") (EApp (EVar "wrapMainDecl") (EVar "callee"))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EVar "isMainTypeSig") (EVar "d"))))) (EVar "decls"))))
+(DTypeSig false "wrapMainDecl" (TyFun (TyCon "Expr") (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DFunDef false "wrapMainDecl" ((PVar "callee") (PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EApp (EApp (EVar "wrapCall") (EVar "callee")) (EVar "site")) (EVar "body"))) (EVar "site")) (EVar "bid")))
+(DFunDef false "wrapMainDecl" ((PVar "callee") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EApp (EVar "wrapMainDecl") (EVar "callee")) (EVar "d"))))
+(DFunDef false "wrapMainDecl" (PWild (PVar "d")) (EVar "d"))
+(DTypeSig false "wrapCall" (TyFun (TyCon "Expr") (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "wrapCall" ((PVar "callee") PWild (PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EVar "callee")) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner")))))
+(DFunDef false "wrapCall" ((PVar "callee") (PVar "site") (PVar "body")) (EApp (EApp (EVar "ELoc") (EVar "site")) (EApp (EApp (EVar "EApp") (EVar "callee")) (EVar "body"))))
 (DTypeSig true "asyncMainPinName" (TyCon "String"))
 (DFunDef false "asyncMainPinName" () (ELit (LString "0runasync")))
 (DTypeSig false "asyncModuleId" (TyCon "String"))
@@ -562,14 +557,8 @@ wrapAsyncMainDecl d = d
 (DTypeSig false "pinAsyncDriver" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "pinAsyncDriver" ((PVar "driver") (PTuple (PVar "mid") (PVar "decls"))) (EIf (EBinOp "==" (EVar "mid") (EVar "asyncModuleId")) (ETuple (EVar "mid") (EBinOp "++" (EVar "decls") (EApp (EApp (EApp (EVar "pinnedCopies") (EVar "driver")) (EVar "asyncMainPinName")) (EVar "decls")))) (ETuple (EVar "mid") (EVar "decls"))))
 (DTypeSig false "wrapAsyncEntry" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "wrapAsyncEntry" ((PList)) (EListLit))
-(DFunDef false "wrapAsyncEntry" ((PList (PTuple (PVar "mid") (PVar "decls")))) (EListLit (ETuple (EVar "mid") (EBinOp "::" (EVar "asyncPinImport") (EApp (EApp (EMethodRef "map") (EVar "wrapAsyncMainDecl")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EVar "isMainTypeSig") (EVar "d"))))) (EVar "decls")))))))
-(DFunDef false "wrapAsyncEntry" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "::" (EVar "p") (EApp (EVar "wrapAsyncEntry") (EVar "rest"))))
+(DFunDef false "wrapAsyncEntry" () (EApp (EVar "onEntry") (ELam ((PVar "decls")) (EBinOp "::" (EVar "asyncPinImport") (EApp (EApp (EVar "wrapEntryMain") (EApp (EVar "EVar") (EVar "asyncMainPinName"))) (EVar "decls"))))))
 (DTypeSig false "synthLoc" (TyCon "Loc"))
 (DFunDef false "synthLoc" () (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))
 (DTypeSig false "asyncPinImport" (TyCon "Decl"))
 (DFunDef false "asyncPinImport" () (EApp (EApp (EApp (EVar "DUse") (EVar "False")) (EApp (EApp (EVar "UseGroup") (EListLit (EVar "asyncModuleId"))) (EListLit (EApp (EApp (EApp (EApp (EVar "UseMember") (EVar "asyncMainPinName")) (EVar "False")) (EVar "synthLoc")) (EVar "None"))))) (EVar "synthLoc")))
-(DTypeSig false "wrapAsyncMainDecl" (TyFun (TyCon "Decl") (TyCon "Decl")))
-(DFunDef false "wrapAsyncMainDecl" ((PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EApp (EApp (EVar "wrapCall") (EVar "asyncMainPinName")) (EVar "site")) (EVar "body"))) (EVar "site")) (EVar "bid")))
-(DFunDef false "wrapAsyncMainDecl" ((PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EVar "wrapAsyncMainDecl") (EVar "d"))))
-(DFunDef false "wrapAsyncMainDecl" ((PVar "d")) (EVar "d"))

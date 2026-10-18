@@ -9,19 +9,21 @@
 -- These are `medaka run` scripts — NOT compiled into the `medaka` binary and NOT
 -- in the emitter seed graph — so this module may freely import the whole compiler.
 
-import frontend.ast.{Decl(..), Expr(..), DoStmt(..), LetBind(..), Loc(..)}
-import types.typecheck.{TcDiag}
+import frontend.ast.{Decl(..), Expr(..), DoStmt(..), LetBind(..), Loc(..), EvId}
+import types.publish.{TcReport(..)}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar, desugarIn, mapProg}
 import frontend.desugar_cache.{desugaredPrelude}
 import driver.front_gate.{
-  JsonFront,
+  JsonFront(..),
+  cliStdlibExports,
   diagJsonPathOfEnv,
   frontGate,
   frontGateJson,
   frontGateOfEnv,
   writeGateAck,
-  frontJsonAfterDrive,
+  frontJsonVerdict,
+  jsonEnvelope,
   jsonFrontKey,
   writeDiagJson,
 }
@@ -30,10 +32,7 @@ import support.util.{splitLast, startsWith, joinNl}
 import types.typecheck.{
   ElabResult,
   elaborateOne,
-  elaborateModules,
-  elaborateModulesWithSchemes,
-  hadTypeErrors,
-  resetTypeErrorsSticky,
+  elaborateModulesWithReport,
   setStdlibOwnership,
 }
 import support.path.{dirOf, joinPath}
@@ -42,15 +41,21 @@ import support.ordmap.{OrdMap, omFromPairs, omLookup, omEmpty}
 import driver.diagnostics.{
   CheckJson,
   Diag,
+  FrontInput(..),
+  FrontOutput(..),
+  FrontPolicy(..),
+  FrontProgram(..),
+  chainKeyOf,
   emitDiagExitCode,
   emitGateDiags,
-  renderTcDiags,
+  frontEnd,
+  noStdlibExports,
   residualOrGeneric,
 }
 import types.target_profile.{
   TargetProfile, selectProfile, selectedProfile, targetProfileEnv
 }
-import tools.check_policy.{EntryAnalysis(..), analyzeProgram}
+import tools.check_policy.{EntryAnalysis(..), analyzeProgramReport}
 import tools.target_check.{targetRefusal, ppTargetDiag}
 import backend.core_validate.{checkedTarget, checkedTargetOf}
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp}
@@ -67,13 +72,9 @@ import driver.loader.{
 import types.private_mangle.{mangleUnitsEv}
 import ir.core_ir_lower.{externDeclNamesOf}
 import driver.main_autoprint.{
-  shouldAutoPrintMain,
   valueMainCandidate,
-  autoPrintWrapModules,
-  autoPrintPinCore,
-  underivedMainDiags,
-  shouldAsyncWrapMain,
-  asyncWrapModules,
+  executedTrees,
+  executedFromReport,
   asyncMainShapeError,
 }
 
@@ -187,23 +188,25 @@ usageModules = "usage: <runtime.mdk> <core.mdk> <entry.mdk> [root ...]"
 export
 driveModules : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   <IO> Unit
-driveModules runEmit = driveModulesLocated (_ => runEmit)
+driveModules runEmit = driveModulesLocated (_ _ => runEmit)
+
+-- What an emit is handed beside its graph: the prelude sources the graph's
+-- prelude decls were desugared from, and on the `--json` route the envelope
+-- file and what the gate kept for it (`None` on every other route).
+public export data EmitAsk = EmitAsk {
+  askPreludeSrcs : (String, String),
+  askJson : Option (String, JsonFront),
+}
 
 -- `driveModules` for a terminal that needs the loader's `(modId, path, decls)`
--- triples as well — the emit drivers do, because since the parent `medaka build`
--- process stopped typechecking they own the located diagnostics for the build
--- and need each module's own file to render against.
+-- triples and the route's ask (`runEmitAsked`) as well — the emit drivers do,
+-- because since the parent `medaka build` process stopped typechecking they own
+-- the located diagnostics for the build and need each module's own file to
+-- render against.
 export
-driveModulesLocated : (List (String, String, List Decl) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+driveModulesLocated : (EmitAsk -> List (String, String, List Decl) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   <IO> Unit
-driveModulesLocated runEmit = driveModulesAsked (_ => runEmit)
-
--- `driveModulesLocated` for a terminal that also takes the `--json` route's
--- ask (`runEmitAsked`): the envelope file and what the gate kept for it, or
--- `None` on every other route.
-driveModulesAsked : (Option (String, JsonFront) -> List (String, String, List Decl) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
-  <IO> Unit
-driveModulesAsked runEmit = match args ()
+driveModulesLocated runEmit = match args ()
   runtimeP :: coreP :: entry :: roots =>
     driveModulesGo runEmit runtimeP coreP entry (rootsOrDefault entry roots)
   _ => failWith usageModules
@@ -222,7 +225,7 @@ desugarPair (mid, p) = (mid, desugarIn mid p)
 -- diagnostics itself, and placeholder 1:0 spans with no path render them as
 -- `(module <mid>)` with no caret.  `ELoc` is transparent to every backend, so
 -- the emitted IR is unchanged by the swap.
-driveModulesGo : (Option (String, JsonFront) -> List (String, String, List Decl) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+driveModulesGo : (EmitAsk -> List (String, String, List Decl) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   String ->
   String ->
   String ->
@@ -245,7 +248,10 @@ driveModulesGo runEmit runtimeP coreP entry roots =
           Err cj => refuseJson path cj
           Ok (g, front) =>
             emitLoaded
-              (runEmit (Some (path, front)))
+              (runEmit EmitAsk {
+                askPreludeSrcs = (rsrc, csrc),
+                askJson = Some (path, front),
+              })
               coreP
               entry
               g.fgRoots
@@ -264,7 +270,10 @@ driveModulesGo runEmit runtimeP coreP entry roots =
             stageExit emitDiagExitCode
           Ok g =>
             emitLoaded
-              (runEmit None)
+              (runEmit EmitAsk {
+                askPreludeSrcs = (rsrc, csrc),
+                askJson = None,
+              })
               coreP
               entry
               g.fgRoots
@@ -276,7 +285,7 @@ driveModulesGo runEmit runtimeP coreP entry roots =
         Err e => failWith (moduleLoadHint (loadErrorMessage e))
         Ok mods =>
           emitLoaded
-            (runEmit None)
+            (runEmit EmitAsk { askPreludeSrcs = (rsrc, csrc), askJson = None })
             coreP
             entry
             roots
@@ -337,36 +346,29 @@ moduleLoadHint e = match unknownModuleIdOf e
 -- once, taking `emitTail` as a function parameter, so each driver keeps only its
 -- backend `emitTail` and calls `driveModules (runEmitWith emitTail)`.
 --
--- COMPOSITE-MAIN AUTO-PRINT (design §10): after the elaborate that learns main's
--- type, a bare non-Unit VALUE main is rewritten `main = <e>` → `main = println
--- <e>` and re-emitted; a bare underived-ADT main surfaces the clean `No impl of
--- Display …` error.  A `main : Async _` is rewritten to apply the `async`
--- module's driver named by `asyncDriver` (`runAsyncMain` on every target; it
--- declares a `Unit` result so no backend auto-prints it) and re-emitted — see
--- main_autoprint.
--- asyncWrapModules (#2506).  A Unit main (incl. every compiler-graph main)
--- takes the unchanged path, so emitter output on the compiler graph is
--- byte-identical.
+-- COMPOSITE-MAIN AUTO-PRINT (design §10): the elaboration that judges the program
+-- also returns the auto-print evidence, and the emit wraps its trees
+-- (main_autoprint.executedTrees): a bare non-Unit VALUE main becomes
+-- `main = 0autoprintln <e>`, and a bare underived-ADT main has already surfaced
+-- the clean `No impl of Display …` error.  A `main : Async _` is wrapped to apply
+-- the `async` module's driver named by `asyncDriver` (`runAsyncMain` on every
+-- target; it declares a `Unit` result so no backend auto-prints it, #2506).  A
+-- Unit main (incl. every compiler-graph main) takes the unchanged path, so emitter
+-- output on the compiler graph is byte-identical.
 
--- #2089: the emit driver's own elaboration is the only `elaborateModules` caller
--- that never read `hadTypeErrors` afterwards — a type error surfaced only on this
--- path (the mangled tree, or the compiler's own graph on the bootstrap, which never
--- passes through `medaka build`'s CLI gate) reached codegen at exit 0.  The gate is
--- HARD: ruling 3 made this process `build`'s only typecheck, so nothing downstream
--- would reject the program, and `MEDAKA_STRICT=1` no longer selects between two
--- behaviours.
+-- #2089: a type error must stop this driver's own elaboration — it surfaced only
+-- on this path (the mangled tree, or the compiler's own graph on the bootstrap,
+-- which never passes through `medaka build`'s CLI gate) and reached codegen at
+-- exit 0.  The gate reads the drive's report (`trChecked`) and is HARD under
+-- every setting of `MEDAKA_STRICT`: this process is the only typecheck on the
+-- build path, so nothing downstream rejects the program.
 --
 -- Residual-only arm: the graph-end drain's own diagnostics, which the per-module
--- lists cannot carry (they close before the drain runs).  Reached from the wrapped
--- re-elaboration, whose per-module diagnostics `emitFullGate` already rendered for
--- the unwrapped program.
-emitResidualGate : List (String, String) ->
-  String ->
-  List (String, TcDiag) ->
-  <IO> Unit
-emitResidualGate pathMap target residual =
-  if hadTypeErrors () then
-    let _ = ePutStrLn (residualOrGeneric pathMap target residual)
+-- lists cannot carry (they close before the drain runs).
+emitResidualGate : List (String, String) -> String -> TcReport -> <IO> Unit
+emitResidualGate pathMap target report =
+  if isNone report.trChecked then
+    let _ = ePutStrLn (residualOrGeneric pathMap target report.trResidual)
     stageExit emitDiagExitCode
 
 -- The whole diagnostic verdict for a build, rendered as `medaka check` renders
@@ -375,15 +377,11 @@ emitResidualGate pathMap target residual =
 -- backend.  `emitDiagExitCode` tells the parent that what reached its stderr is a
 -- located diagnostic and needs no "emitter failed" preamble wrapped around it.
 emitFullGate : List (String, String, List Decl) ->
-  List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  List (String, (List TcDiag, List TcDiag)) ->
-  List (String, TcDiag) ->
+  List (String, List Diag) ->
+  TcReport ->
   <IO> Unit
-emitFullGate modsWithPath runtimeDecls coreDecls modules perMod residual =
-  let (errLines, warnLines) =
-    emitGateDiags runtimeDecls coreDecls modsWithPath modules perMod
+emitFullGate modsWithPath buckets report =
+  let (errLines, warnLines) = emitGateDiags modsWithPath buckets
   let pathMap = map modIdToPath modsWithPath
   match errLines
     -- Warnings ride the CLEAN path only, which is what `check` does with the same
@@ -393,24 +391,10 @@ emitFullGate modsWithPath runtimeDecls coreDecls modules perMod residual =
     -- verdict.
     [] =>
       let _ = map ePutStrLn warnLines
-      emitResidualGate pathMap (entryPathOf modsWithPath) residual
+      emitResidualGate pathMap (entryPathOf modsWithPath) report
     _ =>
       let _ = map ePutStrLn errLines
       stageExit emitDiagExitCode
-
--- The auto-print / async wrap re-checks the WRAPPED program, and its diagnostics
--- are about the user's own `main`.  They go out through the same located face as
--- every other diagnostic of a build: `failWith` prints a bare message, so on the
--- one path that reached it the reader lost the file, the line and the caret that
--- `medaka check` gives them for the identical program.
-emitWrapDiags : List (String, String, List Decl) -> List TcDiag -> <IO> Unit
-emitWrapDiags modsWithPath ds =
-  let mid = entryMidOf modsWithPath
-  let _ =
-    map
-      ePutStrLn
-      (renderTcDiags (map modIdToPath modsWithPath) (map (d => (mid, d)) ds))
-  stageExit emitDiagExitCode
 
 -- The entry module's path, for the residual's fallback text.  The loader is
 -- dependency-first, so the entry is last.
@@ -418,11 +402,6 @@ entryPathOf : List (String, String, List Decl) -> String
 entryPathOf [] = ""
 entryPathOf [(_, path, _)] = path
 entryPathOf (_ :: rest) = entryPathOf rest
-
-entryMidOf : List (String, String, List Decl) -> String
-entryMidOf [] = ""
-entryMidOf [(mid, _, _)] = mid
-entryMidOf (_ :: rest) = entryMidOf rest
 
 -- ── the target check ─────────────────────────────────────────────────────────
 -- `medaka build` names the selected profile in the environment
@@ -446,32 +425,38 @@ selectTargetProfileOfEnv _ = match selectProfile (getEnv targetProfileEnv) None
 -- One elaboration either way.  With a profile it is `check-policy`'s analysis,
 -- the same drive `elaborateModules` runs with the entry's schemes and
 -- invocation table kept, so the refusal costs no second drive.  It is the
--- build's checking drive, so it poses a value `main`'s auto-print obligation.
--- `paths` spells each module's file as the refusal is reported.
-elaborateForTarget : Option TargetProfile ->
+-- build's checking drive, so it poses a value `main`'s auto-print obligation,
+-- and the drive whose trees are emitted, so it returns that print's evidence
+-- and judges an `Async` main's application to `asyncDriver`.  `paths` spells
+-- each module's file as the refusal is reported.
+elaborateForTarget : String ->
+  Option TargetProfile ->
   List (String, String, List Decl) ->
   List (String, String) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (ElabResult, List Diag)
-elaborateForTarget None _ _ runtimeDecls coreDecls modules =
-  let (elaborated, _, _) =
-    elaborateModulesWithSchemes
+  (ElabResult, TcReport, List Diag)
+elaborateForTarget asyncDriver None _ _ runtimeDecls coreDecls modules =
+  let (elaborated, report) =
+    elaborateModulesWithReport
       (valueMainCandidate coreDecls modules)
+      (Some asyncDriver)
       runtimeDecls
       coreDecls
       modules
-  (elaborated, [])
-elaborateForTarget (Some p) modsWithPath paths runtimeDecls coreDecls modules =
-  let analysis =
-    analyzeProgram
+  (elaborated, report, [])
+elaborateForTarget asyncDriver (Some p) modsWithPath paths runtimeDecls coreDecls modules =
+  let (analysis, report) =
+    analyzeProgramReport
       (valueMainCandidate coreDecls modules)
+      (Some asyncDriver)
       runtimeDecls
       coreDecls
       modules
   (
     analysis.eaElab,
+    report,
     targetRefusal p (entryPathOf modsWithPath) paths analysis.eaTarget,
   )
 
@@ -503,24 +488,13 @@ emitJsonGate : String ->
   JsonFront ->
   List (String, String, List Decl) ->
   List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  List (String, (List TcDiag, List TcDiag)) ->
-  List (String, TcDiag) ->
+  List (String, List Diag) ->
+  TcReport ->
   Option TargetProfile ->
   List Diag ->
   <IO> CheckJson
-emitJsonGate path front modsWithPath runtimeDecls coreDecls modules perMod residual profile refusal =
-  let verdict =
-    frontJsonAfterDrive
-      front
-      runtimeDecls
-      coreDecls
-      modsWithPath
-      modules
-      perMod
-      refusal
-  match verdict
+emitJsonGate path front modsWithPath runtimeDecls buckets report profile refusal =
+  match frontJsonVerdict front modsWithPath buckets refusal
     Err refused =>
       let _ = refuseJson path refused
       refused
@@ -529,21 +503,22 @@ emitJsonGate path front modsWithPath runtimeDecls coreDecls modules perMod resid
         emitResidualGate
           (map modIdToPath modsWithPath)
           (entryPathOf modsWithPath)
-          residual
+          report
       let _ = emitTargetGate modsWithPath runtimeDecls profile []
       cj
 
 export
 runEmitWith : String ->
   (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+  EmitAsk ->
   List (String, String, List Decl) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   <IO> Unit
-runEmitWith asyncDriver emitTail modsWithPath runtimeDecls coreDecls modules =
+runEmitWith asyncDriver emitTail ask modsWithPath runtimeDecls coreDecls modules =
   runEmitAsked
-    None
+    ask
     asyncDriver
     emitTail
     modsWithPath
@@ -551,10 +526,21 @@ runEmitWith asyncDriver emitTail modsWithPath runtimeDecls coreDecls modules =
     coreDecls
     modules
 
--- `runEmitWith` on the route `ask` names: on the `--json` route the verdict is
--- the envelope file's, and a clean one is written after the emit returns, so
--- the file holds a clean envelope only for a program that was emitted.
-runEmitAsked : Option (String, JsonFront) ->
+-- What the build's one drive keeps for the gates after it: the target refusal
+-- it found and the profile it checked against.
+data EmitKept = EmitKept {
+  ekRefusal : List Diag,
+  ekProfile : Option TargetProfile,
+}
+
+-- `runEmitWith` on the route `ask` names: one `frontEnd` run whose drive is the
+-- build's elaboration.  Off the `--json` route the gate (`frontGate`) has
+-- already resolved the graph, or nothing does, so the front end resolves
+-- nothing (`ResolvedByGate`).  On it the front end resolves as `check --json`
+-- does, its verdict is the envelope file's, and a clean one is written after the
+-- emit returns, so the file holds a clean envelope only for a program that was
+-- emitted.
+runEmitAsked : EmitAsk ->
   String ->
   (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   List (String, String, List Decl) ->
@@ -569,107 +555,120 @@ runEmitAsked ask asyncDriver emitTail modsWithPath runtimeDecls coreDecls module
   -- never a `DUse` — so elaborating a mangled graph made every import-keyed table miss
   -- and gave two mangled denotations two distinct names.  This order makes the child's
   -- verdict equal `check`'s by construction; `mangleUnitsEv` then renames the elaborated
-  -- trees AND the evidence table's `RLocal` routes.  Each branch below mangles exactly
-  -- once, after its own elaboration.
-  -- The sticky flag is cleared before each elaboration, as every driver in
-  -- `medaka_cli.mdk` clears it before its own: `runEmitWith` runs a SECOND
-  -- elaboration through `emitModulesWith` on a wrapped program, and the async
-  -- branch's `underivedMainDiags` re-check between them typechecks a synthetic
-  -- program whose errors must not be read as that second elaboration's residual.
-  let _ = resetTypeErrorsSticky ()
-  let profile = selectTargetProfileOfEnv ()
+  -- trees AND the evidence table's `RLocal` routes.  `emitElaborated` mangles exactly
+  -- once, after the one elaboration and the driver's wrap.
   let paths = map modIdToPath modsWithPath
-  let reported = match ask
+  let reported = match ask.askJson
     None => paths
-    Some (_, front) => map ((mid, path) => (mid, jsonFrontKey front path)) paths
-  let (elaborated, refusal) =
-    elaborateForTarget
-      profile
-      modsWithPath
-      reported
-      runtimeDecls
-      coreDecls
-      modules
-  let (coreE, modulesE, perMod, residual, _, _) = elaborated
-  -- Both halves of the fold now read the trees the loader parsed: the elaboration
-  -- above is the user's own program, so a diagnostic names the constructors and
+    Some (_, front) =>
+      map ((mid, path) => (mid, jsonFrontKey front modsWithPath path)) paths
+  -- The profile is selected inside the drive, after any resolve the front end
+  -- runs and before the elaboration: the typechecker bounds `IO` by the
+  -- selected profile's join.
+  let drive =
+    _ =>
+      let profile = selectTargetProfileOfEnv ()
+      let (_, report, refusal) =
+        elaborateForTarget
+          asyncDriver
+          profile
+          modsWithPath
+          reported
+          runtimeDecls
+          coreDecls
+          modules
+      (
+        EmitKept { ekRefusal = refusal, ekProfile = profile },
+        report,
+      )
+  let (rsrc, csrc) = ask.askPreludeSrcs
+  let out = match ask.askJson
+    None => frontEnd noStdlibExports drive FrontInput {
+      fiAllowInternal = True,
+      fiTrusted = [],
+      fiRuntimeSrc = rsrc,
+      fiCoreSrc = csrc,
+      fiPolicy = ResolvedByGate,
+      fiProgram = FrontGraph modsWithPath modules,
+    }
+    Some (_, front) =>
+      let program = match modsWithPath
+        [m] => FrontFile m
+        _ => FrontGraph modsWithPath modules
+      frontEnd
+        (cliStdlibExports front.jfStdlibDir)
+        drive
+        FrontInput {
+          fiAllowInternal = front.jfAllowInternal,
+          fiTrusted = front.jfTrusted,
+          fiRuntimeSrc = rsrc,
+          fiCoreSrc = csrc,
+          fiPolicy = DriveUnblocked (chainKeyOf front.jfEntry front.jfRoots),
+          fiProgram = program,
+        }
+  -- Both halves of the fold read the trees the loader parsed: the elaboration
+  -- is the user's own program, so a diagnostic names the constructors and
   -- imports the user wrote (#2809).
-  let clean = match ask
-    None =>
+  match (ask.askJson, out.foDriven)
+    (None, Some kept) =>
+      let _ = emitFullGate modsWithPath out.foDiags out.foReport
       let _ =
-        emitFullGate modsWithPath runtimeDecls coreDecls modules perMod residual
-      let _ = emitTargetGate modsWithPath runtimeDecls profile refusal
-      None
-    Some (path, front) =>
+        emitTargetGate modsWithPath runtimeDecls kept.ekProfile kept.ekRefusal
+      emitElaborated
+        asyncDriver
+        emitTail
+        runtimeDecls
+        coreDecls
+        modules
+        out.foReport
+    (Some (path, front), Some kept) =>
       let cj =
         emitJsonGate
           path
           front
           modsWithPath
           runtimeDecls
+          out.foDiags
+          out.foReport
+          kept.ekProfile
+          kept.ekRefusal
+      let _ =
+        emitElaborated
+          asyncDriver
+          emitTail
+          runtimeDecls
           coreDecls
           modules
-          perMod
-          residual
-          profile
-          refusal
-      Some (path, cj)
-  let _ = emitElaborated
-    asyncDriver
-    emitTail
-    modsWithPath
-    runtimeDecls
-    coreDecls
-    modules
-    (coreE, modulesE)
-  match clean
-    Some (path, cj) => writeDiagJson path cj
-    None => ()
+          out.foReport
+      writeDiagJson path cj
+    -- Resolve rejected the graph, so nothing was elaborated: the envelope holds
+    -- its resolve errors and what the unblocked modules' check drive reported.
+    (Some (path, front), None) =>
+      refuseJson path (fst (jsonEnvelope front modsWithPath out.foDiags))
+    (None, None) =>
+      failWith
+        "error: the build's front end did not drive a graph its gate admitted"
 
 -- The emit of a program the gate admitted, from the elaboration that judged it
--- (`elaborated`); a wrapped `main` is elaborated again, wrapped.
+-- (`report`, whose checked trees are run): the driver's wrap is applied to
+-- them (`executedFromReport`), and the result is mangled once.
 emitElaborated : String ->
   (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
-  List (String, String, List Decl) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List Decl, List (String, List Decl)) ->
+  TcReport ->
   <IO> Unit
-emitElaborated asyncDriver emitTail modsWithPath runtimeDecls coreDecls modules elaborated =
-  let (coreE, modulesE) = elaborated
-  if shouldAutoPrintMain coreDecls modules then
-    -- the wrap's callee is a PRELUDE re-binding, so the core decl list has to
-    -- carry it — see main_autoprint.autoPrintPinCore (#2185 / F1 / F2).  The
-    -- elaboration that judged the program already judged the wrap's `Display`
-    -- obligation, and the caller's gate stopped the build on it.
-    emitModulesWith
-      emitTail
-      modsWithPath
-      runtimeDecls
-      (autoPrintPinCore coreDecls)
-      (autoPrintWrapModules modules)
-  else match asyncMainShapeError modules
+emitElaborated asyncDriver emitTail runtimeDecls coreDecls modules report =
+  match asyncMainShapeError modules
     Some msg => failWith msg
     None =>
-      if shouldAsyncWrapMain asyncDriver modules then
-        -- Re-check the WRAPPED program, as the auto-print branch does: the
-        -- rewrite applies the driver to `main`, and a program whose `Async`
-        -- is not the driver's (a look-alike type, a mismatched row) must fail
-        -- here with a type error, not in the emitter or at run time.
-        let modulesW = asyncWrapModules asyncDriver modules
-        match underivedMainDiags runtimeDecls coreDecls modulesW
-          [] =>
-            emitModulesWith
-              emitTail
-              modsWithPath
-              runtimeDecls
-              coreDecls
-              modulesW
-          ds => emitWrapDiags modsWithPath ds
-      else
-        let (coreD, modules2) = mangleUnitsEv coreE modulesE
-        emitTail runtimeDecls coreD modules2
+      let executed = executedFromReport report asyncDriver (coreDecls, modules)
+      match executed
+        Err msg => failWith msg
+        Ok (coreW, modulesW) =>
+          let (coreD, modules2) = mangleUnitsEv coreW modulesW
+          emitTail runtimeDecls coreD modules2
 
 -- A whole multi-module emit driver, for a backend `emitTail` that also reads
 -- the loader's (module, path, decls): its `Async` main is run by
@@ -677,29 +676,8 @@ emitElaborated asyncDriver emitTail modsWithPath runtimeDecls coreDecls modules 
 export
 driveEmitLocated : (List (String, String, List Decl) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   <IO> Unit
-driveEmitLocated emitTail = driveModulesAsked (ask mods =>
+driveEmitLocated emitTail = driveModulesLocated (ask mods =>
   runEmitAsked ask "runAsyncMain" (emitTail mods) mods)
-
--- Elaborate + mangle + emit a (possibly wrapped) module list from scratch.
-export
-emitModulesWith : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
-  List (String, String, List Decl) ->
-  List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  <IO> Unit
-emitModulesWith emitTail modsWithPath runtimeDecls coreDecls modules =
-  -- Elaborate first, mangle after — see `runEmitWith` (#2809).
-  let _ = resetTypeErrorsSticky ()
-  let (coreE, modulesE, _, residual, _, _) =
-    elaborateModules runtimeDecls coreDecls modules
-  let _ =
-    emitResidualGate
-      (map modIdToPath modsWithPath)
-      (entryPathOf modsWithPath)
-      residual
-  let (coreD, modules2) = mangleUnitsEv coreE modulesE
-  emitTail runtimeDecls coreD modules2
 
 -- ── shared terminal computations ─────────────────────────────────────────────
 -- Identical across the _main and _batch variants of the same stage, so they live

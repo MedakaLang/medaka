@@ -130,7 +130,7 @@ runEmit runtimeDecls preludeDecls userDecls =
 -- side tables are looked up with names the program carried through
 -- `mangleUnitsEv`, so a table keyed off the raw decls misses every stamped
 -- receiver; deriving both from here keeps the two in one namespace.  Same order
--- `entry_support.emitModulesWith` runs: elaborate, then mangle.
+-- `entry_support.runEmitWith` runs: elaborate, then mangle.
 typedElaborated : List Decl -> List Decl -> List Decl -> List Decl
 typedElaborated runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp (funNamesOf userDecls) preludeDecls

@@ -75,8 +75,8 @@ import types.runtime_types.{installedBinderTable, restoreBinderTable}
 --
 -- Exactly one table is installed per elaboration, and every read of it completes
 -- before the next elaboration installs: `test_cmd`'s `prepareMulti` / `prepareSingle` /
--- `runChosen` phases, `elaborateRun`'s async and plain arms, `runEmitWith`,
--- `emitModulesWith`, `eval_autoprint_main.runElab` and `playground_main.runEmit` each
+-- `runChosen` phases, `elaborateRun`, `runEmitWith`, `eval_autoprint_main.runElab`
+-- and `playground_main.finishClean` each
 -- elaborate, install, and finish reading before the next elaboration begins; a
 -- diagnostics-only elaboration that runs between them (`test_cmd`'s helper validation)
 -- runs inside `withEvidencePreserved`, which reinstalls the table it found.  A lookup
