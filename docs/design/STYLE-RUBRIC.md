@@ -3,7 +3,7 @@
 The rules a reviewer applies to Medaka source, tests and comments, with the
 exceptions that make a finding wrong. Each rule was settled by the project owner
 on a real example from the tree, one question at a time (2026-10-17); the
-ruling id (`R1` to `R43`) is the key the review benchmark labels against. The
+ruling id (`R1` to `R49`, recorded in `docs/design/STYLE-RULINGS.md`) is the key the review benchmark labels against. The
 target style is plain, readable Haskell: idiomatic, typed, and never clever for
 its own sake.
 
