@@ -1,0 +1,14 @@
+visibility.driver.main_autoprint	2
+visibility.eval.eval	4
+visibility.frontend.ast	3
+visibility.frontend.parser	1
+visibility.frontend.resolve	15
+visibility.ir.sexp	3
+visibility.tools.doc	7
+visibility.tools.fmt	2
+visibility.tools.lint	4
+visibility.tools.printer	3
+visibility.tools.prop_plan	3
+visibility.tools.refindex	8
+visibility.types.private_mangle	8
+visibility.types.typecheck	50

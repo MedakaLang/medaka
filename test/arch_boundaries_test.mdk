@@ -1,6 +1,7 @@
 {- | Architecture boundary pins: layering, module-level cells, the hooks record,
-   the AST's cell-free shape, the A8 oversize list, and the import closures of the
-   leaf modules (laws A6 and A8, G3 and G7 of the architecture playbook).
+   the AST's cell-free shape, the A8 oversize list, the declaration-visibility
+   counts, and the import closures of the leaf modules (laws A6 and A8, G3 and G7
+   of the architecture playbook).
 
    Scope is every `compiler/**/*.mdk` except `*_test.mdk`; a module id is the
    path under `compiler/` without `.mdk`, `/` read as `.`. Only column-0 import
@@ -334,6 +335,39 @@ oversizeRows mods =
 
 test "arch_boundaries: modules over 3,000 code lines match oversize.golden" =
   pin "oversize.golden" (oversizeRows loadModules)
+
+-- Substrings that mark a declaration's visibility: an exported `DFunDef`,
+-- `DTypeSig`, `DLetGroup` or `DUse` node, an `edPub` flag, a `VisPublic`
+-- constructor and a `dataVis` field. Each code-line occurrence is counted.
+visibilityPatterns : List String
+visibilityPatterns = [
+  "DFunDef True",
+  "DTypeSig True",
+  "DLetGroup True",
+  "DUse True",
+  "edPub = True",
+  "VisPublic",
+  "dataVis =",
+]
+
+visibilityCount : List String -> Int
+visibilityCount ls =
+  sum
+    (map
+      (l => sum (map (p => countOccurrences p l) visibilityPatterns))
+      (filter isCodeLine ls))
+
+visibilityRows : List (String, List String) -> List String
+visibilityRows mods =
+  sort
+    (filterMap
+      ((m, ls) =>
+        let n = visibilityCount ls
+        if n > 0 then Some "visibility.\{m}\t\{n}" else None)
+      mods)
+
+test "arch_boundaries: declaration-visibility counts match visibility.golden" =
+  pin "visibility.golden" (visibilityRows loadModules)
 
 test "arch_boundaries: frontend.ast closure matches its golden" =
   pin
