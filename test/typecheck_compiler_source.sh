@@ -1421,7 +1421,7 @@ require_typecheck_arm numDefaultOwnerAllows groundNumVarsWith 'numDefaultOwnerAl
 require_typecheck_arm numDefaultOwnerAllows groundNumVarsWith 'Unbound _ owner => owner == level'
 require_typecheck_arm numDefaultOwnerAllows groundNumVarsWith 'numDefaultOwnerAllows None _ = True'
 require_typecheck_arm defaultBodyLocalNumWith defaultEachMemberWith 'groundNumVarsWith'
-require_typecheck_arm defaultEachMemberWith registerAmbiguousConstraintsOwnedBy 'defaultAmbiguousNumWith ownerPolicy'
+require_typecheck_arm defaultEachMemberWith registerAmbiguousConstraintsOwnedBy 'defaultAmbiguousNumWith dyn ownerPolicy'
 require_typecheck_arm registerAmbiguousConstraintsOwnedBy oblDispatchMonos 'registerAmbiguousGo'
 
 # Impl bodies read their method declaration and graded scope from one identity-keyed

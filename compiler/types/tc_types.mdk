@@ -1816,7 +1816,7 @@ public export data PendingJoin = PendingJoin {
   pjValues : List (Option Loc, Mono),
   pjLevel : Int,
   pjContext : JoinContext,
-  pjCollector : List EffRow -> EffRow,
+  pjCollector : DynCtx -> List EffRow -> EffRow,
 }
 
 public export data PerRun = PerRun {
@@ -2097,12 +2097,26 @@ public export data TcEnv = TcEnv {
 --     `recordArgStamp` push nothing and the application records the argument.
 --   dcShadowHeadCtx — while typing a shadow occurrence that heads its own
 --     application: the value-position standalone pin does not apply.
+--   dcDo — inside a do-lowered chain: a monad-shape mismatch is reported as
+--     "do requires a monad" at the block's span.  The one Ref in the record is
+--     minted by the `EDoOrigin` arm and set by the first such report, so a later
+--     mismatch in the same chain is plain; a nested chain mints its own.
+--   dcMethodMismatch — while unifying an interface default body against its
+--     declared type: a leaf mismatch names the method.
+public export data DoCtx = DoCtx {
+  doLoc : Loc,
+  doDeferred : Bool,
+  doReported : Ref Bool,
+}
+
 public export data DynCtx = DynCtx {
   dcJoin : Option JoinContext,
   dcNonCovariant : Bool,
   dcSuppressRLocalRecord : Bool,
   dcSuppressArgStamp : Bool,
   dcShadowHeadCtx : Bool,
+  dcDo : Option DoCtx,
+  dcMethodMismatch : Option String,
 }
 
 -- The context outside every construct that sets one.
@@ -2114,6 +2128,8 @@ noDyn = DynCtx {
   dcSuppressRLocalRecord = False,
   dcSuppressArgStamp = False,
   dcShadowHeadCtx = False,
+  dcDo = None,
+  dcMethodMismatch = None,
 }
 
 -- a constrained-function occurrence (`f` where `f : C a => …`): instantiate f's

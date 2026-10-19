@@ -330,6 +330,7 @@ import types.tc_types.{
   GoalPayload(..),
   Obligation(..),
   DynCtx(..),
+  DoCtx(..),
   noDyn,
   DeclEnvModule(..),
   DeclEnvs(..),
@@ -1420,14 +1421,16 @@ effectRowRoots row roots =
 -- otherwise they belong to the enclosing scope, where later uses of the
 -- alternatives can still shape them.  Everything the close reads (roots,
 -- quantifiable authorities) is taken after that.
-finishValueEffectsKeeping : List (Bool, Mono) -> List (Int, AuthResidual)
-finishValueEffectsKeeping generalizing =
+finishValueEffectsKeeping : DynCtx ->
+  List (Bool, Mono) ->
+  List (Int, AuthResidual)
+finishValueEffectsKeeping dyn generalizing =
   let members =
     map ((generalizes, mono) => (localRole generalizes, mono)) generalizing
   let level = perRun.value.currentLevel.value
   let _ =
     if anyList fst generalizing then
-      settlePendingJoins level
+      settlePendingJoins dyn level
     else
       postponePendingJoins level
   let monos = map snd members
@@ -1480,9 +1483,9 @@ authRowRoots row roots =
     roots
     (authRowCells row Tip)
 
-finishEffectContract : (Map Int Unit, Map Int Unit) -> Unit
-finishEffectContract (saved, savedAuths) =
-  let _ = resolvePendingJoins perRun.value.currentLevel.value
+finishEffectContract : DynCtx -> (Map Int Unit, Map Int Unit) -> Unit
+finishEffectContract dyn (saved, savedAuths) =
+  let _ = resolvePendingJoins dyn perRun.value.currentLevel.value
   let _ = finishEffectSummaryScope Tip Tip
   perRun.value.rigidEffvarsRef := saved
   perRun.value.rigidAuthvarsRef := savedAuths
@@ -9423,21 +9426,6 @@ currentLoc = Ref None
 goalSiteLoc : Ref (Option Loc)
 goalSiteLoc = Ref None
 
-currentDoOrigin : Ref (Option Loc)
-currentDoOrigin = Ref None
-
--- #824: True while inferring a `defer` block's lowered chain (see the
--- `EDoOrigin` arm of `infer`); selects the wording of `recordDoMonadError`.
-currentDoDeferred : Ref Bool
-currentDoDeferred = Ref False
-
--- C8b Gap 2 (diagnostic-quality parity): set to `Some methodName` around the
--- OUTER unify of an interface default body against its declared return type, so a
--- leaf TypeMismatch is reported as the oracle's specialized single line
--- `Method '<name>': expected type <e> but got <a>` instead of a bare `Type mismatch: …`.
-currentMethodMismatch : Ref (Option String)
-currentMethodMismatch = Ref None
-
 -- ASYNC-DESIGN Stage 2 (D5): the entry program's inferred `main` scheme, stashed
 -- by `graphModuleWorker`'s `GOutTrees` arm so the native `run` driver can detect a
 -- `main : Async _` and route it through `runAsync` (perform its row) instead of
@@ -11349,12 +11337,12 @@ unifyN dyn a b = typeMismatch dyn a b
 -- A fresh variable standing for a value takes its source's type verbatim,
 -- qualifier included: a declared parameter, a match scrutinee, a call's
 -- result.  Anything already shaped unifies as usual.
-bindFrom : Mono -> Mono -> Unit
-bindFrom target source = match normalize target
+bindFrom : DynCtx -> Mono -> Mono -> Unit
+bindFrom dyn target source = match normalize target
   TVar cell => match !cell
-    Unbound _ _ => bindVar noDyn cell source
-    Link _ => unify target source
-  _ => unify target source
+    Unbound _ _ => bindVar dyn cell source
+    Link _ => unifyIn dyn target source
+  _ => unifyIn dyn target source
 
 -- `lower ⊑ upper`, as an obligation of the open inference scope, or decided
 -- on the spot outside one (an annotation checked at top level).
@@ -11996,8 +11984,14 @@ typeMismatch dyn a b =
   let _ = poisonMismatchVars a b
   typeMismatchReport dyn a b
 
+-- The do-chain a mismatch is blamed on: none once a report has been made for it.
+activeDo : DynCtx -> Option DoCtx
+activeDo dyn = match dyn.dcDo
+  Some doCtx => if doCtx.doReported.value then None else Some doCtx
+  None => None
+
 typeMismatchReport : DynCtx -> Mono -> Mono -> Unit
-typeMismatchReport dyn a b = match !currentMethodMismatch
+typeMismatchReport dyn a b = match dyn.dcMethodMismatch
   Some mname =>
     pushTypeError
       "T-METHOD-MISMATCH"
@@ -12017,7 +12011,7 @@ typeMismatchReportJoin dyn a b = match dyn.dcJoin
       "type mismatch: \{ppMono a} vs \{ppMono b}; \{elselessIfHelp}"
       elselessIfHelp
       None
-  _ => match (!currentDoOrigin, constrainedApplicationHelp a b)
+  _ => match (activeDo dyn, constrainedApplicationHelp a b)
     (None, Some help) =>
       pushTypeErrorHelpFixAt
         "T-TYPE-MISMATCH"
@@ -12025,7 +12019,7 @@ typeMismatchReportJoin dyn a b = match dyn.dcJoin
         "type mismatch: \{ppMono a} vs \{ppMono b}; \{help}"
         help
         None
-    _ => typeMismatchReportRest a b
+    _ => typeMismatchReportRest dyn a b
 
 elselessIfHelp : String
 elselessIfHelp =
@@ -12066,9 +12060,9 @@ constrainedApplicationText app plain ifaces =
   let names = joinWith " and " (map (i => "`\{i}`") ifaces)
   "`\{ppMono app}` is a value whose type implements \{names}, and `\{ppMono plain}` is not"
 
-typeMismatchReportRest : Mono -> Mono -> Unit
-typeMismatchReportRest a b = match !currentDoOrigin
-  Some doLoc => typeMismatchInDo a b doLoc
+typeMismatchReportRest : DynCtx -> Mono -> Mono -> Unit
+typeMismatchReportRest dyn a b = match activeDo dyn
+  Some doCtx => typeMismatchInDo a b doCtx
   None => match firstTupleCallHint [a, b]
     -- P0-16: one side is a tuple-call residual (e.g. `z : Int; z = add(1, 2)`
     -- → `Type mismatch: Int vs (a, b) -> (a, b)`) — append the call-syntax hint.
@@ -12179,10 +12173,10 @@ tconIdConflict a b = match (normalize a, normalize b)
 -- a mismatch inside a do-lowered chain: if it is the monad-shape (`m b`) vs
 -- non-monad obligation, retarget to the tailored "do requires a monad" error;
 -- otherwise fall back to the plain mismatch (the loc stays the do-block's).
-typeMismatchInDo : Mono -> Mono -> Loc -> Unit
-typeMismatchInDo a b doLoc
+typeMismatchInDo : Mono -> Mono -> DoCtx -> Unit
+typeMismatchInDo a b doCtx
   | monoIsApp (normalize a) /= monoIsApp (normalize b) =
-    recordDoMonadError doLoc
+    recordDoMonadError doCtx
   | otherwise =
     pushTypeError "T-TYPE-MISMATCH" "type mismatch: \{ppMono a} vs \{ppMono b}"
 
@@ -12192,15 +12186,15 @@ typeMismatchInDo a b doLoc
 -- other push, which is what makes this path's detection reach the counter too.
 -- (It does NOT re-establish "counter delta == list-length delta": PR2 abolished that
 -- equality on purpose — see `recordTypeError`.)
-recordDoMonadError : Loc -> Unit
-recordDoMonadError doLoc =
-  currentDoOrigin := None
+recordDoMonadError : DoCtx -> Unit
+recordDoMonadError doCtx =
+  doCtx.doReported := True
   recordTypeError
     (TcDiag
       "T-DO-NOT-MONAD"
       1
-      (Some doLoc)
-      (if !currentDoDeferred then deferRequiresMonadMsg else doRequiresMonadMsg)
+      (Some doCtx.doLoc)
+      (if doCtx.doDeferred then deferRequiresMonadMsg else doRequiresMonadMsg)
       None
       None)
 
@@ -12233,13 +12227,14 @@ generalize t = quantifyFree [] pureRow t
 -- [declared] are the authority cells a written signature binds: rigid through
 -- the body and published as written, never defaulted.  [residual] are the
 -- obligations the binding's scope kept over its own quantified authorities.
-generalizeBindingDeclared : Map Int Unit ->
+generalizeBindingDeclared : DynCtx ->
+  Map Int Unit ->
   List AuthResidual ->
   EffRow ->
   Mono ->
   Scheme
-generalizeBindingDeclared declared residual force t =
-  let _ = defaultDeferredPatLitsIn perRun.value.currentLevel.value t
+generalizeBindingDeclared dyn declared residual force t =
+  let _ = defaultDeferredPatLitsIn dyn perRun.value.currentLevel.value t
   let _ = defaultSourcelessAuthorities declared force t
   quantifyFree residual force t
 
@@ -12449,14 +12444,15 @@ lowerToCurrent t = match normalize t
 
 -- Generalize a value RHS; value-restrict (monomorphize, lowering free vars)
 -- otherwise.  monoScheme leaves the mono ungeneralized.
-genBindingRestricted : Map Int Unit ->
+genBindingRestricted : DynCtx ->
+  Map Int Unit ->
   List AuthResidual ->
   Bool ->
   EffRow ->
   Mono ->
   Scheme
-genBindingRestricted declared residual isValue force t
-  | isValue = generalizeBindingDeclared declared residual force t
+genBindingRestricted dyn declared residual isValue force t
+  | isValue = generalizeBindingDeclared dyn declared residual force t
   | otherwise =
     let _ = lowerToCurrent t
     let _ = lowerRowLevels perRun.value.currentLevel.value force
@@ -14695,7 +14691,7 @@ inferRecPatFieldWith _ ft fname bid None =
   [(fname, monoScheme ft)]
 inferRecPatFieldWith env ft _ _ (Some p) =
   let pr = inferPat env p
-  let _ = bindFrom (fst pr) ft
+  let _ = bindFrom env.teDyn (fst pr) ft
   snd pr
 
 -- INTEGER-TYPES-DESIGN §3.2 item 5: an integer literal PATTERN takes its type from
@@ -14731,10 +14727,10 @@ takePatLits _ =
 -- (a lambda's parameter, typed only by a later argument) is deferred: `generalize`
 -- defaults it to `Int` before it could be quantified, and the module's end settles
 -- whatever remains (`settleDeferredPatLits`).
-settlePatLits : List (Mono, Int, Option Loc) -> Unit
-settlePatLits saved =
+settlePatLits : DynCtx -> List (Mono, Int, Option Loc) -> Unit
+settlePatLits dyn saved =
   let _ = refuseOpenedExistentials ()
-  settlePatLitsOnly saved
+  settlePatLitsOnly dyn saved
 
 parkOpenedExistentials : Unit -> Unit
 parkOpenedExistentials _ =
@@ -14771,15 +14767,15 @@ existentialScopeMsg : Option String -> String
 existentialScopeMsg name =
   "this pattern opens the existential authority `\{optionOr "?" name}`, which only a `match` arm or a function clause can scope; match on the value, or take it as a clause parameter"
 
-settlePatLitsOnly : List (Mono, Int, Option Loc) -> Unit
-settlePatLitsOnly saved =
-  let _ = settlePatLitsGo False perRun.value.patLitPending.value
+settlePatLitsOnly : DynCtx -> List (Mono, Int, Option Loc) -> Unit
+settlePatLitsOnly dyn saved =
+  let _ = settlePatLitsGo dyn False perRun.value.patLitPending.value
   perRun.value.patLitPending := saved
 
 -- [final]: the module is done, so an unknown var defaults instead of deferring.
-settlePatLitsGo : Bool -> List (Mono, Int, Option Loc) -> Unit
-settlePatLitsGo _ [] = ()
-settlePatLitsGo final ((a, n, loc) :: rest) =
+settlePatLitsGo : DynCtx -> Bool -> List (Mono, Int, Option Loc) -> Unit
+settlePatLitsGo dyn _ [] = ()
+settlePatLitsGo dyn final ((a, n, loc) :: rest) =
   let _ = match normalize a
     TCon tag _ if isTaggedFixedHead tag =>
       perRun.value.numlitRanges :=
@@ -14791,9 +14787,9 @@ settlePatLitsGo final ((a, n, loc) :: rest) =
     _ =>
       let saved = !currentLoc
       currentLoc := orElseLoc loc saved
-      let _ = unify (tconBuiltin "Int") a
+      let _ = unifyIn dyn (tconBuiltin "Int") a
       currentLoc := saved
-  settlePatLitsGo final rest
+  settlePatLitsGo dyn final rest
 
 -- The module's inference is complete: every deferred literal pattern takes the
 -- type its scrutinee finally got, or `Int`.
@@ -14801,24 +14797,25 @@ settleDeferredPatLits : Unit -> Unit
 settleDeferredPatLits _ =
   let deferred = perRun.value.patLitDeferred.value
   perRun.value.patLitDeferred := []
-  settlePatLitsGo True deferred
+  settlePatLitsGo noDyn True deferred
 
 -- Called by `generalize` before it quantifies [t]: a deferred literal-pattern var
 -- that is about to become a scheme variable is `Int` instead, so a literal pattern
 -- never makes a binding polymorphic.
-defaultDeferredPatLitsIn : Int -> Mono -> Unit
-defaultDeferredPatLitsIn lvl t = match perRun.value.patLitDeferred.value
+defaultDeferredPatLitsIn : DynCtx -> Int -> Mono -> Unit
+defaultDeferredPatLitsIn dyn lvl t = match perRun.value.patLitDeferred.value
   [] => ()
-  deferred => defaultPatLitVarsIn (freeGenVars lvl t) deferred
+  deferred => defaultPatLitVarsIn dyn (freeGenVars lvl t) deferred
 
-defaultPatLitVarsIn : List Int -> List (Mono, Int, Option Loc) -> Unit
-defaultPatLitVarsIn _ [] = ()
-defaultPatLitVarsIn quantified ((a, _, _) :: rest) =
+defaultPatLitVarsIn : DynCtx -> List Int -> List (Mono, Int, Option Loc) -> Unit
+defaultPatLitVarsIn dyn _ [] = ()
+defaultPatLitVarsIn dyn quantified ((a, _, _) :: rest) =
   let _ = match normalize a
     TVar cell =>
-      if containsI (tyvarId cell) quantified then unify (tconBuiltin "Int") a
+      if containsI (tyvarId cell) quantified then
+        unifyIn dyn (tconBuiltin "Int") a
     _ => ()
-  defaultPatLitVarsIn quantified rest
+  defaultPatLitVarsIn dyn quantified rest
 
 litType : Lit -> Mono
 litType (LInt _) = tconBuiltin "Int"
@@ -14868,7 +14865,7 @@ inferPatConWith env scheme pats =
   let ctorType = instantiateCtorPattern scheme
   let pr = inferPats env pats
   let resultVar = freshVar ()
-  let _ = unify ctorType (foldrFun (fst pr) resultVar)
+  let _ = unifyIn env.teDyn ctorType (foldrFun (fst pr) resultVar)
   (resultVar, snd pr)
 
 inferPats : TcEnv -> List Pat -> (List Mono, List (String, Scheme))
@@ -14892,14 +14889,14 @@ inferPatCons env h t =
   let hr = inferPat env h
   let tr = inferPat env t
   let listTy = TApp (tconBuiltin "List") (fst hr)
-  let _ = unify (fst tr) listTy
+  let _ = unifyIn env.teDyn (fst tr) listTy
   (listTy, snd hr ++ snd tr)
 
 inferPatList : TcEnv -> List Pat -> (Mono, List (String, Scheme))
 inferPatList env pats =
   let elem = freshVar ()
   let pr = inferPats env pats
-  let _ = unifyAll elem (fst pr)
+  let _ = unifyAll env.teDyn elem (fst pr)
   (TApp (tconBuiltin "List") elem, snd pr)
 
 inferPatAs : TcEnv ->
@@ -14913,11 +14910,11 @@ inferPatAs env x xloc bid p =
   let _ = recordLocalBind x (Some xloc) bid (fst pr)
   (fst pr, (x, monoScheme (fst pr)) :: snd pr)
 
-unifyAll : Mono -> List Mono -> Unit
-unifyAll _ [] = ()
-unifyAll t (x :: xs) =
-  let _ = unify t x
-  unifyAll t xs
+unifyAll : DynCtx -> Mono -> List Mono -> Unit
+unifyAll dyn _ [] = ()
+unifyAll dyn t (x :: xs) =
+  let _ = unifyIn dyn t x
+  unifyAll dyn t xs
 
 -- ── expression inference ──────────────────────────────────────────────────
 infer : TcEnv -> Expr -> Mono
@@ -14986,26 +14983,19 @@ infer env (ELoc l e) =
   t
 -- Phase 150: a do-lowered chain.  Record the do-block loc so a monad-shape
 -- mismatch during inference is retargeted to the tailored "do requires a monad"
--- error (see typeMismatch); RESTORE the previous value afterwards, not a hard
--- `None` (#894 review finding 2) — an EARLIER statement in the SAME do-chain
--- can itself be an inline nested `do` block (`a <- (do ...)`), whose own
--- `EDoOrigin` used to unconditionally clear the flag to `None` on the way out
--- and so silently un-blame every LATER statement in the outer chain, reviving
--- the pre-fix container/List/Array message for a later `x <- <scalar>` bind.
--- Nesting is otherwise unremarkable (this node is already fully re-entrant
--- everywhere else it is handled — `mapKids`, `alpha`, `appSpineName`, …).
+-- error (see typeMismatch).  The chain's walk gets its own context; an inline
+-- nested `do` block (`a <- (do ...)`) mints another, so its first report never
+-- un-blames a LATER statement of the outer chain (#894 review finding 2).
 infer env (EDoOrigin l e) =
-  let prevDoOrigin = !currentDoOrigin
-  let prevDeferred = !currentDoDeferred
-  currentDoOrigin := Some l
   -- #824: the lowered chain's synthesized callee names the herald
   -- (`deferThen` for a `defer` block), so the "requires a monad" reframe can
   -- name the right interface.
-  currentDoDeferred := doChainIsDeferred e
-  let t = infer env e
-  currentDoOrigin := prevDoOrigin
-  currentDoDeferred := prevDeferred
-  t
+  let doCtx = DoCtx {
+    doLoc = l,
+    doDeferred = doChainIsDeferred e,
+    doReported = Ref False,
+  }
+  infer { env | teDyn = { env.teDyn | dcDo = Some doCtx } } e
 
 infer _ _ = panic "typecheck: unsupported expression"
 
@@ -15020,14 +15010,14 @@ doChainIsDeferred _ = False
 
 inferArrayLit : TcEnv -> List Expr -> Mono
 inferArrayLit env es =
-  let elem = joinValueTypes JoinArray (inferProduced env es)
+  let elem = joinValueTypes env.teDyn JoinArray (inferProduced env es)
   TApp (tconBuiltin "Array") elem
 
 -- [lo..hi] : List Int, [|lo..hi|] : Array Int
 inferIntRange : TcEnv -> Expr -> Expr -> Mono -> Mono
 inferIntRange env lo hi container =
-  let _ = unify (infer env lo) (tconBuiltin "Int")
-  let _ = unify (infer env hi) (tconBuiltin "Int")
+  let _ = unifyIn env.teDyn (infer env lo) (tconBuiltin "Int")
+  let _ = unifyIn env.teDyn (infer env hi) (tconBuiltin "Int")
   TApp container (tconBuiltin "Int")
 
 -- (ESlice's `inferSlice`/`indexKind` were retired with #670: `a.[lo..hi]` now
@@ -15268,6 +15258,7 @@ recordRLocalSite env name tagRef innerRef inst
         let sym = routeLocalSym !tagRef
         let dicts =
           shadowStandaloneDictSlotsAt
+            env.teDyn
             (standaloneValueFor env name sym)
             name
             (if sym == "" then name else sym)
@@ -17152,7 +17143,8 @@ inferStmt : TcEnv -> DoStmt -> TcEnv
 inferStmt env (DoExpr e) =
   let oblN0 = wMark perRun.value.implObls
   let t = infer env e
-  let _ = checkStmtNotDiscarded (wWindow perRun.value.implObls oblN0) t e
+  let _ =
+    checkStmtNotDiscarded env.teDyn (wWindow perRun.value.implObls oblN0) t e
   env
 -- #866: the binder's own Loc is threaded to blockRecLet for the pin note.  A
 -- FUNCTION-FORM block let (`let h a p q = …`) parses with rec=True and lands HERE, not
@@ -17175,8 +17167,8 @@ inferStmt env (DoBind pat e) =
   let _ = pushTypeError "T-BIND-OUTSIDE-DO" bindOutsideDoMsg
   let lits = takePatLits ()
   let pr = inferPat env pat
-  let _ = bindFrom (fst pr) t
-  let _ = settlePatLits lits
+  let _ = bindFrom env.teDyn (fst pr) t
+  let _ = settlePatLits env.teDyn lits
   extendLocalVars env (snd pr)
 inferStmt _ _ = panic "typecheck: unsupported block statement"
 
@@ -17188,8 +17180,8 @@ inferStmt _ _ = panic "typecheck: unsupported block statement"
 -- `Type mismatch: Int vs Unit` (ERROR-QUALITY.md dim 3/5: doesn't name the rule
 -- or offer the fix), so it is reported here instead with its own code and a
 -- one-token `fix` (`let _ = `) for the intentional-discard case.
-checkStmtNotDiscarded : List UObligation -> Mono -> Expr -> Unit
-checkStmtNotDiscarded stmtObls t e
+checkStmtNotDiscarded : DynCtx -> List UObligation -> Mono -> Expr -> Unit
+checkStmtNotDiscarded dyn stmtObls t e
   | isExemptInPlaceSetIndex t e = ()
   | otherwise = match normalize t
     TCon "Unit" _ => ()
@@ -17201,7 +17193,7 @@ checkStmtNotDiscarded stmtObls t e
         if containsI id (numConstrainedIds stmtObls) then
           pushDiscardedValueDesc "a number" e
         else
-          unify t (tconBuiltin "Unit")
+          unifyIn dyn t (tconBuiltin "Unit")
       Link _ => panic "checkStmtNotDiscarded: normalize left a Link"
     nt => pushDiscardedValueError nt e
 
@@ -17293,8 +17285,8 @@ blockRecLet env x xloc bid e =
   let _ = closeLocalScope lscope
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
-  let _ = improveLocalGoals addedObls callN0
-  let _ = finalizeNumBoundary NumBoundary {
+  let _ = improveLocalGoals env.teDyn addedObls callN0
+  let _ = finalizeNumBoundary env.teDyn NumBoundary {
     nbDisposition =
       NumBoundaryOwnedMember (perRun.value.currentLevel.value + 1),
     nbMembers = [t1],
@@ -17304,7 +17296,8 @@ blockRecLet env x xloc bid e =
     nbGuard = localNumGuard addedObls callN0,
   }  -- PLAN.md #11 / RETPOS soundness
   let _ = recordLocalBind x xloc bid t1  -- LSP hover (block rec-let bypasses inferPat)
-  let sch = genBindingRestricted Tip (residualsOf 0 residuals) True pureRow t1  -- #866
+  let sch =
+    genBindingRestricted env.teDyn Tip (residualsOf 0 residuals) True pureRow t1  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   let _ = registerLocalAbsIf x lscope sch oblN0 callN0
   seedAlphaLets (extendLocalVar env x sch) x e  -- WS-2: α scope-seed
@@ -17319,11 +17312,12 @@ blockLet env (PVar x xloc bid) e =
   let lscope = openLocalScopeIf x
   let t = infer env e
   let _ = closeLocalScope lscope
-  let residuals = finishValueEffectsKeeping [(isNonexpansive env e, t)]
+  let residuals =
+    finishValueEffectsKeeping env.teDyn [(isNonexpansive env e, t)]
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
-  let _ = improveLocalGoals addedObls callN0
-  let _ = finalizeNumBoundary NumBoundary {
+  let _ = improveLocalGoals env.teDyn addedObls callN0
+  let _ = finalizeNumBoundary env.teDyn NumBoundary {
     nbDisposition =
       NumBoundaryOwnedMember (perRun.value.currentLevel.value + 1),
     nbMembers = [t],
@@ -17335,6 +17329,7 @@ blockLet env (PVar x xloc bid) e =
   let _ = recordLocalBind x (Some xloc) bid t  -- LSP hover (block let bypasses inferPat)
   let sch =
     genBindingRestricted
+      env.teDyn
       Tip
       (residualsOf 0 residuals)
       (isNonexpansive env e)
@@ -17348,8 +17343,8 @@ blockLet env pat e =
   let t = infer env e
   let lits = takePatLits ()
   let pr = inferPat env pat
-  let _ = bindFrom (fst pr) t
-  let _ = settlePatLits lits
+  let _ = bindFrom env.teDyn (fst pr) t
+  let _ = settlePatLits env.teDyn lits
   extendLocalVars env (snd pr)
 
 inferRecordCreate : TcEnv -> String -> List FieldAssign -> Mono
@@ -17446,7 +17441,7 @@ inferFieldAccess env e fname ev
       None => freshVar ()
       Some (rname, ri) =>
         siteHeadCell ev := stampedRecordHead rname ri
-        let ft = inferFieldOfRecord te rname ri fname
+        let ft = inferFieldOfRecord env.teDyn te rname ri fname
         -- #1468: the WELL-TYPEDNESS half, and it runs AFTER `inferFieldOfRecord`
         -- on purpose — that call is what unifies `te` with the record's result
         -- type, so only here does the receiver's head name the type whose
@@ -17521,16 +17516,16 @@ ownerQualifiedHead mid name
 -- receiver's type is still an unsolved tyvar at this point (the self-hosted
 -- typecheck infers function params as fresh vars, not yet pinned to their sig).
 inferValueField : TcEnv -> Expr -> Mono
-inferValueField env e = refStored (infer env e)
+inferValueField env e = refStored env.teDyn (infer env e)
 
 -- the field's type from a resolved record `rname`, given the (already-inferred)
 -- receiver type `te` to unify against the record's instantiated result type.  A
 -- field absent from a KNOWN record names it (mirrors the oracle's `resolve_in`,
 -- which raises UnknownField with the resolved record name).
-inferFieldOfRecord : Mono -> String -> RecordInfo -> String -> Mono
-inferFieldOfRecord te rname ri fname =
+inferFieldOfRecord : DynCtx -> Mono -> String -> RecordInfo -> String -> Mono
+inferFieldOfRecord dyn te rname ri fname =
   let sr = instantiateRecordShared ri
-  let _ = unify te (snd sr)
+  let _ = unifyIn dyn te (snd sr)
   match omLookup fname (recordFieldMap ri)
     Some fm => substRecordField (fst sr) fm
     None => unknownFieldFresh fname rname (recordFieldNames ri)
@@ -18688,7 +18683,7 @@ inferRecordUpdatePicked : String ->
   Mono
 inferRecordUpdatePicked rname bt env fields ri =
   let sr = instantiateRecordUpdate rname ri (assignedFieldNames fields)
-  let _ = unify bt (snd sr)
+  let _ = unifyIn env.teDyn bt (snd sr)
   -- Before the field values are inferred, so the error sits on the receiver.
   let _ = match firstFieldName fields
     Some fn => recordUpdateWellTyped bt rname ri fn
@@ -18704,7 +18699,7 @@ inferRecordUpdateWith : TcEnv ->
   Mono
 inferRecordUpdateWith env rname base fields ri =
   let sr = instantiateRecordUpdate rname ri (assignedFieldNames fields)
-  let _ = unify (infer env base) (snd sr)
+  let _ = unifyIn env.teDyn (infer env base) (snd sr)
   let _ = unifyFieldAssignsIdx env rname ri (fst sr) fields
   snd sr
 
@@ -18724,7 +18719,7 @@ inferBinopE env op l r dref =
     Some sp => currentLoc := Some sp
     None => ()
   let _ = recordBinopGoals op dref lt
-  if op == "|>" then pipeOp env l r lt rt else inferBinop op lt rt
+  if op == "|>" then pipeOp env l r lt rt else inferBinop env.teDyn op lt rt
 
 -- Synthesize the whole-binop span from its operand Exprs: file + start of the
 -- left operand, end of the right operand.  Falls back to whichever single
@@ -18869,7 +18864,7 @@ inferUnopE env op e dref =
   let t = infer env e
   let _ = recordUnopSite op dref t
   let _ = if op == "-" then recordNegatedLitRange t e
-  inferUnop op t
+  inferUnop env.teDyn op t
 
 -- `-2` is usually `negate 2`, not one fused literal (the parser fuses only a tight
 -- argument and the 2^62 minimum), so the fixed-width range check would see only the
@@ -18891,25 +18886,25 @@ recordNegatedLitRange t (EWideLit _ _ _ lx) =
     _ => ()
 recordNegatedLitRange _ _ = ()
 
-inferBinop : String -> Mono -> Mono -> Mono
-inferBinop "+" lt rt = numArithOp lt rt
-inferBinop "-" lt rt = numArithOp lt rt
-inferBinop "*" lt rt = numArithOp lt rt
-inferBinop "/" lt rt = numArithOp lt rt
-inferBinop "%" lt rt = numArithOp lt rt
-inferBinop "++" lt rt = appendOp lt rt
-inferBinop "==" lt rt = eqCompareOp lt rt
-inferBinop "/=" lt rt = eqCompareOp lt rt
-inferBinop "<" lt rt = ordCompareOp lt rt
-inferBinop ">" lt rt = ordCompareOp lt rt
-inferBinop "<=" lt rt = ordCompareOp lt rt
-inferBinop ">=" lt rt = ordCompareOp lt rt
-inferBinop "&&" lt rt = boolOp lt rt
-inferBinop "||" lt rt = boolOp lt rt
-inferBinop "::" lt rt = consOp lt rt
-inferBinop ">>" lt rt = composeOp lt rt False
-inferBinop "<<" lt rt = composeOp lt rt True
-inferBinop op _ _ = panic ("typecheck: unsupported operator " ++ op)
+inferBinop : DynCtx -> String -> Mono -> Mono -> Mono
+inferBinop dyn "+" lt rt = numArithOp dyn lt rt
+inferBinop dyn "-" lt rt = numArithOp dyn lt rt
+inferBinop dyn "*" lt rt = numArithOp dyn lt rt
+inferBinop dyn "/" lt rt = numArithOp dyn lt rt
+inferBinop dyn "%" lt rt = numArithOp dyn lt rt
+inferBinop dyn "++" lt rt = appendOp dyn lt rt
+inferBinop dyn "==" lt rt = eqCompareOp dyn lt rt
+inferBinop dyn "/=" lt rt = eqCompareOp dyn lt rt
+inferBinop dyn "<" lt rt = ordCompareOp dyn lt rt
+inferBinop dyn ">" lt rt = ordCompareOp dyn lt rt
+inferBinop dyn "<=" lt rt = ordCompareOp dyn lt rt
+inferBinop dyn ">=" lt rt = ordCompareOp dyn lt rt
+inferBinop dyn "&&" lt rt = boolOp dyn lt rt
+inferBinop dyn "||" lt rt = boolOp dyn lt rt
+inferBinop dyn "::" lt rt = consOp dyn lt rt
+inferBinop dyn ">>" lt rt = composeOp dyn lt rt False
+inferBinop dyn "<<" lt rt = composeOp dyn lt rt True
+inferBinop dyn op _ _ = panic ("typecheck: unsupported operator " ++ op)
 
 -- Roadmap #18a: `++` (append) carries a `Semigroup` obligation on its (unified)
 -- operand type — a verbatim mirror of `eqCompareOp`/`recordIfaceObligation` for `==`,
@@ -18928,10 +18923,10 @@ inferBinop op _ _ = panic ("typecheck: unsupported operator " ++ op)
 -- it exists keeps those drivers byte-identical while `medaka check` rejects.
 -- The result is a new value of the operands' value type; what it may reach
 -- is the abstraction's business (`alphaOf`), never inherited from an operand.
-appendOp : Mono -> Mono -> Mono
-appendOp lt rt =
+appendOp : DynCtx -> Mono -> Mono -> Mono
+appendOp dyn lt rt =
   let plain = peelQual lt
-  let _ = unify plain rt
+  let _ = unifyIn dyn plain rt
   let _ = recordIfaceObligation BSemigroup plain
   plain
 
@@ -19159,14 +19154,14 @@ seedBuiltinClasses mid prog =
 -- obligation only when Num exists keeps the no-prelude drivers byte-identical to
 -- that oracle while the full check_main (prelude) path rejects, matching `medaka
 -- check`.
-numArithOp : Mono -> Mono -> Mono
-numArithOp lt rt =
+numArithOp : DynCtx -> Mono -> Mono -> Mono
+numArithOp dyn lt rt =
   -- Chunk D: taint any literal operand BEFORE the unify grounds it — so a literal
   -- fed to an arithmetic op (`1 + "x"`, `x + 1`, `1 + x`) keeps `No impl of Num for
   -- T` (the `+` is the culprit) rather than being reframed as a bare mismatch.
   let _ = markNumlitOpTaint lt
   let _ = markNumlitOpTaint rt
-  let _ = unify lt rt
+  let _ = unifyIn dyn lt rt
   let _ = recordIfaceObligation BNum lt
   lt
 
@@ -19211,7 +19206,8 @@ inferNumLitVar env n fref dref
       -- records the Num impl obligation + a pendingSite on [dref].
       let fromIntTy = inferNumLitMethod anchor dref
       let a = freshVar ()
-      let _ = unify fromIntTy (TFun (tconBuiltin "Int") (openRow ()) a)
+      let _ =
+        unifyIn env.teDyn fromIntTy (TFun (tconBuiltin "Int") (openRow ()) a)
       let _ = pushNumlit (a, fref, n, dref)
       let _ = recordNumlitLoc a  -- Chunk D: literal provenance for Num mis-framing
       a
@@ -19525,9 +19521,9 @@ tagLitLocsWithRoot id kind ((mv, l) :: rest) =
 -- bare-HM no-prelude oracle (tc_probe / typecheck_main)
 -- has no `Eq` class, so recording the obligation only when Eq exists keeps those
 -- drivers byte-identical while full check_main (prelude) rejects.
-eqCompareOp : Mono -> Mono -> Mono
-eqCompareOp lt rt =
-  let _ = unify lt rt
+eqCompareOp : DynCtx -> Mono -> Mono -> Mono
+eqCompareOp dyn lt rt =
+  let _ = unifyIn dyn lt rt
   let _ = recordIfaceObligation BEq lt
   tconBuiltin "Bool"
 
@@ -19545,26 +19541,26 @@ eqCompareOp lt rt =
 -- to `EMethodAt "lt"` at the dict layer, so runtime/emit dispatch is unchanged.
 --
 -- Gated on the PRELUDE's `Ord` being present (`builtinClassPresent BOrd`, #1539).
-ordCompareOp : Mono -> Mono -> Mono
-ordCompareOp lt rt =
-  let _ = unify lt rt
+ordCompareOp : DynCtx -> Mono -> Mono -> Mono
+ordCompareOp dyn lt rt =
+  let _ = unifyIn dyn lt rt
   let _ = recordIfaceObligation BOrd lt
   tconBuiltin "Bool"
 
-boolOp : Mono -> Mono -> Mono
-boolOp lt rt =
-  let _ = unify lt (tconBuiltin "Bool")
-  let _ = unify rt (tconBuiltin "Bool")
+boolOp : DynCtx -> Mono -> Mono -> Mono
+boolOp dyn lt rt =
+  let _ = unifyIn dyn lt (tconBuiltin "Bool")
+  let _ = unifyIn dyn rt (tconBuiltin "Bool")
   tconBuiltin "Bool"
 
-consOp : Mono -> Mono -> Mono
-consOp lt rt =
+consOp : DynCtx -> Mono -> Mono -> Mono
+consOp dyn lt rt =
   let tailElem = freshVar ()
   let _ = noteNumlitCtx lt rt JoinCons  -- Chunk D: tag cons head-vs-list Num mismatch
-  let _ = unify rt (TApp (tconBuiltin "List") tailElem)
+  let _ = unifyIn dyn rt (TApp (tconBuiltin "List") tailElem)
   TApp
     (tconBuiltin "List")
-    (joinValueTypes JoinCons [
+    (joinValueTypes dyn JoinCons [
       (!currentLoc, lt),
       (!currentLoc, tailElem),
     ])
@@ -19583,29 +19579,29 @@ pipeOp env l r lt rt =
 -- The composite takes g's own domain, qualifier included: nothing is applied
 -- to g here, so there is no argument to abstract.  g's result then flows into
 -- h as an ordinary argument.
-composeOp : Mono -> Mono -> Bool -> Mono
-composeOp gt ht False =
-  let (a, first, b) = calleeArrow gt
+composeOp : DynCtx -> Mono -> Mono -> Bool -> Mono
+composeOp dyn gt ht False =
+  let (a, first, b) = calleeArrow dyn gt
   let c = freshVar ()
-  let second = applicationRowTyped ht b c
+  let second = applicationRowTyped dyn ht b c
   TFun a (joinRows joinCellOf first second) c
-composeOp gt ht True = composeOp ht gt False
+composeOp dyn gt ht True = composeOp dyn ht gt False
 
 -- The arrow a callee presents, introduced when its shape is still unknown.
-calleeArrow : Mono -> (Mono, EffRow, Mono)
-calleeArrow ft = match normalize ft
+calleeArrow : DynCtx -> Mono -> (Mono, EffRow, Mono)
+calleeArrow dyn ft = match normalize ft
   TFun dom row res => (dom, row, res)
   _ =>
     let dom = freshVar ()
     let row = openRow ()
     let res = freshVar ()
-    let _ = unify ft (TFun dom row res)
+    let _ = unifyIn dyn ft (TFun dom row res)
     (dom, row, res)
 
-inferUnop : String -> Mono -> Mono
-inferUnop "-" t = negateOp t
-inferUnop "!" t = derefOp t
-inferUnop op _ = panic ("typecheck: unsupported unary op " ++ op)
+inferUnop : DynCtx -> String -> Mono -> Mono
+inferUnop dyn "-" t = negateOp t
+inferUnop dyn "!" t = derefOp dyn t
+inferUnop dyn op _ = panic ("typecheck: unsupported unary op " ++ op)
 
 -- #1739 half A: `!x` is Ref-DEREFERENCE, not boolean negation — `not` is the sole
 -- boolean negation (it is already a prelude fn).  The unify is the same one
@@ -19632,8 +19628,8 @@ inferUnop op _ = panic ("typecheck: unsupported unary op " ++ op)
 -- written to expect (`if !flag then …`), and handing it back keeps ONE located error
 -- instead of a cascade of downstream mismatches — the Chunk-D recovery shape the
 -- literal-provenance arms already use.
-derefOp : Mono -> Mono
-derefOp t =
+derefOp : DynCtx -> Mono -> Mono
+derefOp dyn t =
   if monoIsBool (normalize t) then
     let _ =
       pushTypeErrorHelpFixAt
@@ -19644,17 +19640,17 @@ derefOp t =
         None
     tconBuiltin "Bool"
   else
-    refStored t
+    refStored dyn t
 
 -- The type a `Ref` cell stores, read verbatim: the read is a directed flow out
 -- of the cell, so a stored qualifier survives it.  A cell whose shape is still
 -- unknown takes the `Ref` shape here.
-refStored : Mono -> Mono
-refStored t = match normalize t
+refStored : DynCtx -> Mono -> Mono
+refStored dyn t = match normalize t
   TApp (TCon "Ref" _) inner => inner
   _ =>
     let inner = freshVar ()
-    let _ = unify t (TApp (tconBuiltin "Ref") inner)
+    let _ = unifyIn dyn t (TApp (tconBuiltin "Ref") inner)
     inner
 
 -- `Bool` as a HEAD, ignoring origin: the prelude's Bool is builtin-origin, but a
@@ -20510,18 +20506,18 @@ unifySpineResult env f ft ((node, at) :: rest) =
 
 -- as `unifySpineResult`, but a PROBE: it performs no effect and discards the result.
 -- The dict-slot and obligation recoveries below unify only to populate a substitution.
-unifySpineProbe : Mono -> List Mono -> Unit
-unifySpineProbe ft args =
+unifySpineProbe : DynCtx -> Mono -> List Mono -> Unit
+unifySpineProbe dyn ft args =
   let saved = wSnapshot perRun.value.fileValueFlows
-  let _ = unifySpineProbeGo ft args
+  let _ = unifySpineProbeGo dyn ft args
   wRestore perRun.value.fileValueFlows saved
 
-unifySpineProbeGo : Mono -> List Mono -> Unit
-unifySpineProbeGo _ [] = ()
-unifySpineProbeGo ft (a :: rest) =
+unifySpineProbeGo : DynCtx -> Mono -> List Mono -> Unit
+unifySpineProbeGo dyn _ [] = ()
+unifySpineProbeGo dyn ft (a :: rest) =
   let r = freshVar ()
-  let _ = applicationRowTyped ft a r
-  unifySpineProbeGo r rest
+  let _ = applicationRowTyped dyn ft a r
+  unifySpineProbeGo dyn r rest
 
 -- ── #2109: RESULT-FIRST inference against a known expected type ───────────
 -- `paramVarianceGuard` (the D-2 variance gate) fires only when BOTH rows at a
@@ -20626,7 +20622,7 @@ inferAppResultFirst : TcEnv -> Expr -> List Expr -> Mono -> Mono
 inferAppResultFirst env hd args expected =
   let ft = infer env hd
   let _ = match resultAfterArrows (listLen args) ft
-    Some res => unify res expected
+    Some res => unifyIn env.teDyn res expected
     None => ()
   inferAppArgsAgainst env hd ft args
 
@@ -20655,115 +20651,121 @@ inferAppArgsAgainst env appSoFar ft (x :: rest) =
 -- `unifyInto` names the slot first,
 -- as a call argument's `unify` did; `unifyIntoOrd True` names the value first,
 -- as an annotation and a supplied field do (through `argumentIntoOrd`).
-unifyInto : Bool -> Mono -> Mono -> Unit
-unifyInto pos e a = unifyIntoOrd False pos e a
+unifyInto : DynCtx -> Bool -> Mono -> Mono -> Unit
+unifyInto dyn pos e a = unifyIntoOrd dyn False pos e a
 
 -- [valueFirst] is only the operand order of the fallback `unify`.
-unifyIntoOrd : Bool -> Bool -> Mono -> Mono -> Unit
-unifyIntoOrd valueFirst pos e a =
+unifyIntoOrd : DynCtx -> Bool -> Bool -> Mono -> Mono -> Unit
+unifyIntoOrd dyn valueFirst pos e a =
   let _ =
     if monoHasArrowInSlot e || monoHasArrowInSlot a then
       if pos then
         recordFileValueFlow !currentLoc e a
       else
         recordFileValueFlow !currentLoc a e
-  unifyIntoStep valueFirst pos e a
+  unifyIntoStep dyn valueFirst pos e a
 
 -- Capture a directed judgment once; recursive descent does not rescan every
 -- remaining type subtree for packed arrows.
-unifyIntoStep : Bool -> Bool -> Mono -> Mono -> Unit
-unifyIntoStep valueFirst pos e a =
-  unifyIntoN valueFirst pos (normalize e) (normalize a)
+unifyIntoStep : DynCtx -> Bool -> Bool -> Mono -> Mono -> Unit
+unifyIntoStep dyn valueFirst pos e a =
+  unifyIntoN dyn valueFirst pos (normalize e) (normalize a)
 
-unifyIntoN : Bool -> Bool -> Mono -> Mono -> Unit
-unifyIntoN _ True (TVar cell) (lower@(TFun _ _ _)) = bindValueUpper cell lower
-unifyIntoN _ True (TVar cell) (lower@(TApp _ _)) = bindValueUpper cell lower
-unifyIntoN _ False (lower@(TFun _ _ _)) (TVar cell) = bindValueUpper cell lower
-unifyIntoN _ False (lower@(TApp _ _)) (TVar cell) = bindValueUpper cell lower
+unifyIntoN : DynCtx -> Bool -> Bool -> Mono -> Mono -> Unit
+unifyIntoN dyn _ True (TVar cell) (lower@(TFun _ _ _)) =
+  bindValueUpper dyn cell lower
+unifyIntoN dyn _ True (TVar cell) (lower@(TApp _ _)) =
+  bindValueUpper dyn cell lower
+unifyIntoN dyn _ False (lower@(TFun _ _ _)) (TVar cell) =
+  bindValueUpper dyn cell lower
+unifyIntoN dyn _ False (lower@(TApp _ _)) (TVar cell) =
+  bindValueUpper dyn cell lower
 -- A qualified value reaching a flexible slot gives it a qualified shape with
 -- an allowance above the value's authority, so several values can converge.
-unifyIntoN _ True (TVar cell) (lower@(TQual _ _)) = bindValueUpper cell lower
-unifyIntoN _ False (lower@(TQual _ _)) (TVar cell) = bindValueUpper cell lower
+unifyIntoN dyn _ True (TVar cell) (lower@(TQual _ _)) =
+  bindValueUpper dyn cell lower
+unifyIntoN dyn _ False (lower@(TQual _ _)) (TVar cell) =
+  bindValueUpper dyn cell lower
 -- A flexible slot the qualified value flows OUT OF keeps the qualifier as it
 -- is, so a composed or partially applied function still names its authority.
-unifyIntoN _ _ (TVar cell) (t@(TQual _ _)) = bindVar noDyn cell t
-unifyIntoN _ _ (t@(TQual _ _)) (TVar cell) = bindVar noDyn cell t
+unifyIntoN dyn _ _ (TVar cell) (t@(TQual _ _)) = bindVar dyn cell t
+unifyIntoN dyn _ _ (t@(TQual _ _)) (TVar cell) = bindVar dyn cell t
 -- Qualified into qualified: the flowing side's authority must be within the
 -- receiving side's.  Qualified into plain forgets; plain into qualified can
 -- only be admitted when the qualifier admits the domain's top, since nothing
 -- bounds the plain value (the application site refines this with α).
-unifyIntoN vf pos (TQual e qe) (TQual a qa) =
+unifyIntoN dyn vf pos (TQual e qe) (TQual a qa) =
   let _ = if pos then wantAuthority qa qe else wantAuthority qe qa
-  unifyIntoStep vf pos e a
-unifyIntoN vf pos (TQual e qe) a =
+  unifyIntoStep dyn vf pos e a
+unifyIntoN dyn vf pos (TQual e qe) a =
   let _ = if pos then wantAuthority (authTop (authDomainTop qe)) qe
-  unifyIntoStep vf pos e a
-unifyIntoN vf pos e (TQual a qa) =
+  unifyIntoStep dyn vf pos e a
+unifyIntoN dyn vf pos e (TQual a qa) =
   let _ = if pos then () else wantAuthority (authTop (authDomainTop qa)) qa
-  unifyIntoStep vf pos e a
-unifyIntoN _ _ (TAuth qe) (TAuth qa) = unifyIndex qa qe
-unifyIntoN vf pos (TFun e1 er e2) (TFun a1 ar a2) =
-  let _ = unifyIntoStep vf (not pos) e1 a1
-  let _ = rowInto pos (effrowNorm er) (effrowNorm ar)
-  unifyIntoStep vf pos e2 a2
-unifyIntoN vf pos (e@(TApp e1 e2)) (a@(TApp a1 a2))
-  | tupleUnifyClash e a || monoSlotNonCovariant e1 = unifyOrdered vf e a
+  unifyIntoStep dyn vf pos e a
+unifyIntoN dyn _ _ (TAuth qe) (TAuth qa) = unifyIndex qa qe
+unifyIntoN dyn vf pos (TFun e1 er e2) (TFun a1 ar a2) =
+  let _ = unifyIntoStep dyn vf (not pos) e1 a1
+  let _ = rowInto dyn pos (effrowNorm er) (effrowNorm ar)
+  unifyIntoStep dyn vf pos e2 a2
+unifyIntoN dyn vf pos (e@(TApp e1 e2)) (a@(TApp a1 a2))
+  | tupleUnifyClash e a || monoSlotNonCovariant e1 = unifyOrdered dyn vf e a
   | otherwise =
-    let _ = unifyIntoStep vf pos e1 a1
-    unifyIntoStep vf pos e2 a2
-unifyIntoN vf _ e a = unifyOrdered vf e a
+    let _ = unifyIntoStep dyn vf pos e1 a1
+    unifyIntoStep dyn vf pos e2 a2
+unifyIntoN dyn vf _ e a = unifyOrdered dyn vf e a
 
 -- A flexible receiving slot acquires the value's shape, not its first closed
 -- row. Positive arrows get inference allowances with directed lower bounds;
 -- domains and invariant constructor arguments keep ordinary HM equality.
 -- This is the same structural envelope as a produced-value join, so a generic
 -- choice cannot depend on which callback happens to be supplied first.
-bindValueUpper : Ref Tyvar -> Mono -> Unit
-bindValueUpper cell lower =
+bindValueUpper : DynCtx -> Ref Tyvar -> Mono -> Unit
+bindValueUpper dyn cell lower =
   perRun.value.occursCheckFailed := False
   let _ = occursAdjust (tyvarId cell) (tyvarLevel cell) lower
   if not perRun.value.occursCheckFailed.value then
     let upper =
       optionOrFresh
         (joinProducedEnvelope (valueJoinOps
-          noDyn
+          dyn
           JoinArgument
           collectValueAllowance) [
           (!currentLoc, lower),
         ])
     let _ = recordFileValueFlow !currentLoc upper lower
-    bindVar noDyn cell upper
+    bindVar dyn cell upper
 
-collectValueAllowance : List EffRow -> EffRow
-collectValueAllowance rows =
+collectValueAllowance : DynCtx -> List EffRow -> EffRow
+collectValueAllowance dyn rows =
   let cell = freshInferenceEffvar ()
   let _ = EffectSolver.registerValueAllowance perRun.value.effectSummaries cell
   let upper = EffRow [] (Some cell)
-  let _ = fold (_ lower => rowInto True upper lower) () rows
+  let _ = fold (_ lower => rowInto dyn True upper lower) () rows
   upper
 
-unifyOrdered : Bool -> Mono -> Mono -> Unit
-unifyOrdered True e a = unify a e
-unifyOrdered False e a = unify e a
+unifyOrdered : DynCtx -> Bool -> Mono -> Mono -> Unit
+unifyOrdered dyn True e a = unifyIn dyn a e
+unifyOrdered dyn False e a = unifyIn dyn e a
 
 -- Check the known inclusion without equating the allowance with the performed
 -- row. In particular, a pure alternative must not close an allowance's tail.
-rowInto : Bool -> EffRow -> EffRow -> Unit
-rowInto pos er ar
+rowInto : DynCtx -> Bool -> EffRow -> EffRow -> Unit
+rowInto dyn pos er ar
   | EffectSolver.hasSummaryScope perRun.value.effectSummaries =
     if pos then
       deferEffectRelation False ar er
     else
       deferEffectRelation False er ar
-rowInto True (EffRow le None) (EffRow la None) =
+rowInto dyn True (EffRow le None) (EffRow la None) =
   effectLeakCheck (atomsEscape la le) le
-rowInto False (EffRow le None) (EffRow la None) =
+rowInto dyn False (EffRow le None) (EffRow la None) =
   contraRowCheck (atomsEscape le la) le la
-rowInto True (er@(EffRow le _)) (ar@(EffRow la None)) =
-  if isEmptyL (atomsEscape la le) then () else unifyRowN noDyn er ar
-rowInto False (er@(EffRow le None)) (ar@(EffRow la _)) =
-  if isEmptyL (atomsEscape le la) then () else unifyRowN noDyn er ar
-rowInto _ er ar = unifyRowN noDyn er ar
+rowInto dyn True (er@(EffRow le _)) (ar@(EffRow la None)) =
+  if isEmptyL (atomsEscape la le) then () else unifyRowN dyn er ar
+rowInto dyn False (er@(EffRow le None)) (ar@(EffRow la _)) =
+  if isEmptyL (atomsEscape le la) then () else unifyRowN dyn er ar
+rowInto dyn _ er ar = unifyRowN dyn er ar
 
 -- the contravariant half of `rowInto`: the expected PARAMETER row [le] admits
 -- atoms the actual's parameter row [la] does not, so a caller could hand the
@@ -21058,6 +21060,7 @@ inferShadowApp env mname arityRefs tagRefs f x =
   -- concrete receivers) are byte-identical.
   let _ =
     groundShadowReceiver
+      env.teDyn
       (importerShadowDomain env mname)
       tx
       (definerReceiverIsDictVar mname tx)
@@ -21164,6 +21167,7 @@ inferShadowAppAt env mname arityRefs tagRefs hd nodes f x =
   let tx = infer env x
   let _ =
     groundShadowReceiver
+      env.teDyn
       (importerShadowDomainAt env mname k)
       tx
       (definerReceiverIsDictVar mname tx)
@@ -21466,7 +21470,12 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
   -- dispatch decision, so typecheck asks the impl question about the SAME head the
   -- post-inference route resolver will.  See groundShadowReceiver.
   let _ =
-    groundShadowReceiver (shadowDomainForAt env name sym k) xt isDictVar dloc
+    groundShadowReceiver
+      env.teDyn
+      (shadowDomainForAt env name sym k)
+      xt
+      isDictVar
+      dloc
   let dispatches = definerReceiverDispatches name xt
   -- A dispatching occurrence names the interface whose method it selects, as an
   -- ordinary method occurrence does (`inferMethodCandidateAt`); the standalone arm
@@ -21743,14 +21752,14 @@ ifaceSelfAndSupers iface =
 -- the standalone's k-th parameter.  `k = 0` is the pre-#1815 behavior verbatim (the
 -- bare-head arms pass it, and both of this function's callers now name the index).
 enforceStandaloneDomainAt : TcEnv -> String -> Mono -> Option Loc -> Int -> Unit
-enforceStandaloneDomainAt _ name xt dloc k =
+enforceStandaloneDomainAt env name xt dloc k =
   match standaloneShadowDomainAt name k
     None => ()
     Some dom =>
       if definerReceiverIsDictVar name xt then
         ()
       else
-        unifyStandaloneDomain dom xt dloc
+        unifyStandaloneDomain env.teDyn dom xt dloc
 
 -- P0-20 (SILENT WRONG ANSWER, `eq 1 2` → the binary printed 0): typecheck's
 -- dispatch-vs-standalone decision and the POST-inference route resolver
@@ -21780,13 +21789,18 @@ enforceStandaloneDomainAt _ name xt dloc k =
 -- and grounding would be silently inert — which is not a no-op, it flips the emit path to
 -- the STANDALONE arm while check/run dispatch.  (Observed: `build` printed 3, `run`
 -- printed False.)  Same bug, other direction.
-groundShadowReceiver : Option Mono -> Mono -> Bool -> Option Loc -> Unit
-groundShadowReceiver dom xt isDictVar dloc
+groundShadowReceiver : DynCtx ->
+  Option Mono ->
+  Mono ->
+  Bool ->
+  Option Loc ->
+  Unit
+groundShadowReceiver dyn dom xt isDictVar dloc
   | isDictVar = ()
   | isSome (headTyconMono xt) = ()
   | otherwise = match dom
     None => ()
-    Some d => unifyStandaloneDomain d xt dloc
+    Some d => unifyStandaloneDomain dyn d xt dloc
 
 -- P0-20: the definer-shadow standalone's declared domain, resolved on EITHER path.
 -- Un-mangled run/check (sym == ""): the module's own sig table, keyed by the bare name.
@@ -21801,10 +21815,10 @@ shadowDomainForAt env _ sym k = match lookupVar env sym
   Some s => nthFunDomain k (instantiate s)
 
 -- unify the standalone domain against the argument at the call's location.
-unifyStandaloneDomain : Mono -> Mono -> Option Loc -> Unit
-unifyStandaloneDomain dom xt dloc =
+unifyStandaloneDomain : DynCtx -> Mono -> Mono -> Option Loc -> Unit
+unifyStandaloneDomain dyn dom xt dloc =
   currentLoc := dloc
-  unify dom xt
+  unifyIn dyn dom xt
 
 -- a definer-shadow standalone's declared parameter type, freshly instantiated (so a
 -- polymorphic standalone domain does not leak vars across sites).  None when there is
@@ -22122,6 +22136,7 @@ inferDefinerShadowVarAppAt env name hd nodes f x =
   -- #1815: the DECLARED DOMAIN THE RECEIVER GROUNDS TO IS THE k-TH ONE, not the first.
   let _ =
     groundShadowReceiver
+      env.teDyn
       (standaloneShadowDomainAt name (listLen pre))
       xt
       isDictVar
@@ -22214,13 +22229,14 @@ stampMethodArities (r :: rest) arity =
 -- classifier `isDefinerShadow` reads `definerShadowNamesRef`, which holds bare names on
 -- every path.  Passing [key] to that classifier makes it silently answer False for every
 -- mangled occurrence — see `shadowDeclaredFor`.
-shadowStandaloneDictSlotsAt : Option ValueScheme ->
+shadowStandaloneDictSlotsAt : DynCtx ->
+  Option ValueScheme ->
   String ->
   String ->
   Mono ->
   ShadowDicts
-shadowStandaloneDictSlotsAt None _ _ _ = emptyShadowDicts
-shadowStandaloneDictSlotsAt (Some value) name key xt =
+shadowStandaloneDictSlotsAt dyn None _ _ _ = emptyShadowDicts
+shadowStandaloneDictSlotsAt dyn (Some value) name key xt =
   let inst = instantiateMethodTracked value.vsScheme
   let dc =
     optionOr
@@ -22229,7 +22245,7 @@ shadowStandaloneDictSlotsAt (Some value) name key xt =
   if isEmptyL dc.cdSlots then
     emptyShadowDicts
   else
-    let _ = unifySpineProbe inst.mtiBody [xt]
+    let _ = unifySpineProbe dyn inst.mtiBody [xt]
     shadowStandaloneDictSlots
       dc.cdSlots
       dc.cdArgs
@@ -22355,10 +22371,11 @@ inferBindingChecked env expected pats body =
   let pr = inferPats env pats
   let arity = listLen pats
   let _ = match expected
-    Some want => unifyParamsExpected (fst pr) (expectedParamTypes want arity)
+    Some want =>
+      unifyParamsExpected env.teDyn (fst pr) (expectedParamTypes want arity)
     None => ()
   let scope = openExistentialScope (takeOpenedExistentials ())
-  let _ = settlePatLits lits
+  let _ = settlePatLits env.teDyn lits
   let _ = match expected
     Some want => recordClauseFileBound body arity want
     None => ()
@@ -22375,11 +22392,11 @@ inferBindingChecked env expected pats body =
   (arrowsWithLastEffect (fst pr) bodyEff bodyTy, force)
 
 -- unify each param type with its expected type, for the prefix both lists cover.
-unifyParamsExpected : List Mono -> List Mono -> Unit
-unifyParamsExpected (p :: ps) (e :: es) =
-  let _ = bindFrom p e
-  unifyParamsExpected ps es
-unifyParamsExpected _ _ = ()
+unifyParamsExpected : DynCtx -> List Mono -> List Mono -> Unit
+unifyParamsExpected dyn (p :: ps) (e :: es) =
+  let _ = bindFrom dyn p e
+  unifyParamsExpected dyn ps es
+unifyParamsExpected dyn _ _ = ()
 
 -- Chunk C: recover the ultimate callee name of an application spine (the
 -- leftmost head), stripping transparent wrappers.  `None` when the head is not
@@ -22499,7 +22516,7 @@ doBindArgHint argTy = "bind a plain `\{argTy}` with `let` instead of `<-`"
 -- `andThen` `lowerDo` builds for a `do`-bind (`callAndThen`,
 -- `compiler/frontend/desugar.mdk`)?  A STRUCTURAL check off the one node
 -- `inferApp` was actually called for — no ambient/dynamic flag (the first cut
--- of this fix used callee-name + `currentDoOrigin`, which also lit up on a
+-- of this fix used callee-name + the do-origin context, which also lit up on a
 -- user's own explicit `andThen` call textually nested inside a do-bind's
 -- scrutinee, e.g. `x <- andThen b f`; that call is neither `lowerDo`'s callee
 -- nor wants the `let`-instead-of-`<-` advice).  `callAndThen` tags ONLY the
@@ -22696,7 +22713,7 @@ inferApp env appExpr ft xt =
         -- is not "pass a List or Array" — it is "use `let`, not `<-`". Detected
         -- by AST SHAPE off `appExpr`'s own callee (`isDoLoweredAndThenCallee`,
         -- `callAndThen` tags exactly its synthesized callee), NOT by name +
-        -- `currentDoOrigin` — review finding 1 on the first cut of this fix: a
+        -- the do-origin context — review finding 1 on the first cut of this fix: a
         -- name+ambient-state heuristic false-positives on a user's OWN explicit
         -- `andThen` call textually nested inside a do-bind's scrutinee
         -- (`x <- andThen b f`), which is neither `lowerDo`'s callee nor
@@ -22751,9 +22768,9 @@ argumentIntoOrd valueFirst env arg dom xt =
     None => ()
   match normalize dom
     TQual d q =>
-      let _ = unifyIntoOrd valueFirst True d xt
+      let _ = unifyIntoOrd env.teDyn valueFirst True d xt
       wantAuthority (argumentAuthority env (authDomainTop q) arg xt) q
-    _ => unifyIntoOrd valueFirst True dom xt
+    _ => unifyIntoOrd env.teDyn valueFirst True dom xt
 -- The same judgment for an expression that flows into a declared type rather
 -- than a parameter: a signed body into its result, a lambda or method body into
 -- the arrow it is checked against. A qualified declared type bounds the
@@ -22771,23 +22788,23 @@ checkedInto env e expected actual =
     _ => actual
 -- The same judgment where only the argument's type is at hand (a pipe, a
 -- composition, a dispatch spine): the type's own qualifier or the top.
-applicationRowTyped : Mono -> Mono -> Mono -> EffRow
-applicationRowTyped ft xt result = match normalize ft
+applicationRowTyped : DynCtx -> Mono -> Mono -> Mono -> EffRow
+applicationRowTyped dyn ft xt result = match normalize ft
   TFun dom row res =>
-    let _ = argumentIntoTyped dom xt
-    let _ = bindFrom result res
+    let _ = argumentIntoTyped dyn dom xt
+    let _ = bindFrom dyn result res
     row
   _ =>
     let unknown = openRow ()
-    let _ = unify ft (TFun xt unknown result)
+    let _ = unifyIn dyn ft (TFun xt unknown result)
     unknown
 
-argumentIntoTyped : Mono -> Mono -> Unit
-argumentIntoTyped dom xt = match normalize dom
+argumentIntoTyped : DynCtx -> Mono -> Mono -> Unit
+argumentIntoTyped dyn dom xt = match normalize dom
   TQual d q =>
-    let _ = unifyInto True d xt
+    let _ = unifyInto dyn True d xt
     wantAuthority (typeAuthority (authDomainTop q) xt) q
-  _ => unifyInto True dom xt
+  _ => unifyInto dyn True dom xt
 
 argumentAuthority : TcEnv -> Param -> Option Expr -> Mono -> Authority
 argumentAuthority env top (Some e) xt =
@@ -22907,11 +22924,11 @@ applicationRow : TcEnv -> Expr -> Mono -> Mono -> Mono -> EffRow
 applicationRow env appExpr ft xt result = match normalize ft
   TFun dom row res =>
     let _ = argumentInto env (appArgExpr appExpr) dom xt
-    let _ = bindFrom result res
+    let _ = bindFrom env.teDyn result res
     row
   _ =>
     let unknown = openRow ()
-    let _ = unify ft (TFun xt unknown result)
+    let _ = unifyIn env.teDyn ft (TFun xt unknown result)
     unknown
 
 -- Chunk C: the applied head is a ground non-function.  If the spine over-applies
@@ -22981,8 +22998,8 @@ inferRecLet env x xloc bid e1 e2 =
   let _ = closeLocalScope lscope
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
-  let _ = improveLocalGoals addedObls callN0
-  let _ = finalizeNumBoundary NumBoundary {
+  let _ = improveLocalGoals env.teDyn addedObls callN0
+  let _ = finalizeNumBoundary env.teDyn NumBoundary {
     nbDisposition =
       NumBoundaryOwnedMember (perRun.value.currentLevel.value + 1),
     nbMembers = [t1],
@@ -22992,7 +23009,8 @@ inferRecLet env x xloc bid e1 e2 =
     nbGuard = localNumGuard addedObls callN0,
   }  -- PLAN.md #11 / RETPOS soundness
   let _ = recordLocalBind x xloc bid t1  -- LSP hover (recursive PVar let bypasses inferPat)
-  let sch = genBindingRestricted Tip (residualsOf 0 residuals) True pureRow t1  -- #866
+  let sch =
+    genBindingRestricted env.teDyn Tip (residualsOf 0 residuals) True pureRow t1  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   let _ = registerLocalAbsIf x lscope sch oblN0 callN0
   infer (seedAlphaLets (extendLocalVar env x sch) x e1) e2  -- WS-2: α scope-seed
@@ -23012,14 +23030,14 @@ inferRecursiveValue env name expr =
   let envSelf = extendLocalVar env name (monoScheme owned.bsRecursiveValue)
   let (actual, immediate) =
     captureEffects perRun.value.curEffect joinCellOf (_ => infer envSelf expr)
-  let _ = unifySourceDomains arity owned.bsValue actual
-  let _ = publishProducedResults owned [(exprLoc expr, actual)]
+  let _ = unifySourceDomains env.teDyn arity owned.bsValue actual
+  let _ = publishProducedResults env.teDyn owned [(exprLoc expr, actual)]
   let _ = recordEffectBody owned.bsBody (if arity == 0 then
     immediate
   else
     bodyRowAt arity actual)
-  let _ = checkRecursiveValue owned
-  let residuals = finishValueEffectsKeeping [(True, owned.bsValue)]
+  let _ = checkRecursiveValue env.teDyn owned
+  let residuals = finishValueEffectsKeeping env.teDyn [(True, owned.bsValue)]
   let _ = performEffect perRun.value.curEffect immediate
   (owned.bsValue, residuals)
 
@@ -23084,15 +23102,16 @@ inferLetSimple env pat e1 e2 =
     _ => None
   let t1 = infer env e1
   let _ = closeLocalScope lscope
-  let residuals =
-    finishValueEffectsKeeping [(patIsVar pat && isNonexpansive env e1, t1)]
+  let residuals = finishValueEffectsKeeping env.teDyn [
+    (patIsVar pat && isNonexpansive env e1, t1),
+  ]
   let _ = exitLevel ()
   -- PLAN.md #11 / D4: ground an ambiguous Num-only var owned by this inner let
   -- before it generalizes, so `let z = 2 in y + z` (y:Float) is a clean type
   -- error and never leaks an unbound Num var.  Scoped to this binding's new obligations.
   let addedObls = wWindow perRun.value.implObls oblN0
-  let _ = improveLocalGoals addedObls callN0
-  let _ = finalizeNumBoundary NumBoundary {
+  let _ = improveLocalGoals env.teDyn addedObls callN0
+  let _ = finalizeNumBoundary env.teDyn NumBoundary {
     nbDisposition =
       NumBoundaryOwnedMember (perRun.value.currentLevel.value + 1),
     nbMembers = [t1],
@@ -23122,6 +23141,7 @@ inferLetBody env (PVar x xloc bid) t1 residuals e1 e2 oblN0 callN0 dictN0 lscope
   let _ = recordLocalBind x (Some xloc) bid t1  -- LSP hover (PVar let bypasses inferPat)
   let sch =
     genBindingRestricted
+      env.teDyn
       Tip
       (residualsOf 0 residuals)
       (isNonexpansive env e1)
@@ -23133,17 +23153,17 @@ inferLetBody env (PVar x xloc bid) t1 residuals e1 e2 oblN0 callN0 dictN0 lscope
 inferLetBody env pat t1 _ _ e2 _ _ _ _ =
   let lits = takePatLits ()
   let pr = inferPat env pat
-  let _ = unify (fst pr) t1
-  let _ = settlePatLits lits
+  let _ = unifyIn env.teDyn (fst pr) t1
+  let _ = settlePatLits env.teDyn lits
   infer (extendLocalVars env (snd pr)) e2
 
 inferIf : TcEnv -> Expr -> Expr -> Expr -> Mono
 inferIf env c t e =
-  let _ = unify (infer env c) (tconBuiltin "Bool")
+  let _ = unifyIn env.teDyn (infer env c) (tconBuiltin "Bool")
   let tt = infer env t
   let ee = infer env e
   let context = if isOmittedElse e then JoinElselessIf else JoinIf
-  joinValueTypes context [(exprLoc t, tt), (exprLoc e, ee)]
+  joinValueTypes env.teDyn context [(exprLoc t, tt), (exprLoc e, ee)]
 
 -- The parser builds an omitted `else` as a bare unit literal (`elseBranch`,
 -- `compiler/frontend/parser.mdk`) and wraps every atom it reads in `ELoc`, a
@@ -23157,19 +23177,19 @@ isOmittedElse _ = False
 
 -- Inference owns source locations and variance metadata; effect_values owns
 -- the structural join. Unknown constructor slots remain exact.
-joinValueTypes : JoinContext -> List (Option Loc, Mono) -> Mono
-joinValueTypes context values =
+joinValueTypes : DynCtx -> JoinContext -> List (Option Loc, Mono) -> Mono
+joinValueTypes dyn context values =
   let upper =
     optionOrFresh
       (joinProduced
-        (valueJoinOps noDyn context (collectRows joinCellOf))
+        (valueJoinOps dyn context (_ => collectRows joinCellOf))
         values)
   let _ = map ((loc, lower) => recordFileValueFlow loc upper lower) values
   upper
 
 valueJoinOps : DynCtx ->
   JoinContext ->
-  (List EffRow -> EffRow) ->
+  (DynCtx -> List EffRow -> EffRow) ->
   ValueJoinOps (Option Loc)
 valueJoinOps dyn context collector =
   let ops = decidingJoinOps dyn context collector
@@ -23179,14 +23199,14 @@ valueJoinOps dyn context collector =
 -- must not record it again.
 decidingJoinOps : DynCtx ->
   JoinContext ->
-  (List EffRow -> EffRow) ->
+  (DynCtx -> List EffRow -> EffRow) ->
   ValueJoinOps (Option Loc)
 decidingJoinOps dyn context collector = ValueJoinOps {
   vjoEqual = joinValueEqual dyn context,
   vjoCovariants = producedSlotCovariants,
   vjoFreshType = freshVar,
   vjoFreshRow = openRow,
-  vjoCollectRows = collector,
+  vjoCollectRows = collector dyn,
   vjoFreshAuth = top => AVar (freshAuthvar top None),
   vjoCollectAuth = collectAuthAllowance,
   vjoDefer = _ => None,
@@ -23197,7 +23217,7 @@ decidingJoinOps dyn context collector = ValueJoinOps {
 -- later use shapes one of them.  Inside a binding scope the join is recorded
 -- and decided when the scope closes (§6.8); outside one it is decided now.
 deferJoin : JoinContext ->
-  (List EffRow -> EffRow) ->
+  (DynCtx -> List EffRow -> EffRow) ->
   List (Option Loc, Mono) ->
   Option Mono
 deferJoin context collector values =
@@ -23235,13 +23255,13 @@ distinctVariables values =
 -- all of its joins, since the routes of the methods it uses are fixed when it
 -- closes.  Newest first, so an outer join shapes its alternatives before an
 -- inner join whose result is one of them is decided from that shape.
-resolvePendingJoins : Int -> Unit
-resolvePendingJoins level = match perRun.value.pendingJoinsRef.value
+resolvePendingJoins : DynCtx -> Int -> Unit
+resolvePendingJoins dyn level = match perRun.value.pendingJoinsRef.value
   pj :: rest =>
     if pj.pjLevel >= level then
       perRun.value.pendingJoinsRef := rest
-      let _ = resolvePendingJoin pj
-      resolvePendingJoins level
+      let _ = resolvePendingJoin dyn pj
+      resolvePendingJoins dyn level
   [] => ()
 
 -- Settle the joins a local binding scope recorded before the binding
@@ -23253,23 +23273,23 @@ resolvePendingJoins level = match perRun.value.pendingJoinsRef.value
 -- now, including one whose result is already outer but which has a local
 -- alternative: handing it out would let the binding generalize that
 -- alternative while the join still constrains it.
-settlePendingJoins : Int -> Unit
-settlePendingJoins level =
-  let postponed = settlePending level []
+settlePendingJoins : DynCtx -> Int -> Unit
+settlePendingJoins dyn level =
+  let postponed = settlePending dyn level []
   perRun.value.pendingJoinsRef :=
     reverseL postponed ++ perRun.value.pendingJoinsRef.value
 
-settlePending : Int -> List PendingJoin -> List PendingJoin
-settlePending level postponed = match perRun.value.pendingJoinsRef.value
+settlePending : DynCtx -> Int -> List PendingJoin -> List PendingJoin
+settlePending dyn level postponed = match perRun.value.pendingJoinsRef.value
   pj :: rest =>
     if pj.pjLevel >= level then
       perRun.value.pendingJoinsRef := rest
       if joinOfOuterVariables level pj then
         let _ = lowerTyvarLevel (level - 1) pj.pjResult
-        settlePending level ({ pj | pjLevel = level - 1 } :: postponed)
+        settlePending dyn level ({ pj | pjLevel = level - 1 } :: postponed)
       else
-        let _ = resolvePendingJoin pj
-        settlePending level postponed
+        let _ = resolvePendingJoin dyn pj
+        settlePending dyn level postponed
     else
       postponed
   [] => postponed
@@ -23312,15 +23332,16 @@ lowerPending _ pending = pending
 -- Decide a join at the close of its scope.  A result a unification shaped
 -- was decided then (`takeJoinsShapedBy`); one still shaped here is decided
 -- the same way.
-resolvePendingJoin : PendingJoin -> Unit
-resolvePendingJoin pj = match normalize pj.pjResult
+resolvePendingJoin : DynCtx -> PendingJoin -> Unit
+resolvePendingJoin dyn pj = match normalize pj.pjResult
   TVar _ =>
-    unify
+    unifyIn
+      dyn
       pj.pjResult
       (resolveDeferredJoin
-        (decidingJoinOps noDyn pj.pjContext pj.pjCollector)
+        (decidingJoinOps dyn pj.pjContext pj.pjCollector)
         pj.pjValues)
-  _ => settleShapedJoins noDyn [pj]
+  _ => settleShapedJoins dyn [pj]
 
 -- A receiving qualified slot's allowance: one flexible variable of the
 -- current scope, bounded below by every value that reaches the slot.
@@ -23343,17 +23364,20 @@ collectProducedSummary rows =
   let _ = fold (_ row => recordEffectBody summary row) () rows
   summary
 
-publishProducedResults : BindingSummary -> List (Option Loc, Mono) -> Unit
-publishProducedResults owned values =
+publishProducedResults : DynCtx ->
+  BindingSummary ->
+  List (Option Loc, Mono) ->
+  Unit
+publishProducedResults dyn owned values =
   let results = map (clauseResult owned.bsArity) values
   let produced =
     optionOrFresh
       (joinProducedEnvelope
-        (valueJoinOps noDyn JoinClause collectProducedSummary)
+        (valueJoinOps dyn JoinClause (_ => collectProducedSummary))
         results)
   let _ = map ((loc, lower) => recordFileValueFlow loc produced lower) results
   match resultAfterArrows owned.bsArity owned.bsValue
-    Some expected => bindFrom expected produced
+    Some expected => bindFrom dyn expected produced
     None => panic "binding source arity differs from its allocated shape"
 
 clauseResult : Int -> (Option Loc, Mono) -> (Option Loc, Mono)
@@ -23361,8 +23385,9 @@ clauseResult arity (loc, value) = match resultAfterArrows arity value
   Some result => (loc, result)
   None => (loc, value)
 
-checkRecursiveValue : BindingSummary -> Unit
-checkRecursiveValue owned = unifyInto True owned.bsRecursiveValue owned.bsValue
+checkRecursiveValue : DynCtx -> BindingSummary -> Unit
+checkRecursiveValue dyn owned =
+  unifyInto dyn True owned.bsRecursiveValue owned.bsValue
 
 joinValueEqual : DynCtx -> JoinContext -> Option Loc -> Mono -> Mono -> Unit
 joinValueEqual dyn context loc left right =
@@ -23410,7 +23435,7 @@ inferEach env (e :: es) =
 
 inferListLit : TcEnv -> List Expr -> Mono
 inferListLit env es =
-  let elem = joinValueTypes JoinList (inferProduced env es)
+  let elem = joinValueTypes env.teDyn JoinList (inferProduced env es)
   TApp (tconBuiltin "List") elem
 
 inferAnnot : TcEnv -> Expr -> Ty -> Mono
@@ -23457,7 +23482,7 @@ inferHeadAnnot : TcEnv -> Expr -> Ty -> Mono
 inferHeadAnnot env e ty =
   let t = infer env e
   let annot = headAnnotTy ty
-  let _ = unify t annot
+  let _ = unifyIn env.teDyn t annot
   t
 
 -- The head-pin's target type: if the annotation's head is a TyCon with a known
@@ -23489,7 +23514,7 @@ checkAnnotTooGeneral ty resolved =
 
 inferMatch : TcEnv -> Mono -> List Arm -> Mono
 inferMatch env scrutTy arms =
-  let result = joinValueTypes JoinMatch (inferArms env scrutTy arms)
+  let result = joinValueTypes env.teDyn JoinMatch (inferArms env scrutTy arms)
   let _ = match normalize scrutTy
     TVar _ =>
       perRun.value.matchChecksDeferred :=
@@ -23726,8 +23751,8 @@ inferArm env scrutTy pat gs body
   | otherwise =
     let lits = takePatLits ()
     let pr = inferPat env pat
-    let _ = bindFrom (fst pr) scrutTy
-    let _ = settlePatLits lits
+    let _ = bindFrom env.teDyn (fst pr) scrutTy
+    let _ = settlePatLits env.teDyn lits
     let envBody = inferArmGuards (extendLocalVars env (snd pr)) gs
     infer envBody body
 
@@ -23777,9 +23802,9 @@ inferArmOpening : TcEnv -> Mono -> Pat -> List Guard -> Expr -> Mono
 inferArmOpening env scrutTy pat gs body =
   let lits = takePatLits ()
   let pr = inferPat env pat
-  let _ = bindFrom (fst pr) scrutTy
+  let _ = bindFrom env.teDyn (fst pr) scrutTy
   let scope = openExistentialScope (takeOpenedExistentials ())
-  let _ = settlePatLits lits
+  let _ = settlePatLits env.teDyn lits
   let envBody = inferArmGuards (extendLocalVars env (snd pr)) gs
   let t = infer envBody body
   let _ = closeExistentialScope scope t (exprLoc body)
@@ -23834,14 +23859,14 @@ existentialEscapeMsg name =
 inferArmGuards : TcEnv -> List Guard -> TcEnv
 inferArmGuards env [] = env
 inferArmGuards env ((GBool g) :: rest) =
-  let _ = unify (infer env g) (tconBuiltin "Bool")
+  let _ = unifyIn env.teDyn (infer env g) (tconBuiltin "Bool")
   inferArmGuards env rest
 inferArmGuards env ((GBind p e) :: rest) =
   let te = infer env e
   let lits = takePatLits ()
   let pr = inferPat env p
-  let _ = bindFrom (fst pr) te
-  let _ = settlePatLits lits
+  let _ = bindFrom env.teDyn (fst pr) te
+  let _ = settlePatLits env.teDyn lits
   inferArmGuards (extendLocalVars env (snd pr)) rest
 
 inferLetGroup : TcEnv -> List LetBind -> Expr -> Mono
@@ -25194,9 +25219,11 @@ processLetGroup env binds =
   let env2 = extendLocalVars env recursive
   let _ = fold (_ bind => forgetLocalAbs (letBindName bind)) () binds
   let lscopes = inferLetBinds env2 (zipL binds summaries)
-  let _ = fold (_ entry => checkRecursiveValue (snd entry)) () summaries
+  let _ =
+    fold (_ entry => checkRecursiveValue env.teDyn (snd entry)) () summaries
   let residuals =
     finishValueEffectsKeeping
+      env.teDyn
       (map (letBindGeneralizes env) (zipL binds summaries))
   let _ = flushPendingEscapes ()
   let _ = exitLevel ()
@@ -25208,9 +25235,9 @@ processLetGroup env binds =
   -- the enclosing binding's boundary decides what its uses leave ambiguous.
   -- Scoped to this group's newly added obligations.
   let addedObls = wWindow perRun.value.implObls oblN0
-  let _ = improveLocalGoals addedObls callN0
+  let _ = improveLocalGoals env.teDyn addedObls callN0
   let memberMonos = map (p => schemeMono (snd p)) placeholders
-  let _ = finalizeNumBoundary NumBoundary {
+  let _ = finalizeNumBoundary env.teDyn NumBoundary {
     nbDisposition = NumBoundaryOwnedGroup (perRun.value.currentLevel.value + 1),
     nbMembers = memberMonos,
     nbSurvivingIds = omEmpty,
@@ -25423,8 +25450,8 @@ enclosingVarIds (Some level) args =
 
 -- D1: one operation performs defaulting first, then ambiguity registration.  It
 -- returns the candidates D3 clause 3 withheld, for the boundary's verdict.
-finalizeNumBoundary : NumBoundary -> List Mono
-finalizeNumBoundary boundary =
+finalizeNumBoundary : DynCtx -> NumBoundary -> List Mono
+finalizeNumBoundary dyn boundary =
   let guard = armNumGuard boundary.nbGuard
   let defaultOwnerPolicy = match boundary.nbDisposition
     NumBoundaryOwnedMember owner => Some owner
@@ -25441,6 +25468,7 @@ finalizeNumBoundary boundary =
       [member] =>
         let _ =
           defaultAmbiguousNumWith
+            dyn
             defaultOwnerPolicy
             guard
             boundary.nbSurvivingIds
@@ -25450,6 +25478,7 @@ finalizeNumBoundary boundary =
       _ => panic "NumBoundaryOwnedMember must carry exactly one member"
     NumBoundaryOwnedGroup _ =>
       defaultAbsentNumWith
+        dyn
         defaultOwnerPolicy
         guard
         boundary.nbSurvivingIds
@@ -25458,12 +25487,14 @@ finalizeNumBoundary boundary =
     NumBoundaryOwnedScc _ =>
       let _ =
         defaultGroupNumWith
+          dyn
           defaultOwnerPolicy
           guard
           boundary.nbSurvivingIds
           boundary.nbDefaultObls
           boundary.nbMembers
       defaultEachMemberWith
+        dyn
         defaultOwnerPolicy
         guard
         boundary.nbSurvivingIds
@@ -25472,6 +25503,7 @@ finalizeNumBoundary boundary =
     NumBoundaryOwnedMethodBody _ => match boundary.nbMembers
       [_] =>
         defaultBodyLocalNumWith
+          dyn
           defaultOwnerPolicy
           guard
           boundary.nbSurvivingIds
@@ -25511,17 +25543,19 @@ lowerOwnedRoot owner m = match normalize m
   TVar cell => if tyvarLevel cell == owner then lowerToCurrent m
   _ => ()
 
-defaultAmbiguousNumWith : Option Int ->
+defaultAmbiguousNumWith : DynCtx ->
+  Option Int ->
   ArmedGuard ->
   OrdMap Unit ->
   List UObligation ->
   Mono ->
   Unit
-defaultAmbiguousNumWith ownerPolicy guard protectedIds obls t =
+defaultAmbiguousNumWith dyn ownerPolicy guard protectedIds obls t =
   let argIds = monoArgUnboundIds t
   let inT = monoUnboundIds t
   let candidates = unprotectedNumCandidates protectedIds obls
   groundNumVarsWith
+    dyn
     ownerPolicy
     guard
     obls
@@ -25536,16 +25570,18 @@ defaultAmbiguousNumWith ownerPolicy guard protectedIds obls t =
 -- this does NOT require the var to appear in a member's type (a var consumed inside a
 -- body surfaces in no type but must still ground — `let n = tag [1,2,3]`).  Mirrors
 -- process_letrec_group's group_arg_ids over added_obligs/added_methods.
-defaultGroupNumWith : Option Int ->
+defaultGroupNumWith : DynCtx ->
+  Option Int ->
   ArmedGuard ->
   OrdMap Unit ->
   List UObligation ->
   List Mono ->
   Unit
-defaultGroupNumWith ownerPolicy guard protectedIds obls monos =
+defaultGroupNumWith dyn ownerPolicy guard protectedIds obls monos =
   let argIds = flatMap monoArgUnboundIds monos
   let candidates = unprotectedNumCandidates protectedIds obls
   groundNumVarsWith
+    dyn
     ownerPolicy
     guard
     obls
@@ -25554,16 +25590,18 @@ defaultGroupNumWith ownerPolicy guard protectedIds obls monos =
 -- where-component defaulting: ground every unprotected Num-constrained var no
 -- member's type mentions (a var consumed inside a body, `n = length [1, 2]`).
 -- A var a member's type mentions generalizes with its constraint instead.
-defaultAbsentNumWith : Option Int ->
+defaultAbsentNumWith : DynCtx ->
+  Option Int ->
   ArmedGuard ->
   OrdMap Unit ->
   List UObligation ->
   List Mono ->
   Unit
-defaultAbsentNumWith ownerPolicy guard protectedIds obls monos =
+defaultAbsentNumWith dyn ownerPolicy guard protectedIds obls monos =
   let inTypes = flatMap monoUnboundIds monos
   let candidates = unprotectedNumCandidates protectedIds obls
   groundNumVarsWith
+    dyn
     ownerPolicy
     guard
     obls
@@ -25628,15 +25666,15 @@ localNumGuard addedObls callN0 = NumGuard {
 -- group's are (DICT-SEMANTICS §3 "When"), so its scheme is built from the improved
 -- type.  A variable below the just-exited level is an enclosing binder's to settle,
 -- so it takes part as a constant.
-improveLocalGoals : List UObligation -> Int -> Unit
-improveLocalGoals addedObls callN0 =
+improveLocalGoals : DynCtx -> List UObligation -> Int -> Unit
+improveLocalGoals dyn addedObls callN0 =
   let goals = addedObls ++ callUOblsWindow callN0
   let outer =
     outerRigidIds
       (Some (perRun.value.currentLevel.value + 1))
       (flatMap uOblArgs goals)
       omEmpty
-  improveByUniqueImpl outer goals
+  improveByUniqueImpl dyn outer goals
 
 connectedTiedIds : List Int -> List Mono -> List UObligation -> List Int
 connectedTiedIds enclosing members obls =
@@ -25710,26 +25748,28 @@ idSetOf (i :: more) acc = idSetOf more (IdMap.set i () acc)
 -- `t _ = s [1, 2]` is consumed entirely inside the body and surfaces nowhere in
 -- `t : Option2 Int -> Int`, so nothing outside the body can ever determine it.  That
 -- var, and only that var, is what this grounds.
-defaultBodyLocalNumWith : Option Int ->
+defaultBodyLocalNumWith : DynCtx ->
+  Option Int ->
   ArmedGuard ->
   OrdMap Unit ->
   List UObligation ->
   Unit
-defaultBodyLocalNumWith ownerPolicy guard protectedIds obls =
+defaultBodyLocalNumWith dyn ownerPolicy guard protectedIds obls =
   let candidates = unprotectedNumCandidates protectedIds obls
-  groundNumVarsWith ownerPolicy guard obls candidates
+  groundNumVarsWith dyn ownerPolicy guard obls candidates
 
 -- per-binding defaulting: run the member rule on each placeholder mono
-defaultEachMemberWith : Option Int ->
+defaultEachMemberWith : DynCtx ->
+  Option Int ->
   ArmedGuard ->
   OrdMap Unit ->
   List UObligation ->
   List Mono ->
   Unit
-defaultEachMemberWith _ _ _ _ [] = ()
-defaultEachMemberWith ownerPolicy guard protectedIds obls (m :: rest) =
-  let _ = defaultAmbiguousNumWith ownerPolicy guard protectedIds obls m
-  defaultEachMemberWith ownerPolicy guard protectedIds obls rest
+defaultEachMemberWith dyn _ _ _ _ [] = ()
+defaultEachMemberWith dyn ownerPolicy guard protectedIds obls (m :: rest) =
+  let _ = defaultAmbiguousNumWith dyn ownerPolicy guard protectedIds obls m
+  defaultEachMemberWith dyn ownerPolicy guard protectedIds obls rest
 
 -- RETPOS soundness — ambiguous interface constraint (run≠build hole).
 -- A method obligation recorded inside a binding whose discriminating tyvar is
@@ -25944,26 +25984,28 @@ numDefaultOwnerAllows (Some level) m = match normalize m
 -- Ground each id to Int by unifying the live var carrying it (found among [obls]'
 -- Num operand monos — refs alias post-unify, grounding any grounds all), unless
 -- D3 clause 3 withholds it.
-groundNumVarsWith : Option Int ->
+groundNumVarsWith : DynCtx ->
+  Option Int ->
   ArmedGuard ->
   List UObligation ->
   List Int ->
   Unit
-groundNumVarsWith _ _ _ [] = ()
-groundNumVarsWith ownerPolicy guard obls (id :: rest)
+groundNumVarsWith dyn _ _ _ [] = ()
+groundNumVarsWith dyn ownerPolicy guard obls (id :: rest)
   | omHasKey (intToString id) graphRun.value.localAbs.lasQuantified.value =
-    groundNumVarsWith ownerPolicy guard obls rest
-groundNumVarsWith ownerPolicy guard obls (id :: rest) =
+    groundNumVarsWith dyn ownerPolicy guard obls rest
+groundNumVarsWith dyn ownerPolicy guard obls (id :: rest) =
   let _ = match liveNumVarGo id obls
     Some m =>
-      if numDefaultOwnerAllows ownerPolicy m then groundOrWithhold guard id m
+      if numDefaultOwnerAllows ownerPolicy m then
+        groundOrWithhold dyn guard id m
     None => ()
-  groundNumVarsWith ownerPolicy guard obls rest
+  groundNumVarsWith dyn ownerPolicy guard obls rest
 
-groundOrWithhold : ArmedGuard -> Int -> Mono -> Unit
-groundOrWithhold guard id m =
+groundOrWithhold : DynCtx -> ArmedGuard -> Int -> Mono -> Unit
+groundOrWithhold dyn guard id m =
   if defaultKeepsGoalsSatisfiable guard id then
-    unify m (tconBuiltin "Int")
+    unifyIn dyn m (tconBuiltin "Int")
   else
     guard.agWithheld := m :: !guard.agWithheld
 
@@ -26020,6 +26062,7 @@ generalizeGroup env residuals index ((LetBind name clauses _ _, (_, sch)) :: res
       env
       name
       (genBindingRestricted
+        env.teDyn
         Tip
         (residualsOf index residuals)
         isVal
@@ -27144,6 +27187,7 @@ groundAdmittedGo env mname (ir :: rest) ats dloc =
         None => ()
         Some at =>
           groundShadowReceiver
+            env.teDyn
             (importerShadowDomainAt env mname k)
             at
             (definerReceiverIsDictVar mname at)
@@ -34976,7 +35020,7 @@ inferPropBodiesGo env ((DProp _ name params body) :: rest) =
   let oblMark = wMark perRun.value.implObls
   let callMark = wMark perRun.value.obls
   let dictMark = goalsMark ()
-  let _ = unify (infer local body) (tconBuiltin "Bool")
+  let _ = unifyIn env.teDyn (infer local body) (tconBuiltin "Bool")
   let _ = exitLevel ()
   let _ = settleClosedBody (tconBuiltin "Bool") oblMark callMark dictMark
   let _ = closeScope ()
@@ -35011,7 +35055,7 @@ inferTestBodies env ((DTest _ name body) :: rest) =
   -- language does not provide `Expectation`, and claiming §8 I6.2's
   -- program-global identity for a type some module declares would be a lie the
   -- shared carrier type cannot object to.
-  let _ = unify (infer env body) (tconUnresolved "Expectation")
+  let _ = unifyIn env.teDyn (infer env body) (tconUnresolved "Expectation")
   let _ = exitLevel ()
   let _ =
     settleClosedBody (tconUnresolved "Expectation") oblMark callMark dictMark
@@ -35032,9 +35076,9 @@ settleClosedBody bodyTy oblMark callMark dictMark =
   let addedObls = wWindow perRun.value.implObls oblMark
   let bodyObls = addedObls ++ callUOblsWindow callMark
   let rigidIds = outerRigidIds (Some level) (flatMap uOblArgs bodyObls) omEmpty
-  let _ = improveByUniqueImpl rigidIds bodyObls
+  let _ = improveByUniqueImpl noDyn rigidIds bodyObls
   let _ = determineByUniqueInstance rigidIds bodyObls
-  let withheld = finalizeNumBoundary NumBoundary {
+  let withheld = finalizeNumBoundary noDyn NumBoundary {
     nbDisposition = NumBoundaryOwnedMethodBody level,
     nbMembers = [bodyTy],
     nbSurvivingIds = omEmpty,
@@ -35046,7 +35090,7 @@ settleClosedBody bodyTy oblMark callMark dictMark =
       ngOuterBelow = Some level,
     },
   }
-  let _ = improveByUniqueImpl rigidIds bodyObls
+  let _ = improveByUniqueImpl noDyn rigidIds bodyObls
   let _ = determineByUniqueInstance rigidIds bodyObls
   let _ =
     rejectUndeterminedVectors
@@ -36393,11 +36437,11 @@ setNumlitFloatsGo ((var, fref, n, dref) :: rest) =
 -- (at a method body, its instance head's and declared signature's variables).
 -- The commit never binds one: they take part as constants, and a goal that would
 -- need one bound is left as it is, for `checkSigsTooGeneral` has already run.
-improveByUniqueImpl : OrdMap Unit -> List UObligation -> Unit
-improveByUniqueImpl _ [] = ()
-improveByUniqueImpl sigIds (o :: rest) =
-  let _ = improveGoal sigIds o.pred.iface (map normalize (uOblArgs o))
-  improveByUniqueImpl sigIds rest
+improveByUniqueImpl : DynCtx -> OrdMap Unit -> List UObligation -> Unit
+improveByUniqueImpl dyn _ [] = ()
+improveByUniqueImpl dyn sigIds (o :: rest) =
+  let _ = improveGoal dyn sigIds o.pred.iface (map normalize (uOblArgs o))
+  improveByUniqueImpl dyn sigIds rest
 
 -- Determination by the unique unifying instance (DICT-SEMANTICS §3, the settle
 -- sequence's second step).  A goal of any arity that is not closed is unified with
@@ -36484,7 +36528,7 @@ determineHeldGoal rigidIds window o args
         let _ = enterLevel ()
         let heads = freshRowHeads row
         let _ = exitLevel ()
-        let _ = commitImprovement rigidIds (zipL args heads)
+        let _ = commitImprovement noDyn rigidIds (zipL args heads)
         let _ = fileDeterminedRow row args
         let _ = refileGoals window oldIds
         monoSizes args /= sizeBefore
@@ -36879,7 +36923,7 @@ defaultLiveNumRoots _ =
     }
     fold
       (_ m => match normalize m
-        TVar cell => groundOrWithhold guard (tyvarId cell) m
+        TVar cell => groundOrWithhold noDyn guard (tyvarId cell) m
         _ => ())
       ()
       roots
@@ -37366,8 +37410,8 @@ ordinalWord 3 = "fourth"
 ordinalWord 4 = "fifth"
 ordinalWord i = "\{intToString (i + 1)}th"
 
-improveGoal : OrdMap Unit -> IfaceRef -> List Mono -> Unit
-improveGoal sigIds iface args
+improveGoal : DynCtx -> OrdMap Unit -> IfaceRef -> List Mono -> Unit
+improveGoal dyn sigIds iface args
   | isEmptyL args || monoVectorClosed args = ()
   | otherwise =
     let rows = filterList (ieRowOfIface iface) (improvementPool args)
@@ -37376,15 +37420,15 @@ improveGoal sigIds iface args
         [] => ()
         pairs =>
           if listLen (filterList (rowHeadUnifies args) rows) == 1 then
-            commitImprovement sigIds pairs
+            commitImprovement dyn sigIds pairs
       _ => ()
 
 -- Solve [pairs] in a scratch substitution with every signature variable held
 -- rigid, then bind each variable that substitution solved, in the direction it
 -- solved it: `unify (TVar cell) m` links `cell`, so a fresh variable is linked
 -- to a signature variable and never the other way round.
-commitImprovement : OrdMap Unit -> List (Mono, Mono) -> Unit
-commitImprovement sigIds pairs =
+commitImprovement : DynCtx -> OrdMap Unit -> List (Mono, Mono) -> Unit
+commitImprovement dyn sigIds pairs =
   let cells = flatMap (p => monoVarCells (fst p) ++ monoVarCells (snd p)) pairs
   let sigCells = sigCellsOf sigIds cells
   let scratch = Ref []
@@ -37393,7 +37437,7 @@ commitImprovement sigIds pairs =
   if cohOverlapGo scratch rigidPairs then
     fold
       (_ binding => match lookupAssocI (fst binding) cellsById
-        Some cell => unify (TVar cell) (unrigidSig sigCells (snd binding))
+        Some cell => unifyIn dyn (TVar cell) (unrigidSig sigCells (snd binding))
         None => ())
       ()
       (reverseL !scratch)
@@ -38545,7 +38589,7 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
   let bodyRigidIds =
     monoRootIdSet (headMonos ++ [inst.mbiExpected] ++ map snd inst.mbiNamedVars)
   let bodyObls = addedObls ++ callUOblsWindow callN0
-  let _ = improveByUniqueImpl bodyRigidIds bodyObls
+  let _ = improveByUniqueImpl env.teDyn bodyRigidIds bodyObls
   let _ = determineByUniqueInstance bodyRigidIds bodyObls
   let _ =
     checkMethodRigidityCore
@@ -38632,6 +38676,7 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
   -- that set: D3 clause 3 withholds it when grounding it would leave the goal no
   -- instance, and the second determination below settles it.
   let withheld = finalizeNumBoundary
+    env.teDyn
     NumBoundary {
       nbDisposition = NumBoundaryOwnedMethodBody bodyLevel,
       nbMembers = [inst.mbiExpected],
@@ -38646,7 +38691,7 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
     }
   -- Defaulting is a substitution like any other, so the goals it changed are
   -- improved and determined once more.
-  let _ = improveByUniqueImpl bodyRigidIds bodyObls
+  let _ = improveByUniqueImpl env.teDyn bodyRigidIds bodyObls
   let _ = determineByUniqueInstance bodyRigidIds bodyObls
   -- The method signature's own variables are held at the body's close as a
   -- top-level signature's are at its group's.  A goal that fixes a head variable is
@@ -38855,7 +38900,7 @@ methodBodyLaunderMsg DefaultBody iface mname escaping =
 --   * cascade gates S2/S3 (`gatesBodyCascade`), on a default body: when inferring
 --     the body detected an error, the unify and the launder query are skipped, so
 --     one root cause is not reported again as the shape mismatch it induces at the
---     method boundary.  The unify runs with `currentMethodMismatch = Some mname`, so
+--     method boundary.  The unify runs with `dcMethodMismatch = Some mname`, so
 --     a leaf TypeMismatch reports the specialized line `Method '<mname>': expected
 --     type <e> but got <a>` (dims C and J).  When that unify detects a mismatch,
 --     the body's own added impl obligations are TRUNCATED back to the pre-body
@@ -38863,7 +38908,7 @@ methodBodyLaunderMsg DefaultBody iface mname escaping =
 --     obligations (e.g. `(5 : Bool)` ⇒ `Num Bool`) are cascade victims.  All three
 --     read `perRun.errorsDetected` via `erredDuring`, never the diagnostic list
 --     (issue 1146).  The leaf mismatch the unify region expects is pushed
---     NON-deduped: `currentMethodMismatch` is `Some mname` across the whole region,
+--     NON-deduped: `dcMethodMismatch` is `Some mname` across the whole region,
 --     which selects typeMismatchReport's first arm.
 checkMethodBodyAgainst : TcEnv ->
   IfaceRef ->
@@ -38888,7 +38933,11 @@ checkMethodBodyAgainst env iface kind mname mty gscope inst contract loc pats bo
     else
       let _ = match kind
         ImplBody _ =>
-          rowInto True (inst.mbiCheckedForce ()) (effrowNorm (snd inferred))
+          rowInto
+            env.teDyn
+            True
+            (inst.mbiCheckedForce ())
+            (effrowNorm (snd inferred))
         DefaultBody => ()
       let launderMark = wMark perRun.value.absorptions
       let declArrows = allArrowEffs inst.mbiExpected
@@ -38903,23 +38952,24 @@ checkMethodBodyAgainst env iface kind mname mty gscope inst contract loc pats bo
             inst.mbiExpected
             actual
         DefaultBody => []
-      let _ = match kind
-        DefaultBody => currentMethodMismatch := Some mname
-        ImplBody _ => ()
+      let unifyDyn = match kind
+        DefaultBody => { env.teDyn | dcMethodMismatch = Some mname }
+        ImplBody _ => env.teDyn
       let unifyErred =
         fst
           (erredDuring (_ =>
             let _ = match kind
               DefaultBody =>
                 rowInto
+                  unifyDyn
                   True
                   (inst.mbiCheckedForce ())
                   (effrowNorm (snd inferred))
               ImplBody _ => ()
-            unifyInto True inst.mbiExpected actual))
+            unifyInto unifyDyn True inst.mbiExpected actual))
       let _ = match kind
-        DefaultBody => currentMethodMismatch := None
-        ImplBody _ => finishEffectContract contract
+        DefaultBody => ()
+        ImplBody _ => finishEffectContract env.teDyn contract
       let escaping =
         launderEscapeFromLog
           declArrows
@@ -38942,7 +38992,7 @@ checkMethodBodyAgainst env iface kind mname mty gscope inst contract loc pats bo
         mbcEagerIndexed = eager,
       }
   let _ = match kind
-    DefaultBody => finishEffectContract contract
+    DefaultBody => finishEffectContract env.teDyn contract
     ImplBody _ => ()
   check
 
@@ -42566,7 +42616,7 @@ processTopGroups env sigs defs names exported =
   let grouped = groupClauses defs
   let ordered = tarjanSCCs names (depGraphMap names grouped)
   let result = processSCCs env sigs grouped ordered
-  let _ = resolvePendingJoins 0
+  let _ = resolvePendingJoins env.teDyn 0
   let failures =
     EffectSolver.closeRootAuthorities
       perRun.value.effectSummaries
@@ -42884,8 +42934,12 @@ processSCC env sigs grouped0 members =
   -- signed fn).  Registration/lookup now key by (name, binding-id), so a top-level
   -- `g`'s use keys (g, its-id) and can never match a where-helper `g`'s (g, 0) entry.
   let _ = inferMembers env2 sigs groupedStamped scopedMembers
-  let _ = fold (_ member => checkRecursiveValue member.smOwned) () scopedMembers
-  let _ = resolvePendingJoins perRun.value.currentLevel.value
+  let _ =
+    fold
+      (_ member => checkRecursiveValue env.teDyn member.smOwned)
+      ()
+      scopedMembers
+  let _ = resolvePendingJoins env.teDyn perRun.value.currentLevel.value
   let residuals =
     finishEffectSummaryScopeKeeping
       (quantifiableAuthorities env2 groupedStamped scopedMembers)
@@ -42918,8 +42972,8 @@ processSCC env sigs grouped0 members =
     omFromNames
       (map intToString (flatMap monoArgUnboundIds (map snd placeholders)))
       protectedSigIds
-  let _ = improveByUniqueImpl protectedSigIds addedObls
-  let _ = improveByUniqueImpl protectedSigIds (callUOblsWindow callN0)
+  let _ = improveByUniqueImpl env.teDyn protectedSigIds addedObls
+  let _ = improveByUniqueImpl env.teDyn protectedSigIds (callUOblsWindow callN0)
   let _ = determineByUniqueInstance unownedIds groupObls
   -- #23: also ground an ambiguous Num var that reaches this group ONLY through a
   -- constrained-callee instantiation (its Num obligation lives on the call/dict deltas,
@@ -42933,6 +42987,7 @@ processSCC env sigs grouped0 members =
     ngOuterBelow = None,
   }
   let withheld = finalizeNumBoundary
+    env.teDyn
     NumBoundary {
       nbDisposition = NumBoundaryOwnedScc (perRun.value.currentLevel.value + 1),
       nbMembers = map snd placeholders,
@@ -42944,7 +42999,7 @@ processSCC env sigs grouped0 members =
     }  -- RETPOS soundness
   -- Defaulting is a substitution like any other, so the goals it changed are
   -- improved and determined once more.
-  let _ = improveByUniqueImpl protectedSigIds groupObls
+  let _ = improveByUniqueImpl env.teDyn protectedSigIds groupObls
   let _ = determineByUniqueInstance unownedIds groupObls
   let _ =
     checkSigVarGoals DeclaredBySignature protectedSigIds sigTvMaps groupObls
@@ -43181,7 +43236,7 @@ preunifySigsEx sigs (member :: rest) =
         ebMethodRow = None,
         ebStandalone = None,
       }
-      let _ = bindFrom v signedMono
+      let _ = bindFrom noDyn v signedMono
       let regs = [
         ConstraintReg {
           crName = m,
@@ -43600,12 +43655,13 @@ inferMembers env sigs grouped (member :: rest) =
   let effs = inferMemberClauses env peel member.smOwned (clausesOf m grouped)
   let _ =
     if member.smSigned.value then
-      unifyInto True member.smMono member.smOwned.bsValue
+      unifyInto env.teDyn True member.smMono member.smOwned.bsValue
   let _ = match member.smForceBound.value
     Some bound =>
       let _ =
         fold (_ cl => recordFileBound (snd cl) bound) () (clausesOf m grouped)
       rowInto
+        env.teDyn
         True
         (effrowNorm bound)
         (effrowNorm (optionOr pureRow member.smForce))
@@ -43648,7 +43704,7 @@ inferMemberClauses : TcEnv ->
 inferMemberClauses _ _ _ [] = []
 inferMemberClauses env peel owned clauses =
   let (values, effects) = inferClauseValues env peel owned clauses
-  let _ = publishProducedResults owned values
+  let _ = publishProducedResults env.teDyn owned values
   effrowLabels (collectRows joinCellOf effects)
 
 inferClauseValues : TcEnv ->
@@ -43659,20 +43715,20 @@ inferClauseValues : TcEnv ->
 inferClauseValues _ _ _ [] = ([], [])
 inferClauseValues env peel owned (cl :: rest) =
   let ce = inferClauseEff env peel cl
-  let _ = unifySourceDomains (listLen (fst cl)) owned.bsValue (fst ce)
+  let _ = unifySourceDomains env.teDyn (listLen (fst cl)) owned.bsValue (fst ce)
   let _ = recordEffectBody owned.bsBody (snd ce)
   let (values, effects) = inferClauseValues env peel owned rest
   ((exprLoc (snd cl), fst ce) :: values, snd ce :: effects)
 
-unifySourceDomains : Int -> Mono -> Mono -> Unit
-unifySourceDomains arity owned actual =
+unifySourceDomains : DynCtx -> Int -> Mono -> Mono -> Unit
+unifySourceDomains dyn arity owned actual =
   if arity <= 0 then
     ()
   else match (normalize owned, normalize actual)
     (TFun domain _ result, TFun param _ body) =>
-      let _ = unify domain param
-      unifySourceDomains (arity - 1) result body
-    _ => unify owned actual
+      let _ = unifyIn dyn domain param
+      unifySourceDomains dyn (arity - 1) result body
+    _ => unifyIn dyn owned actual
 
 -- infer one clause, returning its arrow type AND the concrete effect labels its
 -- body performs (captured in a fresh collection, then the ambient restored —
@@ -43692,9 +43748,9 @@ inferClauseEff env peel (pats, body) =
     None => ()
   let lits = takePatLits ()
   let pr = inferPats env pats
-  let _ = peelOntoParams peel (fst pr) pats
+  let _ = peelOntoParams env.teDyn peel (fst pr) pats
   let scope = openExistentialScope (takeOpenedExistentials ())
-  let _ = settlePatLits lits
+  let _ = settlePatLits env.teDyn lits
   let _ = match peel
     Some src => recordClauseFileBound body (listLen pats) src
     None => ()
@@ -43722,17 +43778,17 @@ inferClauseEff env peel (pats, body) =
 -- Phase 73 peel: for a signed clause with params, zip-unify the peeled sig
 -- domains onto the inferred param types.  No-op for an unsigned member, a value
 -- binding (no params), or a sig with no remaining arrows.
-peelOntoParams : Option Mono -> List Mono -> List Pat -> Unit
-peelOntoParams None _ _ = ()
-peelOntoParams (Some _) _ [] = ()
-peelOntoParams (Some src) patTypes pats =
-  zipBindFrom patTypes (peelArrows (listLen pats) src)
+peelOntoParams : DynCtx -> Option Mono -> List Mono -> List Pat -> Unit
+peelOntoParams dyn None _ _ = ()
+peelOntoParams dyn (Some _) _ [] = ()
+peelOntoParams dyn (Some src) patTypes pats =
+  zipBindFrom dyn patTypes (peelArrows (listLen pats) src)
 
-zipBindFrom : List Mono -> List Mono -> Unit
-zipBindFrom (p :: ps) (q :: qs) =
-  let _ = bindFrom p q
-  zipBindFrom ps qs
-zipBindFrom _ _ = ()
+zipBindFrom : DynCtx -> List Mono -> List Mono -> Unit
+zipBindFrom dyn (p :: ps) (q :: qs) =
+  let _ = bindFrom dyn p q
+  zipBindFrom dyn ps qs
+zipBindFrom dyn _ _ = ()
 
 -- a signatured binding's body must not perform a concrete effect its signature
 -- doesn't declare; effect *variables* (polymorphic `<e>`) carry no labels and so
@@ -43839,6 +43895,7 @@ sccSchemes env sigs grouped isLetrec residuals index (member :: rest) =
   (
       m,
       genBindingRestricted
+        env.teDyn
         member.smDeclaredAuths.value
         (residualsOf index residuals)
         isVal
