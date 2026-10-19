@@ -1,0 +1,5 @@
+export interface Rend a where
+  rendr : a -> Int
+
+impl Rend Bool where
+  rendr b = if b then 1000 else 2000

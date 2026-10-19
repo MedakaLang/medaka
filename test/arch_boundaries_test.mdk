@@ -186,13 +186,18 @@ refHead kw s = match stripPrefix kw s
 cellCount : List String -> Int
 cellCount ls = length (filterMap cellName ls)
 
-cellRows : List (String, List String) -> List String
-cellRows mods =
+-- One `<prefix><module>\t<count>` row per module whose count is positive,
+-- sorted.
+countRows : String ->
+  (List String -> Int) ->
+  List (String, List String) ->
+  List String
+countRows prefix countFn mods =
   sort
     (filterMap
       ((m, ls) =>
-        let n = cellCount ls
-        if n > 0 then Some "\{m}\t\{n}" else None)
+        let n = countFn ls
+        if n > 0 then Some "\{prefix}\{m}\t\{n}" else None)
       mods)
 
 -- Lines of `frontend.ast` that hold the word `Ref` (as `grep -nw`) outside a
@@ -300,7 +305,7 @@ test "arch_boundaries: layering violations match layering.golden" =
   pin "layering.golden" (violations (buildGraph loadModules))
 
 test "arch_boundaries: module-level cells match cells.golden" =
-  pin "cells.golden" (cellRows loadModules)
+  pin "cells.golden" (countRows "" cellCount loadModules)
 
 test "arch_boundaries: hook field count matches hooks.golden" =
   pin "hooks.golden" ["hooks.fields\t\{hooksFieldCount loadModules}"]
@@ -357,17 +362,8 @@ visibilityCount ls =
       (l => sum (map (p => countOccurrences p l) visibilityPatterns))
       (filter isCodeLine ls))
 
-visibilityRows : List (String, List String) -> List String
-visibilityRows mods =
-  sort
-    (filterMap
-      ((m, ls) =>
-        let n = visibilityCount ls
-        if n > 0 then Some "visibility.\{m}\t\{n}" else None)
-      mods)
-
 test "arch_boundaries: declaration-visibility counts match visibility.golden" =
-  pin "visibility.golden" (visibilityRows loadModules)
+  pin "visibility.golden" (countRows "visibility." visibilityCount loadModules)
 
 test "arch_boundaries: frontend.ast closure matches its golden" =
   pin

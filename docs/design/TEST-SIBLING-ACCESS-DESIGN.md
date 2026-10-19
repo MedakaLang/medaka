@@ -149,9 +149,9 @@ one that ships.
 
 | Consumer | Projection |
 |---|---|
-| `compiler/frontend/resolve.mdk` | the `ExpNs` descriptors' `nsDirectOf`, one per export namespace, each matching on the `pub` flag |
+| `compiler/frontend/visibility.mdk` | the `ExpNs` descriptors' `nsDirectOf`, one per export namespace, each matching on the `pub` flag |
 | `compiler/types/typecheck.mdk` | `publicValNames`, `publicDataDecls`, `kindPublicDataDecl`, `polarityPublicKeys`, `publicStandaloneNames` |
-| `compiler/types/private_mangle.mdk` | `pubFnNames`, and the `VisPublic` gate in `ctorExportEntries` |
+| `compiler/types/private_mangle.mdk` | `pubLetRecBinders`; its export maps otherwise read `frontend/visibility.mdk`'s surface |
 | `compiler/eval/eval.mdk` | `ModExports`, `ctorNamesOfDecl`, `publicExternNamesRev` |
 | tooling | LSP completion and hover, `rule-dead-code` |
 

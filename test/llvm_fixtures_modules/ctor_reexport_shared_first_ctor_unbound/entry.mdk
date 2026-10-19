@@ -1,0 +1,14 @@
+-- Two carried types whose first constructors share a spelling, where the module
+-- declaring the earlier one has no constructor spelled like the one used.
+--
+-- `facade` carries a's `T = J | K Int` and b's `U = K Int | L`.  The importer
+-- names only `U(..)` and uses the nullary `L`, which only b declares.  A ctor row
+-- that took U's declaring module from the first module declaring `K` would name
+-- an `a__L` no module defines.
+--
+-- Expected output, derived by hand from the semantics: `unU L` is b's `L` arm,
+-- `7`.
+import facade.{U(..), unU}
+
+main : <IO> Unit
+main = putStrLn (intToString (unU L))
