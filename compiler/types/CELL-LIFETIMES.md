@@ -1,6 +1,6 @@
 # Typechecker cell lifetimes
 
-One row per piece of mutable typechecker state: the module-level cells of `compiler/types/typecheck.mdk`, the fields of its four bundle records (declared in `compiler/types/tc_types.mdk`), and the cells outside the file that a drive reads or writes. It is the inventory the state-by-lifetime split works from.
+One row per piece of mutable typechecker state: the module-level cells of `compiler/types/typecheck.mdk`, the fields of its four bundle records (declared in `compiler/types/tc_types.mdk`) and the fields of the context records that replace them (`DynCtx`, `SiteCtx`), and the cells outside the file that a drive reads or writes. It is the inventory the state-by-lifetime split works from.
 
 Columns: `name | holds | lifetime | owner-today | writers | reset | target | interface-fills | source | issue`.
 
@@ -13,17 +13,11 @@ Columns: `name | holds | lifetime | owner-today | writers | reset | target | int
 
 | name | holds | lifetime | owner-today | writers | reset | target | interface-fills | source | issue |
 |---|---|---|---|---|---|---|---|---|---|
-| toggles | three dynamic-context booleans for definer-shadow handling (Toggles record) | run | module-level | bracketed field writes in the infer arms, enterStampCtx, drainStampQueue | resetState (freshToggles) | TcEnv | n/a | - | - |
 | driverState | container: the DriverState bundle; the record is never replaced, only its fields; fields have their own rows | process | module-level | none (fields only) | never | delete | no | - | - |
 | crossRun | container: the CrossRun bundle; fields have their own rows | graph | module-level | resetCrossModuleState, checkCoreMemoized (hit install), checkModulesChainReportFor (hit install), probes | resetCrossModuleState (graphPreamble) | delete | no | - | - |
 | typeErrorsSticky | build or run abort flag armed at the first recorded type error | process | module-level | recordTypeError | resetTypeErrorsSticky (snapshot.mdk and tests only; production never resets); rolled back by checkGraphFinish, captureTypeErrors, methodReturnOwnershipProbe | GraphCtx | no | - | - |
 | typeErrorsStickyDiags | the diagnostics behind the sticky flag | process | module-level | recordTypeError, replaceAmbiguityAt | resetTypeErrorsSticky (snapshot.mdk and tests only); rolled back by checkGraphFinish, captureTypeErrors, methodReturnOwnershipProbe | GraphCtx | no | - | - |
 | currentLoc | innermost ELoc span for diagnostics; written about 35 times in save and restore brackets; never reset to None | run | module-level | infer ELoc arm and save-restore brackets | never (not in resetState) | TcEnv | n/a | - | #1752 |
-| goalSiteLoc | span of the dispatch site a resolver drain is working on | run | module-level | resolver drains | cleared in each resolver base case | TcEnv | n/a | - | - |
-| currentDoOrigin | span of the enclosing do block | run | module-level | infer EDoOrigin arm, recordDoMonadError | saved and restored by the EDoOrigin arm | TcEnv | n/a | - | - |
-| currentDoDeferred | true inside a defer chain of a do block | run | module-level | infer EDoOrigin arm | saved and restored by the EDoOrigin arm | TcEnv | n/a | - | - |
-| currentMethodMismatch | method name around a default-body return unify | run | module-level | checkMethodBodyAgainst | saved and restored by checkMethodBodyAgainst | TcEnv | n/a | - | - |
-| currentJoinContext | construct demanding a value join, for the join diagnostic | run | module-level | joinValueEqual | saved and restored by joinValueEqual | TcEnv | n/a | - | - |
 | assumptionTraceEnabled | test-only gate for the assumption trace (set and cleared by begin and finish pairs; no production reader) | run | module-level | begin and finish helpers for the trace | finish helper clears | delete | n/a | - | - |
 | assumptionTraceEntries | test-only buffer for the assumption trace (set and cleared by begin and finish pairs; no production reader) | run | module-level | begin and finish helpers for the trace | finish helper clears | delete | n/a | - | - |
 | numericPredicateTraceEnabled | test-only gate for the numeric predicate trace (set and cleared by begin and finish pairs; no production reader) | run | module-level | begin and finish helpers for the trace | finish helper clears | delete | n/a | - | - |
@@ -34,8 +28,6 @@ Columns: `name | holds | lifetime | owner-today | writers | reset | target | int
 | evidenceObservationEntries | test-only buffer for the evidence observation trace (set and cleared by begin and finish pairs; no production reader) | run | module-level | begin and finish helpers for the trace | finish helper clears | delete | n/a | - | - |
 | graphRun | container: the GraphRun bundle; fields have their own rows | graph | module-level | resetGraphLineage, markModules, memo hit installs, probes | resetGraphLineage (via resetGraphState) | delete | no | - | - |
 | perRun | container: the PerRun bundle; fields have their own rows | module | module-level | resetState, memo hit installs, enterStampCtx, drainStampQueue | resetState (checkBodyImpl) | delete | no | - | - |
-| innerNotes | what the running stamper built below its destination top level | run | module-level | stampNoting, routeWalkMemoized | reset per stamp in stampNoting; bracketed in routeWalkMemoized | TcEnv | n/a | - | - |
-| nonCovariantSlot | set while unifying a non-covariant type argument | run | module-level | paramVarianceGuard | saved and restored by paramVarianceGuard | TcEnv | n/a | - | - |
 | coreCheckMemoRef | process-wide core-pass memo, one entry | process | module-level | checkCoreMemoized | never (test helper methodReturnMemoTeardownStats clears and restores) | interner | no | - | - |
 | preludePreambleMemoRef | prelude preamble memo, one entry of pure values | process | module-level | preludePreambleStore | never | interner | no | - | - |
 | moduleChainMemoRef | module-chain prefix memo | process | module-level | checkModulesChainReportFor | never (test helper clears and restores) | interner | no | - | - |
@@ -190,6 +182,15 @@ Columns: `name | holds | lifetime | owner-today | writers | reset | target | int
 | PerRun.groupConstraintMonosRef | constraint monos of the group being processed | group | PerRun | processSCC | resetState | GroupCtx | n/a | - | - |
 | PerRun.fieldOwnerModulesRef | field-owner key to declaring module ids; comment says graph-global but it is re-minted per module | module | PerRun | declEnvSeedDataUniverse | resetState | ModuleCtx | no | - | #1597 |
 | PerRun.fieldOwnerReachRef | module ids this module can reach through DUse | module | PerRun | declEnvSeedDataUniverse | resetState | ModuleCtx | no | - | #1597 |
+| DynCtx.dcJoin | the construct whose alternatives a value join is equating, which names the mismatch | run | DynCtx | joinValueEqual | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
+| DynCtx.dcNonCovariant | inside a non-covariant type argument, where two closed effect rows must be equal | run | DynCtx | paramVarianceGuard | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
+| DynCtx.dcSuppressRLocalRecord | typing a definer-shadow occurrence that heads an application, so recordRLocalSite pushes nothing | run | DynCtx | inferDefinerShadowAppAt | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
+| DynCtx.dcSuppressArgStamp | typing a definer-shadow occurrence that heads an application, so recordArgStamp pushes nothing | run | DynCtx | inferDefinerShadowAppAt | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
+| DynCtx.dcShadowHeadCtx | typing a shadow occurrence that heads its own application, so the value-position standalone pin does not apply | run | DynCtx | shadowHeadEnv (callers: inferShadowAppHead, shadowVarHeadMethodScheme, inferDefinerStandaloneVarAppAt) | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
+| DynCtx.dcDo | inside a do-lowered chain, where a monad-shape mismatch reads as "do requires a monad" | run | DynCtx | infer (the EDoOrigin arm, which installs the DoCtx); recordDoMonadError (sets the Ref `doReported` in the installed DoCtx) | none for the field (immutable; a nested walk gets an updated copy); the `doReported` Ref inside it is mutable, set once per region by recordDoMonadError and fresh in each nested do | TcEnv | n/a | - | - |
+| DynCtx.dcMethodMismatch | unifying an interface default body against its declared type, so a leaf mismatch names the method | run | DynCtx | checkMethodBodyAgainst | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
+| SiteCtx.sxSite | the span of the dispatch site being resolved, for a diagnostic raised where no span argument exists | run | SiteCtx | resolveArgStamps, resolveSites, resolveRLocalSites, resolveOpSites, resolveDictApps, checkEnteredReqs, checkImplHeadGoal, residualBoundPreds | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
+| SiteCtx.sxInner | the notes accumulator of the running stamp, which each route built below the top level is ORed into | run | SiteCtx | routeWalkMemoized, stampNoting (install the accumulator); noteInner (ORs into the Ref content) | none for the field (immutable; a nested walk gets an updated copy); the accumulator Ref content is mutable and ORed monotonically by noteInner during the stamp | TcEnv | n/a | - | - |
 | PerRun.typeErrors | windowed diagnostic output channel | module | PerRun | recordTypeError, replaceAmbiguityAt | resetState | ModuleCtx | no | - | #1146 |
 | PerRun.typeErrorMsgSetRef | membership index over typeErrors rendered messages | module | PerRun | recordTypeError, replaceAmbiguityAt | resetState | ModuleCtx | no | - | #2068 |
 | PerRun.ambiguitySitesRef | spans holding a T-AMBIGUOUS-INSTANCE | module | PerRun | pushAmbiguityAt | resetState | ModuleCtx | no | - | - |

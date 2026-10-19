@@ -57,9 +57,6 @@ import types.effect_infer.{
 import types.effect_solver.{
   SummarySolver,
 }
-import types.effect_values.{
-  ValueJoinOps(..),
-}
 import types.effect_bindings.{
   BindingSummary(..),
 }
@@ -222,7 +219,7 @@ public export data PendingEntry =
   -- 5th element is (see `pushPendingObl`).  The resolvers run POST-HM, long after
   -- inference left this expression, so the live `currentLoc` there names whatever
   -- ELoc was entered last (observed: the body of an unrelated impl three lines away).
-  -- Each resolver loop republishes this span into `goalSiteLoc` so the min⊑ selector's
+  -- Each resolver loop hands this span down as the walk's `sxSite` so the min⊑ selector's
   -- ambiguity reject can point at the goal it was actually posed by.
   -- #2549 M2: the 7th field is this site's EVIDENCE ID — the value-level name of
   -- the association the 2nd field (the route cell) carries by pointer identity.
@@ -294,34 +291,6 @@ public export data Obligation = Obligation {
   -- `ecInner`, as `oDest` shares the cell's route, so a cell several goals write ORs
   -- their notes.
   oInner : Ref Inner,
-}
-
--- #158 PR4: the NON-REENTRANT global toggles — booleans a caller flips True around a
--- sub-computation and restores after, so a reader lower in the SAME inference sees the
--- flag.  Unlike the PerRun accumulators these are not per-push state, they are a dynamic
--- context; bundled here as a record OF Refs and driven by SAVE/RESTORE brackets, NOT
--- unconditional set-False:
---   let saved = toggles.value.X.value in setRef toggles.value.X True; <body>; setRef toggles.value.X saved
--- so a nested definer-shadow head that re-enters the same bracket inside <body> no longer
--- clobbers the outer True on its way out (a bare set-False did).  Reset per-module in
--- resetState alongside PerRun (shadowHeadCtxRef was a PerRun field before this PR — its
--- resetState clearing is preserved by freshToggles being minted in the same reset).
---   suppressRLocalRecord — P0-18: while typing a definer-shadow method occurrence that
---     heads a single-arg application (`size (Box 3)`), suppress recordRLocalSite's default
---     push: the standalone scheme's declared domain (`Int`) is NOT the actual receiver
---     type.  inferDefinerShadowApp instead records the ACTUAL argument mono so per-receiver
---     routing sees `Box` (which has a `Sizeable` impl → method) vs `Int` (no impl →
---     standalone).  True only around that occurrence's head; false everywhere else.
---   suppressArgStamp — P0-18: same idea for the EMIT path — suppress recordArgStamp's
---     default push (standalone declared domain) so inferDefinerShadowApp can record the
---     ACTUAL argument mono into pendingArgStamps instead.
---   shadowHeadCtxRef — P0-19 d4b: True while typing a definer-shadow occurrence that is the
---     HEAD of its own application (marked EMethodAt on run/build), so maybeStandaloneValueMono
---     does NOT pin it to the value-position standalone scheme.
-public export data Toggles = Toggles {
-  suppressRLocalRecord : Ref Bool,
-  suppressArgStamp : Ref Bool,
-  shadowHeadCtxRef : Ref Bool,
 }
 
 -- ── A-3.1 (#1112): the whole-graph declaration ENVELOPE ──────────────────────
@@ -939,7 +908,7 @@ public export data MethodScope =
   | MsMany (List IfaceRef)
 
 -- #158 PR5 / #176 closure: the ~18 RESIDUAL survivor Refs — governed until now by
--- per-ref prose and clustered in NEITHER `resetState` (PerRun/Toggles) NOR
+-- per-ref prose and clustered in NEITHER `resetState` (PerRun) NOR
 -- `resetCrossModuleState` (CrossRun).  They have HETEROGENEOUS lifecycles
 -- (driver-set-once preamble state like `effectDomains`/`mainSchemeRef`; module-path
 -- scratch set fresh per module like `standaloneValuesRef`/`methodDispatchIdxByIdRef`;
@@ -1297,7 +1266,7 @@ public export data AbsorptionEvent = AbsorptionEvent {
 -- #1155 (F-3c): [pdaLoc] is the `currentLoc` span snapshotted at the RECORD
 -- site, the same reason and the same shape as `PendingEntry`'s 6th field and
 -- `implObls`' 5th element — `resolveDictApps` runs post-HM, so the live `currentLoc`
--- there is stale.  `resolveDictApps` republishes it into `goalSiteLoc`.
+-- there is stale.  `resolveDictApps` hands it down as the walk's `sxSite`.
 public export data PendingDictApp = PendingDictApp {
   -- #2549 M2: the goal's OWN cell, minted with the goal.  It used to be the
   -- `EDictAt` node's cell, which is how a reader reached the answer; the node now
@@ -1836,16 +1805,18 @@ public export data GivenScope =
 -- `implObls` — #838 I1 / #841 — are the exceptions: each a small `Windowed
 -- a` VALUE whose own two fields are Refs — see `wPush` — so pushing through one is
 -- still one Ref-write, not a whole-record rebuild.)
--- (#158 PR4 extracted shadowHeadCtxRef OUT of here into `Toggles`; its resetState clearing is
--- preserved by freshToggles being minted in the same resetState — see resetState below.)
 -- A produced-value join recorded before any alternative had a shape: the
 -- variable standing for its result, the alternatives, the inference level it
--- was recorded at, and the join's services.
+-- was recorded at, and the construct and row collector its services are built
+-- from.  The services themselves are not stored: the call that settles the join
+-- rebuilds them with its own `DynCtx`, so a join settled inside a non-covariant
+-- slot reads that slot, while its construct is the one it was recorded under.
 public export data PendingJoin = PendingJoin {
   pjResult : Mono,
   pjValues : List (Option Loc, Mono),
   pjLevel : Int,
-  pjOps : ValueJoinOps (Option Loc),
+  pjContext : JoinContext,
+  pjCollector : DynCtx -> List EffRow -> EffRow,
 }
 
 public export data PerRun = PerRun {
@@ -2103,8 +2074,84 @@ public export data EnvBinding = EnvBinding {
   ebStandalone : Option (StandaloneOrigin, ValueScheme),
 }
 
-public export data TcEnv =
-  | TcEnv (OrdMap EnvBinding) (OrdMap Scheme) (List (String, AlphaBinder)) (OrdMap Bool)  -- vars, ctors, alphaLets, isLocal
+public export data TcEnv = TcEnv {
+  teVars : OrdMap EnvBinding,
+  teCtors : OrdMap Scheme,
+  teAlphaLets : List (String, AlphaBinder),
+  teIsLocal : OrdMap Bool,
+  teDyn : DynCtx,
+}
+
+-- The dynamic context of one inference walk: what the construct being checked
+-- tells the checks below it.  A nested walk is handed an updated copy, so the
+-- caller's copy is untouched when it returns and nothing is restored.  `TcEnv`
+-- carries it through inference; the unification core, which takes no env,
+-- takes it as its first parameter.
+--   dcJoin — the construct whose alternatives a value join is equating, which
+--     names the mismatch (an `if` without `else` is a missing branch).
+--   dcNonCovariant — inside a non-covariant type argument, where two closed
+--     effect rows must be equal and their mismatch takes the variance wording.
+--   dcSuppressRLocalRecord, dcSuppressArgStamp — while typing a definer-shadow
+--     occurrence that heads an application (`size (Box 3)`): the standalone's
+--     declared domain is not the receiver, so `recordRLocalSite` and
+--     `recordArgStamp` push nothing and the application records the argument.
+--   dcShadowHeadCtx — while typing a shadow occurrence that heads its own
+--     application: the value-position standalone pin does not apply.
+--   dcDo — inside a do-lowered chain: a monad-shape mismatch is reported as
+--     "do requires a monad" at the block's span.  The one Ref in the record is
+--     minted by the `EDoOrigin` arm and set by the first such report, so a later
+--     mismatch in the same chain is plain; a nested chain mints its own.
+--   dcMethodMismatch — while unifying an interface default body against its
+--     declared type: a leaf mismatch names the method.
+public export data DoCtx = DoCtx {
+  doLoc : Loc,
+  doDeferred : Bool,
+  doReported : Ref Bool,
+}
+
+public export data DynCtx = DynCtx {
+  dcJoin : Option JoinContext,
+  dcNonCovariant : Bool,
+  dcSuppressRLocalRecord : Bool,
+  dcSuppressArgStamp : Bool,
+  dcShadowHeadCtx : Bool,
+  dcDo : Option DoCtx,
+  dcMethodMismatch : Option String,
+}
+
+-- The context outside every construct that sets one.
+export
+noDyn : DynCtx
+noDyn = DynCtx {
+  dcJoin = None,
+  dcNonCovariant = False,
+  dcSuppressRLocalRecord = False,
+  dcSuppressArgStamp = False,
+  dcShadowHeadCtx = False,
+  dcDo = None,
+  dcMethodMismatch = None,
+}
+
+-- The context of one resolver walk: what the dispatch site being resolved tells
+-- the routes and diagnostics below it.  A walk that works on a site is handed an
+-- updated copy.
+--   sxSite — the span of the site, for a diagnostic the route solver raises where
+--     it has no span argument.  `currentLoc` cannot serve: inference has long left
+--     the offending expression, so it names whichever span was entered last.
+--     Absent (a walk outside a resolver drain, such as an obligation check), the
+--     diagnostic falls back to `currentLoc`.
+--   sxInner — the notes accumulator of the running stamp: each route built below
+--     the destination's top level is ORed in.  Absent outside a stamp, where the
+--     notes are not wanted.
+public export data SiteCtx = SiteCtx {
+  sxSite : Option Loc,
+  sxInner : Option (Ref Inner),
+}
+
+-- The context outside every stamp and every site.
+export
+noSite : SiteCtx
+noSite = SiteCtx { sxSite = None, sxInner = None }
 
 -- a constrained-function occurrence (`f` where `f : C a => …`): instantiate f's
 -- scheme (the call's type), and record the routes ref + the instantiated
@@ -3174,7 +3221,7 @@ public export data StampStep =
 
 -- Everything one module's stampers read, cut at the moment they used to run.
 --
--- `scPerRun`/`scToggles` are the WHOLE per-module records, captured by reference
+-- `scPerRun` is the WHOLE per-module record, captured by reference
 -- rather than field by field.  `resetState` installs a FRESH `PerRun` for the next
 -- module, so the record captured here is frozen from that point on and replaying it
 -- reproduces, exactly, the tables the per-module drain read — including the ones a
@@ -3194,7 +3241,6 @@ public export data StampStep =
 public export data StampCtx = StampCtx {
   scModule : String,
   scPerRun : PerRun,
-  scToggles : Toggles,
   scSuperDecls : List Decl,
   scRpNames : List String,
   scGoals : List Obligation,

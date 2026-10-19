@@ -791,7 +791,7 @@ mono_tcon_allowed="| TCon String TyConOrigin
 TCon n o => Some (headKeyOfCon o n)
 (TCon n1 o1, TCon n2 o2) =>
 TCon \"Async\" (OriginModule \"async\") => True
-unifyN (ta@(TCon a oa)) (tb@(TCon b ob)) =
+unifyN dyn (ta@(TCon a oa)) (tb@(TCon b ob)) =
 cohGoR _ (TCon a oa) (TCon b ob) = sameTyConHead a oa b ob
 TCon a oa => match s
 TCon b ob => if sameTyConHead a oa b ob then MOk else MFail
@@ -967,13 +967,11 @@ crossRun.value.crossModuleMethodPredicateSlotsQualRef
 installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
 setMethodPredicateSlotEntry : String -> List MethodPredicateSlot -> Unit
 methodDictArityOf : String -> Int
-resolveMethodDicts : List PendingMethodDict -> Unit
+resolveMethodDicts : SiteCtx -> List PendingMethodDict -> Unit
 pending.pmdRoutesRef :=
-methodPredicateRoutes : String -> ScopeId -> List PredicateSlot -> List Route
-methodPredicateRoute : String -> ScopeId -> PredicateSlot -> Route
-realizeRecDictApps : List RecDictApp -> Unit
-recRoutes : String -> ScopeId -> Mono -> List PredicateSlot -> List Route
-recRoute : String -> ScopeId -> Mono -> PredicateSlot -> Route
+methodPredicateRoute : SiteCtx -> String -> ScopeId -> PredicateSlot -> Route
+realizeRecDictApps : SiteCtx -> List RecDictApp -> Unit
+recRoute : SiteCtx -> String -> ScopeId -> Mono -> PredicateSlot -> Route
 scopePredicateSlots : List ((String, String), List PredicateSlot) ->
 scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) ->
 attributeMethodModulePredicateSlots : String ->'
@@ -1133,6 +1131,16 @@ done || exit 1
 # Expression pins are compared whitespace-flattened, so fmt's line wrapping is not
 # part of the contract.
 predicate_slot_flat="$(tr '\n' ' ' < "$predicate_slot_src" | tr -s ' ')"
+# Full signatures of the route producers; fmt wraps them, so they are matched flattened.
+route_producer_sigs='methodPredicateRoutes : SiteCtx -> String -> ScopeId -> List PredicateSlot -> List Route
+recRoutes : SiteCtx -> String -> ScopeId -> Mono -> List PredicateSlot -> List Route
+stampOpRouteVal : SiteCtx -> Bool -> String -> ScopeId -> String -> Mono -> String -> Route'
+printf '%s\n' "$route_producer_sigs" | while IFS= read -r required; do
+  if ! printf '%s\n' "$predicate_slot_flat" | grep -Fq "$required"; then
+    echo "FAIL: #1318 predicate-slot producer authority is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
 numeric_predicate_expr_required='_ => tagRef := numericReturnRoute route routes
 let split = binopRouteSplit route'
 printf '%s\n' "$numeric_predicate_expr_required" | while IFS= read -r required; do
@@ -1154,9 +1162,9 @@ fi
 # cannot establish that the numeric arm still consumes its exact predicate.
 numeric_return_inst_body="$(sed -n '/^entailInst .*EKNumReturn/,/^entailInst .*EKNestedTop/p' "$predicate_slot_src")"
 numeric_return_inst_required='  let goals = predicate.predicateArguments
-  match ieSelectRowByIface env predicate.predicateInterface goals
+  match ieSelectRowByIface sx env predicate.predicateInterface goals
       let route = RKey (rowRouteKey row) []
-      let routes = implDictRoutesForRow encl useScope goals row'
+      let routes = implDictRoutesForRow sx encl useScope goals row'
 printf '%s\n' "$numeric_return_inst_required" | while IFS= read -r required; do
   if ! printf '%s\n' "$numeric_return_inst_body" | grep -Fq "$required"; then
     echo "FAIL: numeric return instance arm is missing required source: $required"
@@ -1208,7 +1216,7 @@ if ! grep -Fq '  SolverOutcome(..),' "$predicate_slot_src"; then
 fi
 
 ordinary_return_solver_body="$(sed -n '/^solveExactReturnOnce :/,/^exactReturnDefers :/p' "$predicate_slot_src")"
-ordinary_return_solver_required='solveExactReturnOnce request = match request.mrrResolution.value
+ordinary_return_solver_required='solveExactReturnOnce sx request = match request.mrrResolution.value
     request.mrrResolution := Some resolution
         mrrOutcome = Solved (assumAnswerEvidence answer)
         mrrOutcome =
@@ -1279,7 +1287,7 @@ ordinary_return_check_body="$(sed -n '/^checkCallObligationsU deferNonGround uni
 ordinary_return_arm="$(printf '%s\n' "$ordinary_return_check_body" | sed -n '/^    OpExactReturn request =>/,/^    _ =>/p')"
 ordinary_return_complete_check="$(printf '%s\n' "$ordinary_return_arm" | sed -n '/match methodReturnWanted request/,/ None =>/p')"
 ordinary_return_complete_flat="$(printf '%s\n' "$ordinary_return_complete_check" | tr '\n' ' ' | tr -s ' ')"
-ordinary_return_complete_required='match methodReturnWanted request Some _ => consumeExactReturnOutcome univ request (solveExactReturnOnce request) None =>'
+ordinary_return_complete_required='match methodReturnWanted request Some _ => consumeExactReturnOutcome univ request (solveExactReturnOnce noSite request) None =>'
 if ! printf '%s\n' "$ordinary_return_complete_flat" | grep -Fq "$ordinary_return_complete_required"; then
   echo "FAIL: complete ordinary return checker does not consume the one outcome: $ordinary_return_complete_required"
   exit 1
@@ -1300,10 +1308,10 @@ if ! printf '%s\n' "$ordinary_return_legacy_check" | grep -Fq 'checkOneCallOblig
 fi
 
 ordinary_return_stamp_body="$(sed -n '/^resolveExactReturnSite :/,/^resolveNumLitSite :/p' "$predicate_slot_src")"
-ordinary_return_stamp_required='      let resolution = solveExactReturnOnce request
-        exactReturnRoutes name encl scope (omHasKey name rpNames) resolution
-exactReturnRoutes name encl scope isReturnPosition resolution = match (
-    methodReturnEvidenceRoutes encl scope prerequisites,'
+ordinary_return_stamp_required='      let resolution = solveExactReturnOnce sx request
+        exactReturnRoutes sx name encl scope (omHasKey name rpNames) resolution
+exactReturnRoutes sx name encl scope isReturnPosition resolution = match (
+    methodReturnEvidenceRoutes sx encl scope prerequisites,'
 printf '%s\n' "$ordinary_return_stamp_required" | while IFS= read -r required; do
   if ! printf '%s\n' "$ordinary_return_stamp_body" | grep -Fq "$required"; then
     echo "FAIL: ordinary return route adapter is missing required source: $required"
@@ -1337,8 +1345,8 @@ fi
 numeric_operator_required='  let _ = recordBinopGoals op dref lt
 goalRequestOfKind _ (EKPredicateOp _ _ predicate) = Some PredicateRequest {
 entailAssumVar request m encl _ useScope (EKPredicateOp _ _ _) =
-entailInst name m encl useScope tag (EKPredicateOp _ _ predicate) =
-  (stampPredicateOpRouteVal encl useScope name m tag predicate, [])'
+entailInst sx name m encl useScope tag (EKPredicateOp _ _ predicate) =
+  (stampPredicateOpRouteVal sx encl useScope name m tag predicate, [])'
 printf '%s\n' "$numeric_operator_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
     echo "FAIL: exact numeric operator predicate transport is missing: $required"
@@ -1421,7 +1429,7 @@ require_typecheck_arm numDefaultOwnerAllows groundNumVarsWith 'numDefaultOwnerAl
 require_typecheck_arm numDefaultOwnerAllows groundNumVarsWith 'Unbound _ owner => owner == level'
 require_typecheck_arm numDefaultOwnerAllows groundNumVarsWith 'numDefaultOwnerAllows None _ = True'
 require_typecheck_arm defaultBodyLocalNumWith defaultEachMemberWith 'groundNumVarsWith'
-require_typecheck_arm defaultEachMemberWith registerAmbiguousConstraintsOwnedBy 'defaultAmbiguousNumWith ownerPolicy'
+require_typecheck_arm defaultEachMemberWith registerAmbiguousConstraintsOwnedBy 'defaultAmbiguousNumWith dyn ownerPolicy'
 require_typecheck_arm registerAmbiguousConstraintsOwnedBy oblDispatchMonos 'registerAmbiguousGo'
 
 # Impl bodies read their method declaration and graded scope from one identity-keyed
@@ -1530,10 +1538,9 @@ if printf '%s\n' "$lexical_dict_block" | grep -Fq 'activeDictVarOf m'; then
   exit 1
 fi
 
-operator_owner_required='stampOpRouteVal : Bool -> String -> ScopeId -> String -> Mono -> String -> Route
-argImplDictRoutesForEncl encl useScope dictName tag subject goals
-entailInst name m encl useScope tag (EKOp isBinop _) =
-(stampOpRouteVal isBinop encl useScope name m tag, [])'
+operator_owner_required='argImplDictRoutesForEncl sx encl useScope dictName tag subject goals
+entailInst sx name m encl useScope tag (EKOp isBinop _) =
+(stampOpRouteVal sx isBinop encl useScope name m tag, [])'
 printf '%s\n' "$operator_owner_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
     echo "FAIL: operator route dropped its evidence owner: $required"

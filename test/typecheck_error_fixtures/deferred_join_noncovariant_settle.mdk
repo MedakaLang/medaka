@@ -1,0 +1,21 @@
+-- A join recorded before its alternatives had a shape (`k` below: `g` and `h`
+-- are unshaped parameters) is settled later, by the unification that shapes
+-- its result.  That settle runs inside `Ref`'s invariant slot, so the rows of
+-- the alternatives must be equal and the mismatch takes the non-covariant
+-- wording.  The settling call carries the context it runs under; a settle
+-- under the empty context reports the plain closed-row mismatch instead.
+storeLoud : Ref (Unit -> <Stdout> Unit) -> Unit
+storeLoud _ = ()
+
+storeQuiet : Ref (Unit -> Unit) -> Unit
+storeQuiet _ = ()
+
+probe : Bool -> Unit
+probe flag =
+  let pick g h =
+    let k = if flag then g else h
+    let _ = storeLoud (Ref g)
+    storeQuiet (Ref k)
+  ()
+
+main = ()

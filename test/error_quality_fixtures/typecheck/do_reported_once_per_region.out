@@ -1,0 +1,51 @@
+cmd: medaka check
+exit: 1
+---
+error: test/error_quality_fixtures/typecheck/do_reported_once_per_region.mdk:3:7: `do` needs a value whose type implements `Thenable`, such as `Option` or `Result`; for IO sequencing use a bare indented block instead of `do`
+  |
+3 |   x <- Some 1
+  |        ^
+error: test/error_quality_fixtures/typecheck/do_reported_once_per_region.mdk:5:10: type mismatch: Int vs Option a
+  |
+5 |   let b = (2 : Int) == Some 4
+  |           ^
+error: test/error_quality_fixtures/typecheck/do_reported_once_per_region.mdk:10:7: `do` needs a value whose type implements `Thenable`, such as `Option` or `Result`; for IO sequencing use a bare indented block instead of `do`
+  |
+10 |   x <- Some 1
+  |        ^
+error: test/error_quality_fixtures/typecheck/do_reported_once_per_region.mdk:14:4: `do` needs a value whose type implements `Thenable`, such as `Option` or `Result`; for IO sequencing use a bare indented block instead of `do`
+  |
+14 |     Some 2
+  |     ^
+error: test/error_quality_fixtures/typecheck/do_reported_once_per_region.mdk:15:10: type mismatch: Int vs Option a
+  |
+15 |   let b = (2 : Int) == Some 4
+  |           ^
+error: test/error_quality_fixtures/typecheck/do_reported_once_per_region.mdk:24:4: `do` needs a value whose type implements `Thenable`, such as `Option` or `Result`; for IO sequencing use a bare indented block instead of `do`
+  |
+24 |     Some 2
+  |     ^
+error: test/error_quality_fixtures/typecheck/do_reported_once_per_region.mdk:23:12: type mismatch: Int vs Option a
+  |
+23 |     let d = (4 : Int) == Some 6
+  |             ^
+error: test/error_quality_fixtures/typecheck/do_reported_once_per_region.mdk:20:7: `do` needs a value whose type implements `Thenable`, such as `Option` or `Result`; for IO sequencing use a bare indented block instead of `do`
+  |
+20 |   x <- Some 1
+  |        ^
+error: test/error_quality_fixtures/typecheck/do_reported_once_per_region.mdk:30:7: `do` needs a value whose type implements `Thenable`, such as `Option` or `Result`; for IO sequencing use a bare indented block instead of `do`
+  |
+30 |   x <- Some 1
+  |        ^
+error: test/error_quality_fixtures/typecheck/do_reported_once_per_region.mdk:31:10: type mismatch: Int vs Option a
+  |
+31 |   let b = (2 : Int) == Some 4
+  |           ^
+error: test/error_quality_fixtures/typecheck/do_reported_once_per_region.mdk:32:7: type mismatch: a b vs Option
+  |
+32 |   Some x
+  |        ^
+error: test/error_quality_fixtures/typecheck/do_reported_once_per_region.mdk:29:9: type mismatch: Option vs a b
+  |
+29 | k flag = defer
+  |          ^

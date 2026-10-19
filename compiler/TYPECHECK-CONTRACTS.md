@@ -144,7 +144,7 @@ split of emitter epic #1398, not a second backend redesign.
 
 Separate immutable environments, per-request inference storage, lexical contexts,
 solver work/evidence and diagnostics by ownership. Mutable implementation is
-permitted behind those interfaces. Whole `PerRun`/`Toggles` replay is migration
+permitted behind those interfaces. Whole `PerRun` replay is migration
 scaffolding with a deletion owner, not the permanent solver input contract.
 
 For #2586, a failed closed-island extraction triggers a boundary design: enumerate
