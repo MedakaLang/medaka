@@ -1,5 +1,5 @@
 # META
-source_lines=302
+source_lines=299
 stages=DESUGAR,MARK
 # SOURCE
 -- Evidence coverage: does a published evidence table answer every site its
@@ -38,6 +38,7 @@ import frontend.ast.{
   EvTable,
 }
 import support.util.{reverseL}
+import types.route_key.{EvIndex(..)}
 
 -- The five answer kinds a published entry can have.
 public export data EvShape =
@@ -66,10 +67,6 @@ evShapeOf (EvMany _) = ShapeMany
 evShapeOf (EvMethod _ _ _ _ _) = ShapeMethod
 evShapeOf (EvLit _ _) = ShapeLit
 evShapeOf (EvHead _) = ShapeHead
-
--- The table indexed by ordinal less its smallest one, as `installEvidence` lays it
--- out; the first entry at an ordinal is kept.
-data EvIndex = EvIndex Int (Array (Option EvEntry))
 
 -- Every fault of [table] against [trees]: duplicated ordinals first, then each
 -- uncovered site in tree order.  With no trees (a drive that returns none) only
@@ -307,6 +304,7 @@ kvsFaults idx ((k, v) :: rest) acc =
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "EvId" true) (mem "isUnminted" false) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" true))))
 (DData Public "EvShape" () ((variant "ShapeOne" (ConPos)) (variant "ShapeMany" (ConPos)) (variant "ShapeMethod" (ConPos)) (variant "ShapeLit" (ConPos)) (variant "ShapeHead" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "EvShape")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "ShapeOne") (PCon "ShapeOne")) () (EVar "True")) (arm (PTuple (PCon "ShapeMany") (PCon "ShapeMany")) () (EVar "True")) (arm (PTuple (PCon "ShapeMethod") (PCon "ShapeMethod")) () (EVar "True")) (arm (PTuple (PCon "ShapeLit") (PCon "ShapeLit")) () (EVar "True")) (arm (PTuple (PCon "ShapeHead") (PCon "ShapeHead")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "EvShape")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "ShapeOne") () (ELit (LString "ShapeOne"))) (arm (PCon "ShapeMany") () (ELit (LString "ShapeMany"))) (arm (PCon "ShapeMethod") () (ELit (LString "ShapeMethod"))) (arm (PCon "ShapeLit") () (ELit (LString "ShapeLit"))) (arm (PCon "ShapeHead") () (ELit (LString "ShapeHead")))))))
@@ -319,7 +317,6 @@ kvsFaults idx ((k, v) :: rest) acc =
 (DFunDef false "evShapeOf" ((PCon "EvMethod" PWild PWild PWild PWild PWild)) (EVar "ShapeMethod"))
 (DFunDef false "evShapeOf" ((PCon "EvLit" PWild PWild)) (EVar "ShapeLit"))
 (DFunDef false "evShapeOf" ((PCon "EvHead" PWild)) (EVar "ShapeHead"))
-(DData Private "EvIndex" () ((variant "EvIndex" (ConPos (TyCon "Int") (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry")))))) ())
 (DTypeSig true "evidenceFaults" (TyFun (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyFun (TyCon "EvTable") (TyApp (TyCon "List") (TyCon "EvidenceFault")))))
 (DFunDef false "evidenceFaults" ((PVar "trees") (PVar "table")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "minOrdinal") (EVar "table"))) (DoLet false false (PVar "arr") (EApp (EApp (EVar "arrayMake") (EBinOp "-" (EApp (EApp (EVar "slotCount") (EVar "table")) (EVar "lo")) (EVar "lo"))) (EVar "None"))) (DoLet false false (PVar "dups") (EApp (EApp (EApp (EApp (EVar "fillIndex") (EVar "lo")) (EVar "arr")) (EVar "table")) (EListLit))) (DoLet false false (PVar "idx") (EApp (EApp (EVar "EvIndex") (EVar "lo")) (EVar "arr"))) (DoLet false false (PVar "sites") (EMatch (EVar "trees") (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "core") (PVar "mods"))) () (EApp (EApp (EApp (EVar "modsFaults") (EVar "idx")) (EVar "mods")) (EApp (EApp (EApp (EVar "declsFaults") (EVar "idx")) (EVar "core")) (EListLit)))))) (DoExpr (EBinOp "++" (EApp (EVar "reverseL") (EVar "dups")) (EApp (EVar "reverseL") (EVar "sites"))))))
 (DTypeSig false "minOrdinal" (TyFun (TyCon "EvTable") (TyCon "Int")))
@@ -444,6 +441,7 @@ kvsFaults idx ((k, v) :: rest) acc =
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "EvId" true) (mem "isUnminted" false) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" true))))
 (DData Public "EvShape" () ((variant "ShapeOne" (ConPos)) (variant "ShapeMany" (ConPos)) (variant "ShapeMethod" (ConPos)) (variant "ShapeLit" (ConPos)) (variant "ShapeHead" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "EvShape")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "ShapeOne") (PCon "ShapeOne")) () (EVar "True")) (arm (PTuple (PCon "ShapeMany") (PCon "ShapeMany")) () (EVar "True")) (arm (PTuple (PCon "ShapeMethod") (PCon "ShapeMethod")) () (EVar "True")) (arm (PTuple (PCon "ShapeLit") (PCon "ShapeLit")) () (EVar "True")) (arm (PTuple (PCon "ShapeHead") (PCon "ShapeHead")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "EvShape")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "ShapeOne") () (ELit (LString "ShapeOne"))) (arm (PCon "ShapeMany") () (ELit (LString "ShapeMany"))) (arm (PCon "ShapeMethod") () (ELit (LString "ShapeMethod"))) (arm (PCon "ShapeLit") () (ELit (LString "ShapeLit"))) (arm (PCon "ShapeHead") () (ELit (LString "ShapeHead")))))))
@@ -456,7 +454,6 @@ kvsFaults idx ((k, v) :: rest) acc =
 (DFunDef false "evShapeOf" ((PCon "EvMethod" PWild PWild PWild PWild PWild)) (EVar "ShapeMethod"))
 (DFunDef false "evShapeOf" ((PCon "EvLit" PWild PWild)) (EVar "ShapeLit"))
 (DFunDef false "evShapeOf" ((PCon "EvHead" PWild)) (EVar "ShapeHead"))
-(DData Private "EvIndex" () ((variant "EvIndex" (ConPos (TyCon "Int") (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry")))))) ())
 (DTypeSig true "evidenceFaults" (TyFun (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))) (TyFun (TyCon "EvTable") (TyApp (TyCon "List") (TyCon "EvidenceFault")))))
 (DFunDef false "evidenceFaults" ((PVar "trees") (PVar "table")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "minOrdinal") (EVar "table"))) (DoLet false false (PVar "arr") (EApp (EApp (EVar "arrayMake") (EBinOp "-" (EApp (EApp (EVar "slotCount") (EVar "table")) (EVar "lo")) (EVar "lo"))) (EVar "None"))) (DoLet false false (PVar "dups") (EApp (EApp (EApp (EApp (EVar "fillIndex") (EVar "lo")) (EVar "arr")) (EVar "table")) (EListLit))) (DoLet false false (PVar "idx") (EApp (EApp (EVar "EvIndex") (EVar "lo")) (EVar "arr"))) (DoLet false false (PVar "sites") (EMatch (EVar "trees") (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "core") (PVar "mods"))) () (EApp (EApp (EApp (EVar "modsFaults") (EVar "idx")) (EVar "mods")) (EApp (EApp (EApp (EVar "declsFaults") (EVar "idx")) (EVar "core")) (EListLit)))))) (DoExpr (EBinOp "++" (EApp (EVar "reverseL") (EVar "dups")) (EApp (EVar "reverseL") (EVar "sites"))))))
 (DTypeSig false "minOrdinal" (TyFun (TyCon "EvTable") (TyCon "Int")))

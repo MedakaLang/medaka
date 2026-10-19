@@ -680,9 +680,11 @@ import types.route_key.{
   ifaceWordOf,
   funHeadTag,
   installEvidence,
-  evDictRoutes,
-  evSiteRoute,
-  evSiteLit,
+  EvIndex,
+  evIndexOf,
+  evDictRoutesIn,
+  evSiteRouteIn,
+  evSiteLitIn,
 }
 import types.disposition.{
   InstId(..),
@@ -32841,12 +32843,12 @@ firstTvar a b id = match findTvarInMono a id
 -- maps over EVERY decl — so `contains n names` inside `dictPassDecl` was
 -- O(decls x names).  Index it ONCE here; `dictPassDecl`/`dictPassLetBind` probe
 -- with `omHasKey`.  Membership semantics unchanged.
-dictPass : String -> List String -> List Decl -> List Decl
-dictPass mid names prog =
+dictPass : EvIndex -> String -> List String -> List Decl -> List Decl
+dictPass idx mid names prog =
   map
-    (dictPassDecl (omFromNames names omEmpty) (returnPosMethodNames prog))
+    (dictPassDecl idx (omFromNames names omEmpty) (returnPosMethodNames prog))
     (mapProg
-      (e => rewriteLocalDictExpr (rewriteBinopExpr e))
+      (e => rewriteLocalDictExpr (rewriteBinopExpr idx e))
       (grantPass mid prog))
 
 -- ── grant passing: the authority analogue of the dictionary pass ─────────────
@@ -33529,8 +33531,8 @@ grantParamFor (b :: rest) i =
 -- Packed instance prerequisites move into EMethodAt's implementation-dictionary
 -- routes. RNone and scalar routes preserve primitive operations, so primitive
 -- Num method bodies do not recursively call their own dictionary methods.
-rewriteBinopExpr : Expr -> Expr
-rewriteBinopExpr (EBinOp op l r ev) = match evSiteRoute ev
+rewriteBinopExpr : EvIndex -> Expr -> Expr
+rewriteBinopExpr idx (EBinOp op l r ev) = match evSiteRouteIn idx ev
   RNone => EBinOp op l r ev
   -- SHARED-FLOAT-RESIDUAL §3(C): an RScalar route is NOT a typeclass dispatch — it
   -- is the scalar-type tag typecheck stamped on a monomorphic binop
@@ -33566,7 +33568,7 @@ rewriteBinopExpr (EBinOp op l r ev) = match evSiteRoute ev
 -- routes are packed in [dref] and split onto the EMethodAt impl-dict carrier here.
 -- Done in the same mapProg walk that rewrites binops, so
 -- eval/lower never see ENumLit and eval_arith / the emitter get matching tags.
-rewriteBinopExpr (ENumLit n ev _) = match evSiteLit ev
+rewriteBinopExpr idx (ENumLit n ev _) = match evSiteLitIn idx ev
   (Some f, _) => ELit (LFloat f)
   (None, dref) => match dref
     RNone => ELit (LInt n)
@@ -33594,7 +33596,7 @@ rewriteBinopExpr (ENumLit n ev _) = match evSiteLit ev
 -- route; Int/Float (RNone or a scalar tag) stay the literal EUnOp the eval builtin handles
 -- structurally (no recursion — Int's own `negate` body uses the BINOP `0 - a`, and
 -- Float's unary minus has a scalar operand).  `!` never routes (stays RNone).
-rewriteBinopExpr (EUnOp op e ev) = match evSiteRoute ev
+rewriteBinopExpr idx (EUnOp op e ev) = match evSiteRouteIn idx ev
   RNone => EUnOp op e ev
   -- a primitive operand's scalar tag: the builtin negation, as for an unrouted site
   RScalar _ => EUnOp op e ev
@@ -33606,10 +33608,10 @@ rewriteBinopExpr (EUnOp op e ev) = match evSiteRoute ev
 -- at any other type, so a program that reaches eval/emit only has it at those).
 -- At `I64` the halves are the pattern of the magnitude; a `-` around it is the
 -- wrapping negation that makes `-2^63` `minBound`.
-rewriteBinopExpr (EWideLit hi lo ev _) = match evSiteRoute ev
+rewriteBinopExpr idx (EWideLit hi lo ev _) = match evSiteRouteIn idx ev
   RKey word _ _ if isI64Head (literalRouteHead word) => ELit (LI64 hi lo)
   _ => ELit (LU64 hi lo)
-rewriteBinopExpr e = e
+rewriteBinopExpr _ e = e
 
 -- `-N` at `I32` is the constant `-N`: `-2147483648` is the one literal whose
 -- magnitude alone does not fit, so negating `fromInt 2147483648` would panic
@@ -33705,8 +33707,8 @@ unopMethodApp op e route =
         (snd split)))
     e
 
-dictPassDecl : OrdMap Unit -> List String -> Decl -> Decl
-dictPassDecl names _ (DFunDef pub n pats body site bid)
+dictPassDecl : EvIndex -> OrdMap Unit -> List String -> Decl -> Decl
+dictPassDecl _ names _ (DFunDef pub n pats body site bid)
   | omHasKey n names =
     DFunDef pub n (dictParams n (dictArityOf n) ++ pats) body site bid
   | otherwise = DFunDef pub n pats body site bid
@@ -33716,7 +33718,7 @@ dictPassDecl names _ (DFunDef pub n pats body site bid)
 -- rewritten) line up with the definition.  (Without this, a `Num a => a -> a` group member's call site
 -- supplies a leading dict the body never binds → the dict lands in the first user
 -- param → arithmetic over a dict value panics `unknown op`.)
-dictPassDecl names _ (DLetGroup pub binds) =
+dictPassDecl _ names _ (DLetGroup pub binds) =
   DLetGroup pub (map (dictPassLetBind names) binds)
 -- Phase 83/84 single-level + D3b-1: a parametric impl with `requires` gets one
 -- leading `$dict_<method>_<slot>` param on each method (return- OR argument-
@@ -33725,9 +33727,10 @@ dictPassDecl names _ (DLetGroup pub binds) =
 -- added UNIFORMLY across all clauses of a method when ANY clause uses the dict, so
 -- a multi-clause method keeps one arity).  The routes resolveSite/resolveArgStamp
 -- filled on the call-site EMethodAt's impl-dicts ref line up with these params.
-dictPassDecl _ _ (d@(DImpl { iface, implOrigin, reqs, methods, ... })) = DImpl { d |
+dictPassDecl idx _ _ (d@(DImpl { iface, implOrigin, reqs, methods, ... })) = DImpl { d |
   methods =
     implDictPassMethods
+      idx
       IfaceRef { irName = iface, irOrigin = implOrigin }
       (listLen reqs)
       methods,
@@ -33736,11 +33739,11 @@ dictPassDecl _ _ (d@(DImpl { iface, implOrigin, reqs, methods, ... })) = DImpl {
 -- one leading `$dict_<method>_<slot>` param per constraint on its DEFAULT body, so a
 -- caller can supply the dictionary the body's `empty`/… reads (routed RDict by
 -- inferDefaultMethod).
-dictPassDecl _ _ (d@(DInterface { typarams, methods, ... })) =
+dictPassDecl _ _ _ (d@(DInterface { typarams, methods, ... })) =
   DInterface { d | methods = map (ifaceDictPassMethod typarams) methods }
-dictPassDecl names ret (DAttrib attrs d) =
-  DAttrib attrs (dictPassDecl names ret d)
-dictPassDecl _ _ d = d
+dictPassDecl idx names ret (DAttrib attrs d) =
+  DAttrib attrs (dictPassDecl idx names ret d)
+dictPassDecl _ _ _ d = d
 
 -- DLetGroup binding dict-pass: prepend the member's dict params to every clause.
 -- `dictArityOf n` is 0 for an unconstrained member (no change), matching the
@@ -33809,14 +33812,18 @@ methodDictArityOf key =
 -- method dicts unconditionally first (eval.mdk), so dropping the leading method-level
 -- params (the old `match reqs []=>d` early-out) mis-bound the dict into the first
 -- value parameter.
-implDictPassMethods : IfaceRef -> Int -> List ImplMethod -> List ImplMethod
-implDictPassMethods iface nReq methods =
-  let users = dedup (flatMap (clauseImplDictUser iface nReq) methods)
+implDictPassMethods : EvIndex ->
+  IfaceRef ->
+  Int ->
+  List ImplMethod ->
+  List ImplMethod
+implDictPassMethods idx iface nReq methods =
+  let users = dedup (flatMap (clauseImplDictUser idx iface nReq) methods)
   map (prependImplDictIfUser iface nReq users) methods
 
-clauseImplDictUser : IfaceRef -> Int -> ImplMethod -> List String
-clauseImplDictUser iface nReq (ImplMethod n _ body)
-  | usesImplDict n (implMethodDictArity iface n) nReq body = [n]
+clauseImplDictUser : EvIndex -> IfaceRef -> Int -> ImplMethod -> List String
+clauseImplDictUser idx iface nReq (ImplMethod n _ body)
+  | usesImplDict idx n (implMethodDictArity iface n) nReq body = [n]
   | otherwise = []
 
 -- params = method-level dicts (slots 0..k-1) ++ impl-`requires` dicts (slots
@@ -33840,9 +33847,9 @@ prependImplDictIfUser iface nReq users (ImplMethod n pats body) =
 -- one of THIS method's would-be impl-dict params? (the gate that distinguishes a
 -- body that consumes the element dict from a terminal one that doesn't).  Impl-dict
 -- slots are offset by the method's own method-level arity (S2), so probe at k..k+nReq-1.
-usesImplDict : String -> Int -> Int -> Expr -> Bool
-usesImplDict mname methodArity nReq body =
-  anyMember (bodyRDictNames body) (implDictNames mname methodArity nReq)
+usesImplDict : EvIndex -> String -> Int -> Int -> Expr -> Bool
+usesImplDict idx mname methodArity nReq body =
+  anyMember (bodyRDictNames idx body) (implDictNames mname methodArity nReq)
 
 implDictNames : String -> Int -> Int -> List String
 implDictNames mname methodArity nReq =
@@ -33873,10 +33880,10 @@ rangeFromCount start count
 -- plus every EDictAt route-LIST that forwards RDict/RDictFwd to an impl param
 -- (a `=>`-constrained helper call that threads the impl dict through, e.g.
 -- `debug xs = "[\{debugListItems xs}]"` where `debugListItems` is an EDictAt).
-bodyRDictNames : Expr -> List String
-bodyRDictNames e =
+bodyRDictNames : EvIndex -> Expr -> List String
+bodyRDictNames idx e =
   flatMap siteRDictName (collectMethodSites e)
-    ++ flatMap siteRDictNamesL (collectDictSites e)
+    ++ flatMap siteRDictNamesL (collectDictSites idx e)
 
 siteRDictName : Ref Route -> List String
 siteRDictName r = match !r
@@ -33974,69 +33981,78 @@ fieldAssignSites (FieldAssign _ e) = collectMethodSites e
 -- rather than the cells that hold them.  Its one caller (`bodyRDictNames`)
 -- dereferenced every cell immediately anyway, so no writer downstream loses a cell
 -- it could have written.
-collectDictSites : Expr -> List (List Route)
-collectDictSites (EDictAt _ ev) = [evDictRoutes ev]
+collectDictSites : EvIndex -> Expr -> List (List Route)
+collectDictSites idx (EDictAt _ ev) = [evDictRoutesIn idx ev]
 -- D3b-1: an EMethodAt arg-position site carries its element-dict routes in the
 -- impl-/method-dicts route LISTS (not tagRef).  A nested `requires` impl whose
 -- body dispatches a method on its own element tyvar routes RDict $dict_<m>_<slot>
 -- here — scan both so implDictPassMethods' usesImplDict gate sees it and prepends
 -- the matching param.  [] on the golden path (resolveArgStamp never runs).
-collectDictSites (EMethodAt _ _ ev) = methodCellDicts (methodCellOf ev)
-collectDictSites (ELoc _ e) = collectDictSites e
-collectDictSites (EDoOrigin _ e) = collectDictSites e
-collectDictSites (EApp f x) = collectDictSites f ++ collectDictSites x
-collectDictSites (ELam _ b) = collectDictSites b
-collectDictSites (ELet _ _ _ e1 e2) = collectDictSites e1 ++ collectDictSites e2
-collectDictSites (ELetGroup binds body) =
-  flatMap letBindDictSites binds ++ collectDictSites body
-collectDictSites (EMatch e arms) =
-  collectDictSites e ++ flatMap armDictSites arms
-collectDictSites (EIf c t e) =
-  collectDictSites c ++ collectDictSites t ++ collectDictSites e
-collectDictSites (EBinOp _ l r _) = collectDictSites l ++ collectDictSites r
-collectDictSites (EUnOp _ e _) = collectDictSites e
-collectDictSites (EInfix _ l r) = collectDictSites l ++ collectDictSites r
-collectDictSites (EFieldAccess e _ _) = collectDictSites e
-collectDictSites (ETuple es) = flatMap collectDictSites es
-collectDictSites (EListLit es) = flatMap collectDictSites es
-collectDictSites (EArrayLit es) = flatMap collectDictSites es
-collectDictSites (ERangeList a b _) = collectDictSites a ++ collectDictSites b
-collectDictSites (ERangeArray a b _) = collectDictSites a ++ collectDictSites b
-collectDictSites (ESlice e a b _) =
-  collectDictSites e ++ collectDictSites a ++ collectDictSites b
-collectDictSites (EIndex e i) = collectDictSites e ++ collectDictSites i
-collectDictSites (EAnnot e _) = collectDictSites e
-collectDictSites (EBlock stmts) = flatMap doStmtDictSites stmts
-collectDictSites (ERecordCreate _ fs) = flatMap fieldAssignDictSites fs
-collectDictSites (ERecordUpdate e fs _) =
-  collectDictSites e ++ flatMap fieldAssignDictSites fs
-collectDictSites (EVariantUpdate _ e fs) =
-  collectDictSites e ++ flatMap fieldAssignDictSites fs
-collectDictSites _ = []
+collectDictSites _ (EMethodAt _ _ ev) = methodCellDicts (methodCellOf ev)
+collectDictSites idx (ELoc _ e) = collectDictSites idx e
+collectDictSites idx (EDoOrigin _ e) = collectDictSites idx e
+collectDictSites idx (EApp f x) =
+  collectDictSites idx f ++ collectDictSites idx x
+collectDictSites idx (ELam _ b) = collectDictSites idx b
+collectDictSites idx (ELet _ _ _ e1 e2) =
+  collectDictSites idx e1 ++ collectDictSites idx e2
+collectDictSites idx (ELetGroup binds body) =
+  flatMap (letBindDictSites idx) binds ++ collectDictSites idx body
+collectDictSites idx (EMatch e arms) =
+  collectDictSites idx e ++ flatMap (armDictSites idx) arms
+collectDictSites idx (EIf c t e) =
+  collectDictSites idx c ++ collectDictSites idx t ++ collectDictSites idx e
+collectDictSites idx (EBinOp _ l r _) =
+  collectDictSites idx l ++ collectDictSites idx r
+collectDictSites idx (EUnOp _ e _) = collectDictSites idx e
+collectDictSites idx (EInfix _ l r) =
+  collectDictSites idx l ++ collectDictSites idx r
+collectDictSites idx (EFieldAccess e _ _) = collectDictSites idx e
+collectDictSites idx (ETuple es) = flatMap (collectDictSites idx) es
+collectDictSites idx (EListLit es) = flatMap (collectDictSites idx) es
+collectDictSites idx (EArrayLit es) = flatMap (collectDictSites idx) es
+collectDictSites idx (ERangeList a b _) =
+  collectDictSites idx a ++ collectDictSites idx b
+collectDictSites idx (ERangeArray a b _) =
+  collectDictSites idx a ++ collectDictSites idx b
+collectDictSites idx (ESlice e a b _) =
+  collectDictSites idx e ++ collectDictSites idx a ++ collectDictSites idx b
+collectDictSites idx (EIndex e i) =
+  collectDictSites idx e ++ collectDictSites idx i
+collectDictSites idx (EAnnot e _) = collectDictSites idx e
+collectDictSites idx (EBlock stmts) = flatMap (doStmtDictSites idx) stmts
+collectDictSites idx (ERecordCreate _ fs) =
+  flatMap (fieldAssignDictSites idx) fs
+collectDictSites idx (ERecordUpdate e fs _) =
+  collectDictSites idx e ++ flatMap (fieldAssignDictSites idx) fs
+collectDictSites idx (EVariantUpdate _ e fs) =
+  collectDictSites idx e ++ flatMap (fieldAssignDictSites idx) fs
+collectDictSites _ _ = []
 
-letBindDictSites : LetBind -> List (List Route)
-letBindDictSites (LetBind _ clauses _ _) = flatMap funClauseDictSites clauses
+letBindDictSites : EvIndex -> LetBind -> List (List Route)
+letBindDictSites idx (LetBind _ clauses _ _) =
+  flatMap (funClauseDictSites idx) clauses
 
-funClauseDictSites : FunClause -> List (List Route)
-funClauseDictSites (FunClause _ body) = collectDictSites body
+funClauseDictSites : EvIndex -> FunClause -> List (List Route)
+funClauseDictSites idx (FunClause _ body) = collectDictSites idx body
 
-armDictSites : Arm -> List (List Route)
-armDictSites (Arm _ guards body) =
-  flatMap guardDictSites guards ++ collectDictSites body
+armDictSites : EvIndex -> Arm -> List (List Route)
+armDictSites idx (Arm _ guards body) =
+  flatMap (guardDictSites idx) guards ++ collectDictSites idx body
 
-guardDictSites : Guard -> List (List Route)
-guardDictSites (GBool e) = collectDictSites e
-guardDictSites (GBind _ e) = collectDictSites e
+guardDictSites : EvIndex -> Guard -> List (List Route)
+guardDictSites idx (GBool e) = collectDictSites idx e
+guardDictSites idx (GBind _ e) = collectDictSites idx e
 
-doStmtDictSites : DoStmt -> List (List Route)
-doStmtDictSites (DoExpr e) = collectDictSites e
-doStmtDictSites (DoLet _ _ _ e _) = collectDictSites e
-doStmtDictSites (DoBind _ e) = collectDictSites e
-doStmtDictSites (DoAssign _ e) = collectDictSites e
-doStmtDictSites (DoFieldAssign _ _ e) = collectDictSites e
+doStmtDictSites : EvIndex -> DoStmt -> List (List Route)
+doStmtDictSites idx (DoExpr e) = collectDictSites idx e
+doStmtDictSites idx (DoLet _ _ _ e _) = collectDictSites idx e
+doStmtDictSites idx (DoBind _ e) = collectDictSites idx e
+doStmtDictSites idx (DoAssign _ e) = collectDictSites idx e
+doStmtDictSites idx (DoFieldAssign _ _ e) = collectDictSites idx e
 
-fieldAssignDictSites : FieldAssign -> List (List Route)
-fieldAssignDictSites (FieldAssign _ e) = collectDictSites e
+fieldAssignDictSites : EvIndex -> FieldAssign -> List (List Route)
+fieldAssignDictSites idx (FieldAssign _ e) = collectDictSites idx e
 
 dictArityOf : String -> Int
 dictArityOf n =
@@ -51459,6 +51475,7 @@ checkModulesChainReportFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDe
     []
     drivenEvidence
     dispositions
+    graphRun.value.binderRows.value
     None
     entryTables
 
@@ -51777,6 +51794,7 @@ driveGraphK sel valueMain executes preludeKey runtimeDecls coreDecls0 modulesIn 
           []
           drivenEvidence
           dispositions
+          graphRun.value.binderRows.value
           None
           entryTables,
     }
@@ -51813,7 +51831,7 @@ driveGraphK sel valueMain executes preludeKey runtimeDecls coreDecls0 modulesIn 
         gdEvTable = graphRun.value.evTable.value,
         gdDispositions = dispositions,
         -- read after the last `publishEvidence`, so the table is the installed one
-        gdReport = { graphReport perMod corePub residual drivenEvidence dispositions (Some (coreD, modulesOut)) entryTables |
+        gdReport = { graphReport perMod corePub residual drivenEvidence dispositions graphRun.value.binderRows.value (Some (coreD, modulesOut)) entryTables |
           trAutoPrint = autoPrint,
         },
       }
@@ -52612,7 +52630,9 @@ dictPassModulesIfEnabled dictNames core2 modules2 =
   -- because `dictPass` is itself a reader (`bodyRDictNames`), and this is the
   -- Module arm's one funnel into it — the fixpoint reaches this call only on the
   -- sweep whose trees are final, so a discarded sweep never installs.
-  let _ = publishEvidence ()
+  let evTable = drivenEvidence ()
+  let _ = installEvidence evTable
+  let idx = evIndexOf evTable
   let allModDecls = flatMap snd modules2
   let promotedQ = crossRun.value.crossModuleFunPredicateSlotsQualRef.value
   let allMods = namesToSet (map fst modules2) omEmpty
@@ -52631,13 +52651,14 @@ dictPassModulesIfEnabled dictNames core2 modules2 =
     scopeMethodPredicateSlots
       crossRun.value.crossModuleMethodPredicateSlotsQualRef.value
       allMods
-  let core2' = dictPass "" dictNames core2
+  let core2' = dictPass idx "" dictNames core2
   -- ONE reverse-reachability index for the whole run: `dictPassModulesScoped` asks the
   -- importer question once per module, and re-deriving it there re-walked the graph
   -- (twice — ids and decls) with a decl-list scan at every visited node.
   let importerReach = importerReachIndex modules2
   let modules2' =
     dictPassModulesScoped
+      idx
       dictNames
       promotedQ
       importerReach
@@ -52665,17 +52686,18 @@ dictPassModulesIfEnabled dictNames core2 modules2 =
 -- walk); [modules2] is the remaining suffix to process.  core2 is always in scope.
 -- [importerReach] is the run's one reachability index; it answers the importer
 -- question for every module, so nothing here re-walks the import graph.
-dictPassModulesScoped : List String ->
+dictPassModulesScoped : EvIndex ->
+  List String ->
   List ((String, String), List PredicateSlot) ->
   OrdMap (OrdMap Unit) ->
   List Decl ->
   List (String, List Decl) ->
   List (String, List Decl) ->
   List (String, List Decl)
-dictPassModulesScoped _ _ _ _ _ [] = []
+dictPassModulesScoped _ _ _ _ _ _ [] = []
 -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
 -- lint-disable-next-line rule-prefer-assign-op
-dictPassModulesScoped dictNames promotedQ importerReach core2 allModules ((mid, prog) :: rest) =
+dictPassModulesScoped idx dictNames promotedQ importerReach core2 allModules ((mid, prog) :: rest) =
   let importers = transitiveImporters importerReach mid allModules
   let importerDecls = flatMap snd importers
   let scope = core2 ++ prog ++ importerDecls
@@ -52707,8 +52729,9 @@ dictPassModulesScoped dictNames promotedQ importerReach core2 allModules ((mid, 
     scopeMethodPredicateSlots
       crossRun.value.crossModuleMethodPredicateSlotsQualRef.value
       scopeMods
-  (mid, dictPass mid dictNames prog)
+  (mid, dictPass idx mid dictNames prog)
     :: dictPassModulesScoped
+      idx
       dictNames
       promotedQ
       importerReach

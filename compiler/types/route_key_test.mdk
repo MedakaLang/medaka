@@ -15,6 +15,13 @@ import types.route_key.{
   evSiteLitResult,
   evSiteRoute,
   evSiteRouteResult,
+  evDictRoutesIn,
+  evIndexOf,
+  evMethodRoutes,
+  evMethodRoutesIn,
+  evSiteHeadIn,
+  evSiteLitIn,
+  evSiteRouteIn,
   evidenceLookup,
   installedLookup,
   installEvidence,
@@ -177,4 +184,76 @@ test "a site reader refuses an entry of another kind and passes a miss through" 
       "evidence table: record-head site m#9 is from an earlier graph"
       (missOf (evSiteHeadResult (EvId "m" 9))),
     expectEqual "ok" (missOf (evSiteRouteResult (EvId "m" 10))),
+  ]
+
+-- ── the readers over an explicit index answer as their installed twins ──────
+
+indexedTable : List EvEntry
+indexedTable = [
+  EvEntry (EvId "m" 10) (EvOne RNone),
+  EvEntry (EvId "m" 11) (EvMany [RNone, RNone]),
+  EvEntry (EvId "m" 12) (EvLit (Some 2.0) RNone),
+  EvEntry (EvId "m" 13) (EvHead "Mm__Cfg"),
+  EvEntry (EvId "m" 14) (EvMethod "Eq" 2 RNone [RNone] []),
+]
+
+test "evSiteRouteIn answers as evSiteRoute" =
+  let _ = installEvidence indexedTable
+  let idx = evIndexOf indexedTable
+  expectAll [
+    expectEqual
+      (routeShape (evSiteRoute (EvId "m" 10)))
+      (routeShape (evSiteRouteIn idx (EvId "m" 10))),
+    expectEqual "none" (routeShape (evSiteRouteIn idx unminted)),
+  ]
+
+test "evDictRoutesIn answers as evDictRoutes" =
+  let _ = installEvidence indexedTable
+  let idx = evIndexOf indexedTable
+  expectEqual
+    (length (evDictRoutes (EvId "m" 11)))
+    (length (evDictRoutesIn idx (EvId "m" 11)))
+
+test "evSiteLitIn answers as evSiteLit" =
+  let _ = installEvidence indexedTable
+  let idx = evIndexOf indexedTable
+  expectAll [
+    expectEqual
+      (fst (evSiteLit (EvId "m" 12)))
+      (fst (evSiteLitIn idx (EvId "m" 12))),
+    expectEqual None (fst (evSiteLitIn idx unminted)),
+  ]
+
+test "evSiteHeadIn answers as evSiteHead" =
+  let _ = installEvidence indexedTable
+  let idx = evIndexOf indexedTable
+  expectAll [
+    expectEqual (evSiteHead (EvId "m" 13)) (evSiteHeadIn idx (EvId "m" 13)),
+    expectEqual "" (evSiteHeadIn idx unminted),
+  ]
+
+test "evMethodRoutesIn answers as evMethodRoutes" =
+  let _ = installEvidence indexedTable
+  let idx = evIndexOf indexedTable
+  let (iface, arity, _, impls, meths) = evMethodRoutesIn idx (EvId "m" 14)
+  let (iface2, arity2, _, impls2, meths2) = evMethodRoutes (EvId "m" 14)
+  expectAll [
+    expectEqual iface2 iface,
+    expectEqual arity2 arity,
+    expectEqual (length impls2) (length impls),
+    expectEqual (length meths2) (length meths),
+  ]
+
+test "a lookup over an index says why it has no answer, as the installed table does" =
+  let idx = evIndexOf indexedTable
+  expectAll [
+    expectEqual
+      "evidence table: operator site m#9 is from an earlier graph"
+      (missOf (evidenceLookup (Some idx) "operator site" (EvId "m" 9))),
+    expectEqual
+      "evidence table: operator site m#15 was never published"
+      (missOf (evidenceLookup (Some idx) "operator site" (EvId "m" 15))),
+    expectEqual
+      "ok"
+      (missOf (evidenceLookup (Some idx) "operator site" (EvId "m" 10))),
   ]
