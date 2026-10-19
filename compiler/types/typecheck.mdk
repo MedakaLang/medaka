@@ -34941,12 +34941,9 @@ checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
   let progT = match perRun.value.markingRef.value
     Some mm => stampTailDecls mm.mmTop progOut
     None => progS
-  -- (#2 / BREAK #1) inference plan.  FLAT runs the TWO-PHASE prelude-then-user scoped
-  -- inference (dropSchemesNamed drops user schemes shadowing an interface method so the
-  -- prelude's own bodies see the METHOD; scopeShadowsCore/User gate the per-body shadow
-  -- set) — reproducing the isolation the module path gets by checking core as its own
-  -- invocation.  Collapsing this to one pass reintroduces the prelude-method-shadow
-  -- miscompile (List Int vs Int).  MODULE runs the single pass.
+  -- The module path runs a single inference pass; core is checked as its own
+  -- invocation, which isolates the prelude's method bodies from a user binding
+  -- that shadows an interface method (List Int vs Int).
 
   -- Unified impl-body inference form (Module arm, both drivers): inferUserImplBodies
   -- infers parametric heads and preserves diagnostics. allProg = implDecls

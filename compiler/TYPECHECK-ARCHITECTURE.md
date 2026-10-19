@@ -34,7 +34,7 @@ and [#2586](https://github.com/MedakaLang/medaka/issues/2586).
 | [scopes.mdk](types/scopes.mdk) | Abstract scope storage, frame allocation, ancestry, visibility, default-body identity, cursor operations and detached copying. Imports evidence identities and representation data, with no dependency on the typechecker. |
 | [typecheck.mdk](types/typecheck.mdk) | Inference, live-type givens, method rows, obligation scheduling and route compatibility. Owns the scope cursor, dictionary-name rendering and opt-in provenance observations. |
 
-GraphRun owns the scope store; PerRun owns the current lexical cursor. A graph
+GraphRun owns the scope store; ModuleCtx owns the current lexical cursor. A graph
 copy detaches the frame array and counter. Raw scope IDs are meaningful only with
 their store. A given is visible in its owning scope and descendants; generated
 dictionary names and owner labels are not identity keys.
@@ -194,6 +194,8 @@ indented-application shape — a plain `\bcheckBodyImpl\b` with a comment filter
 (two declaration lines plus a trailing comment inside the `PerRun` record). And the loose-cell
 count must key on the **`= Ref` right-hand side**, never on a `: Ref ` signature (§0 trap 4).
 
+> Since moved: `PerRun` is now `ModuleCtx` and `freshPerRun` is `freshModuleCtx`; the `awk` and its figures above are the dated snapshot.
+
 > ⚠️ **Four traps this derivation hit.** Each produced confident, wrong output first.
 > - A regex matching `data|type|impl|…` without a trailing `\s+` silently reclassifies
 >   every function *named* `implMatchesReceiverU`, `dataEnvOf`, `typeOfX` as a declaration
@@ -239,7 +241,7 @@ names, not the numbers."*
 | Logical declarations | 1,478 — **1,443 functions**, 33 `data`, 2 type aliases |
 | Exported | 70 (50 functions reachable as entry points) |
 | Banner sections | 75 (**not** a valid partition — §2) |
-| State cells | **118** at this census (the itemised rows below sum to 116: the loose row lists 7 of the 9 loose cells) — `PerRun` 63, `CrossRun` 25, `DriverState` 18, 3 dynamic-context toggles (now `DynCtx` fields), loose module-level **9** |
+| State cells | **118** at this census (the itemised rows below sum to 116: the loose row lists 7 of the 9 loose cells) — `PerRun` 63 (since `ModuleCtx`), `CrossRun` 25, `DriverState` 18, 3 dynamic-context toggles (now `DynCtx` fields), loose module-level **9** |
 | Functions touching any state | **244 of 1,443** — the other 1,199 are pure |
 | Cells written from ≥6 functions | **7 of 118** |
 | Inbound imports | 11 modules (§7.7) |
@@ -263,7 +265,7 @@ that label until the next banner. They are commit archaeology.
 | Banner | Actually spans | Actually contains |
 |---|---|---|
 | *"the INDEX row unifier (#1094)"* | 1,594 lines, 92 decls | `CrossRun`, `pushDictApp`, `routeLocalSym`, `callOblsWindow` — none of them the index row unifier |
-| *"non-exhaustive-match warning accumulator"* | 185 lines, 5 decls | the core `PerRun` state record and `freshPerRun` |
+| *"non-exhaustive-match warning accumulator"* | 185 lines, 5 decls | the core `PerRun` state record (since `ModuleCtx`) and `freshPerRun` (since `freshModuleCtx`) |
 | *"Multi-param-interface element grounding (Shape A / gap #44)"* | 1,562 lines, 135 decls | the whole impl-method body driver, incl. `inferImplMethod` |
 | *"Tarjan strongly-connected components (O(V+E))"* | 534 lines, 51 decls | the letrec drivers — **but not Tarjan**, which is imported from `compiler/support/scc.mdk` |
 
@@ -283,8 +285,8 @@ this is the #158/#176 design, and it landed.
 
 | Bundle | Cells | What is in it | Reset by |
 |---|---|---|---|
-| `PerRun` | 63 | HM counters + level; the 8 `pending*` route channels; 4 `Windowed` obligation channels; the 5 `numlit*` defaulting cells; shadow tables; per-module registries | `resetState` re-mints via `freshPerRun` |
-| `CrossRun` | 25 | 15 `universe*` accumulators, 6 `crossModule*` constraint tables (each a bare/`Qual` **pair**), 3 `obUniv*`, and `coreSchemeObligationsRef` | survives `resetState` by design |
+| `PerRun` *(now `ModuleCtx`)* | 63 | HM counters + level; the 8 `pending*` route channels; 4 `Windowed` obligation channels; the 5 `numlit*` defaulting cells; shadow tables; per-module registries | `resetState` re-mints via `freshPerRun` *(both since gone: `checkBodyImpl` mints `freshModuleCtx` once per module)* |
+| `CrossRun` | 25 | 15 `universe*` accumulators, 6 `crossModule*` constraint tables (each a bare/`Qual` **pair**), 3 `obUniv*`, and `coreSchemeObligationsRef` | survives the per-module mint by design (`resetState`, since deleted) |
 | `DriverState` | 18 | driver-mode flags, the match oracle + warnings, promotion harvest, `main` scheme, dict-eligibility sets | survives; re-minted per driver entry |
 | toggles *(now `DynCtx`)* | 3 | dynamic-scope suppression flags, now the `DynCtx` fields `dcSuppressRLocalRecord`, `dcSuppressArgStamp`, `dcShadowHeadCtx` that `TcEnv` carries, so no save/restore remains | none: `initialEnv` and `withCtors` start from `noDyn` |
 | *(loose)* | **7** | the four bundle cells themselves (`perRun`, `crossRun`, `driverState`, and the toggles cell, since deleted; the bundles have since been reorganised, see `types/CELL-LIFETIMES.md`) + `typeErrorsSticky`, `useFastIfaceMethodTy`, `currentLoc` | varies |
@@ -293,7 +295,7 @@ this is the #158/#176 design, and it landed.
 state-discipline debt: `perRun` (56 writers), `driverState` (14), `currentLoc` (8),
 `typeErrorsSticky` (8), `crossRun` (7), the toggles cell (6, since deleted), `funConstraintsRef` (6).
 
-⚠️ Two granularities are mixed in that list: `funConstraintsRef` is a `PerRun` *field*, so
+⚠️ Two granularities are mixed in that list: `funConstraintsRef` is a `PerRun` *field* (now `ModuleCtx`), so
 its writers are already inside `perRun`'s 56. Read it as "these are the cells a change is
 most likely to desynchronize," not as a partition.
 
@@ -547,7 +549,7 @@ elaborateModules  =  driveGraphK GOutTrees None …   (a projection)
        graphPreamble  (the ONE Module-mode driver entry: the whole-graph writer/seed
                        set — test/registry_keying_ratchet.sh check 6 pins it)
        foldModules graphModuleWorker
-         → checkModuleFullImpl → checkBodyImpl (Module …)   ← resetState at module START
+         → checkModuleFullImpl → checkBodyImpl (Module …)   ← ModuleCtx mint at module START
               beginModuleMarking: dict set = bare ∪ promotionHarvestRef ∪ this module's aliases
               processSCC: markGroupClauses (mark) → stampGroupClauses (ids) → infer
                           → registerInferredConstraints → markRecursiveOccurrences
@@ -584,11 +586,11 @@ One function, 347 lines, reached from `checkModuleFullImpl`. It dominates **835
 functions / 10,917 lines — 58% of the file — and 110 of 118 state cells (93%)**.
 It directly touches 46 cells.
 
-It opens with `resetState ()`; `mid`, `implDecls`, and `prog0` carry the current
+It opens with the `ModuleCtx` mint (`perRun := freshModuleCtx …`); `mid`, `implDecls`, and `prog0` carry the current
 module and its graph-visible declaration universe. The phases are:
 
 ```
-resetState → stampBindingIds → decl universes → superDecls
+ModuleCtx mint → stampBindingIds → decl universes → superDecls
   → effect domains supplied by graphPreamble
   → checkEffectParams / checkLetRecDecls → shadows → per-module ref setup
   → dataEnv → checkUndeterminedRetEffVars → checkGradedImplHeads → rejectCyclicAliases
@@ -783,7 +785,7 @@ projections plus `entryOwnSchemes`; `ir/` reaches this file only through
 - **The `pending*` deferred-mutation cells are essential, not accidental.** A method site's
   route depends on which tyvar survives unification, knowable only post-inference. Bundle
   them; never try to eliminate them.
-- **52 cells deliberately survive `resetState`.** It re-mints only `perRun` (and, at `1691922a`, the toggles cell, now `DynCtx`)
+- **52 cells deliberately survive `resetState`** (since deleted; the mint is `freshModuleCtx`). It re-mints only `perRun` (and, at `1691922a`, the toggles cell, now `DynCtx`)
   (118 − 63 − 3), so every `CrossRun`, `DriverState` and remaining loose cell persists.
   Clearing one "for hygiene" reproduces the Phase-134 dropped-dict bug. *(Prior docs say
   "~37" — that is `97 − 60` from issue #158's title, an artifact of the old inflated Ref
@@ -817,7 +819,7 @@ same three failure modes are available to the next reader:
    parameters). Corrected in §7.3 — and the corrected finding is the more actionable one.
 3. **Tarjan and `dmeet` were taken from banners.** Both wrong; both caught by re-derivation,
    not by the doc gates (§0).
-4. **"~37 cells survive `resetState`" was copied, not measured** — it is `97 − 60` from
+4. **"~37 cells survive `resetState`" (since deleted) was copied, not measured** — it is `97 − 60` from
    issue #158's title. The real figure is 52. A status banner claiming everything was
    derived does not make it so.
 5. **The issue table was scoped by label, not by subsystem.** Missed #1047 and #1072.
