@@ -1,5 +1,5 @@
 # META
-source_lines=54596
+source_lines=54595
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -4033,7 +4033,7 @@ dropGoalsSince mark kinds =
 -- current module).  resolveSite consults it: a method site at a concrete receiver
 -- with NO impl, whose name is here, routes RLocal (eval reads the standalone) instead
 -- of RKey<head> (which would panic with no impl).
--- NOT cleared by `freshModuleCtx` — elabModuleStamp rebuilds it per module.
+-- `freshModuleCtx` starts it empty; `checkBodyImpl` rebuilds it per module.
 
 -- DEFINER-shadow names (facet 2): the names THIS module declares as a top-level
 -- funDef that ALSO name an interface method (buildDefinerShadows) — e.g. a user
@@ -9487,7 +9487,7 @@ mainTypeIsFloat _ = match driverState.value.mainSchemeRef.value
 -- don't cover the scrutinee's type.  `matchOracle` is the ctor oracle the matrix
 -- recursion consults; `checkOneMatchToLines` seeds it from the program's
 -- data decls (so it sees the same user + builtin ctors check_match does) before
--- inference runs.  Neither is touched by `freshModuleCtx` — the driver seeds them and
+-- inference runs.  `freshModuleCtx` installs both from the `CheckRunSeed` and the driver
 -- reads `matchWarnings` after the typecheck pass; runs that ignore match warnings
 -- (the schemes/selfproc paths) simply never read it.
 -- #159: element type is now `TcDiag` (severity 2), carrying the span (formerly the
@@ -34614,8 +34614,7 @@ checkBodyImpl runSeed moduleSeed mid implDecls prog0 =
   -- deliberately does NOT re-derive, for the reason `moduleImplUniv` gives above.
   perRun.value.bodyImplEnvRef := driverState.value.declEnvsRef.value.deImpls
   -- (#4 + #3-restore) mode-specific pre-inference ref setup (all pure/independent of the
-  -- register+globalS block below, so order-safe).  Flat arms the per-body shadow-scoping
-  -- flags; Module installs importer-shadow state and restores the cross-module dict
+  -- register+globalS block below, so order-safe).  Module installs importer-shadow state and restores the cross-module dict
   -- accumulators `freshModuleCtx` just wiped.
   -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
   -- lint-disable-next-line rule-prefer-assign-op
