@@ -1,0 +1,7 @@
+public export data Tq = Mk Int
+
+public export data Sq = Tq Int Int
+
+export
+sumS : Sq -> Int
+sumS (Tq a b) = a + b

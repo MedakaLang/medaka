@@ -1,0 +1,12 @@
+-- A constructor re-exported by the single-name form `export import m.Tz`.
+--
+-- facade carries m's type `Tz` and, because the name also spells m's constructor,
+-- the constructor `Tz` too: resolve binds `Tz` here to m's arity-1 constructor, and
+-- `check` and `run` agree.  The emitted program must name the same constructor, so
+-- the ctor-export index (`types/private_mangle.ctorExportsFrom`) has to carry the
+-- single-name hop as the export surface does.
+--
+-- Expected output, derived by hand from the semantics: `unTz (Tz 5)` = `5`.
+import facade.{Tz, unTz}
+
+main = println (unTz (Tz 5))

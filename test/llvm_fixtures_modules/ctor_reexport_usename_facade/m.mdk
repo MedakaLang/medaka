@@ -1,0 +1,5 @@
+public export data Tz = Tz Int
+
+export
+unTz : Tz -> Int
+unTz (Tz n) = n

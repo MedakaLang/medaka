@@ -1,5 +1,5 @@
 -- #1305 NON-REGRESSION + COVERAGE CELL for the removal of the `DNewtype` arm from
--- `types/private_mangle.ctorExportEntries`.
+-- the ctor-export index, `types/private_mangle.ctorExportsFrom`.
 --
 -- That arm offered an importing unit the symbol `<nmodw>__Wrapw` for a constructor
 -- the front end never puts in that unit's scope.  This program is the case that must
