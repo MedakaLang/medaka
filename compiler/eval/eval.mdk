@@ -57,14 +57,15 @@ import frontend.ast.{
 -- side of the seam) and `ir/core_ir_lower.mdk`.  It replaces this file's deleted
 -- `implKeyOf`/`ppTyK` mirror; see the obituary above `headTyconHead`.
 import types.route_key.{
-  implRouteKeyWord, ifaceWordOf, funHeadTag, evDictRoutes, evMethodRoutes,
+  implRouteKeyWord, ifaceWordOf, funHeadTag, evDictRoutesIn, evMethodRoutesIn,
   typeTagOf, typeTagName
 }
-import types.disposition.{
-  DispositionTable,
-  InstanceShape(..),
-  inheritorsOf,
-  installedDispositionsOpt,
+import types.disposition.{DispositionTable, InstanceShape(..), inheritorsOf}
+import types.program_facts.{
+  ProgramFacts(..),
+  factsInstalled,
+  factsNow,
+  withFacts,
 }
 import support.util.{
   contains,
@@ -404,15 +405,18 @@ methodReqCountRef = Ref omEmpty
 -- call — but only eval.mdk's drivers filled methodReqCountRef, so on the Core-IR
 -- interpreter the lookup always returned None and the fix was INERT.  Sharing the
 -- code is not sharing the DATA: bind them here so a driver cannot install one
--- without the other.)
+-- without the other.)  [dispositions] is the elaboration's table, `None` for an
+-- untyped program.
 export
-installDispatchTables : List Decl -> List ((String, String, String), List Int)
-installDispatchTables allDecls =
+installDispatchTables : Option DispositionTable ->
+  List Decl ->
+  List ((String, String, String), List Int)
+installDispatchTables dispositions allDecls =
   let disp = buildIfaceDispatch allDecls
-  methodReqCountRef := methodReqCountIndex (buildMethodReqCounts allDecls)
+  methodReqCountRef :=
+    methodReqCountIndex (buildMethodReqCounts dispositions allDecls)
   inheritedEntryRef :=
-    methodReqCountIndex
-      (flatMap (inheritedEntryRows (installedDispositionsOpt ())) allDecls)
+    methodReqCountIndex (flatMap (inheritedEntryRows dispositions) allDecls)
   disp
 
 -- Per (method, instance word): the entries that are an inherited default rather
@@ -441,9 +445,11 @@ isInheritedEntry mname word = match omLookup mname !inheritedEntryRef
   None => False
 
 export
-buildMethodReqCounts : List Decl -> List ((String, String), Int)
-buildMethodReqCounts prog =
-  flatMap (implMethodReqCounts (installedDispositionsOpt ())) prog
+buildMethodReqCounts : Option DispositionTable ->
+  List Decl ->
+  List ((String, String), Int)
+buildMethodReqCounts dispositions prog =
+  flatMap (implMethodReqCounts dispositions) prog
 
 -- Each defined impl method is addressed by the word a dictionary for its instance
 -- carries: the instance's canonical interface/type key.
@@ -1659,12 +1665,17 @@ eval env (EVarId x _) = if startsWithAt x then VUnit else lookupEnv env x
 -- annotateProgram in evalProgram/evalModules.
 eval env (EVarAt x addr) =
   if startsWithAt x then VUnit else lookupAtAddr env x addr
--- #2705: the occurrence's answer comes from the published evidence table, not
--- from cells on the node — the same seam `EDictAt` crosses below.
-eval env (EMethodAt name _ ev) = evalMethodAtEv env name (evMethodRoutes ev)
+-- #2705: the occurrence's answer comes from the evidence of the program facts
+-- the forcing caller holds (`withFacts`), not from cells on the node — the same
+-- seam `EDictAt` crosses below.
+eval env (EMethodAt name _ ev) =
+  evalMethodAtEv env name (evMethodRoutesIn (factsNow ()).pfEvidence ev)
 
 eval env (EDictAt name ev) =
-  applyDicts env (lookupEnv env name) (evDictRoutes ev)
+  applyDicts
+    env
+    (lookupEnv env name)
+    (evDictRoutesIn (factsNow ()).pfEvidence ev)
 eval env (app@(EApp _ _)) = evalApp env app
 eval env (ELam pats body) = VClosure env pats body noTrapLoc
 eval env (ELet _ True (PVar f _ _) e1 e2) = evalRecLet env f e1 e2
@@ -2689,8 +2700,10 @@ storeMemo cell v = seqV (cell := Some v) v
 seqV : Unit -> Value e -> Value e
 seqV _ v = v
 
--- one (methodName, (specificity-score, taggedValue)) per impl method / default
-declImplEntries : EvalEnv (Value e) ->
+-- one (methodName, (specificity-score, taggedValue)) per impl method / default;
+-- [dispositions] is the elaboration's table, `None` for an untyped program
+declImplEntries : Option DispositionTable ->
+  EvalEnv (Value e) ->
   List ((String, String, String), List Int) ->
   Decl ->
   List (String, (Int, Value e))
@@ -2701,12 +2714,13 @@ declImplEntries : EvalEnv (Value e) ->
 -- interface DEFAULT (wrong value, exit 0).  Fixed in LOCKSTEP with
 -- core_ir_lower's `lowerDeclImpl` — the two are parallel projections of the same
 -- decl set and a fix to one is silently absent from the other (AGENTS.md).
-declImplEntries env disp (DAttrib _ d) = declImplEntries env disp d
+declImplEntries dispositions env disp (DAttrib _ d) =
+  declImplEntries dispositions env disp d
 -- B-2.2-e: `implOrigin` is bound here purely to reach `implMethodEntry`'s route
 -- word — the DEFINITION side's half of the identity-bearing key the typechecker
 -- stamps at the call site (`keyForSite`).  Matched arm-for-arm by
 -- `core_ir_lower.lowerDeclImpl`, which threads the same field for the same reason.
-declImplEntries env disp (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
+declImplEntries _ env disp (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
   map (implMethodEntry env disp o ifaceName typeArgs) methods
 -- An interface installs one entry for each default per instance the disposition
 -- table says inherits it, all sharing one value closed over the INTERFACE module's
@@ -2716,14 +2730,13 @@ declImplEntries env disp (DImpl { iface = ifaceName, implOrigin = o, tys = typeA
 -- The interface word comes straight off `ifaceOrigin` (resolve stamps it in
 -- `elaborateModules`' preamble, the seam `run` and the separate `medaka_emitter`
 -- BUILD process share), the spelling the table's producer keys the slot by.
-declImplEntries env disp (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
-  match installedDispositionsOpt ()
-    Some dt => flatMap (inheritedDefaultEntries env disp dt o ifaceName) methods
-    -- untyped eval: no elaboration, so no instance identity to specialize for; an
-    -- impl inheriting another module's default has no body for it here (the same
-    -- limit `core_ir_lower.lowerProgram` documents for the untyped Core-IR probes)
-    None => []
-declImplEntries _ _ _ = []
+declImplEntries (Some dt) env disp (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
+  flatMap (inheritedDefaultEntries env disp dt o ifaceName) methods
+-- An interface under untyped eval has no elaboration, so no instance identity to
+-- specialize for; an impl inheriting another module's default has no body for it
+-- here (the same limit `core_ir_lower.lowerProgram` documents for the untyped
+-- Core-IR probes).
+declImplEntries _ _ _ _ = []
 
 implMethodEntry : EvalEnv (Value e) ->
   List ((String, String, String), List Int) ->
@@ -4321,9 +4334,13 @@ noMainMsg = "no `main` in this file; add `main = ...`"
 
 export
 evalMain : List Decl -> String
-evalMain prog = match lookupBinding "main" (evalOne [] ("__main__", prog))
-  Some v => ppValue (force v)
-  None => runtimePanic "E-NO-MAIN" noMainMsg
+evalMain prog =
+  let facts = factsInstalled ()
+  withFacts
+    facts
+    (_ => match lookupBinding "main" (evalOneFacts facts [] ("__main__", prog))
+      Some v => ppValue (force v)
+      None => runtimePanic "E-NO-MAIN" noMainMsg)
 
 -- Run the program for its OUTPUT (forcing `main`, whose IO side-effects append
 -- to outputRef) and return the captured stdout — diffs against === EVAL ===.
@@ -4335,7 +4352,12 @@ evalMain prog = match lookupBinding "main" (evalOne [] ("__main__", prog))
 -- coalesce with the prelude's point-free `sum` into a mixed-arity VMulti.
 export
 evalOutputWith : List Decl -> List Decl -> String
-evalOutputWith preludeDecls userDecls = evalOneOutput [] (
+evalOutputWith preludeDecls userDecls =
+  evalOutputWithFacts (factsInstalled ()) preludeDecls userDecls
+
+export
+evalOutputWithFacts : ProgramFacts -> List Decl -> List Decl -> String
+evalOutputWithFacts facts preludeDecls userDecls = evalOneOutputFacts facts [] (
   "__main__",
   dropShadowed (funNamesOf userDecls) preludeDecls ++ userDecls,
 )
@@ -4390,7 +4412,8 @@ export
 evalModules : List Decl ->
   List (String, List Decl) ->
   <e> List (String, Value e)
-evalModules preludeDecls modules = evalModulesWith [] preludeDecls modules
+evalModules preludeDecls modules =
+  evalModulesWith (factsInstalled ()) [] preludeDecls modules
 
 -- ── S1-PRELUDE (a): a prelude standalone never shadows a user interface method ──
 -- docs/spec/SHADOW-SEMANTICS.md rows 46-49.  A bare occurrence whose name equals a
@@ -4488,63 +4511,71 @@ coreImportExports privateCells globalCells preludeDecls =
 -- externBindings — the seam `medaka run` uses to install real-I/O prims
 -- (ioExternBindings) without them ever reaching the differential-oracle
 -- drivers, so the oracle stays free of I/O regardless of what `e` is otherwise instantiated at.
+-- [T-EVAL-LOCKSTEP] [facts] is the program's `ProgramFacts`: its dispositions
+-- select the inherited defaults, and its evidence answers every method and
+-- dictionary site.  The returned values are forced by the caller, so it forces
+-- them inside `withFacts` of the same facts; the bracket here covers the install.
 export
-evalModulesWith : List (String, Value e) ->
+evalModulesWith : ProgramFacts ->
+  List (String, Value e) ->
   List Decl ->
   List (String, List Decl) ->
   <e> List (String, Value e)
-evalModulesWith extraExterns preludeDecls0 modules0 =
-  -- #1292: rename CROSS-UNIT-COLLIDING constructors to `<mid>__<Ctor>` before
-  -- anything below reads them, so the program-global `ctorToTypeRef` seeded on the
-  -- next lines stops folding two modules' same-named constructors into ONE entry
-  -- (which tagged every value of the loser's type with the winner's type, and
-  -- dispatched it to the wrong impl -- silently, at exit 0).  A no-op returning its
-  -- input BYTE-IDENTICAL when no constructor name is declared by two units, which
-  -- is every program without the bug.  Idempotent, so a caller that had to rename
-  -- earlier (tools/test_cmd.mdk, whose `test`/prop bodies come out of this same
-  -- module list) costs nothing here.
-  let (preludeDecls, modules) = mangleCtorCollisions preludeDecls0 modules0
-  let externs = externBindings () ++ extraExterns
-  let moduleDecls = flatMap snd modules
-  let allDecls = preludeDecls ++ moduleDecls
-  ctorToTypeRef := buildCtorToType allDecls
-  ffiExternNamesRef := externDeclNamesOfDecls allDecls
-  let disp = installDispatchTables allDecls
-  let ctors = collectCtors allDecls
-  let preludeGroups = groupsOf preludeDecls
-  -- S1-PRELUDE (a), #1497/#1492 — see `preludeShadowNames` for the full mechanism.
-  let shadowNames = preludeShadowNames moduleDecls
-  let preludeShared = groupsNotNamedIn shadowNames preludeGroups
-  let preludePrivate = groupsNamedIn shadowNames preludeGroups
-  let globalNames =
-    map fst boolSeeds
-      ++ map fst externs
-      ++ map fst ctors
-      ++ implMethodNames allDecls
-      ++ map fst preludeShared
-  let globalCells = map (n => (n, Ref VUnit)) globalNames
-  let runtimeCells = runtimeCellsOf externs
-  let privateCells = map (n => (n, Ref VUnit)) (map fst preludePrivate)
-  let globalEnv =
-    EvalEnv (globalFramesWith privateCells globalCells ++ [runtimeCells])
-  let mods =
-    buildModInfos
-      globalCells
-      runtimeCells
-      (coreImportExports privateCells globalCells preludeDecls)
-      []
-      modules
-  let implEntries =
-    flatMap (declImplEntries globalEnv disp) preludeDecls
-      ++ flatMap (modImplEntries disp) mods
-  let _ = installConsts globalCells boolSeeds
-  let _ = installConsts globalCells externs
-  let _ = installConsts globalCells ctors
-  let _ = installConsts globalCells (coalesceImpls implEntries)
-  let _ = installGroups globalEnv globalCells preludeShared
-  let _ = installGroups globalEnv privateCells preludePrivate
-  let _ = installModGroups mods
-  rootLocals mods
+evalModulesWith facts extraExterns preludeDecls0 modules0 = withFacts
+  facts
+  (_ =>
+    -- #1292: rename CROSS-UNIT-COLLIDING constructors to `<mid>__<Ctor>` before
+    -- anything below reads them, so the program-global `ctorToTypeRef` seeded on the
+    -- next lines stops folding two modules' same-named constructors into ONE entry
+    -- (which tagged every value of the loser's type with the winner's type, and
+    -- dispatched it to the wrong impl -- silently, at exit 0).  A no-op returning its
+    -- input BYTE-IDENTICAL when no constructor name is declared by two units, which
+    -- is every program without the bug.  Idempotent, so a caller that had to rename
+    -- earlier (tools/test_cmd.mdk, whose `test`/prop bodies come out of this same
+    -- module list) costs nothing here.
+    let (preludeDecls, modules) = mangleCtorCollisions preludeDecls0 modules0
+    let externs = externBindings () ++ extraExterns
+    let moduleDecls = flatMap snd modules
+    let allDecls = preludeDecls ++ moduleDecls
+    let dispositions = facts.pfDispositions
+    ctorToTypeRef := buildCtorToType allDecls
+    ffiExternNamesRef := externDeclNamesOfDecls allDecls
+    let disp = installDispatchTables dispositions allDecls
+    let ctors = collectCtors allDecls
+    let preludeGroups = groupsOf preludeDecls
+    -- S1-PRELUDE (a), #1497/#1492 — see `preludeShadowNames` for the full mechanism.
+    let shadowNames = preludeShadowNames moduleDecls
+    let preludeShared = groupsNotNamedIn shadowNames preludeGroups
+    let preludePrivate = groupsNamedIn shadowNames preludeGroups
+    let globalNames =
+      map fst boolSeeds
+        ++ map fst externs
+        ++ map fst ctors
+        ++ implMethodNames allDecls
+        ++ map fst preludeShared
+    let globalCells = map (n => (n, Ref VUnit)) globalNames
+    let runtimeCells = runtimeCellsOf externs
+    let privateCells = map (n => (n, Ref VUnit)) (map fst preludePrivate)
+    let globalEnv =
+      EvalEnv (globalFramesWith privateCells globalCells ++ [runtimeCells])
+    let mods =
+      buildModInfos
+        globalCells
+        runtimeCells
+        (coreImportExports privateCells globalCells preludeDecls)
+        []
+        modules
+    let implEntries =
+      flatMap (declImplEntries dispositions globalEnv disp) preludeDecls
+        ++ flatMap (modImplEntries disp) mods
+    let _ = installConsts globalCells boolSeeds
+    let _ = installConsts globalCells externs
+    let _ = installConsts globalCells ctors
+    let _ = installConsts globalCells (coalesceImpls implEntries)
+    let _ = installGroups globalEnv globalCells preludeShared
+    let _ = installGroups globalEnv privateCells preludePrivate
+    let _ = installModGroups mods
+    rootLocals mods)
 
 -- pass 1: allocate each module's local cells + build its env (imports resolved
 -- against already-processed modules, since loader order is dependency-first)
@@ -4682,12 +4713,13 @@ installModGroups ((ModInfo _ decls grps cells menv) :: rest) =
   installModGroups rest
 
 -- a module's impl methods / interface defaults close over ITS env but coalesce
--- into the shared global VMulti
+-- into the shared global VMulti; the dispositions are those of the bracket its
+-- driver opened
 modImplEntries : List ((String, String, String), List Int) ->
   ModInfo (Value e) ->
   List (String, (Int, Value e))
 modImplEntries disp (ModInfo _ decls _ _ menv) =
-  flatMap (declImplEntries menv disp) decls
+  flatMap (declImplEntries (factsNow ()).pfDispositions menv disp) decls
 
 -- the root module is last in dependency order; its locals hold `main`
 rootLocals : List (ModInfo (Value e)) -> <e> List (String, Value e)
@@ -4719,8 +4751,19 @@ evalModulesRootEnvWith : List (String, Value e) ->
   List (String, List Decl) ->
   <e> List (String, Value e)
 evalModulesRootEnvWith extraExterns preludeDecls modules =
+  evalModulesRootEnvFacts (factsInstalled ()) extraExterns preludeDecls modules
+
+-- `evalModulesRootEnvWith` over [facts]; the caller forces the returned values
+-- inside `withFacts facts`.
+export
+evalModulesRootEnvFacts : ProgramFacts ->
+  List (String, Value e) ->
+  List Decl ->
+  List (String, List Decl) ->
+  <e> List (String, Value e)
+evalModulesRootEnvFacts facts extraExterns preludeDecls modules =
   let (mods, globalCells) =
-    buildRootModuleStateWith extraExterns preludeDecls modules
+    buildRootModuleStateWith facts extraExterns preludeDecls modules
   rootFullEnv mods globalCells
 
 export
@@ -4729,58 +4772,78 @@ evalModulesRootEvalEnvWith : List (String, Value e) ->
   List (String, List Decl) ->
   <e> EvalEnv (Value e)
 evalModulesRootEvalEnvWith extraExterns preludeDecls modules =
+  evalModulesRootEvalEnvFacts
+    (factsInstalled ())
+    extraExterns
+    preludeDecls
+    modules
+
+-- `evalModulesRootEvalEnvWith` over [facts]; the caller evaluates in the returned
+-- environment inside `withFacts facts`.
+export
+evalModulesRootEvalEnvFacts : ProgramFacts ->
+  List (String, Value e) ->
+  List Decl ->
+  List (String, List Decl) ->
+  <e> EvalEnv (Value e)
+evalModulesRootEvalEnvFacts facts extraExterns preludeDecls modules =
   let (mods, globalCells) =
-    buildRootModuleStateWith extraExterns preludeDecls modules
+    buildRootModuleStateWith facts extraExterns preludeDecls modules
   rootFullEvalEnv mods globalCells
 
-buildRootModuleStateWith : List (String, Value e) ->
+-- [T-EVAL-LOCKSTEP] third driver, over [facts] as `evalModulesWith` is.
+buildRootModuleStateWith : ProgramFacts ->
+  List (String, Value e) ->
   List Decl ->
   List (String, List Decl) ->
   <e> (List (ModInfo (Value e)), List (String, Ref (Value e)))
-buildRootModuleStateWith extraExterns preludeDecls0 modules0 =
-  -- [T-EVAL-LOCKSTEP] third driver: same rename, same reason as evalModulesWith.
-  let (preludeDecls, modules) = mangleCtorCollisions preludeDecls0 modules0
-  let externs = externBindings () ++ extraExterns
-  let moduleDecls = flatMap snd modules
-  let allDecls = preludeDecls ++ moduleDecls
-  ctorToTypeRef := buildCtorToType allDecls
-  ffiExternNamesRef := externDeclNamesOfDecls allDecls
-  let disp = installDispatchTables allDecls
-  let ctors = collectCtors allDecls
-  let preludeGroups = groupsOf preludeDecls
-  -- S1-PRELUDE (a), #1497/#1492 — see `preludeShadowNames` for the full mechanism.
-  let shadowNames = preludeShadowNames moduleDecls
-  let preludeShared = groupsNotNamedIn shadowNames preludeGroups
-  let preludePrivate = groupsNamedIn shadowNames preludeGroups
-  let globalNames =
-    map fst boolSeeds
-      ++ map fst externs
-      ++ map fst ctors
-      ++ implMethodNames allDecls
-      ++ map fst preludeShared
-  let globalCells = map (n => (n, Ref VUnit)) globalNames
-  let runtimeCells = runtimeCellsOf externs
-  let privateCells = map (n => (n, Ref VUnit)) (map fst preludePrivate)
-  let globalEnv =
-    EvalEnv (globalFramesWith privateCells globalCells ++ [runtimeCells])
-  let mods =
-    buildModInfos
-      globalCells
-      runtimeCells
-      (coreImportExports privateCells globalCells preludeDecls)
-      []
-      modules
-  let implEntries =
-    flatMap (declImplEntries globalEnv disp) preludeDecls
-      ++ flatMap (modImplEntries disp) mods
-  let _ = installConsts globalCells boolSeeds
-  let _ = installConsts globalCells externs
-  let _ = installConsts globalCells ctors
-  let _ = installConsts globalCells (coalesceImpls implEntries)
-  let _ = installGroups globalEnv globalCells preludeShared
-  let _ = installGroups globalEnv privateCells preludePrivate
-  let _ = installModGroups mods
-  (mods, globalCells)
+buildRootModuleStateWith facts extraExterns preludeDecls0 modules0 = withFacts
+  facts
+  (_ =>
+    -- same rename, same reason as evalModulesWith.
+    let (preludeDecls, modules) = mangleCtorCollisions preludeDecls0 modules0
+    let externs = externBindings () ++ extraExterns
+    let moduleDecls = flatMap snd modules
+    let allDecls = preludeDecls ++ moduleDecls
+    let dispositions = facts.pfDispositions
+    ctorToTypeRef := buildCtorToType allDecls
+    ffiExternNamesRef := externDeclNamesOfDecls allDecls
+    let disp = installDispatchTables dispositions allDecls
+    let ctors = collectCtors allDecls
+    let preludeGroups = groupsOf preludeDecls
+    -- S1-PRELUDE (a), #1497/#1492 — see `preludeShadowNames` for the full mechanism.
+    let shadowNames = preludeShadowNames moduleDecls
+    let preludeShared = groupsNotNamedIn shadowNames preludeGroups
+    let preludePrivate = groupsNamedIn shadowNames preludeGroups
+    let globalNames =
+      map fst boolSeeds
+        ++ map fst externs
+        ++ map fst ctors
+        ++ implMethodNames allDecls
+        ++ map fst preludeShared
+    let globalCells = map (n => (n, Ref VUnit)) globalNames
+    let runtimeCells = runtimeCellsOf externs
+    let privateCells = map (n => (n, Ref VUnit)) (map fst preludePrivate)
+    let globalEnv =
+      EvalEnv (globalFramesWith privateCells globalCells ++ [runtimeCells])
+    let mods =
+      buildModInfos
+        globalCells
+        runtimeCells
+        (coreImportExports privateCells globalCells preludeDecls)
+        []
+        modules
+    let implEntries =
+      flatMap (declImplEntries dispositions globalEnv disp) preludeDecls
+        ++ flatMap (modImplEntries disp) mods
+    let _ = installConsts globalCells boolSeeds
+    let _ = installConsts globalCells externs
+    let _ = installConsts globalCells ctors
+    let _ = installConsts globalCells (coalesceImpls implEntries)
+    let _ = installGroups globalEnv globalCells preludeShared
+    let _ = installGroups globalEnv privateCells preludePrivate
+    let _ = installModGroups mods
+    (mods, globalCells))
 
 -- Flatten the root module's frame stack (locals first, then imports, then
 -- globals) to an assoc list — local names shadow imports shadow globals, which
@@ -5102,10 +5165,18 @@ firstOrEmpty (x :: _) = x
 export
 evalModulesOutput : List Decl -> List (String, List Decl) -> String
 evalModulesOutput preludeDecls modules =
+  evalModulesOutputFacts (factsInstalled ()) preludeDecls modules
+
+export
+evalModulesOutputFacts : ProgramFacts ->
+  List Decl ->
+  List (String, List Decl) ->
+  String
+evalModulesOutputFacts facts preludeDecls modules = withFacts facts (_ =>
   outputRef := ""
-  let binds = evalModules preludeDecls modules
+  let binds = evalModulesWith facts [] preludeDecls modules
   let _ = runMainForEffect binds
-  !outputRef
+  !outputRef)
 
 -- ── run-path real-I/O externs (B2, RUN-EFFECTS) ────────────────────────────
 -- Real-I/O primitives installed ONLY by `medaka run`'s driver
@@ -5456,14 +5527,24 @@ testCapableExterns _ = [
 export
 evalModulesOutputRun : List Decl -> List (String, List Decl) -> <IO> String
 evalModulesOutputRun preludeDecls modules =
-  outputRef := ""
-  -- Only the real `medaka run` CLI driver reaches this function (never the
-  -- pure differential-oracle probes — see appendOutput/stashRunStdout above),
-  -- so this is the one place it is safe to arm the abort-time flush.
-  let _ = enableRunStdoutFlush ()
-  let binds = evalModulesWith (ioExternBindings ()) preludeDecls modules
-  let _ = runMainForEffect binds
-  !outputRef
+  evalModulesOutputRunFacts (factsInstalled ()) preludeDecls modules
+
+export
+evalModulesOutputRunFacts : ProgramFacts ->
+  List Decl ->
+  List (String, List Decl) ->
+  <IO> String
+evalModulesOutputRunFacts facts preludeDecls modules = withFacts
+  facts
+  (_ =>
+    outputRef := ""
+    -- Only the real `medaka run` CLI driver reaches this function (never the
+    -- pure differential-oracle probes — see appendOutput/stashRunStdout above),
+    -- so this is the one place it is safe to arm the abort-time flush.
+    let _ = enableRunStdoutFlush ()
+    let binds = evalModulesWith facts (ioExternBindings ()) preludeDecls modules
+    let _ = runMainForEffect binds
+    !outputRef)
 
 -- ── Phase 0 (DRIVER-COLLAPSE): 1-module eval wrappers over evalModules ──────
 -- evalOne / evalOneOutput / evalOneRootEnv run a SINGLE program as the degenerate
@@ -5480,6 +5561,16 @@ export
 evalOne : List Decl -> (String, List Decl) -> <e> List (String, Value e)
 evalOne preludeDecls (rootId, prog) = evalModules preludeDecls [(rootId, prog)]
 
+-- `evalOne` over [facts]; the caller forces the returned values inside
+-- `withFacts facts`.
+export
+evalOneFacts : ProgramFacts ->
+  List Decl ->
+  (String, List Decl) ->
+  <e> List (String, Value e)
+evalOneFacts facts preludeDecls (rootId, prog) =
+  evalModulesWith facts [] preludeDecls [(rootId, prog)]
+
 -- 1-module wrapper over evalModulesWith: the doctest single-file path passes a
 -- capability list (testCapableExterns) so a prelude-only doctest sees the same
 -- real clock/stderr as `medaka run`.
@@ -5489,7 +5580,7 @@ evalOneWith : List (String, Value e) ->
   (String, List Decl) ->
   <e> List (String, Value e)
 evalOneWith extraExterns preludeDecls (rootId, prog) =
-  evalModulesWith extraExterns preludeDecls [(rootId, prog)]
+  evalModulesWith (factsInstalled ()) extraExterns preludeDecls [(rootId, prog)]
 
 -- run a single program for OUTPUT (mirror evalOutput): the 1-module evalModules
 -- already forces the root module's `main` for effects and returns captured stdout.
@@ -5497,6 +5588,11 @@ export
 evalOneOutput : List Decl -> (String, List Decl) -> String
 evalOneOutput preludeDecls (rootId, prog) =
   evalModulesOutput preludeDecls [(rootId, prog)]
+
+export
+evalOneOutputFacts : ProgramFacts -> List Decl -> (String, List Decl) -> String
+evalOneOutputFacts facts preludeDecls (rootId, prog) =
+  evalModulesOutputFacts facts preludeDecls [(rootId, prog)]
 
 -- the root module's FULL frame (locals ∪ imports ∪ globals), mirror
 -- evalModulesRootEnv — the prop runner needs prelude methods (eq/compare) visible.
@@ -5514,3 +5610,14 @@ evalOneRootEnvWith : List (String, Value e) ->
   <e> List (String, Value e)
 evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
   evalModulesRootEnvWith extraExterns preludeDecls [(rootId, prog)]
+
+-- `evalOneRootEnvWith` over [facts]; the caller forces the returned values inside
+-- `withFacts facts`.
+export
+evalOneRootEnvFacts : ProgramFacts ->
+  List (String, Value e) ->
+  List Decl ->
+  (String, List Decl) ->
+  <e> List (String, Value e)
+evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
+  evalModulesRootEnvFacts facts extraExterns preludeDecls [(rootId, prog)]

@@ -29,7 +29,7 @@ import frontend.ast.{
 }
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
-import eval.eval.{Value(..), evalOne, force}
+import eval.eval.{Value(..), evalOneFacts, force}
 import ir.core_ir.{
   CBind(..),
   CClause(..),
@@ -42,7 +42,7 @@ import ir.core_ir.{
 import ir.core_ir_lower.{
   ifaceMethodArityKey, lowerProgramWithFacts, methodConstraintIfaces
 }
-import types.program_facts.{factsOfElab}
+import types.program_facts.{ProgramFacts, factsOfElab, withFacts}
 import ir.core_ir_sexp.{cprogramToSexp}
 import ir.core_ir_sexp_parse.{parseCProgram}
 import types.evidence.{
@@ -1366,13 +1366,15 @@ blockRecEvalValue =
   let source = localNumBlockRecSource ++ "\nmain : Float\nmain = value 1.5\n"
   let core = desugar (parse arithmeticPreludeSource)
   let program = desugar (parseLocated source)
-  let elaborated = elaborateOne [] core ("block_rec_eval", program)
-  let bindings = evalOne [] ("block_rec_eval", elaborated)
-  match lookupAssoc "main" bindings
-    Some value => match force value
-      VFloat result => result
-      _ => 0.0
-    _ => 0.0
+  let (elaborated, facts) =
+    elaborateOneFacts [] core ("block_rec_eval", program)
+  withFacts facts (_ =>
+    let bindings = evalOneFacts facts [] ("block_rec_eval", elaborated)
+    match lookupAssoc "main" bindings
+      Some value => match force value
+        VFloat result => result
+        _ => 0.0
+      _ => 0.0)
 
 test "block recursive let executes with its captured Num dictionary" =
   expectEqual 1.5 blockRecEvalValue
@@ -3749,29 +3751,28 @@ placedNumCodes inherited =
   let (errors, _) = checkOneDiags [] core ("placed_num", program)
   map tcCode errors
 
-placedNumElaborated : Bool -> List Decl
+placedNumElaborated : Bool -> (List Decl, ProgramFacts)
 placedNumElaborated inherited =
   let core = desugar (parse numericPreludeSource)
   let program = desugar (parseLocated (placedNumSource inherited))
-  elaborateOne [] core ("placed_num", program)
+  elaborateOneFacts [] core ("placed_num", program)
 
 placedNumSuppliedValue : Int
-placedNumSuppliedValue =
-  let bindings = evalOne [] ("placed_num", placedNumElaborated False)
-  match lookupAssoc "main" bindings
-    Some v => match force v
-      VInt n => n
-      _ => 0 - 1
-    _ => 0 - 1
+placedNumSuppliedValue = placedNumValue False
 
 placedNumInheritedValue : Int
-placedNumInheritedValue =
-  let bindings = evalOne [] ("placed_num", placedNumElaborated True)
-  match lookupAssoc "main" bindings
-    Some v => match force v
-      VInt n => n
-      _ => 0 - 1
-    _ => 0 - 1
+placedNumInheritedValue = placedNumValue True
+
+placedNumValue : Bool -> Int
+placedNumValue inherited =
+  let (elaborated, facts) = placedNumElaborated inherited
+  withFacts facts (_ =>
+    let bindings = evalOneFacts facts [] ("placed_num", elaborated)
+    match lookupAssoc "main" bindings
+      Some v => match force v
+        VInt n => n
+        _ => 0 - 1
+      _ => 0 - 1)
 
 -- The body-local literal `[1, 2]` appears nowhere in `t`'s declared type, so the
 -- body's own numeric boundary grounds it to Int on either placement, and the call
@@ -4503,14 +4504,18 @@ preludeOutcome prelude sources =
         (_, (_, errors, _)) => map tcCode errors)
       (checkModulesDiagsChain None "" [] [] core modules)
   if isEmptyL codes then
-    let (coreD, elaborated, _, _, _, _, _) = elaborateModules [] core modules
+    let elab = elaborateModules [] core modules
+    let (coreD, elaborated, _, _, _, _, _) = elab
     let rootId = optionOr "" (map fst (last sources))
-    let bindings = evalOne [] (rootId, coreD ++ flatMap snd elaborated)
-    match lookupAssoc "main" bindings
-      Some value => match force value
-        VString s => (codes, s)
-        _ => (codes, "<not a string>")
-      None => (codes, "<no main>")
+    let facts = factsOfElab elab
+    withFacts facts (_ =>
+      let bindings =
+        evalOneFacts facts [] (rootId, coreD ++ flatMap snd elaborated)
+      match lookupAssoc "main" bindings
+        Some value => match force value
+          VString s => (codes, s)
+          _ => (codes, "<not a string>")
+        None => (codes, "<no main>"))
   else
     (codes, "")
 

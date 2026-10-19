@@ -11,7 +11,8 @@ import tools.test_cmd.{
 import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
 import types.typecheck.{elaborateModules}
-import eval.eval.{Value(..), evalOne, force}
+import eval.eval.{Value(..), evalOneFacts, force}
+import types.program_facts.{factsInstalled, withFacts}
 import support.util.{lookupAssoc}
 import io.{runVerb}
 import string.{contains, indexOf, toInt, trim}
@@ -51,17 +52,21 @@ methodProgram = [
 ]
 
 -- `main` of the trees one drive elaborated, evaluated after the helper validation's
--- diagnostics-only drive has run, as the property worker does.
+-- diagnostics-only drive has run, against the installed tables, as the property
+-- worker does.
 mainAfterHelperDiags : Unit -> Int
 mainAfterHelperDiags _ =
   let (coreE, modulesE, _, _, _, _, _) = elaborateModules [] [] methodProgram
   let _ = helperElabDiags [] [] methodProgram
-  let bindings = evalOne coreE ("helper_probe", flatMap snd modulesE)
-  match lookupAssoc "main" bindings
-    Some value => match force value
-      VInt n => n
-      _ => -1
-    None => -2
+  let facts = factsInstalled ()
+  withFacts facts (_ =>
+    let bindings =
+      evalOneFacts facts coreE ("helper_probe", flatMap snd modulesE)
+    match lookupAssoc "main" bindings
+      Some value => match force value
+        VInt n => n
+        _ => -1
+      None => -2)
 
 test "trees elaborated before a helper diagnostics drive still evaluate" =
   expectEqual 7 (mainAfterHelperDiags ())

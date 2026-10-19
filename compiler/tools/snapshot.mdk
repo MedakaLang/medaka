@@ -181,7 +181,7 @@ import types.annotate.{annotateProgram}
 import types.typecheck.{
   checkOneToLinesWithRuntime,
   setCoherenceUserDecls,
-  elaborateOne,
+  elaborateOneFacts,
   elaborateModules,
   mainTypeIsUnit,
   mainTypeIsFloat,
@@ -191,7 +191,7 @@ import types.typecheck.{
 }
 import types.private_mangle.{mangleUnitsEv}
 import types.program_facts.{emptyFacts, factsOfElabWith}
-import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp, noMainMsg}
+import eval.eval.{evalOneOutputFacts, funNamesOf, dropShadowedExp, noMainMsg}
 import backend.emit_plan.{buildEmitPlan}
 import backend.core_validate.{Backend(..)}
 import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
@@ -586,10 +586,9 @@ coreIrOf d =
 evalOf : List Decl -> List Decl -> List Decl -> String
 evalOf runtimeDecls coreDecls d =
   let livePrelude = dropShadowedExp (funNamesOf d) coreDecls
-  evalOneOutput [] (
-    "__main__",
-    elaborateOne runtimeDecls livePrelude ("__user__", d),
-  )
+  let (elaborated, facts) =
+    elaborateOneFacts runtimeDecls livePrelude ("__user__", d)
+  evalOneOutputFacts facts [] ("__main__", elaborated)
 
 -- ── the emit path (BOTH backends, ONE lowered CProgram) ──────────────────────
 --

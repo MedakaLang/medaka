@@ -828,7 +828,7 @@ lowerProgramWith dispositions pins prog =
       (ctorArities prog)
       (buildCtorToType prog)
       (lowerImplsRaw
-        (installDispatchTables prog)
+        (installDispatchTables (factsNow ()).pfDispositions prog)
         (instanceReqCounts prog)
         (declaredMethodArities prog)
         dispositions

@@ -62,7 +62,7 @@ lookupCount wanted ((key, count) :: rest)
 test "method requires counts are keyed by the canonical route word only" =
   let numOrigin = OriginModule "core"
   let forgeOrigin = OriginModule "fixture"
-  let counts = buildMethodReqCounts [
+  let counts = buildMethodReqCounts None [
     implDecl "Num" numOrigin 1,
     implDecl "Forge" forgeOrigin 2,
   ]

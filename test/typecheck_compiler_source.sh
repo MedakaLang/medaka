@@ -1453,7 +1453,7 @@ done || exit 1
 # Eval sizes an elaborated impl definition from its leading dictionary patterns and
 # registers it under its instance's canonical key.  Interface declaration arity was a
 # second, colliding authority and must not return.
-eval_req_count_required='flatMap (implMethodReqCounts (installedDispositionsOpt ())) prog
+eval_req_count_required='flatMap (implMethodReqCounts dispositions) prog
 DImpl { iface, tys, methods, implOrigin, ... }
 let key = implRouteKeyWord implOrigin iface tys None
 ((mname, key), leadingImplDictPats pats)

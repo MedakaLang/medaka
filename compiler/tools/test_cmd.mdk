@@ -87,13 +87,14 @@ import types.typecheck.{
 import driver.main_autoprint.{valueMainCandidate}
 import types.route_key.{withEvidencePreserved}
 import types.private_mangle.{mangleCtorCollisionsPair}
+import types.program_facts.{factsInstalled, factsOfElab, withFacts}
 import frontend.marker.{declRefs}
 import eval.eval.{
   Value,
   EvalEnv,
-  evalOneRootEnvWith,
-  evalModulesRootEvalEnvWith,
-  evalModulesRootEnvWith,
+  evalOneRootEnvFacts,
+  evalModulesRootEvalEnvFacts,
+  evalModulesRootEnvFacts,
   currentEvalFile,
   modulePathMap,
   testCapableExterns,
@@ -715,7 +716,7 @@ data HelperValidation =
 
 -- What the DOCTEST phase's interpreter arm evaluates.  The two shapes are NOT
 -- interchangeable, which is why this is a separate type rather than a third
--- `TestPair` constructor: the single-file arm hands `evalOneRootEnvWith` an EMPTY
+-- `TestPair` constructor: the single-file arm hands `evalOneRootEnvFacts` an EMPTY
 -- prelude with core folded into one `__main__` unit, so prelude-shadow splitting
 -- and cross-unit constructor mangling both see a different program than the pair
 -- form's core-beside-modules shape does.
@@ -1638,7 +1639,7 @@ runChosenOn EngNative _trees None target tsrc userDecls examples synthResults =
 -- test stdlib/core.mdk`) it already declares everything the prelude provides,
 -- so prepending it would duplicate every top-level decl (two `Bounded Char`
 -- impls, etc.) and corrupt return-position dispatch — hence `programIsCore`.
--- Its one-module elaboration is flattened to the shape `evalOneRootEnvWith`
+-- Its one-module elaboration is flattened to the shape `evalOneRootEnvFacts`
 -- consumes (`elaborateOne`'s), keeping the module's diagnostics for the examples,
 -- and its root frame carries the synthesized `__dt_i__` bindings the same way the
 -- pair arm's does.
@@ -1655,11 +1656,12 @@ runChosen (DtPair (TestPair _runtimeM _rawCoreM coreM _rawM modsM)) examples syn
   -- like `H.foo`, which `rootLocals` never carries (#3206). A `__dt_i__`
   -- synth binding is always in `localCells`, first in this flattened list
   -- either way, so this changes nothing about what `force` below returns.
-  let env = evalModulesRootEnvWith (testCapableExterns ()) coreM modsM
-  buildDetailsFrom
-    (Ok (renderExamples env injectedExampleDiags.value synthResults examples))
-    synthResults
-    examples
+  -- A `TestPair` holds no facts, so the examples read the installed tables'.
+  let facts = factsInstalled ()
+  let rendered = withFacts facts (_ =>
+    let env = evalModulesRootEnvFacts facts (testCapableExterns ()) coreM modsM
+    renderExamples env injectedExampleDiags.value synthResults examples)
+  buildDetailsFrom (Ok rendered) synthResults examples
 runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synthResults =
   let allUser = userDecls ++ buildSynthDecls synthResults
   let livePrelude =
@@ -1669,15 +1671,17 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
       dropShadowedExp (funNamesOf allUser) coreDecls
   let rootId = singleRootId roots target
   modulePathMap := [("__main__", target)]
-  let (coreE, modulesE, perModule, _, _, _, _) =
-    elaborateModules runtimeDecls livePrelude [(rootId, allUser)]
+  let elab = elaborateModules runtimeDecls livePrelude [(rootId, allUser)]
+  let (coreE, modulesE, perModule, _, _, _, _) = elab
   let elaborated = coreE ++ flatMap snd modulesE
-  let env =
-    evalOneRootEnvWith (testCapableExterns ()) [] ("__main__", elaborated)
-  buildDetailsFrom
-    (Ok (renderExamples env (exampleDiagLines perModule) synthResults examples))
-    synthResults
-    examples
+  let facts = factsOfElab elab
+  let rendered = withFacts facts (_ =>
+    let env = evalOneRootEnvFacts facts (testCapableExterns ()) [] (
+      "__main__",
+      elaborated,
+    )
+    renderExamples env (exampleDiagLines perModule) synthResults examples)
+  buildDetailsFrom (Ok rendered) synthResults examples
 
 -- ── The interpreter's adapter onto doctest.mdk's buildDetailsFrom seam ──────
 -- buildDetailsFrom (Stage 1) wants "one rendered actual per example, or one
@@ -3171,14 +3175,30 @@ runEvalPreparedRows : PlanEnv ->
   List Decl ->
   List (String, List Decl) ->
   <IO> List PropResult
-runEvalPreparedRows env helpers rows tsrc coreM modsM =
-  runPreparedPropRequestsResults
-    env
-    helpers
-    rows
-    (propLineTests tsrc)
-    (evalModulesRootEvalEnvWith (testCapableExterns ()) coreM modsM)
-    (coreM ++ flatMap snd modsM)
+runEvalPreparedRows env helpers rows tsrc coreM modsM = withRootEvalEnv
+  coreM
+  modsM
+  (evalEnv =>
+    runPreparedPropRequestsResults
+      env
+      helpers
+      rows
+      (propLineTests tsrc)
+      evalEnv
+      (coreM ++ flatMap snd modsM))
+
+-- [consume] over the root environment of [coreM] and [modsM], inside the bracket
+-- of the facts it is built from.  A `TestPair` holds no facts, so they are the
+-- installed tables', read when the environment is built.
+withRootEvalEnv : List Decl ->
+  List (String, List Decl) ->
+  (EvalEnv (Value <IO>) -> <IO> a) ->
+  <IO> a
+withRootEvalEnv coreM modsM consume =
+  let facts = factsInstalled ()
+  withFacts facts (_ =>
+    consume
+      (evalModulesRootEvalEnvFacts facts (testCapableExterns ()) coreM modsM))
 
 -- The structural-only path keeps the established engine behavior unchanged.
 propsReportEnginesPlain : NativePropLeaf ->
@@ -3197,13 +3217,14 @@ propsReportEnginesPlain : NativePropLeaf ->
   <IO> List PropResult
 propsReportEnginesPlain _ [] _ _ _ _ _ _ _ _ _ _ _ = []
 propsReportEnginesPlain leaf (EngInterp :: rest) rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
-  runAllPlannedPropRequestsResults
-      (rootPlanModuleId rawM target)
-      (planModules rawCoreM coreM rawM modsM)
-      (propRequestsFor index file "eval" userDecls cases filterOpt)
-      (propLineTests tsrc)
-      (evalModulesRootEvalEnvWith (testCapableExterns ()) coreM modsM)
-      (elaboratedRootProps modsM userDecls)
+  withRootEvalEnv coreM modsM (evalEnv =>
+      runAllPlannedPropRequestsResults
+        (rootPlanModuleId rawM target)
+        (planModules rawCoreM coreM rawM modsM)
+        (propRequestsFor index file "eval" userDecls cases filterOpt)
+        (propLineTests tsrc)
+        evalEnv
+        (elaboratedRootProps modsM userDecls))
     ++ propsReportEnginesPlain
       leaf
       rest
@@ -3553,14 +3574,14 @@ runProtocolHelperEnginesGo leaf (engine :: rest) message rawCoreM coreM rawM mod
     Ok (env, prepared) =>
       let rows = rejectPreparedProtocolCustom env engineText message prepared
       let here = match engine
-        EngInterp =>
+        EngInterp => withRootEvalEnv coreM modsM (evalEnv =>
           runPreparedPropRequestsResults
             env
             []
             rows
             (propLineTests tsrc)
-            (evalModulesRootEvalEnvWith (testCapableExterns ()) coreM modsM)
-            (coreM ++ flatMap snd modsM)
+            evalEnv
+            (coreM ++ flatMap snd modsM))
         EngNative => runPreparedNativeRows leaf rows target tsrc modules
       here ++ next
 
@@ -3613,14 +3634,14 @@ runValidatedPropEnginesGo leaf (engine :: rest) helpers rejected rawCoreM coreM 
     Ok (env, prepared) =>
       let rows = rejectPreparedHelpers env engineText rejected prepared
       let here = match engine
-        EngInterp =>
+        EngInterp => withRootEvalEnv coreM modsM (evalEnv =>
           runPreparedPropRequestsResults
             env
             helpers
             rows
             (propLineTests tsrc)
-            (evalModulesRootEvalEnvWith (testCapableExterns ()) coreM modsM)
-            (coreM ++ flatMap snd modsM)
+            evalEnv
+            (coreM ++ flatMap snd modsM))
         EngNative => runPreparedNativeRows leaf rows target tsrc modules
       here
         ++ runValidatedPropEnginesGo
@@ -3987,12 +4008,15 @@ testDeclsReportOn : Engine ->
   <IO> List (String, Int, ExResult)
 testDeclsReportOn EngInterp (TestPairErr _) _native _runtimeDecls _target _tsrc _userDecls _filterOpt _file _index =
   []
-testDeclsReportOn EngInterp (TestPair _runtimeM _rawCoreM coreM _rawM modsM) _native runtimeDecls target tsrc userDecls filterOpt _file _index =
-  gatedTestsCollect
-    target
-    (runtimeDecls ++ coreM ++ flatMap snd modsM)
-    (evalModulesRootEvalEnvWith (testCapableExterns ()) coreM modsM)
-    (rootTestsOf filterOpt tsrc modsM userDecls)
+testDeclsReportOn EngInterp (TestPair _runtimeM _rawCoreM coreM _rawM modsM) _native runtimeDecls target tsrc userDecls filterOpt _file _index = withRootEvalEnv
+  coreM
+  modsM
+  (evalEnv =>
+    gatedTestsCollect
+      target
+      (runtimeDecls ++ coreM ++ flatMap snd modsM)
+      evalEnv
+      (rootTestsOf filterOpt tsrc modsM userDecls))
 testDeclsReportOn EngNative _pair native _runtimeDecls target tsrc _userDecls filterOpt file index =
   let tests = filterTestsByName filterOpt (nativeRawTests tsrc)
   match native

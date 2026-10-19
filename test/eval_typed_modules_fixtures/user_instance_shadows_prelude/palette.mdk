@@ -1,0 +1,10 @@
+public export data Color = Red | Green
+
+export impl Debug Color where
+  debug Red = "red"
+  debug Green = "green"
+
+-- More specific than the prelude's `Debug (List a)`: a list of colors
+-- dispatches here, every other list to the prelude's instance.
+export impl Debug (List Color) where
+  debug _ = "a palette"

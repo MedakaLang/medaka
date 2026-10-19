@@ -7,7 +7,8 @@
 -- === EVAL === goldens.  This is the "true execution" path (vs eval_main, which
 -- renders pp_value of `main`): the program actually runs its IO.
 
-import eval.eval.{evalOutputWith}
+import eval.eval.{evalOutputWithFacts}
+import types.program_facts.{emptyFacts}
 import frontend.ast.{Decl}
 import entries.entry_support.{drivePrelude}
 
@@ -16,6 +17,7 @@ oracleMain : Unit -> <IO> Unit
 oracleMain () = drivePrelude emit
 
 emit : List Decl -> List Decl -> <IO> Unit
-emit preludeDecls userDecls = putStr (evalOutputWith preludeDecls userDecls)
+emit preludeDecls userDecls =
+  putStr (evalOutputWithFacts emptyFacts preludeDecls userDecls)
 
 main = oracleMain ()

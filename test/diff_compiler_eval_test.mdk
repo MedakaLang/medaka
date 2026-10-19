@@ -281,7 +281,7 @@ rows = [
     prelude = [runtimeMod, coreMod],
     shape = DirFixture "main.mdk" "main.eval.golden",
     batched = False,
-    fixtures = 24,
+    fixtures = 25,
   },
 ]
 
