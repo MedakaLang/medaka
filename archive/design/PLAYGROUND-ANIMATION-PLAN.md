@@ -72,7 +72,7 @@ and any licensed generated outputs found at dispatch time.
 | Field | S3 — graphics-and-animation-library |
 |---|---|
 | Mission | Implement the pure picture API and effectful frame adapters, including retained Simulation state. Prove them using actual WASM compilation. |
-| Surface | New `graphics.mdk`, `canvas_host.mdk`, `animation.mdk` and pure `*_test.mdk` siblings in `stdlib/`; a proposed `animation_integration_test.mjs` under `playground/`; fixtures owned by this feature, outside shared engine corpora. Enrollment described in §6. |
+| Surface | New `graphics.mdk`, `canvas_host.mdk`, `animation.mdk` and pure `*_test.mdk` siblings in `playground/`; a proposed `animation_integration_test.mjs` under `playground/`; fixtures owned by this feature, outside shared engine corpora. Enrollment described in §6. |
 | Acceptance shape | Four groups: (1) pure geometry/model tests and explicit typechecks; (2) static, time-based, viewport/pointer, and Simulation sources compile through browser compiler + assembler and produce specified commands; (3) independent instances and repeated runs have independent models, globals initialize once, and pure callbacks remain pure; (4) native/render-without-bindings routes refuse clearly while pure graphics remains usable. |
 | Model | Sol/high: finalize the supported type/effect spelling from S1 without losing the agreed lifecycle or introducing an FFI closure. |
 | Depends-on / parallel-ok | S2. Serial. |

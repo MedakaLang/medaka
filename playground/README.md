@@ -27,6 +27,8 @@ the editor exactly as before (`editor.js`/`language-worker.js` unchanged).
 The playground includes editable canvas animation examples and controls. See the
 [Canvas Animation guide](../docs/advanced/playground-animation.md) for the
 `graphics` and `animation` APIs, examples, and lifecycle behavior.
+Those three modules live in `playground/` and are supplied only by the browser
+playground; they are not part of Medaka's standard library.
 
 ```
 Browser

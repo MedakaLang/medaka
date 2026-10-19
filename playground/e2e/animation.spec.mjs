@@ -54,7 +54,11 @@ async function exampleFrames(page, id) {
     ]);
     if (!window.__exampleAssets) {
       const text = path => fetch(path).then(r => { if (!r.ok) throw new Error(path); return r.text(); });
-      const ids = await fetch('dist/stdlib_modules.json').then(r => r.json());
+      const lists = await Promise.all([
+        fetch('dist/stdlib_modules.json').then(r => r.json()),
+        fetch('dist/playground_modules.json').then(r => r.json()),
+      ]);
+      const ids = lists.flat();
       const texts = await Promise.all(ids.map(id => text(`dist/${id}.mdk`)));
       window.__exampleAssets = { wasm: new Uint8Array(await fetch('dist/playground.wasm').then(r => r.arrayBuffer())),
         stdlib: { runtime: await text('dist/runtime.mdk'), core: await text('dist/core.mdk'),

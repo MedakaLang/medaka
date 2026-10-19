@@ -13,8 +13,9 @@
 #   * playground.wasm   — the combined compiler, as WasmGC  (do NOT commit)
 #   * runtime.mdk       — copy of stdlib/runtime.mdk (browser feeds via vfs)
 #   * core.mdk          — copy of stdlib/core.mdk     (browser feeds via vfs)
-#   * <id>.mdk          — every other stdlib module   (browser feeds via vfs)
-#   * stdlib_modules.json — the ids of those modules, generated (do NOT commit)
+#   * <id>.mdk          — browser-vfs modules (stdlib and playground-local)
+#   * stdlib_modules.json — stdlib module ids, generated (do NOT commit)
+#   * playground_modules.json — playground-local module ids, generated (do NOT commit)
 #
 # Pipeline:
 #   1. make medaka                         -> native OCaml-free compiler (./medaka)
@@ -114,9 +115,10 @@ cp "$CORE"    "$DIST/core.mdk"
 # `medaka check --target` gives, rather than by a module that is missing.
 # The module ids are derived from stdlib/ and stdlib/crypto/ (no `_test`
 # siblings), staged flat as dist/<id>.mdk (`crypto.sha256` -> dist/crypto.sha256.mdk),
-# and listed in dist/stdlib_modules.json: the one list main.js fetches from and
-# build_site.sh checks the site against.
-EXTRA_MODULES=$(
+# and listed in dist/stdlib_modules.json. That manifest deliberately stays pure:
+# it is the catalog of the standard library, not every source file the browser
+# happens to load.
+STDLIB_MODULES=$(
   cd "$ROOT/stdlib"
   for f in *.mdk crypto/*.mdk; do
     case "$f" in
@@ -125,17 +127,28 @@ EXTRA_MODULES=$(
     esac
   done | LC_ALL=C sort
 )
-[ -n "$EXTRA_MODULES" ] || { echo "FAIL: no stdlib modules found under $ROOT/stdlib"; exit 1; }
-for m in $EXTRA_MODULES; do
+[ -n "$STDLIB_MODULES" ] || { echo "FAIL: no stdlib modules found under $ROOT/stdlib"; exit 1; }
+for m in $STDLIB_MODULES; do
   cp "$ROOT/stdlib/$(echo "$m" | tr . /).mdk" "$DIST/$m.mdk"
 done
-printf '%s\n' $EXTRA_MODULES \
+printf '%s\n' $STDLIB_MODULES \
   | awk 'BEGIN { printf "[" } { printf "%s\"%s\"", (NR > 1 ? "," : ""), $0 } END { print "]" }' \
   > "$DIST/stdlib_modules.json"
 
+# Canvas animation is a playground capability, rather than a language standard
+# library feature. Keep the small roster explicit so adding an ordinary
+# playground `.mdk` file never publishes it or changes the browser's imports.
+PLAYGROUND_MODULES='animation canvas_host graphics'
+for m in $PLAYGROUND_MODULES; do
+  cp "$ROOT/playground/$m.mdk" "$DIST/$m.mdk"
+done
+printf '%s\n' $PLAYGROUND_MODULES \
+  | awk 'BEGIN { printf "[" } { printf "%s\"%s\"", (NR > 1 ? "," : ""), $0 } END { print "]" }' \
+  > "$DIST/playground_modules.json"
+
 echo
 echo "artifacts in $DIST:"
-for f in playground.wasm runtime.mdk core.mdk stdlib_modules.json $(for m in $EXTRA_MODULES; do echo "$m.mdk"; done); do
+for f in playground.wasm runtime.mdk core.mdk stdlib_modules.json playground_modules.json $(for m in $STDLIB_MODULES $PLAYGROUND_MODULES; do echo "$m.mdk"; done); do
   [ -f "$DIST/$f" ] && printf '  %-20s %10d bytes\n' "$f" "$(wc -c < "$DIST/$f")"
 done
 echo "DONE"

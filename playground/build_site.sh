@@ -16,8 +16,9 @@
 #   vendor/codemirror/codemirror.js
 #   dist/playground.wasm
 #   dist/runtime.mdk  dist/core.mdk
-#   dist/<m>.mdk      for every stdlib module (array, list, crypto.sha256, …)
-#   dist/stdlib_modules.json  their ids, the list main.js fetches from
+#   dist/<m>.mdk      for every browser-vfs module (stdlib and playground-local)
+#   dist/stdlib_modules.json  stdlib ids
+#   dist/playground_modules.json  playground-local ids
 #   guide/<chapter>.html  one page per docs/guide/*.md (OUTLINE.md excluded)
 #   guide/guide.css
 #   advanced/<chapter>.html  one page per docs/advanced/*.md
@@ -43,13 +44,14 @@ SITE="$SCRIPT_DIR/site"
 DIST="$SCRIPT_DIR/dist"
 
 # ── Build dist artifacts if missing ─────────────────────────────────────────
-if [ ! -f "$DIST/playground.wasm" ] || [ ! -f "$DIST/stdlib_modules.json" ]; then
-  echo "[build_site] dist/playground.wasm or dist/stdlib_modules.json not found — running build_playground_wasm.sh ..."
+if [ ! -f "$DIST/playground.wasm" ] || [ ! -f "$DIST/stdlib_modules.json" ] || [ ! -f "$DIST/playground_modules.json" ]; then
+  echo "[build_site] browser assets or module manifests not found — running build_playground_wasm.sh ..."
   bash "$SCRIPT_DIR/build_playground_wasm.sh"
 fi
 
 [ -f "$DIST/playground.wasm" ] || { echo "FAIL: dist/playground.wasm still missing after build"; exit 1; }
 [ -f "$DIST/stdlib_modules.json" ] || { echo "FAIL: dist/stdlib_modules.json still missing after build"; exit 1; }
+[ -f "$DIST/playground_modules.json" ] || { echo "FAIL: dist/playground_modules.json still missing after build"; exit 1; }
 [ -f "$DIST/runtime.mdk" ]     || { echo "FAIL: dist/runtime.mdk missing"; exit 1; }
 [ -f "$DIST/core.mdk" ]        || { echo "FAIL: dist/core.mdk missing"; exit 1; }
 
@@ -89,15 +91,16 @@ cp "$SCRIPT_DIR/vendor/wat2wasm/wat2wasm_bg.wasm" "$SITE/vendor/wat2wasm/"
 # Committed CodeMirror 6 single-ESM bundle (see build_editor.sh)
 cp "$SCRIPT_DIR/vendor/codemirror/codemirror.js" "$SITE/vendor/codemirror/"
 
-# Compiler wasm + stdlib sources.
+# Compiler wasm and browser-vfs sources.
 #
 # Copy EVERY .mdk build_playground_wasm.sh staged, not a hardcoded subset: the
-# page fetches runtime.mdk + core.mdk *and* every module dist/stdlib_modules.json
-# lists, so `import array` in a user program needs dist/array.mdk present. A
+# page fetches runtime.mdk + core.mdk *and* every module named by either manifest,
+# so `import array` and `import animation` in a user program need their files. A
 # hand-maintained list here silently drops modules added later — which is
 # exactly how dist/array.mdk went missing and every `import` 404'd at Run time.
 cp "$DIST/playground.wasm"     "$SITE/dist/"
 cp "$DIST/stdlib_modules.json" "$SITE/dist/"
+cp "$DIST/playground_modules.json" "$SITE/dist/"
 cp "$DIST"/*.mdk               "$SITE/dist/"
 
 # Cloudflare Pages `_headers` file — see the file itself for why this exists
@@ -177,12 +180,13 @@ node "$SCRIPT_DIR/render_docs.mjs" \
 cp "$SCRIPT_DIR"/blog-cards/* "$SITE/blog/"
 
 # ── Verify the site can actually serve what the page asks for ───────────────
-# Derived from dist/stdlib_modules.json, the list main.js fetches from, so this
-# check cannot drift from the page's real needs. An empty list is a failure:
-# build_playground_wasm.sh lists every stdlib module.
+# Derived from both manifests main.js fetches, so this check cannot drift from
+# the page's real needs. The stdlib list must remain nonempty.
 missing=""
-listed=$( { grep -o '"[a-z_0-9.]*"' "$SITE/dist/stdlib_modules.json" || true; } | tr -d '"')
-[ -n "$listed" ] || missing=" (dist/stdlib_modules.json lists no module)"
+stdlib_listed=$( { grep -o '"[a-z_0-9.]*"' "$SITE/dist/stdlib_modules.json" || true; } | tr -d '"')
+playground_listed=$( { grep -o '"[a-z_0-9.]*"' "$SITE/dist/playground_modules.json" || true; } | tr -d '"')
+[ -n "$stdlib_listed" ] || missing=" (dist/stdlib_modules.json lists no module)"
+listed="$stdlib_listed $playground_listed"
 for m in $listed; do
   [ -f "$SITE/dist/$m.mdk" ] || missing="$missing $m.mdk"
 done
@@ -194,14 +198,14 @@ if [ -n "$missing" ]; then
   exit 1
 fi
 for m in graphics canvas_host animation; do
-  if grep -Fq "\"$m\"" "$SITE/dist/stdlib_modules.json"; then
+  if grep -Fq "\"$m\"" "$SITE/dist/playground_modules.json"; then
     [ -f "$SITE/dist/$m.mdk" ] || missing="$missing $m.mdk"
   else
-    missing="$missing $m (not listed in dist/stdlib_modules.json)"
+    missing="$missing $m (not listed in dist/playground_modules.json)"
   fi
 done
 if [ -n "$missing" ]; then
-  echo "FAIL: animation stdlib modules are absent from site/dist:$missing" >&2
+  echo "FAIL: playground animation modules are absent from site/dist:$missing" >&2
   exit 1
 fi
 
@@ -228,7 +232,7 @@ for f in "$SITE"/dist/*.mdk; do
   done
 done
 if [ -n "$unshipped" ]; then
-  echo "FAIL: shipped modules import modules that are not shipped (build_playground_wasm.sh stages stdlib/ and stdlib/crypto/):$unshipped" >&2
+  echo "FAIL: shipped modules import modules that are not shipped:$unshipped" >&2
   exit 1
 fi
 

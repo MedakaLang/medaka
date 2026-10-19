@@ -153,7 +153,6 @@ What's in the standard library, what's planned, module-by-module status.
 | [`FP-STDLIB-DESIGN.md`](stdlib/FP-STDLIB-DESIGN.md) | FP Standard Library — Typeclasses, Combinators & Error Handling | IMPLEMENTED |
 | [`P1-STDLIB-DESIGN.md`](stdlib/P1-STDLIB-DESIGN.md) | P1 Standard Library — Design & Prioritization | PARTIAL |
 | [`STDLIB.md`](stdlib/STDLIB.md) | Medaka Standard Library — Design Notes & Roadmap | — |
-| [`animation.md`](stdlib/animation.md) | animation | — |
 | [`args.md`](stdlib/args.md) | args | — |
 | [`array.md`](stdlib/array.md) | array | — |
 | [`async.md`](stdlib/async.md) | async | — |
@@ -162,12 +161,10 @@ What's in the standard library, what's planned, module-by-module status.
 | [`bytebuilder.md`](stdlib/bytebuilder.md) | bytebuilder | — |
 | [`byteparser.md`](stdlib/byteparser.md) | byteparser | — |
 | [`bytes.md`](stdlib/bytes.md) | bytes | — |
-| [`canvas_host.md`](stdlib/canvas_host.md) | canvas_host | — |
 | [`core.md`](stdlib/core.md) | core | — |
 | [`crypto.hmac.md`](stdlib/crypto.hmac.md) | crypto.hmac | — |
 | [`crypto.sha256.md`](stdlib/crypto.sha256.md) | crypto.sha256 | — |
 | [`fs.md`](stdlib/fs.md) | fs | — |
-| [`graphics.md`](stdlib/graphics.md) | graphics | — |
 | [`hash_map.md`](stdlib/hash_map.md) | hash_map | — |
 | [`hash_set.md`](stdlib/hash_set.md) | hash_set | — |
 | [`hex.md`](stdlib/hex.md) | hex | — |

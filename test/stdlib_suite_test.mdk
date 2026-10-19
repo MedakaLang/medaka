@@ -159,7 +159,6 @@ engineLabel EvalAndNative = "eval+native"
    makes a reverted variable-key schedule visible at all. -}
 suites : List (String, (Int, Engine))
 suites = [
-  ("animation_test", (5, EvalAndNative)),
   ("args", (44, EvalAndNative)),
   -- The Array interface impls and their doctest live in `core`, so their
   -- assertions count there: array 53 + core 135 = 188 before the move,
@@ -189,7 +188,6 @@ suites = [
   -- `readFile` of a file that is not UTF-8. Writes a scratch file, so it is
   -- a capability row like `fs` itself.
   ("fs_test", (1, NativeCapability)),
-  ("graphics_test", (8, EvalAndNative)),
   ("hash_map", (24, EvalAndNative)),
   ("hash_set", (13, EvalAndNative)),
   -- `encodeBytes`/`decodeBytes` merged into `encode`/`decode` (S-codecs-
@@ -251,10 +249,7 @@ rosterNames = map fst suites
    is the outcome an unpinned `exempt` row would have let pass silently. -}
 zeroAssertionModules : List (String, Engine)
 zeroAssertionModules = [
-  ("animation", EvalAndNative),
-  ("canvas_host", EvalAndNative),
   ("crypto/sha256", Eval),
-  ("graphics", EvalAndNative),
   ("net_async", Eval),
 ]
 
@@ -430,9 +425,6 @@ floorExpectation name = match lookup name results
   None => Fail "stdlib/\{name}.mdk has no `results` entry" "" ""
   Some (floor, counted) => expectFloor "stdlib/\{name}.mdk" floor counted
 
-test "stdlib/animation_test.mdk executed >= 5 assertions" =
-  floorExpectation "animation_test"
-
 test "stdlib/args.mdk executed >= 44 assertions" = floorExpectation "args"
 
 test "stdlib/array.mdk executed >= 52 assertions" = floorExpectation "array"
@@ -465,9 +457,6 @@ test "stdlib/crypto/hmac.mdk executed >= 12 assertions" =
 test "stdlib/fs.mdk executed >= 8 assertions" = floorExpectation "fs"
 
 test "stdlib/fs_test.mdk executed >= 1 assertions" = floorExpectation "fs_test"
-
-test "stdlib/graphics_test.mdk executed >= 8 assertions" =
-  floorExpectation "graphics_test"
 
 test "stdlib/hash_map.mdk executed >= 24 assertions" =
   floorExpectation "hash_map"
@@ -563,14 +552,8 @@ zeroExpectation name = match lookup name zeroResults
         "0 assertions"
         "\{intToString ran} assertions"
 
-test "stdlib/animation.mdk runs 0 assertions" = zeroExpectation "animation"
-
-test "stdlib/canvas_host.mdk runs 0 assertions" = zeroExpectation "canvas_host"
-
 test "stdlib/crypto/sha256.mdk runs 0 assertions" =
   zeroExpectation "crypto/sha256"
-
-test "stdlib/graphics.mdk runs 0 assertions" = zeroExpectation "graphics"
 
 test "stdlib/net_async.mdk runs 0 assertions" = zeroExpectation "net_async"
 

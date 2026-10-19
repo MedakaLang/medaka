@@ -17,6 +17,9 @@ or filled polygons in drawing order. The origin is the canvas center; x increase
 to the right and y increases upward. Coordinates and sizes use CSS pixels. Color
 components range from zero to one.
 
+The playground supplies `graphics`, `canvas_host`, and `animation` for this
+browser feature. They are playground modules, not standard-library modules.
+
 This program runs in the playground's canvas host:
 
 ```medaka

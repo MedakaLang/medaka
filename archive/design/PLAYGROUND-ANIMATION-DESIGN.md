@@ -72,9 +72,9 @@ files. Boundary signatures are contracts, not promised parser-valid declarations
 
 | Directory | Module/file | Responsibility and exports | Import boundary |
 |---|---|---|---|
-| `stdlib/` | `graphics.mdk` | Pure `Point`, `Color`, `Shape`, `Picture`; constructors described in §4. | Existing pure stdlib only; no host, animation, compiler, or DOM dependency. |
-| `stdlib/` | `canvas_host.mdk` | Typed scalar externs, frame getters, `render : Picture -> <FFI "js/canvas"> Unit`. | `graphics` and needed stdlib; never `animation` or compiler modules. |
-| `stdlib/` | `animation.mdk` | `Frame`, `Pointer`, abstract `Simulation model`, `drawing`, `animate`, `animateWith`, `simulation`, `runSimulation`. | `graphics`, `canvas_host`, existing stdlib only. |
+| `playground/` | `graphics.mdk` | Pure `Point`, `Color`, `Shape`, `Picture`; constructors described in §4. | Existing pure stdlib only; no host, animation, compiler, or DOM dependency. |
+| `playground/` | `canvas_host.mdk` | Typed scalar externs, frame getters, `render : Picture -> <FFI "js/canvas"> Unit`. | `graphics` and needed stdlib; never `animation` or compiler modules. |
+| `playground/` | `animation.mdk` | `Frame`, `Pointer`, abstract `Simulation model`, `drawing`, `animate`, `animateWith`, `simulation`, `runSimulation`. | `graphics`, `canvas_host`, existing stdlib only. |
 | `playground/` | `animation_protocol.mjs` | Protocol version, limits, validators for frame inputs and batches. Exports `PROTOCOL_VERSION`, `LIMITS`, `validateFrameInput`, `validateFrameBatch`. | No DOM, worker globals, compiler, or host runtime. |
 | `playground/` | `animation_host.mjs` | Per-session FFI binding factory: `createAnimationBindings() -> {bindings, beginInvocation(input), finishInvocation(), discard()}`. | Protocol only; no scheduling or DOM. |
 | `playground/` | `animation_controller.mjs` | Page state machine: `createAnimationController(deps) -> {start, pause, resume, stop, resize, pointer, dispose}`. Inject worker factory, clock/rAF, renderer, and status sink. | Protocol; no editor/compiler imports and no WASM evaluation on the page. |
@@ -380,10 +380,11 @@ justifies a public 3D library. Imported graphics modules must reach both compile
 and editor analyze/hover/completion through the existing extra-module VFS.
 
 Update the explicit site asset list and COEP headers for every new transitive
-worker import. The stdlib source manifest, generated reference, development
-server, and built site must contain the same library/example surface. Test the
-built site as well as the development tree. Production deployment is a later
-release action using the existing playground procedure, not part of this plan.
+worker import. The stdlib manifest remains a pure standard-library catalog; the
+explicit playground-module roster carries the canvas APIs. The development
+server and built site must contain their combined browser surface. Test the built
+site as well as the development tree. Production deployment is a later release
+action using the existing playground procedure, not part of this plan.
 
 ## 8. Verification and language-extension decision
 

@@ -299,18 +299,21 @@ function applyDiagnostics(files) {
 }
 
 // ── Asset loader ──────────────────────────────────────────────────────────────
-// Every stdlib module is bundled into the vfs so `import <mod>` resolves in the
-// browser as it does natively; one the profile cannot run is refused by the
-// compiler's target check.  The ids come from dist/stdlib_modules.json, which
-// build_playground_wasm.sh generates; each is fetched from dist/<id>.mdk.
+// Standard-library modules and the playground's own animation modules share the
+// browser vfs so their source-level imports resolve as they do natively. The
+// manifests keep the standard library catalog separate from playground-only APIs.
 async function fetchOk(name) {
   const r = await fetch(name);
   if (!r.ok) throw new Error('failed to fetch ' + name + ' (' + r.status + ')');
   return r;
 }
 
-async function loadStdlibModules() {
-  const ids = await (await fetchOk('dist/stdlib_modules.json')).json();
+async function loadBrowserModules() {
+  const lists = await Promise.all([
+    fetchOk('dist/stdlib_modules.json').then((r) => r.json()),
+    fetchOk('dist/playground_modules.json').then((r) => r.json()),
+  ]);
+  const ids = lists.flat();
   const texts = await Promise.all(ids.map(async (m) => (await fetchOk('dist/' + m + '.mdk')).text()));
   const extra = {};
   ids.forEach((m, i) => { extra[m] = texts[i]; });
@@ -329,7 +332,7 @@ async function loadAssets() {
       fetchOk('dist/runtime.mdk'),
       fetchOk('dist/core.mdk'),
       fetchOk('vendor/wat2wasm/wat2wasm_bg.wasm'),
-      loadStdlibModules(),
+      loadBrowserModules(),
     ]);
     const [wasm, runtime, core, wat2wasmBytes] = await Promise.all([
       wasmResp.arrayBuffer(),

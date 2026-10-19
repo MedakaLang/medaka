@@ -129,7 +129,8 @@ the source call a stubbed capability, and the two below:
    (`W-MAIN-MISSING`) and the browser answers the same code.
 2. **does it import only modules the page SHIPS?** `10-tooling-and-workflow#5`
    does `import test`, which the page does not ship. The shipped set is derived
-   into `dist/stdlib_modules.json` by `build_playground_wasm.sh`, so the rule
+   into `dist/stdlib_modules.json` and `dist/playground_modules.json` by
+   `build_playground_wasm.sh`, so the rule
    inspects unshipped *imports* as well as stubbed *calls*.
 
 The differential deliberately does **not** patch that rule — it reports the gap
