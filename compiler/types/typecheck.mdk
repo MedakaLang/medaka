@@ -353,6 +353,9 @@ import types.tc_types.{
   MethodEnv(..),
   MethodScope(..),
   DriverState(..),
+  TcConfig(..),
+  TraceSink(..),
+  DriveInputs(..),
   Windowed(..),
   CSlot(..),
   PredicateSlotArgs(..),
@@ -968,7 +971,7 @@ ioJoinAtoms grants =
 expandIoInBound : List Atom -> List Atom
 expandIoInBound b = match findAtom (labelKey ioLabel) b
   None => b
-  Some _ => atomsNorm (b ++ driverState.value.ioJoin.value)
+  Some _ => atomsNorm (b ++ driverState.value.config.value.tcIoJoin)
 
 -- A performed `IO` left over against a bound without `IO` stands for the labels
 -- it joins: a bound naming all of them admits it, a bound naming some refuses it
@@ -980,7 +983,7 @@ narrowPerformedIo diff bound = match findAtom (labelKey ioLabel) diff
   None => diff
   Some _ =>
     let rest = filterList (x => atomKey x /= labelKey ioLabel) diff
-    let join = driverState.value.ioJoin.value
+    let join = driverState.value.config.value.tcIoJoin
     let missing = atomsDiff join bound
     if listLen missing == listLen join then
       diff
@@ -2029,11 +2032,11 @@ effectLeakMsg bound extras =
 -- Empty when `IO` joins every host label at its top.
 ioJoinClause : List Atom -> String
 ioJoinClause atoms =
-  let join = driverState.value.ioJoin.value
+  let join = driverState.value.config.value.tcIoJoin
   let full = map atomOfLabel hostLabels
   if isSome (findAtom (labelKey ioLabel) atoms)
     && isNonEmptyL (atomsDiff full join) then
-    "; `IO` on `\{driverState.value.ioJoinProfile.value}` is <\{renderAtoms join}>"
+    "; `IO` on `\{driverState.value.config.value.tcIoJoinProfile}` is <\{renderAtoms join}>"
   else
     ""
 
@@ -7976,14 +7979,24 @@ ifaceExportsIndex : Unit -> OrdMap (List (String, List String))
 ifaceExportsIndex _ =
   driverState.value.declEnvsRef.value.deMethods.meIfaceExports
 
+-- The configuration before any drive has built one: no IO join, no profile, nothing
+-- owned by the stdlib.
+emptyTcConfig : TcConfig
+emptyTcConfig = TcConfig {
+  tcIoJoin = [],
+  tcIoJoinProfile = "",
+  tcStdlibOwned = omEmpty,
+  tcFlatEntryIsStdlib = False,
+  tcCoherenceUserDecls = [],
+}
+
 -- INITIAL construction only (NOT a per-module reset): each field reproduces its former
 -- top-level ref's initial.  The driver/per-module/per-group sites write each field at
 -- their own current point afterward, unchanged.
 freshDriverState : Unit -> DriverState
 freshDriverState _ = DriverState {
   effectDomains = Ref [],
-  ioJoin = Ref [],
-  ioJoinProfile = Ref "",
+  config = Ref emptyTcConfig,
   graphAdmittedMethodsRef = Ref omEmpty,
   declEnvsRef = Ref emptyDeclEnvs,
   abstractRecordTypesRef = Ref omEmpty,
@@ -7992,9 +8005,6 @@ freshDriverState _ = DriverState {
   dictEligibleSetRef = Ref omEmpty,
   mangledShadowMapRef = Ref [],
   mangledFunDefsPresentRef = Ref False,
-  coherenceUserDecls = Ref [],
-  stdlibOwnedModsRef = Ref omEmpty,
-  flatEntryIsStdlibRef = Ref False,
   builtinExternNamesRef = Ref omEmpty,
   promotionHarvestRef = Ref [],
   mainSchemeRef = Ref None,
@@ -9534,68 +9544,82 @@ hadMatchWarnings _ = match perRun.value.matchWarnings.value
   [] => False
   _ => True
 
-assumptionTraceEnabled : Ref Bool
-assumptionTraceEnabled = Ref False
+-- What the drivers hand the typechecker before a drive (the stdlib ownership, the
+-- coherence user decls, the trace sink), read by `tcConfigOf` and by the `note*`
+-- trace functions.  Written only through the publishers below.
+driveInputs : Ref DriveInputs
+driveInputs = Ref DriveInputs {
+  diStdlibOwned = omEmpty,
+  diFlatEntryIsStdlib = False,
+  diCoherenceUserDecls = [],
+  diTrace = TraceSink {
+    tsAssumptionEnabled = False,
+    tsAssumptionEntries = Ref [],
+    tsNumericPredicateEnabled = False,
+    tsNumericPredicateEntries = Ref [],
+    tsMethodReturnEnabled = False,
+    tsMethodReturnEntries = Ref [],
+    tsEvidenceObservationEnabled = False,
+    tsEvidenceObservationEntries = Ref [],
+  },
+}
 
-assumptionTraceEntries : Ref (List AssumptionTraceEntry)
-assumptionTraceEntries = Ref []
+traceSink : Unit -> TraceSink
+traceSink _ = driveInputs.value.diTrace
 
-numericPredicateTraceEnabled : Ref Bool
-numericPredicateTraceEnabled = Ref False
-
-numericPredicateTraceEntries : Ref (List NumericPredicateTraceEntry)
-numericPredicateTraceEntries = Ref []
-
-methodReturnTraceEnabled : Ref Bool
-methodReturnTraceEnabled = Ref False
-
-methodReturnTraceEntries : Ref (List MethodReturnTraceEntry)
-methodReturnTraceEntries = Ref []
+setTraceSink : TraceSink -> Unit
+setTraceSink sink = driveInputs := { driveInputs.value | diTrace = sink }
 
 export
 beginAssumptionTrace : Unit -> Unit
 beginAssumptionTrace _ =
-  assumptionTraceEntries := []
-  assumptionTraceEnabled := True
+  let sink = traceSink ()
+  sink.tsAssumptionEntries := []
+  setTraceSink { sink | tsAssumptionEnabled = True }
 
 export
 finishAssumptionTrace : Unit -> List AssumptionTraceEntry
 finishAssumptionTrace _ =
-  let entries = reverseL assumptionTraceEntries.value
-  assumptionTraceEntries := []
-  assumptionTraceEnabled := False
+  let sink = traceSink ()
+  let entries = reverseL sink.tsAssumptionEntries.value
+  sink.tsAssumptionEntries := []
+  setTraceSink { sink | tsAssumptionEnabled = False }
   entries
 
 export
 beginNumericPredicateTrace : Unit -> Unit
 beginNumericPredicateTrace _ =
-  numericPredicateTraceEntries := []
-  numericPredicateTraceEnabled := True
+  let sink = traceSink ()
+  sink.tsNumericPredicateEntries := []
+  setTraceSink { sink | tsNumericPredicateEnabled = True }
 
 export
 finishNumericPredicateTrace : Unit -> List NumericPredicateTraceEntry
 finishNumericPredicateTrace _ =
-  let entries = reverseL numericPredicateTraceEntries.value
-  numericPredicateTraceEntries := []
-  numericPredicateTraceEnabled := False
+  let sink = traceSink ()
+  let entries = reverseL sink.tsNumericPredicateEntries.value
+  sink.tsNumericPredicateEntries := []
+  setTraceSink { sink | tsNumericPredicateEnabled = False }
   entries
 
 export
 beginMethodReturnTrace : Unit -> Unit
 beginMethodReturnTrace _ =
-  methodReturnTraceEntries := []
-  methodReturnTraceEnabled := True
+  let sink = traceSink ()
+  sink.tsMethodReturnEntries := []
+  setTraceSink { sink | tsMethodReturnEnabled = True }
 
 export
 finishMethodReturnTrace : Unit -> List MethodReturnTraceEntry
 finishMethodReturnTrace _ =
   let evidence = drivenEvidence ()
+  let sink = traceSink ()
   let entries =
     map
       (publishMethodReturnTrace evidence)
-      (reverseL methodReturnTraceEntries.value)
-  methodReturnTraceEntries := []
-  methodReturnTraceEnabled := False
+      (reverseL sink.tsMethodReturnEntries.value)
+  sink.tsMethodReturnEntries := []
+  setTraceSink { sink | tsMethodReturnEnabled = False }
   entries
 
 publishMethodReturnTrace : EvTable ->
@@ -9639,12 +9663,13 @@ noteMethodReturnTrace : MethodReturnTraceStage ->
   List Route ->
   Unit
 noteMethodReturnTrace stage request route prerequisites =
-  if methodReturnTraceEnabled.value then
+  let sink = traceSink ()
+  if sink.tsMethodReturnEnabled then
     let (qualifiedBody, wanted) = match methodReturnInstantiation request
       Some (Instantiation { body = body, arguments = [InstantiationArgument { wanted = carried, ... }], ... }) =>
         (Some body, Some carried)
       _ => (None, None)
-    methodReturnTraceEntries :=
+    sink.tsMethodReturnEntries :=
       MethodReturnTraceEntry {
           mrtStage = stage,
           mrtInterface = request.mrrIface,
@@ -9663,7 +9688,7 @@ noteMethodReturnTrace stage request route prerequisites =
           mrtRoute = route,
           mrtPrerequisites = prerequisites,
         }
-        :: methodReturnTraceEntries.value
+        :: sink.tsMethodReturnEntries.value
 
 -- #2095: trace-gated, zero cost when off — same discipline as
 -- `methodReturnTrace`. Generalizes that pattern from
@@ -9671,24 +9696,20 @@ noteMethodReturnTrace stage request route prerequisites =
 -- publishes: a method occurrence and a dictionary application alike, whatever
 -- family produced the goal, read back from the SAME cells the stampers wrote
 -- (never re-derived), so this can never disagree with the published `EvTable`.
-evidenceObservationEnabled : Ref Bool
-evidenceObservationEnabled = Ref False
-
-evidenceObservationEntries : Ref (List EvidenceObservationEntry)
-evidenceObservationEntries = Ref []
-
 export
 beginEvidenceObservation : Unit -> Unit
 beginEvidenceObservation _ =
-  evidenceObservationEntries := []
-  evidenceObservationEnabled := True
+  let sink = traceSink ()
+  sink.tsEvidenceObservationEntries := []
+  setTraceSink { sink | tsEvidenceObservationEnabled = True }
 
 export
 finishEvidenceObservation : Unit -> List EvidenceObservationEntry
 finishEvidenceObservation _ =
-  let entries = reverseL evidenceObservationEntries.value
-  evidenceObservationEntries := []
-  evidenceObservationEnabled := False
+  let sink = traceSink ()
+  let entries = reverseL sink.tsEvidenceObservationEntries.value
+  sink.tsEvidenceObservationEntries := []
+  setTraceSink { sink | tsEvidenceObservationEnabled = False }
   entries
 
 goalKindName : GoalKind -> String
@@ -9829,13 +9850,14 @@ renderRouteIdentity (RProj r path) =
 
 noteEvidenceObservation : Obligation -> Unit
 noteEvidenceObservation o =
-  if evidenceObservationEnabled.value then
+  let sink = traceSink ()
+  if sink.tsEvidenceObservationEnabled then
     let routes = obligationRoutes o
     let predicates = obligationPredicateMonos o
     let arity = listLen routes
-    evidenceObservationEntries :=
+    sink.tsEvidenceObservationEntries :=
       evidenceObservationEntriesGo o routes predicates arity 0
-        ++ evidenceObservationEntries.value
+        ++ sink.tsEvidenceObservationEntries.value
 
 evidenceObservationEntriesGo : Obligation ->
   List Route ->
@@ -9871,8 +9893,9 @@ noteNumericPredicateTrace : NumericPredicateTraceStage ->
   List Route ->
   Unit
 noteNumericPredicateTrace stage predicate scope origin selected route prereqs =
-  if numericPredicateTraceEnabled.value then
-    numericPredicateTraceEntries :=
+  let sink = traceSink ()
+  if sink.tsNumericPredicateEnabled then
+    sink.tsNumericPredicateEntries :=
       NumericPredicateTraceEntry {
           nptStage = stage,
           nptPredicate = predicate,
@@ -9882,7 +9905,7 @@ noteNumericPredicateTrace stage predicate scope origin selected route prereqs =
           nptRoute = route,
           nptPrerequisites = prereqs,
         }
-        :: numericPredicateTraceEntries.value
+        :: sink.tsNumericPredicateEntries.value
 
 assumAnswerBinder : AssumAnswer -> EvidenceBinderId
 assumAnswerBinder (SemanticGiven evidence) = givenEvidenceBinder evidence
@@ -9997,14 +10020,15 @@ projectedGivenOf parent path =
 
 noteAssumption : ScopeId -> AssumAnswer -> Unit
 noteAssumption scope answer =
-  if assumptionTraceEnabled.value then
-    assumptionTraceEntries :=
+  let sink = traceSink ()
+  if sink.tsAssumptionEnabled then
+    sink.tsAssumptionEntries :=
       AssumptionTraceEntry {
           atGoalScope = scope,
           atBinder = assumAnswerBinder answer,
           atKind = assumAnswerKind answer,
         }
-        :: assumptionTraceEntries.value
+        :: sink.tsAssumptionEntries.value
 
 captureScope : Unit -> ScopeId
 captureScope _ = Scopes.captureScopeCursor perRun.value.currentScope.value
@@ -30714,7 +30738,8 @@ globalCoherenceConflict env =
 -- exported so the single-file front-end drivers set the user boundary before check
 export
 setCoherenceUserDecls : List Decl -> Unit
-setCoherenceUserDecls ds = driverState.value.coherenceUserDecls := ds
+setCoherenceUserDecls ds =
+  driveInputs := { driveInputs.value | diCoherenceUserDecls = ds }
 
 -- #2072 (extern FFI stamp): the LOADER's owning-root fact, published for the one
 -- reader that needs it — `ffiStampMode`, which decides whether an `extern`
@@ -30743,8 +30768,10 @@ setCoherenceUserDecls ds = driverState.value.coherenceUserDecls := ds
 export
 setStdlibOwnership : Bool -> List String -> Unit
 setStdlibOwnership flatEntry mods =
-  driverState.value.flatEntryIsStdlibRef := flatEntry
-  driverState.value.stdlibOwnedModsRef := namesToSet mods omEmpty
+  driveInputs := { driveInputs.value |
+    diFlatEntryIsStdlib = flatEntry,
+    diStdlibOwned = namesToSet mods omEmpty,
+  }
 
 -- ── instance-`requires` impl-dict routing (Phase 83/84 single-level) ────────
 -- `implMethodNameTc` and its callers route through the graph-global `IE`
@@ -36276,7 +36303,7 @@ methodReturnPrerequisitesMatch _ _ = False
 
 noteNumericObligationChecked : UObligation -> List Mono -> Unit
 noteNumericObligationChecked o occs =
-  if not numericPredicateTraceEnabled.value then
+  if not (traceSink ()).tsNumericPredicateEnabled then
     ()
   else match (o.prov, o.oblProj)
     (_, OpNumLit _) =>
@@ -38214,7 +38241,7 @@ headIsStdlibOwned arg = match headTyconMono arg
   Some (HkDecl (TkIdent (Ident _ io _))) =>
     identOriginFold
       False
-      (mid => omHasKey mid driverState.value.stdlibOwnedModsRef.value)
+      (mid => omHasKey mid driverState.value.config.value.tcStdlibOwned)
       io
   _ => False
 
@@ -40952,9 +40979,10 @@ ffiStampModeOwned : String -> Bool
 -- `medaka check stdlib/runtime.mdk` into a wall of declaration errors — the 132
 -- catalog rows that do not name `FFI` (the same 132 that used to GAIN the atom
 -- here, back when this Bool gated a stamp) would each fail the label rule.
-ffiStampModeOwned "__user__" = not driverState.value.flatEntryIsStdlibRef.value
+ffiStampModeOwned "__user__" =
+  not driverState.value.config.value.tcFlatEntryIsStdlib
 ffiStampModeOwned mid =
-  not (omHasKey mid driverState.value.stdlibOwnedModsRef.value)
+  not (omHasKey mid driverState.value.config.value.tcStdlibOwned)
 
 -- Make an alias-NAMED arrow structurally visible, at the `Ty` (pre-`Mono`) level.
 --
@@ -50595,7 +50623,7 @@ coreCheckMemoHit None = None
 coreCheckMemoHit (Some key) = match !coreCheckMemoRef
   None => None
   Some m =>
-    if m.ccmKey == (key, driverState.value.ioJoinProfile.value) then
+    if m.ccmKey == (key, driverState.value.config.value.tcIoJoinProfile) then
       Some m
     else
       None
@@ -50632,8 +50660,7 @@ copyCrossRun c = CrossRun {
 copyDriverState : DriverState -> DriverState
 copyDriverState d = DriverState {
   effectDomains = Ref d.effectDomains.value,
-  ioJoin = Ref d.ioJoin.value,
-  ioJoinProfile = Ref d.ioJoinProfile.value,
+  config = Ref d.config.value,
   graphAdmittedMethodsRef = Ref d.graphAdmittedMethodsRef.value,
   declEnvsRef = Ref d.declEnvsRef.value,
   abstractRecordTypesRef = Ref d.abstractRecordTypesRef.value,
@@ -50642,9 +50669,6 @@ copyDriverState d = DriverState {
   dictEligibleSetRef = Ref d.dictEligibleSetRef.value,
   mangledShadowMapRef = Ref d.mangledShadowMapRef.value,
   mangledFunDefsPresentRef = Ref d.mangledFunDefsPresentRef.value,
-  coherenceUserDecls = Ref d.coherenceUserDecls.value,
-  stdlibOwnedModsRef = Ref d.stdlibOwnedModsRef.value,
-  flatEntryIsStdlibRef = Ref d.flatEntryIsStdlibRef.value,
   builtinExternNamesRef = Ref d.builtinExternNamesRef.value,
   promotionHarvestRef = Ref d.promotionHarvestRef.value,
   mainSchemeRef = Ref d.mainSchemeRef.value,
@@ -50700,7 +50724,7 @@ checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
       None => ()
       Some k =>
         coreCheckMemoRef := Some CoreCheckMemo {
-          ccmKey = (k, driverState.value.ioJoinProfile.value),
+          ccmKey = (k, driverState.value.config.value.tcIoJoinProfile),
           ccmCoreSchemes = coreSchemes,
           ccmCorePub = corePub,
           ccmCrossRun = copyCrossRun crossRun.value,
@@ -50727,7 +50751,7 @@ preludePreambleFor : Option (Int, Int) ->
 preludePreambleFor None coreDecls coreRow = preludePreambleOf coreDecls coreRow
 preludePreambleFor (Some k) coreDecls coreRow = match !preludePreambleMemoRef
   Some entry =>
-    if fst entry == (k, driverState.value.ioJoinProfile.value) then
+    if fst entry == (k, driverState.value.config.value.tcIoJoinProfile) then
       snd entry
     else
       preludePreambleStore k coreDecls coreRow
@@ -50741,15 +50765,22 @@ preludePreambleStore : (Int, Int) ->
   PreludePreamble
 preludePreambleStore k coreDecls coreRow =
   let p = preludePreambleOf coreDecls coreRow
-  preludePreambleMemoRef := Some ((k, driverState.value.ioJoinProfile.value), p)
+  preludePreambleMemoRef :=
+    Some ((k, driverState.value.config.value.tcIoJoinProfile), p)
   p
 
-setIoJoin : Option TargetProfile -> Unit
-setIoJoin profile =
-  driverState.value.ioJoin := ioJoinAtoms (ioJoinGrants profile)
-  driverState.value.ioJoinProfile := match profile
+-- The drive's configuration: the IO join taken from the selected profile (after the
+-- effect domains it reads), the profile's name, and the driver inputs.
+tcConfigOf : Option TargetProfile -> DriveInputs -> TcConfig
+tcConfigOf profile inputs = TcConfig {
+  tcIoJoin = ioJoinAtoms (ioJoinGrants profile),
+  tcIoJoinProfile = match profile
     None => ""
-    Some p => profileName p
+    Some p => profileName p,
+  tcStdlibOwned = inputs.diStdlibOwned,
+  tcFlatEntryIsStdlib = inputs.diFlatEntryIsStdlib,
+  tcCoherenceUserDecls = inputs.diCoherenceUserDecls,
+}
 
 graphPreamble : GraphOut ->
   Option (Int, Int) ->
@@ -50817,7 +50848,7 @@ graphPreamble sel preludeKey runtimeDecls coreDecls modules =
   -- What `IO` joins, from the profile the verb selected, after the domains the
   -- atoms take their tops from.  `run` checks against `runProfile` of that
   -- profile, whose host-label grants are the selected profile's own.
-  let _ = setIoJoin !selectedProfile
+  driverState.value.config := tcConfigOf !selectedProfile !driveInputs
   -- the prelude's own contribution to every derivation below, from the memo when
   -- the caller supplied a prelude key -- see `PreludePreamble`.  The row is built
   -- HERE, not inside the memo, because it carries THIS analyze's decls.
@@ -51229,7 +51260,7 @@ checkModuleFullDiags mid seedVars accData accAll prog =
 -- typeErrors + currentLevel), so the snapshot below is this module's own errors.
 
 -- coherence over this module's own decls (mirrors the one-module projection's
--- checkCoherence coherenceUserDecls.value, which moduleTypeDiags set to the
+-- checkCoherence over the driver inputs' user decls, which moduleTypeDiags set to the
 -- module decls).  Pushes any conflict into typeErrors AFTER the `freshModuleCtx` above.
 
 -- multi-module diagnostics driver: threads the runtime+core seed and per-module
@@ -51596,7 +51627,7 @@ checkModulesChainReportFor valueMain (Some (rk, ck)) chainKey stepKeys runtimeDe
   let (runtimeSeed, coreSchemes, coreClosed, coreContexts, _, _) =
     graphPreamble GOutDiags (Some (rk, ck)) runtimeDecls coreDecls modules
   let fullKey =
-    "\{driverState.value.ioJoinProfile.value}\n\{chainFullKey rk ck chainKey}\n\{chainGraphKey modules}"
+    "\{driverState.value.config.value.tcIoJoinProfile}\n\{chainFullKey rk ck chainKey}\n\{chainGraphKey modules}"
   let steps = match !moduleChainMemoRef
     Some m => if m.chKey == fullKey then m.chSteps else []
     None => []

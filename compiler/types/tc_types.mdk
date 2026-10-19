@@ -924,11 +924,9 @@ public export data MethodScope =
 -- this header shape) — field prose lives on the reader, e.g. `dispatchIdxScoped`.
 public export data DriverState = DriverState {
   effectDomains : Ref (List (String, Param)),
-  -- What `IO` joins in this drive (`ioJoinAtoms`), and the name of the profile
-  -- it was taken from (`""` for none).  Written once per drive by
-  -- `graphPreamble`, after the effect domains it reads.
-  ioJoin : Ref (List Atom),
-  ioJoinProfile : Ref String,
+  -- The drive's configuration, built once per drive by `graphPreamble` (`tcConfigOf`)
+  -- after the effect domains its IO join reads.
+  config : Ref TcConfig,
   -- Per module: the (dependency id, method name) pairs `deAliasMethodImports`
   -- admitted for dispatch without the program binding that bare name, so the
   -- import seed can tell an admission from a written binding.
@@ -940,9 +938,6 @@ public export data DriverState = DriverState {
   dictEligibleSetRef : Ref (OrdMap Unit),
   mangledShadowMapRef : Ref (List (String, String)),
   mangledFunDefsPresentRef : Ref Bool,
-  coherenceUserDecls : Ref (List Decl),
-  stdlibOwnedModsRef : Ref (OrdMap Unit),
-  flatEntryIsStdlibRef : Ref Bool,
   builtinExternNamesRef : Ref (OrdMap (Ty, List (String, Int))),
   promotionHarvestRef : Ref (List String),
   mainSchemeRef : Ref (Option Scheme),
@@ -951,6 +946,43 @@ public export data DriverState = DriverState {
   -- schedule.  `None` until a preamble has run; a Module arm reading `None` is a
   -- driver that skipped its preamble, and fails loud.
   markSetsRef : Ref (Option MarkSets),
+}
+
+-- The typechecker's configuration for one drive: immutable, built once by
+-- `graphPreamble` from the selected profile and the driver inputs.  `tcIoJoin` is
+-- what `IO` joins (`ioJoinAtoms`) and `tcIoJoinProfile` the name of the profile it
+-- was taken from (`""` for none), which also keys the memos.  The other three are
+-- the driver inputs of `DriveInputs`, copied at the same point.
+public export data TcConfig = TcConfig {
+  tcIoJoin : List Atom,
+  tcIoJoinProfile : String,
+  tcStdlibOwned : OrdMap Unit,
+  tcFlatEntryIsStdlib : Bool,
+  tcCoherenceUserDecls : List Decl,
+}
+
+-- The trace gates and buffers the tests turn on before a drive and read after it.
+-- A gate is a plain `Bool` replaced through the publishers; each buffer is a `Ref`
+-- so a `note*` call appends in place.
+public export data TraceSink = TraceSink {
+  tsAssumptionEnabled : Bool,
+  tsAssumptionEntries : Ref (List AssumptionTraceEntry),
+  tsNumericPredicateEnabled : Bool,
+  tsNumericPredicateEntries : Ref (List NumericPredicateTraceEntry),
+  tsMethodReturnEnabled : Bool,
+  tsMethodReturnEntries : Ref (List MethodReturnTraceEntry),
+  tsEvidenceObservationEnabled : Bool,
+  tsEvidenceObservationEntries : Ref (List EvidenceObservationEntry),
+}
+
+-- What the drivers hand the typechecker before a drive: the stdlib ownership of the
+-- loader's module list, the user declarations coherence is checked over, and the
+-- trace sink.  Held in the config-lifetime cell `driveInputs`.
+public export data DriveInputs = DriveInputs {
+  diStdlibOwned : OrdMap Unit,
+  diFlatEntryIsStdlib : Bool,
+  diCoherenceUserDecls : List Decl,
+  diTrace : TraceSink,
 }
 
 -- #841/#838 I1: `Windowed a` — a list+counter pair (formerly kept in step "by

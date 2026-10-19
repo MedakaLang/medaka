@@ -189,8 +189,6 @@ assumAnswerBinder : AssumAnswer -> EvidenceBinderId
 assumAnswerEvidence : AssumAnswer -> SolverEvidence
 assumAnswerKind : AssumAnswer -> AssumptionTraceKind
 assumAnswerRoute : AssumAnswer -> Option IfaceRef -> ScopeId -> (String -> Route) -> Route
-assumptionTraceEnabled : Ref Bool
-assumptionTraceEntries : Ref (List AssumptionTraceEntry)
 astEffrowE : SigVars -> Ty -> EffRow
 astTypeFreshTbl : Ty -> (Mono, List (String, Mono))
 asyncDriverFindings : Option String -> String -> List Decl -> Scheme -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List DrainFinding
@@ -954,6 +952,7 @@ domainParamWith : Option String -> List (String, String) -> Param
 drainStampQueue : Unit -> List DrainFinding
 driveErrs : List DrainFinding -> List (String, (List (String, PubScheme), List TcDiag, List TcDiag)) -> List TcDiag
 driveGraphK : GraphOut -> Bool -> Option String -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> GraphDrive
+driveInputs : Ref DriveInputs
 drivenEvidence : Unit -> List EvEntry
 driverState : Ref DriverState
 dropFirst : Int -> List a -> List a
@@ -1022,6 +1021,7 @@ emptyMethodModulePredicateSlots : String -> List Decl -> List ((String, String),
 emptyOracle : Oracle
 emptyShadowDicts : ShadowDicts
 emptySigVars : SigVars
+emptyTcConfig : TcConfig
 enclDictVarOf : Option PredicateRequest -> Mono -> String -> ScopeId -> Option EvidenceBinderId
 enclPreds : String -> List PredicateSlot
 enclSlot : String -> Mono -> Option Int
@@ -1062,8 +1062,6 @@ evEntriesOf : List Obligation -> List EvEntry
 evIdModule : EvId -> String
 evOrdinal : EvId -> Int
 evValueOf : EvDest -> EvVal
-evidenceObservationEnabled : Ref Bool
-evidenceObservationEntries : Ref (List EvidenceObservationEntry)
 evidenceObservationEntriesGo : Obligation -> List Route -> List (Option Mono) -> Int -> Int -> List EvidenceObservationEntry
 exactInPatternSlotMsg : String -> String -> String -> String
 exactReturnBlockers : List Mono -> List SolverBlocker
@@ -2147,8 +2145,6 @@ methodReturnResolutionValid : MethodReturnRequest -> MethodReturnResolution -> B
 methodReturnSelectedIdentity : MethodReturnResolution -> Int
 methodReturnSlotOwnershipProbe : Unit -> ((List String, List String), (List String, List String), (List String, List String))
 methodReturnTemplatePresenceProbe : Unit -> (List Bool, List Bool)
-methodReturnTraceEnabled : Ref Bool
-methodReturnTraceEntries : Ref (List MethodReturnTraceEntry)
 methodReturnVectorCompletenessProbe : Unit -> (Option (List String), Option (List String), Bool, Bool)
 methodReturnWanted : MethodReturnRequest -> Option Wanted
 methodReturnWantedMatches : MethodReturnRequest -> Wanted -> Bool
@@ -2327,8 +2323,6 @@ numDefaultOwnerAllows : Option Int -> Mono -> Bool
 numDictObls : List PendingDictApp -> List UObligation
 numObligIds : UObligation -> List Int
 numUnimplementableHead : Mono -> Bool
-numericPredicateTraceEnabled : Ref Bool
-numericPredicateTraceEntries : Ref (List NumericPredicateTraceEntry)
 numericReturnRoute : Route -> List Route -> Route
 numlitCtxKind : Option Loc -> Option JoinContext
 numlitMismatchHint : Option Loc -> List Mono -> String
@@ -3014,12 +3008,12 @@ setDictEligible : List String -> Unit
 setFunConstraintEntry : String -> List PredicateSlot -> Unit
 setFunPredicateSlots : List (String, List PredicateSlot) -> Unit
 setGrantOcc : EvId -> GrantOcc -> Unit
-setIoJoin : Option TargetProfile -> Unit
 setLocIfSome : Option Loc -> Unit
 setMainSchemeIfEntry : Bool -> List (String, PubScheme) -> Unit
 setMethodPredicateSlotEntry : String -> List MethodPredicateSlot -> Unit
 setNumlitFloatsGo : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
 setStdlibOwnership : Bool -> List String -> Unit
+setTraceSink : TraceSink -> Unit
 settleClosedBody : Mono -> Int -> Int -> Int -> Unit
 settleDeferredPatLits : Unit -> Unit
 settlePatLits : DynCtx -> List (Mono, Int, Option Loc) -> Unit
@@ -3201,6 +3195,7 @@ takeOpenedExistentials : Unit -> List (Ref Authvar)
 takePatLits : Unit -> List (Mono, Int, Option Loc)
 takeUntilInclusiveS : String -> List String -> List String
 tcClauseDef : String -> FunClause -> (String, (List Pat, Expr))
+tcConfigOf : Option TargetProfile -> DriveInputs -> TcConfig
 tcDiagGoalKey : (String, TcDiag) -> String
 tconBuiltin : String -> Mono
 tconFrom : TyConOrigin -> String -> Mono
@@ -3212,6 +3207,7 @@ tiedSurvivors : List Mono -> NumGuard -> Map String Unit -> Map String Unit
 topAbsorbs : String -> Expr -> Expr
 topGrantIds : String -> String -> List Int
 topRouteV : SiteCtx -> String -> ScopeId -> IfaceRef -> Mono -> List Mono -> Route
+traceSink : Unit -> TraceSink
 transitiveImporters : Map String (Map String Unit) -> String -> List (String, List Decl) -> List (String, List Decl)
 tupleArgElems : Expr -> Option (List Expr)
 tupleCallHintFor : Mono -> Option (String, Option (Loc, String))
