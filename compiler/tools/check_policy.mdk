@@ -47,8 +47,8 @@ import frontend.desugar.{desugar}
 import types.repr.{Scheme(..), Mono(..), normalize}
 import types.private_mangle.{mangleCtorCollisionsPair}
 import types.publish.{TcReport}
+import types.tc_types.{ElabResult}
 import types.typecheck.{
-  ElabResult,
   elaborateModulesWithReport,
   entrySplit,
   pubSchemes,

@@ -30,12 +30,12 @@ import types.disposition.{
 }
 import types.evidence_coverage.{EvShape(..), evShapeOf}
 import types.route_key.{installedEvidenceEntries}
+import types.tc_types.{MethodReturnMemoView(..)}
 import types.typecheck.{
   checkOneSchemeFullK, checkModulesDiagsChain, checkModulesAllLines,
   elaborateModulesReport, checkModules, methodReturnMemoCurrentViews,
   methodReturnMemoRetentionStats, chainMemoReplayedSteps, tcCode, tcMsg,
-  MethodReturnMemoView(..), checkModulesChainReportFor, checkOneReportK,
-  checkModulesPartialK
+  checkModulesChainReportFor, checkOneReportK, checkModulesPartialK
 }
 import driver.diagnostics.{analyzeProjectReport, noStdlibExports}
 import tools.lsp.{typeAtPoint}
