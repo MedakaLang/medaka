@@ -146,7 +146,8 @@ async function geometryProof(page) {
       const vertices = [[-1,-1,-1], [1,-1,-1], [1,1,-1], [-1,1,-1],
         [-1,-1,1], [1,-1,1], [1,1,1], [-1,1,1]];
       const edges = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
-      for (const [fi, theta] of [0, 0.7, 1.7].entries()) {
+      const expectedAngles = [0.7, 1.4, 2.4];
+      for (const [fi, theta] of expectedAngles.entries()) {
         // Apply independent rotation matrices in homogeneous camera coordinates.
         const matrix = [[Math.cos(theta), 0, Math.sin(theta)],
           [Math.sin(0.5) * Math.sin(theta), Math.cos(0.5), -Math.sin(0.5) * Math.cos(theta)],

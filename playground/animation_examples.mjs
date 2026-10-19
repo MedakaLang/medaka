@@ -17,7 +17,7 @@ project angle size (Vec3 x y z) =
 scene : Frame -> Picture
 scene frame =
   let offset = if frame.pointer.inside then frame.pointer.x * 0.01 else 0.0
-  let angle = frame.elapsed * 0.7 + offset
+  let angle = 0.7 + frame.elapsed * 0.7 + offset
   let size = min frame.width frame.height * 0.2
   let a = project angle size (Vec3 -1.0 -1.0 -1.0)
   let b = project angle size (Vec3 1.0 -1.0 -1.0)
