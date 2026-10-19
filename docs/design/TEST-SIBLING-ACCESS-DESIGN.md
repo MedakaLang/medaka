@@ -202,17 +202,15 @@ each of them one producer to read, rather than one more derivation to reconcile.
 | Phase 3 C1, the `ModuleInterface` codec | C1 serializes "a module's published export surface". | C1 serializes the subsystem's output, both views (§3.1), so slices 1 to 3 land before C1. |
 | The interpreter's export table | Eval's `ModExports` is built by the eval driver from declarations (`evalModulesWith`), not installed by the typechecker; Phase 2 sprint 2's installed-table deletion does not move it. | Eval's switch belongs to slice 3, and moves `evalModules` (`compiler/eval/eval.mdk`) and `cevalModules` (`compiler/ir/core_ir_eval.mdk`) together ([T-EVAL-LOCKSTEP]). |
 
-**Playbook edits, owed when this design is ratified.** They wait for PR #4302 (Phase 1 wrap,
-which re-derives and reorders the playbook) to merge, and none of them blocks slice 1:
+**In the playbook.** `compiler/ARCHITECTURE-PLAYBOOK.md` carries this design as follows:
 
-- a row for the frontend visibility producer beside the backend work that runs in parallel
-  with the typechecker phases, accepting on "no direct `pub`-flag projection remains outside
-  the subsystem" (a grep pin that may only fall);
-- a row in the mapping table for M-IDENTITY / #2563, which has none today: the ladders are the
-  shadow-resolution layer of Phase 4's split, and this subsystem is the producer that layer
-  reads;
-- under C1, the §3.1 ruling: the interface carries the private surface as well as the exported
-  one, serialized from the subsystem's output.
+- a dated amendment in §7 adds the visibility producer as F1 to F3 (slices 1 to 3 here),
+  beside the typechecker phases like Phase 5 but ordered against them, with F2 accepting on "no
+  direct `pub`-flag projection remains outside the producer" (a grep pin that may only fall);
+- the §8 mapping table gains a row for M-IDENTITY / #2563, which had none: its ladders are the
+  `Sh` component of `types/`, and they read the F1 producer when retired;
+- C1 records the §3.1 ruling (the interface carries the private surface as well as the exported
+  one, serialized from the producer's output) and needs F3.
 
 ## 6. Slices
 
