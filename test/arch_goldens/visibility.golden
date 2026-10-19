@@ -10,5 +10,5 @@ visibility.tools.lint	4
 visibility.tools.printer	3
 visibility.tools.prop_plan	3
 visibility.tools.refindex	8
-visibility.types.private_mangle	8
+visibility.types.private_mangle	1
 visibility.types.typecheck	50

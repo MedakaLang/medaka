@@ -58,6 +58,11 @@ declCtors _ = []
 amod : String
 amod = "public export data Wid = Wid Int | Gad\nexport mk x = x\n"
 
+-- a type `Tq`, and a ctor `Tq` of another type
+qmod : String
+qmod =
+  "public export data Tq = Mk Int\npublic export data Sq = Tq Int Int | Other\n"
+
 useIn : String -> String
 useIn imp = imp ++ "\nmain = Wid\n"
 
@@ -177,21 +182,36 @@ test "bare ctor member of a re-export resolves to the original definer" =
 
 test "a re-export that names one ctor offers only that type" = expectAll
   [
+    -- `Tq` names a type of qmod and a ctor of its `Sq`; the hop carries the ctor
     expectEqual
-      (Some "amod__Gad")
+      (Some "qmod__Tq")
       (refName
         "main"
         (declsOf
           "app"
           (mangled
             [
-              ("amod", amod),
-              ("bmod", "export import amod.{Gad}\n"),
-              ("app", "import bmod.{Gad}\nmain = Gad\n"),
+              ("qmod", qmod),
+              ("bmod", "export import qmod.{Tq}\n"),
+              ("app", "import bmod.{Tq}\nmain = Tq\n"),
             ]))),
-    -- a non-ctor member contributes no entry, so `Wid` stays unrewritten
+    -- the other ctor of `Sq` is not carried, so `Other` stays unrewritten
     expectEqual
-      (Some "Wid")
+      (Some "Other")
+      (refName
+        "main"
+        (declsOf
+          "app"
+          (mangled
+            [
+              ("qmod", qmod),
+              ("bmod", "export import qmod.{Tq}\n"),
+              ("app", "import bmod.{Tq}\nmain = Other\n"),
+            ]))),
+    -- a bare ctor member is refused by resolve (`import it as Wid(..)`), so the
+    -- hop carries no `Gad` and nothing is offered
+    expectEqual
+      (Some "Gad")
       (refName
         "main"
         (declsOf
@@ -199,7 +219,7 @@ test "a re-export that names one ctor offers only that type" = expectAll
           (mangled [
             ("amod", amod),
             ("bmod", "export import amod.{Gad}\n"),
-            ("app", "import bmod.{Gad}\nmain = Wid\n"),
+            ("app", "import bmod.{Gad}\nmain = Gad\n"),
           ]))),
   ]
 
