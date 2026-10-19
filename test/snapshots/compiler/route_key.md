@@ -1,5 +1,5 @@
 # META
-source_lines=782
+source_lines=788
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
@@ -134,6 +134,14 @@ export
 installEvidence : EvTable -> Unit
 installEvidence entries = evidenceRef := Some (evIndexOf entries)
 
+-- The installed index, or the empty one when no elaboration has published one, so
+-- a reader holding it answers as an untyped lowering does: no entry for any id.
+export
+installedEvidenceIndex : Unit -> EvIndex
+installedEvidenceIndex _ = match !evidenceRef
+  Some idx => idx
+  None => evIndexOf []
+
 -- Test visibility (`typecheck_test.mdk`): the installed table's slot count, 0 when
 -- none is installed.
 export
@@ -143,11 +151,9 @@ installedEvidenceSlots _ = match !evidenceRef
   Some (EvIndex _ arr) => arrayLength arr
 
 -- Rewrite every installed entry in place (#2809).  The emit path renames its top-level
--- symbols AFTER elaboration, and an `RLocal` route carries one -- but the table
--- `elaborateModules` RETURNS holds only the goal entries, not the per-method occurrence
--- entries `publishEvidence` prepends, so a caller cannot re-derive what is installed and
--- re-installing the returned table panics on the first method occurrence it lost.
--- Rewriting the installed array is the only complete view of it.
+-- symbols AFTER elaboration, and an `RLocal` route carries one.  `mangleUnitsEv`
+-- returns the renamed table by value as well; this keeps the installed copy equal to
+-- it for the readers that still read the installed table.
 export
 remapEvidence : (EvEntry -> EvEntry) -> Unit
 remapEvidence f = match !evidenceRef
@@ -795,6 +801,8 @@ rkTyList =
 (DFunDef false "evIndexOf" ((PVar "entries")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "evMinOrdinal") (EVar "entries"))) (DoLet false false (PVar "arr") (EApp (EApp (EVar "arrayMake") (EBinOp "-" (EApp (EApp (EVar "evSlotCount") (EVar "entries")) (EVar "lo")) (EVar "lo"))) (EVar "None"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fillEvidence") (EVar "lo")) (EVar "arr")) (EVar "entries"))) (DoExpr (EApp (EApp (EVar "EvIndex") (EVar "lo")) (EVar "arr")))))
 (DTypeSig true "installEvidence" (TyFun (TyCon "EvTable") (TyCon "Unit")))
 (DFunDef false "installEvidence" ((PVar "entries")) (EApp (EApp (EVar "setRef") (EVar "evidenceRef")) (EApp (EVar "Some") (EApp (EVar "evIndexOf") (EVar "entries")))))
+(DTypeSig true "installedEvidenceIndex" (TyFun (TyCon "Unit") (TyCon "EvIndex")))
+(DFunDef false "installedEvidenceIndex" (PWild) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "Some" (PVar "idx")) () (EVar "idx")) (arm (PCon "None") () (EApp (EVar "evIndexOf") (EListLit)))))
 (DTypeSig true "installedEvidenceSlots" (TyFun (TyCon "Unit") (TyCon "Int")))
 (DFunDef false "installedEvidenceSlots" (PWild) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (ELit (LInt 0))) (arm (PCon "Some" (PCon "EvIndex" PWild (PVar "arr"))) () (EApp (EVar "arrayLength") (EVar "arr")))))
 (DTypeSig true "remapEvidence" (TyFun (TyFun (TyCon "EvEntry") (TyCon "EvEntry")) (TyCon "Unit")))
@@ -941,6 +949,8 @@ rkTyList =
 (DFunDef false "evIndexOf" ((PVar "entries")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "evMinOrdinal") (EVar "entries"))) (DoLet false false (PVar "arr") (EApp (EApp (EVar "arrayMake") (EBinOp "-" (EApp (EApp (EVar "evSlotCount") (EVar "entries")) (EVar "lo")) (EVar "lo"))) (EVar "None"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fillEvidence") (EVar "lo")) (EVar "arr")) (EVar "entries"))) (DoExpr (EApp (EApp (EVar "EvIndex") (EVar "lo")) (EVar "arr")))))
 (DTypeSig true "installEvidence" (TyFun (TyCon "EvTable") (TyCon "Unit")))
 (DFunDef false "installEvidence" ((PVar "entries")) (EApp (EApp (EVar "setRef") (EVar "evidenceRef")) (EApp (EVar "Some") (EApp (EVar "evIndexOf") (EVar "entries")))))
+(DTypeSig true "installedEvidenceIndex" (TyFun (TyCon "Unit") (TyCon "EvIndex")))
+(DFunDef false "installedEvidenceIndex" (PWild) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "Some" (PVar "idx")) () (EVar "idx")) (arm (PCon "None") () (EApp (EVar "evIndexOf") (EListLit)))))
 (DTypeSig true "installedEvidenceSlots" (TyFun (TyCon "Unit") (TyCon "Int")))
 (DFunDef false "installedEvidenceSlots" (PWild) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (ELit (LInt 0))) (arm (PCon "Some" (PCon "EvIndex" PWild (PVar "arr"))) () (EApp (EVar "arrayLength") (EVar "arr")))))
 (DTypeSig true "remapEvidence" (TyFun (TyFun (TyCon "EvEntry") (TyCon "EvEntry")) (TyCon "Unit")))

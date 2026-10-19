@@ -72,7 +72,7 @@
 -- the thin cj* JSON shaping is reproduced (those live in medaka_cli.mdk, which is
 -- itself an entry and cannot be imported).
 
-import frontend.ast.{Decl(..), Loc(..), Pat, Expr(..)}
+import frontend.ast.{Decl(..), Loc(..), Pat, Expr(..), EvTable}
 import frontend.parser.{
   parseResult,
   parseLocatedResult,
@@ -612,7 +612,7 @@ finishClean emit written paths warnTriples runtimeDecls coreDecls modules =
   match targetRefusalOf written paths analysis
     [] =>
       if emit then
-        let (coreE, modulesE, _, _, _, _) = analysis.eaElab
+        let (coreE, modulesE, _, _, evTable, _, _) = analysis.eaElab
         let executed =
           executedTrees
             report.trAutoPrint
@@ -620,7 +620,7 @@ finishClean emit written paths warnTriples runtimeDecls coreDecls modules =
             (coreDecls, modules)
             (coreE, modulesE)
         match executed
-          Ok executed => runEmit paths warnTriples runtimeDecls executed
+          Ok executed => runEmit paths warnTriples runtimeDecls evTable executed
           Err msg => failWith msg
       else
         emitAnalyzeMarker warnTriples
@@ -673,14 +673,15 @@ nonEmptyDiags _ = True
 runEmit : List (String, String) ->
   List (String, String, List Diag) ->
   List Decl ->
+  EvTable ->
   (List Decl, List (String, List Decl)) ->
   <IO> Unit
-runEmit paths warnTriples runtimeDecls executed =
+runEmit paths warnTriples runtimeDecls evTable executed =
   -- #2809: the program is elaborated as written (`finishClean`), then its
   -- elaborated trees are mangled.
   let (coreE, modulesE) = executed
   let wrapped = mainIsWrapped modulesE
-  let (coreD, modulesM) = mangleUnitsEv coreE modulesE
+  let (coreD, modulesM, _) = mangleUnitsEv evTable coreE modulesE
   let modules2 = stampModulePaths paths modulesM
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0

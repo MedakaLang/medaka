@@ -1,5 +1,5 @@
 # META
-source_lines=252
+source_lines=256
 stages=DESUGAR,MARK
 # SOURCE
 -- What each source binder holds at run time, as the typechecker decided it.
@@ -186,9 +186,13 @@ binderRow (BinderId m i) = match !binderTypesRef
 -- lowering): no table answers `None` instead of panicking.
 export
 binderRowIfInstalled : BinderId -> Option BinderRow
-binderRowIfInstalled (BinderId m i) = match !binderTypesRef
-  None => None
-  Some table => rowIn table m i
+binderRowIfInstalled bid = binderRowIn !binderTypesRef bid
+
+-- The row [table] holds for [bid]; no table answers `None`.
+export
+binderRowIn : Option BinderTypeTable -> BinderId -> Option BinderRow
+binderRowIn None _ = None
+binderRowIn (Some table) (BinderId m i) = rowIn table m i
 
 rowIn : BinderTypeTable -> String -> Int -> Option BinderRow
 rowIn table m i = match get i table
@@ -310,7 +314,10 @@ installedBinderRows _ = match !binderTypesRef
 (DTypeSig true "binderRow" (TyFun (TyCon "BinderId") (TyApp (TyCon "Option") (TyCon "BinderRow"))))
 (DFunDef false "binderRow" ((PCon "BinderId" (PVar "m") (PVar "i"))) (EMatch (EUnOp "!" (EVar "binderTypesRef")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "binder table: no elaboration has published one (looking up ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")"))))) (arm (PCon "Some" (PVar "table")) () (EApp (EApp (EApp (EVar "rowIn") (EVar "table")) (EVar "m")) (EVar "i")))))
 (DTypeSig true "binderRowIfInstalled" (TyFun (TyCon "BinderId") (TyApp (TyCon "Option") (TyCon "BinderRow"))))
-(DFunDef false "binderRowIfInstalled" ((PCon "BinderId" (PVar "m") (PVar "i"))) (EMatch (EUnOp "!" (EVar "binderTypesRef")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "table")) () (EApp (EApp (EApp (EVar "rowIn") (EVar "table")) (EVar "m")) (EVar "i")))))
+(DFunDef false "binderRowIfInstalled" ((PVar "bid")) (EApp (EApp (EVar "binderRowIn") (EUnOp "!" (EVar "binderTypesRef"))) (EVar "bid")))
+(DTypeSig true "binderRowIn" (TyFun (TyApp (TyCon "Option") (TyCon "BinderTypeTable")) (TyFun (TyCon "BinderId") (TyApp (TyCon "Option") (TyCon "BinderRow")))))
+(DFunDef false "binderRowIn" ((PCon "None") PWild) (EVar "None"))
+(DFunDef false "binderRowIn" ((PCon "Some" (PVar "table")) (PCon "BinderId" (PVar "m") (PVar "i"))) (EApp (EApp (EApp (EVar "rowIn") (EVar "table")) (EVar "m")) (EVar "i")))
 (DTypeSig false "rowIn" (TyFun (TyCon "BinderTypeTable") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "BinderRow"))))))
 (DFunDef false "rowIn" ((PVar "table") (PVar "m") (PVar "i")) (EMatch (EApp (EApp (EVar "get") (EVar "i")) (EVar "table")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "row")) () (EMatch (EFieldAccess (EVar "row") "brId") (arm (PCon "BinderId" (PVar "m2") PWild) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "Some") (EVar "row")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "binder table: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EVar "display") (EVar "m2"))) (ELit (LString ""))))))))))
 (DTypeSig true "installedBinderTable" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "BinderTypeTable"))))
@@ -406,7 +413,10 @@ installedBinderRows _ = match !binderTypesRef
 (DTypeSig true "binderRow" (TyFun (TyCon "BinderId") (TyApp (TyCon "Option") (TyCon "BinderRow"))))
 (DFunDef false "binderRow" ((PCon "BinderId" (PVar "m") (PVar "i"))) (EMatch (EUnOp "!" (EVar "binderTypesRef")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "binder table: no elaboration has published one (looking up ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")"))))) (arm (PCon "Some" (PVar "table")) () (EApp (EApp (EApp (EVar "rowIn") (EVar "table")) (EVar "m")) (EVar "i")))))
 (DTypeSig true "binderRowIfInstalled" (TyFun (TyCon "BinderId") (TyApp (TyCon "Option") (TyCon "BinderRow"))))
-(DFunDef false "binderRowIfInstalled" ((PCon "BinderId" (PVar "m") (PVar "i"))) (EMatch (EUnOp "!" (EVar "binderTypesRef")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "table")) () (EApp (EApp (EApp (EVar "rowIn") (EVar "table")) (EVar "m")) (EVar "i")))))
+(DFunDef false "binderRowIfInstalled" ((PVar "bid")) (EApp (EApp (EVar "binderRowIn") (EUnOp "!" (EVar "binderTypesRef"))) (EVar "bid")))
+(DTypeSig true "binderRowIn" (TyFun (TyApp (TyCon "Option") (TyCon "BinderTypeTable")) (TyFun (TyCon "BinderId") (TyApp (TyCon "Option") (TyCon "BinderRow")))))
+(DFunDef false "binderRowIn" ((PCon "None") PWild) (EVar "None"))
+(DFunDef false "binderRowIn" ((PCon "Some" (PVar "table")) (PCon "BinderId" (PVar "m") (PVar "i"))) (EApp (EApp (EApp (EVar "rowIn") (EVar "table")) (EVar "m")) (EVar "i")))
 (DTypeSig false "rowIn" (TyFun (TyCon "BinderTypeTable") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "BinderRow"))))))
 (DFunDef false "rowIn" ((PVar "table") (PVar "m") (PVar "i")) (EMatch (EApp (EApp (EVar "get") (EVar "i")) (EVar "table")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "row")) () (EMatch (EFieldAccess (EVar "row") "brId") (arm (PCon "BinderId" (PVar "m2") PWild) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "Some") (EVar "row")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "binder table: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EMethodRef "display") (EVar "m2"))) (ELit (LString ""))))))))))
 (DTypeSig true "installedBinderTable" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "BinderTypeTable"))))

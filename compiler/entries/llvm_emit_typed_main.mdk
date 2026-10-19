@@ -128,9 +128,9 @@ emit runtimeDecls preludeDecls userDecls =
 runEmit : List Decl -> List Decl -> List Decl -> String
 runEmit runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp (funNamesOf userDecls) preludeDecls
-  let (coreE, modulesE, _, _, _, _) =
+  let (coreE, modulesE, _, _, evTable, _, _) =
     elaborateModules runtimeDecls livePrelude [("__user__", userDecls)]
-  let (coreD, modules2) = mangleUnitsEv coreE modulesE
+  let (coreD, modules2, _) = mangleUnitsEv evTable coreE modulesE
   let mangled = coreD ++ flatMap snd modules2
   let input =
     makeEmitInput

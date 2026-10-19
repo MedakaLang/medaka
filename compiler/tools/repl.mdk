@@ -240,7 +240,7 @@ runPipeline combined =
       -- One drive yields the diagnostics, the entry's own schemes and the
       -- elaborated trees; the session's shadowed prelude names are dropped
       -- before it, so a redefinition is checked against what will run.
-      let ((coreE, modulesE, diagsE, _, _, _), _, allSchemes) = elaborateModulesWithSchemes
+      let ((coreE, modulesE, diagsE, _, _, _, _), _, allSchemes) = elaborateModulesWithSchemes
         False
         runtimeDecls
         (dropShadowedExp (funNamesOf combined) preludeDecls)

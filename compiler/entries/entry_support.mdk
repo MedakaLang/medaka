@@ -10,7 +10,8 @@
 -- in the emitter seed graph — so this module may freely import the whole compiler.
 
 import frontend.ast.{Decl(..), Expr(..), DoStmt(..), LetBind(..), Loc(..), EvId}
-import types.publish.{TcReport(..)}
+import types.publish.{CheckedProgram(..), TcReport(..)}
+import types.program_facts.{ProgramFacts, factsOfChecked}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar, desugarIn, mapProg}
 import frontend.desugar_cache.{desugaredPrelude}
@@ -509,7 +510,7 @@ emitJsonGate path front modsWithPath runtimeDecls buckets report profile refusal
 
 export
 runEmitWith : String ->
-  (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+  (ProgramFacts -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   EmitAsk ->
   List (String, String, List Decl) ->
   List Decl ->
@@ -542,7 +543,7 @@ data EmitKept = EmitKept {
 -- emitted.
 runEmitAsked : EmitAsk ->
   String ->
-  (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+  (ProgramFacts -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   List (String, String, List Decl) ->
   List Decl ->
   List Decl ->
@@ -651,9 +652,10 @@ runEmitAsked ask asyncDriver emitTail modsWithPath runtimeDecls coreDecls module
 
 -- The emit of a program the gate admitted, from the elaboration that judged it
 -- (`report`, whose checked trees are run): the driver's wrap is applied to
--- them (`executedFromReport`), and the result is mangled once.
+-- them (`executedFromReport`), and the result is mangled once.  The backend
+-- lowers against the facts of the checked program with the mangled table.
 emitElaborated : String ->
-  (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+  (ProgramFacts -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
@@ -666,15 +668,24 @@ emitElaborated asyncDriver emitTail runtimeDecls coreDecls modules report =
       let executed = executedFromReport report asyncDriver (coreDecls, modules)
       match executed
         Err msg => failWith msg
-        Ok (coreW, modulesW) =>
-          let (coreD, modules2) = mangleUnitsEv coreW modulesW
-          emitTail runtimeDecls coreD modules2
+        Ok (coreW, modulesW) => match report.trChecked
+          Some checked =>
+            let (coreD, modules2, table) =
+              mangleUnitsEv checked.cpEvidence coreW modulesW
+            emitTail
+              (factsOfChecked { checked | cpEvidence = table })
+              runtimeDecls
+              coreD
+              modules2
+          None =>
+            failWith
+              "internal error: the typecheck published no checked program to run"
 
 -- A whole multi-module emit driver, for a backend `emitTail` that also reads
 -- the loader's (module, path, decls): its `Async` main is run by
 -- `runAsyncMain`.
 export
-driveEmitLocated : (List (String, String, List Decl) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+driveEmitLocated : (List (String, String, List Decl) -> ProgramFacts -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   <IO> Unit
 driveEmitLocated emitTail = driveModulesLocated (ask mods =>
   runEmitAsked ask "runAsyncMain" (emitTail mods) mods)

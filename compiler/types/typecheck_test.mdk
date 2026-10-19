@@ -4496,7 +4496,7 @@ preludeOutcome prelude sources =
         (_, (_, errors, _)) => map tcCode errors)
       (checkModulesDiagsChain None "" [] [] core modules)
   if isEmptyL codes then
-    let (coreD, elaborated, _, _, _, _) = elaborateModules [] core modules
+    let (coreD, elaborated, _, _, _, _, _) = elaborateModules [] core modules
     let rootId = optionOr "" (map fst (last sources))
     let bindings = evalOne [] (rootId, coreD ++ flatMap snd elaborated)
     match lookupAssoc "main" bindings
@@ -5583,7 +5583,7 @@ test "a stable super selection builds each use's super" =
 -- instance).
 closedGoalOutcome : String -> List String -> ((String, Int, Int), Bool)
 closedGoalOutcome prelude lines =
-  let (coreD, modules, _, residual, _, _) = elaborateModules [] (desugar
+  let (coreD, modules, _, residual, _, _, _) = elaborateModules [] (desugar
     (parse prelude)) [
     ("closed_goal", desugar (parseLocated (joinNl lines))),
   ]

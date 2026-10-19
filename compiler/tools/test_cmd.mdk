@@ -832,7 +832,7 @@ elaborateFor rsrc csrc _target _roots mods exempt False _ =
       coreDecls
       rawModules
   match elaborated
-    (coreE, modulesE, perModule, _, _, _) => (
+    (coreE, modulesE, perModule, _, _, _, _) => (
       gateOfPerModule exempt runtimeDecls coreDecls mods perModule,
       PreparedPair
         (uncurryPair
@@ -895,7 +895,7 @@ forceInjected rsrc csrc mods synthDecls =
     (desugaredPrelude rsrc)
     (desugaredPrelude csrc)
     injected)
-    (coreE, modulesE, perModule, _, _, _) =>
+    (coreE, modulesE, perModule, _, _, _, _) =>
       injectedExampleDiags := exampleDiagLines perModule
       uncurryPair
         (desugaredPrelude rsrc)
@@ -1669,7 +1669,7 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
       dropShadowedExp (funNamesOf allUser) coreDecls
   let rootId = singleRootId roots target
   modulePathMap := [("__main__", target)]
-  let (coreE, modulesE, perModule, _, _, _) =
+  let (coreE, modulesE, perModule, _, _, _, _) =
     elaborateModules runtimeDecls livePrelude [(rootId, allUser)]
   let elaborated = coreE ++ flatMap snd modulesE
   let env =
@@ -1875,7 +1875,7 @@ elaborateModulesMangled : List Decl ->
   ((List Decl, List (String, List Decl)), List (String, TcDiag))
 elaborateModulesMangled runtimeDecls coreDecls modules =
   match elaborateModules runtimeDecls coreDecls modules
-    (coreE, modulesE, perModule, residual, _, _) => (
+    (coreE, modulesE, perModule, residual, _, _, _) => (
       mangleCtorCollisionsPair (coreE, modulesE),
       residual ++ perModuleErrors perModule [],
     )
@@ -3345,7 +3345,7 @@ helperElabDiags : List Decl ->
   List (String, TcDiag)
 helperElabDiags runtimeM rawCoreM rawM =
   match withEvidencePreserved (_ => elaborateModules runtimeM rawCoreM rawM)
-    (_, _, perModule, residual, _, _) =>
+    (_, _, perModule, residual, _, _, _) =>
       residual ++ perModuleErrors perModule []
 
 perModuleErrors : List (String, (List TcDiag, List TcDiag)) ->

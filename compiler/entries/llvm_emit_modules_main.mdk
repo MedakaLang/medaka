@@ -37,7 +37,7 @@ import ir.core_ir_lower.{
   ifaceImplHeadTable,
   declaredRecordFieldOrders,
   lowerProgramEmit,
-  lowerProgramEmitPinned,
+  lowerProgramEmitPinnedWith,
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
@@ -67,6 +67,7 @@ import support.timer.{statsEnabled, emitStats}
 import support.util.{endsWith, filterList}
 import driver.main_autoprint.{autoPrintPinName}
 import support.stage_count.{stageCountInit, stageDump}
+import types.program_facts.{ProgramFacts}
 
 -- The entry-module path is argv[2] (`<runtime> <core> <entry> [root ...]`); hand it
 -- to the emitter so a main-less program's diagnostic names the file (issue #397).
@@ -129,11 +130,12 @@ cbindNameOf (CBind n _ _ _) = n
 -- [mods] is the loader's (module, path, decls), whose paths name each module's
 -- trap sites.
 emitTail : List (String, String, List Decl) ->
+  ProgramFacts ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   <IO> Unit
-emitTail mods runtimeDecls coreD modules1 =
+emitTail mods facts runtimeDecls coreD modules1 =
   let half = emitHalfOfEnv
   let wrapped = mainIsWrapped modules1
   let modules2 = stampSiteFiles mods modules1
@@ -168,7 +170,7 @@ emitTail mods runtimeDecls coreD modules1 =
           (checkedFfiExternTypeNamesModules modules2)))
   let input = withNoInlineFns (noInlineFnNames allDecls) base
   let statsOn = statsEnabled ()
-  let cp = lowerProgramEmitPinned preludeImpls allDecls
+  let cp = lowerProgramEmitPinnedWith facts preludeImpls allDecls
   let plan = buildEmitPlan LlvmBackend cp
   if statsOn then
     let (text, stats) = emitProgramWithStats input plan cp

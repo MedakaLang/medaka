@@ -279,9 +279,9 @@ runStaged on targetPath rsrc csrc tsrc =
   -- The per-module schemes and residual diagnostics `elaborateModules` also returns
   -- have no consumer here: this driver measures stages and throws its emitted IR
   -- away, so it has no diagnostic surface to route them to.
-  let (coreE, modulesE, _, _, _, _) =
+  let (coreE, modulesE, _, _, evTable, _, _) =
     elaborateModules rDecls livePrelude (("__user__", desugared) :: [])
-  let (coreD, modules2) = mangleUnitsEv coreE modulesE
+  let (coreD, modules2, _) = mangleUnitsEv evTable coreE modulesE
   let elaborated = coreD ++ flatMap snd modules2
   -- Input indexing is elaboration work; keep it outside the emit timer.  The FFI
   -- projection is post-elaboration so it consumes the same canonical alias shape

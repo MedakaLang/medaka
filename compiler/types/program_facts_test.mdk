@@ -4,9 +4,24 @@
 
 import test.{expectEqual, expectAll, expectTrue, expectFalse}
 import frontend.ast.{EvId(..), EvVal(..), EvEntry(..), Route(..)}
+import frontend.desugar.{desugar}
+import frontend.parser.{parseLocated}
 import types.disposition.{emptyDispositionTable}
-import types.program_facts.{ProgramFacts(..), emptyFacts, withFacts, factsNow}
-import types.route_key.{evIndexOf, evSiteRouteIn}
+import types.program_facts.{
+  ProgramFacts(..),
+  emptyFacts,
+  factsOfElab,
+  withFacts,
+  factsNow,
+}
+import types.route_key.{
+  EvIndex(..),
+  evIndexOf,
+  evSiteRouteIn,
+  installedEvidenceSlots,
+}
+import types.typecheck.{elaborateModules}
+import support.util.{joinNl}
 
 routeFacts : ProgramFacts
 routeFacts = ProgramFacts {
@@ -43,3 +58,37 @@ test "emptyFacts carries no dispositions and no binders" = expectAll [
   expectFalse (isTyped emptyFacts),
   expectFalse (isSome emptyFacts.pfBinders),
 ]
+
+-- An interface in one module, its method applied in another: the entry's
+-- occurrence is a method-occurrence entry, which only the whole table holds.
+twoModuleFacts : ProgramFacts
+twoModuleFacts =
+  let owner = joinNl [
+    "export interface Pick a where",
+    "  pick : a -> Int",
+    "impl Pick Int where",
+    "  pick n = n",
+  ]
+  let entry =
+    joinNl ["import pick_owner.{pick}", "value : Int", "value = pick 41"]
+  factsOfElab
+    (elaborateModules
+      []
+      []
+      (map
+        (m => (fst m, desugar (parseLocated (snd m))))
+        [("pick_owner", owner), ("pick_entry", entry)]))
+
+isMethodSlot : Option EvEntry -> Bool
+isMethodSlot (Some (EvEntry _ (EvMethod _ _ _ _ _))) = True
+isMethodSlot _ = False
+
+indexSlots : EvIndex -> List (Option EvEntry)
+indexSlots (EvIndex _ arr) = toList arr
+
+test "factsOfElab of a driven two-module program holds its method occurrences" =
+  let slots = indexSlots twoModuleFacts.pfEvidence
+  expectAll [
+    expectTrue (any isMethodSlot slots),
+    expectEqual (installedEvidenceSlots ()) (length slots),
+  ]
