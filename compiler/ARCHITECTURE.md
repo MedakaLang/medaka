@@ -100,9 +100,9 @@ cell creates it on entry and drops it on exit, and the cell is unreachable after
 No module-level cell holds per-module or per-group state. Configuration is an immutable
 record the driver builds once.
 
-- *Today (2026-10-18):* `types/typecheck.mdk` holds 26 module-level cells plus 159 `Ref`
-  fields in four bundle records (`PerRun` 88, `GraphRun` 30, `DriverState` 27, `CrossRun`
-  14), all reachable from anywhere; Phase 1 added the graph-owned site cells to `GraphRun`.
+- *Today (2026-10-19):* `types/typecheck.mdk` holds 26 module-level cells plus 153 `Ref`
+  fields in four bundle records (`ModuleCtx` 91, `GraphRun` 30, `DriverState` 18, `CrossRun`
+  14), all reachable from anywhere, and `GroupCtx` (2 fields) is minted per group; Phase 1 added the graph-owned site cells to `GraphRun`.
   The tree holds 108 module-level cells in 28 modules, unchanged since Phase 0.
 - *Check:* module-level `= Ref` cells per module, pinned and falling (Phase 0, G3);
   Phase 2 ends with zero in the typechecker outside interners.
