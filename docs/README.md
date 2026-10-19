@@ -110,6 +110,7 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`RUNTIME-TRAP-UNIFY-DESIGN.md`](design/RUNTIME-TRAP-UNIFY-DESIGN.md) | Runtime-trap-format unification — design | OPEN, but the `Array.set`/`Vector.set` OOB row is discharged: `setInPlace` |
 | [`SOURCE-POSITION-DESIGN.md`](design/SOURCE-POSITION-DESIGN.md) | SOURCE-POSITION-DESIGN.md — principled, unified line:column (source-span) tracking; #331 as increment 1 | DESIGN |
 | [`TARGETS-DESIGN.md`](design/TARGETS-DESIGN.md) | Targets and host profiles | ratified 2026-10-01; the host-binding half |
+| [`TEST-SIBLING-ACCESS-DESIGN.md`](design/TEST-SIBLING-ACCESS-DESIGN.md) | Test siblings see their subject's private names | DECIDED 2026-10-18 |
 | [`TYPE-AWARE-LINT-DESIGN.md`](design/TYPE-AWARE-LINT-DESIGN.md) | Type-Aware Lint Tier — Design | PARTLY SHIPPED and RE-COSTED; TIER 1 UNBLOCKED, TIER 2 STILL BLOCKED |
 | [`WASM-ASYNC-DESIGN.md`](design/WASM-ASYNC-DESIGN.md) | Async on the WasmGC target | PARTIAL |
 
