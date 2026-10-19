@@ -1019,6 +1019,7 @@ emptyImplUniverse : ImplUniverse
 emptyMethodEnv : MethodEnv
 emptyMethodModulePredicateSlot : String -> IfaceRef -> List String -> IfaceMethod -> List ((String, String), List MethodPredicateSlot)
 emptyMethodModulePredicateSlots : String -> List Decl -> List ((String, String), List MethodPredicateSlot)
+emptyOracle : Oracle
 emptyShadowDicts : ShadowDicts
 emptySigVars : SigVars
 enclDictVarOf : Option PredicateRequest -> Mono -> String -> ScopeId -> Option EvidenceBinderId

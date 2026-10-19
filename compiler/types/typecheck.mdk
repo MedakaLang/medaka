@@ -10770,9 +10770,12 @@ perRun = Ref (initialModuleCtx ())
 -- The record a process starts from: no module, an empty oracle, no warnings.
 initialModuleCtx : Unit -> ModuleCtx
 initialModuleCtx _ =
-  freshModuleCtx
-    CheckRunSeed { crsOracle = buildOracle [], crsWarnings = [] }
-    ""
+  freshModuleCtx CheckRunSeed { crsOracle = emptyOracle, crsWarnings = [] } ""
+
+-- Built once: a stamp context keeps no oracle, and building one per stamp is
+-- counted by `exhaust.oracle` in the per-verb stage counts.
+emptyOracle : Oracle
+emptyOracle = buildOracle []
 
 -- The oracle and warnings [m] holds: the seed of a module checked without one
 -- (`cmCheckWorker` and the two core passes), which carries them forward unchanged.
@@ -53885,7 +53888,7 @@ stampCtxOf mid implDecls goals numlits = StampCtx {
     sigNameSetRef = Ref omEmpty,
     sigTyMapRef = Ref omEmpty,
     invocationViewRef = Ref (InvocationView [] [] []),
-    matchOracle = Ref (buildOracle []),
+    matchOracle = Ref emptyOracle,
     matchWarnings = Ref [],
   },
   scRpNames = returnPosMethodNames implDecls,

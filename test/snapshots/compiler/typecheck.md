@@ -1,5 +1,5 @@
 # META
-source_lines=54593
+source_lines=54596
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -10774,9 +10774,12 @@ perRun = Ref (initialModuleCtx ())
 -- The record a process starts from: no module, an empty oracle, no warnings.
 initialModuleCtx : Unit -> ModuleCtx
 initialModuleCtx _ =
-  freshModuleCtx
-    CheckRunSeed { crsOracle = buildOracle [], crsWarnings = [] }
-    ""
+  freshModuleCtx CheckRunSeed { crsOracle = emptyOracle, crsWarnings = [] } ""
+
+-- Built once: a stamp context keeps no oracle, and building one per stamp is
+-- counted by `exhaust.oracle` in the per-verb stage counts.
+emptyOracle : Oracle
+emptyOracle = buildOracle []
 
 -- The oracle and warnings [m] holds: the seed of a module checked without one
 -- (`cmCheckWorker` and the two core passes), which carries them forward unchanged.
@@ -53889,7 +53892,7 @@ stampCtxOf mid implDecls goals numlits = StampCtx {
     sigNameSetRef = Ref omEmpty,
     sigTyMapRef = Ref omEmpty,
     invocationViewRef = Ref (InvocationView [] [] []),
-    matchOracle = Ref (buildOracle []),
+    matchOracle = Ref emptyOracle,
     matchWarnings = Ref [],
   },
   scRpNames = returnPosMethodNames implDecls,
@@ -56423,7 +56426,9 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "perRun" (TyApp (TyCon "Ref") (TyCon "ModuleCtx")))
 (DFunDef false "perRun" () (EApp (EVar "Ref") (EApp (EVar "initialModuleCtx") (ELit LUnit))))
 (DTypeSig false "initialModuleCtx" (TyFun (TyCon "Unit") (TyCon "ModuleCtx")))
-(DFunDef false "initialModuleCtx" (PWild) (EApp (EApp (EVar "freshModuleCtx") (ERecordCreate "CheckRunSeed" ((fa "crsOracle" (EApp (EVar "buildOracle") (EListLit))) (fa "crsWarnings" (EListLit))))) (ELit (LString ""))))
+(DFunDef false "initialModuleCtx" (PWild) (EApp (EApp (EVar "freshModuleCtx") (ERecordCreate "CheckRunSeed" ((fa "crsOracle" (EVar "emptyOracle")) (fa "crsWarnings" (EListLit))))) (ELit (LString ""))))
+(DTypeSig false "emptyOracle" (TyCon "Oracle"))
+(DFunDef false "emptyOracle" () (EApp (EVar "buildOracle") (EListLit)))
 (DTypeSig false "checkRunResidue" (TyFun (TyCon "ModuleCtx") (TyCon "CheckRunSeed")))
 (DFunDef false "checkRunResidue" ((PVar "m")) (ERecordCreate "CheckRunSeed" ((fa "crsOracle" (EFieldAccess (EFieldAccess (EVar "m") "matchOracle") "value")) (fa "crsWarnings" (EFieldAccess (EFieldAccess (EVar "m") "matchWarnings") "value")))))
 (DTypeSig false "carryModuleCtx" (TyFun (TyCon "ModuleCtx") (TyCon "ModuleCtx")))
@@ -63758,7 +63763,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "moduleStampOrder" (TyApp (TyCon "List") (TyCon "StampStep")))
 (DFunDef false "moduleStampOrder" () (EListLit (EVar "SSNumlitFloats") (EVar "SSReturnSites") (EVar "SSBinopSites") (EVar "SSUnopSites") (EVar "SSArithSites") (EVar "SSArgStamps") (EVar "SSRLocalSites") (EVar "SSRecDictApps") (EVar "SSDictApps") (EVar "SSMethodDicts")))
 (DTypeSig false "stampCtxOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))) (TyCon "StampCtx"))))))
-(DFunDef false "stampCtxOf" ((PVar "mid") (PVar "implDecls") (PVar "goals") (PVar "numlits")) (ERecordCreate "StampCtx" ((fa "scModule" (EVar "mid")) (fa "scModuleCtx" (EVariantUpdate "ModuleCtx" (EFieldAccess (EVar "perRun") "value") ((fa "superDeclsRef" (EApp (EVar "Ref") (EApp (EApp (EVar "filterList") (EVar "isInterfaceDecl")) (EVar "implDecls")))) (fa "currentModuleRef" (EApp (EVar "Ref") (EVar "mid"))) (fa "standaloneValuesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "methodDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "sigNameSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "sigTyMapRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "invocationViewRef" (EApp (EVar "Ref") (EApp (EApp (EApp (EVar "InvocationView") (EListLit)) (EListLit)) (EListLit)))) (fa "matchOracle" (EApp (EVar "Ref") (EApp (EVar "buildOracle") (EListLit)))) (fa "matchWarnings" (EApp (EVar "Ref") (EListLit)))))) (fa "scRpNames" (EApp (EVar "returnPosMethodNames") (EVar "implDecls"))) (fa "scGoals" (EVar "goals")) (fa "scNumlits" (EVar "numlits")) (fa "scLiveLocs" (EApp (EVar "liveLocsOf") (EVar "goals"))))))
+(DFunDef false "stampCtxOf" ((PVar "mid") (PVar "implDecls") (PVar "goals") (PVar "numlits")) (ERecordCreate "StampCtx" ((fa "scModule" (EVar "mid")) (fa "scModuleCtx" (EVariantUpdate "ModuleCtx" (EFieldAccess (EVar "perRun") "value") ((fa "superDeclsRef" (EApp (EVar "Ref") (EApp (EApp (EVar "filterList") (EVar "isInterfaceDecl")) (EVar "implDecls")))) (fa "currentModuleRef" (EApp (EVar "Ref") (EVar "mid"))) (fa "standaloneValuesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "methodDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "sigNameSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "sigTyMapRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "invocationViewRef" (EApp (EVar "Ref") (EApp (EApp (EApp (EVar "InvocationView") (EListLit)) (EListLit)) (EListLit)))) (fa "matchOracle" (EApp (EVar "Ref") (EVar "emptyOracle"))) (fa "matchWarnings" (EApp (EVar "Ref") (EListLit)))))) (fa "scRpNames" (EApp (EVar "returnPosMethodNames") (EVar "implDecls"))) (fa "scGoals" (EVar "goals")) (fa "scNumlits" (EVar "numlits")) (fa "scLiveLocs" (EApp (EVar "liveLocsOf") (EVar "goals"))))))
 (DTypeSig false "liveLocsOf" (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "liveLocsOf" ((PVar "goals")) (EBlock (DoLet false false (PVar "ids") (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "liveRoots") "value"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "ids")) (EListLit) (EBlock (DoLet false false (PVar "live") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "i")) (EApp (EApp (EApp (EVar "IdMap.set") (EVar "i")) (ELit LUnit)) (EVar "acc")))) (EVar "Tip")) (EVar "ids"))) (DoLet false false (PVar "mentions") (ELam ((PVar "ms")) (EApp (EApp (EVar "anyList") (ELam ((PVar "m")) (EApp (EApp (EVar "anyList") (ELam ((PVar "i")) (EApp (EApp (EVar "IdMap.has") (EVar "i")) (EVar "live")))) (EApp (EVar "monoUnboundIds") (EVar "m"))))) (EVar "ms")))) (DoExpr (EApp (EVar "spanKeys") (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "o")) (EFieldAccess (EVar "o") "oLoc"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EApp (EVar "mentions") (EApp (EVar "goalMonos") (EVar "o"))))) (EVar "goals"))) (EApp (EApp (EVar "filterMap") (ELam ((PTuple PWild (PVar "m") (PVar "loc"))) (EIf (EApp (EVar "mentions") (EListLit (EVar "m"))) (EApp (EVar "Some") (EVar "loc")) (EVar "None")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "admittedOccObls") "value"))))))))))
 (DTypeSig true "spanKeys" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "String"))))
@@ -65736,7 +65741,9 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "perRun" (TyApp (TyCon "Ref") (TyCon "ModuleCtx")))
 (DFunDef false "perRun" () (EApp (EVar "Ref") (EApp (EVar "initialModuleCtx") (ELit LUnit))))
 (DTypeSig false "initialModuleCtx" (TyFun (TyCon "Unit") (TyCon "ModuleCtx")))
-(DFunDef false "initialModuleCtx" (PWild) (EApp (EApp (EVar "freshModuleCtx") (ERecordCreate "CheckRunSeed" ((fa "crsOracle" (EApp (EVar "buildOracle") (EListLit))) (fa "crsWarnings" (EListLit))))) (ELit (LString ""))))
+(DFunDef false "initialModuleCtx" (PWild) (EApp (EApp (EVar "freshModuleCtx") (ERecordCreate "CheckRunSeed" ((fa "crsOracle" (EVar "emptyOracle")) (fa "crsWarnings" (EListLit))))) (ELit (LString ""))))
+(DTypeSig false "emptyOracle" (TyCon "Oracle"))
+(DFunDef false "emptyOracle" () (EApp (EVar "buildOracle") (EListLit)))
 (DTypeSig false "checkRunResidue" (TyFun (TyCon "ModuleCtx") (TyCon "CheckRunSeed")))
 (DFunDef false "checkRunResidue" ((PVar "m")) (ERecordCreate "CheckRunSeed" ((fa "crsOracle" (EFieldAccess (EFieldAccess (EVar "m") "matchOracle") "value")) (fa "crsWarnings" (EFieldAccess (EFieldAccess (EVar "m") "matchWarnings") "value")))))
 (DTypeSig false "carryModuleCtx" (TyFun (TyCon "ModuleCtx") (TyCon "ModuleCtx")))
@@ -73071,7 +73078,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "moduleStampOrder" (TyApp (TyCon "List") (TyCon "StampStep")))
 (DFunDef false "moduleStampOrder" () (EListLit (EVar "SSNumlitFloats") (EVar "SSReturnSites") (EVar "SSBinopSites") (EVar "SSUnopSites") (EVar "SSArithSites") (EVar "SSArgStamps") (EVar "SSRLocalSites") (EVar "SSRecDictApps") (EVar "SSDictApps") (EVar "SSMethodDicts")))
 (DTypeSig false "stampCtxOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))) (TyCon "StampCtx"))))))
-(DFunDef false "stampCtxOf" ((PVar "mid") (PVar "implDecls") (PVar "goals") (PVar "numlits")) (ERecordCreate "StampCtx" ((fa "scModule" (EVar "mid")) (fa "scModuleCtx" (EVariantUpdate "ModuleCtx" (EFieldAccess (EVar "perRun") "value") ((fa "superDeclsRef" (EApp (EVar "Ref") (EApp (EApp (EVar "filterList") (EVar "isInterfaceDecl")) (EVar "implDecls")))) (fa "currentModuleRef" (EApp (EVar "Ref") (EVar "mid"))) (fa "standaloneValuesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "methodDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "sigNameSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "sigTyMapRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "invocationViewRef" (EApp (EVar "Ref") (EApp (EApp (EApp (EVar "InvocationView") (EListLit)) (EListLit)) (EListLit)))) (fa "matchOracle" (EApp (EVar "Ref") (EApp (EVar "buildOracle") (EListLit)))) (fa "matchWarnings" (EApp (EVar "Ref") (EListLit)))))) (fa "scRpNames" (EApp (EVar "returnPosMethodNames") (EVar "implDecls"))) (fa "scGoals" (EVar "goals")) (fa "scNumlits" (EVar "numlits")) (fa "scLiveLocs" (EApp (EVar "liveLocsOf") (EVar "goals"))))))
+(DFunDef false "stampCtxOf" ((PVar "mid") (PVar "implDecls") (PVar "goals") (PVar "numlits")) (ERecordCreate "StampCtx" ((fa "scModule" (EVar "mid")) (fa "scModuleCtx" (EVariantUpdate "ModuleCtx" (EFieldAccess (EVar "perRun") "value") ((fa "superDeclsRef" (EApp (EVar "Ref") (EApp (EApp (EVar "filterList") (EVar "isInterfaceDecl")) (EVar "implDecls")))) (fa "currentModuleRef" (EApp (EVar "Ref") (EVar "mid"))) (fa "standaloneValuesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "methodDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "sigNameSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "sigTyMapRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "invocationViewRef" (EApp (EVar "Ref") (EApp (EApp (EApp (EVar "InvocationView") (EListLit)) (EListLit)) (EListLit)))) (fa "matchOracle" (EApp (EVar "Ref") (EVar "emptyOracle"))) (fa "matchWarnings" (EApp (EVar "Ref") (EListLit)))))) (fa "scRpNames" (EApp (EVar "returnPosMethodNames") (EVar "implDecls"))) (fa "scGoals" (EVar "goals")) (fa "scNumlits" (EVar "numlits")) (fa "scLiveLocs" (EApp (EVar "liveLocsOf") (EVar "goals"))))))
 (DTypeSig false "liveLocsOf" (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "liveLocsOf" ((PVar "goals")) (EBlock (DoLet false false (PVar "ids") (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "graphRun") "value") "liveRoots") "value"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "ids")) (EListLit) (EBlock (DoLet false false (PVar "live") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "i")) (EApp (EApp (EApp (EVar "IdMap.set") (EVar "i")) (ELit LUnit)) (EVar "acc")))) (EVar "Tip")) (EVar "ids"))) (DoLet false false (PVar "mentions") (ELam ((PVar "ms")) (EApp (EApp (EVar "anyList") (ELam ((PVar "m")) (EApp (EApp (EVar "anyList") (ELam ((PVar "i")) (EApp (EApp (EVar "IdMap.has") (EVar "i")) (EVar "live")))) (EApp (EVar "monoUnboundIds") (EVar "m"))))) (EVar "ms")))) (DoExpr (EApp (EVar "spanKeys") (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "o")) (EFieldAccess (EVar "o") "oLoc"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EApp (EVar "mentions") (EApp (EVar "goalMonos") (EVar "o"))))) (EVar "goals"))) (EApp (EApp (EMethodRef "filterMap") (ELam ((PTuple PWild (PVar "m") (PVar "loc"))) (EIf (EApp (EVar "mentions") (EListLit (EVar "m"))) (EApp (EVar "Some") (EVar "loc")) (EVar "None")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "admittedOccObls") "value"))))))))))
 (DTypeSig true "spanKeys" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "String"))))
