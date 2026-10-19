@@ -969,10 +969,8 @@ setMethodPredicateSlotEntry : String -> List MethodPredicateSlot -> Unit
 methodDictArityOf : String -> Int
 resolveMethodDicts : SiteCtx -> List PendingMethodDict -> Unit
 pending.pmdRoutesRef :=
-methodPredicateRoutes : SiteCtx ->
 methodPredicateRoute : SiteCtx -> String -> ScopeId -> PredicateSlot -> Route
 realizeRecDictApps : SiteCtx -> List RecDictApp -> Unit
-recRoutes : SiteCtx ->
 recRoute : SiteCtx -> String -> ScopeId -> Mono -> PredicateSlot -> Route
 scopePredicateSlots : List ((String, String), List PredicateSlot) ->
 scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) ->
@@ -1133,6 +1131,16 @@ done || exit 1
 # Expression pins are compared whitespace-flattened, so fmt's line wrapping is not
 # part of the contract.
 predicate_slot_flat="$(tr '\n' ' ' < "$predicate_slot_src" | tr -s ' ')"
+# Full signatures of the route producers; fmt wraps them, so they are matched flattened.
+route_producer_sigs='methodPredicateRoutes : SiteCtx -> String -> ScopeId -> List PredicateSlot -> List Route
+recRoutes : SiteCtx -> String -> ScopeId -> Mono -> List PredicateSlot -> List Route
+stampOpRouteVal : SiteCtx -> Bool -> String -> ScopeId -> String -> Mono -> String -> Route'
+printf '%s\n' "$route_producer_sigs" | while IFS= read -r required; do
+  if ! printf '%s\n' "$predicate_slot_flat" | grep -Fq "$required"; then
+    echo "FAIL: #1318 predicate-slot producer authority is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
 numeric_predicate_expr_required='_ => tagRef := numericReturnRoute route routes
 let split = binopRouteSplit route'
 printf '%s\n' "$numeric_predicate_expr_required" | while IFS= read -r required; do
@@ -1530,8 +1538,7 @@ if printf '%s\n' "$lexical_dict_block" | grep -Fq 'activeDictVarOf m'; then
   exit 1
 fi
 
-operator_owner_required='stampOpRouteVal : SiteCtx ->
-argImplDictRoutesForEncl sx encl useScope dictName tag subject goals
+operator_owner_required='argImplDictRoutesForEncl sx encl useScope dictName tag subject goals
 entailInst sx name m encl useScope tag (EKOp isBinop _) =
 (stampOpRouteVal sx isBinop encl useScope name m tag, [])'
 printf '%s\n' "$operator_owner_required" | while IFS= read -r required; do

@@ -1,0 +1,34 @@
+f : Option Int
+f = do
+  x <- Some 1
+  let a = (1 : Int) == Some 3
+  let b = (2 : Int) == Some 4
+  Some x
+
+g : Option Int
+g = do
+  x <- Some 1
+  let a = (1 : Int) == Some 3
+  y <- do
+    let c = (3 : Int) == Some 5
+    Some 2
+  let b = (2 : Int) == Some 4
+  Some x
+
+h : Option Int
+h = do
+  x <- Some 1
+  y <- do
+    let c = (3 : Int) == Some 5
+    let d = (4 : Int) == Some 6
+    Some 2
+  let b = (2 : Int) == Some 4
+  Some x
+
+k : Bool -> Option Int
+k flag = defer
+  x <- Some 1
+  let b = (2 : Int) == Some 4
+  Some x
+
+main = ()
