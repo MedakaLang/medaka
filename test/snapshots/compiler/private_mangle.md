@@ -929,7 +929,7 @@ useCtorPathEntries ctorExportsPerUnit path =
 -- while `check` and `run` were both correct.  Writing the same import WITHOUT `(..)`
 -- was fine, because that spelling took the bare branch.
 --
--- This mirrors the three ARMS of `frontend/resolve.expandMemberNames` (`:2327`) —
+-- This mirrors the three ARMS of `frontend/visibility.expandMemberNames` —
 -- the scope layer this one has to agree with:
 --   * `UseMember name False`      → binds `name`                (bare only)
 --   * `UseMember name True`, hit  → binds `name` :: that type's ctors

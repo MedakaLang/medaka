@@ -5041,7 +5041,7 @@ resolveMembers (UseAlias _ a) (ModExports exports _) =
 --
 -- `T(..)` names a TYPE, so it binds every constructor of `T` under the
 -- constructor's OWN name — one alias cannot rename N constructors, which is the
--- rule `frontend/resolve.expandMemberNames` states and applies at the scope layer,
+-- rule `frontend/visibility.expandMemberNames` states and applies at the scope layer,
 -- and `types/private_mangle.ctorMemberEntry` applies at the symbol layer.  This
 -- is the third realization of that one rule, one per engine family; the three are
 -- diffed by `test/diff_compiler_engines.sh`.

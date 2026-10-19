@@ -1,0 +1,64 @@
+bindsNonCtorExport : ModuleExports -> String -> Bool
+buildExportsWith : ModuleExports -> Map String ModuleExports -> String -> List Decl -> List String -> ModuleExports
+carriedEffectOrigins : List (String, String) -> List (String, String) -> List (String, String)
+carriedIfaceVals : ModuleExports -> List String -> List String
+carriedIn : ExpNs a -> ModuleExports -> Map String ModuleExports -> List Decl -> List a
+carriedOriginsFrom : UsePath -> ModuleExports -> List (String, String) -> List (String, String)
+carriedTypeCtors : Map String Unit -> Map String Unit -> List (String, List String) -> List (String, List String)
+carriedTypeCtorsFrom : ModuleExports -> List String -> List (String, List String)
+carriedValueOriginsFrom : ModuleExports -> List (String, String) -> List (String, (String, String))
+carriedValuesFrom : ModuleExports -> List (String, String) -> List String
+coreExports : List Decl -> ModuleExports
+ctorNames : List Decl -> List String
+dataRecordNames : List Decl -> List String
+directIn : ExpNs a -> List Decl -> List a
+dropLocOfExpanded : (String, String, Loc) -> (String, String)
+effectNames : List Decl -> List String
+expandMemberNames : ModuleExports -> UseMember -> List (String, String, Loc)
+exportsIn : ExpNs a -> ModuleExports -> List a
+fieldOwnersOf : List Decl -> List (String, String)
+filterInSet : Map String Unit -> List String -> List String
+findExports : String -> Map String ModuleExports -> Option ModuleExports
+ifaceMethodNm : IfaceMethod -> String
+ifaceMethodPairs : ModuleExports -> List String -> List (String, List String)
+ifaceMethodsOf : String -> List (String, List String) -> List String
+implMethodNm : ImplMethod -> String
+indexExports : ModuleExports -> ModuleExports
+interfaceList : List Decl -> List (String, List String)
+isNewtypeExport : String -> ModuleExports -> Bool
+isPubExp : ModuleExports -> String -> Bool
+localsExportedFrom : List String -> List (String, String) -> List String
+newtypeTypeOfCtor : String -> ModuleExports -> Option String
+noCarry : UsePath -> ModuleExports -> List a
+nsAbstractCtors : ExpNs (String, String)
+nsAbstractData : ExpNs String
+nsCtorOrigins : ExpNs (String, String)
+nsCtors : ExpNs String
+nsEffectOrigins : ExpNs (String, String)
+nsEffects : ExpNs String
+nsFieldOwners : ExpNs (String, String)
+nsIfaceMethods : ExpNs (String, List String)
+nsIfaceOrigins : ExpNs (String, String)
+nsInterfaces : ExpNs String
+nsNewtypeCtors : ExpNs (String, String)
+nsTypeCtors : ExpNs (String, List String)
+nsTypeOrigins : ExpNs (String, String)
+nsTypes : ExpNs String
+nsValueOrigins : ExpNs (String, (String, String))
+nsValues : ExpNs String
+overPubUse : ModuleExports -> Map String ModuleExports -> (UsePath -> ModuleExports -> List a) -> UsePath -> List a
+ownersForTypes : Map String Unit -> List (String, String) -> List (String, String)
+preludeValueNames : List Decl -> List String
+pubIfaceMethodSets : List Decl -> List (List String)
+pubUsePaths : List Decl -> List UsePath
+recordFieldOwner : String -> Field -> (String, String)
+reexportBindings : UsePath -> ModuleExports -> List (String, String)
+reexportOrigins : UsePath -> ModuleExports -> List String
+scanDecls : (Decl -> List a) -> List Decl -> List a
+typeCtorsAllOf : List Decl -> List (String, List String)
+typeCtorsOf : String -> ModuleExports -> Option (List String)
+typeOfCtor : String -> ModuleExports -> Option String
+useModId : UsePath -> String
+valueDeclOf : ModuleExports -> Map String (String, String) -> String -> (String, String)
+valueDeclsOf : ModuleExports -> Map String (String, String)
+variantFieldOwners : Variant -> List (String, String)
