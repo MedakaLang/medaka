@@ -22,7 +22,8 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import driver.loader.{loadProgram}
 import types.typecheck.{elaborateModules}
-import eval.eval.{evalModulesOutput}
+import eval.eval.{evalModulesOutputFacts}
+import types.program_facts.{factsOfElab}
 import entries.entry_support.{rootsOrDefault, desugarPair}
 
 export
@@ -49,8 +50,8 @@ run runtimeP coreP entry roots = match readFile runtimeP
 
 runElab : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runElab runtimeDecls coreDecls modules =
-  let (coreE, modulesE, _, _, _, _, _) =
-    elaborateModules runtimeDecls coreDecls modules
-  putStr (evalModulesOutput coreE modulesE)
+  let elab = elaborateModules runtimeDecls coreDecls modules
+  let (coreE, modulesE, _, _, _, _, _) = elab
+  putStr (evalModulesOutputFacts (factsOfElab elab) coreE modulesE)
 
 main = oracleMain ()

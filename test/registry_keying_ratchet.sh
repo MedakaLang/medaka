@@ -69,7 +69,7 @@
 #            per-LINE (treats "line contains an allowed substring" as
 #            "line is accounted for") instead of per-OCCURRENCE, and
 #            this ratchet is already holed exactly like that one was.
-#   E  delete the `installDispatchTables allDecls` line from ONE of
+#   E  delete the `installDispatchTables dispositions allDecls` line from ONE of
 #      the three module-state builders (eval.mdk's evalModulesWith or
 #      buildRootModuleStateWith, or core_ir_eval.mdk's cevalModules)  -> FAIL (check 3)
 #      Change either root wrapper's `buildRootModuleStateWith` call to use
@@ -490,17 +490,17 @@ echo "  ok: $cross_write_n crossRun.value.* write target(s), $driver_write_n dri
 # builder, so they must forward their original inputs once and must not grow a
 # second frame initialization. This check turns both requirements into a gate:
 # each builder seeds the SAME four operations (the ctorToTypeRef seed,
-# installDispatchTables allDecls, collectCtors allDecls -> globalNames, and the
+# installDispatchTables dispositions allDecls, collectCtors allDecls -> globalNames, and the
 # globalCells construction). A fix absent from any builder is the recurring
 # P0-9 shape; copied initialization in a wrapper recreates the parallel-driver
 # drift the shared builder was introduced to prevent.
 echo "checking #1111 three-way engine module-state builder parity ..."
 
-ceval_body=$(body_of "$CIE" '^cevalModules preludeDecls0 modules0 =')
-withA_body=$(body_of "$EV" '^evalModulesWith extraExterns preludeDecls0 modules0 =')
-root_builder_body=$(body_of "$EV" '^buildRootModuleStateWith extraExterns preludeDecls0 modules0 =')
-root_env_body=$(body_of "$EV" '^evalModulesRootEnvWith extraExterns preludeDecls modules =')
-root_eval_env_body=$(body_of "$EV" '^evalModulesRootEvalEnvWith extraExterns preludeDecls modules =')
+ceval_body=$(body_of "$CIE" '^cevalModules facts preludeDecls0 modules0 =')
+withA_body=$(body_of "$EV" '^evalModulesWith facts extraExterns preludeDecls0 modules0 =')
+root_builder_body=$(body_of "$EV" '^buildRootModuleStateWith facts extraExterns preludeDecls0 modules0 =')
+root_env_body=$(body_of "$EV" '^evalModulesRootEnvFacts facts extraExterns preludeDecls modules =')
+root_eval_env_body=$(body_of "$EV" '^evalModulesRootEvalEnvFacts facts extraExterns preludeDecls modules =')
 
 frame_check() {
   # $1 = driver label, $2 = body text
@@ -509,7 +509,7 @@ frame_check() {
   n=0
   for marker in \
     'ctorToTypeRef := buildCtorToType allDecls' \
-    'installDispatchTables allDecls' \
+    'installDispatchTables dispositions allDecls' \
     'collectCtors allDecls' \
     'let globalCells = map (n => (n, Ref VUnit)) globalNames'
   do
@@ -540,7 +540,7 @@ root_wrapper_check() {
   final="$3"
   code=$(printf '%s\n' "$body" | strip_comments)
   delegates=$(printf '%s\n' "$code" | grep -Fc 'buildRootModuleStateWith')
-  original_args=$(printf '%s\n' "$code" | grep -Fc 'buildRootModuleStateWith extraExterns preludeDecls modules')
+  original_args=$(printf '%s\n' "$code" | grep -Fc 'buildRootModuleStateWith facts extraExterns preludeDecls modules')
   final_calls=$(printf '%s\n' "$code" | grep -Fc "$final mods globalCells")
   if [ "$delegates" -ne 1 ] || [ "$original_args" -ne 1 ] || [ "$final_calls" -ne 1 ]; then
     echo "FAIL: $label must delegate exactly once to buildRootModuleStateWith"
@@ -553,7 +553,7 @@ root_wrapper_check() {
   fi
   for marker in \
     'ctorToTypeRef := buildCtorToType allDecls' \
-    'installDispatchTables allDecls' \
+    'installDispatchTables dispositions allDecls' \
     'collectCtors allDecls' \
     'let globalCells = map (n => (n, Ref VUnit)) globalNames'
   do
@@ -569,8 +569,8 @@ root_wrapper_check() {
   return 0
 }
 
-root_wrapper_check "evalModulesRootEnvWith (eval.mdk)" "$root_env_body" "rootFullEnv"
-root_wrapper_check "evalModulesRootEvalEnvWith (eval.mdk)" "$root_eval_env_body" "rootFullEvalEnv"
+root_wrapper_check "evalModulesRootEnvFacts (eval.mdk)" "$root_env_body" "rootFullEnv"
+root_wrapper_check "evalModulesRootEvalEnvFacts (eval.mdk)" "$root_eval_env_body" "rootFullEvalEnv"
 
 # "exactly these three" -- a whole-file total (not body-scoped) catches a
 # phantom fourth state builder anywhere else in either file. Uses the SAME binder
@@ -579,7 +579,7 @@ root_wrapper_check "evalModulesRootEvalEnvWith (eval.mdk)" "$root_eval_env_body"
 # functions' OWN one-line definitions elsewhere in eval.mdk (installDispatchTables
 # allDecls = ...) that a bare-substring whole-file count would hit.
 total_ctortotype=$(grep -F -c 'ctorToTypeRef := buildCtorToType allDecls' "$EV" "$CIE" | awk -F: '{s+=$2} END{print s+0}')
-total_disp=$(grep -F -c 'let disp = installDispatchTables allDecls' "$EV" "$CIE" | awk -F: '{s+=$2} END{print s+0}')
+total_disp=$(grep -F -c 'let disp = installDispatchTables dispositions allDecls' "$EV" "$CIE" | awk -F: '{s+=$2} END{print s+0}')
 total_ctors=$(grep -F -c 'let ctors = collectCtors allDecls' "$EV" "$CIE" | awk -F: '{s+=$2} END{print s+0}')
 total_globalcells=$(grep -F -c 'let globalCells = map (n => (n, Ref VUnit)) globalNames' "$EV" "$CIE" | awk -F: '{s+=$2} END{print s+0}')
 

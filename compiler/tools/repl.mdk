@@ -33,9 +33,10 @@ import frontend.resolve.{resolveProgram, ppResError}
 import types.repr.{ppScheme, Scheme(..)}
 import types.typecheck.{elaborateModulesWithSchemes, pubSchemes, tcMsg}
 import types.private_mangle.{mangleCtorCollisionsPair}
+import types.program_facts.{ProgramFacts, emptyFacts, factsOfElab, withFacts}
 import eval.eval.{
   Value(..),
-  evalOneRootEnvWith,
+  evalOneRootEnvFacts,
   testCapableExterns,
   funNamesOf,
   dropShadowedExp,
@@ -228,33 +229,38 @@ lookupScheme name ((n, s) :: rest)
   | name == n = Some s
   | otherwise = lookupScheme name rest
 
+-- The bindings are forced by the caller, inside `withFacts` of the facts returned
+-- beside them.
 runPipeline : List Decl ->
-  <IO> (List String, List (String, Scheme), List (String, Value <IO>))
+  <IO> (List String, List (String, Scheme), List (String, Value <IO>), ProgramFacts)
 runPipeline combined =
   let runtimeDecls = !runtimeDeclsRef
   let preludeDecls = !preludeDeclsRef
   let resErrs = resolveProgram runtimeDecls preludeDecls combined
   match resErrs
-    e :: _ => (map ppResError resErrs, [], [])
+    e :: _ => (map ppResError resErrs, [], [], emptyFacts)
     [] =>
       -- One drive yields the diagnostics, the entry's own schemes and the
       -- elaborated trees; the session's shadowed prelude names are dropped
       -- before it, so a redefinition is checked against what will run.
-      let ((coreE, modulesE, diagsE, _, _, _, _), _, allSchemes) = elaborateModulesWithSchemes
+      let (elab, _, allSchemes) = elaborateModulesWithSchemes
         False
         runtimeDecls
         (dropShadowedExp (funNamesOf combined) preludeDecls)
         [("__repl__", combined)]
+      let (coreE, modulesE, diagsE, _, _, _, _) = elab
       let tcErrs = flatMap (d => fst (snd d)) diagsE
       match tcErrs
-        e :: _ => (map tcMsg tcErrs, [], [])
+        e :: _ => (map tcMsg tcErrs, [], [], emptyFacts)
         [] =>
           let (coreM, modulesM) = mangleCtorCollisionsPair (coreE, modulesE)
-          let bindings = evalOneRootEnvWith (testCapableExterns ()) coreM (
+          let facts = factsOfElab elab
+          let bindings = evalOneRootEnvFacts facts (testCapableExterns
+            ()) coreM (
             "__repl__",
             flatMap snd modulesM,
           )
-          ([], pubSchemes allSchemes, bindings)
+          ([], pubSchemes allSchemes, bindings, facts)
 -- DRIVER-COLLAPSE Phase 3/4: eval via the 1-module wrapper (evalOneRootEnv
 -- = evalModulesRootEnv over [("__repl__", combined)]) instead of the flat
 -- evalProgram (preludeDecls ++ combined).  The prelude is installed
@@ -286,7 +292,7 @@ processDeclInput : String -> <IO> Unit
 processDeclInput src =
   let newDecls = desugar (parse src)
   let combined = combinedDecls newDecls
-  let (errs, allSchemes, _bindings) = runPipeline combined
+  let (errs, allSchemes, _bindings, _) = runPipeline combined
   match errs
     e :: _ => mapIO_ printErr errs
     [] =>
@@ -316,7 +322,7 @@ processExprInput src =
   let wrappedSrc = "__repl__ = " ++ src
   let newDecls = desugar (parse wrappedSrc)
   let combined = combinedDecls newDecls
-  let (errs, allSchemes, bindings) = runPipeline combined
+  let (errs, allSchemes, bindings, facts) = runPipeline combined
   match errs
     e :: _ => mapIO_ printErr errs
     [] =>
@@ -324,7 +330,7 @@ processExprInput src =
       let schemeOpt = lookupScheme "__repl__" allSchemes
       match (valOpt, schemeOpt)
         (Some v, Some scheme) =>
-          let vStr = ppValue (force v)
+          let vStr = withFacts facts (_ => ppValue (force v))
           let tStr = ppScheme scheme
           putStrLn "\{vStr} : \{tStr}"
         _ => ()
@@ -339,7 +345,7 @@ processTypeCmd exprSrc =
     let wrappedSrc = "__repl__ = " ++ trimmed
     let newDecls = desugar (parse wrappedSrc)
     let combined = combinedDecls newDecls
-    let (errs, allSchemes, _) = runPipeline combined
+    let (errs, allSchemes, _, _) = runPipeline combined
     match errs
       e :: _ => mapIO_ printErr errs
       [] => match lookupScheme "__repl__" allSchemes

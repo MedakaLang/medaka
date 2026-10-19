@@ -38,8 +38,9 @@
 import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import eval.eval.{evalModulesOutput}
-import ir.core_ir_eval.{cevalModulesOutput}
+import eval.eval.{evalModulesOutputFacts}
+import ir.core_ir_eval.{cevalModulesOutputFacts}
+import types.program_facts.{emptyFacts}
 import support.timer.{perfEnabled, now, emitPhaseAO, emitTotalA, allocSnap}
 import support.opcount.{setOpCounting, opSnap}
 import support.util.{listLen}
@@ -107,7 +108,7 @@ runStaged on csrc tsrc =
   let tE0 = now ()
   let aE0 = allocSnap ()
   let oE0 = opSnap ()
-  let outE = evalModulesOutput coreDecls modules
+  let outE = evalModulesOutputFacts emptyFacts coreDecls modules
   let _ = stringLength outE
   let tE1 = now ()
   let _ =
@@ -124,7 +125,7 @@ runStaged on csrc tsrc =
   let tC0 = now ()
   let aC0 = allocSnap ()
   let oC0 = opSnap ()
-  let outC = cevalModulesOutput coreDecls modules
+  let outC = cevalModulesOutputFacts emptyFacts coreDecls modules
   let _ = stringLength outC
   let tC1 = now ()
   let _ =

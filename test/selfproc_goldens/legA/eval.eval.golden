@@ -34,9 +34,9 @@ boolToInt : Bool -> Int
 buildCtorFieldOrders : List Decl -> List (String, List String)
 buildCtorToType : List Decl -> List (String, String)
 buildIfaceDispatch : List Decl -> List ((String, String, String), List Int)
-buildMethodReqCounts : List Decl -> List ((String, String), Int)
+buildMethodReqCounts : Option DispositionTable -> List Decl -> List ((String, String), Int)
 buildModInfos : List (String, Ref (Value a)) -> List (String, Ref (Value a)) -> ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
-buildRootModuleStateWith : List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> (List (ModInfo (Value a)), List (String, Ref (Value a)))
+buildRootModuleStateWith : ProgramFacts -> List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> (List (ModInfo (Value a)), List (String, Ref (Value a)))
 buildStampExterns : Unit -> List (String, Value a)
 buildWith : Value a -> Int -> Int -> <a> List (Value a)
 bytesBEGo : Array Int -> Int -> U64 -> U64
@@ -88,7 +88,7 @@ ctorsByTypeOf : List Decl -> List (String, List String)
 ctorsOfDecl : Decl -> List (String, Value a)
 currentEvalFile : Ref String
 currentEvalLoc : Ref Loc
-declImplEntries : EvalEnv (Value a) -> List ((String, String, String), List Int) -> Decl -> List (String, (Int, Value a))
+declImplEntries : Option DispositionTable -> EvalEnv (Value a) -> List ((String, String, String), List Int) -> Decl -> List (String, (Int, Value a))
 defaultNamesOf : IfaceMethod -> List String
 dictOfRoute : EvalEnv (Value a) -> Route -> <a> Value a
 dispatchPositionsOf : Ty -> List String -> List Int
@@ -127,18 +127,26 @@ evalMethodAt : EvalEnv (Value a) -> String -> String -> Route -> List Route -> L
 evalMethodAtEv : EvalEnv (Value a) -> String -> (String, Int, Route, List Route, List Route) -> <a> Value a
 evalModules : List Decl -> List (String, List Decl) -> <a> List (String, Value a)
 evalModulesOutput : List Decl -> List (String, List Decl) -> String
+evalModulesOutputFacts : ProgramFacts -> List Decl -> List (String, List Decl) -> String
 evalModulesOutputRun : List Decl -> List (String, List Decl) -> <IO> String
+evalModulesOutputRunFacts : ProgramFacts -> List Decl -> List (String, List Decl) -> <IO> String
 evalModulesRootEnv : List Decl -> List (String, List Decl) -> <a> List (String, Value a)
+evalModulesRootEnvFacts : ProgramFacts -> List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> List (String, Value a)
 evalModulesRootEnvWith : List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> List (String, Value a)
+evalModulesRootEvalEnvFacts : ProgramFacts -> List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> EvalEnv (Value a)
 evalModulesRootEvalEnvWith : List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> EvalEnv (Value a)
-evalModulesWith : List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> List (String, Value a)
+evalModulesWith : ProgramFacts -> List (String, Value a) -> List Decl -> List (String, List Decl) -> <a> List (String, Value a)
 evalOne : List Decl -> (String, List Decl) -> <a> List (String, Value a)
+evalOneFacts : ProgramFacts -> List Decl -> (String, List Decl) -> <a> List (String, Value a)
 evalOneOutput : List Decl -> (String, List Decl) -> String
+evalOneOutputFacts : ProgramFacts -> List Decl -> (String, List Decl) -> String
 evalOneRootEnv : List Decl -> (String, List Decl) -> <a> List (String, Value a)
+evalOneRootEnvFacts : ProgramFacts -> List (String, Value a) -> List Decl -> (String, List Decl) -> <a> List (String, Value a)
 evalOneRootEnvWith : List (String, Value a) -> List Decl -> (String, List Decl) -> <a> List (String, Value a)
 evalOneWith : List (String, Value a) -> List Decl -> (String, List Decl) -> <a> List (String, Value a)
 evalOr : EvalEnv (Value a) -> Value a -> Expr -> <a> Value a
 evalOutputWith : List Decl -> List Decl -> String
+evalOutputWithFacts : ProgramFacts -> List Decl -> List Decl -> String
 evalRange : Value a -> Value a -> Bool -> (List Int -> Value a) -> Value a
 evalRecLet : EvalEnv (Value a) -> String -> Expr -> Expr -> <a> Value a
 evalRecordUpdate : Value a -> List (String, Value a) -> Value a
@@ -213,7 +221,7 @@ inheritedEntryRef : Ref (Map String (Map String Int))
 inheritedEntryRows : Option DispositionTable -> Decl -> List ((String, String), Int)
 insertScore : (Int, Value a) -> List (Int, Value a) -> List (Int, Value a)
 installConsts : List (String, Ref (Value a)) -> List (String, Value a) -> <a> Unit
-installDispatchTables : List Decl -> List ((String, String, String), List Int)
+installDispatchTables : Option DispositionTable -> List Decl -> List ((String, String, String), List Int)
 installGroup : EvalEnv (Value a) -> List (String, Ref (Value a)) -> List LetBind -> <a> Unit
 installGroups : EvalEnv (Value a) -> List (String, Ref (Value a)) -> List (String, List (List Pat, Expr, Loc)) -> <a> Unit
 installModGroups : List (ModInfo (Value a)) -> <a> Unit

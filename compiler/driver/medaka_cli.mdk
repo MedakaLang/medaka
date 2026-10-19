@@ -200,6 +200,7 @@ import json.{
   asString,
 }
 import types.publish.{TcReport(..)}
+import types.program_facts.{ProgramFacts, factsOfChecked}
 import types.typecheck.{
   TcDiag,
   mainTypeIsUnit,
@@ -212,7 +213,7 @@ import driver.main_autoprint.{
   executedFromReport,
 }
 import eval.eval.{
-  evalModulesOutputRun,
+  evalModulesOutputRunFacts,
   currentEvalFile,
   modulePathMap,
   runJsonMode,
@@ -2588,14 +2589,16 @@ finishBuildArgs _ _ _ = Err "error: medaka build takes exactly one input file"
 -- after this function returned would stage them into an already-drained sink
 -- and lose them.  Under plain `run` it is the same two calls in the same order,
 -- just one stack frame in.
+-- [facts] are those of the checked program whose trees `elaborated` holds.
 finishRunEval : String ->
   Bool ->
+  ProgramFacts ->
   (List Decl, List (String, List Decl)) ->
   List (String, List Decl) ->
   List (String, String, List Diag) ->
   (Unit -> <IO> Unit) ->
   <IO> Unit
-finishRunEval target jsonMode elaborated mods cohWarns postPerf =
+finishRunEval target jsonMode facts elaborated mods cohWarns postPerf =
   let tsrc = readFileSafe target
   let _ = match lastModPair mods
     Some (_, edecls) => match mainEntryError edecls
@@ -2613,7 +2616,7 @@ finishRunEval target jsonMode elaborated mods cohWarns postPerf =
       emitWarningLines (flatMap renderTripleWarnings cohWarns)
   currentEvalFile := target
   runJsonMode := jsonMode
-  let _ = putStr (runProgramOutput (fst elaborated) (snd elaborated))
+  let _ = putStr (runProgramOutput facts (fst elaborated) (snd elaborated))
   -- The `eval`/`total` timings, BEFORE the envelope — see `postPerf`'s note.
   let _ = postPerf ()
   -- Reached only when the program did NOT panic (`panic` is a noreturn C abort), so
@@ -2852,6 +2855,7 @@ runRunCmd argv =
                       finishRunEval
                         target
                         jsonMode
+                        (checkedFacts report)
                         trees
                         mods
                         (allWarnTriples tsrc target diags)
@@ -2932,6 +2936,7 @@ runRunCmd argv =
                       finishRunEval
                         target
                         jsonMode
+                        (checkedFacts report)
                         trees
                         mods
                         projWarns
@@ -2971,9 +2976,20 @@ elaborateRun rtD coreD modsD =
 -- B2 (RUN-EFFECTS): evalModulesOutputRun is evalModulesOutput plus the real-I/O
 -- externs (File/Env/Stdin/Stderr/Clock), hence the `IO` row.  An `Async` main
 -- reaches here already rewritten by `executedTrees`.
-runProgramOutput : List Decl -> List (String, List Decl) -> <IO> String
-runProgramOutput preludeDecls modules =
-  evalModulesOutputRun preludeDecls modules
+runProgramOutput : ProgramFacts ->
+  List Decl ->
+  List (String, List Decl) ->
+  <IO> String
+runProgramOutput facts preludeDecls modules =
+  evalModulesOutputRunFacts facts preludeDecls modules
+
+-- The facts of the checked program [report] judged.  `executedFromReport` has
+-- already refused a report without one, so the absent arm is unreachable.
+checkedFacts : TcReport -> ProgramFacts
+checkedFacts report = match report.trChecked
+  Some checked => factsOfChecked checked
+  None =>
+    panic "internal error: the typecheck published no checked program to run"
 
 -- ── test ──────────────────────────────────────────────────────────────────
 -- Mirrors bin/main.ml's `test` arm + test_main.mdk: read <MEDAKA_ROOT>/stdlib/
