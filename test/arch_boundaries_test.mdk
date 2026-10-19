@@ -11,7 +11,8 @@
    to rewrite them from the tree instead of comparing. -}
 import fs.{walkDir}
 import list.{
-  drop, dropWhile, dropWhileEnd, filterMap, nub, reverse, sort, takeWhile
+  drop, dropWhile, dropWhileEnd, filterMap, lookup, nub, reverse, sort,
+  takeWhile
 }
 import map as M
 import set as S
@@ -618,19 +619,74 @@ nameOf : List String -> String
 nameOf [] = ""
 nameOf (c :: _) = c
 
-lifetimeOf : List String -> String
-lifetimeOf cells = match drop 2 cells
-  [] => ""
-  c :: _ => c
-
 lifetimeVocab : List String
 lifetimeVocab =
   ["process", "config", "graph", "module", "group", "run", "unknown"]
 
+cellAt : Int -> List String -> String
+cellAt i cells = match drop i cells
+  [] => ""
+  c :: _ => c
+
+-- Some "<row>: <label> <value>" when column `i` of the row is outside `vocab`.
+badField : String -> Int -> List String -> List String -> Option String
+badField label i vocab cells =
+  let v = cellAt i cells
+  if elem v vocab then None else Some "\{nameOf cells}: \{label} \{v}"
+
 badLifetime : List String -> Option String
-badLifetime cells =
-  let v = lifetimeOf cells
-  if elem v lifetimeVocab then None else Some "\{nameOf cells}: lifetime \{v}"
+badLifetime = badField "lifetime" 2 lifetimeVocab
+
+ownerVocab : List String
+ownerVocab = ["module-level", "PerRun", "GraphRun", "DriverState", "CrossRun"]
+
+targetVocab : List String
+targetVocab = [
+  "TcEnv", "GroupCtx", "ModuleCtx", "GraphCtx", "TcConfig", "interner", "delete"
+]
+
+fillsVocab : List String
+fillsVocab = ["yes", "no", "n/a"]
+
+sourceFields : List String
+sourceFields =
+  ["cpSchemes", "cpCore", "cpEvidence", "cpDispositions", "cpBinders"]
+
+-- `-`, `none`, `derived(<field>)`, or a comma-separated non-empty field list.
+goodSource : String -> Bool
+goodSource s =
+  s == "-"
+    || s == "none"
+    || derivedField s
+    || fieldList (map trim (split "," s))
+
+derivedField : String -> Bool
+derivedField s = match stripPrefix "derived(" s
+  None => False
+  Some rest => match stripSuffix ")" rest
+    None => False
+    Some f => elem f sourceFields
+
+fieldList : List String -> Bool
+fieldList parts =
+  parts /= [] && filter (p => not (elem p sourceFields)) parts == []
+
+badSource : List String -> Option String
+badSource cells =
+  let v = cellAt 8 cells
+  if goodSource v then None else Some "\{nameOf cells}: source \{v}"
+
+badVocab : List String -> List String
+badVocab cells =
+  filterMap
+    (f => f cells)
+    [
+      badLifetime,
+      badField "owner-today" 3 ownerVocab,
+      badField "target" 6 targetVocab,
+      badField "interface-fills" 7 fillsVocab,
+      badSource,
+    ]
 
 badWidth : List String -> Option String
 badWidth cells =
@@ -639,11 +695,23 @@ badWidth cells =
   else
     Some "\{nameOf cells}: \{length cells} cells, not 10"
 
--- Lines of the module `m` in `mods`, or none when it is absent.
-linesOf : String -> List (String, List String) -> List String
-linesOf m mods = match filter (p => fst p == m) mods
-  [] => []
-  (_, ls) :: _ => ls
+-- The `## Cells outside the file` section: from its heading to the next `## `.
+sideSection : List String -> List String
+sideSection ls =
+  takeWhile
+    (l => not (startsWith "## " l))
+    (drop 1 (dropWhile (/= "## Cells outside the file") ls))
+
+sideNames : List String
+sideNames = [
+  "selectedProfile",
+  "evidenceRef",
+  "dispositionsRef",
+  "binderTypesRef",
+  "binderOrdinalRef",
+  "preludeScopeMemoRef",
+  "loadedSourcesRef",
+]
 
 -- The field name of an indented `name :` line; comment lines give None.
 fieldNameOf : String -> Option String
@@ -678,13 +746,16 @@ bundleFieldNames ls recName =
 -- the `Bundle.field` names of the four `tc_types` bundles.
 cellCensus : List (String, List String) -> List String
 cellCensus mods =
-  filterMap cellName (linesOf "types.typecheck" mods)
-    ++ bundleNames (linesOf "types.tc_types" mods)
+  let linesFor m = optionOr [] (lookup m mods)
+  filterMap cellName (linesFor "types.typecheck")
+    ++ bundleNames (linesFor "types.tc_types")
 
 -- Names in exactly one of the two lists, sorted.
 symmetricDifference : List String -> List String -> List String
 symmetricDifference a b =
-  sort (filter (n => not (elem n b)) a ++ filter (n => not (elem n a)) b)
+  let sa = S.fromList a
+  let sb = S.fromList b
+  sort (toList (S.difference sa sb) ++ toList (S.difference sb sa))
 
 test "arch_boundaries: CELL-LIFETIMES rows equal the cell census" =
   match readFile (underRoot "compiler/types/CELL-LIFETIMES.md")
@@ -692,10 +763,14 @@ test "arch_boundaries: CELL-LIFETIMES rows equal the cell census" =
     Ok text =>
       let rows =
         map rowCells (filter isDataRow (typecheckerSection (lines text)))
+      let sideRows = map rowCells (filter isDataRow (sideSection (lines text)))
+      let allRows = rows ++ sideRows
       let census = cellCensus loadModules
       expectAll [
+        expectAtLeast 150 (length census),
         expectEqual [] (symmetricDifference census (map nameOf rows)),
         expectEqual (length census) (length rows),
-        expectEqual [] (filterMap badLifetime rows),
-        expectEqual [] (filterMap badWidth rows),
+        expectEqual sideNames (map nameOf sideRows),
+        expectEqual [] (flatMap badVocab allRows),
+        expectEqual [] (filterMap badWidth allRows),
       ]
