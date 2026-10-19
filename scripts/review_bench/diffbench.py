@@ -64,8 +64,9 @@ EXPOSED = ("3f3e63a12", "e5a3d0380")
 ARMS = {"baseline": (False, "diff", True), "g2": (False, "strict", True),
         "g2-exempt": (False, "strict-exempt", True), "g1": (True, "diff", True), "fixed": (True, "strict", True),
         "onedecl": (False, "diff", False)}
-# $6.00 for the first pass (g1, g2), $2.00 for the onedecl pass.
-BUDGET_USD = 8.00
+# $6.00 for the first pass (g1, g2), $2.00 for the onedecl pass, then $7.00 for the
+# one test-split pass (baseline and its audit) over the $7.8951 those two spent.
+BUDGET_USD = 14.8951
 # Measured on dev (RESULTS-diffs-dev-2026-10-18.md): a diff unit is larger than a
 # fixture excerpt, so it costs more than review.USD_PER_UNIT.
 USD_PER_UNIT = 0.0057  # baseline arm, battery then confirm
