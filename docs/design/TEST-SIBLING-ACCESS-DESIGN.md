@@ -199,7 +199,7 @@ each of them one producer to read, rather than one more derivation to reconcile.
 |---|---|---|
 | M-IDENTITY, #2563 (identity-key every cross-module namespace) | Its remaining scope includes the typechecker's import-scope ladders (`applyCtorScopeOverrides` → `scopedCtorEntry` → `importedCtorEntry`, and the record rung). They answer "which module's declaration does this importer's name denote" (#2563's wording): they choose among candidates that are already visible. Which names are visible at all comes from the `public*` family in §4.3. | Only the `public*` family has to change for a sibling to typecheck. The ladders stay untouched and stay #2563's; when #2563 retires them it reads the same producer. The feature does not wait on M-IDENTITY. |
 | Phase 2 as planned 2026-10-19: sprint 1 the cell-lifetime table and the `tc_types` leaf, sprint 2 lowering and eval read `CheckedProgram`, then a gate between Phase 3 C1/C2 and state threading | Every Phase 2 sprint lives in `typecheck.mdk`. Slice 1 touches no Phase 2 source, but shares the LEG A golden mechanism (`frontend.resolve` is a LEG A module). | Each slice runs serially between Phase 2 sprints, never in parallel with one. Slice 2 edits `typecheck.mdk` and carries the D1 growth ratchet. Replacing five projections with calls should shrink the file; if it grows, the override names where the lines go. |
-| Phase 3 C1, the `ModuleInterface` codec | C1 serializes "a module's published export surface". | C1 serializes the subsystem's output, both views (§3.1), so slices 1 to 3 land before C1. |
+| Phase 3 C1, the `ModuleInterface` codec | C1 serializes "a module's published export surface". | C1 serializes the subsystem's output, so slice 1 lands before C1. The full view (§3.1) does not exist until slice 3; if C1 exists by then, slice 3 adds the full view to the interface under a format-version bump, which the codec has by design. Slices 2 and 3 do not gate Phase 3. |
 | The interpreter's export table | Eval's `ModExports` is built by the eval driver from declarations (`evalModulesWith`), not installed by the typechecker; Phase 2 sprint 2's installed-table deletion does not move it. | Eval's switch belongs to slice 3, and moves `evalModules` (`compiler/eval/eval.mdk`) and `cevalModules` (`compiler/ir/core_ir_eval.mdk`) together ([T-EVAL-LOCKSTEP]). |
 
 **In the playbook.** `compiler/ARCHITECTURE-PLAYBOOK.md` carries this design as follows:
@@ -210,7 +210,8 @@ each of them one producer to read, rather than one more derivation to reconcile.
 - the §8 mapping table gains a row for M-IDENTITY / #2563, which had none: its ladders are the
   `Sh` component of `types/`, and they read the F1 producer when retired;
 - C1 records the §3.1 ruling (the interface carries the private surface as well as the exported
-  one, serialized from the producer's output) and needs F3.
+  one, serialized from the producer's output) and needs only F1; F3 adds the full view under a
+  format-version bump.
 
 ## 6. Slices
 
@@ -226,8 +227,9 @@ each of them one producer to read, rather than one more derivation to reconcile.
    and a census showing no remaining direct `pub`-flag projection in `types/`.
 3. **The sibling relation.** Loader classification (§3.3), the full view, and the two new
    errors (re-export of a privileged name; a non-test module importing a `_test` module),
-   across check, both interpreter drivers in lockstep, and emit. Placed after Phase 2 sprint 2
-   and before C1. Evidence: `check` accepts the §3.4 example and rejects the same import from
+   across check, both interpreter drivers in lockstep, and emit. Placed after Phase 2 sprint 2;
+   if C1 has landed, the slice also adds the full view to the interface under a format-version
+   bump. Evidence: `check` accepts the §3.4 example and rejects the same import from
    a non-sibling, from a `*_test.mdk` in another directory, and from a user-project
    `net_test.mdk` against stdlib `net`, each rejection naming its diagnostic (R37);
    `medaka test` agrees across the interpreter, native and wasm engines for private values,
