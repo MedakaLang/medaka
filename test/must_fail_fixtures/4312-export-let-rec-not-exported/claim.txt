@@ -1,0 +1,21 @@
+issue: 4312
+what: A public top-level `let rec` group (`export let rec countdown n = ...`, no
+what: signature) is not exported by resolve: `frontend/visibility.nsValues` has no
+what: `DLetGroup` arm. `run`'s own export table and the emitter's export map
+what: (`types/private_mangle.pubLetRecBinders`) both do export it, so a program that
+what: also imports a same-named function explicitly binds by import order, silently
+what: (8 vs 104 on run and build, exit 0). The narrowest observation is the resolve
+what: half: a selective import of the binder is refused. The ONLY difference from
+what: control.mdk is that lib/msig.mdk exports the same function through a signature.
+what: Expected: check accepts (exit 0) and run prints 7. Actual: R-PRIVATE-NAME.
+cmd: check-json main.mdk
+exit: 1
+diag-code: R-PRIVATE-NAME 0:14-0:23
+why-diag-code: `diag-code:`, not `diag:`: the wording is not the defect, the missing
+why-diag-code: export is. The range is `countdown` in `import lib.m.{countdown}` (line 1,
+why-diag-code: col 15, zero-based 0:14). It drains when `nsValues` gains a `DLetGroup True`
+why-diag-code: arm; delete `types/private_mangle.pubLetRecBinders` in the same change.
+control: run control.mdk
+why-control: control.mdk imports `countdown` from lib/msig.mdk, which exports it through a
+why-control: signature instead of `export let rec`. It must print `7` at exit 0. A red
+why-control: control means selective import broke, never that #4312 drained.

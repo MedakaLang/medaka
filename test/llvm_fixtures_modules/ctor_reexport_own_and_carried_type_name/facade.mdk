@@ -1,0 +1,8 @@
+export import m.{T(..), unB}
+
+public export data T = A Int
+
+export
+unA : T -> Int
+unA t = match t
+  A n => n + 7

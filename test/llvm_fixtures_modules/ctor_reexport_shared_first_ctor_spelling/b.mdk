@@ -1,0 +1,7 @@
+public export data U = K Int | L Int
+
+export
+unU : U -> Int
+unU u = match u
+  L n => n
+  _ => 99

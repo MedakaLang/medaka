@@ -29,10 +29,10 @@
 --   3. else `n` defined in core (implicit prelude, imported by every unit) → `core__<n>`
 --   4. else (extern C symbol, constructor, interface/impl method, unknown free
 --      name) → LEFT UNCHANGED.
--- The per-unit import structure comes straight from the unit's `DUse` decls + the
--- per-module set of EXPORTED (pub) function names — both already present at the
--- mangle point (the `(mid, decls)` units).  No resolve.mdk change is needed: a
--- per-unit LOCAL-name → origin-module map is sufficient.
+-- The per-unit import structure comes straight from the unit's `DUse` decls + each
+-- module's export surface, which `frontend.visibility.buildExportsWith` builds from
+-- the `(mid, decls)` units (`unitSurfaces`, which says how its value set differs
+-- from resolve's).  A per-unit LOCAL-name → origin-module map is sufficient.
 --
 -- IMPORT ALIASING does not perturb any of this, because it only changes what the
 -- LOCAL name is, never the shape of the map:
@@ -133,8 +133,21 @@ import frontend.ast.{
   EvId(..),
   EvTable,
 }
+import frontend.visibility.{
+  ModuleExports(..),
+  coreExports,
+  buildExportsWith,
+  pubIfaceMethodSets,
+  directIn,
+  filterInSet,
+  nsValues,
+  valueDeclsOf,
+  valueDeclOf,
+  typeOfCtor,
+}
 import u64 as U64
-import list.{last}
+import list.{last, zip}
+import map.{insertWith}
 import support.util.{
   lookupAssoc,
   contains,
@@ -145,6 +158,7 @@ import support.util.{
   joinDot,
   dedup,
   dedupBy,
+  lenKey,
 }
 -- The per-unit rename map is applied to EVERY reference in the unit (one lookup
 -- per EVar / def-name / pattern ctor). Backing it with the String-keyed
@@ -205,8 +219,7 @@ scopedExternName : String -> ExternDecl -> String
 scopedExternName mid ed = mangledName mid ed.edName
 
 externDeclNames : List Decl -> List String
-externDeclNames decls =
-  map fst (externDeclEntries (ed => ed.edName) False decls)
+externDeclNames decls = map fst (externDeclEntries (ed => ed.edName) decls)
 
 -- `externName` names an extern program-wide from its module and declaration.
 -- `implicit` is in scope in every unit after the prelude, each name with the
@@ -219,13 +232,14 @@ renameUnits : (String -> ExternDecl -> String) ->
 renameUnits externName implicit coreDecls modules =
   let allUnits = ("core", coreDecls) :: modules
   let entryMid = entryUnitMid allUnits
+  let surfaces = unitSurfaces allUnits
   let exportsPerUnit =
     withPreludeDefs
       (dedup (unitDefNames ("", coreDecls)))
       implicit
-      (buildExportsPerUnit [] allUnits)
-  let ctorExportsPerUnit = buildCtorExportsPerUnit [] allUnits
-  let externExports = buildExternExports externName omEmpty allUnits
+      (fnExportsFrom allUnits surfaces)
+  let ctorExportsPerUnit = ctorExportsFrom surfaces
+  let externExports = externExportsFrom externName allUnits surfaces
   let coreOut = mangleUnitU
     entryMid
     exportsPerUnit
@@ -271,13 +285,14 @@ mangleUnitsEv table coreDecls modules =
   let allUnits = ("core", coreDecls) :: modules
   let entryMid = entryUnitMid allUnits
   let _ = symbolInjectivityGuard entryMid allUnits
+  let surfaces = unitSurfaces allUnits
   let exportsPerUnit =
     withPreludeDefs
       (dedup (unitDefNames ("", coreDecls)))
       []
-      (buildExportsPerUnit [] allUnits)
-  let ctorExportsPerUnit = buildCtorExportsPerUnit [] allUnits
-  let externExports = buildExternExports externSymbolName omEmpty allUnits
+      (fnExportsFrom allUnits surfaces)
+  let ctorExportsPerUnit = ctorExportsFrom surfaces
+  let externExports = externExportsFrom externSymbolName allUnits surfaces
   -- ONE map per unit, threaded to both readers: the decl rename and the evidence
   -- remap name the same symbols, and building the map twice was measured at +0.99%
   -- Ir on the emitter child over the compiler's own graph.
@@ -416,7 +431,7 @@ mangleCtorCollisions coreDecls modules =
   if omSize collided == 0 then
     (coreDecls, modules)
   else
-    let ctorExportsPerUnit = buildCtorExportsPerUnit [] allUnits
+    let ctorExportsPerUnit = ctorExportsFrom (unitSurfaces allUnits)
     let coreOut =
       mangleCtorUnitU collided ctorExportsPerUnit ("core", coreDecls)
     let modsOut = map (mangleCtorModule collided ctorExportsPerUnit) modules
@@ -446,7 +461,7 @@ collidedGo (n :: rest) seen dup
 
 -- ⚠️ DATA constructors only -- `unitLocalCtorNames`' `DNewtype` arm is deliberately
 -- NOT consulted here.  A newtype constructor is not importable by ANY spelling (see
--- `unitCtorExportEntry`'s #1305 note), so counting one as a collision would rename a
+-- `offeredCtor`'s #1305 note), so counting one as a collision would rename a
 -- DATA constructor that has no cross-module ambiguity at all: measured, that turned
 -- `test/eval_modules_fixtures/ctor_type_member_newtype_not_bound` (kmodv's
 -- `data KT = Wrap Int Int` beside nmodv's `newtype NT = Wrap Int`) from `1 / 9` to
@@ -612,73 +627,133 @@ checkSymbolsInjective what ((sym, pre) :: rest) seen = match omLookup sym seen
     else
       panic
         "emitted-symbol collision: \{what}s `\{prev}` and `\{pre}` both mangle to `\{sym}` -- two distinct (module, name) pairs cannot share one emitted symbol, so the emitter would silently keep one and drop the other. Rename one of the two modules so their ids differ after `sanitizeId` (which maps `.`, `/` and `-` all to `_`), or rename one of the two definitions."
--- Per-unit CONSTRUCTOR exports: (mid, [(typeName, [ctorName])]).  Mirrors
--- exportsPerUnit but for data/record ctors, so an importing unit can map
--- `import M.{T(..)}` / `import M.{Ctor}` to `<M>__<Ctor>` (see ctorImportEntries).
+-- ── the export surfaces the three export maps read ───────────────────────────
+-- Every unit's `ModuleExports`, built by the same `frontend.visibility` producer
+-- resolve uses, in unit order.  Units arrive dependency-first (the loader's order),
+-- so each `export import` reads a surface already built.  Core's surface is
+-- `coreExports` and never enters `known`: `buildExportsWith` resolves an `export
+-- import core…` through its own core argument.  The values bound beside the
+-- decls' own are every public interface's methods, where resolve passes only the
+-- bound ones (`keepBoundMethods`), plus the public `let rec` binders
+-- (`pubLetRecBinders`), so a re-export carries those as resolve's surface would
+-- once it has them.
+unitSurfaces : List (String, List Decl) -> List (String, ModuleExports)
+unitSurfaces units =
+  let coreExp = match lookupAssoc "core" units
+    Some coreDecls => coreExports coreDecls
+    None => coreExports []
+  surfacesGo coreExp omEmpty units
 
--- exported (pub) top-level function names of a unit, each paired with the module
--- that ACTUALLY defines it.  For a locally-defined pub fn the definer is the unit
--- itself; for a name brought in by `export import` (a `DUse True` re-export) the
--- definer is chased through the re-export chain to the ORIGINAL owning module
--- (mirroring eval.mdk's `pubReexports`), so an importer of a re-exported name
--- mangles its reference to `<originalDefiner>__<name>`, NOT `<reExporter>__<name>`
--- (the re-exporter has no backing DFunDef → the reference would be orphaned/unbound
--- at emit).  Built as a dependency-ordered fold so a re-export can consult the
--- source module's already-computed exports (loader order is dependency-first — the
--- same invariant eval.mdk's buildModInfos relies on).
-buildExportsPerUnit : List (String, List (String, String)) ->
+surfacesGo : ModuleExports ->
+  OrdMap ModuleExports ->
   List (String, List Decl) ->
+  List (String, ModuleExports)
+surfacesGo _ _ [] = []
+surfacesGo coreExp known ((mid, decls) :: rest)
+  | mid == "core" = (mid, coreExp) :: surfacesGo coreExp known rest
+  | otherwise =
+    let exp =
+      buildExportsWith
+        coreExp
+        known
+        mid
+        decls
+        (flatMap identity (pubIfaceMethodSets decls) ++ pubLetRecBinders decls)
+    (mid, exp) :: surfacesGo coreExp (omInsert mid exp known) rest
+
+-- Per unit, the exported FUNCTION symbols, each paired with the module that
+-- defines it: a value the surface exports whose declaration (an
+-- `expValueOrigins` row, which names the declaring module) is a function that
+-- module defines and exports under that name.  An importer of a re-exported name
+-- therefore mangles its reference to `<definer>__<name>`, never
+-- `<reExporter>__<name>`, which has no backing definition.  An interface method,
+-- a body-less signature and an extern are values but not function symbols.
+fnExportsFrom : List (String, List Decl) ->
+  List (String, ModuleExports) ->
   List (String, List (String, String))
-buildExportsPerUnit _ [] = []
-buildExportsPerUnit acc ((mid, decls) :: rest) =
-  let entry = unitExportEntry acc (mid, decls)
-  entry :: buildExportsPerUnit (entry :: acc) rest
+fnExportsFrom units surfaces =
+  let fnSyms = omFromPairs (map unitFnSyms units) omEmpty
+  let methods = omFromPairs (map surfaceMethods surfaces) omEmpty
+  map (unitFnExports fnSyms methods) (zip units surfaces)
 
-unitExportEntry : List (String, List (String, String)) ->
-  (String, List Decl) ->
+surfaceMethods : (String, ModuleExports) -> (String, OrdMap Unit)
+surfaceMethods (mid, exp) =
+  (mid, omFromNames (flatMap snd exp.expIfaceMethods) omEmpty)
+
+-- The functions a unit defines under a name its own decls export.  This reads
+-- the module's direct value exports, not its surface, so a private standalone
+-- beside a public interface method of the same name is not offered
+-- (`test/llvm_fixtures_modules/method_private_standalone_visibility`).  It keeps
+-- core to what core marks exported, too: core's surface is every binding (#2640).
+unitFnSyms : (String, List Decl) -> (String, OrdMap Unit)
+unitFnSyms (mid, decls) =
+  let defined = omFromNames (unitDefNames (mid, decls)) omEmpty
+  let exported = directIn nsValues decls ++ pubLetRecBinders decls
+  (mid, omFromNames (filterInSet defined exported) omEmpty)
+
+-- The first row per name wins: a module's own values precede what it re-exports.
+unitFnExports : OrdMap (OrdMap Unit) ->
+  OrdMap (OrdMap Unit) ->
+  ((String, List Decl), (String, ModuleExports)) ->
   (String, List (String, String))
-unitExportEntry acc (mid, decls) =
-  let locals = map (n => (n, mid)) (dedup (pubFnNames decls))
-  let reexs = flatMap (reexportFnEntries acc) decls
-  (mid, dedupPairsByName (locals ++ reexs))
+unitFnExports fnSyms methods ((mid, _), (_, exp)) =
+  let origins = multiMapOf exp.expValueOrigins
+  (
+    mid,
+    dedupBy fst (flatMap (fnExport fnSyms methods exp origins) exp.expValues),
+  )
 
--- names a `DUse True` (re-export) decl brings in, each paired with its ORIGINAL
--- definer (looked up transitively in `acc` — the source module's already-computed
--- export pairs, so a >1-hop re-export chain still resolves to the true owner).
--- Mirrors eval.mdk's `reexport`/`resolveMembers`.
-reexportFnEntries : List (String, List (String, String)) ->
-  Decl ->
+-- `origins` holds each name's origins in surface order.  An interface method of
+-- its declaring module yields to a later origin, as the front end binds the later function
+-- over it (`W-IMPORT-METHOD-SHADOW`); any other first origin decides, and gives a
+-- row only if it is a function symbol, so an extern carried ahead of a function
+-- keeps the name an extern, as the front end binds it.  A name with no recorded
+-- origin is declared by the module that exports it.
+fnExport : OrdMap (OrdMap Unit) ->
+  OrdMap (OrdMap Unit) ->
+  ModuleExports ->
+  OrdMap (List (String, String)) ->
+  String ->
   List (String, String)
-reexportFnEntries acc (DUse True path _) =
-  let srcMid = useModIdU path
-  match lookupExports srcMid acc
+fnExport fnSyms methods exp origins v =
+  let decls = optionOr [(exp.modId, v)] (omLookup v origins)
+  match find (d => not (isMethodDecl fnSyms methods d)) decls
+    Some (dm, dn) =>
+      if dn == v && isFnSymbol fnSyms dm dn then [(v, dm)] else []
     None => []
-    Some srcExports => reexportMembers path srcExports
-reexportFnEntries acc (DAttrib _ d) = reexportFnEntries acc d
-reexportFnEntries _ _ = []
 
-reexportMembers : UsePath -> List (String, String) -> List (String, String)
-reexportMembers (UseGroup _ members) srcExports =
-  flatMap (reexportMember srcExports) members
-reexportMembers (UseWild _) srcExports = srcExports
-reexportMembers (UseName ns) srcExports =
-  if lenGt1 ns then reexportOne srcExports (lastOfPM ns) else []
-reexportMembers (UseAlias _ _) _ = []
+isFnSymbol : OrdMap (OrdMap Unit) -> String -> String -> Bool
+isFnSymbol fnSyms dm dn = match omLookup dm fnSyms
+  Some syms => omHasKey dn syms
+  None => False
 
-reexportMember : List (String, String) -> UseMember -> List (String, String)
-reexportMember srcExports m = reexportOne srcExports (useMemberOrigin m)
+isMethodDecl : OrdMap (OrdMap Unit) ->
+  OrdMap (OrdMap Unit) ->
+  (String, String) ->
+  Bool
+isMethodDecl fnSyms methods (dm, dn) =
+  not (isFnSymbol fnSyms dm dn)
+    && (match omLookup dm methods
+      Some ms => omHasKey dn ms
+      None => False)
 
-reexportOne : List (String, String) -> String -> List (String, String)
-reexportOne srcExports n = match lookupDefiner n srcExports
-  Some definer => [(n, definer)]
-  None => []
+-- Every value of each key, in list order.
+multiMapOf : List (String, a) -> OrdMap (List a)
+multiMapOf pairs =
+  fold (m (k, v) => insertWith (++) k [v] m) omEmpty (reverseL pairs)
 
--- keep the FIRST occurrence of each name — locals are prepended, so a locally
--- defined pub fn wins over a re-export of the same name.
--- #242: the name key is already a String, so this is the canonical
--- `support.util.dedupBy` verbatim (was a private O(n²) `List`-as-a-set scan).
-dedupPairsByName : List (String, String) -> List (String, String)
-dedupPairsByName pairs = dedupBy fst pairs
+-- The binders of the public top-level `let rec` groups.  The producer's
+-- `nsValues` has no arm for one, so resolve does not export it while `run`'s
+-- export table does, directly and through every `export import` (#4312).  This
+-- keeps the emitted program agreeing with `run` until `nsValues` gains a
+-- `DLetGroup True` arm, which closes #4312 and removes this.
+pubLetRecBinders : List Decl -> List String
+pubLetRecBinders decls = flatMap pubLetRecBindersOf decls
+
+pubLetRecBindersOf : Decl -> List String
+pubLetRecBindersOf (DLetGroup True binds) = map letBindName binds
+pubLetRecBindersOf (DAttrib _ d) = pubLetRecBindersOf d
+pubLetRecBindersOf _ = []
 
 lookupDefiner : String -> List (String, String) -> Option String
 lookupDefiner _ [] = None
@@ -686,128 +761,128 @@ lookupDefiner k ((n, d) :: rest) =
   if k == n then Some d else lookupDefiner k rest
 
 -- ── per-unit CONSTRUCTOR exports ──────────────────────────────────────────────
--- (mid, [(typeName, definerMid, [ctorName])]) for the PUBLIC data/record types
--- offered by the unit — its OWN declares (definerMid == mid) and, transitively,
--- whatever an `export import` re-export brings in (definerMid == the ORIGINAL
--- declaring module, chased through the chain exactly as `reexportFnEntries` does
--- for functions — #1359).  A reserved constructor
--- (Cons/Nil/Some/None/Ok/Err/Lt/Eq/Gt/True/False — the emitter's fixed-tag set) is
--- OMITTED so it is never mangled (mangling would lose its reserved tag).
+-- (mid, [(typeName, definerMid, [ctorName])]) for the constructors the unit's
+-- surface offers an importer, its own and whatever its `export import`s carry.
+-- `definerMid` is the DECLARING module, because a ctor's rename target is
+-- `<definerMid>__<ctor>`: `bmod`'s row can offer `Wid` (declared in `amod`)
+-- without `bmod` ever defining an `@amod__Wid`-shaped symbol.  A type row's
+-- definer is the first of the type's declaring modules (`expTypeOrigins`) that
+-- also declares every ctor in the row (`expCtorOrigins`): two carried types may
+-- share a type name, and two may share a ctor spelling, so neither name alone
+-- identifies the declaration.  Two carried types sharing both are not told apart.
 --
--- The `definerMid` field exists because a ctor's rename target is
--- `<definerMid>__<ctor>`, and for a re-exported ctor that is NOT the same module
--- that offers it to a further importer: `bmod`'s row can offer `Wid` (declared in
--- `amod`) without `bmod` itself ever defining an `@amod__Wid`-shaped symbol, so the
--- importer's rename entry must point at `amod`, the module that actually emits it.
---
--- 🚨 THIS ANSWERS A SCOPE QUESTION — "may an IMPORTER name this constructor?" — not
+-- This answers a scope question, "may an IMPORTER name this constructor?", not
 -- "does this constructor exist?".  The unit's OWN constructors are mangled from a
 -- different, deliberately unfiltered peer (`unitLocalCtorNames`, below), so
 -- declining an entry here never leaves a local definition unrenamed; it only
 -- declines to offer the symbol ACROSS a `DUse`.  Over-offering is not additive: the
 -- entry it manufactures SHADOWS whatever the front end actually bound.
 --
--- ⚠️ THE `VisPublic` GATE IS LOAD-BEARING, and this comment used to say the opposite
--- — *"Visibility is not gated here … unmangled-because-private is harmless (an
--- unimported ctor is never referenced cross-unit)"*.  That was measurably false, and
--- the counter-example is not exotic: a module can export a TYPE and privately declare
--- a CONSTRUCTOR of the same spelling.
+-- A row per type in `expTypeCtors`, then a single-ctor row for each exported ctor
+-- no such row holds.  That second kind is a ctor carried WITHOUT its type: `export
+-- import m.{Tq}` where `m` has `data Tq = Mk Int` and `data Sq = Tq Int Int`
+-- carries the type `Tq` and the ctor `Tq` of `Sq`, and only the ctor is a
+-- constructor symbol here.
+ctorExportsFrom : List (String, ModuleExports) ->
+  List (String, List (String, String, List String))
+ctorExportsFrom surfaces =
+  let surfaceMap = omFromPairs surfaces omEmpty
+  let newtypeCtors = omFromPairs (map surfaceNewtypeCtors surfaces) omEmpty
+  map (unitCtorExports surfaceMap newtypeCtors) surfaces
+
+surfaceNewtypeCtors : (String, ModuleExports) -> (String, OrdMap Unit)
+surfaceNewtypeCtors (mid, exp) =
+  (mid, omFromNames (map fst exp.expNewtypeCtors) omEmpty)
+
+unitCtorExports : OrdMap ModuleExports ->
+  OrdMap (OrdMap Unit) ->
+  (String, ModuleExports) ->
+  (String, List (String, String, List String))
+unitCtorExports surfaceMap newtypeCtors (mid, exp) =
+  let typeDefiners = multiMapOf exp.expTypeOrigins
+  let ctorDefiners = multiMapOf exp.expCtorOrigins
+  let typed =
+    map (typeRowDefiner typeDefiners ctorDefiners mid) exp.expTypeCtors
+  let covered = multiMapOf (flatMap rowCtorDefiners typed)
+  let loose =
+    dedupBy
+      ((c, d) => "\{lenKey c}\{d}")
+      (filterList
+        ((c, d) => not (contains d (definersOf covered c)))
+        exp.expCtorOrigins)
+  (
+    mid,
+    map (typeCtorRow newtypeCtors) typed
+      ++ flatMap (looseCtorRow surfaceMap newtypeCtors) loose,
+  )
+
+definersOf : OrdMap (List String) -> String -> List String
+definersOf definers n = optionOr [] (omLookup n definers)
+
+typeRowDefiner : OrdMap (List String) ->
+  OrdMap (List String) ->
+  String ->
+  (String, List String) ->
+  (String, String, List String)
+typeRowDefiner typeDefiners ctorDefiners mid (ty, cs) =
+  let declaresRow = d => all (c => contains d (definersOf ctorDefiners c)) cs
+  (ty, optionOr mid (find declaresRow (definersOf typeDefiners ty)), cs)
+
+rowCtorDefiners : (String, String, List String) -> List (String, String)
+rowCtorDefiners (_, d, cs) = map (c => (c, d)) cs
+
+typeCtorRow : OrdMap (OrdMap Unit) ->
+  (String, String, List String) ->
+  (String, String, List String)
+typeCtorRow newtypeCtors (ty, definer, cs) =
+  (ty, definer, filterList (offeredCtor newtypeCtors definer) cs)
+
+-- A ctor carried without its type.  Its type field is the type the declaring
+-- module's surface gives it, or `""` when that surface has none; `""` names no
+-- importable type, so `lookupCtorTypeEntry` never selects such a row.
+looseCtorRow : OrdMap ModuleExports ->
+  OrdMap (OrdMap Unit) ->
+  (String, String) ->
+  List (String, String, List String)
+looseCtorRow surfaceMap newtypeCtors (c, definer) =
+  if offeredCtor newtypeCtors definer c then
+    let ty = match omLookup definer surfaceMap
+      Some src => optionOr "" (typeOfCtor c src)
+      None => ""
+    [(ty, definer, [c])]
+  else
+    []
+
+-- The surface's constructors an importer may be offered, each with the module
+-- that declares it.  A reserved one (the emitter's fixed-tag set) is never
+-- mangled: mangling would lose its reserved tag.
+--
+-- A newtype's constructor is never offered (#1305).  It is not importable by ANY
+-- spelling: `import nmod.{NT(..)}`, `import nmod.{NT, Wrap}` and `import nmod.*`
+-- all give `T-UNBOUND` `Unbound variable: Wrap`, because typecheck never publishes
+-- the ctor's scheme, so an offered `<nmod>__Wrap` would shadow whatever the front
+-- end bound under that spelling.  The surface still lists an `export newtype`'s
+-- ctor, and only the DECLARING module's surface says it is one (`expNewtypeCtors`
+-- crosses no hop), so that is where this reads.  `eval.ctorsByTypeOf`
+-- (`compiler/eval/eval.mdk`) is the interpreter-side peer.
+--
+-- Visibility is the producer's.  A real module's surface holds only the ctors of
+-- its `public export data` and those its `export import`s carry; core's is every
+-- ctor the prelude declares (`coreExports`).  A module can export a TYPE and
+-- privately declare a CONSTRUCTOR of the same spelling:
 --     public export data Zz = Mk Int      -- mp exports the TYPE `Zz`
 --     data Hidden = Zz Int Int            -- ...and privately declares a CTOR `Zz`
--- An importer writing `import mp.{Zz(..)}` then `import mq.{Zz, unQ}` has `Zz` bound
--- by the front end to mq's public arity-1 constructor (`run` prints the correct `7`),
--- but an ungated table answers "is `Zz` a constructor of mp?" with YES — off mp's
--- PRIVATE one — and, being first in decl order, that entry wins
--- (`mangleUnitU`'s first-entry-wins `omFromPairs`).  Measured: the built binary died
--- `E-NONEXHAUSTIVE-MATCH`, with `store i64 ptrtoint (ptr @mdk_ctorpap_mp__Zz_0 …)` in
--- the IR and `mq__Zz` emitted nowhere.  Swapping only the two import lines made the
--- same program correct again, which is the tell that a rename map is being keyed off
--- something with no scope.
---     So the gate mirrors `frontend/resolve.expCtorsDirect` (`:2903`) and
--- `expTypeCtorsDirect` (`:2911`), both `DData VisPublic`, and `eval.ctorsByTypeOf`
--- (`compiler/eval/eval.mdk`), which is `DData VisPublic` too.  Pinned by
+-- and an importer of `mp.{Zz(..)}` and `mq.{Zz}` has `Zz` bound to mq's public
+-- ctor, so an offered private `mp__Zz` would win on decl order (`mangleUnitU`'s
+-- first-entry-wins `omFromPairs`).  Pinned by
 -- `test/llvm_fixtures_modules/ctor_scope_private_ctor_not_offered/` and its
 -- import-permuted twin.
---
--- ⚠️ NO `DNewtype` ARM, deliberately (#1305).  A newtype's constructor is not
--- importable by ANY spelling — measured on this binary with no collision present,
--- `import nmod.{NT(..)}`, `import nmod.{NT, Wrap}` and `import nmod.*` all give
--- `T-UNBOUND` `Unbound variable: Wrap` — because `types/typecheck.publicDataDecls`
--- (`:21219`) publishes `DData VisPublic` / `DInterface pub` / `DImpl pub` /
--- `DTypeAlias pub` and has no `DNewtype` arm, so the ctor's scheme is never
--- published.  An arm here offered `<nmod>__Wrap` for a name the front end had bound
--- elsewhere, so `medaka build` mis-bound it while `run` was correct.
---     ⚠️ Gating the arm on `newtypePub` LOOKS like the fix and is a NO-OP: `export
--- newtype` SETS `newtypePub` (`frontend/resolve.expTypeCtorsDirect`, `:2913`, is
--- gated on it and still indexes the ctor).  The arm has to be ABSENT, not filtered.
---     This matches `eval.ctorsByTypeOf` (`compiler/eval/eval.mdk`), the
--- interpreter-side peer, which reached the same shape from the same derivation.
--- dependency-ordered fold, mirroring `buildExportsPerUnit`: `acc` carries every
--- earlier unit's already-computed row so a re-export can look up its source
--- module's ctor exports (transitively — a >1-hop re-export chain still resolves
--- to the true definer).
-buildCtorExportsPerUnit : List (String, List (String, String, List String)) ->
-  List (String, List Decl) ->
-  List (String, List (String, String, List String))
-buildCtorExportsPerUnit _ [] = []
-buildCtorExportsPerUnit acc ((mid, decls) :: rest) =
-  let entry = unitCtorExportEntry acc (mid, decls)
-  entry :: buildCtorExportsPerUnit (entry :: acc) rest
-
-unitCtorExportEntry : List (String, List (String, String, List String)) ->
-  (String, List Decl) ->
-  (String, List (String, String, List String))
-unitCtorExportEntry acc (mid, decls) =
-  (mid, flatMap (ctorExportEntries mid acc) decls)
-
-ctorExportEntries : String ->
-  List (String, List (String, String, List String)) ->
-  Decl ->
-  List (String, String, List String)
-ctorExportEntries mid _ (DData { dataVis = VisPublic, dataName = tyname, dataCtors = variants }) =
-  [(tyname, mid, filterList nonReservedCtor (map variantCtorName variants))]
-ctorExportEntries _ acc (DUse True path _) =
-  let srcMid = useModIdU path
-  match lookupCtorExports srcMid acc
-    None => []
-    Some srcTypeEntries => reexportCtorMembers path srcTypeEntries
-ctorExportEntries mid acc (DAttrib _ d) = ctorExportEntries mid acc d
-ctorExportEntries _ _ _ = []
-
--- names a `DUse True` (re-export) decl brings in, drawn from the source module's
--- already-computed ctor-export row.  Mirrors `reexportMembers`'s three live arms
--- (`UseName`/`UseAlias` contribute nothing, matching its own arms at :566-576).
-reexportCtorMembers : UsePath ->
-  List (String, String, List String) ->
-  List (String, String, List String)
-reexportCtorMembers (UseGroup _ members) srcTypeEntries =
-  flatMap (reexportCtorMember srcTypeEntries) members
-reexportCtorMembers (UseWild _) srcTypeEntries = srcTypeEntries
-reexportCtorMembers (UseName _) _ = []
-reexportCtorMembers (UseAlias _ _) _ = []
-
--- `UseMember name True` (`name(..)`) re-exports the whole type named `name`;
--- otherwise (or on a miss) `name` is offered only if it is itself a ctor spelling
--- somewhere in the source row — mirroring `ctorMemberEntry`'s own wild/bare split.
-reexportCtorMember : List (String, String, List String) ->
-  UseMember ->
-  List (String, String, List String)
-reexportCtorMember srcTypeEntries (UseMember name wild _ _) =
-  if wild then match lookupCtorTypeEntry name srcTypeEntries
-    Some entry => [entry]
-    None => bareReexportCtor srcTypeEntries name
-  else
-    bareReexportCtor srcTypeEntries name
-
-bareReexportCtor : List (String, String, List String) ->
-  String ->
-  List (String, String, List String)
-bareReexportCtor [] _ = []
-bareReexportCtor ((tyname, definer, ctors) :: rest) name =
-  if contains name ctors then
-    [(tyname, definer, [name])]
-  else
-    bareReexportCtor rest name
+offeredCtor : OrdMap (OrdMap Unit) -> String -> String -> Bool
+offeredCtor newtypeCtors definer c =
+  nonReservedCtor c
+    && not (match omLookup definer newtypeCtors
+      Some ns => omHasKey c ns
+      None => False)
 
 variantCtorName : Variant -> String
 variantCtorName (Variant n _) = n
@@ -926,7 +1001,7 @@ useCtorPathEntries ctorExportsPerUnit path =
 -- while `check` and `run` were both correct.  Writing the same import WITHOUT `(..)`
 -- was fine, because that spelling took the bare branch.
 --
--- This mirrors the three ARMS of `frontend/resolve.expandMemberNames` (`:2327`) —
+-- This mirrors the three ARMS of `frontend/visibility.expandMemberNames` —
 -- the scope layer this one has to agree with:
 --   * `UseMember name False`      → binds `name`                (bare only)
 --   * `UseMember name True`, hit  → binds `name` :: that type's ctors
@@ -937,26 +1012,12 @@ useCtorPathEntries ctorExportsPerUnit path =
 -- ctor share a spelling (`data Foo = Foo Int`) both halves yield the SAME pair, and
 -- `mangleUnitU`'s `omFromPairs` collapses the duplicate.
 --
--- 🚨 MIRRORING THE ARMS IS NOT MIRRORING THE TABLE, AND SAYING OTHERWISE ALREADY
--- SHIPPED A REGRESSION.  These arms only ask questions; `unitCtorExportEntry`
--- ANSWERS them, and matching arms against a table that disagrees with resolve's just
--- routes the disagreement through a new spelling.  Adding the bare check to the wild
--- branch did exactly that: it was correct as an arm and wrong as a whole, because the
--- table it consults was ungated on visibility (see the `VisPublic` note on
--- `unitCtorExportEntry`).  Whoever touches these arms next must ask what the table
--- underneath them says.  Residual table-level divergences from resolve, at the time
--- of writing:
---   * VISIBILITY — closed, see the `VisPublic` gate above.
---   * RE-EXPORT — closed (#1359): `ctorExportEntries` now has a `DUse True` arm
---     (`reexportCtorMembers`) mirroring the FUNCTION map's `reexportOne`, chasing
---     the re-export chain via `acc` to the ORIGINAL definer.
---   * `DAttrib` — this file recurses through it, resolve's `expCtorsDirect` /
---     `expTypeCtorsDirect` swallow it in their `_::rest` wildcard (that asymmetry is
---     #1228).  Not exploitable: an attributed public data decl is not importable at
---     all, so nothing reaches these arms to disagree about.
--- `mid` param is gone (#1359): each type entry now carries its own `definerMid`
--- (a re-exported entry's may differ from the DUse target module), so the mangled
--- name is built from THAT, never from the import path's own module id.
+-- Mirroring the arms is not mirroring the table.  These arms only ask questions;
+-- `ctorExportsFrom` answers them, from the export surface resolve reads, so the
+-- arms and resolve agree only while that table is the producer's answer.  Each type
+-- entry carries its own `definerMid` (a re-exported entry's differs from the DUse
+-- target module), so the mangled name is built from that, never from the import
+-- path's own module id.
 ctorMemberEntry : List (String, String, List String) ->
   UseMember ->
   List (String, String)
@@ -1068,12 +1129,12 @@ buildUnitRenameMap entryMid mid exportsPerUnit externName externExports decls =
   let localFns = dedup (unitDefNames (mid, decls))
   let localEntries =
     map (n => (n, mangledName mid n)) localFns
-      ++ externDeclEntries (externName mid) False decls
+      ++ externDeclEntries (externName mid) decls
   let importEntries = importRenameEntries mid exportsPerUnit decls
   let entries =
     localEntries
       ++ importEntries
-      ++ flatMap (externImportEntries externExports False) decls
+      ++ flatMap (externImportEntries externExports) decls
   if mid == entryMid then
     filterList (e => not (isEntryMainKey entryMid mid (fst e))) entries
   else
@@ -1082,36 +1143,51 @@ buildUnitRenameMap entryMid mid exportsPerUnit externName externExports decls =
 
 -- Extern declarations name host symbols. Their imported spellings must be
 -- erased without adding a module prefix, including through re-export chains.
-buildExternExports : (String -> ExternDecl -> String) ->
-  OrdMap (OrdMap String) ->
+-- Per unit, each value its surface exports whose declaration is an extern, named
+-- from the module that declares it.
+externExportsFrom : (String -> ExternDecl -> String) ->
   List (String, List Decl) ->
+  List (String, ModuleExports) ->
   OrdMap (OrdMap String)
-buildExternExports _ exports [] = exports
-buildExternExports externName exports ((mid, decls) :: rest) =
-  let entries =
-    externDeclEntries (externName mid) True decls
-      ++ flatMap (externImportEntries exports True) decls
-  buildExternExports
-    externName
-    (omInsert mid (omFromPairs (reverseL entries) omEmpty) exports)
-    rest
+externExportsFrom externName units surfaces =
+  let externs = omFromPairs (map unitExternDecls units) omEmpty
+  omFromPairs (map (unitExternExports externName externs) surfaces) omEmpty
 
--- `name` is the extern-naming function, applied to the unit's module already.
-externDeclEntries : (ExternDecl -> String) ->
-  Bool ->
-  List Decl ->
+unitExternDecls : (String, List Decl) -> (String, OrdMap ExternDecl)
+unitExternDecls (mid, decls) =
+  (mid, omFromPairs (reverseL (externDeclEntries identity decls)) omEmpty)
+
+unitExternExports : (String -> ExternDecl -> String) ->
+  OrdMap (OrdMap ExternDecl) ->
+  (String, ModuleExports) ->
+  (String, OrdMap String)
+unitExternExports externName externs (mid, exp) =
+  let origins = valueDeclsOf exp
+  let entries =
+    flatMap (externExport externName externs exp origins) exp.expValues
+  (mid, omFromPairs (reverseL entries) omEmpty)
+
+externExport : (String -> ExternDecl -> String) ->
+  OrdMap (OrdMap ExternDecl) ->
+  ModuleExports ->
+  OrdMap (String, String) ->
+  String ->
   List (String, String)
-externDeclEntries _ _ [] = []
-externDeclEntries name publicOnly ((DExtern ed) :: rest) =
-  if ed.edPub || not publicOnly then
-    (ed.edName, name ed) :: externDeclEntries name publicOnly rest
-  else
-    externDeclEntries name publicOnly rest
-externDeclEntries name publicOnly ((DAttrib _ decl) :: rest) =
-  externDeclEntries name publicOnly [decl]
-    ++ externDeclEntries name publicOnly rest
-externDeclEntries name publicOnly (_ :: rest) =
-  externDeclEntries name publicOnly rest
+externExport externName externs exp origins v = match valueDeclOf exp origins v
+  (dm, dn) => match omLookup dm externs
+    Some eds => match omLookup dn eds
+      Some ed => [(v, externName dm ed)]
+      None => []
+    None => []
+
+-- `name` is applied to each extern declaration of the unit.
+externDeclEntries : (ExternDecl -> a) -> List Decl -> List (String, a)
+externDeclEntries _ [] = []
+externDeclEntries name ((DExtern ed) :: rest) =
+  (ed.edName, name ed) :: externDeclEntries name rest
+externDeclEntries name ((DAttrib _ decl) :: rest) =
+  externDeclEntries name [decl] ++ externDeclEntries name rest
+externDeclEntries name (_ :: rest) = externDeclEntries name rest
 
 -- The program-wide name of an extern declared in module `mid`.  One with `bind`
 -- clauses names whatever its clauses bind, which another module may bind
@@ -1139,40 +1215,31 @@ externDeclaredName n binds
     Some i => stringSlice (i + 2) (stringLength n) n
     None => n
 
-externImportEntries : OrdMap (OrdMap String) ->
-  Bool ->
-  Decl ->
-  List (String, String)
-externImportEntries exports publicOnly (DUse pub path _) =
-  if pub || not publicOnly then match omLookup (useModIdU path) exports
-    Some names => externPathEntries publicOnly names path
+externImportEntries : OrdMap (OrdMap String) -> Decl -> List (String, String)
+externImportEntries exports (DUse _ path _) =
+  match omLookup (useModIdU path) exports
+    Some names => externPathEntries names path
     None => []
-  else
-    []
-externImportEntries exports publicOnly (DAttrib _ decl) =
-  externImportEntries exports publicOnly decl
-externImportEntries _ _ _ = []
+externImportEntries exports (DAttrib _ decl) = externImportEntries exports decl
+externImportEntries _ _ = []
 
-externPathEntries : Bool -> OrdMap String -> UsePath -> List (String, String)
-externPathEntries _ names (UseGroup _ members) =
+externPathEntries : OrdMap String -> UsePath -> List (String, String)
+externPathEntries names (UseGroup _ members) =
   flatMap
     (member =>
       externMemberEntry names (useMemberOrigin member) (useMemberLocal member))
     members
-externPathEntries _ names (UseWild _) =
+externPathEntries names (UseWild _) =
   flatMap (name => externMemberEntry names name name) (omKeys names)
-externPathEntries _ names (UseName parts) =
+externPathEntries names (UseName parts) =
   if lenGt1 parts then
     externMemberEntry names (lastOfPM parts) (lastOfPM parts)
   else
     []
-externPathEntries publicOnly names (UseAlias _ alias) =
-  if publicOnly then
-    []
-  else
-    flatMap
-      (name => externMemberEntry names name (qualifiedLocal alias name))
-      (omKeys names)
+externPathEntries names (UseAlias _ alias) =
+  flatMap
+    (name => externMemberEntry names name (qualifiedLocal alias name))
+    (omKeys names)
 
 externMemberEntry : OrdMap String -> String -> String -> List (String, String)
 externMemberEntry names origin local = match omLookup origin names
@@ -1405,49 +1472,6 @@ lookupExports _ [] = None
 lookupExports k ((m, ns) :: rest) =
   if k == m then Some ns else lookupExports k rest
 
--- ── exported (pub) function names of a unit ──────────────────────────────────
--- A name is an exported function symbol if EITHER its DFunDef clause carries
--- `pub = True`, OR a `pub` DTypeSig/DExtern of that name precedes it (the `export`
--- keyword precedes the SIGNATURE; the definition clause parses as a private
--- DFunDef — mirroring resolve.mdk's `expValuesDirect`).  We also count pub
--- DLetGroup binders.  Restricted to names that are ALSO defined as functions in
--- this unit (a pub DTypeSig with no body isn't an emittable symbol).
--- #352: `defined` is a MEMBERSHIP SET, and it was a `List` scanned once per pub name
--- — O(pubNames × unitFns) per unit, which on a unit whose pub names are most of its
--- functions is O(unitFns²).  Measured through profile_main's `mangle` stage on a
--- one-unit shape of N `export`ed fns, net of the prelude baseline: counted-op ratio
--- r1=3.99 r2=3.99 per doubling at N=500/1000/2000 (2,003,000 net scan steps at
--- N=2000) — textbook quadratic.  After: 500 -> 1000 -> 2000, r=2.00/2.00.
--- `filterList` keeps the SAME order and the SAME duplicates — only the membership
--- test changes — so every downstream export list, and therefore every mangled symbol,
--- is byte-identical (fixpoint C3a/C3b).
--- ⚠️ TWO corrections to what #352 filed, both measured, both worth keeping:
---   * "(ALLOCATES — gate-visible)" is WRONG. The scan is PURE; the `mangle` allocation
---     ratio on this shape is r1=2.12 r2=2.11 net / 1.84/1.96 raw — linear BEFORE the
---     fix as well as after. It is visible on the OP arm, not the alloc arm.
---   * This swap is NOT allocation-free either, and that cuts the other way from the
---     #1010 trap in compiler/AGENTS.md. The key projection IS the identity on an
---     already-built String, so nothing allocates PER PROBE — but the one-time set
---     costs O(unitFns log unitFns) nodes, measured at +15% mangle-stage allocation at
---     N=2000 on this shape (net 12.1 -> 13.9 MB) and +5% on a mixed shape. Still a
---     clear win (op count falls 1000x, and mangle is ~15 MB of a ~2 GB compile), but
---     it is a TRADE, not a free one.
-pubFnNames : List Decl -> List String
-pubFnNames decls =
-  let defined = omFromNames (unitDefNames ("", decls)) omEmpty
-  let pubSigs = pubSigNames decls
-  let pubDefs = pubDefNames decls
-  filterList (n => omHasKey n defined) (pubSigs ++ pubDefs)
-
--- names whose DFunDef / DLetGroup binder is itself `pub = True`.
-pubDefNames : List Decl -> List String
-pubDefNames [] = []
-pubDefNames ((DFunDef True n _ _ _ _) :: rest) = n :: pubDefNames rest
-pubDefNames ((DLetGroup True binds) :: rest) =
-  map letBindName binds ++ pubDefNames rest
-pubDefNames ((DAttrib _ d) :: rest) = pubDefNames [d] ++ pubDefNames rest
-pubDefNames (_ :: rest) = pubDefNames rest
-
 -- ── collision-name detection (RETAINED — kept available, no longer the trigger) ──
 -- all top-level FUNCTION names defined in a unit (DFunDef + DLetGroup binders),
 -- wrapped through DAttrib.  Only function-shaped decls can collide as @mdk_<name>.
@@ -1459,16 +1483,6 @@ declDefNames (DFunDef _ n _ _ _ _) = [n]
 declDefNames (DLetGroup _ binds) = map letBindName binds
 declDefNames (DAttrib _ d) = declDefNames d
 declDefNames _ = []
-
--- names exported via a `pub` DTypeSig/DExtern in this unit (so their DFunDef
--- clauses, which parse private, still count as exported function symbols).
-pubSigNames : List Decl -> List String
-pubSigNames [] = []
-pubSigNames ((DTypeSig True n _ _) :: rest) = n :: pubSigNames rest
-pubSigNames ((DExtern (ExternDecl { edPub = True, edName = n, ... })) :: rest) =
-  n :: pubSigNames rest
-pubSigNames ((DAttrib _ d) :: rest) = pubSigNames [d] ++ pubSigNames rest
-pubSigNames (_ :: rest) = pubSigNames rest
 
 -- `<mid>__<name>` with the mid sanitized to a valid identifier (`/`, `.`, `-` →
 -- `_`).  The emitted symbol is `@mdk_<thisname>`, so only [A-Za-z0-9_] are safe.

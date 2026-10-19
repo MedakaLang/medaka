@@ -1,0 +1,15 @@
+public export data T = J | K Int
+
+data Priv = L Int | Z
+
+export
+unT : T -> Int
+unT t = match t
+  J => 1000
+  K n => n + 10
+
+export
+privCount : Int -> Int
+privCount n = match L n
+  L m => m
+  Z => 0

@@ -4945,12 +4945,12 @@ modExportCells (ModExports cells _) = cells
 -- divergence is provably one-directional and a second index would be new code at
 -- the end of a review round.  Split it the day the prelude grows a private type.
 --
--- `types/private_mangle.unitCtorExportEntry` is the SYMBOL-layer peer.  It has
--- since CONVERGED on this shape (2026-08-07): its `DNewtype` arm is gone and it now
--- gates on `dataVis = VisPublic`, so the two indexes agree on visibility and on
--- newtypes and differ only in that the mangler additionally filters reserved-ness
--- (irrelevant here) and recurses through `DAttrib` (where this index, like
--- `expTypeCtorsDirect`, has no arm — #1228, above).
+-- `types/private_mangle.ctorExportsFrom` is the SYMBOL-layer peer.  It reads the
+-- export surface `frontend/visibility` builds, whose data ctors outside core are
+-- those of `public export data`, and never offers a newtype's (`offeredCtor`), so
+-- the two indexes agree on visibility and on newtypes and differ only in that the
+-- mangler additionally filters reserved-ness (irrelevant here) and the surface sees
+-- through `DAttrib` (where this index has no arm — #1228, above).
 --     This mangler/typecheck convergence (2026-08-07) removed the newtype arm but
 -- did not settle #1305 by itself: measured on #1305's own shape (`export newtype NT
 -- = Wrap Int`; `import nmod.{NT(..), unwrapNT}`), `check`/`run`/`build` all three
@@ -5062,7 +5062,7 @@ resolveMembers (UseAlias _ a) (ModExports exports _) =
 --
 -- `T(..)` names a TYPE, so it binds every constructor of `T` under the
 -- constructor's OWN name — one alias cannot rename N constructors, which is the
--- rule `frontend/resolve.expandMemberNames` states and applies at the scope layer,
+-- rule `frontend/visibility.expandMemberNames` states and applies at the scope layer,
 -- and `types/private_mangle.ctorMemberEntry` applies at the symbol layer.  This
 -- is the third realization of that one rule, one per engine family; the three are
 -- diffed by `test/diff_compiler_engines.sh`.

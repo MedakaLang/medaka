@@ -1,0 +1,14 @@
+-- A re-exported function carried after an interface method of the same name.
+--
+-- `facade` carries a's interface `Rend` (method `rendr`) ahead of b's function
+-- `rendr`.  The front end binds the importer's `rendr` to b's function and warns
+-- that the method shadows it inside `facade` (`W-IMPORT-METHOD-SHADOW`).  The fn
+-- export map lets an interface-method origin yield to the later function origin,
+-- so the reference names b's function symbol rather than none.
+--
+-- Expected output, derived by hand from the semantics: `rendr 1` is b's
+-- `n + 1`, `2`.
+import facade.{rendr}
+
+main : <IO> Unit
+main = putStrLn (intToString (rendr 1))

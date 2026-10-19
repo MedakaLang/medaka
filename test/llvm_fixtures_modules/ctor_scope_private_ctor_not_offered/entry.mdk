@@ -1,6 +1,6 @@
 -- THE CTOR-EXPORT INDEX MUST NOT OFFER A MODULE-PRIVATE CONSTRUCTOR.
 --
--- `types/private_mangle.ctorExportEntries` answers "may an IMPORTER name this
+-- `types/private_mangle.ctorExportsFrom` answers "may an IMPORTER name this
 -- constructor?".  It used to answer from an UNGATED table — every `DData` the unit
 -- declares, private ones included — and its own comment defended that as harmless:
 -- *"the import side only resolves what the importing unit actually brings into

@@ -4,10 +4,10 @@
 -- seven had a re-export rule — a gap closed instance by instance
 -- (`UseWild`'s missing interfaces, the constructor/field re-export hop).
 -- Each field's projection, direct builder and carriage rule now live on one
--- `exp<Suffix>` → `ns<Suffix>` descriptor in `resolve.mdk`'s
+-- `exp<Suffix>` → `ns<Suffix>` descriptor in `visibility.mdk`'s
 -- export-namespace table. A hand-copied roster of "these nine fields need
 -- these nine descriptors" would go stale the same way the original count
--- did, so this test instead parses `resolve.mdk`'s own current source with
+-- did, so this test instead parses `visibility.mdk`'s own current source with
 -- the compiler's own frontend, derives `ModuleExports`' field list and the
 -- set of top-level binding names from that parse, and checks the naming
 -- convention generically — a tenth field added later with no descriptor
@@ -34,8 +34,8 @@ import frontend.ast.{Decl(..), Variant(..), ConPayload(..), Field(..), Loc(..)}
 import support.util.{contains, filterList}
 import string.{stripPrefix}
 
-resolveSourcePath : String
-resolveSourcePath = "compiler/frontend/resolve.mdk"
+visibilitySourcePath : String
+visibilitySourcePath = "compiler/frontend/visibility.mdk"
 
 -- The field names of `ModuleExports`' single record constructor, in the
 -- order the `data` decl lists them.
@@ -55,7 +55,7 @@ flatMapVariants (_ :: rest) = flatMapVariants rest
 fieldName : Field -> String
 fieldName (Field n _) = n
 
--- Every top-level binding name resolve.mdk defines (one entry per clause,
+-- Every top-level binding name visibility.mdk defines (one entry per clause,
 -- duplicates included — only membership is ever asked of this list). A
 -- nullary binding like `nsValues = ExpNs { … }` is a `DFunDef` with no
 -- parameters, so every descriptor is in here.
@@ -89,15 +89,15 @@ missingNsValues fields funNames = filterList (missingNsValue funNames) fields
 -- This floor keeps that failure loud: `ModuleExports` has never had fewer
 -- than nine export-namespace fields.
 test "the field derivation itself is non-vacuous — at least nine ModuleExports fields are found" =
-  match readFile resolveSourcePath
-    Err e => expectEqual "read \{resolveSourcePath}" "failed: \{e}"
+  match readFile visibilitySourcePath
+    Err e => expectEqual "read \{visibilitySourcePath}" "failed: \{e}"
     Ok src =>
       let fields = moduleExportsFields (parse src)
       expectTrue (length fields >= 9)
 
-test "every ModuleExports export-namespace field has an ns* descriptor, derived from resolve.mdk's own source" =
-  match readFile resolveSourcePath
-    Err e => expectEqual "read \{resolveSourcePath}" "failed: \{e}"
+test "every ModuleExports export-namespace field has an ns* descriptor, derived from visibility.mdk's own source" =
+  match readFile visibilitySourcePath
+    Err e => expectEqual "read \{visibilitySourcePath}" "failed: \{e}"
     Ok src =>
       let decls = parse src
       let fields = moduleExportsFields decls

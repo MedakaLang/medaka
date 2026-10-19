@@ -1,0 +1,3 @@
+import lib.msig.{countdown}
+
+main = println (countdown 3)

@@ -669,7 +669,7 @@ while IFS= read -r f; do
     # binds and attributes each to a module — the fact every import-clause ordering
     # defect in the tracker (#733/#1253/#1284) is decided by. Goldens cannot see an
     # over-widening there; the permutation differential can.
-    compiler/frontend/resolve.mdk|compiler/frontend/marker.mdk)
+    compiler/frontend/resolve.mdk|compiler/frontend/visibility.mdk|compiler/frontend/marker.mdk)
       add 'diff_compiler_snapshot*'; add 'diff_compiler_check*'
       add 'diff_compiler_import_order'
       # G-0: the SAME argument on a different axis. resolve/marker decide which
