@@ -52,7 +52,7 @@ import ir.core_ir_lower.{
   instanceReqCounts,
   declaredMethodArities,
 }
-import types.program_facts.{ProgramFacts(..), factsInstalled, withFacts}
+import types.program_facts.{ProgramFacts(..), emptyFacts, withFacts}
 import support.util.{isEmptyL, dedup, contains, filterList}
 import support.ordmap.{OrdMap}
 import types.private_mangle.{mangleCtorCollisions}
@@ -597,7 +597,7 @@ cRunMainForEffect binds = match lookupBinding "main" binds
 -- `declaredRecordFieldOrders` instead), so lowering has no business seeding it.
 -- `cevalModules` already seeds it for the multi-module path; these two wrappers
 -- are the single-program analog, so every `ceval*` entry point gets the table
--- from an INTERPRETER driver rather than as a side effect of `lowerProgram`.
+-- from an INTERPRETER driver rather than as a side effect of lowering.
 -- Callers pass the SAME decl list they lowered — for the elaborated corpora that
 -- is the post-`annotateProgram` / post-`elaborate*` list, not the raw parameters.
 export
@@ -793,11 +793,13 @@ cRootLocals (_ :: rest) = cRootLocals rest
 
 -- Run a multi-module Core-IR program for its OUTPUT (the loader-driven analog of
 -- cevalOutput): evaluate every module in dependency order, force the root module's
--- `main` for its IO side-effects, return the captured stdout.
+-- `main` for its IO side-effects, return the captured stdout.  Untyped programs
+-- only: no evidence, no dispositions, no binders.  A typed program uses
+-- `cevalModulesOutputFacts`.
 export
 cevalModulesOutput : List Decl -> List (String, List Decl) -> String
 cevalModulesOutput preludeDecls modules =
-  cevalModulesOutputFacts (factsInstalled ()) preludeDecls modules
+  cevalModulesOutputFacts emptyFacts preludeDecls modules
 
 export
 cevalModulesOutputFacts : ProgramFacts ->

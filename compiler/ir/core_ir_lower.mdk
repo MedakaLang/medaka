@@ -107,7 +107,6 @@ import types.disposition.{
 }
 import types.program_facts.{
   ProgramFacts(..),
-  factsInstalled,
   factsNow,
   withFacts,
 }
@@ -779,13 +778,9 @@ lowerStmt _ = panic "core_ir lower: unsupported block statement"
 -- section).  It cannot see an inherited default: which instance inherits which
 -- default is instance identity, and only elaboration establishes that.  An impl that
 -- leaves a method to its interface's default therefore gets no body for it here.  A
--- driver that typechecks lowers through `lowerTypedProgram`.
-export
-lowerProgram : List Decl -> CProgram
-lowerProgram prog = lowerProgramWithFacts (factsInstalled ()) prog
-
--- `lowerProgram` reading evidence and binder rows from [facts].  Its dispositions
--- are ignored, as `lowerProgram` lowers without them.
+-- driver that typechecks lowers through `lowerTypedProgramWith`.
+--
+-- Evidence and binder rows are read from [facts]; its dispositions are ignored.
 export
 lowerProgramWithFacts : ProgramFacts -> List Decl -> CProgram
 lowerProgramWithFacts facts prog = withFacts facts (_ =>
@@ -796,10 +791,6 @@ lowerProgramWithFacts facts prog = withFacts facts (_ =>
 
 -- Lowering after an elaboration, against the table it published.  Refuses (panics)
 -- when none was published instead of silently lowering every inherited default away.
-export
-lowerTypedProgram : List Decl -> CProgram
-lowerTypedProgram prog = lowerTypedProgramWith (factsInstalled ()) prog
-
 export
 lowerTypedProgramWith : ProgramFacts -> List Decl -> CProgram
 lowerTypedProgramWith facts prog =
@@ -813,7 +804,7 @@ lowerTypedProgramWith facts prog =
       (refoldProgram noLetCheck (lowerProgramWith (Some dispositions) [] prog)))
 
 -- [dispositions] is the typechecker's table for [prog] (`None` for an untyped
--- probe; see `lowerProgram`).  Refutable lets are still one-arm decisions here
+-- probe; see `lowerProgramWithFacts`).  Refutable lets are still one-arm decisions here
 -- (`letDecision`); each public lowering decides which of them to keep, and ends
 -- with `finishLowering`.  It reads the facts of the bracket its caller opened.
 lowerProgramWith : Option DispositionTable ->
@@ -837,7 +828,7 @@ lowerProgramWith dispositions pins prog =
       noDeclFacts)
 
 -- ── which refutable lets keep their decision (see `letDecision`) ─────────────
--- The emitting lowering (`lowerProgramEmit`, both backends) tests a refutable `let`
+-- The emitting lowering (`lowerProgramEmitWith`, both backends) tests a refutable `let`
 -- through its decision; every other consumer gets the plain `CLet`/`CSLet` back,
 -- unchanged.  The decision is kept only where the pattern can really miss, by the
 -- program's constructor table, so a `let` on a single-constructor type keeps its
@@ -1037,26 +1028,17 @@ isSomeLoc None = False
 -- This is an EMIT-ONLY transform: the tree-walking core_ir_eval evaluates a record
 -- to a by-name `VRecord` and matches `PRec` by label, so it must NOT see the
 -- positional `PCon` rewrite (a `PCon` would not match a `VRecord`).  Hence it lives
--- in `lowerProgramEmit` — which the LLVM emit drivers call — NOT in the shared
--- `lowerProgram` that core_ir_main / core_ir_eval use.  The field-order map is
+-- in `lowerProgramEmitWith` — which the LLVM emit drivers call — NOT in the shared
+-- `lowerProgramWithFacts` that core_ir_main / core_ir_eval use.  The field-order map is
 -- DECLARED order (DData named-field variants), the same order
 -- the emitters' record cell layout uses (each `CField` carries its ordinal), so
 -- the positional indices line up with the cell's stored field offsets (verified by the fixture byte-diff).
 export
-lowerProgramEmit : List Decl -> CProgram
-lowerProgramEmit prog = lowerProgramEmitPinned [] prog
-
-export
 lowerProgramEmitWith : ProgramFacts -> List Decl -> CProgram
 lowerProgramEmitWith facts prog = lowerProgramEmitPinnedWith facts [] prog
 
--- `lowerProgramEmit` against a prelude object already compiled: [pins] are that
+-- `lowerProgramEmitWith` against a prelude object already compiled: [pins] are that
 -- object's (method, key, symTag) impl rows (see `stampImplSymbols`).
-export
-lowerProgramEmitPinned : List (String, String, String) -> List Decl -> CProgram
-lowerProgramEmitPinned pins prog =
-  lowerProgramEmitPinnedWith (factsInstalled ()) pins prog
-
 export
 lowerProgramEmitPinnedWith : ProgramFacts ->
   List (String, String, String) ->
@@ -1128,10 +1110,6 @@ stampBinders lowering table prog =
 
 -- [prog] with every binder stamped as an untyped lowering stamps it, for a driver
 -- that builds Core by hand.
-export
-stampUntypedBinders : CProgram -> CProgram
-stampUntypedBinders prog = stampUntypedBindersWith (factsInstalled ()) prog
-
 export
 stampUntypedBindersWith : ProgramFacts -> CProgram -> CProgram
 stampUntypedBindersWith facts prog =
@@ -2400,7 +2378,7 @@ bindUpdateTemps fields body base =
 -- @mdk_impl_<tag>_<method>()`, re-running the body — duplicating any side effect
 -- (issue #719, silent run /= build on the LLVM and WasmGC backends).
 --
--- Fix (emit-only, so BOTH backends inherit it via lowerProgramEmit — the eval arm
+-- Fix (emit-only, so BOTH backends inherit it via lowerProgramEmitWith — the eval arm
 -- already memoises): HOIST each such occurrence to a synthesized top-level value
 -- binding `$memo_<tag>_<method> = <the nullary CMethod>` and replace the occurrence
 -- with a reference to it.  The existing top-level value-global CAF machinery (#561
@@ -2735,13 +2713,9 @@ cInitialRows [] _ = []
 cInitialRows ((CArm pat _ _) :: rest) i =
   ([canonPat pat], i) :: cInitialRows rest (i + 1)
 
--- the top-level function-group half of lowerProgram, exposed for the multi-module
--- driver (core_ir_eval.cevalModules), which lowers each module's groups separately
--- (per-module local frames) rather than as one flat program.
-export
-lowerGroups : List Decl -> List CBind
-lowerGroups prog = lowerGroupsWith (factsInstalled ()) prog
-
+-- the top-level function-group half of lowerProgramWithFacts, exposed for the
+-- multi-module driver (core_ir_eval.cevalModules), which lowers each module's
+-- groups separately (per-module local frames) rather than as one flat program.
 export
 lowerGroupsWith : ProgramFacts -> List Decl -> List CBind
 lowerGroupsWith facts prog =
@@ -3023,22 +2997,6 @@ implHeadKey m tag = "\{m}\n\{tag}"
 -- module's impls against it.
 -- [arities] is `declaredMethodArities` of every module's decls, built jointly for
 -- the same reason.
-export
-lowerImplsWith : List ((String, String, String), List Int) ->
-  OrdMap Int ->
-  OrdMap Int ->
-  Option DispositionTable ->
-  List Decl ->
-  List CImplEntry
-lowerImplsWith disp reqCounts arities dispositions prog =
-  lowerImplsWithFacts
-    (factsInstalled ())
-    disp
-    reqCounts
-    arities
-    dispositions
-    prog
-
 export
 lowerImplsWithFacts : ProgramFacts ->
   List ((String, String, String), List Int) ->

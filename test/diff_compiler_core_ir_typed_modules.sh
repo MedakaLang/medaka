@@ -18,7 +18,7 @@
 # #1608's own complaint, and it is why the driver this gate reads
 # (compiler/entries/core_ir_typed_modules_main.mdk) had to be written.
 #
-# AGENTS.md records `evalModules` (eval.mdk) and `cevalModules` (core_ir_eval.mdk)
+# AGENTS.md records `evalModulesWith` (eval.mdk) and `cevalModules` (core_ir_eval.mdk)
 # as PARALLEL module drivers that must be fixed in LOCKSTEP, and that a fix once
 # shipped patching only eval.mdk and left core_ir_eval.mdk broken for months. This
 # gate is the instrument that can see that happen — see the LOCKSTEP tier below.

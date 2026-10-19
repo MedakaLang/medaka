@@ -36,7 +36,7 @@ import ir.core_ir.{CProgram(..), CBind(..)}
 import ir.core_ir_lower.{
   ifaceImplHeadTable,
   declaredRecordFieldOrders,
-  lowerProgramEmit,
+  lowerProgramEmitWith,
   lowerProgramEmitPinnedWith,
   returnsSelfTable,
   selfFnParamTable,
@@ -114,8 +114,10 @@ emitHalfOfEnv = match getEnv "MEDAKA_EMIT_HALF"
 -- MEDAKA_PRELUDE_OBJ fast path. The pin is cheap (one small fn), so the fix is
 -- to always DEFINE it in the program half instead of asking the shared object
 -- for it.
-preludeSymsOf : List Decl -> (List String, List (String, String, String))
-preludeSymsOf coreD = match lowerProgramEmit coreD
+preludeSymsOf : ProgramFacts ->
+  List Decl ->
+  (List String, List (String, String, String))
+preludeSymsOf facts coreD = match lowerProgramEmitWith facts coreD
   CProgram groups _ _ impls _ _ => (
     filterList
       (n => not (endsWith autoPrintPinName n))
@@ -149,7 +151,7 @@ emitTail mods facts runtimeDecls coreD modules1 =
   -- than source reachability anyway.
   let allDecls = if half == 0 then dceFilter allDecls0 else allDecls0
   let (preludeBinds, preludeImpls) =
-    if half == 2 then preludeSymsOf coreD else ([], [])
+    if half == 2 then preludeSymsOf facts coreD else ([], [])
   let base =
     withRuntimeExterns
       (runtimeExternNames runtimeDecls)

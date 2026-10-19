@@ -25,8 +25,8 @@ it. Full method, both probes, and the instrument-the-resolution-arms technique l
 
 ## [T-EVAL-LOCKSTEP] evalModules / cevalModules lockstep
 
-`evalModules` (`eval/eval.mdk`) and `cevalModules` (`ir/core_ir_eval.mdk`) are parallel module
-drivers — `cevalModules` deliberately mirrors `evalModules` (same frame layout, same
+`evalModulesWith` (`eval/eval.mdk`) and `cevalModules` (`ir/core_ir_eval.mdk`) are parallel module
+drivers — `cevalModules` deliberately mirrors `evalModulesWith` (same frame layout, same
 `importFrameOf`/`pubReexports`/`installConsts` helpers), so a fix to one is silently absent from
 the other. This is exactly how the P0-9 cross-module ctor-collision fix shipped patching only
 `eval.mdk`, leaving `core_ir_eval.mdk` broken for months. Underlying hazard: `installConsts` +

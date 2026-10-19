@@ -87,7 +87,7 @@ import types.typecheck.{
 import driver.main_autoprint.{valueMainCandidate}
 import types.route_key.{withEvidencePreserved}
 import types.private_mangle.{mangleCtorCollisionsPair}
-import types.program_facts.{factsInstalled, factsOfElab, withFacts}
+import types.program_facts.{ProgramFacts, factsOfElab, withFacts}
 import frontend.marker.{declRefs}
 import eval.eval.{
   Value,
@@ -699,13 +699,14 @@ filterMatchedNothing (Some sub) tsrc userDecls =
 -- root module, so sharing the injected trees with them is inert; the injection
 -- is empty for a module with no doctests.
 --
---   TestPair runtime rawCore core raw mods  loaded source declarations paired with the
---                                   elaborated, ctor-mangled graph every phase
---                                   evaluates
+--   TestPair runtime rawCore core raw mods facts  loaded source declarations paired
+--                                   with the elaborated, ctor-mangled graph every
+--                                   phase evaluates and the facts of the
+--                                   elaboration that produced it
 --   TestPairErr msg     a loader failure standing in for it, so each phase
 --                       reports it exactly as it always has
 data TestPair =
-  | TestPair (List Decl) (List Decl) (List Decl) (List (String, List Decl)) (List (String, List Decl))
+  | TestPair (List Decl) (List Decl) (List Decl) (List (String, List Decl)) (List (String, List Decl)) ProgramFacts
   | TestPairErr String
 
 -- Helper elaboration is a second, temporary graph elaboration used only by
@@ -840,7 +841,8 @@ elaborateFor rsrc csrc _target _roots mods exempt False _ =
           runtimeDecls
           coreDecls
           rawModules
-          (mangleCtorCollisionsPair (coreE, modulesE))),
+          (mangleCtorCollisionsPair (coreE, modulesE))
+          (factsOfElab elaborated)),
     )
 elaborateFor rsrc csrc target roots mods exempt True synthDecls = (
   gateOfCheck exempt rsrc csrc target roots mods,
@@ -892,10 +894,9 @@ forceInjected : String ->
   <IO> TestPair
 forceInjected rsrc csrc mods synthDecls =
   let injected = injectIntoLast synthDecls (desugaredModPairs mods)
-  match (elaborateModules
-    (desugaredPrelude rsrc)
-    (desugaredPrelude csrc)
-    injected)
+  let elab =
+    elaborateModules (desugaredPrelude rsrc) (desugaredPrelude csrc) injected
+  match elab
     (coreE, modulesE, perModule, _, _, _, _) =>
       injectedExampleDiags := exampleDiagLines perModule
       uncurryPair
@@ -903,6 +904,7 @@ forceInjected rsrc csrc mods synthDecls =
         (desugaredPrelude csrc)
         injected
         (mangleCtorCollisionsPair (coreE, modulesE))
+        (factsOfElab elab)
 
 -- The doctest-bearing gate: `analyzeProject`'s verdict over the graph this
 -- invocation already loaded, keyed into the same prelude and module-chain memos
@@ -964,9 +966,10 @@ uncurryPair : List Decl ->
   List Decl ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl)) ->
+  ProgramFacts ->
   TestPair
-uncurryPair runtimeDecls rawCore rawModules (core, mods) =
-  TestPair runtimeDecls rawCore core rawModules mods
+uncurryPair runtimeDecls rawCore rawModules (core, mods) facts =
+  TestPair runtimeDecls rawCore core rawModules mods facts
 
 -- The single-file prop/`test "…"` arm's elaboration: the degenerate 1-module
 -- list over the shadow-dropped prelude (`programIsCore` ⇒ [], so `medaka test
@@ -1483,22 +1486,24 @@ nativePropPhase pair target tsrc userDecls cases filterOpt file index leaf
   | not (hasProps userDecls) = []
   | otherwise = match pair
     TestPairErr _ => []
-    TestPair runtimeM rawCoreM coreM rawM modsM => withEvidencePreserved (_ =>
-      propsReportEnginesInProcess
-        leaf
-        [EngNative]
-        runtimeM
-        rawCoreM
-        coreM
-        rawM
-        modsM
-        target
-        tsrc
-        userDecls
-        cases
-        filterOpt
-        file
-        index)
+    TestPair runtimeM rawCoreM coreM rawM modsM factsM => withEvidencePreserved
+      (_ =>
+        propsReportEnginesInProcess
+          leaf
+          [EngNative]
+          runtimeM
+          rawCoreM
+          coreM
+          rawM
+          modsM
+          factsM
+          target
+          tsrc
+          userDecls
+          cases
+          filterOpt
+          file
+          index)
 
 nativePropRowsOr : Option NativeArmResults ->
   (Unit -> <IO> List PropResult) ->
@@ -1649,15 +1654,13 @@ runChosen : DoctestTrees ->
   <IO> RunResult
 runChosen (DtPair (TestPairErr e)) examples synthResults =
   buildDetailsFrom (Err e) synthResults examples
-runChosen (DtPair (TestPair _runtimeM _rawCoreM coreM _rawM modsM)) examples synthResults =
+runChosen (DtPair (TestPair _runtimeM _rawCoreM coreM _rawM modsM facts)) examples synthResults =
   -- Root-FULL env (locals ∪ imports ∪ globals), not `evalModulesWith`'s
   -- locals-only `rootLocals`: `firstUnresolvedDottedRef` below needs the
   -- import frame visible to find (or fail to find) an alias-qualified name
   -- like `H.foo`, which `rootLocals` never carries (#3206). A `__dt_i__`
   -- synth binding is always in `localCells`, first in this flattened list
   -- either way, so this changes nothing about what `force` below returns.
-  -- A `TestPair` holds no facts, so the examples read the installed tables'.
-  let facts = factsInstalled ()
   let rendered = withFacts facts (_ =>
     let env = evalModulesRootEnvFacts facts (testCapableExterns ()) coreM modsM
     renderExamples env injectedExampleDiags.value synthResults examples)
@@ -1871,16 +1874,18 @@ collectPropLines (_ :: rest) = collectPropLines rest
 -- the driver (`elaboratedRootProps`, `collectTests`) and evaluate them in the
 -- driver's env.  A body left with bare constructor references would look for a
 -- cell the rename has moved.  Applying it here renames env and bodies together;
--- the driver's own call is then an idempotent no-op.  The elaboration's error
--- diagnostics come back beside the trees, each keyed by its module.
+-- the driver's own call is then an idempotent no-op.  The elaboration's facts and
+-- its error diagnostics, each keyed by its module, come back beside the trees.
 elaborateModulesMangled : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  ((List Decl, List (String, List Decl)), List (String, TcDiag))
+  ((List Decl, List (String, List Decl)), ProgramFacts, List (String, TcDiag))
 elaborateModulesMangled runtimeDecls coreDecls modules =
-  match elaborateModules runtimeDecls coreDecls modules
+  let elab = elaborateModules runtimeDecls coreDecls modules
+  match elab
     (coreE, modulesE, perModule, residual, _, _, _) => (
       mangleCtorCollisionsPair (coreE, modulesE),
+      factsOfElab elab,
       residual ++ perModuleErrors perModule [],
     )
 
@@ -1909,27 +1914,29 @@ runPropsPinned engines pair native stdlibDir target tsrc userDecls cases filterO
     TestPairErr err =>
       let _ = ePutStrLn err
       False
-    TestPair runtimeM rawCoreM coreM rawM modsM => withEvidencePreserved (_ =>
-      printGradedPropRows
-        (gradeProps
-          index
-          file
-          (nativePropRowsOr native (_ =>
-            propsReportEngines
-              engines
-              stdlibDir
-              runtimeM
-              rawCoreM
-              coreM
-              rawM
-              modsM
-              target
-              tsrc
-              userDecls
-              cases
-              filterOpt
-              file
-              index))))
+    TestPair runtimeM rawCoreM coreM rawM modsM factsM => withEvidencePreserved
+      (_ =>
+        printGradedPropRows
+          (gradeProps
+            index
+            file
+            (nativePropRowsOr native (_ =>
+              propsReportEngines
+                engines
+                stdlibDir
+                runtimeM
+                rawCoreM
+                coreM
+                rawM
+                modsM
+                factsM
+                target
+                tsrc
+                userDecls
+                cases
+                filterOpt
+                file
+                index))))
 
 printGradedPropRows : List GradedProp -> <IO> Bool
 printGradedPropRows [] = True
@@ -2734,7 +2741,7 @@ propsReportPinned engines pair native stdlibDir target tsrc userDecls cases filt
   | not (hasProps userDecls) = []
   | otherwise = match pair
     TestPairErr _ => []
-    TestPair runtimeM rawCoreM coreM rawM modsM => withEvidencePreserved
+    TestPair runtimeM rawCoreM coreM rawM modsM factsM => withEvidencePreserved
       (_ => nativePropRowsOr native (_ =>
         propsReportEngines
           engines
@@ -2744,6 +2751,7 @@ propsReportPinned engines pair native stdlibDir target tsrc userDecls cases filt
           coreM
           rawM
           modsM
+          factsM
           target
           tsrc
           userDecls
@@ -2759,6 +2767,7 @@ propsReportEnginesInProcess : NativePropLeaf ->
   List Decl ->
   List (String, List Decl) ->
   List (String, List Decl) ->
+  ProgramFacts ->
   String ->
   String ->
   List Decl ->
@@ -2767,8 +2776,8 @@ propsReportEnginesInProcess : NativePropLeaf ->
   String ->
   PinIndex ->
   <IO> List PropResult
-propsReportEnginesInProcess _ [] _ _ _ _ _ _ _ _ _ _ _ _ = []
-propsReportEnginesInProcess leaf engines runtimeM rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+propsReportEnginesInProcess _ [] _ _ _ _ _ _ _ _ _ _ _ _ _ = []
+propsReportEnginesInProcess leaf engines runtimeM rawCoreM coreM rawM modsM factsM target tsrc userDecls cases filterOpt file index =
   let modules = planModules rawCoreM coreM rawM modsM
   let root = rootPlanModuleId rawM target
   let planningRequests =
@@ -2786,6 +2795,7 @@ propsReportEnginesInProcess leaf engines runtimeM rawCoreM coreM rawM modsM targ
         coreM
         rawM
         modsM
+        factsM
         target
         tsrc
         userDecls
@@ -2804,6 +2814,7 @@ propsReportEnginesInProcess leaf engines runtimeM rawCoreM coreM rawM modsM targ
             coreM
             rawM
             modsM
+            factsM
             target
             tsrc
             userDecls
@@ -2842,6 +2853,7 @@ propsReportEngines : List Engine ->
   List Decl ->
   List (String, List Decl) ->
   List (String, List Decl) ->
+  ProgramFacts ->
   String ->
   String ->
   List Decl ->
@@ -2850,8 +2862,8 @@ propsReportEngines : List Engine ->
   String ->
   PinIndex ->
   <IO> List PropResult
-propsReportEngines [] _ _ _ _ _ _ _ _ _ _ _ _ _ = []
-propsReportEngines (EngInterp :: rest) stdlibDir runtimeM rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+propsReportEngines [] _ _ _ _ _ _ _ _ _ _ _ _ _ _ = []
+propsReportEngines (EngInterp :: rest) stdlibDir runtimeM rawCoreM coreM rawM modsM factsM target tsrc userDecls cases filterOpt file index =
   superviseEvalProps
       (propWorkerCli stdlibDir)
       target
@@ -2864,6 +2876,7 @@ propsReportEngines (EngInterp :: rest) stdlibDir runtimeM rawCoreM coreM rawM mo
       coreM
       rawM
       modsM
+      factsM
       target
       tsrc
       userDecls
@@ -2871,7 +2884,7 @@ propsReportEngines (EngInterp :: rest) stdlibDir runtimeM rawCoreM coreM rawM mo
       filterOpt
       file
       index
-propsReportEngines (EngNative :: rest) stdlibDir runtimeM rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+propsReportEngines (EngNative :: rest) stdlibDir runtimeM rawCoreM coreM rawM modsM factsM target tsrc userDecls cases filterOpt file index =
   propsReportEnginesInProcess
       runNativePlannedPropRequests
       [EngNative]
@@ -2880,6 +2893,7 @@ propsReportEngines (EngNative :: rest) stdlibDir runtimeM rawCoreM coreM rawM mo
       coreM
       rawM
       modsM
+      factsM
       target
       tsrc
       userDecls
@@ -2895,6 +2909,7 @@ propsReportEngines (EngNative :: rest) stdlibDir runtimeM rawCoreM coreM rawM mo
       coreM
       rawM
       modsM
+      factsM
       target
       tsrc
       userDecls
@@ -3076,7 +3091,7 @@ runEvalRequestRows (TestPairErr message) _ _ _ _ requests =
   workerRuntimeRows
     requests
     "interpreter property worker could not prepare properties: \{message}"
-runEvalRequestRows (TestPair runtimeM rawCoreM coreM rawM modsM) held target tsrc userDecls requests =
+runEvalRequestRows (TestPair runtimeM rawCoreM coreM rawM modsM factsM) held target tsrc userDecls requests =
   let root = rootPlanModuleId rawM target
   let modules = planModules rawCoreM coreM rawM modsM
   match (planPropRequestsTimed
@@ -3087,7 +3102,7 @@ runEvalRequestRows (TestPair runtimeM rawCoreM coreM rawM modsM) held target tsr
     Err err => preparedResults (map (preparedPlanError "eval" err) requests)
     Ok (planEnv, rows) =>
       match customPlansReachable planEnv (preparedPlans rows)
-        [] => runEvalPreparedRows planEnv [] rows tsrc coreM modsM
+        [] => runEvalPreparedRows planEnv [] rows tsrc coreM modsM factsM
         _ =>
           let baseline = match held
             Some diags => diags
@@ -3120,7 +3135,7 @@ runValidatedEvalRequests (HelperValidation pair helpers rejected protocol) targe
         workerRuntimeRows
           requests
           "interpreter property helpers could not prepare: \{message}"
-      TestPair _runtimeM rawCoreM coreM rawM modsM =>
+      TestPair _runtimeM rawCoreM coreM rawM modsM factsM =>
         let root = rootPlanModuleId rawM target
         let modules = planModules rawCoreM coreM rawM modsM
         match (planPropRequestsTimed
@@ -3138,6 +3153,7 @@ runValidatedEvalRequests (HelperValidation pair helpers rejected protocol) targe
               tsrc
               coreM
               modsM
+              factsM
 
 runEvalProtocolRequests : TestPair ->
   String ->
@@ -3150,7 +3166,7 @@ runEvalProtocolRequests (TestPairErr message) _ _ _ _ requests =
   workerRuntimeRows
     requests
     "interpreter property helpers could not prepare: \{message}"
-runEvalProtocolRequests (TestPair _runtimeM rawCoreM coreM rawM modsM) message target tsrc userDecls requests =
+runEvalProtocolRequests (TestPair _runtimeM rawCoreM coreM rawM modsM factsM) message target tsrc userDecls requests =
   let root = rootPlanModuleId rawM target
   let modules = planModules rawCoreM coreM rawM modsM
   match (planPropRequestsTimed
@@ -3167,6 +3183,7 @@ runEvalProtocolRequests (TestPair _runtimeM rawCoreM coreM rawM modsM) message t
         tsrc
         coreM
         modsM
+        factsM
 
 runEvalPreparedRows : PlanEnv ->
   List PropHelper ->
@@ -3174,8 +3191,10 @@ runEvalPreparedRows : PlanEnv ->
   String ->
   List Decl ->
   List (String, List Decl) ->
+  ProgramFacts ->
   <IO> List PropResult
-runEvalPreparedRows env helpers rows tsrc coreM modsM = withRootEvalEnv
+runEvalPreparedRows env helpers rows tsrc coreM modsM factsM = withRootEvalEnv
+  factsM
   coreM
   modsM
   (evalEnv =>
@@ -3188,17 +3207,15 @@ runEvalPreparedRows env helpers rows tsrc coreM modsM = withRootEvalEnv
       (coreM ++ flatMap snd modsM))
 
 -- [consume] over the root environment of [coreM] and [modsM], inside the bracket
--- of the facts it is built from.  A `TestPair` holds no facts, so they are the
--- installed tables', read when the environment is built.
-withRootEvalEnv : List Decl ->
+-- of [facts], the facts of the elaboration that produced them.
+withRootEvalEnv : ProgramFacts ->
+  List Decl ->
   List (String, List Decl) ->
   (EvalEnv (Value <IO>) -> <IO> a) ->
   <IO> a
-withRootEvalEnv coreM modsM consume =
-  let facts = factsInstalled ()
-  withFacts facts (_ =>
-    consume
-      (evalModulesRootEvalEnvFacts facts (testCapableExterns ()) coreM modsM))
+withRootEvalEnv facts coreM modsM consume = withFacts facts (_ =>
+  consume
+    (evalModulesRootEvalEnvFacts facts (testCapableExterns ()) coreM modsM))
 
 -- The structural-only path keeps the established engine behavior unchanged.
 propsReportEnginesPlain : NativePropLeaf ->
@@ -3207,6 +3224,7 @@ propsReportEnginesPlain : NativePropLeaf ->
   List Decl ->
   List (String, List Decl) ->
   List (String, List Decl) ->
+  ProgramFacts ->
   String ->
   String ->
   List Decl ->
@@ -3215,9 +3233,9 @@ propsReportEnginesPlain : NativePropLeaf ->
   String ->
   PinIndex ->
   <IO> List PropResult
-propsReportEnginesPlain _ [] _ _ _ _ _ _ _ _ _ _ _ = []
-propsReportEnginesPlain leaf (EngInterp :: rest) rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
-  withRootEvalEnv coreM modsM (evalEnv =>
+propsReportEnginesPlain _ [] _ _ _ _ _ _ _ _ _ _ _ _ = []
+propsReportEnginesPlain leaf (EngInterp :: rest) rawCoreM coreM rawM modsM factsM target tsrc userDecls cases filterOpt file index =
+  withRootEvalEnv factsM coreM modsM (evalEnv =>
       runAllPlannedPropRequestsResults
         (rootPlanModuleId rawM target)
         (planModules rawCoreM coreM rawM modsM)
@@ -3232,6 +3250,7 @@ propsReportEnginesPlain leaf (EngInterp :: rest) rawCoreM coreM rawM modsM targe
       coreM
       rawM
       modsM
+      factsM
       target
       tsrc
       userDecls
@@ -3239,7 +3258,7 @@ propsReportEnginesPlain leaf (EngInterp :: rest) rawCoreM coreM rawM modsM targe
       filterOpt
       file
       index
-propsReportEnginesPlain leaf (EngNative :: rest) rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+propsReportEnginesPlain leaf (EngNative :: rest) rawCoreM coreM rawM modsM factsM target tsrc userDecls cases filterOpt file index =
   leaf
       target
       tsrc
@@ -3252,6 +3271,7 @@ propsReportEnginesPlain leaf (EngNative :: rest) rawCoreM coreM rawM modsM targe
       coreM
       rawM
       modsM
+      factsM
       target
       tsrc
       userDecls
@@ -3343,8 +3363,7 @@ helperPair runtimeM rawCoreM rawM decls =
   fst (helperElaboration runtimeM rawCoreM rawM decls)
 
 -- One drive over the program with [decls] injected into its last module: the
--- trees and the diagnostics of the same elaboration, whose evidence table it
--- leaves installed for the evaluation of those trees.
+-- trees with their facts, and the diagnostics of the same elaboration.
 helperElaboration : List Decl ->
   List Decl ->
   List (String, List Decl) ->
@@ -3352,9 +3371,9 @@ helperElaboration : List Decl ->
   (TestPair, List (String, TcDiag))
 helperElaboration runtimeM rawCoreM rawM decls =
   let injected = injectIntoLast decls rawM
-  let ((coreM, modsM), diags) =
+  let ((coreM, modsM), factsM, diags) =
     elaborateModulesMangled runtimeM rawCoreM injected
-  (TestPair runtimeM rawCoreM coreM injected modsM, diags)
+  (TestPair runtimeM rawCoreM coreM injected modsM factsM, diags)
 
 -- The program's own elaboration diagnostics: the baseline a helper pass is
 -- measured against.  A diagnostics-only drive, so it restores the evidence
@@ -3474,7 +3493,7 @@ runValidatedPropEngines leaf engines (HelperValidation pair helpers rejected pro
     None => match pair
       TestPairErr message =>
         protocolPropResults engines message userDecls cases filterOpt
-      TestPair _runtimeM rawCoreM coreM rawM modsM =>
+      TestPair _runtimeM rawCoreM coreM rawM modsM factsM =>
         runValidatedPropEnginesGo
           leaf
           engines
@@ -3484,6 +3503,7 @@ runValidatedPropEngines leaf engines (HelperValidation pair helpers rejected pro
           coreM
           rawM
           modsM
+          factsM
           target
           tsrc
           userDecls
@@ -3510,7 +3530,7 @@ runProtocolHelperEngines : NativePropLeaf ->
 runProtocolHelperEngines _ [] _ _ _ _ _ _ _ _ _ = []
 runProtocolHelperEngines _ engines (TestPairErr err) _ _ _ userDecls cases filterOpt _ _ =
   protocolPropResults engines err userDecls cases filterOpt
-runProtocolHelperEngines leaf engines (TestPair _runtimeM rawCoreM coreM rawM modsM) message target tsrc userDecls cases filterOpt file index =
+runProtocolHelperEngines leaf engines (TestPair _runtimeM rawCoreM coreM rawM modsM factsM) message target tsrc userDecls cases filterOpt file index =
   runProtocolHelperEnginesGo
     leaf
     engines
@@ -3519,6 +3539,7 @@ runProtocolHelperEngines leaf engines (TestPair _runtimeM rawCoreM coreM rawM mo
     coreM
     rawM
     modsM
+    factsM
     target
     tsrc
     userDecls
@@ -3534,6 +3555,7 @@ runProtocolHelperEnginesGo : NativePropLeaf ->
   List Decl ->
   List (String, List Decl) ->
   List (String, List Decl) ->
+  ProgramFacts ->
   String ->
   String ->
   List Decl ->
@@ -3542,8 +3564,8 @@ runProtocolHelperEnginesGo : NativePropLeaf ->
   String ->
   PinIndex ->
   <IO> List PropResult
-runProtocolHelperEnginesGo _ [] _ _ _ _ _ _ _ _ _ _ _ _ = []
-runProtocolHelperEnginesGo leaf (engine :: rest) message rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+runProtocolHelperEnginesGo _ [] _ _ _ _ _ _ _ _ _ _ _ _ _ = []
+runProtocolHelperEnginesGo leaf (engine :: rest) message rawCoreM coreM rawM modsM factsM target tsrc userDecls cases filterOpt file index =
   let engineText = engineName engine
   let requests = propRequestsFor index file engineText userDecls cases filterOpt
   let root = rootPlanModuleId rawM target
@@ -3557,6 +3579,7 @@ runProtocolHelperEnginesGo leaf (engine :: rest) message rawCoreM coreM rawM mod
       coreM
       rawM
       modsM
+      factsM
       target
       tsrc
       userDecls
@@ -3574,7 +3597,7 @@ runProtocolHelperEnginesGo leaf (engine :: rest) message rawCoreM coreM rawM mod
     Ok (env, prepared) =>
       let rows = rejectPreparedProtocolCustom env engineText message prepared
       let here = match engine
-        EngInterp => withRootEvalEnv coreM modsM (evalEnv =>
+        EngInterp => withRootEvalEnv factsM coreM modsM (evalEnv =>
           runPreparedPropRequestsResults
             env
             []
@@ -3593,6 +3616,7 @@ runValidatedPropEnginesGo : NativePropLeaf ->
   List Decl ->
   List (String, List Decl) ->
   List (String, List Decl) ->
+  ProgramFacts ->
   String ->
   String ->
   List Decl ->
@@ -3601,9 +3625,9 @@ runValidatedPropEnginesGo : NativePropLeaf ->
   String ->
   PinIndex ->
   <IO> List PropResult
-runValidatedPropEnginesGo _ [] _helpers _rejected _rawCoreM _coreM _rawM _modsM _target _tsrc _userDecls _cases _filterOpt _file _index =
+runValidatedPropEnginesGo _ [] _helpers _rejected _rawCoreM _coreM _rawM _modsM _factsM _target _tsrc _userDecls _cases _filterOpt _file _index =
   []
-runValidatedPropEnginesGo leaf (engine :: rest) helpers rejected rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+runValidatedPropEnginesGo leaf (engine :: rest) helpers rejected rawCoreM coreM rawM modsM factsM target tsrc userDecls cases filterOpt file index =
   let engineText = engineName engine
   let requests = propRequestsFor index file engineText userDecls cases filterOpt
   let root = rootPlanModuleId rawM target
@@ -3624,6 +3648,7 @@ runValidatedPropEnginesGo leaf (engine :: rest) helpers rejected rawCoreM coreM 
           coreM
           rawM
           modsM
+          factsM
           target
           tsrc
           userDecls
@@ -3634,7 +3659,7 @@ runValidatedPropEnginesGo leaf (engine :: rest) helpers rejected rawCoreM coreM 
     Ok (env, prepared) =>
       let rows = rejectPreparedHelpers env engineText rejected prepared
       let here = match engine
-        EngInterp => withRootEvalEnv coreM modsM (evalEnv =>
+        EngInterp => withRootEvalEnv factsM coreM modsM (evalEnv =>
           runPreparedPropRequestsResults
             env
             helpers
@@ -3653,6 +3678,7 @@ runValidatedPropEnginesGo leaf (engine :: rest) helpers rejected rawCoreM coreM 
           coreM
           rawM
           modsM
+          factsM
           target
           tsrc
           userDecls
@@ -4008,7 +4034,8 @@ testDeclsReportOn : Engine ->
   <IO> List (String, Int, ExResult)
 testDeclsReportOn EngInterp (TestPairErr _) _native _runtimeDecls _target _tsrc _userDecls _filterOpt _file _index =
   []
-testDeclsReportOn EngInterp (TestPair _runtimeM _rawCoreM coreM _rawM modsM) _native runtimeDecls target tsrc userDecls filterOpt _file _index = withRootEvalEnv
+testDeclsReportOn EngInterp (TestPair _runtimeM _rawCoreM coreM _rawM modsM factsM) _native runtimeDecls target tsrc userDecls filterOpt _file _index = withRootEvalEnv
+  factsM
   coreM
   modsM
   (evalEnv =>
