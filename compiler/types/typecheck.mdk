@@ -311,7 +311,7 @@ import types.effect_bindings.{
   BindingSummary(..), newBindingSummary, bodyArrows, bodyRowAt
 }
 import types.effect_solver.{
-  SummarySolver, SummaryFailure, ScopeOutcome(..), ScopeRoles(..), noScopeRoles
+  SummaryFailure, ScopeOutcome(..), ScopeRoles(..), noScopeRoles
 }
 import types.effect_values.{
   ValueJoinOps(..), joinProduced, joinProducedEnvelope, producedInputTypes,
@@ -558,7 +558,6 @@ import frontend.resolve.{
 -- difference from the guard-coverage pass is the ctor oracle (here it comes from
 -- the typechecked program's data decls + the inferred scrutinee type).
 import frontend.exhaust.{
-  Oracle,
   buildOracle,
   useful,
   patUnreachable,
@@ -712,7 +711,6 @@ import types.evidence_complete.{
 }
 import types.runtime_types.{
   BinderRow(..),
-  BinderTypeTable,
   addBinderRow,
   emptyBinderTypes,
   installBinderTypes,
@@ -7151,7 +7149,7 @@ ieProbeBlobHead : HeadKey
 ieProbeBlobHead = headKeyOfCon (OriginModule "amod") "Blob"
 -- ═══ #1112 A-3.4: IE-BLOCK-END ═════════════════════════════════════════════════
 
--- ═══ #1519 A-3.3: THE `CE` REGISTRY — CE-BLOCK-BEGIN (its data declarations are in types/tc_types.mdk) ═══
+-- ═══ #1519 A-3.3: THE `CE` REGISTRY — CE-BLOCK-BEGIN (its data declarations are in compiler/types/tc_types.mdk) ═══
 
 ceRowKey : CeRow -> RegKey
 ceRowKey (CeRow k _ _ _ _ _ _ _) = k

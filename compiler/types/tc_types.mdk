@@ -539,7 +539,7 @@ public export data DataTypeDecl = DataTypeDecl {
 --
 -- they are the predicate's arguments, not a second copy of its body.  Both
 -- are consumed by `aliasUniverseAt` through `declEnvVisibleTo` itself; nothing
--- here open-codes `<=` or a `pub` test, which this file prohibits in four places
+-- here open-codes `<=` or a `pub` test, which `compiler/types/typecheck.mdk` prohibits in four places
 -- (`grep -n 'open-cod' compiler/types/typecheck.mdk`) — see `declEnvRowVisible`,
 -- whose own comment is *"Both arms go through the predicate; neither open-codes
 -- `<=` or a `pub` test."*
@@ -756,7 +756,7 @@ public export data ImplAcc = ImplAcc {
 -- The snapshot: `universeIfaceRequiredRef : Ref (Registry (List String))`, `universeIfaceParamKinds : Ref (List
 -- (RegKey, List Kind))`, `universeRegisteredIfacesRef : Ref (OrdMap Unit)`,
 -- `superDeclsRef : Ref (List Decl)` — zero `Scheme`, zero `Mono`, zero
--- `RecordInfo`.  `ceMethodTyAt` (§ elsewhere in this file) returns raw `Ty`
+-- `RecordInfo`.  `ceMethodTyAt` (in `compiler/types/typecheck.mdk`) returns raw `Ty`
 -- and every use site elaborates on demand via `fromAstTypeE`.  This
 -- construction mirrors that exactly, and hits the identical wall A-3.2a's
 -- `DataEnv` construction hit: elaborating a method signature would call
@@ -1303,7 +1303,7 @@ public export data PendingDictApp = PendingDictApp {
   -- `EDictAt` node's cell, which is how a reader reached the answer; the node now
   -- carries `pdaEv` instead and the reader looks that up in the published table, so
   -- this cell is private to the solver — the stampers' write target, read back once
-  -- by `recordEvidence` and by nothing outside this file.
+  -- by `recordEvidence` and by nothing outside `compiler/types/typecheck.mdk`.
   pdaRoutesRef : Ref (List Route),
   -- #2549 M2: this application's evidence id, the same field `PendingEntry` carries
   -- as its 7th and for the same reason.  Taken from the node (`inferDictAt`), not
@@ -1655,14 +1655,14 @@ public export data GivenMatch =
 
 -- #2705 (M2 phase 2): the solver's working cells for ONE `EMethodAt` node, keyed by
 -- the node's `EvId`.  The node itself carries no cell any more — a reader outside
--- this file gets the answer from the published table (`evMethodRoutes`) — but the
+-- `compiler/types/typecheck.mdk` gets the answer from the published table (`evMethodRoutes`) — but the
 -- stampers still write through `Ref`s (every goal destination is an `EvDest` over
 -- one), so the cells live here, minted with the node (`mintMethodCell`) and read
 -- back by `methodCellEntries` when the table is published.  It owns five cells:
 -- the interface identity the occurrence resolved to, the selected denotation's
 -- pre-use arrow arity, the dispatch route, the selected impl's `requires` dicts,
 -- and the method's own `=>` dicts.
--- Two channels carry one fact: inside this file a reader dereferences the live
+-- Two channels carry one fact: inside `compiler/types/typecheck.mdk` a reader dereferences the live
 -- cell, outside it reads the installed snapshot, and "no cell is written after the
 -- last publish" is a discipline of the drain's schedule, not a type.  The mutable
 -- half is what the target's evidence-bindings step retires; until then it is the
@@ -2226,7 +2226,7 @@ public export data CtorFieldConflict =
 -- `DICT-SEMANTICS.md` §8 I7 (ratified 2026-08-10): *an OPERATOR's class, and a numeric
 -- literal's class, are fixed by the language definition.  They are not resolved by
 -- name, and no user declaration can capture them.*  The eight synthetic occurrences in
--- this file (the five operator handlers, `inferNumLitBare`, and the two `Num` gates)
+-- `compiler/types/typecheck.mdk` (the five operator handlers, `inferNumLitBare`, and the two `Num` gates)
 -- have no AST node and no declaration site to read an origin from, so P1 (#1446) needs
 -- a supply route for them that is neither invented nor user-writable.
 --
@@ -2580,7 +2580,7 @@ public export data CohSweep = CohSweepOwn | CohSweepGlobal
 -- declaration-order permutation differential (which permutes SOURCE order and leaves
 -- bucket order untouched, so both permutations agree and the row passes either way).
 -- With the index the union is a stable merge on declaration order, which is the
--- tie-break the rest of this file already documents AND the one that gate can see.
+-- tie-break `compiler/types/typecheck.mdk` already documents AND the one that gate can see.
 -- A-2.2b (#1111): the second field is the entry's PROJECTED HEAD, not its head
 -- tycon NAME.  `keyEntryOf` already computed a `HeadKey` (A-2.2) and threw it
 -- away by projecting it to a bare name; keeping it is what lets this registry
