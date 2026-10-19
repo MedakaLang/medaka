@@ -705,9 +705,6 @@ sideSection ls =
 sideNames : List String
 sideNames = [
   "selectedProfile",
-  "evidenceRef",
-  "dispositionsRef",
-  "binderTypesRef",
   "binderOrdinalRef",
   "preludeScopeMemoRef",
   "loadedSourcesRef",

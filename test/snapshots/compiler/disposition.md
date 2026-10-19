@@ -1,5 +1,5 @@
 # META
-source_lines=294
+source_lines=254
 stages=DESUGAR,MARK
 # SOURCE
 -- The whole-graph per-method disposition table (#1112 A-3, #1403 X-E's future
@@ -11,8 +11,7 @@ stages=DESUGAR,MARK
 -- Depends only on `types.repr`'s and `frontend.ast`'s identity types, so
 -- `compiler/ir/*`, `compiler/eval/*` and `compiler/backend/*` can import this module
 -- without reaching `types.typecheck` — the producer (`buildDispositions`) lives
--- there; this module is the shared carrier plus the installed lookup, mirroring
--- `types/route_key.mdk`'s `evidenceRef`/`installEvidence`.
+-- there; this module is the shared carrier.
 --
 -- Its readers are the two passes that turn an `InheritedDefault` row into code:
 -- `core_ir_lower` (one `CImplDefault` entry per row, which every compiled engine
@@ -257,45 +256,6 @@ validateDispositionTable expected table =
   match dispositionProblems expected table
     [] => ()
     problem :: _ => panic "disposition table: \{problem}"
-
--- ── the installed table ────────────────────────────────────────────────────
--- `elaborateModules` installs one every elaboration so its readers (see the header)
--- need not thread the table through every call site by hand, exactly as
--- `installEvidence` does.
-dispositionsRef : Ref (Option DispositionTable)
-dispositionsRef = Ref None
-
--- Replace the installed table with this elaboration's. Called once per
--- elaboration, so the table never outlives the program it describes.
-export
-installDispositions : DispositionTable -> Unit
-installDispositions table = dispositionsRef := Some table
-
--- A miss means no elaboration has published one — loud, mirroring
--- `route_key.mdk`'s `evDictRoutes` `None` arm at `evidenceRef`, never a silent
--- empty table.
-export
-installedDispositions : Unit -> DispositionTable
-installedDispositions _ = match !dispositionsRef
-  None => panic "disposition table: no elaboration has published one"
-  Some table => table
-
--- For a lowering driver that may run without an elaboration (the untyped Core-IR
--- and eval probes): `None` there means the program was never typechecked, so no
--- instance's inherited defaults are known and none is specialized — an impl that
--- leaves another module's interface method to its default has no body for it on
--- that path (see `core_ir_lower.lowerProgram`).  A typechecked driver reads
--- `installedDispositions`, which refuses a missing table.
-export
-installedDispositionsOpt : Unit -> Option DispositionTable
-installedDispositionsOpt _ = !dispositionsRef
-
--- Put back a table read with `installedDispositionsOpt`, for a driver that
--- elaborates a program it derived from the user's and must leave the user's own
--- elaboration's table installed for the engine that runs next.
-export
-restoreDispositions : Option DispositionTable -> Unit
-restoreDispositions saved = dispositionsRef := saved
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ty" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true))))
@@ -357,16 +317,6 @@ restoreDispositions saved = dispositionsRef := saved
 (DFunDef false "dispositionProblems" ((PCons (PTuple (PVar "inst") (PVar "iface") (PVar "method")) (PVar "rest")) (PVar "table")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "dispositionKey") (EVar "inst")) (EVar "method"))) (DoLet false false (PVar "here") (EMatch (EApp (EApp (EApp (EVar "dispositionLookup") (EVar "inst")) (EVar "method")) (EVar "table")) (arm (PCon "None") () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "missing disposition for ")) (EApp (EVar "display") (EVar "key"))) (ELit (LString ""))))) (arm (PCon "Some" (PVar "row")) () (EIf (EApp (EApp (EVar "ifaceRefSameSpelling") (EVar "iface")) (EApp (EVar "dispositionIface") (EVar "row"))) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "key"))) (ELit (LString " answered by a different interface")))))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EVar "dispositionProblems") (EVar "rest")) (EVar "table"))))))
 (DTypeSig true "validateDispositionTable" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InstId") (TyCon "IfaceRef") (TyCon "String"))) (TyFun (TyCon "DispositionTable") (TyCon "Unit"))))
 (DFunDef false "validateDispositionTable" ((PVar "expected") (PVar "table")) (EMatch (EApp (EApp (EVar "dispositionProblems") (EVar "expected")) (EVar "table")) (arm (PList) () (ELit LUnit)) (arm (PCons (PVar "problem") PWild) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "disposition table: ")) (EApp (EVar "display") (EVar "problem"))) (ELit (LString "")))))))
-(DTypeSig false "dispositionsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "DispositionTable"))))
-(DFunDef false "dispositionsRef" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig true "installDispositions" (TyFun (TyCon "DispositionTable") (TyCon "Unit")))
-(DFunDef false "installDispositions" ((PVar "table")) (EApp (EApp (EVar "setRef") (EVar "dispositionsRef")) (EApp (EVar "Some") (EVar "table"))))
-(DTypeSig true "installedDispositions" (TyFun (TyCon "Unit") (TyCon "DispositionTable")))
-(DFunDef false "installedDispositions" (PWild) (EMatch (EUnOp "!" (EVar "dispositionsRef")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "disposition table: no elaboration has published one")))) (arm (PCon "Some" (PVar "table")) () (EVar "table"))))
-(DTypeSig true "installedDispositionsOpt" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "DispositionTable"))))
-(DFunDef false "installedDispositionsOpt" (PWild) (EUnOp "!" (EVar "dispositionsRef")))
-(DTypeSig true "restoreDispositions" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyCon "Unit")))
-(DFunDef false "restoreDispositions" ((PVar "saved")) (EApp (EApp (EVar "setRef") (EVar "dispositionsRef")) (EVar "saved")))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ty" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true))))
@@ -428,13 +378,3 @@ restoreDispositions saved = dispositionsRef := saved
 (DFunDef false "dispositionProblems" ((PCons (PTuple (PVar "inst") (PVar "iface") (PVar "method")) (PVar "rest")) (PVar "table")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "dispositionKey") (EVar "inst")) (EVar "method"))) (DoLet false false (PVar "here") (EMatch (EApp (EApp (EApp (EVar "dispositionLookup") (EVar "inst")) (EVar "method")) (EVar "table")) (arm (PCon "None") () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "missing disposition for ")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString ""))))) (arm (PCon "Some" (PVar "row")) () (EIf (EApp (EApp (EVar "ifaceRefSameSpelling") (EVar "iface")) (EApp (EVar "dispositionIface") (EVar "row"))) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString " answered by a different interface")))))))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EVar "dispositionProblems") (EVar "rest")) (EVar "table"))))))
 (DTypeSig true "validateDispositionTable" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "InstId") (TyCon "IfaceRef") (TyCon "String"))) (TyFun (TyCon "DispositionTable") (TyCon "Unit"))))
 (DFunDef false "validateDispositionTable" ((PVar "expected") (PVar "table")) (EMatch (EApp (EApp (EVar "dispositionProblems") (EVar "expected")) (EVar "table")) (arm (PList) () (ELit LUnit)) (arm (PCons (PVar "problem") PWild) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "disposition table: ")) (EApp (EMethodRef "display") (EVar "problem"))) (ELit (LString "")))))))
-(DTypeSig false "dispositionsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "DispositionTable"))))
-(DFunDef false "dispositionsRef" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig true "installDispositions" (TyFun (TyCon "DispositionTable") (TyCon "Unit")))
-(DFunDef false "installDispositions" ((PVar "table")) (EApp (EApp (EVar "setRef") (EVar "dispositionsRef")) (EApp (EVar "Some") (EVar "table"))))
-(DTypeSig true "installedDispositions" (TyFun (TyCon "Unit") (TyCon "DispositionTable")))
-(DFunDef false "installedDispositions" (PWild) (EMatch (EUnOp "!" (EVar "dispositionsRef")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "disposition table: no elaboration has published one")))) (arm (PCon "Some" (PVar "table")) () (EVar "table"))))
-(DTypeSig true "installedDispositionsOpt" (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "DispositionTable"))))
-(DFunDef false "installedDispositionsOpt" (PWild) (EUnOp "!" (EVar "dispositionsRef")))
-(DTypeSig true "restoreDispositions" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyCon "Unit")))
-(DFunDef false "restoreDispositions" ((PVar "saved")) (EApp (EApp (EVar "setRef") (EVar "dispositionsRef")) (EVar "saved")))

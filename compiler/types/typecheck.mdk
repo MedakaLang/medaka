@@ -679,7 +679,6 @@ import types.route_key.{
   implRouteKeyWord,
   ifaceWordOf,
   funHeadTag,
-  installEvidence,
   EvIndex,
   evIndexOf,
   evDictRoutesIn,
@@ -692,9 +691,6 @@ import types.disposition.{
   DispositionTable,
   InstanceShape(..),
   buildDispositionTableWithShapes,
-  installDispositions,
-  installedDispositionsOpt,
-  restoreDispositions,
   validateDispositionTable,
 }
 import types.target_profile.{
@@ -715,7 +711,6 @@ import types.runtime_types.{
   BinderRow(..),
   addBinderRow,
   emptyBinderTypes,
-  installBinderTypes,
   RuntimeType(..),
   runtimeTypeOf,
 }
@@ -10324,7 +10319,7 @@ methodCellDicts : EvCell -> List (List Route)
 methodCellDicts c = [c.ecImpl.value, c.ecMeth.value]
 
 -- Every minted method cell as a published entry, read back out of the cells the
--- stampers wrote — the per-node half of the table `publishEvidence` installs.
+-- stampers wrote — the per-node half of the table `drivenEvidence` returns.
 methodCellEntries : Unit -> EvTable
 methodCellEntries _ =
   let arr = graphRun.value.evCells.value
@@ -10360,12 +10355,6 @@ drivenEvidence : Unit -> EvTable
 drivenEvidence _ =
   methodCellEntries () ++ siteCellEntries () ++ graphRun.value.evTable.value
 
--- Install the table the readers below this file consult.  The tree arm calls it
--- before `dictPass` (which reads `EDictAt` routes) and again after it (which mints
--- `EMethodAt` nodes of its own).
-publishEvidence : Unit -> Unit
-publishEvidence _ = installEvidence (drivenEvidence ())
-
 graphRun : Ref GraphRun
 graphRun = Ref (freshGraphRun ())
 
@@ -10379,7 +10368,7 @@ currentScopeStore _ = graphRun.value.scopeStore
 -- module before any body of it is inferred; the ordinal is this run's counter.
 -- `evCounter` is graph-global and monotone, and `resetGraphState` carries it across
 -- every reset, so THE ORDINAL ALONE is what makes an id unique — the module half does
--- not scope it, and `evDictRoutes` indexes on the ordinal without consulting it.
+-- not scope it, and `evDictRoutesIn` indexes on the ordinal without consulting it.
 -- The module half is a tripwire for that lookup (see `EvId` in `frontend/ast.mdk`):
 -- do not make ordinals per-module in the belief that the pair still separates them.
 --
@@ -10404,9 +10393,8 @@ freshEvId _ =
 -- `resetCrossModuleState`) before it marks, except a caller of `markModules`, which
 -- marks first and then hands the trees to a driver whose preamble lands here: that
 -- lineage is `markedAhead`, and this reset keeps its base and cells.  Trees outlive
--- their drive only through the installed table in `types/route_key.mdk`, so a caller
--- that runs a second elaboration before it reads the first's trees restores the
--- first's table around the second (`withEvidencePreserved`).
+-- their drive only through the facts the drive returned, so a caller that runs a
+-- second elaboration before it reads the first's trees keeps the first's facts.
 resetGraphState : Unit -> Unit
 resetGraphState _ = resetGraphLineage graphRun.value.markedAhead
 
@@ -16777,7 +16765,7 @@ inferDictAtFound name ev inst =
   -- EDictAt path because the marker's dict-name set is source-blind and a DIFFERENT module
   -- exports a same-named CONSTRAINED fn (`p.f`).  It needs NO dict routing, so [ev] is
   -- published as an application of ZERO dictionaries (a goal with no slots, which solves
-  -- to `EvMany []`): `evDictRoutes` panics on an id with no entry, so every `EDictAt` must
+  -- to `EvMany []`): `evDictRoutesIn` panics on an id with no entry, so every `EDictAt` must
   -- be represented.  Neither branch below is safe here — the
   -- `if` branch would record a phantom obligation off the bare-name collision, and the
   -- `else` (recursive) branch's realizeRecDictApps does its OWN source-blind bare-name
@@ -51783,11 +51771,8 @@ driveGraphK sel valueMain executes preludeKey runtimeDecls coreDecls0 modulesIn 
   let entryTables = captureEntryTables coreContexts modules
   let corePub = publishedCore coreClosed coreContexts coreSchemes
   -- #1112 A-3: the whole-graph IE/CE `buildDeclEnvs` filled in the preamble
-  -- above is already complete at this point — installed here, once per
-  -- elaboration, on both arms alike (mirroring `installEvidence`'s own
-  -- install-ordering invariant, #2705).
+  -- above is already complete at this point, on both arms alike.
   let dispositions = buildDispositions driverState.value.declEnvsRef.value
-  let _ = installDispositions dispositions
   match sel
     GOutDiags => GraphDrive {
       gdPerMod = perMod,
@@ -51823,17 +51808,13 @@ driveGraphK sel valueMain executes preludeKey runtimeDecls coreDecls0 modulesIn 
           modules
       let (coreD, modules3) =
         dictPassModulesIfEnabled dictNames coreTree modules2
-      -- Installed on the tree arm only: it is the arm whose trees are lowered,
-      -- and a check-only drive therefore never replaces a table a lowering is
-      -- still reading.
-      let _ = installBinderTypes graphRun.value.binderRows.value
       -- `resolveAliasMethodSpellings` restores the origin name behind every
       -- alias-qualified method occurrence (`A.mth` -> `mth`) that inference kept.
       -- Only the user modules go through it: core imports nothing, so it holds no
       -- alias-qualified spelling to restore.
       let modulesOut = map resolveAliasMethodSpellings modules3
       let residual = stickyTypeErrorDiagsSince stickyBefore
-      -- read after the last `publishEvidence`, so the table is the installed one
+      -- read after `dictPass`, so it carries the `EMethodAt` nodes `dictPass` minted
       let evidence = drivenEvidence ()
       GraphDrive {
         gdPerMod = perMod,
@@ -52640,14 +52621,10 @@ dictPassModulesIfEnabled : List String ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl))
 dictPassModulesIfEnabled dictNames core2 modules2 =
-  -- #2549 M2: publish this sweep's solved evidence to the readers before anything
-  -- reads a route out of it.  Here rather than at `elaborateModules`' return
-  -- because `dictPass` is itself a reader (`bodyRDictNames`), and this is the
-  -- Module arm's one funnel into it — the fixpoint reaches this call only on the
-  -- sweep whose trees are final, so a discarded sweep never installs.
-  let evTable = drivenEvidence ()
-  let _ = installEvidence evTable
-  let idx = evIndexOf evTable
+  -- #2549 M2: index this sweep's solved evidence before anything reads a route
+  -- out of it.  Here because `dictPass` is itself a reader (`bodyRDictNames`),
+  -- and this is the Module arm's one funnel into it.
+  let idx = evIndexOf (drivenEvidence ())
   let allModDecls = flatMap snd modules2
   let promotedQ = crossRun.value.crossModuleFunPredicateSlotsQualRef.value
   let allMods = namesToSet (map fst modules2) omEmpty
@@ -52680,9 +52657,6 @@ dictPassModulesIfEnabled dictNames core2 modules2 =
       core2
       modules2
       modules2
-  -- #2705: `dictPass` minted `EMethodAt` nodes of its own (the binop/unop/numeric
-  -- rewrites); publish their cells before any reader below this file sees them.
-  let _ = publishEvidence ()
   (core2', modules2')
 -- Post-ARGSTAMP-UNIFY (Phase 4): ALWAYS run on every path (single elaboration mode).
 -- Emit:

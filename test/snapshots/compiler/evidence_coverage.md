@@ -8,11 +8,11 @@ stages=DESUGAR,MARK
 -- `CheckedProgram` without importing `types.typecheck`.
 --
 -- The shape each node's reader accepts (`types/route_key.mdk`):
---   `EMethodAt`                          -> `EvMethod` (`evMethodRoutes`)
---   `EDictAt`                            -> `EvMany`   (`evDictRoutes`)
---   `EBinOp`, `EUnOp`, `EWideLit`        -> `EvOne`    (`evSiteRoute`)
---   `ENumLit`                            -> `EvLit`    (`evSiteLit`)
---   `EFieldAccess`, `ERecordUpdate`      -> `EvHead`   (`evSiteHead`)
+--   `EMethodAt`                          -> `EvMethod` (`evMethodRoutesIn`)
+--   `EDictAt`                            -> `EvMany`   (`evDictRoutesIn`)
+--   `EBinOp`, `EUnOp`, `EWideLit`        -> `EvOne`    (`evSiteRouteIn`)
+--   `ENumLit`                            -> `EvLit`    (`evSiteLitIn`)
+--   `EFieldAccess`, `ERecordUpdate`      -> `EvHead`   (`evSiteHeadIn`)
 -- A node carrying `unminted` is answered by its reader without a lookup, so it
 -- needs no entry.  `dictPass` rewrites every literal away, so a dict-passed tree
 -- holds no `ENumLit` or `EWideLit`.

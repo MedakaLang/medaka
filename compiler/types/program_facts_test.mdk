@@ -18,7 +18,6 @@ import types.route_key.{
   EvIndex(..),
   evIndexOf,
   evSiteRouteIn,
-  installedEvidenceSlots,
 }
 import types.typecheck.{elaborateModules}
 import support.util.{joinNl}
@@ -88,7 +87,4 @@ indexSlots (EvIndex _ arr) = toList arr
 
 test "factsOfElab of a driven two-module program holds its method occurrences" =
   let slots = indexSlots twoModuleFacts.pfEvidence
-  expectAll [
-    expectTrue (any isMethodSlot slots),
-    expectEqual (installedEvidenceSlots ()) (length slots),
-  ]
+  expectAll [expectTrue (any isMethodSlot slots)]

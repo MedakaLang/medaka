@@ -1,5 +1,5 @@
 # META
-source_lines=788
+source_lines=641
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
@@ -65,55 +65,45 @@ import frontend.ast.{
   authTermsSurface,
 }
 import support.util.{joinWith, escStr}
-import types.runtime_types.{installedBinderTable, restoreBinderTable}
 
--- ── the published evidence table (#2549 M2) ───────────────────────────────
+-- ── the evidence table (#2549 M2) ─────────────────────────────────────────
 -- `EDictAt` carries an `EvId`, not a route cell, so a reader answers "what did
--- the solver decide here" by looking the id up rather than by dereferencing a
--- pointer the typechecker handed it.  The lookup lives HERE because this module
--- is the one below all three readers of a solved route — `types/typecheck.mdk`
--- (dict passing), `eval/eval.mdk` and `ir/core_ir_lower.mdk` — exactly the three
--- the header above names as this seam's consumers.  A cell inside any one of
--- them would be unreachable from the other two, and `frontend/ast.mdk` (the only
--- lower module) imports nothing and holds no state.
+-- the solver decide here" by looking the id up in the elaboration's `EvIndex`
+-- rather than by dereferencing a pointer the typechecker handed it.  The lookup
+-- lives HERE because this module is the one below all three readers of a solved
+-- route -- `types/typecheck.mdk` (dict passing), `eval/eval.mdk` and
+-- `ir/core_ir_lower.mdk` -- and `frontend/ast.mdk` (the only lower module)
+-- imports nothing and holds no state.  No cell holds the index: each reader is
+-- handed the one its own elaboration built.
 --
--- Exactly one table is installed per elaboration, and every read of it completes
--- before the next elaboration installs: `test_cmd`'s `prepareMulti` / `prepareSingle` /
--- `runChosen` phases, `elaborateRun`, `runEmitWith`, `eval_autoprint_main.runElab`
--- and `playground_main.finishClean` each
--- elaborate, install, and finish reading before the next elaboration begins; a
--- diagnostics-only elaboration that runs between them (`test_cmd`'s helper validation)
--- runs inside `withEvidencePreserved`, which reinstalls the table it found.  A lookup
--- that cannot be answered is a panic on every arm:
+-- A lookup that cannot be answered is an `Err` here, and a panic in the readers:
 --
---   no table installed  -> panic.  `evidenceRef` holding `None` means no elaboration
---                          has run.
---   ordinal below span  -> panic: the id is from an earlier graph.
---   ordinal above span  -> panic.
---   in-span `None`      -> panic.
+--   no index            -> Err.  The caller holds `None`: no elaboration ran.
+--   ordinal below span  -> Err: the id is from an earlier graph.
+--   ordinal above span  -> Err.
+--   in-span `None`      -> Err.
 --
 -- This holds because the typechecker publishes an entry for EVERY `EDictAt` it mints,
 -- including an application of zero dictionaries (`EvMany []`, the #739 arm of
--- `inferDictAtFound`), so "no entry" can only mean a missing or stale table.
+-- `inferDictAtFound`), so "no entry" can only mean a missing or stale index.
 --
--- What the panic does NOT catch: a read that escaped the install ordering and landed
--- on an ordinal inside the installed span.  A memo hit rewinds the counter, so two
--- elaborations can publish overlapping spans, and such a read can land on ANOTHER
--- GOAL'S ROUTES — silently wrong, at exit 0.  The module half of the id, compared on
--- every hit, is the only tripwire for that, and it cannot fire for today's consumer.
--- The install ordering above is the protection.
+-- What the lookup does NOT catch: an id from another elaboration that lands on an
+-- ordinal inside this index's span.  A memo hit rewinds the counter, so two
+-- elaborations can publish overlapping spans, and such a read answers with
+-- ANOTHER GOAL'S ROUTES -- silently wrong, at exit 0.  The module half of the id,
+-- compared on every hit, is the only tripwire for that, and it cannot fire for
+-- today's consumer.  Handing each reader its own elaboration's index is the
+-- protection.
 --
 -- The index is an ARRAY over the id's ordinal, not a scan of the spine: the table
 -- has one entry per solver goal (838 on a four-file fixture), so a per-site linear
 -- scan would be the List-as-a-map quadratic `compiler/AGENTS.md` records thirteen
 -- instances of.  Ordinals are graph-global (see `freshEvId`), so the ordinal less the
 -- table's smallest one IS the index and carries uniqueness by itself; the array spans
--- the installed entries' ordinals, not every ordinal the process has minted.  The
--- id's MODULE half is compared on every hit as a tripwire, not as part of the key —
--- see `EvId` in `frontend/ast.mdk` for why it cannot fire for today's consumer and
--- must be kept anyway.
-evidenceRef : Ref (Option EvIndex)
-evidenceRef = Ref None
+-- the entries' ordinals, not every ordinal the process has minted.  The id's MODULE
+-- half is compared on every hit as a tripwire, not as part of the key -- see `EvId`
+-- in `frontend/ast.mdk` for why it cannot fire for today's consumer and must be
+-- kept anyway.
 
 -- The table indexed by ordinal less its smallest one: the lowest ordinal and the
 -- slots from it.
@@ -127,84 +117,6 @@ evIndexOf entries =
   let arr = arrayMake (evSlotCount entries lo - lo) None
   let _ = fillEvidence lo arr entries
   EvIndex lo arr
-
--- Replace the installed evidence with this elaboration's.  Called once per
--- elaboration, so the table never outlives the program it describes.
-export
-installEvidence : EvTable -> Unit
-installEvidence entries = evidenceRef := Some (evIndexOf entries)
-
--- The installed index, or the empty one when no elaboration has published one, so
--- a reader holding it answers as an untyped lowering does: no entry for any id.
-export
-installedEvidenceIndex : Unit -> EvIndex
-installedEvidenceIndex _ = match !evidenceRef
-  Some idx => idx
-  None => evIndexOf []
-
--- Test visibility (`typecheck_test.mdk`): the installed table's slot count, 0 when
--- none is installed.
-export
-installedEvidenceSlots : Unit -> Int
-installedEvidenceSlots _ = match !evidenceRef
-  None => 0
-  Some (EvIndex _ arr) => arrayLength arr
-
--- Rewrite every installed entry in place (#2809).  The emit path renames its top-level
--- symbols AFTER elaboration, and an `RLocal` route carries one.  `mangleUnitsEv`
--- returns the renamed table by value as well; this keeps the installed copy equal to
--- it for the readers that still read the installed table.
-export
-remapEvidence : (EvEntry -> EvEntry) -> Unit
-remapEvidence f = match !evidenceRef
-  None => ()
-  Some (EvIndex _ arr) => remapEvidenceGo f arr 0 (arrayLength arr)
-
-remapEvidenceGo : (EvEntry -> EvEntry) ->
-  Array (Option EvEntry) ->
-  Int ->
-  Int ->
-  Unit
-remapEvidenceGo f arr i n
-  | i >= n = ()
-  | otherwise =
-    let _ = match arrayGetUnsafe i arr
-      None => ()
-      Some e => arraySetUnsafe i (Some (f e)) arr
-    remapEvidenceGo f arr (i + 1) n
-
--- Every installed entry, in ordinal order: the table of installed entries.
--- Empty when no elaboration has published one.
-export
-installedEvidenceEntries : Unit -> List EvEntry
-installedEvidenceEntries _ = match !evidenceRef
-  None => []
-  Some (EvIndex _ arr) => evidenceEntriesFrom arr (arrayLength arr - 1) []
-
--- Helper elaboration temporarily replaces the process-global evidence table.
--- Restore the complete installed table afterward, including method-occurrence
--- entries that an elaborateModules return value does not carry.  The binder-type
--- table is replaced by the same elaborations and is put back with it.
-export
-withEvidencePreserved : (Unit -> <e> a) -> <e> a
-withEvidencePreserved action =
-  let before = installedEvidenceEntries ()
-  let binders = installedBinderTable ()
-  let result = action ()
-  let _ = installEvidence before
-  let _ = restoreBinderTable binders
-  result
-
-evidenceEntriesFrom : Array (Option EvEntry) ->
-  Int ->
-  List EvEntry ->
-  List EvEntry
-evidenceEntriesFrom arr i acc =
-  if i < 0 then
-    acc
-  else match arrayGetUnsafe i arr
-    None => evidenceEntriesFrom arr (i - 1) acc
-    Some e => evidenceEntriesFrom arr (i - 1) (e :: acc)
 
 -- one past the largest ordinal in [entries], at least [acc]
 evSlotCount : EvTable -> Int -> Int
@@ -239,24 +151,12 @@ neverPublished : String -> String -> Int -> Result String a
 neverPublished what m i =
   Err "evidence table: \{what} \{m}#\{intToString i} was never published"
 
--- The installed entry's answer for [ev], looked up as [what]; every miss panics.
-installedAnswer : String -> EvId -> EvVal
-installedAnswer what ev = match installedLookup what ev
-  Ok v => v
-  Err message => panic message
-
--- `installedAnswer` over an explicit index.
 answerIn : EvIndex -> String -> EvId -> EvVal
 answerIn idx what ev = match evidenceLookup (Some idx) what ev
   Ok v => v
   Err message => panic message
 
--- `installedAnswer`'s answer, or the reason the installed table has none.
-export
-installedLookup : String -> EvId -> Result String EvVal
-installedLookup what ev = evidenceLookup !evidenceRef what ev
-
--- The lookup over [table], the shape `evidenceRef` holds: `None` when no
+-- The lookup over [table], the shape a reader holds: `None` when no
 -- elaboration has published one, else the lowest ordinal and the slots from it.
 export
 evidenceLookup : Option EvIndex -> String -> EvId -> Result String EvVal
@@ -280,13 +180,8 @@ evidenceLookup (Some (EvIndex lo arr)) what (EvId m i) =
 --
 -- Every `EDictAt` has an entry; an application that needs no routing (the #739
 -- bare-name-collision arm of `inferDictAtFound`) is published as `EvMany []`.  An id
--- with no entry therefore means the installed table is not the one this node's
--- elaboration published, and it panics, as `evMethodRoutes` does.
-export
-evDictRoutes : EvId -> List Route
-evDictRoutes ev = evRoutesOf (installedAnswer "dictionary application" ev)
-
--- `evDictRoutes` over an explicit index.
+-- with no entry therefore means the index is not the one this node's
+-- elaboration published, and it panics, as `evMethodRoutesIn` does.
 export
 evDictRoutesIn : EvIndex -> EvId -> List Route
 evDictRoutesIn idx ev = evRoutesOf (answerIn idx "dictionary application" ev)
@@ -306,24 +201,12 @@ evRoutesOf (EvHead _) =
 
 -- The route solved for operator site [ev].  A site built after inference carries
 -- `unminted`: no route was ever decided for it, and it answers `RNone`, the
--- builtin operator.  Every other miss panics, as `evDictRoutes` does.
-export
-evSiteRoute : EvId -> Route
-evSiteRoute ev = match evSiteRouteResult ev
-  Ok r => r
-  Err message => panic message
-
--- `evSiteRoute` over an explicit index.
+-- builtin operator.  Every other miss panics, as `evDictRoutesIn` does.
 export
 evSiteRouteIn : EvIndex -> EvId -> Route
 evSiteRouteIn idx ev = match siteRouteResultIn (Some idx) ev
   Ok r => r
   Err message => panic message
-
--- `evSiteRoute`'s answer, or the reason the installed table has none.
-export
-evSiteRouteResult : EvId -> Result String Route
-evSiteRouteResult ev = siteRouteResultIn !evidenceRef ev
 
 siteRouteResultIn : Option EvIndex -> EvId -> Result String Route
 siteRouteResultIn table ev
@@ -338,22 +221,10 @@ siteRouteResultIn table ev
 -- A literal built after inference carries `unminted` and answers `(None, RNone)`,
 -- a plain `Int`.  Every other miss panics.
 export
-evSiteLit : EvId -> (Option Float, Route)
-evSiteLit ev = match evSiteLitResult ev
-  Ok answer => answer
-  Err message => panic message
-
--- `evSiteLit` over an explicit index.
-export
 evSiteLitIn : EvIndex -> EvId -> (Option Float, Route)
 evSiteLitIn idx ev = match siteLitResultIn (Some idx) ev
   Ok answer => answer
   Err message => panic message
-
--- `evSiteLit`'s answer, or the reason the installed table has none.
-export
-evSiteLitResult : EvId -> Result String (Option Float, Route)
-evSiteLitResult ev = siteLitResultIn !evidenceRef ev
 
 siteLitResultIn : Option EvIndex -> EvId -> Result String (Option Float, Route)
 siteLitResultIn table ev
@@ -368,22 +239,10 @@ siteLitResultIn table ev
 -- "" when inference never resolved one.  A site built after inference carries
 -- `unminted` and answers "".  Every other miss panics.
 export
-evSiteHead : EvId -> String
-evSiteHead ev = match evSiteHeadResult ev
-  Ok head => head
-  Err message => panic message
-
--- `evSiteHead` over an explicit index.
-export
 evSiteHeadIn : EvIndex -> EvId -> String
 evSiteHeadIn idx ev = match siteHeadResultIn (Some idx) ev
   Ok head => head
   Err message => panic message
-
--- `evSiteHead`'s answer, or the reason the installed table has none.
-export
-evSiteHeadResult : EvId -> Result String String
-evSiteHeadResult ev = siteHeadResultIn !evidenceRef ev
 
 siteHeadResultIn : Option EvIndex -> EvId -> Result String String
 siteHeadResultIn table ev
@@ -399,17 +258,11 @@ siteHeadResultIn table ev
 -- `requires` dicts and the method's own `=>` dicts.  The arity is fixed from the selected scheme before application can
 -- specialize its result.
 --
--- As with `evDictRoutes`, a miss here is LOUD on every arm.  The typechecker mints
+-- As with `evDictRoutesIn`, a miss here is LOUD on every arm.  The typechecker mints
 -- one entry per `EMethodAt` node at the moment it constructs the node and
--- publishes every one of them, so an id with no entry can only mean the table
--- installed is not the one this node's elaboration published — the install-
--- ordering hazard the header above describes, surfaced instead of answered with
--- an unrouted dispatch.
-export
-evMethodRoutes : EvId -> (String, Int, Route, List Route, List Route)
-evMethodRoutes ev = evMethodOf (installedAnswer "method occurrence" ev)
-
--- `evMethodRoutes` over an explicit index.
+-- publishes every one of them, so an id with no entry can only mean the index
+-- held is not the one this node's elaboration published, surfaced instead of
+-- answered with an unrouted dispatch.
 export
 evMethodRoutesIn : EvIndex ->
   EvId ->
@@ -793,28 +646,9 @@ rkTyList =
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "EffParamTy" true) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "effAtomBare" false) (mem "effAtomWith" false) (mem "Route" true) (mem "EvId" true) (mem "isUnminted" false) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "constraintUnresolved" false) (mem "tyConBuiltin" false) (mem "ifaceIdentity" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "escStr" false))))
-(DUse false (UseGroup ("types" "runtime_types") ((mem "installedBinderTable" false) (mem "restoreBinderTable" false))))
-(DTypeSig false "evidenceRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "EvIndex"))))
-(DFunDef false "evidenceRef" () (EApp (EVar "Ref") (EVar "None")))
 (DData Public "EvIndex" () ((variant "EvIndex" (ConPos (TyCon "Int") (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry")))))) ())
 (DTypeSig true "evIndexOf" (TyFun (TyCon "EvTable") (TyCon "EvIndex")))
 (DFunDef false "evIndexOf" ((PVar "entries")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "evMinOrdinal") (EVar "entries"))) (DoLet false false (PVar "arr") (EApp (EApp (EVar "arrayMake") (EBinOp "-" (EApp (EApp (EVar "evSlotCount") (EVar "entries")) (EVar "lo")) (EVar "lo"))) (EVar "None"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fillEvidence") (EVar "lo")) (EVar "arr")) (EVar "entries"))) (DoExpr (EApp (EApp (EVar "EvIndex") (EVar "lo")) (EVar "arr")))))
-(DTypeSig true "installEvidence" (TyFun (TyCon "EvTable") (TyCon "Unit")))
-(DFunDef false "installEvidence" ((PVar "entries")) (EApp (EApp (EVar "setRef") (EVar "evidenceRef")) (EApp (EVar "Some") (EApp (EVar "evIndexOf") (EVar "entries")))))
-(DTypeSig true "installedEvidenceIndex" (TyFun (TyCon "Unit") (TyCon "EvIndex")))
-(DFunDef false "installedEvidenceIndex" (PWild) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "Some" (PVar "idx")) () (EVar "idx")) (arm (PCon "None") () (EApp (EVar "evIndexOf") (EListLit)))))
-(DTypeSig true "installedEvidenceSlots" (TyFun (TyCon "Unit") (TyCon "Int")))
-(DFunDef false "installedEvidenceSlots" (PWild) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (ELit (LInt 0))) (arm (PCon "Some" (PCon "EvIndex" PWild (PVar "arr"))) () (EApp (EVar "arrayLength") (EVar "arr")))))
-(DTypeSig true "remapEvidence" (TyFun (TyFun (TyCon "EvEntry") (TyCon "EvEntry")) (TyCon "Unit")))
-(DFunDef false "remapEvidence" ((PVar "f")) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PCon "EvIndex" PWild (PVar "arr"))) () (EApp (EApp (EApp (EApp (EVar "remapEvidenceGo") (EVar "f")) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))))
-(DTypeSig false "remapEvidenceGo" (TyFun (TyFun (TyCon "EvEntry") (TyCon "EvEntry")) (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit"))))))
-(DFunDef false "remapEvidenceGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EApp (EVar "Some") (EApp (EVar "f") (EVar "e")))) (EVar "arr"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "remapEvidenceGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "installedEvidenceEntries" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "EvEntry"))))
-(DFunDef false "installedEvidenceEntries" (PWild) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PCon "EvIndex" PWild (PVar "arr"))) () (EApp (EApp (EApp (EVar "evidenceEntriesFrom") (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit)))))
-(DTypeSig true "withEvidencePreserved" (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyVar "a"))) (TyEffect () (Some "e") (TyVar "a"))))
-(DFunDef false "withEvidencePreserved" ((PVar "action")) (EBlock (DoLet false false (PVar "before") (EApp (EVar "installedEvidenceEntries") (ELit LUnit))) (DoLet false false (PVar "binders") (EApp (EVar "installedBinderTable") (ELit LUnit))) (DoLet false false (PVar "result") (EApp (EVar "action") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "installEvidence") (EVar "before"))) (DoLet false false PWild (EApp (EVar "restoreBinderTable") (EVar "binders"))) (DoExpr (EVar "result"))))
-(DTypeSig false "evidenceEntriesFrom" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "EvEntry")) (TyApp (TyCon "List") (TyCon "EvEntry"))))))
-(DFunDef false "evidenceEntriesFrom" ((PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "evidenceEntriesFrom") (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EApp (EVar "evidenceEntriesFrom") (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "e") (EVar "acc")))))))
 (DTypeSig false "evSlotCount" (TyFun (TyCon "EvTable") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "evSlotCount" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "evSlotCount" ((PCons (PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "evSlotCount") (EVar "rest")) (EApp (EApp (EVar "max") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))))
@@ -829,17 +663,11 @@ rkTyList =
 (DFunDef false "fillEvidence" ((PVar "lo") (PVar "arr") (PCons (PAs "e" (PCon "EvEntry" (PCon "EvId" (PVar "m") (PVar "i")) PWild)) (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (EVar "lo"))) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "arraySetUnsafe") (EBinOp "-" (EVar "i") (EVar "lo"))) (EApp (EVar "Some") (EVar "e"))) (EVar "arr"))) (arm (PCon "Some" PWild) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: two goals published under ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))))) (DoExpr (EApp (EApp (EApp (EVar "fillEvidence") (EVar "lo")) (EVar "arr")) (EVar "rest")))))
 (DTypeSig false "neverPublished" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a"))))))
 (DFunDef false "neverPublished" ((PVar "what") (PVar "m") (PVar "i")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EVar "display") (EVar "what"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " was never published")))))
-(DTypeSig false "installedAnswer" (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "EvVal"))))
-(DFunDef false "installedAnswer" ((PVar "what") (PVar "ev")) (EMatch (EApp (EApp (EVar "installedLookup") (EVar "what")) (EVar "ev")) (arm (PCon "Ok" (PVar "v")) () (EVar "v")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
 (DTypeSig false "answerIn" (TyFun (TyCon "EvIndex") (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "EvVal")))))
 (DFunDef false "answerIn" ((PVar "idx") (PVar "what") (PVar "ev")) (EMatch (EApp (EApp (EApp (EVar "evidenceLookup") (EApp (EVar "Some") (EVar "idx"))) (EVar "what")) (EVar "ev")) (arm (PCon "Ok" (PVar "v")) () (EVar "v")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
-(DTypeSig true "installedLookup" (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "EvVal")))))
-(DFunDef false "installedLookup" ((PVar "what") (PVar "ev")) (EApp (EApp (EApp (EVar "evidenceLookup") (EUnOp "!" (EVar "evidenceRef"))) (EVar "what")) (EVar "ev")))
 (DTypeSig true "evidenceLookup" (TyFun (TyApp (TyCon "Option") (TyCon "EvIndex")) (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "EvVal"))))))
 (DFunDef false "evidenceLookup" ((PCon "None") (PVar "what") (PCon "EvId" (PVar "m") (PVar "i"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: no elaboration has published one (looking up ")) (EApp (EVar "display") (EVar "what"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")")))))
 (DFunDef false "evidenceLookup" ((PCon "Some" (PCon "EvIndex" (PVar "lo") (PVar "arr"))) (PVar "what") (PCon "EvId" (PVar "m") (PVar "i"))) (EIf (EBinOp "<" (EVar "i") (EVar "lo")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EVar "display") (EVar "what"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " is from an earlier graph")))) (EIf (EBinOp ">=" (EBinOp "-" (EVar "i") (EVar "lo")) (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EApp (EApp (EVar "neverPublished") (EVar "what")) (EVar "m")) (EVar "i")) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (EVar "lo"))) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "neverPublished") (EVar "what")) (EVar "m")) (EVar "i"))) (arm (PCon "Some" (PCon "EvEntry" (PCon "EvId" (PVar "m2") PWild) (PVar "v"))) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "Ok") (EVar "v")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EVar "display") (EVar "m2"))) (ELit (LString ""))))))))))
-(DTypeSig true "evDictRoutes" (TyFun (TyCon "EvId") (TyApp (TyCon "List") (TyCon "Route"))))
-(DFunDef false "evDictRoutes" ((PVar "ev")) (EApp (EVar "evRoutesOf") (EApp (EApp (EVar "installedAnswer") (ELit (LString "dictionary application"))) (EVar "ev"))))
 (DTypeSig true "evDictRoutesIn" (TyFun (TyCon "EvIndex") (TyFun (TyCon "EvId") (TyApp (TyCon "List") (TyCon "Route")))))
 (DFunDef false "evDictRoutesIn" ((PVar "idx") (PVar "ev")) (EApp (EVar "evRoutesOf") (EApp (EApp (EApp (EVar "answerIn") (EVar "idx")) (ELit (LString "dictionary application"))) (EVar "ev"))))
 (DTypeSig false "evRoutesOf" (TyFun (TyCon "EvVal") (TyApp (TyCon "List") (TyCon "Route"))))
@@ -848,32 +676,18 @@ rkTyList =
 (DFunDef false "evRoutesOf" ((PCon "EvMethod" PWild PWild PWild PWild PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application answered by a method occurrence"))))
 (DFunDef false "evRoutesOf" ((PCon "EvLit" PWild PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application answered by a literal site"))))
 (DFunDef false "evRoutesOf" ((PCon "EvHead" PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application answered by a record-head site"))))
-(DTypeSig true "evSiteRoute" (TyFun (TyCon "EvId") (TyCon "Route")))
-(DFunDef false "evSiteRoute" ((PVar "ev")) (EMatch (EApp (EVar "evSiteRouteResult") (EVar "ev")) (arm (PCon "Ok" (PVar "r")) () (EVar "r")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
 (DTypeSig true "evSiteRouteIn" (TyFun (TyCon "EvIndex") (TyFun (TyCon "EvId") (TyCon "Route"))))
 (DFunDef false "evSiteRouteIn" ((PVar "idx") (PVar "ev")) (EMatch (EApp (EApp (EVar "siteRouteResultIn") (EApp (EVar "Some") (EVar "idx"))) (EVar "ev")) (arm (PCon "Ok" (PVar "r")) () (EVar "r")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
-(DTypeSig true "evSiteRouteResult" (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Route"))))
-(DFunDef false "evSiteRouteResult" ((PVar "ev")) (EApp (EApp (EVar "siteRouteResultIn") (EUnOp "!" (EVar "evidenceRef"))) (EVar "ev")))
 (DTypeSig false "siteRouteResultIn" (TyFun (TyApp (TyCon "Option") (TyCon "EvIndex")) (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Route")))))
 (DFunDef false "siteRouteResultIn" ((PVar "table") (PVar "ev")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "Ok") (EVar "RNone")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "evidenceLookup") (EVar "table")) (ELit (LString "operator site"))) (EVar "ev")) (arm (PCon "Ok" (PCon "EvOne" (PVar "r"))) () (EApp (EVar "Ok") (EVar "r"))) (arm (PCon "Ok" PWild) () (EApp (EVar "Err") (ELit (LString "evidence table: an operator site answered by another kind of entry")))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Err") (EVar "message")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "evSiteLit" (TyFun (TyCon "EvId") (TyTuple (TyApp (TyCon "Option") (TyCon "Float")) (TyCon "Route"))))
-(DFunDef false "evSiteLit" ((PVar "ev")) (EMatch (EApp (EVar "evSiteLitResult") (EVar "ev")) (arm (PCon "Ok" (PVar "answer")) () (EVar "answer")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
 (DTypeSig true "evSiteLitIn" (TyFun (TyCon "EvIndex") (TyFun (TyCon "EvId") (TyTuple (TyApp (TyCon "Option") (TyCon "Float")) (TyCon "Route")))))
 (DFunDef false "evSiteLitIn" ((PVar "idx") (PVar "ev")) (EMatch (EApp (EApp (EVar "siteLitResultIn") (EApp (EVar "Some") (EVar "idx"))) (EVar "ev")) (arm (PCon "Ok" (PVar "answer")) () (EVar "answer")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
-(DTypeSig true "evSiteLitResult" (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "Option") (TyCon "Float")) (TyCon "Route")))))
-(DFunDef false "evSiteLitResult" ((PVar "ev")) (EApp (EApp (EVar "siteLitResultIn") (EUnOp "!" (EVar "evidenceRef"))) (EVar "ev")))
 (DTypeSig false "siteLitResultIn" (TyFun (TyApp (TyCon "Option") (TyCon "EvIndex")) (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "Option") (TyCon "Float")) (TyCon "Route"))))))
 (DFunDef false "siteLitResultIn" ((PVar "table") (PVar "ev")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "Ok") (ETuple (EVar "None") (EVar "RNone"))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "evidenceLookup") (EVar "table")) (ELit (LString "literal site"))) (EVar "ev")) (arm (PCon "Ok" (PCon "EvLit" (PVar "f") (PVar "r"))) () (EApp (EVar "Ok") (ETuple (EVar "f") (EVar "r")))) (arm (PCon "Ok" PWild) () (EApp (EVar "Err") (ELit (LString "evidence table: a literal site answered by another kind of entry")))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Err") (EVar "message")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "evSiteHead" (TyFun (TyCon "EvId") (TyCon "String")))
-(DFunDef false "evSiteHead" ((PVar "ev")) (EMatch (EApp (EVar "evSiteHeadResult") (EVar "ev")) (arm (PCon "Ok" (PVar "head")) () (EVar "head")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
 (DTypeSig true "evSiteHeadIn" (TyFun (TyCon "EvIndex") (TyFun (TyCon "EvId") (TyCon "String"))))
 (DFunDef false "evSiteHeadIn" ((PVar "idx") (PVar "ev")) (EMatch (EApp (EApp (EVar "siteHeadResultIn") (EApp (EVar "Some") (EVar "idx"))) (EVar "ev")) (arm (PCon "Ok" (PVar "head")) () (EVar "head")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
-(DTypeSig true "evSiteHeadResult" (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "evSiteHeadResult" ((PVar "ev")) (EApp (EApp (EVar "siteHeadResultIn") (EUnOp "!" (EVar "evidenceRef"))) (EVar "ev")))
 (DTypeSig false "siteHeadResultIn" (TyFun (TyApp (TyCon "Option") (TyCon "EvIndex")) (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "siteHeadResultIn" ((PVar "table") (PVar "ev")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "Ok") (ELit (LString ""))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "evidenceLookup") (EVar "table")) (ELit (LString "record-head site"))) (EVar "ev")) (arm (PCon "Ok" (PCon "EvHead" (PVar "h"))) () (EApp (EVar "Ok") (EVar "h"))) (arm (PCon "Ok" PWild) () (EApp (EVar "Err") (ELit (LString "evidence table: a record-head site answered by another kind of entry")))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Err") (EVar "message")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "evMethodRoutes" (TyFun (TyCon "EvId") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
-(DFunDef false "evMethodRoutes" ((PVar "ev")) (EApp (EVar "evMethodOf") (EApp (EApp (EVar "installedAnswer") (ELit (LString "method occurrence"))) (EVar "ev"))))
 (DTypeSig true "evMethodRoutesIn" (TyFun (TyCon "EvIndex") (TyFun (TyCon "EvId") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))))
 (DFunDef false "evMethodRoutesIn" ((PVar "idx") (PVar "ev")) (EApp (EVar "evMethodOf") (EApp (EApp (EApp (EVar "answerIn") (EVar "idx")) (ELit (LString "method occurrence"))) (EVar "ev"))))
 (DTypeSig false "evMethodOf" (TyFun (TyCon "EvVal") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
@@ -941,28 +755,9 @@ rkTyList =
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "EffParamTy" true) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "effAtomBare" false) (mem "effAtomWith" false) (mem "Route" true) (mem "EvId" true) (mem "isUnminted" false) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "constraintUnresolved" false) (mem "tyConBuiltin" false) (mem "ifaceIdentity" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "escStr" false))))
-(DUse false (UseGroup ("types" "runtime_types") ((mem "installedBinderTable" false) (mem "restoreBinderTable" false))))
-(DTypeSig false "evidenceRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "EvIndex"))))
-(DFunDef false "evidenceRef" () (EApp (EVar "Ref") (EVar "None")))
 (DData Public "EvIndex" () ((variant "EvIndex" (ConPos (TyCon "Int") (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry")))))) ())
 (DTypeSig true "evIndexOf" (TyFun (TyCon "EvTable") (TyCon "EvIndex")))
 (DFunDef false "evIndexOf" ((PVar "entries")) (EBlock (DoLet false false (PVar "lo") (EApp (EVar "evMinOrdinal") (EVar "entries"))) (DoLet false false (PVar "arr") (EApp (EApp (EVar "arrayMake") (EBinOp "-" (EApp (EApp (EVar "evSlotCount") (EVar "entries")) (EVar "lo")) (EVar "lo"))) (EVar "None"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "fillEvidence") (EVar "lo")) (EVar "arr")) (EVar "entries"))) (DoExpr (EApp (EApp (EVar "EvIndex") (EVar "lo")) (EVar "arr")))))
-(DTypeSig true "installEvidence" (TyFun (TyCon "EvTable") (TyCon "Unit")))
-(DFunDef false "installEvidence" ((PVar "entries")) (EApp (EApp (EVar "setRef") (EVar "evidenceRef")) (EApp (EVar "Some") (EApp (EVar "evIndexOf") (EVar "entries")))))
-(DTypeSig true "installedEvidenceIndex" (TyFun (TyCon "Unit") (TyCon "EvIndex")))
-(DFunDef false "installedEvidenceIndex" (PWild) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "Some" (PVar "idx")) () (EVar "idx")) (arm (PCon "None") () (EApp (EVar "evIndexOf") (EListLit)))))
-(DTypeSig true "installedEvidenceSlots" (TyFun (TyCon "Unit") (TyCon "Int")))
-(DFunDef false "installedEvidenceSlots" (PWild) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (ELit (LInt 0))) (arm (PCon "Some" (PCon "EvIndex" PWild (PVar "arr"))) () (EApp (EVar "arrayLength") (EVar "arr")))))
-(DTypeSig true "remapEvidence" (TyFun (TyFun (TyCon "EvEntry") (TyCon "EvEntry")) (TyCon "Unit")))
-(DFunDef false "remapEvidence" ((PVar "f")) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PCon "EvIndex" PWild (PVar "arr"))) () (EApp (EApp (EApp (EApp (EVar "remapEvidenceGo") (EVar "f")) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))))
-(DTypeSig false "remapEvidenceGo" (TyFun (TyFun (TyCon "EvEntry") (TyCon "EvEntry")) (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit"))))))
-(DFunDef false "remapEvidenceGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EApp (EVar "Some") (EApp (EVar "f") (EVar "e")))) (EVar "arr"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "remapEvidenceGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "installedEvidenceEntries" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "EvEntry"))))
-(DFunDef false "installedEvidenceEntries" (PWild) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PCon "EvIndex" PWild (PVar "arr"))) () (EApp (EApp (EApp (EVar "evidenceEntriesFrom") (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit)))))
-(DTypeSig true "withEvidencePreserved" (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyVar "a"))) (TyEffect () (Some "e") (TyVar "a"))))
-(DFunDef false "withEvidencePreserved" ((PVar "action")) (EBlock (DoLet false false (PVar "before") (EApp (EVar "installedEvidenceEntries") (ELit LUnit))) (DoLet false false (PVar "binders") (EApp (EVar "installedBinderTable") (ELit LUnit))) (DoLet false false (PVar "result") (EApp (EVar "action") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "installEvidence") (EVar "before"))) (DoLet false false PWild (EApp (EVar "restoreBinderTable") (EVar "binders"))) (DoExpr (EVar "result"))))
-(DTypeSig false "evidenceEntriesFrom" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "EvEntry")) (TyApp (TyCon "List") (TyCon "EvEntry"))))))
-(DFunDef false "evidenceEntriesFrom" ((PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "evidenceEntriesFrom") (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EApp (EVar "evidenceEntriesFrom") (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "e") (EVar "acc")))))))
 (DTypeSig false "evSlotCount" (TyFun (TyCon "EvTable") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "evSlotCount" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "evSlotCount" ((PCons (PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "evSlotCount") (EVar "rest")) (EApp (EApp (EMethodRef "max") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))))
@@ -977,17 +772,11 @@ rkTyList =
 (DFunDef false "fillEvidence" ((PVar "lo") (PVar "arr") (PCons (PAs "e" (PCon "EvEntry" (PCon "EvId" (PVar "m") (PVar "i")) PWild)) (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (EVar "lo"))) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "arraySetUnsafe") (EBinOp "-" (EVar "i") (EVar "lo"))) (EApp (EVar "Some") (EVar "e"))) (EVar "arr"))) (arm (PCon "Some" PWild) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: two goals published under ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))))) (DoExpr (EApp (EApp (EApp (EVar "fillEvidence") (EVar "lo")) (EVar "arr")) (EVar "rest")))))
 (DTypeSig false "neverPublished" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a"))))))
 (DFunDef false "neverPublished" ((PVar "what") (PVar "m") (PVar "i")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EMethodRef "display") (EVar "what"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " was never published")))))
-(DTypeSig false "installedAnswer" (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "EvVal"))))
-(DFunDef false "installedAnswer" ((PVar "what") (PVar "ev")) (EMatch (EApp (EApp (EVar "installedLookup") (EVar "what")) (EVar "ev")) (arm (PCon "Ok" (PVar "v")) () (EVar "v")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
 (DTypeSig false "answerIn" (TyFun (TyCon "EvIndex") (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "EvVal")))))
 (DFunDef false "answerIn" ((PVar "idx") (PVar "what") (PVar "ev")) (EMatch (EApp (EApp (EApp (EVar "evidenceLookup") (EApp (EVar "Some") (EVar "idx"))) (EVar "what")) (EVar "ev")) (arm (PCon "Ok" (PVar "v")) () (EVar "v")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
-(DTypeSig true "installedLookup" (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "EvVal")))))
-(DFunDef false "installedLookup" ((PVar "what") (PVar "ev")) (EApp (EApp (EApp (EVar "evidenceLookup") (EUnOp "!" (EVar "evidenceRef"))) (EVar "what")) (EVar "ev")))
 (DTypeSig true "evidenceLookup" (TyFun (TyApp (TyCon "Option") (TyCon "EvIndex")) (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "EvVal"))))))
 (DFunDef false "evidenceLookup" ((PCon "None") (PVar "what") (PCon "EvId" (PVar "m") (PVar "i"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: no elaboration has published one (looking up ")) (EApp (EMethodRef "display") (EVar "what"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")")))))
 (DFunDef false "evidenceLookup" ((PCon "Some" (PCon "EvIndex" (PVar "lo") (PVar "arr"))) (PVar "what") (PCon "EvId" (PVar "m") (PVar "i"))) (EIf (EBinOp "<" (EVar "i") (EVar "lo")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EMethodRef "display") (EVar "what"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " is from an earlier graph")))) (EIf (EBinOp ">=" (EBinOp "-" (EVar "i") (EVar "lo")) (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EApp (EApp (EVar "neverPublished") (EVar "what")) (EVar "m")) (EVar "i")) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (EVar "lo"))) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "neverPublished") (EVar "what")) (EVar "m")) (EVar "i"))) (arm (PCon "Some" (PCon "EvEntry" (PCon "EvId" (PVar "m2") PWild) (PVar "v"))) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "Ok") (EVar "v")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EMethodRef "display") (EVar "m2"))) (ELit (LString ""))))))))))
-(DTypeSig true "evDictRoutes" (TyFun (TyCon "EvId") (TyApp (TyCon "List") (TyCon "Route"))))
-(DFunDef false "evDictRoutes" ((PVar "ev")) (EApp (EVar "evRoutesOf") (EApp (EApp (EVar "installedAnswer") (ELit (LString "dictionary application"))) (EVar "ev"))))
 (DTypeSig true "evDictRoutesIn" (TyFun (TyCon "EvIndex") (TyFun (TyCon "EvId") (TyApp (TyCon "List") (TyCon "Route")))))
 (DFunDef false "evDictRoutesIn" ((PVar "idx") (PVar "ev")) (EApp (EVar "evRoutesOf") (EApp (EApp (EApp (EVar "answerIn") (EVar "idx")) (ELit (LString "dictionary application"))) (EVar "ev"))))
 (DTypeSig false "evRoutesOf" (TyFun (TyCon "EvVal") (TyApp (TyCon "List") (TyCon "Route"))))
@@ -996,32 +785,18 @@ rkTyList =
 (DFunDef false "evRoutesOf" ((PCon "EvMethod" PWild PWild PWild PWild PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application answered by a method occurrence"))))
 (DFunDef false "evRoutesOf" ((PCon "EvLit" PWild PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application answered by a literal site"))))
 (DFunDef false "evRoutesOf" ((PCon "EvHead" PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application answered by a record-head site"))))
-(DTypeSig true "evSiteRoute" (TyFun (TyCon "EvId") (TyCon "Route")))
-(DFunDef false "evSiteRoute" ((PVar "ev")) (EMatch (EApp (EVar "evSiteRouteResult") (EVar "ev")) (arm (PCon "Ok" (PVar "r")) () (EVar "r")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
 (DTypeSig true "evSiteRouteIn" (TyFun (TyCon "EvIndex") (TyFun (TyCon "EvId") (TyCon "Route"))))
 (DFunDef false "evSiteRouteIn" ((PVar "idx") (PVar "ev")) (EMatch (EApp (EApp (EVar "siteRouteResultIn") (EApp (EVar "Some") (EVar "idx"))) (EVar "ev")) (arm (PCon "Ok" (PVar "r")) () (EVar "r")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
-(DTypeSig true "evSiteRouteResult" (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Route"))))
-(DFunDef false "evSiteRouteResult" ((PVar "ev")) (EApp (EApp (EVar "siteRouteResultIn") (EUnOp "!" (EVar "evidenceRef"))) (EVar "ev")))
 (DTypeSig false "siteRouteResultIn" (TyFun (TyApp (TyCon "Option") (TyCon "EvIndex")) (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Route")))))
 (DFunDef false "siteRouteResultIn" ((PVar "table") (PVar "ev")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "Ok") (EVar "RNone")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "evidenceLookup") (EVar "table")) (ELit (LString "operator site"))) (EVar "ev")) (arm (PCon "Ok" (PCon "EvOne" (PVar "r"))) () (EApp (EVar "Ok") (EVar "r"))) (arm (PCon "Ok" PWild) () (EApp (EVar "Err") (ELit (LString "evidence table: an operator site answered by another kind of entry")))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Err") (EVar "message")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "evSiteLit" (TyFun (TyCon "EvId") (TyTuple (TyApp (TyCon "Option") (TyCon "Float")) (TyCon "Route"))))
-(DFunDef false "evSiteLit" ((PVar "ev")) (EMatch (EApp (EVar "evSiteLitResult") (EVar "ev")) (arm (PCon "Ok" (PVar "answer")) () (EVar "answer")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
 (DTypeSig true "evSiteLitIn" (TyFun (TyCon "EvIndex") (TyFun (TyCon "EvId") (TyTuple (TyApp (TyCon "Option") (TyCon "Float")) (TyCon "Route")))))
 (DFunDef false "evSiteLitIn" ((PVar "idx") (PVar "ev")) (EMatch (EApp (EApp (EVar "siteLitResultIn") (EApp (EVar "Some") (EVar "idx"))) (EVar "ev")) (arm (PCon "Ok" (PVar "answer")) () (EVar "answer")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
-(DTypeSig true "evSiteLitResult" (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "Option") (TyCon "Float")) (TyCon "Route")))))
-(DFunDef false "evSiteLitResult" ((PVar "ev")) (EApp (EApp (EVar "siteLitResultIn") (EUnOp "!" (EVar "evidenceRef"))) (EVar "ev")))
 (DTypeSig false "siteLitResultIn" (TyFun (TyApp (TyCon "Option") (TyCon "EvIndex")) (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "Option") (TyCon "Float")) (TyCon "Route"))))))
 (DFunDef false "siteLitResultIn" ((PVar "table") (PVar "ev")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "Ok") (ETuple (EVar "None") (EVar "RNone"))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "evidenceLookup") (EVar "table")) (ELit (LString "literal site"))) (EVar "ev")) (arm (PCon "Ok" (PCon "EvLit" (PVar "f") (PVar "r"))) () (EApp (EVar "Ok") (ETuple (EVar "f") (EVar "r")))) (arm (PCon "Ok" PWild) () (EApp (EVar "Err") (ELit (LString "evidence table: a literal site answered by another kind of entry")))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Err") (EVar "message")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "evSiteHead" (TyFun (TyCon "EvId") (TyCon "String")))
-(DFunDef false "evSiteHead" ((PVar "ev")) (EMatch (EApp (EVar "evSiteHeadResult") (EVar "ev")) (arm (PCon "Ok" (PVar "head")) () (EVar "head")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
 (DTypeSig true "evSiteHeadIn" (TyFun (TyCon "EvIndex") (TyFun (TyCon "EvId") (TyCon "String"))))
 (DFunDef false "evSiteHeadIn" ((PVar "idx") (PVar "ev")) (EMatch (EApp (EApp (EVar "siteHeadResultIn") (EApp (EVar "Some") (EVar "idx"))) (EVar "ev")) (arm (PCon "Ok" (PVar "head")) () (EVar "head")) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "panic") (EVar "message")))))
-(DTypeSig true "evSiteHeadResult" (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "evSiteHeadResult" ((PVar "ev")) (EApp (EApp (EVar "siteHeadResultIn") (EUnOp "!" (EVar "evidenceRef"))) (EVar "ev")))
 (DTypeSig false "siteHeadResultIn" (TyFun (TyApp (TyCon "Option") (TyCon "EvIndex")) (TyFun (TyCon "EvId") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "siteHeadResultIn" ((PVar "table") (PVar "ev")) (EIf (EApp (EVar "isUnminted") (EVar "ev")) (EApp (EVar "Ok") (ELit (LString ""))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "evidenceLookup") (EVar "table")) (ELit (LString "record-head site"))) (EVar "ev")) (arm (PCon "Ok" (PCon "EvHead" (PVar "h"))) () (EApp (EVar "Ok") (EVar "h"))) (arm (PCon "Ok" PWild) () (EApp (EVar "Err") (ELit (LString "evidence table: a record-head site answered by another kind of entry")))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Err") (EVar "message")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "evMethodRoutes" (TyFun (TyCon "EvId") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
-(DFunDef false "evMethodRoutes" ((PVar "ev")) (EApp (EVar "evMethodOf") (EApp (EApp (EVar "installedAnswer") (ELit (LString "method occurrence"))) (EVar "ev"))))
 (DTypeSig true "evMethodRoutesIn" (TyFun (TyCon "EvIndex") (TyFun (TyCon "EvId") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))))
 (DFunDef false "evMethodRoutesIn" ((PVar "idx") (PVar "ev")) (EApp (EVar "evMethodOf") (EApp (EApp (EApp (EVar "answerIn") (EVar "idx")) (ELit (LString "method occurrence"))) (EVar "ev"))))
 (DTypeSig false "evMethodOf" (TyFun (TyCon "EvVal") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))

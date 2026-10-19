@@ -1,6 +1,5 @@
 currentFacts : Ref (Option ProgramFacts)
 emptyFacts : ProgramFacts
-factsInstalled : Unit -> ProgramFacts
 factsNow : Unit -> ProgramFacts
 factsOfChecked : CheckedProgram -> ProgramFacts
 factsOfElab : (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry, DispositionTable, Map Int BinderRow) -> ProgramFacts

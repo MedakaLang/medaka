@@ -133,7 +133,6 @@ import frontend.ast.{
   EvId(..),
   EvTable,
 }
-import types.route_key.{remapEvidence}
 import u64 as U64
 import list.{last}
 import support.util.{
@@ -262,7 +261,7 @@ entryUnitMid units = match last units
 -- `wasm_reach.refsRoute`'s reachability) is named THERE and nowhere else.  An entry's
 -- `EvId` names the module it was minted in, which is the unit whose rename map resolves
 -- its symbols.  [table] is the elaboration's whole evidence table; it is returned
--- renamed, and the installed copy is renamed in place as well.
+-- renamed.
 export
 mangleUnitsEv : EvTable ->
   List Decl ->
@@ -299,7 +298,6 @@ mangleUnitsEv table coreDecls modules =
     _ :: rest => rest
   let remap =
     mangleEvEntry (omFromPairs (reverseL (map dropUnitDecls units)) omEmpty)
-  let _ = remapEvidence remap
   (coreOut, modsOut, map remap table)
 
 -- one unit's rename map, keyed by its module id, beside the decls it applies to.  The

@@ -153,7 +153,7 @@ public export data CExpr =
   | CDict String (List Route)
 
 -- The evidence a method occurrence carries, exactly as elaboration published it
--- (`route_key.evMethodRoutes`): the interface word (`""` when the occurrence
+-- (`route_key.evMethodRoutesIn`): the interface word (`""` when the occurrence
 -- denotes no interface method, so no engine may narrow by interface), the
 -- selected denotation's pre-use arity, the dispatch answer, the selected
 -- instance's prerequisite dictionaries, and the method's own context dictionaries.
@@ -423,7 +423,7 @@ public export data CProgram =
 -- binder of its own.  A binder pattern is a `PVar`, a `PAs`, or a record-pattern
 -- pun; a `CBind`'s row also gives the type its body returns (`brReturns`).  The
 -- table is a snapshot, so the program is self-contained: a consumer never reads
--- the typechecker's installed table.  `core_validate.validateBinderStamps` refuses
+-- the typechecker's published table.  `core_validate.validateBinderStamps` refuses
 -- a binder with no row and a function with no return type.
 public export data DeclFacts = DeclFacts {
   factRequires : List (String, Int),
