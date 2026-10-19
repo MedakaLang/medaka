@@ -19,7 +19,11 @@ Steps (README.md "Diff-level benchmark"):
 Arms: `baseline` (review.py's default), `g2` (scope_strict), `g2-exempt`
 (scope_strict_exempt), `g1` (evidence.py TWIN_NOTES), `fixed` (g1 and g2). The
 scope arms ask nothing a `baseline` or `g1` run has not cached, since a
-stricter scope only confirms fewer classes. Results: RESULTS-diffs-dev-2026-10-18.md.
+stricter scope only confirms fewer classes. `onedecl` (review.py --one-decl)
+cuts each planned unit into its one-declaration pieces; a unit of one
+declaration is its own piece and is served from the baseline's cache. Arms are
+compared on parent units: the planned (merged) unit a piece belongs to.
+Results: RESULTS-diffs-dev-2026-10-18.md, RESULTS-diffs-onedecl-dev-2026-10-18.md.
 
 Run from anywhere: python3 -I scripts/review_bench/diffbench.py <step> --split dev
 """
@@ -56,12 +60,18 @@ CLEAN_UNITS = 8  # sampled per clean commit
 CLEAN_COMMITS = 30  # per split
 # The commits whose live reviews exposed the two gaps the fixed arm addresses.
 EXPOSED = ("3f3e63a12", "e5a3d0380")
-ARMS = {"baseline": (False, "diff"), "g2": (False, "strict"), "g2-exempt": (False, "strict-exempt"),
-        "g1": (True, "diff"), "fixed": (True, "strict")}
-BUDGET_USD = 6.00
+# arm: (twin notes, scope, merge adjacent declarations)
+ARMS = {"baseline": (False, "diff", True), "g2": (False, "strict", True),
+        "g2-exempt": (False, "strict-exempt", True), "g1": (True, "diff", True), "fixed": (True, "strict", True),
+        "onedecl": (False, "diff", False)}
+# $6.00 for the first pass (g1, g2), $2.00 for the onedecl pass.
+BUDGET_USD = 8.00
 # Measured on dev (RESULTS-diffs-dev-2026-10-18.md): a diff unit is larger than a
 # fixture excerpt, so it costs more than review.USD_PER_UNIT.
 USD_PER_UNIT = 0.0057  # baseline arm, battery then confirm
+# A one-declaration piece of a merged unit, battery then confirm: the mean over the
+# dev onedecl run's 430 such pieces (RESULTS-diffs-onedecl-dev-2026-10-18.md).
+USD_PER_PIECE = 0.0039
 AUDIT_USD = 0.045  # per Opus audit call
 SCORED = ("positive", "control")
 
@@ -309,23 +319,56 @@ def cmd_plan(a) -> int:
 # ---------------------------------------------------------------------------
 # Running an arm
 # ---------------------------------------------------------------------------
-def make_units(plan: dict, split: str, fx: list[dict], twin_notes: bool, jobs: int) -> list[dict]:
+def unit_key(c: str, path: str, lo: int, hi: int) -> str:
+    """review.make_unit's key, known before evidence is generated."""
+    return "L" + BT._h(f"{c}|{path}|{lo}-{hi}")[:12]
+
+
+def piece_rows(plan: dict, split: str, parents: set[str] | None = None) -> list[tuple[str, list, str]]:
+    """(commit, spec + role + splits, parent key) for the one-declaration pieces of a
+    split's planned units, in plan order: review.cut_units(merge=False) over the same
+    commit and file, each piece inside the planned unit it belongs to, which lends it
+    its role. A planned unit of one declaration is its own piece."""
+    by_c: dict[str, list] = defaultdict(list)
+    for c, s in plan_units(plan, split):
+        if parents is None or unit_key(c, *s[:3]) in parents:
+            by_c[c].append(s)
+    out = []
+    for c, specs in sorted(by_c.items()):
+        files = list(dict.fromkeys(s[0] for s in specs))
+        with contextlib.redirect_stdout(sys.stderr):
+            pieces, _notes = RV.unit_specs(plan["commits"][c]["totals"]["parent"], c, files, False)
+        for s in specs:
+            pk = unit_key(c, *s[:3])
+            out += [(c, list(q) + s[6:8], pk) for q in pieces if q[0] == s[0] and s[1] <= q[1] and q[2] <= s[2]]
+    return out
+
+
+def make_units(plan: dict, split: str, fx: list[dict], twin_notes: bool, jobs: int, merge: bool = True,
+               parents: set[str] | None = None) -> list[dict]:
+    """The split's units with evidence: the planned units, or with `merge` off their
+    one-declaration pieces (of `parents` only, when given). Each records its parent."""
     EV.TWIN_NOTES = twin_notes
     keyed = {it["_key"]: it for it in fx}
     out = []
+    rows = [(c, s, None) for c, s in plan_units(plan, split)] if merge else piece_rows(plan, split, parents)
     by_c: dict[str, list] = defaultdict(list)
-    for c, s in plan_units(plan, split):
-        by_c[c].append(s)
+    for c, s, pk in rows:
+        by_c[c].append((s, pk))
     for c, specs in sorted(by_c.items()):
-        us = RV.units_from_specs(c, [tuple(s[:6]) for s in specs], jobs)
+        us = RV.units_from_specs(c, [tuple(s[:6]) for s, _pk in specs], jobs)
         items = [keyed[k] for k in plan["commits"][c]["items"] if k in keyed]
-        for u, s in zip(us, specs):
+        for u, (s, pk) in zip(us, specs):
             # Few-shot examples never come from a fixture this commit introduced.
             u["item_keys"] = sorted(it["_key"] for it in items)
             u["groups"] = sorted({it["_group"] for it in items})
-            u["commit"], u["role"] = c, s[6]
+            u["commit"], u["role"], u["parent"] = c, s[6], pk or u["_key"]
             out.append(u)
     return out
+
+
+def parent_of(u: dict) -> str:
+    return u.get("parent", u["_key"])
 
 
 def spent() -> float:
@@ -339,14 +382,30 @@ def log_spend(what: str, usd: float) -> None:
 
 
 def unit_record(u: dict) -> dict:
-    return {k: u[k] for k in ("_key", "commit", "role", "file", "lo", "hi", "anchor", "changed")}
+    return {k: u[k] for k in ("_key", "commit", "role", "file", "lo", "hi", "anchor", "changed", "parent")}
+
+
+def compared_parents(split: str, of: str) -> set[str]:
+    """The units `of`'s run reviewed that every other arm's run kept as comparable:
+    the evidence-nondeterministic units the merged arms leave out stay out."""
+    run = _load(f"run-{split}-{of}.json", None)
+    if run is None:
+        sys.exit(f"no run for {split}/{of}")
+    keep = {u["_key"] for u in run["units"]}
+    for arm in ARMS:
+        other = _load(f"run-{split}-{arm}.json", None)
+        if other is not None and ARMS[arm][2] and other.get("comparable") is not None:
+            keep &= set(other["comparable"])
+    return keep
 
 
 def cmd_run(a) -> int:
     fx = I.load(None)
     plan = build_plan(fx)
     rub, _known, fx, classes = RV.setup()
-    twin, scope_name = ARMS[a.arm]
+    twin, scope_name, merge = ARMS[a.arm]
+    if not merge:
+        return run_pieces(a, plan, fx, rub, classes, scope_name)
     units = make_units(plan, a.split, fx, twin, a.jobs)
     if a.units_of:
         # Arms are compared on the same units: those another arm's run reviewed.
@@ -395,29 +454,84 @@ def cmd_run(a) -> int:
     return 0
 
 
+def run_pieces(a, plan: dict, fx: list[dict], rub: dict, classes: list[str], scope_name: str) -> int:
+    """An arm without merging: the pieces of the units `--units-of` (default baseline)
+    compared, so both arms cover the same commits, files and changed lines."""
+    of = a.units_of or "baseline"
+    parents = compared_parents(a.split, of)
+    prev = {u["_key"]: u for u in _load(f"run-{a.split}-{of}.json", {"units": []})["units"]}
+    if a.roles:
+        parents = {k for k in parents if prev[k]["role"] in a.roles}
+    units = make_units(plan, a.split, fx, False, a.jobs, merge=False, parents=parents)
+    pieces = Counter(u["parent"] for u in units)
+    # A unit of one declaration is its own piece: its prompt must be the one `of` asked.
+    own = [u for u in units if u["_key"] == u["parent"]]
+    fresh = {u["_key"] for u in units
+             if E._cache_get(RV.BATTERY_KIND, BT.battery_request(u, rub, classes, True)[0]) is None}
+    differ = {u["_key"] for u in own if u["_key"] in fresh}
+    units = [u for u in units if u["parent"] not in differ]
+    lost = {k for k in parents if k not in pieces}
+    uncovered = sum(len(set(prev[k]["changed"]) - {n for u in units if u["parent"] == k for n in u["changed"]})
+                    for k in parents - differ - lost)
+    print(f"{a.split}/{a.arm}: {len(parents)} parent units ({sum(n > 1 for n in pieces.values())} cut into "
+          f"pieces) -> {len(units)} pieces; {len(differ)} single-declaration parents left out (prompt differs "
+          f"from `{of}`'s), {len(lost)} with no piece, {uncovered} parent changed lines in no piece",
+          file=sys.stderr)
+    fresh_new = sum(u["_key"] in fresh for u in units)
+    if a.dry_run:
+        print(f"{a.split}/{a.arm}: {len(units)} pieces, {fresh_new} without a cached battery answer; estimate "
+              f"${fresh_new * USD_PER_PIECE:.2f} at ${USD_PER_PIECE}/piece; spent so far ${spent():.4f} of "
+              f"${BUDGET_USD:.2f}")
+        return 0
+    left = min(a.max_usd, BUDGET_USD - spent())
+    if left <= 0:
+        sys.exit(f"diffbench: budget ${BUDGET_USD:.2f} spent")
+    res = RV.review_units(units, rub, fx, classes, jobs=a.jobs, timeout=a.timeout, max_usd=left,
+                          scope_fn=RV.SCOPES[scope_name])
+    log_spend(f"run {a.split} {a.arm}", res["spend"])
+    _save(f"run-{a.split}-{a.arm}.json", {
+        "units": [unit_record(u) for u in res["reviewed"]], "unreviewed": len(res["unreviewed"]),
+        "per_unit": res["per_unit"], "spend": res["spend"], "errors": res["errors"],
+        "comparable": None, "units_of": of, "roles": a.roles or None,
+        "pieces": {k: n for k, n in pieces.items() if k not in differ}})
+    print(f"{a.split}/{a.arm}: {len(res['reviewed'])} pieces reviewed, {len(res['unreviewed'])} not (budget), "
+          f"{len(res['findings'])} findings, new spend ${res['spend']:.4f}, {res['errors']} errors; "
+          f"total spent ${spent():.4f}", file=sys.stderr)
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # 4. Scoring
 # ---------------------------------------------------------------------------
-def at_item(f: dict, u: dict, r: dict) -> bool:
+def at_item(f: dict, u: dict, r: dict, anchor: bool = True) -> bool:
     """The finding sits on the item: same file at the introducing commit, its line
     within the mapped range (+-SLACK), or its unit's anchor naming the item's declaration."""
     if u["commit"] != r.get("commit") or f["file"] != r["commit_file"]:
         return False
     if r["lo"] - SLACK <= f["line"] <= r["hi"] + SLACK:
         return True
-    return bool(r["anchor"]) and r["anchor"] in u["anchor"].split(" / ")
+    return anchor and bool(r["anchor"]) and r["anchor"] in u["anchor"].split(" / ")
 
 
 def run_units(split: str, arm: str) -> set[str] | None:
+    """The parent units an arm's run reviewed whole (a piece-cut run may stop mid-parent)."""
     run = _load(f"run-{split}-{arm}.json", None)
-    return None if run is None else {u["_key"] for u in run["units"]}
+    if run is None:
+        return None
+    if "pieces" not in run:
+        return {u["_key"] for u in run["units"]}
+    done = Counter(parent_of(u) for u in run["units"])
+    return {k for k, n in run["pieces"].items() if done[k] == n}
 
 
-def score(plan: dict, split: str, arm: str, m: dict[str, dict], only: set[str] | None = None) -> dict:
+def score(plan: dict, split: str, arm: str, m: dict[str, dict], only: set[str] | None = None,
+          anchor: bool = True) -> dict:
+    """`only` holds parent units; `anchor` off drops the anchor clause of at_item."""
     run = _load(f"run-{split}-{arm}.json", None)
     if run is None:
         return {}
-    units = {u["_key"]: u for u in run["units"] if only is None or u["_key"] in only}
+    whole = run_units(split, arm)
+    units = {u["_key"]: u for u in run["units"] if parent_of(u) in whole and (only is None or parent_of(u) in only)}
     per_unit = run["per_unit"]
     recs_by_c: dict[str, list[dict]] = defaultdict(list)
     for r in m.values():
@@ -435,7 +549,7 @@ def score(plan: dict, split: str, arm: str, m: dict[str, dict], only: set[str] |
         for n, f in enumerate(per_unit.get(k, {}).get("findings", [])):
             lab = "unlabelled"
             for r in recs:
-                if not at_item(f, u, r):
+                if not at_item(f, u, r, anchor):
                     continue
                 if r["polarity"] in SCORED and r["class"] == f["class"]:
                     hit[r["id"]] = True
@@ -476,6 +590,36 @@ def family(cls: str) -> str:
     return cls.split(".")[0].split("-")[0]
 
 
+MISS_CAUSES = ("battery did not flag the class in the unit", "battery flagged it, confirm said no",
+               "flagged, but its quote was on unchanged lines (scope filter)",
+               "a finding of the class in the unit, but outside the range and anchor")
+
+
+def miss_causes(s: dict, pos: list[dict]) -> dict[str, str]:
+    """Per missed positive, the furthest its class got in the units overlapping it."""
+    by_c: dict[str, list[str]] = defaultdict(list)
+    for k, u in s["units"].items():
+        by_c[u["commit"]].append(k)
+    out = {}
+    for r in pos:
+        if s["hit"].get(r["id"]):
+            continue
+        rank, c = 0, r["class"]
+        for k in by_c.get(r.get("commit"), []):
+            u = s["units"][k]
+            if not overlaps((u["file"], u["lo"], u["hi"]), r["commit_file"], r["lo"], r["hi"]):
+                continue
+            p = s["run"]["per_unit"].get(k, {})
+            if any(f["class"] == c for f in p.get("findings", [])):
+                rank = max(rank, 3)
+            elif any(d["class"] == c for d in p.get("dropped_battery", []) + p.get("dropped_confirm", [])):
+                rank = max(rank, 2)
+            elif c in p.get("confirm_no", []):
+                rank = max(rank, 1)
+        out[r["id"]] = MISS_CAUSES[rank]
+    return out
+
+
 def report(split: str, arms: list[str]) -> str:
     fx = I.load(None)
     m = item_map(fx)
@@ -485,8 +629,9 @@ def report(split: str, arms: list[str]) -> str:
     have = {k: v for k, v in have.items() if v is not None}
     common = set.intersection(*have.values()) if have else set()
     sc = {arm: score(plan, split, arm, m, common) for arm in have}
-    out += [f"Arms compared on the {len(common)} units every listed run reviewed "
-            + ", ".join(f"(`{k}` {len(v)})" for k, v in have.items()) + ".", ""]
+    out += [f"Arms compared on the {len(common)} (parent) units every listed run reviewed whole "
+            + ", ".join(f"(`{k}` {len(v)})" for k, v in have.items()) + "; units scored per arm: "
+            + ", ".join(f"`{k}` {len(s['units'])}" for k, s in sc.items()) + ".", ""]
     if not sc:
         return "\n".join(out + ["no runs"])
     any_sc = next(iter(sc.values()))
@@ -494,23 +639,36 @@ def report(split: str, arms: list[str]) -> str:
     pos = [r for r in items if r["polarity"] == "positive"]
     ctl = [r for r in items if r["polarity"] == "control"]
     il = item_level(m, [r["id"] for r in items])
+    noanchor = {arm: score(plan, split, arm, m, common, anchor=False) for arm in have}
     out += ["### Labelled items", "",
-            "| arm | recall | FPR | item-level recall, same items | item-level FPR, same items |",
-            "|---|---:|---:|---:|---:|"]
+            "| arm | recall | FPR | recall, no anchor clause | FPR, no anchor clause | item-level recall, same items "
+            "| item-level FPR, same items |",
+            "|---|---:|---:|---:|---:|---:|---:|"]
     for arm, s in sc.items():
         tp = sum(s["hit"].get(r["id"], False) for r in pos)
         fp = sum(s["hit"].get(r["id"], False) for r in ctl)
+        na = noanchor[arm]
         ip = [r for r in pos if r["id"] in il]
         ic = [r for r in ctl if r["id"] in il]
         out.append(f"| {arm} | {_rate(tp, len(pos))} | {_rate(fp, len(ctl))} | "
+                   f"{_rate(sum(na['hit'].get(r['id'], False) for r in pos), len(pos))} | "
+                   f"{_rate(sum(na['hit'].get(r['id'], False) for r in ctl), len(ctl))} | "
                    f"{_rate(sum(il[r['id']] for r in ip), len(ip))} | {_rate(sum(il[r['id']] for r in ic), len(ic))} |")
+    out += ["", "### Why positives are missed", "",
+            "| arm | cause of the miss | item level found it | item level missed it |", "|---|---|---:|---:|"]
+    for arm, s in sc.items():
+        causes = miss_causes(s, pos)
+        for cause in MISS_CAUSES:
+            ids = [i for i, c in causes.items() if c == cause]
+            out.append(f"| {arm} | {cause} | {sum(il.get(i) is True for i in ids)} | "
+                       f"{sum(il.get(i) is False for i in ids)} |")
     out += ["", "### Unlabelled findings", "",
             "| arm | unit kind | units | changed lines | unlabelled | per unit | per 100 changed lines | "
-            "allowed | $ / unit |", "|---|---|---:|---:|---:|---:|---:|---:|---:|"]
+            "allowed | $ / unit | $ / 100 changed lines |", "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for arm, s in sc.items():
         for role in ("item", "other", "clean"):
-            ks = [k for k, u in s["units"].items() if u["role"] == role
-                  and (role == "item" or plan["commits"][u["commit"]]["noise_split"] == split)]
+            ks = {k for k, u in s["units"].items() if u["role"] == role
+                  and (role == "item" or plan["commits"][u["commit"]]["noise_split"] == split)}
             if not ks:
                 continue
             ch = sum(len(s["units"][k]["changed"]) for k in ks)
@@ -518,7 +676,8 @@ def report(split: str, arms: list[str]) -> str:
             al = sum(1 for (k, _n), lab in s["labels"].items() if k in ks and lab == "allowed")
             cost = sum(s["run"]["per_unit"][k]["cost"] for k in ks if k in s["run"]["per_unit"])
             out.append(f"| {arm} | {role} | {len(ks)} | {ch} | {un} | {_f(un / len(ks))} | "
-                       f"{_f(100 * un / ch if ch else None)} | {al} | {_f(cost / len(ks), '${:.4f}')} |")
+                       f"{_f(100 * un / ch if ch else None)} | {al} | {_f(cost / len(ks), '${:.4f}')} | "
+                       f"{_f(100 * cost / ch if ch else None, '${:.3f}')} |")
     clean = [pc for pc in plan["commits"].values() if pc["kind"] == "clean" and pc["noise_split"] == split]
     lab = [pc for pc in plan["commits"].values() if pc["kind"] == "labelled" and pc["noise_split"] == split]
     if clean:
@@ -547,7 +706,7 @@ def report(split: str, arms: list[str]) -> str:
         dc = [d for p in pu for d in p["dropped_confirm"]]
         top = Counter(d["class"] for d in db + dc).most_common(5)
         out.append(f"| {arm} | {len(db)} | {len(dc)} | " + ", ".join(f"`{c}` {n}" for c, n in top) + " |")
-    for strict, loose in (("g2", "baseline"), ("fixed", "g1")):
+    for strict, loose in (("g2", "baseline"), ("fixed", "g1"), ("onedecl", "baseline")):
         if strict in sc and loose in sc:
             out += ["", f"`{strict}` against `{loose}`: " + scope_diff(sc[loose], sc[strict])]
     out += ["", "### Spend", ""]
@@ -558,10 +717,11 @@ def report(split: str, arms: list[str]) -> str:
 
 
 def finding_keys(s: dict) -> dict[tuple, str]:
+    """(parent unit, class, line) of each finding: the same finding under either cutting."""
     out = {}
     for (k, n), lab in s["labels"].items():
         f = s["run"]["per_unit"][k]["findings"][n]
-        out[(k, f["class"], f["line"])] = lab
+        out[(parent_of(s["units"][k]), f["class"], f["line"])] = lab
     return out
 
 
@@ -623,8 +783,9 @@ def cmd_audit(a) -> int:
     m = item_map(fx)
     plan = build_plan(fx)
     rub, _known, fx, classes = RV.setup()
-    # Sample from the units every arm's run reviewed, so the audit scores each arm.
-    have = [v for v in (run_units(a.split, arm) for arm in ARMS) if v is not None]
+    # Sample from the units every arm's run reviewed, so the audit scores each arm. A
+    # piece-cut arm narrows the pool only for its own audit, so earlier samples stand.
+    have = [v for v in (run_units(a.split, arm) for arm in ARMS if ARMS[arm][2] or arm == a.arm) if v is not None]
     s = score(plan, a.split, a.arm, m, set.intersection(*have) if have else None)
     if not s:
         sys.exit(f"no run for {a.split}/{a.arm}")
@@ -635,10 +796,10 @@ def cmd_audit(a) -> int:
             pool.append((k, n))
     if a.new_against:
         base = score(plan, a.split, a.new_against, m)
-        seen = {(k, f["class"], f["line"], f["quote"]) for k, p in base["run"]["per_unit"].items()
-                for f in p["findings"]}
-        pool = [(k, n) for k, n in pool
-                if (k, *[s["run"]["per_unit"][k]["findings"][n][x] for x in ("class", "line", "quote")]) not in seen]
+        seen = {(parent_of(base["units"][k]), f["class"], f["line"], f["quote"])
+                for k, p in base["run"]["per_unit"].items() if k in base["units"] for f in p["findings"]}
+        pool = [(k, n) for k, n in pool if (parent_of(s["units"][k]), *[s["run"]["per_unit"][k]["findings"][n][x]
+                                                                     for x in ("class", "line", "quote")]) not in seen]
     picked = sorted(random.Random(SEED).sample(pool, min(a.n, len(pool))))
     est = len(picked) * AUDIT_USD
     print(f"audit {a.split}/{a.arm}: {len(pool)} unlabelled findings, auditing {len(picked)}, "
@@ -653,8 +814,11 @@ def cmd_audit(a) -> int:
         need[s["units"][k]["commit"]].append(k)
     EV.TWIN_NOTES = True
     full = {}
+    if not ARMS[a.arm][2]:
+        rows = piece_rows(plan, a.split, {parent_of(s["units"][k]) for k, _n in picked})
     for c, ks in need.items():
-        specs = [next(x for x in plan["commits"][c]["units"] if x[0] == s["units"][k]["file"]
+        cand = plan["commits"][c]["units"] if ARMS[a.arm][2] else [x for c2, x, _pk in rows if c2 == c]
+        specs = [next(x for x in cand if x[0] == s["units"][k]["file"]
                       and x[1] == s["units"][k]["lo"] and x[2] == s["units"][k]["hi"]) for k in ks]
         for k, u in zip(ks, RV.units_from_specs(c, [tuple(x[:6]) for x in specs], a.jobs)):
             full[k] = u
@@ -674,7 +838,7 @@ def cmd_audit(a) -> int:
         r = res.get(key, {"error": "missing"})
         f = s["run"]["per_unit"][k]["findings"][n]
         out[f"{k}#{n}"] = {"class": f["class"], "file": f["file"], "line": f["line"], "quote": f["quote"],
-                           "reason": f["reason"], "role": s["units"][k]["role"],
+                           "reason": f["reason"], "role": s["units"][k]["role"], "parent": parent_of(s["units"][k]),
                            "verdict": "error" if "error" in r else BT.parse_audit(r["raw"]),
                            "cause": parse_cause(r.get("raw", "")), "raw": r.get("raw", "")[:1200],
                            "cost_usd": r.get("cost_usd", 0.0)}
@@ -692,15 +856,18 @@ CAUSE_TAG = {"unchanged": "G2 (pre-existing code)", "deliberate": "G1 (deliberat
 
 
 def _kept_by(split: str, arm: str) -> set[tuple] | None:
+    """(parent unit, class) of each finding an arm's run kept."""
     run = _load(f"run-{split}-{arm}.json", None)
     if run is None:
         return None
-    return {(k, f["class"]) for k, p in run["per_unit"].items() for f in p["findings"]}
+    parent = {u["_key"]: parent_of(u) for u in run["units"]}
+    return {(parent.get(k, k), f["class"]) for k, p in run["per_unit"].items() for f in p["findings"]}
 
 
 def audit_report(split: str) -> str:
     out = []
     kept = {arm: _kept_by(split, arm) for arm in ARMS}
+    covered = {arm: run_units(split, arm) for arm in ARMS}
     for f in sorted(DB.glob(f"audit-{split}-*.json")) if DB.exists() else []:
         v = json.loads(f.read_text())
         c = Counter(x["verdict"] for x in v.values())
@@ -714,12 +881,19 @@ def audit_report(split: str) -> str:
         rows = ["", "| verdict | audited | " + " | ".join(f"kept by `{a}`" for a in ARMS if kept[a] is not None)
                 + " |", "|---|---:|" + "---:|" * sum(kept[a] is not None for a in ARMS)]
         for verdict in ("yes", "no", "unsure"):
-            xs = [(k.split("#")[0], x) for k, x in v.items() if x["verdict"] == verdict]
+            xs = [(x.get("parent", k.split("#")[0]), x) for k, x in v.items() if x["verdict"] == verdict]
             rows.append(f"| {verdict} | {len(xs)} | " + " | ".join(
-                str(sum((uk, x["class"]) in kept[a] for uk, x in xs)) for a in ARMS if kept[a] is not None)
-                + " |")
-        out.append("\n".join(rows))
+                kept_cell(xs, kept[a], covered[a]) for a in ARMS if kept[a] is not None) + " |")
+        out.append("\n".join(rows) + "\n\nA cell \"k of n\" counts only the n audited findings whose unit that "
+                   "arm's run reviewed.")
     return "\n\n".join(out)
+
+
+def kept_cell(xs: list[tuple], kept: set[tuple], covered: set[str]) -> str:
+    """How many audited findings an arm keeps, among those in units it reviewed."""
+    mine = [(uk, x) for uk, x in xs if uk in covered]
+    n = sum((uk, x["class"]) in kept for uk, x in mine)
+    return str(n) if len(mine) == len(xs) else f"{n} of {len(mine)}"
 
 
 def cmd_estimate(a) -> int:
@@ -734,6 +908,17 @@ def cmd_estimate(a) -> int:
                         for u in units)
             print(f"{split}/{arm}: {len(units)} units, {fresh} uncached battery calls, about "
                   f"${fresh * USD_PER_UNIT:.2f} with confirm")
+        # Pieces are counted from the cutting alone: a piece equal to its planned unit is
+        # the baseline's unit; the others are new unless an onedecl run asked them.
+        rows = piece_rows(plan, split)
+        asked = {u["_key"] for u in _load(f"run-{split}-onedecl.json", {"units": []})["units"]}
+        new = [(c, q) for c, q, pk in rows if unit_key(c, *q[:3]) != pk]
+        fresh = sum(unit_key(c, *q[:3]) not in asked for c, q in new)
+        roles = Counter(q[6] for _c, q in new)
+        print(f"{split}/onedecl: {len(rows)} pieces of {len({pk for *_x, pk in rows})} planned units; "
+              f"{len(rows) - len(new)} are a planned unit (the baseline's, cached once it runs), {len(new)} new "
+              f"({', '.join(f'{r} {n}' for r, n in sorted(roles.items()))}), {fresh} of them unasked: about "
+              f"${fresh * USD_PER_PIECE:.2f} after the baseline at ${USD_PER_PIECE}/piece")
     print(f"audit: about ${AUDIT_USD:.3f} per Opus call")
     return 0
 
@@ -751,6 +936,8 @@ def main() -> int:
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--max-usd", type=float, default=BUDGET_USD)
     p.add_argument("--units-of", choices=sorted(ARMS), help="only the units this arm's run reviewed")
+    p.add_argument("--roles", nargs="+", choices=("item", "other", "clean"),
+                   help="onedecl: only the pieces of parent units of these kinds")
     p.add_argument("--jobs", type=int, default=4)
     p.add_argument("--timeout", type=int, default=300)
     p.set_defaults(fn=cmd_run)

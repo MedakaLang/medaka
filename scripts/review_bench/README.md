@@ -153,6 +153,7 @@ $D plan                                  # commits and units per split (no model
 $D estimate                              # unit counts and cost per split and arm, asking nothing
 $D run --split dev --arm baseline
 $D run --split dev --arm g1 --units-of baseline   # also g2, g2-exempt, fixed
+$D run --split dev --arm onedecl --roles item clean   # pieces of baseline's units
 $D audit --split dev --arm baseline --n 40
 $D audit --split dev --arm fixed --new-against baseline --n 15
 $D report --split dev --out /tmp/diffs.md
@@ -189,12 +190,17 @@ $D report --split dev --out /tmp/diffs.md
   without twin notes is what `baseline` asked with (a few generators depend on
   the process's string-hash order), and `report` compares arms on the units
   every listed run reviewed.
+- **`onedecl`** (`review.py --one-decl`) reviews the one-declaration pieces of
+  the units `baseline` compared (`--roles` narrows them to item, other or clean
+  units); a single-declaration unit is its own piece, served from the
+  baseline's cache. Arms are compared on parent units, and noise and cost per
+  100 changed lines is the comparable figure (`RESULTS-diffs-onedecl-dev-2026-10-18.md`).
 - **Audit:** Opus judges a fixed-seed sample of an arm's unlabelled findings
   with `battery.py`'s audit prompt, its scope paragraph replaced by the diff's
   (the changed lines are listed after the excerpt), and gives a cause for each
   "no". The judge always sees the twin notes.
-- **Budget:** a ledger under `.cache/diffbench/` stops new asking at $6.00 in
-  all. `run` and `audit` on `test` refuse without `--approved`: the test split
+- **Budget:** a ledger under `.cache/diffbench/` stops new asking at $8.00 in
+  all ($6.00 for the first pass, $2.00 for `onedecl`). `run` and `audit` on `test` refuse without `--approved`: the test split
   is looked at once, with the owner's approval.
 
 ## Cache and results
