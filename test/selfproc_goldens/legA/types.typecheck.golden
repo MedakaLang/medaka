@@ -442,7 +442,8 @@ checkDomainAxes : Option Loc -> String -> Option String -> List (String, String)
 checkEachEffectAtom : List EffAtomTy -> Unit
 checkEffVarAtoms : String -> List (String, List Atom) -> List (String, Ref Effvar) -> Option Loc -> Unit
 checkEffectAtoms : List EffAtomTy -> Unit
-checkEffectEscape : List (String, Ty) -> String -> List Atom -> Unit
+checkEffectEscape : DynCtx -> List (String, Ty) -> String -> List Atom -> Unit
+checkEffectEscapeIn : GroupCtx -> List (String, Ty) -> String -> List Atom -> Unit
 checkEffectParams : List Decl -> Unit
 checkEffectParamsDecl : Decl -> Unit
 checkEffectParamsTy : Ty -> Unit
@@ -875,8 +876,8 @@ deferEffectRelation : Bool -> EffRow -> EffRow -> Unit
 deferJoin : JoinContext -> (DynCtx -> List EffRow -> EffRow) -> List (Option Loc, Mono) -> Option Mono
 deferRequiresMonadMsg : String
 definerPairsOf : String -> Map String (List (String, String)) -> List (String, String)
-definerReceiverDispatches : String -> Mono -> Bool
-definerReceiverIsDictVar : String -> Mono -> Bool
+definerReceiverDispatches : DynCtx -> String -> Mono -> Bool
+definerReceiverIsDictVar : DynCtx -> String -> Mono -> Bool
 definerRowsOf : List (String, (String, String)) -> List (String, String)
 definerShadowArgHead : Expr -> Option (String, Ref (Option Int), Ref Route, Ref (List Route), Ref Inner)
 definerShadowArgHeadCell : String -> EvCell -> Option (String, Ref (Option Int), Ref Route, Ref (List Route), Ref Inner)
@@ -1231,7 +1232,7 @@ fixedSibling : Int -> List (Int, String) -> Option String
 fixedWidthLiteralFits : Route -> Int -> Bool
 flatGroupIsCore : List String -> Bool
 flexibleIndex : Ref Authvar -> Authority -> Bool
-flushPendingEscapes : Unit -> Unit
+flushPendingEscapes : Option GroupCtx -> Unit
 foldAppFallback : SigVars -> List (String, Mono) -> Mono -> List Ty -> Mono
 foldAppKinds : SigVars -> List (String, Mono) -> Mono -> List Kind -> List Ty -> Mono
 foldModules : Bool -> Bool -> (String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, a)) -> (Bool -> String -> a -> b -> b) -> b -> List (String, Scheme) -> List (String, ExportBinding) -> List (String, List (String, ExportBinding)) -> List Decl -> List Decl -> List (String, List Decl) -> b
@@ -1392,6 +1393,7 @@ groundedSignatureVariable : List (String, Mono) -> Option (String, Mono)
 groupClauses : List (String, (List Pat, Expr)) -> Map String (List (List Pat, Expr))
 groupClausesGo : List (String, (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
 groupDefinerPairs : Map String (List (String, String)) -> List (String, (String, String)) -> Map String (List (String, String))
+groupMonos : DynCtx -> List (String, Mono)
 groupNames : List (String, (List Pat, Expr)) -> Map String Unit -> List String
 groupRefs : List (List Pat, Expr) -> List String
 groupSchemesOf : TcEnv -> List LetBind -> List (String, Scheme)

@@ -119,7 +119,6 @@ Columns: `name | holds | lifetime | owner-today | writers | reset | target | int
 | PerRun.indexSubstitutedRef | index variables an index equality substituted a term for | module | PerRun | substituteIndexLinked | resetState | ModuleCtx | no | - | - |
 | PerRun.extendedBindersRef | authority variables an argument extended on the right | module | PerRun | noteArgumentShape | resetState | ModuleCtx | no | - | - |
 | PerRun.displayHiddenBindersRef | authority variables an interpolation hid behind a non-prelude display | module | PerRun | noteArgumentShape | resetState | ModuleCtx | no | - | - |
-| PerRun.pendingEscapesRef | post-hoc escape findings held until the group solver scope closes | group | PerRun | checkEffectEscape, flushPendingEscapes | resetState | GroupCtx | n/a | - | - |
 | PerRun.openedExistentialsRef | existential cells opened at the pattern site being inferred | run | PerRun | openExistentials, parkOpenedExistentials, refuseOpenedExistentials, takeOpenedExistentials | resetState | TcEnv | n/a | - | - |
 | PerRun.openedExistentialsStackRef | stack of parked opened-existential lists | run | PerRun | parkOpenedExistentials, refuseOpenedExistentials | resetState | TcEnv | n/a | - | - |
 | PerRun.recordByNameRef | record infos by name, seeded each module from universeRecordPop | module | PerRun | loadDataUniverse, overrideScopedRecords, registerCachedRecord, registerRecordInfoKeyed | resetState | ModuleCtx | no | - | - |
@@ -179,7 +178,6 @@ Columns: `name | holds | lifetime | owner-today | writers | reset | target | int
 | PerRun.flatShadowScopingRef | flag never written; always False | module | PerRun | - | resetState | delete | no | - | - |
 | PerRun.flatCoreFnNamesRef | set never written; always empty | module | PerRun | - | resetState | delete | no | - | - |
 | PerRun.flatUserShadowNamesRef | set never written; always empty | module | PerRun | - | resetState | delete | no | - | - |
-| PerRun.groupConstraintMonosRef | constraint monos of the group being processed | group | PerRun | processSCC | resetState | GroupCtx | n/a | - | - |
 | PerRun.fieldOwnerModulesRef | field-owner key to declaring module ids; comment says graph-global but it is re-minted per module | module | PerRun | declEnvSeedDataUniverse | resetState | ModuleCtx | no | - | #1597 |
 | PerRun.fieldOwnerReachRef | module ids this module can reach through DUse | module | PerRun | declEnvSeedDataUniverse | resetState | ModuleCtx | no | - | #1597 |
 | DynCtx.dcJoin | the construct whose alternatives a value join is equating, which names the mismatch | run | DynCtx | joinValueEqual | none (immutable; a nested walk gets an updated copy) | TcEnv | n/a | - | - |
