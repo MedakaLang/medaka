@@ -291,6 +291,54 @@ test "re-exported function resolves to the original definer" =
           ("app", "import bmod.{mk}\nmain = mk\n"),
         ])))
 
+test "a type row's ctors take that type's declaring module, not a same-spelled ctor's" =
+  -- `K` is declared by both carried types; `L` only by b's `U` (a's is private)
+  expectEqual
+    (Some "b__L")
+    (refIn [
+      ("a", "public export data T = J | K Int\ndata Priv = L Int | Z\n"),
+      ("b", "public export data U = K Int | L Int\n"),
+      ("facade", "export import a.{T(..)}\nexport import b.{U(..)}\n"),
+      ("app", "import facade.{U(..)}\nmain = L\n"),
+    ])
+
+test "an own type and a carried type of the same name keep their own modules" =
+  let units =
+    app => [
+      ("m", "public export data T = B Int\n"),
+      ("facade", "export import m.{T(..)}\npublic export data T = A Int\n"),
+      ("app", app),
+    ]
+  expectAll
+    [
+      expectEqual
+        (Some "facade__A")
+        (refIn (units "import facade.{T(..)}\nmain = A\n")),
+      -- `T(..)` expands through facade's first `T` row, as resolve's does; a
+      -- wildcard brings the carried `T`'s ctors too
+      expectEqual (Some "m__B") (refIn (units "import facade.*\nmain = B\n")),
+    ]
+
+test "a function carried after a same-named interface method is still offered" =
+  expectEqual
+    (Some "b__rendr")
+    (refIn [
+      ("a", "export\ninterface Rend a where\n  rendr : a -> Int\n"),
+      ("b", "export\nrendr n = n + 1\n"),
+      ("facade", "export import a.{Rend}\nexport import b.{rendr}\n"),
+      ("app", "import facade.{rendr}\nmain = rendr\n"),
+    ])
+
+test "an extern carried ahead of a same-named function keeps the extern" =
+  expectEqual
+    (Some "myabs")
+    (refIn [
+      ("b", "export\nextern myabs : Int -> Int\n"),
+      ("c", "export\nmyabs n = n + 1\n"),
+      ("facade", "export import b.{myabs}\nexport import c.{myabs}\n"),
+      ("app", "import facade.{myabs}\nmain = myabs\n"),
+    ])
+
 test "mangleCtorCollisions returns a collision-free program unchanged" =
   expectEqual
     ["Wid", "Gad"]

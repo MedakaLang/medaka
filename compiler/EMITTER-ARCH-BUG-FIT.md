@@ -226,7 +226,7 @@ member and visibility rules:
 
 - `ctorMemberEntry` now preserves a constructor named directly with `Ctor(..)`
   (#1300's closed regression control);
-- `ctorExportEntries` deliberately has no newtype arm, exposing the deeper
+- `ctorExportsFrom` deliberately never offers a newtype's ctor (`offeredCtor`), exposing the deeper
   resolve/typecheck disagreement in #1305 as a loud build refusal;
 - constructor exports have no re-export-chain peer of value exports (#1359);
 - a private constructor can still outrank a public imported constructor in eval

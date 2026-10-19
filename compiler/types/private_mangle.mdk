@@ -31,8 +31,8 @@
 --      name) → LEFT UNCHANGED.
 -- The per-unit import structure comes straight from the unit's `DUse` decls + each
 -- module's export surface, which `frontend.visibility.buildExportsWith` builds from
--- the `(mid, decls)` units exactly as it does for resolve (`unitSurfaces`).  A
--- per-unit LOCAL-name → origin-module map is sufficient.
+-- the `(mid, decls)` units (`unitSurfaces`, which says how its value set differs
+-- from resolve's).  A per-unit LOCAL-name → origin-module map is sufficient.
 --
 -- IMPORT ALIASING does not perturb any of this, because it only changes what the
 -- LOCAL name is, never the shape of the map:
@@ -138,6 +138,7 @@ import frontend.visibility.{
   buildExportsWith,
   pubIfaceMethodSets,
   directIn,
+  filterInSet,
   nsValues,
   valueDeclsOf,
   valueDeclOf,
@@ -146,6 +147,7 @@ import frontend.visibility.{
 import types.route_key.{remapEvidence}
 import u64 as U64
 import list.{last, zip}
+import map.{insertWith}
 import support.util.{
   lookupAssoc,
   contains,
@@ -156,6 +158,7 @@ import support.util.{
   joinDot,
   dedup,
   dedupBy,
+  lenKey,
 }
 -- The per-unit rename map is applied to EVERY reference in the unit (one lookup
 -- per EVar / def-name / pattern ctor). Backing it with the String-keyed
@@ -629,9 +632,10 @@ checkSymbolsInjective what ((sym, pre) :: rest) seen = match omLookup sym seen
 -- so each `export import` reads a surface already built.  Core's surface is
 -- `coreExports` and never enters `known`: `buildExportsWith` resolves an `export
 -- import core…` through its own core argument.  The values bound beside the
--- decls' own are every public interface's methods, plus the public `let rec`
--- binders (`pubLetRecBinders`), so a re-export carries those as resolve's surface
--- would once it has them.
+-- decls' own are every public interface's methods, where resolve passes only the
+-- bound ones (`keepBoundMethods`), plus the public `let rec` binders
+-- (`pubLetRecBinders`), so a re-export carries those as resolve's surface would
+-- once it has them.
 unitSurfaces : List (String, List Decl) -> List (String, ModuleExports)
 unitSurfaces units =
   let coreExp = match lookupAssoc "core" units
@@ -657,18 +661,23 @@ surfacesGo coreExp known ((mid, decls) :: rest)
     (mid, exp) :: surfacesGo coreExp (omInsert mid exp known) rest
 
 -- Per unit, the exported FUNCTION symbols, each paired with the module that
--- defines it: a value the surface exports whose declaration (`valueDeclOf`, which
--- chases a re-export to its declaring module) is a function that module defines
--- and exports under that name.  An importer of a re-exported name therefore
--- mangles its reference to `<definer>__<name>`, never `<reExporter>__<name>`,
--- which has no backing definition.  An interface method, a body-less signature
--- and an extern are values but not function symbols.
+-- defines it: a value the surface exports whose declaration (an
+-- `expValueOrigins` row, which names the declaring module) is a function that
+-- module defines and exports under that name.  An importer of a re-exported name
+-- therefore mangles its reference to `<definer>__<name>`, never
+-- `<reExporter>__<name>`, which has no backing definition.  An interface method,
+-- a body-less signature and an extern are values but not function symbols.
 fnExportsFrom : List (String, List Decl) ->
   List (String, ModuleExports) ->
   List (String, List (String, String))
 fnExportsFrom units surfaces =
   let fnSyms = omFromPairs (map unitFnSyms units) omEmpty
-  map (unitFnExports fnSyms) (zip units surfaces)
+  let methods = omFromPairs (map surfaceMethods surfaces) omEmpty
+  map (unitFnExports fnSyms methods) (zip units surfaces)
+
+surfaceMethods : (String, ModuleExports) -> (String, OrdMap Unit)
+surfaceMethods (mid, exp) =
+  (mid, omFromNames (flatMap snd exp.expIfaceMethods) omEmpty)
 
 -- The functions a unit defines under a name its own decls export.  This reads
 -- the module's direct value exports, not its surface, so a private standalone
@@ -679,25 +688,58 @@ unitFnSyms : (String, List Decl) -> (String, OrdMap Unit)
 unitFnSyms (mid, decls) =
   let defined = omFromNames (unitDefNames (mid, decls)) omEmpty
   let exported = directIn nsValues decls ++ pubLetRecBinders decls
-  (mid, omFromNames (filterList (n => omHasKey n defined) exported) omEmpty)
+  (mid, omFromNames (filterInSet defined exported) omEmpty)
 
 -- The first row per name wins: a module's own values precede what it re-exports.
 unitFnExports : OrdMap (OrdMap Unit) ->
+  OrdMap (OrdMap Unit) ->
   ((String, List Decl), (String, ModuleExports)) ->
   (String, List (String, String))
-unitFnExports fnSyms ((mid, _), (_, exp)) =
-  let origins = valueDeclsOf exp
-  (mid, dedupBy fst (flatMap (fnExport fnSyms exp origins) exp.expValues))
+unitFnExports fnSyms methods ((mid, _), (_, exp)) =
+  let origins = multiMapOf exp.expValueOrigins
+  (
+    mid,
+    dedupBy fst (flatMap (fnExport fnSyms methods exp origins) exp.expValues),
+  )
 
+-- `origins` holds each name's origins in surface order.  An interface method of
+-- its declaring module yields to a later origin, as the front end binds the later function
+-- over it (`W-IMPORT-METHOD-SHADOW`); any other first origin decides, and gives a
+-- row only if it is a function symbol, so an extern carried ahead of a function
+-- keeps the name an extern, as the front end binds it.  A name with no recorded
+-- origin is declared by the module that exports it.
 fnExport : OrdMap (OrdMap Unit) ->
+  OrdMap (OrdMap Unit) ->
   ModuleExports ->
-  OrdMap (String, String) ->
+  OrdMap (List (String, String)) ->
   String ->
   List (String, String)
-fnExport fnSyms exp origins v = match valueDeclOf exp origins v
-  (dm, dn) => match omLookup dm fnSyms
-    Some syms => if dn == v && omHasKey v syms then [(v, dm)] else []
+fnExport fnSyms methods exp origins v =
+  let decls = optionOr [(exp.modId, v)] (omLookup v origins)
+  match find (d => not (isMethodDecl fnSyms methods d)) decls
+    Some (dm, dn) =>
+      if dn == v && isFnSymbol fnSyms dm dn then [(v, dm)] else []
     None => []
+
+isFnSymbol : OrdMap (OrdMap Unit) -> String -> String -> Bool
+isFnSymbol fnSyms dm dn = match omLookup dm fnSyms
+  Some syms => omHasKey dn syms
+  None => False
+
+isMethodDecl : OrdMap (OrdMap Unit) ->
+  OrdMap (OrdMap Unit) ->
+  (String, String) ->
+  Bool
+isMethodDecl fnSyms methods (dm, dn) =
+  not (isFnSymbol fnSyms dm dn)
+    && (match omLookup dm methods
+      Some ms => omHasKey dn ms
+      None => False)
+
+-- Every value of each key, in list order.
+multiMapOf : List (String, a) -> OrdMap (List a)
+multiMapOf pairs =
+  fold (m (k, v) => insertWith (++) k [v] m) omEmpty (reverseL pairs)
 
 -- The binders of the public top-level `let rec` groups.  The producer's
 -- `nsValues` has no arm for one, so resolve does not export it while `run`'s
@@ -720,9 +762,13 @@ lookupDefiner k ((n, d) :: rest) =
 -- ── per-unit CONSTRUCTOR exports ──────────────────────────────────────────────
 -- (mid, [(typeName, definerMid, [ctorName])]) for the constructors the unit's
 -- surface offers an importer, its own and whatever its `export import`s carry.
--- `definerMid` is the DECLARING module (`expCtorOrigins`), because a ctor's rename
--- target is `<definerMid>__<ctor>`: `bmod`'s row can offer `Wid` (declared in
--- `amod`) without `bmod` ever defining an `@amod__Wid`-shaped symbol.
+-- `definerMid` is the DECLARING module, because a ctor's rename target is
+-- `<definerMid>__<ctor>`: `bmod`'s row can offer `Wid` (declared in `amod`)
+-- without `bmod` ever defining an `@amod__Wid`-shaped symbol.  A type row's
+-- definer is the first of the type's declaring modules (`expTypeOrigins`) that
+-- also declares every ctor in the row (`expCtorOrigins`): two carried types may
+-- share a type name, and two may share a ctor spelling, so neither name alone
+-- identifies the declaration.  Two carried types sharing both are not told apart.
 --
 -- This answers a scope question, "may an IMPORTER name this constructor?", not
 -- "does this constructor exist?".  The unit's OWN constructors are mangled from a
@@ -752,77 +798,88 @@ unitCtorExports : OrdMap ModuleExports ->
   (String, ModuleExports) ->
   (String, List (String, String, List String))
 unitCtorExports surfaceMap newtypeCtors (mid, exp) =
-  let origins = omFromPairs (reverseL exp.expCtorOrigins) omEmpty
-  let offered = offeredCtor newtypeCtors origins mid
-  let covered = omFromNames (flatMap snd exp.expTypeCtors) omEmpty
-  let loose = dedup (filterList (c => not (omHasKey c covered)) exp.expCtors)
+  let typeDefiners = multiMapOf exp.expTypeOrigins
+  let ctorDefiners = multiMapOf exp.expCtorOrigins
+  let typed =
+    map (typeRowDefiner typeDefiners ctorDefiners mid) exp.expTypeCtors
+  let covered = multiMapOf (flatMap rowCtorDefiners typed)
+  let loose =
+    dedupBy
+      ((c, d) => "\{lenKey c}\{d}")
+      (filterList
+        ((c, d) => not (contains d (definersOf covered c)))
+        exp.expCtorOrigins)
   (
     mid,
-    map (typeCtorRow offered origins mid) exp.expTypeCtors
-      ++ flatMap (looseCtorRow surfaceMap offered origins mid) loose,
+    map (typeCtorRow newtypeCtors) typed
+      ++ flatMap (looseCtorRow surfaceMap newtypeCtors) loose,
   )
 
-typeCtorRow : (String -> Bool) ->
-  OrdMap String ->
+definersOf : OrdMap (List String) -> String -> List String
+definersOf definers n = optionOr [] (omLookup n definers)
+
+typeRowDefiner : OrdMap (List String) ->
+  OrdMap (List String) ->
   String ->
   (String, List String) ->
   (String, String, List String)
-typeCtorRow offered origins mid (ty, cs) =
-  let definer = match cs
-    c :: _ => ctorOrigin origins mid c
-    [] => mid
-  (ty, definer, filterList offered cs)
+typeRowDefiner typeDefiners ctorDefiners mid (ty, cs) =
+  let declaresRow = d => all (c => contains d (definersOf ctorDefiners c)) cs
+  (ty, optionOr mid (find declaresRow (definersOf typeDefiners ty)), cs)
 
+rowCtorDefiners : (String, String, List String) -> List (String, String)
+rowCtorDefiners (_, d, cs) = map (c => (c, d)) cs
+
+typeCtorRow : OrdMap (OrdMap Unit) ->
+  (String, String, List String) ->
+  (String, String, List String)
+typeCtorRow newtypeCtors (ty, definer, cs) =
+  (ty, definer, filterList (offeredCtor newtypeCtors definer) cs)
+
+-- A ctor carried without its type.  Its type field is the type the declaring
+-- module's surface gives it, or `""` when that surface has none; `""` names no
+-- importable type, so `lookupCtorTypeEntry` never selects such a row.
 looseCtorRow : OrdMap ModuleExports ->
-  (String -> Bool) ->
-  OrdMap String ->
-  String ->
-  String ->
+  OrdMap (OrdMap Unit) ->
+  (String, String) ->
   List (String, String, List String)
-looseCtorRow surfaceMap offered origins mid c =
-  if offered c then
-    let o = ctorOrigin origins mid c
-    let ty = match omLookup o surfaceMap
-      Some src => match typeOfCtor c src
-        Some t => t
-        None => ""
+looseCtorRow surfaceMap newtypeCtors (c, definer) =
+  if offeredCtor newtypeCtors definer c then
+    let ty = match omLookup definer surfaceMap
+      Some src => optionOr "" (typeOfCtor c src)
       None => ""
-    [(ty, o, [c])]
+    [(ty, definer, [c])]
   else
     []
 
-ctorOrigin : OrdMap String -> String -> String -> String
-ctorOrigin origins mid c = match omLookup c origins
-  Some o => o
-  None => mid
-
--- The surface's constructors an importer may be offered.  A reserved one (the
--- emitter's fixed-tag set) is never mangled: mangling would lose its reserved tag.
+-- The surface's constructors an importer may be offered, each with the module
+-- that declares it.  A reserved one (the emitter's fixed-tag set) is never
+-- mangled: mangling would lose its reserved tag.
 --
 -- A newtype's constructor is never offered (#1305).  It is not importable by ANY
 -- spelling: `import nmod.{NT(..)}`, `import nmod.{NT, Wrap}` and `import nmod.*`
 -- all give `T-UNBOUND` `Unbound variable: Wrap`, because typecheck never publishes
--- the ctor's scheme.  Offering `<nmod>__Wrap` for a name the front end had bound
--- elsewhere made `medaka build` mis-bind it while `run` was correct.  The surface
--- still lists an `export newtype`'s ctor, and only the DECLARING module's surface
--- says it is one (`expNewtypeCtors` crosses no hop), so that is where this reads.
--- `eval.ctorsByTypeOf` (`compiler/eval/eval.mdk`) is the interpreter-side peer.
+-- the ctor's scheme, so an offered `<nmod>__Wrap` would shadow whatever the front
+-- end bound under that spelling.  The surface still lists an `export newtype`'s
+-- ctor, and only the DECLARING module's surface says it is one (`expNewtypeCtors`
+-- crosses no hop), so that is where this reads.  `eval.ctorsByTypeOf`
+-- (`compiler/eval/eval.mdk`) is the interpreter-side peer.
 --
--- Visibility is the producer's: only a `public export data` contributes ctors to
--- a surface.  That gate is load-bearing.  A module can export a TYPE and privately
--- declare a CONSTRUCTOR of the same spelling:
+-- Visibility is the producer's.  A real module's surface holds only the ctors of
+-- its `public export data` and those its `export import`s carry; core's is every
+-- ctor the prelude declares (`coreExports`).  A module can export a TYPE and
+-- privately declare a CONSTRUCTOR of the same spelling:
 --     public export data Zz = Mk Int      -- mp exports the TYPE `Zz`
 --     data Hidden = Zz Int Int            -- ...and privately declares a CTOR `Zz`
--- An importer writing `import mp.{Zz(..)}` then `import mq.{Zz, unQ}` has `Zz`
--- bound by the front end to mq's public constructor, and a table that offered mp's
--- private one would win on decl order (`mangleUnitU`'s first-entry-wins
--- `omFromPairs`), so the built binary called `mp__Zz`.  Pinned by
+-- and an importer of `mp.{Zz(..)}` and `mq.{Zz}` has `Zz` bound to mq's public
+-- ctor, so an offered private `mp__Zz` would win on decl order (`mangleUnitU`'s
+-- first-entry-wins `omFromPairs`).  Pinned by
 -- `test/llvm_fixtures_modules/ctor_scope_private_ctor_not_offered/` and its
 -- import-permuted twin.
-offeredCtor : OrdMap (OrdMap Unit) -> OrdMap String -> String -> String -> Bool
-offeredCtor newtypeCtors origins mid c =
+offeredCtor : OrdMap (OrdMap Unit) -> String -> String -> Bool
+offeredCtor newtypeCtors definer c =
   nonReservedCtor c
-    && not (match omLookup (ctorOrigin origins mid c) newtypeCtors
+    && not (match omLookup definer newtypeCtors
       Some ns => omHasKey c ns
       None => False)
 

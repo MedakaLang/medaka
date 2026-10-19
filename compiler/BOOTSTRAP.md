@@ -394,7 +394,8 @@ separate decl) carries `pub = False` — the export lives on the `DTypeSig True`
 `util__joinNl` while `exhaust.mdk`'s bare imported reference was left unrewritten
 → the self-hosted `elaborateModules` (run during emit) panicked `unbound
 variable: joinNl`. Fix: collect each unit's pub-via-`DTypeSig`/`DExtern` names
-(`pubSigNames`) and exclude them from the rename in `declRenameEntries` /
+(then `pubSigNames`; today the `nsValues` rule of `frontend/visibility.mdk`) and
+exclude them from the rename in `declRenameEntries` /
 `letBindRenameEntry`.
 
 **2. `llvm_emit.mdk` — chained `++` over a runtime-dispatched operand emitted a

@@ -1,0 +1,13 @@
+-- A module's own type and a type it re-exports share the name `T`.
+--
+-- `facade` declares `T = A Int` and carries m's `T = B Int`.  Its surface lists
+-- the own row first, so `import facade.{T(..)}` brings both `A` and `B`, and `A`
+-- is facade's.  The ctor-export index keys each row's declaring module by the
+-- type's origin AND its ctors, so neither row borrows the other's module.
+--
+-- Expected output, derived by hand from the semantics: `unA (A 1)` is facade's
+-- `A n` arm, `1 + 7` = `8`.
+import facade.{T(..), unA}
+
+main : <IO> Unit
+main = putStrLn (intToString (unA (A 1)))

@@ -1,0 +1,16 @@
+-- Two carried types whose first constructors share a spelling.
+--
+-- `facade` carries a's `T = J | K Int` and b's `U = K Int | L Int`, so the
+-- spelling `K` has two declaring modules.  The importer names only `U(..)`, so
+-- `L` is b's `U.L`; a's private `Priv` also has a ctor spelled `L`, which is not
+-- exported and must not be what `L` denotes.  Each type row of the ctor-export
+-- index (`types/private_mangle.ctorExportsFrom`) takes its declaring module from
+-- that type's own origin, not from whichever module first declared its first
+-- constructor's spelling.
+--
+-- Expected output, derived by hand from the semantics: `unU (L 3)` is b's `L n`
+-- arm, `3`; `privCount 0` matches a's private `L 0` and gives `0`; `3 + 0` = `3`.
+import facade.{U(..), unU, privCount}
+
+main : <IO> Unit
+main = putStrLn (intToString (unU (L 3) + privCount 0))

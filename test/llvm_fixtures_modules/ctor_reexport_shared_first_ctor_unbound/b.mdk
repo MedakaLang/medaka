@@ -1,0 +1,7 @@
+public export data U = K Int | L
+
+export
+unU : U -> Int
+unU u = match u
+  K n => n + 500
+  L => 7
