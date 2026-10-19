@@ -364,12 +364,12 @@ loweredEntry runtimeDecls coreDecls entry roots =
       let (flatStdlib, ownedStdlib) =
         stdlibOwnership entry roots (underRoot "stdlib") pairs
       let _ = setStdlibOwnership flatStdlib ownedStdlib
-      let (coreE, modulesE, _, _, _, _) =
+      let (coreE, modulesE, _, _, evTable, _, _) =
         elaborateModules
           runtimeDecls
           coreDecls
           (map (p => (fst p, desugarIn (fst p) (snd p))) pairs)
-      let (coreD, modules2) = mangleUnitsEv coreE modulesE
+      let (coreD, modules2, _) = mangleUnitsEv evTable coreE modulesE
       Ok (lowerProgramEmit (dceFilter (coreD ++ flatMap snd modules2)))
 
 -- Each binder occurrence's row, in the binder walk's order, as text: what an

@@ -54,7 +54,7 @@ methodProgram = [
 -- diagnostics-only drive has run, as the property worker does.
 mainAfterHelperDiags : Unit -> Int
 mainAfterHelperDiags _ =
-  let (coreE, modulesE, _, _, _, _) = elaborateModules [] [] methodProgram
+  let (coreE, modulesE, _, _, _, _, _) = elaborateModules [] [] methodProgram
   let _ = helperElabDiags [] [] methodProgram
   let bindings = evalOne coreE ("helper_probe", flatMap snd modulesE)
   match lookupAssoc "main" bindings

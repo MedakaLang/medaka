@@ -52,9 +52,9 @@ import frontend.ast.{
 import types.route_key.{
   implRouteKeyWord,
   ifaceWordOf,
-  evDictRoutes,
-  evMethodRoutes,
-  evSiteHead,
+  evDictRoutesIn,
+  evMethodRoutesIn,
+  evSiteHeadIn,
   numIntWord,
   numFloatWord,
 }
@@ -93,7 +93,8 @@ import types.runtime_types.{
   BinderRow(..),
   RuntimeType(..),
   binderOrdinal,
-  binderRowIfInstalled,
+  binderRowIn,
+  BinderTypeTable,
 }
 import map as BM
 import frontend.marker.{localBoundNames}
@@ -103,8 +104,12 @@ import types.disposition.{
   emptyDispositionTable,
   ifaceSuperCount,
   inheritorsOf,
-  installedDispositions,
-  installedDispositionsOpt,
+}
+import types.program_facts.{
+  ProgramFacts(..),
+  factsInstalled,
+  factsNow,
+  withFacts,
 }
 import eval.eval.{
   buildCtorToType,
@@ -190,10 +195,14 @@ lower (ERangeList lo hi incl) = CRangeList (lower lo) (lower hi) incl
 lower (ERangeArray lo hi incl) = CRangeArray (lower lo) (lower hi) incl
 lower (EIndex _ _) = panic "EIndex is desugared to index before lowering"
 lower (ESlice _ _ _ _) = panic "ESlice is desugared to slice before lowering"
-lower (EFieldAccess e f ev) = CFieldAccess (lower e) f (evSiteHead ev) (-1)
+lower (EFieldAccess e f ev) =
+  CFieldAccess (lower e) f (evSiteHeadIn (factsNow ()).pfEvidence ev) (-1)
 lower (ERecordCreate name fields) = CRecord name (map lowerField fields)
 lower (ERecordUpdate base fields ev) =
-  CRecordUpdate (evSiteHead ev) (lower base) (map lowerField fields)
+  CRecordUpdate
+    (evSiteHeadIn (factsNow ()).pfEvidence ev)
+    (lower base)
+    (map lowerField fields)
 lower (EVariantUpdate con base fields) =
   CVariantUpdate con (lower base) (map lowerField fields)
 lower (EBlock stmts) = CBlock (lowerStmts stmts)
@@ -212,8 +221,10 @@ lower (EHeadAnnot e _) = lower e
 -- IR experiment; drop them, the core_ir fixtures carry no requires-impls)
 -- #2705: the occurrence's answer is read from the published evidence table, the
 -- same seam `EDictAt` crosses on the next line.
-lower (EMethodAt name _ ev) = cmethodOf name (evMethodRoutes ev)
-lower (EDictAt name ev) = CDict name (evDictRoutes ev)
+lower (EMethodAt name _ ev) =
+  cmethodOf name (evMethodRoutesIn (factsNow ()).pfEvidence ev)
+lower (EDictAt name ev) =
+  CDict name (evDictRoutesIn (factsNow ()).pfEvidence ev)
 -- A located `match` keeps its keyword's span as the trap site of the decision
 -- it lowers to, the span the interpreter reports (`eval`'s `ELoc l (EMatch …)`
 -- arm); a refutable `let` takes its own site field (the `ELet` arm above).
@@ -771,26 +782,40 @@ lowerStmt _ = panic "core_ir lower: unsupported block statement"
 -- driver that typechecks lowers through `lowerTypedProgram`.
 export
 lowerProgram : List Decl -> CProgram
-lowerProgram prog =
+lowerProgram prog = lowerProgramWithFacts (factsInstalled ()) prog
+
+-- `lowerProgram` reading evidence and binder rows from [facts].  Its dispositions
+-- are ignored, as `lowerProgram` lowers without them.
+export
+lowerProgramWithFacts : ProgramFacts -> List Decl -> CProgram
+lowerProgramWithFacts facts prog = withFacts facts (_ =>
   finishLowering
     UntypedLowering
-    (refoldProgram noLetCheck (lowerProgramWith None [] prog))
+    facts.pfBinders
+    (refoldProgram noLetCheck (lowerProgramWith None [] prog)))
 
 -- Lowering after an elaboration, against the table it published.  Refuses (panics)
 -- when none was published instead of silently lowering every inherited default away.
 export
 lowerTypedProgram : List Decl -> CProgram
-lowerTypedProgram prog =
-  finishLowering
-    TypedLowering
-    (refoldProgram
-      noLetCheck
-      (lowerProgramWith (Some (installedDispositions ())) [] prog))
+lowerTypedProgram prog = lowerTypedProgramWith (factsInstalled ()) prog
+
+export
+lowerTypedProgramWith : ProgramFacts -> List Decl -> CProgram
+lowerTypedProgramWith facts prog =
+  let dispositions = match facts.pfDispositions
+    Some table => table
+    None => panic "disposition table: no elaboration has published one"
+  withFacts facts (_ =>
+    finishLowering
+      TypedLowering
+      facts.pfBinders
+      (refoldProgram noLetCheck (lowerProgramWith (Some dispositions) [] prog)))
 
 -- [dispositions] is the typechecker's table for [prog] (`None` for an untyped
 -- probe; see `lowerProgram`).  Refutable lets are still one-arm decisions here
 -- (`letDecision`); each public lowering decides which of them to keep, and ends
--- with `finishLowering`.
+-- with `finishLowering`.  It reads the facts of the bracket its caller opened.
 lowerProgramWith : Option DispositionTable ->
   List (String, String, String) ->
   List Decl ->
@@ -1021,41 +1046,56 @@ export
 lowerProgramEmit : List Decl -> CProgram
 lowerProgramEmit prog = lowerProgramEmitPinned [] prog
 
+export
+lowerProgramEmitWith : ProgramFacts -> List Decl -> CProgram
+lowerProgramEmitWith facts prog = lowerProgramEmitPinnedWith facts [] prog
+
 -- `lowerProgramEmit` against a prelude object already compiled: [pins] are that
 -- object's (method, key, symTag) impl rows (see `stampImplSymbols`).
 export
 lowerProgramEmitPinned : List (String, String, String) -> List Decl -> CProgram
 lowerProgramEmitPinned pins prog =
-  let sited = siteTrapCalls prog
-  let dispositions = installedDispositionsOpt ()
-  let raw =
-    withDeclFacts
-      (emitDeclFacts dispositions sited)
-      (lowerProgramWith dispositions pins sited)
-  let fo = declaredRecordFieldOrders prog
-  -- An emitting lowering is untyped exactly when no elaboration published the
-  -- disposition table it lowered against (`lowerProgramWith`).
-  let lowering = match dispositions
-    Some _ => TypedLowering
-    None => UntypedLowering
-  -- the let decisions are refolded after the record-pattern rewrite, which
-  -- resolves the record patterns `patCanMiss` reads
-  let rewritten = rewriteProgramRecPats fo raw
-  finishLowering
-    lowering
-    (hoistNullaryMemo
-      (refoldProgram
-        (patCanMiss (siblingTable (cprogramCtorTypes raw)))
-        rewritten))
+  lowerProgramEmitPinnedWith (factsInstalled ()) pins prog
+
+export
+lowerProgramEmitPinnedWith : ProgramFacts ->
+  List (String, String, String) ->
+  List Decl ->
+  CProgram
+lowerProgramEmitPinnedWith facts pins prog = withFacts
+  facts
+  (_ =>
+    let sited = siteTrapCalls prog
+    let dispositions = facts.pfDispositions
+    let raw =
+      withDeclFacts
+        (emitDeclFacts facts sited)
+        (lowerProgramWith dispositions pins sited)
+    let fo = declaredRecordFieldOrders prog
+    -- An emitting lowering is untyped exactly when no elaboration published the
+    -- disposition table it lowered against (`lowerProgramWith`).
+    let lowering = match dispositions
+      Some _ => TypedLowering
+      None => UntypedLowering
+    -- the let decisions are refolded after the record-pattern rewrite, which
+    -- resolves the record patterns `patCanMiss` reads
+    let rewritten = rewriteProgramRecPats fo raw
+    finishLowering
+      lowering
+      facts.pfBinders
+      (hoistNullaryMemo
+        (refoldProgram
+          (patCanMiss (siblingTable (cprogramCtorTypes raw)))
+          rewritten)))
 
 -- The declaration facts an emitting lowering publishes (see `DeclFacts`): every
 -- instance's `requires` count, and the super count of each of their interfaces.
 -- Without a published table an interface has no supers, as the emitters lay a
 -- dictionary out (`llvm_emit.entrySuperCount`).
-emitDeclFacts : Option DispositionTable -> List Decl -> DeclFacts
-emitDeclFacts dispositions decls =
+emitDeclFacts : ProgramFacts -> List Decl -> DeclFacts
+emitDeclFacts facts decls =
   let reqs = instanceReqCounts decls
-  let table = optionOr emptyDispositionTable dispositions
+  let table = optionOr emptyDispositionTable facts.pfDispositions
   let words = omKeys (omFromNames (map ifaceWordOfKey (omKeys reqs)) omEmpty)
   DeclFacts {
     factRequires = map (k => (k, optionOr 0 (omLookup k reqs))) (omKeys reqs),
@@ -1069,8 +1109,8 @@ withDeclFacts facts (CProgram groups ctorArs ctorTypes impls mctx _) =
 
 -- ── binder stamps: every binder says what it holds ───────────────────────────
 -- Run last, so no later pass can mint a binder it has not stamped.  A binder that
--- carries a source id is stamped from the typechecker's published table.  In a
--- typed lowering a row the table lacks stays absent, which
+-- carries a source id is stamped from the binder table the lowering's facts carry
+-- (`pfBinders`).  In a typed lowering a row the table lacks stays absent, which
 -- `core_validate.validateBinderStamps` refuses; an untyped lowering has no table
 -- to read, so its source binders are stamped `RTValue`, the answer "no static
 -- fact", and a backend takes its generic path for them.  A binder with no id is
@@ -1080,31 +1120,37 @@ withDeclFacts facts (CProgram groups ctorArs ctorTypes impls mctx _) =
 -- `RTValue`.  The rows are snapshotted into the program's `DeclFacts`, so a
 -- consumer never reads the typechecker's table, which the next elaboration
 -- replaces.
-stampBinders : Lowering -> CProgram -> CProgram
-stampBinders lowering prog =
+stampBinders : Lowering -> Option BinderTypeTable -> CProgram -> CProgram
+stampBinders lowering table prog =
   let rows = Ref BM.Tip
-  let stamped = mapProgramBinders (stampVisit lowering rows) prog
+  let stamped = mapProgramBinders (stampVisit lowering table rows) prog
   withBinderRows (BM.values !rows) stamped
 
 -- [prog] with every binder stamped as an untyped lowering stamps it, for a driver
 -- that builds Core by hand.
 export
 stampUntypedBinders : CProgram -> CProgram
-stampUntypedBinders prog = stampBinders UntypedLowering prog
+stampUntypedBinders prog = stampUntypedBindersWith (factsInstalled ()) prog
+
+export
+stampUntypedBindersWith : ProgramFacts -> CProgram -> CProgram
+stampUntypedBindersWith facts prog =
+  stampBinders UntypedLowering facts.pfBinders prog
 
 -- Whether the program being lowered was elaborated, so that its source binders
 -- have rows in the typechecker's table.
 data Lowering = TypedLowering | UntypedLowering
 
 stampVisit : Lowering ->
+  Option BinderTypeTable ->
   Ref (BM.Map Int BinderRow) ->
   BinderSite ->
   String ->
   BinderId ->
   BinderId
-stampVisit lowering rows site x (bid@(BinderId _ n)) =
+stampVisit lowering table rows site x (bid@(BinderId _ n)) =
   if n >= 0 then
-    match binderRowIfInstalled bid
+    match binderRowIn table bid
       Some row => rows := BM.set n row !rows
       None => match lowering
         TypedLowering => ()
@@ -1166,10 +1212,11 @@ cprogramCtorTypes (CProgram _ _ ctorTypes _ _ _) = ctorTypes
 -- clauses the eta pass produced.  `core_validate.validateCalls` reads the same
 -- `definedArityOf`, so the stamp and the check cannot disagree about a table.
 
-finishLowering : Lowering -> CProgram -> CProgram
-finishLowering lowering prog =
+finishLowering : Lowering -> Option BinderTypeTable -> CProgram -> CProgram
+finishLowering lowering table prog =
   stampBinders
     lowering
+    table
     (markTailSites (stampCallModes (etaSaturateProgram prog)))
 
 -- A program's defined arities: each top-level binding's clause pattern count,
@@ -1906,9 +1953,11 @@ attribTargetName _ = []
 
 indexTwinOf : OrdMap String -> Expr -> Option String
 indexTwinOf twins (ELoc _ h) = indexTwinOf twins h
-indexTwinOf twins (EMethodAt "index" _ ev) = match evMethodRoutes ev
-  (_, _, RKey key _ _, _, _) => omLookup key twins
-  _ => None
+indexTwinOf twins (EMethodAt "index" _ ev) =
+  let evidence = (factsNow ()).pfEvidence
+  match evMethodRoutesIn evidence ev
+    (_, _, RKey key _ _, _, _) => omLookup key twins
+    _ => None
 indexTwinOf _ _ = None
 
 -- Every name a pattern or a local function binds in [d], its own parameters
@@ -2691,7 +2740,12 @@ cInitialRows ((CArm pat _ _) :: rest) i =
 -- (per-module local frames) rather than as one flat program.
 export
 lowerGroups : List Decl -> List CBind
-lowerGroups prog = map (refoldBind noLetCheck) (lowerGroupsRaw prog)
+lowerGroups prog = lowerGroupsWith (factsInstalled ()) prog
+
+export
+lowerGroupsWith : ProgramFacts -> List Decl -> List CBind
+lowerGroupsWith facts prog =
+  withFacts facts (_ => map (refoldBind noLetCheck) (lowerGroupsRaw prog))
 
 lowerGroupsRaw : List Decl -> List CBind
 lowerGroupsRaw prog = lgGroup (bindSites prog omEmpty) (funClausesOf prog)
@@ -2977,9 +3031,28 @@ lowerImplsWith : List ((String, String, String), List Int) ->
   List Decl ->
   List CImplEntry
 lowerImplsWith disp reqCounts arities dispositions prog =
-  map
-    (refoldImpl noLetCheck)
-    (lowerImplsRaw disp reqCounts arities dispositions prog)
+  lowerImplsWithFacts
+    (factsInstalled ())
+    disp
+    reqCounts
+    arities
+    dispositions
+    prog
+
+export
+lowerImplsWithFacts : ProgramFacts ->
+  List ((String, String, String), List Int) ->
+  OrdMap Int ->
+  OrdMap Int ->
+  Option DispositionTable ->
+  List Decl ->
+  List CImplEntry
+lowerImplsWithFacts facts disp reqCounts arities dispositions prog = withFacts
+  facts
+  (_ =>
+    map
+      (refoldImpl noLetCheck)
+      (lowerImplsRaw disp reqCounts arities dispositions prog))
 
 lowerImplsRaw : List ((String, String, String), List Int) ->
   OrdMap Int ->

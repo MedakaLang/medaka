@@ -3025,9 +3025,9 @@ public export data ChainMemo = ChainMemo {
 -- What a whole-graph drive produces, for either output selection.  `gdPerMod`,
 -- `gdCoreSchemes` and `gdCoreContexts` are filled on both; `gdCore`, `gdModules`
 -- and `gdResidual` are the tree arm's and are empty on `GOutDiags`.  `gdEvTable`
--- is the goal half of the evidence table only (the drain's per-goal entries, what
--- `ElabResult` returns); the whole table the drive installs is the report's
--- `cpEvidence`.
+-- is the whole evidence table the tree arm installs (what `ElabResult` returns, and
+-- the report's `cpEvidence`), and on `GOutDiags` the goal half only (the drain's
+-- per-goal entries).
 public export data GraphDrive = GraphDrive {
   gdPerMod : List ModDiags,
   gdCoreSchemes : List (String, PubScheme),
@@ -3042,6 +3042,7 @@ public export data GraphDrive = GraphDrive {
   -- (`declEnvsRef`) is complete by the graph preamble above, before either
   -- arm's own work begins.
   gdDispositions : DispositionTable,
+  gdBinders : BinderTypeTable,
   -- The drive's frozen outputs as one value (`types/publish.mdk`'s `TcReport`).
   gdReport : TcReport,
 }
@@ -3066,16 +3067,15 @@ public export data GraphDrive = GraphDrive {
 -- its own `Loc`, in push order.  Callers that gate on `hadTypeErrors` render it
 -- instead of a deflection; the emit driver's #2089 gate prints it.  It is the
 -- same list the sticky channel holds, cut to this call.
--- #2549 M2: the fifth component is the EVIDENCE TABLE — every goal this
--- elaboration solved, keyed by its `EvId`.  It is published as DATA because the one
--- reader that needs it, `compiler/eval/eval.mdk`, cannot import a typechecker-private
--- cell.  Nothing consumes it yet: the routes it carries are the same routes already
--- stamped into the trees' own cells, so a caller that ignores it loses nothing.
+-- #2549 M2: the fifth component is the EVIDENCE TABLE — the whole table this
+-- elaboration installed, keyed by `EvId`: every goal it solved, every method
+-- occurrence and every minted site.  It is the table before `mangleUnitsEv`
+-- renames the trees, so a caller that lowers mangled trees lowers against the
+-- table that call returns.
 -- #1112 A-3: the sixth component is the whole-graph per-method DISPOSITION
--- TABLE (`compiler/types/disposition.mdk`) — same rationale as the evidence
--- table: the reader this exists for (X-E, #1403) is not yet written, so a
--- caller that ignores it loses nothing today.
-export type ElabResult = (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable, DispositionTable)
+-- TABLE (`compiler/types/disposition.mdk`).  The seventh is the BINDER-TYPE
+-- table the elaboration installed.  `program_facts.factsOfElab` reads all three.
+export type ElabResult = (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), EvTable, DispositionTable, BinderTypeTable)
 
 -- E4/E6: prePass a module rewriting ARG-position method occurrences to EMethodAt
 -- (argNames) AND `=>`-constrained-fn occurrences to EDictAt (dictNames); both
@@ -3463,8 +3463,8 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "GraphOut" () ((variant "GOutDiags" (ConPos)) (variant "GOutTrees" (ConPos))) ())
 (DData Public "ChainStep" () ((variant "ChainStep" (ConNamed (field "csKey" (TyCon "String")) (field "csDepEnv" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding")))))) (field "csAccData" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csAccAll" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csResults" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "csCrossRun" (TyCon "CrossRun")) (field "csGraphRun" (TyCon "GraphRun")) (field "csDriver" (TyCon "DriverState"))))) ())
 (DData Public "ChainMemo" () ((variant "ChainMemo" (ConNamed (field "chKey" (TyCon "String")) (field "chSteps" (TyApp (TyCon "List") (TyCon "ChainStep"))) (field "chReplayed" (TyCon "Int"))))) ())
-(DData Public "GraphDrive" () ((variant "GraphDrive" (ConNamed (field "gdPerMod" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "gdCoreSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "gdCoreContexts" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl")))) (field "gdCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "gdModules" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "gdResidual" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "gdEvTable" (TyCon "EvTable")) (field "gdDispositions" (TyCon "DispositionTable")) (field "gdReport" (TyCon "TcReport"))))) ())
-(DTypeAlias true "ElabResult" () (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyCon "EvTable") (TyCon "DispositionTable")))
+(DData Public "GraphDrive" () ((variant "GraphDrive" (ConNamed (field "gdPerMod" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "gdCoreSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "gdCoreContexts" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl")))) (field "gdCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "gdModules" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "gdResidual" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "gdEvTable" (TyCon "EvTable")) (field "gdDispositions" (TyCon "DispositionTable")) (field "gdBinders" (TyCon "BinderTypeTable")) (field "gdReport" (TyCon "TcReport"))))) ())
+(DTypeAlias true "ElabResult" () (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyCon "EvTable") (TyCon "DispositionTable") (TyCon "BinderTypeTable")))
 (DData Public "MarkCtx" () ((variant "MarkCtx" (ConNamed (field "mcRp" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mcAn" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mcSm" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))) ())
 (DData Public "SpellCtx" () ((variant "SpellCtx" (ConNamed (field "scTopFns" (TyApp (TyCon "List") (TyCon "String"))) (field "scBare" (TyCon "BareLocals")) (field "scCorePfx" (TyCon "String"))))) ())
 (DData Public "BareLocals" () ((variant "BareLocals" (ConNamed (field "blAll" (TyCon "Bool")) (field "blSet" (TyApp (TyCon "List") (TyCon "String")))))) ())
@@ -3652,8 +3652,8 @@ public export data ModuleMarking = ModuleMarking {
 (DData Public "GraphOut" () ((variant "GOutDiags" (ConPos)) (variant "GOutTrees" (ConPos))) ())
 (DData Public "ChainStep" () ((variant "ChainStep" (ConNamed (field "csKey" (TyCon "String")) (field "csDepEnv" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "ExportBinding")))))) (field "csAccData" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csAccAll" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csResults" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "csCrossRun" (TyCon "CrossRun")) (field "csGraphRun" (TyCon "GraphRun")) (field "csDriver" (TyCon "DriverState"))))) ())
 (DData Public "ChainMemo" () ((variant "ChainMemo" (ConNamed (field "chKey" (TyCon "String")) (field "chSteps" (TyApp (TyCon "List") (TyCon "ChainStep"))) (field "chReplayed" (TyCon "Int"))))) ())
-(DData Public "GraphDrive" () ((variant "GraphDrive" (ConNamed (field "gdPerMod" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "gdCoreSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "gdCoreContexts" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl")))) (field "gdCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "gdModules" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "gdResidual" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "gdEvTable" (TyCon "EvTable")) (field "gdDispositions" (TyCon "DispositionTable")) (field "gdReport" (TyCon "TcReport"))))) ())
-(DTypeAlias true "ElabResult" () (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyCon "EvTable") (TyCon "DispositionTable")))
+(DData Public "GraphDrive" () ((variant "GraphDrive" (ConNamed (field "gdPerMod" (TyApp (TyCon "List") (TyCon "ModDiags"))) (field "gdCoreSchemes" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "PubScheme")))) (field "gdCoreContexts" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl")))) (field "gdCore" (TyApp (TyCon "List") (TyCon "Decl"))) (field "gdModules" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (field "gdResidual" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))) (field "gdEvTable" (TyCon "EvTable")) (field "gdDispositions" (TyCon "DispositionTable")) (field "gdBinders" (TyCon "BinderTypeTable")) (field "gdReport" (TyCon "TcReport"))))) ())
+(DTypeAlias true "ElabResult" () (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyCon "EvTable") (TyCon "DispositionTable") (TyCon "BinderTypeTable")))
 (DData Public "MarkCtx" () ((variant "MarkCtx" (ConNamed (field "mcRp" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mcAn" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "mcSm" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))) ())
 (DData Public "SpellCtx" () ((variant "SpellCtx" (ConNamed (field "scTopFns" (TyApp (TyCon "List") (TyCon "String"))) (field "scBare" (TyCon "BareLocals")) (field "scCorePfx" (TyCon "String"))))) ())
 (DData Public "BareLocals" () ((variant "BareLocals" (ConNamed (field "blAll" (TyCon "Bool")) (field "blSet" (TyApp (TyCon "List") (TyCon "String")))))) ())

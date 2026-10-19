@@ -7,8 +7,9 @@
 -- No inference and no table construction beyond `evIndexOf`: a leaf that imports
 -- representation modules only, never `types.typecheck`.
 
-import types.route_key.{EvIndex, evIndexOf}
-import types.disposition.{DispositionTable}
+import frontend.ast.{EvTable}
+import types.route_key.{EvIndex, evIndexOf, installedEvidenceIndex}
+import types.disposition.{DispositionTable, installedDispositionsOpt}
 import types.runtime_types.{BinderTypeTable, installedBinderTable}
 import types.publish.{CheckedProgram(..)}
 import types.tc_types.{ElabResult}
@@ -38,13 +39,29 @@ factsOfChecked c = ProgramFacts {
   pfBinders = Some c.cpBinders,
 }
 
--- The table `elaborateModules` returned carries goal entries only, and the binder
--- table is the installed one until the result carries its own.
+-- The facts of one elaboration, as it returned them: before `mangleUnitsEv`
+-- renames the trees, so a caller that lowers mangled trees takes
+-- `factsOfElabWith` and the table the mangle returned.
 export
 factsOfElab : ElabResult -> ProgramFacts
-factsOfElab (_, _, _, _, table, dispositions) = ProgramFacts {
+factsOfElab (elab@(_, _, _, _, table, _, _)) = factsOfElabWith table elab
+
+-- [elab]'s facts with [table] as its evidence.
+export
+factsOfElabWith : EvTable -> ElabResult -> ProgramFacts
+factsOfElabWith table (_, _, _, _, _, dispositions, binders) = ProgramFacts {
   pfEvidence = evIndexOf table,
   pfDispositions = Some dispositions,
+  pfBinders = Some binders,
+}
+
+-- The three installed tables as one value, for a lowering entry that still reads
+-- them; each table is absent as its installed cell is.
+export
+factsInstalled : Unit -> ProgramFacts
+factsInstalled _ = ProgramFacts {
+  pfEvidence = installedEvidenceIndex (),
+  pfDispositions = installedDispositionsOpt (),
   pfBinders = installedBinderTable (),
 }
 

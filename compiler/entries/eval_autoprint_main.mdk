@@ -30,7 +30,7 @@ oracleMain () = driveModules runElab
 -- `Async` main takes the scheduler driver, #2506) and force them.
 runElab : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runElab runtimeDecls coreDecls modules =
-  let ((coreE, modulesE, _, _, _, _), report) =
+  let ((coreE, modulesE, _, _, _, _, _), report) =
     elaborateModulesWithReport
       (valueMainCandidate coreDecls modules)
       (Some "runAsyncMain")

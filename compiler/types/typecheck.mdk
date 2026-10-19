@@ -719,6 +719,7 @@ import types.runtime_types.{
   RuntimeType(..),
   runtimeTypeOf,
 }
+import types.program_facts.{ProgramFacts, factsOfElab}
 
 -- A head the LANGUAGE provides, written here as a string literal.  §8 I6.2(a):
 -- ONE program-global identity, NOT the identity of whichever module wrote it,
@@ -26092,10 +26093,20 @@ clauseIsValue _ (FunClause _ _) = True
 -- same value.  Read its header before changing either arm.
 export
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
-elaborateOne runtimeDecls coreDecls (rootId, prog) =
-  let (coreD, modules, _, _, _, _) =
-    elaborateModules runtimeDecls coreDecls [(rootId, prog)]
-  coreD ++ flatMap snd modules
+elaborateOne runtimeDecls coreDecls prog =
+  fst (elaborateOneFacts runtimeDecls coreDecls prog)
+
+-- `elaborateOne` with the facts its elaboration installed, for a caller that lowers
+-- the flat decls.
+export
+elaborateOneFacts : List Decl ->
+  List Decl ->
+  (String, List Decl) ->
+  (List Decl, ProgramFacts)
+elaborateOneFacts runtimeDecls coreDecls (rootId, prog) =
+  let elab = elaborateModules runtimeDecls coreDecls [(rootId, prog)]
+  let (coreD, modules, _, _, _, _, _) = elab
+  (coreD ++ flatMap snd modules, factsOfElab elab)
 
 -- #415 item 3: the ONLY writer of dictEligibleRef / dictEligibleSetRef.  The set is
 -- DERIVED from the list here rather than mirrored at each set site, so the two cannot
@@ -51787,6 +51798,7 @@ driveGraphK sel valueMain executes preludeKey runtimeDecls coreDecls0 modulesIn 
       gdResidual = [],
       gdEvTable = graphRun.value.evTable.value,
       gdDispositions = dispositions,
+      gdBinders = graphRun.value.binderRows.value,
       gdReport =
         graphReport
           perMod
@@ -51821,6 +51833,8 @@ driveGraphK sel valueMain executes preludeKey runtimeDecls coreDecls0 modulesIn 
       -- alias-qualified spelling to restore.
       let modulesOut = map resolveAliasMethodSpellings modules3
       let residual = stickyTypeErrorDiagsSince stickyBefore
+      -- read after the last `publishEvidence`, so the table is the installed one
+      let evidence = drivenEvidence ()
       GraphDrive {
         gdPerMod = perMod,
         gdCoreSchemes = corePub,
@@ -51828,10 +51842,10 @@ driveGraphK sel valueMain executes preludeKey runtimeDecls coreDecls0 modulesIn 
         gdCore = coreD,
         gdModules = modulesOut,
         gdResidual = residual,
-        gdEvTable = graphRun.value.evTable.value,
+        gdEvTable = evidence,
         gdDispositions = dispositions,
-        -- read after the last `publishEvidence`, so the table is the installed one
-        gdReport = { graphReport perMod corePub residual drivenEvidence dispositions graphRun.value.binderRows.value (Some (coreD, modulesOut)) entryTables |
+        gdBinders = graphRun.value.binderRows.value,
+        gdReport = { graphReport perMod corePub residual (_ => evidence) dispositions graphRun.value.binderRows.value (Some (coreD, modulesOut)) entryTables |
           trAutoPrint = autoPrint,
         },
       }
@@ -52509,6 +52523,7 @@ elaborateModulesWithReport valueMain executes runtimeDecls coreDecls0 modulesIn 
       g.gdResidual,
       g.gdEvTable,
       g.gdDispositions,
+      g.gdBinders,
     ),
     g.gdReport,
   )

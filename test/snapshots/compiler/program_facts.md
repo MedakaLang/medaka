@@ -1,5 +1,5 @@
 # META
-source_lines=71
+source_lines=88
 stages=DESUGAR,MARK
 # SOURCE
 -- The facts a typechecked program carries to the stages that read it: the
@@ -11,8 +11,9 @@ stages=DESUGAR,MARK
 -- No inference and no table construction beyond `evIndexOf`: a leaf that imports
 -- representation modules only, never `types.typecheck`.
 
-import types.route_key.{EvIndex, evIndexOf}
-import types.disposition.{DispositionTable}
+import frontend.ast.{EvTable}
+import types.route_key.{EvIndex, evIndexOf, installedEvidenceIndex}
+import types.disposition.{DispositionTable, installedDispositionsOpt}
 import types.runtime_types.{BinderTypeTable, installedBinderTable}
 import types.publish.{CheckedProgram(..)}
 import types.tc_types.{ElabResult}
@@ -42,13 +43,29 @@ factsOfChecked c = ProgramFacts {
   pfBinders = Some c.cpBinders,
 }
 
--- The table `elaborateModules` returned carries goal entries only, and the binder
--- table is the installed one until the result carries its own.
+-- The facts of one elaboration, as it returned them: before `mangleUnitsEv`
+-- renames the trees, so a caller that lowers mangled trees takes
+-- `factsOfElabWith` and the table the mangle returned.
 export
 factsOfElab : ElabResult -> ProgramFacts
-factsOfElab (_, _, _, _, table, dispositions) = ProgramFacts {
+factsOfElab (elab@(_, _, _, _, table, _, _)) = factsOfElabWith table elab
+
+-- [elab]'s facts with [table] as its evidence.
+export
+factsOfElabWith : EvTable -> ElabResult -> ProgramFacts
+factsOfElabWith table (_, _, _, _, _, dispositions, binders) = ProgramFacts {
   pfEvidence = evIndexOf table,
   pfDispositions = Some dispositions,
+  pfBinders = Some binders,
+}
+
+-- The three installed tables as one value, for a lowering entry that still reads
+-- them; each table is absent as its installed cell is.
+export
+factsInstalled : Unit -> ProgramFacts
+factsInstalled _ = ProgramFacts {
+  pfEvidence = installedEvidenceIndex (),
+  pfDispositions = installedDispositionsOpt (),
   pfBinders = installedBinderTable (),
 }
 
@@ -74,8 +91,9 @@ factsNow _ = match !currentFacts
   Some facts => facts
   None => panic "program facts: read outside any withFacts bracket"
 # DESUGAR
-(DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" false) (mem "evIndexOf" false))))
-(DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "EvTable" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" false) (mem "evIndexOf" false) (mem "installedEvidenceIndex" false))))
+(DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderTypeTable" false) (mem "installedBinderTable" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "CheckedProgram" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "ElabResult" false))))
@@ -85,7 +103,11 @@ factsNow _ = match !currentFacts
 (DTypeSig true "factsOfChecked" (TyFun (TyCon "CheckedProgram") (TyCon "ProgramFacts")))
 (DFunDef false "factsOfChecked" ((PVar "c")) (ERecordCreate "ProgramFacts" ((fa "pfEvidence" (EApp (EVar "evIndexOf") (EFieldAccess (EVar "c") "cpEvidence"))) (fa "pfDispositions" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpDispositions"))) (fa "pfBinders" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpBinders"))))))
 (DTypeSig true "factsOfElab" (TyFun (TyCon "ElabResult") (TyCon "ProgramFacts")))
-(DFunDef false "factsOfElab" ((PTuple PWild PWild PWild PWild (PVar "table") (PVar "dispositions"))) (ERecordCreate "ProgramFacts" ((fa "pfEvidence" (EApp (EVar "evIndexOf") (EVar "table"))) (fa "pfDispositions" (EApp (EVar "Some") (EVar "dispositions"))) (fa "pfBinders" (EApp (EVar "installedBinderTable") (ELit LUnit))))))
+(DFunDef false "factsOfElab" ((PAs "elab" (PTuple PWild PWild PWild PWild (PVar "table") PWild PWild))) (EApp (EApp (EVar "factsOfElabWith") (EVar "table")) (EVar "elab")))
+(DTypeSig true "factsOfElabWith" (TyFun (TyCon "EvTable") (TyFun (TyCon "ElabResult") (TyCon "ProgramFacts"))))
+(DFunDef false "factsOfElabWith" ((PVar "table") (PTuple PWild PWild PWild PWild PWild (PVar "dispositions") (PVar "binders"))) (ERecordCreate "ProgramFacts" ((fa "pfEvidence" (EApp (EVar "evIndexOf") (EVar "table"))) (fa "pfDispositions" (EApp (EVar "Some") (EVar "dispositions"))) (fa "pfBinders" (EApp (EVar "Some") (EVar "binders"))))))
+(DTypeSig true "factsInstalled" (TyFun (TyCon "Unit") (TyCon "ProgramFacts")))
+(DFunDef false "factsInstalled" (PWild) (ERecordCreate "ProgramFacts" ((fa "pfEvidence" (EApp (EVar "installedEvidenceIndex") (ELit LUnit))) (fa "pfDispositions" (EApp (EVar "installedDispositionsOpt") (ELit LUnit))) (fa "pfBinders" (EApp (EVar "installedBinderTable") (ELit LUnit))))))
 (DTypeSig false "currentFacts" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "ProgramFacts"))))
 (DFunDef false "currentFacts" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "withFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyVar "a"))) (TyEffect () (Some "e") (TyVar "a")))))
@@ -93,8 +115,9 @@ factsNow _ = match !currentFacts
 (DTypeSig true "factsNow" (TyFun (TyCon "Unit") (TyCon "ProgramFacts")))
 (DFunDef false "factsNow" (PWild) (EMatch (EUnOp "!" (EVar "currentFacts")) (arm (PCon "Some" (PVar "facts")) () (EVar "facts")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "program facts: read outside any withFacts bracket"))))))
 # MARK
-(DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" false) (mem "evIndexOf" false))))
-(DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "EvTable" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "EvIndex" false) (mem "evIndexOf" false) (mem "installedEvidenceIndex" false))))
+(DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderTypeTable" false) (mem "installedBinderTable" false))))
 (DUse false (UseGroup ("types" "publish") ((mem "CheckedProgram" true))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "ElabResult" false))))
@@ -104,7 +127,11 @@ factsNow _ = match !currentFacts
 (DTypeSig true "factsOfChecked" (TyFun (TyCon "CheckedProgram") (TyCon "ProgramFacts")))
 (DFunDef false "factsOfChecked" ((PVar "c")) (ERecordCreate "ProgramFacts" ((fa "pfEvidence" (EApp (EVar "evIndexOf") (EFieldAccess (EVar "c") "cpEvidence"))) (fa "pfDispositions" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpDispositions"))) (fa "pfBinders" (EApp (EVar "Some") (EFieldAccess (EVar "c") "cpBinders"))))))
 (DTypeSig true "factsOfElab" (TyFun (TyCon "ElabResult") (TyCon "ProgramFacts")))
-(DFunDef false "factsOfElab" ((PTuple PWild PWild PWild PWild (PVar "table") (PVar "dispositions"))) (ERecordCreate "ProgramFacts" ((fa "pfEvidence" (EApp (EVar "evIndexOf") (EVar "table"))) (fa "pfDispositions" (EApp (EVar "Some") (EVar "dispositions"))) (fa "pfBinders" (EApp (EVar "installedBinderTable") (ELit LUnit))))))
+(DFunDef false "factsOfElab" ((PAs "elab" (PTuple PWild PWild PWild PWild (PVar "table") PWild PWild))) (EApp (EApp (EVar "factsOfElabWith") (EVar "table")) (EVar "elab")))
+(DTypeSig true "factsOfElabWith" (TyFun (TyCon "EvTable") (TyFun (TyCon "ElabResult") (TyCon "ProgramFacts"))))
+(DFunDef false "factsOfElabWith" ((PVar "table") (PTuple PWild PWild PWild PWild PWild (PVar "dispositions") (PVar "binders"))) (ERecordCreate "ProgramFacts" ((fa "pfEvidence" (EApp (EVar "evIndexOf") (EVar "table"))) (fa "pfDispositions" (EApp (EVar "Some") (EVar "dispositions"))) (fa "pfBinders" (EApp (EVar "Some") (EVar "binders"))))))
+(DTypeSig true "factsInstalled" (TyFun (TyCon "Unit") (TyCon "ProgramFacts")))
+(DFunDef false "factsInstalled" (PWild) (ERecordCreate "ProgramFacts" ((fa "pfEvidence" (EApp (EVar "installedEvidenceIndex") (ELit LUnit))) (fa "pfDispositions" (EApp (EVar "installedDispositionsOpt") (ELit LUnit))) (fa "pfBinders" (EApp (EVar "installedBinderTable") (ELit LUnit))))))
 (DTypeSig false "currentFacts" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "ProgramFacts"))))
 (DFunDef false "currentFacts" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "withFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyVar "a"))) (TyEffect () (Some "e") (TyVar "a")))))

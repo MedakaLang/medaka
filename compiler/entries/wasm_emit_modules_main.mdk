@@ -40,7 +40,7 @@ import types.typecheck.{
 }
 import ir.core_ir_lower.{
   declaredRecordFieldOrders,
-  lowerProgramEmit,
+  lowerProgramEmitWith,
   methodIfaceTable,
   ctorFieldTypeNames,
   validateFfiExternTypeNames,
@@ -59,6 +59,7 @@ import entries.entry_support.{
   stampSiteFiles,
 }
 import support.timer.{statsEnabled, emitStats}
+import types.program_facts.{ProgramFacts}
 
 main : <IO> Unit
 -- WasmGC has no clock host-imports yet (`sleepMs`/`monotonicSec` are WASM-GAP
@@ -77,11 +78,12 @@ main = driveEmitLocated emitTail
 
 -- Build the explicit WasmGC input and emit an already-elaborated program.
 emitTail : List (String, String, List Decl) ->
+  ProgramFacts ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   <IO> Unit
-emitTail mods runtimeDecls coreD modules1 =
+emitTail mods facts runtimeDecls coreD modules1 =
   let wrapped = mainIsWrapped modules1
   let modules2 = stampSiteFiles mods modules1
   let allDecls0 = coreD ++ flatMap snd modules2
@@ -102,7 +104,7 @@ emitTail mods runtimeDecls coreD modules1 =
         (mainTypeIsUnit () || wrapped)
         (declaredRecordFieldOrders allDecls)
         ffiRows)
-  let lowered = lowerProgramEmit allDecls
+  let lowered = lowerProgramEmitWith facts allDecls
   let (plan, reached) = buildEmitPlanReached ffiRows lowered
   -- MEDAKA_STATS reporting hook: the counts come from the plan, so the ratio is the
   -- reach filter's own notion of reachable.  Off by default, so ordinary emission

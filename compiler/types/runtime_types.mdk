@@ -182,9 +182,13 @@ binderRow (BinderId m i) = match !binderTypesRef
 -- lowering): no table answers `None` instead of panicking.
 export
 binderRowIfInstalled : BinderId -> Option BinderRow
-binderRowIfInstalled (BinderId m i) = match !binderTypesRef
-  None => None
-  Some table => rowIn table m i
+binderRowIfInstalled bid = binderRowIn !binderTypesRef bid
+
+-- The row [table] holds for [bid]; no table answers `None`.
+export
+binderRowIn : Option BinderTypeTable -> BinderId -> Option BinderRow
+binderRowIn None _ = None
+binderRowIn (Some table) (BinderId m i) = rowIn table m i
 
 rowIn : BinderTypeTable -> String -> Int -> Option BinderRow
 rowIn table m i = match get i table
