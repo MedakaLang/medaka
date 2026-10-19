@@ -45,19 +45,26 @@ scoped.
 - Check it against its class's row in `docs/design/STYLE-RUBRIC.md`, exceptions
   included, before acting. A finding that matches an exception is wrong.
 - Check the DECLINED register in `.claude/skills/style-review/SKILL.md`.
-- The operating point is recall 0.76 and false-positive rate 0.08 on the
-  labelled classes. About one in three findings on other classes is wrong
-  (`scripts/review_bench/RESULTS-confirm-2026-10-18.md`).
+- Over real commits on the test split, the reviewer finds 0.68 of labelled
+  defects (113/166) and flags 0.16 of clean controls (12/77). About 7 findings
+  land per 100 changed lines outside the labels. An Opus audit judged 0.79 of
+  those real (30/38); most wrong ones misapply the class's own rule, and
+  `dup.in-diff` is the weakest
+  (`scripts/review_bench/RESULTS-diffs-test-2026-10-18.md`).
 - A finding marked "from an evidence block" is argued from other code. Read
   that code before believing it.
 
 ## Cost
 
-$0.0052 per unit measured (`RESULTS-confirm-2026-10-18.md`). A unit is one
-touched declaration, or adjacent touched ones up to 40 lines. A 16-file
-compiler commit cut into 54 units and cost about $0.24; a 2-file stdlib commit
-into 15 units, $0.07. `--max-usd` (default 1.00) stops asking and reports how
-many units went unreviewed. Run `--dry-run` first on a sprint diff.
+About $0.006 per unit, or $0.04 per 100 changed lines, measured over real
+commits (`RESULTS-diffs-test-2026-10-18.md`). A unit is one
+touched declaration, or adjacent touched ones up to 40 lines (cutting one
+declaration per unit was measured: no better, half again the noise and cost).
+A 16-file compiler commit cut into 54 units and cost about $0.24; a 2-file
+stdlib commit into 15 units, $0.07. At `--jobs 4` a unit takes about 11
+seconds, so a sprint-sized diff of about 70 units takes about 15 minutes.
+`--max-usd` (default 1.00) stops asking and reports how many units went
+unreviewed. Run `--dry-run` first on a sprint diff.
 
 ## Never a gate
 
