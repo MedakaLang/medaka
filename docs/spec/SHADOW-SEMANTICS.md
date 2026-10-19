@@ -2317,8 +2317,8 @@ same "which stage owns S4/S6" decision.
 > (the flat-path scoping refs this paragraph names were retired with the flat check
 > mode). Every consumer of that ref — `definerShadowVarHead`,
 > `definerShadowArgHead`, `maybeStandaloneValueMono`, `recordImplObligation`'s skip arm,
-> `resolveRLocalSite` — becomes per-module for free. All three refs are cleared by
-> `resetState` and set ONLY by a `checkProgramSeededSplit` with a non-empty prelude, so the
+> `resolveRLocalSite` — becomes per-module for free. All three refs were cleared per
+> module and set ONLY by a `checkProgramSeededSplit` with a non-empty prelude, so the
 > multi-module path and every prelude-free probe path are byte-identical.
 >
 > The `=>`-constrained-receiver carve-out (`definerReceiverIsDictVar`) is UNCHANGED and

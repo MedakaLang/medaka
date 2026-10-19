@@ -1051,7 +1051,7 @@ dispKeyRender base rigids =
 --   * NO `mregDelete` — no target table removes a value from a multi-bucket
 --     (`ImplUniverse`'s buckets, `ifaceDispatchRef` and `methodReqCountRef` are
 --     grow-only within a run; the first is rebuilt per read/build rather than
---     reset, the other two cleared wholesale by `resetState`).
+--     reset, the other two cleared wholesale by the module mint, `freshModuleCtx`).
 
 -- ── Doctest fixtures ───────────────────────────────────────────────────────
 -- These `Ident`s exist only to give the doctests below short, readable

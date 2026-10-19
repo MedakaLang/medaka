@@ -32,7 +32,7 @@ which carry line numbers as of 2026-07-13.)
 - **Level bracketing must be exception-safe.** Generalization uses Rémy levels:
   hand-balanced `enterLevel ()` (`typecheck.mdk:854`) / `exitLevel ()` (`:857`)
   pairs around `currentLevel` (`:745`). A non-local exit *between* them permanently
-  increments the level. The whole-program entry points call `resetState` (`:2189`)
+  increments the level. Each module check mints a fresh `ModuleCtx` (`freshModuleCtx`)
   on entry, so a leak is wiped before the next run; and within a single run the
   leak is *relative* — `processSCC` (`:10799`) brackets against whatever base it
   starts at and generalizes against that same base, so a uniform leak does not by
@@ -132,7 +132,7 @@ the name, not the number.
 
 | Area | Real names |
 |---|---|
-| Unification / generalization | `unify` (:2305), `normalize` (:2261), `generalize` (:2398), `instantiate` (:2518), `freshVar` (:754), `enterLevel`/`exitLevel` (:854/:857), `currentLevel` (:745), `resetState` (:2189) |
+| Unification / generalization | `unify` (:2305), `normalize` (:2261), `generalize` (:2398), `instantiate` (:2518), `freshVar` (:754), `enterLevel`/`exitLevel` (:854/:857), `currentLevel` (:745), `freshModuleCtx` |
 | Value restriction | `isNonexpansive` (:2424), `genBindingRestricted` (:2494), `lowerToCurrent` (:2470), `occursAdjust` (:2277) |
 | Errors / rendering | `pushTypeError` (:1991), `pushTypeErrorOnce` (:2005), `pushTypeErrorOnceAt` (:2018), `pushTypeErrorHelpFixAt` (:2055), `currentLoc` (:2075), `ppMono` (:2603), `ppScheme` (:2565), `ppMonosShared` (:10147) |
 | Group inference (letrec/SCC) | `processSCCs` (:10751) → `processSCC` (:10799) → `sccSchemes` (:11089), `isLetrecGroup` (:10867) |
