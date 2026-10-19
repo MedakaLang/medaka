@@ -103,6 +103,8 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`MESSAGE-AUDIT.md`](design/MESSAGE-AUDIT.md) | MESSAGE-AUDIT.md | PARTIAL |
 | [`MUT-SCOPING-DESIGN.md`](design/MUT-SCOPING-DESIGN.md) | `<Mut>` scoping — effect masking for allocate→fill→freeze | CLOSED |
 | [`PERF-CI-COVERAGE.md`](design/PERF-CI-COVERAGE.md) | PERF-CI-COVERAGE.md — a comprehensive design for catching quadratics in CI | DESIGN |
+| [`PLAYGROUND-ANIMATION-DESIGN.md`](design/PLAYGROUND-ANIMATION-DESIGN.md) | Playground canvas and animation | PROPOSED |
+| [`PLAYGROUND-ANIMATION-PLAN.md`](design/PLAYGROUND-ANIMATION-PLAN.md) | Playground animation implementation plan | READY FOR SPIKE |
 | [`REFERENCES-RENAME-DESIGN.md`](design/REFERENCES-RENAME-DESIGN.md) | Cross-file `references` + `rename` (#254) — Design / Scoping | DESIGN |
 | [`REGEX-DESIGN.md`](design/REGEX-DESIGN.md) | Regular expressions in the stdlib | — |
 | [`REVIEW-WORKFLOW-DESIGN.md`](design/REVIEW-WORKFLOW-DESIGN.md) | Review workflow: a cheap reviewer and the benchmark that measures it | — |

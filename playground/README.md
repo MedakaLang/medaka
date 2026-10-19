@@ -24,6 +24,9 @@ the editor exactly as before (`editor.js`/`language-worker.js` unchanged).
 
 ## Architecture
 
+Planned canvas support: [animation design](../docs/design/PLAYGROUND-ANIMATION-DESIGN.md)
+and [implementation plan](../docs/design/PLAYGROUND-ANIMATION-PLAN.md).
+
 ```
 Browser
 ┌──────────────────────────────────────────────────────────────────┐
