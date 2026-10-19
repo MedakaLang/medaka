@@ -564,6 +564,7 @@ import frontend.resolve.{
 -- difference from the guard-coverage pass is the ctor oracle (here it comes from
 -- the typechecked program's data decls + the inferred scrutinee type).
 import frontend.exhaust.{
+  Oracle,
   buildOracle,
   useful,
   patUnreachable,
