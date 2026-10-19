@@ -2,7 +2,7 @@
 
 `fixtures.jsonl` holds one JSON object per line. Each object is one labelled
 excerpt of real Medaka source, pinned to a commit. Classes and rules are those of
-`docs/design/STYLE-RUBRIC.md`; the rulings (`R1` to `R49`) are the project
+`docs/design/STYLE-RUBRIC.md`; the rulings (`R1` onward) are the project
 owner's, recorded in `docs/design/STYLE-RULINGS.md`. `STATS.md` has the
 counts.
 
